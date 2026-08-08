@@ -28,8 +28,13 @@ Scope:
   translate into their neutral decisions (spawn-subtask, yield-for-human,
   wait-timer) via ``translate_control_tool``.
 * ``model`` is a constant per Policy instance.
-* ``_step_count`` is an instance attribute — **one Policy instance per
-  Task**; a subtask uses its own Policy with its own counter.
+* The instance holds **configuration only** — no per-task or per-turn loop
+  state. One ReActPolicy is cached inside an Engine that is shared across
+  turns and across tasks with equal bindings (the Engine cache key omits
+  ``task_id``), so anything task- or turn-scoped must not live on ``self``:
+  the step cap reads ``StepContext.steps_in_turn`` (Engine-threaded, resets
+  every driven turn), and the compaction-trigger baselines live in a bounded
+  per-``task_id`` table (:class:`_TaskTriggerBaseline`).
 
 Layering: this module ships in noeta-sdk's ``react`` built-in
 and reaches the kernel across the wheel boundary — so it imports only the
@@ -46,6 +51,9 @@ adapter (provider injection happens at the call site, behind a
 from __future__ import annotations
 
 import json
+import threading
+from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Any, Optional, Protocol
 
 from noeta.policies.control_semantics import (
@@ -105,12 +113,55 @@ __all__ = [
 #: clean summary without the appended block.
 _SUMMARIZE_SYSTEM_PROMPT = load_markdown(__package__, "summarize")
 
-#: ``ReActPolicy._last_input_tokens_at_call`` sentinel: a compaction collapsed
-#: the history, so no recorded input count describes it any more. Distinct from
-#: ``0`` ("no round-trip yet — fall back to the ctx baseline") because after a
-#: compaction the ctx baseline is stale too and must NOT be fallen back to.
-#: See :meth:`ReActPolicy._real_baseline`.
+#: ``_TaskTriggerBaseline.last_input_tokens_at_call`` sentinel: a compaction
+#: collapsed the history, so no recorded input count describes it any more.
+#: Distinct from ``0`` ("no round-trip yet — fall back to the ctx baseline")
+#: because after a compaction the ctx baseline is stale too and must NOT be
+#: fallen back to. See :meth:`ReActPolicy._real_baseline`.
 _BASELINE_INVALIDATED = -1
+
+
+@dataclass(slots=True)
+class _TaskTriggerBaseline:
+    """One task's compaction-trigger baseline pair.
+
+    ``last_estimate_at_call`` is the chars/4 estimate of the request this task
+    LAST actually sent to the provider. The compaction trigger mixes the real
+    recorded usage of that round-trip with the chars/4 delta since (``current
+    estimate − this``). Advanced ONLY right after a successful
+    ``_llm.complete`` (never on a proactive/early return), so it always tracks
+    the last request that actually consumed tokens.
+
+    ``last_input_tokens_at_call`` is the provider's REAL input count for the
+    task's last main round-trip, ``0`` before the first one, or
+    ``_BASELINE_INVALIDATED`` right after a compaction. Pinned beside
+    ``last_estimate_at_call`` (same call site) and read by
+    ``_trigger_estimate`` in preference to ``StepContext.last_input_tokens``:
+    the ctx projection only moves when the LLM client's ``apply_event``
+    callback is wired, so this pair is the guaranteed-live intra-turn
+    baseline. Most recent wins — never ``max``: after a compaction the real
+    count DROPS, and a max would pin the trigger to a stale pre-compaction
+    high and re-fire forever.
+
+    Both fields are keyed **per task** in ``ReActPolicy._baselines`` — the
+    policy instance is cached inside an Engine shared across tasks, and a
+    shared pair would leak one conversation's near-window baseline into a
+    fresh conversation's trigger (which then dies on
+    ``compaction_no_progress`` before its first real round-trip). ``0`` on a
+    fresh entry; because ``decide()`` re-runs in the same order on resume, the
+    values reconstruct identically (no persisted state needed).
+    """
+
+    last_estimate_at_call: int = 0
+    last_input_tokens_at_call: int = 0
+
+
+#: Upper bound on the per-task baseline table. Entries beyond it evict oldest
+#: first; an evicted task that later decides again starts from a fresh pair,
+#: which reproduces exactly the fresh-instance fallback (pure chars/4 estimate
+#: until its next round-trip records real usage) — degraded precision for one
+#: trigger, never a wrong decision.
+_MAX_TRACKED_TASK_BASELINES = 1024
 
 #: Sanity band for :meth:`ReActPolicy._observed_density` — real provider tokens
 #: per chars/4 estimated token. The heuristic's honest spread on real payloads
@@ -160,9 +211,13 @@ class _LLMClientP(Protocol):
 class ReActPolicy:
     """Minimal Noeta ReAct policy.
 
-    Construct **one instance per Task**: ``_step_count`` is an instance
-    attribute, sharing it across tasks would let the cumulative counter
-    bleed across loops. Subtasks should construct their own ReActPolicy.
+    Safe to share across tasks and turns: the instance carries configuration
+    only. The ``max_steps`` ceiling reads the Engine-threaded
+    ``StepContext.steps_in_turn`` (so a runaway loop is bounded per driven
+    turn and the budget renews every turn), and the compaction-trigger
+    baselines are keyed per ``task_id`` in a bounded table — one conversation
+    can never bleed its counter or its near-window token baseline into
+    another that shares the cached Engine.
     """
 
     def __init__(
@@ -172,7 +227,11 @@ class ReActPolicy:
         tools: dict[str, Tool],
         system_prompt: str,
         model: str,
-        max_steps: int = 50,
+        #: Per-turn decide() ceiling — a runaway-loop backstop, not a working
+        #: budget. Deliberately enormous by default: real turns end on their
+        #: own long before it, and a tight default has already bricked long
+        #: conversations once (the counter used to live on the instance).
+        max_steps: int = 1_000_000,
         max_history_messages: Optional[int] = None,
         #: The routing-ordered control-tool translate specs.
         #: Each spec's ``translate`` closure carries its own build inputs (the
@@ -213,35 +272,17 @@ class ReActPolicy:
         self._model = model
         self._max_steps = max_steps
         self._max_history_messages = max_history_messages
-        self._step_count = 0
-        # the chars/4 estimate of the request we LAST actually
-        # sent to the provider. The compaction trigger mixes the real recorded
-        # usage of that turn (``StepContext.last_input_tokens``) with the chars/4
-        # delta since (``current estimate − this``). Advanced ONLY right after a
-        # successful ``_llm.complete`` (never on a proactive/early return), so it
-        # always tracks the last request that actually consumed tokens. ``0`` on
-        # a fresh instance; one instance per Task (like ``_step_count``), and
-        # because decide() is called in the same order on resume, the
-        # value reconstructs identically (no persisted state needed).
-        self._last_estimate_at_call = 0
-        # The provider's REAL input count for the last main round-trip THIS
-        # instance made, or ``0`` before the first one. Pinned beside
-        # ``_last_estimate_at_call`` (same call site, same resume argument) and
-        # read by ``_trigger_estimate`` in preference to
-        # ``StepContext.last_input_tokens``.
-        #
-        # Why both: ``ctx.last_input_tokens`` is fold-projected, and fold only
-        # runs at a lease boundary — the ``LLMRequestFinished`` emitted mid
-        # tool-loop never reaches the in-memory task. So inside ONE
-        # ``Engine.run_one_step`` the ctx baseline is frozen at the entry value
-        # (``0`` on a first turn), which silently degrades the trigger to the
-        # pure chars/4 estimate for the whole turn, however long the tool loop
-        # runs. This field carries the same real count across that gap; ctx
-        # remains the cross-turn baseline for a FRESH instance (which starts
-        # here at ``0``). Most recent wins — never ``max``: after a compaction
-        # the real count DROPS, and a max would pin the trigger to a stale
-        # pre-compaction high and re-fire forever.
-        self._last_input_tokens_at_call = 0
+        # The per-task compaction-trigger baselines (see
+        # :class:`_TaskTriggerBaseline` for the full semantics of the pair).
+        # Keyed by ``ctx.task_id`` with LRU eviction at
+        # ``_MAX_TRACKED_TASK_BASELINES`` — NOT instance attributes: this
+        # instance is cached inside an Engine that serves every task with
+        # equal bindings, and instance-level baselines let one conversation's
+        # state poison another's trigger. The lock guards only the table's
+        # structure (get-or-create / LRU reorder / eviction); a single task's
+        # entry is only ever mutated by that task's one driving thread.
+        self._baselines: OrderedDict[str, _TaskTriggerBaseline] = OrderedDict()
+        self._baselines_lock = threading.Lock()
         # ③ compaction trigger configuration. When ``context_window``
         # is None compaction is OFF (no proactive trigger,
         # an overflow error stays a FailDecision). When set, the available
@@ -300,12 +341,32 @@ class ReActPolicy:
     # Policy Protocol
     # ------------------------------------------------------------------
 
+    def _baseline_state(self, task_id: str) -> _TaskTriggerBaseline:
+        """Get-or-create ``task_id``'s trigger-baseline entry (LRU-refreshed)."""
+        with self._baselines_lock:
+            state = self._baselines.get(task_id)
+            if state is None:
+                state = _TaskTriggerBaseline()
+                self._baselines[task_id] = state
+            else:
+                self._baselines.move_to_end(task_id)
+            while len(self._baselines) > _MAX_TRACKED_TASK_BASELINES:
+                self._baselines.popitem(last=False)
+            return state
+
     def decide(self, ctx: StepContext, view: View) -> Decision:
-        if self._step_count >= self._max_steps:
+        # The per-turn ceiling: ``ctx.steps_in_turn`` is the Engine's count of
+        # decide() calls already made this driven turn, reset every turn by
+        # construction. Comparing the Engine-threaded count (instead of an
+        # instance counter) is what keeps the budget PER TURN — the instance
+        # is cached across turns and tasks, so an instance counter accumulated
+        # for the cache entry's whole life and eventually failed every turn
+        # sharing it.
+        if ctx.steps_in_turn >= self._max_steps:
             return FailDecision(
                 reason="react_max_steps_exceeded", retryable=False
             )
-        self._step_count += 1
+        state = self._baseline_state(ctx.task_id)
         request, selection = self._build_request_and_selection(view)
         # ③ (D-3a) proactive trigger. The trigger size is no
         # longer a pure chars/4 estimate of the whole request — that
@@ -317,20 +378,20 @@ class ReActPolicy:
         # ``estimated`` is still computed and carried on the Decision /
         # ``Compacted`` event as the provider-neutral size signal.
         estimated = estimate_messages_tokens(request.messages)
-        trigger_size = self._trigger_estimate(ctx, estimated)
+        trigger_size = self._trigger_estimate(ctx, estimated, state)
         if self._compaction_triggered(trigger_size):
             # Compact FIRST — do not spend the main LLM call on a doomed
-            # request. (No LLM call this step, so ``_last_estimate_at_call``
+            # request. (No LLM call this step, so ``last_estimate_at_call``
             # is intentionally NOT advanced — the mix baseline only moves when
             # a real round-trip records fresh usage.)
             return self._compaction_decision(
-                ctx, view, reason="proactive", estimated=estimated
+                ctx, view, state, reason="proactive", estimated=estimated
             )
         response = self._llm.complete(request, ctx, selection=selection)
         # a real round-trip just happened, so the next turn's
         # "appended since" delta is measured from THIS request's estimate.
         # Pin it AFTER the call so a proactive/early return never advances it.
-        self._last_estimate_at_call = estimated
+        state.last_estimate_at_call = estimated
         # …and pin the real count that came back with it, so the next step in
         # THIS tool loop mixes against a live baseline instead of a frozen
         # fold projection. Only a SUCCESSFUL main round-trip counts: the
@@ -342,7 +403,7 @@ class ReActPolicy:
         # away — pinning it would leave correctness hanging on the downstream
         # ``_BASELINE_INVALIDATED`` reset, so gate on the stop_reason here.
         if response.stop_reason != "error" and response.usage.input > 0:
-            self._last_input_tokens_at_call = response.usage.input
+            state.last_input_tokens_at_call = response.usage.input
         # ③ (D-3b) passive trigger: the provider returned an overflow error
         # (②'s category). Compact before retrying instead of failing. The mix
         # baseline (``ctx.last_input_tokens``) is the LAST SUCCESSFUL turn's
@@ -354,7 +415,7 @@ class ReActPolicy:
             and (response.raw or {}).get("category") == CATEGORY_OVERFLOW
         ):
             return self._compaction_decision(
-                ctx, view, reason="overflow", estimated=estimated
+                ctx, view, state, reason="overflow", estimated=estimated
             )
         return self._response_to_decision(response, view)
 
@@ -374,7 +435,9 @@ class ReActPolicy:
             - self._compaction_buffer,
         )
 
-    def _trigger_estimate(self, ctx: StepContext, estimated: int) -> int:
+    def _trigger_estimate(
+        self, ctx: StepContext, estimated: int, state: _TaskTriggerBaseline
+    ) -> int:
         """The size the proactive trigger compares against the window.
 
         Compaction mix: ``real previous-turn usage + chars/4 of what was
@@ -383,9 +446,9 @@ class ReActPolicy:
         never re-counted live → a resumed run derives the same trigger). The
         "appended since" delta is approximated as ``current chars/4 estimate −
         the chars/4 estimate of the request we last actually sent``
-        (``_last_estimate_at_call``): a turn that only appended a tool result
-        grows the estimate by that result's size, which is exactly the delta we
-        want to add on top of the real baseline.
+        (``state.last_estimate_at_call``): a turn that only appended a tool
+        result grows the estimate by that result's size, which is exactly the
+        delta we want to add on top of the real baseline.
 
         Two byte-safe fallbacks keep this monotone and never WORSE than the old
         pure estimate:
@@ -401,31 +464,33 @@ class ReActPolicy:
         mix can only ever raise the trigger size, never mask a genuinely huge
         raw history that the real baseline happens to under-represent.
         """
-        baseline = self._real_baseline(ctx)
+        baseline = self._real_baseline(ctx, state)
         if baseline <= 0:
             return estimated
-        delta = max(0, estimated - self._last_estimate_at_call)
+        delta = max(0, estimated - state.last_estimate_at_call)
         return max(estimated, baseline + delta)
 
-    def _real_baseline(self, ctx: StepContext) -> int:
+    def _real_baseline(
+        self, ctx: StepContext, state: _TaskTriggerBaseline
+    ) -> int:
         """The most recent REAL input count available, or ``0`` if none is.
 
-        ``_last_input_tokens_at_call`` (this instance's own last main
-        round-trip) is strictly more recent than ``ctx.last_input_tokens``
-        (fold-projected at the lease boundary, then frozen for the whole turn),
-        so it wins whenever it is set. A fresh instance has none and falls back
-        to ctx — the cross-turn baseline. Both derive from an already-recorded
-        ``Usage``, so a resumed run re-derives the same number: we never count
-        tokens live.
+        ``state.last_input_tokens_at_call`` (this task's own last main
+        round-trip, pinned inside ``decide``) is at least as recent as
+        ``ctx.last_input_tokens`` (fold-projected; live mid-turn only when the
+        Engine wires the ``apply_event`` callback), so it wins whenever it is
+        set. A fresh entry has none and falls back to ctx — the cross-turn
+        baseline. Both derive from an already-recorded ``Usage``, so a resumed
+        run re-derives the same number: we never count tokens live.
 
         ``_BASELINE_INVALIDATED`` (a compaction landed) suppresses BOTH: no
         recorded count describes the collapsed history, so the caller falls
         back to the pure estimate rather than trust a stale high.
         """
-        if self._last_input_tokens_at_call == _BASELINE_INVALIDATED:
+        if state.last_input_tokens_at_call == _BASELINE_INVALIDATED:
             return 0
-        if self._last_input_tokens_at_call > 0:
-            return self._last_input_tokens_at_call
+        if state.last_input_tokens_at_call > 0:
+            return state.last_input_tokens_at_call
         return ctx.last_input_tokens
 
     def _compaction_triggered(self, estimated: int) -> bool:
@@ -539,12 +604,14 @@ class ReActPolicy:
         a ``Compacted`` always carries a summary.
 
         Reading it off the View is what keeps the Policy pure: no ContentStore
-        deref, and no Policy-private carry-over (a resumed run builds a fresh
-        Policy instance, so instance state would silently change the summarize
-        request across a resume — the one thing determinism forbids). Anything
-        that does not look like that message returns ``None`` and the caller
-        falls back to summarising the whole raw prefix: lossless, merely
-        unbounded, i.e. the safe direction to degrade in.
+        deref, and no Policy-private carry-over (neither a resumed run — which
+        may build a fresh instance — nor a cache-evicted-and-rebuilt engine
+        holds the old instance state, so any state consulted here would
+        silently change the summarize request across those boundaries — the
+        one thing determinism forbids). Anything that does not look like that
+        message returns ``None`` and the caller falls back to summarising the
+        whole raw prefix: lossless, merely unbounded, i.e. the safe direction
+        to degrade in.
         """
         if view.summary_boundary <= 0 or len(view.segments) < 3:
             return None
@@ -562,6 +629,7 @@ class ReActPolicy:
         self,
         ctx: StepContext,
         view: View,
+        state: _TaskTriggerBaseline,
         *,
         reason: str,
         estimated: int,
@@ -626,7 +694,7 @@ class ReActPolicy:
         for a Policy that bypasses this guarantee.
         """
         history = view.rolling_history
-        boundary = self._summary_boundary(history)
+        boundary = self._summary_boundary(history, state)
         if boundary <= view.summary_boundary:
             # No NEW prefix beyond what is already collapsed — compaction would
             # re-summarise the same prefix and spin forever. Fail closed; this
@@ -699,7 +767,7 @@ class ReActPolicy:
         # boundary can no longer advance). Invalidate both and let the pure
         # estimate carry the trigger until the next round-trip records a count
         # for the NEW history.
-        self._last_input_tokens_at_call = _BASELINE_INVALIDATED
+        state.last_input_tokens_at_call = _BASELINE_INVALIDATED
         return CompactionRequestedDecision(
             reason=reason,
             estimated_tokens=estimated,
@@ -708,7 +776,9 @@ class ReActPolicy:
             composer_version=self._composer_version,
         )
 
-    def _tail_budget_in_estimate_units(self) -> int:
+    def _tail_budget_in_estimate_units(
+        self, state: _TaskTriggerBaseline
+    ) -> int:
         """``tail_token_budget`` converted into the unit ``_summary_boundary``
         actually accumulates in.
 
@@ -733,11 +803,11 @@ class ReActPolicy:
         which reproduces the pre-existing arithmetic exactly — an unobserved
         session keeps today's byte-equal behaviour.
         """
-        return int(self._tail_token_budget / self._observed_density())
+        return int(self._tail_token_budget / self._observed_density(state))
 
-    def _observed_density(self) -> float:
+    def _observed_density(self, state: _TaskTriggerBaseline) -> float:
         """REAL provider tokens per chars/4 estimated token, as measured on
-        this instance's last main round-trip (``1.0`` before there is one).
+        this task's last main round-trip (``1.0`` before there is one).
 
         Both operands are already-recorded numbers pinned at the same call
         site, so a resumed run re-derives the same ratio — we never measure
@@ -755,14 +825,18 @@ class ReActPolicy:
         clamp bounds the damage to a factor of four in either direction, which
         the tail budget absorbs.
         """
-        if self._last_estimate_at_call <= 0:
+        if state.last_estimate_at_call <= 0:
             return 1.0
-        if self._last_input_tokens_at_call <= 0:
+        if state.last_input_tokens_at_call <= 0:
             return 1.0
-        ratio = self._last_input_tokens_at_call / self._last_estimate_at_call
+        ratio = (
+            state.last_input_tokens_at_call / state.last_estimate_at_call
+        )
         return min(_DENSITY_MAX, max(_DENSITY_MIN, ratio))
 
-    def _summary_boundary(self, history: list[Message]) -> int:
+    def _summary_boundary(
+        self, history: list[Message], state: _TaskTriggerBaseline
+    ) -> int:
         """How many leading RAW-history messages to collapse — everything older
         than the protected tail window (sized by ``tail_token_budget``).
 
@@ -787,7 +861,7 @@ class ReActPolicy:
         keeps the boundary monotonic, so the anti-spiral progress guarantee
         (``boundary > view.summary_boundary``) is preserved.
         """
-        budget = self._tail_budget_in_estimate_units()
+        budget = self._tail_budget_in_estimate_units(state)
         if budget <= 0:
             return 0
         acc = 0

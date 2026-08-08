@@ -880,6 +880,13 @@ class Engine:
             raise RuntimeError("Engine started without a Policy.")
 
         consecutive_tool_calls = 0
+        # The per-turn step index threaded through StepContext. A step-capped
+        # Policy (ReAct ``max_steps``) reads it instead of keeping an instance
+        # counter: the Engine — and therefore its Policy — is cached across
+        # turns and tasks, so any instance counter would accumulate for the
+        # cache entry's whole life and eventually fail every turn that shares
+        # it. A local counter here resets per drive by construction.
+        steps_in_turn = 0
         while True:
             # cancel-cascade: poll before composing/deciding (a cancel that
             # landed between turns stops the next from starting) and again
@@ -904,8 +911,8 @@ class Engine:
             # rebuild StepContext each turn so the compaction trigger sees the
             # REAL input-token usage fold projected from the PREVIOUS
             # round-trip's ``LLMRequestFinished`` (``0`` on the first turn → the
-            # Policy falls back to a pure estimate). The other three identifiers
-            # are loop-invariant; only ``last_input_tokens`` moves.
+            # Policy falls back to a pure estimate). The three identifiers are
+            # loop-invariant; ``last_input_tokens`` and ``steps_in_turn`` move.
             #
             # ``apply_event`` hands the LLM client the applier for the task we
             # are stepping. Its emits land straight in the EventLog, so without
@@ -926,12 +933,14 @@ class Engine:
                 apply_event=lambda env: apply_event(
                     task, env, self._content_store
                 ),
-                cancelled=cancelled)
+                cancelled=cancelled,
+                steps_in_turn=steps_in_turn)
             view = self._composer.compose(task)
             _emit_context_plan(
                 self._emit, self._content_store, task, view, lease_id, trace_id
             )
             decision: Decision = self._policy.decide(ctx, view)
+            steps_in_turn += 1
             _raise_if_cancelled(cancelled, task.task_id)
             if isinstance(decision, StatePatchDecision):
                 # Loop-continuing state-write control tool. It carries its

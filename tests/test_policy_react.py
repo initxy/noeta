@@ -463,23 +463,67 @@ def test_history_truncation_keeps_only_last_n_messages() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_max_steps_ceiling_fails_after_n_calls_without_calling_provider() -> None:
-    """The ceiling trips before the provider is called again — a runaway loop
-    costs exactly ``max_steps`` requests, not one more."""
+def _ctx_at_step(steps_in_turn: int, task_id: str = "task-1") -> StepContext:
+    return StepContext(
+        task_id=task_id,
+        lease_id="lease-1",
+        trace_id="trace-1",
+        steps_in_turn=steps_in_turn,
+    )
+
+
+def test_max_steps_ceiling_fails_at_the_turn_step_index() -> None:
+    """The ceiling reads the Engine-threaded ``StepContext.steps_in_turn`` —
+    the step just below it still calls the provider, the step at it trips
+    WITHOUT calling the provider, so a runaway turn costs exactly
+    ``max_steps`` requests, not one more."""
     tool_use = LLMResponse(
         stop_reason="tool_use",
         content=[
             ToolUseBlock(call_id="x", tool_name="echo", arguments={"i": 0})
         ],
     )
-    policy, provider = _make_policy([tool_use] * 51, max_steps=50)
+    policy, provider = _make_policy([tool_use] * 2, max_steps=50)
 
-    for _ in range(50):
-        d = policy.decide(_ctx(), _empty_view())
-        assert isinstance(d, ToolCallsDecision)
+    d = policy.decide(_ctx_at_step(49), _empty_view())
+    assert isinstance(d, ToolCallsDecision)
 
-    final = policy.decide(_ctx(), _empty_view())
+    final = policy.decide(_ctx_at_step(50), _empty_view())
     assert isinstance(final, FailDecision)
     assert final.reason == "react_max_steps_exceeded"
     assert final.retryable is False
-    assert len(provider.received_requests) == 50
+    assert len(provider.received_requests) == 1
+
+
+def test_max_steps_budget_renews_every_turn_and_task() -> None:
+    """The cap is per DRIVEN TURN, not per policy lifetime: the instance is
+    cached inside an Engine shared across turns and tasks, so an instance
+    counter would accumulate until every later turn died at the ceiling
+    (the '~40 user turns then permanent react_max_steps_exceeded' bug). A
+    fresh turn's ``steps_in_turn=0`` — even on the SAME instance, even for a
+    different task — must decide normally again."""
+    tool_use = LLMResponse(
+        stop_reason="tool_use",
+        content=[
+            ToolUseBlock(call_id="x", tool_name="echo", arguments={"i": 0})
+        ],
+    )
+    policy, provider = _make_policy([tool_use] * 3, max_steps=2)
+
+    # Turn 1 of task A exhausts its budget…
+    assert isinstance(
+        policy.decide(_ctx_at_step(0), _empty_view()), ToolCallsDecision
+    )
+    assert isinstance(
+        policy.decide(_ctx_at_step(2), _empty_view()), FailDecision
+    )
+    # …the NEXT turn (Engine restarts the count) is unaffected…
+    assert isinstance(
+        policy.decide(_ctx_at_step(0), _empty_view()), ToolCallsDecision
+    )
+    # …and so is another task sharing this cached instance.
+    assert isinstance(
+        policy.decide(_ctx_at_step(0, task_id="task-2"), _empty_view()),
+        ToolCallsDecision,
+    )
+    assert len(provider.received_requests) == 3

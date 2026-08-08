@@ -498,7 +498,10 @@ def build_session_inputs(
     compaction: CompactionConfig,
     budget: Budget,
     allowed_subtask_agents: frozenset[str] = frozenset(),
-    max_steps: int = 20,
+    # Per-turn decide() ceiling forwarded to the ReActPolicy — a runaway-loop
+    # backstop that renews every driven turn, so the default is deliberately
+    # enormous (mirrors the SDK host default).
+    max_steps: int = 1_000_000,
     #: The write/shell safety inputs (``write_mode`` / ``shell_mode`` /
     #: ``shell_allowlist`` / ``write_path_globs`` / ``write_roots``) are not
     #: kernel-signature parameters: they have a single consumer (the fs
