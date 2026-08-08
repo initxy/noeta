@@ -112,7 +112,7 @@
 
 **原因。** compaction 和定价都源自模型目录。目录未描述的模型每次往返会得到 `COMPACTION_OFF` 和 `0.0` 的价格。这两种退化都不抛异常，所以没有任何东西告诉你。
 
-**修法。** 为该模型添加一行 `ModelSpec`。`CATALOG` 和 `ModelSpec` 都从 `noeta.sdk.providers` 重新导出；这一行的 `context_window`、`max_output_tokens` 和价格字段，就是两处推导所读取的全部内容。见[配置 Provider](../how-to/configure-provider.md)。
+**修法。** 为该模型注册一行 `ModelSpec` —— `HostConfig(extra_models={...})`，或在进程启动时调用 `noeta.sdk.providers` 的 `register_models`；这一行的 `context_window`、`max_output_tokens` 和价格字段，就是两处推导所读取的全部内容。见[配置 Provider](../how-to/configure-provider.md)。
 
 ## Worker 表现异常
 

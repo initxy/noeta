@@ -106,26 +106,48 @@ If you get an exception instead, see the troubleshooting table below.
 
 ## 4. Register uncatalogued models
 
-Compaction knobs and cost accounting are both derived from the model catalog. A
-model the catalog does not describe gets compaction turned **off** and a price of
-`0.0` — neither degradation raises, so nothing tells you. Add a row for any
-gateway model, fine-tune, or self-hosted id:
+Compaction knobs and cost accounting are both derived from the model catalog.
+A model the catalog does not describe falls back to conservative compaction
+knobs (a 128,000-token window) and a price of `0.0` — each announced by a
+warn-once log line, never an exception. Register a row for any gateway model,
+fine-tune, or self-hosted id — declaratively on the host config:
 
 ```python
-from noeta.sdk.providers import CATALOG, ModelSpec
+from noeta.sdk import Client, HostConfig
+from noeta.sdk.providers import ModelSpec
 
-CATALOG["my-gateway-model"] = ModelSpec(
-    real_model_id="my-gateway-model",
-    context_window=200_000,
-    max_output_tokens=8_192,
-    input_price_per_mtok=3.0,
-    output_price_per_mtok=15.0,
-    cache_read_price_per_mtok=0.3,
-    cache_write_price_per_mtok=3.75,
-)
+client = Client(options, provider=chat, host_config=HostConfig(
+    extra_models={
+        "my-gateway-model": ModelSpec(
+            real_model_id="my-gateway-model",
+            context_window=200_000,
+            max_output_tokens=8_192,
+            input_price_per_mtok=3.0,
+            output_price_per_mtok=15.0,
+            cache_read_price_per_mtok=0.3,
+            cache_write_price_per_mtok=3.75,
+            provider_family="anthropic",   # optional: what actually speaks behind the id
+        ),
+    },
+))
 ```
 
-Leave the prices at `0.0` if you only care about compaction.
+or imperatively at process start, before building any Client:
+
+```python
+from noeta.sdk.providers import ModelSpec, register_models
+
+register_models({"my-gateway-model": ModelSpec(...)})
+```
+
+Leave the prices as `None` if the gateway publishes no rate card — that is
+"price unknown" (warn once, charge `0.0`), distinct from a genuinely free
+`0.0`. Do not mutate `CATALOG` directly: it is the shipped table only, and
+registration is what enforces the collision rules (a name clashing with a
+shipped row fails the build instead of silently overriding it) and keeps the
+merged view — `noeta.sdk.providers.catalog_models()` — consistent. Register
+the same rows on every run: compaction derivation feeds the composed prompt
+bytes, so a resumed session must see the same catalog.
 
 ## Troubleshooting
 

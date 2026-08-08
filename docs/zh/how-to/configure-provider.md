@@ -85,23 +85,37 @@ OK
 
 ## 4. 注册目录里没有的模型
 
-compaction 的各项参数和成本核算都是从模型目录推导出来的。目录未描述的模型会被**关闭** compaction，价格记为 `0.0` —— 这两种退化都不抛异常，所以没有任何东西告诉你。为任何网关模型、微调模型或自托管 id 添加一行：
+compaction 的各项参数和成本核算都是从模型目录推导出来的。目录未描述的模型会回退到保守的 compaction 参数（128,000 token 窗口），价格记为 `0.0` —— 每种退化都有一条 warn-once 日志，绝不抛异常。为任何网关模型、微调模型或自托管 id 注册一行 —— 声明式地写在 host config 上：
 
 ```python
-from noeta.sdk.providers import CATALOG, ModelSpec
+from noeta.sdk import Client, HostConfig
+from noeta.sdk.providers import ModelSpec
 
-CATALOG["my-gateway-model"] = ModelSpec(
-    real_model_id="my-gateway-model",
-    context_window=200_000,
-    max_output_tokens=8_192,
-    input_price_per_mtok=3.0,
-    output_price_per_mtok=15.0,
-    cache_read_price_per_mtok=0.3,
-    cache_write_price_per_mtok=3.75,
-)
+client = Client(options, provider=chat, host_config=HostConfig(
+    extra_models={
+        "my-gateway-model": ModelSpec(
+            real_model_id="my-gateway-model",
+            context_window=200_000,
+            max_output_tokens=8_192,
+            input_price_per_mtok=3.0,
+            output_price_per_mtok=15.0,
+            cache_read_price_per_mtok=0.3,
+            cache_write_price_per_mtok=3.75,
+            provider_family="anthropic",   # 可选：声明这个 id 背后实际说话的是谁
+        ),
+    },
+))
 ```
 
-如果你只关心 compaction，把价格留在 `0.0` 即可。
+或者在进程启动时、构建任何 Client 之前命令式注册：
+
+```python
+from noeta.sdk.providers import ModelSpec, register_models
+
+register_models({"my-gateway-model": ModelSpec(...)})
+```
+
+网关不公布价目表就把价格留为 `None` —— 那是"价格未知"（警告一次、按 `0.0` 记账），与真正免费的 `0.0` 是两种状态。不要直接改 `CATALOG`：它只是出厂表，注册才是碰撞规则的执行点（与出厂行撞名会让构建失败，而不是悄悄覆盖），也是合并视图 `noeta.sdk.providers.catalog_models()` 保持一致的前提。每次启动注册同样的行：compaction 推导参与组装出的 prompt 字节，恢复的会话必须看到同一张目录。
 
 ## 故障排查
 

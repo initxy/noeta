@@ -178,9 +178,10 @@ the catalog does not describe gets conservative compaction defaults
 (context window 128,000 / max output 16,384) and a price of `0.0` per
 round-trip — each announced by a warn-once log line rather than silently.
 
-**Fix.** Add a `ModelSpec` row for the model. `CATALOG` and `ModelSpec` are
-re-exported from `noeta.sdk.providers`; the row's `context_window`,
-`max_output_tokens`, and price fields are everything both derivations read. See
+**Fix.** Register a `ModelSpec` row for the model —
+`HostConfig(extra_models={...})`, or `register_models` from
+`noeta.sdk.providers`; the row's `context_window`, `max_output_tokens`, and
+price fields are everything both derivations read. See
 [Configure a provider](../how-to/configure-provider.md).
 
 ## Workers misbehave

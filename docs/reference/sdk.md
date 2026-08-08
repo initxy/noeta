@@ -35,7 +35,7 @@ because importing them pulls in weight most callers do not need.
 
 | Module | Holds | Why it is separate |
 | --- | --- | --- |
-| `noeta.sdk.providers` | `AnthropicProvider`, `OpenAICompatProvider`, `OpenAIResponsesProvider`, `CATALOG`, `ModelSpec` | only a caller that builds a network provider pays for `httpx` |
+| `noeta.sdk.providers` | `AnthropicProvider`, `OpenAICompatProvider`, `OpenAIResponsesProvider`, `CATALOG`, `ModelSpec`, `register_models`, `find_spec`, `catalog_models` | only a caller that builds a network provider pays for `httpx` |
 | `noeta.sdk.storage` | `open_storage_stack` plus the sqlite / postgres adapters | only a caller that chose Postgres pays for `psycopg` |
 | `noeta.sdk.testing` | `FakeLLMProvider` | test material must not be reachable from a production import |
 | `noeta.presets` | the four official agents and their prompts | re-exported from the root as `presets`, and importable directly |
