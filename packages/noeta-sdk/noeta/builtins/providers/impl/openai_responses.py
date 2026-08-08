@@ -776,8 +776,7 @@ def _model_admits_images(model: str) -> bool:
     ImageBlock, so the guard never sees it — this flag is its dedicated check),
     so one place can't pass an image while the other rejects it.
     """
-    real_id = catalog.resolve_alias(model)
-    spec = catalog.CATALOG.get(real_id)
+    spec = catalog.find_spec(model)
     if spec is None:
         return True
     return bool(spec.supports_vision)

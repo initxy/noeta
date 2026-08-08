@@ -23,8 +23,9 @@ and resume derive identical knobs regardless of who warned first.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
-from typing import Optional
+from typing import Mapping, Optional
 
 from noeta.context.composer import COMPOSER_VERSION
 from noeta.execution.builder import CompactionConfig
@@ -36,6 +37,9 @@ __all__ = [
     "CATALOG",
     "ALIASES",
     "spec_for",
+    "find_spec",
+    "catalog_models",
+    "register_models",
     "resolve_alias",
     "price",
     "provider_family",
@@ -91,6 +95,15 @@ class ModelSpec:
     #: the image up front, while a model absent from the table is merely
     #: *unknown* and images are let through for the provider to judge.
     supports_vision: bool = False
+    #: Explicit wire family (``"anthropic"`` / ``"openai"``) for a row whose
+    #: real id carries no recognisable prefix — a gateway routing name that IS
+    #: a Claude behind a relay declares it here. Consumed by
+    #: :func:`provider_family` ahead of prefix inference and validated at
+    #: registration; a declaration for hosts and future consumers — nothing
+    #: built-in branches on the family today. ``None`` (every shipped row)
+    #: falls back to real-id prefix inference, keeping the public table a
+    #: pure transcription of vendor pages.
+    provider_family: Optional[str] = None
 
     @property
     def is_priced(self) -> bool:
@@ -239,14 +252,163 @@ ALIASES: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Operator extensions. The shipped table above is a transcription of public
+# vendor pages; deployments also run models it cannot know — internal gateway
+# routing names, self-hosted models. Those rows are HOST WIRING, registered at
+# process start, and they live in this overlay rather than in the shipped
+# dicts so the public table stays a pure transcription. Every lookup consults
+# the union via ``find_spec`` / ``resolve_alias``.
+#
+# Determinism contract: the catalog feeds ``derive_compaction_config`` and
+# therefore the composed prompt bytes, so a host must register the SAME
+# extensions on every run — the same requirement as wiring the same plugins
+# and skill directories. There is deliberately no unregister: removal
+# mid-process would change composed bytes under a live session.
+# ---------------------------------------------------------------------------
+
+_EXTENSIONS: dict[str, ModelSpec] = {}
+_EXTENSION_ALIASES: dict[str, str] = {}
+_REGISTER_LOCK = threading.Lock()
+
+#: Families a row may declare explicitly. Validated at registration: the
+#: field exists so a consumer can branch on it, and a typo'd family silently
+#: picking the wrong wire conventions later is exactly the class of failure
+#: this module refuses up front.
+_KNOWN_FAMILIES = frozenset({"anthropic", "openai"})
+
+
+def register_models(
+    models: Mapping[str, ModelSpec],
+    aliases: Optional[Mapping[str, str]] = None,
+) -> None:
+    """Register operator model rows (and aliases) into the catalog overlay.
+
+    Collisions refuse loudly: a name already present anywhere — shipped table,
+    shipped aliases, registered extensions or extension aliases — or already
+    registered with a *different* spec, raises ``ValueError`` naming the id;
+    an extension never silently overrides existing data. Re-registering the
+    *identical* spec is a no-op, so a process may build several Clients from
+    the same HostConfig. Alias targets are resolved through the shipped
+    aliases and must land on a shipped or registered row (rows registered in
+    the same call count).
+
+    Registration is all-or-nothing and thread-safe: every row and alias in
+    one call is validated first, then committed under a module lock, so a
+    refused call leaves the overlay untouched and two racing registrations
+    cannot interleave. Every refusal is ``ValueError`` — one exception type
+    at the HostConfig boundary, wrong value and wrong type alike.
+    """
+    alias_items = dict(aliases) if aliases is not None else {}
+    with _REGISTER_LOCK:
+        staged_models: dict[str, ModelSpec] = {}
+        for name, spec in models.items():
+            if not isinstance(spec, ModelSpec):
+                raise ValueError(
+                    f"extra model {name!r}: expected a ModelSpec, got "
+                    f"{type(spec).__name__}"
+                )
+            if not name:
+                raise ValueError("extra model id must be a non-empty string")
+            if name in CATALOG or name in ALIASES or name in _EXTENSION_ALIASES:
+                raise ValueError(
+                    f"extra model {name!r} collides with an existing catalog "
+                    "row/alias; extensions never override existing data"
+                )
+            if (
+                spec.provider_family is not None
+                and spec.provider_family not in _KNOWN_FAMILIES
+            ):
+                raise ValueError(
+                    f"extra model {name!r}: unknown provider_family "
+                    f"{spec.provider_family!r}; expected one of "
+                    f"{sorted(_KNOWN_FAMILIES)}"
+                )
+            existing = _EXTENSIONS.get(name)
+            if existing is not None:
+                if existing != spec:
+                    raise ValueError(
+                        f"extra model {name!r} is already registered with a "
+                        "different spec; re-register the identical spec or "
+                        "pick another name"
+                    )
+                continue  # identical re-registration — a no-op
+            staged_models[name] = spec
+        staged_aliases: dict[str, str] = {}
+        for alias, target in alias_items.items():
+            if not alias:
+                raise ValueError("extra alias must be a non-empty string")
+            if (
+                alias in CATALOG
+                or alias in ALIASES
+                or alias in _EXTENSIONS
+                or alias in staged_models
+            ):
+                raise ValueError(
+                    f"extra alias {alias!r} collides with an existing catalog "
+                    "row/alias; extensions never override existing data"
+                )
+            # Resolve through the shipped aliases so a target may be shipped
+            # shorthand ("opus"); the RESOLVED id is stored, keeping
+            # ``resolve_alias`` single-hop.
+            real_target = ALIASES.get(target, target)
+            if (
+                real_target not in CATALOG
+                and real_target not in _EXTENSIONS
+                and real_target not in staged_models
+            ):
+                raise ValueError(
+                    f"extra alias {alias!r} points at unknown model "
+                    f"{target!r}; register the ModelSpec row first"
+                )
+            existing_target = _EXTENSION_ALIASES.get(alias)
+            if existing_target is not None:
+                if existing_target != real_target:
+                    raise ValueError(
+                        f"extra alias {alias!r} is already registered for "
+                        f"{existing_target!r}"
+                    )
+                continue
+            staged_aliases[alias] = real_target
+        _EXTENSIONS.update(staged_models)
+        _EXTENSION_ALIASES.update(staged_aliases)
+
+
+def catalog_models() -> dict[str, ModelSpec]:
+    """The merged catalog as one mapping — shipped rows plus registered
+    extensions (a fresh copy; mutating it changes nothing).
+
+    The enumeration counterpart of :func:`find_spec`: a host building a model
+    picker or validating config lists THIS, not ``CATALOG``, which is only
+    the shipped table.
+    """
+    return {**CATALOG, **_EXTENSIONS}
+
+
+def find_spec(model_id: str) -> Optional[ModelSpec]:
+    """The merged-catalog lookup: shipped table first, then the overlay.
+
+    Alias-resolved; ``None`` for an unknown selector. This is the single
+    membership judgment — every consumer that used to reach into ``CATALOG``
+    directly goes through here so operator extensions are visible everywhere
+    the shipped rows are.
+    """
+    real = resolve_alias(model_id)
+    spec = CATALOG.get(real)
+    if spec is None:
+        spec = _EXTENSIONS.get(real)
+    return spec
+
+
 def resolve_alias(selector: str) -> str:
     """Map a friendly alias to its real model-id, passing anything else through.
 
     Pass-through is deliberate: a real model-id and the test-only
     ``stub-model`` must survive unchanged, so callers may hand either form to
-    every catalog function.
+    every catalog function. Shipped aliases win over extension aliases by
+    construction — ``register_models`` refuses the collision.
     """
-    return ALIASES.get(selector, selector)
+    return ALIASES.get(selector, _EXTENSION_ALIASES.get(selector, selector))
 
 
 def spec_for(model_id: str) -> ModelSpec:
@@ -255,26 +417,35 @@ def spec_for(model_id: str) -> ModelSpec:
     Raises :class:`KeyError` for an unknown id so a mis-typed or unpriced model
     surfaces loudly instead of silently costing $0.
     """
-    return CATALOG[resolve_alias(model_id)]
+    spec = find_spec(model_id)
+    if spec is None:
+        raise KeyError(resolve_alias(model_id))
+    return spec
 
 
 def provider_family(model: str) -> str | None:
     """Classify a model selector as ``"anthropic"``, ``"openai"`` or ``None``.
 
-    The only model→family judgment in the codebase: the assembly layer uses it
-    to pick the provider-appropriate edit tool without writing the vendor
-    difference into any tool field or prompt. The family comes from a
-    **catalogued** model's real-id prefix, so only a registered model can
-    switch the tool set.
+    The only model→family judgment in the codebase, injected into session
+    assembly (``build_session_inputs(provider_family=…)``) for any stage that
+    must branch on the bound vendor family. The family comes from a
+    **catalogued** model's real-id prefix, so only a registered model
+    classifies at all.
 
     ``None`` — an uncatalogued selector, including every test sentinel — means
-    "do not filter": callers keep both edit variants, so an unknown model never
-    silently loses a tool.
+    "unknown": callers must not narrow anything on it.
+
+    A registered extension row may declare its family explicitly
+    (``ModelSpec.provider_family``) — a gateway routing name carries no
+    recognisable prefix, but the operator knows what speaks behind it. The
+    value is injected into session assembly for stages that may branch on the
+    bound vendor family; nothing built-in does so today.
     """
-    real = resolve_alias(model)
-    spec = CATALOG.get(real)
+    spec = find_spec(model)
     if spec is None:
         return None
+    if spec.provider_family is not None:
+        return spec.provider_family
     if spec.real_model_id.startswith("claude"):
         return "anthropic"
     if spec.real_model_id.startswith("gpt"):
@@ -301,7 +472,7 @@ def price(model_id: str, usage: Usage) -> float:
     every caller — including the swallowing one — inherits it.
     """
     real = resolve_alias(model_id)
-    spec = CATALOG.get(real)
+    spec = find_spec(real)
     if spec is None:
         _warn_once(
             "pricing",
@@ -388,7 +559,7 @@ def derive_compaction_config(model: str) -> CompactionConfig:
     both paths derive identical knobs.
     """
     real = resolve_alias(model)
-    spec = CATALOG.get(real)
+    spec = find_spec(real)
     if spec is None:
         _warn_once(
             "compaction",

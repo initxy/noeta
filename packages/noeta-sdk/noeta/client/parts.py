@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import MISSING, fields
-from typing import Any, Callable, Optional, Protocol, cast
+from typing import Any, Callable, Mapping, Optional, Protocol, cast
 
 from noeta.agent.spec import ComponentRef, ToolRef
 from noeta.context.reminders import ReminderSpec
@@ -42,6 +42,7 @@ __all__ = [
     "memory_impl",
     "provider_family",
     "react_impl",
+    "register_catalog_models",
     "resolve_model_alias",
 ]
 
@@ -124,6 +125,16 @@ def provider_family(model: str) -> Optional[str]:
     """
     family: Optional[str] = _catalog().provider_family(model)
     return family
+
+
+def register_catalog_models(models: Mapping[str, Any]) -> None:
+    """Register operator model rows into the catalog overlay, loader-resolved.
+
+    The declarative ``HostConfig.extra_models`` lands here at Client
+    construction; all validation (ModelSpec type, collisions with shipped
+    rows, identical-re-registration idempotency) lives in the catalog module.
+    """
+    _catalog().register_models(models)
 
 
 _WORKSPACE_MOD: Optional[Any] = None

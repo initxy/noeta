@@ -39,7 +39,7 @@ from noeta.execution import (
     multi_turn_policy_wrapper,
 )
 from noeta.client.messages import ViewItem, as_messages
-from noeta.client.parts import resolve_model_alias
+from noeta.client.parts import register_catalog_models, resolve_model_alias
 from noeta.execution.driver import DriveOutcome, SeededTurn
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
@@ -533,6 +533,12 @@ class Client:
         #    multi-session); absent it, build the in-memory triple (the historical
         #    default, byte-identical for every existing caller).
         hc = host_config if host_config is not None else HostConfig()
+        # Operator catalog extensions register before anything derives from
+        # the catalog (compaction knobs, pricing, vision projection, family).
+        # Idempotent across Clients built from the same HostConfig; collisions
+        # with shipped rows raise here, at build, never mid-session.
+        if hc.extra_models:
+            register_catalog_models(hc.extra_models)
         injected = hc.storage_triple()
         dispatcher: Dispatcher
         event_log: EventLogFull

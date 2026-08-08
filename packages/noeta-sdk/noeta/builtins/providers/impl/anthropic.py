@@ -558,7 +558,7 @@ def _model_admits_images(model: str) -> bool:
       provider is the authority on its own capabilities and answers with a
       clear error if the model truly cannot read images.
     """
-    spec = catalog.CATALOG.get(catalog.resolve_alias(model))
+    spec = catalog.find_spec(model)
     if spec is None:
         return True
     return bool(spec.supports_vision)

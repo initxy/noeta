@@ -270,6 +270,21 @@ class HostConfig:
     #: ``AgentSpec``.
     plugin_config: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
+    # -- model catalog extensions --------------------------------------------
+    #: Operator model rows joining the shipped catalog: ``model id →
+    #: ModelSpec`` (from ``noeta.sdk.providers``; typed ``Any`` here because
+    #: the class lives in the providers built-in, reached only dynamically).
+    #: For deployments the public table cannot know — internal gateway routing
+    #: names, self-hosted models. Registered at Client construction; a name
+    #: colliding with a shipped row/alias fails the build, and a spec must be
+    #: registered identically on every run (the catalog feeds compaction
+    #: derivation, which feeds composed bytes). Wiring, never identity.
+    #: Registration lands when the Client is CONSTRUCTED: a host that consults
+    #: catalog-derived surfaces earlier (``model_capabilities``,
+    #: ``catalog_models`` at config-validation time) should call
+    #: ``noeta.sdk.providers.register_models`` at process start instead.
+    extra_models: Mapping[str, Any] = field(default_factory=dict)
+
     # -- host kill-switches ------------------------------------------------
     workflow_allowed: bool = False
     #: Per-session background-job concurrency cap, forwarded to
