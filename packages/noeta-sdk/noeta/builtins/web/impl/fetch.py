@@ -15,7 +15,9 @@ answers 401/403 (or the host is unreachable), the transport raises, and the
 tool degrades to ``ToolResult(success=False, ...)`` with a message that names
 the cause — it never raises out of the step. This limitation is stated in the
 tool's description resource so the model does not try webfetch on intranet /
-logged-in pages.
+logged-in pages. A page whose body renders to empty Markdown (blocked, empty,
+or script-only) degrades the same way: success=True with zero bytes would read
+as "the page had nothing on it" and stop the model from trying another source.
 
 The Markdown conversion is a deliberately minimal, dependency-free heuristic; it
 is deterministic given identical input bytes so a resumed run reproduces the same
@@ -173,6 +175,19 @@ class WebFetchTool:
 
         title = _extract_title(raw)
         markdown = html_to_markdown(raw)
+        if not markdown.strip():
+            # An empty rendering is a failed fetch, not a successful empty page:
+            # reporting success=True with 0 bytes reads as "the page had nothing
+            # on it", and the model moves on instead of trying another source.
+            summary_url = truncate_bytes(url, SUMMARY_EMBED_MAX_BYTES)
+            return ToolResult(
+                success=False,
+                summary=(
+                    f"WebFetch got no readable text from {summary_url} — the page "
+                    "rendered to empty Markdown (blocked, empty, or script-only); "
+                    "try another source"
+                ),
+            )
         # The full Markdown is the audit artifact; the model reads the page
         # directly — a Title/URL header, then the body, truncated with a notice
         # when a page is pathologically long.

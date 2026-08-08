@@ -182,6 +182,20 @@ def test_webfetch_degrades_on_transport_failure() -> None:
     _assert_output_json_safe(result)
 
 
+def test_webfetch_empty_rendering_degrades_to_failure() -> None:
+    # A body that renders to empty Markdown (blocked, empty, or script-only
+    # page) must not report success: "fetched (0B markdown)" reads as "the page
+    # had nothing on it" and stops the model from trying another source.
+    empty = "<html><head><title>t</title></head><body><script>x()</script></body></html>"
+    transport = FakeFetchTransport(pages_by_url={"https://hollow": empty})
+    ctx, _ = _ctx()
+    result = WebFetchTool(transport=transport).invoke({"url": "https://hollow"}, ctx)
+    assert result.success is False
+    assert "no readable text" in result.summary
+    assert result.artifacts == []
+    _assert_output_json_safe(result)
+
+
 def test_webfetch_private_url_failure_names_the_cause() -> None:
     # A private / authenticated URL answers 401/403. The summary has to name the
     # cause, or the model retries the same fetch instead of asking for access.
