@@ -10,6 +10,7 @@ closure so no registry, menu, or kit crosses into kernel code.
 from __future__ import annotations
 
 import logging
+import warnings
 from pathlib import Path
 from typing import Any, Optional, Sequence, cast
 
@@ -19,6 +20,7 @@ from noeta.context.content_channel import (
     ContentChannelRegistry,
     ContentKindSpec,
 )
+from noeta.client.plugins import is_trusted
 from noeta.execution.control_tool import ControlToolEntry
 from noeta.execution.session_pack import (
     ContentKindContribution,
@@ -53,6 +55,8 @@ from .script import (
 
 __all__ = [
     "DEFAULT_SKILLS_SUBDIR",
+    "WORKSPACE_AGENTS_SKILLS_SUBDIR",
+    "UntrustedWorkspaceSkillsWarning",
     "build_skill_composer",
     "build_skill_script_wiring",
     "build_skills_kit",
@@ -199,6 +203,76 @@ def extract_skill_allowed_tools_raw(
 #: The ``--skills-dir`` override supplies ``override_skills_dir`` below.
 DEFAULT_SKILLS_SUBDIR = ".noeta/skills"
 
+#: Vendor-neutral per-workspace tier — ``<workspace>/.agents/skills`` — indexed
+#: just below the ``.noeta/skills`` pack: at equal scope the vendor-specific
+#: directory wins, so ``.noeta/skills`` keeps sovereignty over skills borrowed
+#: from the shared ecosystem convention.
+WORKSPACE_AGENTS_SKILLS_SUBDIR = ".agents/skills"
+
+
+class UntrustedWorkspaceSkillsWarning(UserWarning):
+    """Repo-derived workspace skill tiers were skipped: workspace not trusted.
+
+    Carries ``workspace_dir`` (the trust subject — the HOST-side path an
+    operator would ``grant_trust``, never a container mount point) and
+    ``skipped_dirs`` (the tiers actually dropped) as attributes, so a host can
+    consume them without parsing the message. Python's default warning filter
+    dedups per message+location, so an interactive host that wants a
+    per-session prompt must call ``is_trusted`` itself rather than listen for
+    this warning.
+    """
+
+    def __init__(
+        self, workspace_dir: Path, skipped_dirs: tuple[Path, ...]
+    ) -> None:
+        self.workspace_dir = workspace_dir
+        self.skipped_dirs = skipped_dirs
+        super().__init__(
+            f"workspace {workspace_dir} is not trusted; skipping its skill "
+            f"tiers: {', '.join(str(d) for d in skipped_dirs)} "
+            "(grant_trust to enable them)"
+        )
+
+
+#: The two admissible ``workspace_skills_trust`` values. Anything else raises:
+#: a fail-open typo on a security knob must not read as "open".
+_TRUST_MODES = ("open", "trust-store")
+
+
+def _workspace_skills_trusted(
+    trust_mode: str,
+    store: Optional[Path],
+    subject: Path,
+    gated_dirs: Sequence[Path],
+) -> bool:
+    """Whether the repo-derived workspace skill tiers (``gated_dirs``) may load.
+
+    ``trust_mode`` = ``"open"`` (always) or ``"trust-store"`` (only when
+    ``subject`` is recorded in the plugin trust store — the same store that
+    gates workspace plugin directories, so one ``grant_trust`` covers both).
+    ``subject`` is the HOST-side workspace path (the ``trust_subject`` config
+    key when the host supplies one): in sandbox mode the pack's own
+    ``workspace_dir`` is a container path like ``/workspace``, which the
+    operator never granted — and which every session shares, so keying on it
+    would collapse the gate to a global on/off. An untrusted subject skips the
+    tiers with a warning — never an error, mirroring the plugin loader's
+    ``UntrustedPluginDirWarning``. ``store`` overrides the trust-store path
+    (hermetic tests).
+
+    Note the trust store is a file OUTSIDE the workspace: a grant or
+    revocation between turns changes the tier set — and with it the skill
+    menu bytes in the stable prefix — on the next session build.
+    """
+    if trust_mode != "trust-store":
+        return True
+    if is_trusted(subject, store):
+        return True
+    warnings.warn(
+        UntrustedWorkspaceSkillsWarning(subject, tuple(gated_dirs)),
+        stacklevel=2,
+    )
+    return False
+
 
 def _snapshot_skill_tiers(
     exec_env: Optional[ExecEnv], tiers: Sequence[Path]
@@ -238,6 +312,7 @@ def load_workspace_skills(
     override_skills_dir: Optional[Path] = None,
     lower_skill_dirs: Sequence[Path] = (),
     exec_env: Optional[ExecEnv] = None,
+    workspace_pack_enabled: bool = True,
 ) -> SkillRegistry:
     """Build a ``SkillRegistry`` by merging the skill tiers.
 
@@ -257,6 +332,10 @@ def load_workspace_skills(
     Missing directories produce an **empty** Registry rather than an error — a
     workspace with no skills is still a valid coding session, and a fresh empty
     workspace still sees the global / built-in tiers.
+
+    ``workspace_pack_enabled=False`` skips the workspace-local top tier
+    entirely (the fold stops at ``lower_skill_dirs``) — the trust gate's lever
+    for an untrusted workspace with no operator ``override_skills_dir``.
     """
     skills_dir = (
         override_skills_dir
@@ -269,15 +348,20 @@ def load_workspace_skills(
     # rendered base directories are container paths. All tiers are fetched in
     # ONE container round-trip (``prefetched``) when the backend supports it;
     # each indexer scopes the shared snapshot to its own root.
-    prefetched = _snapshot_skill_tiers(
-        exec_env, [*lower_skill_dirs, skills_dir]
+    tiers = (
+        [*lower_skill_dirs, skills_dir]
+        if workspace_pack_enabled
+        else list(lower_skill_dirs)
     )
+    prefetched = _snapshot_skill_tiers(exec_env, tiers)
     merged = SkillRegistry({})
     for lower in lower_skill_dirs:
         merged = merge_skill_registries(
             merged,
             SkillIndexer(lower, exec_env=exec_env, prefetched=prefetched).index(),
         )
+    if not workspace_pack_enabled:
+        return merged
     return merge_skill_registries(
         merged,
         SkillIndexer(skills_dir, exec_env=exec_env, prefetched=prefetched).index(),
@@ -381,6 +465,7 @@ def build_skills_kit(
     workspace: WorkspaceRoot,
     scripts_enabled: bool,
     exec_env: Optional[ExecEnv],
+    workspace_pack_enabled: bool = True,
 ) -> SkillsKit:
     """Assemble everything the session build needs from the skill subsystem.
 
@@ -394,6 +479,7 @@ def build_skills_kit(
         override_skills_dir=override_skills_dir,
         lower_skill_dirs=lower_skill_dirs,
         exec_env=exec_env,
+        workspace_pack_enabled=workspace_pack_enabled,
     )
     script_tool, skill_script_tools, skill_scripts = build_skill_script_wiring(
         registry,
@@ -417,14 +503,26 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
     """The skills kit as a ``session_pack`` contribution.
 
     The manifest-declared factory. Reads this plugin's own config entry —
-    ``skills_dir`` (workspace override), ``builtin_skills_dirs`` +
-    ``global_skills_dir`` (the lower tiers), ``allow_skill_scripts``,
-    ``tool_enforcement`` — and assembles the three-tier kit.
-    ``builtin_skills_dirs`` is the whole lowest tier as the host assembled it:
+    ``skills_dir`` (workspace override; when set it PINS the workspace-scoped
+    set: the ``.agents/skills`` tier does not mount beneath it),
+    ``builtin_skills_dirs`` + ``extra_skill_dirs`` + ``global_agents_skills_dir``
+    + ``global_skills_dir`` (the lower tiers, low→high),
+    ``workspace_agents_tier`` (mounts ``<workspace>/.agents/skills`` just below
+    the workspace pack — a host-set switch on the full session environment; the
+    reduced orchestration shape omits it, though operator-supplied override
+    keys such as ``extra_skill_dirs`` reach both shapes by the override
+    channel's own contract: naming a key is an explicit act),
+    ``workspace_skills_trust`` + ``trust_store`` + ``trust_subject`` (the
+    workspace-tier trust gate; the subject is the HOST-side workspace path —
+    see :func:`_workspace_skills_trusted`), ``allow_skill_scripts``,
+    ``tool_enforcement`` — and assembles the tiered kit.
+    ``builtin_skills_dirs`` opens the lowest tier as the host assembled it:
     its own built-in packs plus every directory a loaded plugin contributed on
-    the ``skills`` surface. A directory that does not exist indexes to an empty
-    registry, so a plugin whose pack is absent in some install contributes
-    nothing rather than failing the build. The kit stays
+    the ``skills`` surface; ``extra_skill_dirs`` (operator-named foreign
+    directories, e.g. ``~/.claude/skills``) rides that same lowest tier after
+    them, so anything local shadows a borrowed skill. A directory that does not
+    exist indexes to an empty registry, so a plugin whose pack is absent in
+    some install contributes nothing rather than failing the build. The kit stays
     INSIDE this factory (no kit crosses into kernel code): the ``skill`` control
     tool rides ``control_tools`` as a closure over the merged registry, the
     guard inputs ride the opaque ``guard_facts`` bundle, and the
@@ -435,13 +533,54 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
     from the session entirely.
     """
     cfg = ctx.config("skills")
+    trust_mode = cast(str, cfg.get("workspace_skills_trust", "open"))
+    if trust_mode not in _TRUST_MODES:
+        raise ValueError(
+            f"skills config: unknown workspace_skills_trust value "
+            f"{trust_mode!r}; expected one of {_TRUST_MODES}"
+        )
     override_dir = cast(Optional[Path], cfg.get("skills_dir"))
     lower_skill_dirs: list[Path] = list(
         cast("Sequence[Path]", cfg.get("builtin_skills_dirs", ()))
     )
+    lower_skill_dirs.extend(
+        cast("Sequence[Path]", cfg.get("extra_skill_dirs", ()))
+    )
+    agents_global_dir = cast(
+        Optional[Path], cfg.get("global_agents_skills_dir")
+    )
+    if agents_global_dir is not None:
+        lower_skill_dirs.append(agents_global_dir)
     global_dir = cast(Optional[Path], cfg.get("global_skills_dir"))
     if global_dir is not None:
         lower_skill_dirs.append(global_dir)
+    # An operator ``skills_dir`` override PINS the workspace-scoped skill set:
+    # no repo-derived tier mounts beneath it, so a host that names its own
+    # directory keeps exact control over what a session sees.
+    agents_tier_active = override_dir is None and bool(
+        cfg.get("workspace_agents_tier", False)
+    )
+    # The trust gate covers exactly the repo-derived tiers in play; when
+    # nothing repo-derived would mount (override set, `.agents` switch off)
+    # there is no stake and no warning.
+    gated_dirs: list[Path] = []
+    if agents_tier_active:
+        gated_dirs.append(ctx.workspace_dir / WORKSPACE_AGENTS_SKILLS_SUBDIR)
+    if override_dir is None:
+        gated_dirs.append(ctx.workspace_dir / DEFAULT_SKILLS_SUBDIR)
+    trusted = True
+    if gated_dirs:
+        trusted = _workspace_skills_trusted(
+            trust_mode,
+            cast(Optional[Path], cfg.get("trust_store")),
+            cast(Optional[Path], cfg.get("trust_subject"))
+            or ctx.workspace_dir,
+            gated_dirs,
+        )
+    if trusted and agents_tier_active:
+        lower_skill_dirs.append(
+            ctx.workspace_dir / WORKSPACE_AGENTS_SKILLS_SUBDIR
+        )
     kit = build_skills_kit(
         workspace_dir=ctx.workspace_dir,
         override_skills_dir=override_dir,
@@ -449,6 +588,7 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
         workspace=ctx.workspace,
         scripts_enabled=bool(cfg.get("allow_skill_scripts", False)),
         exec_env=ctx.exec_env,
+        workspace_pack_enabled=trusted or override_dir is not None,
     )
     tools: dict[str, Tool] = {}
     if kit.script_tool is not None:

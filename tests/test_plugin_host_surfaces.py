@@ -465,7 +465,27 @@ def test_overrides_do_not_reinstate_the_reduced_environment(tmp_path: Path) -> N
     reduced = host._plugin_config(shell_mode="deny")
     assert "memory" not in reduced
     assert "builtin_skills_dirs" not in reduced["skills"]
+    assert "workspace_agents_tier" not in reduced["skills"]
+    assert "trust_subject" not in reduced["skills"]
     assert reduced["runbooks"] == {"tool_name": "x"}
+
+
+def test_full_shape_arms_workspace_agents_tier_and_trust_subject(
+    tmp_path: Path,
+) -> None:
+    """The zero-config workspace `.agents/skills` tier lives on one host line:
+    the full session shape arms the switch and carries the HOST-side trust
+    subject; the reduced shape (above) has neither."""
+    from tests._sdk_session import runner_main_spec
+
+    host = _host(tmp_path, overrides={})
+    full = host._plugin_config(
+        shell_mode="deny",
+        spec=runner_main_spec(),
+        trust_subject=tmp_path / "repo",
+    )
+    assert full["skills"]["workspace_agents_tier"] is True
+    assert full["skills"]["trust_subject"] == tmp_path / "repo"
 
 
 # ===========================================================================
