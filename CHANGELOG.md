@@ -8,6 +8,27 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-08-08
+
+Covers `noeta-sdk` only (`noeta-runtime` stays at 0.6.4). Patch bump:
+additive catalog surface, no breaking change.
+
+### Added — operator-extensible model catalog
+
+- `HostConfig.extra_models` and `noeta.sdk.providers.register_models`: operator
+  `ModelSpec` rows (internal gateway routing names, self-hosted models) join
+  the shipped catalog through a registration overlay consulted by every
+  lookup — spec resolution, pricing, compaction derivation, vision gating,
+  family classification. Collisions with shipped rows refuse loudly at build;
+  identical re-registration is a no-op; registration is all-or-nothing and
+  thread-safe. Extension aliases may target shipped shorthand.
+- `ModelSpec.provider_family`: an extension row whose id carries no vendor
+  prefix can declare its wire family explicitly (validated at registration).
+- `noeta.sdk.providers.find_spec` (merged point lookup) and `catalog_models()`
+  (merged enumeration for model pickers). `CATALOG` remains the shipped table.
+- Docs: the "register uncatalogued models" how-to now teaches registration
+  instead of direct `CATALOG` mutation, which bypassed every collision rule.
+
 ## [0.6.6] - 2026-08-08
 
 Covers `noeta-sdk` only (`noeta-runtime` stays at 0.6.4). Patch bump:
@@ -1757,7 +1778,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.6...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.7...HEAD
+[0.6.7]: https://github.com/initxy/noeta/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/initxy/noeta/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/initxy/noeta/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/initxy/noeta/compare/v0.6.3...v0.6.4
