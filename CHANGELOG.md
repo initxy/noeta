@@ -8,6 +8,41 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-08-08
+
+Covers `noeta-sdk` only (`noeta-runtime` stays at 0.6.4). Patch bump per
+default policy; note the new system requirement below.
+
+### Changed — Grep/Glob now run on ripgrep
+
+- `Grep` and `Glob` shell out to ripgrep through the `ExecEnv` seam instead
+  of walking with Python `re` / `pathlib`. **rg is now a hard requirement of
+  these two tools** — a missing binary fails with an install hint, and a
+  sandbox container image must include it. One engine, one dialect: the
+  pattern language is rg's (linear-time; lookaround and backreferences are
+  rejected by rg itself, so the conservative ReDoS pre-screen and its false
+  rejections are gone), and the walk carries rg's defaults — gitignore-aware
+  inside a git repository, hidden and binary files skipped, symlinks not
+  followed. `Glob` keeps pathlib pattern semantics (`*.py` stays top-level,
+  `**/*.py` recurses) over the `rg --files` walk.
+- `Grep`'s parameter surface now matches the reference agent's schema
+  (verified byte-level against Claude Code 2.1.226): `context` with `-C` as
+  its alias, `-n` defaulting to true in content mode, `-o` (only-matching),
+  `type` passing through to rg's full file-type list, `head_limit` read as
+  `head -N` over output lines/entries (default 250; 0 = unlimited), and a
+  new `offset` that skips like `tail -n +N`.
+- `-u: true` (`--no-ignore --hidden`) is the one extension beyond that
+  surface: it searches gitignored and hidden files, and a zero-match answer
+  names it instead of reading as "nowhere in the tree".
+
+### Fixed
+
+- A tree containing an unreadable file no longer fails the whole search: rg
+  exits 2 in that case even after printing every reachable match, and that
+  now counts as a clean per-file skip (a spoken stderr — bad regex, unknown
+  type — still fails loudly). An rg stream that overflows the capture cap
+  appends a "results are partial" note instead of truncating silently.
+
 ## [0.6.8] - 2026-08-08
 
 Covers `noeta-sdk` only (`noeta-runtime` stays at 0.6.4). Patch bump: one
@@ -1790,7 +1825,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.8...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.9...HEAD
+[0.6.9]: https://github.com/initxy/noeta/compare/v0.6.8...v0.6.9
 [0.6.8]: https://github.com/initxy/noeta/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/initxy/noeta/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/initxy/noeta/compare/v0.6.5...v0.6.6
