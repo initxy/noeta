@@ -241,7 +241,7 @@ def test_price_empty_usage_is_zero() -> None:
 
 def test_spec_for_unknown_model_raises_keyerror() -> None:
     """``spec_for`` stays strict — it hands back a spec or nothing, and every
-    caller that can survive a miss goes through ``CATALOG.get`` instead."""
+    caller that can survive a miss goes through ``find_spec`` instead."""
     with pytest.raises(KeyError):
         spec_for("totally-unknown-model")
 

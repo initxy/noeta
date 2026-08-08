@@ -26,6 +26,9 @@ __all__ = [
     "AnthropicProvider",
     "CATALOG",
     "ModelSpec",
+    "catalog_models",
+    "find_spec",
+    "register_models",
 ]
 
 _IMPL = "noeta.builtins.providers.impl"
@@ -36,6 +39,9 @@ _EXPORTS = {
     "OpenAIResponsesProvider": "openai_responses",
     "CATALOG": "catalog",
     "ModelSpec": "catalog",
+    "catalog_models": "catalog",
+    "find_spec": "catalog",
+    "register_models": "catalog",
 }
 
 
