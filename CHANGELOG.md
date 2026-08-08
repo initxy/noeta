@@ -8,6 +8,40 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-08-08
+
+Covers `noeta-sdk` only (`noeta-runtime` stays at 0.6.4). Patch bump:
+additive skill-discovery and instructions-discovery surface, no breaking
+change.
+
+### Added — skill directories across ecosystem conventions
+
+- The vendor-neutral `<workspace>/.agents/skills` directory is indexed by
+  default as a tier just below `<workspace>/.noeta/skills`, so a repo carrying
+  skills in the shared convention works unchanged while the Noeta-native
+  directory keeps sovereignty on name clashes.
+- New opt-in tiers via `plugin_config["skills"]`: `extra_skill_dirs` (borrowed
+  foreign directories such as `~/.claude/skills`, riding the lowest band after
+  built-in and plugin packs) and `global_agents_skills_dir`
+  (`~/.agents/skills`, just below the global `~/.noeta/skills`). Home-scoped
+  and foreign directories are never scanned by default.
+- `workspace_skills_trust` (`"open"` default / `"trust-store"`): gates both
+  repo-derived workspace tiers on the plugin trust store — one `grant_trust`
+  covers plugins and skills. The gate keys on the host-side workspace path
+  (`trust_subject`), never a sandbox container path; an unknown value fails
+  the session build instead of failing open. Skipped tiers produce an
+  `UntrustedWorkspaceSkillsWarning` carrying the subject and directories as
+  attributes.
+- An operator `skills_dir` override now pins the workspace-scoped skill set:
+  the `.agents/skills` tier does not mount beneath it.
+
+### Added — CLAUDE.md as an instructions candidate
+
+- The workspace-instructions search order is now `NOETA.md` → `AGENTS.md` →
+  `CLAUDE.md` (first non-empty wins), for the root file and read-triggered
+  subdirectory discovery alike, so existing Claude Code repos work without
+  renaming anything.
+
 ## [0.6.5] - 2026-08-06
 
 Covers `noeta-sdk` only (`noeta-runtime` stays at 0.6.4). Patch bump:
@@ -1723,7 +1757,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.5...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.6...HEAD
+[0.6.6]: https://github.com/initxy/noeta/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/initxy/noeta/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/initxy/noeta/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/initxy/noeta/compare/v0.6.2...v0.6.3
