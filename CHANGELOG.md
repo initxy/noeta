@@ -8,6 +8,18 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-08-08
+
+Covers `noeta-sdk` only (`noeta-runtime` stays at 0.6.4). Patch bump: one
+WebFetch bug fix.
+
+### Fixed
+
+- `WebFetch` on a page whose body renders to empty Markdown (blocked, empty,
+  or script-only) now degrades to `success=False` with a "try another source"
+  summary. It used to report success with zero bytes, which reads as "the
+  page had nothing on it" and stopped the model from trying another source.
+
 ## [0.6.7] - 2026-08-08
 
 Covers `noeta-sdk` only (`noeta-runtime` stays at 0.6.4). Patch bump:
@@ -1778,7 +1790,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.7...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.8...HEAD
+[0.6.8]: https://github.com/initxy/noeta/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/initxy/noeta/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/initxy/noeta/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/initxy/noeta/compare/v0.6.4...v0.6.5
