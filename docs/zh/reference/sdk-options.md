@@ -188,7 +188,7 @@ compile_options(options, *, plugins=None, preset_prompts=None)
 | `workflow_allowed` | `False` | 暴露 `run_workflow`（同时还需要具备委派能力） |
 | `max_background_jobs_per_root_task` | `8` | 超过上限时一次后台 `Bash` 会被拒绝，而不是排队 |
 | `max_background_subagents_per_root_task` | `8` | 对 `Task(background=True)` 同理 |
-| `instructions_enabled` | `False` | 加载工作区根的 `NOETA.md`，否则 `AGENTS.md` |
+| `instructions_enabled` | `False` | 加载工作区根的 `NOETA.md`，否则 `AGENTS.md`，再否则 `CLAUDE.md` |
 | `instructions_file` | `None` | 只读这一个路径，不做搜索 |
 | `instructions_discovery` | `False` | 由 `Read` 触发的子目录 instructions 文件发现 |
 | `write_mode` | `"dry_run"` | `"apply"` 才执行真实写入 |

@@ -231,7 +231,7 @@ Supplying both forms raises `ValueError`, as does a partial explicit triple. All
 | `workflow_allowed` | `False` | expose `run_workflow` (also requires delegation) |
 | `max_background_jobs_per_root_task` | `8` | over the cap a background `Bash` is rejected, not queued |
 | `max_background_subagents_per_root_task` | `8` | the same for `Task(background=True)` |
-| `instructions_enabled` | `False` | load the workspace-root `NOETA.md`, else `AGENTS.md` |
+| `instructions_enabled` | `False` | load the workspace-root `NOETA.md`, else `AGENTS.md`, else `CLAUDE.md` |
 | `instructions_file` | `None` | read only this path instead of searching |
 | `instructions_discovery` | `False` | `Read`-triggered discovery of subdirectory instruction files |
 | `write_mode` | `"dry_run"` | `"apply"` performs real writes |

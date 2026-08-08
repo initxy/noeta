@@ -178,8 +178,10 @@ ref     = "house_style.mcp:TICKETS_SERVER"   # 一个 SdkMcpServer
 host · host-wired · 冲突 `none` · sorted。一个纯资源 Surface：一个指向 skill 包目录的 `path`。没有 `ref`，因为什么都不会被 import。每个已加载插件的目录都会加入 skill 合并的**最低那一层**，它们彼此之间按 `(plugin, 贡献名)` 排序，因此完整的优先级是
 
 ```
-内置  <  插件贡献的  <  全局 ~/.noeta/skills  <  工作区 .noeta/skills
+内置  <  插件贡献的  <  extra_skill_dirs  <  全局 ~/.agents/skills  <  全局 ~/.noeta/skills  <  工作区 .agents/skills  <  工作区 .noeta/skills
 ```
+
+默认只挂载两个工作区层。家目录层和借入层都是显式选择加入——`extra_skill_dirs`（如 `~/.claude/skills`）和 `global_agents_skills_dir`（`~/.agents/skills`）走 `HostConfig.plugin_config["skills"]`，`global_skills_dir` 是 host 字段——因为服务端 SDK 不应静默读取运行用户的家目录。运维方的 `skills_dir` override 会钉死工作区作用域的技能集（`.agents/skills` 层不会挂在它下面）；`workspace_skills_trust: "trust-store"` 则让两个工作区层都过插件信任库的门。
 
 所以用户自己工作区里的技能永远会盖住同名的插件技能。这些技能包由与其他各层相同的 `SkillIndexer` 建索引，因此整套 frontmatter 契约——`disable-model-invocation`、`allowed-tools`、`priority`——它们全都白拿。
 

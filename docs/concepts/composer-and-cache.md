@@ -105,8 +105,8 @@ A default-off host switch (`HostConfig.instructions_discovery`) arms a
 post-tool hook. After a successful `Read` of a file **inside the workspace**,
 the runtime walks from the workspace root down to that file's directory —
 shallowest first, the root itself excluded, since the root file is loaded
-pre-loop — and activates the first `NOETA.md` / `AGENTS.md` it finds in each
-directory that has not contributed one yet.
+pre-loop — and activates the first `NOETA.md` / `AGENTS.md` / `CLAUDE.md` it
+finds in each directory that has not contributed one yet.
 
 This is the monorepo case: a subtree that carries its own conventions. Each
 activation is an ordinary content-channel event emitted after the turn's tool

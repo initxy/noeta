@@ -44,7 +44,8 @@ Rule of thumb: the wider the impact (spanning multiple modules), the more it bel
 [anchored-content-placement](anchored-content-placement.md) ·
 [memory-consolidation](memory-consolidation.md) ·
 [skill-resource-on-demand](skill-resource-on-demand.md) ·
-[model-driven-skill-invocation](model-driven-skill-invocation.md)
+[model-driven-skill-invocation](model-driven-skill-invocation.md) ·
+[skill-directory-tiers](skill-directory-tiers.md)
 
 **Tools, agents & providers**:
 [tool-and-agent-catalog](tool-and-agent-catalog.md) ·

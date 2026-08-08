@@ -99,7 +99,7 @@ agent 可以调用的一个外部动作。`name` / `input_schema` / `description
 
 ### Skill
 
-一个本地的、静态的 LLM 工作流模板，位于 `.noeta/skills/<name>/SKILL.md`，可以附带资源文件。三个层级由低到高合并：内置、全局 `~/.noeta/skills`，然后是工作区。加载分两阶段——*菜单*（名字加一行摘要）被渲染进 `skill` control tool 的 schema，而只有被选中的那个 skill 的正文才会进入半稳定段，压缩不会把它冲掉。捆绑的资源按需取用：渲染器会在前面加上 `Base directory for this skill: <dir>`，模型再用 `Read` 去读文件。**不是 Tool。**
+一个本地的、静态的 LLM 工作流模板，位于 `.noeta/skills/<name>/SKILL.md`，可以附带资源文件。层级由低到高合并：内置/插件/借入目录（`extra_skill_dirs`，如 `~/.claude/skills`，选择加入）、全局 `~/.agents/skills`（选择加入）、全局 `~/.noeta/skills`（选择加入）、工作区 `.agents/skills`，最后是工作区 `.noeta/skills`——同一作用域内厂商专属目录胜出，默认只挂载两个工作区层。加载分两阶段——*菜单*（名字加一行摘要）被渲染进 `skill` control tool 的 schema，而只有被选中的那个 skill 的正文才会进入半稳定段，压缩不会把它冲掉。捆绑的资源按需取用：渲染器会在前面加上 `Base directory for this skill: <dir>`，模型再用 `Read` 去读文件。**不是 Tool。**
 
 ### Provider
 
@@ -213,7 +213,7 @@ View 分三部分组装。`stable_prefix` 携带系统 prompt 消息和 provider
 
 ### Anchored placement
 
-一份内容通道常驻内容渲染在哪里，由它的激活锚点决定——即该次激活被 fold 时所记录的滚动历史长度，先写者获胜。一条规则，没有按 kind 的开关：锚点在第一条 assistant 消息处或之前的渲染在半稳定段；更晚的锚点则渲染在动态后缀里的那个位置上，因此一次任务中途的激活是追加，而不是改写头部。配套特性：**instructions discovery**，默认关闭，它会激活被读文件与工作区根之间各目录下的 `NOETA.md` / `AGENTS.md`。
+一份内容通道常驻内容渲染在哪里，由它的激活锚点决定——即该次激活被 fold 时所记录的滚动历史长度，先写者获胜。一条规则，没有按 kind 的开关：锚点在第一条 assistant 消息处或之前的渲染在半稳定段；更晚的锚点则渲染在动态后缀里的那个位置上，因此一次任务中途的激活是追加，而不是改写头部。配套特性：**instructions discovery**，默认关闭，它会激活被读文件与工作区根之间各目录下的 `NOETA.md` / `AGENTS.md` / `CLAUDE.md`。
 → [ADR: Anchored content placement](https://github.com/initxy/noeta/blob/main/docs/adr/anchored-content-placement.md)
 
 ### Origin
