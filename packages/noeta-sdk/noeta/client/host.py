@@ -442,13 +442,18 @@ class SdkHost(GenericEngineResolver):
     #: The other skills fields below become inert when this is ``False``.
     skills_enabled: bool = True
     # Skills dir overriding workspace_dir/.noeta/skills (workspace-local tier);
-    # None uses the default load location.
-    skills_dir: Optional[Path] = None
+    # None uses the default load location. When set it PINS the
+    # workspace-scoped set: the repo-derived `.agents/skills` tier does not
+    # mount beneath it.
     # Lower-priority skill tiers below the workspace-local tier, ordered
-    # built-in < global (workspace-local always wins). The product layer passes
+    # built-in < plugin < extra_skill_dirs (borrowed, via plugin_config) <
+    # global ~/.agents/skills (global_agents_skills_dir, via plugin_config) <
+    # global ~/.noeta/skills < workspace .agents/skills < workspace pack
+    # (workspace-local always wins). The product layer passes
     # the built-in tier (the SDK doesn't know noeta-agent's BUILTIN_SKILLS_DIR);
     # global_skills_dir defaults to None ⇒ no global tier. Empty = workspace-local
     # tier only.
+    skills_dir: Optional[Path] = None
     builtin_skills_dirs: Tuple[Path, ...] = ()
     #: Skill directories loaded plugins contribute on the ``skills`` surface
     #: (``PluginSet.host_skills_dirs``, folded in by the ``Client``). They ride
@@ -1461,6 +1466,12 @@ class SdkHost(GenericEngineResolver):
         # final path). ``None`` (no session workspace) keeps the host-fixed default
         # dir.
         workspace_dir = Path(workspace) if workspace else self.workspace_dir
+        # The HOST-side workspace path, captured BEFORE the sandbox
+        # substitution below: the skills trust gate keys on what the operator
+        # granted (a host repo path), never the container mount point — every
+        # sandboxed session shares the same container workdir, so gating on it
+        # would collapse per-repo trust to a global on/off.
+        trust_subject = workspace_dir
         # Sandbox backend: when the host configured one, every session's fs / shell
         # IO routes into the container instead of the host. The backend is fed to
         # ``build_session_inputs`` (which builds the pack's tools against it AND
@@ -1671,6 +1682,7 @@ class SdkHost(GenericEngineResolver):
                 shell_mode=shell_mode,
                 spec=spec,
                 memory_override=memory_override,
+                trust_subject=trust_subject,
             ),
             hooks_pre_tool_use=self.hooks_pre_tool_use,
             repetition_threshold=self.repetition_threshold,
@@ -2028,6 +2040,7 @@ class SdkHost(GenericEngineResolver):
         shell_mode: ShellMode,
         spec: Optional[AgentSpec] = None,
         memory_override: Optional[Path] = None,
+        trust_subject: Optional[Path] = None,
     ) -> dict[str, dict[str, Any]]:
         """The per-plugin config bag a build path hands the kernel builder.
 
@@ -2083,6 +2096,17 @@ class SdkHost(GenericEngineResolver):
             self.plugin_skills_dirs
         )
         config["skills"]["global_skills_dir"] = self.global_skills_dir
+        # The vendor-neutral ``<workspace>/.agents/skills`` tier mounts on the
+        # full session environment only — the pack derives the path from its
+        # own per-session ``workspace_dir`` (which a per-session workspace or
+        # sandbox mount replaces), so the host passes a switch, not a path.
+        # The reduced orchestration environment keeps omitting lower tiers.
+        config["skills"]["workspace_agents_tier"] = True
+        # The trust gate's subject: the HOST-side per-session workspace path
+        # (captured before any sandbox substitution). Absent (None), the pack
+        # falls back to its own workspace_dir — correct on every local path.
+        if trust_subject is not None:
+            config["skills"]["trust_subject"] = trust_subject
         config["workspace"]["instructions_discovery"] = self.instructions_discovery
         # The per-task memory root rides the top-precedence ``memory_dir`` slot so
         # the builder's tool pack + resident index target that tenant's store;

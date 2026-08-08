@@ -35,6 +35,8 @@ from .script import (
 )
 from .wiring import (
     DEFAULT_SKILLS_SUBDIR,
+    WORKSPACE_AGENTS_SKILLS_SUBDIR,
+    UntrustedWorkspaceSkillsWarning,
     build_skill_composer,
     build_skill_script_wiring,
     build_skills_kit,
@@ -49,6 +51,7 @@ from .wiring import (
 
 __all__ = [
     "DEFAULT_SKILLS_SUBDIR",
+    "WORKSPACE_AGENTS_SKILLS_SUBDIR",
     "SKILL_DRIFT_POLICY",
     "SKILL_KIND",
     "SKILL_SCRIPT_TOOL_NAME",
@@ -58,6 +61,7 @@ __all__ = [
     "SkillIndexer",
     "SkillRegistry",
     "SkillsKit",
+    "UntrustedWorkspaceSkillsWarning",
     "activate_skills",
     "build_skill_composer",
     "build_skill_hashes",
