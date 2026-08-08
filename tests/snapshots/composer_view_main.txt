@@ -30,7 +30,7 @@
     },
     {
       "function": {
-        "description": "Matches a glob pattern against file names and returns the matching paths.\n\n- Standard glob semantics — `**` matches recursively (e.g. \"**/*.py\", \"src/**/test_*\"). Results are sorted by modification time, newest first, and capped with a notice — narrow the pattern if truncated.\n- Scope with `path` (the directory to search, default: the whole workspace). `path` is workspace-relative, or absolute to search outside the workspace (a neighbouring checkout). Results are workspace-relative POSIX paths, or absolute when the search was rooted outside it.\n- `pattern` is always relative to `path`: no leading `/` and no `..`. Hidden directories and dependency/cache trees (node_modules, __pycache__, …) are skipped; matches escaping the searched directory via symlink are dropped.\n- To search by file content rather than name use `Grep`; to read a known file use `Read`.",
+        "description": "Matches a glob pattern against file names and returns the matching paths.\n\n- Standard glob semantics — `**` matches recursively (e.g. \"**/*.py\", \"src/**/test_*\"). Results are sorted by modification time, newest first, and capped with a notice — narrow the pattern if truncated.\n- Scope with `path` (the directory to search, default: the whole workspace). `path` is workspace-relative, or absolute to search outside the workspace (a neighbouring checkout). Results are workspace-relative POSIX paths, or absolute when the search was rooted outside it.\n- `pattern` is always relative to `path`: no leading `/` and no `..`. The walk is ripgrep's: gitignored and hidden files are not listed and symlinks are not followed; a `path` targeting a hidden directory directly is still searched.\n- To search by file content rather than name use `Grep`; to read a known file use `Read`.",
         "name": "Glob",
         "parameters": {
           "additionalProperties": false,
@@ -52,7 +52,7 @@
     },
     {
       "function": {
-        "description": "Searches file contents with a regular expression (Python `re` syntax).\n\n- `pattern` matches line by line (or across lines with `multiline: true`). Scope with `path` (a file or sub-directory; workspace-relative, or absolute to search outside the workspace) and filter with `glob` (e.g. \"**/*.py\").\n- `output_mode`: \"files_with_matches\" (the default) lists the files that contain a match; \"content\" shows the matching lines; \"count\" shows per-file match counts.\n- In content mode, `-n: true` adds line numbers (they align with `Read`'s), `-A`/`-B`/`-C` add context lines, and overlong lines are clipped with a marker.\n- `-i: true` matches case-insensitively. `head_limit` caps how many results return.\n- Hidden directories and dependency/cache trees (node_modules, __pycache__, …) are skipped; binary and unreadable files are skipped silently. Symlinks are not followed, so one walk stays in one tree.\n- Workflow: find the files with the default mode first, then `Read` the surroundings — it keeps search noise out of your context. To match by filename use `Glob`.",
+        "description": "Searches file contents with ripgrep (rg regex syntax — linear-time; lookaround and backreferences are not supported).\n\n- `pattern` matches line by line (or across lines with `multiline: true`). Scope with `path` (a file or sub-directory; workspace-relative, or absolute to search outside the workspace) and filter with `glob` (e.g. \"**/*.py\") or `type` (an rg file-type name, e.g. \"py\", \"js\", \"rust\").\n- `output_mode`: \"files_with_matches\" (the default) lists the files that contain a match; \"content\" shows the matching lines; \"count\" shows per-file match counts.\n- In content mode, line numbers are on by default (`-n: false` hides them; they align with `Read`'s), `context` (alias `-C`) or `-A` / `-B` add context lines, `-o: true` prints only the matched parts, and overlong lines are clipped with a marker.\n- `-i: true` matches case-insensitively. `head_limit` caps the output like `head -N` — first N files/entries, or first N output lines in content mode (default 250; 0 = unlimited) — and `offset` skips the first N like `tail -n +N`.\n- The walk carries rg's defaults: gitignored, hidden and binary files are skipped and symlinks are not followed. `-u: true` also searches gitignored and hidden files; a `path` targeting a hidden directory directly is always searched.\n- Workflow: find the files with the default mode first, then `Read` the surroundings — it keeps search noise out of your context. To match by filename use `Glob`.",
         "name": "Grep",
         "parameters": {
           "additionalProperties": false,
@@ -75,15 +75,29 @@
             "-n": {
               "type": "boolean"
             },
+            "-o": {
+              "type": "boolean"
+            },
+            "-u": {
+              "type": "boolean"
+            },
+            "context": {
+              "minimum": 0,
+              "type": "integer"
+            },
             "glob": {
               "type": "string"
             },
             "head_limit": {
-              "minimum": 1,
+              "minimum": 0,
               "type": "integer"
             },
             "multiline": {
               "type": "boolean"
+            },
+            "offset": {
+              "minimum": 0,
+              "type": "integer"
             },
             "output_mode": {
               "enum": [
@@ -97,6 +111,9 @@
               "type": "string"
             },
             "pattern": {
+              "type": "string"
+            },
+            "type": {
               "type": "string"
             }
           },
@@ -412,7 +429,7 @@
         }
       ],
       "name": "stable_prefix",
-      "segment_hash": "9d8fe7b96a9da3de74203dcbd9c7990ee2a19777607533ace2431d8d0acb6420"
+      "segment_hash": "82239e000d1d080deaf823f93a36e8ae4cba9dabdfffe9e60fdbb602afaa609f"
     },
     {
       "content": [],
