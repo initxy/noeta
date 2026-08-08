@@ -93,6 +93,25 @@ def test_load_falls_back_to_agents_md(tmp_path: Path) -> None:
     assert snap.name == "AGENTS.md"
 
 
+def test_load_falls_back_to_claude_md(tmp_path: Path) -> None:
+    """A repo carrying only the Claude Code convention still gets instructions."""
+    _write(tmp_path / "CLAUDE.md", "# Claude rules\n")
+    snap = load_instructions(tmp_path, filenames=DEFAULT_INSTRUCTIONS_FILENAMES)
+    assert snap is not None
+    assert snap.name == "CLAUDE.md"
+    assert snap.text.startswith("# Claude rules")
+
+
+def test_load_agents_md_beats_claude_md(tmp_path: Path) -> None:
+    """With both present, AGENTS.md wins — such repos conventionally make
+    CLAUDE.md an ``@``-include of AGENTS.md, so the fallback must not double-load."""
+    _write(tmp_path / "AGENTS.md", "# Agents\n")
+    _write(tmp_path / "CLAUDE.md", "@AGENTS.md\n")
+    snap = load_instructions(tmp_path, filenames=DEFAULT_INSTRUCTIONS_FILENAMES)
+    assert snap is not None
+    assert snap.name == "AGENTS.md"
+
+
 def test_load_none_when_missing(tmp_path: Path) -> None:
     # Empty directory → None
     assert load_instructions(tmp_path, filenames=DEFAULT_INSTRUCTIONS_FILENAMES) is None
@@ -127,7 +146,7 @@ def test_load_override_missing_is_none(tmp_path: Path) -> None:
 
 
 def test_default_filenames_match_docstring() -> None:
-    assert DEFAULT_INSTRUCTIONS_FILENAMES == ("NOETA.md", "AGENTS.md")
+    assert DEFAULT_INSTRUCTIONS_FILENAMES == ("NOETA.md", "AGENTS.md", "CLAUDE.md")
 
 
 # ---------------------------------------------------------------------------

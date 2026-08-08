@@ -81,10 +81,12 @@ __all__ = [
 
 
 #: Workspace-root search order for the instructions file. The first
-#: existing, non-empty candidate wins. NOETA.md is canonical (the
-#: project's CLAUDE.md counterpart); AGENTS.md is a common GitHub /
-#: repo convention supported as a fallback.
-DEFAULT_INSTRUCTIONS_FILENAMES = ("NOETA.md", "AGENTS.md")
+#: existing, non-empty candidate wins. NOETA.md is canonical; AGENTS.md is
+#: the cross-vendor repo convention; CLAUDE.md is the Claude Code counterpart,
+#: last so a repo carrying both picks AGENTS.md (such repos conventionally
+#: make CLAUDE.md an ``@``-include of AGENTS.md). The same order drives
+#: read-triggered subdirectory discovery.
+DEFAULT_INSTRUCTIONS_FILENAMES = ("NOETA.md", "AGENTS.md", "CLAUDE.md")
 
 
 # ---------------------------------------------------------------------------
