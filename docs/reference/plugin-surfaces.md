@@ -276,8 +276,18 @@ loaded plugin's directories join the **lowest tier** of the skill merge, ordered
 `(plugin, contribution name)` among themselves, so the full precedence is
 
 ```
-built-in  <  plugin-contributed  <  global ~/.noeta/skills  <  workspace .noeta/skills
+built-in  <  plugin-contributed  <  extra_skill_dirs  <  global ~/.agents/skills  <  global ~/.noeta/skills  <  workspace .agents/skills  <  workspace .noeta/skills
 ```
+
+Only the workspace tiers mount by default. The home-scoped and borrowed tiers
+are opt-in — `extra_skill_dirs` (e.g. `~/.claude/skills`) and
+`global_agents_skills_dir` (`~/.agents/skills`) via
+`HostConfig.plugin_config["skills"]`, `global_skills_dir` as a host field —
+because a server-side SDK must not silently read the operating user's home
+directory. An operator `skills_dir` override pins the workspace-scoped set
+(the `.agents/skills` tier does not mount beneath it), and
+`workspace_skills_trust: "trust-store"` gates both workspace tiers on the
+plugin trust store.
 
 A user's own workspace skill therefore always shadows a same-named plugin one.
 The packs are indexed by the same `SkillIndexer` as every other tier, so they

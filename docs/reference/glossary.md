@@ -147,8 +147,12 @@ prompt. A tool also carries `version` and `risk_level`, which gates approval.
 ### Skill
 
 A local, static LLM-workflow template at `.noeta/skills/<name>/SKILL.md`,
-optionally with resource files. Three tiers merge low to high: built-in, global
-`~/.noeta/skills`, then workspace. Loading is two-stage — the *menu* (name plus
+optionally with resource files. Tiers merge low to high: built-in/plugin/
+borrowed (`extra_skill_dirs`, e.g. `~/.claude/skills` — opt-in), global
+`~/.agents/skills` (opt-in), global `~/.noeta/skills` (opt-in), workspace
+`.agents/skills`, then workspace `.noeta/skills` — the vendor-specific
+directory wins at equal scope, and only the workspace tiers mount by
+default. Loading is two-stage — the *menu* (name plus
 one-line summary) is rendered into the `skill` control-tool schema, and only the
 selected skill's body enters the semi-stable segment, which compaction does not
 flush. Bundled resources are reached on demand: the renderer prepends
@@ -383,7 +387,7 @@ One rule, no per-kind flag: an anchor at or before the first assistant message
 renders in the semi-stable segment; a later anchor renders inside the dynamic
 suffix at that point, so a mid-task activation appends instead of rewriting the
 head. Companion feature: **instructions discovery**, off by default, which
-activates the `NOETA.md` / `AGENTS.md` of directories between a read file and
+activates the `NOETA.md` / `AGENTS.md` / `CLAUDE.md` of directories between a read file and
 the workspace root.
 → [ADR: Anchored content placement](https://github.com/initxy/noeta/blob/main/docs/adr/anchored-content-placement.md)
 
