@@ -192,6 +192,7 @@ compile_options(options, *, plugins=None, preset_prompts=None)
 | `instructions_file` | `None` | 只读这一个路径，不做搜索 |
 | `instructions_discovery` | `False` | 由 `Read` 触发的子目录 instructions 文件发现 |
 | `write_mode` | `"dry_run"` | `"apply"` 才执行真实写入 |
+| `extra_models` | `{}` | 运维方注入的 `ModelSpec` 行，与出厂 catalog 合并（内部网关路由名、自托管模型）；与出厂行撞名会让构建失败。每次启动须注册同样的行——catalog 参与压缩水位推导 |
 
 ## Sandbox 与存储的接线类型
 

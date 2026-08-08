@@ -235,6 +235,7 @@ Supplying both forms raises `ValueError`, as does a partial explicit triple. All
 | `instructions_file` | `None` | read only this path instead of searching |
 | `instructions_discovery` | `False` | `Read`-triggered discovery of subdirectory instruction files |
 | `write_mode` | `"dry_run"` | `"apply"` performs real writes |
+| `extra_models` | `{}` | operator `ModelSpec` rows joining the shipped catalog (internal gateway names, self-hosted models); collisions with shipped rows fail the build. Register the same rows every run — the catalog feeds compaction derivation |
 
 ## Sandbox and storage wiring types
 

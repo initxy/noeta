@@ -54,6 +54,7 @@ Rule of thumb: the wider the impact (spanning multiple modules), the more it bel
 [control-tool-contributions-and-activation-identity](control-tool-contributions-and-activation-identity.md) ·
 [agent-identity-and-provenance](agent-identity-and-provenance.md) ·
 [provider-adapters-and-multimodal](provider-adapters-and-multimodal.md) ·
+[model-catalog-extension](model-catalog-extension.md) ·
 [guard-observer-hooks](guard-observer-hooks.md) ·
 [event-origin-marker](event-origin-marker.md) ·
 [mcp-connectors](mcp-connectors.md) ·

@@ -26,7 +26,7 @@ from noeta.sdk import query, Client, Options, tool
 
 | 模块 | 包含 | 为什么单独放 |
 | --- | --- | --- |
-| `noeta.sdk.providers` | `AnthropicProvider`、`OpenAICompatProvider`、`OpenAIResponsesProvider`、`CATALOG`、`ModelSpec` | 只有真正构建网络 provider 的调用方才为 `httpx` 付费 |
+| `noeta.sdk.providers` | `AnthropicProvider`、`OpenAICompatProvider`、`OpenAIResponsesProvider`、`CATALOG`、`ModelSpec`、`register_models`、`find_spec`、`catalog_models` | 只有真正构建网络 provider 的调用方才为 `httpx` 付费 |
 | `noeta.sdk.storage` | `open_storage_stack` 以及 sqlite / postgres 适配器 | 只有选了 Postgres 的调用方才为 `psycopg` 付费 |
 | `noeta.sdk.testing` | `FakeLLMProvider` | 测试用料绝不能从一个生产导入路径够到 |
 | `noeta.presets` | 四个官方 agent 及其 prompt | 以 `presets` 从根重新导出，也可以直接导入 |

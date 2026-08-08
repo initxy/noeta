@@ -164,10 +164,11 @@ Neither degradation raises beyond the warning.
 **When you hit it:** You point `Options.model` at a gateway model id, a
 fine-tune, or a self-hosted model that is not in `CATALOG`.
 
-**Workaround:** Add a `ModelSpec` row for it. `CATALOG` and `ModelSpec` are
-re-exported from `noeta.sdk.providers`; a row supplies `context_window`,
-`max_output_tokens`, and the price fields, which is everything both derivations
-read.
+**Workaround:** Register a `ModelSpec` row for it —
+`HostConfig(extra_models={...})`, or `register_models` from
+`noeta.sdk.providers` at process start. A row supplies `context_window`,
+`max_output_tokens`, and the price fields, which is everything both
+derivations read.
 
 ### Content is never garbage-collected
 

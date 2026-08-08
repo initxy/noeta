@@ -84,7 +84,7 @@
 
 **什么时候撞上：** 你把 `Options.model` 指向一个不在 `CATALOG` 里的网关模型 id、微调模型或自托管模型。
 
-**绕过办法：** 为它添加一行 `ModelSpec`。`CATALOG` 和 `ModelSpec` 都从 `noeta.sdk.providers` 重新导出；一行提供 `context_window`、`max_output_tokens` 和价格字段，那就是两处推导所读取的全部内容。
+**绕过办法：** 为它注册一行 `ModelSpec` —— `HostConfig(extra_models={...})`，或在进程启动时调用 `noeta.sdk.providers` 的 `register_models`；一行提供 `context_window`、`max_output_tokens` 和价格字段，那就是两处推导所读取的全部内容。
 
 ### 内容永远不会被垃圾回收
 
