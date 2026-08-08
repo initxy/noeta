@@ -8,6 +8,55 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-08-08
+
+Covers both packages, lockstep at 0.6.10 (`noeta-runtime` jumps from 0.6.4;
+`noeta-sdk`'s `noeta-runtime>=` floor rises with it — the ReAct policy reads
+the new `StepContext.steps_in_turn` field).
+
+### Fixed — loop state no longer outlives its task or turn
+
+The Engine cache deliberately shares one Engine (and its Policy) across every
+task with equal bindings, but the ReAct policy carried task/turn-scoped
+mutable state on the instance. Three consequences, all fixed:
+
+- **The `max_steps` counter accumulated across turns — and across
+  conversations.** A long multi-turn session eventually exhausted the cap and
+  then EVERY later turn park-failed with `react_max_steps_exceeded` until
+  something rebuilt the Engine (edit a role file, restart the process). The
+  counter now rides `StepContext.steps_in_turn`, threaded by the Engine's
+  step loop, so the budget is per driven turn and renews on every human
+  message. (`ReActPolicy` no longer has `_step_count`; a custom Policy doing
+  its own capping should read `ctx.steps_in_turn`.)
+- **The compaction-trigger baselines bled across tasks.** One conversation's
+  near-window real-usage baseline could make a fresh conversation's first
+  turn fire the proactive trigger and die non-retryable on
+  `compaction_no_progress`. The baselines (`last_estimate_at_call` /
+  `last_input_tokens_at_call`) now live in a bounded per-`task_id` table
+  inside the policy; semantics per task are unchanged. (Signature note:
+  `_trigger_estimate` / `_observed_density` / `_summary_boundary` and friends
+  now take the per-task state explicitly — private surface, but tests that
+  poked the old attributes must switch to `_baseline_state(task_id)`.)
+- **A schema-carrying workflow helper claimed by a resident worker lost its
+  structured-output contract.** `resolve_engine` now reads the durable
+  `TaskCreated.inputs.output_schema` for subtasks and builds the
+  schema-shaped engine UNCACHED (same choice as the drain), so the
+  `structured_output` mount + `StructuredOutputPolicy` receipt survive the
+  untargeted-claim path and never leak into the shared cache.
+
+### Changed
+
+- `max_steps` defaults are now deliberately enormous (1,000,000 — SDK host,
+  session-inputs builder, and `ReActPolicy` alike): the cap is a
+  runaway-loop backstop, not a working budget, and with per-turn semantics a
+  real turn can never reach it. Hosts that want a tight per-turn ceiling can
+  still set one explicitly.
+- `Budget` docs now spell out the dimension: its caps
+  (`max_iterations` / `max_tool_calls` / `max_cost_usd`) accumulate over the
+  task's WHOLE life — on the multi-turn path that means the whole
+  conversation, durably — so they must be sized for the longest conversation
+  you are willing to fund, not for one turn.
+
 ## [0.6.9] - 2026-08-08
 
 Covers `noeta-sdk` only (`noeta-runtime` stays at 0.6.4). Patch bump per
@@ -1826,6 +1875,7 @@ Initial preview release.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
 [Unreleased]: https://github.com/initxy/noeta/compare/v0.6.9...HEAD
+[0.6.10]: https://github.com/initxy/noeta/compare/v0.6.9...v0.6.10
 [0.6.9]: https://github.com/initxy/noeta/compare/v0.6.8...v0.6.9
 [0.6.8]: https://github.com/initxy/noeta/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/initxy/noeta/compare/v0.6.6...v0.6.7
