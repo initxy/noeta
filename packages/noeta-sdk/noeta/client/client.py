@@ -865,6 +865,7 @@ class Client:
         workspace_dir: Optional[str] = None,
         effort: Optional[str] = None,
         activations: tuple[str, ...] = (),
+        attachment_texts: tuple[str, ...] = (),
     ) -> DriveOutcome:
         """Create a Task and drive the first turn (driver ``start``).
 
@@ -893,6 +894,15 @@ class Client:
         ``activations`` are built-in skill names to pin (pre-loop) for this
         turn — see :meth:`seed_start`. ``()`` keeps the start byte-identical to
         the no-skill path.
+
+        ``attachment_texts`` are host-composed reference snapshots (``@``
+        mentions, a task briefing, a workspace summary) recorded as their own
+        ``origin="system"`` user messages **before** the goal, so the transcript
+        attributes them distinctly from what the human typed. Being ordinary
+        recorded messages they survive resume and are never re-read. Use this
+        rather than reaching for a reminder provider when the text is already
+        settled at send time; a provider is for text that must be computed at
+        recording time and lands *after* the goal.
         """
         outcome = self._driver.start(
             goal=goal,
@@ -904,6 +914,7 @@ class Client:
             workspace_dir=workspace_dir,
             effort=effort,
             activations=activations,
+            attachment_texts=attachment_texts,
         )
         return self._drain_approvals(outcome.task_id, outcome)
 
@@ -918,6 +929,7 @@ class Client:
         enabled_mcp: tuple[str, ...] = (),
         effort: Optional[str] = None,
         activations: tuple[str, ...] = (),
+        attachment_texts: tuple[str, ...] = (),
     ) -> DriveOutcome:
         """Append a new user turn (driver ``send_goal``).
 
@@ -936,6 +948,10 @@ class Client:
         turn — see :meth:`seed_start`. This is the channel a mid-conversation
         ``/skill-name`` slash command rides; ``()`` keeps the append
         byte-identical to the no-skill path.
+
+        ``attachment_texts`` are host-composed reference snapshots recorded as
+        their own ``origin="system"`` messages before the goal — see
+        :meth:`start`.
         """
         outcome = self._driver.send_goal(
             task_id=task_id,
@@ -946,6 +962,7 @@ class Client:
             enabled_mcp=enabled_mcp,
             effort=effort,
             activations=activations,
+            attachment_texts=attachment_texts,
         )
         return self._drain_approvals(task_id, outcome)
 
@@ -1080,6 +1097,7 @@ class Client:
         workspace_dir: Optional[str] = None,
         effort: Optional[str] = None,
         activations: tuple[str, ...] = (),
+        attachment_texts: tuple[str, ...] = (),
     ) -> SeededTurn:
         """Create + validate + lease a first turn WITHOUT driving it
         (driver ``seed_start``); pass the result to :meth:`drive_seeded`.
@@ -1088,7 +1106,11 @@ class Client:
         task — the same forced-preload channel a ``/skill-name`` slash command
         uses (``TaskStatePatched(activate_skills=…)``). A thin forward to the
         driver's existing ``activations`` parameter; ``()`` keeps the seed
-        byte-identical to the no-skill path."""
+        byte-identical to the no-skill path.
+
+        ``attachment_texts`` are host-composed reference snapshots recorded as
+        their own ``origin="system"`` messages before the goal — see
+        :meth:`start`."""
         return self._driver.seed_start(
             goal=goal,
             agent=agent if agent is not None else self._main_agent_name,
@@ -1099,6 +1121,7 @@ class Client:
             workspace_dir=workspace_dir,
             effort=effort,
             activations=activations,
+            attachment_texts=attachment_texts,
         )
 
     def seed_send_goal(
@@ -1112,6 +1135,7 @@ class Client:
         enabled_mcp: tuple[str, ...] = (),
         effort: Optional[str] = None,
         activations: tuple[str, ...] = (),
+        attachment_texts: tuple[str, ...] = (),
     ) -> SeededTurn:
         """Validate + seed a follow-up user turn WITHOUT driving it
         (driver ``seed_send_goal``).
@@ -1119,7 +1143,11 @@ class Client:
         ``activations`` are built-in skill names to pin (pre-loop) for this
         turn — see :meth:`seed_start`. This is the async-transport counterpart
         of :meth:`send_goal`'s activations, i.e. the path a product's HTTP
-        command endpoint uses for a mid-conversation ``/skill-name``."""
+        command endpoint uses for a mid-conversation ``/skill-name``.
+
+        ``attachment_texts`` are host-composed reference snapshots recorded as
+        their own ``origin="system"`` messages before the goal — see
+        :meth:`start`."""
         return self._driver.seed_send_goal(
             task_id=task_id,
             goal=goal,
@@ -1129,6 +1157,7 @@ class Client:
             enabled_mcp=enabled_mcp,
             effort=effort,
             activations=activations,
+            attachment_texts=attachment_texts,
         )
 
     def seed_approve(
@@ -1393,6 +1422,30 @@ class Client:
         for env in reversed(self._host.event_log.read(task_id)):
             if env.type == "TaskSuspended":
                 return parse_suspend_reason(str(env.payload.reason))
+        return None
+
+    def task_answer(self, task_id: str) -> Any:
+        """The most recent turn's terminal answer, as the **raw** value.
+
+        Reads whichever lifecycle event that turn landed on — ``TaskCompleted``
+        for a one-shot task, ``TaskSuspended`` for a multi-turn conversation
+        that finished a turn and parked on the next-goal handle. ``None`` when
+        the latest turn produced no answer (still running, waiting on a
+        question, a parked failure, a never-finished conversation).
+
+        Raw is the point. ``messages()`` projects the same value into a
+        ``Result`` view item as ``str(answer)``, which is right for rendering
+        and wrong for consuming: an ``Options.output_schema`` answer is a dict
+        by the time the kernel is done with it, and ``str()`` on a dict yields
+        Python repr, not JSON. Take this when you want the value; take
+        ``messages()`` when you want the transcript.
+        """
+        store = self._host.content_store
+        for env in reversed(self._host.event_log.read(task_id)):
+            if env.type in ("TaskCompleted", "TaskSuspended"):
+                return answer_from_payload(env.payload, store)
+            if env.type == "TaskFailed":
+                return None
         return None
 
     def task_summaries(self) -> list[dict[str, Any]]:
