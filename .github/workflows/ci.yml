@@ -37,6 +37,12 @@ jobs:
       - name: Sync workspace (kernel + dev group)
         run: uv sync --frozen
 
+      - name: Install ripgrep
+        # Grep/Glob shell out to `rg` (0.6.9 made it a hard requirement, not a
+        # fallback), so a runner without the binary fails ~44 fs-tool tests on
+        # "ripgrep is required" rather than on anything the change did.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+
       - name: Smoke import
         run: uv run python -c "from noeta.core.engine import Engine; print('import OK')"
 
