@@ -97,6 +97,14 @@ class MultiTurnReActPolicy:
                 prompt=self._wake_handle,
                 state_patch=result.state_patch,
                 assistant_message=result.assistant_message,
+                # The finish's answer travels with it. Dropping it used to be
+                # this substitution's one lossy edge: a conversation never
+                # writes ``TaskCompleted``, so a host that wanted the turn's
+                # structured result had to re-parse the assistant text and
+                # re-do the ``output_schema`` deserialization the kernel had
+                # already done. Carried through, ``TaskSuspended.answer`` holds
+                # the same value ``TaskCompleted.answer`` would have.
+                answer=result.answer,
             )
         if isinstance(result, FailDecision):
             return YieldForHumanDecision(

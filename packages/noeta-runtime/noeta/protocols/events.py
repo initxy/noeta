@@ -10,7 +10,7 @@ inline.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 
 from noeta.protocols.canonical import from_canonical_bytes, register, to_canonical_bytes
 from noeta.protocols.content_store import ContentStore
@@ -406,11 +406,18 @@ class TaskCompletedPayload:
 
 
 def answer_from_payload(
-    payload: "TaskCompletedPayload", content_store: ContentStore
+    payload: Union["TaskCompletedPayload", "TaskSuspendedPayload"],
+    content_store: ContentStore,
 ) -> Any:
-    """The full answer for a ``TaskCompleted`` payload: derefs ``answer_ref``
-    or returns the inline ``answer``. The single reader every consumer should
-    use, so the spill stays transparent."""
+    """The full answer carried by a payload: derefs ``answer_ref`` or returns
+    the inline ``answer``. The single reader every consumer should use, so the
+    spill stays transparent.
+
+    Serves both payloads that can carry one — ``TaskCompleted`` for a task that
+    ended, ``TaskSuspended`` for a multi-turn conversation whose turn finished
+    and parked. One reader rather than two because the spill rule is the same
+    and a caller should not have to know which lifecycle event it is holding.
+    ``TaskSuspended`` payloads that stand in for no finish answer ``None``."""
     if payload.answer_ref is not None:
         return from_canonical_bytes(content_store.get(payload.answer_ref))
     return payload.answer
@@ -613,6 +620,22 @@ class TaskSuspendedPayload:
 
     reason: str
     wake_on: WakeCondition
+    #: The terminal answer of the turn this suspend stands in for, set only when
+    #: the suspend replaced a ``FinishDecision`` (the multi-turn conversation
+    #: path — a conversation parks on the next-goal handle instead of writing
+    #: ``TaskCompleted``, so this is where that turn's answer lives). Spilled
+    #: exactly like ``TaskCompletedPayload``'s: an oversized value moves to the
+    #: ContentStore behind ``answer_ref`` and ``answer`` holds ``None``. Read
+    #: both through :func:`answer_from_payload`.
+    #:
+    #: Additive: absent from every older recording, and
+    #: ``__canonical_omit_none__`` keeps a ``None`` out of the byte stream — so
+    #: a suspend that carries no answer is byte-equal to one recorded before
+    #: this field existed, and no ``schema_version`` bump is owed.
+    answer: Any = None
+    answer_ref: Optional[ContentRef] = None
+
+    __canonical_omit_none__ = frozenset({"answer", "answer_ref"})
 
 
 @dataclass(frozen=True, slots=True)
