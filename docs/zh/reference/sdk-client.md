@@ -81,14 +81,16 @@ with Client(Options(system_prompt="…"), provider=my_provider,
 
 | 方法 | 签名（`task_id` 之后为关键字参数） |
 | --- | --- |
-| `start` | `(*, goal, agent=None, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), workspace_dir=None, effort=None, activations=())` |
-| `send_goal` | `(task_id, *, goal, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), effort=None, activations=())` |
+| `start` | `(*, goal, agent=None, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), workspace_dir=None, effort=None, activations=(), attachment_texts=())` |
+| `send_goal` | `(task_id, *, goal, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), effort=None, activations=(), attachment_texts=())` |
 | `approve` | `(task_id, *, call_id, reason=None, resolver="client")` |
 | `deny` | `(task_id, *, call_id, reason=None, resolver="client")` |
 | `answer` | `(task_id, *, question_id, answers, answered_by="client")` |
 | `deliver_event` | `(task_id, *, event_kind, payload=None)` |
 
 `start` 时的 `workspace_dir` 被一次性焊入持久化的 `TaskHostBound` 记录；之后每一轮都靠 fold 解析它，这也是 `send_goal` 没有这个参数的原因。`permission_mode`、`enabled_mcp`、`effort` 和 `activations` 是每轮的、非持久的宿主旋钮。`activations` 在循环开始前钉住内置 skill——这正是 `/skill-name` 斜杠命令所依附的通道。
+
+`attachment_texts` 是宿主拼好的参考快照（`@` 提及、任务简报、工作区摘要），每一条作为独立的 `origin="system"` 消息落账在 goal **之前**，所以逐字稿绝不会把它们记到人头上。它们是普通的落账消息，续流读得回来、不会重读。文本在发送时已经定稿就用这条；如果它必须在**记账的那一刻**现算——因为要读实时状态——那就改为贡献一个 `reminder_provider`（见[插件面](plugin-surfaces.md)），它的产出落在 goal **之后**。两条通道都只用公开名就能走通：`Reminder`、`RecallView`、`ReminderProvider` 和 `TURN_INTAKE` 都从 `noeta.sdk` 导出。
 
 `deliver_event` 唤醒一个挂在 `wait_external` 上的任务。匹配按 `event_kind` 精确进行；可选的 `payload` 会作为恢复轮上一条 `origin="system"` 的消息被记录，而不是作为唤醒事件本身。投递一个任务并不在等待的事件会抛出 `NotResumableError`。
 
@@ -162,6 +164,7 @@ print(client.stop_workers(timeout=30))   # → True
 | --- | --- |
 | `events(task_id)` | `list[EventEnvelope]` |
 | `messages(task_id)` | `list[ViewItem]` —— fold 出的人类视图 |
+| `task_answer(task_id)` | 最近一轮的终态答案，取**原值**，从该轮落到的那个生命周期事件上读（`TaskCompleted`；多轮对话里一轮干完挂起则是 `TaskSuspended`）。最近一轮没有答案时为 `None`。要拿值就用它——`output_schema` 的答案在这里是 `dict`，而 `messages()` 为了逐字稿会经 `str()` 渲染 |
 | `events_after(task_id, after_seq=None)` | 严格位于某个游标之后的流 |
 | `task_streams()` | 每条被驱动过的流一个 `TaskStreamSummary`，携带 `task_id` 和 `last_seq` |
 | `delete_task(task_id)` | `{"ok", "task_id", "deleted": [...], "reason"?}`；会以 `reason="running"` 或 `"not_found"` 拒绝 |
@@ -193,6 +196,7 @@ print(client.stop_workers(timeout=30))   # → True
 | `ProviderSelectorError` | `provider_selector_rejected` | 轮次驱动器，在 seed 时 |
 | `NotResumableError` | `not_resumable` | `deliver_event`，以及对一个接不了目标的任务调用 `send_goal` |
 | `TaskAlreadyTerminalError` | `task_already_terminal` | 对一个已结束任务调用任何动词 |
+| `UnknownTaskError` —— 带 `task_id`、`verb`、`reason` | `unknown_task` | 对不指向任何活流的 id 调用 `cancel` / `interrupt` / `close` / `reopen`。在该动词写入**之前**就拒掉，所以一个打错的 id 不可能造出一条以控制事件为创世的流 |
 | `UnsupportedSubtaskSuspend` | `unsupported_subtask_suspend` | 子任务排空 |
 
 ## 下一步

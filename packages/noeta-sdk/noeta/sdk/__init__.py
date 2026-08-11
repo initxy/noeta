@@ -89,6 +89,17 @@ from noeta.client.surfaces import (
     standard_registry,
 )
 from noeta.client.wire import envelope_to_dict
+
+# The recorded reminder-provider seam. A plugin contributing to the
+# ``reminder_provider`` surface returns ``Reminder`` s from a ``RecallView``,
+# so both types plus the seam name belong on the public surface — without them
+# a host could declare the contribution but not write its value.
+from noeta.execution.reminders import (
+    TURN_INTAKE,
+    RecallView,
+    Reminder,
+    ReminderProvider,
+)
 from noeta.sdk.authoring import (
     DecoratedTool,
     SdkMcpServer,
@@ -190,6 +201,7 @@ from noeta.execution import (
     NotResumableError,
     ProviderSelectorError,
     TaskAlreadyTerminalError,
+    UnknownTaskError,
     UnsupportedSubtaskSuspend,
 )
 from noeta.protocols.errors import CodedError
@@ -256,6 +268,7 @@ __all__ = [
     "NotResumableError",
     "UnsupportedSubtaskSuspend",
     "TaskAlreadyTerminalError",
+    "UnknownTaskError",
     "NotForkableError",
     "permission_modes",
     "effort_modes",
@@ -341,6 +354,10 @@ __all__ = [
     "PluginBuilder",
     "PluginSet",
     "load_plugins",
+    "Reminder",
+    "RecallView",
+    "ReminderProvider",
+    "TURN_INTAKE",
     "PluginActivation",
     "DEFAULT_PLUGINS",
     "presets",

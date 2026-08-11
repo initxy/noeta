@@ -105,8 +105,8 @@ tool call resolves the same way no matter which verb resumed the conversation.
 
 | Method | Signature (keyword-only after `task_id`) |
 | --- | --- |
-| `start` | `(*, goal, agent=None, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), workspace_dir=None, effort=None, activations=())` |
-| `send_goal` | `(task_id, *, goal, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), effort=None, activations=())` |
+| `start` | `(*, goal, agent=None, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), workspace_dir=None, effort=None, activations=(), attachment_texts=())` |
+| `send_goal` | `(task_id, *, goal, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), effort=None, activations=(), attachment_texts=())` |
 | `approve` | `(task_id, *, call_id, reason=None, resolver="client")` |
 | `deny` | `(task_id, *, call_id, reason=None, resolver="client")` |
 | `answer` | `(task_id, *, question_id, answers, answered_by="client")` |
@@ -117,6 +117,17 @@ once; every later turn fold-resolves it, which is why `send_goal` has no such
 parameter. `permission_mode`, `enabled_mcp`, `effort` and `activations` are
 per-turn, non-durable host knobs. `activations` pins built-in skills before the
 loop starts — the channel a `/skill-name` slash command rides.
+
+`attachment_texts` are host-composed reference snapshots (`@` mentions, a task
+briefing, a workspace summary), each recorded as its own `origin="system"`
+message **before** the goal, so the transcript never attributes them to the
+person. Being ordinary recorded messages they survive resume and are never
+re-read. Use this when the text is already settled at send time; when it must be
+computed *while* the turn is recorded — because it reads live state — contribute
+a `reminder_provider` instead ([plugin surfaces](plugin-surfaces.md)), whose
+output lands **after** the goal. Both channels are reachable with public names
+only: `Reminder`, `RecallView`, `ReminderProvider` and `TURN_INTAKE` are
+exported from `noeta.sdk`.
 
 `deliver_event` wakes a task suspended on `wait_external`. Matching is exact on
 `event_kind`; the optional `payload` is recorded as an `origin="system"` message
@@ -214,6 +225,7 @@ Pure reads — no external IO, no effect on the task.
 | --- | --- |
 | `events(task_id)` | `list[EventEnvelope]` |
 | `messages(task_id)` | `list[ViewItem]` — the folded human view |
+| `task_answer(task_id)` | the latest turn's terminal answer as the **raw** value, off whichever lifecycle event that turn landed on (`TaskCompleted`, or `TaskSuspended` for a multi-turn conversation that finished a turn and parked). `None` when the latest turn produced none. Take this when you want the value — an `output_schema` answer is a `dict` here, while `messages()` renders it through `str()` for the transcript |
 | `events_after(task_id, after_seq=None)` | the stream strictly past a cursor |
 | `task_streams()` | one `TaskStreamSummary` per driven stream, carrying `task_id` and `last_seq` |
 | `delete_task(task_id)` | `{"ok", "task_id", "deleted": [...], "reason"?}`; refuses with `reason="running"` or `"not_found"` |
@@ -248,6 +260,7 @@ Boundary code should match errors **structurally** —
 | `ProviderSelectorError` | `provider_selector_rejected` | the turn driver, at seed time |
 | `NotResumableError` | `not_resumable` | `deliver_event`, `send_goal` on a task that cannot take one |
 | `TaskAlreadyTerminalError` | `task_already_terminal` | any verb on a finished task |
+| `UnknownTaskError` — carries `task_id`, `verb`, `reason` | `unknown_task` | `cancel` / `interrupt` / `close` / `reopen` on an id that names no live stream. Refused **before** the verb writes, so a typo'd id cannot mint a stream whose genesis is a control event |
 | `UnsupportedSubtaskSuspend` | `unsupported_subtask_suspend` | subtask drain |
 
 ## Next
