@@ -4,6 +4,8 @@
 
 Noeta 是一个面向长程、任务导向 agent 的运行时：它托管、记录、调度并重放 agent 的执行，而不规定 agent 该怎么写。下面关于 Noeta 的每一条陈述都对照本仓库的代码核验过。对其他项目的陈述只限于它们最核心的设计取向——更细的部分请读它们各自的文档。
 
+本页比的是*设计*。想看公开基准上的能力数字——一个建在 Noeta 上的 agent 跑官方 Terminal-Bench harness、与整个领域对照——见[基准测试](../benchmarks.md)。
+
 ## Noeta 是什么
 
 - **两个库，进程内运行。** `noeta-runtime` 是内核，不声明任何依赖；`noeta-sdk` 是你唯一需要 import 的东西，承载全部能力实现。没有 CLI，也没有 HTTP 服务器：宿主嵌入 `noeta.sdk` 并自己驱动循环。

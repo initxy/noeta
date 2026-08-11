@@ -4,6 +4,40 @@
 
 请按下面的顺序阅读。每一页只假设你读过它上面的那些，并且每一页都以一段平实的概述和一张图开场。
 
+## 三个想法撑起整个设计
+
+其余的一切 —— 审计、replay、挂起 / 恢复、provider 中立 —— 都是从这三个里长出来的。
+
+### 1. 状态是事件日志的一次 fold
+
+<p align="center">
+  <img src="../../assets/diagrams/event-sourcing.svg" alt="Event sourcing — 事件追加进 EventLog，大对象进 ContentStore，fold 重建四个状态切片" width="820">
+</p>
+
+每个 task 拥有一条只追加的事件流：交给它的目标、每次组装出的 context plan、每次模型响应、每次工具调用及其结果、每次挂起与唤醒。没有一张供引擎读写的 task 表。谁需要当前状态，就从头 fold 这条流把它算出来 —— 状态对象是一份可丢弃的投影，日志才是母本。事件 payload 保持很小（上限 4 KB）；更大的东西，比如一整个响应体或一份大的工具输出，会进入内容寻址的存储，事件里只留一个引用。因为状态只能由 fold 产生，"agent 做了什么"和"agent 是什么"永远不会打架。
+
+→ [事件溯源](event-sourcing.md) · [Fold 与快照](fold-and-snapshot.md) · [状态与写者](../architecture/state-and-writers.md)
+
+### 2. 中途杀掉它，它会恢复
+
+<p align="center">
+  <img src="../../assets/diagrams/crash-resume.svg" alt="崩溃与恢复 —— worker A 在步骤中途死亡，lease 过期，worker B fold 日志并精确一次地继续" width="820">
+</p>
+
+一个 worker 对 task 取得一份 **lease** —— 一个短期的、靠 heartbeat 续期的独占持有 —— 并把它推进到下一个挂起点或终止态。每一次向日志写入都要出示这个 lease id，所以同一个 task 在任何时刻只可能有一个写者。worker 一旦死掉，heartbeat 停止，lease 过期，task 回到就绪队列；下一个 worker fold 日志，把被打断的那次 attempt 封存为死历史，然后从最后一个持久点继续。同一套机制也覆盖有意的等待：task 可以为一个人工回答、一个定时器或一个 subtask 挂起，睡着期间不产生任何成本，而唤醒它的 wake 是持久的、单 worker 的、精确一次投递的 —— 至少一次投递加上幂等消费。
+
+→ [唤醒与恢复](wake-resume.md) · [任务模型](task-model.md) · [部署 worker](../how-to/deploy-worker.md)
+
+### 3. 两个包，能力即插件
+
+<p align="center">
+  <img src="../../assets/diagrams/architecture.svg" alt="Noeta 架构 —— 你的代码 import noeta.sdk，其下是 noeta-runtime 内核，builtins 只经插件加载器触达内核" width="820">
+</p>
+
+Noeta 以两个库交付，共享同一个 `noeta.` 命名空间。**`noeta-sdk`** 是你唯一要 import 的东西：`query` / `Client` / `Options` / `@tool`、预设 agent，以及每一项官方能力。**`noeta-runtime`** 是纯内核 —— Engine、fold、snapshot、Worker、Dispatcher、lease、context composer —— 它没有声明任何依赖。内核自身不含任何能力：文件工具、web 工具、memory、browser、MCP、sandbox、存储后端，以及每一个 provider 适配器，都是内置**插件**，只能经由加载器的动态 ref 解析触达内核，这条规则由 import linter 在每次构建时强制执行。正是这一道边界，让 provider 中立成为结构性事实而不是一句承诺，也让你的插件走的路和 Noeta 自己的完全一样。
+
+→ [架构概览](../architecture/overview.md) · [包与导入规则](../architecture/packages.md) · [扩展平面](../architecture/extension-planes.md)
+
 ## 阅读顺序
 
 1. **[事件溯源](event-sourcing.md)** —— Noeta 从不把"当前状态"当作事实。它把发生的一切追加到每个任务自己的日志里，再从这条日志重新算出状态。从这里开始；其余每一页都倚靠这一个想法。

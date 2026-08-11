@@ -3,38 +3,50 @@ layout: home
 
 hero:
   name: "Noeta"
-  text: "面向 AI agent 的持久化、provider 中立运行时 + SDK"
-  tagline: 一个面向长程 agent 的 Python 库。Task 状态由 append-only 事件日志 fold 而来，因此被杀掉的进程能从中断处恢复；Task 可以为人工、定时器或子任务挂起，并持久化唤醒。import noeta.sdk 即可在进程内驱动引擎 —— 无 server，运行时不需要任何凭证。
+  text: "给「必须一直跑下去的 agent」用的 Python 运行时 + SDK"
+  tagline: 今天在你自己的进程里驱动一个 agent；明天把同一个 agent 放到多 worker、多 host 的池子上跑 —— agent 本身一行不用改。每一项能力都是插件，每一家模型厂商都只隔着一行接线，每一次运行都持久到能扛住 kill -9、事后还能 replay。
   actions:
     - theme: brand
       text: 快速上手（5 分钟）
       link: /zh/tutorials/quickstart
     - theme: alt
-      text: 你的第一个 agent
-      link: /zh/tutorials/first-agent
+      text: 基准测试
+      link: /zh/benchmarks
     - theme: alt
       text: GitHub
       link: https://github.com/initxy/noeta
 
 features:
-  - title: 崩溃可恢复
-    details: 一个 Task 的事实基础是它的 append-only 事件日志，而不是驻留内存的某个值。在 Task 执行到一半时杀掉进程，下一个 worker 会 fold 回日志、密封被中断的 Attempt，并且绝不会静默重跑一次已经产生副作用的调用。
+  - title: 面向 server，而不只是一个能调用的循环
+    details: Client.start_workers(n) 把同一个进程变成常驻 worker 池；把存储指向 Postgres，多个 host 就共享同一个数据库，写入由 lease 围栏保护。Engine 是无状态的，所以横向扩展是换一次存储、不是重写 —— 而且没有要运维的 daemon，也没有 HTTP 跳转。
 
-  - title: 为长程而设计
-    details: Task 可以挂起以等待人、定时器或子任务，休眠期间不消耗任何资源。条件触发时它恰好唤醒一次 —— 匹配是持久化的，因此中途崩溃只会重新投递，而不会把它丢掉。
+  - title: 每一项能力都是插件 —— 包括我们自己的
+    details: 内核出厂时零能力。文件工具、web 工具、memory、browser、MCP、sandbox、存储后端，以及每一个 provider 适配器，都是内置插件，只经由唯一一道门触达内核。你的插件走的是同一条路；不存在一个把你挡在门外的特权内部 API。
 
-  - title: 完全可审查
-    details: 每个 Step、LLM 往返、工具调用、Guard 裁决和 token 计数都是日志中的一个事件。trace 告诉你某一步为什么发生，而不只是发生了什么。
+  - title: 16 个扩展 Surface，以惰性数据声明
+    details: 插件就是一个带静态 manifest 的包，所以在 import 它的任何一行代码之前，Noeta 就能列出它贡献了什么并检查冲突。工具、agent、policy、Guard、Observer、MCP server、sandbox provider 全都是贡献。
 
-  - title: 先进程内，再 worker 池
-    details: import noeta.sdk 就能在你自己的进程内驱动引擎 —— 没有 HTTP 跳转，也没有需要运维的守护进程。同一份代码可以用 Client.start_workers(n) 扩容，或在 Postgres 上跨多台主机运行，因为 Engine 是无状态的，写入由 lease 围栏保护。
+  - title: 中途杀掉进程，它会自己恢复
+    details: 状态从不攥在内存里 —— 它是 fold(events)，由只追加的日志重新算出来，靠 heartbeat 续期的 lease 保证每个 Task 只有一个写者。下一个 worker 会封存被打断的 Attempt，并从最后一个持久点精确一次地继续。
 
-  - title: Provider 中立
-    details: Anthropic、任意 OpenAI chat-completions 网关，以及 OpenAI Responses API 都位于同一个从不点名厂商的内部协议之后。切换端点是接线，而不是重写 —— 内核被禁止导入任何 provider 包。
+  - title: 等待是免费的，而且是一等公民
+    details: Task 可以为一个人工回答、一个定时器、一个子任务或一个外部事件挂起，睡着期间不产生任何成本。唤醒是持久的、单 worker 的、精确一次投递的 —— 跨月的审批循环和五秒的工具调用用的是同一套机器。
 
-  - title: 每个能力都是插件
-    details: 工具、agent、policy、Guard、Observer、MCP server 和 sandbox provider 全都是在十六个扩展 Surface 上以 manifest 声明的贡献。Noeta 自己的 built-in plugin 走的正是你的插件所用的同一个加载器。
+  - title: 任何模型，靠强制而非承诺
+    details: Anthropic、任意 OpenAI chat-completions 网关，以及 OpenAI Responses API 都位于同一个从不点名厂商的内部协议之后。切换端点是接线、不是重写 —— 内核被禁止导入任何 provider 包，一旦尝试，构建就失败。
 ---
+
+## 落在公开排行榜的第一梯队
+
+| 基准 | 范围 | `noeta-agent` `main`（Claude Opus 4.8） | 领域水平 |
+|---|---|---|---|
+| Terminal-Bench 2.1 | 40 题分层抽样 | **82.5%**（33/40） | 公开榜单区间 58.7%–83.8% |
+| SWE-bench Verified | 15 实例子集 | **86.7%**（13/15） | 榜首约 79%，中段约 66–77% |
+
+跑在 [harbor](https://github.com/harbor-framework/harbor)（官方 Terminal-Bench
+harness）上，用官方数据集，由每道题自己的 verifier 打分。参赛的是
+[`noeta-agent`](https://github.com/initxy/noeta-agent) 的 `main` 预设，完全由本
+SDK 的公开面组装而成。两行都是**抽样**，并如实标注 —— 完整方法学、排除项与可复跑命令见[基准测试](/zh/benchmarks)。
 
 ## 60 秒试用
 
@@ -141,3 +153,4 @@ assert result.answer() == "Hello from Noeta."
 |---|---|
 | [故障排查](/zh/operations/troubleshooting) | 你真正会遇到的故障：现象、原因、修法。 |
 | [已知限制](/zh/operations/limitations) | Noeta 目前还做不到什么，直说。 |
+| [基准测试](/zh/benchmarks) | 建在 Noeta 上的 agent 在公开基准上的成绩，以及这是怎么测的。 |

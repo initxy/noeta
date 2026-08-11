@@ -3,38 +3,52 @@ layout: home
 
 hero:
   name: "Noeta"
-  text: "A durable, provider-neutral runtime + SDK for AI agents"
-  tagline: A Python library for long-horizon agents. Task state is folded from an append-only event log, so a killed process resumes where it stopped; tasks suspend for a human, a timer, or a subtask and wake durably. Import noeta.sdk and drive the engine in-process — no server, and no credentials needed to run it.
+  text: "A Python runtime + SDK for agents that have to keep running"
+  tagline: Drive an agent in your own process today; run the same agent on a multi-worker, multi-host pool tomorrow — without touching the agent. Every capability is a plugin, every model vendor is one line of wiring, and every run is durable enough to survive kill -9 and replay afterwards.
   actions:
     - theme: brand
       text: Quickstart (5 min)
       link: /tutorials/quickstart
     - theme: alt
-      text: Your first agent
-      link: /tutorials/first-agent
+      text: Benchmarks
+      link: /benchmarks
     - theme: alt
       text: GitHub
       link: https://github.com/initxy/noeta
 
 features:
-  - title: Survives crashes
-    details: A task's truth is its append-only event log, not a value in memory. Kill the process mid-task and the next worker folds the log back, seals the interrupted attempt, and never silently re-runs a call that had side effects.
+  - title: Server-ready, not just a loop you call
+    details: Client.start_workers(n) turns the same process into a resident worker pool; point the store at Postgres and several hosts share one database with lease-fenced writes. The Engine is stateless, so scaling out is a storage swap, not a rewrite — and there is no daemon to operate and no HTTP hop.
 
-  - title: Long-horizon by design
-    details: A task can suspend to wait on a person, a timer, or a subtask, and costs nothing while it sleeps. When the condition fires it wakes exactly once — the match is durable, so a crash in between re-delivers instead of dropping it.
+  - title: Every capability is a plugin — including ours
+    details: The kernel ships zero capabilities. File tools, web tools, memory, browser, MCP, sandboxes, storage backends, and every provider adapter are built-in plugins reaching the kernel through one doorway. Your plugin rides the identical path; there is no privileged internal API you are locked out of.
 
-  - title: Fully inspectable
-    details: Every step, LLM round-trip, tool call, guard verdict, and token count is an event in the log. The trace tells you why a step happened, not just what happened.
+  - title: Sixteen extension surfaces, declared as inert data
+    details: A plugin is a package with a static manifest, so Noeta can list and collision-check everything it contributes before importing a line of its code. Tools, agents, policies, guards, observers, MCP servers, and sandbox providers are all contributions.
 
-  - title: In-process, then a worker pool
-    details: Import noeta.sdk and drive the engine in your own process — no HTTP hop, no daemon to operate. The same code scales up with Client.start_workers(n), or across hosts on Postgres, because the Engine is stateless and writes are lease-fenced.
+  - title: Kill the process mid-task; it resumes
+    details: State is never held in memory — it is fold(events), recomputed from an append-only log, with a heartbeat-renewed lease making exactly one writer per task. The next worker seals the interrupted attempt and carries on from the last durable point, exactly once.
 
-  - title: Provider-neutral
-    details: Anthropic, any OpenAI chat-completions gateway, and the OpenAI Responses API sit behind one internal protocol that never names a vendor. Swapping endpoints is wiring, not a rewrite — the kernel is barred from importing a provider package.
+  - title: Waiting is free and first class
+    details: A task suspends for a human answer, a timer, a subtask, or an external event, and costs nothing while it sleeps. The wake is durable, single-worker, and delivered exactly once — a month-long approval loop is the same machinery as a five-second tool call.
 
-  - title: Every capability is a plugin
-    details: Tools, agents, policies, guards, observers, MCP servers, and sandbox providers are all manifest-declared contributions over sixteen extension surfaces. Noeta's own built-ins ride the identical loader your plugin does.
+  - title: Any model, enforced — not promised
+    details: Anthropic, any OpenAI chat-completions gateway, and the OpenAI Responses API sit behind one internal protocol that never names a vendor. Swapping endpoints is wiring, not a rewrite — the kernel is barred from importing a provider package, and the build fails if it tries.
 ---
+
+## In the top band of the public leaderboard
+
+| Benchmark | Scope | `noeta-agent` `main` (Claude Opus 4.8) | Field |
+|---|---|---|---|
+| Terminal-Bench 2.1 | 40-task stratified sample | **82.5%** (33/40) | public board spans 58.7%–83.8% |
+| SWE-bench Verified | 15-instance subset | **86.7%** (13/15) | top ~79%, mid-pack ~66–77% |
+
+Run through [harbor](https://github.com/harbor-framework/harbor), the official
+Terminal-Bench harness, on the official datasets, scored by each task's own
+verifier. The agent is [`noeta-agent`](https://github.com/initxy/noeta-agent)'s
+`main` preset, assembled entirely from this SDK's public surface. Both rows are
+**samples**, labelled as such — see [Benchmarks](/benchmarks) for the full
+methodology, exclusions, and re-runnable commands.
 
 ## 60-second taste
 
@@ -142,3 +156,4 @@ New here? Read the [Quickstart](/tutorials/quickstart), then
 |---|---|
 | [Troubleshooting](/operations/troubleshooting) | Symptom, cause, fix for the failures you will actually hit. |
 | [Known limitations](/operations/limitations) | What Noeta does not do yet, stated plainly. |
+| [Benchmarks](/benchmarks) | How an agent built on Noeta scores on public benchmarks, and how that was measured. |
