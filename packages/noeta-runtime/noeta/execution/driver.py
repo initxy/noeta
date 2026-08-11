@@ -96,6 +96,7 @@ __all__ = [
     "ProviderSelectorError",
     "SeededTurn",
     "TaskAlreadyTerminalError",
+    "UnknownTaskError",
     "multi_turn_policy_wrapper",
 ]
 
@@ -201,6 +202,34 @@ class TaskAlreadyTerminalError(CodedError, RuntimeError):
         self.task_id = task_id
         self.verb = verb
         super().__init__(f"cannot {verb} task {task_id!r}: already terminal")
+
+
+class UnknownTaskError(CodedError, RuntimeError):
+    """A lifecycle verb targeted a ``task_id`` that names no live stream —
+    either no events at all, or a stream whose genesis is not ``TaskCreated``.
+
+    Refusing is the whole point: these verbs write their marker through
+    ``system_emit``, which appends to whatever ``task_id`` it is handed and
+    creates the stream as a side effect. Without this check a typo'd id
+    durably mints a stream whose FIRST event is ``TaskCancelled`` /
+    ``TurnInterrupted``, and every later ``fold`` of it raises — which takes
+    the whole-log read models (``list_task_summaries``) down permanently,
+    recoverable only by deleting the task. So the guard runs BEFORE the write,
+    and the error is typed rather than the raw ``ValueError`` fold would give.
+
+    A :class:`RuntimeError` too, like its lifecycle siblings, so any
+    ``except RuntimeError`` contract is unaffected; ``reason`` distinguishes
+    the two shapes for a caller that wants to tell "never existed" from
+    "already poisoned".
+    """
+
+    code = "unknown_task"
+
+    def __init__(self, *, task_id: str, verb: str, reason: str) -> None:
+        self.task_id = task_id
+        self.verb = verb
+        self.reason = reason
+        super().__init__(f"cannot {verb} task {task_id!r}: {reason}")
 
 
 class NotForkableError(CodedError, RuntimeError):
@@ -1661,12 +1690,13 @@ class InteractionDriver:
         no lease / no ``state_patch``), so it does not race the Engine's
         single ``RuntimeState`` writer.
 
-        Refuses a task that is already terminal (nothing to cancel).
+        Refuses a task that is already terminal (nothing to cancel), and one
+        whose id names no live stream (:class:`UnknownTaskError`) — the
+        ``system_emit`` below would otherwise mint that stream with a
+        ``TaskCancelled`` genesis no ``fold`` can read.
         """
         host = self._host
-        task = fold(host.event_log, host.content_store, task_id)
-        if task.status == "terminal":
-            raise TaskAlreadyTerminalError(task_id=task_id, verb="cancel")
+        self._live_task(task_id, verb="cancel")
         trace_id = self._trace_id(task_id)
         host.event_log.system_emit(
             task_id=task_id,
@@ -1745,9 +1775,7 @@ class InteractionDriver:
         thing to "close").
         """
         host = self._host
-        task = fold(host.event_log, host.content_store, task_id)
-        if task.status == "terminal":
-            raise TaskAlreadyTerminalError(task_id=task_id, verb="close")
+        task = self._live_task(task_id, verb="close")
         engine = host.resolve_engine(task)
         engine.note_conversation_closed(
             task, closed_by=closed_by, reason=reason
@@ -1834,7 +1862,10 @@ class InteractionDriver:
         already executing; that is ``force=True``'s job below.
 
         Refuses a terminal task (:class:`TaskAlreadyTerminalError`, matching
-        ``cancel`` / ``close`` / ``reopen``). On an already-idle conversation
+        ``cancel`` / ``close`` / ``reopen``) and an id naming no live stream
+        (:class:`UnknownTaskError`) — the ``TurnInterrupted`` below is a
+        ``system_emit``, so without that guard a typo'd id mints an unreadable
+        stream. On an already-idle conversation
         it is a clean no-op landing: the marker records the request, the
         registry mark is consumed by the next lease, and the task stays exactly
         as resumable as it was.
@@ -1852,9 +1883,7 @@ class InteractionDriver:
         double-Esc: first interrupt cooperative, second one forced.
         """
         host = self._host
-        task = fold(host.event_log, host.content_store, task_id)
-        if task.status == "terminal":
-            raise TaskAlreadyTerminalError(task_id=task_id, verb="interrupt")
+        task = self._live_task(task_id, verb="interrupt")
         host.event_log.system_emit(
             task_id=task_id,
             type="TurnInterrupted",
@@ -2029,12 +2058,12 @@ class InteractionDriver:
         **Idempotent**: reopening a conversation that is not currently
         closed is a no-op — no event is written, so calling ``reopen`` twice (or
         on a never-closed conversation) cannot stack spurious audit entries.
-        Refuses a terminal task.
+        Refuses a terminal task, and an id naming no live stream
+        (:class:`UnknownTaskError`) — idempotence is for a conversation that
+        exists, not a licence to answer ``pending`` for one that never did.
         """
         host = self._host
-        task = fold(host.event_log, host.content_store, task_id)
-        if task.status == "terminal":
-            raise TaskAlreadyTerminalError(task_id=task_id, verb="reopen")
+        task = self._live_task(task_id, verb="reopen")
         if not task.governance.closed:
             # Already open — nothing to reopen, write no audit event.
             return self._outcome(task_id)
@@ -2929,6 +2958,42 @@ class InteractionDriver:
         if not events:
             return None
         return getattr(events[0].payload, "parent_task_id", None)
+
+    def _live_task(self, task_id: str, *, verb: str) -> Any:
+        """Fold ``task_id`` after proving it names a live, non-terminal stream.
+
+        The shared front door for the lifecycle verbs that write a control-plane
+        marker (``cancel`` / ``interrupt`` / ``close`` / ``reopen``). Two
+        refusals, both BEFORE any write:
+
+        * :class:`UnknownTaskError` — the stream is empty, or its genesis is not
+          ``TaskCreated``. ``system_emit`` would otherwise mint the stream as a
+          side effect of the marker and leave a body ``fold`` can never read.
+        * :class:`TaskAlreadyTerminalError` — the conversation is already over.
+
+        Centralised because the ordering is the safety property, and it used to
+        be a per-verb accident: ``close`` happened to be safe only because
+        ``resolve_engine`` ran before its write, so a later reshuffle of that
+        method would have silently reintroduced the corruption. The genesis
+        read costs one extra stream scan on the happy path, which these
+        human-triggered verbs can afford — they already fold twice (here and in
+        :meth:`_outcome`).
+        """
+        host = self._host
+        events = host.event_log.read(task_id)
+        if not events:
+            raise UnknownTaskError(task_id=task_id, verb=verb, reason="no events")
+        genesis = events[0].type
+        if genesis != "TaskCreated":
+            raise UnknownTaskError(
+                task_id=task_id,
+                verb=verb,
+                reason=f"first event is {genesis!r}, expected TaskCreated",
+            )
+        task = fold(host.event_log, host.content_store, task_id)
+        if task.status == "terminal":
+            raise TaskAlreadyTerminalError(task_id=task_id, verb=verb)
+        return task
 
     def _outcome(self, task_id: str) -> DriveOutcome:
         host = self._host
