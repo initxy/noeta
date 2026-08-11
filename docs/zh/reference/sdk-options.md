@@ -37,7 +37,7 @@
 | `model` | `str \| None` | 路由提示；被排除在身份与相等性之外 |
 | `metadata` | `Mapping[str, str] = {}` | 观测用标签；排除在身份之外 |
 | `can_use_tool` | `(tool_name, arguments) -> bool` | 程序化审批；它的裁决被记录为一个普通的审批事件，带 `resolver="can_use_tool"` |
-| `output_schema` | `Mapping \| None` | 最终答案的 JSON Schema；同时挂载 `structured_output` control tool |
+| `output_schema` | `Mapping \| None` | 最终答案的 JSON Schema；由 provider 原生约束模型输出，并把 `FinishDecision.answer` 反序列化。它**不会**挂载 `structured_output` control tool——那个门控在子任务 / workflow helper 起跑时带的 per-helper schema 上 |
 | `thinking` | `"adaptive"` \| `"disabled"` \| `None` | 非法值会在构造时抛出 `ValueError` |
 | `effort` | `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` \| `None` | 同上 |
 | `guards` | `tuple[Guard, ...] = ()` | 动作前拦截 |

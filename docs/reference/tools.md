@@ -167,7 +167,7 @@ self-gates: mounting *is* enablement.
 | `AskUserQuestion` | the agent activates `AskUserQuestion` | `AskUserQuestion` |
 | `skill` | the agent activates `skill_invocation` **and** the merged skill menu is non-empty | `skills` |
 | `run_workflow` | `HostConfig.workflow_allowed` is on (and the agent can delegate) | `react` |
-| `structured_output` | `Options.output_schema` is set | `react` |
+| `structured_output` | the agent is a subtask / workflow helper spawned with a per-helper schema (**not** `Options.output_schema`, which is served natively by the provider) | `react` |
 
 ## MCP tools
 
