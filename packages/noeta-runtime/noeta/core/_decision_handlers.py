@@ -855,15 +855,30 @@ def _suspend(
     reason: str,
     lease_id: str,
     trace_id: str,
+    answer: Any = None,
 ) -> Task:
-    """Snapshot + ``TaskSuspended`` shared by every suspend branch."""
+    """Snapshot + ``TaskSuspended`` shared by every suspend branch.
+
+    ``answer`` is set only by the branch standing in for a ``FinishDecision``
+    (the multi-turn conversation path). It rides the same spill as
+    ``TaskCompleted``'s, so an oversized value cannot burst the envelope's
+    payload ceiling; ``None`` leaves the payload byte-equal to a suspend
+    recorded before the field existed."""
     task.status = "suspended"
     task.wake_on = wake_on
     ctx.write_snapshot(task, lease_id=lease_id, trace_id=trace_id)
+    inline_answer, answer_ref = (
+        (None, None) if answer is None else _spill_answer(ctx.content_store, answer)
+    )
     ctx.emit(
         task_id=task.task_id,
         type_="TaskSuspended",
-        payload=TaskSuspendedPayload(reason=reason, wake_on=wake_on),
+        payload=TaskSuspendedPayload(
+            reason=reason,
+            wake_on=wake_on,
+            answer=inline_answer,
+            answer_ref=answer_ref,
+        ),
         lease_id=lease_id,
         trace_id=trace_id,
     )
@@ -924,6 +939,12 @@ def handle_yield_for_human(
     tag (default ``waiting_human``) on both branches, so a yield standing in for
     something else — a failed multi-turn turn parked for the human — is legible
     in the ledger instead of reading as an ordinary pause.
+
+    ``decision.answer`` rides the same two branches into
+    ``TaskSuspended.answer``. It is set only when the yield stands in for a
+    ``FinishDecision``: a multi-turn conversation parks rather than completes,
+    so this is the only place that turn's answer becomes durable. ``None``
+    everywhere else, which records nothing.
     """
     suspend_reason = decision.suspend_reason or SUSPEND_REASON_WAITING_HUMAN
     anchor = decision.request_anchor
@@ -949,6 +970,7 @@ def handle_yield_for_human(
             reason=suspend_reason,
             lease_id=lease_id,
             trace_id=trace_id,
+            answer=decision.answer,
         )
     # The fallback handle uses ``uuid.uuid4().hex``, not ctx.id_factory.
     handle = decision.prompt or f"yield-{uuid.uuid4().hex}"
@@ -959,6 +981,7 @@ def handle_yield_for_human(
         reason=suspend_reason,
         lease_id=lease_id,
         trace_id=trace_id,
+        answer=decision.answer,
     )
 
 

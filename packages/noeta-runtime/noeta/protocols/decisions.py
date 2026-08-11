@@ -287,6 +287,15 @@ class YieldForHumanDecision:
     #: instead of dissolving into a generic pause — the multi-turn wrapper sets
     #: it when it parks a *failed* turn.
     suspend_reason: Optional[str] = None
+    #: The terminal answer of the turn this suspend stands in for, when the
+    #: suspend replaced a ``FinishDecision``. Multi-turn conversations park on
+    #: the next-goal handle instead of completing, so without this the value a
+    #: ``FinishDecision`` carried — including an ``output_schema``-deserialized
+    #: dict — had nowhere to go, and a host wanting a structured result had to
+    #: re-parse the assistant text. ``None`` means "this suspend produced no
+    #: answer", which is every suspend that was not standing in for a finish
+    #: (a pending question, a parked failure).
+    answer: Any = None
 
 
 @dataclass(frozen=True, slots=True)
