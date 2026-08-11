@@ -120,7 +120,7 @@ Control tool 是面向模型的 schema，它翻译成 engine 决策，而不是�
 | `AskUserQuestion` | agent 激活了 `AskUserQuestion` | `AskUserQuestion` |
 | `skill` | agent 激活了 `skill_invocation` **并且**合并后的 skill 菜单非空 | `skills` |
 | `run_workflow` | `HostConfig.workflow_allowed` 打开（且该 agent 能委派） | `react` |
-| `structured_output` | 设置了 `Options.output_schema` | `react` |
+| `structured_output` | 该 agent 是带 per-helper schema 起跑的子任务 / workflow helper（**不是** `Options.output_schema`，那条走 provider 原生约束） | `react` |
 
 ## MCP 工具
 

@@ -47,7 +47,7 @@ are compared for equality.
 | `model` | `str \| None` | routing hint; excluded from identity and from equality |
 | `metadata` | `Mapping[str, str] = {}` | observational labels; excluded from identity |
 | `can_use_tool` | `(tool_name, arguments) -> bool` | programmatic approval; its ruling is recorded as an ordinary approval event with `resolver="can_use_tool"` |
-| `output_schema` | `Mapping \| None` | JSON Schema for the final answer; also mounts the `structured_output` control tool |
+| `output_schema` | `Mapping \| None` | JSON Schema for the final answer; instructs the model natively and deserializes `FinishDecision.answer`. It does **not** mount the `structured_output` control tool — that one is gated on the per-helper schema a subtask / workflow helper is spawned with |
 | `thinking` | `"adaptive"` \| `"disabled"` \| `None` | invalid values raise `ValueError` at construction |
 | `effort` | `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` \| `None` | same |
 | `guards` | `tuple[Guard, ...] = ()` | pre-act interception |
