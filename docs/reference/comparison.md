@@ -9,6 +9,10 @@ written. Every statement about Noeta below is checked against the code in this
 repository. Statements about other projects are limited to their headline
 design — for anything finer, read their own documentation.
 
+This page compares *designs*. For a capability number on public benchmarks —
+an agent built on Noeta, run on the official Terminal-Bench harness against the
+field — see [Benchmarks](../benchmarks.md).
+
 ## What Noeta is
 
 - **Two libraries, in-process.** `noeta-runtime` is the kernel and declares no

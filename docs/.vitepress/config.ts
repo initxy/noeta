@@ -102,6 +102,7 @@ const sidebarEn = [
     items: [
       { text: 'Troubleshooting', link: '/operations/troubleshooting' },
       { text: 'Known limitations', link: '/operations/limitations' },
+      { text: 'Benchmarks', link: '/benchmarks' },
     ],
   },
 ]
@@ -192,6 +193,7 @@ const sidebarZh = [
     items: [
       { text: '故障排查', link: '/zh/operations/troubleshooting' },
       { text: '已知限制', link: '/zh/operations/limitations' },
+      { text: '基准测试', link: '/zh/benchmarks' },
     ],
   },
 ]
