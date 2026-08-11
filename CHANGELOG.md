@@ -8,6 +8,80 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.11] - 2026-08-11
+
+Covers both packages, lockstep at 0.6.11 (`noeta-sdk`'s `noeta-runtime>=` floor
+rises with it — `Client.task_answer` reads the new `TaskSuspended.answer`).
+Everything here is additive; no existing call changes shape.
+
+### Fixed — a typo'd task id no longer corrupts the store
+
+`cancel` / `interrupt` / `close` / `reopen` write their control-plane marker
+through `system_emit`, which creates the stream as a side effect of appending.
+Three of the four folded *after* that write, so one unknown `task_id` durably
+minted a stream whose first event was `TaskCancelled` / `TurnInterrupted`. Every
+later `fold` of that stream raised — and because `list_task_summaries` scans
+every stream, one poisoned id took the whole store's task list down until the
+task was deleted.
+
+The guard now runs before any write, in one shared place rather than per verb,
+and refuses with the new typed **`UnknownTaskError`** (code `unknown_task`,
+carrying `task_id` / `verb` / `reason`) instead of the raw `ValueError` a fold
+would give. It is a `RuntimeError` like its lifecycle siblings, so an
+`except RuntimeError` contract is unaffected, and `reason` tells "never existed"
+apart from "already poisoned" — a store written by an older version still
+carries such streams.
+
+### Added — a parked turn keeps its terminal answer
+
+A multi-turn conversation never writes `TaskCompleted`: `MultiTurnReActPolicy`
+rewrites the terminal `FinishDecision` into a next-goal suspend so the ledger
+stays open. `FinishDecision.answer` had nowhere to go in that substitution, so a
+host that wanted both "resumable conversation" and "structured terminal answer"
+could have either, not both — with `Options.output_schema` set it had to discard
+the kernel's deserialization and re-parse the assistant text.
+
+- `TaskSuspendedPayload` gains `answer` / `answer_ref`, spilled exactly like
+  `TaskCompletedPayload`'s, and `YieldForHumanDecision` gains `answer` to carry
+  it there. `answer_from_payload` now reads both payloads.
+- Byte-compatible with every older recording: `__canonical_omit_none__` keeps a
+  `None` out of the stream, so a suspend that stands in for no finish is
+  byte-equal to one recorded before the field existed. No `schema_version` bump.
+- ADR: `terminal-answer-on-a-parked-turn`.
+
+### Added — SDK surface for what the kernel already did
+
+- **`Client.task_answer(task_id)`** — the latest turn's terminal answer as the
+  *raw* value, off whichever lifecycle event that turn landed on. `messages()`
+  renders the same value through `str()` for the transcript, which turns an
+  `output_schema` dict into Python repr; take this one when you want the value.
+- **`attachment_texts`** on `start` / `send_goal` / `seed_start` /
+  `seed_send_goal` — host-composed reference snapshots (`@` mentions, a
+  briefing, a workspace summary) recorded as their own `origin="system"`
+  messages *before* the goal. It existed on the driver; `Client` did not forward
+  it, so a host had to reach into `Client._host`.
+- **`Reminder`, `RecallView`, `ReminderProvider`, `TURN_INTAKE`** exported from
+  `noeta.sdk` — the other intake channel, for text that must be computed while
+  the turn is recorded and lands *after* the goal. A plugin could declare a
+  `reminder_provider` contribution but not write its value with public names.
+- **`UnknownTaskError`** exported alongside its lifecycle siblings.
+
+### Documentation
+
+- The README now leads with what the runtime is for — server-ready deployment,
+  every capability as a plugin, sixteen extension surfaces — instead of three
+  diagrammed sections on fold, leases, and the package split. That prose and its
+  diagrams moved to the concepts index, where a reader arrives wanting them.
+- New **[Benchmarks](https://initxy.github.io/noeta/benchmarks/)** page:
+  Terminal-Bench 2.1 (82.5% on a 40-task stratified sample) and SWE-bench
+  Verified (86.7% on a 15-instance subset), run on the official harbor harness
+  by `noeta-agent`'s `main` preset. Labelled as samples, with methodology,
+  exclusions, and re-runnable commands.
+- Corrected in the reference: `Options.output_schema` does **not** mount the
+  `structured_output` control tool — it instructs the model natively through the
+  provider. The control tool is gated on the per-helper schema a subtask or
+  workflow helper is spawned with.
+
 ## [0.6.10] - 2026-08-08
 
 Covers both packages, lockstep at 0.6.10 (`noeta-runtime` jumps from 0.6.4;
@@ -1875,6 +1949,7 @@ Initial preview release.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
 [Unreleased]: https://github.com/initxy/noeta/compare/v0.6.9...HEAD
+[0.6.11]: https://github.com/initxy/noeta/compare/v0.6.10...v0.6.11
 [0.6.10]: https://github.com/initxy/noeta/compare/v0.6.9...v0.6.10
 [0.6.9]: https://github.com/initxy/noeta/compare/v0.6.8...v0.6.9
 [0.6.8]: https://github.com/initxy/noeta/compare/v0.6.7...v0.6.8
