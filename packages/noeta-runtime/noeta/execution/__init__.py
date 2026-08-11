@@ -15,6 +15,7 @@ from noeta.execution.driver import (
     NotResumableError,
     ProviderSelectorError,
     TaskAlreadyTerminalError,
+    UnknownTaskError,
     multi_turn_policy_wrapper,
 )
 from noeta.execution.host import (
@@ -56,6 +57,7 @@ __all__ = [
     "NotResumableError",
     "ProviderSelectorError",
     "TaskAlreadyTerminalError",
+    "UnknownTaskError",
     "multi_turn_policy_wrapper",
     "MultiTurnReActPolicy",
     "NEXT_GOAL_WAKE_HANDLE",
