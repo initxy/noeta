@@ -65,7 +65,7 @@ Shell 元字符（`|`、`;`、`&&`、`>`、…）在分词之前就被拒绝。�
 
 | 工具 | 风险 | 做什么 | 源码 |
 | --- | --- | --- | --- |
-| `WebFetch` | low | 通过 HTTP(S) 抓取一个公开网页并渲染成 Markdown。始终可用。 | `noeta/builtins/web/impl/fetch.py` |
+| `WebFetch` | low | 抓取一个公开网页、渲染成 Markdown，再用一次辅助模型调用（`Options.webfetch_model`，默认落在会话主模型上）针对调用方的 `prompt` 作答——主模型读到的是答案，不是原始页面。HTTP 自动升级为 HTTPS，跨主机重定向不跟随而是返回给模型，抓取结果按 URL 缓存 15 分钟。始终可用。 | `noeta/builtins/web/impl/fetch.py` |
 | `WebSearch` | low | 执行一次网络搜索并把排序后的结果作为 Markdown 返回。**只在设置了 `NOETA_WEB_SEARCH_API_KEY` 时挂载。** | `noeta/builtins/web/impl/search.py` |
 
 ## App 工具

@@ -196,17 +196,24 @@
     },
     {
       "function": {
-        "description": "Fetches a public URL and returns its content rendered as Markdown.\n\n- Performs a GET on `url`, converts the HTML to compact Markdown (headings, links, list items; scripts, styles, and `<head>` stripped), and returns a `Title:` / `URL:` header followed by the page body. A pathologically long page is truncated with a notice naming the total size.\n- Only public pages: an intranet or logged-in URL answers 401/403 (or is unreachable) and the call fails with the cause named — don't retry those.\n- Redirects are followed. To search the web rather than fetch a known page, use `WebSearch`.",
+        "description": "Fetches a URL, converts the page to Markdown, and answers `prompt` against it — returning the answer, not the raw page.\n\n- Only public pages: an intranet or logged-in URL answers 401/403 (or is unreachable) and the call fails with the cause named — don't retry those.\n- HTTP is upgraded to HTTPS. Cross-host redirects are returned to you rather than followed; call again with the redirect URL.\n- Fetched pages are cached for 15 minutes per URL, so a follow-up `prompt` about the same page is cheap.\n- To search the web rather than fetch a known page, use `WebSearch`.",
         "name": "WebFetch",
         "parameters": {
           "additionalProperties": false,
           "properties": {
+            "prompt": {
+              "description": "The prompt to run on the fetched content",
+              "type": "string"
+            },
             "url": {
+              "description": "The URL to fetch content from",
+              "format": "uri",
               "type": "string"
             }
           },
           "required": [
-            "url"
+            "url",
+            "prompt"
           ],
           "type": "object"
         }
@@ -293,7 +300,7 @@
         }
       ],
       "name": "stable_prefix",
-      "segment_hash": "4e09db97b97770d68a1939e21069914b690bc90418a1ab66e049a2b2f7934b3f"
+      "segment_hash": "529e186d0058084fe659eefb78d526f8933cd5ec3b5c0c917d657228f7399de8"
     },
     {
       "content": [],
