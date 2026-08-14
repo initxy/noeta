@@ -98,7 +98,7 @@ Declared by the `web` built-in plugin manifest.
 
 | Tool | Risk | What it does | Source |
 | --- | --- | --- | --- |
-| `WebFetch` | low | Fetch a public web page over HTTP(S) and render it to Markdown. Always available. | `noeta/builtins/web/impl/fetch.py` |
+| `WebFetch` | low | Fetch a public web page, render it to Markdown, and answer the call's `prompt` against it with an auxiliary model call (`Options.webfetch_model`, defaulting to the session's main model) — the calling model reads the answer, not the raw page. HTTP upgrades to HTTPS, cross-host redirects are returned rather than followed, and fetched pages are cached for 15 minutes per URL. Always available. | `noeta/builtins/web/impl/fetch.py` |
 | `WebSearch` | low | Run a web search and return ranked hits as Markdown. **Mounted only when `NOETA_WEB_SEARCH_API_KEY` is set.** | `noeta/builtins/web/impl/search.py` |
 
 ## App tools

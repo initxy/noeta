@@ -391,6 +391,19 @@ class Options:
         the default provider. A host routing hint — **excluded from
         identity** for the same reason: the judge's picks are recorded, so
         a resumed run replays the recorded recall rather than re-judging.
+    webfetch_model:
+        Optional model (alias or real id) for the **WebFetch digest** call:
+        the tool answers its ``prompt`` against the fetched page with one
+        auxiliary model call and returns the answer, not the raw page.
+        ``None`` (the default) runs that call on the session's main model —
+        the digest still happens, it just isn't routed to a cheaper model.
+        Digesting is a mechanical read-and-answer over one page, so — like
+        :attr:`compaction_model` — it is the kind of call a small model
+        serves well. Resolved through the same alias table as :attr:`model`;
+        served by the session's own provider, so it must name a model that
+        provider can serve. A host routing hint — **excluded from identity**
+        for the same reason: the answer rides the recorded ToolResult, so a
+        resumed run replays the record rather than re-digesting.
     metadata:
         Observational labels. Also excluded from identity.
     provider:
@@ -523,6 +536,7 @@ class Options:
     model: Optional[str] = field(default=None, compare=False)
     compaction_model: Optional[str] = field(default=None, compare=False)
     recall_model: Optional[str] = field(default=None, compare=False)
+    webfetch_model: Optional[str] = field(default=None, compare=False)
     metadata: Mapping[str, str] = field(default_factory=dict, compare=False)
     provider: Optional[LLMProvider] = field(default=None, compare=False)
     cwd: str | Path | None = field(default=None, compare=False)

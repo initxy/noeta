@@ -8,6 +8,33 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Changed — `WebFetch` aligned with Claude Code's surface
+
+`WebFetch` now takes `url` **and `prompt`** (both required) and answers the
+prompt against the fetched page with one auxiliary model call, returning the
+answer instead of the raw rendering — a fetched page no longer floods the
+calling model's context. The digest runs on the session's own provider; the
+new wiring knob **`Options.webfetch_model`** (alias-resolved, excluded from
+identity like `compaction_model` / `recall_model`) routes it to a cheaper
+model, and `None` keeps it on the session's main model. With no provider wired
+(direct tool construction) or on a digest failure, the tool degrades to the
+previous raw-render behaviour, and the full rendering is still offloaded as
+the ContentStore audit artifact either way.
+
+Three more Claude Code parity behaviours landed with it: `http://` URLs are
+upgraded to `https://` before fetching; a redirect to a **different host** is
+returned to the model to re-issue explicitly instead of being silently
+followed (same-host redirects still follow, bounded); and fetched pages are
+cached per URL for 15 minutes (successes only), so a follow-up `prompt` about
+the same page re-digests without re-fetching. The container (sandbox) egress
+path keeps byte-parity on all of this: `curl` no longer follows redirects
+itself — hops resolve in Python off `-w` status metadata (needs curl >= 7.63),
+and an HTTP >= 400 fails with the status named exactly like the httpx path.
+
+The `explore` / `plan` preset prompt also gained one rule: a web fetch that
+fails or times out is reported and routed around — never re-hammered against
+the same host.
+
 ## [0.6.11] - 2026-08-11
 
 Covers both packages, lockstep at 0.6.11 (`noeta-sdk`'s `noeta-runtime>=` floor

@@ -558,6 +558,11 @@ class SdkHost(GenericEngineResolver):
     # the message + memory index and picks the relevant memories. None = judge
     # off, recall stays purely lexical.
     recall_model: Optional[str] = None
+    # Wiring-only WebFetch digest model (Options.webfetch_model): when set, the
+    # webfetch tool answers its ``prompt`` against the fetched page on this
+    # model; None keeps the digest on the session's main model. Served by the
+    # session's own provider either way.
+    webfetch_model: Optional[str] = None
     # Positive int or None; engine-level inline char cap for tool output. None = no
     # truncation. A resumed session must reuse the value the original run used, or
     # it re-derives different tool-output bytes.
@@ -1607,6 +1612,13 @@ class SdkHost(GenericEngineResolver):
             pack_backends["browser"] = browser_backend
         if self.app_gateway is not None:
             pack_backends["app_preview"] = self.app_gateway
+        # The session's own provider adapter, resolved once and shared by the
+        # engine's LLM client below and — as the generic ``"llm"`` backend — by
+        # any pack making an auxiliary model call (webfetch's digest today).
+        # Auxiliary calls therefore always run on the SAME adapter as the
+        # session's decide turns; only the model id may differ.
+        bound_provider = self._provider_for(provider)
+        pack_backends["llm"] = bound_provider
         inputs = build_session_inputs(
             session_packs=self._session_packs(agent.name),
             # The built-in + this agent's activated control tools, merged with the
@@ -1734,7 +1746,7 @@ class SdkHost(GenericEngineResolver):
         # so a session on a different provider runs its LLM round-trips on that
         # adapter — the registry, not a host-fixed single instance, is the source.
         llm = RuntimeLLMClient(
-            provider=self._provider_for(provider),
+            provider=bound_provider,
             event_log=self.event_log,
             content_store=self.content_store,
             pricing=_catalog_pricing,
@@ -2088,6 +2100,15 @@ class SdkHost(GenericEngineResolver):
                 "instructions_file": self.instructions_file,
             },
         }
+        # webfetch's digest routing: the alias-resolved ``Options.webfetch_model``
+        # when set (alias resolution happens here for the same layering reason as
+        # ``compaction_model``'s — the web built-in must not import the providers
+        # built-in). Absent, no ``web`` entry is derived and the pack digests on
+        # the session's main model.
+        if self.webfetch_model:
+            config["web"] = {
+                "digest_model": resolve_model_alias(self.webfetch_model)
+            }
         if reduced:
             return self._apply_plugin_config_overrides(config)
         config["fs"]["write_path_globs"] = _spec_write_path_globs(spec)
@@ -2136,7 +2157,8 @@ class SdkHost(GenericEngineResolver):
           ``docs/how-to/write-a-plugin.md`` documents and the only way a pack
           that the SDK has never heard of gets configured at all.
         * a name the SDK does derive (``fs`` / ``skills`` / ``workspace`` /
-          ``memory``) — a **shallow per-key overlay**: start from the derived
+          ``memory``, plus ``web`` when ``webfetch_model`` is set) — a
+          **shallow per-key overlay**: start from the derived
           mapping, write the host's keys over it. Replacing the whole entry
           would make supplying one key silently delete the rest (a host that
           set ``{"fs": {"shell_allowlist": …}}`` would lose ``write_mode``),

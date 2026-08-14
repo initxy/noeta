@@ -616,6 +616,7 @@ class Client:
             effort=options.effort,
             compaction_model=options.compaction_model,
             recall_model=options.recall_model,
+            webfetch_model=options.webfetch_model,
             # Extension points.
             # policy: the custom Options.policy IS the ``(llm) -> Policy``
             # factory (it also carries the .ref compile_options put in the
