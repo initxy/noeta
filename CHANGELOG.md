@@ -8,6 +8,12 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.12] - 2026-08-14
+
+Covers `noeta-sdk` only; `noeta-runtime` stays at 0.6.11 (the runtime is
+untouched — every change lives in the web built-in, the presets, and the
+SDK client wiring), so the sdk's `noeta-runtime>=0.6.11` floor is unchanged.
+
 ### Changed — `WebFetch` aligned with Claude Code's surface
 
 `WebFetch` now takes `url` **and `prompt`** (both required) and answers the
@@ -1975,7 +1981,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.9...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.12...HEAD
+[0.6.12]: https://github.com/initxy/noeta/compare/v0.6.11...v0.6.12
 [0.6.11]: https://github.com/initxy/noeta/compare/v0.6.10...v0.6.11
 [0.6.10]: https://github.com/initxy/noeta/compare/v0.6.9...v0.6.10
 [0.6.9]: https://github.com/initxy/noeta/compare/v0.6.8...v0.6.9
