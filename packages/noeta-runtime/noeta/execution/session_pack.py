@@ -112,14 +112,27 @@ class SessionRecorder(Protocol):
         version: str,
         ref: ContentRef,
         policy: str,
+        refresh: bool = True,
     ) -> None:
-        """Activate/refresh the ``(kind, name)`` resident at ``ref``'s bytes."""
+        """Activate/refresh the ``(kind, name)`` resident at ``ref``'s bytes.
+
+        ``refresh=False`` declares an activate-once resident: the first record
+        wins for the task's whole life, and a later call with a DIFFERENT hash
+        appends nothing (the composer keeps resolving the original bytes).
+        For a resident whose source is re-captured per process rather than
+        re-read from a deterministic file — the workspace environment's clock
+        and git snapshot — this is what keeps the rendered bytes identical
+        across resumes, so the prompt-cache prefix survives. ``refresh=True``
+        (the default) records a refresh whenever the hash moved.
+        """
         ...
 
 
 #: A contribution's pre-loop activation hook, run once per session build
-#: (including resume) at seed time. The recorder's no-op-on-unchanged-hash rule
-#: is what makes it idempotent per drive.
+#: (including resume) at seed time. Idempotence per drive comes from the
+#: recorder's gate: unchanged hash appends nothing, and an activate-once
+#: record (``refresh=False``) appends nothing even when its re-captured
+#: source produced new bytes.
 InitHook = Callable[[SessionRecorder], None]
 
 

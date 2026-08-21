@@ -97,8 +97,11 @@ ENVIRONMENT_KIND = "environment"
 ENVIRONMENT_NAME = "workspace"
 #: Declared shape version of the rendered body (not its content — content
 #: is free to evolve under the ``evolving`` policy). Bumped to ``"2"`` when
-#: the git branch / status / capture-date lines joined the rendered block.
-ENVIRONMENT_VERSION = "2"
+#: the git branch / status / capture-date lines joined the rendered block;
+#: to ``"3"`` when the snapshot note joined them (the block is recorded
+#: activate-once per task, so the note tells the model the git facts are a
+#: task-start snapshot, mirroring Claude Code's git-status wording).
+ENVIRONMENT_VERSION = "3"
 #: The drift policy environment recordings carry: hash recorded, drift
 #: allowed (advisory-only) — an absolute path moves across machines. (Why a
 #: content-channel resident and NOT the system prompt: the system prompt is
@@ -109,7 +112,8 @@ ENVIRONMENT_DRIFT_POLICY = "evolving"
 
 @dataclass(frozen=True, slots=True)
 class EnvironmentSnapshot:
-    """Preloaded, session-static workspace facts captured at wiring time.
+    """Preloaded workspace facts captured at wiring time, recorded once per
+    task (the pack's ``init`` is activate-once — see the last paragraph).
 
     ``workspace_display`` is the directory string the model is told it is
     working in (relative fs-tool paths resolve against it); ``is_git_repo``
@@ -119,12 +123,17 @@ class EnvironmentSnapshot:
     ``git_branch`` / ``git_status`` / ``captured_date`` are a once-at-start
     snapshot of the git branch, ``git status --short`` (truncated) and the
     host date/time, captured at wiring time alongside the rest. They are
-    session-static by deliberate choice — memoized at session start, NOT
-    refreshed per turn (mirrors Claude Code's memoized git status), so the
-    rendered bytes stay stable and never churn the prompt cache; a model
-    that wants live state runs ``git status`` itself. Each is the empty
-    string when capture fails or does not apply (non-git workspace), and an
-    empty line is omitted from the rendered block.
+    task-static by deliberate choice (mirrors Claude Code's memoized git
+    status): the first recording wins for the task's whole life — the pack's
+    ``init`` records with ``refresh=False``, so an engine rebuilt in a fresh
+    process re-captures a NEW snapshot but never re-records it, and the
+    composer keeps resolving the original bytes from the ContentStore. That
+    is what keeps the rendered block byte-identical across turns AND resumes
+    (the semi_stable prefix the prompt cache rides on); a model that wants
+    live state runs ``git status`` itself, and the rendered note says so.
+    Each field is the empty string when capture fails or does not apply
+    (non-git workspace), and an empty line is omitted from the rendered
+    block.
     """
 
     workspace_display: str
@@ -363,22 +372,24 @@ def load_environment(
     Impure (reads the workspace path string, probes ``.git`` on disk,
     reads ``sys.platform``, and — when it is a git repo — spawns git to
     read the branch / short status, plus reads the host clock) but called
-    ONCE pre-loop — before anything enters the ledger — so the composer's
-    renderer and the pre-loop ``_init`` recording share one snapshot,
-    and record time equals compose time by construction.
+    once per engine build, before anything enters the ledger, so the
+    composer's renderer and the pre-loop ``_init`` recording share one
+    snapshot — and on the build that seeds the task, record time equals
+    compose time by construction.
 
-    Reproducibility scope: the snapshot is memoized for the whole session,
-    so the rendered bytes are identical *across steps within one session*
-    (the semi-stable segment stays KV-cache-stable). They are NOT guaranteed
-    to reproduce *across sessions*: ``captured_date`` is a wall clock and
-    ``git_branch`` / ``git_status`` reflect live repo state, so a resume in a
-    fresh process legitimately re-renders different bytes for those lines.
-    That is why the environment resident carries the ``evolving`` drift policy
-    (``content_hash`` recorded as advisory provenance, free to move) and lives
-    in ``semi_stable``, NOT the stable prefix — only the stable prefix (system
-    + tools) is under the hard cross-step byte-reproducibility constraint.
-    ``workspace_display`` / ``platform`` do reproduce given the same
-    ``workspace_dir``.
+    Reproducibility scope: the CAPTURE is not reproducible — ``captured_date``
+    is a wall clock and ``git_branch`` / ``git_status`` reflect live repo
+    state, so a fresh process legitimately captures different values. The
+    RECORDING is what stays stable: the pack's ``init`` records activate-once
+    (``refresh=False``), so only the task's first capture ever enters the
+    ledger and every later compose — same process or a resume in a fresh
+    one — resolves those original bytes from the ContentStore. The rendered
+    block is therefore byte-identical for the task's whole life, keeping the
+    ``semi_stable`` segment prompt-cache-stable across turns and resumes.
+    The block still lives in ``semi_stable``, NOT the stable prefix: it
+    carries an absolute workspace path, which must not rotate the
+    cross-host-shared ``stable_prefix`` hash. ``workspace_display`` /
+    ``platform`` do reproduce given the same ``workspace_dir``.
 
     ``.git`` is probed by mere existence (``.git`` is a directory in a
     normal clone, a gitlink *file* in a worktree / submodule — both count

@@ -785,8 +785,10 @@ class InteractionDriver:
         # instructions + environment) records its resident through ONE
         # SeedRecorder, in folded pack-loop order, BEFORE the goal so the
         # residents anchor pre-loop (semi_stable, byte-identical placement).
-        # Idempotent per drive: a re-record of an already-active (kind, name)
-        # is dropped, so resume appends nothing.
+        # Idempotent per drive: an already-active (kind, name) re-recorded at
+        # an unchanged hash is dropped, and an activate-once resident
+        # (refresh=False — the environment's re-captured clock/git snapshot)
+        # is dropped at ANY hash, so resume appends nothing.
         task = run_content_init(
             host.event_log,
             host.content_store,
@@ -1333,8 +1335,12 @@ class InteractionDriver:
         # invocation, so a memory written by an EARLIER turn of this same task
         # reaches the index HERE instead of waiting for a whole new task (the
         # Engine is cached, so its build-time state can be arbitrarily old).
-        # Idempotent by the recorder's unchanged-hash rule: an untouched source
-        # appends nothing, so the common turn is byte-identical, and a refresh
+        # Idempotent by the recorder's gate: an untouched deterministic source
+        # (memory index, instructions files) re-renders the same bytes and
+        # appends nothing, and the environment — whose re-captured clock/git
+        # snapshot hashes differently on every engine rebuild — records
+        # activate-once (refresh=False), so it appends nothing here either.
+        # The common turn is therefore byte-identical, and a genuine refresh
         # moves the resident's bytes but never its placement (the activation
         # anchor is first-write-wins).
         return self._seed_woken(

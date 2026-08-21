@@ -8,6 +8,29 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed — the workspace-environment block no longer busts the prompt cache on resume
+
+The `<workspace-environment>` resident carried a per-second `Captured at:`
+wall-clock line (plus live git branch/status), and its snapshot is re-captured
+whenever the engine is rebuilt — so driving the same task from a fresh process
+(one process per turn, the common server deployment) re-recorded the resident
+with new bytes on every `send_goal`. That moved message #0, invalidated every
+cached prefix behind it, and dropped the provider's cache read back to the
+system+tools breakpoint: the whole transcript re-primed each turn, at a cost
+that grew with conversation length.
+
+The resident now records **activate-once**: `SessionRecorder.record_content`
+gained `refresh: bool = True` (runtime), first-write-wins when `False`, and the
+workspace pack's environment init records with `refresh=False` (sdk). The
+task's first capture is the one the composer keeps resolving — same process or
+a resume in a fresh one — so message #0 stays byte-identical for the task's
+whole life, matching Claude Code's memoized git-status/date semantics. The
+rendered block now says so (`ENVIRONMENT_VERSION` 2 → 3): a snapshot note
+after the git lines tells the model the branch/status are from task start and
+to run git itself for live state. Deterministic residents (memory index,
+instructions) keep the default refresh semantics — an unchanged source still
+appends nothing, a real content change still records exactly one refresh.
+
 ## [0.6.12] - 2026-08-14
 
 Covers `noeta-sdk` only; `noeta-runtime` stays at 0.6.11 (the runtime is

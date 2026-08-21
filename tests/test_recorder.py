@@ -95,6 +95,63 @@ def test_record_content_is_first_only_for_an_active_name() -> None:
     assert len(_content_events(log, task.task_id)) == 1
 
 
+def test_record_content_refreshes_an_active_name_at_a_new_hash() -> None:
+    # Default mode: a changed source records exactly one refresh (hash
+    # last-write-wins) — the memory-index behavior.
+    log, cs, _disp = _runtime()
+    task = _task(log, cs)
+    rec = SeedRecorder(log, cs, task, actor="plugin:x")
+
+    first = cs.put(b"v1 bytes", media_type="text/markdown")
+    second = cs.put(b"v2 bytes", media_type="text/markdown")
+    rec.record_content(kind="k", name="n", version="1", ref=first, policy="evolving")
+    rec.record_content(kind="k", name="n", version="1", ref=second, policy="evolving")
+
+    assert len(_content_events(log, task.task_id)) == 2
+    assert rec.task.state.active_content["k"]["n"] == second.hash
+
+
+def test_record_content_refresh_false_is_first_write_wins() -> None:
+    # Activate-once mode: once active at ANY hash, a later record with
+    # DIFFERENT bytes appends nothing — the environment resident's guard
+    # against its re-captured clock/git snapshot busting the prompt cache
+    # on every resume.
+    log, cs, _disp = _runtime()
+    task = _task(log, cs)
+    rec = SeedRecorder(log, cs, task, actor="plugin:environment")
+
+    first = cs.put(b"snapshot at task start", media_type="text/markdown")
+    second = cs.put(b"snapshot at resume", media_type="text/markdown")
+    rec.record_content(
+        kind="environment", name="workspace", version="3",
+        ref=first, policy="evolving", refresh=False,
+    )
+    rec.record_content(
+        kind="environment", name="workspace", version="3",
+        ref=second, policy="evolving", refresh=False,
+    )
+
+    assert len(_content_events(log, task.task_id)) == 1
+    assert rec.task.state.active_content["environment"]["workspace"] == first.hash
+
+
+def test_record_content_refresh_false_still_makes_the_first_write() -> None:
+    # First-write-wins still WRITES first: a not-yet-active resident records
+    # normally under refresh=False.
+    log, cs, _disp = _runtime()
+    task = _task(log, cs)
+    rec = SeedRecorder(log, cs, task, actor="plugin:environment")
+    ref = cs.put(b"snapshot", media_type="text/markdown")
+
+    rec.record_content(
+        kind="environment", name="workspace", version="3",
+        ref=ref, policy="evolving", refresh=False,
+    )
+
+    assert len(_content_events(log, task.task_id)) == 1
+    assert rec.task.state.active_content["environment"]["workspace"] == ref.hash
+
+
 def test_run_content_init_runs_hooks_in_order_and_stamps_each_plugin() -> None:
     log, cs, _disp = _runtime()
     task = _task(log, cs)
