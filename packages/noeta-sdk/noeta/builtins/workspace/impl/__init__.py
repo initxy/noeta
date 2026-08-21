@@ -106,7 +106,12 @@ def render_environment_text(snapshot: EnvironmentSnapshot) -> str:
 
     The git branch / status / date lines are appended only when captured —
     an empty field (non-git workspace, or capture that failed / was
-    skipped) renders no line at all, keeping the block tight.
+    skipped) renders no line at all, keeping the block tight. When either
+    git line rendered, a note states that they are a task-start snapshot
+    (the block is recorded activate-once and never refreshed — see
+    :func:`build_environment_session_pack`), mirroring Claude Code's
+    git-status wording, so the model runs git itself for live state
+    instead of trusting stale lines.
     """
     lines = [
         "<workspace-environment>",
@@ -120,6 +125,12 @@ def render_environment_text(snapshot: EnvironmentSnapshot) -> str:
         lines.append(f"Git branch: {snapshot.git_branch}")
     if snapshot.git_status:
         lines.append(f"Git status:\n{snapshot.git_status}")
+    if snapshot.git_branch or snapshot.git_status:
+        lines.append(
+            "The git branch/status above are a snapshot from when this "
+            "task started; they do not update as the task runs. Run git "
+            "commands for the current state."
+        )
     if snapshot.captured_date:
         lines.append(f"Captured at: {snapshot.captured_date}")
     lines.append("</workspace-environment>")
@@ -407,22 +418,29 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
 def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution:
     """The environment resident as a ``session_pack`` contribution (band 500).
 
-    Always on (a workspace always exists): captures the session-static
-    workspace facts once so the composer's renderer AND the pre-loop
-    ``_init`` recording share the same snapshot, and contributes the
-    environment content kind LAST of the built-in residents (kind band 400)
-    so the semi_stable byte layout is unchanged for sessions that never
-    activate it.
+    Always on (a workspace always exists): captures the workspace facts once
+    per engine build so the composer's renderer AND the pre-loop ``_init``
+    recording share the same snapshot, and contributes the environment
+    content kind LAST of the built-in residents (kind band 400) so the
+    semi_stable byte layout is unchanged for sessions that never activate it.
     """
     snapshot = load_environment(ctx.workspace_dir, exec_env=ctx.exec_env)
     content_store = ctx.content_store
 
     def _init(rec: SessionRecorder) -> None:
-        """Pre-loop activation of the environment resident.
+        """Pre-loop activation of the environment resident — activate-once.
 
         Records the same snapshot the composer's kind renders from; ``ref.hash``
         equals the rendered-environment sha256 the fingerprint carries,
         and the envelope attributes ``actor="plugin:environment"``.
+
+        ``refresh=False``: the snapshot is a wall clock + live git state, so
+        an engine rebuilt in a fresh process captures DIFFERENT bytes on
+        every resume — the recorder's unchanged-hash gate alone would let
+        each new goal re-record the block, move message #0, and bust the
+        prompt-cache prefix for the whole transcript behind it. First write
+        wins instead: the task keeps its task-start snapshot (the rendered
+        note says so) and the model runs git itself for live state.
         """
         body = render_environment_text(snapshot).encode("utf-8")
         ref = content_store.put(body, media_type="text/markdown")
@@ -432,6 +450,7 @@ def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution
             version=ENVIRONMENT_VERSION,
             ref=ref,
             policy=ENVIRONMENT_DRIFT_POLICY,
+            refresh=False,
         )
 
     return PackContribution(

@@ -171,6 +171,10 @@ def test_render_includes_branch_status_date_when_present() -> None:
     text = render_environment_text(snap)
     assert "Git branch: main" in text
     assert "Git status:\n M a.py\n?? b.py" in text
+    # The git lines carry the task-start-snapshot note (mirrors Claude
+    # Code's git-status wording) so the model never trusts them as live.
+    assert "snapshot from when this task started" in text
+    assert "Run git commands for the current state." in text
     assert "Captured at: 2026-06-25T10:00:00" in text
     assert text.rstrip().endswith("</workspace-environment>")
 
@@ -183,6 +187,8 @@ def test_render_omits_empty_git_lines() -> None:
     text = render_environment_text(snap)
     assert "Git branch:" not in text
     assert "Git status:" not in text
+    # No git lines rendered → no snapshot note either.
+    assert "snapshot from when this task started" not in text
     assert "Captured at:" not in text
 
 
@@ -200,11 +206,13 @@ def test_render_omits_only_the_empty_fields() -> None:
     text = render_environment_text(snap)
     assert "Git branch: main" in text
     assert "Git status:" not in text
+    # A rendered branch alone still carries the snapshot note.
+    assert "snapshot from when this task started" in text
     assert "Captured at: 2026-06-25T10:00:00" in text
 
 
-def test_environment_version_is_2() -> None:
-    assert ENVIRONMENT_VERSION == "2"
+def test_environment_version_is_3() -> None:
+    assert ENVIRONMENT_VERSION == "3"
 
 
 def test_render_is_stable_for_same_snapshot() -> None:
@@ -291,16 +299,17 @@ def _engine(log, cs, composer) -> Engine:
     )
 
 
-def _activate_environment(log, cs, task):
+def _activate_environment(log, cs, task, snapshot: EnvironmentSnapshot = _SAMPLE):
     """Activate the environment resident exactly as the workspace built-in's
     ``init`` hook does: rendered bytes into the content store, the ref recorded
-    through the :class:`SeedRecorder`. The recorded ``ref.hash`` therefore
-    equals ``environment_content_hash(_SAMPLE)`` by construction — both are
-    ``sha256(render_environment_text(_SAMPLE))``.
+    through the :class:`SeedRecorder` with ``refresh=False`` (activate-once).
+    The recorded ``ref.hash`` therefore equals
+    ``environment_content_hash(snapshot)`` by construction — both are
+    ``sha256(render_environment_text(snapshot))``.
     """
     rec = SeedRecorder(log, cs, task, actor="plugin:environment")
     ref = cs.put(
-        render_environment_text(_SAMPLE).encode("utf-8"), media_type="text/markdown"
+        render_environment_text(snapshot).encode("utf-8"), media_type="text/markdown"
     )
     rec.record_content(
         kind=ENVIRONMENT_KIND,
@@ -308,6 +317,7 @@ def _activate_environment(log, cs, task):
         version=ENVIRONMENT_VERSION,
         ref=ref,
         policy=ENVIRONMENT_DRIFT_POLICY,
+        refresh=False,
     )
     return rec.task
 
@@ -328,6 +338,35 @@ def test_activation_emits_evolving_event_and_activates() -> None:
     assert payload.content_hash == environment_content_hash(_SAMPLE)
     assert payload.version == ENVIRONMENT_VERSION
     assert events[0].actor == "plugin:environment"
+    assert task.state.active_content[ENVIRONMENT_KIND] == {
+        ENVIRONMENT_NAME: environment_content_hash(_SAMPLE)
+    }
+
+
+def test_activation_is_first_write_wins_across_recaptures() -> None:
+    # A resume in a fresh process re-captures the snapshot with a new clock
+    # and git state — DIFFERENT bytes. The init hook records activate-once,
+    # so the second capture appends nothing and the task keeps rendering its
+    # task-start snapshot: message #0 stays byte-identical and the prompt
+    # cache prefix behind it survives.
+    log, cs, _disp = _runtime()
+    engine = _engine(log, cs, _composer(cs))
+    task = engine.create_task(goal="g", policy_name="scripted")
+
+    task = _activate_environment(log, cs, task)
+    recaptured = EnvironmentSnapshot(
+        workspace_display="/work/repo",
+        is_git_repo=True,
+        platform="darwin",
+        git_branch="main",
+        git_status=" M changed.py",
+        captured_date="2026-08-21T11:22:33",
+    )
+    assert environment_content_hash(recaptured) != environment_content_hash(_SAMPLE)
+    task = _activate_environment(log, cs, task, snapshot=recaptured)
+
+    events = [e for e in log.read(task.task_id) if e.type == "ContextContentRecorded"]
+    assert len(events) == 1
     assert task.state.active_content[ENVIRONMENT_KIND] == {
         ENVIRONMENT_NAME: environment_content_hash(_SAMPLE)
     }
@@ -376,15 +415,21 @@ def _end_response() -> LLMResponse:
     )
 
 
-def _server_host(ws: Path, *, instructions_enabled: bool = False):
+def _server_host(ws: Path, *, instructions_enabled: bool = False, runtime=None):
     """A real ``SdkHost`` over an in-memory runtime, driven through
-    ``InteractionDriver`` — task creation goes via ``driver.start``."""
+    ``InteractionDriver`` — task creation goes via ``driver.start``.
+    ``runtime`` reuses an existing ``(event_log, content_store, dispatcher)``
+    triple, so a SECOND host over the same stores models a resume in a fresh
+    process (rebuilt engine, re-captured environment snapshot)."""
     from noeta.client import SdkHost
     from noeta.execution.driver import multi_turn_policy_wrapper
 
-    dispatcher = InMemoryDispatcher()
-    event_log = InMemoryEventLog(lease_validator=dispatcher)
-    content_store = InMemoryContentStore()
+    if runtime is None:
+        dispatcher = InMemoryDispatcher()
+        event_log = InMemoryEventLog(lease_validator=dispatcher)
+        content_store = InMemoryContentStore()
+    else:
+        event_log, content_store, dispatcher = runtime
     host = SdkHost(
         event_log=event_log,
         content_store=content_store,
@@ -429,6 +474,52 @@ def test_server_seed_start_records_environment(tmp_path: Path) -> None:
     assert tuple(folded.state.active_content.get(ENVIRONMENT_KIND, {})) == (
         ENVIRONMENT_NAME,
     )
+
+
+def test_new_goal_in_fresh_process_keeps_the_task_start_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The prompt-cache regression this channel is built around: the SAME task
+    driven for a second turn by a REBUILT engine (fresh process → new
+    ``load_environment`` capture, new clock) must NOT re-record the
+    environment resident. One recording, task-start bytes, message #0
+    byte-identical — the cached prefix behind it survives.
+    """
+    from noeta.execution.driver import InteractionDriver
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / ".git").mkdir()
+    monkeypatch.setattr(env_exec, "_run_git", lambda *a, **k: "")
+    monkeypatch.setattr(env_exec, "_captured_date", lambda: "2026-08-21T10:00:00")
+    host, event_log, content_store = _server_host(ws)
+    driver = InteractionDriver(host)
+    first = driver.start(goal="round one", agent="main")
+    assert first.status == "suspended"  # multi-turn: waiting for the next goal
+
+    # "Fresh process": a second host over the SAME durable stores builds its
+    # own engine, whose pack re-captures the snapshot at a later clock.
+    monkeypatch.setattr(env_exec, "_captured_date", lambda: "2026-08-21T10:05:00")
+    host2, _log2, _cs2 = _server_host(
+        ws, runtime=(event_log, content_store, host.dispatcher)
+    )
+    InteractionDriver(host2).send_goal(first.task_id, goal="round two")
+
+    env_events = [
+        e
+        for e in event_log.read(first.task_id)
+        if e.type == "ContextContentRecorded"
+        and getattr(e.payload, "kind", "") == ENVIRONMENT_KIND
+    ]
+    assert len(env_events) == 1
+    folded = fold(event_log, content_store, first.task_id)
+    active_hash = folded.state.active_content[ENVIRONMENT_KIND][ENVIRONMENT_NAME]
+    from noeta.protocols.values import ContentRef
+
+    body = content_store.get(
+        ContentRef(hash=active_hash, size=0, media_type="text/markdown")
+    ).decode("utf-8")
+    assert "Captured at: 2026-08-21T10:00:00" in body  # task-start, not resume
 
 
 def test_server_seed_start_records_instructions_when_file_present(

@@ -6,7 +6,8 @@ The envelope carries ``actor="plugin:<name>"`` purely as a provenance label —
 the recorder remains the sole component calling ``event_log.emit``, so the
 single-writer invariant holds and ``fold(events) → state`` cannot fork (fold
 never reads ``actor``). The active-content gate is what makes rerunning the
-hooks on resume append nothing when nothing changed.
+hooks on resume append nothing when nothing changed — and, for activate-once
+residents (``refresh=False``), nothing even when a re-captured source changed.
 """
 
 from __future__ import annotations
@@ -63,6 +64,7 @@ class SeedRecorder:
         version: str,
         ref: ContentRef,
         policy: str,
+        refresh: bool = True,
     ) -> None:
         """Activate the ``(kind, name)`` resident at ``ref``'s bytes.
 
@@ -72,10 +74,23 @@ class SeedRecorder:
         freely: it runs at task seed, at a subtask drain, and again whenever a
         new goal is seeded onto a resumed task, so an unchanged source appends
         nothing and a changed one records exactly one refresh.
+
+        ``refresh=False`` narrows the gate to first-write-wins: once the
+        resident is active AT ANY HASH, later records append nothing even
+        when the bytes differ. The hash gate alone only protects residents
+        whose sources re-read deterministically (an unchanged file re-renders
+        the same bytes); a source re-CAPTURED per process — the environment's
+        wall clock and git snapshot — hashes differently on every engine
+        rebuild, so without this mode each resume would record a refresh,
+        move the semi_stable bytes, and bust the prompt-cache prefix for the
+        whole transcript behind it.
         """
         if not kind or not name or not ref.hash:
             return
-        if self._task.state.active_content.get(kind, {}).get(name) == ref.hash:
+        active = self._task.state.active_content.get(kind, {}).get(name)
+        if active == ref.hash:
+            return
+        if active is not None and not refresh:
             return
         env = self._event_log.emit(
             task_id=self._task.task_id,
