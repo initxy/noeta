@@ -8,6 +8,13 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.13] - 2026-08-21
+
+Covers both packages, lockstep: `noeta-runtime` 0.6.11 → 0.6.13 (the
+recorder/SPI half; 0.6.12 was an sdk-only tag) and `noeta-sdk` 0.6.12 →
+0.6.13 (the workspace built-in half), with the sdk's floor raised to
+`noeta-runtime>=0.6.13`.
+
 ### Fixed — the workspace-environment block no longer busts the prompt cache on resume
 
 The `<workspace-environment>` resident carried a per-second `Captured at:`
@@ -2004,7 +2011,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.12...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.13...HEAD
+[0.6.13]: https://github.com/initxy/noeta/compare/v0.6.12...v0.6.13
 [0.6.12]: https://github.com/initxy/noeta/compare/v0.6.11...v0.6.12
 [0.6.11]: https://github.com/initxy/noeta/compare/v0.6.10...v0.6.11
 [0.6.10]: https://github.com/initxy/noeta/compare/v0.6.9...v0.6.10
