@@ -8,6 +8,12 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.14] - 2026-08-25
+
+Covers `noeta-sdk` only; `noeta-runtime` stays at 0.6.13 (the runtime is
+untouched — the change lives in the memory built-in), so the sdk's
+`noeta-runtime>=0.6.13` floor is unchanged.
+
 ### Fixed — `memory_write` no longer drops frontmatter fields a rewrite does not mention
 
 The per-field merge used the *text's* fence as its base and read only
@@ -2024,7 +2030,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.13...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.14...HEAD
+[0.6.14]: https://github.com/initxy/noeta/compare/v0.6.13...v0.6.14
 [0.6.13]: https://github.com/initxy/noeta/compare/v0.6.12...v0.6.13
 [0.6.12]: https://github.com/initxy/noeta/compare/v0.6.11...v0.6.12
 [0.6.11]: https://github.com/initxy/noeta/compare/v0.6.10...v0.6.11
