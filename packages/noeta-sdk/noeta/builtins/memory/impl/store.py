@@ -25,7 +25,9 @@ aliases (matcher-only — the cross-lingual recall surface); a file without
 (or with a malformed) fence keeps the v1 first-line behavior byte-for-byte.
 ``memory_write`` additionally stamps ``created`` / ``updated`` dates and a
 ``source_task`` ledger receipt, so every tool-written memory records when
-it was true and which task's history backs it.
+it was true and which task's history backs it. A rewrite merges per-field
+over the fence already on disk: fields the new text and parameters do not
+mention survive, and a key written with an empty value is dropped.
 
 Layering note: this module deliberately knows nothing about the content
 channel — the store hands over plain ``(name, summary, type, keywords)``
@@ -95,8 +97,9 @@ _SUMMARY_MAX_CHARS = 200
 _FENCE = "---"
 
 #: Tool-composed fence keys, in the order they are written. Unknown keys a
-#: memory already carries are preserved after these, sorted — the write tool
-#: merges per-field and never drops data it does not recognize.
+#: memory already carries (on disk, or in the text's own fence) are preserved
+#: after these, sorted — the write tool merges per-field and never drops data
+#: it does not recognize; only an explicit empty value removes a key.
 _FENCE_KEY_ORDER = (
     "description",
     "type",
@@ -451,12 +454,22 @@ class MemoryWriteTool:
         ):
             return _err(self.name, "'keywords' must be a one-line string")
 
-        # Per-field merge: the text's own fence is the base, params
-        # overlay the fields they name, and everything else the fence
-        # carried is preserved — the old replace-the-whole-fence rule
-        # silently destroyed curator-maintained fields (keywords, dates)
-        # on every parametered rewrite.
-        fields, body = _split_frontmatter(text)
+        # Per-field merge, lowest to highest: the fence already on disk,
+        # then the text's own fence, then the params — each layer
+        # overrides only the fields it names, so a body-only rewrite (the
+        # common case: the tool description tells the model NOT to write
+        # a fence, and a curator's ``keywords`` live only on disk) keeps
+        # every field it does not mention, known or not. The only way to
+        # remove a field is naming it with an empty value; the composer
+        # omits empties. Merging from the text's fence alone looked like
+        # this protection but guarded nothing: the model it protected
+        # against never sends a fence.
+        prior = self.store.read(name)  # type: ignore[arg-type]
+        prior_fields = (
+            _split_frontmatter(prior)[0] if prior is not None else {}
+        )
+        text_fields, body = _split_frontmatter(text)
+        fields = {**prior_fields, **text_fields}
         if description:
             fields["description"] = description[:_SUMMARY_MAX_CHARS]
         if mem_type:
@@ -469,10 +482,6 @@ class MemoryWriteTool:
         # a model resends often predates the file), ``updated`` always
         # moves. Staleness judgement needs dates no one remembered to ask
         # for, so the tool stamps them unconditionally.
-        prior = self.store.read(name)  # type: ignore[arg-type]
-        prior_fields = (
-            _split_frontmatter(prior)[0] if prior is not None else {}
-        )
         today = _today()
         fields["created"] = (
             prior_fields.get("created") or fields.get("created") or today
