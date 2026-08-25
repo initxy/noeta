@@ -335,6 +335,99 @@ def test_write_tool_no_params_keeps_text_fence_fields(
     assert store.entries() == (("note", "self-made", "", ""),)
 
 
+def test_write_tool_body_only_rewrite_keeps_disk_fence_fields(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The common rewrite: the tool description tells the model NOT to
+    # write a fence, and a curator's keywords live only on disk. A write
+    # naming neither params nor a fence must keep every field the memory
+    # already carries — the tool's own AND ones it does not recognize.
+    store = _store(tmp_path)
+    tool = MemoryWriteTool(store=store)
+    _pin_today(monkeypatch, "2026-08-01")
+    assert tool.invoke(
+        {
+            "name": "note",
+            "text": "---\nstatus: active\ndue: 2026-09-01\n---\nv1",
+            "description": "Curated summary",
+            "type": "project",
+            "keywords": "记忆, recall",
+        },
+        _ctx(),
+    ).success
+    _pin_today(monkeypatch, "2026-08-05")
+    assert tool.invoke({"name": "note", "text": "v2"}, _ctx()).success
+    assert store.read("note") == (
+        "---\ndescription: Curated summary\ntype: project\n"
+        "keywords: 记忆, recall\ncreated: 2026-08-01\nupdated: 2026-08-05\n"
+        "due: 2026-09-01\nstatus: active\n---\nv2"
+    )
+    assert store.entries() == (
+        ("note", "Curated summary", "project", "记忆, recall"),
+    )
+
+
+def test_write_tool_merge_precedence_disk_then_text_then_params(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Lowest to highest: disk fence < text fence < params, each layer
+    # touching only the fields it names.
+    _pin_today(monkeypatch)
+    store = _store(tmp_path)
+    tool = MemoryWriteTool(store=store)
+    assert tool.invoke(
+        {
+            "name": "note",
+            "text": "---\nowner: disk\nstatus: active\n---\nv1",
+            "description": "from disk",
+            "type": "user",
+            "keywords": "disk-kw",
+        },
+        _ctx(),
+    ).success
+    assert tool.invoke(
+        {
+            "name": "note",
+            "text": (
+                "---\ndescription: from text\ntype: project\n"
+                "owner: text\n---\nv2"
+            ),
+            "description": "from params",
+        },
+        _ctx(),
+    ).success
+    assert store.read("note") == (
+        "---\ndescription: from params\ntype: project\nkeywords: disk-kw\n"
+        "created: 2026-08-05\nupdated: 2026-08-05\n"
+        "owner: text\nstatus: active\n---\nv2"
+    )
+
+
+def test_write_tool_empty_value_in_text_fence_drops_disk_field(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The one way to remove a field: name it with an empty value. Other
+    # disk fields are untouched.
+    _pin_today(monkeypatch)
+    store = _store(tmp_path)
+    tool = MemoryWriteTool(store=store)
+    assert tool.invoke(
+        {
+            "name": "note",
+            "text": "---\nstatus: active\ndue: 2026-09-01\n---\nv1",
+            "keywords": "kw",
+        },
+        _ctx(),
+    ).success
+    assert tool.invoke(
+        {"name": "note", "text": "---\ndue:\n---\nv2"}, _ctx()
+    ).success
+    assert store.read("note") == (
+        "---\nkeywords: kw\ncreated: 2026-08-05\nupdated: 2026-08-05\n"
+        "status: active\n---\nv2"
+    )
+
+
 def test_write_tool_stamps_source_task_from_runtime_metadata(
     tmp_path: Path, monkeypatch
 ) -> None:

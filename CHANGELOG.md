@@ -8,6 +8,19 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed — `memory_write` no longer drops frontmatter fields a rewrite does not mention
+
+The per-field merge used the *text's* fence as its base and read only
+`created` back from disk, so any field the new write did not restate —
+`description` / `type` / `keywords`, and every key the tool does not
+recognize — vanished on rewrite. In practice that was every body-only
+rewrite: the tool description tells the model not to write a fence, and a
+consolidation curator's `keywords` live only on disk, so the very fields the
+merge existed to protect were the ones it lost. The merge now layers disk
+fence < text fence < parameters, each overriding only the fields it names;
+naming a key with an empty value is the one way to remove it. The tool
+description, `docs/reference/tools.md` and `CONTEXT.md` state the rule.
+
 ## [0.6.13] - 2026-08-21
 
 Covers both packages, lockstep: `noeta-runtime` 0.6.11 → 0.6.13 (the
