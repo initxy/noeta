@@ -91,14 +91,16 @@ from noeta.client.surfaces import (
 from noeta.client.wire import envelope_to_dict
 
 # The recorded reminder-provider seam. A plugin contributing to the
-# ``reminder_provider`` surface returns ``Reminder`` s from a ``RecallView``,
-# so both types plus the seam name belong on the public surface — without them
-# a host could declare the contribution but not write its value.
+# ``reminder_provider`` surface returns ``Reminder`` s and/or
+# ``ResidentActivation`` s from a ``RecallView``, so the types plus the seam
+# name belong on the public surface — without them a host could declare the
+# contribution but not write its value.
 from noeta.execution.reminders import (
     TURN_INTAKE,
     RecallView,
     Reminder,
     ReminderProvider,
+    ResidentActivation,
 )
 from noeta.sdk.authoring import (
     DecoratedTool,
@@ -355,6 +357,7 @@ __all__ = [
     "PluginSet",
     "load_plugins",
     "Reminder",
+    "ResidentActivation",
     "RecallView",
     "ReminderProvider",
     "TURN_INTAKE",

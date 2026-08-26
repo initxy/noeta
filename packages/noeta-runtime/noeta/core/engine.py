@@ -605,6 +605,50 @@ class Engine:
         patch.apply(task.state)
         return task
 
+    def record_content(
+        self,
+        task: Task,
+        *,
+        kind: str,
+        name: str,
+        version: str,
+        body: bytes,
+        media_type: str = "text/markdown",
+        policy: str,
+        refresh: bool = True,
+        lease_id: str,
+        trace_id: Optional[str] = None,
+    ) -> Task:
+        """Activate or refresh a content-channel resident mid-task.
+
+        The in-turn twin of the seed window's ``SessionRecorder.record_content``
+        (:class:`noeta.execution.recorder.SeedRecorder`), same gate: ``put()``
+        the bytes, then record ``ContextContentRecorded`` unless ``(kind,
+        name)`` is already active at this exact hash; ``refresh=False`` narrows
+        that to first-write-wins — active at ANY hash appends nothing. Fold
+        stamps the activation anchor at the current rolling-history length, so a
+        resident recorded right after a goal append renders right there
+        (anchored placement) rather than rewriting the head segments. Callers
+        MUST hold a valid lease; the Engine stays the single writer.
+        """
+        if not kind or not name:
+            return task
+        active = task.state.active_content.get(kind, {}).get(name)
+        if active is not None and not refresh:
+            return task
+        ref = self._content_store.put(body, media_type=media_type)
+        return emit_context_content_recorded(
+            self,
+            task,
+            kind=kind,
+            name=name,
+            version=version,
+            content_hash=ref.hash,
+            policy=policy,
+            lease_id=lease_id,
+            trace_id=trace_id,
+        )
+
     # -- operator-driven tool-call approval --------------------------------
 
     def resolve_tool_approval(

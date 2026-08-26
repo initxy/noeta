@@ -553,12 +553,15 @@ def test_consolidation_seed_carries_no_recall(tmp_path: Path) -> None:
     try:
         out = client.start(goal=goal, agent=CONSOLIDATION_AGENT_NAME)
         curator_items = client.messages(out.task_id)
+        curator_residents = _memory_residents(client, out.task_id)
     finally:
         client.shutdown()
     assert not [
         item for item in curator_items
         if getattr(item, "origin", None) == "memory"
     ]
+    # Only the index is resident: no recalled body was activated.
+    assert curator_residents == ["index"]
 
     # Control: the same goal, the same store, an ordinary memory-on agent.
     control = _client(
@@ -569,14 +572,22 @@ def test_consolidation_seed_carries_no_recall(tmp_path: Path) -> None:
     )
     try:
         out = control.start(goal=goal)
-        main_items = control.messages(out.task_id)
+        control_residents = _memory_residents(control, out.task_id)
     finally:
         control.shutdown()
-    recalled = [
-        item for item in main_items
-        if getattr(item, "origin", None) == "memory"
+    assert "deploy-notes" in control_residents, (
+        "the control agent must still recall on the same goal"
+    )
+
+
+def _memory_residents(client: Client, task_id: str) -> list[str]:
+    """The ``memory``-kind resident names the task activated, in event order."""
+    return [
+        env.payload.name
+        for env in client.events(task_id)
+        if env.type == "ContextContentRecorded"
+        and getattr(env.payload, "kind", "") == "memory"
     ]
-    assert recalled, "the control agent must still recall on the same goal"
 
 
 def test_intake_providers_skip_only_the_reserved_curator(tmp_path: Path) -> None:

@@ -35,6 +35,7 @@ from noeta.client.consolidation import (
     run_consolidation,
 )
 from noeta.core.fold import fold
+from noeta.protocols.values import ContentRef
 from noeta.protocols.messages import (
     LLMResponse,
     TextBlock,
@@ -103,12 +104,25 @@ def _memory_host(tmp_path: Path, responses, **knobs):
 
 
 def _memory_origins(host, task_id: str) -> list[str]:
+    """Every recalled text the task carries: the bodies active as
+    ``memory``-kind residents (tier-1 hits, resolved from the content store
+    at their recorded hash) plus any ``origin="memory"`` pointer turn."""
     folded = fold(host.event_log, host.content_store, task_id)
-    return [
+    out = [
+        host.content_store.get(
+            ContentRef(hash=content_hash, size=0, media_type="text/markdown")
+        ).decode("utf-8")
+        for name, content_hash in sorted(
+            folded.state.active_content.get("memory", {}).items()
+        )
+        if name != "index"
+    ]
+    out.extend(
         "".join(b.text for b in m.content if hasattr(b, "text"))
         for m in folded.runtime.messages
         if m.origin == "memory"
-    ]
+    )
+    return out
 
 
 # ---------------------------------------------------------------------------

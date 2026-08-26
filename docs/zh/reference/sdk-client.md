@@ -90,7 +90,7 @@ with Client(Options(system_prompt="…"), provider=my_provider,
 
 `start` 时的 `workspace_dir` 被一次性焊入持久化的 `TaskHostBound` 记录；之后每一轮都靠 fold 解析它，这也是 `send_goal` 没有这个参数的原因。`permission_mode`、`enabled_mcp`、`effort` 和 `activations` 是每轮的、非持久的宿主旋钮。`activations` 在循环开始前钉住内置 skill——这正是 `/skill-name` 斜杠命令所依附的通道。
 
-`attachment_texts` 是宿主拼好的参考快照（`@` 提及、任务简报、工作区摘要），每一条作为独立的 `origin="system"` 消息落账在 goal **之前**，所以逐字稿绝不会把它们记到人头上。它们是普通的落账消息，续流读得回来、不会重读。文本在发送时已经定稿就用这条；如果它必须在**记账的那一刻**现算——因为要读实时状态——那就改为贡献一个 `reminder_provider`（见[插件面](plugin-surfaces.md)），它的产出落在 goal **之后**。两条通道都只用公开名就能走通：`Reminder`、`RecallView`、`ReminderProvider` 和 `TURN_INTAKE` 都从 `noeta.sdk` 导出。
+`attachment_texts` 是宿主拼好的参考快照（`@` 提及、任务简报、工作区摘要），每一条作为独立的 `origin="system"` 消息落账在 goal **之前**，所以逐字稿绝不会把它们记到人头上。它们是普通的落账消息，续流读得回来、不会重读。文本在发送时已经定稿就用这条；如果它必须在**记账的那一刻**现算——因为要读实时状态——那就改为贡献一个 `reminder_provider`（见[插件面](plugin-surfaces.md)），它的产出落在 goal **之后**。两条通道都只用公开名就能走通：`Reminder`、`ResidentActivation`、`RecallView`、`ReminderProvider` 和 `TURN_INTAKE` 都从 `noeta.sdk` 导出。
 
 `deliver_event` 唤醒一个挂在 `wait_external` 上的任务。匹配按 `event_kind` 精确进行；可选的 `payload` 会作为恢复轮上一条 `origin="system"` 的消息被记录，而不是作为唤醒事件本身。投递一个任务并不在等待的事件会抛出 `NotResumableError`。
 

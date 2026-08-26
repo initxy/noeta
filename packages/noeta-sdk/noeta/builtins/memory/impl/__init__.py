@@ -20,6 +20,7 @@ from typing import Optional, cast
 
 from noeta.builtins.memory.impl import store as _store_mod
 from noeta.builtins.memory.impl.index import (
+    MEMORY_BODY_VERSION,
     MEMORY_DRIFT_POLICY,
     MEMORY_INDEX_NAME,
     MEMORY_INDEX_VERSION,
@@ -36,6 +37,7 @@ from noeta.builtins.memory.impl.recall import (
     append_user_message_with_recall,
     memory_reminder_provider,
     recall_memories,
+    resident_memory_names,
 )
 from noeta.builtins.memory.impl.store import (
     MemoryArchiveTool,
@@ -57,6 +59,7 @@ from noeta.protocols.tool import Tool
 
 
 __all__ = [
+    "MEMORY_BODY_VERSION",
     "MEMORY_DRIFT_POLICY",
     "MEMORY_INDEX_NAME",
     "MEMORY_INDEX_VERSION",
@@ -77,6 +80,7 @@ __all__ = [
     "load_memory_store",
     "memory_reminder_provider",
     "recall_memories",
+    "resident_memory_names",
 ]
 
 

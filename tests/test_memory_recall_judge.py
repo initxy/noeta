@@ -28,7 +28,7 @@ from noeta.builtins.memory.impl.judge import (
 )
 from noeta.builtins.memory.impl.recall import memory_reminder_provider
 from noeta.builtins.memory.impl.store import MemoryStore
-from noeta.execution.reminders import RecallView
+from noeta.execution.reminders import RecallView, ResidentActivation
 from noeta.protocols.messages import LLMResponse, TextBlock
 
 
@@ -257,10 +257,13 @@ def test_judge_fires_only_on_lexical_miss(tmp_path: Path) -> None:
     assert "memory_read" in reminder.text
     assert "make deploy" not in reminder.text  # body not spent on a guess
 
-    # Lexical hit: the judge is never consulted and tier-1 keeps its body.
+    # Lexical hit: the judge is never consulted and tier-1 keeps its body —
+    # as a memory-kind resident activation, not a turn.
     (hit,) = provider(_view("how do we deploy?"))
     assert calls == ["怎么上线？"]  # unchanged
-    assert "Always run make deploy." in hit.text
+    assert isinstance(hit, ResidentActivation)
+    assert (hit.kind, hit.name) == ("memory", "deploy-process")
+    assert b"Always run make deploy." in hit.body
 
 
 def test_judge_returning_nothing_stays_a_miss(tmp_path: Path) -> None:

@@ -110,7 +110,7 @@ ref     = "house_style.provider:GatewayProvider"
 
 ### `reminder_provider`
 
-wiring · per-agent · 冲突 `name` · sorted。轨道 A：一个位于具名摄入接缝（`turn_intake`、`task_seed`）上的 provider，它读取一个很窄的 `RecallView` 并返回零个或多个 `Reminder`。它*可以*查询外部系统，因为它的输出会被**记录**下来——恢复时 fold 会从账本里把这条 reminder 折回来，绝不会重新调用这个 provider。它抛出异常会让这一轮大声失败。内置语料：`memory` 在 `turn_intake` 上贡献了 `memory-recall`。
+wiring · per-agent · 冲突 `name` · sorted。轨道 A：一个位于具名摄入接缝（`turn_intake`、`task_seed`）上的 provider，它读取一个很窄的 `RecallView`，返回零个或多个 `Reminder`（作为后续消息落账）和/或 `ResidentActivation`（经 `Engine.record_content` 作为内容通道的常驻内容落账，紧跟在 goal 之后，默认 activate-once——适合「在一个 task 里只进入一次、压缩后仍在」的内容）。它*可以*查询外部系统，因为它的输出会被**记录**下来——恢复时 fold 会从账本里把这些消息和激活折回来，绝不会重新调用这个 provider。它抛出异常会让这一轮大声失败。内置语料：`memory` 在 `turn_intake` 上贡献了 `memory-recall`——tier-1 正文作为 `memory` 类别的激活，指针作为一条 reminder。
 
 ```toml
 [[tool.noeta.contributions]]
