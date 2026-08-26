@@ -539,12 +539,12 @@ wheels = [
 
 [[package]]
 name = "noeta-runtime"
-version = "0.6.13"
+version = "0.6.15"
 source = { editable = "packages/noeta-runtime" }
 
 [[package]]
 name = "noeta-sdk"
-version = "0.6.14"
+version = "0.6.15"
 source = { editable = "packages/noeta-sdk" }
 dependencies = [
     { name = "httpx" },
