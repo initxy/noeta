@@ -8,6 +8,13 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.15] - 2026-08-26
+
+Covers both packages, lockstep: `noeta-runtime` 0.6.13 → 0.6.15 (the intake
+seam + `Engine.record_content` half; 0.6.14 was an sdk-only tag) and
+`noeta-sdk` 0.6.14 → 0.6.15 (the memory built-in half), with the sdk's floor
+raised to `noeta-runtime>=0.6.15`.
+
 ### Changed — a recalled memory body enters a task once, as a resident
 
 Auto-recall re-injected the same tier-1 bodies on every goal of a long-lived
@@ -2056,6 +2063,7 @@ Initial preview release.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
 [Unreleased]: https://github.com/initxy/noeta/compare/v0.6.14...HEAD
+[0.6.15]: https://github.com/initxy/noeta/compare/v0.6.14...v0.6.15
 [0.6.14]: https://github.com/initxy/noeta/compare/v0.6.13...v0.6.14
 [0.6.13]: https://github.com/initxy/noeta/compare/v0.6.12...v0.6.13
 [0.6.12]: https://github.com/initxy/noeta/compare/v0.6.11...v0.6.12
