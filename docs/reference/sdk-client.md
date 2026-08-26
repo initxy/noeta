@@ -126,7 +126,7 @@ re-read. Use this when the text is already settled at send time; when it must be
 computed *while* the turn is recorded — because it reads live state — contribute
 a `reminder_provider` instead ([plugin surfaces](plugin-surfaces.md)), whose
 output lands **after** the goal. Both channels are reachable with public names
-only: `Reminder`, `RecallView`, `ReminderProvider` and `TURN_INTAKE` are
+only: `Reminder`, `ResidentActivation`, `RecallView`, `ReminderProvider` and `TURN_INTAKE` are
 exported from `noeta.sdk`.
 
 `deliver_event` wakes a task suspended on `wait_external`. Matching is exact on

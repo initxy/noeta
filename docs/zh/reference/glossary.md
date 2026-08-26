@@ -226,7 +226,7 @@ View 分三部分组装。`stable_prefix` 携带系统 prompt 消息和 provider
 
 ### Memory
 
-跨任务的长期记忆：基于文件、由模型管理。改动走 `memory_write` 和 `memory_archive`（退役，绝不删除）；读取走 `memory_read` 和 `memory_search`。**常驻索引**是一个内容通道使用者，因此压缩绝不会把它冲掉，而**自动召回**是 `turn_intake` 接缝上的一个轨道 A provider。召回按字面 token 匹配（名字、摘要，以及 frontmatter 的 `keywords` 别名——确定性的跨语言桥梁）；设置 `Options.recall_model` 后，字面 miss 会经由一次小模型调用重试（**recall judge**：读消息加索引、挑出相关记忆），选中项以指针形态注入并照常落账；`memory_write` 会盖上 `created` / `updated` 日期和一条 `source_task` 账本回执。由 `plugins=("memory", …)` 激活，属于 agent 身份的一部分——在官方 agent 中只有 `main` 打开它。
+跨任务的长期记忆：基于文件、由模型管理。改动走 `memory_write` 和 `memory_archive`（退役，绝不删除）；读取走 `memory_read` 和 `memory_search`。**常驻索引**是一个内容通道使用者，因此压缩绝不会把它冲掉，而**自动召回**是 `turn_intake` 接缝上的一个 provider：tier-1 命中会变成 `memory` 类别的常驻内容（一条记忆正文在一个 task 里只进入一次，activate-once，压缩后仍在），tier-2 命中则以指针行的形态落在一条 `origin="memory"` 的消息里。召回按字面 token 匹配（名字、摘要，以及 frontmatter 的 `keywords` 别名——确定性的跨语言桥梁）；设置 `Options.recall_model` 后，字面 miss 会经由一次小模型调用重试（**recall judge**：读消息加索引、挑出相关记忆），选中项以指针形态注入并照常落账；`memory_write` 会盖上 `created` / `updated` 日期和一条 `source_task` 账本回执。由 `plugins=("memory", …)` 激活，属于 agent 身份的一部分——在官方 agent 中只有 `main` 打开它。
 → [按租户隔离记忆](../how-to/multi-tenant-memory.md)
 
 ### Memory consolidation

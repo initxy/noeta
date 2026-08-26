@@ -184,11 +184,11 @@ def test_live_memory_write_tool(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-# Auto-recall (origin=memory injected message + kind=memory index event) is
-# the ``driver.seed_start`` recall seam: ``append_user_message_with_recall``
-# runs the memory ``reminder_provider`` before the goal enters the ledger, so a
-# goal matching a memory name injects an ``origin="memory"`` follow-up turn and
-# records a resident ``ContextContentRecorded(kind=memory, policy=evolving)``.
+# Auto-recall is the ``driver.seed_start`` recall seam: the memory
+# ``reminder_provider`` runs before the goal enters the ledger, so a goal
+# matching a memory name activates the body as a ``memory``-kind resident —
+# a second ``ContextContentRecorded(kind=memory, policy=evolving)`` next to
+# the index's — rendered to the model as a host-injected message.
 @requires_live_llm
 def test_live_memory_recall_origin(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
@@ -220,15 +220,18 @@ def test_live_memory_recall_origin(tmp_path: Path) -> None:
         if e.type == "ContextContentRecorded"
         and getattr(e.payload, "kind", "") == "memory"
     ]
-    assert len(idx) == 1
-    assert idx[0].payload.policy == "evolving"
+    assert [e.payload.name for e in idx] == ["index", "deploy-runbook"]
+    assert {e.payload.policy for e in idx} == {"evolving"}
 
     folded = fold(host.event_log, host.content_store, out.task_id)
-    recall_msgs = [
-        m for m in folded.runtime.messages if m.origin == "memory"
-    ]
-    assert recall_msgs, "a goal matching the memory name must inject an origin=memory recall"
-    joined = "".join(
-        b.text for b in recall_msgs[0].content if hasattr(b, "text")
+    assert "deploy-runbook" in folded.state.active_content["memory"], (
+        "a goal matching the memory name must activate the body resident"
     )
-    assert "zanzibar" in joined
+    assert not [m for m in folded.runtime.messages if m.origin == "memory"]
+    # The model saw the body: its reply answers from it.
+    assistant_texts = [
+        "".join(b.text for b in m.content if hasattr(b, "text"))
+        for m in folded.runtime.messages
+        if m.role == "assistant"
+    ]
+    assert assistant_texts and "zanzibar" in assistant_texts[-1].lower()

@@ -31,6 +31,7 @@ from noeta.execution.reminders import (
     RecallView,
     Reminder,
     ReminderProviderRegistry,
+    ResidentActivation,
     SeamProvider,
     build_recall_view,
     record_intake_reminders,
@@ -133,6 +134,77 @@ def test_reminder_lands_in_ledger_with_origin() -> None:
     rebuilt = fold(log, cs, task_id)
     user = [m for m in rebuilt.runtime.messages if m.role == "user"]
     assert [m.origin for m in user] == ["system", "memory"]
+
+
+def test_resident_activation_records_after_the_goal_and_before_reminders() -> None:
+    """A provider's ``ResidentActivation`` is recorded through
+    ``Engine.record_content`` — one ``ContextContentRecorded`` whose anchor is
+    the history length right after the goal — and the reminder turn lands
+    after it; fold reproduces the activation."""
+    engine, log, cs, task_id, lease_id = _engine_setup()
+    task = fold(log, cs, task_id)
+
+    def provider(view: RecallView):
+        return (
+            ResidentActivation(kind="note", name="a", body=b"body of a"),
+            Reminder(text="pointer", origin="memory"),
+        )
+
+    task = record_intake_reminders(
+        engine, task, content=[TextBlock(text="the goal")],
+        lease_id=lease_id, providers=(provider,),
+    )
+
+    types = [env.type for env in log.read(task_id)]
+    assert types[-3:] == [
+        "MessagesAppended", "ContextContentRecorded", "MessagesAppended",
+    ]
+    recorded = [e for e in log.read(task_id) if e.type == "ContextContentRecorded"]
+    assert (recorded[0].payload.kind, recorded[0].payload.name) == ("note", "a")
+    assert recorded[0].payload.policy == "evolving"
+    assert task.context.content_anchors["note:a"] == 1  # right after the goal
+    rebuilt = fold(log, cs, task_id)
+    assert rebuilt.state.active_content["note"] == task.state.active_content["note"]
+    assert [m.origin for m in rebuilt.runtime.messages] == [None, "memory"]
+
+
+def test_resident_activation_is_activate_once_by_default() -> None:
+    """``refresh=False`` (the default): a name already active at ANY hash
+    appends nothing, even with different bytes; ``refresh=True`` records the
+    new hash."""
+    engine, log, cs, task_id, lease_id = _engine_setup()
+    task = fold(log, cs, task_id)
+    task = record_intake_reminders(
+        engine, task, content=[TextBlock(text="g1")], lease_id=lease_id,
+        providers=(lambda v: (ResidentActivation(kind="note", name="a", body=b"v1"),),),
+    )
+    first_hash = task.state.active_content["note"]["a"]
+    before = len(log.read(task_id))
+
+    task = record_intake_reminders(
+        engine, task, content=[TextBlock(text="g2")], lease_id=lease_id,
+        providers=(lambda v: (ResidentActivation(kind="note", name="a", body=b"v2"),),),
+    )
+    assert len(log.read(task_id)) == before + 1  # the goal append only
+    assert task.state.active_content["note"]["a"] == first_hash
+
+    task = record_intake_reminders(
+        engine, task, content=[TextBlock(text="g3")], lease_id=lease_id,
+        providers=(
+            lambda v: (
+                ResidentActivation(kind="note", name="a", body=b"v2", refresh=True),
+            ),
+        ),
+    )
+    assert task.state.active_content["note"]["a"] != first_hash
+    assert task.context.content_anchors["note:a"] == 1  # placement never moves
+
+
+def test_resident_activation_rejects_illegal_values() -> None:
+    with pytest.raises(ValueError):
+        ResidentActivation(kind="", name="a", body=b"x")
+    with pytest.raises(ValueError):
+        ResidentActivation(kind="note", name="a", body=b"x", policy="forged")
 
 
 def test_no_reminders_is_a_plain_append() -> None:

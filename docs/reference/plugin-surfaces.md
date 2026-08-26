@@ -167,10 +167,15 @@ ref     = "house_style.provider:GatewayProvider"
 
 wiring · per-agent · collision `name` · sorted. Track A: a provider at a named
 intake seam (`turn_intake`, `task_seed`) that reads a narrow `RecallView` and
-returns zero or more `Reminder`s. It may query an external system because its
-output is **recorded** — resume folds the reminder back from the ledger and never
-re-invokes the provider. A raise fails the turn loudly. Built-in corpus: `memory`
-contributes `memory-recall` on `turn_intake`.
+returns zero or more `Reminder`s (recorded as follow-up turns) and/or
+`ResidentActivation`s (recorded as content-channel residents through
+`Engine.record_content`, right after the goal and activate-once by default —
+the shape for content that must enter a task once and survive compaction). It
+may query an external system because its output is **recorded** — resume folds
+the turns and activations back from the ledger and never re-invokes the
+provider. A raise fails the turn loudly. Built-in corpus: `memory` contributes
+`memory-recall` on `turn_intake` — tier-1 bodies as `memory`-kind activations,
+pointers as one reminder.
 
 ```toml
 [[tool.noeta.contributions]]

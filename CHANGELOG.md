@@ -8,6 +8,31 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Changed — a recalled memory body enters a task once, as a resident
+
+Auto-recall re-injected the same tier-1 bodies on every goal of a long-lived
+task: a host that maps one chat channel to one task saw two memories recorded
+eleven times over eleven wakeups — 58% of the transcript — and even machine
+receipts triggered it, because a slug token appeared in every event envelope.
+A tier-1 hit is now recorded as a `memory`-kind content-channel resident
+(`ResidentActivation` → `Engine.record_content`, activate-once per task): the
+body renders once — semi-stable on the opening goal, right after a later goal,
+re-hung after a compaction summary — as one `origin="memory"` message, and
+the name is silent in both tiers on every later goal of that task, at any
+hash (the index resident and `memory_read` cover freshness). Pointer hits
+(tier-2, recall judge, over-budget bodies) still ride one `origin="memory"`
+follow-up turn per goal; a pointer for a resident name is dropped. The
+follow-up turn therefore no longer carries bodies.
+
+- `noeta.execution.reminders.ResidentActivation` (also on `noeta.sdk`): a
+  `reminder_provider` may return it next to `Reminder`; the intake seam
+  records activations after the goal and before the reminder turns.
+- `Engine.record_content` — the in-turn twin of
+  `SessionRecorder.record_content`, same gate.
+- The `memory` renderer renders every non-index active name as a recalled
+  body (`format_recalled_body`, `MEMORY_BODY_VERSION`); `recall_memories`
+  takes `resident=` and `resident_memory_names` reads the activation map.
+
 ## [0.6.14] - 2026-08-25
 
 Covers `noeta-sdk` only; `noeta-runtime` stays at 0.6.13 (the runtime is

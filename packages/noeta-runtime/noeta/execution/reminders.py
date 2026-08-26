@@ -1,6 +1,7 @@
 """Recorded reminder-provider seams: at a named seam a provider reads a narrow
 :class:`RecallView` and returns :class:`Reminder` s that the seam records through
-the Engine's sole origin-writer verb.
+the Engine's sole origin-writer verb — and/or :class:`ResidentActivation` s that
+it records as content-channel residents through ``Engine.record_content``.
 
 Because the output is **recorded**, a provider may be impure — query a vector DB,
 an external system, the memory store — and resume/replay folds the reminder back
@@ -18,9 +19,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Iterable, Mapping, Optional, Sequence
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Iterable,
+    Mapping,
+    Optional,
+    Sequence,
+    Union,
+)
 
 from noeta.protocols.decisions import TaskStatePatch
+from noeta.protocols.events import CONTENT_DRIFT_POLICIES
 from noeta.protocols.messages import Block, MessageOrigin, TextBlock
 
 
@@ -29,7 +40,9 @@ __all__ = [
     "TASK_SEED",
     "REMINDER_SEAMS",
     "IntakeGoalPrelude",
+    "IntakeItem",
     "Reminder",
+    "ResidentActivation",
     "RecallView",
     "ReminderProvider",
     "SeamProvider",
@@ -75,6 +88,54 @@ class Reminder:
 
 
 @dataclass(frozen=True, slots=True)
+class ResidentActivation:
+    """One content-channel resident to activate at the seam.
+
+    The track-C sibling of :class:`Reminder`: where a reminder is recorded as a
+    follow-up *turn*, an activation is recorded as a ``(kind, name)`` resident
+    through the Engine's ``record_content`` verb — the seam ``put()`` s ``body``
+    and emits ``ContextContentRecorded``, so a provider never touches the
+    ledger or the content store. What enters context is then whatever the
+    kind's renderer composes from the recorded bytes, placed by the activation
+    anchor (semi_stable pre-loop, else inside the dynamic suffix at the point
+    of activation) and re-hung after a compaction summary — the right shape
+    for content that must enter a task once and stay.
+
+    ``refresh=False`` (the default) is activate-once: a ``(kind, name)``
+    already active in this task, at ANY hash, appends nothing. ``refresh=True``
+    records a refresh whenever the hash moved (the seed recorder's default).
+    """
+
+    kind: str
+    name: str
+    body: bytes
+    version: str = "1"
+    policy: str = "evolving"
+    media_type: str = "text/markdown"
+    refresh: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.kind or not self.name:
+            raise ValueError(
+                "ResidentActivation.kind and ResidentActivation.name must be "
+                "non-empty"
+            )
+        if self.policy not in CONTENT_DRIFT_POLICIES:
+            raise ValueError(
+                f"ResidentActivation.policy {self.policy!r} illegal; expected "
+                f"one of {CONTENT_DRIFT_POLICIES}"
+            )
+
+
+#: What a provider may return at a seam: a follow-up turn or a resident
+#: activation. The seam records activations before reminder turns, so a
+#: resident activated on a goal anchors right after that goal. A reminder is
+#: read by duck typing (``text`` + ``origin``); an activation must be the typed
+#: :class:`ResidentActivation`.
+IntakeItem = Union[Reminder, ResidentActivation]
+
+
+@dataclass(frozen=True, slots=True)
 class RecallView:
     """Narrow, read-only projection a reminder provider sees at a seam.
 
@@ -101,9 +162,10 @@ class RecallView:
         return "\n".join(b.text for b in self.message if isinstance(b, TextBlock))
 
 
-#: A reminder provider: the narrow view -> zero or more reminders. May be impure
-#: (its output is recorded); a raise propagates and fails the turn loudly.
-ReminderProvider = Callable[[RecallView], Iterable[Reminder]]
+#: A reminder provider: the narrow view -> zero or more intake items (reminder
+#: turns and/or resident activations). May be impure (its output is recorded);
+#: a raise propagates and fails the turn loudly.
+ReminderProvider = Callable[[RecallView], Iterable[IntakeItem]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,14 +222,14 @@ def build_recall_view(
 
 def run_reminder_providers(
     view: RecallView, providers: Sequence[ReminderProvider]
-) -> list[Reminder]:
-    """Run every provider in the given order, concatenating their reminders.
+) -> list[IntakeItem]:
+    """Run every provider in the given order, concatenating their items.
 
     A raise **propagates** and fails the turn — no silent skip. The order is the
     caller's, already ``(plugin, name)``-sorted when it comes from a
     :class:`ReminderProviderRegistry`.
     """
-    out: list[Reminder] = []
+    out: list[IntakeItem] = []
     for provider in providers:
         out.extend(provider(view))
     return out
@@ -184,29 +246,50 @@ def record_intake_reminders(
     origin: Optional[MessageOrigin] = None,
     workspace_path: Optional[Path] = None,
 ) -> Any:
-    """Record an incoming user turn plus every provider's reminders, in order.
+    """Record an incoming user turn plus every provider's items, in order.
 
     The sequence is load-bearing and pinned by goldens: run the providers first
-    (impure, before the ledger is touched), record the incoming turn, then record
-    each reminder as its own follow-up turn tagged with the reminder's
-    ``origin``. Providers that all return nothing leave exactly the plain
-    ``append_user_message`` bytes, so a session without reminder providers is
-    byte-identical to a bare append. Resume folds the recorded reminders back
-    from the ledger and never re-enters this function.
+    (impure, before the ledger is touched), record the incoming turn, then
+    record each :class:`ResidentActivation` through ``Engine.record_content``
+    (its anchor is the rolling-history length at fold time, so the resident
+    renders right after the goal), then each :class:`Reminder` as its own
+    follow-up turn tagged with the reminder's ``origin``. Providers that all
+    return nothing leave exactly the plain ``append_user_message`` bytes, so a
+    session without reminder providers is byte-identical to a bare append.
+    Resume folds the recorded turns and activations back from the ledger and
+    never re-enters this function.
     """
     view = build_recall_view(task, content, workspace_path=workspace_path)
-    reminders = run_reminder_providers(view, providers)
+    items = run_reminder_providers(view, providers)
     task = engine.append_user_message(
         task, content=content, lease_id=lease_id, trace_id=trace_id, origin=origin
     )
-    for reminder in reminders:
-        task = engine.append_user_message(
-            task,
-            content=[TextBlock(text=reminder.text)],
-            lease_id=lease_id,
-            trace_id=trace_id,
-            origin=reminder.origin,
-        )
+    for item in items:
+        if isinstance(item, ResidentActivation):
+            task = engine.record_content(
+                task,
+                kind=item.kind,
+                name=item.name,
+                version=item.version,
+                body=item.body,
+                media_type=item.media_type,
+                policy=item.policy,
+                refresh=item.refresh,
+                lease_id=lease_id,
+                trace_id=trace_id,
+            )
+    # Reminders are read by duck typing (``text`` + ``origin``) — the contract
+    # third-party providers have always relied on; only an activation has to
+    # be the typed ``ResidentActivation``.
+    for item in items:
+        if not isinstance(item, ResidentActivation):
+            task = engine.append_user_message(
+                task,
+                content=[TextBlock(text=item.text)],
+                lease_id=lease_id,
+                trace_id=trace_id,
+                origin=item.origin,
+            )
     return task
 
 
@@ -222,7 +305,8 @@ class IntakeGoalPrelude:
     The field order is load-bearing: attachments seed BEFORE the goal as their
     own ``origin="system"`` messages and never feed the recall key, and the
     skill-activation patch lands AFTER it. Only the goal append itself is routed
-    through the recording seam.
+    through the recording seam (goal, then the providers' resident activations,
+    then their reminder turns).
 
     ``providers`` is the FULL composed tuple for this turn — the host owns the
     composition rule; the kernel never distinguishes one provider from another.

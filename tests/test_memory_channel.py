@@ -15,6 +15,8 @@ Second tenant on the content channel (reuses the 02/03 generic abstraction, zero
 
 from __future__ import annotations
 
+import hashlib
+
 from pathlib import Path
 
 from noeta.context.composer import ThreeSegmentComposer
@@ -51,13 +53,23 @@ from noeta.execution.recorder import SeedRecorder
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.decisions import FinishDecision
-from noeta.protocols.messages import ImageBlock, TextBlock
+from noeta.protocols.messages import (
+    ImageBlock,
+    Message,
+    TextBlock,
+    is_host_injected,
+)
 from noeta.storage.memory import (
     InMemoryContentStore,
     InMemoryDispatcher,
     InMemoryEventLog,
 )
 from noeta.builtins.memory.impl.store import MemoryStore
+from noeta.builtins.memory.impl.index import (
+    MEMORY_BODY_VERSION,
+    RECALLED_BODY_FRAME,
+    format_recalled_body,
+)
 
 
 _ENTRIES = (
@@ -136,11 +148,36 @@ def test_renderer_renders_one_user_message_when_index_active() -> None:
     assert "deploy-process" in msg.content[0].text
 
 
-def test_renderer_renders_nothing_when_index_inactive() -> None:
+def test_renderer_renders_nothing_when_nothing_active() -> None:
     renderer = build_memory_renderer(_ENTRIES)
-    # No resolve call when the index name is not active → empty, no store touch.
+    # No active name ⇒ no resolve call, no message.
     assert renderer([], _index_resolve).messages == []
-    assert renderer(["not-the-index"], _index_resolve).messages == []
+
+
+def test_renderer_renders_recalled_bodies_after_the_index() -> None:
+    """Every non-index active name is a recalled memory body: one
+    ``origin="memory"`` (host-injected) message per name, the body verbatim
+    under the frame, after the index whatever the activation order says."""
+    bodies = {"aaa-first": b"Body A.", "deploy-process": b"Run make deploy."}
+
+    def resolve(kind: str, name: str) -> bytes:
+        assert kind == MEMORY_KIND
+        if name == MEMORY_INDEX_NAME:
+            return render_memory_index_text(_ENTRIES).encode("utf-8")
+        return bodies[name]
+
+    rendered = build_memory_renderer(_ENTRIES)(
+        ["aaa-first", MEMORY_INDEX_NAME, "deploy-process"], resolve
+    )
+    assert len(rendered.messages) == 3
+    texts = [m.content[0].text for m in rendered.messages]
+    assert rendered.messages[0].origin is None
+    assert "Long-term memory index" in texts[0]
+    assert [m.origin for m in rendered.messages[1:]] == ["memory", "memory"]
+    assert all(is_host_injected(m) for m in rendered.messages[1:])
+    assert texts[1] == format_recalled_body("aaa-first", "Body A.")
+    assert texts[1].startswith(RECALLED_BODY_FRAME)
+    assert texts[2].endswith("## deploy-process\nRun make deploy.")
 
 
 def test_memory_kind_is_evolving_and_resolves_through_generic_seam() -> None:
@@ -463,12 +500,18 @@ def test_recall_pointer_survives_an_empty_summary(tmp_path: Path) -> None:
     assert "memory_read" in rendered
 
 
-def test_recall_hit_appends_origin_memory_after_user_message(
+def test_recall_hit_activates_a_body_resident_after_user_message(
     tmp_path: Path,
 ) -> None:
+    """A tier-1 hit is recorded as a ``memory``-kind resident (one
+    ``ContextContentRecorded``), not as a follow-up turn: the ledger holds
+    only the human turn, and the composed View carries the body once, as a
+    host-injected message — in semi_stable here, since no assistant turn
+    precedes the activation."""
     store = _store_with_memories(tmp_path)
     log, cs, disp = _runtime()
-    engine = _engine(log, cs, _composer(cs, store.entries()))
+    composer = _composer(cs, store.entries())
+    engine = _engine(log, cs, composer)
     task = engine.create_task(goal="g", policy_name="scripted")
     disp.enqueue(task.task_id)
     lease = disp.lease(worker_id="w-mem")
@@ -483,16 +526,145 @@ def test_recall_hit_appends_origin_memory_after_user_message(
     )
 
     messages = task.runtime.messages
-    assert len(messages) == 2
+    assert len(messages) == 1
     assert messages[0].origin is None  # human turn keeps its natural author
     assert messages[0].content[0].text == "how do we deploy?"
-    assert messages[1].origin == "memory"
-    assert "make deploy" in messages[1].content[0].text
+    body = store.read("deploy-process")
+    assert body is not None
+    expected_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    assert task.state.active_content[MEMORY_KIND] == {
+        "deploy-process": expected_hash
+    }
+    recorded = [
+        e for e in log.read(task.task_id) if e.type == "ContextContentRecorded"
+    ]
+    assert [
+        (e.payload.kind, e.payload.name, e.payload.version, e.payload.policy)
+        for e in recorded
+    ] == [(MEMORY_KIND, "deploy-process", MEMORY_BODY_VERSION, "evolving")]
+    semi = [s for s in composer.compose(task).segments if s.name == "semi_stable"][0]
+    assert [m.origin for m in semi.content] == ["memory"]
+    assert semi.content[0].content[0].text == format_recalled_body(
+        "deploy-process", body
+    )
     # fold matches live
     folded = fold(log, cs, task.task_id)
     assert to_canonical_bytes(folded.runtime.messages) == to_canonical_bytes(
         messages
     )
+    assert folded.state.active_content == task.state.active_content
+
+
+def test_recall_same_name_on_a_later_goal_records_nothing(
+    tmp_path: Path,
+) -> None:
+    """Activate-once per task: a second goal naming the same memory appends
+    exactly its own turn — no activation, no pointer — and the View still
+    carries the body exactly once."""
+    store = _store_with_memories(tmp_path)
+    log, cs, disp = _runtime()
+    composer = _composer(cs, store.entries())
+    engine = _engine(log, cs, composer)
+    task = engine.create_task(goal="g", policy_name="scripted")
+    disp.enqueue(task.task_id)
+    lease = disp.lease(worker_id="w-mem")
+    assert lease is not None
+    task = append_user_message_with_recall(
+        engine, task, content=[TextBlock(text="how do we deploy?")],
+        lease_id=lease.lease_id, store=store,
+    )
+    before = len(log.read(task.task_id))
+
+    task = append_user_message_with_recall(
+        engine, task, content=[TextBlock(text="deploy it again, please")],
+        lease_id=lease.lease_id, store=store,
+    )
+
+    assert len(log.read(task.task_id)) == before + 1
+    assert [m.origin for m in task.runtime.messages] == [None, None]
+    view = composer.compose(task)
+    bodies = [
+        m for s in view.segments for m in s.content
+        if m.content and "Always run make deploy." in getattr(m.content[0], "text", "")
+    ]
+    assert len(bodies) == 1
+
+
+def test_recall_pointer_for_a_resident_name_is_dropped(tmp_path: Path) -> None:
+    """A later goal that hits a resident name AND a fresh tier-2 memory: the
+    resident is silent in every tier, the tier-2 hit still rides the pointer
+    turn."""
+    store = MemoryStore(root=tmp_path / "memories")
+    store.write("deploy-process", "How we deploy\n\nAlways run make deploy.")
+    store.write("rollback-runbook", "How we roll back a release\n\nRun make rollback.")
+    log, cs, disp = _runtime()
+    engine = _engine(log, cs, _composer(cs, store.entries()))
+    task = engine.create_task(goal="g", policy_name="scripted")
+    disp.enqueue(task.task_id)
+    lease = disp.lease(worker_id="w-mem")
+    assert lease is not None
+    task = append_user_message_with_recall(
+        engine, task, content=[TextBlock(text="how do we deploy?")],
+        lease_id=lease.lease_id, store=store,
+    )
+    assert set(task.state.active_content[MEMORY_KIND]) == {"deploy-process"}
+
+    task = append_user_message_with_recall(
+        engine, task,
+        content=[TextBlock(text="after the deploy, how do we roll back the release?")],
+        lease_id=lease.lease_id, store=store,
+    )
+
+    assert set(task.state.active_content[MEMORY_KIND]) == {"deploy-process"}
+    assert [m.origin for m in task.runtime.messages] == [None, None, "memory"]
+    pointer_turn = task.runtime.messages[-1].content[0].text
+    assert "- rollback-runbook: How we roll back a release" in pointer_turn
+    assert "deploy-process" not in pointer_turn
+
+
+def test_recalled_body_survives_compaction_and_is_not_re_recorded(
+    tmp_path: Path,
+) -> None:
+    """A body resident whose anchor falls inside a compaction summary's
+    covered prefix re-hangs right after the summary — and a later goal naming
+    the memory still records nothing, because the resident is still active."""
+    store = _store_with_memories(tmp_path)
+    log, cs, disp = _runtime()
+    composer = _composer(cs, store.entries())
+    engine = _engine(log, cs, composer)
+    task = engine.create_task(goal="g", policy_name="scripted")
+    disp.enqueue(task.task_id)
+    lease = disp.lease(worker_id="w-mem")
+    assert lease is not None
+    # A prior assistant turn (in-memory only — placement, not replay, is
+    # under test) makes the activation a mid-task one.
+    task.runtime.messages.append(
+        Message(role="assistant", content=[TextBlock(text="earlier reply")])
+    )
+    task = append_user_message_with_recall(
+        engine, task, content=[TextBlock(text="how do we deploy?")],
+        lease_id=lease.lease_id, store=store,
+    )
+    assert task.context.content_anchors[f"{MEMORY_KIND}:deploy-process"] == 2
+
+    task.context.summary_ref = cs.put(
+        to_canonical_bytes("SUMMARY"), media_type="application/json"
+    )
+    task.context.summary_boundary = 2
+    dynamic = [
+        s for s in composer.compose(task).segments if s.name == "dynamic_suffix"
+    ][0]
+    texts = [m.content[0].text for m in dynamic.content]
+    assert texts[0] == "SUMMARY"
+    assert "Always run make deploy." in texts[1]
+    assert dynamic.content[1].origin == "memory"
+
+    before = len(log.read(task.task_id))
+    task = append_user_message_with_recall(
+        engine, task, content=[TextBlock(text="deploy it once more")],
+        lease_id=lease.lease_id, store=store,
+    )
+    assert len(log.read(task.task_id)) == before + 1
 
 
 def test_recall_is_verbatim_copy_not_synthesis(tmp_path: Path) -> None:
@@ -563,14 +735,14 @@ def test_recall_key_from_text_only_image_rides_along(tmp_path: Path) -> None:
     )
 
     messages = task.runtime.messages
-    assert len(messages) == 2
+    assert len(messages) == 1
     # Human turn carries the text + image as-is.
     assert messages[0].content[0].text == "how do we deploy?"
     assert isinstance(messages[0].content[1], ImageBlock)
     assert messages[0].content[1].source == ref
-    # The hit is driven by text (not the image): the same text recalls the deploy memory.
-    assert messages[1].origin == "memory"
-    assert "make deploy" in messages[1].content[0].text
+    # The hit is driven by text (not the image): the same text recalls the
+    # deploy memory — as a resident activation.
+    assert set(task.state.active_content[MEMORY_KIND]) == {"deploy-process"}
 
 
 def test_recall_miss_appends_only_the_user_message(tmp_path: Path) -> None:
@@ -588,6 +760,7 @@ def test_recall_miss_appends_only_the_user_message(tmp_path: Path) -> None:
 
     assert len(task.runtime.messages) == 1
     assert task.runtime.messages[0].origin is None
+    assert MEMORY_KIND not in task.state.active_content
 
 
 def test_replay_never_reruns_retrieval_bytes_equal(tmp_path: Path) -> None:

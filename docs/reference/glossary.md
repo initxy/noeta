@@ -413,8 +413,10 @@ confused with [Memory](#memory), which is cross-task.
 Cross-task long-term memory: file-based and model-managed. Mutation is
 `memory_write` and `memory_archive` (retire, never delete); reading is
 `memory_read` and `memory_search`. The **resident index** is a content-channel
-tenant, so compaction never flushes it, and **auto-recall** is a track-A
-provider on the `turn_intake` seam. Recall matches literal tokens (names,
+tenant, so compaction never flushes it, and **auto-recall** is a provider on
+the `turn_intake` seam: a tier-1 hit becomes a `memory`-kind resident (a body
+enters a task once, activate-once, and survives compaction), a tier-2 hit
+rides as a pointer line in one `origin="memory"` turn. Recall matches literal tokens (names,
 summaries, and the frontmatter `keywords` aliases — the deterministic
 cross-lingual bridge); with `Options.recall_model` set, a lexical miss is
 retried through one small-model call over the message plus the index (the

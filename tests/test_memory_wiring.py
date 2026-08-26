@@ -252,31 +252,32 @@ def test_product_prepare_records_index_and_recalls(tmp_path: Path) -> None:
         if e.type == "ContextContentRecorded"
         and getattr(e.payload, "kind", "") == MEMORY_KIND
     ]
-    assert len(generic) == 1
-    assert generic[0].payload.policy == "evolving"
+    # Two memory-kind residents: the index (pre-loop init hook) and the
+    # recalled body (turn intake), both evolving.
+    assert [e.payload.name for e in generic] == [MEMORY_INDEX_NAME, "deploy-notes"]
+    assert {e.payload.policy for e in generic} == {"evolving"}
 
     from noeta.core.fold import fold
 
     folded = fold(host.event_log, host.content_store, out.task_id)
-    origins = [m.origin for m in folded.runtime.messages]
-    assert "memory" in origins
-    # The recall message carries the full memory text.
-    recall_msg = next(
-        m for m in folded.runtime.messages if m.origin == "memory"
-    )
-    joined = "".join(
-        b.text for b in recall_msg.content if hasattr(b, "text")
-    )
-    assert "deploy-notes" in joined
+    # The body is a resident, not a turn: the ledger holds no recall message.
+    assert "memory" not in [m.origin for m in folded.runtime.messages]
+    assert set(folded.state.active_content[MEMORY_KIND]) == {
+        MEMORY_INDEX_NAME, "deploy-notes",
+    }
+    # What the model saw: the index and the recalled body, the body as one
+    # host-injected (origin="memory") message carrying the full memory text.
+    request = host.provider.received_requests[0]
+    recalled = [m for m in request.messages if m.origin == "memory"]
+    assert len(recalled) == 1
+    joined = "".join(b.text for b in recalled[0].content if hasattr(b, "text"))
+    assert "## deploy-notes" in joined
     assert "Always run smoke tests." in joined
-    # The recall turn lands right after the human goal turn.
-    goal_index = next(
-        i for i, m in enumerate(folded.runtime.messages)
-        if m.origin is None and m.role == "user"
-    )
-    assert folded.runtime.messages[goal_index + 1].origin == "memory"
-    # The index is resident as semi_stable.
-    assert tuple(folded.state.active_content.get(MEMORY_KIND, {})) == ("index",)
+    index_msgs = [
+        m for m in request.messages
+        if any("Long-term memory index" in getattr(b, "text", "") for b in m.content)
+    ]
+    assert len(index_msgs) == 1
 
 
 def test_product_memory_disabled_zero_events(tmp_path: Path) -> None:
@@ -362,8 +363,9 @@ def test_product_model_writes_memory_via_tool(tmp_path: Path) -> None:
 
 def test_product_resume_recalls_memory_written_earlier(tmp_path: Path) -> None:
     """Multi-turn loop: first turn the model writes memory, and the follow-up
-    goal matches its name → second turn's recall recorded with origin=memory
-    (RecallGoalPrelude, the ``_goal_prelude`` seam's SDK port)."""
+    goal matches its name → the second turn activates the body as a
+    memory-kind resident anchored after the resume goal (``IntakeGoalPrelude``,
+    the ``_goal_prelude`` seam's SDK port)."""
     from noeta.protocols.messages import LLMResponse, ToolUseBlock, Usage
 
     ws = tmp_path / "ws"
@@ -401,14 +403,24 @@ def test_product_resume_recalls_memory_written_earlier(tmp_path: Path) -> None:
     from noeta.core.fold import fold
 
     folded = fold(host.event_log, host.content_store, first.task_id)
-    recall_msgs = [
-        m for m in folded.runtime.messages if m.origin == "memory"
-    ]
-    assert recall_msgs, "a resume goal matching a memory name must inject a recall"
-    joined = "".join(
-        b.text for b in recall_msgs[-1].content if hasattr(b, "text")
+    assert "release-steps" in folded.state.active_content[MEMORY_KIND], (
+        "a resume goal matching a memory name must activate the body resident"
     )
-    assert "Tag, build, publish." in joined
+    assert not [m for m in folded.runtime.messages if m.origin == "memory"]
+    # Mid-task activation: the anchor lies past the first assistant turn, so
+    # the body renders inside the dynamic suffix right after the resume goal.
+    first_assistant = next(
+        i for i, m in enumerate(folded.runtime.messages) if m.role == "assistant"
+    )
+    assert folded.context.content_anchors[f"{MEMORY_KIND}:release-steps"] > first_assistant
+    request = host.provider.received_requests[-1]
+    texts = [
+        "".join(b.text for b in m.content if hasattr(b, "text"))
+        for m in request.messages
+    ]
+    goal_at = next(i for i, t in enumerate(texts) if t == "walk me through release-steps")
+    assert request.messages[goal_at + 1].origin == "memory"
+    assert "Tag, build, publish." in texts[goal_at + 1]
 
 
 def test_index_resident_refreshes_on_the_next_turn(tmp_path: Path) -> None:
