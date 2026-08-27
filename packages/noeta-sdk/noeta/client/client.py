@@ -974,6 +974,7 @@ class Client:
         goal: str,
         images: Sequence[ImageBlock] = (),
         goal_origin: Optional[MessageOrigin] = None,
+        drive: bool = True,
     ) -> DriveOutcome:
         """Deliver a user message mid-turn, or as a follow-up (driver ``inject_goal``).
 
@@ -985,14 +986,17 @@ class Client:
           still-``running`` outcome, taking no lease and driving nothing (so,
           unlike :meth:`send_goal`, it does NOT drain further approvals);
         * a task **suspended on the next-goal handle** falls through to
-          :meth:`send_goal` (wake + lease + drive), the ordinary follow-up turn;
+          :meth:`send_goal` (wake + lease + drive), the ordinary follow-up turn —
+          unless ``drive=False``, which refuses that landing with the typed
+          ``NotResumableError`` so a caller that must not drive a turn on its
+          own thread can seed the follow-up onto a worker pool instead;
         * any other state raises the typed ``NotResumableError``.
 
         The caller never branches on task status — use this whenever the message
         should reach the task "now if it's running, else next turn".
         """
         return self._driver.inject_goal(
-            task_id=task_id, goal=goal, images=images, goal_origin=goal_origin
+            task_id=task_id, goal=goal, images=images, goal_origin=goal_origin, drive=drive
         )
 
     def approve(

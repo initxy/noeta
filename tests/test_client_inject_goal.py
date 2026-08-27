@@ -91,6 +91,30 @@ def test_inject_goal_on_next_goal_falls_through_to_send_goal(tmp_path: Path) -> 
     assert types.count("TaskWoken") >= 1
 
 
+def test_inject_goal_without_drive_refuses_a_parked_task_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """``drive=False`` is for a caller that must never drive a turn itself (a
+    host's wake pump): a task resting on the next-goal handle gets the typed
+    refusal instead of a ``send_goal`` on the caller's thread, and the log is
+    untouched so the caller can seed the follow-up its own way."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    host, _, event_log = _host(ws, responses=[_end_turn("t1"), _end_turn("t2")])
+    driver = InteractionDriver(host)
+
+    started = driver.start(goal="hello", agent="main")
+    before = len(event_log.read(started.task_id))
+    with pytest.raises(NotResumableError) as exc:
+        driver.inject_goal(started.task_id, goal="follow-up", drive=False)
+    assert exc.value.status == "suspended"
+    assert "not waiting for a running turn" in str(exc.value)
+    assert len(event_log.read(started.task_id)) == before
+    # the ordinary landing is unchanged: the same call with ``drive`` drives
+    out = driver.inject_goal(started.task_id, goal="follow-up")
+    assert out.wake_handle == NEXT_GOAL_WAKE_HANDLE
+
+
 def test_inject_goal_on_running_writes_durable_request_and_pokes_inbox(
     tmp_path: Path,
 ) -> None:
