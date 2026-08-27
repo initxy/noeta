@@ -2080,7 +2080,7 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.14...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.16...HEAD
 [0.6.16]: https://github.com/initxy/noeta/compare/v0.6.15...v0.6.16
 [0.6.15]: https://github.com/initxy/noeta/compare/v0.6.14...v0.6.15
 [0.6.14]: https://github.com/initxy/noeta/compare/v0.6.13...v0.6.14
