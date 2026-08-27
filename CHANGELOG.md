@@ -8,6 +8,24 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.16] - 2026-08-27
+
+Covers both packages, lockstep: `noeta-runtime` 0.6.15 → 0.6.16 (the driver
+verb) and `noeta-sdk` 0.6.15 → 0.6.16 (the `Client` pass-through), with the
+sdk's floor raised to `noeta-runtime>=0.6.16`.
+
+### Added — `inject_goal(drive=False)` refuses to drive a parked task
+
+`InteractionDriver.inject_goal` / `Client.inject_goal` take `drive` (default
+`True`, the existing behaviour). With `drive=False` a task suspended on the
+next-goal handle no longer falls through to `send_goal` on the caller's
+thread: it raises the typed `NotResumableError` (`expected="a running turn"`)
+and writes nothing, so a caller that must never drive a turn itself — a host's
+wake pump handing batches to a resident worker pool — seeds the follow-up
+through `seed_send_goal` / `dispatch_seeded` instead. Closes the window in
+which a task that parked between the caller's status read and the injection
+pulled the whole turn onto the caller. The running landing is unchanged.
+
 ## [0.6.15] - 2026-08-26
 
 Covers both packages, lockstep: `noeta-runtime` 0.6.13 → 0.6.15 (the intake
@@ -2063,6 +2081,7 @@ Initial preview release.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
 [Unreleased]: https://github.com/initxy/noeta/compare/v0.6.14...HEAD
+[0.6.16]: https://github.com/initxy/noeta/compare/v0.6.15...v0.6.16
 [0.6.15]: https://github.com/initxy/noeta/compare/v0.6.14...v0.6.15
 [0.6.14]: https://github.com/initxy/noeta/compare/v0.6.13...v0.6.14
 [0.6.13]: https://github.com/initxy/noeta/compare/v0.6.12...v0.6.13
