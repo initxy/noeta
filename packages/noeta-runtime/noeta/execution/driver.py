@@ -1067,6 +1067,7 @@ class InteractionDriver:
         goal: str,
         images: Sequence[ImageBlock] = (),
         goal_origin: Optional[MessageOrigin] = None,
+        drive: bool = True,
     ) -> DriveOutcome:
         """Deliver a user message to a task **mid-turn** — one verb, two landings.
 
@@ -1085,7 +1086,13 @@ class InteractionDriver:
         * **suspended on the next-goal handle** — there is no turn in flight to
           inject into, so this transparently falls through to :meth:`send_goal`
           (wake + lease + drive), i.e. the ordinary follow-up turn. One verb the
-          caller can use without branching on task status.
+          caller can use without branching on task status. ``drive=False``
+          refuses this landing instead: a caller that must never drive a turn
+          on its own thread (a host's wake pump handing a batch to a worker
+          pool) gets the typed :class:`NotResumableError` and seeds the
+          follow-up through ``seed_send_goal`` / ``dispatch_seeded`` like any
+          other — so a task that parked between the caller's status read and
+          this call cannot pull the whole turn onto the caller.
         * **anything else** (terminal, or suspended on a different handle such as
           an approval / question) — raises the typed :class:`NotResumableError`,
           exactly as the other human commands do for a wrong wake.
@@ -1102,16 +1109,18 @@ class InteractionDriver:
                 task_id, goal=goal, images=images, goal_origin=goal_origin
             )
         wake_on = getattr(task, "wake_on", None)
-        if (
+        parked = (
             task.status == "suspended"
             and isinstance(wake_on, HumanResponseReceived)
             and wake_on.handle == NEXT_GOAL_WAKE_HANDLE
-        ):
+        )
+        if parked and drive:
             return self.send_goal(task_id, goal=goal, images=images,
                                   goal_origin=goal_origin)
-        # Terminal, or suspended on some other handle (approval / question):
-        # there is no running turn to inject into and no next-goal turn to
-        # append — the same wrong-wake refusal the other human commands give.
+        # Terminal, or suspended on some other handle (approval / question) —
+        # or parked on the next-goal handle for a caller that will not drive:
+        # there is no running turn to inject into, and the same wrong-wake
+        # refusal the other human commands give is the answer.
         task_status = getattr(host.dispatcher, "task_status", None)
         raise NotResumableError(
             task_id=task_id,
@@ -1121,7 +1130,10 @@ class InteractionDriver:
             dispatcher_status=(
                 task_status(task_id) if callable(task_status) else None
             ),
-            expected="a running turn or the next-goal handle",
+            expected=(
+                "a running turn" if parked
+                else "a running turn or the next-goal handle"
+            ),
         )
 
     def _inject_running(
