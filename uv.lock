@@ -539,7 +539,7 @@ wheels = [
 
 [[package]]
 name = "noeta-runtime"
-version = "0.6.16"
+version = "0.6.17"
 source = { editable = "packages/noeta-runtime" }
 
 [[package]]
