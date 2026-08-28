@@ -8,6 +8,13 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.17] - 2026-08-28
+
+Covers `noeta-runtime` only: 0.6.16 → 0.6.17. `noeta-sdk` stays at 0.6.16
+(the fix lives in the kernel's `create_task` / fold, not in a built-in), so
+the sdk's `noeta-runtime>=0.6.16` floor is unchanged — a fresh install
+resolves the dependency to 0.6.17.
+
 ### Fixed — the seeded environment resident described the host, not the container
 
 `Engine.create_task` emitted `TaskHostBound` but returned a `Task` with an
@@ -2099,7 +2106,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.16...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.17...HEAD
+[0.6.17]: https://github.com/initxy/noeta/compare/v0.6.16...v0.6.17
 [0.6.16]: https://github.com/initxy/noeta/compare/v0.6.15...v0.6.16
 [0.6.15]: https://github.com/initxy/noeta/compare/v0.6.14...v0.6.15
 [0.6.14]: https://github.com/initxy/noeta/compare/v0.6.13...v0.6.14
