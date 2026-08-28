@@ -36,7 +36,7 @@ from noeta.core._decision_handlers import (
     record_assistant_thinking,
     strip_message_origin,
 )
-from noeta.core.fold import apply_event, fold
+from noeta.core.fold import apply_event, apply_host_binding, fold
 from noeta.core.hooks import HookManager
 from noeta.core.snapshot import (
     CONSECUTIVE_TOOL_CALLS_SNAPSHOT_THRESHOLD,
@@ -381,12 +381,25 @@ class Engine:
             agent_name=agent_name,
             host_binding=host_binding,
         )
-        return Task(
+        task = Task(
             task_id=tid,
             status="pending",
             parent_task_id=parent_task_id,
             state=TaskState(goal=goal),
         )
+        # The returned Task must agree with the ``TaskHostBound`` just emitted:
+        # ``resolve_engine`` reads the session's workspace / container off this
+        # slice, and ``InteractionDriver.seed_start`` resolves an Engine from
+        # THIS object — before anything folds the stream back. Left unfolded,
+        # that resolve silently falls back to the host-fixed default workspace
+        # with no ExecEnv, and the pre-loop content init it drives captures the
+        # workspace-environment resident against the WRONG root. That resident
+        # is activate-once (``refresh=False``), so the mis-captured block is the
+        # task's for life. Same ``apply_host_binding`` the fold handler uses, so
+        # the two can never drift.
+        if host_binding is not None:
+            apply_host_binding(task, host_binding)
+        return task
 
     # -- conversation seeding --------------------------------------------
 

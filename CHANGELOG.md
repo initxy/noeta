@@ -8,6 +8,25 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed — the seeded environment resident described the host, not the container
+
+`Engine.create_task` emitted `TaskHostBound` but returned a `Task` with an
+unfolded `GovernanceState`, so the `host.resolve_engine(task)` that
+`InteractionDriver.seed_start` runs a few lines later read neither the
+session's `workspace` nor its `exec_env_ref` and silently fell back to the
+host-fixed default dir with no `ExecEnv`. The Engine that build produced is
+the one driving the pre-loop content init, so the `<workspace-environment>`
+block was captured against the wrong root — and because that resident is
+activate-once (`refresh=False`), the mis-captured block was the task's for
+life. A sandboxed session therefore told its model `Working directory:
+<host path>` for every turn while its tools were rooted at the container
+workdir, and a model that trusted the block opened with a `cd` into a
+directory that does not exist inside the container. Subtasks were unaffected
+(their Engines resolve off a folded Task), which is why the divergence read as
+a root-task-only quirk. `create_task` now lands the binding it just wrote on
+the Task it returns, through the same `apply_host_binding` the fold handler
+uses so the two cannot drift.
+
 ## [0.6.16] - 2026-08-27
 
 Covers both packages, lockstep: `noeta-runtime` 0.6.15 → 0.6.16 (the driver

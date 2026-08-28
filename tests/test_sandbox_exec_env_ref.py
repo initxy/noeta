@@ -32,6 +32,7 @@ from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
 from noeta.execution.driver import InteractionDriver, multi_turn_policy_wrapper
 from noeta.protocols.messages import LLMResponse, TextBlock, Usage
+from noeta.protocols.values import ContentRef
 from noeta.storage.memory import (
     InMemoryContentStore,
     InMemoryDispatcher,
@@ -168,6 +169,20 @@ def _task_host_bound_ref(event_log, task_id: str) -> Optional[str]:
     return None
 
 
+def _recorded_environment(event_log, content_store, task_id: str) -> Optional[str]:
+    """The rendered ``<workspace-environment>`` block as the model saw it."""
+    for env in event_log.read(task_id):
+        if env.type != "ContextContentRecorded":
+            continue
+        if getattr(env.payload, "kind", "") != "environment":
+            continue
+        digest = getattr(env.payload, "content_hash", "")
+        return content_store.get(
+            ContentRef(hash=digest, size=0, media_type="text/markdown")
+        ).decode("utf-8")
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # weld + fold
 # --------------------------------------------------------------------------- #
@@ -189,6 +204,32 @@ def test_seed_start_allocates_welds_and_folds_exec_env_ref(
     assert ref == "http://A-1:8080#sid-A-1"  # encoded base_url#sandbox_id
     task = fold(triple[0], triple[1], out.task_id)
     assert task.governance.exec_env_ref == ref
+
+
+def test_seed_records_the_environment_against_the_container_workdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The seeded environment resident must describe the CONTAINER, not the host.
+
+    ``seed_start`` resolves the Engine that drives the pre-loop content init off
+    the Task ``create_task`` just returned. That Task carries the ``TaskHostBound``
+    the same call emitted, so the resolve must see the session's workspace +
+    container. Returned unfolded, it silently falls back to the host-fixed
+    default dir with no ExecEnv, and the block names a host path the model
+    cannot ``cd`` into — permanently, since the resident is activate-once.
+    """
+    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", _recording_factory([]))
+    ws = tmp_path / "session-ws"
+    ws.mkdir()
+    triple = _triple()
+    host = _host(triple, tmp_path, sandbox_provider=FakeProvider("E"))
+    out = InteractionDriver(host, default_model=None).start(
+        goal="hi", agent="main", workspace_dir=str(ws)
+    )
+    block = _recorded_environment(triple[0], triple[1], out.task_id)
+    assert block is not None, "no environment resident was recorded"
+    assert "Working directory: /workspace\n" in block, block
+    assert str(tmp_path) not in block, block
 
 
 def test_non_sandbox_session_records_no_ref(tmp_path: Path) -> None:

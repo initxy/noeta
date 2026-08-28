@@ -8,6 +8,7 @@ state: resume refolds the same prefix and has to reach the same content address.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from noeta.core.prefetch import prefetched
 from noeta.core.snapshot import deserialize_task_state, rehydrate_task
@@ -568,25 +569,38 @@ def _on_model_bound(
     )
 
 
-def _on_task_host_bound(
-    task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
-) -> None:
-    # Fold the durable server host identity into GovernanceState. Emitted once
-    # at task open on the server product path; a recording without it leaves
-    # these None.
-    task.governance.host_id = str(getattr(env.payload, "host_id", "")) or None
+def apply_host_binding(task: Task, payload: Any) -> None:
+    """Land a ``TaskHostBound`` payload on ``task.governance`` — ONE definition.
+
+    Shared by the fold handler below and ``Engine.create_task``, whose returned
+    Task must agree with the ``TaskHostBound`` it just emitted: the resolver
+    reads the session's workspace / container off THIS slice, and
+    ``InteractionDriver.seed_start`` resolves an Engine from the freshly
+    created Task before anything folds the stream back. Two copies of these
+    three assignments would drift, and a drifted copy is silent — the
+    resolver just falls back to the host-fixed defaults.
+    """
+    # The durable server host identity. Emitted once at task open on the server
+    # product path; a recording without it leaves these None.
+    task.governance.host_id = str(getattr(payload, "host_id", "")) or None
     # The per-session workspace absolute path is welded into durable state. A
     # record carrying only a workspace name folds this field to None — the
     # resolver falls back to its host-fixed default dir.
     task.governance.workspace = (
-        str(getattr(env.payload, "workspace_dir", "") or "") or None
+        str(getattr(payload, "workspace_dir", "") or "") or None
     )
     # The sandbox container base_url welded per session, so a resumed /
     # reclaimed task reconnects to the SAME container. ``None`` on every local /
     # non-sandbox recording → resolver uses the local host, byte-equal.
     task.governance.exec_env_ref = (
-        str(getattr(env.payload, "exec_env_ref", "") or "") or None
+        str(getattr(payload, "exec_env_ref", "") or "") or None
     )
+
+
+def _on_task_host_bound(
+    task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
+) -> None:
+    apply_host_binding(task, env.payload)
 
 
 def _on_mcp_provenance_recorded(
