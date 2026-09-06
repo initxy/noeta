@@ -8,6 +8,13 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.18] - 2026-09-06
+
+Covers `noeta-sdk` only: 0.6.16 → 0.6.18 (0.6.17 was the runtime-only
+release, and one tag gates each publish job on its own version, so the sdk
+skips that number). `noeta-runtime` stays at 0.6.17; the fix lives in the
+react built-in, so the sdk's `noeta-runtime>=0.6.16` floor is unchanged.
+
 ### Fixed — proactive compaction against a summarizer that ignores the system prompt
 
 - **The summarize instruction now also rides as the final `user` turn of the
@@ -2131,7 +2138,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.17...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.18...HEAD
+[0.6.18]: https://github.com/initxy/noeta/compare/v0.6.17...v0.6.18
 [0.6.17]: https://github.com/initxy/noeta/compare/v0.6.16...v0.6.17
 [0.6.16]: https://github.com/initxy/noeta/compare/v0.6.15...v0.6.16
 [0.6.15]: https://github.com/initxy/noeta/compare/v0.6.14...v0.6.15
