@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from noeta.context.composer import ThreeSegmentComposer, RenderedContent
 from noeta.builtins.react.impl import ReActPolicy
+from noeta.builtins.react.impl.react import _SUMMARIZE_PROMPT
 
 # ``_carries_tool_result`` is a react.py internal with no package-level door;
 # this boundary test reaches past ``impl`` on purpose.
@@ -39,6 +40,9 @@ from noeta.runtime.llm import RuntimeLLMClient
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
 from noeta.testing.fake_llm import FakeLLMProvider
 
+
+#: A reply the note gate accepts — two of the prompt's section titles.
+_NOTE = "1. Primary Request & Intent: the goal.\n6. Pending Tasks: the rest."
 
 def _ctx() -> StepContext:
     return StepContext(task_id="t-1", lease_id="l-1", trace_id="tr-1")
@@ -121,7 +125,7 @@ def test_boundary_indexes_raw_runtime_not_view_projection() -> None:
         responses=[
             LLMResponse(
                 stop_reason="end_turn",
-                content=[TextBlock(text="fresh summary")],
+                content=[TextBlock(text=_NOTE)],
             )
         ]
     )
@@ -145,9 +149,12 @@ def test_boundary_indexes_raw_runtime_not_view_projection() -> None:
     # iter_messages() index. The fake provider records what it saw.
     summarize_req = provider.received_requests[0]
     assert summarize_req.messages[0].content[0].text == "earlier summary"
-    assert summarize_req.messages[1:] == list(
+    assert summarize_req.messages[1:-1] == list(
         task.runtime.messages[4:boundary]
     )
+    # ... closed by the synthetic instruction turn, which is not history.
+    assert summarize_req.messages[-1].role == "user"
+    assert summarize_req.messages[-1].content[0].text == _SUMMARIZE_PROMPT
     # Bounded, not from-zero: the already-collapsed prefix is represented by the
     # one summary message, not re-sent message by message.
     assert task.runtime.messages[0] not in summarize_req.messages
@@ -186,7 +193,7 @@ def test_boundary_protects_the_tail_window() -> None:
     provider = FakeLLMProvider(
         responses=[
             LLMResponse(
-                stop_reason="end_turn", content=[TextBlock(text="sum")]
+                stop_reason="end_turn", content=[TextBlock(text=_NOTE)]
             )
         ]
     )

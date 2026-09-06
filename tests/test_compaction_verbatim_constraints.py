@@ -187,7 +187,14 @@ def test_summarize_prompt_carries_verbatim_rule() -> None:
     constraint = "Do not touch config/secrets.yaml ever."
     paraphrase_resp = LLMResponse(
         stop_reason="end_turn",
-        content=[TextBlock(text="condensed summary, secrets handled carefully")],
+        content=[
+            TextBlock(
+                text=(
+                    "1. Primary Request & Intent: a refactor.\n"
+                    "7. Decisions & Constraints: secrets handled carefully."
+                )
+            )
+        ],
     )
     policy, provider = _policy([paraphrase_resp])
     policy.decide(_ctx(), _big_view_with_constraint(constraint))
@@ -295,7 +302,14 @@ def test_constraint_survives_even_if_model_paraphrases_it_away() -> None:
     # Model produced a summary that does NOT contain the constraint verbatim.
     paraphrase_resp = LLMResponse(
         stop_reason="end_turn",
-        content=[TextBlock(text="User wants a refactor; be careful with secrets.")],
+        content=[
+            TextBlock(
+                text=(
+                    "1. Primary Request & Intent: user wants a refactor.\n"
+                    "7. Decisions & Constraints: be careful with secrets."
+                )
+            )
+        ],
     )
     policy, _ = _policy([paraphrase_resp])
     decision = policy.decide(_ctx(), _big_view_with_constraint(constraint))
@@ -312,7 +326,8 @@ def test_constraint_kept_when_model_already_preserved_it() -> None:
         content=[
             TextBlock(
                 text=(
-                    "User asked for a refactor. "
+                    "1. Primary Request & Intent: user asked for a refactor.\n"
+                    "7. Decisions & Constraints: "
                     "Never edit the vendored lib/ directory. Threads open."
                 )
             )
@@ -327,7 +342,10 @@ def test_constraint_kept_when_model_already_preserved_it() -> None:
 def test_no_constraints_leaves_summary_untouched() -> None:
     """A history with no safety/permission directives produces the model summary
     verbatim (no spurious appended block)."""
-    summary_text = "condensed summary of the conversation"
+    summary_text = (
+        "1. Primary Request & Intent: condensed summary of the conversation.\n"
+        "6. Pending Tasks: none."
+    )
     resp = LLMResponse(
         stop_reason="end_turn", content=[TextBlock(text=summary_text)]
     )

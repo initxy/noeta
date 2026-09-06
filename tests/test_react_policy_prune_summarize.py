@@ -31,6 +31,12 @@ from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.tools.fake import FakeTool
 
 
+#: A reply the note gate accepts — two of the prompt's section titles.
+_NOTE_TEXT = (
+    "1. Primary Request & Intent: condensed summary of the conversation.\n"
+    "6. Pending Tasks: none."
+)
+
 def _ctx() -> StepContext:
     return StepContext(task_id="t-1", lease_id="l-1", trace_id="tr-1")
 
@@ -54,7 +60,7 @@ def _medium_view(n: int = 10):
 def _summary_resp() -> LLMResponse:
     return LLMResponse(
         stop_reason="end_turn",
-        content=[TextBlock(text="condensed summary of the conversation")],
+        content=[TextBlock(text=_NOTE_TEXT)],
     )
 
 
@@ -106,7 +112,7 @@ def test_proactive_trigger_returns_compaction_decision() -> None:
     decision = policy.decide(_ctx(), _big_view())
     assert isinstance(decision, CompactionRequestedDecision)
     assert decision.reason == "proactive"
-    assert decision.summary == "condensed summary of the conversation"
+    assert decision.summary == _NOTE_TEXT
     assert decision.boundary_count > 0
     assert decision.composer_version == "three_segment.v3"
     # Exactly one LLM call: the summarize (no main turn this step).
@@ -240,7 +246,7 @@ def test_passive_overflow_returns_compaction_decision() -> None:
     decision = policy.decide(_ctx(), _medium_view())
     assert isinstance(decision, CompactionRequestedDecision)
     assert decision.reason == "overflow"
-    assert decision.summary == "condensed summary of the conversation"
+    assert decision.summary == _NOTE_TEXT
     # Two LLM calls: the overflowing turn + the summarize.
     assert len(provider.received_requests) == 2
 
@@ -401,7 +407,7 @@ def test_sloppy_gateway_usage_still_compacts() -> None:
         "a nonsense usage report collapsed the density and pinned the boundary"
     )
     assert second.boundary_count > 0
-    assert second.summary == "condensed summary of the conversation"
+    assert second.summary == _NOTE_TEXT
 
 
 def test_density_clamp_bounds_both_directions() -> None:

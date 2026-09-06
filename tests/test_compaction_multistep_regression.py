@@ -101,7 +101,15 @@ class _MultiCompactionProvider:
             self.summarize_calls += 1
             return LLMResponse(
                 stop_reason="end_turn",
-                content=[TextBlock(text="CONDENSED-SUMMARY")],
+                content=[
+                    TextBlock(
+                        text=(
+                            "CONDENSED-SUMMARY\n"
+                            "1. Primary Request & Intent: the goal.\n"
+                            "6. Pending Tasks: the rest."
+                        )
+                    )
+                ],
             )
         # Finish only AFTER a second compaction has actually happened.
         if self.summarize_calls >= 2:
