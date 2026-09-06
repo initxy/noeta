@@ -122,7 +122,15 @@ class _DenseTokenizingProvider:
             self.summarize_calls += 1
             return LLMResponse(
                 stop_reason="end_turn",
-                content=[TextBlock(text="CONDENSED-SUMMARY")],
+                content=[
+                    TextBlock(
+                        text=(
+                            "CONDENSED-SUMMARY\n"
+                            "1. Primary Request & Intent: the goal.\n"
+                            "6. Pending Tasks: the rest."
+                        )
+                    )
+                ],
                 usage=usage,
             )
         self.main_calls += 1

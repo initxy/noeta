@@ -94,6 +94,8 @@ __all__ = [
     "SPAWN_SUBAGENT_TOOL",
     "extract_safety_constraints",
     "enforce_verbatim_constraints",
+    "looks_like_summary_note",
+    "SUMMARY_FAILED_REASON",
 ]
 
 #: ``SPAWN_SUBAGENT_TOOL`` is defined in ``noeta.policies.control_semantics``
@@ -104,14 +106,21 @@ __all__ = [
 #: ``skill`` (skills), and ``run_workflow`` / ``structured_output`` (this
 #: built-in's ``control_tool`` module).
 
-#: The compaction summarize call's system prompt, externalized to
-#: ``summarize.md`` beside this module (byte-identical to the former inline
-#: literal, so a resumed run still rebuilds the identical summarize request).
-#: Its closing HARD RULE is the model-facing half of the verbatim rule: the
-#: deterministic post-check (:func:`enforce_verbatim_constraints`) is the
-#: actual guarantee; the prompt nudges the model so the common case produces a
-#: clean summary without the appended block.
-_SUMMARIZE_SYSTEM_PROMPT = load_markdown(__package__, "summarize")
+#: The compaction summarize instruction, externalized to ``summarize.md``
+#: beside this module. It rides the summarize request TWICE — as the request's
+#: ``system`` and as a trailing ``user`` turn (see
+#: :meth:`ReActPolicy._summary_prompt_request` for why). Its closing HARD RULE
+#: is the model-facing half of the verbatim rule: the deterministic post-check
+#: (:func:`enforce_verbatim_constraints`) is the actual guarantee; the prompt
+#: nudges the model so the common case produces a clean summary without the
+#: appended block.
+_SUMMARIZE_PROMPT = load_markdown(__package__, "summarize")
+
+#: The stable head of every summarize-failure reason. A host branches on the
+#: prefix (``reason.startswith(SUMMARY_FAILED_REASON)``); the free text after
+#: ``": "`` carries the response facts for a human — see
+#: :func:`_summary_failure`.
+SUMMARY_FAILED_REASON = "compaction_summary_failed"
 
 #: ``_TaskTriggerBaseline.last_input_tokens_at_call`` sentinel: a compaction
 #: collapsed the history, so no recorded input count describes it any more.
@@ -502,6 +511,20 @@ class ReActPolicy:
     ) -> LLMRequest:
         """Build the deterministic summarize round-trip request.
 
+        **The instruction rides twice: as the request's ``system`` AND as a
+        trailing ``user`` turn appended after the history.** A model handed a
+        tool-result-ending history and a system-only instruction can weigh the
+        conversation's momentum over the system text and simply continue the
+        task. Observed on a relay-served frontier model: every proactive
+        compaction either came back with no content at all (a loud
+        ``compaction_summary_failed``) or with a one-line "next step"
+        narration that then silently replaced the whole collapsed prefix. The
+        identical request with the instruction as the final user message is
+        answered with the note — which is also how Claude Code sends its
+        compaction prompt. The system copy stays for models that do honour it
+        (and keeps the summarize call recognisable by its system text); the
+        duplication costs under a thousand tokens per compaction.
+
         A fixed structured-section instruction over the
         history-to-be-collapsed. The sections are adopted from Claude Code's
         compaction template but trimmed to a durable subset: Noeta only ever
@@ -558,11 +581,15 @@ class ReActPolicy:
         """
         summary_system = Message(
             role="system",
-            content=[TextBlock(text=_SUMMARIZE_SYSTEM_PROMPT)],
+            content=[TextBlock(text=_SUMMARIZE_PROMPT)],
+        )
+        instruction_turn = Message(
+            role="user",
+            content=[TextBlock(text=_SUMMARIZE_PROMPT)],
         )
         return LLMRequest(
             model=self._compaction_model or self._model,
-            messages=list(history),
+            messages=[*history, instruction_turn],
             tools=list(tools),
             system=summary_system,
             # The summarize round-trip must not tool-call (see the docstring):
@@ -730,19 +757,24 @@ class ReActPolicy:
         )
         # The summarize round-trip can come back failed — an ``error``
         # stop_reason (the LLM client's transient retries already exhausted, or
-        # a fatal/overflow error) — or empty (a model that emitted only a
-        # thinking block / whitespace). Recording EITHER as a ``Compacted``
-        # would set ``summary_ref`` to an empty note and then let the Composer's
-        # ``_apply_summary`` REPLACE the whole collapsed prefix with it: the
-        # early intent and accumulated context are destroyed, AND the empty
-        # ``user`` text block the provider is then handed is itself rejected
-        # with a 400 on the very next request. Fail the step cleanly instead,
-        # leaving the durable history untouched — a bad summary is strictly
-        # worse than no compaction. Deterministic on resume: the recorded
-        # summarize response replays identically, so the same branch is taken.
-        if summary_resp.stop_reason == "error" or not summary.strip():
+        # a fatal/overflow error) — empty (a model that emitted only a
+        # thinking block / whitespace), or as something that is NOT a note (a
+        # model that ignored the instruction and narrated its next step
+        # instead). Recording ANY of these as a ``Compacted`` would set
+        # ``summary_ref`` to it and then let the Composer's ``_apply_summary``
+        # REPLACE the whole collapsed prefix with it: the early intent and
+        # accumulated context are destroyed silently, AND an empty ``user``
+        # text block is itself rejected with a 400 on the very next request.
+        # Fail the step cleanly instead, leaving the durable history untouched
+        # — a bad summary is strictly worse than no compaction. The reason
+        # carries the response facts (see ``_summary_failure``) so the host's
+        # receipt says what came back, not just that it was refused.
+        # Deterministic on resume: the recorded summarize response replays
+        # identically, so the same branch is taken.
+        failure = _summary_failure(summary_resp, summary)
+        if failure is not None:
             return FailDecision(
-                reason="compaction_summary_failed", retryable=False
+                reason=f"{SUMMARY_FAILED_REASON}: {failure}", retryable=False
             )
         # the model is *asked* (via the summarize prompt) to keep
         # safety/permission directives verbatim, but cannot be trusted to. Run
@@ -1256,3 +1288,97 @@ def enforce_verbatim_constraints(
         return summary
     block = "\n".join(f"- {c}" for c in missing)
     return f"{summary}\n\n{_VERBATIM_HEADER}\n{block}"
+
+
+# ---------------------------------------------------------------------------
+# Summarize response gate
+# ---------------------------------------------------------------------------
+
+#: The nine section titles ``summarize.md`` asks the note to carry, in prompt
+#: order. :func:`looks_like_summary_note` counts them; a test pins every title
+#: to the prompt text so the gate and the prompt cannot drift apart.
+_SUMMARY_SECTION_TITLES: tuple[str, ...] = (
+    "Primary Request & Intent",
+    "Key Technical Concepts",
+    "Files & Code",
+    "Errors & Fixes",
+    "All user messages",
+    "Pending Tasks",
+    "Decisions & Constraints",
+    "Current Work",
+    "Next Step",
+)
+
+#: How many section titles a response must show before it is recorded as a
+#: note. Two rather than one: a narration can mention "the primary request"
+#: in passing, while a note for even the shortest conversation carries at
+#: least sections 1 and 5.
+_SUMMARY_MIN_SECTIONS = 2
+
+#: Longest excerpt a failure reason quotes. The reason rides an inline event
+#: payload with a 4 KB ceiling, and a host renders it as one line.
+_FAILURE_EXCERPT_CHARS = 160
+
+
+def looks_like_summary_note(text: str) -> bool:
+    """Whether ``text`` has the shape ``summarize.md`` asks for.
+
+    The check is deliberately structural, not semantic: at least
+    :data:`_SUMMARY_MIN_SECTIONS` of the prompt's section titles appear
+    (case-insensitive, markdown decoration around them ignored by construction
+    since only the title words are matched). It separates a note from the one
+    failure the prompt cannot prevent — a model that ignores the instruction
+    and answers with what it would have said next ("The file is long and got
+    cut off. Fetching the rest.") — which is otherwise indistinguishable from
+    a short but genuine note by length or stop reason. Titles are matched in
+    the prompt's own language; a note that localises its headings fails the
+    gate, and the failure reason quotes its head so that case is diagnosable.
+    Pure over ``text`` so a resumed run takes the same branch.
+    """
+    lowered = text.lower()
+    found = sum(
+        1 for title in _SUMMARY_SECTION_TITLES if title.lower() in lowered
+    )
+    return found >= _SUMMARY_MIN_SECTIONS
+
+
+def _excerpt(text: str, limit: int = _FAILURE_EXCERPT_CHARS) -> str:
+    """One-line, whitespace-collapsed excerpt for a failure reason."""
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[: limit - 3] + "..."
+
+
+def _summary_failure(response: LLMResponse, text: str) -> Optional[str]:
+    """Why ``response`` must not be recorded as a note, or ``None`` when it may.
+
+    ``text`` is the joined text of the response's text blocks. The returned
+    string is the human-facing detail of the failure reason: which of the
+    three refusals fired and the facts a reader needs to tell them apart —
+    the error category and message for an errored round-trip; the stop
+    reason, output token count and block kinds for an empty one (an
+    only-thinking response and a zero-content response look identical
+    without the block list); and the same counts plus the head of the text
+    for a reply that is not a note. Pure over ``(response, text)``.
+    """
+    if response.stop_reason == "error":
+        raw = response.raw if isinstance(response.raw, dict) else {}
+        category = raw.get("category") or "unknown"
+        error = _excerpt(str(raw.get("error") or ""))
+        return (
+            f"errored summarize round-trip (category={category}"
+            + (f", error={error!r}" if error else "")
+            + ")"
+        )
+    facts = (
+        f"stop_reason={response.stop_reason}, "
+        f"output_tokens={response.usage.output}"
+    )
+    if not text.strip():
+        kinds = ", ".join(type(b).__name__ for b in response.content) or "none"
+        return f"empty summarize response ({facts}, blocks={kinds})"
+    if not looks_like_summary_note(text):
+        return (
+            f"summarize response is not a note ({facts}, "
+            f"text_len={len(text)}, head={_excerpt(text, 80)!r})"
+        )
+    return None

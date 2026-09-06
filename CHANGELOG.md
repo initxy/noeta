@@ -8,6 +8,31 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed — proactive compaction against a summarizer that ignores the system prompt
+
+- **The summarize instruction now also rides as the final `user` turn of the
+  summarize request** (it stays in `system` too). A relay-served frontier model
+  handed the instruction in `system` alone and a history ending on a tool
+  result kept working the task instead: every proactive compaction in one
+  production store came back either with no content at all (a loud
+  `compaction_summary_failed`) or with a one-line "next step" narration that
+  was then recorded as the note and silently replaced the whole collapsed
+  prefix. The same request with the instruction as the trailing user message
+  is answered with the note — the placement Claude Code uses. Summarize-request
+  bytes change relative to runs recorded before this version (the same caveat
+  every `summarize.md` change carries).
+- **A summarize reply that is not a note is refused.** `Compacted` is recorded
+  only when the reply shows at least two of the prompt's nine section titles;
+  a narration, however long, now fails the step the way an empty reply does
+  instead of destroying the prefix.
+- **`compaction_summary_failed` carries the response facts.** The reason is
+  now `compaction_summary_failed: <detail>` — the error category and message
+  for an errored round-trip; stop reason, output tokens and block kinds for an
+  empty one; those plus the head of the text for a non-note — so a host's
+  receipt (and the `turn_failed: …` detail of a parked conversation) says what
+  came back. The `compaction_summary_failed` head is stable: a host that
+  compared the whole reason with `==` must switch to a prefix match.
+
 ## [0.6.17] - 2026-08-28
 
 Covers `noeta-runtime` only: 0.6.16 → 0.6.17. `noeta-sdk` stays at 0.6.16

@@ -75,6 +75,9 @@ _AVAILABLE = _CONTEXT_WINDOW - _MAX_OUTPUT - _BUFFER
 _TAIL = _AVAILABLE // 3
 
 
+#: A reply the note gate accepts — two of the prompt's section titles.
+_NOTE = "1. Primary Request & Intent: the goal.\n6. Pending Tasks: the rest."
+
 def _ctx() -> StepContext:
     return StepContext(task_id="t-1", lease_id="l-1", trace_id="tr-1")
 
@@ -95,16 +98,16 @@ def test_summarize_template_carries_the_continuity_sections() -> None:
     """The note template ends on the two end-of-span continuity sections
     (Current Work / Next Step), keeps them out of the carry-forward rule, and
     still opens with the marker line the fake providers key on."""
-    from noeta.builtins.react.impl.react import _SUMMARIZE_SYSTEM_PROMPT
+    from noeta.builtins.react.impl.react import _SUMMARIZE_PROMPT
 
-    assert _SUMMARIZE_SYSTEM_PROMPT.startswith(_SUMMARY_MARKER)
-    assert "8. Current Work:" in _SUMMARIZE_SYSTEM_PROMPT
-    assert "9. Next Step:" in _SUMMARIZE_SYSTEM_PROMPT
+    assert _SUMMARIZE_PROMPT.startswith(_SUMMARY_MARKER)
+    assert "8. Current Work:" in _SUMMARIZE_PROMPT
+    assert "9. Next Step:" in _SUMMARIZE_PROMPT
     # The sections describe the END of the covered span and defer to the
     # verbatim continuation — the wording that keeps them honest.
-    assert "supersede this section" in _SUMMARIZE_SYSTEM_PROMPT
+    assert "supersede this section" in _SUMMARIZE_PROMPT
     # Rewritten each pass: the one exception to note carry-forward.
-    assert "superseded, not carried forward" in _SUMMARIZE_SYSTEM_PROMPT
+    assert "superseded, not carried forward" in _SUMMARIZE_PROMPT
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +159,7 @@ def test_summarize_request_carries_the_live_tool_schemas() -> None:
     provider = FakeLLMProvider(
         responses=[
             LLMResponse(
-                stop_reason="end_turn", content=[TextBlock(text="condensed note")]
+                stop_reason="end_turn", content=[TextBlock(text=_NOTE)]
             )
         ]
     )
@@ -208,7 +211,7 @@ def test_summarize_request_is_deterministic() -> None:
         provider = FakeLLMProvider(
             responses=[
                 LLMResponse(
-                    stop_reason="end_turn", content=[TextBlock(text="note")]
+                    stop_reason="end_turn", content=[TextBlock(text=_NOTE)]
                 )
             ]
         )
@@ -287,8 +290,8 @@ class _SizedProvider:
                     TextBlock(
                         text=(
                             f"CONDENSED NOTE {len(self.summarize_requests)}: "
-                            "intent, concepts, paths, errors, user messages, "
-                            "pending tasks, decisions."
+                            "1. Primary Request & Intent: do the work. "
+                            "6. Pending Tasks: keep going."
                         )
                     )
                 ],
@@ -384,7 +387,10 @@ def test_summarize_input_stays_within_the_window_across_compactions() -> None:
 
     assert len(provider.summarize_requests) >= 3, types
     for i, req in enumerate(provider.summarize_requests):
-        size = estimate_messages_tokens(req.messages)
+        # The history half only: the trailing instruction turn is a fixed
+        # constant (the same text the request's ``system`` carries), not the
+        # per-pass input this guards.
+        size = estimate_messages_tokens(req.messages[:-1])
         assert size <= _AVAILABLE, (
             f"summarize #{i + 1} input is {size} estimated tokens, over the "
             f"{_AVAILABLE}-token available window"
@@ -557,7 +563,7 @@ def test_http200_overflow_stop_reason_drives_compaction_not_failure() -> None:
                 )
             ),
             _anthropic_stream(
-                _anthropic_body(stop_reason="end_turn", text="condensed note")
+                _anthropic_body(stop_reason="end_turn", text=_NOTE)
             ),
         ]
     )
@@ -590,4 +596,4 @@ def test_http200_overflow_stop_reason_drives_compaction_not_failure() -> None:
 
     assert isinstance(decision, CompactionRequestedDecision)
     assert decision.reason == "overflow"
-    assert decision.summary.startswith("condensed note")
+    assert decision.summary.startswith(_NOTE)
