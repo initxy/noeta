@@ -1538,13 +1538,18 @@ def test_origin_system_wrapped_in_system_reminder_and_merged_into_prev_user_turn
     )
     assert len(wire) == 1
     assert wire[0]["role"] == "user"
-    # the last block of the (only, hence last) message carries cache_control.
+    # The breakpoint sits on the last RECORDED block (the human words); the
+    # trailing injection is re-derived per compose and stays outside the
+    # cache entry.
     assert wire[0]["content"] == [
-        {"type": "text", "text": "real human words"},
+        {
+            "type": "text",
+            "text": "real human words",
+            "cache_control": {"type": "ephemeral"},
+        },
         {
             "type": "text",
             "text": "<system-reminder>\nhost says hi\n</system-reminder>",
-            "cache_control": {"type": "ephemeral"},
         },
     ]
 
@@ -1557,7 +1562,8 @@ def test_origin_memory_before_user_merges_into_next_user_turn() -> None:
     )
     assert len(wire) == 1
     assert wire[0]["role"] == "user"
-    # the last block of the (only, hence last) message carries cache_control.
+    # the human block is both the last recorded block and the last block, so
+    # it carries cache_control either way.
     assert wire[0]["content"] == [
         {
             "type": "text",
@@ -1578,12 +1584,19 @@ def test_origin_system_with_no_adjacent_user_turn_stands_alone() -> None:
         [_user("q"), assistant, _injected("mid-loop reminder", "system")]
     )
     assert [m["role"] for m in wire] == ["user", "assistant", "user"]
-    # last block of the last message carries cache_control.
+    # The breakpoint sits on the assistant turn — the last recorded block —
+    # and the standalone injection stays outside the cache entry.
+    assert wire[1]["content"] == [
+        {
+            "type": "text",
+            "text": "working on it",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
     assert wire[2]["content"] == [
         {
             "type": "text",
             "text": "<system-reminder>\nmid-loop reminder\n</system-reminder>",
-            "cache_control": {"type": "ephemeral"},
         }
     ]
 
@@ -1605,13 +1618,100 @@ def test_origin_system_merges_into_tool_result_user_turn() -> None:
         [_user("q"), assistant, tool, _injected("file changed on disk", "system")]
     )
     assert [m["role"] for m in wire] == ["user", "assistant", "user"]
+    # The tool_result is the last recorded block, so it carries the
+    # breakpoint; the merged injection after it stays outside the cache entry.
     assert wire[2]["content"][0]["type"] == "tool_result"
-    # last block of the last message carries cache_control.
+    assert wire[2]["content"][0]["cache_control"] == {"type": "ephemeral"}
     assert wire[2]["content"][1] == {
         "type": "text",
         "text": "<system-reminder>\nfile changed on disk\n</system-reminder>",
-        "cache_control": {"type": "ephemeral"},
     }
+
+
+@respx.mock
+def test_cache_control_skips_every_trailing_injected_turn() -> None:
+    """Several trailing injections (the compose-time reminder tail is one
+    ``origin="system"`` turn per reminder, and a memory pointer rides
+    ``origin="memory"``) all stay outside the cache entry: the breakpoint
+    walks back to the last recorded block."""
+    assistant = Message(
+        role="assistant",
+        content=[
+            ToolUseBlock(call_id="c1", tool_name="echo", arguments={"k": "x"})
+        ],
+    )
+    tool = Message(
+        role="tool",
+        content=[ToolResultBlock(call_id="c1", output="ok", success=True)],
+    )
+    wire = _wire_messages(
+        [
+            _user("q"),
+            assistant,
+            tool,
+            _injected("todo: keep going", "system"),
+            _injected("recalled pointer", "memory"),
+        ]
+    )
+    assert [m["role"] for m in wire] == ["user", "assistant", "user"]
+    blocks = wire[2]["content"]
+    assert [b["type"] for b in blocks] == ["tool_result", "text", "text"]
+    assert blocks[0]["cache_control"] == {"type": "ephemeral"}
+    assert all("cache_control" not in b for b in blocks[1:])
+    # exactly one breakpoint in the messages array
+    assert json.dumps(wire).count('"cache_control"') == 1
+
+
+@respx.mock
+def test_cache_control_prefix_is_stable_when_only_the_reminder_tail_changes() -> None:
+    """The property the placement exists for: two steps that resend the same
+    recorded history under a different reminder tail produce byte-identical
+    wire bytes through the breakpoint, so the second step reads the entry the
+    first one wrote. With the breakpoint on the reminder the two prefixes
+    would differ at the very block that keys the entry."""
+    assistant = Message(
+        role="assistant",
+        content=[
+            ToolUseBlock(call_id="c1", tool_name="echo", arguments={"k": "x"})
+        ],
+    )
+    tool = Message(
+        role="tool",
+        content=[ToolResultBlock(call_id="c1", output="ok", success=True)],
+    )
+    history = [_user("q"), assistant, tool]
+    step_one = _wire_messages([*history, _injected("todo: 2 left", "system")])
+    step_two = _wire_messages([*history, _injected("todo: 1 left", "system")])
+
+    def through_breakpoint(wire: list[dict[str, Any]]) -> str:
+        out: list[Any] = []
+        for message in wire:
+            blocks = []
+            for block in message["content"]:
+                blocks.append(block)
+                if "cache_control" in block:
+                    return json.dumps([*out, {**message, "content": blocks}])
+            out.append(message)
+        raise AssertionError("no breakpoint in messages")
+
+    assert through_breakpoint(step_one) == through_breakpoint(step_two)
+    # and the tails really did differ, so the equality above is not vacuous
+    assert step_one[-1]["content"][-1] != step_two[-1]["content"][-1]
+
+
+@respx.mock
+def test_cache_control_falls_back_to_last_block_when_every_message_is_injected() -> None:
+    """Degenerate: nothing recorded to anchor on ⇒ the last block carries it
+    (the pre-existing behaviour), rather than no messages breakpoint at all."""
+    wire = _wire_messages([_injected("only the host spoke", "system")])
+    assert len(wire) == 1
+    assert wire[0]["content"] == [
+        {
+            "type": "text",
+            "text": "<system-reminder>\nonly the host spoke\n</system-reminder>",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
 
 
 @respx.mock
@@ -2032,9 +2132,11 @@ def test_image_block_vision_model_without_resolver_raises_loud() -> None:
 # ---------------------------------------------------------------------------
 #
 # Ephemeral cache_control is stamped on the OUTBOUND wire body only — the last
-# tool, the last message's last content block, and (lifting the flat string into
-# block form) the system preamble. It must never reach LLMRequest / request_ref;
-# the recorded canonical bytes stay provider-neutral and unchanged.
+# tool, the last RECORDED message's last content block (trailing host-injected
+# turns such as the compose-time reminder tail stay outside the entry, see the
+# origin tests above), and (lifting the flat string into block form) the system
+# preamble. It must never reach LLMRequest / request_ref; the recorded canonical
+# bytes stay provider-neutral and unchanged.
 
 
 @respx.mock
