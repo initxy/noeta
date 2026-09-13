@@ -43,22 +43,32 @@ from noeta.core.wiring import wire_default_observers
 from noeta.builtins.memory.impl.matching import match_tokens as _tokens
 from noeta.builtins.memory.impl.recall import (
     append_user_message_with_recall,
+    read_memory_names,
     recall_memories,
 )
 from noeta.builtins.memory.impl.store import (
     DEFAULT_GLOBAL_MEMORY_DIR,
+    MemoryReadTool,
     load_memory_store,
 )
 from noeta.execution.recorder import SeedRecorder
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.canonical import to_canonical_bytes
-from noeta.protocols.decisions import FinishDecision
+from noeta.protocols.decisions import (
+    FinishDecision,
+    ToolCall,
+    ToolCallsDecision,
+    YieldForHumanDecision,
+)
 from noeta.protocols.messages import (
     ImageBlock,
     Message,
     TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
     is_host_injected,
 )
+from noeta.runtime.tool import ToolRuntime
 from noeta.storage.memory import (
     InMemoryContentStore,
     InMemoryDispatcher,
@@ -665,6 +675,218 @@ def test_recalled_body_survives_compaction_and_is_not_re_recorded(
         lease_id=lease.lease_id, store=store,
     )
     assert len(log.read(task.task_id)) == before + 1
+
+
+# ---------------------------------------------------------------------------
+# A page the model read itself is silent — until compaction swallows the read
+# ---------------------------------------------------------------------------
+
+
+def _engine_reading(
+    log: InMemoryEventLog,
+    cs: InMemoryContentStore,
+    composer: ThreeSegmentComposer,
+    store: MemoryStore,
+    name: str,
+    call_id: str = "c-read",
+) -> Engine:
+    """An Engine whose scripted policy performs ONE real ``memory_read`` of
+    ``name`` — the assistant tool-use turn attached, as the react policy
+    attaches it — through a real ``ToolRuntime``, then replies and parks for
+    the next user message, the multi-turn conversation shape."""
+    tool_use = ToolUseBlock(
+        call_id=call_id, tool_name="memory_read", arguments={"name": name}
+    )
+    read = ToolCallsDecision(
+        calls=[ToolCall(tool_name="memory_read", arguments={"name": name}, call_id=call_id)],
+        assistant_message=Message(role="assistant", content=[tool_use]),
+    )
+    reply = YieldForHumanDecision(
+        prompt="next?",
+        assistant_message=Message(
+            role="assistant", content=[TextBlock(text="Read it.")]
+        ),
+    )
+    return Engine(
+        event_log=log,
+        content_store=cs,
+        composer=composer,
+        policy=StubScriptedPolicy([read, reply]),
+        tools={"memory_read": MemoryReadTool(store=store)},
+        tool_runtime=ToolRuntime(event_log=log, content_store=cs),
+    )
+
+
+def _bodies_in_view(view, needle: str) -> int:
+    """How many composed messages carry ``needle`` — in a text block or in a
+    tool result's output."""
+    count = 0
+    for segment in view.segments:
+        for message in segment.content:
+            for block in message.content:
+                text = getattr(block, "text", None)
+                output = getattr(block, "output", None)
+                if needle in (text or "") or needle in str(output or ""):
+                    count += 1
+                    break
+    return count
+
+
+def test_read_memory_names_pairs_successful_reads_only() -> None:
+    """Only a ``memory_read`` whose result succeeded counts: a failed read, a
+    read with no result yet, another tool's call and a malformed argument
+    all leave the name recallable."""
+    def use(call_id: str, name: object, tool: str = "memory_read") -> Message:
+        return Message(
+            role="assistant",
+            content=[ToolUseBlock(call_id=call_id, tool_name=tool, arguments={"name": name})],
+        )
+
+    def result(call_id: str, ok: bool) -> Message:
+        return Message(
+            role="tool",
+            content=[ToolResultBlock(call_id=call_id, output={}, success=ok)],
+        )
+
+    history = (
+        Message(role="user", content=[TextBlock(text="goal")]),
+        use("ok", "deploy-process"), result("ok", True),
+        use("bad", "ghost"), result("bad", False),
+        use("other", "naming-rules", tool="memory_search"), result("other", True),
+        use("pending", "rollback-runbook"),
+        use("weird", 42), result("weird", True),
+    )
+    assert read_memory_names(history) == frozenset({"deploy-process"})
+    assert read_memory_names(()) == frozenset()
+
+
+def test_recall_is_silent_for_a_memory_the_model_read_itself(
+    tmp_path: Path,
+) -> None:
+    """The model loads a page with ``memory_read``; a later goal naming that
+    page (a tier-1 hit) records nothing — no activation, no pointer — and the
+    composed View carries the body exactly once, as the tool result."""
+    store = _store_with_memories(tmp_path)
+    log, cs, disp = _runtime()
+    composer = _composer(cs, store.entries())
+    engine = _engine_reading(log, cs, composer, store, "deploy-process")
+    task = engine.create_task(goal="g", policy_name="scripted")
+    disp.enqueue(task.task_id)
+    lease = disp.lease(worker_id="w-mem")
+    assert lease is not None
+    task = append_user_message_with_recall(
+        engine, task, content=[TextBlock(text="hello there")],
+        lease_id=lease.lease_id, store=store,
+    )
+    task = engine.run_one_step(task, lease_id=lease.lease_id)  # read, reply, park
+    assert [m.role for m in task.runtime.messages] == [
+        "user", "assistant", "tool", "assistant",
+    ]
+    read = task.runtime.messages[2].content[0]
+    assert isinstance(read, ToolResultBlock) and read.success
+    assert read.output["name"] == "deploy-process"
+    before = len(log.read(task.task_id))
+
+    task = append_user_message_with_recall(
+        engine, task, content=[TextBlock(text="how do we deploy?")],
+        lease_id=lease.lease_id, store=store,
+    )
+
+    assert len(log.read(task.task_id)) == before + 1  # the goal, nothing else
+    assert MEMORY_KIND not in task.state.active_content
+    assert [m.origin for m in task.runtime.messages] == [None] * 5
+    assert _bodies_in_view(composer.compose(task), "Always run make deploy.") == 1
+    # fold matches live — the read rode the real ledger path
+    folded = fold(log, cs, task.task_id)
+    assert to_canonical_bytes(folded.runtime.messages) == to_canonical_bytes(
+        task.runtime.messages
+    )
+    assert folded.state.active_content == task.state.active_content
+
+
+def test_recall_pointer_is_dropped_for_a_memory_the_model_read_itself(
+    tmp_path: Path,
+) -> None:
+    """A tier-2 hit on a page the model already read is dropped too — a
+    pointer's only job is to send the model to ``memory_read``, and it has
+    been. A fresh tier-2 memory still rides the pointer turn."""
+    store = MemoryStore(root=tmp_path / "memories")
+    store.write(
+        "df-42",
+        "---\ndescription: postgres connection pooling notes\n---\nUse pgbouncer.",
+    )
+    store.write(
+        "df-43",
+        "---\ndescription: postgres connection retry policy\n---\nRetry thrice.",
+    )
+    log, cs, disp = _runtime()
+    composer = _composer(cs, store.entries())
+    engine = _engine_reading(log, cs, composer, store, "df-42")
+    task = engine.create_task(goal="g", policy_name="scripted")
+    disp.enqueue(task.task_id)
+    lease = disp.lease(worker_id="w-mem")
+    assert lease is not None
+    task = append_user_message_with_recall(
+        engine, task, content=[TextBlock(text="hello there")],
+        lease_id=lease.lease_id, store=store,
+    )
+    task = engine.run_one_step(task, lease_id=lease.lease_id)  # reads df-42
+
+    task = append_user_message_with_recall(
+        engine, task,
+        content=[TextBlock(text="postgres connection keeps dropping")],
+        lease_id=lease.lease_id, store=store,
+    )
+
+    assert [m.origin for m in task.runtime.messages] == [None] * 5 + ["memory"]
+    pointer_turn = task.runtime.messages[-1].content[0].text
+    assert "- df-43: postgres connection retry policy" in pointer_turn
+    assert "df-42" not in pointer_turn
+    assert MEMORY_KIND not in task.state.active_content
+
+
+def test_recall_serves_a_read_memory_again_after_compaction(
+    tmp_path: Path,
+) -> None:
+    """Once a compaction summary covers the read, the tool result no longer
+    reaches the model, so the same goal that was silent before now records
+    the body as a resident — placed after the summary, like any mid-task
+    activation."""
+    store = _store_with_memories(tmp_path)
+    log, cs, disp = _runtime()
+    composer = _composer(cs, store.entries())
+    engine = _engine_reading(log, cs, composer, store, "deploy-process")
+    task = engine.create_task(goal="g", policy_name="scripted")
+    disp.enqueue(task.task_id)
+    lease = disp.lease(worker_id="w-mem")
+    assert lease is not None
+    task = append_user_message_with_recall(
+        engine, task, content=[TextBlock(text="hello there")],
+        lease_id=lease.lease_id, store=store,
+    )
+    task = engine.run_one_step(task, lease_id=lease.lease_id)  # read, reply, park
+    assert len(task.runtime.messages) == 4
+    task.context.summary_ref = cs.put(
+        to_canonical_bytes("SUMMARY"), media_type="application/json"
+    )
+    task.context.summary_boundary = 4  # covers goal, read, result and reply
+    before = len(log.read(task.task_id))
+
+    task = append_user_message_with_recall(
+        engine, task, content=[TextBlock(text="how do we deploy?")],
+        lease_id=lease.lease_id, store=store,
+    )
+
+    assert len(log.read(task.task_id)) == before + 2  # goal + activation
+    assert set(task.state.active_content[MEMORY_KIND]) == {"deploy-process"}
+    dynamic = [
+        s for s in composer.compose(task).segments if s.name == "dynamic_suffix"
+    ][0]
+    texts = [m.content[0].text for m in dynamic.content]
+    assert texts[0] == "SUMMARY"
+    assert texts[1] == "how do we deploy?"
+    assert "Always run make deploy." in texts[2]
+    assert dynamic.content[2].origin == "memory"
 
 
 def test_recall_is_verbatim_copy_not_synthesis(tmp_path: Path) -> None:

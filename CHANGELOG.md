@@ -8,6 +8,29 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+Covers both packages: `noeta-runtime` gains a field on the intake seam's
+view, `noeta-sdk` uses it in the `memory` built-in.
+
+### Fixed — memory recall no longer re-injects a page the model already read
+
+- **`RecallView.visible_history`** (`noeta-runtime`): the intake seam now
+  hands every `reminder_provider` the rolling history the model still sees
+  verbatim — the recorded messages past the compaction boundary, all of them
+  while no summary stands — so a provider can learn what the model already
+  did in this task. Defaulted to `()`, so a hand-built view and every
+  existing provider are unaffected.
+- **Memory auto-recall is silent for a page the model loaded itself with
+  `memory_read`** (`noeta-sdk`, the `memory` built-in). Recall's "already in
+  context" set was only its own residents, so on a long-lived task a goal
+  naming a page the model had just read (a tier-1 hit) injected the whole
+  body a second time next to the tool result, and a tier-2 hit pointed the
+  model at a page it had already read. Recall now pairs the `memory_read`
+  calls in `visible_history` with their successful results and leaves those
+  names out of both tiers. A failed read (no such memory) does not count,
+  and once a compaction summary swallows the read the page is recallable
+  again — the tool result no longer reaches the model, so recall must serve
+  it. New `read_memory_names` next to `resident_memory_names`.
+
 ## [0.6.20] - 2026-09-13
 
 Covers `noeta-sdk` only: 0.6.19 → 0.6.20. `noeta-runtime` stays at 0.6.17;

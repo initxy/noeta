@@ -38,6 +38,7 @@ from noeta.execution.reminders import (
     run_reminder_providers,
 )
 from noeta.policies.stub import StubFinishPolicy
+from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.messages import Message, TextBlock
 from noeta.storage.memory import (
     InMemoryContentStore,
@@ -97,6 +98,39 @@ def test_recall_view_text_is_the_textblock_concatenation() -> None:
     )
     assert view.text == "first\nsecond"
     assert view.task_id is None  # opaque task -> defensive None
+    assert view.visible_history == ()  # opaque task -> nothing visible
+
+
+def test_recall_view_visible_history_stops_at_the_compaction_boundary() -> None:
+    """``visible_history`` is the rolling history the model still sees: every
+    recorded message while no summary stands, only the messages past
+    ``summary_boundary`` once a compaction summary covers the prefix — the
+    composer's own rule, so a provider reading it sees what the model does."""
+    engine, log, cs, task_id, lease_id = _engine_setup()
+    task = fold(log, cs, task_id)
+    for text in ("one", "two", "three"):
+        task = engine.append_user_message(
+            task, content=[TextBlock(text=text)], lease_id=lease_id
+        )
+    assert [m.role for m in task.runtime.messages] == ["user"] * 3
+
+    view = build_recall_view(task, [TextBlock(text="next")])
+    assert view.visible_history == tuple(task.runtime.messages)
+    assert all(isinstance(m, Message) for m in view.visible_history)
+
+    task.context.summary_ref = cs.put(
+        to_canonical_bytes("SUMMARY"), media_type="application/json"
+    )
+    task.context.summary_boundary = 2
+    view = build_recall_view(task, [TextBlock(text="next")])
+    assert [m.content[0].text for m in view.visible_history] == ["three"]
+
+    # A boundary past the end covers everything; a boundary without a summary
+    # covers nothing (the composer swaps no prefix in that case either).
+    task.context.summary_boundary = 99
+    assert build_recall_view(task, []).visible_history == ()
+    task.context.summary_ref = None
+    assert len(build_recall_view(task, []).visible_history) == 3
 
 
 # ---------------------------------------------------------------------------
