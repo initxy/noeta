@@ -485,6 +485,12 @@ class SdkHost(GenericEngineResolver):
     # per task id — a resumed task must resolve the same store. ``None`` ⇒ the
     # host-level chain.
     memory_root_resolver: Optional[Callable[[str], Optional[Path]]] = None
+    #: ``<workspace-environment>`` block switch. Workspace environment material
+    #: (not agent identity), so the activation tuple carries no flag and SdkHost
+    #: configures it directly. True (default) records the block once at task
+    #: start and renders it as the first semi-stable message; False wires no
+    #: environment pack at all — nothing recorded, nothing rendered.
+    environment_enabled: bool = True
     #: Project-instructions-file switch. Like memory, this is workspace environment
     #: material (not agent identity), so the activation tuple carries no flag and
     #: SdkHost configures it directly. When True, looks for NOETA.md → AGENTS.md in
@@ -2096,6 +2102,7 @@ class SdkHost(GenericEngineResolver):
                 "tool_enforcement": self.skill_tool_enforcement,
             },
             "workspace": {
+                "environment_enabled": self.environment_enabled,
                 "instructions_enabled": self.instructions_enabled,
                 "instructions_file": self.instructions_file,
             },

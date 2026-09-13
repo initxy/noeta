@@ -37,6 +37,7 @@ _LEGACY_PLUGIN_CONFIG_KEYS = {
     ),
     "memory": ("memory_dir", "global_memory_dir"),
     "workspace": (
+        "environment_enabled",
         "instructions_enabled",
         "instructions_file",
         "instructions_discovery",
