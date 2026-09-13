@@ -301,6 +301,14 @@ class HostConfig:
     max_background_subagents_per_root_task: int = (
         DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_ROOT_TASK
     )
+    #: The ``<workspace-environment>`` block switch, forwarded verbatim to
+    #: ``SdkHost.environment_enabled``. On by default: every session records the
+    #: workspace facts (directory, git repo flag, platform, task-start git
+    #: branch / status / date) once at task start and renders them as the first
+    #: semi-stable message. Off, the block is neither recorded nor rendered —
+    #: for a host that supplies its own working-directory and clock context and
+    #: does not want a second, task-start-frozen copy in front of the model.
+    environment_enabled: bool = True
     #: Project-instructions-file switch, forwarded verbatim to
     #: ``SdkHost.instructions_enabled``. When on, the session's workspace root
     #: is searched for ``NOETA.md`` → ``AGENTS.md`` (in that order) and the file

@@ -188,6 +188,7 @@ compile_options(options, *, plugins=None, preset_prompts=None)
 | `workflow_allowed` | `False` | 暴露 `run_workflow`（同时还需要具备委派能力） |
 | `max_background_jobs_per_root_task` | `8` | 超过上限时一次后台 `Bash` 会被拒绝，而不是排队 |
 | `max_background_subagents_per_root_task` | `8` | 对 `Task(background=True)` 同理 |
+| `environment_enabled` | `True` | 记录并渲染 `<workspace-environment>` 块（工作目录、是否 git 仓库、平台、任务开始时的 git 分支 / 状态 / 日期），作为 semi-stable 段的第一条消息；`False` 则完全不装配环境 pack——适合自己向模型提供目录与时钟上下文的宿主 |
 | `instructions_enabled` | `False` | 加载工作区根的 `NOETA.md`，否则 `AGENTS.md`，再否则 `CLAUDE.md` |
 | `instructions_file` | `None` | 只读这一个路径，不做搜索 |
 | `instructions_discovery` | `False` | 由 `Read` 触发的子目录 instructions 文件发现 |

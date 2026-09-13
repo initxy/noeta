@@ -8,6 +8,20 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Added — a host switch for the `<workspace-environment>` block
+
+- **`HostConfig.environment_enabled`** (default `True`, forwarded to
+  `SdkHost.environment_enabled`). `False` wires no environment pack at all:
+  the block is neither recorded at task start nor rendered into the
+  semi-stable segment. Until now the block was always on — a host that
+  already tells the model its working directory and the current time (and
+  whose agent may not even carry the `Read` / `Edit` / `Glob` / `Grep`
+  tools the block's resolution line names) had no way to drop the second,
+  task-start-frozen copy: the `Captured at:` stamp is the host machine's
+  local time taken once per task (first write wins, also across resumes),
+  so a long-lived task showed the model a stale clock next to the host's
+  live one. The default keeps every existing session byte-identical.
+
 ## [0.6.18] - 2026-09-06
 
 Covers `noeta-sdk` only: 0.6.16 → 0.6.18 (0.6.17 was the runtime-only

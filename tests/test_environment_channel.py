@@ -1,7 +1,8 @@
-"""Workspace environment block — the always-on content channel.
+"""Workspace environment block — the on-by-default content channel.
 
 Unlike the instructions and memory channels this one is registered and
-activated for every task (a workspace always exists), and it renders into
+activated for every task (a workspace always exists) unless the host turns it
+off (``environment_enabled=False``), and it renders into
 ``semi_stable`` rather than the system prompt: the block carries an absolute
 workspace path, so putting it in the prompt would rotate the ``stable_prefix``
 hash per host and bust prompt caching. These pin the fact capture, the
@@ -415,7 +416,13 @@ def _end_response() -> LLMResponse:
     )
 
 
-def _server_host(ws: Path, *, instructions_enabled: bool = False, runtime=None):
+def _server_host(
+    ws: Path,
+    *,
+    instructions_enabled: bool = False,
+    environment_enabled: bool = True,
+    runtime=None,
+):
     """A real ``SdkHost`` over an in-memory runtime, driven through
     ``InteractionDriver`` — task creation goes via ``driver.start``.
     ``runtime`` reuses an existing ``(event_log, content_store, dispatcher)``
@@ -440,11 +447,27 @@ def _server_host(ws: Path, *, instructions_enabled: bool = False, runtime=None):
         write_mode=FsWriteMode.DRY_RUN,
         shell_mode=ShellMode.OFF,
         instructions_enabled=instructions_enabled,
+        environment_enabled=environment_enabled,
         policy_wrapper=multi_turn_policy_wrapper,
         registry=official_agent_registry(),
         aliases={"default": "main"},
     )
     return host, event_log, content_store
+
+
+def _env_blocks(host, task_id: str) -> list[str]:
+    """The ``<workspace-environment>`` texts the composer renders for ``task_id``."""
+    folded = fold(host.event_log, host.content_store, task_id)
+    view = host.resolve_engine_for_agent(
+        "main", model="stub-model"
+    )._composer.compose(folded)  # noqa: SLF001
+    return [
+        block.text
+        for seg in view.segments
+        for msg in seg.content
+        for block in msg.content
+        if hasattr(block, "text") and "workspace-environment" in block.text
+    ]
 
 
 def test_server_seed_start_records_environment(tmp_path: Path) -> None:
@@ -572,6 +595,93 @@ def test_server_seed_start_skips_instructions_when_disabled(tmp_path: Path) -> N
     }
     assert ENVIRONMENT_KIND in kinds
     assert INSTRUCTIONS_KIND not in kinds
+
+
+def test_server_seed_start_skips_environment_when_disabled(tmp_path: Path) -> None:
+    """``environment_enabled=False`` → the pack contributes nothing: no
+    ``ContextContentRecorded`` for the environment kind, nothing active, and
+    no ``<workspace-environment>`` block anywhere in the composed view — while
+    the instructions resident (its own switch) still records."""
+    from noeta.builtins.workspace.impl import INSTRUCTIONS_KIND
+    from noeta.execution.driver import InteractionDriver
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / ".git").mkdir()
+    (ws / "AGENTS.md").write_text("# rules\n", encoding="utf-8")
+    host, event_log, _cs = _server_host(
+        ws, instructions_enabled=True, environment_enabled=False
+    )
+    driver = InteractionDriver(host)
+
+    outcome = driver.start(goal="hello", agent="main")
+
+    kinds = {
+        getattr(e.payload, "kind", "")
+        for e in event_log.read(outcome.task_id)
+        if e.type == "ContextContentRecorded"
+    }
+    assert ENVIRONMENT_KIND not in kinds
+    assert INSTRUCTIONS_KIND in kinds
+    folded = fold(event_log, host.content_store, outcome.task_id)
+    assert ENVIRONMENT_KIND not in folded.state.active_content
+    assert _env_blocks(host, outcome.task_id) == []
+
+
+def test_environment_disabled_stays_off_across_resume(tmp_path: Path) -> None:
+    """A second host over the same stores (a resume in a fresh process) with
+    the switch still off records nothing either — the off state is a host
+    fact, not a first-turn accident."""
+    from noeta.execution.driver import InteractionDriver
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    host, event_log, content_store = _server_host(ws, environment_enabled=False)
+    first = InteractionDriver(host).start(goal="round one", agent="main")
+    assert first.status == "suspended"
+
+    host2, _log2, _cs2 = _server_host(
+        ws,
+        environment_enabled=False,
+        runtime=(event_log, content_store, host.dispatcher),
+    )
+    InteractionDriver(host2).send_goal(first.task_id, goal="round two")
+
+    env_events = [
+        e
+        for e in event_log.read(first.task_id)
+        if e.type == "ContextContentRecorded"
+        and getattr(e.payload, "kind", "") == ENVIRONMENT_KIND
+    ]
+    assert env_events == []
+    assert _env_blocks(host2, first.task_id) == []
+
+
+def test_product_session_environment_disabled_renders_nothing(tmp_path: Path) -> None:
+    """The same switch through the product host wiring (``make_host`` forwards
+    it verbatim to ``SdkHost``): one-shot session, block absent end to end."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / ".git").mkdir()
+    host = make_host(
+        make_registry(runner_main_spec("main")),
+        workspace_dir=ws,
+        provider=FakeLLMProvider(responses=[_end_response()]),
+        model="stub-model",
+        multi_turn=False,
+        write_mode=FsWriteMode.DRY_RUN,
+        shell_mode=ShellMode.OFF,
+        environment_enabled=False,
+    )
+    out = make_driver(host).start(goal="hi", agent="main")
+    assert out.status == "terminal"
+    assert not [
+        e
+        for e in host.event_log.read(out.task_id)
+        if e.type == "ContextContentRecorded"
+        and getattr(e.payload, "kind", "") == ENVIRONMENT_KIND
+    ]
+    assert _env_blocks(host, out.task_id) == []
 
 
 def test_product_session_records_and_renders_environment(tmp_path: Path) -> None:

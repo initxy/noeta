@@ -418,12 +418,22 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
 def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution:
     """The environment resident as a ``session_pack`` contribution (band 500).
 
-    Always on (a workspace always exists): captures the workspace facts once
-    per engine build so the composer's renderer AND the pre-loop ``_init``
-    recording share the same snapshot, and contributes the environment
-    content kind LAST of the built-in residents (kind band 400) so the
-    semi_stable byte layout is unchanged for sessions that never activate it.
+    On by default (a workspace always exists): captures the workspace facts
+    once per engine build so the composer's renderer AND the pre-loop
+    ``_init`` recording share the same snapshot, and contributes the
+    environment content kind LAST of the built-in residents (kind band 400)
+    so the semi_stable byte layout is unchanged for sessions that never
+    activate it.
+
+    The host switch ``environment_enabled`` (this plugin's own config entry,
+    ``HostConfig.environment_enabled`` → ``SdkHost.environment_enabled``)
+    turns the resident off: the pack then contributes nothing — no content
+    kind, no recording, no rendered block — for a host that supplies its own
+    working-directory and clock context to the model. Read here and nowhere
+    else, so the composer and the seed recording can never disagree.
     """
+    if not bool(ctx.config("workspace").get("environment_enabled", True)):
+        return PackContribution()
     snapshot = load_environment(ctx.workspace_dir, exec_env=ctx.exec_env)
     content_store = ctx.content_store
 

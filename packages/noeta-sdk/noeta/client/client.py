@@ -681,6 +681,10 @@ class Client:
             max_background_subagents_per_root_task=(
                 hc.max_background_subagents_per_root_task
             ),
+            # The workspace environment block: on by default, a host that
+            # supplies its own directory / clock context turns it off through
+            # HostConfig.
+            environment_enabled=hc.environment_enabled,
             # Workspace instruction files: the root NOETA.md / AGENTS.md at
             # session start, and the subdirectory files discovered as the model
             # reads (anchored-content placement ADR). Both off by default; a

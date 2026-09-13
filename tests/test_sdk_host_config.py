@@ -49,6 +49,7 @@ def test_empty_host_config_is_inert() -> None:
     assert hc.mcp_server_resolver is None
     assert hc.workflow_allowed is False
     assert hc.instructions_discovery is False
+    assert hc.environment_enabled is True
 
 
 def test_storage_triple_is_all_or_none() -> None:
@@ -158,6 +159,7 @@ def test_host_injections_reach_the_host(tmp_path: Path) -> None:
             provider_headers=headers,
             workflow_allowed=True,
             instructions_discovery=True,
+            environment_enabled=False,
         ),
     )
     try:
@@ -166,6 +168,7 @@ def test_host_injections_reach_the_host(tmp_path: Path) -> None:
         assert client._host.provider_headers is headers
         assert client._host.workflow_allowed is True
         assert client._host.instructions_discovery is True
+        assert client._host.environment_enabled is False
     finally:
         client.shutdown()
 
