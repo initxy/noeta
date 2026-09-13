@@ -32,7 +32,7 @@ from typing import (
 
 from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.events import CONTENT_DRIFT_POLICIES
-from noeta.protocols.messages import Block, MessageOrigin, TextBlock
+from noeta.protocols.messages import Block, Message, MessageOrigin, TextBlock
 
 
 __all__ = [
@@ -151,6 +151,14 @@ class RecallView:
     #: supply it.
     task_state: Optional[Any]
     workspace_path: Optional[Path]
+    #: The rolling history the model still sees verbatim: the recorded
+    #: messages past the compaction boundary (all of them while no summary
+    #: stands), in ledger order. A summary-covered turn is left out because the
+    #: model no longer has it — only the summary's prose — so a provider that
+    #: reads this to learn what the model already did (which tools it ran,
+    #: which pages it loaded) sees exactly what the model does. ``()`` when the
+    #: seam cannot supply it.
+    visible_history: tuple[Message, ...] = ()
 
     @property
     def text(self) -> str:
@@ -211,13 +219,30 @@ def build_recall_view(
     Reads the task defensively so a caller holding only an opaque task handle —
     before the full task is materialised, say — still gets a legal view; a
     provider that needs a field the seam could not supply sees ``None``.
+
+    ``visible_history`` applies the composer's own boundary rule: with a
+    compaction summary standing (``ContextState.summary_ref`` set) the first
+    ``summary_boundary`` messages are covered and dropped, otherwise every
+    recorded message is visible.
     """
     return RecallView(
         task_id=getattr(task, "task_id", None),
         message=tuple(content),
         task_state=getattr(task, "state", None),
         workspace_path=workspace_path,
+        visible_history=_visible_history(task),
     )
+
+
+def _visible_history(task: Any) -> tuple[Message, ...]:
+    messages = getattr(getattr(task, "runtime", None), "messages", None)
+    if not isinstance(messages, Sequence):
+        return ()
+    boundary = 0
+    context = getattr(task, "context", None)
+    if getattr(context, "summary_ref", None) is not None:
+        boundary = max(0, min(int(getattr(context, "summary_boundary", 0)), len(messages)))
+    return tuple(messages[boundary:])
 
 
 def run_reminder_providers(

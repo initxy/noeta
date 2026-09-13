@@ -12,7 +12,13 @@ A recalled **body** enters a task once: a tier-1 hit rides as a
 same name on a later goal of the same task costs nothing, and the resident
 survives compaction by re-hanging after the summary), while pointers — tier-2
 hits, judge picks, over-budget bodies — ride the ``origin="memory"`` follow-up
-turn as before. A name already resident in the task is silent in both tiers.
+turn as before. A name already resident in the task is silent in both tiers —
+and so is a memory the model loaded itself with ``memory_read`` while that
+read still sits in the history the model sees (the seam's
+``RecallView.visible_history``, which stops at the compaction boundary): the
+page is already in context as a tool result, so recall must neither inject the
+body again nor point at a page the model has already read. Once a compaction
+summary swallows the read, the page is recallable again.
 
 The ``memory`` built-in plugin's manifest declares
 :func:`memory_reminder_provider` on the ``reminder_provider`` surface (the
@@ -21,7 +27,7 @@ listing / reference declaration); the store binding stays host wiring.
 
 from __future__ import annotations
 
-from typing import Any, Collection, Mapping, Optional
+from typing import Any, Collection, Iterable, Mapping, Optional
 
 from noeta.builtins.memory.impl.index import (
     MEMORY_BODY_VERSION,
@@ -43,13 +49,19 @@ from noeta.execution.reminders import (
     ResidentActivation,
     record_intake_reminders,
 )
-from noeta.protocols.messages import Block, MessageOrigin
-from noeta.builtins.memory.impl.store import MemoryStore
+from noeta.protocols.messages import (
+    Block,
+    MessageOrigin,
+    ToolResultBlock,
+    ToolUseBlock,
+)
+from noeta.builtins.memory.impl.store import MEMORY_READ_TOOL_NAME, MemoryStore
 
 
 __all__ = [
     "append_user_message_with_recall",
     "memory_reminder_provider",
+    "read_memory_names",
     "recall_memories",
     "resident_memory_names",
 ]
@@ -68,6 +80,38 @@ def resident_memory_names(task_state: Any) -> frozenset[str]:
         return frozenset()
     names = active.get(MEMORY_KIND, {})
     return frozenset(n for n in names if n != MEMORY_INDEX_NAME)
+
+
+def read_memory_names(history: Iterable[Any]) -> frozenset[str]:
+    """The memories the model loaded itself with ``memory_read`` in ``history``.
+
+    Pairs each ``memory_read`` ``ToolUseBlock`` with its ``ToolResultBlock``
+    on ``call_id`` and keeps the name only when the read succeeded — a failed
+    read (no such memory, an invalid name) loaded nothing, so the name stays
+    recallable. Called on the seam's ``RecallView.visible_history`` (the
+    rolling history past the compaction boundary), never on the whole ledger:
+    a read whose result a summary has swallowed is a page the model no longer
+    has, and recall must serve it again. A truncated read still counts — what
+    the model saw is longer than any body recall would inject.
+    """
+    requested: dict[str, str] = {}
+    names: set[str] = set()
+    for message in history:
+        for block in getattr(message, "content", ()):
+            if (
+                isinstance(block, ToolUseBlock)
+                and block.tool_name == MEMORY_READ_TOOL_NAME
+                and isinstance(block.arguments, Mapping)
+                and isinstance(block.arguments.get("name"), str)
+            ):
+                requested[block.call_id] = block.arguments["name"]
+            elif (
+                isinstance(block, ToolResultBlock)
+                and block.success
+                and block.call_id in requested
+            ):
+                names.add(requested[block.call_id])
+    return frozenset(names)
 
 
 def recall_memories(
@@ -98,13 +142,15 @@ def recall_memories(
     reads exactly like a complete one. Budget is spent in hit order, so the
     high-confidence early hits keep their bodies and the tail degrades.
 
-    **And a resident is silent.** ``resident`` names the memories already
-    active as residents of this task (:func:`resident_memory_names`); they
-    leave the candidate set before matching, in both tiers, so they neither
-    take a hit slot nor spend budget — the body is already in context, placed
-    by its anchor and re-hung across compaction. A memory that happens to be
-    named like the index resident can never ride full (it would overwrite the
-    index's activation), so it degrades to a pointer.
+    **And a resident is silent.** ``resident`` names the memories already in
+    context: the residents of this task (:func:`resident_memory_names`) and
+    the pages the model loaded itself with ``memory_read``
+    (:func:`read_memory_names`). They leave the candidate set before matching,
+    in both tiers, so they neither take a hit slot nor spend budget — the
+    body is already there, as a resident placed by its anchor and re-hung
+    across compaction, or as the tool result the model asked for. A memory
+    that happens to be named like the index resident can never ride full (it
+    would overwrite the index's activation), so it degrades to a pointer.
     """
     skip = frozenset(resident)
     entries = tuple(e for e in store.entries() if e[0] not in skip)
@@ -144,7 +190,10 @@ def memory_reminder_provider(
     miss). Names already resident in the task (``view.task_state``'s
     activation map) are silent in both tiers, which is what makes a
     long-lived task's eleventh goal cost nothing for a memory its first goal
-    already recalled. Bound to a live ``store`` at wiring time, exactly like
+    already recalled; so are the pages the model loaded itself with
+    ``memory_read`` while that read is still in ``view.visible_history``, so
+    a goal that names a page the model just read neither injects the body a
+    second time nor points at it. Bound to a live ``store`` at wiring time, exactly like
     the memory tools — the ``memory`` built-in plugin *declares* this provider
     (the listing surface), while the store binding stays host wiring.
 
@@ -156,7 +205,9 @@ def memory_reminder_provider(
     to a bare-name pointer, same as any tier-2 hit with no summary.
     """
     def provider(view: RecallView) -> tuple[IntakeItem, ...]:
-        resident = resident_memory_names(view.task_state)
+        resident = resident_memory_names(view.task_state) | read_memory_names(
+            getattr(view, "visible_history", ())
+        )
         hits = recall_memories(store, view.text, resident=resident)
         if not hits and judge is not None:
             entries = tuple(

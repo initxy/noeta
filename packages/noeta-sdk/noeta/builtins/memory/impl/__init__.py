@@ -36,6 +36,7 @@ from noeta.builtins.memory.impl.judge import (
 from noeta.builtins.memory.impl.recall import (
     append_user_message_with_recall,
     memory_reminder_provider,
+    read_memory_names,
     recall_memories,
     resident_memory_names,
 )
@@ -79,6 +80,7 @@ __all__ = [
     "build_memory_tools",
     "load_memory_store",
     "memory_reminder_provider",
+    "read_memory_names",
     "recall_memories",
     "resident_memory_names",
 ]
