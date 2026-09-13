@@ -8,6 +8,12 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.20] - 2026-09-13
+
+Covers `noeta-sdk` only: 0.6.19 → 0.6.20. `noeta-runtime` stays at 0.6.17;
+the fix lives in the `providers` built-in, so the sdk's
+`noeta-runtime>=0.6.16` floor is unchanged.
+
 ### Fixed — the Anthropic prompt-cache breakpoint no longer sits on the reminder tail
 
 - **`AnthropicProvider` anchors its messages-side `cache_control` breakpoint
@@ -2184,6 +2190,7 @@ Initial preview release.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
 [Unreleased]: https://github.com/initxy/noeta/compare/v0.6.19...HEAD
+[0.6.20]: https://github.com/initxy/noeta/compare/v0.6.19...v0.6.20
 [0.6.19]: https://github.com/initxy/noeta/compare/v0.6.18...v0.6.19
 [0.6.18]: https://github.com/initxy/noeta/compare/v0.6.17...v0.6.18
 [0.6.17]: https://github.com/initxy/noeta/compare/v0.6.16...v0.6.17
