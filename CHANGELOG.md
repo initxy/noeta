@@ -8,8 +8,14 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
-Covers both packages: `noeta-runtime` gains a field on the intake seam's
-view, `noeta-sdk` uses it in the `memory` built-in.
+## [0.6.21] - 2026-09-13
+
+Covers both packages, lockstep: `noeta-runtime` 0.6.17 → 0.6.21 (0.6.18 to
+0.6.20 were sdk-only tags, and one tag gates each publish job on its own
+version, so the runtime skips those numbers) and `noeta-sdk` 0.6.20 → 0.6.21.
+The runtime gains a field on the intake seam's view and the sdk's `memory`
+built-in reads it, so the sdk's floor rises to `noeta-runtime>=0.6.21` — on
+an older runtime the sdk imports fine but the fix below stays inert.
 
 ### Fixed — memory recall no longer re-injects a page the model already read
 
@@ -2212,7 +2218,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.19...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.21...HEAD
+[0.6.21]: https://github.com/initxy/noeta/compare/v0.6.20...v0.6.21
 [0.6.20]: https://github.com/initxy/noeta/compare/v0.6.19...v0.6.20
 [0.6.19]: https://github.com/initxy/noeta/compare/v0.6.18...v0.6.19
 [0.6.18]: https://github.com/initxy/noeta/compare/v0.6.17...v0.6.18
