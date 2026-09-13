@@ -287,6 +287,19 @@ class AnthropicProvider:
         # plain consecutive user turns keep their 1:1 rendering.
         outbound_messages: list[dict[str, Any]] = []
         prev_injected = False
+        # The messages-side prompt-cache breakpoint lands on the last wire
+        # block of the last message that is NOT host-injected. Compose-time
+        # reminders ride the request tail as injected user turns and are
+        # re-derived on every compose, never recorded: the next step resends
+        # the same history with a different (or absent) tail. Anthropic only
+        # writes a cache entry at the breakpoint and only ever reads back
+        # entries earlier requests wrote, so a breakpoint on a reminder keys
+        # the entry to bytes no later request repeats — every earlier
+        # position stays unwritten and the whole conversation misses, each
+        # step. Anchoring on the last recorded block leaves only the volatile
+        # tail outside the cache. ``None`` (every message injected) falls back
+        # to the last block in ``_apply_cache_control``.
+        breakpoint_block: Optional[dict[str, Any]] = None
         for message in request.messages:
             if message.role == "system":
                 raise ValueError(
@@ -294,6 +307,11 @@ class AnthropicProvider:
                 )
             wire = _message_to_anthropic(message, self._image_resolver, vision)
             injected = is_host_injected(message)
+            if not injected and wire["content"]:
+                # The block dict is shared by reference with the outbound
+                # list (merging below spreads the same dicts), so stamping it
+                # later lands on the wire body.
+                breakpoint_block = wire["content"][-1]
             if (
                 (injected or prev_injected)
                 and wire["role"] == "user"
@@ -332,7 +350,7 @@ class AnthropicProvider:
             )
         # ``cache_control`` is an Anthropic wire concern and must never reach
         # LLMRequest / request_ref, so it is stamped on the just-built body.
-        _apply_cache_control(body)
+        _apply_cache_control(body, message_block=breakpoint_block)
         if request.temperature is not None:
             body["temperature"] = request.temperature
         if request.output_schema is not None:
@@ -795,7 +813,9 @@ def _tool_result_text(block: ToolResultBlock) -> str:
 _CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
 
 
-def _apply_cache_control(body: dict[str, Any]) -> None:
+def _apply_cache_control(
+    body: dict[str, Any], *, message_block: Optional[dict[str, Any]] = None
+) -> None:
     """Stamp ephemeral prompt-cache breakpoints onto the outbound wire body.
 
     Mutates ``body`` in place; the caller passes the just-built wire dict, so
@@ -812,10 +832,18 @@ def _apply_cache_control(body: dict[str, Any]) -> None:
       ``[{"type":"text","text":...,"cache_control":...}]`` — Anthropic requires
       block (not bare-string) shape to carry cache_control. Caches
       tools + system, i.e. the bulk of the stable bytes.
-    * **last message's last content block**: stamp the final content block —
-      caches tools + system + the growing conversation up to that point. Every
-      wire content block is already a dict here, so it can carry the field
-      directly.
+    * **last recorded content block**: stamp ``message_block`` — the last wire
+      block of the last message that is not host-injected, chosen by the
+      caller while translating — so the entry covers tools + system + the
+      conversation up to the last block the next request will resend
+      byte-identically. The trailing host injections (compose-time reminders,
+      re-derived per compose and never recorded) stay outside the entry: a
+      breakpoint on one of them keys the entry to bytes the next step drops,
+      and since Anthropic reads back only positions an earlier request wrote,
+      the whole conversation would miss on every step. ``None`` — every
+      message is injected — falls back to the last block of the last message.
+      Every wire content block is already a dict here, so it can carry the
+      field directly.
 
     (The stamps are applied system-first below purely because the system block
     needs re-shaping first; order of application is irrelevant — only wire
@@ -837,9 +865,13 @@ def _apply_cache_control(body: dict[str, Any]) -> None:
 
     messages = body.get("messages")
     if isinstance(messages, list) and messages:
-        last_content = messages[-1].get("content")
-        if isinstance(last_content, list) and last_content:
-            last_content[-1]["cache_control"] = dict(_CACHE_CONTROL_EPHEMERAL)
+        target = message_block
+        if target is None:
+            last_content = messages[-1].get("content")
+            if isinstance(last_content, list) and last_content:
+                target = last_content[-1]
+        if target is not None:
+            target["cache_control"] = dict(_CACHE_CONTROL_EPHEMERAL)
 
 
 def _translate_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:

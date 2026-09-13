@@ -8,6 +8,31 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed — the Anthropic prompt-cache breakpoint no longer sits on the reminder tail
+
+- **`AnthropicProvider` anchors its messages-side `cache_control` breakpoint
+  on the last *recorded* block** — the last wire block of the last message
+  that is not host-injected — instead of the last block of the request.
+  Compose-time reminders (`unfinished-todos`, `delegation-nudge`,
+  `read-suggestion`, the react built-in's `collapsed-context`, any plugin
+  `reminder`) ride the request tail as `origin="system"` user turns that are
+  re-derived on every compose and never recorded, so the next step resends
+  the same history under a different or absent tail. Anthropic writes a
+  cache entry only at the breakpoint and reads back only positions an
+  earlier request wrote, so a breakpoint on a reminder keyed the entry to
+  bytes no later request repeated: whenever any reminder rendered, every
+  earlier prefix position stayed unwritten and the whole conversation past
+  `system` + `tools` was re-written at cache-write price on every step. The
+  default `main` preset was hit from its first step (the delegation nudge
+  renders until the first spawn), any task with an unfinished todo list
+  likewise, and every task after its first compaction (the
+  `collapsed-context` reminder renders for the rest of the task). Trailing
+  *recorded* injections (a `turn_intake` reminder, a memory pointer) are
+  walked over too — they enter the entry one step later, unharmed. With
+  every message injected (degenerate) the last block still carries it.
+  Recorded request bytes are unchanged (`cache_control` never enters
+  `request_ref`).
+
 ## [0.6.19] - 2026-09-13
 
 Covers `noeta-sdk` only: 0.6.18 → 0.6.19. `noeta-runtime` stays at 0.6.17;
