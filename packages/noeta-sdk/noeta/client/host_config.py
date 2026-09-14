@@ -255,6 +255,23 @@ class HostConfig:
     #: task must resolve the same store. ``None`` ⇒ the host-level chain above.
     memory_root_resolver: Optional[Callable[[str], Optional[Path]]] = None
 
+    # -- skill menu ranking --------------------------------------------------
+    #: Per-task keep order for the ``skill`` control tool's roster: given a
+    #: task id, return ``{skill name: score}`` (higher keeps its summary
+    #: longer when the roster is over budget) or ``None`` for no ranking.
+    #: The same tenancy seam as ``memory_root_resolver`` — the SDK hands over
+    #: task ids, the product maps them to tenants — and the same contract:
+    #: cheap, total, and deterministic for a given task id, because the
+    #: roster is composed once per build and a resumed task must compose the
+    #: same bytes. Fold a tenant's ledger with ``skill_usage_from_events`` /
+    #: ``rank_skills_by_usage`` to derive one. Reaches the ``skills`` pack as
+    #: ``plugin_config["skills"]["menu_rank"]``; a static host-wide ranking
+    #: can be set there directly instead. ``None`` ⇒ tier + ``priority``
+    #: order only.
+    skill_menu_rank_resolver: Optional[
+        Callable[[str], Optional[Mapping[str, float]]]
+    ] = None
+
     # -- plugin operator config ---------------------------------------------
     #: Operator config per plugin: ``plugin name -> {key: value}``, reaching a
     #: ``session_pack`` factory as ``SessionBuildContext.config("<plugin

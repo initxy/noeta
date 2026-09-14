@@ -33,6 +33,12 @@ from noeta.client.consolidation import (
     consolidation_due,
     run_consolidation,
 )
+from noeta.client.skill_usage import (
+    SkillUsage,
+    decayed_usage_score,
+    rank_skills_by_usage,
+    skill_usage_from_events,
+)
 from noeta.client.host_config import HostConfig, SandboxExecEnvConfig
 # The factory seam types behind ``HostConfig.sandbox_backend_factory`` /
 # ``sandbox_browser_factory``, so a host can annotate its injected factories
@@ -233,6 +239,10 @@ __all__ = [
     "run_consolidation",
     "consolidation_due",
     "build_consolidation_digest",
+    "SkillUsage",
+    "skill_usage_from_events",
+    "rank_skills_by_usage",
+    "decayed_usage_score",
     # the typed chat turn-boundary marker — a host's session-stop seam
     # recognizes the trailing next-goal suspend by this wake handle
     "NEXT_GOAL_WAKE_HANDLE",

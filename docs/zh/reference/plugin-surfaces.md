@@ -185,6 +185,8 @@ host · host-wired · 冲突 `none` · sorted。一个纯资源 Surface：一个
 
 所以用户自己工作区里的技能永远会盖住同名的插件技能。这些技能包由与其他各层相同的 `SkillIndexer` 建索引，因此整套 frontmatter 契约——`disable-model-invocation`、`allowed-tools`、`priority`——它们全都白拿。
 
+`plugin_config["skills"]` 下还有两个键决定 `skill` control tool 渲染出来的技能列表长什么样。`menu_budget_tokens` 给整张列表定一个总预算（按估算 token 计，中日韩字符按一个字一个 token 算）；host 会按所绑定模型上下文窗口的 1% 推出来，在这里写一个值就直接替换掉。`menu_rank`（`技能名 -> 分数`）是列表超预算时的保留顺序：分数高的先保住摘要，然后是工作区层先于借入层，再按 frontmatter `priority`，最后按名字；排不上的只留名字。按任务给的排序改走 `HostConfig.skill_menu_rank_resolver`（见 [SDK 选项](sdk-options.md)）。
+
 **路径必须是绝对路径。** 同一份 manifest 可能从 wheel 的 package data、一个裸 `.toml`、或者一个单文件 `.py` 读出来，而这几种来源对"相对路径相对于什么"并无共识；与其让它随安装方式不同而指向不同目录，加载器直接以一个指名该插件的 `PluginError` 拒绝。用模块自身的位置拼出来：`str(Path(__file__).parent / "skills")`。一个磁盘上不存在的路径**不是**错误——它索引成一个空层，因此一个按条件发布的技能包只是什么都不贡献而已。
 
 ```toml

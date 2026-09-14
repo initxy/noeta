@@ -12,7 +12,9 @@ the plugin loader's ``ref`` resolution.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+import logging
+import re
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from noeta.execution.control_tool import (
     ControlToolBuildContext,
@@ -37,12 +39,19 @@ from .indexer import strip_argument_placeholder
 
 
 __all__ = [
+    "DEFAULT_MENU_BUDGET_TOKENS",
     "MENU_DESCRIPTION_MAX_CHARS",
     "SKILL_TOOL",
+    "estimate_menu_tokens",
+    "fit_menu_to_budget",
+    "menu_keep_order",
     "skill_tool_schema",
     "make_skill_translate",
     "make_skills_control_tool",
 ]
+
+
+_log = logging.getLogger(__name__)
 
 
 #: Model-visible **control** tool name for model-driven skill menu selection.
@@ -57,6 +66,61 @@ SKILL_TOOL = "skill"
 MENU_DESCRIPTION_MAX_CHARS = 1024
 
 _TRUNCATION_MARKER = "… (truncated)"
+
+#: Total roster budget, in estimated tokens, when the host passes no
+#: ``menu_budget_tokens`` — 1 % of a 200k-token window, the same fraction the
+#: host derives from the bound model's catalog window. The per-skill cap
+#: above bounds one entry; this bounds the whole roster, which is what a
+#: workspace with a hundred skills actually pays for on every turn.
+DEFAULT_MENU_BUDGET_TOKENS = 2000
+
+#: The kernel's ``chars/4`` heuristic, applied to the non-CJK part of a
+#: summary. A Han / Kana / Hangul character is counted as one token instead:
+#: skill summaries are routinely written in Chinese, and ``chars/4`` would
+#: under-count them three- to four-fold, making the budget a fiction exactly
+#: where it matters.
+_CHARS_PER_TOKEN = 4
+
+#: One character = one token for these scripts. A compiled class rather than
+#: a per-character range walk: a 200-skill Chinese roster is scanned a few
+#: times per build, and the walk cost ~10× the regex.
+_CJK_CHAR = re.compile(
+    "["
+    "\u1100-\u11ff"  # Hangul Jamo
+    # CJK symbols and punctuation, Hiragana, Katakana, Bopomofo, Hangul
+    # compatibility Jamo, Kanbun, CJK strokes, enclosed CJK, CJK compatibility
+    "\u3000-\u33ff"
+    "\u3400-\u4dbf"  # CJK unified ideographs extension A
+    "\u4e00-\u9fff"  # CJK unified ideographs
+    "\uac00-\ud7af"  # Hangul syllables
+    "\uf900-\ufaff"  # CJK compatibility ideographs
+    "\uff00-\uffef"  # halfwidth and fullwidth forms
+    "\U00020000-\U0002ffff"  # CJK unified ideographs extensions B–F
+    "]"
+)
+
+
+def _is_cjk(ch: str) -> bool:
+    return _CJK_CHAR.fullmatch(ch) is not None
+
+
+def estimate_menu_tokens(text: str) -> int:
+    """Deterministic, CJK-aware token estimate for one piece of roster text.
+
+    A budgeting unit, not a billed count — like the kernel's
+    ``estimate_text_tokens`` it only has to be stable and monotone. CJK
+    characters count one each; the rest ``ceil(n / 4)``.
+    """
+    cjk = len(_CJK_CHAR.findall(text))
+    other = len(text) - cjk
+    return cjk + (other + _CHARS_PER_TOKEN - 1) // _CHARS_PER_TOKEN
+
+
+#: The roster joins entries with this separator (see ``enum_roster_prop``);
+#: the cost model charges it per entry so the estimate tracks the rendered
+#: string rather than the bare summaries.
+_ROSTER_SEPARATOR = "; "
+_ROSTER_DASH = " — "
 
 
 _SKILL_DESCRIPTION = load_markdown(__package__, "skill")
@@ -213,8 +277,105 @@ def _menu_description(text: str) -> str:
     return text[:keep] + _TRUNCATION_MARKER
 
 
+def _tier_of(registry: Any, name: str) -> int:
+    """``registry.tier_of(name)`` when the registry keeps tiers, else ``0``.
+
+    Duck-typed so a synthetic registry (a test double, a host's own) that
+    offers only ``names()`` / ``get()`` still builds a menu."""
+    tier_of = getattr(registry, "tier_of", None)
+    if tier_of is None:
+        return 0
+    return int(tier_of(name))
+
+
+def menu_keep_order(
+    registry: Any,
+    names: Sequence[str],
+    rank: Optional[Mapping[str, float]] = None,
+) -> tuple[str, ...]:
+    """``names`` in the order their summaries are worth keeping.
+
+    Highest first: the host's ``rank`` score (a per-task, per-tenant signal —
+    usage-derived or hand-set — absent names score ``0``), then the merge
+    tier (workspace-local above global above built-in / borrowed), then the
+    frontmatter ``priority`` (ascending, the render-order convention), then
+    the name. Every key is fixed at session build, so the same registry and
+    rank always yield the same order — and the same roster bytes.
+    """
+
+    scores: Mapping[str, float] = rank if rank is not None else {}
+
+    def key(name: str) -> tuple[float, int, int, str]:
+        desc = registry.get(name)
+        priority = getattr(desc, "priority", 0) if desc is not None else 0
+        return (
+            -float(scores.get(name, 0.0)),
+            -_tier_of(registry, name),
+            int(priority),
+            name,
+        )
+
+    return tuple(sorted(names, key=key))
+
+
+def _entry_tokens(name: str, description: str) -> int:
+    """Estimated cost of one rendered roster entry plus its separator."""
+    text = name + (_ROSTER_DASH + description if description else "")
+    return estimate_menu_tokens(text + _ROSTER_SEPARATOR)
+
+
+def fit_menu_to_budget(
+    entries: Sequence[tuple[str, str]],
+    keep_order: Sequence[str],
+    budget_tokens: int,
+) -> frozenset[str]:
+    """The names whose summary must be dropped for the roster to fit.
+
+    The cost model is the rendered roster: every entry pays for its name (a
+    name is never dropped — the ``enum`` must list every skill the model may
+    activate), and a summary pays its increment over the bare name. Below the
+    budget nothing is dropped, so today's rosters are byte-identical. Over it,
+    summaries are kept greedily in ``keep_order`` while their increment still
+    fits — a later, shorter summary can still fit after a longer one was
+    skipped, the same greedy Claude Code's listing uses — and the rest go
+    name-only. A names-only roster that already exceeds the budget drops every
+    summary: the entry count is the workspace's to trim.
+
+    Every entry is charged exactly once: ``keep_order`` first (duplicates
+    collapsed to their first position), then any name it left out, as the
+    lowest priority — a partial keep order can never let a summary slip past
+    the budget. Duplicate names in ``entries`` are a caller error (the
+    baseline would under-count) and raise.
+    """
+    by_name = dict(entries)
+    if len(by_name) != len(entries):
+        raise ValueError("fit_menu_to_budget: duplicate names in entries")
+    bare = {name: _entry_tokens(name, "") for name in by_name}
+    remaining = budget_tokens - sum(bare.values())
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for name in (*keep_order, *by_name):
+        if name in by_name and name not in seen:
+            seen.add(name)
+            ordered.append(name)
+    dropped: set[str] = set()
+    for name in ordered:
+        description = by_name[name]
+        if not description:
+            continue
+        increment = _entry_tokens(name, description) - bare[name]
+        if increment <= remaining:
+            remaining -= increment
+        else:
+            dropped.add(name)
+    return frozenset(dropped)
+
+
 def _skill_menu(
     registry: Any,
+    *,
+    budget_tokens: int = DEFAULT_MENU_BUDGET_TOKENS,
+    rank: Optional[Mapping[str, float]] = None,
 ) -> tuple[tuple[tuple[str, str], ...], frozenset[str]]:
     """The ``skill`` tool's ``(menu, menu_names)``, derived from the plugin's
     own registry.
@@ -229,21 +390,50 @@ def _skill_menu(
     stays in the Registry, which is what keeps the host preload channel
     (``Options.skills``, a seed activation) able to load it — the same split
     Claude Code draws between what the model may invoke and what the user may.
+
+    The roster is then fitted to ``budget_tokens`` (:func:`fit_menu_to_budget`
+    in :func:`menu_keep_order`): a skill past the budget keeps its name and
+    loses its summary. The menu stays name-sorted whatever the keep order, so
+    the ``enum`` bytes never depend on ``rank``; only which summaries survive
+    does. Going over budget is logged once per build — the operator's cue to
+    trim the skill tiers or raise the budget.
     """
-    if registry is not None:
-        entries: list[tuple[str, str]] = []
-        for name in sorted(registry.names()):
-            desc = registry.get(name)
-            if desc is None or not getattr(desc, "model_invocable", True):
-                continue
-            entries.append((name, _menu_description(desc.description)))
-        if entries:
-            return tuple(entries), frozenset(name for name, _ in entries)
-    return (), frozenset()
+    if registry is None:
+        return (), frozenset()
+    entries: list[tuple[str, str]] = []
+    for name in sorted(registry.names()):
+        desc = registry.get(name)
+        if desc is None or not getattr(desc, "model_invocable", True):
+            continue
+        entries.append((name, _menu_description(desc.description)))
+    if not entries:
+        return (), frozenset()
+    names = tuple(name for name, _ in entries)
+    dropped = fit_menu_to_budget(
+        entries, menu_keep_order(registry, names, rank), budget_tokens
+    )
+    if dropped:
+        full = sum(_entry_tokens(name, desc) for name, desc in entries)
+        _log.warning(
+            "skill menu over budget: %d of %d skills listed by name only "
+            "(full roster ~%d tokens, budget %d); trim the skill tiers or "
+            "raise plugin_config['skills']['menu_budget_tokens']",
+            len(dropped),
+            len(entries),
+            full,
+            budget_tokens,
+        )
+        entries = [
+            (name, "" if name in dropped else desc) for name, desc in entries
+        ]
+    return tuple(entries), frozenset(names)
 
 
 def make_skills_control_tool(
     registry: Any,
+    *,
+    menu_budget_tokens: Optional[int] = None,
+    menu_rank: Optional[Mapping[str, float]] = None,
 ) -> Callable[[ControlToolBuildContext], Optional[ControlToolMount]]:
     """Build the ``skill`` control-tool mount factory over ``registry``.
 
@@ -252,12 +442,22 @@ def make_skills_control_tool(
     self-gates on the effective ``skill_invocation`` capability flag AND a
     non-empty indexed menu — mounting IS enablement. The rendered menu tuple may
     be empty (descriptions absent) while the tool is still grown.
+
+    ``menu_budget_tokens`` (``None`` ⇒ :data:`DEFAULT_MENU_BUDGET_TOKENS`) and
+    ``menu_rank`` (``None`` ⇒ no host ranking) are the session pack's reading
+    of its ``menu_budget_tokens`` / ``menu_rank`` config keys; both are fixed
+    for the closure's life, so every mount of one session composes the same
+    roster bytes.
     """
+    budget = (
+        DEFAULT_MENU_BUDGET_TOKENS if menu_budget_tokens is None else menu_budget_tokens
+    )
+    rank: Optional[Mapping[str, float]] = dict(menu_rank) if menu_rank else None
 
     def factory(ctx: ControlToolBuildContext) -> Optional[ControlToolMount]:
         if not ctx.flag("skill_invocation"):
             return None
-        menu, menu_names = _skill_menu(registry)
+        menu, menu_names = _skill_menu(registry, budget_tokens=budget, rank=rank)
         if not menu_names:
             return None
         return ControlToolMount(

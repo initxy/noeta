@@ -10,9 +10,10 @@ closure so no registry, menu, or kit crosses into kernel code.
 from __future__ import annotations
 
 import logging
+import math
 import warnings
 from pathlib import Path
-from typing import Any, Optional, Sequence, cast
+from typing import Any, Mapping, Optional, Sequence, cast
 
 from noeta.context.composer import ThreeSegmentComposer
 from noeta.context.reminders import ReminderRegistry
@@ -72,24 +73,38 @@ _log = logging.getLogger(__name__)
 
 
 def merge_skill_registries(
-    base: SkillRegistry, overlay: SkillRegistry
+    base: SkillRegistry, overlay: SkillRegistry, *, tier: Optional[int] = None
 ) -> SkillRegistry:
     """Merge two registries into a new one — ``overlay`` wins on name clash.
 
-    Built purely from the public ``names()`` / ``get()`` API so the internal
-    storage stays opaque. The result is a fresh ``SkillRegistry`` (neither input
-    is mutated).
+    Built purely from the public ``names()`` / ``get()`` / ``tier_of()`` API
+    so the internal storage stays opaque. The result is a fresh
+    ``SkillRegistry`` (neither input is mutated).
+
+    The overlay's names are stamped ``tier`` when given, else one tier above
+    the base's highest, so a low→high fold (``load_workspace_skills``) leaves
+    every name knowing how narrow its scope was: the ``skill`` control tool
+    keeps a workspace-local skill's summary ahead of a borrowed one when the
+    menu is over budget. Several directories of one scope (the built-in,
+    plugin-contributed and borrowed packs all share the lowest) pass the same
+    ``tier``; precedence on a name clash is unaffected either way.
     """
     merged: dict[str, SkillDescription] = {}
+    tiers: dict[str, int] = {}
     for name in base.names():
         desc = base.get(name)
         if desc is not None:
             merged[name] = desc
+            tiers[name] = base.tier_of(name)
+    overlay_tier = (
+        max(tiers.values(), default=-1) + 1 if tier is None else int(tier)
+    )
     for name in overlay.names():
         desc = overlay.get(name)
         if desc is not None:
             merged[name] = desc
-    return SkillRegistry(merged)
+            tiers[name] = overlay_tier
+    return SkillRegistry(merged, tiers)
 
 
 def _skill_root(desc: SkillDescription, exec_env: Optional[ExecEnv]) -> Optional[Path]:
@@ -313,6 +328,7 @@ def load_workspace_skills(
     lower_skill_dirs: Sequence[Path] = (),
     exec_env: Optional[ExecEnv] = None,
     workspace_pack_enabled: bool = True,
+    lower_skill_tiers: Optional[Sequence[int]] = None,
 ) -> SkillRegistry:
     """Build a ``SkillRegistry`` by merging the skill tiers.
 
@@ -336,7 +352,22 @@ def load_workspace_skills(
     ``workspace_pack_enabled=False`` skips the workspace-local top tier
     entirely (the fold stops at ``lower_skill_dirs``) — the trust gate's lever
     for an untrusted workspace with no operator ``override_skills_dir``.
+
+    ``lower_skill_tiers`` is the keep-order tier stamped on each lower dir's
+    names (``SkillRegistry.tier_of``), parallel to ``lower_skill_dirs``; the
+    session pack passes the scope tiers (every built-in / plugin / borrowed
+    dir ``0``, the global tiers and the workspace ``.agents`` tier above).
+    ``None`` stamps each dir one tier above the previous — a direct caller
+    with one dir per scope gets the same answer. The workspace-local pack is
+    always stamped one above the highest lower tier.
     """
+    if lower_skill_tiers is None:
+        lower_skill_tiers = tuple(range(len(lower_skill_dirs)))
+    elif len(lower_skill_tiers) != len(lower_skill_dirs):
+        raise ValueError(
+            "load_workspace_skills: lower_skill_tiers must parallel "
+            "lower_skill_dirs"
+        )
     skills_dir = (
         override_skills_dir
         if override_skills_dir is not None
@@ -355,10 +386,11 @@ def load_workspace_skills(
     )
     prefetched = _snapshot_skill_tiers(exec_env, tiers)
     merged = SkillRegistry({})
-    for lower in lower_skill_dirs:
+    for lower, tier in zip(lower_skill_dirs, lower_skill_tiers):
         merged = merge_skill_registries(
             merged,
             SkillIndexer(lower, exec_env=exec_env, prefetched=prefetched).index(),
+            tier=tier,
         )
     if not workspace_pack_enabled:
         return merged
@@ -466,6 +498,7 @@ def build_skills_kit(
     scripts_enabled: bool,
     exec_env: Optional[ExecEnv],
     workspace_pack_enabled: bool = True,
+    lower_skill_tiers: Optional[Sequence[int]] = None,
 ) -> SkillsKit:
     """Assemble everything the session build needs from the skill subsystem.
 
@@ -480,6 +513,7 @@ def build_skills_kit(
         lower_skill_dirs=lower_skill_dirs,
         exec_env=exec_env,
         workspace_pack_enabled=workspace_pack_enabled,
+        lower_skill_tiers=lower_skill_tiers,
     )
     script_tool, skill_script_tools, skill_scripts = build_skill_script_wiring(
         registry,
@@ -497,6 +531,49 @@ def build_skills_kit(
             extract_skill_allowed_tools_raw(registry)
         ),
     )
+
+
+def _read_menu_budget(raw: object) -> Optional[int]:
+    """``menu_budget_tokens`` as the pack reads it: ``None`` (absent ⇒ the
+    control tool's default) or a positive int. Anything else is a config
+    error, raised loudly rather than read as "no budget"."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+        raise ValueError(
+            f"skills config: menu_budget_tokens must be a positive int, "
+            f"got {raw!r}"
+        )
+    return raw
+
+
+def _read_menu_rank(raw: object) -> Optional[dict[str, float]]:
+    """``menu_rank`` as the pack reads it: ``None`` / empty (no host ranking)
+    or a ``skill name → score`` mapping with numeric scores."""
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise ValueError(
+            f"skills config: menu_rank must be a mapping of skill name to "
+            f"score, got {type(raw).__name__}"
+        )
+    rank: dict[str, float] = {}
+    for name, score in raw.items():
+        if (
+            not isinstance(name, str)
+            or isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not math.isfinite(score)
+        ):
+            # NaN would silently break the keep order (every comparison is
+            # False, so ``sorted`` no longer sees a total order); inf is a
+            # config mistake too. Both fail here, loudly.
+            raise ValueError(
+                f"skills config: menu_rank entries must map a skill name to a "
+                f"finite number, got {name!r}: {score!r}"
+            )
+        rank[name] = float(score)
+    return rank or None
 
 
 def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
@@ -540,20 +617,29 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
             f"{trust_mode!r}; expected one of {_TRUST_MODES}"
         )
     override_dir = cast(Optional[Path], cfg.get("skills_dir"))
+    # The lower tiers, low→high, each dir paired with the keep-order tier of
+    # its SCOPE (``SkillRegistry.tier_of``): every built-in, plugin-contributed
+    # and borrowed (``extra_skill_dirs``) pack is tier 0 together, the global
+    # ``.agents`` / ``.noeta`` dirs 1 / 2, the workspace ``.agents`` dir 3 —
+    # the CONTEXT.md order. Precedence on a name clash still follows list
+    # order (later wins); only the over-budget keep order reads the tier.
     lower_skill_dirs: list[Path] = list(
         cast("Sequence[Path]", cfg.get("builtin_skills_dirs", ()))
     )
     lower_skill_dirs.extend(
         cast("Sequence[Path]", cfg.get("extra_skill_dirs", ()))
     )
+    lower_skill_tiers: list[int] = [0] * len(lower_skill_dirs)
     agents_global_dir = cast(
         Optional[Path], cfg.get("global_agents_skills_dir")
     )
     if agents_global_dir is not None:
         lower_skill_dirs.append(agents_global_dir)
+        lower_skill_tiers.append(1)
     global_dir = cast(Optional[Path], cfg.get("global_skills_dir"))
     if global_dir is not None:
         lower_skill_dirs.append(global_dir)
+        lower_skill_tiers.append(2)
     # An operator ``skills_dir`` override PINS the workspace-scoped skill set:
     # no repo-derived tier mounts beneath it, so a host that names its own
     # directory keeps exact control over what a session sees.
@@ -581,6 +667,7 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
         lower_skill_dirs.append(
             ctx.workspace_dir / WORKSPACE_AGENTS_SKILLS_SUBDIR
         )
+        lower_skill_tiers.append(3)
     kit = build_skills_kit(
         workspace_dir=ctx.workspace_dir,
         override_skills_dir=override_dir,
@@ -589,6 +676,7 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
         scripts_enabled=bool(cfg.get("allow_skill_scripts", False)),
         exec_env=ctx.exec_env,
         workspace_pack_enabled=trusted or override_dir is not None,
+        lower_skill_tiers=lower_skill_tiers,
     )
     tools: dict[str, Tool] = {}
     if kit.script_tool is not None:
@@ -597,6 +685,13 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
     # dependency one-way at module load mirrors the layering.
     from .control_tool import make_skills_control_tool
 
+    # The roster budget and the host's keep-order ranking. Both are plain
+    # data fixed at session build: the host derives ``menu_budget_tokens``
+    # from the bound model's catalog window (this pack must not import the
+    # providers built-in) and resolves ``menu_rank`` per task, so the mount
+    # composes the same roster bytes for the task's whole life.
+    menu_budget = _read_menu_budget(cfg.get("menu_budget_tokens"))
+    menu_rank = _read_menu_rank(cfg.get("menu_rank"))
     # The skill resident leads the semi_stable layout (kind band 100); the
     # ``skill`` control tool rides this contribution as a closure over the
     # merged registry (band 400), and the guard facts travel as one opaque
@@ -606,7 +701,13 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
         content_kinds=(ContentKindContribution(100, kit.content_kind),),
         control_tools=(
             ControlToolEntry(
-                "skill", 400, make_skills_control_tool(kit.registry)
+                "skill",
+                400,
+                make_skills_control_tool(
+                    kit.registry,
+                    menu_budget_tokens=menu_budget,
+                    menu_rank=menu_rank,
+                ),
             ),
         ),
         guard_facts=SkillGuardFacts(

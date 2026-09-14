@@ -670,6 +670,7 @@ class Client:
             memory_dir=hc.memory_dir,
             global_memory_dir=hc.global_memory_dir,
             memory_root_resolver=hc.memory_root_resolver,
+            skill_menu_rank_resolver=hc.skill_menu_rank_resolver,
             mcp_server_resolver=hc.mcp_server_resolver,
             mcp_http_post=hc.mcp_http_post,
             delta_sink=hc.delta_sink,

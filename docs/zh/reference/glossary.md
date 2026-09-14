@@ -99,7 +99,7 @@ agent 可以调用的一个外部动作。`name` / `input_schema` / `description
 
 ### Skill
 
-一个本地的、静态的 LLM 工作流模板，位于 `.noeta/skills/<name>/SKILL.md`，可以附带资源文件。层级由低到高合并：内置/插件/借入目录（`extra_skill_dirs`，如 `~/.claude/skills`，选择加入）、全局 `~/.agents/skills`（选择加入）、全局 `~/.noeta/skills`（选择加入）、工作区 `.agents/skills`，最后是工作区 `.noeta/skills`——同一作用域内厂商专属目录胜出，默认只挂载两个工作区层。加载分两阶段——*菜单*（名字加一行摘要）被渲染进 `skill` control tool 的 schema，而只有被选中的那个 skill 的正文才会进入半稳定段，压缩不会把它冲掉。捆绑的资源按需取用：渲染器会在前面加上 `Base directory for this skill: <dir>`，模型再用 `Read` 去读文件。**不是 Tool。**
+一个本地的、静态的 LLM 工作流模板，位于 `.noeta/skills/<name>/SKILL.md`，可以附带资源文件。层级由低到高合并：内置/插件/借入目录（`extra_skill_dirs`，如 `~/.claude/skills`，选择加入）、全局 `~/.agents/skills`（选择加入）、全局 `~/.noeta/skills`（选择加入）、工作区 `.agents/skills`，最后是工作区 `.noeta/skills`——同一作用域内厂商专属目录胜出，默认只挂载两个工作区层。加载分两阶段——*菜单*（名字加一行摘要）被渲染进 `skill` control tool 的 schema，而只有被选中的那个 skill 的正文才会进入半稳定段，压缩不会把它冲掉。菜单有总预算（默认是模型窗口的 1%）：超出后，排序靠后的 skill 只保留名字、不再带摘要。捆绑的资源按需取用：渲染器会在前面加上 `Base directory for this skill: <dir>`，模型再用 `Read` 去读文件。**不是 Tool。**
 
 ### Provider
 

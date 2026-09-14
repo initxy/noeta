@@ -155,7 +155,9 @@ directory wins at equal scope, and only the workspace tiers mount by
 default. Loading is two-stage — the *menu* (name plus
 one-line summary) is rendered into the `skill` control-tool schema, and only the
 selected skill's body enters the semi-stable segment, which compaction does not
-flush. Bundled resources are reached on demand: the renderer prepends
+flush. The menu has a total budget (1 % of the model's window by default):
+past it, the lowest-ranked skills keep their name and lose their summary.
+Bundled resources are reached on demand: the renderer prepends
 `Base directory for this skill: <dir>` and the model reads files with `Read`.
 **Not a Tool.**
 

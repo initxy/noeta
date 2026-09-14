@@ -302,6 +302,16 @@ The packs are indexed by the same `SkillIndexer` as every other tier, so they
 inherit the whole frontmatter contract — `disable-model-invocation`,
 `allowed-tools`, `priority` — for free.
 
+Two more keys under `plugin_config["skills"]` shape the roster the `skill`
+control tool renders. `menu_budget_tokens` caps the whole roster in estimated
+tokens (CJK-aware); the host derives it as 1 % of the bound model's context
+window and an override here replaces that number. `menu_rank` (`skill name →
+score`) is the keep order when the roster is over budget: the highest-scored
+summaries survive, then workspace-local tiers before borrowed ones, then
+frontmatter `priority`, then name; the rest keep their name only. A per-task
+rank comes from `HostConfig.skill_menu_rank_resolver` instead (see
+[SDK options](sdk-options.md)).
+
 **The path must be absolute.** A manifest is read from a wheel's package data, a
 bare `.toml`, or a single `.py`, and those roots disagree about what a relative
 path would be relative to; rather than resolve it differently depending on how

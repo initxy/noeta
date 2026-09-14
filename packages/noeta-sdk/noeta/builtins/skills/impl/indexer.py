@@ -15,7 +15,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from noeta.context.composer import ContentRenderer, ContentResolve, RenderedContent
 from noeta.protocols.messages import Message, TextBlock
@@ -382,14 +382,33 @@ class SkillRegistry:
     keeping that segment cache-stable across steps.
     """
 
-    def __init__(self, skills: dict[str, SkillDescription]) -> None:
+    def __init__(
+        self,
+        skills: dict[str, SkillDescription],
+        tiers: Optional[Mapping[str, int]] = None,
+    ) -> None:
         self._skills: dict[str, SkillDescription] = dict(skills)
+        # Which merge tier each name came from (``merge_skill_registries``
+        # stamps the overlay one above the base's highest). Only the ``skill``
+        # control tool's keep order reads it; a registry built directly — an
+        # indexer's single tier, a synthetic test registry — is all tier 0.
+        self._tiers: dict[str, int] = {
+            name: int(tiers[name])
+            for name in self._skills
+            if tiers is not None and name in tiers
+        }
 
     def get(self, name: str) -> Optional[SkillDescription]:
         return self._skills.get(name)
 
     def names(self) -> tuple[str, ...]:
         return tuple(self._skills.keys())
+
+    def tier_of(self, name: str) -> int:
+        """The merge tier ``name`` was indexed from — higher = narrower scope
+        (workspace-local above global above built-in / borrowed). ``0`` for a
+        name no merge stamped, and for an unknown name."""
+        return self._tiers.get(name, 0)
 
     def resolve(
         self, active: list[str]
