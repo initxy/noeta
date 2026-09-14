@@ -8,7 +8,9 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
-Covers both packages, lockstep: the Engine cache lived in `noeta-runtime`'s
+## [0.6.24] - 2026-09-14
+
+Covers both packages, lockstep — 0.6.22 → 0.6.24 for `noeta-runtime`, 0.6.23 → 0.6.24 for `noeta-sdk`: the Engine cache lived in `noeta-runtime`'s
 resolver and the host's half in `noeta-sdk`, and the two ship together
 (`noeta-sdk`'s `noeta-runtime>=` floor rises with it).
 
@@ -2376,6 +2378,7 @@ Initial preview release.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
 [Unreleased]: https://github.com/initxy/noeta/compare/v0.6.23...HEAD
+[0.6.24]: https://github.com/initxy/noeta/compare/v0.6.23...v0.6.24
 [0.6.23]: https://github.com/initxy/noeta/compare/v0.6.22...v0.6.23
 [0.6.22]: https://github.com/initxy/noeta/compare/v0.6.21...v0.6.22
 [0.6.21]: https://github.com/initxy/noeta/compare/v0.6.20...v0.6.21
