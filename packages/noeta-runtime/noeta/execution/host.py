@@ -66,9 +66,10 @@ class ResidentHost(Protocol):
     def resolve_engine(self, task: Any) -> EngineProtocol:
         """Resolve the Engine driving ``task`` by its folded state.
 
-        The Engine MUST be keyed on the Task's folded
+        The Engine MUST be built from the Task's folded
         ``(agent_name, model_binding)``, so a resumed turn rebuilds the same
-        Engine and composes the same bytes.
+        Engine and composes the same bytes; within a turn, every resolve
+        returns the turn's Engine.
         """
         ...
 
@@ -84,7 +85,7 @@ class ResidentHost(Protocol):
         effort: Optional[str] = None,
         exec_env_ref: Optional[str] = None,
     ) -> EngineProtocol:
-        """Resolve a (cached) Engine **by agent name** — used for Task creation.
+        """Build an Engine **by agent name** — used for Task creation.
 
         ``start`` calls this before a Task (and therefore its recorded
         ``agent_name``) exists, so it cannot go through :meth:`resolve_engine`.

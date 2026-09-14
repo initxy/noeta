@@ -138,6 +138,14 @@ def _spawned_child_id(host: Any, parent_id: str) -> str:
     )
 
 
+def _engine_model(engine: Any) -> str:
+    """The model the Engine's (possibly wrapped) ReAct policy sends."""
+    policy = engine._policy
+    while not hasattr(policy, "_model"):
+        policy = policy._inner
+    return str(policy._model)
+
+
 def _tool_name(tool: dict[str, Any]) -> str:
     """A recorded tool schema's name — Anthropic-shaped (``name``) or
     OpenAI-function-shaped (``function.name``)."""
@@ -305,8 +313,7 @@ def test_resolve_engine_inherits_from_the_root_through_an_unbound_middle_child(
         ),
     )
 
-    host.resolve_engine(fold(host.event_log, host.content_store, "leaf"))
+    engine = host.resolve_engine(fold(host.event_log, host.content_store, "leaf"))
 
-    # The resolver keys its Engine cache on the resolved model (2nd slot).
-    (key,) = list(host._engines.keys())  # noqa: SLF001
-    assert key[1] == SESSION_MODEL, key
+    # The built Engine's policy runs on the root's bound model.
+    assert _engine_model(engine) == SESSION_MODEL

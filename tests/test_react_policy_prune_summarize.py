@@ -629,6 +629,50 @@ def test_baseline_table_evicts_oldest_beyond_the_cap() -> None:
     policy, *_ = _policy([_summary_resp()])
     for i in range(_MAX_TRACKED_TASK_BASELINES + 10):
         policy._baseline_state(f"task-{i}")
-    assert len(policy._baselines) == _MAX_TRACKED_TASK_BASELINES
-    assert "task-0" not in policy._baselines
-    assert f"task-{_MAX_TRACKED_TASK_BASELINES + 9}" in policy._baselines
+    table = policy._baselines
+    assert len(table) == _MAX_TRACKED_TASK_BASELINES
+    keys = {task for task, _model in table.keys()}
+    assert "task-0" not in keys
+    assert f"task-{_MAX_TRACKED_TASK_BASELINES + 9}" in keys
+
+
+def test_baseline_survives_a_rebuilt_policy_for_the_same_task_and_model() -> None:
+    """The Engine — and so the policy — is built afresh every turn; the
+    baseline pair lives in the ``TriggerBaselines`` table the host keeps in
+    the task's local slot and hands each turn's factory, so a turn's first
+    request still mixes the previous turn's real usage with the estimate
+    delta. A bare policy (no slot) keeps a private table; a different task
+    or model starts its own pair."""
+    from noeta.builtins.react.impl import (
+        TRIGGER_BASELINES_SLOT,
+        TriggerBaselines,
+        build_react_policy_factory,
+    )
+
+    slots: dict[str, Any] = {}
+
+    def task_slot(name: str, factory: Any) -> Any:
+        return slots.setdefault(name, factory())
+
+    def build(**overrides: Any) -> ReActPolicy:
+        kwargs: dict[str, Any] = dict(
+            tools={}, system_prompt="sys", model="gpt-4o", max_steps=10,
+            control_translate_specs=(), content_store=InMemoryContentStore(),
+            context_window=2000, max_output_tokens=500, compaction_buffer=100,
+            tail_token_budget=200, composer_version="three_segment.v3",
+            output_schema=None, thinking=None, effort=None,
+        )
+        kwargs.update(overrides)
+        policy = build_react_policy_factory(**kwargs)(llm=object())
+        assert isinstance(policy, ReActPolicy)
+        return policy
+
+    first = build(task_slot=task_slot)
+    first._baseline_state("t-keep").last_input_tokens_at_call = 4321
+    second = build(task_slot=task_slot)
+    assert second._baseline_state("t-keep").last_input_tokens_at_call == 4321
+    assert second._baseline_state("t-other").last_input_tokens_at_call == 0
+    assert isinstance(slots[TRIGGER_BASELINES_SLOT], TriggerBaselines)
+    # Without a slot every policy starts its own table.
+    bare, *_ = _policy([_summary_resp()])
+    assert bare._baseline_state("t-keep").last_input_tokens_at_call == 0

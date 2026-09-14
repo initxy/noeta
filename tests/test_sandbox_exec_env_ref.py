@@ -303,7 +303,7 @@ def test_reclaim_on_another_host_reconnects_to_recorded_container(
 # --------------------------------------------------------------------------- #
 
 
-def test_exec_env_ref_keys_the_engine_cache(
+def test_exec_env_ref_binds_every_build_to_its_container(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sandbox_mod, "_default_backend_factory", _recording_factory([]))
@@ -313,8 +313,9 @@ def test_exec_env_ref_keys_the_engine_cache(
     e_x1 = host.resolve_engine_for_agent("main", exec_env_ref="http://x:1#s")
     e_x2 = host.resolve_engine_for_agent("main", exec_env_ref="http://x:1#s")
     e_y = host.resolve_engine_for_agent("main", exec_env_ref="http://y:2#s")
-    assert e_x1 is e_x2  # same ref → cached Engine reused
-    assert e_x1 is not e_y  # different container → distinct Engine
+    # Same ref → the same resolved backend on each per-turn build; a
+    # different container → a different backend.
+    assert e_x1._tools["Read"].exec_env is e_x2._tools["Read"].exec_env
     assert e_x1._tools["Read"].exec_env.base_url == "http://x:1"
     assert e_y._tools["Read"].exec_env.base_url == "http://y:2"
 

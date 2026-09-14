@@ -592,7 +592,12 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
     ``workspace_skills_trust`` + ``trust_store`` + ``trust_subject`` (the
     workspace-tier trust gate; the subject is the HOST-side workspace path —
     see :func:`_workspace_skills_trusted`), ``allow_skill_scripts``,
-    ``tool_enforcement`` — and assembles the tiered kit.
+    ``tool_enforcement``, ``task_slot`` (the host-bound get-or-create over
+    the task's local slots; the model-invocable roster this build composed
+    is reported into it — see :mod:`~noeta.builtins.skills.impl.roster_note`)
+    — and assembles the tiered kit. It runs once per turn (the Engine is a
+    per-turn value), so a skill installed, edited or removed shows on the
+    next turn.
     ``builtin_skills_dirs`` opens the lowest tier as the host assembled it:
     its own built-in packs plus every directory a loaded plugin contributed on
     the ``skills`` surface; ``extra_skill_dirs`` (operator-named foreign
@@ -683,7 +688,19 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
         tools[kit.script_tool.name] = kit.script_tool
     # Late import: control_tool.py imports nothing from wiring; keeping the
     # dependency one-way at module load mirrors the layering.
-    from .control_tool import make_skills_control_tool
+    from .control_tool import make_skills_control_tool, model_invocable_names
+    from .roster_note import ROSTER_SLOT, SkillRoster
+
+    # Report the model-invocable roster this build composed into the task's
+    # local slot (``roster_note.SkillRoster``), when the host bound one: the
+    # ``turn_intake`` note naming skills that joined the roster since the task
+    # last saw it reads from there. A build without a task (the seed /
+    # by-name path, the orchestration engine) binds no slot.
+    task_slot = cfg.get("task_slot")
+    if callable(task_slot):
+        task_slot(ROSTER_SLOT, SkillRoster).note_built(
+            model_invocable_names(kit.registry)
+        )
 
     # The roster budget and the host's keep-order ranking. Both are plain
     # data fixed at session build: the host derives ``menu_budget_tokens``

@@ -594,9 +594,8 @@ def test_seed_build_shares_the_sandbox_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # The seed Engine (built by resolve_engine_for_agent before a task exists)
-    # shares the Engine cache with the first driving turn. If the seed built the
-    # LOCAL backend, the cached Engine would pin it and the drive would bypass the
-    # sandbox — so the seed must route to the SAME backend.
+    # and the first driving turn's Engine must route to the SAME sandbox
+    # backend: a seed on the LOCAL backend would record the wrong environment.
     fake = RecordingExecEnv(base_url="http://box:8080")
     monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle, preamble=None: fake)
     host = _make_host(
@@ -606,9 +605,9 @@ def test_seed_build_shares_the_sandbox_backend(
     )
     seed = host.resolve_engine_for_agent("main")
     assert seed._tools["Read"].exec_env is fake
-    # The driving resolve reuses the cached Engine → same backend, not Local.
+    # Every build — the Engine is a per-turn value — resolves the same backend.
     again = host.resolve_engine_for_agent("main")
-    assert again is seed
+    assert again._tools["Read"].exec_env is fake
 
 
 # --------------------------------------------------------------------------- #

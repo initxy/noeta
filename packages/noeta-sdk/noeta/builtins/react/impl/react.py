@@ -29,12 +29,13 @@ Scope:
   wait-timer) via ``translate_control_tool``.
 * ``model`` is a constant per Policy instance.
 * The instance holds **configuration only** — no per-task or per-turn loop
-  state. One ReActPolicy is cached inside an Engine that is shared across
-  turns and across tasks with equal bindings (the Engine cache key omits
-  ``task_id``), so anything task- or turn-scoped must not live on ``self``:
-  the step cap reads ``StepContext.steps_in_turn`` (Engine-threaded, resets
-  every driven turn), and the compaction-trigger baselines live in a bounded
-  per-``task_id`` table (:class:`_TaskTriggerBaseline`).
+  state. A ReActPolicy lives inside a per-turn Engine (built for one task's
+  turn, rebuilt for the next), so anything that must span turns does not
+  live on ``self``: the step cap reads ``StepContext.steps_in_turn``
+  (Engine-threaded, resets every driven turn), and the compaction-trigger
+  baselines live in a :class:`TriggerBaselines` table the host keeps in
+  the task's local state and hands each turn's instance (a bare instance
+  keeps its own, bounded per ``task_id``).
 
 Layering: this module ships in noeta-sdk's ``react`` built-in
 and reaches the kernel across the wheel boundary — so it imports only the
@@ -152,13 +153,20 @@ class _TaskTriggerBaseline:
     count DROPS, and a max would pin the trigger to a stale pre-compaction
     high and re-fire forever.
 
-    Both fields are keyed **per task** in ``ReActPolicy._baselines`` — the
-    policy instance is cached inside an Engine shared across tasks, and a
-    shared pair would leak one conversation's near-window baseline into a
-    fresh conversation's trigger (which then dies on
-    ``compaction_no_progress`` before its first real round-trip). ``0`` on a
-    fresh entry; because ``decide()`` re-runs in the same order on resume, the
-    values reconstruct identically (no persisted state needed).
+    Both fields are keyed **per ``(task, model)``** in a
+    :class:`TriggerBaselines` table. The Engine — and so this policy — is
+    built afresh every turn, and a pair that lived on the instance would
+    reset at every turn boundary, dropping the trigger to the pure chars/4
+    estimate for each turn's first request; so the host keeps the table in
+    the task's local state (``noeta.runtime.task_local``) and hands it to
+    each turn's instance through the factory's ``task_slot``. Keying by task
+    keeps one conversation's near-window baseline out of another's trigger
+    (a bare instance without a host slot may serve several tasks); keying by
+    model keeps a real token count from one tokenizer from describing a
+    request to another. ``0`` on a fresh entry; because ``decide()`` re-runs
+    in the same order on resume, the values reconstruct identically (no
+    persisted state needed). Process-local housekeeping — never composed,
+    never recorded.
     """
 
     last_estimate_at_call: int = 0
@@ -171,6 +179,49 @@ class _TaskTriggerBaseline:
 #: until its next round-trip records real usage) — degraded precision for one
 #: trigger, never a wrong decision.
 _MAX_TRACKED_TASK_BASELINES = 1024
+
+#: The task-local slot the host keeps a task's :class:`TriggerBaselines` in.
+TRIGGER_BASELINES_SLOT = "react.trigger_baselines"
+
+
+class TriggerBaselines:
+    """A bounded ``(task_id, model) → _TaskTriggerBaseline`` table (see
+    :class:`_TaskTriggerBaseline` for why it is not a policy attribute).
+
+    The lock guards only the table's structure (get-or-create / LRU reorder /
+    eviction); a single entry is only ever mutated by its task's one driving
+    thread. The host keeps one per task in the task's local state; a bare
+    policy (direct construction, a host without the slot) keeps its own.
+    """
+
+    def __init__(self, *, max_tasks: int = _MAX_TRACKED_TASK_BASELINES) -> None:
+        self._max = max_tasks
+        self._table: OrderedDict[tuple[str, str], _TaskTriggerBaseline] = (
+            OrderedDict()
+        )
+        self._lock = threading.Lock()
+
+    def state(self, task_id: str, model: str) -> _TaskTriggerBaseline:
+        """Get-or-create ``(task_id, model)``'s entry (LRU-refreshed)."""
+        key = (task_id, model)
+        with self._lock:
+            state = self._table.get(key)
+            if state is None:
+                state = _TaskTriggerBaseline()
+                self._table[key] = state
+            else:
+                self._table.move_to_end(key)
+            while len(self._table) > self._max:
+                self._table.popitem(last=False)
+            return state
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._table)
+
+    def keys(self) -> tuple[tuple[str, str], ...]:
+        with self._lock:
+            return tuple(self._table)
 
 #: Sanity band for :meth:`ReActPolicy._observed_density` — real provider tokens
 #: per chars/4 estimated token. The heuristic's honest spread on real payloads
@@ -224,9 +275,9 @@ class ReActPolicy:
     only. The ``max_steps`` ceiling reads the Engine-threaded
     ``StepContext.steps_in_turn`` (so a runaway loop is bounded per driven
     turn and the budget renews every turn), and the compaction-trigger
-    baselines are keyed per ``task_id`` in a bounded table — one conversation
-    can never bleed its counter or its near-window token baseline into
-    another that shares the cached Engine.
+    baselines live in a :class:`TriggerBaselines` table keyed per
+    ``(task_id, model)`` — the host's task-local one when it hands one in,
+    so the calibration spans the task's turns; the instance's own otherwise.
     """
 
     def __init__(
@@ -274,6 +325,11 @@ class ReActPolicy:
         #: provider 400. ``None`` (no compaction model / old caller) keeps
         #: the main model's cap.
         compaction_max_output_tokens: Optional[int] = None,
+        #: The compaction-trigger baseline table (see
+        #: :class:`_TaskTriggerBaseline`). The host passes the task's own so
+        #: the calibration outlives this per-turn instance; ``None`` (a bare
+        #: policy) keeps a private one.
+        trigger_baselines: Optional[TriggerBaselines] = None,
     ) -> None:
         self._llm = llm
         self._tools = tools
@@ -281,17 +337,9 @@ class ReActPolicy:
         self._model = model
         self._max_steps = max_steps
         self._max_history_messages = max_history_messages
-        # The per-task compaction-trigger baselines (see
-        # :class:`_TaskTriggerBaseline` for the full semantics of the pair).
-        # Keyed by ``ctx.task_id`` with LRU eviction at
-        # ``_MAX_TRACKED_TASK_BASELINES`` — NOT instance attributes: this
-        # instance is cached inside an Engine that serves every task with
-        # equal bindings, and instance-level baselines let one conversation's
-        # state poison another's trigger. The lock guards only the table's
-        # structure (get-or-create / LRU reorder / eviction); a single task's
-        # entry is only ever mutated by that task's one driving thread.
-        self._baselines: OrderedDict[str, _TaskTriggerBaseline] = OrderedDict()
-        self._baselines_lock = threading.Lock()
+        self._baselines = (
+            trigger_baselines if trigger_baselines is not None else TriggerBaselines()
+        )
         # ③ compaction trigger configuration. When ``context_window``
         # is None compaction is OFF (no proactive trigger,
         # an overflow error stays a FailDecision). When set, the available
@@ -351,17 +399,9 @@ class ReActPolicy:
     # ------------------------------------------------------------------
 
     def _baseline_state(self, task_id: str) -> _TaskTriggerBaseline:
-        """Get-or-create ``task_id``'s trigger-baseline entry (LRU-refreshed)."""
-        with self._baselines_lock:
-            state = self._baselines.get(task_id)
-            if state is None:
-                state = _TaskTriggerBaseline()
-                self._baselines[task_id] = state
-            else:
-                self._baselines.move_to_end(task_id)
-            while len(self._baselines) > _MAX_TRACKED_TASK_BASELINES:
-                self._baselines.popitem(last=False)
-            return state
+        """``(task_id, model)``'s trigger-baseline entry — see
+        :class:`TriggerBaselines`."""
+        return self._baselines.state(task_id, self._model)
 
     def decide(self, ctx: StepContext, view: View) -> Decision:
         # The per-turn ceiling: ``ctx.steps_in_turn`` is the Engine's count of

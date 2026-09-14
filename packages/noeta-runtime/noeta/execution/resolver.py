@@ -2,19 +2,33 @@
 
 Three domain seams (agent lookup, spawnable-set parsing, engine build) are left
 as abstract hooks; a concrete subclass fills them in while the skeleton owns the
-shared resolution logic — the Engine cache key, the ask_user_question masks, and
-the delegation/spawnable inheritance rule. The cache key must reproduce the same
-Engine for a resumed turn, so every binding dimension a session can vary (model,
-workspace, provider, sandbox container, permission mode, MCP aliases, effort)
-extends a flat key tuple. Declared as a plain class rather than a ``@dataclass``
-so a dataclass subclass supplies the real field storage and ``__init__`` while
-keeping its field table byte-identical.
+shared resolution logic — the binding dimensions a build receives, the
+ask_user_question masks, and the delegation/spawnable inheritance rule.
+
+**The Engine is a per-turn value, not a cached resource.** A turn opens
+with a user goal and runs — through every approval, answer and sub-agent
+return that resumes it — until the task parks on the next-goal handle or
+ends. :meth:`GenericEngineResolver.resolve_engine` builds the turn's Engine
+once, from the task's folded bindings (model, workspace, provider, sandbox
+container, permission mode, MCP aliases, effort) and whatever the host reads
+at build time — skill tiers, the project shell allowlist, the workspace
+trust decision, an MCP server's tool list — keeps it in the host's
+:class:`~noeta.runtime.task_local.TaskLocalRegistry` for the turn's resumes,
+and lets it go when the turn settles. Reading those inputs per turn is what
+makes a change to any of them visible on the next turn of every task, with
+no invalidation machinery; reusing the build within the turn is what keeps
+the turn's tool set fixed. A build is deterministic in its inputs, so the
+composed stable prefix moves only when an input actually changed. The one
+expensive external resource, the live MCP connection, is pooled by the host
+across builds (see ``noeta.builtins.mcp.impl.pool``), not by this resolver.
+
+Declared as a plain class rather than a ``@dataclass`` so a dataclass subclass
+supplies the real field storage and ``__init__`` while keeping its field table
+byte-identical.
 """
 
 from __future__ import annotations
 
-import threading
-from collections import OrderedDict
 from typing import Any, Callable, Optional
 
 from noeta.agent.registry import UnknownAgentError
@@ -42,10 +56,6 @@ __all__ = [
     "GenericEngineResolver",
     "agent_name_of",
 ]
-
-#: Upper bound on the in-process Engine cache. Mirrors the constant in
-#: ``noeta.client.host`` so both sides of the resolver hierarchy use the same cap.
-_MAX_CACHED_ENGINES: int = 256
 
 #: Sentinel for ``_engine_for_agent(policy_wrapper=...)`` distinguishing "caller
 #: did not pass it" (⇒ the host's ``self.policy_wrapper``) from "caller passed
@@ -114,44 +124,30 @@ class GenericEngineResolver:
     workflow_allowed: bool
     policy_wrapper: Optional[Callable[[Policy], Policy]]
     unnamed_fallback: Optional[Any]
-    # The cache key carries two session-scoped dimensions — ``workspace``
-    # (per-session fs-root name) then ``provider`` (bound provider name) — each
-    # ``None`` for the host-fixed default. The key stays a flat tuple so both
-    # extend it without a structural change. Bounded LRU via OrderedDict
-    # (cap = _MAX_CACHED_ENGINES) + a threading Lock to serialise
-    # get-or-build-put under ThreadingHTTPServer concurrency.
-    _engines: OrderedDict[
-        tuple[
-            str, str, bool, Optional[str], Optional[str], Optional[str],
-            tuple[str, ...], Optional[str], Optional[str], bool,
-        ],
-        Engine,
-    ]
-    _engines_lock: threading.Lock
-    #: Per-key Engine-build locks: the global ``_engines_lock`` guards only the
-    #: cache map, while a build (including a live MCP connect) runs outside it,
-    #: one-per-key via these locks, so a slow/hanging connector cannot serialise
-    #: every session's Engine build. Storage supplied by the @dataclass subclass;
-    #: lazily created in ``_engine_for_agent`` for older test doubles.
-    _engine_builds: dict[Any, threading.Lock]
     # per-turn, NON-durable permission_mode carrier
     # keyed by task_id (storage supplied by the @dataclass subclass — see
     # ``SdkHost._turn_permission_mode``). Set via :meth:`note_turn_permission`
     # before resolution, read in :meth:`resolve_engine` to thread the mode into
-    # the cache key + build.
+    # the build.
     _turn_permission_mode: dict[str, Optional[str]]
     #: per-turn, NON-durable enabled-MCP-alias carrier keyed by
     #: task_id (storage supplied by the @dataclass subclass — see
     #: ``SdkHost._turn_mcp_aliases``). The frontend sends the alias clean list
     #: each turn (NO url / token — those live host-side); the driver records
     #: it here via :meth:`note_turn_mcp` before resolution, read in
-    #: :meth:`resolve_engine` to thread the aliases into the cache key + build.
+    #: :meth:`resolve_engine` to thread the aliases into the build.
     #: ``()`` (default / no enabled servers) ⇒ no live MCP tools.
     _turn_mcp_aliases: dict[str, tuple[str, ...]]
     #: Per-turn, NON-durable reasoning-effort carrier keyed by task_id. Mirrors
-    #: permission/MCP: set before Engine resolution, read into the cache key +
-    #: build inputs. ``None`` ⇒ host/provider default.
+    #: permission/MCP: set before Engine resolution, read into the build
+    #: inputs. ``None`` ⇒ host/provider default.
     _turn_effort: dict[str, Optional[str]]
+    #: The task-local registry (``noeta.runtime.task_local``): the turn's
+    #: Engine, the read-first record, and the slots the built-ins keep per
+    #: task. Storage supplied by the @dataclass subclass (see
+    #: ``SdkHost._task_locals``); read through ``getattr`` so an older test
+    #: double without it builds per resolve and keeps nothing.
+    _task_locals: Any
     #: cancel-cascade — process-local set of cancelled root task ids. The
     #: driver's ``cancel`` marks the root here (via :meth:`request_cancellation`)
     #: alongside the durable ``TaskCancelled`` event; :meth:`drive_pending_subtasks`
@@ -215,12 +211,12 @@ class GenericEngineResolver:
     ) -> Engine:
         """Build a real ``Engine`` for ``agent`` on ``model``.
 
-        ``task_id`` is the task whose stream a skipped-MCP-server
-        observer event is recorded on (``None`` for the seed/by-name path where
-        no task exists yet — that path is built without live MCP). It is NOT part
-        of the cache key: a re-resolve of the same (agent, …, mcp_aliases) key
-        returns the cached Engine without reconnecting, so the connect + any skip
-        event fire exactly once per built Engine.
+        Called once per turn: the Engine is a per-turn value (module
+        docstring), so everything an implementation reads here — skill tiers,
+        the shell allowlist, an MCP server's tool list — is read fresh for
+        the turn, and a resume within the turn never reaches here. ``task_id`` is the task whose stream MCP provenance / skip
+        observer events are recorded on (``None`` for the seed/by-name path
+        where no task exists yet — that path is built without live MCP).
 
         ``GenericEngineResolver`` itself never inspects the product-specific
         knobs (write modes, shell modes, workspace dir, provider, hooks,
@@ -232,50 +228,28 @@ class GenericEngineResolver:
 
         ``workspace`` is the per-session workspace **absolute path**
         (``None`` ⇒ the host-fixed default dir). An implementation uses it
-        directly as the Engine's fs/skill tools root; the generic skeleton only
-        threads the path string through the cache key.
+        directly as the Engine's fs/skill tools root.
 
         ``provider`` is the per-session provider **name**
         (``None`` ⇒ the host default provider). An implementation resolves it
-        to a configured LLM adapter instance for this Engine's round-trips; the
-        generic skeleton only threads the name through the cache key.
+        to a configured LLM adapter instance for this Engine's round-trips.
 
         ``exec_env_ref`` is the per-session sandbox container ``base_url``
         (``None`` ⇒ the local host / the host-default sandbox config). An
         implementation resolves it to a live sandbox backend the Engine's fs /
         shell tools run their IO against — a resumed / reclaimed session
-        reconnects to THIS container by its address; the generic skeleton only
-        threads it through the cache key.
+        reconnects to THIS container by its address.
 
         ``structured_output_schema`` is a workflow helper's per-helper JSON
         Schema (read off its durable ``TaskCreated.inputs.output_schema`` by
-        :meth:`drive_pending_subtasks`' child-engine builder — the only
-        caller that ever passes it). An implementation mounts the
-        ``structured_output`` control schema (its ``parameters`` = this
-        schema) AND wraps the built policy in ``StructuredOutputPolicy`` so
-        the helper's call becomes its final answer. ``None`` (every other
-        build, including every cached :meth:`_engine_for_agent` path) leaves
-        the build unchanged.
+        :meth:`drive_pending_subtasks`' child-engine builder and by
+        :meth:`resolve_engine` for a helper a resident worker claimed). An
+        implementation mounts the ``structured_output`` control schema (its
+        ``parameters`` = this schema) AND wraps the built policy in
+        ``StructuredOutputPolicy`` so the helper's call becomes its final
+        answer. ``None`` (every other build) leaves the build unchanged.
         """
         raise NotImplementedError
-
-    def _engine_cache_scope(
-        self, agent: Any, task_id: Optional[str]
-    ) -> Optional[str]:
-        """Optional host-defined Engine-cache partition for ``(agent, task)``.
-
-        The cache key deliberately omits ``task_id`` — engines are SHARED
-        across tasks with equal bindings. A host whose engine material varies
-        per task beyond the standard key dimensions (e.g. the SdkHost's
-        per-tenant memory root, whose store is baked into the built Engine's
-        tool closures and resident index) returns a stable string scope here;
-        engines then resolve per ``(key, scope)`` so one task's material can
-        never serve another scope's task via the cache. Must be cheap, total,
-        and deterministic for a given ``(agent, task_id)`` — it runs on every
-        engine resolve. ``None`` (this default — every host without
-        task-varying material) keeps the shared slot.
-        """
-        return None
 
     def _build_orchestration_engine(
         self, task_id: str, *, allowed_subtask_agents: frozenset[str]
@@ -297,8 +271,9 @@ class GenericEngineResolver:
     @property
     def engine(self) -> Engine:
         """The single-Engine fallback (Protocol requirement): the default
-        Agent's Engine. A resident host normally drives via
-        :meth:`resolve_engine`; this is the degenerate single-Agent view.
+        Agent's Engine, built afresh on every read like any other. A resident
+        host normally drives via :meth:`resolve_engine`; this is the
+        degenerate single-Agent view.
         """
         return self._engine_for_agent(self._lookup_agent("default", task_id="<default-engine>"))
 
@@ -344,10 +319,23 @@ class GenericEngineResolver:
         if carrier is not None:
             carrier[str(task_id)] = tuple(aliases)
 
+    def forget_turn_engine(self, task_id: str) -> None:
+        """Let go of the Engine kept for ``task_id``'s turn, so the next
+        :meth:`resolve_engine` builds afresh. The driver calls it when a new
+        user goal opens a turn (a stale Engine from an earlier turn must not
+        serve it), the worker when a turn settles — terminal, or parked on
+        the next-goal handle — so a parked conversation holds no tool set and
+        no MCP lease. Idempotent; a no-op without the registry."""
+        locals_ = getattr(self, "_task_locals", None)
+        if locals_ is not None:
+            locals_.drop_engine(str(task_id))
+
     def forget_turn_carriers(self, task_id: str) -> None:
         """Drop a task's per-turn carrier entries (permission_mode / effort /
-        mcp aliases). Called from the conversation-end control verbs
-        (``cancel`` / ``close``) — mirrors :meth:`forget_background_subagents`.
+        mcp aliases) and its task-local state (the turn Engine, the read-first
+        record, the built-ins' slots). Called from the conversation-end
+        control verbs (``cancel`` / ``close``) — mirrors
+        :meth:`forget_background_subagents`.
 
         The carriers are written every turn and were otherwise **never evicted**
         (one entry per task, forever), so a long-lived server serving many
@@ -363,6 +351,9 @@ class GenericEngineResolver:
             carrier = getattr(self, name, None)
             if carrier is not None:
                 carrier.pop(key, None)
+        locals_ = getattr(self, "_task_locals", None)
+        if locals_ is not None:
+            locals_.forget(key)
 
     def request_cancellation(self, task_id: str) -> None:
         """cancel-cascade — mark ``task_id`` cancelled in the process-local
@@ -425,8 +416,13 @@ class GenericEngineResolver:
     def resolve_engine(self, task: Any) -> Engine:
         """Resolve the Engine driving ``task`` by its folded state.
 
-        Folds the Task's ``TaskCreated.agent_name`` → :meth:`_lookup_agent` →
-        cached :meth:`_build_engine`. An unknown ``agent_name`` is a hard
+        The turn's Engine, built once: a resume within the turn (an approval,
+        an answer, a sub-agent return, the driver reading the ask codec off
+        it) gets the Engine the turn opened with, from the task-local
+        registry; the first resolve of a turn folds the Task's
+        ``TaskCreated.agent_name`` → :meth:`_lookup_agent` →
+        :meth:`_build_engine` and keeps the result until
+        :meth:`forget_turn_engine`. An unknown ``agent_name`` is a hard
         :class:`UnknownAgentError` at lease time, not a silent
         no-op. ``"unnamed"`` resolves to ``unnamed_fallback`` when one was
         supplied, else also hard-errors.
@@ -450,6 +446,19 @@ class GenericEngineResolver:
         drain (``subtask_drain._ChildNotReady``) resolves the same Engine.
         """
         task_id = str(getattr(task, "task_id", ""))
+        locals_ = getattr(self, "_task_locals", None)
+        if locals_ is not None:
+            held = locals_.held_engine(task_id)
+            if held is not None:
+                return held
+        engine = self._build_turn_engine(task, task_id)
+        if locals_ is not None:
+            locals_.hold_engine(task_id, engine)
+        return engine
+
+    def _build_turn_engine(self, task: Any, task_id: str) -> Engine:
+        """The build half of :meth:`resolve_engine`: fold the bindings, pick
+        the agent, build. Never consults the task-local registry."""
         name = agent_name_of(self.event_log, task_id)
         # A ``__workflow__`` child recorded on the stream is the orchestration
         # interpreter, NOT a named agent — route it (with the task_id, so its
@@ -461,7 +470,7 @@ class GenericEngineResolver:
         # ``_lookup_agent("__workflow__")`` and hard-errors. The inherited
         # spawnable set comes from the child's DIRECT parent agent (the one that
         # called ``run_workflow``) — equal to what the drain threads at the
-        # same tree layer. Returns uncached, exactly as the drain path does.
+        # same tree layer. Built the way the drain path builds it.
         if name == WORKFLOW_AGENT_NAME:
             parent_id = getattr(task, "parent_task_id", None)
             inherited: frozenset[str] = frozenset()
@@ -576,8 +585,8 @@ class GenericEngineResolver:
         # ahead of the drain's targeted descent) still mounts the
         # ``structured_output`` control schema + receipt wrapper the drain path
         # builds. Without this the claimed helper silently loses its schema
-        # contract. ``None`` for every root / plain child keeps the cached
-        # build byte-identical.
+        # contract. ``None`` for every root / plain child keeps the build
+        # byte-identical.
         subtask_schema = (
             _subtask_output_schema(self.event_log, task_id)
             if is_subtask
@@ -791,13 +800,13 @@ class GenericEngineResolver:
         effort: Optional[str] = None,
         exec_env_ref: Optional[str] = None,
     ) -> Engine:
-        """Resolve a (cached) Engine **by agent name** — for Task creation.
+        """Build an Engine **by agent name** — for Task creation.
 
         The :class:`InteractionDriver` (or equivalent task-creating surface)
         needs the seed Engine that writes ``TaskCreated`` *before* a Task
         (and therefore its recorded ``agent_name``) exists, so it cannot go
         through the Task-keyed :meth:`resolve_engine`. This shares the same
-        registry lookup + per-(agent, model, ask) cache: an unknown
+        registry lookup and build: an unknown
         ``agent_name`` is the same hard :class:`UnknownAgentError`
         (``agent_name`` is load-bearing), so a caller can never create a
         Task naming an unresolvable Agent. ``"unnamed"`` resolves to
@@ -1065,9 +1074,6 @@ class GenericEngineResolver:
                 # it so the child mounts the ``structured_output`` control
                 # schema + the ``StructuredOutputPolicy`` receipt wrapper.
                 # ``None`` (every plain child) leaves the build unchanged.
-                # Built uncached (this direct ``_build_engine`` call never
-                # goes through ``_engine_for_agent``), so the schema-shaped
-                # engine can never leak to a sibling via the cache key.
                 structured_output_schema=_subtask_output_schema(
                     self.event_log, task_id
                 ),
@@ -1126,16 +1132,12 @@ class GenericEngineResolver:
         delegation_enabled: Optional[bool] = None,
         allowed_subtask_agents: Optional[frozenset[str]] = None,
     ) -> Engine:
-        """Per-agent Engine builder + cache.
+        """Build ``agent``'s Engine for one turn.
 
-        The cache key is
-        ``(agent_name, model, ask_user_question_enabled, workspace, provider)``
-        — the model is part of the binding (a per-turn switch resolves a
-        distinct Engine), ``workspace`` is the per-session fs-root **absolute path**
-        so two concurrent sessions on different directories never share an Engine
-        (and their files never cross), and ``provider`` is the per-session
-        provider name so two sessions on different providers never share an Engine.
-        ``None`` workspace / provider ⇒ the host-fixed defaults.
+        A per-turn value, never cached (module docstring): every call builds
+        afresh, so two tasks with equal bindings hold distinct Engines that
+        compose byte-identical schemas, and nothing in an Engine outlives its
+        turn except what the host pools deliberately (live MCP connections).
 
         ``todo_write`` / ``ask_user_question`` are AGENT identity, not host
         config. ``effective_ask`` is the (already depth-masked) value the caller
@@ -1149,16 +1151,23 @@ class GenericEngineResolver:
         ``delegation_enabled`` / ``allowed_subtask_agents`` override that
         identity read for a SUBTASK — :meth:`resolve_engine` passes the root's
         inherited spawn set, verbatim, the way the drain's child-engine builder
-        does — and widen the cache key, so a child's inherited build never
-        shares a slot with the same agent's own-identity build.
+        does.
+
+        ``policy_wrapper``: the multi-turn wrapper is a TOP-LEVEL-session
+        concern (it turns a ``FinishDecision`` into a next-goal suspend for
+        ``noeta code chat``). A delegated child is one-shot and must finish
+        with a real ``TaskCompleted``, so the resident worker's per-task
+        :meth:`resolve_engine` passes ``None`` for a subtask (mirroring the
+        drain's ``_build_subtask_engine``) while the root keeps
+        ``self.policy_wrapper``. The ``_POLICY_WRAPPER_UNSET`` sentinel
+        distinguishes "caller did not pass it" (⇒ ``self.policy_wrapper``)
+        from "caller passed ``None``" (⇒ build unwrapped); a plain ``None``
+        default would conflate the two and re-wrap an explicit-unwrapped
+        child.
 
         ``structured_output_schema`` (a workflow helper's per-helper JSON
-        Schema) BYPASSES the cache entirely: the schema shapes the Engine, so
-        it can neither share a slot with schema-free builds nor leave a
-        schema-shaped engine behind for them. Sharing a cached Engine across
-        tasks is safe for everything else because the Policy keeps no
-        cross-task mutable state (the step cap reads the Engine-threaded
-        per-turn count; the compaction baselines are keyed per task).
+        Schema) shapes this one build: the ``structured_output`` control mount
+        plus the ``StructuredOutputPolicy`` receipt wrapper.
         """
         resolved_model = model if model else self.model
         effective_ask = (
@@ -1191,135 +1200,24 @@ class GenericEngineResolver:
                 if allowed_subtask_agents is not None
                 else frozenset()
             )
-        # Delegation is a pure function of (agent, delegation_allowed) for an
-        # own-identity build, but a subtask's inherited spawn set is a per-tree
-        # input, so ``(eff_delegation, eff_subtask_agents)`` keys the build
-        # too — an inherited child build never shares a slot with the same
-        # agent's own-identity build. ``workspace``
-        # and ``provider`` ARE part of the key: a different session fs-root
-        # / provider must resolve a distinct Engine so concurrent sessions never
-        # share fs tools or LLM adapter.
-        # ``permission_mode`` is a
-        # per-turn, NON-durable knob that drives ``require_approval_tools``, so two
-        # turns on different permission modes must NOT share a cached Engine.
-        # ``mcp_aliases`` is a per-turn,
-        # NON-durable enabled-server-alias tuple. Two turns enabling different MCP
-        # servers must NOT share a cached Engine (their live tool sets differ), so
-        # the alias tuple keys the build.
-        # ``exec_env_ref`` is the per-session
-        # sandbox container base_url. Two sessions bound to different containers
-        # must NOT share a cached Engine (their fs / shell tools target different
-        # backends).
-        # ``policy_wrapper``: the multi-turn wrapper is a
-        # TOP-LEVEL-session concern (it turns a ``FinishDecision`` into a
-        # next-goal suspend for ``noeta code chat``). A delegated child is
-        # one-shot and must finish with a real ``TaskCompleted``; the resident
-        # worker's per-task ``resolve_engine`` therefore passes ``None`` for a
-        # subtask (mirroring the drain's ``_build_subtask_engine``), while the
-        # root keeps ``self.policy_wrapper``. Keying on ``wrapper is None`` keeps
-        # a wrapped root Engine and an unwrapped child Engine (same agent + model
-        # + workspace + ask — the common explorer case) in SEPARATE cache slots,
-        # so the root's wrapper never leaks to a child via the cache. The
-        # ``_POLICY_WRAPPER_UNSET`` sentinel distinguishes "caller did not pass
-        # it" (⇒ ``self.policy_wrapper``) from "caller passed ``None``" (⇒ build
-        # unwrapped); a plain ``None`` default would conflate the two and re-wrap
-        # an explicit-unwrapped child.
         effective_wrapper = (
             self.policy_wrapper
             if policy_wrapper is _POLICY_WRAPPER_UNSET
             else policy_wrapper
         )
-        # A per-helper structured-output schema SHAPES the Engine (the
-        # ``structured_output`` control mount + the StructuredOutputPolicy
-        # receipt wrapper), so a schema-carrying build must never enter the
-        # shared cache: keyed in, it would collide with every other schema for
-        # the same agent; keyed out, it would leak the schema-shaped engine to
-        # schema-free siblings. Build it uncached — the same choice the
-        # delegation drain makes for its child engines.
-        if structured_output_schema is not None:
-            return self._build_engine(
-                agent,
-                resolved_model,
-                delegation_enabled=eff_delegation,
-                allowed_subtask_agents=eff_subtask_agents,
-                ask_user_question_enabled=effective_ask,
-                policy_wrapper=effective_wrapper,
-                workspace=workspace,
-                provider=provider,
-                permission_mode=permission_mode,
-                mcp_aliases=mcp_aliases,
-                effort=effort,
-                task_id=task_id,
-                exec_env_ref=exec_env_ref,
-                structured_output_schema=structured_output_schema,
-            )
-        # ``_engine_cache_scope`` is a host-defined
-        # partition for engine material that varies per TASK beyond the
-        # standard dimensions (e.g. the SdkHost's per-tenant memory root, whose
-        # store is baked into the built Engine's tool closures). ``None`` (the
-        # base default, every single-tenant host) keeps the shared slot;
-        # the cache is in-memory
-        # only (never durable), so widening the tuple has no resume effect.
-        key = (
-            agent.name, resolved_model, effective_ask, workspace, provider,
-            permission_mode, mcp_aliases, effort, exec_env_ref,
-            effective_wrapper is None,
-            eff_delegation, eff_subtask_agents,
-            self._engine_cache_scope(agent, task_id),
+        return self._build_engine(
+            agent,
+            resolved_model,
+            delegation_enabled=eff_delegation,
+            allowed_subtask_agents=eff_subtask_agents,
+            ask_user_question_enabled=effective_ask,
+            policy_wrapper=effective_wrapper,
+            workspace=workspace,
+            provider=provider,
+            permission_mode=permission_mode,
+            mcp_aliases=mcp_aliases,
+            effort=effort,
+            task_id=task_id,
+            exec_env_ref=exec_env_ref,
+            structured_output_schema=structured_output_schema,
         )
-        # the global lock guards only the cache map. The build
-        # itself runs OUTSIDE it, guarded by a PER-KEY build lock — one build
-        # per key (so the live MCP connect + its McpServerSkipped/observer
-        # events fire exactly once), while builds for DIFFERENT keys run
-        # concurrently. Holding the global lock across ``_build_engine`` would
-        # serialise every session behind one slow/hanging MCP connector —
-        # a delegated child could not even build its Engine until an
-        # unrelated session's connect finished.
-        with self._engines_lock:
-            cached = self._engines.get(key)
-            if cached is not None:
-                self._engines.move_to_end(key)
-                return cached
-            builds = getattr(self, "_engine_builds", None)
-            if builds is None:
-                # Older @dataclass subclasses / test doubles supply no
-                # storage — create it lazily under the global lock.
-                builds = {}
-                self._engine_builds = builds
-            build_lock = builds.setdefault(key, threading.Lock())
-        with build_lock:
-            try:
-                # Double-check: a concurrent thread may have finished this key's
-                # build while we waited on its lock.
-                with self._engines_lock:
-                    cached = self._engines.get(key)
-                    if cached is not None:
-                        self._engines.move_to_end(key)
-                        return cached
-                engine = self._build_engine(
-                    agent,
-                    resolved_model,
-                    delegation_enabled=eff_delegation,
-                    allowed_subtask_agents=eff_subtask_agents,
-                    ask_user_question_enabled=effective_ask,
-                    policy_wrapper=effective_wrapper,
-                    workspace=workspace,
-                    provider=provider,
-                    permission_mode=permission_mode,
-                    mcp_aliases=mcp_aliases,
-                    effort=effort,
-                    task_id=task_id,
-                    exec_env_ref=exec_env_ref,
-                )
-                with self._engines_lock:
-                    self._engines[key] = engine
-                    # LRU eviction: drop the oldest entry when over the cap.
-                    if len(self._engines) > _MAX_CACHED_ENGINES:
-                        self._engines.popitem(last=False)
-                return engine
-            finally:
-                # Always drop the per-key build-lock entry, even if
-                # ``_build_engine`` raised — otherwise the Lock leaks in
-                # ``_engine_builds`` forever (one per distinct failing key).
-                with self._engines_lock:
-                    builds.pop(key, None)

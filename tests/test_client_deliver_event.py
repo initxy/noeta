@@ -28,16 +28,23 @@ EVENT_KIND = "webhook:payment"
 
 
 class _WaitExternalThenFinishPolicy:
-    """Scripted: suspend on ``wait_external`` once, then finish."""
+    """Scripted: suspend on ``wait_external`` once per task, then finish.
 
-    def __init__(self) -> None:
-        self._decisions = [
-            WaitExternalDecision(event_kind=EVENT_KIND),
-            FinishDecision(answer="paid"),
-        ]
+    The script is keyed by task in class-level storage, not kept on the
+    instance: the Engine — and so this policy — is built afresh every turn,
+    so a policy that carries state across turns must key it by task."""
+
+    _decisions_by_task: dict[str, list] = {}
 
     def decide(self, ctx, view):  # noqa: ARG002 — scripted
-        return self._decisions.pop(0)
+        script = self._decisions_by_task.setdefault(
+            ctx.task_id,
+            [
+                WaitExternalDecision(event_kind=EVENT_KIND),
+                FinishDecision(answer="paid"),
+            ],
+        )
+        return script.pop(0)
 
 
 class _WaitExternalPolicyProvider:

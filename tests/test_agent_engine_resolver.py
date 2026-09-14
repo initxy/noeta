@@ -324,8 +324,14 @@ def test_resolver_dispatches_on_recorded_agent_name(tmp_path: Path) -> None:
     assert "Edit" not in set(exp_engine._tools)
 
 
-def test_resolver_caches_one_engine_per_agent(tmp_path: Path) -> None:
-    """Two tasks of the same Agent share one cached Engine."""
+def test_resolver_builds_one_engine_per_turn(tmp_path: Path) -> None:
+    """The Engine is a per-turn value: two tasks — same Agent, same bindings
+    — hold distinct Engines that expose the same tool set (nothing in one
+    task's Engine reaches another's); within a turn every resolve hands back
+    the turn's Engine (a resume finds the tool set it started with); once
+    the turn's Engine is let go, the next resolve builds afresh (nothing read
+    at build — skill tiers, an MCP tool list — can go stale between
+    turns)."""
     event_log, content_store, dispatcher = _storage()
     seed = build_engine_for_agent(
         official_specs()["main"],
@@ -338,9 +344,15 @@ def test_resolver_caches_one_engine_per_agent(tmp_path: Path) -> None:
     t1 = seed.create_task(goal="a", policy_name="react", agent_name="general-purpose")
     t2 = seed.create_task(goal="b", policy_name="react", agent_name="general-purpose")
     resolver = _resolver(event_log, content_store, dispatcher, tmp_path)
-    e1 = resolver.resolve_engine(fold(event_log, content_store, t1.task_id))
+    task1 = fold(event_log, content_store, t1.task_id)
+    e1 = resolver.resolve_engine(task1)
     e2 = resolver.resolve_engine(fold(event_log, content_store, t2.task_id))
-    assert e1 is e2
+    assert e1 is not e2
+    assert resolver.resolve_engine(task1) is e1
+    resolver.forget_turn_engine(t1.task_id)
+    e1_next = resolver.resolve_engine(task1)
+    assert e1_next is not e1
+    assert set(e1._tools) == set(e2._tools) == set(e1_next._tools)
 
 
 def test_resolver_unknown_agent_is_hard_error(tmp_path: Path) -> None:
@@ -532,9 +544,7 @@ def test_subtask_engine_is_not_multi_turn_wrapped(tmp_path: Path) -> None:
     per-task ``resolve_engine`` must NOT carry the multi-turn wrapper — it is
     one-shot and must finish with a real ``TaskCompleted`` so the
     ``ChildLifecycleObserver`` fires the parent's wake. The root task on the
-    SAME agent + model still IS wrapped, and the two live in DISTINCT cache
-    slots (the wrapper-is-None dimension keys them apart), so the root's
-    wrapper cannot leak to the child via the cache.
+    SAME agent + model still IS wrapped.
 
     This is the regression guard for the deadlock where a resident worker's
     untargeted ``tick()`` claimed a spawned explorer child ahead of the
@@ -553,8 +563,8 @@ def test_subtask_engine_is_not_multi_turn_wrapped(tmp_path: Path) -> None:
         provider=_EndTurnProvider(),
         workspace_dir=tmp_path,
     )
-    # Two tasks on the SAME agent + model — the cache-collision case. One is a
-    # root task, the other a delegated child (parent_task_id set).
+    # Two tasks on the SAME agent + model. One is a root task, the other a
+    # delegated child (parent_task_id set).
     root_task = seed.create_task(
         goal="root", policy_name="react", agent_name="general-purpose"
     )
@@ -581,36 +591,25 @@ def test_subtask_engine_is_not_multi_turn_wrapped(tmp_path: Path) -> None:
         "child engine inherited the multi-turn wrapper — a subtask must be "
         "one-shot (FinishDecision → TaskCompleted), not a next-goal suspend"
     )
-    # Same agent + model, but the wrapper-is-None cache dimension keeps them in
-    # SEPARATE slots — so resolving the child never returns the root's wrapped
-    # Engine (the fix is not masked by the cache).
-    assert root_engine is not child_engine, (
-        "root and child shared one cached Engine — the wrapper-is-None cache "
-        "dimension failed to key them apart"
-    )
-    assert len(resolver._engines) == 2, (
-        f"expected 2 cached engines (root wrapped + child unwrapped), "
-        f"got {len(resolver._engines)}: {list(resolver._engines.keys())}"
-    )
+    assert root_engine is not child_engine
 
 
-def test_subtask_engine_cache_isolates_wrapped_from_unwrapped(tmp_path: Path) -> None:
-    """Direct unit guard on ``_engine_for_agent``: the same agent resolved once
-    with the host wrapper and once with ``policy_wrapper=None`` lands in two
-    cache entries (the 10th key dimension). Without this, a child resolved
-    AFTER its same-agent root would reuse the root's wrapped Engine and the
-    subtask fix would be silently masked."""
+def test_subtask_engine_wrapper_follows_the_explicit_argument(tmp_path: Path) -> None:
+    """Direct unit guard on ``_engine_for_agent``: the same agent built once
+    with the host wrapper and once with ``policy_wrapper=None`` yields a
+    wrapped and an unwrapped Engine — the ``_POLICY_WRAPPER_UNSET`` sentinel
+    keeps an explicit ``None`` from being overwritten by the host default."""
     event_log, content_store, dispatcher = _storage()
     resolver = _multi_turn_resolver(event_log, content_store, dispatcher, tmp_path)
     agent = resolver._lookup_agent("general-purpose", task_id="<unit>")
 
     wrapped = resolver._engine_for_agent(agent, policy_wrapper=resolver.policy_wrapper)
     unwrapped = resolver._engine_for_agent(agent, policy_wrapper=None)
+    defaulted = resolver._engine_for_agent(agent)
 
     assert _is_multi_turn_wrapped(wrapped)
+    assert _is_multi_turn_wrapped(defaulted)
     assert not _is_multi_turn_wrapped(unwrapped)
-    assert wrapped is not unwrapped
-    assert len(resolver._engines) == 2
 
 
 def test_resolve_engine_routes_workflow_child(tmp_path: Path) -> None:

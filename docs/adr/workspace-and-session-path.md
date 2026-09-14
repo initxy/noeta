@@ -8,7 +8,7 @@ One host process serves many working directories and many providers at once, and
 
 **Workspace, provider and permission mode are session-level, not process-level.** The host is a table of providers and a default workspace; a session overrides both when it starts.
 
-**A session pins the full absolute path.** `TaskHostBoundPayload.workspace_dir` carries the resolved absolute path, written once at task creation. Every later turn folds that path, and resume reads only it — no name resolution, no directory pool, no lookup outside the event log. The Engine cache is keyed on that absolute path and on the provider name, so two sessions on different directories or providers never share an Engine.
+**A session pins the full absolute path.** `TaskHostBoundPayload.workspace_dir` carries the resolved absolute path, written once at task creation. Every later turn folds that path, and resume reads only it — no name resolution, no directory pool, no lookup outside the event log. Every turn's Engine is built from that absolute path and the provider name (the engine-per-turn ADR), so two sessions on different directories or providers never share fs tools or an adapter.
 
 **Path admission has no allowlist.** The host hands over any absolute directory; the only requirement is that it is an existing directory.
 
@@ -21,7 +21,7 @@ One host process serves many working directories and many providers at once, and
 ## Rationale
 
 - **Resume depends only on the event log.** An absolute path in `TaskHostBound` is reconstructible from persisted data alone. Anything else a session could be pinned to — a registry entry, a symlink, a hashed directory name under a pool — lives outside the log, so it can be renamed or cleaned up, and a resumed session then either fails to find its directory or silently runs against the wrong one. That failure is invisible and destructive, so the path itself is the durable unit and any grouping of sessions by directory stays off the resume path.
-- **Sinking the three run-config dimensions to the session** is what lets one process serve many directories and providers; keying the Engine cache on them keeps the sharing honest.
+- **Sinking the three run-config dimensions to the session** is what lets one process serve many directories and providers; building every turn's Engine from them keeps the sharing honest.
 - **Provider folds into the model binding** because provider and model are chosen and switched together — one binding event for one pair. Only the name is recorded, because the instance carries connection details and secrets that must never reach the log.
 - **Permission is not durable** because it is never replayed; recording it would be provenance for a decision the resume path does not make.
 - **Memory is one layer** because its value is remembering across contexts; slicing it by workspace weakens exactly that and forces a decision at write time about which layer a new memory lands in.
@@ -38,7 +38,7 @@ One host process serves many working directories and many providers at once, and
 
 ## Consequences
 
-- The pieces land in `noeta.client.host` (the providers table, workspace resolution, the Engine cache key), `noeta.execution.driver` and `noeta.execution.resolver` (welding the path, folding it, the per-turn carriers), and `noeta.protocols.events` (`TaskHostBoundPayload.workspace_dir`, `ModelBoundPayload.provider`).
+- The pieces land in `noeta.client.host` (the providers table, workspace resolution, the per-turn Engine build), `noeta.execution.driver` and `noeta.execution.resolver` (welding the path, folding it, the per-turn carriers), and `noeta.protocols.events` (`TaskHostBoundPayload.workspace_dir`, `ModelBoundPayload.provider`).
 - `workspace_dir` is omitted from the canonical event form when absent, so a recording without a session workspace folds to the host's default directory.
 - The per-turn carriers are process-local: a host restart between turns loses them, and the next turn supplies its own value.
 - Multi-tenancy has to revisit path admission and the single global memory root together.

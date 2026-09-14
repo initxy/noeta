@@ -180,8 +180,8 @@ class GovernanceState:
     model_bindings: list[dict[str, Any]] = field(default_factory=list)
     # The provider name folded onto that same ``ModelBound`` binding — provider
     # binding deliberately rides the model-binding route rather than owning a
-    # separate event. The resolver looks up ``providers[name]`` and adds it as a
-    # dimension of the engine cache key; ``None`` keeps the host default.
+    # separate event. The resolver looks up ``providers[name]`` and builds the
+    # turn's Engine on that adapter; ``None`` keeps the host default.
     provider_binding: Optional[str] = None
     # The server host identity bound at task open, folded from the single
     # ``TaskHostBound`` event.

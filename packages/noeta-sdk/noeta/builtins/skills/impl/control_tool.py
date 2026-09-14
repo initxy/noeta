@@ -48,6 +48,7 @@ __all__ = [
     "skill_tool_schema",
     "make_skill_translate",
     "make_skills_control_tool",
+    "model_invocable_names",
 ]
 
 
@@ -371,6 +372,22 @@ def fit_menu_to_budget(
     return frozenset(dropped)
 
 
+def model_invocable_names(registry: Any) -> tuple[str, ...]:
+    """The sorted skill names ``registry`` lets the model invoke — the
+    ``skill`` tool's enum, before any budget fitting. A skill whose
+    frontmatter declares ``disable-model-invocation: true`` is left out (it
+    stays loadable through the host preload channel). ``()`` for no registry."""
+    if registry is None:
+        return ()
+    out: list[str] = []
+    for name in sorted(registry.names()):
+        desc = registry.get(name)
+        if desc is None or not getattr(desc, "model_invocable", True):
+            continue
+        out.append(name)
+    return tuple(out)
+
+
 def _skill_menu(
     registry: Any,
     *,
@@ -401,9 +418,9 @@ def _skill_menu(
     if registry is None:
         return (), frozenset()
     entries: list[tuple[str, str]] = []
-    for name in sorted(registry.names()):
+    for name in model_invocable_names(registry):
         desc = registry.get(name)
-        if desc is None or not getattr(desc, "model_invocable", True):
+        if desc is None:
             continue
         entries.append((name, _menu_description(desc.description)))
     if not entries:

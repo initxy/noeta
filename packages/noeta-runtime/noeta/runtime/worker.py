@@ -740,6 +740,7 @@ def run_leased_task(
                 prelude=prelude,
                 cancelled=cancelled,
                 reliability_sink=reliability_sink,
+                next_goal_handle=next_goal_handle,
             )
         if task.status == "suspended":
             rt.dispatcher.release(
@@ -807,11 +808,36 @@ def run_leased_task(
         rt.dispatcher.release(
             lease.lease_id, next_state=task.status, wake_on=task.wake_on
         )
+        _settle_turn_engine(rt, task, next_goal_handle)
         return "drained"
     except TaskCancellationRequested:
         return _settle_stopped_turn(
             rt, lease, engine, next_goal_handle=next_goal_handle
         )
+
+
+def _settle_turn_engine(
+    rt: WorkerRuntime, task: Any, next_goal_handle: Optional[str]
+) -> None:
+    """Let the host drop the turn's Engine once the turn has settled: the
+    task is terminal, or it parked on the next-goal handle (a normally
+    finishing interactive turn). A suspend on anything else — an approval,
+    a question, a sub-agent wake, a timer — is mid-turn, and the resume that
+    follows must find the same Engine. No-op on a host without the seam
+    (a bare ``WorkerRuntime`` double keeps nothing)."""
+    forget = getattr(rt, "forget_turn_engine", None)
+    if not callable(forget):
+        return
+    if task.status == "terminal":
+        forget(task.task_id)
+        return
+    wake_on = getattr(task, "wake_on", None)
+    if (
+        next_goal_handle is not None
+        and isinstance(wake_on, HumanResponseReceived)
+        and wake_on.handle == next_goal_handle
+    ):
+        forget(task.task_id)
 
 
 def _cancel_predicate(rt: WorkerRuntime, task_id: str) -> Optional[Callable[[], bool]]:
@@ -869,6 +895,9 @@ def _settle_stopped_turn(
             consumed_wake_event=consumed,
         )
         _discard_cancellation(rt, lease.task_id)
+        forget = getattr(rt, "forget_turn_engine", None)
+        if callable(forget):
+            forget(lease.task_id)
         return "cancelled"
     task = suspend_on_human_handle(
         engine,
@@ -884,6 +913,7 @@ def _settle_stopped_turn(
         consumed_wake_event=consumed,
     )
     _discard_cancellation(rt, lease.task_id)
+    _settle_turn_engine(rt, task, next_goal_handle)
     return "stopped"
 
 
@@ -937,6 +967,7 @@ def _run_woken(
     prelude: Optional[WokenPrelude] = None,
     cancelled: Optional[Callable[[], bool]] = None,
     reliability_sink: Optional[ReliabilitySink] = None,
+    next_goal_handle: Optional[str] = None,
 ) -> WorkerOutcome:
     """The latest-matching-`TaskWoken` recovery state
     machine. ``task`` is the freshly folded task; ``lease.wake_event`` is the
@@ -990,6 +1021,7 @@ def _run_woken(
             wake_on=task.wake_on,
             consumed_wake_event=lease.wake_event,
         )
+        _settle_turn_engine(rt, task, next_goal_handle)
         return "woken"
 
     # A matching TaskWoken is already durable — reconcile by folded status.
@@ -1055,6 +1087,7 @@ def _run_woken(
                 wake_on=task.wake_on,
                 consumed_wake_event=lease.wake_event,
             )
+            _settle_turn_engine(rt, task, next_goal_handle)
             return "woken"
         # case 5′ — an interrupted attempt after the wake (the
         # partial-step orphan): seal + re-drive or park.

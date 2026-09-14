@@ -30,10 +30,12 @@ from typing import Optional, cast
 
 from noeta.builtins.web.impl.digest import LLMPageDigester, PageDigester
 from noeta.builtins.web.impl.fetch import (
+    PAGE_CACHE_SLOT,
     ContainerCurlFetchTransport,
     CrossHostRedirect,
     FetchTransport,
     HttpFetchTransport,
+    PageCache,
     WebFetchTool,
     build_web_tools,
 )
@@ -76,11 +78,21 @@ def build_web_session_pack(ctx: SessionBuildContext) -> PackContribution:
     webfetch / web_search egress THROUGH the container (curl via the
     ExecEnv); ``None`` keeps the host httpx path.
     """
+    # The task's page cache lives in its local slot (the host binds
+    # ``task_slot`` into ``plugin_config["web"]``), so the 15 minutes span the
+    # task's turns and never another task's. No slot (a bare builder call,
+    # the seed build) ⇒ the tool keeps a private cache.
+    task_slot = ctx.config("web").get("task_slot")
+    page_cache = (
+        task_slot(PAGE_CACHE_SLOT, PageCache) if callable(task_slot) else None
+    )
     return PackContribution(
         tools={
             name: tool
             for name, tool in build_web_tools(
-                exec_env=ctx.exec_env, digester=_digester_from(ctx)
+                exec_env=ctx.exec_env,
+                digester=_digester_from(ctx),
+                page_cache=page_cache,
             ).items()
             if name in ctx.allowed_tools
         }
@@ -95,6 +107,8 @@ __all__ = [
     "HttpFetchTransport",
     "HttpSearchTransport",
     "LLMPageDigester",
+    "PAGE_CACHE_SLOT",
+    "PageCache",
     "PageDigester",
     "SearchResult",
     "SearchTransport",

@@ -194,6 +194,8 @@ Supplying both forms raises `ValueError`, as does a partial explicit triple. All
 | `write_roots` | `None` | `(task_id) -> Sequence[str]` extra write roots |
 | `mcp_server_resolver` | `None` | `(alias) -> McpAnyServerSpec \| None`, resolved per turn |
 | `mcp_http_post` | `None` | injectable HTTP transport (`HttpPostFn`) for remote MCP |
+| `mcp_idle_ttl` | `1800.0` | seconds a pooled MCP connection no turn holds stays open (`None` = forever); connections are shared across tasks by server identity and scope, released when a turn settles, retired early by `Client.reconnect_mcp()` |
+| `mcp_scope_resolver` | `None` | `(task_id) -> str \| None` — the pool scope a task's MCP connections live in (a tenant id, a workspace); tasks share a connection only within one scope, `None` is the shared scope. The same tenancy seam as `memory_root_resolver` |
 | `delta_sink` | `None` | `(StepContext, call_id, StreamDelta) -> None` — ephemeral token deltas; never persisted |
 | `otlp_traces` / `otlp_http_post` | `None` | `OtlpTraceConfig` export config plus transport |
 | `provider_headers` | `None` | `(StepContext) -> Mapping[str, str]` per-request headers |

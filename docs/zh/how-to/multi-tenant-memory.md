@@ -54,7 +54,9 @@ print(client.memory_root(some_task_id))
 - **从持久记录里推导出来。** 把租户的工作区作为 `start(goal=..., workspace_dir=...)` 传入。驱动器会在 Task 创建过程中、也就是第一轮 recall 运行之前，把那个绝对路径焊到该会话的 `TaskHostBound` 事件上 —— 于是解析器可以从账本上读出工作区，并把工作区映射到租户。
 - **先 seed、再注册、然后驱动。** 如果你的后端自己驱动每一轮（`seed_start` → `drive_seeded` / `dispatch_seeded` 这种拆分），就在这两次调用之间注册映射：seed 的 lease 被持有着，所以在映射存在之前没有 worker 能解析出引擎。seed 时刻的 recall 和 seed 时刻的常驻索引会走 host 级别的链条，因此把回退目标（`global_memory_dir`）指向一个空目录。
 
-引擎按解析出来的根目录做缓存，所以两个租户永远不会共用某个被缓存引擎的记忆存储。
+每一轮的引擎都按它的任务解析出来的根目录现建，所以两个租户永远不会共用同一份记忆存储。seed 时建的引擎不会带进驱动这一步：`seed_start` 结束时就把它放掉，驱动时按中间注册好的映射重新建这一轮自己的引擎。
+
+MCP 连接也走同一个接口来分租户。host 按服务器身份把连接放在池里共用，两个租户如果解析出的服务器配置一模一样，就会共用同一条连接 —— 一个有状态的 stdio 服务器（浏览器、登录态）就会把 A 租户的状态带进 B 租户的那一轮。把 `HostConfig.mcp_scope_resolver`（`task_id -> 分组名 | None`，和 `memory_root_resolver` 是同一种约定）设成租户 id，连接就只在同一分组内共用。单租户的 host 留 `None` 即可。
 
 ## 3. 按租户整理
 

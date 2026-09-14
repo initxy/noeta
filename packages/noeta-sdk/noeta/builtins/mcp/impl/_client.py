@@ -15,7 +15,12 @@ in ``noeta.runtime.shell_policy``:
 * every transport / protocol / timeout fault raises :class:`McpError`
   (the ``McpTool`` wrapper turns that into a typed failed ``ToolResult``);
 * ``shutdown`` is bounded: close stdin → terminate → wait → kill → reap,
-  idempotent.
+  idempotent;
+* one JSON-RPC exchange at a time: a connection is shared by every turn
+  that names its server (``noeta.builtins.mcp.impl.pool``), so
+  ``_request`` holds an instance lock from send to matched reply — two
+  turns queue on one stdin instead of interleaving lines and swallowing
+  each other's replies.
 
 Request-response subset: ``initialize`` +
 ``notifications/initialized`` + ``tools/list`` + ``tools/call`` +
@@ -31,6 +36,7 @@ import json
 import os
 import select
 import subprocess
+import threading
 import time
 from typing import Any, Callable, Optional
 
@@ -99,6 +105,12 @@ class McpStdioClient:
         self._readbuf = b""
         self._next_id = 0
         self._closed = False
+        # Serializes a whole request/reply exchange (and a notification), so
+        # concurrent holders of one pooled connection never interleave on the
+        # pipe. ``shutdown`` deliberately does NOT take it: it runs only once
+        # no holder is left (pool) or at process exit, and a hung request must
+        # not stall teardown for its full timeout.
+        self._exchange_lock = threading.Lock()
 
     # -- lifecycle -------------------------------------------------------
 
@@ -219,6 +231,10 @@ class McpStdioClient:
     # -- JSON-RPC --------------------------------------------------------
 
     def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        with self._exchange_lock:
+            return self._request_locked(method, params)
+
+    def _request_locked(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         if self._proc is None:
             raise McpError("client not started")
         self._next_id += 1
@@ -252,7 +268,8 @@ class McpStdioClient:
         raise McpError(f"{method}: too many interleaved messages before response")
 
     def _notify(self, method: str, params: dict[str, Any]) -> None:
-        self._send({"jsonrpc": "2.0", "method": method, "params": params})
+        with self._exchange_lock:
+            self._send({"jsonrpc": "2.0", "method": method, "params": params})
 
     def _send(self, obj: dict[str, Any]) -> None:
         if self._proc is None or self._proc.stdin is None:

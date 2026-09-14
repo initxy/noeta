@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import html as _html
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -66,6 +67,8 @@ __all__ = [
     "FetchTransport",
     "HttpFetchTransport",
     "ContainerCurlFetchTransport",
+    "PAGE_CACHE_SLOT",
+    "PageCache",
     "WebFetchTool",
     "build_web_tools",
 ]
@@ -82,10 +85,66 @@ _INLINE_PAGE_MAX_CHARS = 100_000
 _MAX_REDIRECT_HOPS = 5
 #: Per-URL page-cache TTL — Claude Code's "cached for 15 minutes per URL".
 _CACHE_TTL_SECONDS = 900.0
-#: Entry cap on the per-tool page cache (each entry is one rendered page, so
-#: the cap bounds resident memory, not correctness — an evicted URL simply
+#: Entry cap on the page cache (each entry is one rendered page, so the cap
+#: bounds resident memory, not correctness — an evicted URL simply
 #: re-fetches).
 _CACHE_MAX_ENTRIES = 16
+
+
+class PageCache:
+    """The 15-minute per-URL page cache (successes only), one per task.
+
+    The tool — like the whole Engine — is built afresh every turn, so a
+    cache on the tool instance would forget the page at every turn boundary
+    and Claude Code's "cached for 15 minutes" would hold within a turn only.
+    The session pack therefore keeps the cache in the task's local slot
+    :data:`PAGE_CACHE_SLOT` (``plugin_config["web"]["task_slot"]``, bound by
+    the host) and hands it to each turn's tool. Per task, never wider: a
+    page fetched through one task's egress (its sandbox container, its
+    tenant's network) must never answer another task's fetch. Tests inject
+    their own instance with a fake clock. Thread-safe.
+    """
+
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        ttl_seconds: float = _CACHE_TTL_SECONDS,
+        max_entries: int = _CACHE_MAX_ENTRIES,
+    ) -> None:
+        self.clock = clock
+        self._ttl = ttl_seconds
+        self._max = max_entries
+        #: url → (expires_at, title, rendered markdown).
+        self._pages: dict[str, tuple[float, str, str]] = {}
+        self._lock = threading.Lock()
+
+    def get(self, url: str) -> Optional[tuple[str, str]]:
+        with self._lock:
+            entry = self._pages.get(url)
+            if entry is None:
+                return None
+            expires_at, title, markdown = entry
+            if self.clock() >= expires_at:
+                del self._pages[url]
+                return None
+            return title, markdown
+
+    def put(self, url: str, title: str, markdown: str) -> None:
+        with self._lock:
+            # FIFO eviction: dicts iterate in insertion order, so the first
+            # key is the oldest entry.
+            while len(self._pages) >= self._max:
+                del self._pages[next(iter(self._pages))]
+            self._pages[url] = (self.clock() + self._ttl, title, markdown)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._pages.clear()
+
+
+#: The task-local slot the session pack keeps a task's :class:`PageCache` in.
+PAGE_CACHE_SLOT = "web.page_cache"
 
 # Blocks whose *text content* is not body text: scripts, styles, the document
 # title (surfaced separately), and the whole <head>.
@@ -223,12 +282,10 @@ class WebFetchTool:
     #: ``None`` (no provider wired — direct construction, tests) keeps the
     #: raw-render behaviour; the session pack always binds one.
     digester: Optional[PageDigester] = None
-    #: Injectable monotonic clock — the cache TTL's time source.
-    clock: Callable[[], float] = field(default=time.monotonic)
-    #: url → (expires_at, title, rendered markdown). Successes only.
-    _page_cache: dict[str, tuple[float, str, str]] = field(
-        default_factory=dict, repr=False
-    )
+    #: The per-URL page cache (successes only). The session pack passes the
+    #: task's own (see :class:`PageCache`); a bare tool keeps a private one,
+    #: and a test passes ``PageCache(clock=...)``.
+    cache: PageCache = field(default_factory=PageCache)
 
     def invoke(self, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         url = arguments.get("url")
@@ -335,21 +392,10 @@ class WebFetchTool:
         )
 
     def _cache_get(self, url: str) -> Optional[tuple[str, str]]:
-        entry = self._page_cache.get(url)
-        if entry is None:
-            return None
-        expires_at, title, markdown = entry
-        if self.clock() >= expires_at:
-            del self._page_cache[url]
-            return None
-        return title, markdown
+        return self.cache.get(url)
 
     def _cache_put(self, url: str, title: str, markdown: str) -> None:
-        # FIFO eviction: dicts iterate in insertion order, so the first key is
-        # the oldest entry.
-        while len(self._page_cache) >= _CACHE_MAX_ENTRIES:
-            del self._page_cache[next(iter(self._page_cache))]
-        self._page_cache[url] = (self.clock() + _CACHE_TTL_SECONDS, title, markdown)
+        self.cache.put(url, title, markdown)
 
 
 @dataclass
@@ -530,6 +576,7 @@ def _url_host(url: str) -> str:
 def build_web_tools(
     exec_env: Optional[ExecEnv] = None,
     digester: Optional[PageDigester] = None,
+    page_cache: Optional[PageCache] = None,
 ) -> dict[str, Tool]:
     """Build the web tool pack (``webfetch`` always; ``web_search`` if keyed).
 
@@ -545,7 +592,9 @@ def build_web_tools(
     MCP server). ``webfetch`` is always present.
 
     ``digester`` is webfetch's answer path (the session pack binds one off the
-    ``"llm"`` backend); ``None`` keeps the raw-render behaviour.
+    ``"llm"`` backend); ``None`` keeps the raw-render behaviour. ``page_cache``
+    is the task's :class:`PageCache` (the session pack reads it off the
+    task's local slot); ``None`` gives the tool a private one.
 
     When ``exec_env`` is supplied (sandbox mode) both tools egress THROUGH the
     container — ``webfetch`` via :class:`ContainerCurlFetchTransport` and
@@ -559,7 +608,11 @@ def build_web_tools(
         else HttpFetchTransport()
     )
     tools: list[Tool] = [
-        WebFetchTool(transport=fetch_transport, digester=digester)
+        WebFetchTool(
+            transport=fetch_transport,
+            digester=digester,
+            cache=page_cache if page_cache is not None else PageCache(),
+        )
     ]
     search = build_web_search_tool(exec_env=exec_env)
     if search is not None:

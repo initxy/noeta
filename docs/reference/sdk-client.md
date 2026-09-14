@@ -232,9 +232,10 @@ Pure reads — no external IO, no effect on the task.
 | `get_content(content_hash)` | `bytes \| None` |
 | `put_content(body, *, media_type)` | `ContentRef` |
 | `memory_root(task_id=None)` | `Path` — the store this task resolves to under the multi-tenant chain |
+| `reconnect_mcp(alias=None)` | retires the pooled MCP connection(s) — every server, or one alias, in every scope — so the next turn of every task connects afresh; a turn still using one keeps it until the turn settles. The verb for "the server config changed" |
 | `subscribe(callback)` | an unsubscribe callable; post-commit envelopes, all tasks |
 | `add_sandbox_lifecycle_listener(on_allocate, on_release)` | product wiring for container-tracked side effects; a no-op without a sandbox |
-| `shutdown()` | idempotent: stops workers, tears down observers and the trace sink, releases the sandbox |
+| `shutdown()` | idempotent: stops workers, tears down observers and the trace sink, closes every pooled MCP connection, releases the sandbox |
 
 ## Memory consolidation
 

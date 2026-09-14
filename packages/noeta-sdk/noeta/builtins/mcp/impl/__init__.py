@@ -39,6 +39,11 @@ from noeta.builtins.mcp.impl.resources import (
     make_mcp_resource_ref,
     read_resource,
 )
+from noeta.builtins.mcp.impl.pool import (
+    DEFAULT_MCP_IDLE_TTL_S,
+    McpConnectionPool,
+    connection_key,
+)
 from noeta.builtins.mcp.impl.tool import (
     McpServerSkip,
     McpTool,
@@ -60,6 +65,7 @@ from noeta.runtime.mcp import (
 
 __all__ = [
     "DEFAULT_MCP_HTTP_TIMEOUT_S",
+    "DEFAULT_MCP_IDLE_TTL_S",
     "DEFAULT_MCP_TIMEOUT_S",
     "HttpPostFn",
     "MCP_PREFIX",
@@ -67,6 +73,7 @@ __all__ = [
     "MCP_RESOURCE_ORIGIN_PREFIX",
     "McpAnyServerSpec",
     "McpConfigError",
+    "McpConnectionPool",
     "McpError",
     "McpHttpClient",
     "McpHttpServerSpec",
@@ -76,6 +83,7 @@ __all__ = [
     "McpTool",
     "McpToolSpec",
     "build_mcp_tools",
+    "connection_key",
     "discover_prompts",
     "discover_resources",
     "expand_prompt",

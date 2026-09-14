@@ -111,7 +111,9 @@ class HostConfig:
     resolves an enabled MCP alias to its full connectable spec each turn;
     ``None`` ⇒ no live MCP is connected. ``mcp_http_post`` is an injectable HTTP
     transport for the remote-MCP client (tests pass a fake; ``None`` uses stdlib
-    urllib). These are runtime objects, never part of the agent identity.
+    urllib). ``mcp_idle_ttl`` bounds how long an unused pooled connection
+    stays open; ``mcp_scope_resolver`` partitions the pool per task (tenant /
+    workspace). These are runtime objects, never part of the agent identity.
 
     ``workflow_allowed`` is the host kill-switch for the ``run_workflow`` control
     tool. ``write_mode`` is the process-level fs write policy (``"dry_run"``
@@ -157,6 +159,20 @@ class HostConfig:
         Callable[[str], Optional[McpAnyServerSpec]]
     ] = None
     mcp_http_post: Optional[HttpPostFn] = None
+    #: Idle expiry, in seconds, of a pooled MCP connection no turn holds;
+    #: ``None`` ⇒ never. The Engine is built per turn, and its MCP
+    #: connections come from one host-owned pool keyed by server identity
+    #: (shared across tasks, released when the turn's Engine goes, closed on
+    #: ``Client.shutdown()``); ``Client.reconnect_mcp()`` retires them early.
+    mcp_idle_ttl: Optional[float] = 1800.0
+    #: Per-task MCP pool partition: ``task_id -> scope name`` (a tenant id, a
+    #: workspace) or ``None`` for the shared scope. Two tasks share a pooled
+    #: connection only when the server identity AND the scope match, so a
+    #: stateful stdio server (a browser, a login) never carries one tenant's
+    #: state into another's turn. The same tenancy seam as
+    #: ``memory_root_resolver`` — cheap, total, deterministic per task id.
+    #: ``None`` (single-tenant) shares every connection.
+    mcp_scope_resolver: Optional[Callable[[str], Optional[str]]] = None
     #: Token-streaming sink: ``(ctx, call_id, delta)`` receives ephemeral
     #: ``StreamDelta``s while a streaming-capable provider call is in flight
     #: (a product backend wires its delta hub here). ``None`` ⇒ no sink; deltas

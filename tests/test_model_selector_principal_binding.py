@@ -53,6 +53,14 @@ from noeta.runtime.workspace import FsWriteMode
 # ---------------------------------------------------------------------------
 
 
+def _engine_model(engine) -> str:
+    """The model the Engine's (possibly wrapped) ReAct policy sends."""
+    policy = engine._policy
+    while not hasattr(policy, "_model"):
+        policy = policy._inner
+    return str(policy._model)
+
+
 def _end_turn(text: str = "done") -> LLMResponse:
     return LLMResponse(
         stop_reason="end_turn",
@@ -290,7 +298,8 @@ def test_cli_local_principal_binds_host_default_without_selector(
 
 def test_resolver_keys_engine_on_agent_and_bound_model(tmp_path: Path) -> None:
     """Two tasks naming the same agent but bound to different models resolve
-    to DISTINCT Engines; the same (agent, model) shares one Engine."""
+    to DISTINCT Engines on their own models; a task's turn keeps its Engine,
+    and its next turn builds afresh on the same binding."""
     ws = tmp_path / "ws"
     ws.mkdir()
     host, dispatcher, log = _host(ws, responses=[_end_turn()])
@@ -318,10 +327,15 @@ def test_resolver_keys_engine_on_agent_and_bound_model(tmp_path: Path) -> None:
 
     eng_a = host.resolve_engine(a_folded)
     eng_b = host.resolve_engine(b_folded)
-    assert eng_a is not eng_b  # distinct model → distinct Engine
+    assert _engine_model(eng_a) == "opus"
+    assert _engine_model(eng_b) == "haiku"
 
-    # Re-resolving A's binding returns the SAME cached Engine.
+    # Within the turn A keeps its Engine; the next turn builds a fresh one
+    # on the same model.
     assert host.resolve_engine(a_folded) is eng_a
+    host.forget_turn_engine(a.task_id)
+    again = host.resolve_engine(a_folded)
+    assert again is not eng_a and _engine_model(again) == "opus"
 
 
 def test_resolver_falls_back_to_host_model_when_no_binding(
@@ -335,10 +349,13 @@ def test_resolver_falls_back_to_host_model_when_no_binding(
     eng = host.resolve_engine_for_agent("default")
     t = eng.create_task(goal="g", policy_name="react", agent_name="default")
     folded = fold(log, host.content_store, t.task_id)
-    # No ModelBound → resolves the host-default Engine (same one the
-    # explicit host model would mint).
+    # No ModelBound → resolves on the host-default model (the same one an
+    # explicit host-model build mints).
     resolved = host.resolve_engine(folded)
-    assert resolved is host.resolve_engine_for_agent("default", model="gpt-test")
+    assert _engine_model(resolved) == "gpt-test"
+    assert _engine_model(
+        host.resolve_engine_for_agent("default", model="gpt-test")
+    ) == "gpt-test"
 
 
 # ---------------------------------------------------------------------------
