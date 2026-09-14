@@ -8,6 +8,14 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.23] - 2026-09-14
+
+Covers `noeta-sdk` only: 0.6.21 → 0.6.23 (0.6.22 was the runtime-only
+release, and one tag gates each publish job on its own version, so the sdk
+skips that number). `noeta-runtime` stays at 0.6.22; the change lives in the
+`skills` built-in and the host, so the sdk's `noeta-runtime>=0.6.21` floor is
+unchanged.
+
 ### Added — the `skill` menu has a budget, a keep order, and a usage score for hosts
 
 - **The roster the `skill` control tool renders is capped as a whole**
@@ -22,17 +30,25 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
   budget the bytes are unchanged. Over it, summaries drop from the bottom of
   the keep order while every name stays in the `enum`, and the build logs
   one warning naming the knob. Keep order: the host's `menu_rank` score
-  (desc) > merge tier (workspace-local first; `SkillRegistry.tier_of`,
-  stamped by `merge_skill_registries`) > frontmatter `priority` (asc) > name.
+  (desc) > merge tier (one tier per scope — every built-in, plugin and
+  borrowed pack together at the bottom, then the global tiers, then the
+  workspace ones; `SkillRegistry.tier_of`, stamped by
+  `load_workspace_skills` / `merge_skill_registries`) > frontmatter
+  `priority` (asc) > name.
 - **`HostConfig.skill_menu_rank_resolver`** (`task_id → {skill: score} |
   None`) — the per-task, per-tenant keep order, the same seam and contract
   as `memory_root_resolver` (cheap, total, deterministic per task id). It
   reaches the pack as `menu_rank` and partitions the Engine cache, so two
-  tenants never share a roster.
+  tenants never share a roster. The host asks it **once per task** and keeps
+  the first non-empty answer for the task's life in that process, so a
+  score that decays with the clock never rotates a running task's roster or
+  rebuilds its Engine turn after turn; a resolver that declines is asked
+  again on the next build. Configuring it together with a static
+  `plugin_config["skills"]["menu_rank"]` is refused at construction.
 - **`noeta.sdk.skill_usage_from_events` / `rank_skills_by_usage` /
-  `SkillUsage`** — a pure fold of a tenant's event streams into per-skill
-  `(count, last_used_at)` plus Claude Code's decay score
-  (`count × max(0.5^(days/7), 0.1)`). Noeta records nothing new: every
+  `decayed_usage_score` / `SkillUsage`** — a pure fold of a tenant's event
+  streams into per-skill `(count, last_used_at)` plus Claude Code's decay
+  score (`count × max(0.5^(days/7), 0.1)`). Noeta records nothing new: every
   activation is already a `TaskStatePatched(activate_skills=…)` event. Only
   activations after a task's first `ContextPlanComposed` count, so host
   preloads never rank themselves first.
@@ -2285,7 +2301,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.22...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.23...HEAD
+[0.6.23]: https://github.com/initxy/noeta/compare/v0.6.22...v0.6.23
 [0.6.22]: https://github.com/initxy/noeta/compare/v0.6.21...v0.6.22
 [0.6.21]: https://github.com/initxy/noeta/compare/v0.6.20...v0.6.21
 [0.6.20]: https://github.com/initxy/noeta/compare/v0.6.19...v0.6.20
