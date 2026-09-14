@@ -175,6 +175,12 @@ compile_options(options, *, plugins=None, preset_prompts=None)
 | `memory_dir` / `global_memory_dir` | `None` | 宿主级的存储根 |
 | `memory_root_resolver` | `None` | `(task_id) -> Path \| None`，按任务的根 |
 
+**技能菜单。** `skill` control tool 渲染出来的技能列表会按预算裁剪（默认是模型上下文窗口的 1%，估算 token 时中日韩字符按一个字一个 token 算）；超出后，排序靠后的技能只保留名字、不再带摘要。保留顺序是：host 给的分数，然后工作区层先于借入层，再按 frontmatter `priority`，最后按名字。想按使用频次排，就用 `noeta.sdk` 上的 `skill_usage_from_events` 和 `rank_skills_by_usage` 把租户的事件流折成分数；固定的排序直接写进 `plugin_config["skills"]["menu_rank"]`（两者不能同时配，host 构造时就会拒绝）。host 对每个任务只问解析器一次，拿到第一份非空答案后在本进程里一直沿用，所以随时间衰减的分数不会让进行中的任务每轮换一份列表；解析器暂时给不出答案（返回 None）的话，下次构建会再问一次。和 `memory_root_resolver` 一样，跨进程恢复的任务必须解析出同一份排序。
+
+| 字段 | 默认值 | 用途 |
+| --- | --- | --- |
+| `skill_menu_rank_resolver` | `None` | `(task_id) -> {技能名: 分数} \| None`，按任务的保留顺序 |
+
 **插件运维配置。**
 
 | 字段 | 默认值 | 用途 |

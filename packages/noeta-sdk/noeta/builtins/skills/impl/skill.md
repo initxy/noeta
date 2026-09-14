@@ -5,7 +5,9 @@ Activate a named skill so its instructions load into the current task.
 A single call activates ONE skill, chosen by the `skill` parameter — constrained
 to the roster of skills indexed for this workspace. Activation loads that skill's
 instructions and capabilities via a state patch, the same channel a pre-loop
-activation uses. There are no other arguments: just the skill name.
+activation uses. There are no other arguments: just the skill name. A skill
+listed by name alone still has a full summary and body; only its roster line
+was shortened to save context, and activating it loads everything.
 
 ## When to use
 

@@ -12,6 +12,7 @@ with catalog pricing and the deterministic tool pack the generic
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import logging
 import threading
 from collections import OrderedDict
@@ -296,6 +297,47 @@ def _catalog_pricing(model: str, usage: Usage) -> float:
         return 0.0
 
 
+#: The ``skill`` roster's budget as a fraction of the bound model's context
+#: window — the same 1 % Claude Code reserves for its skill listing, counted
+#: here in estimated tokens where CC compares a ``1 % × window × 4``
+#: character proxy against character counts. Equal for an ASCII roster; for
+#: a CJK roster (one token per character) this is the honest 1 % where CC's
+#: proxy admits four times the characters. An operator who wants CC's
+#: looser fit overrides the absolute number in ``plugin_config["skills"]``.
+SKILL_MENU_BUDGET_FRACTION = 0.01
+
+#: Window assumed if the catalog ever reports none. ``derive_compaction_config``
+#: gives an uncatalogued model a conservative window rather than
+#: ``COMPACTION_OFF``, so this is a defensive floor, not a reachable path
+#: today; 1 % of it is the pack's own default.
+_SKILL_MENU_FALLBACK_WINDOW = 200_000
+
+#: Upper bound on the per-task skill-menu rank memo (task ids seen by this
+#: process). LRU beyond it; an evicted task that resolves again simply asks
+#: the resolver once more.
+_MAX_SKILL_MENU_RANK_MEMO = 4096
+
+
+def skill_menu_budget_tokens(model: str) -> int:
+    """The ``skills`` pack's ``menu_budget_tokens`` for ``model`` — 1 % of its
+    catalog context window (an uncatalogued model takes the catalog's
+    conservative window, with the same one-time warning compaction logs).
+    Deterministic in ``model``, so live and resume derive the same roster."""
+    window = derive_compaction_config(model).context_window
+    if not window:
+        window = _SKILL_MENU_FALLBACK_WINDOW
+    return max(1, int(window * SKILL_MENU_BUDGET_FRACTION))
+
+
+def _rank_fingerprint(rank: Mapping[str, float]) -> str:
+    """A short, order-independent digest of a skill-menu rank map, for the
+    Engine cache scope."""
+    canonical = to_canonical_bytes(
+        {name: float(score) for name, score in sorted(rank.items())}
+    )
+    return hashlib.sha256(canonical).hexdigest()[:16]
+
+
 def _spec_write_path_globs(spec: AgentSpec) -> tuple[str, ...]:
     """Read a spec's restricted-write path whitelist.
 
@@ -485,6 +527,16 @@ class SdkHost(GenericEngineResolver):
     # per task id — a resumed task must resolve the same store. ``None`` ⇒ the
     # host-level chain.
     memory_root_resolver: Optional[Callable[[str], Optional[Path]]] = None
+    # Per-task keep order for the ``skill`` control tool's roster (task id →
+    # ``{skill: score}`` or ``None``): the same tenancy seam and contract as
+    # ``memory_root_resolver`` (cheap, total, deterministic per task id — a
+    # resumed task must compose the same roster bytes). Reaches the skills
+    # pack as ``plugin_config["skills"]["menu_rank"]`` and partitions the
+    # Engine cache, so two tenants never share a roster. ``None`` ⇒ tier +
+    # frontmatter ``priority`` order only.
+    skill_menu_rank_resolver: Optional[
+        Callable[[str], Optional[Mapping[str, float]]]
+    ] = None
     #: ``<workspace-environment>`` block switch. Workspace environment material
     #: (not agent identity), so the activation tuple carries no flag and SdkHost
     #: configures it directly. True (default) records the block once at task
@@ -731,6 +783,15 @@ class SdkHost(GenericEngineResolver):
     _engine_builds: dict[Any, threading.Lock] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
+    # First non-empty skill-menu rank per task id — the code-level side of
+    # the ``skill_menu_rank_resolver`` contract (see
+    # :meth:`_skill_menu_rank_override`). Process-local, bounded LRU.
+    _skill_menu_rank_by_task: OrderedDict[str, Mapping[str, float]] = field(
+        default_factory=OrderedDict, init=False, repr=False, compare=False
+    )
+    _skill_menu_rank_lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
     # Per-session permission_mode is a NON-durable, per-turn knob — the frontend
     # sends it each turn; it is never written to the event log. The async HTTP
     # transport seeds a turn on the request thread but resolves the Engine later on
@@ -877,6 +938,17 @@ class SdkHost(GenericEngineResolver):
             raise ValueError(
                 f"SdkHost: default_provider {self.default_provider!r} is not a "
                 f"key of the providers registry {sorted(self.providers)!r}"
+            )
+        if self.skill_menu_rank_resolver is not None and "menu_rank" in (
+            self.plugin_config_overrides.get("skills") or {}
+        ):
+            # The static override is applied last and would replace every
+            # resolved rank, while the Engine cache would still partition by
+            # the rank it replaced — N identical Engines, N MCP connects, no
+            # behaviour. One or the other.
+            raise ValueError(
+                "SdkHost: pass EITHER skill_menu_rank_resolver (per task) OR "
+                "plugin_config['skills']['menu_rank'] (static) — not both"
             )
         # Build the shared background-delivery glue first: both the
         # background-shell and background-sub-agent exit hooks route their
@@ -1702,9 +1774,11 @@ class SdkHost(GenericEngineResolver):
             # (single-tenant / resolver fallback) keeps the host fields.
             plugin_config=self._plugin_config(
                 shell_mode=shell_mode,
+                model=model,
                 spec=spec,
                 memory_override=memory_override,
                 trust_subject=trust_subject,
+                skill_menu_rank=self._skill_menu_rank_override(task_id),
             ),
             hooks_pre_tool_use=self.hooks_pre_tool_use,
             repetition_threshold=self.repetition_threshold,
@@ -1876,7 +1950,9 @@ class SdkHost(GenericEngineResolver):
             # bag as the session path. ``spec=None`` selects the reduced
             # orchestration environment — see :meth:`_plugin_config` for what it
             # deliberately omits.
-            plugin_config=self._plugin_config(shell_mode=self.shell_mode),
+            plugin_config=self._plugin_config(
+                shell_mode=self.shell_mode, model=self.model
+            ),
             tool_output_inline_limit=self.tool_output_inline_limit,
         )
         policy: Policy = react_impl().OrchestrationPolicy(script=script, args=wf_args)
@@ -2060,9 +2136,11 @@ class SdkHost(GenericEngineResolver):
         self,
         *,
         shell_mode: ShellMode,
+        model: Optional[str] = None,
         spec: Optional[AgentSpec] = None,
         memory_override: Optional[Path] = None,
         trust_subject: Optional[Path] = None,
+        skill_menu_rank: Optional[Mapping[str, float]] = None,
     ) -> dict[str, dict[str, Any]]:
         """The per-plugin config bag a build path hands the kernel builder.
 
@@ -2080,6 +2158,10 @@ class SdkHost(GenericEngineResolver):
           neither the lower skills tiers nor instruction discovery. Omitting an
           entry (rather than passing one the pack would self-gate away) is what
           keeps its session correct.
+
+        ``model`` is the session's bound model (the per-task binding on the
+        session path; ``None`` ⇒ the host's default), from which the skills
+        pack's ``menu_budget_tokens`` is derived.
 
         :attr:`plugin_config_overrides` (the host's ``HostConfig.plugin_config``)
         is applied last, over whichever of the two shapes was built — see
@@ -2100,6 +2182,14 @@ class SdkHost(GenericEngineResolver):
                 "skills_dir": self.skills_dir,
                 "allow_skill_scripts": self.allow_skill_scripts,
                 "tool_enforcement": self.skill_tool_enforcement,
+                # The roster budget, derived here from the bound model's
+                # catalog window for the same layering reason as
+                # ``web.digest_model``: the skills built-in must not import
+                # the providers built-in. An operator override of the
+                # absolute number rides ``plugin_config["skills"]``.
+                "menu_budget_tokens": skill_menu_budget_tokens(
+                    model if model is not None else self.model
+                ),
             },
             "workspace": {
                 "environment_enabled": self.environment_enabled,
@@ -2116,6 +2206,11 @@ class SdkHost(GenericEngineResolver):
             config["web"] = {
                 "digest_model": resolve_model_alias(self.webfetch_model)
             }
+        if skill_menu_rank:
+            # The per-task keep order (``skill_menu_rank_resolver``), fixed for
+            # the build. Absent ⇒ no key, so a host without the seam derives
+            # the bag it always did.
+            config["skills"]["menu_rank"] = dict(skill_menu_rank)
         if reduced:
             return self._apply_plugin_config_overrides(config)
         config["fs"]["write_path_globs"] = _spec_write_path_globs(spec)
@@ -2235,10 +2330,56 @@ class SdkHost(GenericEngineResolver):
             return None
         return self.memory_root_resolver(task_id)
 
+    def _skill_menu_rank_override(
+        self, task_id: Optional[str]
+    ) -> Optional[Mapping[str, float]]:
+        """The per-task skill-menu rank ``task_id`` composes with, or ``None``
+        — same fallbacks as :meth:`_memory_root_override` (no resolver, no
+        task id, resolver declining). Centralised so :meth:`_build_engine`
+        and :meth:`_engine_cache_scope` can never disagree on which roster a
+        task composes.
+
+        The resolver is asked ONCE per task: its first non-empty answer is
+        memoised for the task's life in this process. The roster sits in the
+        tool schema (stable prefix) and keys the Engine cache, and the score
+        the SDK itself recommends (``rank_skills_by_usage``) decays with
+        ``now`` — re-asking on every ``resolve_engine`` would rotate the
+        prefix and rebuild the Engine (MCP reconnect included) turn after
+        turn. A declining resolver (``None`` / empty) is asked again on the
+        next build, so a host that binds the tenant after the seed build
+        still ranks from the following turn on. Across processes the
+        resolver's own determinism keeps a resumed task's roster stable —
+        the same contract as ``memory_root_resolver``.
+        """
+        if self.skill_menu_rank_resolver is None or not task_id:
+            return None
+        with self._skill_menu_rank_lock:
+            memo = self._skill_menu_rank_by_task
+            cached = memo.get(task_id)
+            if cached is not None:
+                memo.move_to_end(task_id)
+                return cached
+        rank = self.skill_menu_rank_resolver(task_id)
+        if not rank:
+            return None
+        frozen: Mapping[str, float] = dict(rank)
+        with self._skill_menu_rank_lock:
+            memo = self._skill_menu_rank_by_task
+            existing = memo.get(task_id)
+            if existing is not None:
+                # A concurrent build for the same task got here first; its
+                # answer is the task's.
+                memo.move_to_end(task_id)
+                return existing
+            memo[task_id] = frozen
+            if len(memo) > _MAX_SKILL_MENU_RANK_MEMO:
+                memo.popitem(last=False)
+        return frozen
+
     def _engine_cache_scope(
         self, agent: AgentSpec, task_id: Optional[str]
     ) -> Optional[str]:
-        """Partition the Engine cache by resolved per-task memory root.
+        """Partition the Engine cache by per-task memory root and skill rank.
 
         The Engine cache key deliberately omits ``task_id`` (engines are shared
         across tasks with equal bindings), but a memory-enabled Engine bakes its
@@ -2248,10 +2389,19 @@ class SdkHost(GenericEngineResolver):
         override root; ``None`` (memory-off agent, no resolver, no task id, or
         resolver fallback) keeps the shared slot.
         """
-        if not agent_activates(agent, "memory"):
-            return None
-        override = self._memory_root_override(task_id)
-        return str(override) if override is not None else None
+        parts: list[str] = []
+        if agent_activates(agent, "memory"):
+            override = self._memory_root_override(task_id)
+            if override is not None:
+                parts.append(str(override))
+        if agent_activates(agent, "skill_invocation"):
+            # The ``skill`` control-tool schema is baked into the cached
+            # Engine's composer, so a task-specific rank needs its own slot
+            # for the same reason a tenant memory root does.
+            rank = self._skill_menu_rank_override(task_id)
+            if rank is not None:
+                parts.append("skill_menu_rank:" + _rank_fingerprint(rank))
+        return "|".join(parts) if parts else None
 
     def declared_skill_activations(self, agent: str) -> tuple[str, ...]:
         """The agent spec's declared ``skills`` (``Options.skills``), as plain names.

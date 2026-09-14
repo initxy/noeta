@@ -8,6 +8,37 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Added — the `skill` menu has a budget, a keep order, and a usage score for hosts
+
+- **The roster the `skill` control tool renders is capped as a whole**
+  (`noeta-sdk`). Each skill's summary was already cut at 1024 characters, but
+  a workspace with a hundred skills still paid for a hundred summaries in the
+  stable prefix of every turn. The skills pack now fits the roster to
+  `plugin_config["skills"]["menu_budget_tokens"]` — derived by the host as
+  1 % of the bound model's catalog context window, `2000` when a host passes
+  nothing, overridable through `HostConfig.plugin_config` — using a
+  CJK-aware estimate (a Han / Kana / Hangul character counts one token; the
+  kernel's `chars/4` would undercount a Chinese roster four-fold). Under
+  budget the bytes are unchanged. Over it, summaries drop from the bottom of
+  the keep order while every name stays in the `enum`, and the build logs
+  one warning naming the knob. Keep order: the host's `menu_rank` score
+  (desc) > merge tier (workspace-local first; `SkillRegistry.tier_of`,
+  stamped by `merge_skill_registries`) > frontmatter `priority` (asc) > name.
+- **`HostConfig.skill_menu_rank_resolver`** (`task_id → {skill: score} |
+  None`) — the per-task, per-tenant keep order, the same seam and contract
+  as `memory_root_resolver` (cheap, total, deterministic per task id). It
+  reaches the pack as `menu_rank` and partitions the Engine cache, so two
+  tenants never share a roster.
+- **`noeta.sdk.skill_usage_from_events` / `rank_skills_by_usage` /
+  `SkillUsage`** — a pure fold of a tenant's event streams into per-skill
+  `(count, last_used_at)` plus Claude Code's decay score
+  (`count × max(0.5^(days/7), 0.1)`). Noeta records nothing new: every
+  activation is already a `TaskStatePatched(activate_skills=…)` event. Only
+  activations after a task's first `ContextPlanComposed` count, so host
+  preloads never rank themselves first.
+- The `skill` tool's description tells the model that a name-only roster
+  entry is still a full skill whose activation loads summary and body.
+
 ## [0.6.22] - 2026-09-14
 
 Covers `noeta-runtime` only: 0.6.21 → 0.6.22. `noeta-sdk` stays at 0.6.21;
