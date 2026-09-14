@@ -8,6 +8,34 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed — a sub-agent child claimed by an idle resident worker runs the engine the drain would build
+
+- **A foreground child stolen by a resident worker's untargeted poll no
+  longer drops to the host defaults** (`noeta-runtime`).
+  `ChildLifecycleObserver` enqueues every foreground child unreserved, so
+  under `num_workers >= 2` an idle worker's FIFO poll can claim a
+  freshly-spawned child ahead of the parent's delegation drain
+  (`subtask_drain._ChildNotReady`). That path (`run_leased_task` →
+  `resolve_engine`) seeded only the goal: the child ran on the host-default
+  model and reasoning effort instead of the root session's bindings, with no
+  opening `ModelBound`, no pre-loop residents (no `<workspace-environment>`
+  block), and the leaf agent's own delegation identity instead of the root's
+  inherited spawn set — a silent downgrade whenever the pool's default
+  differed from the session's. Now `resolve_engine` gives an unbound subtask
+  what the drain's child-engine builder gives it: the root's bound model (a
+  child agent's declared `default_model` still wins), per-turn effort /
+  permission mode / MCP selection, and the root's spawn set; and the worker
+  opens the child through the new host seam `seed_claimed_subtask`, which
+  runs the one shared `seed_child_task` (bind → goal → residents) the drain's
+  targeted descent runs. A child is recorded identically whichever driver
+  wins its lease; the race itself is unchanged (see the worker-queue-routing
+  ADR) and now benign. Subtask inheritance in `resolve_engine` also reads the
+  ROOT of the delegation tree rather than the direct parent, so a depth ≥ 2
+  child claimed by a worker still lands in the root session's workspace /
+  container / provider. `_engine_for_agent` keys its cache on the effective
+  delegation set, so a child's inherited build never shares a slot with the
+  same agent's own-identity build.
+
 ## [0.6.21] - 2026-09-13
 
 Covers both packages, lockstep: `noeta-runtime` 0.6.17 → 0.6.21 (0.6.18 to

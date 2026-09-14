@@ -26,6 +26,7 @@ from noeta.execution.subtask_drain import (
     UnsupportedSubtaskSuspend,
     drive_pending_subtasks,
     resume_woken_parent,
+    seed_child_task,
 )
 from noeta.policies.control_semantics import WORKFLOW_AGENT_NAME
 from noeta.protocols.content_store import ContentStore
@@ -439,6 +440,14 @@ class GenericEngineResolver:
         ``LLMRequestStartedPayload.model``. A per-turn switch (a later
         ``ModelBound`` with a different model) resolves a distinct Engine for
         that model.
+
+        A **subtask** (a task with a parent) that carries no binding of its
+        own inherits its delegation tree's ROOT session instead of the host
+        defaults — bound model, workspace, provider, sandbox container,
+        per-turn effort / permission mode / MCP selection, and the root's
+        spawn set — the same choices ``_build_drain_host``'s child-engine
+        builder makes, so a child claimed by a resident worker ahead of the
+        drain (``subtask_drain._ChildNotReady``) resolves the same Engine.
         """
         task_id = str(getattr(task, "task_id", ""))
         name = agent_name_of(self.event_log, task_id)
@@ -505,27 +514,62 @@ class GenericEngineResolver:
         subtask_wrapper: Optional[Callable[[Policy], Policy]] = (
             None if is_subtask else self.policy_wrapper
         )
-        # Subtasks carry no TaskHostBound of their own — the fold leaves
-        # their governance.exec_env_ref / workspace / provider as None. A
-        # delegation tree runs in ONE container / fs root / provider (the
-        # root parent's binding), so a subtask must inherit the parent's
-        # bound values to resolve the SAME sandbox backend — otherwise the
-        # child gets the local host (no browser tools, container-isolated fs
-        # visibility). Mirrors _build_drain_host's inheritance for the
-        # foreground drain path; this branch covers the resident-worker path
-        # (resolve_engine) where an idle worker claims a child task.
+        # ``"unnamed"`` resolves to the supplied fallback; without one the
+        # registry lookup hard-errors on it, per ``_lookup_agent``'s contract.
+        is_unnamed = name == "unnamed" and self.unnamed_fallback is not None
+        agent = (
+            self.unnamed_fallback
+            if is_unnamed
+            else self._lookup_agent(name, task_id=task_id)
+        )
+        # Subtasks carry no TaskHostBound / opening ModelBound of their own
+        # until a driver opens them, and their per-turn carriers are never
+        # noted — the fold leaves governance.exec_env_ref / workspace /
+        # provider / model_binding None and the carriers empty. A delegation
+        # tree runs in ONE container / fs root / provider, on the ROOT
+        # session's bound model and per-turn effort / permission mode / MCP
+        # selection, with delegation INHERITED from the root (its spawnable
+        # set, not the leaf agent's own identity) — exactly the choices
+        # ``_build_drain_host``'s child-engine builder makes for the foreground
+        # drain path. This branch makes the resident-worker path (an idle
+        # worker's untargeted ``tick()`` claiming a child ahead of the drain's
+        # targeted descent — ``subtask_drain._ChildNotReady``) resolve the SAME
+        # Engine, so a child is driven identically whichever driver won its
+        # lease. Read off the tree's ROOT (walked up from the child's
+        # ``TaskCreated.parent_task_id``), not the direct parent: a depth ≥ 2
+        # child's parent is itself a subtask carrying none of these.
+        delegation_enabled: Optional[bool] = None
+        allowed_subtask_agents: Optional[frozenset[str]] = None
         if is_subtask:
-            parent_id = getattr(task, "parent_task_id", None)
-            if parent_id is not None:
-                parent = fold(
-                    self.event_log, self.content_store, str(parent_id)
+            root_id = self._root_task_id_of(task_id)
+            root = fold(self.event_log, self.content_store, root_id)
+            if exec_env_ref is None:
+                exec_env_ref = self._bound_exec_env_ref_for(root)
+            if workspace is None:
+                workspace = self._bound_workspace_for(root)
+            if provider is None:
+                provider = self._bound_provider_for(root)
+            # An unbound child runs on its agent's declared default model, else
+            # the root's non-default binding, else the host default — the same
+            # binding :meth:`seed_claimed_subtask` records when the worker
+            # opens it, so Engine and recording agree.
+            if self._own_model_binding(task) is None:
+                binding = self._child_binding_for(
+                    task_id, self._inherited_model_of(root)
                 )
-                if exec_env_ref is None:
-                    exec_env_ref = self._bound_exec_env_ref_for(parent)
-                if workspace is None:
-                    workspace = self._bound_workspace_for(parent)
-                if provider is None:
-                    provider = self._bound_provider_for(parent)
+                model = binding[0] if binding else self.model
+            if effort is None:
+                effort = getattr(self, "_turn_effort", {}).get(root_id)
+            if permission_mode is None:
+                permission_mode = self._turn_permission_mode.get(root_id)
+            if not mcp_aliases:
+                mcp_aliases = self._child_mcp_aliases(agent, root_id)
+            # The root's spawn set needs the root's recorded agent; a root
+            # stream with no genesis (hand-emitted child, purged parent) has
+            # none to inherit, so the child keeps its own delegation identity.
+            if self._task_created_of(root_id) is not None:
+                delegation_enabled = True
+                allowed_subtask_agents = self._inherited_spawnable_of(root_id)
         # A workflow helper spawned via ``agent(goal, schema=...)`` carries its
         # per-helper JSON Schema in the durable ``TaskCreated.inputs`` — thread
         # it so a child claimed HERE (a resident worker's untargeted ``tick()``,
@@ -539,31 +583,16 @@ class GenericEngineResolver:
             if is_subtask
             else None
         )
-        if name == "unnamed" and self.unnamed_fallback is not None:
-            return self._engine_for_agent(
-                self.unnamed_fallback,
-                model=model,
-                ask_user_question_enabled=False,
-                workspace=workspace,
-                provider=provider,
-                permission_mode=permission_mode,
-                mcp_aliases=mcp_aliases,
-                effort=effort,
-                task_id=task_id,
-                exec_env_ref=exec_env_ref,
-                policy_wrapper=subtask_wrapper,
-                structured_output_schema=subtask_schema,
-            )
-        agent = self._lookup_agent(name, task_id=task_id)
-        # ask_user_question comes from agent identity, masked to depth-0
-        # root tasks (a delegated child never inherits it).
         return self._engine_for_agent(
             agent,
             model=model,
+            # ask_user_question comes from agent identity, masked to depth-0
+            # root tasks (a delegated child never inherits it); the unnamed
+            # fallback never gets it.
             ask_user_question_enabled=(
-                agent_activates(agent, "ask_user_question")
-                and getattr(task, "parent_task_id", None) is None
-                and int(getattr(task, "subtask_depth", 0) or 0) == 0
+                not is_unnamed
+                and agent_activates(agent, "ask_user_question")
+                and not is_subtask
             ),
             workspace=workspace,
             provider=provider,
@@ -574,6 +603,8 @@ class GenericEngineResolver:
             exec_env_ref=exec_env_ref,
             policy_wrapper=subtask_wrapper,
             structured_output_schema=subtask_schema,
+            delegation_enabled=delegation_enabled,
+            allowed_subtask_agents=allowed_subtask_agents,
         )
 
     def _bound_model_for(self, task: Any) -> str:
@@ -584,8 +615,14 @@ class GenericEngineResolver:
         switched) falls back to the host-fixed default :attr:`model` so the
         recorded ``LLMRequestStartedPayload.model`` is unchanged.
         """
+        return self._own_model_binding(task) or self.model
+
+    @staticmethod
+    def _own_model_binding(task: Any) -> Optional[str]:
+        """The model the Task's OWN latest ``ModelBound`` folded to
+        (``governance.model_binding``); ``None`` when it never bound one."""
         bound = getattr(getattr(task, "governance", None), "model_binding", None)
-        return bound if isinstance(bound, str) and bound else self.model
+        return bound if isinstance(bound, str) and bound else None
 
     def _bound_workspace_for(self, task: Any) -> Optional[str]:
         """The per-session workspace **absolute path** the Task is bound to.
@@ -623,6 +660,124 @@ class GenericEngineResolver:
         """
         bound = getattr(getattr(task, "governance", None), "exec_env_ref", None)
         return bound if isinstance(bound, str) and bound else None
+
+    # -- delegation-tree inheritance (shared by the drain and the worker path) --
+
+    def _task_created_of(self, task_id: str) -> Optional[Any]:
+        """The ``TaskCreated`` payload recorded on ``task_id``'s stream — its
+        genesis (agent, parent, goal) — or ``None`` when the stream records
+        none (never opened, or purged)."""
+        for env in self.event_log.read(task_id):
+            if env.type == "TaskCreated":
+                return env.payload
+        return None
+
+    def _root_task_id_of(self, task_id: str) -> str:
+        """The root of ``task_id``'s delegation tree, walked up through each
+        stream's ``TaskCreated.parent_task_id`` (the same walk
+        :meth:`_resume_woken_ancestors` makes); a root returns itself. The
+        walk stops at a parent whose stream records no genesis (a hand-emitted
+        child, a purged parent) and returns THAT id — its fold is empty, so
+        the child inherits nothing from it rather than failing to resolve."""
+        current = str(task_id)
+        while True:
+            created = self._task_created_of(current)
+            parent_id = getattr(created, "parent_task_id", None) if created else None
+            if not parent_id:
+                return current
+            current = str(parent_id)
+
+    def _agent_of(self, task_id: str) -> Any:
+        """The agent object a recorded task resolves to: its
+        ``TaskCreated.agent_name`` through :meth:`_lookup_agent`, with
+        ``"unnamed"`` routed to ``unnamed_fallback`` when one is supplied (the
+        lookup hook's contract leaves that case to callers)."""
+        name = agent_name_of(self.event_log, task_id)
+        if name == "unnamed" and self.unnamed_fallback is not None:
+            return self.unnamed_fallback
+        return self._lookup_agent(name, task_id=task_id)
+
+    def _inherited_model_of(self, root_task: Any) -> Optional[str]:
+        """The model a delegation tree inherits from its root session: the
+        root's bound model when it DIFFERS from the host default, else
+        ``None`` — the driver binds every session at open, so a root on the
+        default model keeps its children unbound."""
+        bound = self._own_model_binding(root_task)
+        return bound if bound and bound != self.model else None
+
+    def _child_binding_for(
+        self, task_id: str, inherited_model: Optional[str]
+    ) -> Optional[tuple[str, str]]:
+        """The opening ``ModelBound`` a sub-agent child runs on, as
+        ``(model, principal_identity)``: the child agent's declared default
+        model (``"agent-default"``) wins, else the root session's inherited
+        non-default binding (``"inherited"``), else ``None`` — the
+        host-default model, which writes no event. ``__workflow__`` has no
+        agent spec / declared model → no binding (the orchestration
+        interpreter makes no LLM calls of its own; the workers it spawns
+        inherit through this same rule). The ONE rule behind both the drain's
+        ``child_model_binding`` callback and the resident worker's
+        :meth:`seed_claimed_subtask`."""
+        if agent_name_of(self.event_log, task_id) == WORKFLOW_AGENT_NAME:
+            return None
+        declared = getattr(self._agent_of(task_id), "default_model", None)
+        if declared:
+            return (str(declared), "agent-default")
+        if inherited_model:
+            return (inherited_model, "inherited")
+        return None
+
+    def _child_mcp_aliases(
+        self, child_agent: Any, root_id: str
+    ) -> tuple[str, ...]:
+        """The MCP aliases a child inherits: the root session's per-turn
+        enabled set, ONLY when the child's own spec opens the ``mcp``
+        capability (per-spec opt-in); ``()`` otherwise. ``agent_activates``
+        tolerates a spec without the activation (or a non-AgentSpec like
+        ``__workflow__`` carrying no ``plugins``) — both stay MCP-free."""
+        inherited = getattr(self, "_turn_mcp_aliases", {}).get(str(root_id), ())
+        return tuple(inherited) if agent_activates(child_agent, "mcp") else ()
+
+    def _inherited_spawnable_of(self, root_id: str) -> frozenset[str]:
+        """The spawn set every child of a delegation tree runs with: the ROOT
+        agent's ``spawnable`` (filtered to known agents) — delegation is
+        inherited from the root, never read from a leaf child's own (possibly
+        delegation-free) identity."""
+        return self._spawnable_set(self._agent_of(str(root_id)).spawnable)
+
+    def seed_claimed_subtask(
+        self, task: Any, *, engine: Any, lease_id: str
+    ) -> Any:
+        """Open a sub-agent child a resident worker claimed ahead of the drain.
+
+        The worker's ``run_leased_task`` reaches this as a duck-typed seam
+        (L2 cannot import ``noeta.execution``) when it leases a child that
+        has a parent, a goal and no messages yet — the num_workers>=2 race
+        ``subtask_drain._ChildNotReady`` documents. It runs the SAME
+        :func:`seed_child_task` the drain's targeted descent runs, with the
+        same binding choice (the child agent's declared default model, else
+        the root session's non-default bound model, on the root's bound
+        provider), so the child's recording is identical whichever driver won
+        the lease. ``engine`` is the child's already-resolved Engine —
+        :meth:`resolve_engine` inherits the root's bindings by the same rule,
+        so the Engine and the binding it records agree.
+        """
+        root = fold(
+            self.event_log,
+            self.content_store,
+            self._root_task_id_of(str(task.task_id)),
+        )
+        return seed_child_task(
+            self.event_log,
+            self.content_store,
+            task,
+            engine,
+            lease_id=lease_id,
+            model_binding=self._child_binding_for(
+                str(task.task_id), self._inherited_model_of(root)
+            ),
+            provider=self._bound_provider_for(root),
+        )
 
     def resolve_engine_for_agent(
         self,
@@ -807,9 +962,7 @@ class GenericEngineResolver:
         # children, so a cancel mid-flight tears the tree down.
         root_id = str(parent_task.task_id)
         cancel_check = lambda: self.is_cancelled(root_id)  # noqa: E731
-        root_agent_name = agent_name_of(self.event_log, parent_task.task_id)
-        root_agent = self._lookup_agent(root_agent_name, task_id=parent_task.task_id)
-        inherited_subtasks = self._spawnable_set(root_agent.spawnable)
+        inherited_subtasks = self._inherited_spawnable_of(root_id)
         # children share the root session's fs root — the
         # delegation tree runs in ONE workspace (the root parent's absolute path
         # binding), not each child's host default. ``None`` parent workspace ⇒
@@ -832,14 +985,7 @@ class GenericEngineResolver:
         # to the host default. Gated to a binding that DIFFERS from the host
         # default — the driver binds every session at open, so a root on the
         # default model keeps children unbound.
-        bound = getattr(
-            getattr(parent_task, "governance", None), "model_binding", None
-        )
-        inherited_model = (
-            bound
-            if isinstance(bound, str) and bound and bound != self.model
-            else None
-        )
+        inherited_model = self._inherited_model_of(parent_task)
         # the whole delegation tree shares the root
         # session's per-turn permission_mode — read from the parent's NON-durable
         # carrier (set by the driver for the spawning turn). ``None`` ⇒ host
@@ -850,14 +996,11 @@ class GenericEngineResolver:
         # the parent task's enabled MCP alias list (NON-durable,
         # the driver stashed it for the spawning turn). A child inherits this
         # set ONLY when its own spec opens the ``mcp`` capability (per-spec
-        # opt-in); a child without it gets ``()`` (no MCP tools). The opt-in
-        # child connects its OWN independent server sessions (independent
-        # recording — a resume reads its own recorded specs back, never
-        # reconnects).
-        # ``()`` parent aliases ⇒ no child ever gets MCP.
-        inherited_mcp = getattr(self, "_turn_mcp_aliases", {}).get(
-            str(parent_task.task_id), ()
-        )
+        # opt-in — ``_child_mcp_aliases``); a child without it gets ``()`` (no
+        # MCP tools). The opt-in child connects its OWN independent server
+        # sessions (independent recording — a resume reads its own recorded
+        # specs back, never reconnects). ``()`` parent aliases ⇒ no child ever
+        # gets MCP.
         # the whole delegation tree shares the root session's per-turn
         # reasoning-effort override — read from the parent's NON-durable carrier
         # (set by the driver for the spawning turn), same pattern as
@@ -868,13 +1011,6 @@ class GenericEngineResolver:
         inherited_effort = getattr(self, "_turn_effort", {}).get(
             str(parent_task.task_id)
         )
-
-        def _child_mcp_aliases(child_agent: Any) -> tuple[str, ...]:
-            # inherit the parent's enabled aliases only when the child
-            # spec opts in. ``agent_activates`` tolerates a spec without the
-            # ``mcp`` activation (or a non-AgentSpec like __workflow__ carrying no
-            # ``plugins``) — both stay MCP-free.
-            return inherited_mcp if agent_activates(child_agent, "mcp") else ()
 
         def _build_subtask_engine(task_id: str) -> Engine:
             # a child recorded as __workflow__ is the orchestration
@@ -920,7 +1056,7 @@ class GenericEngineResolver:
                 # per-spec opt-in MCP inheritance. The opt-in child
                 # connects its own server sessions; ``task_id`` so a connect
                 # skip records ``McpServerSkipped`` on the CHILD's stream.
-                mcp_aliases=_child_mcp_aliases(child_agent),
+                mcp_aliases=self._child_mcp_aliases(child_agent, root_id),
                 effort=inherited_effort,
                 task_id=task_id,
                 # Per-helper structured output: a workflow helper spawned via
@@ -936,22 +1072,6 @@ class GenericEngineResolver:
                     self.event_log, task_id
                 ),
             )
-
-        def _child_model_binding(task_id: str) -> Optional[tuple[str, str]]:
-            # __workflow__ has no agent spec / declared model → no binding
-            # (the orchestration interpreter makes no LLM calls of its own;
-            # the workers it spawns inherit through this same callback).
-            if agent_name_of(self.event_log, task_id) == WORKFLOW_AGENT_NAME:
-                return None
-            child_agent = self._lookup_agent(
-                agent_name_of(self.event_log, task_id), task_id=task_id
-            )
-            declared = getattr(child_agent, "default_model", None)
-            if declared:
-                return (declared, "agent-default")
-            if inherited_model:
-                return (inherited_model, "inherited")
-            return None
 
         # A child's session-level residents (instructions + environment, plus a
         # memory index when the child's activation carries it) are pre-loop
@@ -976,7 +1096,12 @@ class GenericEngineResolver:
                 else _build_subtask_engine(pid)
             ),
             on_root_release=lambda _lease_id: None,
-            child_model_binding=_child_model_binding,
+            # the child agent's declared default model, else the root's
+            # inherited non-default binding — the one rule the worker-claimed
+            # path (``seed_claimed_subtask``) applies too.
+            child_model_binding=lambda child_id: self._child_binding_for(
+                child_id, inherited_model
+            ),
             child_provider=inherited_provider,
             cancel_check=cancel_check,
             discard_cancellation=lambda: self.discard_cancellation(root_id),
@@ -998,6 +1123,8 @@ class GenericEngineResolver:
         exec_env_ref: Optional[str] = None,
         policy_wrapper: Any = _POLICY_WRAPPER_UNSET,
         structured_output_schema: Optional[dict[str, Any]] = None,
+        delegation_enabled: Optional[bool] = None,
+        allowed_subtask_agents: Optional[frozenset[str]] = None,
     ) -> Engine:
         """Per-agent Engine builder + cache.
 
@@ -1019,6 +1146,11 @@ class GenericEngineResolver:
         ``spawnable`` (filtered to known agents) — never a host
         input. When delegation is off (agent declares none, or the deployment
         disabled it) the set is empty so no spawn_subagent schema is exposed.
+        ``delegation_enabled`` / ``allowed_subtask_agents`` override that
+        identity read for a SUBTASK — :meth:`resolve_engine` passes the root's
+        inherited spawn set, verbatim, the way the drain's child-engine builder
+        does — and widen the cache key, so a child's inherited build never
+        shares a slot with the same agent's own-identity build.
 
         ``structured_output_schema`` (a workflow helper's per-helper JSON
         Schema) BYPASSES the cache entirely: the schema shapes the Engine, so
@@ -1034,24 +1166,36 @@ class GenericEngineResolver:
             if ask_user_question_enabled is None
             else ask_user_question_enabled
         )
-        eff_delegation = (
-            agent_activates(agent, "delegation") and self.delegation_allowed
-        )
-        eff_subtask_agents = (
-            self._spawnable_set(agent.spawnable)
-            if eff_delegation
-            else frozenset()
-        )
-        # when the host enables workflow, run_workflow may spawn the
-        # reserved __workflow__ orchestration child, so it must be in the
-        # PermissionGuard allow-list. It is NEVER a named agent, so it is filtered
-        # out of the model-facing spawn_subagent directory by ``_build_engine``
-        # (registry.resolve raises → skipped).
-        if self.workflow_allowed:
-            eff_subtask_agents = eff_subtask_agents | {WORKFLOW_AGENT_NAME}
-        # Delegation is a pure function of (agent, delegation_allowed) and the
-        # kill-switch is resolver-fixed, so ``agent.name`` already keys it
-        # uniquely — no need to widen the cache key with it. ``workspace``
+        if delegation_enabled is None:
+            eff_delegation = (
+                agent_activates(agent, "delegation") and self.delegation_allowed
+            )
+            eff_subtask_agents = (
+                self._spawnable_set(agent.spawnable)
+                if eff_delegation
+                else frozenset()
+            )
+            # when the host enables workflow, run_workflow may spawn the
+            # reserved __workflow__ orchestration child, so it must be in the
+            # PermissionGuard allow-list. It is NEVER a named agent, so it is
+            # filtered out of the model-facing spawn_subagent directory by
+            # ``_build_engine`` (registry.resolve raises → skipped).
+            if self.workflow_allowed:
+                eff_subtask_agents = eff_subtask_agents | {WORKFLOW_AGENT_NAME}
+        else:
+            # a subtask's inherited delegation (the root's spawn set), taken
+            # verbatim — byte-equal to the drain's ``_build_subtask_engine``.
+            eff_delegation = delegation_enabled
+            eff_subtask_agents = (
+                allowed_subtask_agents
+                if allowed_subtask_agents is not None
+                else frozenset()
+            )
+        # Delegation is a pure function of (agent, delegation_allowed) for an
+        # own-identity build, but a subtask's inherited spawn set is a per-tree
+        # input, so ``(eff_delegation, eff_subtask_agents)`` keys the build
+        # too — an inherited child build never shares a slot with the same
+        # agent's own-identity build. ``workspace``
         # and ``provider`` ARE part of the key: a different session fs-root
         # / provider must resolve a distinct Engine so concurrent sessions never
         # share fs tools or LLM adapter.
@@ -1120,6 +1264,7 @@ class GenericEngineResolver:
             agent.name, resolved_model, effective_ask, workspace, provider,
             permission_mode, mcp_aliases, effort, exec_env_ref,
             effective_wrapper is None,
+            eff_delegation, eff_subtask_agents,
             self._engine_cache_scope(agent, task_id),
         )
         # the global lock guards only the cache map. The build

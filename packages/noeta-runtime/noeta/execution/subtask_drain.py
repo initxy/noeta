@@ -50,6 +50,7 @@ __all__ = [
     "_DelegationFrame",
     "drive_pending_subtasks",
     "resume_woken_parent",
+    "seed_child_task",
 ]
 
 
@@ -130,13 +131,19 @@ class _ChildNotReady(Exception):
     in-flight drain (or the ``ChildLifecycleObserver`` once the child
     terminates) completes the handoff and wakes the ancestor chain normally.
 
-    KNOWN GAP: this only stops the race from crashing the in-request caller;
-    it does not prevent the steal. A full fix would reserve foreground
-    children the same way background ones are
-    (``Dispatcher.enqueue(..., reserved=True)``) and drive them via the
-    shared executor, uniformly with the background path — a larger,
-    cross-cutting change (touches ``ChildLifecycleObserver`` and the
-    handful of low-level tests that untargeted-lease foreground children).
+    The steal itself is benign: the resident worker's ``run_leased_task``
+    opens a claimed child through the host's ``seed_claimed_subtask`` seam —
+    the same :func:`seed_child_task` this descent runs — and resolves its
+    Engine through ``resolve_engine``, which inherits the root session's
+    model / effort / permission mode / MCP selection / delegation set exactly
+    as the drain's child-engine builder does, so the child is recorded the
+    same way whichever driver won its lease. What stays open is only the
+    race: closing it would reserve foreground children the same way
+    background ones are (``Dispatcher.enqueue(..., reserved=True)``) and
+    drive them via the shared executor, uniformly with the background path —
+    a larger, cross-cutting change (touches ``ChildLifecycleObserver`` and
+    the handful of low-level tests that untargeted-lease foreground
+    children).
     """
 
     def __init__(self, child_id: str) -> None:
@@ -848,6 +855,81 @@ def _frame_for(parent: Any) -> "_DelegationFrame":
     )
 
 
+def seed_child_task(
+    event_log: EventLogFull,
+    content_store: ContentStore,
+    child_task: Any,
+    child_engine: EngineProtocol,
+    *,
+    lease_id: str,
+    model_binding: Optional[tuple[str, str]],
+    provider: Optional[str],
+) -> Any:
+    """Open a freshly-claimed sub-agent child: bind its model, seed its goal,
+    activate its residents — in that order, mirroring
+    ``InteractionDriver.seed_start``'s bind-then-seed order for a root.
+
+    The ONE opening path for a child, whoever claimed it: the drain's targeted
+    :func:`_descend_to_child` and a resident worker's untargeted claim
+    (``run_leased_task`` → the host's ``seed_claimed_subtask`` seam) both run
+    this, so a child is recorded identically regardless of which driver won
+    the lease (the num_workers>=2 race :class:`_ChildNotReady` documents).
+    Every step is resume-safe — the binding is written only while the child
+    is still unbound, the goal only while it has no messages, and the resident
+    records are hash-gated — so a re-entrant descent (a suspended child
+    resumed later) or a crash-recovery re-drive changes nothing.
+
+    ``model_binding`` is ``(model, principal_identity)`` — the child agent's
+    declared default (``"agent-default"``) else the root session's non-default
+    binding (``"inherited"``) — or ``None`` for the host-default model, which
+    writes no event. ``provider`` rides the binding (the root session's bound
+    provider; ``None`` ⇒ host default).
+    """
+    # The child's opening ModelBound lands BEFORE the goal seed, so
+    # fold/_bound_model_for resolve the child on that model and a later cold
+    # resume rebuilds the same binding. Skipped for the host-default model and
+    # for a child already bound (re-entrant descent after a suspend).
+    if model_binding and not child_task.governance.model_binding:
+        bind_model, bind_identity = model_binding
+        child_task = child_engine.note_model_bound(
+            child_task,
+            lease_id=lease_id,
+            model=bind_model,
+            principal_identity=bind_identity,
+            provider=provider,
+        )
+    # Seed ONLY the child goal (isolated context — never the parent's
+    # messages or system prompt), and only when the child has no messages yet:
+    # a background-sub-agent crash-recovery re-drive
+    # (docs/adr/background-subagent.md) descends into an already-seeded child
+    # to continue it from its own EventLog — re-seeding the goal there would
+    # duplicate it.
+    if not child_task.runtime.messages:
+        child_task = child_engine.append_user_message(
+            child_task,
+            content=[TextBlock(text=child_task.state.goal)],
+            lease_id=lease_id,
+        )
+    # Pre-loop activation of every resident the child's activation contributes
+    # — the generic ``init`` seam, symmetric with
+    # ``InteractionDriver.seed_start``: each pack's init hook records its
+    # resident (memory index, workspace instructions + environment) through one
+    # SeedRecorder over the child engine's ``content_init_hooks``, in folded
+    # pack-loop order. Recorded AFTER the goal seed and BEFORE the first step so
+    # the child's first request carries the workspace block; the records are
+    # hash-gated/idempotent (so a re-entrant descent / resume is safe) and land
+    # in semi_stable under each resident's drift policy — never the stable_prefix,
+    # so adding them does not bust prompt caching. A test-double engine without
+    # ``content_init_hooks`` ⇒ ``()`` ⇒ no-op.
+    return run_content_init(
+        event_log,
+        content_store,
+        child_task,
+        init_hooks=getattr(child_engine, "content_init_hooks", ()),
+        lease_id=lease_id,
+    )
+
+
 def _descend_to_child(host: DrainHost, expected_child_id: str) -> tuple[Any, Any]:
     """Targeted-lease the named child (never the non-targeted
     "next ready" task), build its own runtime, seed only its goal, and
@@ -876,56 +958,22 @@ def _descend_to_child(host: DrainHost, expected_child_id: str) -> tuple[Any, Any
     try:
         child_engine = host.build_child_engine(child_lease.task_id)
         child_task = fold(host.event_log, host.content_store, child_lease.task_id)
-        # A child's opening model binding (its agent's declared default model,
-        # else the root session's inherited non-default binding — the resolver's
-        # ``child_model_binding`` callback owns the choice) lands as the child
-        # task's own opening ModelBound — written BEFORE the goal seed, mirroring
-        # InteractionDriver.start's bind-then-seed order, so fold/_bound_model_for
-        # resolve the child on that model and a later cold resume rebuilds the
-        # same binding. Skipped when the host wires no callback (test doubles),
-        # the callback returns no binding (host-default model), or the child is
-        # already bound (re-entrant descent after a suspend).
-        if host.child_model_binding is not None:
-            binding = host.child_model_binding(child_lease.task_id)
-            if binding and not child_task.governance.model_binding:
-                bind_model, bind_identity = binding
-                child_task = child_engine.note_model_bound(
-                    child_task,
-                    lease_id=child_lease.lease_id,
-                    model=bind_model,
-                    principal_identity=bind_identity,
-                    provider=host.child_provider,
-                )
-        # Seed ONLY the child goal (isolated context — never the parent's
-        # messages or system prompt). Resume-safe: only seed when the child has no
-        # messages yet (a fresh child folds to an empty ``runtime.messages``). A
-        # background-sub-agent crash-recovery re-drive (docs/adr/background-subagent.md)
-        # descends into an already-seeded child to continue it from its own EventLog —
-        # re-seeding the goal there would duplicate it. The foreground path always
-        # descends into a fresh child, so this guard is a no-op for it.
-        if not child_task.runtime.messages:
-            child_task = child_engine.append_user_message(
-                child_task,
-                content=[TextBlock(text=child_task.state.goal)],
-                lease_id=child_lease.lease_id,
-            )
-        # Pre-loop activation of every resident the child's activation contributes
-        # — the generic ``init`` seam, symmetric with
-        # ``InteractionDriver.seed_start``: each pack's init hook records its
-        # resident (memory index, workspace instructions + environment) through one
-        # SeedRecorder over the child engine's ``content_init_hooks``, in folded
-        # pack-loop order. Recorded AFTER the goal seed and BEFORE the first step so
-        # the child's first request carries the workspace block; the records are
-        # hash-gated/idempotent (so a re-entrant descent / resume is safe) and land
-        # in semi_stable under each resident's drift policy — never the stable_prefix,
-        # so adding them does not bust prompt caching. A test-double engine without
-        # ``content_init_hooks`` ⇒ ``()`` ⇒ no-op.
-        child_task = run_content_init(
+        # bind → goal → residents, through the one shared opening path (the
+        # resident worker's claim runs the same function). The resolver's
+        # ``child_model_binding`` callback owns the binding choice; a host that
+        # wires none (test doubles) opens the child on the host-default model.
+        child_task = seed_child_task(
             host.event_log,
             host.content_store,
             child_task,
-            init_hooks=getattr(child_engine, "content_init_hooks", ()),
+            child_engine,
             lease_id=child_lease.lease_id,
+            model_binding=(
+                host.child_model_binding(child_lease.task_id)
+                if host.child_model_binding is not None
+                else None
+            ),
+            provider=host.child_provider,
         )
         # Keep the child's lease alive while its step runs — no resident
         # WorkerLoop heartbeats this in-request drain, so a child step longer

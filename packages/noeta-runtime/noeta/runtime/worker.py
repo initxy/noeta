@@ -191,7 +191,11 @@ class WorkerRuntime(Protocol):
     picks between them — it prefers ``rt.resolve_engine(task)`` when the
     runtime provides it, else falls back to the single ``rt.engine``. The
     agent-lookup logic itself lives in the host (L3 ``noeta.agent``), so L2
-    never reverse-depends on the Agent registry.
+    never reverse-depends on the Agent registry. A resident host likewise
+    provides ``seed_claimed_subtask(task, engine=, lease_id=) → Task``, the
+    duck-typed seam :func:`run_leased_task` opens a claimed sub-agent child
+    through (bind → goal → residents, the drain's own path); a runtime
+    without it gets the goal seeded and nothing else.
     """
 
     @property
@@ -774,24 +778,31 @@ def run_leased_task(
                     outcome="drained",
                     reliability_sink=reliability_sink,
                 )
-        # Subtask goal seeding: a foreground child claimed by a worker before
-        # the parent's delegation drain (_descend_to_child) could seed its
-        # goal has an empty runtime.messages. Without this the child sends
-        # an empty ``input`` to the provider and gets a 400. Detect the
-        # condition (has parent, no messages yet, carries a goal) and inject
-        # the goal as the opening user message — mirroring what
-        # _descend_to_child does, so the child is well-formed regardless of
-        # which worker picks it up.
+        # Subtask opening: a foreground child claimed by a worker before the
+        # parent's delegation drain (_descend_to_child) could open it has an
+        # empty runtime.messages. Without this the child sends an empty
+        # ``input`` to the provider and gets a 400. Detect the condition (has
+        # parent, no messages yet, carries a goal) and open it through the
+        # host's ``seed_claimed_subtask`` seam — the SAME bind → goal →
+        # residents path the drain runs (its opening ModelBound, the goal as
+        # the opening user message, the pre-loop workspace / memory
+        # residents), so the child is recorded identically whichever driver
+        # picks it up. A bare runtime without the seam (test doubles) still
+        # seeds the goal so the child is well-formed.
         if (
             task.parent_task_id is not None
             and not task.runtime.messages
             and task.state.goal
         ):
-            task = engine.append_user_message(
-                task,
-                content=[TextBlock(text=task.state.goal)],
-                lease_id=lease.lease_id,
-            )
+            seed_claimed = getattr(rt, "seed_claimed_subtask", None)
+            if seed_claimed is not None:
+                task = seed_claimed(task, engine=engine, lease_id=lease.lease_id)
+            else:
+                task = engine.append_user_message(
+                    task,
+                    content=[TextBlock(text=task.state.goal)],
+                    lease_id=lease.lease_id,
+                )
         task = engine.run_one_step(task, lease_id=lease.lease_id, cancelled=cancelled)
         rt.dispatcher.release(
             lease.lease_id, next_state=task.status, wake_on=task.wake_on
