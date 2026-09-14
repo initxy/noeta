@@ -75,4 +75,7 @@ client's.
   stale buffered wakes never match fresh conditions, so readers stay correct.
 - The pre-existing same-queue foreground-child steal race
   (`subtask_drain._ChildNotReady`) is unchanged — queues narrow it to a single
-  pool but do not close it.
+  pool but do not close it. It has since been made benign: a claimed child
+  resolves the same engine (`resolve_engine` inherits the root's bindings) and
+  is opened by the same `seed_child_task` path (`seed_claimed_subtask`) the
+  drain uses, so only the claim order differs, not the child's recording.
