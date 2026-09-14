@@ -41,27 +41,49 @@ Static credentials — a bearer token, an API key, a custom header — are injec
 into the HTTP request headers at call time and appear in no request body, no
 event, and no recording. A turn carries only the list of enabled aliases.
 
-**Connect at task start, then freeze.** The enabled aliases resolve to specs,
-each server is connected and listed, and the tool set is frozen for the Task.
-Order is deterministic — servers alias-sorted, tools within a server sorted by
-their Noeta-side name — so the tool dict order, the schema order and the stable
-hash reproduce. On the task-start path a per-server connect or handshake fault
-drops that server, records a durable skip event the host surfaces, and continues
-with the rest; one bad connector never sinks the Task. A duplicate alias is a
-hard configuration error, because it is a caller wiring bug rather than a connect
-fault. The discovery path that populates a configuration menu takes the opposite
-stance and fails fast, tearing down every client it had opened.
+**List at every turn's build, over a pooled connection; the tool set is
+frozen for the turn.** The enabled aliases resolve to specs, each server's
+connection is acquired from the host's pool (see below), `tools/list` runs,
+and the tool set is frozen for the turn (the Engine is a per-turn value —
+see the engine-per-turn ADR). Order is deterministic — servers alias-sorted,
+tools within a server sorted by their Noeta-side name — so the tool dict
+order, the schema order and the stable hash reproduce. A per-server connect
+/ handshake / list fault drops that server, records a durable skip event the
+host surfaces (once per outage, not per turn), and continues with the rest;
+one bad connector never sinks the Task. A duplicate alias is a hard
+configuration error, because it is a caller wiring bug rather than a connect
+fault. The discovery path that populates a configuration menu takes the
+opposite stance and fails fast, tearing down every client it had opened.
+
+**Connections are pooled by server identity and the host's scope.**
+`McpConnectionPool` keys a live client on the spec plus a scope —
+`(transport, scope, alias, argv, env)` or `(transport, scope, alias, url,
+headers)`, in memory only — so every task naming one server in one scope
+shares one connection, tenants with different credentials do not, and a
+host that resolves a scope per task (`HostConfig.mcp_scope_resolver`, the
+same tenancy seam as `memory_root_resolver`; `None` = the shared scope)
+keeps a stateful server's state — a browser, a login — from crossing
+tenants even when the spec is byte-identical. A build acquires and counts a
+holder; the turn's Engine releases when the turn settles; a holder-less
+connection expires after `HostConfig.mcp_idle_ttl`;
+`Client.reconnect_mcp(alias=None)` retires connections (in every scope) so
+the next build reconnects while a turn still holding one keeps it;
+`Client.shutdown()` closes them all. Each client serializes its JSON-RPC exchanges on an instance
+lock, so concurrent turns on one connection queue rather than interleave. A
+pooled connection that stops answering `tools/list` is retired and the
+server connected fresh once before it is skipped for the turn.
 
 **Resume rebuilds the tool set from the recording, never by reconnecting.** The
 real tool spec — name, input schema, and description verbatim — is pinned into
 the first recorded LLM request, and a resumed run reconstructs it from there, so
 the rebuilt schema and stable hash match the live run byte for byte.
 
-**Provenance is recorded, credential-free.** One event per Task, emitted before
-the loop starts, records which aliases were enabled and which of each server's
-tools were ticked — names only, never a URL, token or header. A Task with no MCP
-emits nothing and folds to an empty record with zero drift. Tool *behaviour* is
-not carried here; the recorded request spec is the durable truth a resume reads.
+**Provenance is recorded, credential-free.** One event per Task — and one
+more each time the enabled set changes — emitted at the build that connects,
+records which aliases were enabled and which of each server's tools were
+ticked — names only, never a URL, token or header. A Task with no MCP emits
+nothing and folds to an empty record with zero drift. Tool *behaviour* is not
+carried here; the recorded request spec is the durable truth a resume reads.
 
 **Prompts arrive as recorded messages.** A server's prompts hang on the same
 slash-invocation menu skills use, named `/mcp__<alias>__<prompt>`. Expanding one
@@ -87,7 +109,7 @@ without that activation stays MCP-free.
 
 The request/response subset is what keeps the client synchronous and
 single-threaded. Every server-push feature needs a long-lived stream and a
-reader: `list_changed` contradicts freezing the tool set at task start,
+reader: `list_changed` contradicts freezing the tool set for the turn (a per-build `tools/list` over the pooled connection covers the same need by pulling),
 `sampling` hands a remote server the power to initiate model calls, which is hard
 to govern for both safety and determinism, and `elicitation` interrupts mid-turn.
 Common servers are entirely request/response, so the subset suffices.
@@ -142,7 +164,9 @@ drifting when the underlying file or resource changes.
   built-in; the reserved prefix, server specs and error types sit kernel-side in
   `noeta.runtime.mcp`. None of it may seep into a host or product layer.
 - A host supplies the alias resolver and, optionally, an injectable POST function
-  so tests can run the whole path without real network.
+  so tests can run the whole path without real network; `build_mcp_tools`
+  takes the host's pool on the task-start path and connects fresh, caller-owned
+  clients without one.
 - Credentials have hard in/out constraints: never into a request body, never into
   a recording, never into a host-config fingerprint. Any auth mechanism must keep
   the token landing host-side.

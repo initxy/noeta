@@ -171,9 +171,10 @@ print(client.stop_workers(timeout=30))   # → True
 | `get_content(content_hash)` | `bytes \| None` |
 | `put_content(body, *, media_type)` | `ContentRef` |
 | `memory_root(task_id=None)` | `Path` —— 这个任务在多租户链下解析到的那个存储 |
+| `reconnect_mcp(alias=None)` | 把池里的 MCP 连接作废——全部，或只作废一个别名，所有分组一起——下一轮所有任务都会重新连接；正在用的那一轮继续用到这一轮结束为止。「服务器配置改了」就调它 |
 | `subscribe(callback)` | 一个取消订阅的可调用对象；提交后的信封，覆盖所有任务 |
 | `add_sandbox_lifecycle_listener(on_allocate, on_release)` | 为容器跟踪型副作用准备的产品接线；没有 sandbox 时是空操作 |
-| `shutdown()` | 幂等：停掉 worker、拆除 observer 与 trace sink、释放 sandbox |
+| `shutdown()` | 幂等：停掉 worker、拆除 observer 与 trace sink、关掉池里所有 MCP 连接、释放 sandbox |
 
 ## 记忆整理
 

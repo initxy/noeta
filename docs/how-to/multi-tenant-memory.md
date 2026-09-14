@@ -77,8 +77,18 @@ dict lookup cannot know it yet. Two strategies:
   through the host-level chain, so point the fallback (`global_memory_dir`) at
   an empty directory.
 
-Engines are cached per resolved root, so two tenants never share a cached
-engine's memory store.
+Every turn's Engine is built afresh with the root its task resolves to, so two
+tenants never share a memory store. The seed's Engine never carries into the
+drive: `seed_start` lets it go, and the drive builds the turn's own against
+the bindings registered in between.
+
+The same seam partitions live MCP connections. The host pools them by server
+identity, so two tenants whose resolver hands out byte-identical specs would
+share one connection — and a stateful stdio server (a browser, a login)
+would carry one tenant's state into the other's turn. Set
+`HostConfig.mcp_scope_resolver` (`task_id -> scope name | None`, the same
+contract as `memory_root_resolver`) to the tenant id: connections are then
+shared only within a scope. Leave it `None` on a single-tenant host.
 
 ## 3. Consolidate per tenant
 

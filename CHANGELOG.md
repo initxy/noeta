@@ -8,6 +8,80 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+Covers both packages, lockstep: the Engine cache lived in `noeta-runtime`'s
+resolver and the host's half in `noeta-sdk`, and the two ship together
+(`noeta-sdk`'s `noeta-runtime>=` floor rises with it).
+
+### Changed — the Engine is a per-turn value; task state lives beside it; MCP connections are pooled
+
+- **No Engine cache; one Engine per turn.** A turn opens with a user goal
+  and runs — through every approval, answer and sub-agent return that
+  resumes it — until the task parks on the next-goal handle or ends.
+  `resolve_engine` builds the turn's Engine once from the task's folded
+  bindings and everything the build reads, keeps it for the turn's resumes,
+  and lets it go when the turn settles; the next turn builds afresh. The
+  256-slot LRU, its cache key, the per-key build locks, `_engine_cache_scope`
+  and the host's MCP-reaping cache dict are gone from both packages. Two
+  tasks with equal bindings hold distinct Engines that compose byte-identical
+  schemas; the build is deterministic, so the prompt-cache prefix moves only
+  when an input actually changed. New resolver verb `forget_turn_engine`
+  (the driver calls it when a turn opens, the worker when one settles). See
+  `docs/adr/engine-per-turn.md`.
+- **What a task needs across turns lives in one task-local registry**
+  (`noeta.runtime.task_local.TaskLocalRegistry`, host-owned, keyed by task
+  id, one lock, one LRU, forgotten at `cancel` / `close`): the edit tools'
+  read-first record — the host now builds each turn's `ToolRuntime` itself
+  and threads the task's record in, so `Read` in one turn and `Edit` in the
+  next, or `Read` → `Edit` awaiting approval → approve, works; and it is per
+  task, so one task's read no longer lets another edit (the cached Engine
+  had shared the record across every task on its key) — plus named slots
+  the built-ins keep through the `task_slot` the host binds into
+  `plugin_config["skills"]` / `["web"]` and onto the react policy factory:
+  the ReAct compaction-trigger calibration (`TriggerBaselines`, keyed
+  `(task_id, model)`), WebFetch's fifteen-minute page cache (`PageCache`,
+  per task — a page fetched through one tenant's sandbox never answers
+  another's), the skill roster the task last saw (`SkillRoster`), and the
+  last MCP provenance emitted. A host-supplied `Options.policy` that keeps
+  state across turns must key it by task itself.
+- **A skill installed, edited or removed while the process runs is in the
+  `skill` roster on every task's next turn** — the tiers are indexed at every
+  build — **and the turn carries a recorded "new skills" note** naming what
+  joined the roster since the task last saw it (a `turn_intake` reminder;
+  silent on a task's opening turn, after a restart, and for removals —
+  Claude Code's "New skills discovered" behaviour). The same per-turn
+  reading covers the project shell allowlist, the workspace trust decision
+  and an MCP server's tool list.
+- **MCP connections live in one host-owned pool keyed by server identity
+  and the host's scope** (`noeta.builtins.mcp.impl.pool.McpConnectionPool`):
+  every task naming a server in one scope shares its connection, tenants
+  with different credentials get their own, and the new
+  `HostConfig.mcp_scope_resolver` (`task_id -> scope | None`, the same
+  tenancy seam as `memory_root_resolver`) partitions the pool per tenant /
+  workspace so a stateful stdio server (a browser, a login) never carries
+  one tenant's state into another's turn. `tools/list` runs per build so a
+  server-side tool change shows next turn; the turn's Engine releases the
+  connection when the turn settles; a holder-less connection expires after
+  the new `HostConfig.mcp_idle_ttl` (default 1800 s, `None` = never); and
+  `Client.shutdown()` closes them all — the stdio subprocess leak past
+  shutdown is gone. New `Client.reconnect_mcp(alias=None)` retires
+  connections (every scope) so the next turn reconnects while a turn still
+  holding one keeps it. `build_mcp_tools(pool=…, pool_scope=…)` is the
+  task-start path; a pooled connection that stops answering is reconnected
+  once before the server is skipped for the turn, and a tool-name collision
+  (`McpConfigError`) releases the connection intact instead of retiring it.
+- **`McpStdioClient` serializes its JSON-RPC exchanges on an instance lock**
+  (the HTTP client guards its id counter): two concurrent turns on one
+  connection no longer interleave on one stdin, where the reader would skip
+  the other turn's reply as a stray notification and time out.
+- **MCP provenance is recorded once per task and again when the enabled
+  aliases change; a dead server is reported once per outage**, not once per
+  turn (and no longer only on a cache miss — a task that reused another's
+  cached Engine used to record no provenance at all).
+- `seed_start` lets its seed-time Engine go before the drive, so a product
+  that binds per-task tenancy between `seed_start` and `drive_seeded` (the
+  documented multi-tenant pattern) drives on an Engine built against those
+  bindings.
+
 ## [0.6.23] - 2026-09-14
 
 Covers `noeta-sdk` only: 0.6.21 → 0.6.23 (0.6.22 was the runtime-only

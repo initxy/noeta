@@ -153,6 +153,8 @@ compile_options(options, *, plugins=None, preset_prompts=None)
 | `write_roots` | `None` | `(task_id) -> Sequence[str]`，额外的写入根 |
 | `mcp_server_resolver` | `None` | `(alias) -> McpAnyServerSpec \| None`，按轮解析 |
 | `mcp_http_post` | `None` | 为远程 MCP 注入的 HTTP 传输（`HttpPostFn`） |
+| `mcp_idle_ttl` | `1800.0` | 没有任何一轮在用的 MCP 连接闲置多少秒后关掉（`None` 表示永不）；连接按服务器身份和分组在进程内共用，一轮结束后归还，`Client.reconnect_mcp()` 可以提前作废 |
+| `mcp_scope_resolver` | `None` | `(task_id) -> str \| None` —— 这个任务的 MCP 连接归哪个分组（租户 id、工作区）；只有同一分组内的任务才共用连接，`None` 是公共分组。和 `memory_root_resolver` 是同一种按任务分租户的接口 |
 | `delta_sink` | `None` | `(StepContext, call_id, StreamDelta) -> None` —— 瞬时的 token delta；从不持久化 |
 | `otlp_traces` / `otlp_http_post` | `None` | `OtlpTraceConfig` 导出配置以及传输 |
 | `provider_headers` | `None` | `(StepContext) -> Mapping[str, str]`，按请求的 header |

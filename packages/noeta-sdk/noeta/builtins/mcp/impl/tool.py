@@ -273,61 +273,106 @@ def _connect_client(
     )
 
 
+def _discover_server_tools(
+    spec: McpAnyServerSpec, client: Union[McpStdioClient, McpHttpClient]
+) -> dict[str, McpTool]:
+    """``tools/list`` on a started ``client`` → the subset-filtered, wrapped,
+    name-sorted ``McpTool`` dict for ``spec``. Any ``tools/list`` / mapping /
+    collision fault propagates (``McpError`` / ``McpConfigError``)."""
+    # per-server tool subset (the user-chosen allow-list, raw
+    # ``tools/list`` names). ``None`` ⇒ keep all (back-compat); a tuple ⇒
+    # drop any advertised tool not in it BEFORE it is wrapped, so unselected
+    # tools never enter the tool set / reach the model. The surviving set is
+    # sorted below, so order/stable-hash determinism is unchanged.
+    subset = spec.tool_subset
+    allow = set(subset) if subset is not None else None
+    built: dict[str, McpTool] = {}
+    for raw in client.list_tools():
+        raw_name = raw.get("name")
+        if allow is not None and raw_name not in allow:
+            continue
+        noeta_name = make_mcp_tool_name(spec.alias, raw_name)
+        if noeta_name in built:
+            raise McpConfigError(
+                f"MCP tool name collision on {noeta_name!r} "
+                f"(server {spec.alias!r}): two raw names sanitize alike"
+            )
+        schema = raw.get("inputSchema")
+        if not isinstance(schema, dict):
+            schema = {"type": "object", "additionalProperties": True}
+        raw_desc = raw.get("description")
+        built[noeta_name] = McpTool(
+            name=noeta_name,
+            remote_tool_name=str(raw_name),
+            input_schema=schema,
+            client=client,
+            description=raw_desc if isinstance(raw_desc, str) else "",
+        )
+    return {noeta_name: built[noeta_name] for noeta_name in sorted(built)}
+
+
 def _connect_one_server(
     spec: McpAnyServerSpec,
     *,
     spawn: Optional[SpawnFn],
     http_post: Optional[HttpPostFn],
+    pool: Optional[Any],
+    pool_scope: Optional[str] = None,
 ) -> tuple[
     dict[str, McpTool], Union[McpStdioClient, McpHttpClient]
 ]:
     """Connect ONE server, discover + wrap its (subset-filtered) tools.
 
-    Returns ``(built_tools_sorted, client)``. Any connect / handshake /
-    ``tools/list`` / mapping / collision fault propagates (``McpError`` /
-    ``McpConfigError``); on a raise the caller owns tearing down the partially
-    started ``client`` (returned via the ``BaseException`` path is not possible,
-    so this helper shuts its own client down before re-raising)."""
-    client = _connect_client(spec, spawn=spawn, http_post=http_post)
+    Returns ``(built_tools_sorted, client)``. Without a ``pool`` the client
+    is fresh and the caller owns its ``shutdown``; with one it is acquired
+    from the pool (shared with every other build naming the same server) and
+    the caller owns its ``release``. Any connect / handshake / ``tools/list``
+    / mapping / collision fault propagates (``McpError`` / ``McpConfigError``)
+    with the client already shut down (fresh) or released (pooled).
+
+    A pooled connection that was reused and then fails ``tools/list`` is
+    retired and the server connected fresh ONCE before the fault propagates:
+    a stdio server that died between turns, or an HTTP endpoint that was
+    restarted, costs one reconnect rather than a turn without its tools. A
+    ``McpConfigError`` (a tool-name collision) is the operator's wiring, not
+    the connection's fault: the pooled client is released intact, never
+    retired. ``pool_scope`` is the host's partition (see the pool module).
+    """
+    if pool is None:
+        client = _connect_client(spec, spawn=spawn, http_post=http_post)
+        try:
+            client.start()
+            built = _discover_server_tools(spec, client)
+        except BaseException:
+            # The partial connection of THIS server is dead — drop it.
+            client.shutdown()
+            raise
+        return built, client
+    client, reused = pool.acquire(spec, pool_scope)
     try:
-        client.start()
-        # per-server tool subset (the user-chosen allow-list, raw
-        # ``tools/list`` names). ``None`` ⇒ keep all (back-compat); a tuple ⇒
-        # drop any advertised tool not in it BEFORE it is wrapped, so unselected
-        # tools never enter the tool set / reach the model. The surviving set is
-        # sorted below, so order/stable-hash determinism is unchanged.
-        subset = spec.tool_subset
-        allow = set(subset) if subset is not None else None
-        built: dict[str, McpTool] = {}
-        for raw in client.list_tools():
-            raw_name = raw.get("name")
-            if allow is not None and raw_name not in allow:
-                continue
-            noeta_name = make_mcp_tool_name(spec.alias, raw_name)
-            if noeta_name in built:
-                raise McpConfigError(
-                    f"MCP tool name collision on {noeta_name!r} "
-                    f"(server {spec.alias!r}): two raw names sanitize alike"
-                )
-            schema = raw.get("inputSchema")
-            if not isinstance(schema, dict):
-                schema = {"type": "object", "additionalProperties": True}
-            raw_desc = raw.get("description")
-            built[noeta_name] = McpTool(
-                name=noeta_name,
-                remote_tool_name=str(raw_name),
-                input_schema=schema,
-                client=client,
-                description=raw_desc if isinstance(raw_desc, str) else "",
-            )
-    except BaseException:
-        # The partial connection of THIS server is dead — drop it. (On the
-        # skip-on-failure path the caller catches the re-raise and records the
-        # skip; on the fail-fast path the batch caller tears down the rest.)
-        client.shutdown()
+        return _discover_server_tools(spec, client), client
+    except McpConfigError:
+        pool.release(client)
         raise
-    ordered = {noeta_name: built[noeta_name] for noeta_name in sorted(built)}
-    return ordered, client
+    except McpError:
+        pool.retire(client)
+        pool.release(client)
+        if not reused:
+            raise
+    except BaseException:
+        pool.retire(client)
+        pool.release(client)
+        raise
+    client, _ = pool.acquire(spec, pool_scope)
+    try:
+        return _discover_server_tools(spec, client), client
+    except McpConfigError:
+        pool.release(client)
+        raise
+    except BaseException:
+        pool.retire(client)
+        pool.release(client)
+        raise
 
 
 def build_mcp_tools(
@@ -336,6 +381,8 @@ def build_mcp_tools(
     spawn: Optional[SpawnFn] = None,
     http_post: Optional[HttpPostFn] = None,
     skip_on_failure: bool = False,
+    pool: Optional[Any] = None,
+    pool_scope: Optional[str] = None,
 ) -> tuple[
     dict[str, McpTool],
     list[Union[McpStdioClient, McpHttpClient]],
@@ -361,10 +408,17 @@ def build_mcp_tools(
       sinks the whole task). The caller turns each skip into a durable
       ``McpServerSkipped`` observer event the front-end surfaces.
 
+    ``pool`` (an :class:`~noeta.builtins.mcp.impl.pool.McpConnectionPool`)
+    is the task-start path's connection source: clients are acquired from it
+    — shared with every other build naming the same server in the same
+    ``pool_scope`` (the host's partition, ``None`` = shared), ``tools/list``
+    run afresh for this build — and the caller owns their ``release``.
+    Without a pool (discovery, the CLI menu) every client is fresh and the
+    caller owns its ``shutdown``.
+
     Returns ``(tools, clients, skipped)``; ``skipped`` is always ``[]`` when
-    ``skip_on_failure=False``. Callers must ``shutdown`` the returned clients.
-    Returns ``({}, [], [])`` for empty ``specs`` so the default-off path
-    constructs nothing.
+    ``skip_on_failure=False``. Returns ``({}, [], [])`` for empty ``specs`` so
+    the default-off path constructs nothing.
 
     A **duplicate alias** is always a hard ``McpConfigError`` regardless of
     ``skip_on_failure`` — it is a caller wiring bug (the enabled-alias list / the
@@ -383,7 +437,8 @@ def build_mcp_tools(
             seen_aliases.add(spec.alias)
             try:
                 built, client = _connect_one_server(
-                    spec, spawn=spawn, http_post=http_post
+                    spec, spawn=spawn, http_post=http_post, pool=pool,
+                    pool_scope=pool_scope,
                 )
             except (McpError, McpConfigError) as exc:
                 if not skip_on_failure:
@@ -395,7 +450,10 @@ def build_mcp_tools(
             tools.update(built)
     except BaseException:
         for c in clients:
-            c.shutdown()
+            if pool is None:
+                c.shutdown()
+            else:
+                pool.release(c)
         raise
     return tools, clients, skipped
 

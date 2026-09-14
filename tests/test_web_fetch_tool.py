@@ -33,7 +33,7 @@ from noeta.builtins.web.impl import (
     build_web_session_pack,
     build_web_tools,
 )
-from noeta.builtins.web.impl.fetch import html_to_markdown
+from noeta.builtins.web.impl.fetch import PageCache, html_to_markdown
 from noeta.execution.session_pack import SessionBuildContext
 
 
@@ -328,7 +328,7 @@ def test_webfetch_caches_page_for_repeat_fetches() -> None:
 def test_webfetch_cache_expires_after_ttl() -> None:
     transport = FakeFetchTransport(pages_by_url={"https://x": _PAGE})
     now = [1000.0]
-    tool = WebFetchTool(transport=transport, clock=lambda: now[0])
+    tool = WebFetchTool(transport=transport, cache=PageCache(clock=lambda: now[0]))
     ctx, _ = _ctx()
     tool.invoke(_args("https://x"), ctx)
     now[0] += 901.0  # past the 15-minute TTL

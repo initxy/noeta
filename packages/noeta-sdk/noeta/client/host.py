@@ -12,9 +12,10 @@ with catalog pricing and the deterministic tool pack the generic
 from __future__ import annotations
 
 import dataclasses
-import hashlib
+import functools
 import logging
 import threading
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,7 +25,6 @@ from noeta.agent.registry import AgentRegistry, UnknownAgentError
 from noeta.agent.spec import AgentSpec, BudgetSpec, ToolRef, agent_activates
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
-from noeta.protocols.canonical import to_canonical_bytes
 from noeta.context.content_channel import ContentKindSpec
 from noeta.context.reminders import ReminderSpec
 from noeta.execution.builder import build_session_inputs
@@ -47,6 +47,7 @@ from noeta.protocols.events import (
 from noeta.protocols.hooks import Guard
 from noeta.protocols.messages import LLMProvider, StreamDelta, Usage
 from noeta.protocols.policy import Policy
+from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.tool import Tool
 from noeta.protocols.values import ContentRef
@@ -62,6 +63,8 @@ from noeta.runtime.background_shell import (
 from noeta.runtime.cancellation import CancellationRegistry
 from noeta.runtime.injection import InjectionInbox
 from noeta.runtime.file_checkpoint import FileCheckpointRegistry
+from noeta.runtime.task_local import TaskLocalRegistry, TaskSlot
+from noeta.runtime.tool import ToolRuntime
 from noeta.client.parts import (
     browser_tool_names,
     catalog_price,
@@ -77,6 +80,7 @@ from noeta.client.parts import (
     memory_impl,
     provider_family,
     resolve_model_alias,
+    skills_impl,
 )
 from noeta.client.consolidation import CONSOLIDATION_AGENT_NAME
 from noeta.client.host_config import SandboxExecEnvConfig
@@ -104,107 +108,15 @@ __all__ = ["SdkHost"]
 
 _log = logging.getLogger(__name__)
 
-#: Upper bound on the in-process Engine cache shared by all sessions on this
-#: host. LRU eviction (OrderedDict.popitem(last=False)) keeps the pool from
-#: growing without bound in long-lived server processes.
-_MAX_CACHED_ENGINES: int = 256
-
-
-#: An ``OrderedDict`` for the Engine LRU that also REAPS the live MCP clients
-#: an evicted Engine owns. ``_build_engine`` connects MCP servers (each an
-#: :class:`McpStdioClient` subprocess / an :class:`McpHttpClient`) and those
-#: clients are retained only via the cached Engine's tools; the plain
-#: ``popitem(last=False)`` eviction in :meth:`GenericEngineResolver._engine_for_agent`
-#: drops the Engine and would orphan the subprocess + leak its fds. That eviction
-#: site lives in the base resolver, so the cache *value* carries its clients:
-#: ``_build_engine`` stages them on the host via
-#: :meth:`SdkHost._stage_mcp_clients`; ``__setitem__`` adopts the staged list for
-#: the new key, and every removal path (``__delitem__`` / ``pop`` / ``popitem``)
-#: calls ``client.shutdown()`` (idempotent, never raises) on the removed entry's
-#: clients. One bad client can't break eviction: shutdown is swallowed + logged.
-class _McpReapingEngineCache(OrderedDict):  # type: ignore[type-arg]
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        # key → live MCP clients owned by that key's Engine.
-        self._clients_by_key: dict[Any, list[Any]] = {}
-        # Set by the host right before ``__setitem__`` runs (the base resolver
-        # assigns ``self._engines[key] = engine`` straight after ``_build_engine``
-        # returns). Consumed-and-cleared on adoption. THREAD-LOCAL: with the
-        # per-key build locks, Engine builds for different keys run concurrently;
-        # stage → adopt pairs on the build thread (the build and its put always
-        # run on the same thread), so concurrent builds cannot adopt each other's
-        # clients.
-        self._staging = threading.local()
-
-    def stage(self, clients: list[Any]) -> None:
-        self._staging.pending = list(clients)
-
-    def discard_staged(self) -> None:
-        """Reap + clear anything staged on THIS thread that was never adopted.
-
-        Staging pairs with adoption on the build thread, so a pending list still
-        sitting here means its build never reached the cache put — the clients
-        are orphaned and must be shut down, not merely dropped (an
-        ``McpStdioClient`` drop leaks its subprocess + fds for the life of the
-        process)."""
-        pending = getattr(self._staging, "pending", [])
-        self._staging.pending = []
-        if pending:
-            self._reap(pending)
-
-    def _reap(self, clients: list[Any]) -> None:
-        for client in clients:
-            try:
-                client.shutdown()
-            except Exception:  # noqa: BLE001 — one bad client can't break eviction
-                _log.warning("MCP client shutdown failed on eviction", exc_info=True)
-
-    def __setitem__(self, key: Any, value: Any) -> None:
-        pending = getattr(self._staging, "pending", [])
-        self._staging.pending = []
-        # Replacing an existing key (rare — only an identical key rebuild): reap
-        # the old key's clients first so they aren't orphaned by the overwrite.
-        if key in self._clients_by_key:
-            self._reap(self._clients_by_key.pop(key))
-        if pending:
-            self._clients_by_key[key] = pending
-        super().__setitem__(key, value)
-
-    def __delitem__(self, key: Any) -> None:
-        clients = self._clients_by_key.pop(key, None)
-        super().__delitem__(key)
-        if clients:
-            self._reap(clients)
-
-    def popitem(self, last: bool = True) -> Any:
-        key, value = super().popitem(last=last)
-        clients = self._clients_by_key.pop(key, None)
-        if clients:
-            self._reap(clients)
-        return key, value
-
-    def pop(self, key: Any, *args: Any) -> Any:
-        had = key in self
-        value = super().pop(key, *args)
-        if had:
-            clients = self._clients_by_key.pop(key, None)
-            if clients:
-                self._reap(clients)
-        return value
-
-    def clear(self) -> None:
-        all_clients = list(self._clients_by_key.values())
-        self._clients_by_key.clear()
-        super().clear()
-        for clients in all_clients:
-            self._reap(clients)
-
-
 #: The synthetic registry name a single convenience ``provider`` is folded under
 #: in :meth:`SdkHost.__post_init__`. On the single-provider path a bound
 #: ``ModelBound`` never carries a provider name (the driver passes no selector),
 #: so this name is purely an internal table key — it never enters a durable write.
 _SINGLE_PROVIDER_NAME = "default"
+
+#: The task-local slot the host keeps a task's last MCP provenance / skip set
+#: in (see :meth:`SdkHost._note_mcp_stream`).
+_MCP_STREAM_NOTE_SLOT = "mcp.stream_note"
 
 
 # ---------------------------------------------------------------------------
@@ -327,15 +239,6 @@ def skill_menu_budget_tokens(model: str) -> int:
     if not window:
         window = _SKILL_MENU_FALLBACK_WINDOW
     return max(1, int(window * SKILL_MENU_BUDGET_FRACTION))
-
-
-def _rank_fingerprint(rank: Mapping[str, float]) -> str:
-    """A short, order-independent digest of a skill-menu rank map, for the
-    Engine cache scope."""
-    canonical = to_canonical_bytes(
-        {name: float(score) for name, score in sorted(rank.items())}
-    )
-    return hashlib.sha256(canonical).hexdigest()[:16]
 
 
 def _spec_write_path_globs(spec: AgentSpec) -> tuple[str, ...]:
@@ -531,8 +434,8 @@ class SdkHost(GenericEngineResolver):
     # ``{skill: score}`` or ``None``): the same tenancy seam and contract as
     # ``memory_root_resolver`` (cheap, total, deterministic per task id — a
     # resumed task must compose the same roster bytes). Reaches the skills
-    # pack as ``plugin_config["skills"]["menu_rank"]`` and partitions the
-    # Engine cache, so two tenants never share a roster. ``None`` ⇒ tier +
+    # pack as ``plugin_config["skills"]["menu_rank"]``; the Engine is built
+    # per turn, so two tenants never share a roster. ``None`` ⇒ tier +
     # frontmatter ``priority`` order only.
     skill_menu_rank_resolver: Optional[
         Callable[[str], Optional[Mapping[str, float]]]
@@ -576,6 +479,21 @@ class SdkHost(GenericEngineResolver):
     # leaves it ``None`` (the client uses stdlib ``urllib``). Pure wiring — never
     # recorded.
     mcp_http_post: Optional[HttpPostFn] = None
+    #: Idle expiry, in seconds, of a pooled MCP connection no turn holds
+    #: (``None`` ⇒ never). The Engine is built per turn; its MCP connections
+    #: come from ONE host-owned pool keyed by server identity
+    #: (:mod:`noeta.builtins.mcp.impl.pool`), shared across tasks, released
+    #: when the turn's Engine goes, closed on :meth:`shutdown_mcp`.
+    mcp_idle_ttl: Optional[float] = 1800.0
+    #: Per-task MCP pool partition: given a task id, the host-injected callable
+    #: names the scope its connections live in (a tenant id, a workspace),
+    #: or ``None`` for the shared scope. Two tasks share a pooled connection
+    #: only when the server identity AND the scope match, so a stateful stdio
+    #: server (a browser, a login) never carries one tenant's state into
+    #: another's turn. The same tenancy seam as ``memory_root_resolver`` —
+    #: cheap, total, deterministic per task id, the SDK hands over task ids
+    #: and never users. ``None`` (single-tenant) shares every connection.
+    mcp_scope_resolver: Optional[Callable[[str], Optional[str]]] = None
     # HookGuard rules for the pre-tool-use phase; an empty tuple registers no
     # extra hook.
     hooks_pre_tool_use: tuple[PreToolUseRule, ...] = ()
@@ -752,36 +670,23 @@ class SdkHost(GenericEngineResolver):
     # every session provisions when a provider is present. A host runtime injection,
     # never part of any agent identity.
     sandbox_policy: Optional[Callable[[str, Optional[str]], bool]] = None
-    # The cache key has a ``workspace`` dimension (the bound **absolute path**, or
-    # ``None`` for the host default) and a ``provider`` dimension — so two sessions
-    # on different directories or providers never share an Engine. Bounded LRU via
-    # OrderedDict (cap = _MAX_CACHED_ENGINES) + a threading Lock to serialise
-    # get-or-build-put under ThreadingHTTPServer concurrency.
-    _engines: OrderedDict[
-        tuple[
-            str,
-            str,
-            bool,
-            Optional[str],
-            Optional[str],
-            Optional[str],
-            tuple[str, ...],
-            Optional[str],
-            Optional[str],
-        ],
-        Engine,
-    ] = field(
-        default_factory=_McpReapingEngineCache, init=False, repr=False, compare=False
-    )
-    _engines_lock: threading.Lock = field(
+    # The MCP connection pool (``McpConnectionPool``), built lazily on the
+    # first live MCP resolve so a host that never enables MCP never imports the
+    # built-in; reached through :meth:`_mcp_pool_get`.
+    _mcp_pool: Optional[Any] = field(default=None, init=False, repr=False, compare=False)
+    _mcp_pool_lock: threading.Lock = field(
         default_factory=threading.Lock, init=False, repr=False, compare=False
     )
-    # Per-key Engine-build locks (see
-    # ``GenericEngineResolver._engine_for_agent``): builds run outside the global
-    # ``_engines_lock`` so one session's slow/hanging MCP connect does not
-    # serialise every other Engine build.
-    _engine_builds: dict[Any, threading.Lock] = field(
-        default_factory=dict, init=False, repr=False, compare=False
+    # Task-local runtime state (``noeta.runtime.task_local``): the turn's
+    # Engine, the read-first record the edit tools check, and the slots the
+    # built-ins keep per task (the ReAct trigger calibration, WebFetch's page
+    # cache, the skill roster the task last saw, the last MCP provenance
+    # emitted). One lock, one LRU, one ``forget`` — the base resolver's
+    # ``forget_turn_carriers`` drops a task's record at cancel / close. A
+    # runtime accelerator like ``_file_checkpoint``: never written to the
+    # event log → no resume effect.
+    _task_locals: TaskLocalRegistry = field(
+        default_factory=TaskLocalRegistry, init=False, repr=False, compare=False
     )
     # First non-empty skill-menu rank per task id — the code-level side of
     # the ``skill_menu_rank_resolver`` contract (see
@@ -796,8 +701,8 @@ class SdkHost(GenericEngineResolver):
     # sends it each turn; it is never written to the event log. The async HTTP
     # transport seeds a turn on the request thread but resolves the Engine later on
     # a background thread, so the per-turn mode is stashed here keyed by task_id
-    # (set by the driver before resolution, read in ``resolve_engine`` to key +
-    # build the Engine). Single writer per task (turns are serial under the
+    # (set by the driver before resolution, read in ``resolve_engine`` into the
+    # turn's build). Single writer per task (turns are serial under the
     # dispatcher lease); overwritten each turn, never evicted (one short string per
     # task) so a turn that suspends on approval still resolves the same mode when
     # it resumes.
@@ -807,15 +712,15 @@ class SdkHost(GenericEngineResolver):
     # Per-turn, NON-durable enabled-MCP-alias carrier keyed by task_id. Mirrors
     # ``_turn_permission_mode``: the driver records the turn's enabled aliases
     # (clean list, no url/token) here before the Engine is resolved;
-    # ``resolve_engine`` reads it to thread the aliases into the cache key +
-    # ``_build_engine`` (which resolves each alias → spec via ``mcp_server_resolver``
-    # → live MCP tools). Never written to the event log.
+    # ``resolve_engine`` reads it to thread the aliases into ``_build_engine``
+    # (which resolves each alias → spec via ``mcp_server_resolver`` → live MCP
+    # tools). Never written to the event log.
     _turn_mcp_aliases: dict[str, tuple[str, ...]] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
     # Per-turn, NON-durable reasoning-effort override. Same carrier pattern as
     # permission_mode / enabled_mcp: the driver records the selector before the
-    # turn resolves its Engine; resolver reads it into the cache key and policy.
+    # turn resolves its Engine; the resolver reads it into the build and policy.
     _turn_effort: dict[str, Optional[str]] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -942,10 +847,9 @@ class SdkHost(GenericEngineResolver):
         if self.skill_menu_rank_resolver is not None and "menu_rank" in (
             self.plugin_config_overrides.get("skills") or {}
         ):
-            # The static override is applied last and would replace every
-            # resolved rank, while the Engine cache would still partition by
-            # the rank it replaced — N identical Engines, N MCP connects, no
-            # behaviour. One or the other.
+            # The static override is applied last and would silently replace
+            # every resolved rank — a resolver the host wired that never has
+            # an effect. One or the other.
             raise ValueError(
                 "SdkHost: pass EITHER skill_menu_rank_resolver (per task) OR "
                 "plugin_config['skills']['menu_rank'] (static) — not both"
@@ -1399,8 +1303,67 @@ class SdkHost(GenericEngineResolver):
     def _spawnable_set(self, spawnable: Any) -> frozenset[str]:
         return frozenset(n for n in spawnable if n in self.registry)
 
+    def _mcp_pool_get(self) -> Any:
+        """The host's MCP connection pool, built on first use."""
+        pool = self._mcp_pool
+        if pool is not None:
+            return pool
+        with self._mcp_pool_lock:
+            if self._mcp_pool is None:
+                self._mcp_pool = mcp_impl().McpConnectionPool(
+                    http_post=self.mcp_http_post, idle_ttl=self.mcp_idle_ttl
+                )
+            return self._mcp_pool
+
+    def reconnect_mcp(self, alias: Optional[str] = None) -> None:
+        """Retire the pooled MCP connection(s) — every server, or one alias —
+        so the next Engine build connects afresh. The host's verb for "the
+        server config changed" / "restart that server". A turn still holding
+        a retired connection keeps it until its Engine goes; nothing in
+        flight breaks. A host that never connected MCP is a no-op."""
+        pool = self._mcp_pool
+        if pool is not None:
+            pool.invalidate(alias)
+
+    def shutdown_mcp(self) -> None:
+        """Close every pooled MCP connection now. The Client calls this after
+        the workers stopped (no turn is mid-call), before the sandbox
+        teardown, so no stdio subprocess outlives ``Client.shutdown()``."""
+        pool = self._mcp_pool
+        if pool is not None:
+            pool.shutdown()
+
+    def _note_mcp_stream(
+        self, task_id: str, servers: tuple[Any, ...], skipped: frozenset[str]
+    ) -> tuple[bool, frozenset[str]]:
+        """Compare this build's ``(servers, skipped)`` with the last build's
+        for ``task_id`` (kept in the task's local slot); return
+        ``(emit provenance?, aliases newly skipped)`` and remember this build.
+        First sighting — the task's first build in this process — emits
+        provenance and every skip."""
+        note = self._task_locals.slot(task_id, _MCP_STREAM_NOTE_SLOT, dict)
+        previous = note.get("last")
+        note["last"] = (servers, skipped)
+        if previous is None:
+            return True, skipped
+        prev_servers, prev_skipped = previous
+        return servers != prev_servers, skipped - prev_skipped
+
+    def _mcp_scope_override(self, task_id: Optional[str]) -> Optional[str]:
+        """The MCP pool scope ``task_id``'s connections live in, or ``None``
+        (the shared scope) — same fallbacks as :meth:`_memory_root_override`:
+        no resolver, no task id, the resolver declining."""
+        if self.mcp_scope_resolver is None or not task_id:
+            return None
+        scope = self.mcp_scope_resolver(str(task_id))
+        return str(scope) if scope else None
+
     def _resolve_live_mcp_tools(
-        self, mcp_aliases: tuple[str, ...], *, task_id: Optional[str] = None
+        self,
+        mcp_aliases: tuple[str, ...],
+        *,
+        task_id: Optional[str] = None,
+        leases: Optional[list[Any]] = None,
     ) -> Optional[dict[str, Any]]:
         """Connect the turn's enabled MCP servers → live tools.
 
@@ -1412,14 +1375,24 @@ class SdkHost(GenericEngineResolver):
         alphabetical order → tool-name order inside ``build_mcp_tools``), so the
         tool dict order → schema order → stable hash is reproducible.
 
-        Connection lifecycle: this runs once per BUILT Engine (the resolver caches
-        on the cache-key tuple incl. ``mcp_aliases``), so the connect + the tool-set
-        freeze happen exactly once at task start, never mid-turn. Failure is
-        skip-on-failure: one enabled server that cannot connect / handshake /
-        ``tools/list`` is dropped, recorded as one ``McpServerSkipped`` observer
-        event on ``task_id``'s stream, and the build continues with the surviving
-        servers' tools — a single bad connector never sinks the task. The alias is a
-        clean name; no url/token ever enters the event.
+        Connection lifecycle: the Engine is built per turn, so this runs per
+        turn — but the connections come from the host's pool
+        (:meth:`_mcp_pool_get`), one per server identity and pool scope
+        (:meth:`_mcp_scope_override`), shared across every task on this host
+        that resolves the same pair; only ``tools/list`` is re-run per build,
+        which is what makes a server's tool-set change visible next turn. Every client
+        acquired here is appended to ``leases``; the built Engine's finalizer
+        releases them (see :meth:`_build_engine`), so a connection closes only
+        when no turn holds it and it has idled past ``mcp_idle_ttl`` — or on
+        :meth:`shutdown_mcp`.
+
+        Failure is skip-on-failure: one enabled server that cannot connect /
+        handshake / ``tools/list`` is dropped, recorded as one
+        ``McpServerSkipped`` observer event on ``task_id``'s stream (once per
+        outage, not per turn — see :meth:`_note_mcp_stream`), and the build
+        continues with the surviving servers' tools — a single bad connector
+        never sinks the task. The alias is a clean name; no url/token ever
+        enters the event.
 
         Returns ``None`` when no live MCP tools resulted — empty aliases, no
         resolver wired, no alias resolved to a spec, OR every server was skipped —
@@ -1427,12 +1400,6 @@ class SdkHost(GenericEngineResolver):
         merges no MCP tools (resume passes empty aliases and so never reaches here).
         A returned dict takes the live override path.
         """
-        # Reap any clients staged by a prior build that never reached the cache put
-        # (so a no-MCP build can never adopt stale clients, and an orphaned stdio
-        # subprocess is shut down rather than dropped). The cache consumes-and-clears
-        # on each ``__setitem__``; this guards the rare build-without-put path (e.g.
-        # an exception after staging).
-        self._discard_staged_mcp_clients()
         resolver = self.mcp_server_resolver
         if not mcp_aliases or resolver is None:
             return None
@@ -1443,91 +1410,79 @@ class SdkHost(GenericEngineResolver):
                 specs.append(spec)
         if not specs:
             return None
-        # Record the per-task MCP provenance (enabled aliases + tool subsets, names
-        # only, NO credentials) the moment we know which servers resolved, BEFORE
-        # the connect (so a server that then fails to connect — and gets a
-        # McpServerSkipped — still shows in the provenance as "enabled this run").
-        # Emitted in the pre-loop window (resolve_engine runs before the first step),
-        # origin observer, so the fold rebuilds the same GovernanceState.mcp_provenance
-        # from the event on resume. Only on the live connect path (task_id present);
-        # the seed/by-name build passes task_id=None and never reaches here, and
-        # resume passes empty aliases.
-        if task_id:
-            self.event_log.system_emit(
-                task_id=task_id,
-                type="McpProvenanceRecorded",
-                payload=McpProvenanceRecordedPayload(
-                    servers=mcp_impl().mcp_provenance_from_specs(specs)
-                ),
-                actor="mcp",
-                origin="observer",
-            )
-        tools, clients, skipped = mcp_impl().build_mcp_tools(
-            tuple(specs), http_post=self.mcp_http_post, skip_on_failure=True
+        impl = mcp_impl()
+        tools, clients, skipped = impl.build_mcp_tools(
+            tuple(specs),
+            http_post=self.mcp_http_post,
+            skip_on_failure=True,
+            pool=self._mcp_pool_get(),
+            pool_scope=self._mcp_scope_override(task_id),
         )
-        # Stage the live clients so the engine cache adopts them when the base
-        # resolver puts the just-built Engine (``self._engines[key] = engine``), and
-        # shuts them down when that Engine is evicted from the LRU. Without this the
-        # McpStdioClient subprocess + its fds would leak on eviction.
-        self._stage_mcp_clients(clients)
-        # Record one observer event per skipped server (front-end surface + audit
-        # trail). Only possible once the task exists; the seed/by-name build passes
-        # ``task_id=None`` and never connects MCP, so a skip without a task_id is not
-        # reachable on the live path. Defensive: only emit when we have a stream to
-        # write to.
-        if skipped and task_id:
-            for skip in skipped:
+        if leases is not None:
+            leases.extend(clients)
+        # The per-task MCP provenance (enabled aliases + tool subsets, names
+        # only, NO credentials) and one observer event per newly skipped
+        # server (front-end surface + audit trail). Only on the live connect
+        # path (task_id present); the seed/by-name build passes task_id=None
+        # and never connects MCP. Emitted in the pre-loop window, origin
+        # observer, so the fold rebuilds the same GovernanceState.mcp_provenance
+        # on resume. A server that failed still shows in the provenance as
+        # "enabled this run".
+        if task_id:
+            servers = impl.mcp_provenance_from_specs(specs)
+            emit_provenance, new_skips = self._note_mcp_stream(
+                task_id,
+                tuple(
+                    (str(row["alias"]), tuple(row["tools"])) for row in servers
+                ),
+                frozenset(skip.alias for skip in skipped),
+            )
+            if emit_provenance:
                 self.event_log.system_emit(
                     task_id=task_id,
-                    type="McpServerSkipped",
-                    payload=McpServerSkippedPayload(
-                        alias=skip.alias, reason=skip.reason
-                    ),
+                    type="McpProvenanceRecorded",
+                    payload=McpProvenanceRecordedPayload(servers=servers),
                     actor="mcp",
                     origin="observer",
                 )
+            for skip in skipped:
+                if skip.alias in new_skips:
+                    self.event_log.system_emit(
+                        task_id=task_id,
+                        type="McpServerSkipped",
+                        payload=McpServerSkippedPayload(
+                            alias=skip.alias, reason=skip.reason
+                        ),
+                        actor="mcp",
+                        origin="observer",
+                    )
         if not tools:
             return None
-        # The connected clients are retained by the live ``McpTool`` objects (each
-        # holds its client); the cached Engine owns those tools for the session's
-        # life, and the staged clients (above) are shut down by the engine cache
-        # when that Engine is evicted from the LRU.
         return dict(tools)
 
-    def _stage_mcp_clients(self, clients: list[Any]) -> None:
-        """Hand the just-connected MCP clients to the engine cache so it adopts
-        them on the next ``self._engines[key] = engine`` put and reaps them on
-        eviction. A no-op for a plain ``OrderedDict`` cache (e.g. a test that
-        swapped it out), so the staging contract is best-effort."""
-        stage = getattr(self._engines, "stage", None)
-        if stage is not None:
-            stage(clients)
-
-    def _discard_staged_mcp_clients(self) -> None:
-        """Shut down + clear staged-but-never-adopted MCP clients (see
-        :meth:`_McpReapingEngineCache.discard_staged`). Best-effort, like
-        :meth:`_stage_mcp_clients`: a swapped-in plain cache has nothing to
-        discard."""
-        discard = getattr(self._engines, "discard_staged", None)
-        if discard is not None:
-            discard()
-
     def _build_engine(self, *args: Any, **kwargs: Any) -> Engine:
-        """Build this turn's Engine, never leaking a connected MCP client.
+        """Build this turn's Engine, never leaking a pooled MCP connection.
 
-        :meth:`_assemble_engine` connects the turn's enabled MCP servers partway
-        through and *stages* the live clients for the engine cache to adopt on
-        the put that follows a successful return. Every step after that connect
-        can still raise (a bad session-inputs build, an unknown provider, a
-        failing policy factory) — and the base resolver then never puts, so the
-        staged clients would be adopted by nobody: an ``McpStdioClient``
-        subprocess and its fds would survive, per failed build, for the life of
-        the process. Reaping them here makes the connect failure-atomic."""
+        :meth:`_assemble_engine` acquires the turn's enabled MCP connections
+        from the host pool partway through and lists them in ``mcp_leases``.
+        Every step after that can still raise (a bad session-inputs build, an
+        unknown provider, a failing policy factory) — then the leases are
+        released here, so the acquire is failure-atomic. On success the
+        leases ride a ``weakref.finalize`` on the Engine: the Engine is a
+        per-turn value nobody caches, so the release lands when the turn's
+        holder lets go (a reference cycle through the Engine delays it to the
+        next cyclic GC pass — acceptable; the idle TTL is the backstop), and
+        ``weakref.finalize`` also runs at interpreter exit."""
+        leases: list[Any] = []
         try:
-            return self._assemble_engine(*args, **kwargs)
+            engine = self._assemble_engine(*args, mcp_leases=leases, **kwargs)
         except BaseException:
-            self._discard_staged_mcp_clients()
+            if leases:
+                self._mcp_pool_get().release_all(leases)
             raise
+        if leases:
+            weakref.finalize(engine, self._mcp_pool_get().release_all, leases)
+        return engine
 
     def _assemble_engine(
         self,
@@ -1546,6 +1501,7 @@ class SdkHost(GenericEngineResolver):
         task_id: Optional[str] = None,
         exec_env_ref: Optional[str] = None,
         structured_output_schema: Optional[dict[str, Any]] = None,
+        mcp_leases: Optional[list[Any]] = None,
     ) -> Engine:
         spec = agent
         # ``workspace`` is the per-session workspace **absolute path** (welded into
@@ -1565,8 +1521,8 @@ class SdkHost(GenericEngineResolver):
         # swaps the host ``WorkspaceRoot`` for a lexical container root); the host
         # ``workspace_dir`` is meaningless inside the container, so it is replaced by
         # the container's working directory. The SAME backend is handed to the seed
-        # build (``task_id is None``) and every driving turn, which keeps the
-        # seed/drive Engine-cache entry from silently pinning the local backend.
+        # build (``task_id is None``) and every driving turn, so the seed and the
+        # drive never diverge on which backend they target.
         # Absent a manager, this is a no-op and the local path is unaffected.
         bound_exec_env: Optional[ExecEnv] = None
         bound_exec_env_ref = exec_env_ref
@@ -1677,10 +1633,13 @@ class SdkHost(GenericEngineResolver):
         # (no url/token in any request); the specs come from the product-injected
         # ``mcp_server_resolver`` (the SDK never holds the config store). ``()``
         # aliases / ``None`` resolver ⇒ ``build_mcp_tools(())`` builds nothing. The
-        # connected clients are owned by the cached Engine for this session. Resume
-        # stays reconnect-free: the recorded tool spec is the durable truth, and the
-        # resume path passes empty aliases.
-        mcp_tools_override = self._resolve_live_mcp_tools(mcp_aliases, task_id=task_id)
+        # connections come from the host pool and are leased to this Engine for
+        # its turn (``mcp_leases``). Resume stays reconnect-free: the recorded
+        # tool spec is the durable truth, and the resume path passes empty
+        # aliases.
+        mcp_tools_override = self._resolve_live_mcp_tools(
+            mcp_aliases, task_id=task_id, leases=mcp_leases
+        )
         memory_override = self._memory_root_override(task_id)
         # The named backend bag: live backing objects for the capability packs,
         # keyed by the plugins' own names. Absent names mean "no live backing" —
@@ -1697,6 +1656,13 @@ class SdkHost(GenericEngineResolver):
         # session's decide turns; only the model id may differ.
         bound_provider = self._provider_for(provider)
         pack_backends["llm"] = bound_provider
+        # The task's local slots (``noeta.runtime.task_local``), bound for this
+        # build: the packs reach theirs through ``plugin_config[…]["task_slot"]``
+        # and the ReAct factory keeps its trigger calibration in one, so what a
+        # built-in needs across turns survives the per-turn build. ``None`` on
+        # a build without a task (the seed / by-name path): those never run a
+        # tool or a step.
+        task_slot = self._task_locals.bind_slot(task_id) if task_id else None
         inputs = build_session_inputs(
             session_packs=self._session_packs(agent.name),
             # The built-in + this agent's activated control tools, merged with the
@@ -1704,7 +1670,7 @@ class SdkHost(GenericEngineResolver):
             control_tools=self._control_tools(agent.name),
             base_reminders=default_reminder_specs(),
             guards_factory=default_guards_factory(),
-            default_policy_factory=default_policy_factory(),
+            default_policy_factory=self._policy_factory_builder(task_slot),
             workspace_dir=workspace_dir,
             system_prompt=spec.instructions,
             allowed_tools=spec_tool_names,
@@ -1779,6 +1745,7 @@ class SdkHost(GenericEngineResolver):
                 memory_override=memory_override,
                 trust_subject=trust_subject,
                 skill_menu_rank=self._skill_menu_rank_override(task_id),
+                task_slot=task_slot,
             ),
             hooks_pre_tool_use=self.hooks_pre_tool_use,
             repetition_threshold=self.repetition_threshold,
@@ -1860,12 +1827,14 @@ class SdkHost(GenericEngineResolver):
             # exactly one event per (task, skill).
             content_hashes=inputs.content_hashes,
             tool_output_inline_limit=inputs.tool_output_inline_limit,
-            # The host's background-shell registry, so a session's
-            # ``shell_run(background=true)`` reaches it through the ToolContext.
-            background_runner=self._process_registry,
-            # The host's per-turn file-checkpoint gate, so an AI ``edit`` / ``write``
-            # stashes its rewind baseline.
-            file_checkpoint_registry=self._file_checkpoint,
+            # The turn's tool runtime: the host's background-shell registry,
+            # its per-turn file-checkpoint gate, this agent's
+            # ``tool_result_transform`` stages, and the TASK's read-first record
+            # — which is why the runtime is built here rather than by the
+            # Engine's default: that record must outlive the per-turn Engine, or
+            # a file Read in one turn (or before an approval) could not be
+            # edited in the next.
+            tool_runtime=self._tool_runtime(agent.name, task_id),
             # background sub-agent launch+capacity seam, wired ONLY on a top-level
             # interactive Engine (``policy_wrapper`` is the multi-turn wrapper —
             # present only there). A child engine / oneshot host gets ``None`` so
@@ -1883,13 +1852,6 @@ class SdkHost(GenericEngineResolver):
             # resolved Engine and records each pack's residents at seed time. ``()``
             # when no pack activates a pre-loop resident.
             content_init_hooks=inputs.init_hooks,
-            # tool_result_transform stages for THIS agent — selected by the agent's
-            # name from the per-agent map the Client resolved from the activated
-            # plugin set. ``()`` for an agent that activated no transform-bearing
-            # plugin.
-            tool_result_transforms=tuple(
-                self.tool_result_transforms.get(agent.name, ())
-            ),
             # The ask answer codec (the ask mount's typed ``answer_codec``, threaded
             # through the builder) put on the Engine so the driver's ``answer`` path
             # can decode a submitted answer. ``None`` for a session that did not
@@ -1965,10 +1927,46 @@ class SdkHost(GenericEngineResolver):
             hooks=inputs.hooks,
             content_hashes=inputs.content_hashes,
             tool_output_inline_limit=inputs.tool_output_inline_limit,
-            background_runner=self._process_registry,
-            file_checkpoint_registry=self._file_checkpoint,
+            tool_runtime=self._tool_runtime(None, task_id),
             content_init_hooks=inputs.init_hooks,
         )
+
+    def _tool_runtime(self, agent: Optional[str], task_id: Optional[str]) -> ToolRuntime:
+        """The ToolRuntime a built Engine records tool calls through.
+
+        Carries the host's background-shell registry (``shell_run``
+        background jobs), the per-turn file-checkpoint gate (rewind
+        baselines), ``agent``'s ``tool_result_transform`` stages (``None`` —
+        the orchestration engine — has none), and ``task_id``'s read-first
+        record from the task-local registry, so the edit tools' "read it
+        first" precondition spans every turn of the task and every resume
+        within one. A build without a task (the seed / by-name path) gets the
+        runtime's own throwaway record: it never runs a tool.
+        """
+        return ToolRuntime(
+            event_log=self.event_log,
+            content_store=self.content_store,
+            background_runner=self._process_registry,
+            file_checkpoint_registry=self._file_checkpoint,
+            tool_result_transforms=tuple(
+                self.tool_result_transforms.get(agent, ()) if agent else ()
+            ),
+            file_read_registry=(
+                self._task_locals.read_registry(task_id) if task_id else None
+            ),
+        )
+
+    def _policy_factory_builder(self, task_slot: Optional[TaskSlot]) -> Any:
+        """The react built-in's policy-factory builder, with the task's slot
+        bound so the ReAct policy keeps its compaction-trigger calibration
+        across the task's turns (a per-turn policy instance would otherwise
+        start every turn's first request from the bare chars/4 estimate).
+        Binding a keyword the builder's protocol does not name keeps
+        ``PolicyFactoryBuilder`` unchanged for third-party builders."""
+        builder = default_policy_factory()
+        if task_slot is None:
+            return builder
+        return functools.partial(builder, task_slot=task_slot)
 
     def _read_task_inputs(self, task_id: str) -> dict[str, Any]:
         """Read a task's recorded ``TaskCreated.inputs`` (durable, resume-safe)."""
@@ -2078,6 +2076,17 @@ class SdkHost(GenericEngineResolver):
                     should_abort=should_abort,
                 )
             providers.append(impl.memory_reminder_provider(store, judge=judge))
+        if agent != CONSOLIDATION_AGENT_NAME and agent_activates(
+            spec, "skill_invocation"
+        ):
+            # The "new skills" note: names the skills that joined this task's
+            # roster since it last saw it (``roster_note``). Silent on the
+            # opening turn and whenever nothing joined, so the recorded bytes
+            # of every existing flow are untouched. The curator digests
+            # sessions, it never converses — no note for it either.
+            providers.append(
+                skills_impl().new_skills_reminder_provider(self._task_locals.peek)
+            )
         providers.extend(self.reminder_providers.get(agent, {}).get(TURN_INTAKE, ()))
         return tuple(providers)
 
@@ -2141,6 +2150,7 @@ class SdkHost(GenericEngineResolver):
         memory_override: Optional[Path] = None,
         trust_subject: Optional[Path] = None,
         skill_menu_rank: Optional[Mapping[str, float]] = None,
+        task_slot: Optional[TaskSlot] = None,
     ) -> dict[str, dict[str, Any]]:
         """The per-plugin config bag a build path hands the kernel builder.
 
@@ -2211,6 +2221,15 @@ class SdkHost(GenericEngineResolver):
             # the build. Absent ⇒ no key, so a host without the seam derives
             # the bag it always did.
             config["skills"]["menu_rank"] = dict(skill_menu_rank)
+        if task_slot is not None:
+            # The task's local slots (``noeta.runtime.task_local``), bound to
+            # this build's task, for the packs that keep state across the
+            # per-turn build: the skills pack reports the roster it composed
+            # (the "new skills" note reads it), the web pack keeps its page
+            # cache. A build without a task binds none, and the packs then
+            # keep nothing past the build.
+            config["skills"]["task_slot"] = task_slot
+            config.setdefault("web", {})["task_slot"] = task_slot
         if reduced:
             return self._apply_plugin_config_overrides(config)
         config["fs"]["write_path_globs"] = _spec_write_path_globs(spec)
@@ -2322,9 +2341,9 @@ class SdkHost(GenericEngineResolver):
 
         ``None`` — no resolver wired (single-tenant), no task id in hand (the
         by-name seed path), or the resolver declining this task — means "fall
-        back to the host-level chain". Centralised so :meth:`memory_root`,
-        :meth:`_build_engine`, and :meth:`_engine_cache_scope` can never
-        disagree on which store a task resolves.
+        back to the host-level chain". Centralised so :meth:`memory_root` and
+        :meth:`_build_engine` can never disagree on which store a task
+        resolves.
         """
         if self.memory_root_resolver is None or not task_id:
             return None
@@ -2335,21 +2354,18 @@ class SdkHost(GenericEngineResolver):
     ) -> Optional[Mapping[str, float]]:
         """The per-task skill-menu rank ``task_id`` composes with, or ``None``
         — same fallbacks as :meth:`_memory_root_override` (no resolver, no
-        task id, resolver declining). Centralised so :meth:`_build_engine`
-        and :meth:`_engine_cache_scope` can never disagree on which roster a
-        task composes.
+        task id, resolver declining).
 
         The resolver is asked ONCE per task: its first non-empty answer is
         memoised for the task's life in this process. The roster sits in the
-        tool schema (stable prefix) and keys the Engine cache, and the score
-        the SDK itself recommends (``rank_skills_by_usage``) decays with
-        ``now`` — re-asking on every ``resolve_engine`` would rotate the
-        prefix and rebuild the Engine (MCP reconnect included) turn after
-        turn. A declining resolver (``None`` / empty) is asked again on the
-        next build, so a host that binds the tenant after the seed build
-        still ranks from the following turn on. Across processes the
-        resolver's own determinism keeps a resumed task's roster stable —
-        the same contract as ``memory_root_resolver``.
+        tool schema (the stable prefix), and the score the SDK itself
+        recommends (``rank_skills_by_usage``) decays with ``now`` — re-asking
+        on every per-turn build would rotate the prefix turn after turn. A
+        declining resolver (``None`` / empty) is asked again on the next
+        build, so a host that binds the tenant after the seed build still
+        ranks from the following turn on. Across processes the resolver's own
+        determinism keeps a resumed task's roster stable — the same contract
+        as ``memory_root_resolver``.
         """
         if self.skill_menu_rank_resolver is None or not task_id:
             return None
@@ -2375,33 +2391,6 @@ class SdkHost(GenericEngineResolver):
             if len(memo) > _MAX_SKILL_MENU_RANK_MEMO:
                 memo.popitem(last=False)
         return frozen
-
-    def _engine_cache_scope(
-        self, agent: AgentSpec, task_id: Optional[str]
-    ) -> Optional[str]:
-        """Partition the Engine cache by per-task memory root and skill rank.
-
-        The Engine cache key deliberately omits ``task_id`` (engines are shared
-        across tasks with equal bindings), but a memory-enabled Engine bakes its
-        :class:`MemoryStore` into the tool closures + resident index — so two tasks
-        whose ``memory_root_resolver`` maps to DIFFERENT roots must never share a
-        cached Engine (tenant A's store would serve tenant B). Scope = the resolved
-        override root; ``None`` (memory-off agent, no resolver, no task id, or
-        resolver fallback) keeps the shared slot.
-        """
-        parts: list[str] = []
-        if agent_activates(agent, "memory"):
-            override = self._memory_root_override(task_id)
-            if override is not None:
-                parts.append(str(override))
-        if agent_activates(agent, "skill_invocation"):
-            # The ``skill`` control-tool schema is baked into the cached
-            # Engine's composer, so a task-specific rank needs its own slot
-            # for the same reason a tenant memory root does.
-            rank = self._skill_menu_rank_override(task_id)
-            if rank is not None:
-                parts.append("skill_menu_rank:" + _rank_fingerprint(rank))
-        return "|".join(parts) if parts else None
 
     def declared_skill_activations(self, agent: str) -> tuple[str, ...]:
         """The agent spec's declared ``skills`` (``Options.skills``), as plain names.

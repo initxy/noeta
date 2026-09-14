@@ -2,14 +2,13 @@
 
 ``HostConfig.skill_menu_rank_resolver`` is the same tenancy seam as
 ``memory_root_resolver`` — the SDK hands over task ids, the product maps them
-to tenants. The resolved rank reaches the ``skills`` pack as ``menu_rank``
-and partitions the Engine cache, so two tenants never share a roster; the
+to tenants. The resolved rank reaches the ``skills`` pack as ``menu_rank``;
+the Engine is built per turn, so two tenants never share a roster; the
 budget itself is derived by the host from the bound model's catalog window.
 """
 
 from __future__ import annotations
 
-import dataclasses
 
 import pytest
 from pathlib import Path
@@ -17,7 +16,6 @@ from typing import Any, Optional
 
 from noeta.client.host import (
     SKILL_MENU_BUDGET_FRACTION,
-    _rank_fingerprint,
     skill_menu_budget_tokens,
 )
 from noeta.client.parts import derive_compaction_config
@@ -80,11 +78,9 @@ def test_bare_host_derives_the_budget_and_no_rank(tmp_path: Path) -> None:
     assert host2._plugin_config(shell_mode=ShellMode.OFF)["skills"]["menu_budget_tokens"] == 77
 
 
-def test_rank_resolver_reaches_the_roster_and_partitions_the_engine_cache(
-    tmp_path: Path,
-) -> None:
-    """Two tasks equal on every standard cache dimension but ranked
-    differently compose different rosters from distinct cached Engines."""
+def test_rank_resolver_reaches_the_roster(tmp_path: Path) -> None:
+    """Two tasks equal on every binding but ranked differently compose
+    different rosters; a task composes the same roster on every build."""
     mapping: dict[str, dict[str, float]] = {}
     host, driver = _skill_host(
         tmp_path,
@@ -102,47 +98,10 @@ def test_rank_resolver_reaches_the_roster_and_partitions_the_engine_cache(
     task_b = fold(host.event_log, host.content_store, seeded_b.task_id)
     engine_a = host.resolve_engine(task_a)
     engine_b = host.resolve_engine(task_b)
-    assert engine_a is not engine_b
-    assert host.resolve_engine(task_a) is engine_a
 
     assert _roster(engine_a) == {"aaa": "a" * 400, "bbb": "", "ccc": ""}
     assert _roster(engine_b) == {"aaa": "", "bbb": "", "ccc": "c" * 400}
-
-
-def test_engine_cache_scope_folds_the_rank_beside_the_memory_root(
-    tmp_path: Path,
-) -> None:
-    tenant = tmp_path / "tenant"
-    rank = {"aaa": 2.0}
-    host, _ = _skill_host(
-        tmp_path,
-        memory_root_resolver=lambda tid: tenant if tid == "t-a" else None,
-        skill_menu_rank_resolver=lambda tid: rank if tid in ("t-a", "t-b") else None,
-    )
-    spec = host.registry.resolve("main")
-    fp = "skill_menu_rank:" + _rank_fingerprint(rank)
-    assert host._engine_cache_scope(spec, "t-a") == f"{tenant}|{fp}"
-    assert host._engine_cache_scope(spec, "t-b") == fp
-    assert host._engine_cache_scope(spec, "t-none") is None
-    assert host._engine_cache_scope(spec, None) is None
-    # An agent without skill invocation ignores the rank; one without memory
-    # ignores the root.
-    no_skills = dataclasses.replace(
-        spec, plugins=tuple(p for p in spec.plugins if p != "skill_invocation")
-    )
-    assert host._engine_cache_scope(no_skills, "t-b") is None
-    no_memory = dataclasses.replace(
-        spec, plugins=tuple(p for p in spec.plugins if p != "memory")
-    )
-    assert host._engine_cache_scope(no_memory, "t-a") == fp
-    # An empty rank is "no rank".
-    host_empty, _ = _skill_host(tmp_path, skill_menu_rank_resolver=lambda tid: {})
-    assert host_empty._engine_cache_scope(spec, "t-a") is None
-
-
-def test_rank_fingerprint_is_order_independent() -> None:
-    assert _rank_fingerprint({"a": 1, "b": 2.5}) == _rank_fingerprint({"b": 2.5, "a": 1.0})
-    assert _rank_fingerprint({"a": 1}) != _rank_fingerprint({"a": 2})
+    assert _roster(host.resolve_engine(task_a)) == _roster(engine_a)
 
 
 def test_host_config_forwards_the_resolver_to_the_host(tmp_path: Path) -> None:
@@ -172,7 +131,7 @@ def test_host_config_forwards_the_resolver_to_the_host(tmp_path: Path) -> None:
 def test_rank_is_resolved_once_per_task_in_this_process(tmp_path: Path) -> None:
     """The first non-empty answer sticks for the task's life: a resolver whose
     score decays with the clock (``rank_skills_by_usage(now=...)``) cannot
-    rotate a running task's roster or rebuild its Engine turn after turn. A
+    rotate a running task's roster from one per-turn build to the next. A
     declining resolver is asked again; its later answer then sticks."""
     calls: list[str] = []
     tick = {"n": 0}
@@ -192,19 +151,17 @@ def test_rank_is_resolved_once_per_task_in_this_process(tmp_path: Path) -> None:
         skill_menu_rank_resolver=resolver,
         plugin_config_overrides={"skills": {"menu_budget_tokens": 130}},
     )
-    spec = host.registry.resolve("main")
     seeded = driver.seed_start(goal="g", agent="main")
     answers[seeded.task_id] = {"ccc": 1.0}
     task = fold(host.event_log, host.content_store, seeded.task_id)
     engine = host.resolve_engine(task)
-    scope = host._engine_cache_scope(spec, seeded.task_id)
     # ``seed_start`` already resolved once (declined: no answer yet) and the
     # build above asked once more; from here on the memo answers.
     asked = calls.count(seeded.task_id)
+    roster = _roster(engine)
     for _ in range(3):
-        assert host.resolve_engine(task) is engine
-        assert host._engine_cache_scope(spec, seeded.task_id) == scope
-    assert _roster(engine) == {"aaa": "", "bbb": "", "ccc": "c" * 400}
+        assert _roster(host.resolve_engine(task)) == roster
+    assert roster == {"aaa": "", "bbb": "", "ccc": "c" * 400}
     assert calls.count(seeded.task_id) == asked
 
     # A task the resolver declines at first is asked again on the next
@@ -212,12 +169,12 @@ def test_rank_is_resolved_once_per_task_in_this_process(tmp_path: Path) -> None:
     late = driver.seed_start(goal="g", agent="main")
     late_task = fold(host.event_log, host.content_store, late.task_id)
     unranked = host.resolve_engine(late_task)
-    assert host._engine_cache_scope(spec, late.task_id) is None
+    # Unranked: tier + priority + name order keeps the first name's summary.
+    assert _roster(unranked) == {"aaa": "a" * 400, "bbb": "", "ccc": ""}
     answers[late.task_id] = {"aaa": 1.0}
     ranked = host.resolve_engine(late_task)
-    assert ranked is not unranked
     assert _roster(ranked) == {"aaa": "a" * 400, "bbb": "", "ccc": ""}
-    assert host.resolve_engine(late_task) is ranked
+    assert _roster(host.resolve_engine(late_task)) == _roster(ranked)
 
 
 def test_static_menu_rank_and_a_resolver_together_are_refused(tmp_path: Path) -> None:

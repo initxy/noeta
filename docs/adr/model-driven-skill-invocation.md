@@ -91,21 +91,27 @@ of truth).
   to a borrowed ecosystem merely for having been folded first. The menu
   itself stays name-sorted; rank decides only which summaries survive, so an
   under-budget roster is rank-independent.
-- **Rank is an input fixed at build, and the Engine cache is partitioned by
-  it.** The roster sits in the tool schema, in the stable prefix; re-reading
-  a mutable rank mid-task would rotate the prefix. The cached Engine bakes
-  the schema in, so a task-specific rank gets its own cache slot for the
-  same reason a tenant memory root does. The host enforces "fixed" in code:
-  the resolver is asked once per task and its first non-empty answer is
-  memoised for the task's life in that process (a declining resolver is
-  asked again on the next build), because the score the SDK itself ships
-  decays with the clock and a per-call `now` would otherwise rotate the
-  prefix and rebuild the Engine — MCP reconnect included — every turn.
-  Across processes the resolver's own determinism is the contract, as for
+- **Rank is an input fixed per task.** The roster sits in the tool schema,
+  in the stable prefix; re-reading a mutable rank mid-task would rotate the
+  prefix. The Engine is built per turn (the engine-per-turn ADR), so the
+  host enforces "fixed" in code: the resolver is asked once per task and its
+  first non-empty answer is memoised for the task's life in that process (a
+  declining resolver is asked again on the next build), because the score
+  the SDK itself ships decays with the clock and a per-call `now` would
+  otherwise rotate the prefix from one build to the next. Across processes
+  the resolver's own determinism is the contract, as for
   `memory_root_resolver`. A static `plugin_config["skills"]["menu_rank"]`
-  and a resolver are mutually exclusive (the static override is applied
-  last and would replace the resolved rank while the cache still
-  partitioned by it).
+  and a resolver are mutually exclusive (the static override is applied last
+  and would silently replace every resolved rank).
+- **A skill that appears mid-process is in the roster on every task's next
+  turn, with a note.** The roster is read at every per-turn build, so
+  install / edit / remove need no refresh verb; the skills built-in records
+  a "new skills" `turn_intake` reminder naming what joined the roster since
+  the task last saw it (the roster the pack composed rides the task's local
+  slot — `noeta.runtime.task_local`, via `plugin_config["skills"]["task_slot"]`
+  — so it is process-local: silent on the opening turn and after a restart —
+  Claude Code's "New skills discovered" behaviour). A removed skill leaves
+  the enum silently.
 - **The budget is the honest 1 %.** Claude Code's 1 % is a character proxy
   (`1 % × window × 4` characters); Noeta's is 1 % in estimated tokens.
   Equal for an ASCII roster, four times tighter for a CJK roster — the

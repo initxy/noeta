@@ -34,6 +34,7 @@ wrapper turns into a typed failed ``ToolResult``; at ``prepare`` time
 
 from __future__ import annotations
 
+import threading
 import json
 import urllib.error
 import urllib.request
@@ -86,6 +87,9 @@ class McpHttpClient:
         self._next_id = 0
         self._started = False
         self._closed = False
+        # The endpoint is stateless, so exchanges may overlap; only the
+        # request-id counter needs guarding when a pooled connection is shared.
+        self._id_lock = threading.Lock()
 
     # -- lifecycle -------------------------------------------------------
 
@@ -168,8 +172,9 @@ class McpHttpClient:
     # -- JSON-RPC over HTTP ---------------------------------------------
 
     def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        self._next_id += 1
-        req_id = self._next_id
+        with self._id_lock:
+            self._next_id += 1
+            req_id = self._next_id
         req = {"jsonrpc": "2.0", "id": req_id, "method": method, "params": params}
         headers = {
             "Content-Type": "application/json",

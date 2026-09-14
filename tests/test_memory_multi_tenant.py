@@ -9,10 +9,9 @@ users):
   chain (``memory_root`` / ``memory_recall_context`` / the engine build's tool
   pack + resident index) resolves the per-task resolver FIRST, falling back to
   the ``memory_dir`` > ``global_memory_dir`` > default chain on ``None``.
-* The Engine cache is partitioned by resolved per-task root
-  (``_engine_cache_scope``) — two tasks with equal standard key dimensions but
-  different tenant roots must never share a cached Engine (the MemoryStore is
-  baked into its tool closures).
+* The Engine is built per turn, and each build bakes the store the resolver
+  maps ITS task to — two tasks with equal bindings but different tenant roots
+  never share a MemoryStore.
 * ``build_consolidation_digest`` / ``run_consolidation`` take ``include_task``
   so a host runs one curation pass per tenant; ``run_consolidation``'s
   ``on_seeded`` hands the curation task id to the host BEFORE it is claimable,
@@ -265,16 +264,15 @@ def test_recall_and_tools_follow_the_per_task_root(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Engine cache — the resolved root partitions the cache
+# 3. Per-turn Engine — each build resolves its own tenant root
 # ---------------------------------------------------------------------------
 
 
-def test_engine_cache_not_shared_across_tenant_roots(tmp_path: Path) -> None:
-    """Two sessions equal on EVERY standard cache dimension (agent, model,
-    workspace, provider, …) but mapped to different tenant roots must resolve
-    distinct Engines — and each session's ``memory_write`` must land in its
-    own root. Without the ``_engine_cache_scope`` partition the second session
-    would reuse the first tenant's cached Engine (its baked-in MemoryStore)."""
+def test_engines_resolve_their_own_tenant_root(tmp_path: Path) -> None:
+    """Two sessions equal on EVERY binding (agent, model, workspace, provider,
+    …) but mapped to different tenant roots each ``memory_write`` into their
+    own root: the Engine is built per turn, and each build bakes the store the
+    resolver maps ITS task to."""
     mem_a = tmp_path / "mem-a"
     mem_b = tmp_path / "mem-b"
     mapping: dict[str, Path] = {}
@@ -304,37 +302,6 @@ def test_engine_cache_not_shared_across_tenant_roots(tmp_path: Path) -> None:
     # Same memory name, different stores — no cross-tenant clobbering.
     assert "Tenant A's fact." in (mem_a / "fact.md").read_text(encoding="utf-8")
     assert "Tenant B's fact." in (mem_b / "fact.md").read_text(encoding="utf-8")
-
-    # The cached Engines are distinct per tenant root (and stable per task).
-    task_a = fold(host.event_log, host.content_store, seeded_a.task_id)
-    task_b = fold(host.event_log, host.content_store, seeded_b.task_id)
-    assert host.resolve_engine(task_a) is not host.resolve_engine(task_b)
-    assert host.resolve_engine(task_a) is host.resolve_engine(task_a)
-
-
-def test_engine_cache_scope_is_none_for_memory_off_or_fallback(
-    tmp_path: Path,
-) -> None:
-    """The scope partitions ONLY when it must: a memory-off agent or a
-    resolver fallback keeps the shared ``None`` slot (no cache fragmentation,
-    byte-equal key semantics)."""
-    tenant = tmp_path / "tenant"
-    host, _ = _memory_host(
-        tmp_path,
-        [],
-        memory_root_resolver=lambda tid: tenant if tid == "t-a" else None,
-    )
-    spec_on = host.registry.resolve("main")
-    assert host._engine_cache_scope(spec_on, "t-a") == str(tenant)
-    assert host._engine_cache_scope(spec_on, "t-unknown") is None
-    assert host._engine_cache_scope(spec_on, None) is None
-    import dataclasses
-
-    spec_off = dataclasses.replace(
-        spec_on,
-        plugins=tuple(p for p in spec_on.plugins if p != "memory"),
-    )
-    assert host._engine_cache_scope(spec_off, "t-a") is None
 
 
 # ---------------------------------------------------------------------------

@@ -54,9 +54,9 @@ a degenerate attach provider, so the manager has a single code path.
 
 **`exec_env_ref` is the durable binding.** The handle's addressing is packed into
 a flat `"{base_url}#{sandbox_id}"` string (split on the last `#`), welded onto
-`TaskHostBound`, folded into governance, and threaded through the engine
-resolver's cache key alongside workspace and provider — two sessions bound to
-different containers never share an Engine. A provider that mints no id encodes to
+`TaskHostBound`, folded into governance, and threaded into every turn's Engine
+build alongside workspace and provider — two sessions bound to different
+containers never share a backend. A provider that mints no id encodes to
 the bare `base_url`. Resume and stale-reclaim read the recorded ref and reconnect
 through `provider.attach`; credentials come from the reconnecting host's own
 environment and never enter the record, a log, or an event.

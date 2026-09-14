@@ -872,6 +872,15 @@ class InteractionDriver:
         # the SeedRecorder above alongside the memory index. The workspace
         # factory captures the SAME snapshot its renderer holds, so the
         # recorded fingerprint equals the composed bytes by construction.
+        #
+        # The seed's Engine does not carry into the drive. A product binds its
+        # per-task tenancy (``memory_root_resolver`` / ``skill_menu_rank_resolver``
+        # / ``mcp_scope_resolver``) BETWEEN this seed — which mints the task
+        # id — and the drive, so the drive must resolve against those
+        # bindings: it builds the turn's Engine afresh and keeps THAT one for
+        # the turn's resumes. (``send_goal`` knows its task id before it is
+        # called, so its seed-time Engine is the turn's.)
+        self._forget_turn_engine(task.task_id)
         return SeededTurn(task_id=task.task_id, lease=lease, prelude=None)
 
     def drive_seeded(self, seeded: SeededTurn) -> DriveOutcome:
@@ -1232,8 +1241,11 @@ class InteractionDriver:
         # file-checkpoint gate (root = this top-level task) so a file edited in
         # an EARLIER turn re-stashes its turn-start baseline now, instead of the
         # earlier turn's gate suppressing it (which would over-revert a rewind to
-        # THIS turn back to the earlier turn's content).
+        # THIS turn back to the earlier turn's content). The earlier turn's
+        # Engine goes with it: this turn resolves afresh, so a skill installed
+        # or an MCP tool list changed since is in force from here on.
         self._reset_file_checkpoint_turn(task_id)
+        self._forget_turn_engine(task_id)
         # Build the woken prelude, validating any selector FIRST: a rejected
         # selector must leave NO durable write (no reopen, no ModelBound, no
         # turn), so ``_authorize_selector`` / ``_authorize_pair`` raise before
@@ -1417,6 +1429,9 @@ class InteractionDriver:
         (it is not a human turn).
         """
         self._require_human_suspend(task_id, NEXT_GOAL_WAKE_HANDLE)
+        # A background notice opens a turn like a goal does: the parked turn's
+        # Engine (if the worker left one) must not serve it.
+        self._forget_turn_engine(task_id)
         # Deref the final output BEFORE seeding, mirroring the sub-agent path:
         # a content fault raised here retries idempotently, and the model sees
         # the real tail inline instead of a hash it cannot read. The elision
@@ -1620,10 +1635,12 @@ class InteractionDriver:
         The ``ask_user_question`` built-in's mount carries an
         :class:`~noeta.execution.control_tool.AskAnswerCodec` on its typed
         ``answer_codec`` field; the SDK host threads it onto every Engine whose
-        session mounted the tool. We fold the task, resolve its Engine (cached —
-        the drive that follows reuses it), and read the codec structurally. A
-        session that never mounted ``ask_user_question`` has no codec, so
-        answering it fails loudly here rather than silently mis-decoding.
+        session mounted the tool. We fold the task, resolve its Engine (the
+        turn's — a task suspended on a question is mid-turn, so this is the
+        Engine that asked, and the drive that follows reuses it), and read the
+        codec structurally. A session that never mounted ``ask_user_question``
+        has no codec, so answering it fails loudly here rather than silently
+        mis-decoding.
         """
         host = self._host
         task = fold(host.event_log, host.content_store, task_id)
@@ -2055,6 +2072,9 @@ class InteractionDriver:
             wake_on=folded.wake_on,
             consumed_wake_event=lease.wake_event,
         )
+        # Parked on the next-goal handle without a drive: the turn is over,
+        # so its Engine goes the way the worker's settle lets it go.
+        self._forget_turn_engine(task_id)
         return True
 
     def reopen(
@@ -3039,6 +3059,15 @@ class InteractionDriver:
         return DriveOutcome(
             task_id=task_id, status=task.status, wake_handle=handle
         )
+
+    def _forget_turn_engine(self, task_id: str) -> None:
+        """Let the host drop the Engine it kept for ``task_id``'s turn — a
+        new turn is opening (``send_goal``, a background notice) or the turn
+        settled without a drive (``interrupt``). ``getattr`` so a host / test
+        double without the task-local registry is a clean no-op."""
+        forget = getattr(self._host, "forget_turn_engine", None)
+        if callable(forget):
+            forget(task_id)
 
     def _reset_file_checkpoint_turn(self, root_task_id: str) -> None:
         """Clear the per-turn rewind-baseline gate at a top-level

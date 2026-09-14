@@ -673,6 +673,8 @@ class Client:
             skill_menu_rank_resolver=hc.skill_menu_rank_resolver,
             mcp_server_resolver=hc.mcp_server_resolver,
             mcp_http_post=hc.mcp_http_post,
+            mcp_idle_ttl=hc.mcp_idle_ttl,
+            mcp_scope_resolver=hc.mcp_scope_resolver,
             delta_sink=hc.delta_sink,
             provider_headers=hc.provider_headers,
             workflow_allowed=hc.workflow_allowed,
@@ -1567,6 +1569,21 @@ class Client:
                 return getattr(env.payload, "parent_task_id", None)
         return None
 
+    def reconnect_mcp(self, alias: Optional[str] = None) -> None:
+        """Retire the pooled MCP connection(s) so the next turn connects afresh.
+
+        ``alias=None`` retires every server, a name retires that one. The
+        verb for "the server config changed" / "restart that server":
+        connections come from one host-owned pool keyed by server identity
+        (and ``HostConfig.mcp_scope_resolver``'s scope) and are shared across
+        tasks, so this is the only way to drop a live one early (idle ones
+        expire on ``HostConfig.mcp_idle_ttl``). A turn still using a retired
+        connection keeps it until the turn settles — nothing in flight
+        breaks; its next turn rebuilds and reconnects, and so does every
+        other task's. No-op when nothing was ever connected.
+        """
+        self._host.reconnect_mcp(alias)
+
     def memory_root(self, task_id: Optional[str] = None) -> Path:
         """The host's resolved memory-store root (see :meth:`SdkHost.memory_root`).
 
@@ -1807,6 +1824,13 @@ class Client:
                 # container, and letting an exporter flush failure skip it
                 # leaked a live container per Client.
                 pass
+        # Close every pooled MCP connection: the workers are stopped, so no
+        # turn is mid-call, and a stdio server's subprocess must not outlive
+        # this Client. No-op when MCP was never connected.
+        try:
+            self._host.shutdown_mcp()
+        except Exception:
+            pass
         # Reap the host's sandbox backend (if any) so an idle container
         # connection does not outlive the process. No-op on the local path.
         try:

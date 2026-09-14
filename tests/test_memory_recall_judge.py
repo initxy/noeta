@@ -325,7 +325,7 @@ def test_host_recall_model_binds_the_judge(tmp_path: Path) -> None:
         global_memory_dir=mem,
         recall_model="judge-model",
     )
-    (provider,) = host.intake_reminder_providers("main")
+    provider = host.intake_reminder_providers("main")[0]  # memory recall first
     (reminder,) = provider(_view("怎么上线？"))
     assert reminder.origin == "memory"
     assert "- deploy-process: How we deploy safely" in reminder.text
@@ -340,7 +340,7 @@ def test_host_recall_model_binds_the_judge(tmp_path: Path) -> None:
         model="stub-model",
         global_memory_dir=mem,
     )
-    (lexical_only,) = bare.intake_reminder_providers("main")
+    lexical_only = bare.intake_reminder_providers("main")[0]
     assert lexical_only(_view("怎么上线？")) == ()
     assert silent_llm.received_requests == []
 
@@ -367,7 +367,7 @@ def test_host_wires_judge_abort_to_task_cancellation(tmp_path: Path) -> None:
         global_memory_dir=mem,
         recall_model="judge-model",
     )
-    (intake,) = host.intake_reminder_providers("main", task_id="root-1")
+    intake = host.intake_reminder_providers("main", task_id="root-1")[0]
 
     result: list[tuple] = []
     turn = threading.Thread(

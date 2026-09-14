@@ -29,7 +29,9 @@ from .orchestration import (
     WORKFLOW_SYSTEM_PROMPT,
 )
 from .react import (
+    TRIGGER_BASELINES_SLOT,
     ReActPolicy,
+    TriggerBaselines,
     enforce_verbatim_constraints,
     extract_safety_constraints,
 )
@@ -49,6 +51,8 @@ __all__ = [
     "ReActPolicy",
     "STRUCTURED_OUTPUT_TOOL",
     "StructuredOutputPolicy",
+    "TRIGGER_BASELINES_SLOT",
+    "TriggerBaselines",
     "WORKFLOW_SYSTEM_PROMPT",
     "build_react_policy_factory",
     "build_recall_history_control_tool",
@@ -84,15 +88,25 @@ def build_react_policy_factory(
     effort: Optional[str],
     compaction_model: Optional[str] = None,
     compaction_max_output_tokens: Optional[int] = None,
+    task_slot: Optional[Callable[[str, Callable[[], Any]], Any]] = None,
 ) -> Callable[[Any], Policy]:
     """The ``(llm) -> Policy`` factory the builder falls back to; ``Options.policy``
     and a plugin's ``policy`` contribution both outrank it.
 
-    ``compaction_model`` / ``compaction_max_output_tokens`` default here
-    (unlike their siblings) so a caller predating the knobs — a third-party
-    ``PolicyFactoryBuilder`` implementation, or a test constructing the
-    factory directly — keeps working unchanged.
+    ``compaction_model`` / ``compaction_max_output_tokens`` / ``task_slot``
+    default here (unlike their siblings) so a caller predating the knobs — a
+    third-party ``PolicyFactoryBuilder`` implementation, or a test
+    constructing the factory directly — keeps working unchanged. ``task_slot``
+    is the host's get-or-create over the task's local slots (bound by the SDK
+    host with ``functools.partial`` — the builder protocol does not name it):
+    the policy keeps its compaction-trigger calibration there, so it spans the
+    task's turns instead of resetting with each turn's Engine.
     """
+    baselines = (
+        task_slot(TRIGGER_BASELINES_SLOT, TriggerBaselines)
+        if task_slot is not None
+        else None
+    )
 
     def factory(llm: Any) -> Policy:
         return ReActPolicy(
@@ -113,6 +127,7 @@ def build_react_policy_factory(
             effort=effort,
             compaction_model=compaction_model,
             compaction_max_output_tokens=compaction_max_output_tokens,
+            trigger_baselines=baselines,
         )
 
     return factory

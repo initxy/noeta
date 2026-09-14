@@ -43,6 +43,7 @@ __all__ = [
     "provider_family",
     "react_impl",
     "register_catalog_models",
+    "skills_impl",
     "resolve_model_alias",
 ]
 
@@ -192,6 +193,22 @@ def browser_tool_names() -> tuple[str, ...]:
         "noeta.builtins.browser.impl:BROWSER_TOOL_NAMES"
     )
     return names
+
+
+_SKILLS_MOD: Optional[Any] = None
+
+
+def skills_impl() -> Any:
+    """The ``skills`` built-in's impl module, loader-resolved (memoized).
+
+    The host's doorway to the per-task roster ledger and the "new skills"
+    ``turn_intake`` provider (``roster_note``); the pack itself still arrives
+    through the ``session_pack`` contribution.
+    """
+    global _SKILLS_MOD
+    if _SKILLS_MOD is None:
+        _SKILLS_MOD = importlib.import_module("noeta.builtins.skills.impl")
+    return _SKILLS_MOD
 
 
 _MCP_MOD: Optional[Any] = None

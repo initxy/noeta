@@ -55,11 +55,10 @@ class StepContext:
     first decide. It is the step-cap's SOLE counter: a Policy compares it
     against its ``max_steps`` ceiling so a runaway tool loop is bounded PER
     TURN. The count deliberately does NOT live on the Policy instance — a
-    cached Engine's Policy outlives turns and even tasks (the Engine cache key
-    omits ``task_id``), so an instance counter silently accumulates across a
-    whole conversation (and across conversations sharing the cache slot) until
-    every later turn dies at the ceiling. Threaded here, the budget resets at
-    each turn by construction.
+    Policy instance serves a whole turn (every resume within it), and once
+    did outlive turns and tasks, so an instance counter silently accumulated
+    across a conversation until every later turn died at the ceiling.
+    Threaded here, the budget resets at each turn by construction.
     """
 
     task_id: str
