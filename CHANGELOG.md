@@ -8,6 +8,14 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.22] - 2026-09-14
+
+Covers `noeta-runtime` only: 0.6.21 → 0.6.22. `noeta-sdk` stays at 0.6.21;
+the fix lives in the runtime's resolver, worker and delegation drain, and
+the sdk host inherits the new seam from `GenericEngineResolver`, so the
+sdk's `noeta-runtime>=0.6.21` floor is unchanged — an sdk 0.6.21 on this
+runtime gets the fix.
+
 ### Fixed — a sub-agent child claimed by an idle resident worker runs the engine the drain would build
 
 - **A foreground child stolen by a resident worker's untargeted poll no
@@ -2246,7 +2254,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.21...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.22...HEAD
+[0.6.22]: https://github.com/initxy/noeta/compare/v0.6.21...v0.6.22
 [0.6.21]: https://github.com/initxy/noeta/compare/v0.6.20...v0.6.21
 [0.6.20]: https://github.com/initxy/noeta/compare/v0.6.19...v0.6.20
 [0.6.19]: https://github.com/initxy/noeta/compare/v0.6.18...v0.6.19
