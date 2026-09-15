@@ -8,6 +8,12 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.25] - 2026-09-14
+
+Covers `noeta-sdk` only: 0.6.24 → 0.6.25. `noeta-runtime` stays at 0.6.24;
+both changes live in the `skills` built-in and the host, so the sdk's
+`noeta-runtime>=0.6.24` floor is unchanged.
+
 ### Changed — the skill menu shortens summaries before dropping them, and ranks by usage by default
 
 - **Short summaries before name-only.** Over its budget the `skill` roster
@@ -2424,7 +2430,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.23...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.25...HEAD
+[0.6.25]: https://github.com/initxy/noeta/compare/v0.6.24...v0.6.25
 [0.6.24]: https://github.com/initxy/noeta/compare/v0.6.23...v0.6.24
 [0.6.23]: https://github.com/initxy/noeta/compare/v0.6.22...v0.6.23
 [0.6.22]: https://github.com/initxy/noeta/compare/v0.6.21...v0.6.22
