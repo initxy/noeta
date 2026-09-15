@@ -221,22 +221,34 @@ Supplying both forms raises `ValueError`, as does a partial explicit triple. All
 | `memory_root_resolver` | `None` | `(task_id) -> Path \| None` per-task root |
 
 **Skill menu.** The roster the `skill` control tool renders is fitted to a
-budget (1 % of the model's context window, CJK-aware estimate); over it, the
-lowest-ranked skills keep their name and lose their summary. The keep order is
-the host's rank, then workspace-local tiers before borrowed ones, then
-frontmatter `priority`, then name. Fold a tenant's ledger with
-`skill_usage_from_events` + `rank_skills_by_usage` (both on `noeta.sdk`) to
-derive a rank; a static one goes straight into
-`plugin_config["skills"]["menu_rank"]` (never both — the host refuses the
-pair at construction). The host asks the resolver once per task and keeps
-its first non-empty answer for the task's life in that process, so a
-time-decayed score never rotates a running task's roster; a resolver that
-declines is asked again on the next build. Like `memory_root_resolver`, a
-resumed task must resolve the same rank across processes.
+budget (1 % of the model's context window, CJK-aware estimate). Over it, every
+skill first gets a short summary (its first sentence, at most 24 tokens), the
+leftover restores full summaries from the top of the keep order, and only when
+the short summaries overflow does the bottom of the keep order keep its name
+alone. The keep order is the host's rank, then workspace-local tiers before
+borrowed ones, then frontmatter `priority`, then name.
+
+By default the host ranks by usage: with no resolver and no static
+`menu_rank`, it folds the most recently updated task streams of the whole store
+(at most 200, refolded at most every 10 minutes) with
+`skill_usage_from_events` + `rank_skills_by_usage` (both on `noeta.sdk`). That
+fold spans every tenant, so the default stays off when `memory_root_resolver`
+or `mcp_scope_resolver` is bound (the host logs it once): a multi-tenant host
+folds each tenant's streams itself and returns the rank from
+`skill_menu_rank_resolver`. A static rank goes straight into
+`plugin_config["skills"]["menu_rank"]` (never together with a resolver — the
+host refuses the pair at construction), and `skill_usage_ranking=False` turns
+the default off. The host asks for a rank once per task and keeps its first
+non-empty answer for the task's life in that process, so a time-decayed score
+never rotates a running task's roster; a resolver that declines is asked again
+on the next build. Like `memory_root_resolver`, a resolver must give a resumed
+task the same rank across processes; the default only tries — a task resumed
+in another process may compose a different roster once.
 
 | Field | Default | Purpose |
 | --- | --- | --- |
 | `skill_menu_rank_resolver` | `None` | `(task_id) -> {skill: score} \| None` per-task keep order |
+| `skill_usage_ranking` | `True` | rank by the store's own skill usage when no rank is given (single-tenant hosts) |
 
 **Plugin operator config.**
 

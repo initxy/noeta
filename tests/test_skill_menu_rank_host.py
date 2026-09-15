@@ -10,6 +10,8 @@ budget itself is derived by the host from the bound model's catalog window.
 from __future__ import annotations
 
 
+import logging
+
 import pytest
 from pathlib import Path
 from typing import Any, Optional
@@ -19,26 +21,32 @@ from noeta.client.host import (
     skill_menu_budget_tokens,
 )
 from noeta.client.parts import derive_compaction_config
+from noeta.client.skill_usage import SkillUsageRanker
 from noeta.core.fold import fold
+from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock, Usage
 from noeta.runtime.shell_policy import ShellMode
 from noeta.runtime.workspace import FsWriteMode
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.builtins.skills.impl import SKILL_TOOL
+from noeta.builtins.skills.impl.control_tool import short_summary
 
 from tests._sdk_session import make_driver, make_host, make_registry, runner_main_spec
 from tests._skill_fixtures import write_skill
 
 
-def _skill_host(tmp_path: Path, **knobs: Any):
+def _skill_host(
+    tmp_path: Path, *, responses: Optional[list[LLMResponse]] = None, **knobs: Any
+):
     ws = tmp_path / "ws"
     ws.mkdir(exist_ok=True)
-    # Three long summaries; the override budget below fits exactly one.
+    # Three long summaries; the override budget below shortens all three and
+    # upgrades exactly one back to full.
     for name in ("aaa", "bbb", "ccc"):
         write_skill(ws, name, name[0] * 400)
     host = make_host(
         make_registry(runner_main_spec("main")),
         workspace_dir=ws,
-        provider=FakeLLMProvider(responses=[]),
+        provider=FakeLLMProvider(responses=list(responses or [])),
         model="stub-model",
         multi_turn=False,
         write_mode=FsWriteMode.DRY_RUN,
@@ -47,6 +55,10 @@ def _skill_host(tmp_path: Path, **knobs: Any):
         **knobs,
     )
     return host, make_driver(host)
+
+
+#: The shortened roster line of each fixture skill.
+_SHORT = {name: short_summary(name[0] * 400) for name in ("aaa", "bbb", "ccc")}
 
 
 def _roster(engine: Any) -> dict[str, str]:
@@ -85,7 +97,7 @@ def test_rank_resolver_reaches_the_roster(tmp_path: Path) -> None:
     host, driver = _skill_host(
         tmp_path,
         skill_menu_rank_resolver=mapping.get,
-        plugin_config_overrides={"skills": {"menu_budget_tokens": 130}},
+        plugin_config_overrides={"skills": {"menu_budget_tokens": 160}},
     )
     # The product pattern: seed (task id minted), bind the tenant's rank,
     # then resolve — the driving Engine composes with that rank.
@@ -99,8 +111,8 @@ def test_rank_resolver_reaches_the_roster(tmp_path: Path) -> None:
     engine_a = host.resolve_engine(task_a)
     engine_b = host.resolve_engine(task_b)
 
-    assert _roster(engine_a) == {"aaa": "a" * 400, "bbb": "", "ccc": ""}
-    assert _roster(engine_b) == {"aaa": "", "bbb": "", "ccc": "c" * 400}
+    assert _roster(engine_a) == {**_SHORT, "aaa": "a" * 400}
+    assert _roster(engine_b) == {**_SHORT, "ccc": "c" * 400}
     assert _roster(host.resolve_engine(task_a)) == _roster(engine_a)
 
 
@@ -149,7 +161,7 @@ def test_rank_is_resolved_once_per_task_in_this_process(tmp_path: Path) -> None:
     host, driver = _skill_host(
         tmp_path,
         skill_menu_rank_resolver=resolver,
-        plugin_config_overrides={"skills": {"menu_budget_tokens": 130}},
+        plugin_config_overrides={"skills": {"menu_budget_tokens": 160}},
     )
     seeded = driver.seed_start(goal="g", agent="main")
     answers[seeded.task_id] = {"ccc": 1.0}
@@ -161,7 +173,7 @@ def test_rank_is_resolved_once_per_task_in_this_process(tmp_path: Path) -> None:
     roster = _roster(engine)
     for _ in range(3):
         assert _roster(host.resolve_engine(task)) == roster
-    assert roster == {"aaa": "", "bbb": "", "ccc": "c" * 400}
+    assert roster == {**_SHORT, "ccc": "c" * 400}
     assert calls.count(seeded.task_id) == asked
 
     # A task the resolver declines at first is asked again on the next
@@ -170,10 +182,10 @@ def test_rank_is_resolved_once_per_task_in_this_process(tmp_path: Path) -> None:
     late_task = fold(host.event_log, host.content_store, late.task_id)
     unranked = host.resolve_engine(late_task)
     # Unranked: tier + priority + name order keeps the first name's summary.
-    assert _roster(unranked) == {"aaa": "a" * 400, "bbb": "", "ccc": ""}
+    assert _roster(unranked) == {**_SHORT, "aaa": "a" * 400}
     answers[late.task_id] = {"aaa": 1.0}
     ranked = host.resolve_engine(late_task)
-    assert _roster(ranked) == {"aaa": "a" * 400, "bbb": "", "ccc": ""}
+    assert _roster(ranked) == {**_SHORT, "aaa": "a" * 400}
     assert _roster(host.resolve_engine(late_task)) == _roster(ranked)
 
 
@@ -186,3 +198,123 @@ def test_static_menu_rank_and_a_resolver_together_are_refused(tmp_path: Path) ->
             skill_menu_rank_resolver=lambda tid: {"aaa": 1.0},
             plugin_config_overrides={"skills": {"menu_rank": {"aaa": 1.0}}},
         )
+
+
+# ---------------------------------------------------------------------------
+# The default rank: a host with no resolver ranks by the store's own ledger
+# ---------------------------------------------------------------------------
+
+
+def _skill_call(name: str) -> LLMResponse:
+    return LLMResponse(
+        stop_reason="tool_use",
+        content=[ToolUseBlock(call_id="sk", tool_name=SKILL_TOOL, arguments={"skill": name})],
+        usage=Usage(uncached=1, output=1),
+    )
+
+
+def _end() -> LLMResponse:
+    return LLMResponse(
+        stop_reason="end_turn",
+        content=[TextBlock(text="done")],
+        usage=Usage(uncached=1, output=1),
+    )
+
+
+def test_bare_host_ranks_the_roster_by_usage_in_the_ledger(tmp_path: Path) -> None:
+    """No resolver, no static rank, no tenancy seam: the host folds the store.
+    A task whose model activated ``ccc`` through the ``skill`` tool makes the
+    next process's roster keep ``ccc`` full ahead of the alphabetically
+    earlier ``aaa`` — and a task keeps the rank it first composed with."""
+    db = str(tmp_path / "store.sqlite")
+    budget = {"skills": {"menu_budget_tokens": 160}}
+    first, first_driver = _skill_host(
+        tmp_path,
+        responses=[_skill_call("ccc"), _end()],
+        sqlite_path=db,
+        plugin_config_overrides=budget,
+    )
+    outcome = first_driver.start(goal="use ccc", agent="main")
+    assert outcome.status == "terminal"
+
+    # A fresh process over the same store: its first fold sees the use.
+    second, second_driver = _skill_host(
+        tmp_path, sqlite_path=db, plugin_config_overrides=budget
+    )
+    assert isinstance(second._skill_usage_ranker, SkillUsageRanker)
+    seeded = second_driver.seed_start(goal="g", agent="main")
+    task = fold(second.event_log, second.content_store, seeded.task_id)
+    ranked = _roster(second.resolve_engine(task))
+    assert ranked == {**_SHORT, "ccc": "c" * 400}
+    assert _roster(second.resolve_engine(task)) == ranked
+
+
+def test_default_rank_without_usage_keeps_tier_priority_name_order(
+    tmp_path: Path,
+) -> None:
+    """An empty ledger ranks nothing: the roster is the one a host without
+    the default composes."""
+    host, driver = _skill_host(
+        tmp_path, plugin_config_overrides={"skills": {"menu_budget_tokens": 160}}
+    )
+    assert host._skill_usage_ranker is not None
+    seeded = driver.seed_start(goal="g", agent="main")
+    task = fold(host.event_log, host.content_store, seeded.task_id)
+    assert _roster(host.resolve_engine(task)) == {**_SHORT, "aaa": "a" * 400}
+
+
+@pytest.mark.parametrize(
+    "knobs",
+    [
+        {"skill_usage_ranking": False},
+        {"skill_menu_rank_resolver": lambda tid: None},
+        {"plugin_config_overrides": {"skills": {"menu_rank": {"bbb": 1.0}}}},
+    ],
+    ids=["switched-off", "resolver", "static-rank"],
+)
+def test_default_rank_is_off_when_the_host_ranks_or_opts_out(
+    tmp_path: Path, knobs: dict[str, Any]
+) -> None:
+    host, _ = _skill_host(tmp_path, **knobs)
+    assert host._skill_usage_ranker is None
+
+
+@pytest.mark.parametrize(
+    "knobs",
+    [
+        {"memory_root_resolver": lambda tid: None},
+        {"mcp_scope_resolver": lambda tid: None},
+    ],
+    ids=["memory-root", "mcp-scope"],
+)
+def test_default_rank_is_off_for_a_multi_tenant_host(
+    tmp_path: Path, knobs: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    """A store-wide fold would rank one tenant's roster by another's use, so
+    a host that binds a tenancy resolver gets no default — and is told how to
+    rank per tenant."""
+    with caplog.at_level(logging.INFO, logger="noeta.client.host"):
+        host, _ = _skill_host(tmp_path, **knobs)
+    assert host._skill_usage_ranker is None
+    assert "skill_menu_rank_resolver" in caplog.text
+
+
+def test_host_config_forwards_the_usage_ranking_switch(tmp_path: Path) -> None:
+    from noeta.sdk import Client, HostConfig, Options
+
+    options = Options(
+        system_prompt="you finish immediately",
+        name="main",
+        allowed_tools=(),
+        permission_mode="bypassPermissions",
+    )
+    client = Client(
+        options,
+        provider=FakeLLMProvider(responses=[]),
+        workspace_dir=tmp_path,
+        host_config=HostConfig(skill_usage_ranking=False),
+    )
+    assert client._host.skill_usage_ranking is False
+    assert client._host._skill_usage_ranker is None
+    assert HostConfig().skill_usage_ranking is True
+

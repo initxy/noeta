@@ -40,11 +40,13 @@ from .indexer import strip_argument_placeholder
 
 __all__ = [
     "DEFAULT_MENU_BUDGET_TOKENS",
-    "MENU_DESCRIPTION_MAX_CHARS",
+    "MENU_DESCRIPTION_MAX_TOKENS",
+    "MENU_SHORT_SUMMARY_MAX_TOKENS",
     "SKILL_TOOL",
     "estimate_menu_tokens",
     "fit_menu_to_budget",
     "menu_keep_order",
+    "short_summary",
     "skill_tool_schema",
     "make_skill_translate",
     "make_skills_control_tool",
@@ -59,14 +61,28 @@ _log = logging.getLogger(__name__)
 SKILL_TOOL = "skill"
 
 
-#: Per-skill budget for the roster line. Every menu description concatenates
-#: into ONE property description that sits inside the stable-prefix hash, so an
-#: author's unbounded ``description:`` is unbounded prompt on every single turn
-#: of every session that indexes it. The cap is per skill, not per menu: the
-#: entry count is bounded by the workspace, the description length is not.
-MENU_DESCRIPTION_MAX_CHARS = 1024
+#: Per-skill budget for the roster line, in estimated tokens
+#: (:func:`estimate_menu_tokens`). Every menu description concatenates into ONE
+#: property description that sits inside the stable-prefix hash, so an author's
+#: unbounded ``description:`` is unbounded prompt on every single turn of every
+#: session that indexes it. Tokens, not characters, so a Chinese summary is
+#: capped at the same cost as an English one; 384 is Claude Code's 1,536
+#: characters for an ASCII summary.
+MENU_DESCRIPTION_MAX_TOKENS = 384
 
 _TRUNCATION_MARKER = "… (truncated)"
+
+#: The short form an over-budget roster gives every skill before any skill
+#: keeps its full summary: the first sentence, clipped to this many estimated
+#: tokens. Enough for the "what" an author puts first; small enough that a
+#: roster of a few dozen skills fits the default budget.
+MENU_SHORT_SUMMARY_MAX_TOKENS = 24
+
+_SHORT_MARKER = "…"
+
+#: A sentence ends at ``.`` / ``!`` / ``?`` followed by whitespace, or right
+#: after a full-width ``。！？；`` (CJK prose puts no space after them).
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s|(?<=[。！？；])")
 
 #: Total roster budget, in estimated tokens, when the host passes no
 #: ``menu_budget_tokens`` — 1 % of a 200k-token window, the same fraction the
@@ -115,6 +131,38 @@ def estimate_menu_tokens(text: str) -> int:
     cjk = len(_CJK_CHAR.findall(text))
     other = len(text) - cjk
     return cjk + (other + _CHARS_PER_TOKEN - 1) // _CHARS_PER_TOKEN
+
+
+def _clip_to_tokens(text: str, max_tokens: int, marker: str) -> str:
+    """The longest prefix of ``text`` whose estimate, ``marker`` included,
+    stays within ``max_tokens`` — with ``marker`` appended.
+
+    The estimate is monotone in the prefix length, so a binary search over it
+    is exact; it costs a few regex scans instead of a per-character walk.
+    """
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if estimate_menu_tokens(text[:mid] + marker) <= max_tokens:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo].rstrip() + marker
+
+
+def short_summary(text: str) -> str:
+    """The short roster form of one summary.
+
+    A summary within :data:`MENU_SHORT_SUMMARY_MAX_TOKENS` is its own short
+    form. A longer one keeps its first sentence, clipped to the cap with a
+    trailing ``…`` when the sentence alone is still too long.
+    """
+    if estimate_menu_tokens(text) <= MENU_SHORT_SUMMARY_MAX_TOKENS:
+        return text
+    first = _SENTENCE_END.split(text.strip(), maxsplit=1)[0].strip()
+    if estimate_menu_tokens(first) <= MENU_SHORT_SUMMARY_MAX_TOKENS:
+        return first
+    return _clip_to_tokens(first, MENU_SHORT_SUMMARY_MAX_TOKENS, _SHORT_MARKER)
 
 
 #: The roster joins entries with this separator (see ``enum_roster_prop``);
@@ -266,16 +314,16 @@ def _menu_description(text: str) -> str:
 
     Truncation is a suffix marker rather than a hard cut, so the model can tell
     a clipped summary from a terse one and knows the body holds the rest. The
-    result is exactly :data:`MENU_DESCRIPTION_MAX_CHARS` characters, marker
-    included. ``$ARGUMENTS`` is excised first — the menu is a model-visible
-    surface and Noeta has no argument channel to substitute from (same rule as
-    the activation render; see ``indexer.strip_argument_placeholder``).
+    result stays within :data:`MENU_DESCRIPTION_MAX_TOKENS` estimated tokens,
+    marker included. ``$ARGUMENTS`` is excised first — the menu is a
+    model-visible surface and Noeta has no argument channel to substitute from
+    (same rule as the activation render; see
+    ``indexer.strip_argument_placeholder``).
     """
     text = strip_argument_placeholder(text)
-    if len(text) <= MENU_DESCRIPTION_MAX_CHARS:
+    if estimate_menu_tokens(text) <= MENU_DESCRIPTION_MAX_TOKENS:
         return text
-    keep = MENU_DESCRIPTION_MAX_CHARS - len(_TRUNCATION_MARKER)
-    return text[:keep] + _TRUNCATION_MARKER
+    return _clip_to_tokens(text, MENU_DESCRIPTION_MAX_TOKENS, _TRUNCATION_MARKER)
 
 
 def _tier_of(registry: Any, name: str) -> int:
@@ -329,18 +377,28 @@ def fit_menu_to_budget(
     entries: Sequence[tuple[str, str]],
     keep_order: Sequence[str],
     budget_tokens: int,
-) -> frozenset[str]:
-    """The names whose summary must be dropped for the roster to fit.
+) -> dict[str, str]:
+    """The summary each name shows in a roster fitted to ``budget_tokens``:
+    its full summary, its :func:`short_summary`, or ``""`` (name only).
 
     The cost model is the rendered roster: every entry pays for its name (a
     name is never dropped — the ``enum`` must list every skill the model may
     activate), and a summary pays its increment over the bare name. Below the
-    budget nothing is dropped, so today's rosters are byte-identical. Over it,
-    summaries are kept greedily in ``keep_order`` while their increment still
-    fits — a later, shorter summary can still fit after a longer one was
-    skipped, the same greedy Claude Code's listing uses — and the rest go
-    name-only. A names-only roster that already exceeds the budget drops every
-    summary: the entry count is the workspace's to trim.
+    budget every summary stays full, so today's rosters are byte-identical.
+    Over it, two greedy passes run in ``keep_order``:
+
+    - **breadth** — each skill gets its short summary while the increment
+      still fits (a later, shorter one can still fit after a longer one was
+      skipped, the greedy Claude Code's listing uses); the rest go name-only;
+    - **depth** — only when no skill went name-only, each skill is upgraded to
+      its full summary while that increment still fits.
+
+    A short summary is what lets the model judge a skill and a bare name
+    mostly is not, so every skill gets something before any skill gets
+    everything; the keep order decides who gets the full text and, when even
+    the short forms overflow, who is listed by name only. A names-only roster
+    that already exceeds the budget shows no summary at all: the entry count
+    is the workspace's to trim.
 
     Every entry is charged exactly once: ``keep_order`` first (duplicates
     collapsed to their first position), then any name it left out, as the
@@ -351,6 +409,8 @@ def fit_menu_to_budget(
     by_name = dict(entries)
     if len(by_name) != len(entries):
         raise ValueError("fit_menu_to_budget: duplicate names in entries")
+    if sum(_entry_tokens(name, desc) for name, desc in by_name.items()) <= budget_tokens:
+        return by_name
     bare = {name: _entry_tokens(name, "") for name in by_name}
     remaining = budget_tokens - sum(bare.values())
     ordered: list[str] = []
@@ -359,17 +419,32 @@ def fit_menu_to_budget(
         if name in by_name and name not in seen:
             seen.add(name)
             ordered.append(name)
-    dropped: set[str] = set()
+    fitted = {name: "" for name in by_name}
+    name_only = False
     for name in ordered:
         description = by_name[name]
         if not description:
             continue
-        increment = _entry_tokens(name, description) - bare[name]
+        short = short_summary(description)
+        increment = _entry_tokens(name, short) - bare[name]
         if increment <= remaining:
             remaining -= increment
+            fitted[name] = short
         else:
-            dropped.add(name)
-    return frozenset(dropped)
+            name_only = True
+    if name_only:
+        return fitted
+    for name in ordered:
+        description = by_name[name]
+        if fitted[name] == description:
+            continue
+        increment = _entry_tokens(name, description) - _entry_tokens(
+            name, fitted[name]
+        )
+        if increment <= remaining:
+            remaining -= increment
+            fitted[name] = description
+    return fitted
 
 
 def model_invocable_names(registry: Any) -> tuple[str, ...]:
@@ -409,11 +484,11 @@ def _skill_menu(
     Claude Code draws between what the model may invoke and what the user may.
 
     The roster is then fitted to ``budget_tokens`` (:func:`fit_menu_to_budget`
-    in :func:`menu_keep_order`): a skill past the budget keeps its name and
-    loses its summary. The menu stays name-sorted whatever the keep order, so
-    the ``enum`` bytes never depend on ``rank``; only which summaries survive
-    does. Going over budget is logged once per build — the operator's cue to
-    trim the skill tiers or raise the budget.
+    in :func:`menu_keep_order`): over the budget a skill shows a shortened
+    summary or its name alone. The menu stays name-sorted whatever the keep
+    order, so the ``enum`` bytes never depend on ``rank``; only how much of
+    each summary survives does. Going over budget is logged once per build —
+    the operator's cue to trim the skill tiers or raise the budget.
     """
     if registry is None:
         return (), frozenset()
@@ -426,23 +501,26 @@ def _skill_menu(
     if not entries:
         return (), frozenset()
     names = tuple(name for name, _ in entries)
-    dropped = fit_menu_to_budget(
+    fitted = fit_menu_to_budget(
         entries, menu_keep_order(registry, names, rank), budget_tokens
     )
-    if dropped:
-        full = sum(_entry_tokens(name, desc) for name, desc in entries)
+    kept = sum(1 for name, desc in entries if desc and fitted[name] == desc)
+    shortened = sum(1 for name, desc in entries if fitted[name] and fitted[name] != desc)
+    name_only = sum(1 for name, desc in entries if desc and not fitted[name])
+    if shortened or name_only:
         _log.warning(
-            "skill menu over budget: %d of %d skills listed by name only "
-            "(full roster ~%d tokens, budget %d); trim the skill tiers or "
-            "raise plugin_config['skills']['menu_budget_tokens']",
-            len(dropped),
+            "skill menu over budget: of %d skills, %d keep a full summary, "
+            "%d shortened, %d listed by name only (full roster ~%d tokens, "
+            "budget %d); trim the skill tiers or raise "
+            "plugin_config['skills']['menu_budget_tokens']",
             len(entries),
-            full,
+            kept,
+            shortened,
+            name_only,
+            sum(_entry_tokens(name, desc) for name, desc in entries),
             budget_tokens,
         )
-        entries = [
-            (name, "" if name in dropped else desc) for name, desc in entries
-        ]
+        entries = [(name, fitted[name]) for name, _ in entries]
     return tuple(entries), frozenset(names)
 
 
