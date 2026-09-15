@@ -305,20 +305,15 @@ class SkillIndexer:
     def _parse_disabled_flag(raw: Optional[str], path: Path) -> bool:
         """Read ``disable-model-invocation`` leniently: the YAML 1.1 boolean
         dialect — ``true``/``false``, ``yes``/``no``, ``on``/``off``,
-        ``1``/``0``, case-insensitive, one layer of surrounding quotes
-        tolerated (the frontmatter parser keeps quotes verbatim, and
-        ``disable-model-invocation: "true"`` is legitimate YAML an author will
-        write). Anything else is warned and read as ``false``.
+        ``1``/``0``, case-insensitive (a quoted ``"true"`` arrives unquoted from
+        the frontmatter parser). Anything else is warned and read as ``false``.
 
         Absent ⇒ ``False`` (the skill stays on the menu), so the key only ever
         subtracts — a workspace that has never heard of it is unaffected.
         """
         if raw is None:
             return False
-        token = raw.strip()
-        if len(token) >= 2 and token[0] == token[-1] and token[0] in "'\"":
-            token = token[1:-1].strip()
-        token = token.lower()
+        token = raw.strip().lower()
         if token in ("true", "yes", "on", "1"):
             return True
         if token in ("false", "no", "off", "0"):

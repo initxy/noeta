@@ -239,9 +239,9 @@ def test_disable_model_invocation_accepts_the_yaml_boolean_dialect(
     tmp_path: Path,
 ) -> None:
     """``yes``/``on``/``1`` and a quoted ``"true"`` are legitimate YAML truthy
-    spellings an author will write; the no-YAML frontmatter parser keeps them
-    (quotes included) verbatim, so the flag reader widens instead. The falsy
-    set maps symmetrically."""
+    spellings an author will write; the frontmatter parser unquotes the quoted
+    ones and the flag reader takes the YAML 1.1 boolean dialect. The falsy set
+    maps symmetrically."""
     truthy = ("yes", "On", "1", '"true"', "'TRUE'")
     falsy = ("no", "Off", "0", '"false"')
     for i, value in enumerate(truthy):
@@ -348,7 +348,8 @@ def test_nested_unknown_metadata_block_loads_as_metadata(
     desc = registry.get("lark-doc")
     assert desc is not None
     assert desc.version == "2.0.0"
-    assert desc.description == "\"Read and edit Lark docs\""
+    # The quotes are YAML syntax; the nested block stays one opaque string.
+    assert desc.description == "Read and edit Lark docs"
     assert desc.metadata == (
         (
             "metadata",
@@ -568,3 +569,27 @@ def test_arguments_placeholder_excised_from_the_rendered_description(
     text = _rendered_text(registry, "s2")
     assert "$ARGUMENTS" not in text
     assert "Summarize into a report" in text
+
+
+def test_quoted_frontmatter_values_index_as_their_content(tmp_path: Path) -> None:
+    """A SKILL.md whose values are quoted — the norm for generated skills —
+    indexes exactly like its unquoted twin: the name passes the name check,
+    the priority reads as an integer, and neither the menu summary nor the
+    activation text shows a quote."""
+    _write(
+        tmp_path / "quoted" / "SKILL.md",
+        "﻿---\n"
+        "# generated\n"
+        'name: "quoted"\n'
+        'description: "Operate the \\"thing\\". Use when asked."\n'
+        "priority: '10'  # first\n"
+        'allowed-tools: "Read, Bash"\n'
+        "---\n"
+        "Body.\n",
+    )
+    registry = SkillIndexer(tmp_path).index()
+    desc = registry.get("quoted")
+    assert desc is not None
+    assert desc.description == 'Operate the "thing". Use when asked.'
+    assert desc.priority == 10
+    assert dict(desc.metadata)["allowed-tools"] == "Read, Bash"
