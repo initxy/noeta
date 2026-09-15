@@ -84,6 +84,7 @@ from noeta.client.parts import (
 )
 from noeta.client.consolidation import CONSOLIDATION_AGENT_NAME
 from noeta.client.host_config import SandboxExecEnvConfig
+from noeta.client.skill_usage import SkillUsageRanker
 from noeta.client.sandbox import (
     BackendFactory,
     BrowserBackendFactory,
@@ -435,11 +436,18 @@ class SdkHost(GenericEngineResolver):
     # ``memory_root_resolver`` (cheap, total, deterministic per task id — a
     # resumed task must compose the same roster bytes). Reaches the skills
     # pack as ``plugin_config["skills"]["menu_rank"]``; the Engine is built
-    # per turn, so two tenants never share a roster. ``None`` ⇒ tier +
-    # frontmatter ``priority`` order only.
+    # per turn, so two tenants never share a roster. ``None`` ⇒ the default
+    # usage rank below, else tier + frontmatter ``priority`` order only.
     skill_menu_rank_resolver: Optional[
         Callable[[str], Optional[Mapping[str, float]]]
     ] = None
+    # The default keep order when the host passes no resolver and no static
+    # ``menu_rank``: usage folded from the most recently updated streams of the
+    # whole store (``SkillUsageRanker``). Store-wide, so it stays off when a
+    # tenancy resolver (``memory_root_resolver`` / ``mcp_scope_resolver``) is
+    # bound — that host says which streams belong together through
+    # ``skill_menu_rank_resolver``. False ⇒ tier + ``priority`` order only.
+    skill_usage_ranking: bool = True
     #: ``<workspace-environment>`` block switch. Workspace environment material
     #: (not agent identity), so the activation tuple carries no flag and SdkHost
     #: configures it directly. True (default) records the block once at task
@@ -697,6 +705,11 @@ class SdkHost(GenericEngineResolver):
     _skill_menu_rank_lock: threading.Lock = field(
         default_factory=threading.Lock, init=False, repr=False, compare=False
     )
+    # The default rank source (``skill_usage_ranking``), built in
+    # ``__post_init__`` when this host may use it; ``None`` otherwise.
+    _skill_usage_ranker: Optional[SkillUsageRanker] = field(
+        default=None, init=False, repr=False, compare=False
+    )
     # Per-session permission_mode is a NON-durable, per-turn knob — the frontend
     # sends it each turn; it is never written to the event log. The async HTTP
     # transport seeds a turn on the request thread but resolves the Engine later on
@@ -854,6 +867,7 @@ class SdkHost(GenericEngineResolver):
                 "SdkHost: pass EITHER skill_menu_rank_resolver (per task) OR "
                 "plugin_config['skills']['menu_rank'] (static) — not both"
             )
+        self._skill_usage_ranker = self._default_skill_usage_ranker()
         # Build the shared background-delivery glue first: both the
         # background-shell and background-sub-agent exit hooks route their
         # completion push through it. It stays inert (records the durable exit,
@@ -1744,7 +1758,13 @@ class SdkHost(GenericEngineResolver):
                 spec=spec,
                 memory_override=memory_override,
                 trust_subject=trust_subject,
-                skill_menu_rank=self._skill_menu_rank_override(task_id),
+                # A roster exists only for an agent that activates skill
+                # invocation, so no other agent asks for a rank.
+                skill_menu_rank=(
+                    self._skill_menu_rank_override(task_id)
+                    if agent_activates(spec, "skill_invocation")
+                    else None
+                ),
                 task_slot=task_slot,
             ),
             hooks_pre_tool_use=self.hooks_pre_tool_use,
@@ -2349,12 +2369,40 @@ class SdkHost(GenericEngineResolver):
             return None
         return self.memory_root_resolver(task_id)
 
+    def _default_skill_usage_ranker(self) -> Optional[SkillUsageRanker]:
+        """The store-wide usage ranker, when this host may rank by it.
+
+        Only as the default: not when the host passes its own resolver or a
+        static ``menu_rank``, not when ``skill_usage_ranking`` is off, and not
+        when the event log cannot enumerate its streams. Not either when a
+        tenancy resolver is bound — a store-wide fold would rank one tenant's
+        roster by another's use — and that skip is logged, because such a
+        host gets tier + ``priority`` order until it passes a resolver.
+        """
+        if (
+            not self.skill_usage_ranking
+            or self.skill_menu_rank_resolver is not None
+            or "menu_rank" in (self.plugin_config_overrides.get("skills") or {})
+            or not callable(getattr(self.event_log, "list_task_streams", None))
+        ):
+            return None
+        if self.memory_root_resolver is not None or self.mcp_scope_resolver is not None:
+            _log.info(
+                "SdkHost: skill menu usage ranking is off because a tenancy "
+                "resolver is bound; pass skill_menu_rank_resolver to rank each "
+                "tenant's skill menu by its own usage"
+            )
+            return None
+        return SkillUsageRanker(self.event_log)
+
     def _skill_menu_rank_override(
         self, task_id: Optional[str]
     ) -> Optional[Mapping[str, float]]:
         """The per-task skill-menu rank ``task_id`` composes with, or ``None``
         — same fallbacks as :meth:`_memory_root_override` (no resolver, no
-        task id, resolver declining).
+        task id, resolver declining). With no resolver, the default usage
+        ranker (:meth:`_default_skill_usage_ranker`) answers in its place,
+        under the same once-per-task memo.
 
         The resolver is asked ONCE per task: its first non-empty answer is
         memoised for the task's life in this process. The roster sits in the
@@ -2367,7 +2415,9 @@ class SdkHost(GenericEngineResolver):
         determinism keeps a resumed task's roster stable — the same contract
         as ``memory_root_resolver``.
         """
-        if self.skill_menu_rank_resolver is None or not task_id:
+        resolver = self.skill_menu_rank_resolver
+        ranker = self._skill_usage_ranker
+        if not task_id or (resolver is None and ranker is None):
             return None
         with self._skill_menu_rank_lock:
             memo = self._skill_menu_rank_by_task
@@ -2375,7 +2425,12 @@ class SdkHost(GenericEngineResolver):
             if cached is not None:
                 memo.move_to_end(task_id)
                 return cached
-        rank = self.skill_menu_rank_resolver(task_id)
+        if resolver is not None:
+            rank = resolver(task_id)
+        elif ranker is not None:
+            rank = ranker.rank()
+        else:
+            return None
         if not rank:
             return None
         frozen: Mapping[str, float] = dict(rank)

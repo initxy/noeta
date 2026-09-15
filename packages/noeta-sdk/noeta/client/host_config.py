@@ -282,11 +282,21 @@ class HostConfig:
     #: same bytes. Fold a tenant's ledger with ``skill_usage_from_events`` /
     #: ``rank_skills_by_usage`` to derive one. Reaches the ``skills`` pack as
     #: ``plugin_config["skills"]["menu_rank"]``; a static host-wide ranking
-    #: can be set there directly instead. ``None`` ⇒ tier + ``priority``
-    #: order only.
+    #: can be set there directly instead. ``None`` ⇒ the default usage rank
+    #: below, else tier + ``priority`` order only.
     skill_menu_rank_resolver: Optional[
         Callable[[str], Optional[Mapping[str, float]]]
     ] = None
+    #: The default keep order when neither a resolver nor a static
+    #: ``menu_rank`` is set: the host folds skill usage from the most recently
+    #: updated task streams of the whole store (at most 200, refolded at most
+    #: every 10 minutes), and each task keeps the first rank it composed with.
+    #: Store-wide, so it is a single-tenant default: it stays off when
+    #: ``memory_root_resolver`` or ``mcp_scope_resolver`` is bound (logged
+    #: once) — that host passes ``skill_menu_rank_resolver`` instead. Best
+    #: effort across processes: a task resumed in another process may compose
+    #: a different roster once. ``False`` ⇒ tier + ``priority`` order only.
+    skill_usage_ranking: bool = True
 
     # -- plugin operator config ---------------------------------------------
     #: Operator config per plugin: ``plugin name -> {key: value}``, reaching a

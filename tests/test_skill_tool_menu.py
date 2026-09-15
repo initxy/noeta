@@ -38,10 +38,12 @@ from noeta.builtins.skills.impl import (
 )
 from noeta.builtins.skills.impl.control_tool import (
     DEFAULT_MENU_BUDGET_TOKENS,
-    MENU_DESCRIPTION_MAX_CHARS,
+    MENU_DESCRIPTION_MAX_TOKENS,
+    MENU_SHORT_SUMMARY_MAX_TOKENS,
     estimate_menu_tokens,
     fit_menu_to_budget,
     menu_keep_order,
+    short_summary,
 )
 from noeta.builtins.skills.impl.indexer import SkillDescription, SkillRegistry
 from noeta.builtins.skills.impl.wiring import merge_skill_registries
@@ -472,16 +474,19 @@ def test_hidden_skill_cannot_be_named_by_the_model(tmp_path: Path) -> None:
 
 
 def test_oversized_description_is_truncated_in_the_roster(tmp_path: Path) -> None:
-    """(d) One skill's description is capped at 1024 chars in the roster.
+    """(d) One skill's description is capped at 384 estimated tokens in the
+    roster — 1,536 characters of ASCII, 384 of Chinese.
 
     Every description concatenates into ONE property description that sits
     inside the stable-prefix hash, so an unbounded ``description:`` is unbounded
-    prompt on every turn.
+    prompt on every turn. The cap is in tokens so a Chinese summary cannot cost
+    four times an English one.
     """
     ws = tmp_path / "ws"
     ws.mkdir()
-    long_description = "x" * 5000
-    write_skill(ws, "verbose", long_description)
+    write_skill(ws, "verbose", "x" * 5000)
+    write_skill(ws, "exact", "y" * 1536)
+    write_skill(ws, "chinese", "中" * 1024)
     write_skill(ws, "terse", "short one")
 
     schemas = _build_composer_schemas(ws, skill_invocation_enabled=True)
@@ -492,10 +497,16 @@ def test_oversized_description_is_truncated_in_the_roster(tmp_path: Path) -> Non
     entries = dict(
         entry.split(" — ", 1) for entry in roster.split("; ") if " — " in entry
     )
-    assert len(entries["verbose"]) == MENU_DESCRIPTION_MAX_CHARS == 1024
+    assert MENU_DESCRIPTION_MAX_TOKENS == 384
+    assert len(entries["verbose"]) == 1536
     assert entries["verbose"].startswith("x" * 100)
     assert entries["verbose"].endswith("(truncated)")
-    # A description inside the budget is untouched.
+    assert entries["chinese"].startswith("中" * 100)
+    assert entries["chinese"].endswith("(truncated)")
+    assert estimate_menu_tokens(entries["chinese"]) <= MENU_DESCRIPTION_MAX_TOKENS
+    assert len(entries["chinese"]) < 400
+    # A description inside the cap is untouched.
+    assert entries["exact"] == "y" * 1536
     assert entries["terse"] == "short one"
 
 
@@ -516,7 +527,7 @@ def test_arguments_placeholder_excised_from_the_roster(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The roster budget — a total cap on the menu, name-only past it
+# The roster budget — a total cap on the menu: short summaries, then name-only
 # ---------------------------------------------------------------------------
 
 def _roster_entries(schema: dict[str, Any]) -> dict[str, str]:
@@ -569,30 +580,127 @@ def test_under_budget_roster_is_byte_identical_to_the_unbudgeted_one() -> None:
     assert _roster_entries(tight) == {"alpha": "first", "beta": "second"}
 
 
-def test_over_budget_drops_lowest_ranked_summaries_but_keeps_every_name(
+def test_over_budget_shortens_every_summary_and_keeps_the_top_ranked_one_full(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Past the budget the roster degrades summary-by-summary from the bottom
-    of the keep order; the ``enum`` still lists every skill, and the operator
-    gets one warning naming the knob."""
+    """Past the budget every skill first gets its short summary; the leftover
+    upgrades summaries back to full from the top of the keep order. The
+    ``enum`` still lists every skill, and the operator gets one warning naming
+    the three counts and the knob."""
     registry = _registry(
         ("aaa", "x" * 400, 100),
         ("bbb", "y" * 400, 100),
         ("ccc", "z" * 400, 100),
     )
-    # Names-only baseline is a handful of tokens; one 400-char summary is
-    # ~100 tokens. Budget for exactly one summary.
+    # Names ~6 tokens, three short summaries 24 each, one upgrade to the full
+    # 400-char summary 76 more: 160 pays for exactly one upgrade.
     with caplog.at_level(logging.WARNING, logger="noeta.builtins.skills"):
         schema = _schema_for(
-            registry, menu_budget_tokens=130, menu_rank={"ccc": 5.0}
+            registry, menu_budget_tokens=160, menu_rank={"ccc": 5.0}
         )
     prop = schema["function"]["parameters"]["properties"]["skill"]
     assert prop["enum"] == ["aaa", "bbb", "ccc"]
-    entries = _roster_entries(schema)
-    assert entries["ccc"] == "z" * 400
-    assert entries["aaa"] == "" and entries["bbb"] == ""
-    assert "2 of 3 skills listed by name only" in caplog.text
+    assert _roster_entries(schema) == {
+        "aaa": short_summary("x" * 400),
+        "bbb": short_summary("y" * 400),
+        "ccc": "z" * 400,
+    }
+    assert (
+        "of 3 skills, 1 keep a full summary, 2 shortened, 0 listed by name only"
+        in caplog.text
+    )
     assert "menu_budget_tokens" in caplog.text
+
+
+def test_name_only_starts_when_the_short_summaries_overflow(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When even the short forms do not fit, the bottom of the keep order is
+    listed by name only — and then no skill keeps a full summary."""
+    registry = _registry(
+        ("aaa", "x" * 400, 100),
+        ("bbb", "y" * 400, 100),
+        ("ccc", "z" * 400, 100),
+    )
+    with caplog.at_level(logging.WARNING, logger="noeta.builtins.skills"):
+        schema = _schema_for(registry, menu_budget_tokens=60, menu_rank={"ccc": 5.0})
+    prop = schema["function"]["parameters"]["properties"]["skill"]
+    assert prop["enum"] == ["aaa", "bbb", "ccc"]
+    assert _roster_entries(schema) == {
+        "aaa": short_summary("x" * 400),
+        "bbb": "",
+        "ccc": short_summary("z" * 400),
+    }
+    assert "0 keep a full summary, 2 shortened, 1 listed by name only" in caplog.text
+
+
+def test_short_summary_is_the_first_sentence_clipped_to_the_cap() -> None:
+    """The short form keeps what an author puts first: a summary within the
+    cap is unchanged, a longer one keeps its first sentence (ASCII or CJK
+    sentence end), and a first sentence still too long is clipped with ``…``."""
+    assert MENU_SHORT_SUMMARY_MAX_TOKENS == 24
+    assert short_summary("Short one. Really.") == "Short one. Really."
+    assert (
+        short_summary("Operate TCE via bytedcli. " + "long " * 50)
+        == "Operate TCE via bytedcli."
+    )
+    assert (
+        short_summary("用费曼技巧把复杂的东西讲透。" + "核心" * 30)
+        == "用费曼技巧把复杂的东西讲透。"
+    )
+    # A dot inside a token (a version number) is not a sentence end.
+    assert short_summary("Version 3.5 " + "adds things " * 20).endswith("…")
+    for long_first in ("x" * 400, "飞" * 100 + "。"):
+        clipped = short_summary(long_first)
+        assert clipped.endswith("…")
+        assert estimate_menu_tokens(clipped) <= MENU_SHORT_SUMMARY_MAX_TOKENS
+        assert long_first.startswith(clipped[:-1])
+
+
+def test_depth_pass_waits_until_every_skill_has_a_short_summary() -> None:
+    """A leftover too small for one skill's short summary never pays for
+    another skill's upgrade: a full summary never sits beside a bare name."""
+    # Full is 27 tokens, its first sentence 21: the upgrade costs only 6.
+    cheap_upgrade = "中" * 20 + "。" + "文" * 6
+    entries = (("aaa", cheap_upgrade), ("zzz", "z" * 400))
+    keep_order = ("aaa", "zzz")
+    names = estimate_menu_tokens("aaa; ") + estimate_menu_tokens("zzz; ")
+    aaa_short = estimate_menu_tokens(
+        f"aaa — {short_summary(cheap_upgrade)}; "
+    ) - estimate_menu_tokens("aaa; ")
+    zzz_short = estimate_menu_tokens(
+        f"zzz — {short_summary('z' * 400)}; "
+    ) - estimate_menu_tokens("zzz; ")
+
+    # Room for aaa's short form plus 10: zzz's short form (24) does not fit,
+    # so aaa stays short although its 6-token upgrade would.
+    tight = fit_menu_to_budget(entries, keep_order, names + aaa_short + 10)
+    assert tight == {"aaa": short_summary(cheap_upgrade), "zzz": ""}
+    # Once zzz's short form fits too, the same 10 pays for aaa's upgrade.
+    roomy = fit_menu_to_budget(entries, keep_order, names + aaa_short + zzz_short + 10)
+    assert roomy == {"aaa": cheap_upgrade, "zzz": short_summary("z" * 400)}
+
+
+def test_a_measured_roster_profile_lists_every_skill_with_a_summary() -> None:
+    """The case that motivated the short step: 67 skills with ~120-token
+    summaries (half English, half Chinese) at the 2000-token budget of a
+    200k window. Before it, 50 of them were listed by name only."""
+    rows = []
+    for i in range(67):
+        if i % 2:
+            desc = (
+                f"Operates platform {i} through its command line: list, search, "
+                "get, create, update and delete resources in every region. "
+                + "Use when a task mentions it. " * 12
+            )
+        else:
+            desc = f"飞书平台{i}的操作：查询、创建、更新、删除资源，管理权限与成员。" + "适用于相关任务。" * 12
+        rows.append((f"skill-{i:02d}", desc, 100))
+    registry = _registry(*rows)
+    schema = _schema_for(registry, menu_budget_tokens=2000)
+    entries = _roster_entries(schema)
+    assert len(entries) == 67
+    assert all(entries.values())
 
 
 def test_under_budget_logs_no_warning(caplog: pytest.LogCaptureFixture) -> None:
@@ -666,18 +774,19 @@ def test_fit_is_greedy_so_a_shorter_later_summary_can_still_fit() -> None:
     later, shorter one in the keep order still gets in."""
     entries = (("big", "x" * 400), ("small", "y" * 20), ("tiny", "z" * 4))
     keep_order = ("big", "small", "tiny")
-    # Baseline (names + separators) ~6 tokens; big ≈ 101, small ≈ 6, tiny ≈ 2.
-    dropped = fit_menu_to_budget(entries, keep_order, budget_tokens=20)
-    assert dropped == frozenset({"big"})
+    # Baseline (names + separators) ~6 tokens; big's short form ≈ 24,
+    # small ≈ 6, tiny ≈ 2 (both within the cap, so their own short form).
+    fitted = fit_menu_to_budget(entries, keep_order, budget_tokens=20)
+    assert fitted == {"big": "", "small": "y" * 20, "tiny": "z" * 4}
 
 
 def test_fit_drops_every_summary_when_names_alone_exceed_the_budget() -> None:
     entries = tuple((f"skill-{i:03d}", "summary") for i in range(50))
-    dropped = fit_menu_to_budget(entries, [n for n, _ in entries], 10)
-    assert dropped == frozenset(n for n, _ in entries)
+    fitted = fit_menu_to_budget(entries, [n for n, _ in entries], 10)
+    assert fitted == {n: "" for n, _ in entries}
     # Nothing to drop when nothing has a summary.
     bare = tuple((n, "") for n, _ in entries)
-    assert fit_menu_to_budget(bare, [n for n, _ in bare], 10) == frozenset()
+    assert fit_menu_to_budget(bare, [n for n, _ in bare], 10) == dict(bare)
 
 
 def test_menu_bytes_do_not_depend_on_rank_when_under_budget() -> None:
@@ -693,7 +802,8 @@ def test_session_pack_reads_budget_and_rank_from_its_config(
     tmp_path: Path,
 ) -> None:
     """``plugin_config["skills"]["menu_budget_tokens"]`` and ``["menu_rank"]``
-    reach the mount: the ranked skill keeps its summary, the rest go name-only."""
+    reach the mount: the top-ranked skill keeps its full summary, the rest are
+    shortened."""
     ws = tmp_path / "ws"
     ws.mkdir()
     write_skill(ws, "aaa", "a" * 400)
@@ -711,13 +821,17 @@ def test_session_pack_reads_budget_and_rank_from_its_config(
         capability_flags={"skill_invocation": True},
         plugin_config={
             "fs": {"write_mode": FsWriteMode.DRY_RUN, "shell_mode": ShellMode.OFF},
-            "skills": {"menu_budget_tokens": 130, "menu_rank": {"bbb": 2, "aaa": 1}},
+            "skills": {"menu_budget_tokens": 160, "menu_rank": {"bbb": 2, "aaa": 1}},
         },
     )
     schema = _find_skill_schema(list(inputs.composer._control_action_schemas))
     assert schema is not None
     entries = _roster_entries(schema)
-    assert entries == {"aaa": "", "bbb": "b" * 400, "ccc": ""}
+    assert entries == {
+        "aaa": short_summary("a" * 400),
+        "bbb": "b" * 400,
+        "ccc": short_summary("c" * 400),
+    }
 
 
 @pytest.mark.parametrize(
@@ -846,18 +960,18 @@ def test_session_pack_keeps_builtin_plugin_and_borrowed_packs_on_one_tier(
             capability_flags={"skill_invocation": True},
             plugin_config={
                 "fs": {"write_mode": FsWriteMode.DRY_RUN, "shell_mode": ShellMode.OFF},
-                "skills": {"menu_budget_tokens": 130, **skills_cfg},
+                "skills": {"menu_budget_tokens": 160, **skills_cfg},
             },
         )
         schema = _find_skill_schema(list(inputs.composer._control_action_schemas))
         assert schema is not None
         return _roster_entries(schema)
 
-    # Built-in + borrowed only: one tier, name order ⇒ ``aaa`` keeps its
+    # Built-in + borrowed only: one tier, name order ⇒ ``aaa`` keeps its full
     # summary although the borrowed dir was folded later.
     assert roster(
         {"builtin_skills_dirs": [builtin], "extra_skill_dirs": [borrowed]}
-    ) == {"aaa": "a" * 400, "bbb": ""}
+    ) == {"aaa": "a" * 400, "bbb": short_summary("b" * 400)}
     # A global-tier skill outranks both.
     assert roster(
         {
@@ -865,7 +979,11 @@ def test_session_pack_keeps_builtin_plugin_and_borrowed_packs_on_one_tier(
             "extra_skill_dirs": [borrowed],
             "global_skills_dir": glob,
         }
-    ) == {"aaa": "", "bbb": "", "ccc": "c" * 400}
+    ) == {
+        "aaa": short_summary("a" * 400),
+        "bbb": short_summary("b" * 400),
+        "ccc": "c" * 400,
+    }
 
 
 def test_fit_charges_every_entry_even_outside_the_keep_order() -> None:
@@ -873,13 +991,18 @@ def test_fit_charges_every_entry_even_outside_the_keep_order() -> None:
     it leaves out are fitted last; duplicates in the keep order count once;
     duplicate entries are a caller error."""
     entries = tuple((f"s{i}", "x" * 400) for i in range(10))
-    dropped = fit_menu_to_budget(entries, ["s0", "s0"], budget_tokens=10)
-    assert dropped == frozenset(n for n, _ in entries)
-    # With room for exactly one summary the keep order's pick survives and
-    # the left-out names come after it.
-    one = 10 * 2 + 101  # ten bare names (~2 tokens each) + one 400-char summary
-    dropped = fit_menu_to_budget(entries, ["s7"], budget_tokens=one)
-    assert "s7" not in dropped and len(dropped) == 9
+    fitted = fit_menu_to_budget(entries, ["s0", "s0"], budget_tokens=10)
+    assert fitted == {n: "" for n, _ in entries}
+    # With room for exactly one short summary the keep order's pick gets it
+    # and the left-out names come after it.
+    short = short_summary("x" * 400)
+    names = sum(estimate_menu_tokens(f"{n}; ") for n, _ in entries)
+    one = names + estimate_menu_tokens(f"s7 — {short}; ") - estimate_menu_tokens("s7; ")
+    fitted = fit_menu_to_budget(entries, ["s7"], budget_tokens=one)
+    assert fitted["s7"] == short
+    assert [n for n, summary in fitted.items() if not summary] == [
+        n for n, _ in entries if n != "s7"
+    ]
     with pytest.raises(ValueError, match="duplicate"):
         fit_menu_to_budget((("a", "x"), ("a", "y")), ["a"], budget_tokens=100)
 

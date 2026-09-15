@@ -22,13 +22,21 @@ A rank derived here decays with ``now``. The host asks its
 ``skill_menu_rank_resolver`` once per task (the first non-empty answer is
 kept for the task's life in that process), so a fresh ``now`` per call never
 rotates a running task's roster; feed it the tenant's fold at task start.
+
+A host that binds no tenancy seam at all does not need a resolver: the SDK
+host then ranks with :class:`SkillUsageRanker`, the same fold over the most
+recently updated streams of the whole store.
 """
 
 from __future__ import annotations
 
+import logging
+import threading
+import time
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Optional, Protocol
 
+from noeta.protocols.event_log import EventLogReader, EventLogTaskIndex
 from noeta.protocols.events import EventEnvelope
 
 
@@ -45,6 +53,17 @@ __all__ = [
 _LOOP_STARTED_EVENT = "ContextPlanComposed"
 _STATE_PATCHED_EVENT = "TaskStatePatched"
 _SECONDS_PER_DAY = 86_400.0
+
+#: How many of the most recently updated task streams
+#: :class:`SkillUsageRanker` folds. Bounds the read; the 7-day half-life
+#: already makes older use count for little.
+DEFAULT_USAGE_SCAN_STREAMS = 200
+
+#: How long, in seconds, one :class:`SkillUsageRanker` snapshot answers
+#: before the next ask folds again.
+DEFAULT_USAGE_SNAPSHOT_TTL_S = 600.0
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,3 +152,68 @@ def rank_skills_by_usage(
         )
         for name, entry in sorted(usage.items())
     }
+
+
+class _UsageSource(EventLogReader, EventLogTaskIndex, Protocol):
+    """The two event-log capabilities the ranker reads: enumerate the task
+    streams, read one."""
+
+
+class SkillUsageRanker:
+    """The SDK host's ``menu_rank`` when the host supplies none: skill usage
+    folded from the most recently updated task streams of the whole store.
+
+    Store-wide, so only a single-tenant host uses it — ``SdkHost`` skips it
+    when a tenancy resolver is bound. Bounded: an ask within ``ttl_s`` of the
+    last fold answers from that snapshot, so the store sees at most
+    ``max_streams`` stream reads per ``ttl_s`` however many tasks build;
+    concurrent asks wait for one fold instead of each running their own. The
+    snapshot is process-local, so another process may fold a different one —
+    the host's per-task memo keeps a running task's roster fixed, and a task
+    resumed elsewhere composes a different roster at most once.
+
+    A failing read never fails the turn build that asked: it is logged, the
+    previous snapshot keeps answering, and the next fold is due after
+    ``ttl_s``.
+    """
+
+    def __init__(
+        self,
+        event_log: _UsageSource,
+        *,
+        clock: Callable[[], float] = time.time,
+        max_streams: int = DEFAULT_USAGE_SCAN_STREAMS,
+        ttl_s: float = DEFAULT_USAGE_SNAPSHOT_TTL_S,
+    ) -> None:
+        self._event_log = event_log
+        self._clock = clock
+        self._max_streams = max_streams
+        self._ttl_s = ttl_s
+        self._lock = threading.Lock()
+        self._rank: dict[str, float] = {}
+        self._folded_at: Optional[float] = None
+
+    def rank(self) -> dict[str, float]:
+        """``skill → decayed usage score`` for the current snapshot (``{}``
+        when nothing in the scanned streams activated a skill)."""
+        with self._lock:
+            now = self._clock()
+            if self._folded_at is not None and now - self._folded_at < self._ttl_s:
+                return self._rank
+            self._folded_at = now
+            try:
+                streams = self._event_log.list_task_streams()[: self._max_streams]
+                usage = skill_usage_from_events(
+                    event
+                    for summary in streams
+                    for event in self._event_log.read(summary.task_id)
+                )
+            except Exception:
+                _log.warning(
+                    "skill usage fold failed; the skill menu keeps its previous "
+                    "keep order until the next fold",
+                    exc_info=True,
+                )
+                return self._rank
+            self._rank = rank_skills_by_usage(usage, now=now)
+            return self._rank

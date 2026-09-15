@@ -177,11 +177,14 @@ compile_options(options, *, plugins=None, preset_prompts=None)
 | `memory_dir` / `global_memory_dir` | `None` | 宿主级的存储根 |
 | `memory_root_resolver` | `None` | `(task_id) -> Path \| None`，按任务的根 |
 
-**技能菜单。** `skill` control tool 渲染出来的技能列表会按预算裁剪（默认是模型上下文窗口的 1%，估算 token 时中日韩字符按一个字一个 token 算）；超出后，排序靠后的技能只保留名字、不再带摘要。保留顺序是：host 给的分数，然后工作区层先于借入层，再按 frontmatter `priority`，最后按名字。想按使用频次排，就用 `noeta.sdk` 上的 `skill_usage_from_events` 和 `rank_skills_by_usage` 把租户的事件流折成分数；固定的排序直接写进 `plugin_config["skills"]["menu_rank"]`（两者不能同时配，host 构造时就会拒绝）。host 对每个任务只问解析器一次，拿到第一份非空答案后在本进程里一直沿用，所以随时间衰减的分数不会让进行中的任务每轮换一份列表；解析器暂时给不出答案（返回 None）的话，下次构建会再问一次。和 `memory_root_resolver` 一样，跨进程恢复的任务必须解析出同一份排序。
+**技能菜单。** `skill` control tool 渲染出来的技能列表有总预算（默认是模型上下文窗口的 1%，估算 token 时中日韩字符按一个字一个 token 算）。超出预算后分两步收缩：先给每个技能一句短描述（取第一句，最多 24 token）；所有技能都放下之后，剩下的预算再按保留顺序把短描述换回完整描述；连短描述都放不下时，排在最后的技能只留名字。保留顺序是：host 给的分数，然后工作区层先于借入层，再按 frontmatter `priority`，最后按名字。
+
+默认按使用频率排：没配解析器、也没写固定的 `menu_rank` 时，host 会取整个存储里最近更新的任务事件流（最多 200 个，最多每 10 分钟重算一次），用 `noeta.sdk` 上的 `skill_usage_from_events` 和 `rank_skills_by_usage` 算出分数。这样算会把所有租户的使用记录混在一起，所以只要配了 `memory_root_resolver` 或 `mcp_scope_resolver`，默认排序就不开（host 会记一条日志）；多租户的 host 要自己按租户统计事件流，通过 `skill_menu_rank_resolver` 返回分数。固定的排序直接写进 `plugin_config["skills"]["menu_rank"]`（不能和解析器同时配，host 构造时就会拒绝）；`skill_usage_ranking=False` 关掉默认排序。host 对每个任务只要一次分数，拿到第一份非空答案后在本进程里一直沿用，所以随时间衰减的分数不会让进行中的任务每轮换一份列表；解析器暂时给不出答案（返回 None）的话，下次构建会再问一次。和 `memory_root_resolver` 一样，解析器要保证跨进程恢复的任务拿到同一份排序；默认排序在这点上只能尽力——换一个进程恢复的任务，列表可能变一次。
 
 | 字段 | 默认值 | 用途 |
 | --- | --- | --- |
 | `skill_menu_rank_resolver` | `None` | `(task_id) -> {技能名: 分数} \| None`，按任务的保留顺序 |
+| `skill_usage_ranking` | `True` | 没给排序时，按存储里的技能使用频率排（单租户 host） |
 
 **插件运维配置。**
 

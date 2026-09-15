@@ -8,6 +8,34 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Changed — the skill menu shortens summaries before dropping them, and ranks by usage by default
+
+- **Short summaries before name-only.** Over its budget the `skill` roster
+  now gives every skill a short summary first — the summary's first sentence,
+  at most 24 estimated tokens, clipped with `…` — and restores full summaries
+  from the top of the keep order only once all of them fit; a skill is listed
+  by name only when even the short summaries overflow. On a measured 67-skill
+  roster at the 2000-token budget of a 200k window this moves the roster from
+  17 full / 50 name-only to 7 full / 60 short / 0 name-only.
+  `fit_menu_to_budget` returns the summary each name shows instead of the set
+  of dropped names, and the over-budget warning reports the full, shortened
+  and name-only counts.
+- **The per-summary cap is in estimated tokens.** One summary renders at most
+  384 estimated tokens (`MENU_DESCRIPTION_MAX_TOKENS`, replacing the
+  1,024-character `MENU_DESCRIPTION_MAX_CHARS`): 1,536 characters of ASCII,
+  384 of Chinese, so a Chinese summary no longer costs four times an English
+  one.
+- **A host with no rank ranks by usage.** With no
+  `skill_menu_rank_resolver` and no static `menu_rank`, `SdkHost` folds skill
+  usage from the most recently updated task streams of the whole store (at
+  most 200, refolded at most every 10 minutes) and each task keeps the first
+  rank it composed with. The fold spans every tenant, so it stays off when
+  `memory_root_resolver` or `mcp_scope_resolver` is bound (logged once); new
+  `HostConfig.skill_usage_ranking` (default `True`) turns it off.
+- The `skill` schema bytes change for an over-budget roster and for a summary
+  past the new cap, so the first turn after upgrading misses the prompt cache
+  once.
+
 ## [0.6.24] - 2026-09-14
 
 Covers both packages, lockstep — 0.6.22 → 0.6.24 for `noeta-runtime`, 0.6.23 → 0.6.24 for `noeta-sdk`: the Engine cache lived in `noeta-runtime`'s

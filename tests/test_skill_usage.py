@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import pytest
 
+from noeta.client.skill_usage import SkillUsageRanker
+from noeta.protocols.event_log import TaskStreamSummary
 from noeta.protocols.events import EventEnvelope, TaskStatePatchedPayload
 from noeta.sdk import (
     SkillUsage,
@@ -111,3 +113,88 @@ def test_a_scalar_activate_skills_payload_counts_nothing() -> None:
         _event("A", "TaskStatePatched", at=4.0, patch={"activate_skills": 7}),
     ]
     assert skill_usage_from_events(events) == {}
+
+
+# ---------------------------------------------------------------------------
+# SkillUsageRanker — the host's store-wide default
+# ---------------------------------------------------------------------------
+
+
+class _Store:
+    """Task streams listed most-recent first, counting every read."""
+
+    def __init__(self, streams: dict[str, list[EventEnvelope]]) -> None:
+        self.streams = streams
+        self.reads: list[str] = []
+        self.fail = False
+
+    def list_task_streams(self) -> list[TaskStreamSummary]:
+        if self.fail:
+            raise OSError("store down")
+        return [
+            TaskStreamSummary(task_id=tid, last_seq=len(events), last_event_time=events[-1].occurred_at)
+            for tid, events in self.streams.items()
+        ]
+
+    def read(self, task_id: str, *, after_seq=None) -> list[EventEnvelope]:
+        self.reads.append(task_id)
+        return self.streams[task_id]
+
+    def find_latest_snapshot(self, task_id: str):
+        return None
+
+
+def _used(task_id: str, name: str, *, at: float) -> list[EventEnvelope]:
+    return [
+        _event(task_id, "ContextPlanComposed", at=at),
+        _activate(task_id, [name], at=at + 1),
+    ]
+
+
+def test_ranker_folds_only_the_most_recent_streams_once_per_ttl() -> None:
+    now = {"t": 30 * DAY}
+    store = _Store(
+        {
+            "newest": _used("newest", "coder", at=29 * DAY),
+            "newer": _used("newer", "reviewer", at=28 * DAY),
+            "oldest": _used("oldest", "archivist", at=1 * DAY),
+        }
+    )
+    ranker = SkillUsageRanker(store, clock=lambda: now["t"], max_streams=2, ttl_s=600)
+
+    rank = ranker.rank()
+    assert set(rank) == {"coder", "reviewer"}
+    assert rank["coder"] > rank["reviewer"]
+    assert store.reads == ["newest", "newer"]
+
+    # Within the TTL every ask answers from the snapshot: no read at all.
+    for _ in range(5):
+        now["t"] += 60
+        assert ranker.rank() == rank
+    assert store.reads == ["newest", "newer"]
+
+    # Past it, the next ask folds again and sees new use.
+    store.streams = {"latest": _used("latest", "archivist", at=now["t"]), **store.streams}
+    now["t"] += 600
+    assert "archivist" in ranker.rank()
+    assert store.reads[2:] == ["latest", "newest"]
+
+
+def test_ranker_keeps_the_previous_snapshot_when_the_store_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    now = {"t": 10 * DAY}
+    store = _Store({"a": _used("a", "coder", at=9 * DAY)})
+    ranker = SkillUsageRanker(store, clock=lambda: now["t"], ttl_s=600)
+    rank = ranker.rank()
+    assert set(rank) == {"coder"}
+
+    store.fail = True
+    now["t"] += 601
+    assert ranker.rank() == rank
+    assert "skill usage fold failed" in caplog.text
+    # The failed fold still counts as the fold of this TTL.
+    now["t"] += 60
+    assert ranker.rank() == rank
+    assert caplog.text.count("skill usage fold failed") == 1
+
