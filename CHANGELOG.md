@@ -36,6 +36,25 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
   past the new cap, so the first turn after upgrading misses the prompt cache
   once.
 
+### Fixed — SKILL.md frontmatter reads YAML quoting and comments as YAML
+
+- **A quoted value is unquoted.** `description: "..."` — the norm for
+  generated skills — used to keep its quotes, so the model saw a stray `"` in
+  the `skill` roster and in the activation text, and a `\"` escape as a
+  literal backslash. Double-quoted values now resolve their escapes,
+  single-quoted ones their `''`, and a quoted value spanning lines folds as
+  YAML does; this also lets a quoted `name` pass the name check (it used to
+  drop the skill), a quoted `priority` read as an integer, and a quoted
+  `allowed-tools` grant the tools it lists (it used to degrade to an empty
+  grant). A quoted value that is not one well-formed scalar stays verbatim
+  with a warning.
+- **Comments and a BOM no longer drop a skill.** A `#` comment line, a comment
+  after a value (`name: x  # id`) and a leading byte-order mark used to make
+  the file unparseable or the name invalid; they are now skipped.
+- Values stay strings: nothing is converted to a bool, a number or a list.
+  The roster and activation text of a skill with quoted values change once,
+  so its first turn after upgrading misses the prompt cache once.
+
 ## [0.6.24] - 2026-09-14
 
 Covers both packages, lockstep — 0.6.22 → 0.6.24 for `noeta-runtime`, 0.6.23 → 0.6.24 for `noeta-sdk`: the Engine cache lived in `noeta-runtime`'s
