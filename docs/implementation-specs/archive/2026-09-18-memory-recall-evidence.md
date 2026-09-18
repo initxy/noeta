@@ -1,9 +1,9 @@
 # Memory recall: one shared word is not evidence
 
-Status: implemented on `main`'s working tree 2026-09-18, not yet committed or
-released (proposed 2026-09-18, revised the same day after a review against the
-code). `make check` green; the rules are distilled into CONTEXT.md ("Memory") and
-the unified-context-supply ADR, so this file can be archived with the release.
+Status: SHIPPED 2026-09-18 in noeta-sdk 0.6.27 (`make check` green 4018/87.02%;
+proposed the same day and revised after a review against the code). Distilled
+into `CONTEXT.md` ("Memory") and `docs/adr/unified-context-supply.md` (2026-09-18
+amendment). `recall_text` stays deferred — see "Deferred" below.
 Asked for by the Aisthon host after an audit of its live requests; see
 `docs/specs/2026-09-18-context-audit-fixes.md` there. Built together with
 `memory-recall-names-links-size.md`: both touch the same matcher, and the

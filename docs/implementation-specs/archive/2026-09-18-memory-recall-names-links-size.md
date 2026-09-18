@@ -1,8 +1,8 @@
 # Memory recall: non-ASCII names, one hop along `related`, a write-time size cap
 
-Status: implemented on `main`'s working tree 2026-09-18, not yet committed or
-released (proposed 2026-09-17, revised 2026-09-18 after a review against the
-code). `make check` green. Asked for by the Aisthon host, whose owner keeps a
+Status: SHIPPED 2026-09-18 in noeta-sdk 0.6.27 (`make check` green 4018/87.02%;
+proposed 2026-09-17, revised 2026-09-18 after a review against the code).
+Distilled into `CONTEXT.md` ("Memory") and `docs/adr/unified-context-supply.md`. Asked for by the Aisthon host, whose owner keeps a
 Chinese-language memory store; see Aisthon's ADR-0018 and
 `docs/specs/2026-09-17-one-desk-and-one-door-out.md` there. Built together with
 `memory-recall-evidence.md`, whose two-token rule must ship no later than the
