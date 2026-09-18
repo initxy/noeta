@@ -8,6 +8,12 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.26] - 2026-09-17
+
+Covers `noeta-sdk` only: 0.6.25 → 0.6.26. `noeta-runtime` stays at 0.6.24;
+the fix lives in the `providers` built-in and uses the runtime's existing
+header seam, so the sdk's `noeta-runtime>=0.6.24` floor is unchanged.
+
 ### Fixed — `OpenAICompatProvider` sends `provider_headers` on non-streamed calls
 
 - **Per-call headers are no longer dropped.** `OpenAICompatProvider` accepted
@@ -2443,7 +2449,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.25...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.26...HEAD
+[0.6.26]: https://github.com/initxy/noeta/compare/v0.6.25...v0.6.26
 [0.6.25]: https://github.com/initxy/noeta/compare/v0.6.24...v0.6.25
 [0.6.24]: https://github.com/initxy/noeta/compare/v0.6.23...v0.6.24
 [0.6.23]: https://github.com/initxy/noeta/compare/v0.6.22...v0.6.23
