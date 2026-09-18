@@ -10,15 +10,22 @@ dragging the content channel into the store module.
 from __future__ import annotations
 
 import re
+from collections import Counter
+from dataclasses import dataclass
+from typing import Collection
 
 
 __all__ = [
     "DEFAULT_RECALL_MAX_HITS",
     "MemoryEntries",
+    "NAME_MIN_OVERLAP",
+    "RankedMemory",
     "SUMMARY_MIN_OVERLAP",
+    "common_name_tokens",
     "match_memories",
     "match_memories_tiered",
     "match_tokens",
+    "rank_memories",
 ]
 
 
@@ -50,19 +57,18 @@ _CJK_RUN_RE = re.compile(
 #: Word tokens shorter than this never match. Applies to the WORD rule only
 #: — a CJK bigram is 2 characters by construction and must stay exempt, or
 #: recall goes silently dead for every space-free script. Three (not two)
-#: because a tier-1 hit spends a whole memory body on ONE shared token, and
-#: two-letter fragments (``db``, ``ci``, the tail of a hyphenated slug) share
-#: far too easily with ordinary prose; a two-letter term is still reachable
-#: through ``memory_search``.
+#: because two-letter fragments (``db``, ``ci``, the tail of a hyphenated
+#: slug) share far too easily with ordinary prose; a two-letter term is still
+#: reachable through ``memory_search``.
 _MIN_TOKEN_LEN = 3
 
-#: Word tokens too common to be evidence of anything. Same reasoning as the
-#: length floor and the same blast radius: without it a memory named
-#: ``user-preferences`` fires tier-1 — a whole body inline — on any message
-#: containing "user". Deliberately small and closed: a stopword list is a
-#: precision knob, not a language model, and every entry here is a word no
-#: author would choose as the distinguishing half of a memory slug. The CJK
-#: path never consults it.
+#: Word tokens too common to be evidence of anything, in any store. Same
+#: reasoning as the length floor. Deliberately small and closed: a stopword
+#: list is a precision knob, not a language model, and every entry here is a
+#: word no author would choose as the distinguishing half of a memory slug.
+#: What is common in ONE store — a project prefix two dozen names share, the
+#: year in a dated slug — is not this list's job: :func:`common_name_tokens`
+#: counts that off the store's own names. The CJK path never consults it.
 _STOPWORDS: frozenset[str] = frozenset(
     {
         "about", "after", "again", "all", "and", "any", "are", "been",
@@ -84,6 +90,17 @@ _STOPWORDS: frozenset[str] = frozenset(
 #: rule, and it is affordable because a tier-2 hit costs one index line
 #: rather than a whole memory body.
 SUMMARY_MIN_OVERLAP = 2
+#: Tier-1 (name) matching needs this many distinct non-common name tokens in
+#: the text — or every one of them, when the name carries fewer. A body is
+#: uninvited context the model cannot decline, and names are slugs of
+#: ordinary technical words (``applog-web-report-channel``), so ONE shared
+#: word — "report" — is a lead, not evidence that the text named the page.
+#: One shared token therefore earns the tier-2 pointer, never silence.
+NAME_MIN_OVERLAP = 2
+#: A name token is *common* once more than this many names carry it, or more
+#: than a tenth of the store, whichever is larger — see
+#: :func:`common_name_tokens`.
+_COMMON_MIN_NAMES = 3
 
 
 def match_tokens(value: str) -> set[str]:
@@ -91,9 +108,7 @@ def match_tokens(value: str) -> set[str]:
 
     A space-separated run is one token per word, **filtered**: a word shorter
     than :data:`_MIN_TOKEN_LEN` or listed in :data:`_STOPWORDS` is not
-    evidence, so it never reaches either tier. The filter is what keeps
-    tier-1's threshold of one honest — one shared token buys a whole memory
-    body, so that token has to mean something.
+    evidence, so it never reaches either tier.
 
     A CJK run becomes its **character bigrams**, because the word rule finds
     nothing at all in a script written without spaces — a wholly
@@ -155,11 +170,124 @@ def _keywords_hit(keywords: str, lowered_text: str) -> bool:
     return False
 
 
+@dataclass(frozen=True, slots=True)
+class RankedMemory:
+    """One matched memory with the evidence that matched it.
+
+    ``by_name`` marks a tier-1 hit. ``score`` is the number of distinct
+    matched tokens — name tokens for tier 1, name and summary tokens together
+    for tier 2 — and ``by_keyword`` a curator alias that occurred as a phrase.
+    """
+
+    name: str
+    by_name: bool
+    score: int
+    by_keyword: bool = False
+
+
+def common_name_tokens(entries: MemoryEntries) -> frozenset[str]:
+    """The name tokens too widespread in THIS store to be name evidence.
+
+    A token carried by more than ``max(3, len(entries) // 10)`` names. A
+    closed stopword list cannot know that ``schema`` is filler in one store
+    and the distinguishing word in another; document frequency over the
+    store's own names can, with no dictionary — and it is what catches the
+    project prefix two dozen slugs share and the year in a dated one. Count
+    it over the WHOLE store (residents and excluded names included), so what
+    is common never depends on which pages happen to be in context.
+    """
+    limit = max(_COMMON_MIN_NAMES, len(entries) // 10)
+    counts = Counter(
+        token
+        for name, _summary, _type, _keywords in entries
+        for token in match_tokens(name)
+    )
+    return frozenset(token for token, n in counts.items() if n > limit)
+
+
+def rank_memories(
+    entries: MemoryEntries,
+    text: str,
+    *,
+    exclude: Collection[str] = (),
+) -> tuple[RankedMemory, ...]:
+    """Every memory ``text`` matches, best first, uncapped.
+
+    The ordered whole of which :func:`match_memories_tiered` keeps the head;
+    the write tool's near-duplicate probe reads it too, so "similar" means
+    exactly "recall would surface it". ``exclude`` names never match but
+    still count toward :func:`common_name_tokens`.
+
+    Tier 1: the text shares :data:`NAME_MIN_OVERLAP` distinct non-common
+    tokens of the NAME, or all of them when the name has fewer — a one-word
+    name still hits on its word; a name made only of common tokens never hits
+    by name. Sorted by matched-token count, descending, then index order.
+
+    Tier 2: an entry not hit by name hits on ONE shared non-common name token
+    (a lead, not evidence), OR when its SUMMARY shares at least
+    :data:`SUMMARY_MIN_OVERLAP` distinct tokens (prose needs more evidence
+    than a slug), OR when any KEYWORDS item occurs in the text as a phrase
+    (:func:`_keywords_hit` — word-prefix for ASCII items, substring for CJK).
+    Keywords are curator-authored retrieval aliases — synonyms and
+    cross-language equivalents — so one occurring phrase carries name-grade
+    signal and sorts ahead of the rest of the tier; the hit still rides
+    tier-2 because the user did not *name* the memory, and a guess is worth a
+    pointer, not a body. This is the deterministic answer to cross-lingual
+    recall: a Chinese query meets an English-named memory through its Chinese
+    keywords, with zero services involved. After keyword hits the tier sorts
+    by distinct matched tokens across name and summary, descending, then
+    index order. The ``type`` field never participates.
+    """
+    text_tokens = match_tokens(text)
+    if not text_tokens:
+        return ()
+    lowered = text.lower()
+    common = common_name_tokens(entries)
+    skip = frozenset(exclude)
+    name_hits: list[tuple[int, RankedMemory]] = []
+    summary_hits: list[tuple[int, RankedMemory]] = []
+    for position, (name, summary, _type, keywords) in enumerate(entries):
+        if name in skip:
+            continue
+        distinctive = match_tokens(name) - common
+        matched = distinctive & text_tokens
+        need = min(NAME_MIN_OVERLAP, len(distinctive))
+        if need and len(matched) >= need:
+            name_hits.append(
+                (position, RankedMemory(name, True, len(matched)))
+            )
+            continue
+        summary_matched = match_tokens(summary) & text_tokens
+        by_keyword = bool(keywords) and _keywords_hit(keywords, lowered)
+        if (
+            matched
+            or len(summary_matched) >= SUMMARY_MIN_OVERLAP
+            or by_keyword
+        ):
+            summary_hits.append(
+                (
+                    position,
+                    RankedMemory(
+                        name,
+                        False,
+                        len(matched | summary_matched),
+                        by_keyword,
+                    ),
+                )
+            )
+    name_hits.sort(key=lambda hit: (-hit[1].score, hit[0]))
+    summary_hits.sort(
+        key=lambda hit: (not hit[1].by_keyword, -hit[1].score, hit[0])
+    )
+    return tuple(ranked for _position, ranked in name_hits + summary_hits)
+
+
 def match_memories_tiered(
     entries: MemoryEntries,
     text: str,
     *,
     max_hits: int = DEFAULT_RECALL_MAX_HITS,
+    exclude: Collection[str] = (),
 ) -> tuple[tuple[str, bool], ...]:
     """Two-tier recall matching, pure and deterministic — with the tier.
 
@@ -168,46 +296,14 @@ def match_memories_tiered(
     spends on, so it has to survive the call (see ``format_recall_text``
     for what the difference buys).
 
-    Tier 1: a memory hits when any token of its NAME appears in the user
-    text — names are author-chosen slugs, so one *filtered* shared token is
-    high-signal (:func:`match_tokens` has already dropped stopwords and
-    words under :data:`_MIN_TOKEN_LEN`, which is what stops a slug like
-    ``deploy-the-thing`` from firing on "the").
-
-    Tier 2: an entry not already hit by name hits when its SUMMARY shares
-    at least :data:`SUMMARY_MIN_OVERLAP` distinct tokens (prose needs more
-    evidence than a slug), OR when any KEYWORDS item occurs in the text
-    as a phrase (:func:`_keywords_hit` — word-prefix for ASCII items,
-    substring for CJK). Keywords are curator-authored retrieval aliases —
-    synonyms and cross-language equivalents — so one occurring phrase
-    carries name-grade signal; the hit still rides tier-2 because the
-    user did not *name* the memory, and a guess is worth a pointer, not a
-    body. This is the deterministic answer to cross-lingual recall: a
-    Chinese query meets an English-named memory through its Chinese
-    keywords, with zero services involved. The ``type`` field never
-    participates.
-
-    Order is tier-1 hits in index order, then tier-2 hits in index order,
-    capped at ``max_hits`` overall. Vector / semantic retrieval is out of
-    scope: its backing service would arrive behind an adapter, swapping this
-    function whole.
+    The head of :func:`rank_memories` (which holds the matching rules):
+    tier-1 hits, then tier-2 hits, each best first, capped at ``max_hits``
+    overall — so the cap keeps the strongest evidence, not the start of the
+    alphabet. Vector / semantic retrieval is out of scope: its backing
+    service would arrive behind an adapter, swapping this function whole.
     """
-    text_tokens = match_tokens(text)
-    if not text_tokens:
-        return ()
-    lowered = text.lower()
-    name_hits: list[tuple[str, bool]] = []
-    summary_hits: list[tuple[str, bool]] = []
-    for name, summary, _type, keywords in entries:
-        if match_tokens(name) & text_tokens:
-            name_hits.append((name, True))
-        elif len(
-            match_tokens(summary) & text_tokens
-        ) >= SUMMARY_MIN_OVERLAP or (
-            keywords and _keywords_hit(keywords, lowered)
-        ):
-            summary_hits.append((name, False))
-    return tuple((name_hits + summary_hits)[:max_hits])
+    ranked = rank_memories(entries, text, exclude=exclude)
+    return tuple((hit.name, hit.by_name) for hit in ranked[:max_hits])
 
 
 def match_memories(

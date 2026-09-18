@@ -21,8 +21,10 @@ Memory files may open with an optional frontmatter fence (``---`` lines
 around ``key: value`` pairs — parsed by a minimal in-module parser, NO
 yaml dependency). ``description`` overrides the first-line index summary,
 ``type`` tags the entry, and ``keywords`` carries comma-separated retrieval
-aliases (matcher-only — the cross-lingual recall surface); a file without
-(or with a malformed) fence keeps the v1 first-line behavior byte-for-byte.
+aliases (matcher-only — the cross-lingual recall surface); ``related`` lists
+the page names recall follows one hop from a page the text named; a file
+without (or with a malformed) fence keeps the v1 first-line behavior
+byte-for-byte.
 ``memory_write`` additionally stamps ``created`` / ``updated`` dates and a
 ``source_task`` ledger receipt, so every tool-written memory records when
 it was true and which task's history backs it. A rewrite merges per-field
@@ -48,10 +50,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from noeta.builtins.memory.impl.matching import (
-    SUMMARY_MIN_OVERLAP,
-    match_tokens,
-)
+from noeta.builtins.memory.impl.matching import rank_memories
 from noeta.protocols.resources import load_markdown
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
 from noeta.tools.limits import INLINE_CONTENT_MAX_BYTES, truncate_bytes
@@ -84,10 +83,24 @@ MEMORY_FILE_SUFFIX = ".md"
 #: The frontmatter ``type`` vocabulary; anything else is treated as absent.
 MEMORY_TYPES = ("user", "project", "procedural", "reference")
 
-#: Strict slug: starts alphanumeric, then alphanumerics / ``.`` / ``_`` /
-#: ``-`` only — no path separators, no leading dot, bounded length. A
-#: valid name can never traverse out of the memory directory.
-_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+#: Strict slug: starts with a letter or digit, then letters / digits / ``.``
+#: / ``_`` / ``-`` only — no path separators, no leading dot, no whitespace
+#: or control characters, bounded length. A valid name can never traverse out
+#: of the memory directory. "Letter" is Unicode's, not ASCII's: a store kept
+#: in Chinese names its pages in Chinese, and a page the check refuses is
+#: skipped by ``_iter_memories`` without a word — on disk, in git, and absent
+#: from the index, recall and search. ``\Z`` rather than ``$``, which would
+#: let a trailing newline through.
+_NAME_RE = re.compile(r"[^\W_][\w.-]{0,127}\Z")
+#: Byte bound beside the 128-code-point one: the name is a file name, and
+#: ``write`` adds a suffix plus a temp-file decoration to it. 128 CJK
+#: characters are 384 UTF-8 bytes, past the usual 255-byte limit; an ASCII
+#: name can never reach this.
+_NAME_MAX_BYTES = 240
+
+#: Separators of a ``related`` fence value — the keyword separators, for the
+#: same reason: a Chinese-writing author reaches for ``，`` / ``、``.
+_RELATED_SEP_RE = re.compile(r"[,，、;；]")
 
 #: Summary display cap for index entries (frontmatter description or
 #: first non-empty body line).
@@ -130,7 +143,27 @@ _SEARCH_MAX_MEMORIES = 10
 
 
 def _is_valid_name(name: object) -> bool:
-    return isinstance(name, str) and _NAME_RE.match(name) is not None
+    return (
+        isinstance(name, str)
+        and _NAME_RE.match(name) is not None
+        and len(name.encode("utf-8")) <= _NAME_MAX_BYTES
+    )
+
+
+def _related_names(value: str) -> tuple[str, ...]:
+    """The page names a ``related`` fence value lists, in order, de-duplicated.
+
+    One line, separated like ``keywords``: ``a, b``. ``[a, b]`` and
+    ``[[a]], [[b]]`` read the same way — brackets and quotes are decoration.
+    A YAML block list cannot be supported here: the fence parser is
+    ``key: value`` lines only, and drops a fence holding anything else.
+    """
+    out: list[str] = []
+    for raw in _RELATED_SEP_RE.split(value):
+        name = raw.strip().strip("[]'\"").strip()
+        if name and name not in out:
+            out.append(name)
+    return tuple(out)
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -279,6 +312,19 @@ class MemoryStore:
             out.append((name, summary, mem_type, keywords))
         return tuple(out)
 
+    def related(self, name: str) -> tuple[str, ...]:
+        """The page names ``name``'s fence lists under ``related``.
+
+        The store's only multi-hop: recall follows these one step from a
+        page the text named. Names come back as written — whether each one
+        exists is the caller's question. ``()`` for a missing page, a page
+        without the field, or a malformed fence.
+        """
+        text = self.read(name)
+        if text is None:
+            return ()
+        return _related_names(_split_frontmatter(text)[0].get("related", ""))
+
     def search(self, query: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
         """Case-insensitive plain-substring search over names and full text.
 
@@ -422,6 +468,9 @@ class MemoryWriteTool:
             "additionalProperties": False,
         }
     )
+    #: Host-set body cap in UTF-8 bytes (``HostConfig.memory_max_bytes``);
+    #: ``None`` accepts any size. See ``invoke`` for what is measured.
+    max_bytes: Optional[int] = None
 
     def invoke(self, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         name = arguments.get("name")
@@ -430,6 +479,21 @@ class MemoryWriteTool:
             return _err(self.name, f"invalid memory name {name!r}")
         if not isinstance(text, str) or not text:
             return _err(self.name, "requires non-empty string 'text'")
+        # The size cap, refused BEFORE anything is written: a page that
+        # outgrows recall's inline budget silently degrades to a one-line
+        # pointer, and a host that checks after the write can only complain
+        # about a commit. The body is what is measured — the fence carries
+        # fields this tool stamps itself, and a refusal the model cannot fix
+        # by editing its text would be useless.
+        if self.max_bytes is not None:
+            size = len(_split_frontmatter(text)[1].encode("utf-8"))
+            if size > self.max_bytes:
+                return _err(
+                    self.name,
+                    f"body is {size} bytes, over this store's cap of "
+                    f"{self.max_bytes}: tighten it, or split it into two "
+                    f"memories",
+                )
         description = arguments.get("description")
         mem_type = arguments.get("type")
         keywords = arguments.get("keywords")
@@ -497,21 +561,24 @@ class MemoryWriteTool:
             fields["source_task"] = task_id
 
         # Near-duplicate probe, NEW names only (rewriting a memory is the
-        # cure, not the disease). Symmetric with recall: would this new
-        # entry's name-or-summary line recall an existing one? Advisory —
-        # the write always proceeds; the note rides the result so the
-        # model can merge while the context that caused the write is
-        # still live, which a background pass never sees.
+        # cure, not the disease). Symmetric with recall BY CONSTRUCTION:
+        # would this new entry's name-or-summary line recall an existing
+        # one, in either tier? It asks the recall matcher itself, so a
+        # token two dozen names share (a project prefix) is no more a
+        # resemblance here than it is evidence there, and the strongest
+        # resemblance is named first. Advisory — the write always proceeds;
+        # the note rides the result so the model can merge while the
+        # context that caused the write is still live, which a background
+        # pass never sees.
         similar: list[str] = []
         if prior is None:
-            probe = match_tokens(
-                f"{name} {fields.get('description') or _first_line_summary(body)}"
+            probe = (
+                f"{name} "
+                f"{fields.get('description') or _first_line_summary(body)}"
             )
-            for other_name, other_summary, _t, _kw in self.store.entries():
-                if match_tokens(other_name) & probe or len(
-                    match_tokens(other_summary) & probe
-                ) >= SUMMARY_MIN_OVERLAP:
-                    similar.append(other_name)
+            similar = [
+                hit.name for hit in rank_memories(self.store.entries(), probe)
+            ]
 
         text = _compose_frontmatter(fields) + body
         try:
@@ -681,10 +748,15 @@ class MemoryArchiveTool:
         )
 
 
-def build_memory_tools(store: MemoryStore) -> dict[str, Tool]:
-    """The memory tool pack — mirrors ``build_fs_tools``' dict shape."""
+def build_memory_tools(
+    store: MemoryStore, *, max_bytes: Optional[int] = None
+) -> dict[str, Tool]:
+    """The memory tool pack — mirrors ``build_fs_tools``' dict shape.
+
+    ``max_bytes`` is the write tool's body cap (``None`` = no cap).
+    """
     return {
-        MEMORY_WRITE_TOOL_NAME: MemoryWriteTool(store=store),
+        MEMORY_WRITE_TOOL_NAME: MemoryWriteTool(store=store, max_bytes=max_bytes),
         MEMORY_READ_TOOL_NAME: MemoryReadTool(store=store),
         MEMORY_SEARCH_TOOL_NAME: MemorySearchTool(store=store),
         MEMORY_ARCHIVE_TOOL_NAME: MemoryArchiveTool(store=store),

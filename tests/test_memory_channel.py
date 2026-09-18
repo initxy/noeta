@@ -204,7 +204,8 @@ def test_memory_kind_is_evolving_and_resolves_through_generic_seam() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Recall matching — two tiers (name ≥1 token, then summary ≥2), deterministic
+# Recall matching — two tiers (name ≥2 tokens or the whole name, then one
+# name token / summary ≥2 / a keyword phrase), deterministic
 # ---------------------------------------------------------------------------
 
 
@@ -219,10 +220,12 @@ def test_match_no_hit_returns_empty() -> None:
 
 
 def test_match_multiple_hits_keep_index_order_and_cap() -> None:
-    entries = tuple((f"topic-{i}", "s", "", "") for i in range(8))
-    text = "about " + " ".join(f"topic-{i}" for i in range(8))
-    hits = match_memories(entries, text, max_hits=3)
-    assert hits == ("topic-0", "topic-1", "topic-2")
+    # Eight names the text spells out in full — equal evidence, so the cap
+    # keeps them in index order.
+    names = tuple(f"subject{i}-memo{i}" for i in range(8))
+    entries = tuple((name, "s", "", "") for name in names)
+    hits = match_memories(entries, "about " + " ".join(names), max_hits=3)
+    assert hits == names[:3]
 
 
 def test_match_two_letter_name_token_no_longer_hits() -> None:
@@ -245,7 +248,7 @@ def test_match_ignores_stopword_only_overlap() -> None:
     """
     entries = (("how-we-deploy", "what the team should do for a release", "", ""),)
     assert match_memories(entries, "how are you? what should we do?") == ()
-    assert match_memories(entries, "how do we deploy?") == ("how-we-deploy",)
+    assert match_memories(entries, "what is our deploy process?") == ("how-we-deploy",)
 
 
 def test_match_summary_needs_two_distinct_tokens() -> None:
@@ -280,7 +283,8 @@ def test_match_cap_spans_both_tiers() -> None:
         ("release-plan", "s", "", ""),
         ("aa-other", "release checklist steps", "", ""),
     )
-    hits = match_memories(entries, "release checklist steps", max_hits=2)
+    text = "the release notes and the release plan: checklist steps"
+    hits = match_memories(entries, text, max_hits=2)
     # Both name hits fill the cap; the tier-2 hit is squeezed out.
     assert hits == ("release-notes", "release-plan")
 
@@ -406,7 +410,7 @@ def test_compose_places_index_in_semi_stable_and_stays_pure() -> None:
 
 def test_recall_memories_reads_store_at_call_time(tmp_path: Path) -> None:
     store = _store_with_memories(tmp_path)
-    hits = recall_memories(store, "how do we deploy?")
+    hits = recall_memories(store, "what is our deploy process?")
     assert [h.name for h in hits] == ["deploy-process"]
     assert hits[0].full and "make deploy" in hits[0].text
     # The injector may be impure: a memory written midway is immediately recallable.
@@ -419,9 +423,9 @@ def test_recall_stops_seeing_archived_memory(tmp_path: Path) -> None:
     # Archiving moves the file under ``archive/``; the non-recursive
     # entries glob no longer lists it, so recall goes quiet immediately.
     store = _store_with_memories(tmp_path)
-    assert recall_memories(store, "how do we deploy?")
+    assert recall_memories(store, "what is our deploy process?")
     store.archive("deploy-process")
-    assert recall_memories(store, "how do we deploy?") == ()
+    assert recall_memories(store, "what is our deploy process?") == ()
     assert (store.root / "archive" / "deploy-process.md").is_file()
 
 
@@ -485,17 +489,15 @@ def test_recall_total_budget_degrades_the_tail(tmp_path: Path) -> None:
     (highest-confidence) hits keep their bodies, the tail degrades."""
     store = MemoryStore(root=tmp_path / "memories")
     body = "z" * (RECALL_BODY_MAX_BYTES - 100)
-    for i in range(5):
-        store.write(
-            f"budget-note-{i}",
-            f"---\ndescription: note {i}\n---\n{body}",
-        )
-    hits = recall_memories(store, "review every budget-note please")
+    names = [f"ledger{i}-sheet{i}" for i in range(5)]
+    for i, name in enumerate(names):
+        store.write(name, f"---\ndescription: note {i}\n---\n{body}")
+    hits = recall_memories(store, "review " + " and ".join(names))
     assert len(hits) == DEFAULT_RECALL_MAX_HITS
     inline = [h for h in hits if h.full]
     # 4 * (4096 - 100 + frontmatter) fits under 16384; the 5th cannot.
-    assert [h.name for h in inline] == [f"budget-note-{i}" for i in range(4)]
-    assert hits[4].name == "budget-note-4" and hits[4].full is False
+    assert [h.name for h in inline] == names[:4]
+    assert hits[4].name == names[4] and hits[4].full is False
     assert sum(len(h.text.encode("utf-8")) for h in inline) <= (
         RECALL_TOTAL_MAX_BYTES
     )
@@ -530,7 +532,7 @@ def test_recall_hit_activates_a_body_resident_after_user_message(
     task = append_user_message_with_recall(
         engine,
         task,
-        content=[TextBlock(text="how do we deploy?")],
+        content=[TextBlock(text="what is our deploy process?")],
         lease_id=lease.lease_id,
         store=store,
     )
@@ -538,7 +540,7 @@ def test_recall_hit_activates_a_body_resident_after_user_message(
     messages = task.runtime.messages
     assert len(messages) == 1
     assert messages[0].origin is None  # human turn keeps its natural author
-    assert messages[0].content[0].text == "how do we deploy?"
+    assert messages[0].content[0].text == "what is our deploy process?"
     body = store.read("deploy-process")
     assert body is not None
     expected_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -580,7 +582,7 @@ def test_recall_same_name_on_a_later_goal_records_nothing(
     lease = disp.lease(worker_id="w-mem")
     assert lease is not None
     task = append_user_message_with_recall(
-        engine, task, content=[TextBlock(text="how do we deploy?")],
+        engine, task, content=[TextBlock(text="what is our deploy process?")],
         lease_id=lease.lease_id, store=store,
     )
     before = len(log.read(task.task_id))
@@ -614,7 +616,7 @@ def test_recall_pointer_for_a_resident_name_is_dropped(tmp_path: Path) -> None:
     lease = disp.lease(worker_id="w-mem")
     assert lease is not None
     task = append_user_message_with_recall(
-        engine, task, content=[TextBlock(text="how do we deploy?")],
+        engine, task, content=[TextBlock(text="what is our deploy process?")],
         lease_id=lease.lease_id, store=store,
     )
     assert set(task.state.active_content[MEMORY_KIND]) == {"deploy-process"}
@@ -652,7 +654,7 @@ def test_recalled_body_survives_compaction_and_is_not_re_recorded(
         Message(role="assistant", content=[TextBlock(text="earlier reply")])
     )
     task = append_user_message_with_recall(
-        engine, task, content=[TextBlock(text="how do we deploy?")],
+        engine, task, content=[TextBlock(text="what is our deploy process?")],
         lease_id=lease.lease_id, store=store,
     )
     assert task.context.content_anchors[f"{MEMORY_KIND}:deploy-process"] == 2
@@ -788,7 +790,7 @@ def test_recall_is_silent_for_a_memory_the_model_read_itself(
     before = len(log.read(task.task_id))
 
     task = append_user_message_with_recall(
-        engine, task, content=[TextBlock(text="how do we deploy?")],
+        engine, task, content=[TextBlock(text="what is our deploy process?")],
         lease_id=lease.lease_id, store=store,
     )
 
@@ -873,7 +875,7 @@ def test_recall_serves_a_read_memory_again_after_compaction(
     before = len(log.read(task.task_id))
 
     task = append_user_message_with_recall(
-        engine, task, content=[TextBlock(text="how do we deploy?")],
+        engine, task, content=[TextBlock(text="what is our deploy process?")],
         lease_id=lease.lease_id, store=store,
     )
 
@@ -884,7 +886,7 @@ def test_recall_serves_a_read_memory_again_after_compaction(
     ][0]
     texts = [m.content[0].text for m in dynamic.content]
     assert texts[0] == "SUMMARY"
-    assert texts[1] == "how do we deploy?"
+    assert texts[1] == "what is our deploy process?"
     assert "Always run make deploy." in texts[2]
     assert dynamic.content[2].origin == "memory"
 
@@ -913,10 +915,10 @@ def test_recall_is_verbatim_copy_not_synthesis(tmp_path: Path) -> None:
         "Module naming conventions\n\nUse snake_case; avoid CamelCase.",
     )
 
-    hits = recall_memories(store, "how do we deploy this module?")
-    # Both memories may hit (name tokens "deploy" and "module"/"naming" —
-    # at least deploy-process must), and every body returned is
-    # byte-identical to the file on disk (no transformation).
+    hits = recall_memories(store, "how does the deploy process treat naming?")
+    # deploy-process is named outright (a body); naming-rules shares one name
+    # token (a pointer). Every body returned is byte-identical to the file on
+    # disk (no transformation).
     assert "deploy-process" in {h.name for h in hits}
     for hit in hits:
         on_disk = store.read(hit.name)
@@ -951,7 +953,7 @@ def test_recall_key_from_text_only_image_rides_along(tmp_path: Path) -> None:
     task = append_user_message_with_recall(
         engine,
         task,
-        content=[TextBlock(text="how do we deploy?"), ImageBlock(source=ref)],
+        content=[TextBlock(text="what is our deploy process?"), ImageBlock(source=ref)],
         lease_id=lease.lease_id,
         store=store,
     )
@@ -959,7 +961,7 @@ def test_recall_key_from_text_only_image_rides_along(tmp_path: Path) -> None:
     messages = task.runtime.messages
     assert len(messages) == 1
     # Human turn carries the text + image as-is.
-    assert messages[0].content[0].text == "how do we deploy?"
+    assert messages[0].content[0].text == "what is our deploy process?"
     assert isinstance(messages[0].content[1], ImageBlock)
     assert messages[0].content[1].source == ref
     # The hit is driven by text (not the image): the same text recalls the
@@ -1000,7 +1002,7 @@ def test_replay_never_reruns_retrieval_bytes_equal(tmp_path: Path) -> None:
     task = append_user_message_with_recall(
         engine,
         task,
-        content=[TextBlock(text="how do we deploy?")],
+        content=[TextBlock(text="what is our deploy process?")],
         lease_id=lease.lease_id,
         store=store,
     )

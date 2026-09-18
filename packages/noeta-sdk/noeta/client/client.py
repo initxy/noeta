@@ -670,6 +670,8 @@ class Client:
             memory_dir=hc.memory_dir,
             global_memory_dir=hc.global_memory_dir,
             memory_root_resolver=hc.memory_root_resolver,
+            recall_exclude=frozenset(hc.recall_exclude),
+            memory_max_bytes=hc.memory_max_bytes,
             skill_menu_rank_resolver=hc.skill_menu_rank_resolver,
             skill_usage_ranking=hc.skill_usage_ranking,
             mcp_server_resolver=hc.mcp_server_resolver,

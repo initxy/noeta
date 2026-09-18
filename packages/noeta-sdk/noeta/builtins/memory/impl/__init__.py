@@ -87,7 +87,7 @@ __all__ = [
 
 
 def build_memory_pack(
-    *, root: Optional[Path] = None
+    *, root: Optional[Path] = None, max_bytes: Optional[int] = None
 ) -> tuple[MemoryStore, MemoryEntries, dict[str, Tool]]:
     """One session's ``(store, entries-snapshot, tools)`` memory kit.
 
@@ -97,11 +97,15 @@ def build_memory_pack(
     **build-time** index fingerprint (what :func:`memory_content_kind` reports
     through the generic ``content_hashes`` seam); what actually enters context
     is whatever the init hook records, which it re-reads from ``store`` at
-    invocation.
+    invocation. ``max_bytes`` is the write tool's body cap (``None`` = none).
     """
     resolved = root if root is not None else _store_mod.DEFAULT_GLOBAL_MEMORY_DIR
     memory_store = load_memory_store(root=resolved)
-    return memory_store, memory_store.entries(), build_memory_tools(memory_store)
+    return (
+        memory_store,
+        memory_store.entries(),
+        build_memory_tools(memory_store, max_bytes=max_bytes),
+    )
 
 
 def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
@@ -109,7 +113,8 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
 
     Self-gates on the agent's ``memory`` capability flag. The store root
     resolves by precedence: explicit ``memory_dir`` > ``global_memory_dir`` >
-    the module default.
+    the module default. ``max_bytes`` (the host's ``memory_max_bytes``) caps a
+    ``memory_write`` body; absent means no cap.
     """
     if not ctx.flag("memory"):
         return EMPTY_CONTRIBUTION
@@ -117,7 +122,10 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
     memory_dir = cfg.get("memory_dir")
     global_memory_dir = cfg.get("global_memory_dir")
     root = memory_dir if memory_dir is not None else global_memory_dir
-    store, entries, tools = build_memory_pack(root=cast(Optional[Path], root))
+    store, entries, tools = build_memory_pack(
+        root=cast(Optional[Path], root),
+        max_bytes=cast(Optional[int], cfg.get("max_bytes")),
+    )
     content_store = ctx.content_store
 
     def _init(rec: SessionRecorder) -> None:

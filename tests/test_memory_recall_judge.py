@@ -257,9 +257,9 @@ def test_judge_fires_only_on_lexical_miss(tmp_path: Path) -> None:
     assert "memory_read" in reminder.text
     assert "make deploy" not in reminder.text  # body not spent on a guess
 
-    # Lexical hit: the judge is never consulted and tier-1 keeps its body —
-    # as a memory-kind resident activation, not a turn.
-    (hit,) = provider(_view("how do we deploy?"))
+    # The text names the page: the judge is never consulted and tier-1 keeps
+    # its body — as a memory-kind resident activation, not a turn.
+    (hit,) = provider(_view("what is our deploy process?"))
     assert calls == ["怎么上线？"]  # unchanged
     assert isinstance(hit, ResidentActivation)
     assert (hit.kind, hit.name) == ("memory", "deploy-process")
