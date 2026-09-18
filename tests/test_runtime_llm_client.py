@@ -11,6 +11,7 @@ only decide whether to retry from the category stamped on the response.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -638,3 +639,58 @@ def test_openai_compat_end_to_end_normal_records_three_events(
     # Both refs resolve to bodies in ContentStore.
     cs.get(events[0].payload.request_ref)
     cs.get(events[1].payload.response_ref)
+
+
+@pytest.mark.parametrize(
+    ("with_delta_sink", "allow_stream"),
+    [
+        # A host with no delta_sink: every round-trip is non-streamed.
+        (False, True),
+        # The compaction summarize call opts out of streaming even when a
+        # sink is wired.
+        (True, False),
+    ],
+)
+def test_openai_compat_non_streamed_call_carries_provider_headers(
+    with_delta_sink: bool, allow_stream: bool
+) -> None:
+    """Non-streamed round-trips reach ``complete_with_headers``, so
+    ``provider_headers`` lands on the wire instead of being dropped by the
+    plain ``complete`` fallback."""
+    import httpx
+    import respx
+
+    from noeta.builtins.providers.impl.openai_compat import OpenAICompatProvider
+    from noeta.runtime.llm import RuntimeLLMClient
+
+    base_url = "https://example.test/v1"
+    payload = {
+        "id": "chatcmpl-1",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "ok"},
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post(f"{base_url}/chat/completions").mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+        client = RuntimeLLMClient(
+            provider=OpenAICompatProvider(base_url=base_url, api_key="sk-test"),
+            event_log=InMemoryEventLog(),
+            content_store=InMemoryContentStore(),
+            provider_headers=lambda ctx: {"X-TT-logid": ctx.task_id},
+            delta_sink=(lambda *_: None) if with_delta_sink else None,
+        )
+        resp = client.complete(
+            _req(), _ctx(task_id="task-abc"), allow_stream=allow_stream
+        )
+
+    assert resp.stop_reason == "end_turn"
+    request = route.calls.last.request
+    assert request.headers["x-tt-logid"] == "task-abc"
+    assert json.loads(request.content).get("stream") is None
