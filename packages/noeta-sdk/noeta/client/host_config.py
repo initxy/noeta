@@ -14,7 +14,15 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Collection,
+    Mapping,
+    Optional,
+    Tuple,
+)
 
 from noeta.client.sandbox_provider import SandboxProvider, SandboxSpec
 from noeta.client.storage_resolve import open_storage_stack
@@ -270,6 +278,20 @@ class HostConfig:
     #: build and goal paths) and deterministic for a given task id — a resumed
     #: task must resolve the same store. ``None`` ⇒ the host-level chain above.
     memory_root_resolver: Optional[Callable[[str], Optional[Path]]] = None
+    #: Memory names auto-recall never surfaces — not as a body, a pointer, a
+    #: ``related`` neighbour, or a recall-judge candidate. For a page the host
+    #: already rides into context by its own means (a resident of its own
+    #: kind), which recall cannot see and would otherwise inject a second
+    #: time. The index still lists the page and ``memory_read`` still reads
+    #: it. Empty ⇒ every page is recallable.
+    recall_exclude: Collection[str] = ()
+    #: Cap on a ``memory_write`` body, in UTF-8 bytes (the text after its
+    #: optional fence). A larger write is refused before anything is written,
+    #: with both numbers in the message, so the model can tighten or split the
+    #: page while it still has the context. Worth setting under auto-recall's
+    #: 4096-byte inline limit: a page past that limit is recalled as a
+    #: one-line pointer, never whole. ``None`` ⇒ no cap.
+    memory_max_bytes: Optional[int] = None
 
     # -- skill menu ranking --------------------------------------------------
     #: Per-task keep order for the ``skill`` control tool's roster: given a

@@ -11,8 +11,8 @@ A recalled **body** enters a task once: a tier-1 hit rides as a
 ``ResidentActivation`` of the ``memory`` content kind (activate-once, so the
 same name on a later goal of the same task costs nothing, and the resident
 survives compaction by re-hanging after the summary), while pointers — tier-2
-hits, judge picks, over-budget bodies — ride the ``origin="memory"`` follow-up
-turn as before. A name already resident in the task is silent in both tiers —
+hits, the ``related`` neighbours of a tier-1 hit, judge picks, over-budget
+bodies — ride the ``origin="memory"`` follow-up turn as before. A name already resident in the task is silent in both tiers —
 and so is a memory the model loaded itself with ``memory_read`` while that
 read still sits in the history the model sees (the seam's
 ``RecallView.visible_history``, which stops at the compaction boundary): the
@@ -30,6 +30,7 @@ from __future__ import annotations
 from typing import Any, Collection, Iterable, Mapping, Optional
 
 from noeta.builtins.memory.impl.index import (
+    DEFAULT_RECALL_MAX_HITS,
     MEMORY_BODY_VERSION,
     MEMORY_DRIFT_POLICY,
     MEMORY_INDEX_NAME,
@@ -115,21 +116,27 @@ def read_memory_names(history: Iterable[Any]) -> frozenset[str]:
 
 
 def recall_memories(
-    store: MemoryStore, text: str, *, resident: Collection[str] = ()
+    store: MemoryStore,
+    text: str,
+    *,
+    resident: Collection[str] = (),
+    exclude: Collection[str] = (),
+    judge: Optional[RecallJudge] = None,
 ) -> tuple[RecallHit, ...]:
     """The injector's impure half: read the store NOW, match, load text.
 
     Reading at call time (not from a wiring-time snapshot) means a
     memory written mid-session by ``memory_write`` is immediately
     recallable — legal because this runs before anything enters the
-    ledger. Returns :class:`RecallHit` values in index order; unreadable
-    hits are skipped rather than crashing the turn.
+    ledger. Returns :class:`RecallHit` values best first (the matcher's
+    order), at most ``DEFAULT_RECALL_MAX_HITS`` of them whatever their
+    source; unreadable hits are skipped rather than crashing the turn.
 
     **Only a tier-1 hit costs a body.** A name match is the user's own
     words naming the memory, so the body is loaded and injected as it
-    always was. A tier-2 hit — prose overlap against the summary — carries
-    just its index summary, and the model pays for the body only if it
-    calls ``memory_read``. A memory whose file has gone missing is dropped
+    always was. A tier-2 hit — one shared name word, or prose overlap
+    against the summary — carries just its index summary, and the model pays
+    for the body only if it calls ``memory_read``. A memory whose file has gone missing is dropped
     from either tier; a tier-2 entry with an empty summary still rides as
     a bare name, which is enough to read by.
 
@@ -145,19 +152,41 @@ def recall_memories(
     **And a resident is silent.** ``resident`` names the memories already in
     context: the residents of this task (:func:`resident_memory_names`) and
     the pages the model loaded itself with ``memory_read``
-    (:func:`read_memory_names`). They leave the candidate set before matching,
-    in both tiers, so they neither take a hit slot nor spend budget — the
-    body is already there, as a resident placed by its anchor and re-hung
-    across compaction, or as the tool result the model asked for. A memory
-    that happens to be named like the index resident can never ride full (it
-    would overwrite the index's activation), so it degrades to a pointer.
+    (:func:`read_memory_names`). They are out of every candidate set, so they
+    neither take a hit slot nor spend budget — the body is already there, as
+    a resident placed by its anchor and re-hung across compaction, or as the
+    tool result the model asked for. ``exclude`` is the host's standing
+    version of the same thing (``HostConfig.recall_exclude``): a page it
+    rides into context by its own means. Both still count when the matcher
+    decides which name tokens are common, so what is in context never changes
+    the tier of another page. A memory that happens to be named like the
+    index resident can never ride full (it would overwrite the index's
+    activation), so it degrades to a pointer.
+
+    **A named page brings its neighbours.** For each tier-1 hit, in hit order,
+    the pages its fence lists under ``related`` join as pointers while the cap
+    has room: one hop, never a body, skipping names that do not exist, are
+    already hits, or are out of the candidate set. Links are followed from
+    tier 1 alone — a pointer is already a guess, and a guess's neighbour is
+    noise.
+
+    **The judge fills in when nothing was named.** ``judge`` (the semantic
+    fallback) is consulted only when tier 1 is empty AND the pointers have not
+    already filled the cap — a tier-1 hit never spends the call, and neither
+    does a turn whose picks would be dropped. It chooses among the pages that
+    are not already pointers, and its picks ride after them as pointers too.
     """
-    skip = frozenset(resident)
-    entries = tuple(e for e in store.entries() if e[0] not in skip)
+    entries = store.entries()
+    skip = frozenset(resident) | frozenset(exclude)
     summaries = {name: summary for name, summary, _type, _kw in entries}
+
+    def pointer(name: str) -> RecallHit:
+        return RecallHit(name=name, text=summaries.get(name, ""), full=False)
+
     hits: list[RecallHit] = []
+    named: list[str] = []
     spent = 0
-    for name, by_name in match_memories_tiered(entries, text):
+    for name, by_name in match_memories_tiered(entries, text, exclude=skip):
         if by_name and name != MEMORY_INDEX_NAME:
             body = store.read(name)
             if body is None:
@@ -169,13 +198,46 @@ def recall_memories(
             ):
                 spent += size
                 hits.append(RecallHit(name=name, text=body, full=True))
-                continue
-        hits.append(RecallHit(name=name, text=summaries.get(name, ""), full=False))
+            else:
+                hits.append(pointer(name))
+        else:
+            hits.append(pointer(name))
+        if by_name:
+            named.append(name)
+
+    taken = {hit.name for hit in hits}
+    room = DEFAULT_RECALL_MAX_HITS - len(hits)
+    if named:
+        for source in named:
+            for other in store.related(source):
+                if room <= 0:
+                    break
+                if other in taken or other in skip or other not in summaries:
+                    continue
+                hits.append(pointer(other))
+                taken.add(other)
+                room -= 1
+    elif judge is not None and room > 0:
+        candidates = tuple(
+            e for e in entries if e[0] not in skip and e[0] not in taken
+        )
+        if candidates:
+            # Held to the candidates it was shown: the bound judge already
+            # drops a hallucinated slug, but the seam takes any callable, and
+            # an excluded name must stay silent whoever picks it.
+            offered = {e[0] for e in candidates}
+            picks = dict.fromkeys(
+                n for n in judge(candidates, text) if n in offered
+            )
+            hits.extend(pointer(n) for n in list(picks)[:room])
     return tuple(hits)
 
 
 def memory_reminder_provider(
-    store: MemoryStore, judge: Optional[RecallJudge] = None
+    store: MemoryStore,
+    judge: Optional[RecallJudge] = None,
+    *,
+    exclude: Collection[str] = (),
 ) -> ReminderProvider:
     """The built-in memory auto-recall as a ``reminder_provider``.
 
@@ -198,29 +260,25 @@ def memory_reminder_provider(
     (the listing surface), while the store binding stays host wiring.
 
     ``judge`` (host-wired from ``Options.recall_model``) is the semantic
-    fallback: consulted ONLY when the lexical pass returns nothing — a
-    lexical hit never spends the call — and its picks ride as tier-2
-    pointers, because a judge is a guess and a guess is worth a pointer,
-    not a body. A judged name whose file has meanwhile vanished degrades
-    to a bare-name pointer, same as any tier-2 hit with no summary.
+    fallback: consulted ONLY when the text named no page and the lexical
+    pointers leave room under the cap — a tier-1 hit never spends the call —
+    and its picks ride as tier-2 pointers, because a judge is a guess and a
+    guess is worth a pointer, not a body (:func:`recall_memories` holds the
+    rule). A judged name whose file has meanwhile vanished degrades to a
+    bare-name pointer, same as any tier-2 hit with no summary.
+
+    ``exclude`` (host-wired from ``HostConfig.recall_exclude``) names the
+    pages recall never surfaces, in any tier: ones the host already rides
+    into context by its own means. The index still lists them and
+    ``memory_read`` still reads them.
     """
     def provider(view: RecallView) -> tuple[IntakeItem, ...]:
         resident = resident_memory_names(view.task_state) | read_memory_names(
             getattr(view, "visible_history", ())
         )
-        hits = recall_memories(store, view.text, resident=resident)
-        if not hits and judge is not None:
-            entries = tuple(
-                e for e in store.entries() if e[0] not in resident
-            )
-            if entries:
-                summaries = {
-                    name: summary for name, summary, _t, _k in entries
-                }
-                hits = tuple(
-                    RecallHit(name=name, text=summaries.get(name, ""), full=False)
-                    for name in judge(entries, view.text)
-                )
+        hits = recall_memories(
+            store, view.text, resident=resident, exclude=exclude, judge=judge
+        )
         if not hits:
             return ()
         items: list[IntakeItem] = [

@@ -431,6 +431,13 @@ class SdkHost(GenericEngineResolver):
     # per task id — a resumed task must resolve the same store. ``None`` ⇒ the
     # host-level chain.
     memory_root_resolver: Optional[Callable[[str], Optional[Path]]] = None
+    # Memory names auto-recall never surfaces, in any tier
+    # (``HostConfig.recall_exclude``): pages the host rides into context itself.
+    recall_exclude: frozenset[str] = frozenset()
+    # ``memory_write`` body cap in UTF-8 bytes (``HostConfig.memory_max_bytes``);
+    # reaches the memory pack as ``plugin_config["memory"]["max_bytes"]``.
+    # ``None`` ⇒ no cap.
+    memory_max_bytes: Optional[int] = None
     # Per-task keep order for the ``skill`` control tool's roster (task id →
     # ``{skill: score}`` or ``None``): the same tenancy seam and contract as
     # ``memory_root_resolver`` (cheap, total, deterministic per task id — a
@@ -2095,7 +2102,11 @@ class SdkHost(GenericEngineResolver):
                     resolve_model_alias(self.recall_model),
                     should_abort=should_abort,
                 )
-            providers.append(impl.memory_reminder_provider(store, judge=judge))
+            providers.append(
+                impl.memory_reminder_provider(
+                    store, judge=judge, exclude=self.recall_exclude
+                )
+            )
         if agent != CONSOLIDATION_AGENT_NAME and agent_activates(
             spec, "skill_invocation"
         ):
@@ -2283,6 +2294,7 @@ class SdkHost(GenericEngineResolver):
                 memory_override if memory_override is not None else self.memory_dir
             ),
             "global_memory_dir": self.global_memory_dir,
+            "max_bytes": self.memory_max_bytes,
         }
         return self._apply_plugin_config_overrides(config)
 

@@ -422,10 +422,20 @@ rides as a pointer line in one `origin="memory"` turn; a page the model
 already loaded with `memory_read` is silent in both tiers while that read is
 still in the history the model sees. Recall matches literal tokens (names,
 summaries, and the frontmatter `keywords` aliases — the deterministic
-cross-lingual bridge); with `Options.recall_model` set, a lexical miss is
+cross-lingual bridge). Tier 1 means the message **named** the page: it shares
+two name tokens, or the whole of a shorter name, not counting tokens that
+more than `max(3, 10 %)` of the store's names carry (a project prefix, the
+year in a dated slug). One shared name token, two shared summary tokens or a
+keyword phrase is tier 2; within a tier the strongest evidence comes first,
+and at most five items ride per goal. A tier-1 page brings the pages its
+frontmatter lists under `related` (one line: `related: a, b`) as pointers, one
+hop only. With `Options.recall_model` set, a goal that named no page is
 retried through one small-model call over the message plus the index (the
-**recall judge**), whose picks ride in as pointers and are recorded like any
-recall; `memory_write` stamps `created` / `updated` dates and a
+**recall judge**) unless the pointers already fill the cap; its picks ride in
+as pointers and are recorded like any recall. `HostConfig.recall_exclude`
+names pages recall never surfaces; `HostConfig.memory_max_bytes` caps a
+`memory_write` body. Page names are letters and digits of any script plus
+`.` `_` `-`. `memory_write` stamps `created` / `updated` dates and a
 `source_task` ledger receipt. Activated by `plugins=("memory", …)`, part
 of agent identity — among the official agents only `main` opens it.
 → [Multi-tenant memory](../how-to/multi-tenant-memory.md)

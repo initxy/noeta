@@ -8,6 +8,51 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+`noeta-sdk` only; every change is in the `memory` built-in and its host wiring.
+
+### Changed — auto-recall spends a body only on a message that names the page
+
+- **One shared word is a pointer, not a body.** A tier-1 hit now needs two
+  distinct name tokens in the message, or all of them when the name has fewer
+  (`deploy` still hits on "deploy"). One shared name token is a tier-2 pointer.
+  **This changes the default for every host**: a page named `deploy-notes` rode
+  whole on "deploy" alone and is now a pointer until the message says both
+  words. Measured on a live 36-page store, the old rule injected 266 bodies over
+  56 conversations, most of them on words like "schema", "shell" and "report".
+- **A token most names share is no evidence.** A name token carried by more
+  than `max(3, len(entries) // 10)` names — a project prefix, the year in a
+  dated slug — no longer counts toward a name hit. It is counted over the whole
+  store, so excluding a page or having it in context never changes another
+  page's tier.
+- **The cap keeps the strongest hits.** Within a tier, hits sort by matched
+  tokens (keyword-phrase hits lead tier 2), then index order; before, the cap
+  kept the first five names in the alphabet.
+- **The recall judge runs when no page was named**, not only on a total lexical
+  miss, and not at all when the pointers already fill the cap. Its candidates
+  leave out the pages that are already pointers, and a pick outside the
+  candidates it was shown is dropped.
+- **The write tool's "similar existing memories" note uses the same rule**, so
+  a new `project-*` page is no longer reported as similar to every other one.
+
+### Added — `recall_exclude`, `related`, non-ASCII names, `memory_max_bytes`
+
+- **`HostConfig.recall_exclude`** — names auto-recall never surfaces, in any
+  tier, as a neighbour, or as a judge candidate. For a page the host already
+  puts in context itself. The index and `memory_read` are unaffected.
+- **`related`** — a fence line (`related: a, b`; `[a, b]` and `[[a]]` read the
+  same) naming other pages. A tier-1 hit brings them as pointers: one hop,
+  inside the five-item cap, skipping missing, resident and excluded names. It
+  must be one line — the fence parser drops a fence holding a YAML block list.
+- **Page names in any script.** A name may use Unicode letters and digits
+  (plus `.` `_` `-`), up to 128 characters and 240 UTF-8 bytes. Pages named in
+  Chinese were skipped silently by the index, recall and `memory_search`. A
+  trailing newline, which the old check let through, is now refused.
+- **`HostConfig.memory_max_bytes`** — `memory_write` refuses a body over the
+  cap before writing, naming both numbers; the fence is not counted.
+
+A host whose goals carry receipts or bookkeeping lines should pass them as
+`attachment_texts`: they are recorded before the goal and never matched.
+
 ## [0.6.26] - 2026-09-17
 
 Covers `noeta-sdk` only: 0.6.25 → 0.6.26. `noeta-runtime` stays at 0.6.24;
