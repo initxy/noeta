@@ -8,6 +8,19 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed — `OpenAICompatProvider` sends `provider_headers` on non-streamed calls
+
+- **Per-call headers are no longer dropped.** `OpenAICompatProvider` accepted
+  per-call headers only on its streamed path and did not implement
+  `complete_with_headers`, so the runtime fell back to plain `complete` —
+  and silently dropped what `HostConfig.provider_headers` computed — on every
+  non-streamed round-trip: the compaction summarize call always, and every
+  call on a host with no `delta_sink`. A gateway that keys tracing or account
+  stickiness off those headers lost them without an error. The adapter now
+  implements `HeaderAwareProvider`; the headers merge over the constructor
+  headers and are transport-only, so recorded bytes and the prompt-cache key
+  are unchanged.
+
 ## [0.6.25] - 2026-09-14
 
 Covers `noeta-sdk` only: 0.6.24 → 0.6.25. `noeta-runtime` stays at 0.6.24;

@@ -645,6 +645,55 @@ def test_metadata_tool_choice_rides_the_wire_verbatim() -> None:
 
 
 # ---------------------------------------------------------------------------
+# HeaderAwareProvider capability (per-request header injection)
+# ---------------------------------------------------------------------------
+
+
+def test_provider_satisfies_header_aware_protocol() -> None:
+    from noeta.protocols.messages import HeaderAwareProvider
+
+    assert isinstance(_make_provider(), HeaderAwareProvider)
+
+
+@respx.mock
+def test_complete_with_headers_merges_over_client_headers() -> None:
+    route = respx.post(CHAT_ENDPOINT).mock(
+        return_value=httpx.Response(200, json=_chat_response())
+    )
+
+    provider = _make_provider(
+        extra_headers={"X-Static": "static", "X-TT-logid": "static-log"}
+    )
+    provider.complete_with_headers(
+        _basic_request(), {"x-noeta-task": "task-abc", "X-TT-logid": "task-abc"}
+    )
+
+    request = route.calls.last.request
+    # Per-request headers are attached, and win on a shared name...
+    assert request.headers["x-noeta-task"] == "task-abc"
+    assert request.headers["x-tt-logid"] == "task-abc"
+    # ...while the shared client's constructor headers survive alongside them.
+    assert request.headers["authorization"] == "Bearer sk-test"
+    assert request.headers["x-static"] == "static"
+
+
+@respx.mock
+def test_complete_with_headers_none_matches_plain_complete() -> None:
+    route = respx.post(CHAT_ENDPOINT).mock(
+        return_value=httpx.Response(200, json=_chat_response())
+    )
+
+    provider = _make_provider()
+    via_headers = provider.complete_with_headers(_basic_request(), None)
+    plain = provider.complete(_basic_request())
+
+    assert via_headers == plain
+    first, second = route.calls[0].request, route.calls[1].request
+    assert first.content == second.content
+    assert dict(first.headers) == dict(second.headers)
+
+
+# ---------------------------------------------------------------------------
 # system role inside messages → defensive ValueError
 # ---------------------------------------------------------------------------
 

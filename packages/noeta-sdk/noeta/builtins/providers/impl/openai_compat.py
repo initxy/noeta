@@ -124,15 +124,33 @@ class OpenAICompatProvider:
         )
 
     # ------------------------------------------------------------------
-    # LLMProvider Protocol
+    # LLMProvider / HeaderAwareProvider Protocol
     # ------------------------------------------------------------------
 
     def complete(self, request: LLMRequest) -> LLMResponse:
+        return self.complete_with_headers(request, None)
+
+    def complete_with_headers(
+        self,
+        request: LLMRequest,
+        request_headers: Optional[dict[str, str]],
+    ) -> LLMResponse:
+        """Blocking completion with per-call headers over the shared client.
+
+        Without this method the runtime falls back to plain :meth:`complete`
+        on every non-streamed round-trip — the compaction summarize call, and
+        every call on a host with no ``delta_sink`` — and silently drops the
+        ``HostConfig.provider_headers`` it computed for that call.
+        ``request_headers`` merge over the constructor headers and are
+        transport-only: never recorded, and never part of the prompt-cache key.
+        """
         body = self._build_request_body(request)
         # Every wire-shape failure is translated into the neutral Noeta error
         # taxonomy here, so the runtime never sees an httpx type.
         try:
-            http_response = self._client.post("/chat/completions", json=body)
+            http_response = self._client.post(
+                "/chat/completions", json=body, headers=request_headers
+            )
             http_response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise _translate_http_error(exc) from exc
