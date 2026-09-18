@@ -8,7 +8,11 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
-`noeta-sdk` only; every change is in the `memory` built-in and its host wiring.
+## [0.6.27] - 2026-09-18
+
+Covers `noeta-sdk` only: 0.6.26 → 0.6.27. `noeta-runtime` stays at 0.6.24;
+every change is in the `memory` built-in and its host wiring, so the sdk's
+`noeta-runtime>=0.6.24` floor is unchanged.
 
 ### Changed — auto-recall spends a body only on a message that names the page
 
@@ -2494,7 +2498,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.26...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.27...HEAD
+[0.6.27]: https://github.com/initxy/noeta/compare/v0.6.26...v0.6.27
 [0.6.26]: https://github.com/initxy/noeta/compare/v0.6.25...v0.6.26
 [0.6.25]: https://github.com/initxy/noeta/compare/v0.6.24...v0.6.25
 [0.6.24]: https://github.com/initxy/noeta/compare/v0.6.23...v0.6.24
