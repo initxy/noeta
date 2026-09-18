@@ -1,6 +1,6 @@
 # Skill menu: token per-skill cap, three-step degrade, default usage rank
 
-Status: IMPLEMENTED 2026-09-14, uncommitted — owner approved the three recommended decisions (tenancy rule, 384-token cap, 24-token short summary). Distilled into the ADR amendment and CONTEXT.md; archive after commit.
+Status: SHIPPED 2026-09-14 in noeta-sdk 0.6.25 (`make check` green 3995/87.00%). Distilled into `docs/adr/model-driven-skill-invocation.md` (second 2026-09-14 amendment) and `CONTEXT.md`. The frontmatter quoting fix listed under Out shipped in the same release.
 Owner: initxy
 Packages: `noeta-sdk` only (the `skills` built-in and the client host). Release: sdk-only patch.
 
