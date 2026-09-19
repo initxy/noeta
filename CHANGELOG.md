@@ -64,9 +64,10 @@ additions only.
 ### Changed — what the model reads says what the code does (`noeta-runtime`, `noeta-sdk`)
 
 From a 2026-09-19 audit of every model-facing string (spec:
-`docs/implementation-specs/prompt-surface-truthfulness.md`). The rule behind
-each entry: remove the hazard in code before describing it in a prompt, and put
-a rule the model needs only when it trips into the error it gets when it trips.
+`docs/implementation-specs/archive/2026-09-19-prompt-surface-truthfulness.md`).
+The rule behind each entry: remove the hazard in code before describing it in a
+prompt, and put a rule the model needs only when it trips into the error it gets
+when it trips.
 Prompt text shrinks overall; `main.md` is untouched.
 
 - **A refused delegation is feedback, not the end of the Task.** More than
