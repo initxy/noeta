@@ -2,8 +2,8 @@
 
 An example manifest plugin that contributes one `Observer` on the **`observer`**
 surface. It snapshots the workspace every time the agent *starts* a mutating file
-tool call (`write` / `edit` / `apply_patch`), and ships `restore_checkpoint` to
-roll the working tree back to any of those points.
+tool call (`Write` / `Edit`), and ships `restore_checkpoint` to roll the working
+tree back to any of those points.
 
 The reason to want it: an agent editing files is one bad turn away from work you
 cannot get back, and asking the user to commit before every session is not a
@@ -63,7 +63,7 @@ import, and the `cwd` default is rarely the workspace a real host means.
 
 The mutating-tool set is a construction knob of `GitCheckpointObserver`
 (`mutating_tools=…`); the shipped manifest takes the default
-`("write", "edit", "apply_patch")`.
+`("Write", "Edit")`.
 
 ## Loading it
 

@@ -166,7 +166,13 @@ def _maybe_spawn_decision(
             assistant_message,
             assistant_thinking,
             patch=None,
-            text="Task cannot be mixed with other tool calls in the same turn",
+            # Stamped on every tool_use of the response, so it must read
+            # correctly on a neighbour that never ran too.
+            text=(
+                "Nothing in this response ran: a response carrying Task may "
+                "carry only Task calls. Re-issue the other calls in a "
+                "separate response."
+            ),
             valid=False,
         )
     members_per_call: list[tuple[ToolUseBlock, list[tuple[str, str]]]] = []
@@ -179,8 +185,9 @@ def _maybe_spawn_decision(
                 assistant_thinking,
                 patch=None,
                 text=(
-                    "Task requires string 'subagent_type' and 'prompt' "
-                    "arguments"
+                    "Nothing in this response ran: every Task call needs "
+                    "string 'subagent_type' and 'prompt' arguments. Re-issue "
+                    "them with both set."
                 ),
                 valid=False,
             )

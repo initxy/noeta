@@ -19,12 +19,15 @@ __all__ = [
     "DEFAULT_RECALL_MAX_HITS",
     "MemoryEntries",
     "NAME_MIN_OVERLAP",
+    "RECALL_KEY_MAX_CHARS",
     "RankedMemory",
     "SUMMARY_MIN_OVERLAP",
+    "carried_tokens",
     "common_name_tokens",
     "match_memories",
     "match_memories_tiered",
     "match_tokens",
+    "name_overlap_needed",
     "rank_memories",
 ]
 
@@ -40,6 +43,18 @@ MemoryEntries = tuple[tuple[str, str, str, str], ...]
 
 #: Recall injection cap — keeps a chatty match from flooding the turn.
 DEFAULT_RECALL_MAX_HITS = 5
+
+#: The matcher reads at most this many leading characters of the text. The
+#: recall key is the whole incoming message, and a message is routinely a
+#: person's sentence followed by something pasted — a log, a stack trace, a
+#: worker's report. Tokenised whole, a 40 KB paste shares a token with nearly
+#: every page in the store and recall answers with five bodies of noise. The
+#: ask is at the head: a message states what it wants before it pastes the
+#: evidence, so the leading slice is the part that carries intent. 2 000
+#: characters is ten index summaries (:data:`_SUMMARY_MAX_CHARS` is 200) and
+#: comfortably the whole of any typed message including the head of a pasted
+#: excerpt; past it, a page is still reachable through ``memory_search``.
+RECALL_KEY_MAX_CHARS = 2000
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 #: Keyword list separators — liberal on purpose: a Chinese-writing model
@@ -90,12 +105,13 @@ _STOPWORDS: frozenset[str] = frozenset(
 #: rule, and it is affordable because a tier-2 hit costs one index line
 #: rather than a whole memory body.
 SUMMARY_MIN_OVERLAP = 2
-#: Tier-1 (name) matching needs this many distinct non-common name tokens in
-#: the text — or every one of them, when the name carries fewer. A body is
-#: uninvited context the model cannot decline, and names are slugs of
-#: ordinary technical words (``applog-web-report-channel``), so ONE shared
-#: word — "report" — is a lead, not evidence that the text named the page.
-#: One shared token therefore earns the tier-2 pointer, never silence.
+#: Tier-1 (name) matching: the floor on how many of a name's tokens the text
+#: must carry before it counts as having NAMED the page. A body is uninvited
+#: context the model cannot decline, and names are slugs of ordinary technical
+#: words (``applog-web-report-channel``), so ONE shared word — "report" — is a
+#: lead, not evidence that the text named the page. One shared token therefore
+#: earns the tier-2 pointer, never silence. See :func:`name_overlap_needed`
+#: for the whole rule, of which this is the floor.
 NAME_MIN_OVERLAP = 2
 #: A name token is *common* once more than this many names carry it, or more
 #: than a tenth of the store, whichever is larger — see
@@ -103,8 +119,34 @@ NAME_MIN_OVERLAP = 2
 _COMMON_MIN_NAMES = 3
 
 
+def _script_tokens(value: str, *, filtered: bool) -> set[str]:
+    """The tokenisation both token views share — see :func:`match_tokens`.
+
+    ``filtered`` applies the word rule's length floor and stopword set. It
+    never touches bigrams: every bigram is exactly 2 characters, so a shared
+    floor would delete the space-free path outright.
+    """
+    lowered = value.lower()
+    words = _TOKEN_RE.findall(lowered)
+    tokens = (
+        {
+            t
+            for t in words
+            if len(t) >= _MIN_TOKEN_LEN and t not in _STOPWORDS
+        }
+        if filtered
+        else set(words)
+    )
+    for run in _CJK_RUN_RE.findall(lowered):
+        if len(run) == 1:
+            tokens.add(run)
+        else:
+            tokens.update(run[i : i + 2] for i in range(len(run) - 1))
+    return tokens
+
+
 def match_tokens(value: str) -> set[str]:
-    """Match tokens, by script.
+    """Match tokens, by script — the **evidence** view.
 
     A space-separated run is one token per word, **filtered**: a word shorter
     than :data:`_MIN_TOKEN_LEN` or listed in :data:`_STOPWORDS` is not
@@ -124,18 +166,52 @@ def match_tokens(value: str) -> set[str]:
     single-character run falls back to the character itself so a
     one-character term still matches something.
     """
-    lowered = value.lower()
-    tokens = {
-        t
-        for t in _TOKEN_RE.findall(lowered)
-        if len(t) >= _MIN_TOKEN_LEN and t not in _STOPWORDS
-    }
-    for run in _CJK_RUN_RE.findall(lowered):
-        if len(run) == 1:
-            tokens.add(run)
-        else:
-            tokens.update(run[i : i + 2] for i in range(len(run) - 1))
-    return tokens
+    return _script_tokens(value, filtered=True)
+
+
+def carried_tokens(value: str) -> set[str]:
+    """Every token ``value`` carries — the **size** view, filters off.
+
+    The same tokenisation as :func:`match_tokens` without the length floor and
+    the stopword set, so ``ci-cd-flow`` carries three tokens rather than one
+    and ``how-we-deploy`` three rather than one. Two jobs, both tier-1's:
+
+    * it measures how big a NAME is, so a name whose other tokens the filters
+      ate cannot be "named" by the one token that survived them;
+    * it measures how much of that name the TEXT carries, so a message that
+      writes the slug out in full — ``zz-target``, ``ci-cd-flow`` — names the
+      page even though the filters make ``zz`` / ``ci`` / ``cd`` unusable as
+      evidence on their own.
+
+    Never used as evidence by itself: a hit still needs a filtered token
+    (:func:`rank_memories`), so a name made of stopwords cannot be named by
+    ordinary prose.
+    """
+    return _script_tokens(value, filtered=False)
+
+
+def name_overlap_needed(size: int) -> int:
+    """How many of a ``size``-token name the text must carry to have named it.
+
+    ``min(size, max(NAME_MIN_OVERLAP, size // 2))`` — at least
+    :data:`NAME_MIN_OVERLAP` tokens **and** at least half of them (rounded
+    down), and never more than the name has:
+
+    * a one-token name (``deploy``, ``部署``) needs its one token, as before;
+    * a two- or three-token name needs two — ``ci-cd-flow`` can no longer be
+      named by ``flow`` alone, which is what made a passing "data flow" buy
+      the whole page. Before this rule the floor was taken against the
+      *filtered* token count, which collapsed to 1 for exactly the names whose
+      other tokens the filters ate;
+    * a long name needs half of it — 3 of the 6 bigrams of ``我们的部署流程``,
+      which "我们这个流程" (the pronoun plus one ordinary word) does not reach.
+
+    Half is rounded DOWN because CJK bigrams overlap: an N-character name
+    yields N-1 bigrams, so the M shared characters of a genuine naming yield
+    only M-1 of them, and rounding up would put a real naming just out of
+    reach (``技能同步`` covers 3 of ``工具技能同步做法``'s 7 bigrams).
+    """
+    return min(size, max(NAME_MIN_OVERLAP, size // 2))
 
 
 def _keywords_hit(keywords: str, lowered_text: str) -> bool:
@@ -216,12 +292,17 @@ def rank_memories(
     The ordered whole of which :func:`match_memories_tiered` keeps the head;
     the write tool's near-duplicate probe reads it too, so "similar" means
     exactly "recall would surface it". ``exclude`` names never match but
-    still count toward :func:`common_name_tokens`.
+    still count toward :func:`common_name_tokens`. Only the leading
+    :data:`RECALL_KEY_MAX_CHARS` characters of ``text`` are read.
 
-    Tier 1: the text shares :data:`NAME_MIN_OVERLAP` distinct non-common
-    tokens of the NAME, or all of them when the name has fewer — a one-word
-    name still hits on its word; a name made only of common tokens never hits
-    by name. Sorted by matched-token count, descending, then index order.
+    Tier 1 means the text **named** the page: it carries
+    :func:`name_overlap_needed` of the name's tokens — at least
+    :data:`NAME_MIN_OVERLAP` of them and at least half of them, counting every
+    token the name carries (:func:`carried_tokens`), store-common tokens
+    excluded from both sides — and at least one of those is a filtered
+    evidence token, so a name cannot be named by stopwords alone. One rule for
+    every script: a CJK name's bigrams count exactly as an ASCII name's words
+    do. Sorted by matched-token count, descending, then index order.
 
     Tier 2: an entry not hit by name hits on ONE shared non-common name token
     (a lead, not evidence), OR when its SUMMARY shares at least
@@ -238,10 +319,12 @@ def rank_memories(
     by distinct matched tokens across name and summary, descending, then
     index order. The ``type`` field never participates.
     """
-    text_tokens = match_tokens(text)
+    key = text[:RECALL_KEY_MAX_CHARS]
+    text_tokens = match_tokens(key)
     if not text_tokens:
         return ()
-    lowered = text.lower()
+    lowered = key.lower()
+    text_carried = carried_tokens(key)
     common = common_name_tokens(entries)
     skip = frozenset(exclude)
     name_hits: list[tuple[int, RankedMemory]] = []
@@ -249,10 +332,17 @@ def rank_memories(
     for position, (name, summary, _type, keywords) in enumerate(entries):
         if name in skip:
             continue
+        carried = carried_tokens(name) - common
         distinctive = match_tokens(name) - common
         matched = distinctive & text_tokens
-        need = min(NAME_MIN_OVERLAP, len(distinctive))
-        if need and len(matched) >= need:
+        # ``matched`` is the evidence (a filtered token the text shares);
+        # ``covered`` is how much of the name the text carries at all, so a
+        # message that writes the slug out in full still names the page even
+        # where the filters left it one usable token. ``matched`` ⊆ ``covered``
+        # by construction, so the truthy check is also the "at least one
+        # evidence token" guard.
+        covered = carried & text_carried
+        if matched and len(covered) >= name_overlap_needed(len(carried)):
             name_hits.append(
                 (position, RankedMemory(name, True, len(matched)))
             )

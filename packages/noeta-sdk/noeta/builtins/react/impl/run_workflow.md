@@ -2,55 +2,43 @@ Run a short Python orchestration script that fans work out to sub-agents and ret
 
 ## What it does
 
-Submits a model-authored orchestration script that runs in a deterministic
-sandbox exposing exactly these names:
+The script runs in a sandbox that adds these names to the ordinary builtins:
 
 - `parallel(items, agent="general-purpose")`: spawn a BATCH of sub-agents at
   once, wait for them all, and return their answers as a list in spawn order.
   Each item is a goal string, or a `{"goal": ..., "agent": ...}` dict to pick a
-  specific sub-agent per item. Use this for the fan-out step INSIDE a workflow —
-  when you also need a loop / branch / dependency chain around it.
+  specific sub-agent per item.
 - `agent(goal, agent="general-purpose")`: spawn ONE sub-agent, wait for it, and
   return its final answer (a string). Sequential `agent()` calls run one after
   another, so chain them ONLY when a later call needs an earlier result; for
   independent work use `parallel()` instead.
-- `log(message)`: emit a progress note (returns nothing).
 - `args`: the dict supplied via this tool's `args` parameter.
 
-Finish with `return <value>` — that value becomes the workflow's answer. The
-script is not a normal tool: it is interpreted as its own sub-task, so it can
-suspend and resume across many sub-agent spawns and survive a crash.
+Finish with `return <value>` — that value becomes the workflow's answer.
 
 ## When to use
 
 - You need to ORCHESTRATE sub-agents programmatically: loop over a list, branch
   the next call on a prior result, or chain steps where each one feeds the next.
-- The work is multi-step across agents — a dependency chain (`agent()` feeding
-  `agent()`), or fan-out batches you then loop over or combine.
 
 ## When NOT to use
 
-- For a single one-off delegation — just use `Task` instead; reaching for a
-  whole script to wrap one spawn is overkill.
-- For plain parallelism with no loop / branch / dependency — emit SEVERAL
-  `Task` calls in ONE assistant turn instead; that single turn IS the fan-out,
-  and they run concurrently without a workflow.
-- For work you can do yourself with the file/search/shell tools; the sub-agents
-  you spawn do the actual I/O, so a workflow only pays off when the work is
-  multi-step or branches across agents.
+- For a single delegation — use `Task` instead.
+- For plain parallelism with no loop / branch / dependency — emit several
+  `Task` calls in one response; they run concurrently without a workflow.
+- For work you can do yourself with the file/search/shell tools.
 
 ## Preconditions
 
-- The script MUST be deterministic: no time/random/datetime, no imports, no file
-  or network access (the sub-agents you spawn do the actual I/O). Non-deterministic
-  scripts are rejected before any sub-agent runs.
-- Delegation must be enabled for this agent (the workflow spawns real sub-agents);
-  if the host has not opted into workflows this tool is not offered at all.
+- The script must be deterministic: it may be replayed from the top after a
+  crash, so every run must make the same calls — no imports, no clock or
+  randomness, no I/O of its own (`print` included); the sub-agents do the I/O.
+  A script that breaks this is rejected before any sub-agent starts.
 
 ## Example
 
-A dependency chain — scout first, then fan the result out and combine. THIS is
-what needs a workflow (the fan-out depends on the scout's output):
+A dependency chain — the fan-out depends on the scout's output, which is what
+needs a workflow:
 
     modules = agent(
         'List the modules missing a docstring, one bare name per line.',

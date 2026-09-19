@@ -194,8 +194,10 @@ def test_edit_dry_run_does_not_write(tmp_path: Path) -> None:
         {"file_path": "a.py", "old_string": "hello", "new_string": "world"}, ctx
     )
     assert result.success is True
-    assert "Proposed edit" in result.output
-    assert "dry run" in result.output
+    # The text must be unmistakable about what did NOT happen, and must not
+    # send the model into a retry loop that cannot succeed.
+    assert "NOT WRITTEN" in result.output
+    assert "no retry of Edit or Write will change the file" in result.output
     # File on disk is byte-identical.
     assert target.read_bytes() == original_bytes
     # But the proposed-diff artifact IS produced.
@@ -415,8 +417,9 @@ def test_write_dry_run_does_not_create(tmp_path: Path) -> None:
     tool = WriteFileTool(workspace=workspace, mode=FsWriteMode.DRY_RUN)
     result = tool.invoke({"file_path": "new.txt", "content": "hello\n"}, ctx)
     assert result.success is True
-    assert "Proposed write" in result.output
-    assert "dry run" in result.output
+    assert "NOT WRITTEN" in result.output
+    assert "was not created" in result.output
+    assert "no retry of Write or Edit will change the file" in result.output
     assert not (workspace.root / "new.txt").exists()
     # Proposed diff artifact is still produced.
     assert store.get(result.artifacts[0]).decode("utf-8").startswith("--- a/new.txt")

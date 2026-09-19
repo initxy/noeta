@@ -22,18 +22,22 @@ from noeta.core._decision_handlers import (
     HandlerContext,
     SkillHashesFn,
     _validate_tool_output_inline_limit,
+    append_decision_denial_feedback,
     append_tool_denial_feedback,
     dispatch_exit,
     emit_skill_provenance_for_patch,
     emit_step_transition,
     handle_compaction_requested,
     handle_spawn_background_subtask,
+    handle_spawn_subtask,
+    handle_spawn_subtasks,
     handle_state_patch,
     handle_tool_calls,
     handle_yield_for_human,
     invoke_approved_tool_call,
     put_messages,
     record_assistant_thinking,
+    resume_approved_decision,
     strip_message_origin,
 )
 from noeta.core.fold import apply_event, apply_host_binding, fold
@@ -52,6 +56,7 @@ from noeta.protocols.decisions import (
     CompactionRequestedDecision,
     Decision,
     SpawnSubtaskDecision,
+    SpawnSubtasksDecision,
     StatePatchDecision,
     TaskStatePatch,
     ToolCall,
@@ -89,6 +94,7 @@ from noeta.protocols.hooks import (
     ProposedAction,
     ProposedToolCall,
     VerdictResult,
+    decision_approval_kind,
 )
 from noeta.protocols.messages import (
     Block,
@@ -675,12 +681,19 @@ class Engine:
         lease_id: str,
         trace_id: Optional[str] = None,
     ) -> Task:
-        """Resolve a pending human-in-the-loop tool-call approval.
+        """Resolve a pending human-in-the-loop approval.
 
         The public seam the worker/runner calls **after** ``note_woken``
         re-leases a task that suspended on
         ``HumanResponseReceived(handle="approval-{call_id}")``. Engine stays the
         single writer of both the governance events and the runtime messages.
+
+        One seam for all three Guard action points. ``call_id`` is the model's
+        own for a gated tool call, and the reserved ``finish-{task_id}`` /
+        ``spawn-{task_id}`` for a gated ``finish`` / spawn (see
+        :func:`noeta.protocols.hooks.decision_approval_kind`); each suspend
+        records the blocked action under that id, so every one of them is
+        resolvable by the same verb.
 
         Fail-closed precondition: ``call_id`` must still be in
         ``task.governance.pending_approvals`` — the durable, restart-safe anchor
@@ -689,11 +702,13 @@ class Engine:
         :class:`ApprovalNotPending` and emits **no** event, so the log never
         carries two resolutions for one ``call_id``.
 
-        On **approve** the recorded pending call is reconstructed and invoked
-        (bypassing the guard — the human already approved); on **deny** a
-        ``role="tool"`` denial-feedback message is appended and no tool runs. On
-        resume the resolution is read from the recorded
-        ``ToolCallApprovalResolved`` event rather than a live decision.
+        On **approve** the recorded action is reconstructed and carried out
+        (bypassing the guard — the human already approved): the tool runs, or
+        the held finish / spawn proceeds. On **deny** nothing runs and the
+        refusal goes back to the model as a failed ``role="tool"`` result, so
+        the turn continues rather than dying. On resume the resolution is read
+        from the recorded ``ToolCallApprovalResolved`` event rather than a live
+        decision.
         """
         pending = task.governance.pending_approvals.get(call_id)
         if pending is None:
@@ -723,18 +738,34 @@ class Engine:
         )
         apply_event(task, env, self._content_store)
 
-        # Continue deterministically: run the approved call, or append denial
-        # feedback so the resumed loop is not left with a dangling assistant
-        # tool_call and no tool result.
+        # Continue deterministically: carry out the approved action, or append
+        # denial feedback so the resumed loop is not left with a dangling
+        # assistant tool_call and no tool result. ``kind`` splits the gated
+        # tool call from the two gated decisions; the anchor, the resolution
+        # event and the fail-closed precondition above are shared.
+        kind = decision_approval_kind(call_id, task.task_id)
         if approved:
-            call = ToolCall(
-                tool_name=tool_name, arguments=arguments, call_id=call_id
-            )
             # The approval-resume is a non-default continuation — tag it so the
             # recovery guards read ``last_transition`` O(1).
             emit_step_transition(self._ctx, task, reason="approval_resume", lease_id=lease_id, trace_id=resolved_trace)
+            if kind is not None:
+                return resume_approved_decision(
+                    self._ctx, task,
+                    kind=kind, arguments=arguments,
+                    lease_id=lease_id, trace_id=resolved_trace,
+                )
+            call = ToolCall(
+                tool_name=tool_name, arguments=arguments, call_id=call_id
+            )
             invoke_approved_tool_call(
                 self._ctx, task, call,
+                lease_id=lease_id, trace_id=resolved_trace,
+            )
+        elif kind is not None:
+            append_decision_denial_feedback(
+                self._ctx, task,
+                kind=kind,
+                reason=reason or "denied by human",
                 lease_id=lease_id, trace_id=resolved_trace,
             )
         else:
@@ -932,6 +963,16 @@ class Engine:
                 trace_id=trace_id,
             )
             task.status = "running"
+        elif task.status != "running":
+            # Already settled — nothing left to advance. A woken-command
+            # prelude can end the turn on its own: approving a gated ``finish``
+            # completes the Task, approving a gated spawn suspends it on the
+            # child's barrier. Composing and asking the Policy for one more
+            # decision there would step past a terminal, so the step is a
+            # no-op and the caller releases on the status the prelude produced.
+            # Every other caller hands in a ``pending`` / ``running`` task, so
+            # nothing else changes.
+            return task
 
         if self._policy is None:
             raise RuntimeError("Engine started without a Policy.")
@@ -1067,6 +1108,27 @@ class Engine:
                         task, lease_id=lease_id, trace_id=trace_id
                     )
                     consecutive_tool_calls = 0
+                continue
+
+            if isinstance(decision, (SpawnSubtaskDecision, SpawnSubtasksDecision)):
+                # A spawn normally exits the loop on the child's barrier, but a
+                # DENIED one does not: the handler answers every Task call with
+                # a failed result, creates no child, and returns None so the
+                # turn keeps running and the model can re-issue. Same
+                # loop-continuing shape as the background-spawn branch above.
+                spawned = (
+                    handle_spawn_subtask(
+                        self._ctx, task, decision,
+                        lease_id=lease_id, trace_id=trace_id,
+                    )
+                    if isinstance(decision, SpawnSubtaskDecision)
+                    else handle_spawn_subtasks(
+                        self._ctx, task, decision,
+                        lease_id=lease_id, trace_id=trace_id,
+                    )
+                )
+                if spawned is not None:
+                    return spawned
                 continue
 
             return self._dispatch(

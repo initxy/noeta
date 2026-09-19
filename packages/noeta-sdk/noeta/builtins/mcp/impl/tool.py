@@ -26,6 +26,7 @@ from typing import Union
 from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.tools.limits import (
     INLINE_CONTENT_MAX_BYTES,
+    MCP_INJECTION_MAX_BYTES,
     fit_output_fields,
     truncate_bytes,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "McpToolSpec",
     "build_mcp_tools",
     "cap_injected",
+    "describe_mcp_tool",
     "is_mcp_tool_name",
     "make_mcp_tool_name",
     "parse_mcp_tool_specs",
@@ -60,23 +62,57 @@ __all__ = [
 
 
 def cap_injected(text: str, *, kind: str) -> str:
-    """Bound server-controlled injected text at the inline-content ceiling.
+    """Bound server-controlled injected text at :data:`MCP_INJECTION_MAX_BYTES`.
 
     An MCP prompt / resource body is injected as an ``origin="system"``
     message, so an unbounded one is BOTH a prompt-injection surface and a
-    context/token bomb (the transport only caps at ~8 MB). 64 KiB is ample for a
-    real prompt / resource snapshot; past it we truncate with a visible marker
-    naming ``kind`` ("prompt" / "resource") so the model knows it was cut.
+    context/token bomb (the transport only caps at ~8 MB). Injection has its
+    OWN 64 KiB ceiling rather than the tool-result one: that ceiling grew to
+    1 MiB for content the model asked for, while an injected turn is content
+    nobody asked for that then sits in the history for the rest of the task.
+    Past the cap the text is truncated with a visible marker naming ``kind``
+    ("prompt" / "resource") so the model knows it was cut.
 
     Single shared implementation for :func:`~noeta.builtins.mcp.impl.prompts.
     flatten_prompt_messages` and :func:`~noeta.builtins.mcp.impl.resources.
     flatten_resource_contents` so the cap wording / ceiling never drift."""
-    if len(text.encode("utf-8")) <= INLINE_CONTENT_MAX_BYTES:
+    if len(text.encode("utf-8")) <= MCP_INJECTION_MAX_BYTES:
         return text
     return (
-        truncate_bytes(text, INLINE_CONTENT_MAX_BYTES)
-        + f"\n\n[truncated: MCP {kind} exceeded {INLINE_CONTENT_MAX_BYTES} bytes]"
+        truncate_bytes(text, MCP_INJECTION_MAX_BYTES)
+        + f"\n\n[truncated: MCP {kind} exceeded {MCP_INJECTION_MAX_BYTES} bytes]"
     )
+
+
+#: Cap on a server-supplied tool description. It rides the tool schema on
+#: EVERY request for the rest of the session, so an essay is paid for forever;
+#: 1 KiB fits any real description.
+_MCP_DESCRIPTION_MAX_BYTES = 1024
+
+#: Inline share of an over-cap MCP tool RESULT. Half the content ceiling, so
+#: the marked head still fits after JSON-escape expansion instead of being
+#: halved again by ``fit_output_fields``.
+_MCP_RESULT_INLINE_MAX_BYTES = INLINE_CONTENT_MAX_BYTES // 2
+
+
+def describe_mcp_tool(alias: str, description: object) -> str:
+    """The model-facing description of one MCP tool: source first, then the
+    server's own words, capped.
+
+    The server writes this text and it lands in the tool list beside noeta's
+    own tool descriptions, where a sentence like "always call this before
+    anything else" reads as harness documentation. The prefix names whose
+    sentence it is, at the one place a server's words enter the tool list.
+    """
+    text = description if isinstance(description, str) else ""
+    if len(text.encode("utf-8")) > _MCP_DESCRIPTION_MAX_BYTES:
+        text = (
+            truncate_bytes(text, _MCP_DESCRIPTION_MAX_BYTES)
+            + f"\n[truncated: description exceeded "
+            f"{_MCP_DESCRIPTION_MAX_BYTES} bytes]"
+        )
+    prefix = f"[MCP server {alias!r}]"
+    return f"{prefix} {text}" if text else prefix
 
 
 _OUTPUT_MEDIA_TYPE = "application/json"
@@ -207,8 +243,10 @@ def _result_to_tool_result(
 
     ``isError: true`` → ``success=False``. ``content`` text blocks are
     concatenated into ``output``; non-text blocks are summarised. A large
-    ``output`` is offloaded to a ContentStore artifact (reusing the
-    shared inline byte budget)."""
+    ``output`` is offloaded to a ContentStore artifact (reusing the shared
+    inline byte budget) and what stays inline is MARKED as a head — a silently
+    shortened result reads as everything the server had to say, and the model
+    answers from half an answer."""
     is_error = bool(result.get("isError"))
     content = result.get("content")
     text_parts: list[str] = []
@@ -230,8 +268,16 @@ def _result_to_tool_result(
     if len(encoded) > INLINE_CONTENT_MAX_BYTES:
         ref = ctx.artifact_store.put(encoded, media_type="text/plain")
         artifacts.append(ref)
+        # The marker leads the text rather than trailing it: every trim below
+        # this point cuts from the END, so a trailing marker is the first thing
+        # a second pass would drop.
+        head = truncate_bytes(text, _MCP_RESULT_INLINE_MAX_BYTES)
+        marked = (
+            f"[truncated: the server returned {len(encoded)} bytes; what "
+            f"follows is the first {len(head.encode('utf-8'))}]\n{head}"
+        )
         output = fit_output_fields(
-            {"text": text, "text_ref": ref_json(ref), "non_text_blocks": non_text},
+            {"text": marked, "text_ref": ref_json(ref), "non_text_blocks": non_text},
             shrink_order=["text"],
             max_bytes=INLINE_CONTENT_MAX_BYTES,
         )
@@ -300,13 +346,12 @@ def _discover_server_tools(
         schema = raw.get("inputSchema")
         if not isinstance(schema, dict):
             schema = {"type": "object", "additionalProperties": True}
-        raw_desc = raw.get("description")
         built[noeta_name] = McpTool(
             name=noeta_name,
             remote_tool_name=str(raw_name),
             input_schema=schema,
             client=client,
-            description=raw_desc if isinstance(raw_desc, str) else "",
+            description=describe_mcp_tool(spec.alias, raw.get("description")),
         )
     return {noeta_name: built[noeta_name] for noeta_name in sorted(built)}
 

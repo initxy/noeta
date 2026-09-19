@@ -15,7 +15,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from tests._session_inputs import default_factory_kwargs
-from noeta.context.composer import RenderedContent, ThreeSegmentComposer
+from noeta.context.composer import (
+    _SUMMARY_FRAME,
+    RenderedContent,
+    ThreeSegmentComposer,
+)
 from noeta.context.content_channel import (
     ContentChannelRegistry,
     ContentKindSpec,
@@ -255,8 +259,10 @@ def test_covered_anchor_rehangs_after_compaction_summary() -> None:
     task.context.summary_ref = summary_ref
     task.context.summary_boundary = 3
     view = _composer(cs).compose(task)
+    # The summary message opens with the compose-time frame that tells the
+    # model the note stands in for the messages it replaced.
     assert _texts(view.segments[2].content) == [
-        "SUMMARY",
+        f"{_SUMMARY_FRAME}\n\nSUMMARY",
         "note:a",
         "recent",
         "note:b",

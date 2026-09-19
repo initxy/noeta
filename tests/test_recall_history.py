@@ -285,8 +285,9 @@ def test_reminder_ships_in_the_default_base_specs() -> None:
 
     names = [s.name for s in default_reminder_specs()]
     assert "collapsed-context" in names
-    # The classic three are still there — the widened loader dropped nothing.
-    for classic in ("unfinished-todos", "delegation-nudge", "read-suggestion"):
+    # The surviving classics are still there — the widened loader dropped
+    # nothing (``delegation-nudge`` was removed on purpose, not lost here).
+    for classic in ("unfinished-todos", "read-suggestion"):
         assert classic in names
 
 
@@ -307,7 +308,10 @@ def test_model_visible_strings_carry_no_constraint_trigger() -> None:
         render_collapsed_slice(_view(boundary=0), 0, 5),
         render_collapsed_slice(_view(), 9, 5),
         # Error ack texts:
-        "RecallHistory may appear at most once per turn",
+        "Nothing in this response ran: RecallHistory may be called only once "
+        "per response. Re-issue it as a single call.",
+        "Nothing in this response ran: RecallHistory cannot share a response "
+        "with TodoWrite. Re-issue the other calls in a separate response.",
         "the collapsed history is unavailable this turn",
         "offset must be a non-negative integer",
         "limit must be a positive integer",

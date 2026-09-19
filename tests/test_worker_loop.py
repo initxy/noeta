@@ -324,6 +324,87 @@ def test_exception_policy_invalid_lease_does_not_fail_or_release() -> None:
     assert loop.tick() is False  # loop survived
 
 
+class _FlakyLeaseDispatcher:
+    """Dispatcher whose ``lease()`` raises the scripted number of times before
+    it starts answering — a dropped connection, a restart, a failover."""
+
+    def __init__(self, *, failures: int) -> None:
+        self._remaining = failures
+        self.lease_calls = 0
+        self.handed = False
+
+    def lease(self, *, worker_id: str, lease_seconds: float = 30.0,
+              task_id: Any = None, queue: str = "default") -> Any:
+        self.lease_calls += 1
+        if self._remaining > 0:
+            self._remaining -= 1
+            raise OSError("server closed the connection unexpectedly")
+        if self.handed:
+            return None
+        self.handed = True
+        return _FakeLease()
+
+    def fail(self, lease_id: str, *, retryable: bool = False,
+             reason: Any = None) -> None:
+        pass
+
+
+def test_dispatcher_fault_does_not_kill_the_loop_and_backs_off() -> None:
+    """A raising ``lease()`` must not unwind out of the loop: without the
+    guard the daemon thread dies silently while the pool still reports itself
+    running, and only a process restart recovers. The loop reports the
+    symptom, backs off (doubling, bounded) and keeps polling."""
+    from noeta.runtime.worker import ReliabilityEvent
+
+    disp = _FlakyLeaseDispatcher(failures=3)
+    rt = _BoomRuntime(disp, ValueError("never reached"))
+    seen: list[ReliabilityEvent] = []
+    slept: list[float] = []
+    loop = WorkerLoop(
+        rt, worker_id="w", heartbeat_interval=0, poll_interval=0.5,
+        lease_backoff_max_s=1.5, reliability_sink=seen.append,
+        sleep=slept.append,
+    )
+
+    assert loop.tick() is False  # faulted, reported as an empty poll
+    assert loop.tick() is False
+    assert loop.tick() is False
+    assert [e.kind for e in seen] == ["dispatcher_unavailable"] * 3
+    assert slept == [0.5, 1.0, 1.5]  # doubling, capped at lease_backoff_max_s
+
+    # The backend comes back: the loop is still alive and leases again.
+    assert loop.tick() is True
+    assert disp.lease_calls == 4
+    # ... and the next fault starts the ladder over.
+    disp._remaining = 1
+    assert loop.tick() is False
+    assert slept[-1] == 0.5
+
+
+def test_dispatcher_fault_does_not_swallow_process_teardown() -> None:
+    """``KeyboardInterrupt`` / ``SystemExit`` are a teardown, not a fault to
+    absorb — they propagate."""
+
+    class _TeardownDispatcher:
+        def __init__(self, exc: BaseException) -> None:
+            self._exc = exc
+
+        def lease(self, **kwargs: Any) -> Any:
+            raise self._exc
+
+    for exc in (KeyboardInterrupt(), SystemExit()):
+        loop = WorkerLoop(
+            _BoomRuntime(_TeardownDispatcher(exc), ValueError("x")),
+            worker_id="w", heartbeat_interval=0, sleep=lambda _s: None,
+        )
+        try:
+            loop.tick()
+        except BaseException as raised:  # noqa: BLE001 — that IS the assertion
+            assert raised is exc
+        else:
+            raise AssertionError(f"{type(exc).__name__} was swallowed")
+
+
 def test_exception_policy_fail_itself_raising_is_swallowed() -> None:
     disp = _RaisingDispatcher(fail_raises=True)
     rt = _BoomRuntime(disp, ValueError("boom"))

@@ -498,6 +498,24 @@ def test_timeout_maps_to_transient() -> None:
         _make_provider().complete(_basic_request())
 
 
+def test_default_timeout_is_300_seconds() -> None:
+    # ``complete`` is a non-streaming POST, so the socket is silent for the
+    # whole generation and this read timeout is in practice a wall-clock cap on
+    # it. At 60s a long answer on a large ``max_tokens`` cap timed out and then
+    # burned the runtime's retry budget re-running the same doomed call — the
+    # failure the Anthropic adapter was rewritten to remove. 300s is the ADR
+    # default (docs/adr/provider-adapters-and-multimodal.md) the Responses
+    # adapter already honors.
+    provider = _make_provider()
+    assert provider._client.timeout.read == 300.0
+    assert provider._client.timeout.connect == 300.0
+
+
+def test_explicit_timeout_is_respected() -> None:
+    provider = _make_provider(timeout_seconds=12.5)
+    assert provider._client.timeout.read == 12.5
+
+
 # ---------------------------------------------------------------------------
 # Parse failure → ValueError
 # ---------------------------------------------------------------------------

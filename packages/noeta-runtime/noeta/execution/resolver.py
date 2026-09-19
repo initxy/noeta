@@ -101,6 +101,27 @@ def _subtask_output_schema(
     return None
 
 
+def _recorded_mcp_aliases(task: Any) -> tuple[str, ...]:
+    """The enabled MCP aliases a Task's folded provenance carries.
+
+    ``GovernanceState.mcp_provenance`` (folded from ``McpProvenanceRecorded``
+    — one event per Task and one more each time the enabled set changes) is
+    the durable, credential-free record of which connectors the Task was
+    given. The per-turn alias carrier is process-local, so a Task resolved in
+    another process — a restart, a daemon worker, another machine — has none
+    and reads this instead. ``()`` for a Task that never had MCP, which keeps
+    that build byte-identical to the carrier-less path.
+    """
+    rows = getattr(getattr(task, "governance", None), "mcp_provenance", None)
+    if not isinstance(rows, list):
+        return ()
+    return tuple(
+        str(row["alias"])
+        for row in rows
+        if isinstance(row, dict) and row.get("alias")
+    )
+
+
 class GenericEngineResolver:
     """Per-task agent→Engine resolver skeleton.
 
@@ -136,7 +157,9 @@ class GenericEngineResolver:
     #: each turn (NO url / token — those live host-side); the driver records
     #: it here via :meth:`note_turn_mcp` before resolution, read in
     #: :meth:`resolve_engine` to thread the aliases into the build.
-    #: ``()`` (default / no enabled servers) ⇒ no live MCP tools.
+    #: An entry — including an explicit ``()`` (every server off this turn) —
+    #: is this turn's choice; NO entry (a resume in another process) falls
+    #: back to the Task's durable MCP provenance.
     _turn_mcp_aliases: dict[str, tuple[str, ...]]
     #: Per-turn, NON-durable reasoning-effort carrier keyed by task_id. Mirrors
     #: permission/MCP: set before Engine resolution, read into the build
@@ -311,10 +334,13 @@ class GenericEngineResolver:
         the Engine is resolved so both the synchronous seed-time resolve AND the
         later background-thread drive read the SAME set. ``()`` means "no enabled
         MCP servers" → :meth:`_build_engine` builds no live MCP tools.
-        Never written to the event log (the recorded tool schema is the durable
-        truth; the alias list is only the runtime selector that decides which
-        servers to connect this turn). Overwritten each turn; a turn that
-        suspends on approval resolves the same set on resume."""
+        Never written to the event log (the alias list is only the runtime
+        selector that decides which servers to connect this turn; the durable
+        record is the ``McpProvenanceRecorded`` the connecting build writes).
+        Overwritten each turn; a turn that suspends on approval resolves the
+        same set on resume — and a resume in ANOTHER process, which has no
+        entry here, falls back to that durable record rather than to no MCP at
+        all."""
         carrier = getattr(self, "_turn_mcp_aliases", None)
         if carrier is not None:
             carrier[str(task_id)] = tuple(aliases)
@@ -500,9 +526,20 @@ class GenericEngineResolver:
         # daemon / CLI) ⇒ the host-fixed default.
         permission_mode = self._turn_permission_mode.get(task_id)
         # the per-turn, NON-durable enabled-MCP-alias list the driver
-        # stashed for this task. ``()`` (no enabled servers — resume / daemon /
-        # CLI) ⇒ no live MCP tools.
-        mcp_aliases = getattr(self, "_turn_mcp_aliases", {}).get(task_id, ())
+        # stashed for this task. An entry — including an explicit ``()`` (the
+        # frontend turned every server off for this turn) — WINS: a new human
+        # turn is what changes the enabled set. NO entry means this process
+        # never saw the turn open (resume after a restart, a daemon worker,
+        # another machine), so the durable provenance is read back and its
+        # servers are reconnected through the host's resolver — without it the
+        # rebuilt Engine would silently drop every ``mcp__`` tool the Task was
+        # given (a host with no resolver still builds none).
+        carrier = getattr(self, "_turn_mcp_aliases", {})
+        mcp_aliases = (
+            carrier[task_id]
+            if task_id in carrier
+            else _recorded_mcp_aliases(task)
+        )
         effort = getattr(self, "_turn_effort", {}).get(task_id)
         # The multi-turn wrapper is a TOP-LEVEL-session concern only. A delegated
         # child (has a parent) is one-shot: it must finish with a real
@@ -550,7 +587,7 @@ class GenericEngineResolver:
         delegation_enabled: Optional[bool] = None
         allowed_subtask_agents: Optional[frozenset[str]] = None
         if is_subtask:
-            root_id = self._root_task_id_of(task_id)
+            root_id = self.root_task_id_of(task_id)
             root = fold(self.event_log, self.content_store, root_id)
             if exec_env_ref is None:
                 exec_env_ref = self._bound_exec_env_ref_for(root)
@@ -572,7 +609,7 @@ class GenericEngineResolver:
             if permission_mode is None:
                 permission_mode = self._turn_permission_mode.get(root_id)
             if not mcp_aliases:
-                mcp_aliases = self._child_mcp_aliases(agent, root_id)
+                mcp_aliases = self._child_mcp_aliases(agent, root_id, root=root)
             # The root's spawn set needs the root's recorded agent; a root
             # stream with no genesis (hand-emitted child, purged parent) has
             # none to inherit, so the child keeps its own delegation identity.
@@ -681,13 +718,18 @@ class GenericEngineResolver:
                 return env.payload
         return None
 
-    def _root_task_id_of(self, task_id: str) -> str:
+    def root_task_id_of(self, task_id: str) -> str:
         """The root of ``task_id``'s delegation tree, walked up through each
         stream's ``TaskCreated.parent_task_id`` (the same walk
         :meth:`_resume_woken_ancestors` makes); a root returns itself. The
         walk stops at a parent whose stream records no genesis (a hand-emitted
         child, a purged parent) and returns THAT id — its fold is empty, so
-        the child inherits nothing from it rather than failing to resolve."""
+        the child inherits nothing from it rather than failing to resolve.
+
+        Public because the tree's root is also what the cancel registry is
+        marked with: the worker reaches this as a duck-typed seam (L2 cannot
+        import ``noeta.execution``) to bind a claimed child's cooperative-cancel
+        poll to its root, the way the in-request drain already does."""
         current = str(task_id)
         while True:
             created = self._task_created_of(current)
@@ -737,15 +779,25 @@ class GenericEngineResolver:
         return None
 
     def _child_mcp_aliases(
-        self, child_agent: Any, root_id: str
+        self, child_agent: Any, root_id: str, *, root: Any = None
     ) -> tuple[str, ...]:
         """The MCP aliases a child inherits: the root session's per-turn
-        enabled set, ONLY when the child's own spec opens the ``mcp``
+        enabled set — or, when this process never saw that turn open (a resume
+        after a restart, a daemon worker claiming the child), the root's
+        durable provenance — ONLY when the child's own spec opens the ``mcp``
         capability (per-spec opt-in); ``()`` otherwise. ``agent_activates``
         tolerates a spec without the activation (or a non-AgentSpec like
-        ``__workflow__`` carrying no ``plugins``) — both stay MCP-free."""
+        ``__workflow__`` carrying no ``plugins``) — both stay MCP-free.
+        ``root`` is the caller's already-folded root, so the fallback costs no
+        second fold on the paths that have one."""
+        if not agent_activates(child_agent, "mcp"):
+            return ()
         inherited = getattr(self, "_turn_mcp_aliases", {}).get(str(root_id), ())
-        return tuple(inherited) if agent_activates(child_agent, "mcp") else ()
+        if inherited:
+            return tuple(inherited)
+        if root is None:
+            root = fold(self.event_log, self.content_store, str(root_id))
+        return _recorded_mcp_aliases(root)
 
     def _inherited_spawnable_of(self, root_id: str) -> frozenset[str]:
         """The spawn set every child of a delegation tree runs with: the ROOT
@@ -774,7 +826,7 @@ class GenericEngineResolver:
         root = fold(
             self.event_log,
             self.content_store,
-            self._root_task_id_of(str(task.task_id)),
+            self.root_task_id_of(str(task.task_id)),
         )
         return seed_child_task(
             self.event_log,
@@ -1065,7 +1117,9 @@ class GenericEngineResolver:
                 # per-spec opt-in MCP inheritance. The opt-in child
                 # connects its own server sessions; ``task_id`` so a connect
                 # skip records ``McpServerSkipped`` on the CHILD's stream.
-                mcp_aliases=self._child_mcp_aliases(child_agent, root_id),
+                mcp_aliases=self._child_mcp_aliases(
+                    child_agent, root_id, root=parent_task
+                ),
                 effort=inherited_effort,
                 task_id=task_id,
                 # Per-helper structured output: a workflow helper spawned via

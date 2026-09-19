@@ -26,16 +26,27 @@ __all__ = [
     "PlanFn",
     "DEFAULT_DELIVER_TIMEOUT_S",
     "DEFAULT_DELIVER_POLL_S",
+    "DEFAULT_DELIVER_MAX_POLL_S",
 ]
 
 _log = logging.getLogger("noeta.execution.background_delivery")
 
 #: How long the delivery thread keeps re-attempting while the parent session is
 #: still mid-turn (its spawning turn outran the activity). A settled parent
-#: delivers on the first attempt; the bound is what stops a never-settling parent
-#: from leaking a daemon thread.
-DEFAULT_DELIVER_TIMEOUT_S = 30.0
+#: delivers on the first attempt.
+#:
+#: The bound is a leak guard, NOT a delivery deadline: nothing re-attempts after
+#: it expires until the process restarts and the registry's recovery scan finds
+#: the undelivered child, so a bound shorter than a long turn silently drops the
+#: result of work that actually finished. It is therefore set well past any
+#: plausible turn, and the loop stops early on the one state that really has
+#: nowhere to deliver to — a terminal parent.
+DEFAULT_DELIVER_TIMEOUT_S = 3600.0
+#: First retry interval. The wait backs off (doubling, capped at
+#: :data:`DEFAULT_DELIVER_MAX_POLL_S`) so a parent that stays busy for minutes
+#: costs a fold a second rather than twenty.
 DEFAULT_DELIVER_POLL_S = 0.05
+DEFAULT_DELIVER_MAX_POLL_S = 1.0
 
 #: Push the completion notice and drive the turn, given the wired notifier. MUST
 #: raise when the session is not idle-suspended on its next-goal handle, since
@@ -108,13 +119,19 @@ class BackgroundDelivery:
         the push is dropped and the durable exit event stands for audit; a
         session idle-suspended on its next-goal handle is woken and driven
         through one notice turn; anything else makes ``deliver`` raise and is
-        re-attempted until the session settles or ``retry_timeout_s`` elapses
-        (``0.0`` ⇒ a single attempt). A background backstop must never crash, so
-        a parent that never settles is swallowed as a deferred no-op."""
+        re-attempted — with a backing-off wait — until the session settles, goes
+        terminal, or ``retry_timeout_s`` elapses (``0.0`` ⇒ a single attempt).
+
+        The notice waits for the parent however long its turn runs: the result
+        is real work the model asked for, and giving up on it merely because the
+        parent stayed busy loses it until the next process start. A background
+        backstop must never crash, so the leak guard expiring is still swallowed
+        — but loudly, because by then a finished sub-agent's answer is gone."""
         deliver = plan()
         if deliver is None:
             return  # cancelled / nothing to deliver
         deadline = time.monotonic() + retry_timeout_s
+        wait = poll_s
         while True:
             task = fold(self._event_log, self._content_store, task_id)
             if task.status == "terminal":
@@ -124,11 +141,13 @@ class BackgroundDelivery:
                 return
             except Exception:  # noqa: BLE001 — mid-turn defer; never crash a backstop
                 if time.monotonic() >= deadline:
-                    _log.debug(
-                        "background completion for session %s deferred (not "
-                        "idle-suspended on next-goal within %.1fs)",
+                    _log.warning(
+                        "background completion for session %s DROPPED (still "
+                        "not idle-suspended on next-goal after %.1fs); it is "
+                        "re-delivered only by the recovery scan at next start",
                         task_id,
                         retry_timeout_s,
                     )
                     return
-                time.sleep(poll_s)
+                time.sleep(wait)
+                wait = min(wait * 2, DEFAULT_DELIVER_MAX_POLL_S)

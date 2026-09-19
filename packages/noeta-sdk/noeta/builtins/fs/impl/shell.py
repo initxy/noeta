@@ -56,6 +56,31 @@ def _err(name: str, message: str) -> ToolResult:
     return ToolResult(success=False, summary=f"{name}: {message}")
 
 
+def _capture_notice(outcome: RunOutcome, output_cap: int) -> str:
+    """Name a stream whose HEAD the capture cap dropped, or ``""``.
+
+    ``cap_stream`` keeps the tail, so an over-cap build log silently loses its
+    beginning — the invocation banner, the first error. Nothing in the body
+    shows that, so the loss is stated above it."""
+    streams = [
+        name
+        for name, dropped in (
+            ("stdout", outcome.stdout_truncated),
+            ("stderr", outcome.stderr_truncated),
+        )
+        if dropped
+    ]
+    if not streams:
+        return ""
+    size = (
+        f"{output_cap // 1024} KB" if output_cap >= 1024 else f"{output_cap} bytes"
+    )
+    return (
+        f"[earlier output dropped: only the last {size} of "
+        f"{' and '.join(streams)} was captured]"
+    )
+
+
 def _render_streams(stdout: bytes, stderr: bytes) -> str:
     """The model-facing body: stdout, then stderr under a label only when both
     streams carry content (matching the familiar single-stream view when only
@@ -134,8 +159,10 @@ class ShellRunTool:
             if not _matches_allowlist(argv, self.rules):
                 return _err(
                     self.name,
-                    f"command {argv[0]!r} not in allowlist; "
-                    "use --allow-shell to run arbitrary commands",
+                    f"{argv[0]!r} is not in this host's allowlist and was not "
+                    "run; nothing you can pass to Bash changes that. Read / "
+                    "Grep / Glob cover inspection — otherwise tell the user "
+                    "which command is needed and why.",
                 )
             exec_argv = argv
         else:  # ShellMode.ARBITRARY — full bash
@@ -163,6 +190,7 @@ class ShellRunTool:
             ctx=ctx,
             timeout_s=timeout_s,
             interrupted=interrupted,
+            output_cap=self.output_cap,
         )
 
     def _run_foreground(
@@ -256,6 +284,7 @@ def _build_shell_result(
     ctx: ToolContext,
     timeout_s: int,
     interrupted: bool = False,
+    output_cap: int = DEFAULT_SHELL_OUTPUT_CAP,
 ) -> ToolResult:
     # The FULL streams are the audit artifacts; only the capped rendering
     # rides inline, and no ref ever enters the model-facing text.
@@ -269,6 +298,9 @@ def _build_shell_result(
             ctx.artifact_store.put(outcome.stderr, media_type="text/plain")
         )
     body = _render_streams(outcome.stdout, outcome.stderr)
+    notice = _capture_notice(outcome, output_cap)
+    if notice:
+        body = f"{notice}\n{body}" if body else notice
     summary_cmd = truncate_bytes(command, SUMMARY_EMBED_MAX_BYTES)
     if interrupted:
         # The session kill cascade reaped the group mid-run (user stop) —

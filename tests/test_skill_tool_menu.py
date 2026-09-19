@@ -469,8 +469,8 @@ def test_hidden_skill_cannot_be_named_by_the_model(tmp_path: Path) -> None:
     assert decision.patch is None
     block = decision.messages_after[0].content[0]
     assert isinstance(block, ToolResultBlock)
-    assert "unknown skill 'hidden'" in block.output
-    assert "available: visible" in block.output
+    assert "unknown skill 'hidden'" in (block.error or "")
+    assert "available: visible" in (block.error or "")
 
 
 def test_oversized_description_is_truncated_in_the_roster(tmp_path: Path) -> None:

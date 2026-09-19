@@ -14,19 +14,26 @@ Noeta is a pure-Python library. Your image installs `noeta-sdk`, copies your
 host code, and runs it. The runtime is in-process — there is no Noeta daemon to
 start.
 
+One system package is not optional: **`ripgrep`**. Since 0.6.9 the `Grep` and
+`Glob` tools run `rg` through the execution environment, so an image without it
+fails on the agent's first search.
+
 ```dockerfile
 # Dockerfile
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# System deps your tools need (git, curl, …). Trim to what your agent uses.
+# System deps. `ripgrep` is required — the Grep and Glob tools shell out to
+# `rg` through the execution environment, so without it both fail at runtime.
+# The rest (git, curl, …) is what your own tools need; trim to taste.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git ca-certificates \
+        ripgrep git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Noeta. Pin the version your host was built against.
-RUN pip install --no-cache-dir "noeta-sdk>=0.4.0,<0.5.0"
+# Install Noeta. Pin the version your host was built against — the current
+# line is `0.6.x`; see the release notes for the exact patch.
+RUN pip install --no-cache-dir "noeta-sdk>=0.6,<0.7"
 
 # Copy your host.
 COPY host.py .

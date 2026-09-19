@@ -194,5 +194,5 @@ def test_skill_translate_closure_captures_its_menu() -> None:
     assert bad.patch is None
     block = bad.messages_after[0].content[0]
     assert isinstance(block, ToolResultBlock)
-    assert "unknown skill 'zeta'" in block.output
-    assert "alpha, beta" in block.output
+    assert "unknown skill 'zeta'" in (block.error or "")
+    assert "alpha, beta" in (block.error or "")

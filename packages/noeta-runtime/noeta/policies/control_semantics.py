@@ -81,13 +81,19 @@ def ack_patch_decision(
     text: str,
     valid: bool,
 ) -> StatePatchDecision:
-    """Shared ack builder for control tools: one ToolResultBlock per tool_use, wrapped in a StatePatchDecision."""
+    """Shared ack builder for control tools: one ToolResultBlock per tool_use, wrapped in a StatePatchDecision.
+
+    A failed ack carries its text ONCE. The adapters render a failed result as
+    ``f"{error}\\n{output}"``, so setting both fields would make the model read
+    the same sentence twice; ``output`` stays empty and ``error`` is the single
+    channel. A successful ack has no ``error`` and rides ``output``.
+    """
     ack = Message(
         role="tool",
         content=[
             ToolResultBlock(
                 call_id=b.call_id,
-                output=text,
+                output=text if valid else "",
                 success=valid,
                 error=None if valid else text,
             )

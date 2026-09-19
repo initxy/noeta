@@ -66,10 +66,10 @@ def test_run_workflow_description_names_no_deleted_delegation_surface() -> None:
 def test_run_workflow_description_points_at_the_task_tool_and_turn_fanout() -> None:
     """The two "when NOT to use" bullets still route the model somewhere: the
     single delegation goes to ``Task``, and the fan-out idiom is several
-    ``Task`` calls in ONE assistant turn (the ``spawns`` array's replacement)."""
+    ``Task`` calls in one response (the ``spawns`` array's replacement)."""
     description = _run_workflow_description()
     assert "`Task` instead" in description
-    assert "`Task` calls in ONE assistant turn" in description
+    assert "`Task` calls in one response" in description
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +146,7 @@ def test_ask_user_question_model_visible_strings_use_the_claude_code_name() -> N
 def test_ask_user_question_acks_still_name_the_tool() -> None:
     """A negative-only assertion would pass on a text that dropped the name
     entirely, so pin that the acks which name a tool name the right one."""
-    assert _only_tool_call_ack_text().startswith(ASK_USER_QUESTION_TOOL)
+    assert ASK_USER_QUESTION_TOOL in _only_tool_call_ack_text()
     named = [t for t in _validation_error_texts() if "call_id" in t]
     assert named
     for text in named:

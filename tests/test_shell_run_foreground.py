@@ -167,3 +167,52 @@ def test_foreground_completion_unregisters(tmp_path: Path) -> None:
     assert result.success
     assert result.output == "done"
     assert _foreground_table(registry) == {}
+
+
+# ---------------------------------------------------------------------------
+# Capture cap: the head of a big stream is gone, and the body says so
+# ---------------------------------------------------------------------------
+
+
+def test_capture_cap_names_the_dropped_head(tmp_path: Path) -> None:
+    """``cap_stream`` keeps the TAIL, so an over-cap log silently loses its
+    beginning — the invocation banner, the first error. Nothing in the body
+    shows that, so the result states it above the output.
+
+    Without the notice the model reads a partial log as the whole run and
+    concludes the build printed nothing before the tail it can see.
+    """
+    ws = WorkspaceRoot.from_path(tmp_path)
+    tool = ShellRunTool(
+        workspace=ws, mode=ShellMode.ARBITRARY, output_cap=1024
+    )
+    ctx = ToolContext(artifact_store=InMemoryContentStore())
+    result = tool.invoke(
+        {"command": "python3 -c \"print('A'*4000)\""}, ctx
+    )
+    assert result.success is True
+    first = result.output.splitlines()[0]
+    assert first == "[earlier output dropped: only the last 1 KB of stdout was captured]"
+    # The FULL stream is still the artifact.
+    assert result.artifacts
+
+
+def test_capture_cap_silent_when_nothing_was_dropped(tmp_path: Path) -> None:
+    tool, ctx = _tool_and_ctx(tmp_path)
+    result = tool.invoke({"command": "echo hi"}, ctx)
+    assert result.output == "hi"
+
+
+def test_allowlist_refusal_names_what_the_model_can_do(tmp_path: Path) -> None:
+    """The strict-tier refusal used to send the model at ``--allow-shell``, a
+    flag that exists nowhere. It now says what did not happen, that no argument
+    changes it, and the two routes that are actually open."""
+    ws = WorkspaceRoot.from_path(tmp_path)
+    tool = ShellRunTool(workspace=ws, mode=ShellMode.ALLOWLIST)
+    ctx = ToolContext(artifact_store=InMemoryContentStore())
+    result = tool.invoke({"command": "nmap localhost"}, ctx)
+    assert result.success is False
+    assert "--allow-shell" not in result.summary
+    assert "'nmap' is not in this host's allowlist and was not run" in result.summary
+    assert "nothing you can pass to Bash changes that" in result.summary
+    assert "tell the user which command is needed and why" in result.summary

@@ -256,9 +256,17 @@ class ReplaceTextTool:
                 "running `cat -n` on a snippet of the edited file:"
             )
         else:
+            # `success=True`: the tool did everything this host permits — it
+            # matched, diffed and staged the edit. Only the wording carries the
+            # "not written" fact, so it leads, names the dead end (retrying is
+            # the model's one wrong move here), and points at the two ways
+            # forward.
             head = (
-                f"Proposed edit to {rel} (dry run — nothing written). Here's "
-                "a `cat -n` snippet of the result:"
+                f"NOT WRITTEN: {rel} is unchanged on disk. This host stages "
+                "edits instead of applying them, so no retry of Edit or Write "
+                "will change the file. Continue from the proposed result "
+                "below, or tell the user what to change.\n"
+                "Proposed result (`cat -n` snippet):"
             )
         summary_path = truncate_bytes(rel, SUMMARY_EMBED_MAX_BYTES)
         mode_label = "applied" if applied else "proposed"
@@ -417,10 +425,14 @@ class WriteFileTool:
                 else f"File created successfully at: {rel}"
             )
         else:
-            verb_label = "overwrite of" if overwrite else "write to"
+            # See ``ReplaceTextTool`` for why this stays ``success=True``.
+            state = "was not overwritten" if overwrite else "was not created"
             output = (
-                f"Proposed {verb_label} {rel} (dry run — nothing written; "
-                f"{len(body)} bytes, +{added}/-{removed})."
+                f"NOT WRITTEN: {rel} {state}. This host stages writes instead "
+                "of applying them, so no retry of Write or Edit will change "
+                "the file. Continue from the content you proposed, or tell "
+                "the user what the file needs to contain. (Proposed: "
+                f"{len(body)} bytes, +{added}/-{removed}.)"
             )
         summary_path = truncate_bytes(rel, SUMMARY_EMBED_MAX_BYTES)
         mode_label = "applied" if applied else "proposed"

@@ -340,8 +340,10 @@ def test_mixed_spawn_batch_returns_recoverable_ack() -> None:
     for b in ack.content:
         assert isinstance(b, ToolResultBlock)
         assert b.success is False
-        assert b.error is not None
-        assert "Task cannot be mixed with other tool calls" in b.output
+        assert b.output == ""
+        assert "a response carrying Task may carry only Task calls" in (
+            b.error or ""
+        )
 
 
 def test_delegation_disabled_treats_spawn_as_normal_tool() -> None:

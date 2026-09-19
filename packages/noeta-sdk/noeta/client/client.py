@@ -672,6 +672,7 @@ class Client:
             memory_root_resolver=hc.memory_root_resolver,
             recall_exclude=frozenset(hc.recall_exclude),
             memory_max_bytes=hc.memory_max_bytes,
+            memory_index_budget_tokens=hc.memory_index_budget_tokens,
             skill_menu_rank_resolver=hc.skill_menu_rank_resolver,
             skill_usage_ranking=hc.skill_usage_ranking,
             mcp_server_resolver=hc.mcp_server_resolver,
@@ -681,6 +682,18 @@ class Client:
             delta_sink=hc.delta_sink,
             provider_headers=hc.provider_headers,
             workflow_allowed=hc.workflow_allowed,
+            # Generic loop / tool-output bounds. Both spell "off" as None on
+            # HostConfig; the host field for the guard spells it 0 (the
+            # threshold the governance pack tests for), so map it here. A bare
+            # HostConfig() registers no RepetitionGuard and truncates nothing,
+            # exactly as before.
+            repetition_threshold=(
+                hc.repetition_threshold if hc.repetition_threshold is not None else 0
+            ),
+            tool_output_inline_limit=hc.tool_output_inline_limit,
+            # The hosts WebFetch may reach without asking a human. Empty (the
+            # default) ⇒ every fetch is gated under a gating permission mode.
+            webfetch_allowed_hosts=hc.webfetch_allowed_hosts,
             # Per-session background concurrency caps (shell jobs / sub-agents).
             # Both default to 8, so a bare HostConfig() is unchanged.
             max_background_jobs_per_root_task=hc.max_background_jobs_per_root_task,

@@ -2,13 +2,13 @@
 
 ## Context
 
-Every fs tool resolves a user-supplied path through one `WorkspaceRoot`. That seam is the only place path containment is decided, and it has to answer two different questions: where may a tool *read*, and where may a tool *write*. The two answers are not the same, and the containment check is not a sandbox — `shell_run` reaches the whole filesystem through a subprocess, so a path check inside the tools is never the boundary that keeps a secret off a host.
+Every fs tool resolves a user-supplied path through one `WorkspaceRoot`. That seam is the only place path containment is decided, and it has to answer two different questions: where may a tool *read*, and where may a tool *write*. The two answers are not the same, and the containment check is not a sandbox — `Bash` reaches the whole filesystem through a subprocess, so a path check inside the tools is never the boundary that keeps a secret off a host.
 
 ## Decision
 
-**Reads are not fenced.** `read`, `grep` and `glob` join a relative path onto the workspace and canonicalise it, and take an absolute path wherever it points (`resolve_anywhere`). Reading a neighbouring checkout, a skill pack's bundled reference, or a file under `/usr/share` is done by naming it. `glob`'s optional `path` chooses the tree to walk and its pattern stays relative to that tree, which is what keeps every walk bounded.
+**Reads are not fenced.** `Read`, `Grep` and `Glob` join a relative path onto the workspace and canonicalise it, and take an absolute path wherever it points (`resolve_anywhere`). Reading a neighbouring checkout, a skill pack's bundled reference, or a file under `/usr/share` is done by naming it. `Glob`'s optional `path` chooses the tree to walk and its pattern stays relative to that tree, which is what keeps every walk bounded.
 
-**Writes are contained.** `edit`, `write` and `apply_patch` resolve through the fenced path, and a target that lands outside the workspace fails with a tool error rather than an exception.
+**Writes are contained.** `Edit` and `Write` resolve through the fenced path, and a target that lands outside the workspace fails with a tool error rather than an exception.
 
 **The unit of widening is a directory, not a call.** `WorkspaceRoot.extra_roots` carries absolute directories the host has authorized this caller to write into. Containment is matched component-wise (`path_within`, i.e. `Path.is_relative_to`) after canonicalisation — never string-prefix, so `/srv/app-old` is not covered by an authorization on `/srv/app`, and no symlink launders a path into an authorized root.
 
@@ -26,7 +26,7 @@ Every fs tool resolves a user-supplied path through one `WorkspaceRoot`. That se
 
 ## Rationale
 
-- **The asymmetry between read and write is the whole idea.** A fence costs something every time it stops legitimate work and buys something only when it stops damage. For writes the trade is worth it: a wrong write outside the workspace is irreversible and silent. For reads there is nothing to buy — the act is recoverable, and the same bytes are one `shell_run` away — so a refusal only produces a dead end the model cannot escalate.
+- **The asymmetry between read and write is the whole idea.** A fence costs something every time it stops legitimate work and buys something only when it stops damage. For writes the trade is worth it: a wrong write outside the workspace is irreversible and silent. For reads there is nothing to buy — the act is recoverable, and the same bytes are one `Bash` call away — so a refusal only produces a dead end the model cannot escalate.
 - **Component-wise containment, stated once.** A string-prefix check would be a silent authorization bug (`/srv/app` admitting `/srv/app-old`), and the failure stays invisible until the moment it matters. One predicate, shared by the fence, the display helper and any host-side gate, keeps the question and the answer identical.
 - **A resolver, not a value.** The shape is forced by the resume path: authorization can change *during* a suspended call, while the tool set must not change with it.
 - **Fail-closed is not a detail.** The seam widens a destructive capability, so every ambiguity in it has to resolve toward refusal; otherwise a misconfigured host silently grants more than it meant to.

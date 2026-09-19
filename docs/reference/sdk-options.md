@@ -61,11 +61,17 @@ are compared for equality.
 | Mode | Which tools require approval |
 | --- | --- |
 | `"default"` | every tool whose declared `risk_level` is not `low` |
-| `"acceptEdits"` | the same rule, minus the three edit-class tools `Edit` / `Write` |
+| `"acceptEdits"` | the same rule, minus the two edit-class tools `Edit` / `Write` |
 | `"bypassPermissions"` | none — for trusted, non-interactive runs |
 
 The mode only chooses the gated set. A `Guard` may still deny, and
 `Options.can_use_tool` still resolves whatever the gate stops.
+
+Two tools are gated per **call** rather than by grade, because their reach is a
+property of the arguments: `Bash` (a command outside the effective allowlist
+asks) and `WebFetch` (a host outside `HostConfig.webfetch_allowed_hosts` asks).
+Both are silent under `bypassPermissions`. See
+[Tools → WebFetch egress](tools.md#webfetch-egress).
 
 Read the legal values at runtime rather than hard-coding them:
 
@@ -193,7 +199,7 @@ Supplying both forms raises `ValueError`, as does a partial explicit triple. All
 | `app_gateway` | `None` | `AppPreviewGateway`; `None` ⇒ no `open_app` tool |
 | `write_roots` | `None` | `(task_id) -> Sequence[str]` extra write roots |
 | `mcp_server_resolver` | `None` | `(alias) -> McpAnyServerSpec \| None`, resolved per turn |
-| `mcp_http_post` | `None` | injectable HTTP transport (`HttpPostFn`) for remote MCP |
+| `mcp_http_post` | `None` | injectable HTTP transport (`HttpPostFn`) for remote MCP — return `bytes` (stateless) or an `McpHttpResponse` to join a Streamable HTTP session |
 | `mcp_idle_ttl` | `1800.0` | seconds a pooled MCP connection no turn holds stays open (`None` = forever); connections are shared across tasks by server identity and scope, released when a turn settles, retired early by `Client.reconnect_mcp()` |
 | `mcp_scope_resolver` | `None` | `(task_id) -> str \| None` — the pool scope a task's MCP connections live in (a tenant id, a workspace); tasks share a connection only within one scope, `None` is the shared scope. The same tenancy seam as `memory_root_resolver` |
 | `delta_sink` | `None` | `(StepContext, call_id, StreamDelta) -> None` — ephemeral token deltas; never persisted |
@@ -258,6 +264,21 @@ in another process may compose a different roster once.
 | --- | --- | --- |
 | `plugin_config` | `{}` | `plugin name -> {key: value}`, read by a session pack as `ctx.config("<name>")`. A third-party name passes through verbatim; for the four the SDK derives itself (`fs` / `skills` / `workspace` / `memory`) the host's keys are overlaid **per key**. See [Write a plugin](../how-to/write-a-plugin.md) |
 
+**Loop and tool-output bounds.** The two generic bounds a host wiring custom or
+MCP tools wants on. Both are `None` = off, and a set value must be a positive
+int.
+
+| Field | Default | Purpose |
+| --- | --- | --- |
+| `repetition_threshold` | `None` | register the built-in `RepetitionGuard`: after this many identical `(tool, arguments)` calls in the detection window the call routes through approval instead of running. The one loop nothing else bounds — `Options.budget` caps cost and tool calls only when set, and ReAct's step backstop is 1,000,000, so a tool that keeps returning the same error the model keeps retrying verbatim runs until the budget or the operator stops it. 3 is the guard's own default |
+| `tool_output_inline_limit` | `None` | inline character cap on a tool result **before** it is appended to the history: over the cap the model sees the first N characters plus a deterministic `[tool output truncated: …]` marker, while the full bytes stay in `ToolResultRecorded.output_ref`. The built-in tools cap themselves (`Read` by lines, `Bash` at 30k, MCP at 1 MiB), so this is the backstop for host-supplied tools. A resumed task must reuse the original run's value, or it re-derives different tool-output bytes |
+
+**Web egress.**
+
+| Field | Default | Purpose |
+| --- | --- | --- |
+| `webfetch_allowed_hosts` | `()` | the hosts `WebFetch` may reach without asking a human. `"example.com"` matches that host exactly, `"*.example.com"` its subdomains at any depth but not the apex; a malformed entry raises here. Under `default` / `acceptEdits` every other host routes the call through per-call approval, the way an unlisted `Bash` command does, so `WebFetch` keeps `risk_level="low"` and a listed host stays prompt-free. `bypassPermissions` gates nothing. It is an **approval** knob: `WebFetch` fences no address of its own, since an agent holding `Bash` reaches the same target with one `curl`. See [Tools → WebFetch egress](tools.md#webfetch-egress) |
+
 **Kill-switches and policy.**
 
 | Field | Default | Purpose |
@@ -284,7 +305,7 @@ in another process may compose a different roster once.
 | `SandboxExecEnvConfig` | attach-mode config: `base_url`, `api_key_env`, `workdir` |
 | `ExecEnv` / `BrowserBackend` | the container-execution and browser-wire Protocols |
 | `BackendFactory` / `BrowserBackendFactory` / `BoundPreamble` | the callable aliases the two `HostConfig` factory fields are written against |
-| `McpServerSpec` / `McpHttpServerSpec` / `McpAnyServerSpec` / `McpError` / `McpConfigError` / `HttpPostFn` | the MCP vocabulary a resolver returns |
+| `McpServerSpec` / `McpHttpServerSpec` / `McpAnyServerSpec` / `McpError` / `McpConfigError` / `HttpPostFn` / `McpHttpResponse` | the MCP vocabulary a resolver returns |
 | `path_within(resolved, root) -> bool` | the containment predicate the write fence uses — component-wise, never string-prefix, so `/srv/app-old` is not inside `/srv/app` |
 
 `noeta.sdk.storage` is the durable-backend doorway. `open_storage_stack(path)`

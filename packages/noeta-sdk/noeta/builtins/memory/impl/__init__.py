@@ -20,6 +20,7 @@ from typing import Optional, cast
 
 from noeta.builtins.memory.impl import store as _store_mod
 from noeta.builtins.memory.impl.index import (
+    DEFAULT_INDEX_BUDGET_TOKENS,
     MEMORY_BODY_VERSION,
     MEMORY_DRIFT_POLICY,
     MEMORY_INDEX_NAME,
@@ -60,6 +61,7 @@ from noeta.protocols.tool import Tool
 
 
 __all__ = [
+    "DEFAULT_INDEX_BUDGET_TOKENS",
     "MEMORY_BODY_VERSION",
     "MEMORY_DRIFT_POLICY",
     "MEMORY_INDEX_NAME",
@@ -88,22 +90,25 @@ __all__ = [
 
 def build_memory_pack(
     *, root: Optional[Path] = None, max_bytes: Optional[int] = None
-) -> tuple[MemoryStore, MemoryEntries, dict[str, Tool]]:
-    """One session's ``(store, entries-snapshot, tools)`` memory kit.
+) -> tuple[MemoryStore, MemoryEntries, dict[str, str], dict[str, Tool]]:
+    """One session's ``(store, entries-snapshot, updated dates, tools)`` kit.
 
     ``root`` is the operator-resolved store root; ``None`` falls back to
     ``DEFAULT_GLOBAL_MEMORY_DIR``, read LATE off the store module so a test
     pinning that attribute stays hermetic. The entries snapshot is the
     **build-time** index fingerprint (what :func:`memory_content_kind` reports
-    through the generic ``content_hashes`` seam); what actually enters context
-    is whatever the init hook records, which it re-reads from ``store`` at
-    invocation. ``max_bytes`` is the write tool's body cap (``None`` = none).
+    through the generic ``content_hashes`` seam), and the dates beside it are
+    the index's keep order when the store is over budget; what actually enters
+    context is whatever the init hook records, which it re-reads from ``store``
+    at invocation. ``max_bytes`` is the write tool's body cap (``None`` = none).
     """
     resolved = root if root is not None else _store_mod.DEFAULT_GLOBAL_MEMORY_DIR
     memory_store = load_memory_store(root=resolved)
+    entries, updated = memory_store.index_snapshot()
     return (
         memory_store,
-        memory_store.entries(),
+        entries,
+        updated,
         build_memory_tools(memory_store, max_bytes=max_bytes),
     )
 
@@ -114,7 +119,9 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
     Self-gates on the agent's ``memory`` capability flag. The store root
     resolves by precedence: explicit ``memory_dir`` > ``global_memory_dir`` >
     the module default. ``max_bytes`` (the host's ``memory_max_bytes``) caps a
-    ``memory_write`` body; absent means no cap.
+    ``memory_write`` body; absent means no cap. ``index_budget_tokens`` (the
+    host's ``memory_index_budget_tokens``, derived per model) caps the rendered
+    index; absent means :data:`DEFAULT_INDEX_BUDGET_TOKENS`.
     """
     if not ctx.flag("memory"):
         return EMPTY_CONTRIBUTION
@@ -122,10 +129,20 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
     memory_dir = cfg.get("memory_dir")
     global_memory_dir = cfg.get("global_memory_dir")
     root = memory_dir if memory_dir is not None else global_memory_dir
-    store, entries, tools = build_memory_pack(
+    store, entries, updated, tools = build_memory_pack(
         root=cast(Optional[Path], root),
         max_bytes=cast(Optional[int], cfg.get("max_bytes")),
     )
+    raw_budget = cfg.get("index_budget_tokens")
+    if raw_budget is None:
+        index_budget = DEFAULT_INDEX_BUDGET_TOKENS
+    elif isinstance(raw_budget, int) and not isinstance(raw_budget, bool) and raw_budget > 0:
+        index_budget = raw_budget
+    else:
+        raise ValueError(
+            f"memory config: index_budget_tokens must be a positive int, "
+            f"got {raw_budget!r}"
+        )
     content_store = ctx.content_store
 
     def _init(rec: SessionRecorder) -> None:
@@ -146,10 +163,14 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
         (the activation anchor is first-write-wins). An empty store leaves the
         ledger untouched.
         """
-        live_entries = store.entries()
+        live_entries, live_updated = store.index_snapshot()
         if not live_entries:
             return
-        body = render_memory_index_text(live_entries).encode("utf-8")
+        body = render_memory_index_text(
+            live_entries,
+            budget_tokens=index_budget,
+            updated=live_updated,
+        ).encode("utf-8")
         ref = content_store.put(body, media_type="text/markdown")
         rec.record_content(
             kind=MEMORY_KIND,
@@ -163,7 +184,14 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
         tools=tools,
         content_kinds=(
             # Kind band 200 — after skill, before instructions.
-            ContentKindContribution(200, memory_content_kind(entries)),
+            ContentKindContribution(
+                200,
+                memory_content_kind(
+                    entries,
+                    budget_tokens=index_budget,
+                    updated=updated,
+                ),
+            ),
         ),
         init=_init,
     )

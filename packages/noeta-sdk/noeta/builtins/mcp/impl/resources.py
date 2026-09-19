@@ -43,19 +43,11 @@ from noeta.builtins.mcp.impl.tool import McpAnyServerSpec, _connect_client, cap_
 
 
 __all__ = [
-    "MCP_RESOURCE_ORIGIN_PREFIX",
     "discover_resources",
     "flatten_resource_contents",
     "make_mcp_resource_ref",
     "read_resource",
 ]
-
-
-#: A human-readable provenance prefix the host prepends to a snapshotted resource
-#: so the conversation transcript shows "this came from an MCP resource" (the
-#: structural origin is ``Message.origin="system"``; this is the visible label,
-#: mirroring ``mcp-prompt`` / memory recall attribution).
-MCP_RESOURCE_ORIGIN_PREFIX = "mcp-resource"
 
 
 def make_mcp_resource_ref(alias: str, uri: str) -> str:

@@ -57,6 +57,8 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 
 宿主配置可以追加更多规则（`{"program": …, "subcommand": …}`）；内置的那些始终保留。运维配置的规则比精心挑选的内置项更宽松：它的意思是"这个程序可以运行"，接受任何通过了元字符扫描的尾部参数。
 
+工作区也可以在 `<workspace>/.noeta/shell-allowlist.json` 里带上自己的规则——同样的 JSON 形状，写成一个列表。这个文件属于**仓库内容**，因此要过工作区信任这一关：只有当工作区路径被记录进插件信任存储（`grant_trust`，`~/.noeta/trust.json`，也就是给工作区插件目录和工作区 skill 层把关的那个存储），宿主才会加载它。在一个未受信的工作区里，这个文件不贡献任何规则，宿主会按工作区各警告一次（`UntrustedProjectShellAllowlistWarning`），并在消息里点出是哪个文件。想无条件加载就设 `SdkHost(project_shell_allowlist_trust="open")`，想换一个信任存储就设 `SdkHost(trust_store=…)`。在 `bypassPermissions` 下逐次调用的门本来就不设，所以这个文件根本不会被读。
+
 Shell 元字符（`|`、`;`、`&&`、`>`、…）在分词之前就被拒绝。这是**路径包含加白名单，不是一个进程 sandbox**——`Bash` 是在受信任的工作区里派生外部程序。
 
 ## Web 工具
@@ -65,8 +67,33 @@ Shell 元字符（`|`、`;`、`&&`、`>`、…）在分词之前就被拒绝。�
 
 | 工具 | 风险 | 做什么 | 源码 |
 | --- | --- | --- | --- |
-| `WebFetch` | low | 抓取一个公开网页、渲染成 Markdown，再用一次辅助模型调用（`Options.webfetch_model`，默认落在会话主模型上）针对调用方的 `prompt` 作答——主模型读到的是答案，不是原始页面。HTTP 自动升级为 HTTPS，跨主机重定向不跟随而是返回给模型，抓取结果按 URL 缓存 15 分钟。始终可用。 | `noeta/builtins/web/impl/fetch.py` |
+| `WebFetch` | low | 抓取一个公开网页、渲染成 Markdown，再用一次辅助模型调用（`Options.webfetch_model`，默认落在会话主模型上）针对调用方的 `prompt` 作答——主模型读到的是答案，不是原始页面。HTTP 自动升级为 HTTPS，跨主机重定向不跟随而是返回给模型，抓取结果按 URL 缓存 15 分钟。每份结果的第一行都写明这是外部网页内容。始终可用。 | `noeta/builtins/web/impl/fetch.py` |
 | `WebSearch` | low | 执行一次网络搜索并把排序后的结果作为 Markdown 返回。**只在设置了 `NOETA_WEB_SEARCH_API_KEY` 时挂载。** | `noeta/builtins/web/impl/search.py` |
+
+### WebFetch 能打到哪里
+
+`WebFetch` 的 URL 完全由模型填，而这个工具是 `low` 风险，静态审批集合永远拦不到它。所以它改成按**每次调用**拦，拦的是主机。
+
+**升级须知。** `WebFetch` 指到哪就能打到哪——公网、内网、回送地址都一样。在会拦的权限模式下，`webfetch_allowed_hosts` 之外的主机需要审批。唯一会被直接拒的是这个工具本来就不抓的 scheme：`file:`、`gopher:` 之类会以「WebFetch fetches http(s) URLs only」失败，这跟主机无关。
+
+**没列进名单的主机要人点头。** `HostConfig.webfetch_allowed_hosts` 列出哪些主机可以不问人直接抓。只有两种写法：
+
+| 条目 | 匹配什么 |
+| --- | --- |
+| `example.com` | 就这一个主机 |
+| `*.example.com` | 它的子域，任意层级——`a.example.com`、`a.b.example.com`——但**不包括** `example.com` 本身 |
+
+要连顶级域名本身一起放行，就两条都写上。写错了（带 scheme、带路径、带端口、带用户名、`*` 出现在开头 `*.` 之外的位置）会在构造 `HostConfig` 时直接报错，而不是悄悄谁也匹配不上。匹配用的是 URL 里真正的主机，小写并做过 IDNA 归一：`https://example.com@evil.test/` 按 `evil.test` 判，`allowed.com` 也绝不会把 `notallowed.com` 一起放过去。
+
+| 权限模式 | 名单外的主机 | 名单内的主机 |
+| --- | --- | --- |
+| `default` | 逐次调用请求审批 | 直接抓，不打扰 |
+| `acceptEdits` | 逐次调用请求审批 | 直接抓，不打扰 |
+| `bypassPermissions` | 直接抓，不打扰 | 直接抓，不打扰 |
+
+这道闸是一个逐次调用的谓词，跟 `Bash` 处理白名单外命令的形状一样——所以 `WebFetch` 保持 `risk_level="low"`，名单内的主机不会弹窗，而审批照常走 `ToolCallApprovalRequested` → `approve` / `deny` 这条老路（`Options.can_use_tool` 也一样能接管）。跨主机重定向是交还给模型自己重发一次的，那第二次调用同样由这个谓词判——重定向没法把一次抓取偷渡到未经批准的主机上。
+
+**这道闸不是什么。** 它只是在遇到陌生主机时问一声人，并不能把 agent 圈在某个网络里。手里握着 `Bash` 的 agent 一条 `curl` 就能打到任何地址，所以 `WebFetch` 自己不拦任何地址——真要有出网边界，就在网络层或者 sandbox 容器里做，那一层顺带也管住了 shell。
 
 ## App 工具
 
@@ -97,7 +124,7 @@ Shell 元字符（`|`、`;`、`&&`、`>`、…）在分词之前就被拒绝。�
 | `browser_click` | high | 点击位于 `index` 的可交互元素（来自快照里那份编号列表）。 | `noeta/builtins/browser/impl/__init__.py` |
 | `browser_type` | high | 向位于 `index` 的元素输入文本。 | `noeta/builtins/browser/impl/__init__.py` |
 | `browser_extract` | high | 把当前页面重新读成一份快照（无参数）。 | `noeta/builtins/browser/impl/__init__.py` |
-| `browser_screenshot` | high | 截取一张 PNG 并把它存成一个**工作区 artifact**，返回它的 `ContentRef`。它不会作为视觉输入喂给模型。 | `noeta/builtins/browser/impl/__init__.py` |
+| `browser_screenshot` | high | 截取一张 PNG，作为 artifact 存进 `ContentStore` 并返回它的 `ContentRef`——工作区里不会多出文件。它不会作为视觉输入喂给模型。 | `noeta/builtins/browser/impl/__init__.py` |
 
 四个文本类工具返回一份*页面快照*：页面文本加上编号的可交互元素。`browser_click` / `browser_type` 寻址的正是那套编号，因此必须先有一份快照。
 
@@ -113,14 +140,19 @@ Shell 元字符（`|`、`;`、`&&`、`>`、…）在分词之前就被拒绝。�
 
 Control tool 是面向模型的 schema，它翻译成 engine 决策，而不是一次 `Tool.invoke`。每一个都是一条会自我门控的 `control_tool` 贡献：挂载*本身*就是启用。
 
+下表的**激活名**是写进 `Options.plugins` 的那个名字，跟第一列给模型看的工具名不是一回事；写错会在构建 client 时直接抛 `ValueError`，错误信息里会把合法的名字都列出来。
+
 | 工具 | 何时挂载 | 插件 |
 | --- | --- | --- |
 | `Task` | agent 激活了 `delegation`（有子 agent 时自动推导） | `delegation` |
-| `TodoWrite` | agent 激活了 `TodoWrite` | `TodoWrite` |
-| `AskUserQuestion` | agent 激活了 `AskUserQuestion` | `AskUserQuestion` |
+| `TodoWrite` | agent 激活了 `todo_write` | `todo_write` |
+| `AskUserQuestion` | agent 激活了 `ask_user_question` | `ask_user_question` |
 | `skill` | agent 激活了 `skill_invocation` **并且**合并后的 skill 菜单非空 | `skills` |
 | `run_workflow` | `HostConfig.workflow_allowed` 打开（且该 agent 能委派） | `react` |
+| `RecallHistory` | host 接上了压缩 —— 走 `Client` / `query` 时一直是开的，子 agent 也一样；哪怕还没折叠过任何东西，schema 也在 | `react` |
 | `structured_output` | 该 agent 是带 per-helper schema 起跑的子任务 / workflow helper（**不是** `Options.output_schema`，那条走 provider 原生约束） | `react` |
+
+`RecallHistory` 把被压缩折叠掉、只在会话开头留下一条摘要的那些原始消息读回来 —— 原文一直留着，摘要只是在 prompt 里顶替它们的位置。会话里生出来的东西（早先那条报错的原话、压缩前讨论过的代码）不落在任何文件上，`Read` 永远找不回来，这个工具可以。结果是只读的渲染，用 `offset` 翻页；当前折叠区间会写在每次调用的结果里，也写在 `collapsed-context` 那条 reminder 里。
 
 ## MCP 工具
 
@@ -138,7 +170,7 @@ Control tool 是面向模型的 schema，它翻译成 engine 决策，而不是�
 | `medium` | 改动持久状态，但只在一个受限目录内——例如记忆存储。 |
 | `high` | 修改文件系统、派生外部进程，或触达真实网络。要过审批门。 |
 
-`Options.permission_mode` 决定哪些等级真的会被门控：`"default"` 门控 `low` 以上的一切，`"acceptEdits"` 豁免三个编辑类工具，而 `"bypassPermissions"` 什么都不门控。
+`Options.permission_mode` 决定哪些等级真的会被门控：`"default"` 门控 `low` 以上的一切，`"acceptEdits"` 豁免 `Edit` / `Write` 这两个编辑类工具，而 `"bypassPermissions"` 什么都不门控。
 
 ## 下一步
 

@@ -62,12 +62,18 @@ from noeta.protocols.events import (
     spill_goal,
 )
 from noeta.protocols.hooks import (
+    DecisionApprovalKind,
+    FINISH_APPROVAL_TOOL,
     ProposedAction,
     ProposedFinish,
     ProposedSpawnSubtask,
     ProposedToolCall,
+    SPAWN_APPROVAL_TOOL,
     Verdict,
     VerdictResult,
+    approval_wake_handle,
+    finish_approval_call_id,
+    spawn_approval_call_id,
 )
 from noeta.protocols.messages import (
     ImageBlock,
@@ -106,6 +112,7 @@ __all__ = [
     "SkillHashesFn",
     "ToolInvoker",
     "WriteSnapshotFn",
+    "append_decision_denial_feedback",
     "append_tool_denial_feedback",
     "dispatch_exit",
     "emit_skill_provenance_for_patch",
@@ -125,6 +132,7 @@ __all__ = [
     "maybe_emit_skill_content_recorded",
     "put_messages",
     "record_assistant_thinking",
+    "resume_approved_decision",
     "strip_message_origin",
     "wrap_tool_result_block",
 ]
@@ -1007,12 +1015,86 @@ def _yield_for_approval(
     )
 
 
+def _suspend_for_decision_approval(
+    ctx: HandlerContext,
+    task: Task,
+    *,
+    call: ToolCall,
+    lease_id: str,
+    trace_id: str,
+) -> Task:
+    """Record the durable approval anchor for a gated **decision** (finish /
+    spawn) and suspend on its handle.
+
+    The anchor is what makes the suspend resolvable: ``approve`` / ``deny``
+    name its ``call_id`` (``finish-{task_id}`` / ``spawn-{task_id}``, the two
+    reserved ids :mod:`noeta.protocols.hooks` derives) and
+    ``Engine.resolve_tool_approval`` reads the held decision back out of the
+    folded ``governance.pending_approvals``, so a fresh process finishes
+    exactly what the Guard stopped instead of asking the model again. Same
+    two steps the tool-call branch of :func:`handle_tool_calls` runs inline —
+    it just has a batch to balance first, so the anchor stays there.
+    """
+    ctx.emit(
+        task_id=task.task_id,
+        type_="ToolCallApprovalRequested",
+        payload=build_tool_call_approval_requested_payload(
+            call, ctx.content_store
+        ),
+        lease_id=lease_id,
+        trace_id=trace_id,
+    )
+    return _yield_for_approval(
+        ctx,
+        task,
+        handle=approval_wake_handle(call.call_id),
+        lease_id=lease_id,
+        trace_id=trace_id,
+    )
+
+
+def _finish_approval_call(task: Task, decision: FinishDecision) -> ToolCall:
+    """The reserved gated "call" standing in for a held ``finish``.
+
+    ``arguments`` is the decision itself, so the resume proceeds with the
+    answer the human reviewed. ``assistant_message`` records whether the
+    Policy had already committed its own assistant turn before the Guard ran
+    (``_apply_decision_assistant_message`` runs ahead of the handler), so the
+    resume knows whether :func:`_finish_body` must still synthesise the
+    fallback one — without it an approved finish would double the answer in
+    the conversation.
+    """
+    return ToolCall(
+        tool_name=FINISH_APPROVAL_TOOL,
+        arguments={
+            "answer": decision.answer,
+            "assistant_message": decision.assistant_message is not None,
+        },
+        call_id=finish_approval_call_id(task.task_id),
+    )
+
+
+def _spawn_approval_call(task: Task, decision: SpawnSubtaskDecision) -> ToolCall:
+    """The reserved gated "call" standing in for a held spawn — the delegation
+    spec the human reviews, and the one the resume launches."""
+    return ToolCall(
+        tool_name=SPAWN_APPROVAL_TOOL,
+        arguments={
+            "agent_name": decision.agent_name,
+            "goal": decision.goal,
+            "inputs": dict(decision.inputs),
+            "background": decision.background,
+        },
+        call_id=spawn_approval_call_id(task.task_id),
+    )
+
+
 def _guard_and_route(
     ctx: HandlerContext,
     task: Task,
     action: ProposedAction,
     *,
-    approval_handle: str,
+    approval_call: ToolCall,
     on_deny: Callable[[Optional[str]], Task],
     lease_id: str,
     trace_id: str,
@@ -1020,30 +1102,29 @@ def _guard_and_route(
     """Run a single proposed action past its Guard and route the verdict.
 
     The "ask the Guard, then branch on allow / deny / require_approval"
-    plumbing is the same deep logic for every *single-action* exit
-    decision (``handle_finish`` / ``handle_spawn_subtask``): only the two
-    non-allow tails differ. This helper owns the routing so the callers
-    keep just their pure decision body; the locality lives here.
+    plumbing behind ``handle_finish``. (``handle_spawn_subtask`` ran through
+    here too until a denied spawn stopped being terminal: it now answers its
+    calls and continues the turn, which is not an outcome this
+    ``Optional[Task]`` contract can express, so it asks the Guard itself.)
 
     * **DENY** → call ``on_deny(verdict.reason)`` and return its terminal
       ``Task``. The raw ``verdict.reason`` (possibly ``None``) is passed
-      through **unchanged** so each caller keeps its own deny shape:
-      ``handle_finish`` interpolates it raw (``f"finish denied: {reason}"``),
-      ``handle_spawn_subtask`` applies its own ``reason or "denied"`` fallback
-      before emitting ``SubtaskDenied`` + failing.
-    * **REQUIRE_APPROVAL** → suspend through :func:`_yield_for_approval`
-      with the caller's ``approval_handle`` (``approval-finish-…`` /
-      ``approval-spawn-…``).
+      through **unchanged** so the caller keeps its own deny shape
+      (``handle_finish`` interpolates it raw: ``f"finish denied: {reason}"``).
+    * **REQUIRE_APPROVAL** → record the caller's ``approval_call`` as the
+      durable anchor and suspend on its handle
+      (``approval-finish-…`` / ``approval-spawn-…``) through
+      :func:`_suspend_for_decision_approval`.
     * **ALLOW** → return ``None``; the caller proceeds with its pure body.
     """
     verdict = ctx.guard(action, task)
     if verdict.verdict is Verdict.DENY:
         return on_deny(verdict.reason)
     if verdict.verdict is Verdict.REQUIRE_APPROVAL:
-        return _yield_for_approval(
+        return _suspend_for_decision_approval(
             ctx,
             task,
-            handle=approval_handle,
+            call=approval_call,
             lease_id=lease_id,
             trace_id=trace_id,
         )
@@ -1129,7 +1210,7 @@ def handle_finish(
         ctx,
         task,
         ProposedFinish(answer=decision.answer),
-        approval_handle=f"approval-finish-{task.task_id}",
+        approval_call=_finish_approval_call(task, decision),
         on_deny=lambda reason: handle_fail(
             ctx,
             task,
@@ -1142,16 +1223,43 @@ def handle_finish(
     )
     if routed is not None:
         return routed
+    return _finish_body(
+        ctx,
+        task,
+        answer=decision.answer,
+        synthesize_assistant_message=decision.assistant_message is None,
+        lease_id=lease_id,
+        trace_id=trace_id,
+    )
+
+
+def _finish_body(
+    ctx: HandlerContext,
+    task: Task,
+    *,
+    answer: Any,
+    synthesize_assistant_message: bool,
+    lease_id: str,
+    trace_id: str,
+) -> Task:
+    """The post-Guard half of :func:`handle_finish`: record the final answer
+    and terminate.
+
+    Split out because the approval-resume path
+    (:func:`resume_approved_decision`) runs exactly this and nothing else —
+    the Guard already ran, and re-running it on the human's own approval
+    would just suspend on the same handle again.
+    """
     # Fallback: when the Policy did not attach its own ``assistant_message``
     # (Stub policies don't), synthesise a minimal assistant Message from
-    # ``decision.answer`` so RuntimeState still surfaces the final answer in the
+    # ``answer`` so RuntimeState still surfaces the final answer in the
     # conversation log. A Policy that already attached an assistant_message has
     # had it appended at the top of ``run_one_step`` via
     # ``_apply_decision_assistant_message`` — no duplicate emission here.
-    if decision.assistant_message is None:
+    if synthesize_assistant_message:
         msg = Message(
             role="assistant",
-            content=[TextBlock(text=_render_answer_text(decision.answer))],
+            content=[TextBlock(text=_render_answer_text(answer))],
         )
         task.runtime.messages.append(msg)
         ctx.emit(
@@ -1165,7 +1273,7 @@ def handle_finish(
     # event stays under the payload cap (otherwise the write raises
     # PayloadTooLarge and crashes the drain). The full
     # text still lives in the final assistant Message (messages_ref) too.
-    inline_answer, answer_ref = _spill_answer(ctx.content_store, decision.answer)
+    inline_answer, answer_ref = _spill_answer(ctx.content_store, answer)
     return _terminate(
         ctx,
         task,
@@ -1196,6 +1304,16 @@ def handle_fail(
     )
 
 
+#: Model-facing text for a delegation the Guard refused. The Guard's own
+#: ``reason`` is kernel/Guard vocabulary, so it is quoted rather than rewritten;
+#: the sentences around it say what did not happen and what to do instead.
+_SPAWN_DENIED_MESSAGE = (
+    "Delegation refused: {reason}. No sub-agent started; none of this "
+    "response's Task calls ran. Use an offered sub-agent name, or do the work "
+    "yourself."
+)
+
+
 def handle_spawn_subtask(
     ctx: HandlerContext,
     task: Task,
@@ -1203,7 +1321,7 @@ def handle_spawn_subtask(
     *,
     lease_id: str,
     trace_id: str,
-) -> Task:
+) -> Optional[Task]:
     """Suspend parent on a typed wake condition; bootstrap the child.
 
     The order is fixed: ``SubtaskSpawned`` (parent) → ``TaskCreated`` (child
@@ -1211,42 +1329,91 @@ def handle_spawn_subtask(
     parent is returned in ``suspended`` status; the worker releases the lease.
     The ``dispatcher.enqueue`` for the child runs in
     :class:`noeta.core.observers.ChildLifecycleObserver`.
+
+    Returns ``None`` when the Guard DENIED: a refused delegation is feedback,
+    not a verdict on the conversation, so the durable ``SubtaskDenied`` is
+    still written, every ``Task`` call is answered with a failed result, no
+    child is created, and the parent's turn CONTINUES so the model can
+    re-issue. Same shape the background-spawn path already takes.
     """
-    def _on_deny(raw_reason: Optional[str]) -> Task:
-        reason = raw_reason or "denied"
-        goal_inline, goal_ref = spill_goal(ctx.content_store, decision.goal)
-        ctx.emit(
-            task_id=task.task_id,
-            type_="SubtaskDenied",
-            payload=SubtaskDeniedPayload(
-                agent_name=decision.agent_name,
-                goal=goal_inline,
-                reason=reason,
-                goal_ref=goal_ref,
-            ),
-            lease_id=lease_id,
-            trace_id=trace_id,
-        )
-        return handle_fail(
+    verdict = ctx.guard(ProposedSpawnSubtask(decision=decision), task)
+    if verdict.verdict is Verdict.DENY:
+        reason = verdict.reason or "denied"
+        _emit_subtask_denied(
             ctx,
             task,
-            FailDecision(reason=f"subtask denied: {reason}"),
+            agent_name=decision.agent_name,
+            goal=decision.goal,
+            reason=reason,
             lease_id=lease_id,
             trace_id=trace_id,
         )
+        _append_denial_feedback(
+            ctx,
+            task,
+            result_text=_SPAWN_DENIED_MESSAGE.format(reason=reason),
+            fallback_text=_SPAWN_DENIED_MESSAGE.format(reason=reason),
+            lease_id=lease_id,
+            trace_id=trace_id,
+        )
+        return None
+    if verdict.verdict is Verdict.REQUIRE_APPROVAL:
+        return _suspend_for_decision_approval(
+            ctx,
+            task,
+            call=_spawn_approval_call(task, decision),
+            lease_id=lease_id,
+            trace_id=trace_id,
+        )
+    return _spawn_body(
+        ctx, task, decision, lease_id=lease_id, trace_id=trace_id
+    )
 
-    routed = _guard_and_route(
-        ctx,
-        task,
-        ProposedSpawnSubtask(decision=decision),
-        approval_handle=f"approval-spawn-{task.task_id}",
-        on_deny=_on_deny,
+
+def _emit_subtask_denied(
+    ctx: HandlerContext,
+    task: Task,
+    *,
+    agent_name: str,
+    goal: str,
+    reason: str,
+    lease_id: str,
+    trace_id: str,
+) -> None:
+    """The durable audit record of a refused delegation — one ``SubtaskDenied``
+    on the parent stream, and **zero** ``SubtaskSpawned`` / child
+    ``TaskCreated``. Written on every deny path (single, background, fan-out)
+    whether or not the turn continues afterwards."""
+    goal_inline, goal_ref = spill_goal(ctx.content_store, goal)
+    ctx.emit(
+        task_id=task.task_id,
+        type_="SubtaskDenied",
+        payload=SubtaskDeniedPayload(
+            agent_name=agent_name,
+            goal=goal_inline,
+            reason=reason,
+            goal_ref=goal_ref,
+        ),
         lease_id=lease_id,
         trace_id=trace_id,
     )
-    if routed is not None:
-        return routed
 
+
+def _spawn_body(
+    ctx: HandlerContext,
+    task: Task,
+    decision: SpawnSubtaskDecision,
+    *,
+    lease_id: str,
+    trace_id: str,
+) -> Task:
+    """The post-Guard half of :func:`handle_spawn_subtask`: bootstrap the child
+    and suspend the parent on its barrier.
+
+    Split out for the same reason as :func:`_finish_body` — the
+    approval-resume path proceeds with the reviewed delegation and must not
+    re-consult the Guard that held it.
+    """
     subtask_id = ctx.id_factory()
     goal_inline, goal_ref = spill_goal(ctx.content_store, decision.goal)
     ctx.emit(
@@ -1407,38 +1574,58 @@ def handle_spawn_background_subtask(
         # conversation (unlike a foreground denial) — the model just gets a
         # denial tool_result and keeps its turn.
         reason = verdict.reason or "denied"
-        goal_inline, goal_ref = spill_goal(ctx.content_store, decision.goal)
-        ctx.emit(
-            task_id=task.task_id,
-            type_="SubtaskDenied",
-            payload=SubtaskDeniedPayload(
-                agent_name=decision.agent_name,
-                goal=goal_inline,
-                reason=reason,
-                goal_ref=goal_ref,
-            ),
+        _emit_subtask_denied(
+            ctx,
+            task,
+            agent_name=decision.agent_name,
+            goal=decision.goal,
+            reason=reason,
             lease_id=lease_id,
             trace_id=trace_id,
         )
         _append_background_spawn_result(
             ctx, task, call_id=call_id, success=False,
-            text=f"background sub-agent denied: {reason}",
+            text=_SPAWN_DENIED_MESSAGE.format(reason=reason),
             lease_id=lease_id, trace_id=trace_id,
         )
         return None
     if verdict.verdict is Verdict.REQUIRE_APPROVAL:
         # A background launch has no mid-turn approval (no partial-launch +
-        # approval-resume); route to the SAME approval suspend the foreground
-        # spawn uses, so a human can approve and the model re-issues the spawn
-        # on resume.
-        return _yield_for_approval(
+        # approval-resume); route to the SAME approval suspend — and the same
+        # ``approval-spawn-{task_id}`` anchor — the foreground spawn uses. The
+        # anchor records ``background=True``, so approving launches THIS
+        # delegation from :func:`resume_approved_decision` rather than asking
+        # the model to re-issue it (a re-issue would meet the same Guard and
+        # suspend again, which is no exit at all).
+        return _suspend_for_decision_approval(
             ctx,
             task,
-            handle=f"approval-spawn-{task.task_id}",
+            call=_spawn_approval_call(task, decision),
             lease_id=lease_id,
             trace_id=trace_id,
         )
+    return _background_spawn_body(
+        ctx, task, decision,
+        call_id=call_id, lease_id=lease_id, trace_id=trace_id,
+    )
 
+
+def _background_spawn_body(
+    ctx: HandlerContext,
+    task: Task,
+    decision: SpawnSubtaskDecision,
+    *,
+    call_id: str,
+    lease_id: str,
+    trace_id: str,
+) -> None:
+    """The post-Guard half of :func:`handle_spawn_background_subtask`: cap
+    check, durable record, child genesis, ack, hand-off.
+
+    Always returns ``None`` — over-cap and launched alike continue the
+    parent's turn. Split out so the approval-resume path launches the
+    reviewed delegation without re-consulting the Guard that held it.
+    """
     # Per-session concurrency cap (mirrors the background-shell job cap):
     # CHECK BEFORE any durable write so an over-cap launch leaves NO
     # ``BackgroundSubagentStarted`` / child ``TaskCreated`` — the model just gets
@@ -1511,6 +1698,170 @@ def handle_spawn_background_subtask(
     return None
 
 
+def _unpaired_tool_use_call_ids(task: Task) -> tuple[str, ...]:
+    """Every recorded ``tool_use`` with no matching ``tool_result``, in
+    emission order.
+
+    The structural invariant this module repeats everywhere: a compose
+    carrying a dangling ``tool_use`` is rejected by providers with a fatal
+    400. Generalises :func:`_pending_background_spawn_call_id`, which asks the
+    same question of the ``spawn_subagent`` tool only.
+    """
+    resolved: set[str] = set()
+    for msg in task.runtime.messages:
+        if msg.role == "tool":
+            for block in msg.content:
+                if isinstance(block, ToolResultBlock):
+                    resolved.add(block.call_id)
+    pending: list[str] = []
+    for msg in task.runtime.messages:
+        if msg.role != "assistant":
+            continue
+        for block in msg.content:
+            if (
+                isinstance(block, ToolUseBlock)
+                and block.call_id not in resolved
+            ):
+                pending.append(block.call_id)
+    return tuple(pending)
+
+
+def resume_approved_decision(
+    ctx: HandlerContext,
+    task: Task,
+    *,
+    kind: DecisionApprovalKind,
+    arguments: dict[str, Any],
+    lease_id: str,
+    trace_id: str,
+) -> Task:
+    """Proceed with a finish / spawn a human approved, **bypassing the Guard**
+    — the decision-point twin of :func:`invoke_approved_tool_call`.
+
+    ``arguments`` is the recovered ``governance.pending_approvals`` entry: the
+    held decision itself, as :func:`_finish_approval_call` /
+    :func:`_spawn_approval_call` recorded it before the suspend. The resume
+    therefore proceeds with the exact answer / delegation the human reviewed,
+    on any process, without asking the model a second time — and without
+    re-running the Guard, which returned ``require_approval`` and would
+    simply suspend on the same handle again.
+
+    The returned Task's status IS the turn's outcome the caller releases on:
+    ``terminal`` for a finish, ``suspended`` on the child's barrier for a
+    foreground spawn, still ``running`` for a background launch (whose parent
+    turn continues on the next step).
+    """
+    if kind == "finish":
+        return _finish_body(
+            ctx,
+            task,
+            answer=arguments.get("answer"),
+            synthesize_assistant_message=not arguments.get("assistant_message"),
+            lease_id=lease_id,
+            trace_id=trace_id,
+        )
+    decision = SpawnSubtaskDecision(
+        agent_name=arguments["agent_name"],
+        goal=arguments["goal"],
+        inputs=dict(arguments.get("inputs") or {}),
+        background=bool(arguments.get("background")),
+    )
+    call_id = (
+        _pending_background_spawn_call_id(task) if decision.background else None
+    )
+    if call_id is not None and ctx.launch_background_subagent is not None:
+        _background_spawn_body(
+            ctx, task, decision,
+            call_id=call_id, lease_id=lease_id, trace_id=trace_id,
+        )
+        return task
+    # Not a background launch, or this engine has no launcher / no tool_use
+    # left to pair the ack to: the foreground barrier spawn, exactly the
+    # fallback ``handle_spawn_background_subtask`` and ``dispatch_exit`` take.
+    return _spawn_body(
+        ctx, task, decision, lease_id=lease_id, trace_id=trace_id
+    )
+
+
+def append_decision_denial_feedback(
+    ctx: HandlerContext,
+    task: Task,
+    *,
+    kind: DecisionApprovalKind,
+    reason: str,
+    lease_id: str,
+    trace_id: str,
+) -> Task:
+    """Return a human's denial of a gated finish / spawn to the model so the
+    turn CONTINUES — the decision-point twin of
+    :func:`append_tool_denial_feedback`.
+
+    A human denial is feedback, not a verdict on the conversation: the human
+    declined this one answer / delegation and the model gets to adapt. Every
+    model-driven form of these decisions is proposed FROM a ``tool_use`` — the
+    ``Task`` control tool for a spawn, the structured-output tool for a
+    finish — so each dangling call is answered with a failed result and the
+    next compose stays balanced. A Policy that proposed the decision without
+    one (a scripted Policy, a plain ``end_turn`` finish) has nothing to pair,
+    so the denial rides an ``origin="system"`` user message instead.
+    """
+    return _append_denial_feedback(
+        ctx,
+        task,
+        result_text=reason,
+        fallback_text=f"{kind} not approved: {reason}",
+        lease_id=lease_id,
+        trace_id=trace_id,
+    )
+
+
+def _append_denial_feedback(
+    ctx: HandlerContext,
+    task: Task,
+    *,
+    result_text: str,
+    fallback_text: str,
+    lease_id: str,
+    trace_id: str,
+) -> Task:
+    """Hand a refusal back to the model and keep the turn balanced.
+
+    One failed ``ToolResultBlock`` per UNPAIRED ``tool_use``, in one
+    ``MessagesAppended`` — the structural invariant this module repeats: a
+    compose carrying a dangling ``tool_use`` is a fatal provider 400. The scan
+    walks blocks, so a batch-form ``Task`` call whose members share one
+    ``call_id`` is still answered exactly once. ``fallback_text`` rides an
+    ``origin="system"`` user message when the decision came from a Policy that
+    emitted no ``tool_use`` at all.
+    """
+    pending = _unpaired_tool_use_call_ids(task)
+    if pending:
+        msg = Message(
+            role="tool",
+            content=[
+                ToolResultBlock(
+                    call_id=call_id, output="", success=False, error=result_text
+                )
+                for call_id in pending
+            ],
+        )
+    else:
+        msg = Message(
+            role="user",
+            content=[TextBlock(text=fallback_text)],
+            origin="system",
+        )
+    task.runtime.messages.append(msg)
+    ctx.emit(
+        task_id=task.task_id,
+        type_="MessagesAppended",
+        payload=put_messages(ctx.content_store, [msg]),
+        lease_id=lease_id,
+        trace_id=trace_id,
+    )
+    return task
+
+
 #: Max children a single fan-out batch may create. Keeps
 #: ``SubtaskGroupCompleted.subtask_ids`` (carried in TaskSuspended / snapshot
 #: ``wake_on``) well under the 4 KB envelope.
@@ -1559,28 +1910,33 @@ def _deny_fanout_batch(
     spec: SpawnSubtaskSpec,
     *,
     reason: str,
+    message: str,
     lease_id: str,
     trace_id: str,
-) -> Task:
+) -> None:
     """All-or-none deny: emit one ``SubtaskDenied`` (the failing spec for a
-    per-spec deny, the first spec for a global one) + fail the parent. **Zero**
-    ``SubtaskSpawned`` / child ``TaskCreated``.
+    per-spec deny, the first spec for a global one), answer every ``Task`` call
+    with ``message``, and let the turn continue. **Zero** ``SubtaskSpawned`` /
+    child ``TaskCreated``.
+
+    ``reason`` is the durable audit code (``fanout_batch_size:20>16``);
+    ``message`` is what the model reads. They are separate on purpose: the code
+    must stay greppable in the ledger, and the model cannot act on it.
     """
-    goal_inline, goal_ref = spill_goal(ctx.content_store, spec.goal)
-    ctx.emit(
-        task_id=task.task_id,
-        type_="SubtaskDenied",
-        payload=SubtaskDeniedPayload(
-            agent_name=spec.agent_name, goal=goal_inline, reason=reason,
-            goal_ref=goal_ref,
-        ),
+    _emit_subtask_denied(
+        ctx,
+        task,
+        agent_name=spec.agent_name,
+        goal=spec.goal,
+        reason=reason,
         lease_id=lease_id,
         trace_id=trace_id,
     )
-    return handle_fail(
+    _append_denial_feedback(
         ctx,
         task,
-        FailDecision(reason=f"subtask denied: {reason}"),
+        result_text=message,
+        fallback_text=message,
         lease_id=lease_id,
         trace_id=trace_id,
     )
@@ -1593,12 +1949,14 @@ def handle_spawn_subtasks(
     *,
     lease_id: str,
     trace_id: str,
-) -> Task:
+) -> Optional[Task]:
     """Fan out N sub-agents and suspend on an all-of group join.
 
     **All-or-none admission**: preflight every spec (size + duplicate call_id +
     per-spec guard with simulated ``spawned_subtasks = current + i``); on any
-    deny / require_approval the whole batch denies (parent fail, zero child).
+    deny / require_approval the whole batch denies — zero child, one
+    ``SubtaskDenied``, every ``Task`` call answered with a failed result, and
+    ``None`` returned so the turn continues and the model can re-issue.
     Only after all pass are the N ``SubtaskSpawned`` + N child ``TaskCreated``
     emitted (member order) and the parent suspended on ``SubtaskGroupCompleted``.
     """
@@ -1612,11 +1970,17 @@ def handle_spawn_subtasks(
 
     # --- global preflight (all-or-none): size + call_id layout ---
     if not (1 <= n <= MAX_FANOUT):
-        return _deny_fanout_batch(
+        _deny_fanout_batch(
             ctx, task, specs[0],
             reason=f"fanout_batch_size:{n}>{MAX_FANOUT}",
+            message=(
+                f"{n} Task calls in one response exceeds the limit of "
+                f"{MAX_FANOUT}. None were started — re-issue them in batches "
+                f"of {MAX_FANOUT} or fewer."
+            ),
             lease_id=lease_id, trace_id=trace_id,
         )
+        return None
     # Batch-form layout check: members of ONE batch call legitimately share its
     # call_id — they must be contiguous and numbered 0..k-1, and a call_id must
     # not reappear in a later run. This catches two distinct tool_uses with a
@@ -1624,10 +1988,16 @@ def handle_spawn_subtasks(
     # one-call ``spawns`` array, and it is exactly the layout the resume pairing
     # reproduces positionally from the assistant message.
     if not _valid_fanout_call_layout(specs):
-        return _deny_fanout_batch(
+        _deny_fanout_batch(
             ctx, task, specs[0], reason="fanout_batch_duplicate_call_id",
+            message=(
+                "Two Task calls in this response share one call id, so their "
+                "results could not be told apart. None were started — "
+                "re-issue them as separate calls with distinct ids."
+            ),
             lease_id=lease_id, trace_id=trace_id,
         )
+        return None
 
     # --- per-spec guard preflight, simulated spawned_subtasks ---
     sim_spawned = task.governance.spawned_subtasks
@@ -1638,25 +2008,38 @@ def handle_spawn_subtasks(
             spawned_subtasks_override=sim_spawned,
         )
         if verdict.verdict is Verdict.DENY:
-            return _deny_fanout_batch(
-                ctx, task, spec, reason=verdict.reason or "denied",
+            reason = verdict.reason or "denied"
+            _deny_fanout_batch(
+                ctx, task, spec, reason=reason,
+                message=_SPAWN_DENIED_MESSAGE.format(reason=reason),
                 lease_id=lease_id, trace_id=trace_id,
             )
+            return None
         if verdict.verdict is Verdict.REQUIRE_APPROVAL:
             # Approval is unsupported inside a fan-out batch (no partial create,
-            # no per-spec approval-resume) → deny.
-            return _deny_fanout_batch(
+            # no per-spec approval-resume) → deny. A single Task call per
+            # response still routes through the approval suspend, which is why
+            # the message points there.
+            _deny_fanout_batch(
                 ctx, task, spec, reason="approval_unsupported_in_fanout",
+                message=(
+                    "A sub-agent in this response needs approval, which a "
+                    f"batch cannot carry. None of the {n} were started — "
+                    "re-issue them one Task call per response."
+                ),
                 lease_id=lease_id, trace_id=trace_id,
             )
+            return None
         sim_spawned += 1  # current + i, not the pre-batch counter
 
     # --- all passed → mint N ids + group_id, emit in member order ---
     subtask_ids = tuple(ctx.id_factory() for _ in specs)
-    if len(set(subtask_ids)) != n:  # defensive
-        return _deny_fanout_batch(
-            ctx, task, specs[0], reason="fanout_batch_duplicate_subtask_id",
-            lease_id=lease_id, trace_id=trace_id,
+    if len(set(subtask_ids)) != n:
+        # The id factory handed back a collision — a construction bug in this
+        # process, not anything the model did or can fix. Fail loud rather than
+        # teach the model a lesson about our own plumbing.
+        raise RuntimeError(
+            "id_factory produced duplicate subtask ids for a fan-out batch"
         )
     group_id = derive_group_id(subtask_ids)
     for spec, sid in zip(specs, subtask_ids):
@@ -1952,10 +2335,13 @@ def handle_tool_calls(
             # that providers reject with a fatal 400.
             for remaining in decision.calls[idx:]:
                 stopped = "interrupted: a human stop landed during this batch"
+                # A failed result carries its text once: the adapters render
+                # ``error`` ahead of ``output``, so filling both would read the
+                # sentence twice.
                 result_blocks.append(
                     ToolResultBlock(
                         call_id=remaining.call_id,
-                        output=stopped,
+                        output="",
                         success=False,
                         error=stopped,
                     )
@@ -1994,7 +2380,7 @@ def handle_tool_calls(
             result_blocks.append(
                 ToolResultBlock(
                     call_id=call.call_id,
-                    output=reason,
+                    output="",
                     success=False,
                     error=reason,
                 )
@@ -2035,7 +2421,7 @@ def handle_tool_calls(
                 result_blocks.append(
                     ToolResultBlock(
                         call_id=trailing.call_id,
-                        output=skipped,
+                        output="",
                         success=False,
                         error=skipped,
                     )
@@ -2053,11 +2439,30 @@ def handle_tool_calls(
             return _yield_for_approval(
                 ctx,
                 task,
-                handle=f"approval-{call.call_id}",
+                handle=approval_wake_handle(call.call_id),
                 lease_id=lease_id,
                 trace_id=trace_id,
             )
-        tool = ctx.resolve_tool(call)
+        try:
+            tool = ctx.resolve_tool(call)
+        except KeyError:
+            # A name the model invented is model output, not a kernel fault.
+            # The assistant turn carrying it is already committed, so raising
+            # would strand the whole batch mid-flight (and every sibling call
+            # with it). Answer this one call and let the rest of the batch run.
+            unknown = (
+                f"No tool named {call.tool_name!r} is available in this task; "
+                "use one of the offered tools."
+            )
+            result_blocks.append(
+                ToolResultBlock(
+                    call_id=call.call_id,
+                    output="",
+                    success=False,
+                    error=unknown,
+                )
+            )
+            continue
         result = ctx.tool_invoker.invoke(
             tool,
             call,
@@ -2137,16 +2542,21 @@ def dispatch_exit(
     Exit decisions produce a final ``Task`` (terminal or suspended)
     and exit the compose → decide loop. ``ToolCallsDecision`` is NOT
     routed here (it loops back; see ``Engine.run_one_step``'s special
-    case).
+    case), and neither are the two spawn decisions when they DENY —
+    a denied spawn answers its calls and keeps the turn running, which
+    ``Engine.run_one_step`` routes ahead of this dispatcher. A caller that
+    reaches the spawn handlers through here gets the still-running task back.
     """
     if isinstance(decision, SpawnSubtaskDecision):
-        return handle_spawn_subtask(
+        spawned = handle_spawn_subtask(
             ctx, task, decision, lease_id=lease_id, trace_id=trace_id
         )
+        return spawned if spawned is not None else task
     if isinstance(decision, SpawnSubtasksDecision):
-        return handle_spawn_subtasks(
+        fanned = handle_spawn_subtasks(
             ctx, task, decision, lease_id=lease_id, trace_id=trace_id
         )
+        return fanned if fanned is not None else task
     if isinstance(decision, FinishDecision):
         return handle_finish(
             ctx, task, decision, lease_id=lease_id, trace_id=trace_id

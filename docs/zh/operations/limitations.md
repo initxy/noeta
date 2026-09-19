@@ -62,7 +62,7 @@
 
 ### 可靠性事件是进程本地的
 
-**这意味着：** worker 会向一个可注入的 sink 发出 `ReliabilityEvent` —— `stale_requeued`、`suspended_without_wake`、`step_failed_retryable`、`heartbeat_invalid_lease`、`shutdown_abandoned`、`timers_fired`、`attempt_abandoned`、`attempt_parked` —— 这个 sink 默认是结构化日志。它们**不是** EventLog 事件，不会被持久化，也活不过一次重启。
+**这意味着：** worker 会向一个可注入的 sink 发出 `ReliabilityEvent` —— `stale_requeued`、`suspended_without_wake`、`step_failed_retryable`、`heartbeat_invalid_lease`、`shutdown_abandoned`、`timers_fired`、`attempt_abandoned`、`attempt_parked`、`cap_terminal_reconciled`、`dispatcher_unavailable` —— 这个 sink 默认是结构化日志。它们**不是** EventLog 事件，不会被持久化，也活不过一次重启。
 
 **什么时候撞上：** 你要基于 worker 的可靠性信号搭监控或告警。
 

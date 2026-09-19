@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import email.utils
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -23,9 +24,32 @@ __all__ = [
     "HOST_INJECTED_PREAMBLE",
     "encode_tool_arguments",
     "decode_tool_arguments",
+    "neutralize_reserved_tags",
     "parse_retry_after",
     "render_tool_result_body",
 ]
+
+
+#: The one tag that marks a host-authored turn on the Anthropic wire. Matched
+#: case-insensitively and with whitespace tolerated inside the brackets, so a
+#: near-miss spelling cannot slip a boundary marker through either.
+_RESERVED_TAG_RE = re.compile(r"<(\s*/?\s*system-reminder\s*)>", re.IGNORECASE)
+
+
+def neutralize_reserved_tags(text: str) -> str:
+    """Rewrite every ``<system-reminder>`` / ``</system-reminder>`` occurrence
+    so it no longer parses as the reserved tag.
+
+    Provenance is structural: only the provider adapter's wrapper may open or
+    close a host-authored turn. Plenty of text reaching the wire comes from
+    somewhere else — a background job's stdout, a sub-agent's answer, an
+    attachment, an MCP payload, a memory body — so the two chokepoints that
+    render it (:func:`render_tool_result_body` and the Anthropic wrapper) pass
+    it through here first. Escaping the opening bracket is the whole rewrite:
+    the words stay readable, the boundary stops being forgeable, and the
+    transform is pure, so a cached prefix re-renders byte-identically.
+    """
+    return _RESERVED_TAG_RE.sub(r"&lt;\1>", text)
 
 
 #: Self-describing preface for host-injected turns (``origin`` system/memory)
@@ -54,12 +78,18 @@ def render_tool_result_body(output: Any, error: Optional[str]) -> str:
     a ~6x ``\\uXXXX`` expansion. A failed call's ``error`` text leads the body:
     OpenAI-shaped wires have no error flag, so the text itself is the only
     channel that survives every provider.
+
+    Both halves go through :func:`neutralize_reserved_tags` — a tool result is
+    the widest channel anything outside the host has into the prompt, and it
+    must not be able to spell a host-turn boundary.
     """
     if isinstance(output, str):
         body = output
     else:
         body = json.dumps(output, ensure_ascii=False)
+    body = neutralize_reserved_tags(body)
     if error:
+        error = neutralize_reserved_tags(error)
         return f"{error}\n{body}" if body else error
     return body
 

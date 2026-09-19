@@ -107,7 +107,7 @@ if outcome.wake_handle == f"approval-{call_id}":
 client.send_goal(outcome.task_id, goal="Now add a test for it.")
 ```
 
-一次被门控的工具调用挂在 `approval-{call_id}` 上；被门控的 `finish` 或 spawn 则分别用 `approval-finish-{task_id}` / `approval-spawn-{task_id}`。请从 `client.events(task_id)` 里的 `ToolCallApprovalRequested` 事件上读取 `call_id`，而不要去解析这个句柄。
+一次被门控的工具调用挂在 `approval-{call_id}` 上；被门控的 `finish` 或 spawn 则分别用 `approval-finish-{task_id}` / `approval-spawn-{task_id}`，它们的 `call_id` 是保留的 `finish-{task_id}` / `spawn-{task_id}`。请从 `client.events(task_id)` 里的 `ToolCallApprovalRequested` 事件上读取 `call_id`，而不要去解析这个句柄；不论哪一种，`approve` / `deny` 都原样接收这个 `call_id`。批准一个被门控的决定会直接按人已经审过的那个答案或那次委派继续走，不会再问一次模型；拒绝则把这次否决作为反馈交回给模型，这一轮继续跑下去。
 
 ## seed / drive 拆分
 

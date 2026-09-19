@@ -1,12 +1,13 @@
-# Noeta is an MCP client over a request/response subset; credentials stay host-side and the tool set is rebuilt from the recording
+# Noeta is an MCP client over a request/response subset; credentials stay host-side and a resume rebuilds the tool set from the recording
 
 ## Context
 
 An MCP server — local stdio or remote HTTP — exposes tools, prompts and
 resources that an Agent should be able to use. Noeta is always the client, the
 borrowing party. Two hard lines constrain how: the client is **synchronous and
-single-threaded**, and a Task's tool set must survive **resume** without
-touching the network, because resume works by folding the recording forward.
+single-threaded**, and a Task's tool set must survive **resume** — the
+recording, never process memory, decides which servers a Task was given, so a
+restart or another machine picking the Task up reaches the same tool set.
 
 ## Decision
 
@@ -19,6 +20,28 @@ response, accepting either a bare JSON object or an event-stream body carrying a
 single data line; it never holds a stream open. Resource templates and lazy tool
 search are out of scope, and exposing Noeta *as* an MCP server is the opposite
 direction and out of scope.
+
+**A Streamable HTTP session is joined, not held open.** A 2025-spec server
+assigns an `Mcp-Session-Id` on `initialize` and rejects every later request that
+does not carry it. The HTTP client captures that id, finishes the lifecycle with
+`notifications/initialized` (answered `202` with an empty body, so nothing is
+parsed), echoes the id on every request it makes afterwards, and `DELETE`s it
+when the connection is torn down — retired, expired, or closed with the host. A
+`404` while an id is in play means the server dropped the session: the client
+forgets the id and the fault travels the path a dead connection already travels
+(retire, connect fresh once, handshake again). A server that assigns no id stays
+stateless and sees exactly the requests it saw before, the notification
+included: the lifecycle asks for it unconditionally, and sending it only into a
+session is the conservative cut — a stateless server has no state for it to
+advance, and the connectors that work today keep a byte-identical wire. A
+notification the server refuses fails the connect, the same fail-fast the stdio
+client gives it. None of this holds a stream open — it is still one POST, one
+response — and the id is treated like a credential: on the wire only, never in
+an event, a recording, or provenance. The injectable POST function may return
+raw body bytes (the original shape, stateless) or an `McpHttpResponse` carrying
+the response headers, which is what a host-supplied transport returns to join a
+session; only the client's own transport sends the `DELETE`, since a host that
+supplied a transport owns its network path.
 
 **The transport belongs to the `mcp` built-in.** The stdio and HTTP clients, the
 tool wrapper, and the prompt and resource helpers live there; the shared
@@ -73,17 +96,29 @@ lock, so concurrent turns on one connection queue rather than interleave. A
 pooled connection that stops answering `tools/list` is retired and the
 server connected fresh once before it is skipped for the turn.
 
-**Resume rebuilds the tool set from the recording, never by reconnecting.** The
+**A resume takes the server list from the recording and reconnects it.** The
 real tool spec — name, input schema, and description verbatim — is pinned into
-the first recorded LLM request, and a resumed run reconstructs it from there, so
-the rebuilt schema and stable hash match the live run byte for byte.
+the first recorded LLM request, so what a run was given stays auditable byte for
+byte whatever the server does afterwards. A resume *within* the turn reuses the
+turn's Engine and touches nothing. A resume in another process — a restart, a
+daemon worker, another machine — has lost the per-turn alias selector, so it
+reads the enabled aliases back off the folded provenance and connects them
+through the host's resolver, in the pool scope a turn-open build would use.
+Reconnecting is not optional: a schema rebuilt from a recording carries no live
+client, and the call an approval resumes into has to execute. With the servers
+unchanged the rebuilt tool set — and the stable prefix over it — is the recorded
+one; a server that changed underneath shows up exactly as it would at the next
+turn's `tools/list`, and an unreachable one is skipped the way a turn-open build
+skips it.
 
 **Provenance is recorded, credential-free.** One event per Task — and one
 more each time the enabled set changes — emitted at the build that connects,
 records which aliases were enabled and which of each server's tools were
 ticked — names only, never a URL, token or header. A Task with no MCP emits
 nothing and folds to an empty record with zero drift. Tool *behaviour* is not
-carried here; the recorded request spec is the durable truth a resume reads.
+carried here; the recorded request spec pins that. This record is also what a
+resume in another process reads to know which servers to connect, so a rebuild
+that lands on the same set adds no second event.
 
 **Prompts arrive as recorded messages.** A server's prompts hang on the same
 slash-invocation menu skills use, named `/mcp__<alias>__<prompt>`. Expanding one
@@ -118,10 +153,12 @@ Credentials staying host-side is the host boundary. A request body carrying
 tokens would spread them into logs, recordings and provenance; a callback that
 resolves an alias into a spec keeps them in one place under operator control.
 
-Resume is not threatened by live dependence on the outside world because the tool
-spec that actually shaped the recording is pinned into it. Two live runs against
-the same server can legitimately differ; faithfully recording the tools this run
-was given is the guarantee that matters.
+A resume depends on the servers being reachable — a tool has to be live to be
+called — but never on their being identical, because the tool spec that actually
+shaped the recording is pinned into it. Two live runs against the same server can
+legitimately differ; faithfully recording the tools this run was given is the
+guarantee that matters, and a server that is down at resume costs the Task that
+server's tools rather than the Task.
 
 Injected server text is both a prompt-injection surface and a context bomb — the
 transport caps only at megabytes — so it is bounded before it reaches the model.
@@ -136,6 +173,9 @@ drifting when the underlying file or resource changes.
    and rejected: it requires a persistent open stream and a background reader,
    contradicting the synchronous single-threaded client and the frozen tool set,
    and `sampling` would hand a remote server the ability to start model calls.
+   The rejection is the push half only — the session half (see the session
+   decision above) is one request header and costs neither a stream nor a
+   thread, and without it every stateful hosted server is unreachable.
 2. **Expose Noeta itself as an MCP server.** Rejected: it is the opposite
    direction from connecting out, and shares nothing with this client.
 3. **Support OAuth as the auth mechanism.** Rejected: the authorization redirect
@@ -167,6 +207,9 @@ drifting when the underlying file or resource changes.
   so tests can run the whole path without real network; `build_mcp_tools`
   takes the host's pool on the task-start path and connects fresh, caller-owned
   clients without one.
+- Every process that may resume a Task needs the alias resolver wired, because
+  that is where the reconnect reads its specs; a process without one rebuilds
+  the Task with no MCP tools.
 - Credentials have hard in/out constraints: never into a request body, never into
   a recording, never into a host-config fingerprint. Any auth mechanism must keep
   the token landing host-side.

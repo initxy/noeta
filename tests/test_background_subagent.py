@@ -32,6 +32,7 @@ from noeta.protocols.messages import (
     ToolUseBlock,
     Usage,
 )
+from noeta.protocols.hooks import ProposedSpawnSubtask, VerdictResult
 from noeta.protocols.wake import HumanResponseReceived, SubtaskCompleted
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.runtime.shell_policy import ShellMode
@@ -268,6 +269,69 @@ def test_background_spawn_over_cap_is_rejected_without_durable_trace(
     assert "not started" in paired[0].output.lower() or (
         "not started" in (paired[0].error or "").lower()
     )
+
+
+class _RequireApprovalOnSpawn:
+    """A host compliance Guard doing review-before-delegate."""
+
+    name = "approve-spawn"
+    priority = 10
+
+    def check(self, action: Any, ctx: Any) -> VerdictResult:  # noqa: ARG002
+        if isinstance(action, ProposedSpawnSubtask):
+            return VerdictResult.require_approval("review before delegate")
+        return VerdictResult.allow()
+
+
+def test_background_spawn_approval_launches_the_reviewed_child(
+    tmp_path: Path,
+) -> None:
+    """A Guard holding a background launch suspends on the SAME
+    ``approval-spawn-{task_id}`` anchor the foreground path uses, with
+    ``background=True`` recorded on it — so approving launches THIS child
+    rather than asking the model to re-issue the spawn (a re-issue would meet
+    the same Guard and suspend again, which is no exit at all)."""
+    provider = FakeLLMProvider(responses=[_spawn_bg(), _end("started; chatting")])
+    host, driver = _host(
+        _make_ws(tmp_path), provider, extra_guards=(_RequireApprovalOnSpawn(),)
+    )
+    stub = _RecordingLauncher()
+    _install_stub(host, stub)
+
+    out = driver.start(goal=PARENT_GOAL, agent="main")
+
+    assert out.status == "suspended"
+    assert out.wake_handle == f"approval-spawn-{out.task_id}"
+    assert "BackgroundSubagentStarted" not in _events(host, out.task_id)
+    parent = fold(host.event_log, host.content_store, out.task_id)
+    pending = parent.governance.pending_approvals[f"spawn-{out.task_id}"]
+    assert pending["arguments"]["background"] is True
+    assert pending["arguments"]["goal"] == CHILD_GOAL
+    assert stub.launched == []
+
+    out = driver.approve(out.task_id, call_id=f"spawn-{out.task_id}")
+
+    # The reviewed child launched in the background and the parent's turn
+    # carried on to its interactive park — no barrier, no second model ask
+    # for the spawn itself.
+    types = _events(host, out.task_id)
+    assert "BackgroundSubagentStarted" in types
+    assert "SubtaskSpawned" not in types
+    started = _started_payload(host, out.task_id)
+    assert started.goal == CHILD_GOAL
+    assert started.call_id == SPAWN_CALL_ID
+    assert len(stub.launched) == 1
+    parent = fold(host.event_log, host.content_store, out.task_id)
+    assert isinstance(parent.wake_on, HumanResponseReceived)
+    paired = [
+        b
+        for m in parent.runtime.messages
+        if m.role == "tool"
+        for b in m.content
+        if isinstance(b, ToolResultBlock) and b.call_id == SPAWN_CALL_ID
+    ]
+    assert paired and paired[0].success is True
+    assert STARTED_MARKER in paired[0].output
 
 
 def test_resume_reproduces_background_audit(tmp_path: Path) -> None:
@@ -564,6 +628,70 @@ def test_delivery_gives_up_when_parent_never_settles(tmp_path: Path) -> None:
 
     assert elapsed < 5.0  # gave up at the deadline, did not hang
     assert "BackgroundSubagentDelivered" not in _events(host, parent_id)
+
+
+def test_delivery_waits_out_a_busy_parent_instead_of_dropping(
+    tmp_path: Path,
+) -> None:
+    """A parent that is merely BUSY must not cost the sub-agent its answer.
+
+    The retry window is a leak guard, not a delivery deadline: nothing
+    re-attempts once it expires until the process restarts and the recovery
+    scan finds the child, so a bound shorter than a long turn silently drops
+    the result of work that actually finished. The loop therefore keeps
+    re-attempting (backing off) until the parent settles.
+    """
+    from noeta.execution.background_delivery import (
+        DEFAULT_DELIVER_MAX_POLL_S,
+        DEFAULT_DELIVER_TIMEOUT_S,
+    )
+
+    # The default window comfortably outlasts any plausible turn.
+    assert DEFAULT_DELIVER_TIMEOUT_S >= 600.0
+
+    ws = _make_ws(tmp_path)
+    provider = FakeLLMProvider(responses=[_end("idle")])
+    host, driver = _host(ws, provider)
+    out = driver.start(goal="just chat", agent="main")
+    parent_id = out.task_id
+
+    class _BusyThenIdle:
+        """Mid-turn for the first few attempts, then settles."""
+
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        def notify_background_subagent_exit(
+            self, *args: Any, **kw: Any
+        ) -> None:
+            self.attempts += 1
+            if self.attempts < 4:
+                raise RuntimeError("parent still mid-turn")
+
+    notifier = _BusyThenIdle()
+    waits: list[float] = []
+
+    def _plan() -> Any:
+        def _deliver(n: Any) -> None:
+            n.notify_background_subagent_exit(parent_id, subtask_id="bg-x")
+
+        return _deliver
+
+    import noeta.execution.background_delivery as bd
+
+    real_sleep = bd.time.sleep
+    bd.time.sleep = lambda s: (waits.append(s), real_sleep(0))[1]  # type: ignore[assignment]
+    try:
+        host._delivery.drive(notifier, parent_id, _plan, poll_s=0.01)  # noqa: SLF001
+    finally:
+        bd.time.sleep = real_sleep  # type: ignore[assignment]
+
+    # It kept trying until the parent was ready, rather than giving up.
+    assert notifier.attempts == 4
+    # The wait backs off, so a parent busy for minutes costs a fold a second,
+    # not twenty.
+    assert waits == [0.01, 0.02, 0.04]
+    assert all(w <= DEFAULT_DELIVER_MAX_POLL_S for w in waits)
 
 
 def test_deref_failure_writes_no_delivery_anchor(tmp_path: Path) -> None:

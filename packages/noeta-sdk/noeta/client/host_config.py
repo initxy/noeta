@@ -30,6 +30,7 @@ from noeta.execution.background_subagent import (
     DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_ROOT_TASK,
 )
 from noeta.client.otlp import OtlpHttpPost, OtlpTraceConfig
+from noeta.client.webfetch_policy import normalize_allowed_hosts
 from noeta.runtime.background_shell import DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK
 
 if TYPE_CHECKING:
@@ -136,6 +137,25 @@ class HostConfig:
     owner's ruling and remembering it as a durable grant — wires this so the
     approved directory is open when the paused call resumes. Reads are never
     fenced and never consult it.
+
+    Loop and tool-output bounds
+    ---------------------------
+    ``repetition_threshold`` registers the built-in ``RepetitionGuard`` (a
+    model wedged on the identical ``(tool, arguments)`` call), and
+    ``tool_output_inline_limit`` caps a tool result's inline characters before
+    it is appended to the history. Both are ``None`` = off by default, which is
+    what a host that never sets them has always run; both are positive ints
+    when set. They are the two generic bounds a host with custom or MCP tools
+    wants on — nothing else bounds an arg-identical loop below ReAct's
+    1,000,000-step backstop, and nothing else bounds a third-party tool's
+    inline payload.
+
+    Web egress
+    ----------
+    ``webfetch_allowed_hosts`` names the hosts ``WebFetch`` may reach without
+    human approval; every other host — intranet or public — routes the call
+    through approval unless the session bypasses permissions. It is an approval
+    knob only; ``WebFetch`` refuses no address of its own.
     """
 
     # -- durable storage (all-or-none) -------------------------------------
@@ -292,6 +312,14 @@ class HostConfig:
     #: 4096-byte inline limit: a page past that limit is recalled as a
     #: one-line pointer, never whole. ``None`` ⇒ no cap.
     memory_max_bytes: Optional[int] = None
+    #: Total budget for the rendered memory index, in estimated tokens. The
+    #: index sits in the cached head of every request, so an unbounded one
+    #: charges the store's page count to every turn. Over budget, entries
+    #: degrade whole — full line, then name only, then a closing count
+    #: pointing at ``memory_search`` — with the most recently written pages
+    #: keeping the most. ``None`` ⇒ 1 % of the bound model's context window,
+    #: the same share the ``skill`` roster takes.
+    memory_index_budget_tokens: Optional[int] = None
 
     # -- skill menu ranking --------------------------------------------------
     #: Per-task keep order for the ``skill`` control tool's roster: given a
@@ -350,6 +378,50 @@ class HostConfig:
     #: ``noeta.sdk.providers.register_models`` at process start instead.
     extra_models: Mapping[str, Any] = field(default_factory=dict)
 
+    # -- loop and tool-output bounds -----------------------------------------
+    #: How many times the model may repeat the SAME ``(tool, arguments)`` call
+    #: inside the detection window before the built-in ``RepetitionGuard``
+    #: intervenes (it asks for approval, the guard's own default action). The
+    #: one loop nothing else bounds: ``Options.budget`` caps cost and tool
+    #: calls only when the host sets them, and ReAct's ``max_steps`` backstop
+    #: is 1,000,000 — so a tool that keeps returning the same error the model
+    #: keeps retrying verbatim runs until the budget or the operator stops it.
+    #: 3 is the guard's own threshold default. ``None`` ⇒ the guard is not
+    #: registered at all (today's behavior).
+    repetition_threshold: Optional[int] = None
+    #: Inline character cap on a tool result BEFORE it is appended to the
+    #: history (``docs/adr/unified-context-supply.md``): over the cap the model
+    #: sees the first N characters plus a deterministic ``[tool output
+    #: truncated: …]`` marker, while the full bytes stay in
+    #: ``ToolResultRecorded.output_ref`` so audit loses nothing. The built-in
+    #: tools cap themselves (``Read`` by lines, ``Bash`` at 30k, MCP at 1 MiB),
+    #: so this is the generic backstop for host-supplied and MCP tools, which
+    #: may return a multi-megabyte payload inline. A resumed task must reuse
+    #: the value the original run used, or it re-derives different tool-output
+    #: bytes. ``None`` ⇒ no truncation (today's behavior).
+    tool_output_inline_limit: Optional[int] = None
+
+    # -- web egress ----------------------------------------------------------
+    #: The hosts ``WebFetch`` may reach without asking a human. Operator
+    #: configuration, trusted like ``shell_allowlist`` — never model input.
+    #: Two forms: ``"example.com"`` (that host exactly) and
+    #: ``"*.example.com"`` (its subdomains at any depth, but not the apex —
+    #: list both for both). A malformed entry raises here rather than silently
+    #: matching nothing.
+    #:
+    #: Under a gating permission mode (``default`` / ``acceptEdits``) a fetch
+    #: of any other host — intranet or public — routes through HITL approval,
+    #: per call, the way an unlisted ``Bash`` command does, so ``WebFetch``
+    #: keeps ``risk_level="low"`` and a listed host stays prompt-free.
+    #: ``bypassPermissions`` gates nothing, here as everywhere. Empty (the
+    #: default) ⇒ every fetch is gated unless the session bypasses permissions.
+    #:
+    #: It is an **approval** knob and nothing more: ``WebFetch`` refuses no
+    #: address, intranet or loopback, because an agent holding ``Bash`` reaches
+    #: the same target with one ``curl``. A host that needs an egress boundary
+    #: enforces it at the network or the sandbox.
+    webfetch_allowed_hosts: Sequence[str] = ()
+
     # -- host kill-switches ------------------------------------------------
     workflow_allowed: bool = False
     #: Per-session background-job concurrency cap, forwarded to
@@ -407,6 +479,24 @@ class HostConfig:
                 f"HostConfig.write_mode must be one of {{{legal}}}; "
                 f"got {self.write_mode!r}"
             )
+        # Both bounds spell "off" as ``None``. A 0 or a negative would be read
+        # as a *disabled* guard by one consumer and an impossible cap by the
+        # other, so refuse the ambiguity at construction rather than silently
+        # running unguarded.
+        for name, value in (
+            ("repetition_threshold", self.repetition_threshold),
+            ("tool_output_inline_limit", self.tool_output_inline_limit),
+        ):
+            if value is not None and value <= 0:
+                raise ValueError(
+                    f"HostConfig.{name} must be a positive int or None "
+                    f"(None = off); got {value!r}"
+                )
+        # The egress allowlist is a security knob, so a typo has to be loud: an
+        # entry that quietly matches nothing would gate every fetch the
+        # operator meant to open, and one that quietly matched too much would
+        # open a host they never named.
+        normalize_allowed_hosts(self.webfetch_allowed_hosts)
 
     def storage_triple(
         self,

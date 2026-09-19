@@ -158,7 +158,7 @@ head:
   audit, absent from the prompt. Below the window nothing is cleared, so a
   half-empty context never forces the model to re-run a tool.
 - **Compose-time reminders** are pure renderers appended at the very end of the
-  tail: unfinished todos, a delegation nudge, a read-strategy hint while
+  tail: unfinished todos, a read-strategy hint while
   compaction thrashes, and — once a compaction has collapsed a prefix — a
   pointer at the collapsed range the `RecallHistory` tool can read back. They
   are View-only — never written to the message stream, never recorded as

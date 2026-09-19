@@ -10,7 +10,8 @@ operator-authored server specs, and the HTTP transport type.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Callable, Mapping, Optional, Union
 
 
@@ -20,6 +21,7 @@ __all__ = [
     "McpAnyServerSpec",
     "McpConfigError",
     "McpError",
+    "McpHttpResponse",
     "McpHttpServerSpec",
     "McpServerSpec",
 ]
@@ -45,10 +47,33 @@ class McpError(Exception):
     """
 
 
+@dataclass(frozen=True, slots=True)
+class McpHttpResponse:
+    """One HTTP response to a posted JSON-RPC request.
+
+    ``body`` is what the client parses; ``headers`` and ``status`` are the
+    envelope a Streamable HTTP session needs — the client reads exactly one
+    header out of them, ``Mcp-Session-Id``, and treats it like a credential
+    (echoed on the wire, never logged, recorded, or folded into provenance).
+    Returning this instead of plain bytes is what lets a transport join a
+    stateful server; a transport that returns bytes runs stateless.
+    """
+
+    body: bytes
+    headers: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    status: int = 200
+
+
 #: The HTTP POST entrypoint: JSON-RPC request object + merged request headers
-#: in, raw response body bytes out. Injectable so a test can substitute a fake
+#: in, the response out. Returning raw body ``bytes`` is the original shape and
+#: stays fully supported — such a connection simply runs stateless. Returning an
+#: :class:`McpHttpResponse` also hands back the response headers, so the client
+#: can pick up the ``Mcp-Session-Id`` a Streamable HTTP server assigns and echo
+#: it on every later request. Injectable so a test can substitute a fake
 #: transport and prove resume NEVER reaches it.
-HttpPostFn = Callable[[dict[str, Any], Mapping[str, str]], bytes]
+HttpPostFn = Callable[
+    [dict[str, Any], Mapping[str, str]], Union[bytes, McpHttpResponse]
+]
 
 
 @dataclass(frozen=True, slots=True)

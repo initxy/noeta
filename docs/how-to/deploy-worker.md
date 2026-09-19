@@ -133,9 +133,16 @@ fenced in-transaction against the live lease and lease expiry runs on the
 database clock. SQLite has no cross-host fencing — keep it to one host, where
 a multi-worker pool is fine.
 
-The ready queue does no routing: a worker drains whatever it leases, so every
-task in a store must be one that pool can run. Give distinct workload profiles
-their own store.
+Distinct workload profiles do **not** need separate stores. Every dispatcher
+row carries a queue name: a root is born on the queue of the client that seeded
+it (`HostConfig.queue`), its children inherit it, and a worker pool's
+untargeted lease claims only its own queue — so two differently-configured
+clients over one storage triple cannot drive each other's work. Give each
+profile its own queue name and point its pool at the same name.
+
+Inside one queue the usual rule applies: every task on it must be one that pool
+can run. See [ADR: Worker queue
+routing](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md).
 
 ## Driving the loop yourself
 

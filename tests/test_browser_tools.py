@@ -14,9 +14,12 @@ from typing import Any
 
 from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools.limits import INLINE_CONTENT_MAX_BYTES
 from noeta.builtins.sandbox.impl.browser import AioBrowserError
-from noeta.builtins.browser.impl import BROWSER_TOOL_NAMES, build_browser_tools
+from noeta.builtins.browser.impl import (
+    BROWSER_TOOL_NAMES,
+    _SNAPSHOT_INLINE_MAX_CHARS,
+    build_browser_tools,
+)
 
 
 class FakeBackend:
@@ -159,15 +162,44 @@ def test_extract_delegates() -> None:
     assert result.output["snapshot"] == "BODY\n[1] link"
 
 
-def test_large_snapshot_offloads_to_artifact() -> None:
-    big = "x" * (INLINE_CONTENT_MAX_BYTES + 1000)
+def test_large_snapshot_is_marked_and_offloaded() -> None:
+    """An over-cap snapshot is elided with a MARKER, never silently shortened.
+
+    The old path halved the string with no marker at a 1 MiB fence, so the
+    model read a cut page as the whole page — and could address an element
+    index that was no longer in front of it.
+    """
+    big = "x" * (_SNAPSHOT_INLINE_MAX_CHARS + 1000)
     backend = FakeBackend(snapshot=big)
     ctx, store = _ctx()
     result = build_browser_tools(backend)["browser_extract"].invoke({}, ctx)
     assert result.success is True
+    inline = result.output["snapshot"]
+    assert len(inline) < len(big)
+    assert "chars truncated" in inline
+    # No ref in the model-facing output — the model has no deref tool.
+    assert "snapshot_ref" not in result.output
+    # The untouched snapshot is still the artifact.
     assert len(result.artifacts) == 1
-    assert "snapshot_ref" in result.output
     assert store.get(result.artifacts[0]) == big.encode("utf-8")
+
+
+def test_small_snapshot_rides_inline_untouched() -> None:
+    backend = FakeBackend(snapshot="BODY\n[1] link")
+    ctx, _ = _ctx()
+    result = build_browser_tools(backend)["browser_extract"].invoke({}, ctx)
+    assert result.output == {"snapshot": "BODY\n[1] link"}
+    assert result.artifacts == []
+
+
+def test_empty_extract_is_a_failure_naming_the_empty_page() -> None:
+    """``success=True`` with 0 chars reads as "the page had nothing on it"."""
+    backend = FakeBackend(snapshot="   \n  ")
+    ctx, _ = _ctx()
+    result = build_browser_tools(backend)["browser_extract"].invoke({}, ctx)
+    assert result.success is False
+    assert "returned no content" in result.summary
+    assert result.summary.startswith("browser_extract: ")
 
 
 # -- error mapping ---------------------------------------------------------- #

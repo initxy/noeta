@@ -33,6 +33,7 @@ from noeta.protocols.events import TaskCreatedPayload
 from noeta.protocols.messages import (
     LLMRequest,
     LLMResponse,
+    Message,
     TextBlock,
     ToolUseBlock,
     Usage,
@@ -274,7 +275,7 @@ def _request_texts(provider: FakeLLMProvider) -> str:
     for req in provider.received_requests:
         for msg in req.messages:
             for block in msg.content:
-                for attr in ("text", "output"):
+                for attr in ("text", "output", "error"):
                     value = getattr(block, attr, None)
                     if value is not None:
                         parts.append(value if isinstance(value, str) else str(value))
@@ -423,6 +424,59 @@ def test_unmodelled_schema_keywords_never_reject(tmp_path: Path) -> None:
     assert out.status == "terminal"
     orch_id = _child_ids(host, out.task_id)[0]
     assert _answer(host, orch_id) == {"x": 12345}
+
+
+class _MixedCallPolicy:
+    """An inner Policy that batches ``structured_output`` with a second call."""
+
+    def decide(self, ctx, view):  # noqa: ANN001, ARG002
+        assistant = Message(
+            role="assistant",
+            content=[
+                ToolUseBlock(
+                    call_id="c1",
+                    tool_name=STRUCTURED_OUTPUT_TOOL,
+                    arguments={},
+                ),
+                ToolUseBlock(
+                    call_id="c2", tool_name="Read", arguments={"path": "x"}
+                ),
+            ],
+        )
+        return ToolCallsDecision(
+            calls=[
+                ToolCall(
+                    tool_name=STRUCTURED_OUTPUT_TOOL, arguments={}, call_id="c1"
+                ),
+                ToolCall(
+                    tool_name="Read", arguments={"path": "x"}, call_id="c2"
+                ),
+            ],
+            assistant_message=assistant,
+        )
+
+
+def test_rejected_call_answers_its_neighbours_too() -> None:
+    """A rejection stops the WHOLE response, so every tool_use in it gets a
+    result. Leaving the neighbour dangling is the fatal-400 shape the
+    continuation request rejects, and the text has to read correctly on a call
+    that never ran."""
+    policy = StructuredOutputPolicy(
+        inner=_MixedCallPolicy(),
+        schema={"type": "object", "required": ["title"], "properties": {}},
+    )
+    decision = policy.decide(SimpleNamespace(), SimpleNamespace(rolling_history=[]))
+    assert isinstance(decision, StatePatchDecision)
+    blocks = decision.messages_after[0].content
+    assert sorted(b.call_id for b in blocks) == ["c1", "c2"]
+    for b in blocks:
+        assert b.success is False
+        # A failed result carries its text once, on ``error``.
+        assert b.output == ""
+        text = b.error or ""
+        assert text.startswith("Nothing in this response ran")
+        assert "structured_output must be called on its own" in text
+        assert "$.title" in text
 
 
 class _BadCallPolicy:

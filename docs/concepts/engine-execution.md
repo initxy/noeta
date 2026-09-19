@@ -39,7 +39,7 @@ model asked for:
 
 ```python
 ToolCallsDecision(
-    calls=[ToolCall(tool_name="read", arguments={"path": "README.md"},
+    calls=[ToolCall(tool_name="Read", arguments={"file_path": "README.md"},
                     call_id="call_1")],
 )
 ```

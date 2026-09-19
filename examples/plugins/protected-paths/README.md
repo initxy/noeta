@@ -5,7 +5,7 @@ surface. It inspects every file-mutating built-in tool call and **denies** it
 when the target path escapes a configured allowlist of roots, or matches an
 optional deny-glob.
 
-The reason to want it: an agent with a `write` tool can address any path on the
+The reason to want it: an agent with a `Write` tool can address any path on the
 machine, and "the prompt says stay in the workspace" is not an enforcement
 mechanism. This is the packaged form of an ad-hoc `can_use_tool` path check — a
 host enables it *by name* instead of writing guard code in every embedding.
@@ -19,15 +19,14 @@ not a fence.
 
 | Tool | Path argument(s) read |
 | --- | --- |
-| `edit` | `arguments["path"]` |
-| `write` | `arguments["path"]` |
-| `apply_patch` | `arguments["edits"][*]["path"]` (every edit in the batch) |
+| `Edit` | `arguments["file_path"]` |
+| `Write` | `arguments["file_path"]` |
 
-Everything else passes untouched: read-only tools (`read` / `glob` / `grep`),
+Everything else passes untouched: read-only tools (`Read` / `Glob` / `Grep`),
 custom tools, and non-tool actions (spawn / finish). This fence is about where
 writes land, nothing else.
 
-`shell_run` is **out of scope on purpose**. A shell can reach anything on the
+`Bash` is **out of scope on purpose**. A shell can reach anything on the
 filesystem, so a path fence around it would be theatre. Confine shell IO with a
 sandbox execution environment instead.
 

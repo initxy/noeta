@@ -259,10 +259,13 @@ def _clip_line(line: str) -> str:
     return line[:_MAX_LINE_CHARS] + _LINE_TRUNC_MARKER
 
 
-def _reminder(text: str) -> str:
-    """A host-authored inline notice, in the envelope the model is trained to
-    read as ambient context rather than file content."""
-    return f"<system-reminder>{text}</system-reminder>"
+def _note(text: str) -> str:
+    """A tool's own inline note, parenthesised like every other footer here.
+
+    Deliberately NOT a ``<system-reminder>`` envelope: that tag marks a
+    host-authored turn and is produced only by the provider adapter, so a tool
+    result never spells it."""
+    return f"({text})"
 
 
 @dataclass
@@ -394,9 +397,7 @@ class ReadFileTool:
         if total_lines == 0:
             return ToolResult(
                 success=True,
-                output=_reminder(
-                    "Warning: the file exists but has empty contents."
-                ),
+                output=_note("The file exists but has empty contents."),
                 artifacts=[ref],
                 summary=f"read {summary_path} (empty{note})",
             )
@@ -404,9 +405,9 @@ class ReadFileTool:
         if start >= total_lines:
             return ToolResult(
                 success=True,
-                output=_reminder(
-                    f"Warning: the file has only {total_lines} lines, fewer "
-                    f"than the requested offset {offset}."
+                output=_note(
+                    f"The file has only {total_lines} lines, fewer than the "
+                    f"requested offset {offset}. Nothing was read."
                 ),
                 artifacts=[ref],
                 summary=f"read {summary_path} (offset past end{note})",
@@ -430,12 +431,10 @@ class ReadFileTool:
 
         notes: list[str] = []
         if bytes_replaced:
-            notes.append(
-                _reminder("Non-utf8 bytes were replaced with U+FFFD.")
-            )
+            notes.append(_note("Non-utf8 bytes were replaced with U+FFFD."))
         if shown_end < total_lines or start > 0:
             notes.append(
-                _reminder(
+                _note(
                     f"Showing lines {start + 1}-{shown_end} of {total_lines} "
                     f"total lines. Use offset={shown_end + 1} to continue "
                     "reading."
@@ -934,17 +933,20 @@ class GrepTool:
                 summary="grep: 0 matches",
             )
         window = self._window(rendered, head_limit, offset)
-        shown = sum(1 for _, is_match in window if is_match)
-        out_lines = [line for line, _ in window]
         # The 32 KB inline budget is a fence, not the working rule — the
         # default head_limit keeps ordinary output far below it. Trim whole
-        # lines if a wall of clipped-wide lines still overflows.
+        # lines if a wall of clipped-wide lines still overflows. The trim runs
+        # BEFORE the match count so the footer and the summary describe the
+        # lines actually kept, not the ones the fence dropped.
         while (
-            len(out_lines) > 1
-            and len("\n".join(out_lines).encode("utf-8")) > INLINE_OUTPUT_MAX_BYTES
+            len(window) > 1
+            and len(
+                "\n".join(line for line, _ in window).encode("utf-8")
+            ) > INLINE_OUTPUT_MAX_BYTES
         ):
-            out_lines = out_lines[: max(1, len(out_lines) // 2)]
-        output = "\n".join(out_lines)
+            window = window[: max(1, len(window) // 2)]
+        shown = sum(1 for _, is_match in window if is_match)
+        output = "\n".join(line for line, _ in window)
         if shown < total:
             output += (
                 f"\n(Showing {shown} of {total} matches. Narrow the query or "

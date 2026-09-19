@@ -51,10 +51,12 @@
 | 模式 | 哪些工具需要审批 |
 | --- | --- |
 | `"default"` | 声明的 `risk_level` 不是 `low` 的每一个工具 |
-| `"acceptEdits"` | 同样的规则，但减去三个编辑类工具 `Edit` / `Write` |
+| `"acceptEdits"` | 同样的规则，但减去 `Edit` / `Write` 这两个编辑类工具 |
 | `"bypassPermissions"` | 一个都不需要——用于受信任的非交互式运行 |
 
 模式只决定被门控的集合。`Guard` 仍然可以拒绝，而 `Options.can_use_tool` 仍然会去裁决那些被门控拦下的调用。
+
+有两个工具是按**每次调用**拦的，而不是按风险等级——因为它们能干什么取决于参数：`Bash`（命令不在生效白名单里就要人点头）和 `WebFetch`（主机不在 `HostConfig.webfetch_allowed_hosts` 里就要人点头）。这两道闸在 `bypassPermissions` 下都不设。见 [工具 → WebFetch 能打到哪里](tools.md#webfetch-能打到哪里)。
 
 请在运行时读取合法取值，而不要把它们硬编码：
 
@@ -152,7 +154,7 @@ compile_options(options, *, plugins=None, preset_prompts=None)
 | `app_gateway` | `None` | `AppPreviewGateway`；`None` ⇒ 没有 `open_app` 工具 |
 | `write_roots` | `None` | `(task_id) -> Sequence[str]`，额外的写入根 |
 | `mcp_server_resolver` | `None` | `(alias) -> McpAnyServerSpec \| None`，按轮解析 |
-| `mcp_http_post` | `None` | 为远程 MCP 注入的 HTTP 传输（`HttpPostFn`） |
+| `mcp_http_post` | `None` | 为远程 MCP 注入的 HTTP 传输（`HttpPostFn`）—— 返回 `bytes` 走无状态那条路，返回 `McpHttpResponse` 则让连接加入 Streamable HTTP 会话 |
 | `mcp_idle_ttl` | `1800.0` | 没有任何一轮在用的 MCP 连接闲置多少秒后关掉（`None` 表示永不）；连接按服务器身份和分组在进程内共用，一轮结束后归还，`Client.reconnect_mcp()` 可以提前作废 |
 | `mcp_scope_resolver` | `None` | `(task_id) -> str \| None` —— 这个任务的 MCP 连接归哪个分组（租户 id、工作区）；只有同一分组内的任务才共用连接，`None` 是公共分组。和 `memory_root_resolver` 是同一种按任务分租户的接口 |
 | `delta_sink` | `None` | `(StepContext, call_id, StreamDelta) -> None` —— 瞬时的 token delta；从不持久化 |
@@ -194,6 +196,19 @@ compile_options(options, *, plugins=None, preset_prompts=None)
 | --- | --- | --- |
 | `plugin_config` | `{}` | `插件名 -> {键: 值}`，由 session pack 通过 `ctx.config("<name>")` 读取。第三方名字原样透传；对 SDK 自己推导的那四个（`fs` / `skills` / `workspace` / `memory`），host 给的键是**逐键覆盖**的。见[写一个插件](../how-to/write-a-plugin.md) |
 
+**死循环与工具输出的上限。** 接了自定义工具或 MCP 工具的 host 最该打开的两道通用上限。两个默认都是 `None`（不开），要设就得是正整数。
+
+| 字段 | 默认值 | 用途 |
+| --- | --- | --- |
+| `repetition_threshold` | `None` | 注册内建的 `RepetitionGuard`：在检测窗口内同一个 `(工具, 参数)` 调了这么多次之后，这次调用不再直接执行，而是转去走审批。这是别处都兜不住的一种循环——`Options.budget` 的花费和调用次数上限只在 host 主动设了才生效，ReAct 的步数兜底是 1,000,000，所以一个工具一直返回同样的报错、模型一直原样重试，就会一直跑到预算耗尽或人来叫停。3 是这个 Guard 自己的默认阈值 |
+| `tool_output_inline_limit` | `None` | 工具结果**在追加进历史之前**的内联字符上限：超了模型只看到前 N 个字符，外加一条固定格式的 `[tool output truncated: …]` 标记，完整字节仍留在 `ToolResultRecorded.output_ref` 里。内建工具各自有上限（`Read` 按行数、`Bash` 30k、MCP 1 MiB），所以这条主要是给 host 自带工具兜底。恢复的任务必须沿用原来那次的取值，否则重新推导出来的工具输出字节会不一样 |
+
+**出网。**
+
+| 字段 | 默认 | 作用 |
+| --- | --- | --- |
+| `webfetch_allowed_hosts` | `()` | `WebFetch` 可以不问人直接抓的主机。`"example.com"` 只匹配这一个主机，`"*.example.com"` 匹配它任意层级的子域但不含顶级域名本身；写错的条目会在这里直接报错。在 `default` / `acceptEdits` 下，其余主机都要逐次调用走审批，跟白名单外的 `Bash` 命令一个待遇，所以 `WebFetch` 保持 `risk_level="low"`，名单内的主机也不会弹窗。`bypassPermissions` 什么都不拦。这是一道**审批**闸：`WebFetch` 自己不拦任何地址，因为手里握着 `Bash` 的 agent 一条 `curl` 就能打到同一个目标。见 [工具 → WebFetch 能打到哪里](tools.md#webfetch-能打到哪里) |
+
 **总开关与策略。**
 
 | 字段 | 默认值 | 用途 |
@@ -220,7 +235,7 @@ compile_options(options, *, plugins=None, preset_prompts=None)
 | `SandboxExecEnvConfig` | attach 模式的配置：`base_url`、`api_key_env`、`workdir` |
 | `ExecEnv` / `BrowserBackend` | 容器执行与浏览器线上协议的 Protocol |
 | `BackendFactory` / `BrowserBackendFactory` / `BoundPreamble` | 两个 `HostConfig` 工厂字段所依据的可调用类型别名 |
-| `McpServerSpec` / `McpHttpServerSpec` / `McpAnyServerSpec` / `McpError` / `McpConfigError` / `HttpPostFn` | 一个 resolver 返回的 MCP 词汇 |
+| `McpServerSpec` / `McpHttpServerSpec` / `McpAnyServerSpec` / `McpError` / `McpConfigError` / `HttpPostFn` / `McpHttpResponse` | 一个 resolver 返回的 MCP 词汇 |
 | `path_within(resolved, root) -> bool` | 写入围栏所用的包含判定——按路径分量比较，绝不是字符串前缀，因此 `/srv/app-old` 不在 `/srv/app` 之内 |
 
 `noeta.sdk.storage` 是通往持久化后端的门。`open_storage_stack(path)` 从一个字符串构建整个 `(event_log, content_store, dispatcher)` 三元组；`build_storage_stack`、`is_memory_path` 和 `is_postgres_url` 是更细粒度的入口，而 sqlite 与 postgres 适配器（连同它们的只读变体和 schema 版本错误）也都从同一个模块导出。

@@ -5,9 +5,12 @@ the decisions taken along the way, and the acceptance criteria that define
 "done". It is written before or during implementation, and it is what a later
 session reads to pick the work back up.
 
-Everything in this directory describes **intent for work in flight**, not the
-shipped system. For what the system does, read the code, the
-[ADRs](../adr/index.md), and [CONTEXT.md](../../CONTEXT.md).
+The **top level** of this directory holds only **work in flight** — intent, not
+the shipped system. Everything under `archive/` is a spec whose work already
+landed, kept for the construction detail it records; its status line says which
+release it shipped in. For what the system does today, read the code, the
+[ADRs](../adr/index.md), and [CONTEXT.md](../../CONTEXT.md) — never an archived
+spec.
 
 ## When to write one
 
@@ -41,21 +44,29 @@ only makes sense while the work is in flight, it belongs in the spec.
 
 ## When the work lands
 
-Distill, then delete.
+Distill first, then archive. Distilling is the part that matters; the move is
+bookkeeping.
 
 1. Every decision worth keeping moves into an ADR under `docs/adr/` — the
    reasoning and the rejected alternatives, not the construction plan.
 2. Every term the work pins down moves into `CONTEXT.md`.
 3. What the system does is carried by the code and its tests.
 
-Then `git rm` the spec. **There is no archive directory.** The durable content
-sits in the ADRs and `CONTEXT.md`, where readers look for it; the construction
-detail sits in the git history, next to the diff that produced it. A spec kept
-past its work is a description of intent that some reader will mistake for
-current design.
+Only then, `git mv` the file into `archive/` under a `YYYY-MM-DD-<name>.md`
+name — the date it shipped, not the date it was written — and rewrite its
+status line to `Status: SHIPPED <date> in <package> <version>`, naming where
+the content was distilled to. Use `git mv` so the history follows the file.
+
+Archiving rather than deleting keeps the construction detail — the slice plan,
+the deviations, the rejected shapes that never reached an ADR — findable by
+name instead of only by digging through a diff. The rule that makes it safe is
+the split: the top level is current intent, `archive/` is history, and neither
+is a description of the current design. That is what the ADRs and `CONTEXT.md`
+are for.
 
 Work that gets called off ends the same way: if the direction is worth warning
-the next person away from, write that into an ADR, then delete the file.
+the next person away from, write that into an ADR, then archive the file with a
+status line that says it was abandoned and why.
 
 ## Language
 

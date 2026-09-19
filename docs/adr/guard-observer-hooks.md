@@ -35,6 +35,20 @@ carries durable payloads recording which call is blocked and how a human
 resolved it, because a resumed process must reconstruct the exact pending call
 from the log, but it opens no parallel suspend/wake lifecycle.
 
+All three action points share that anchor (`ToolCallApprovalRequested`) and one
+resolution verb (`approve` / `deny`, keyed by `call_id`). `before_tool_call` has
+an identifier to key on — the model's own `call_id`; the two decision points
+have none, so they key on a reserved id derived from the Task,
+`finish-{task_id}` / `spawn-{task_id}`, which is what the host passes back and
+what the `approval-finish-…` / `approval-spawn-…` handle is built from.
+Approving a decision proceeds with the anchored decision itself — the reviewed
+answer ships, the reviewed delegation launches — without asking the model again
+and without re-running the Guard that held it (which would only suspend on the
+same handle). Denying returns the refusal to the model the way a denied tool
+call does, so the turn continues rather than ending: a human declining one
+answer or one delegation is feedback, unlike the Guard's own `deny`, which
+fails the Task.
+
 The default stack is small: a budget Guard then a permission Guard always; a
 repetition Guard and a rule-driven pre-tool-use Guard only when the operator
 configures them, registered after the built-ins so a user rule can tighten a

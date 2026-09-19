@@ -8,7 +8,7 @@ built-ins; and reminders touch ONLY the volatile dynamic suffix, so the
 prompt-cache-friendly stable prefix keeps its hash across steps however much the
 reminders churn.
 
-The rendered text of the three built-ins is pinned separately by
+The rendered text of the built-ins is pinned separately by
 ``tests/test_composer_reminders_characterization.py``.
 """
 
@@ -83,20 +83,22 @@ def test_render_all_skips_none() -> None:
 
 def test_default_specs_are_the_builtin_corpus() -> None:
     """The loader-resolved base carries the built-in corpus in the order
-    todo -> delegation -> read -> collapsed-context, resolved from the built-in
-    manifests (the classic three on ``reminders``, the compaction pointer on
-    ``react``) and never statically imported."""
+    todo -> read -> collapsed-context, resolved from the built-in manifests
+    (the two classics on ``reminders``, the compaction pointer on ``react``)
+    and never statically imported.
+
+    Band 200 is vacant: ``delegation-nudge`` used to sit there and was removed,
+    and the surviving bands keep their numbers rather than closing the gap."""
     registry = ReminderRegistry(default_reminder_specs())
     assert [s.name for s in registry.specs()] == [
         "unfinished-todos",
-        "delegation-nudge",
         "read-suggestion",
         "collapsed-context",
     ]
+    assert "delegation-nudge" not in BUILTIN_REMINDER_PRIORITIES
     # priorities keep that order and match the declared table
     assert [s.priority for s in registry.specs()] == [
         BUILTIN_REMINDER_PRIORITIES["unfinished-todos"],
-        BUILTIN_REMINDER_PRIORITIES["delegation-nudge"],
         BUILTIN_REMINDER_PRIORITIES["read-suggestion"],
         350,
     ]

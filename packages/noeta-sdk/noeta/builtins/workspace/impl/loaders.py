@@ -100,8 +100,10 @@ ENVIRONMENT_NAME = "workspace"
 #: the git branch / status / capture-date lines joined the rendered block;
 #: to ``"3"`` when the snapshot note joined them (the block is recorded
 #: activate-once per task, so the note tells the model the git facts are a
-#: task-start snapshot, mirroring Claude Code's git-status wording).
-ENVIRONMENT_VERSION = "3"
+#: task-start snapshot, mirroring Claude Code's git-status wording); to
+#: ``"4"`` when a clipped ``git status`` started saying so instead of
+#: rendering a short list as if it were the whole tree.
+ENVIRONMENT_VERSION = "4"
 #: The drift policy environment recordings carry: hash recorded, drift
 #: allowed (advisory-only) — an absolute path moves across machines. (Why a
 #: content-channel resident and NOT the system prompt: the system prompt is
@@ -474,17 +476,33 @@ def _git_branch(workspace_dir: Path, exec_env: Optional[ExecEnv] = None) -> str:
 
 
 def _git_status(workspace_dir: Path, exec_env: Optional[ExecEnv] = None) -> str:
+    """The short status, clipped at a LINE boundary and marked when clipped.
+
+    The environment block renders this verbatim, so an unmarked clip reads as
+    the whole dirty tree — the model concludes a file it changed is clean.
+    Cutting mid-entry would be worse still: half a path is a path that does
+    not exist. So the cut lands on a newline and the marker names both counts
+    and the command that shows the rest.
+    """
     args = ["status", "--short"]
     status = (
         _run_git(workspace_dir, args, exec_env)
         if exec_env is not None
         else _run_git(workspace_dir, args)
+    ).rstrip("\n")
+    encoded = status.encode("utf-8")
+    if len(encoded) <= _GIT_STATUS_MAX_BYTES:
+        return status
+    # Decode ignoring a trailing partial multibyte char from the byte cut,
+    # then back off to the last complete line.
+    kept = encoded[:_GIT_STATUS_MAX_BYTES].decode("utf-8", errors="ignore")
+    newline = kept.rfind("\n")
+    kept = kept[:newline] if newline >= 0 else ""
+    marker = (
+        f"({len(kept.splitlines())} of {len(status.splitlines())} changed "
+        "paths shown; the status is truncated — run `git status` for the rest.)"
     )
-    if len(status.encode("utf-8")) > _GIT_STATUS_MAX_BYTES:
-        clipped = status.encode("utf-8")[:_GIT_STATUS_MAX_BYTES]
-        # Drop a trailing partial multibyte char from the byte cut.
-        status = clipped.decode("utf-8", errors="ignore")
-    return status.rstrip("\n")
+    return f"{kept}\n{marker}" if kept else marker
 
 
 def _captured_date() -> str:

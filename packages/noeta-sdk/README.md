@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory() as tmp:
     result = query(
         Options(
             system_prompt="You are a concise assistant.",
-            allowed_tools=("read",),
+            allowed_tools=("Read",),
             permission_mode="bypassPermissions",
         ),
         goal="Say hello.",

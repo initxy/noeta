@@ -788,10 +788,12 @@ def _settle_stopped_root(host: DrainHost, root: Any) -> Any:
         )
     stopped = "interrupted: the delegation was stopped before this subtask completed"
     for call_id in _unpaired_spawn_call_ids(settled):
+        # ``output`` stays empty: the adapters render a failed result as
+        # ``error`` followed by ``output``, so filling both repeats the sentence.
         settled = engine.append_subagent_result_message(
             settled,
             call_id=call_id,
-            output=stopped,
+            output="",
             success=False,
             error=stopped,
             lease_id=lease.lease_id,

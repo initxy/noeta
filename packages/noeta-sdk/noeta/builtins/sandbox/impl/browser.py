@@ -139,6 +139,12 @@ class AioBrowserBackend:
         Raises :class:`AioBrowserError` on any transport / protocol fault, on a
         non-object result, or on an ``isError: true`` result (the container
         reporting the browser action itself failed).
+
+        The message carries the cause and nothing else: ``name`` is a container
+        tool (``browser_form_input_fill``, ``browser_get_markdown``) that is not
+        part of the model's surface, and the browser tool that catches this
+        already prefixes its own public name. Naming both would show the model
+        a tool it cannot call, twice over.
         """
         self._ensure_started()
         try:
@@ -146,12 +152,12 @@ class AioBrowserBackend:
         except AioBrowserError:
             raise
         except Exception as exc:  # any transport / protocol fault
-            raise AioBrowserError(f"{name}: transport error: {exc}") from exc
+            raise AioBrowserError(f"transport error: {exc}") from exc
         if not isinstance(result, dict):
-            raise AioBrowserError(f"{name}: result is not an object")
+            raise AioBrowserError("the browser returned a malformed result")
         if result.get("isError"):
             raise AioBrowserError(
-                f"{name}: {self._text(result) or 'tool error'}"
+                self._text(result) or "the browser reported an error"
             )
         return result
 
@@ -220,6 +226,6 @@ class AioBrowserBackend:
                             return base64.b64decode(data)
                         except (ValueError, TypeError) as exc:
                             raise AioBrowserError(
-                                f"screenshot: bad base64 image data: {exc}"
+                                f"bad base64 image data: {exc}"
                             ) from exc
-        raise AioBrowserError("screenshot: response missing image content block")
+        raise AioBrowserError("the browser returned no image")

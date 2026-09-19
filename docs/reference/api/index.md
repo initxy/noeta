@@ -189,7 +189,8 @@ Register new content kinds for the semi-stable context segment.
 ## Plugins
 
 The manifest mechanism: surface registry, static manifests, the loader, and the
-workspace-directory trust store.
+workspace-directory trust store — the same store that gates the workspace skill
+tiers and the workspace's own shell rules file.
 
 ::: noeta.sdk.SurfaceSpec
 
@@ -218,6 +219,8 @@ workspace-directory trust store.
 ::: noeta.sdk.PluginError
 
 ::: noeta.sdk.UntrustedPluginDirWarning
+
+::: noeta.sdk.UntrustedProjectShellAllowlistWarning
 
 ## Memory
 
@@ -276,6 +279,8 @@ Typed, coded error surface for boundary code.
 ::: noeta.sdk.McpError
 
 ::: noeta.sdk.HttpPostFn
+
+::: noeta.sdk.McpHttpResponse
 
 ## Content Types
 

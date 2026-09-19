@@ -219,7 +219,10 @@ def _maybe_recall_history_decision(
             ctx.assistant_message,
             ctx.assistant_thinking,
             patch=None,
-            text="RecallHistory may appear at most once per turn",
+            text=(
+                "Nothing in this response ran: RecallHistory may be called "
+                "only once per response. Re-issue it as a single call."
+            ),
             valid=False,
         )
     block = recall_blocks[0]
@@ -237,9 +240,9 @@ def _maybe_recall_history_decision(
             ctx.assistant_thinking,
             patch=None,
             text=(
-                "RecallHistory cannot be batched with another control tool "
-                f"({control_others[0].tool_name}); issue them in separate "
-                "turns"
+                "Nothing in this response ran: RecallHistory cannot share a "
+                f"response with {control_others[0].tool_name}. Re-issue the "
+                "other calls in a separate response."
             ),
             valid=False,
         )

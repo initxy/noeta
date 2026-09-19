@@ -29,7 +29,11 @@ byte-for-byte.
 ``source_task`` ledger receipt, so every tool-written memory records when
 it was true and which task's history backs it. A rewrite merges per-field
 over the fence already on disk: fields the new text and parameters do not
-mention survive, and a key written with an empty value is dropped.
+mention survive, and a key written with an empty value is dropped. **The
+body is a field like any other**: a rewrite whose text is only a
+frontmatter fence edits the fields and keeps the body on disk, so the
+documented recipe for removing a frontmatter key cannot silently empty the
+page; a new memory with no body is refused instead.
 
 Layering note: this module deliberately knows nothing about the content
 channel — the store hands over plain ``(name, summary, type, keywords)``
@@ -117,6 +121,7 @@ _FENCE_KEY_ORDER = (
     "description",
     "type",
     "keywords",
+    "related",
     "created",
     "updated",
     "source_task",
@@ -209,7 +214,12 @@ def _entry_fields(text: str) -> tuple[str, str, str]:
     unrecognized ``type`` value is treated as absent (``""``). ``keywords``
     is passed through raw — it feeds the matcher, never the rendered
     index."""
-    fields, body = _split_frontmatter(text)
+    return _entry_fields_of(*_split_frontmatter(text))
+
+
+def _entry_fields_of(fields: dict[str, str], body: str) -> tuple[str, str, str]:
+    """:func:`_entry_fields` over an already-split file — one parse per file
+    when the caller needs other fence keys as well."""
     mem_type = fields.get("type", "")
     if mem_type not in MEMORY_TYPES:
         mem_type = ""
@@ -306,11 +316,28 @@ class MemoryStore:
             return None
 
     def entries(self) -> tuple[tuple[str, str, str, str], ...]:
+        return self.index_snapshot()[0]
+
+    def index_snapshot(
+        self,
+    ) -> tuple[tuple[tuple[str, str, str, str], ...], dict[str, str]]:
+        """``(entries, {name: its ``updated`` date})`` from ONE walk.
+
+        The index renderer needs both — the entries to render and the dates
+        to rank them by when the store outgrows its budget — and a store of a
+        thousand pages should not be read twice to get them. ``""`` for a page
+        whose fence carries no ``updated`` (written before the tool stamped
+        one, or by hand); it sorts last, which is the right guess for a page
+        nobody has touched through the tool.
+        """
         out: list[tuple[str, str, str, str]] = []
+        updated: dict[str, str] = {}
         for name, text in self._iter_memories():
-            summary, mem_type, keywords = _entry_fields(text)
+            fields, body = _split_frontmatter(text)
+            summary, mem_type, keywords = _entry_fields_of(fields, body)
             out.append((name, summary, mem_type, keywords))
-        return tuple(out)
+            updated[name] = fields.get("updated", "")
+        return tuple(out), updated
 
     def related(self, name: str) -> tuple[str, ...]:
         """The page names ``name``'s fence lists under ``related``.
@@ -413,6 +440,13 @@ class MemoryWriteTool:
     runtime threads one) a ``source_task`` ledger receipt into the
     frontmatter, and a write under a NEW name reports existing memories
     it looks like — see ``invoke`` for why each lives on the write path.
+
+    Field semantics, one rule for all four of ``description`` / ``type`` /
+    ``keywords`` / ``related`` and for the body: **absent keeps, empty
+    removes**. A parameter the call omits leaves that field as the memory
+    has it; ``""`` (``[]`` for ``related``) removes it; text that is only a
+    frontmatter fence keeps the body, and a new memory with no body is
+    refused.
     """
 
     store: MemoryStore
@@ -435,32 +469,47 @@ class MemoryWriteTool:
                 "text": {
                     "type": "string",
                     "description": (
-                        "Full memory body (markdown). Without a "
-                        "'description' parameter, the first line becomes "
-                        "the index summary."
+                        "Full memory body (markdown), replacing the body "
+                        "the memory has. Without a 'description' "
+                        "parameter, the first line becomes the index "
+                        "summary. Text that carries only a frontmatter "
+                        "fence keeps the existing body."
                     ),
                 },
                 "description": {
                     "type": "string",
                     "description": (
-                        "Optional one-line summary shown in the memory "
-                        "index instead of the first body line."
+                        "One-line summary shown in the memory index "
+                        "instead of the first body line. Omit to keep the "
+                        "current one, \"\" to remove it."
                     ),
                 },
                 "type": {
                     "type": "string",
-                    "enum": list(MEMORY_TYPES),
+                    "enum": [*MEMORY_TYPES, ""],
                     "description": (
-                        "Optional memory category shown in the index."
+                        "Memory category shown in the index. Omit to keep "
+                        "the current one, \"\" to remove it."
                     ),
                 },
                 "keywords": {
                     "type": "string",
                     "description": (
-                        "Optional comma-separated retrieval aliases — "
-                        "synonyms and cross-language equivalents (e.g. "
-                        "both English and Chinese terms) that should "
-                        "auto-recall this memory."
+                        "Comma-separated retrieval aliases — synonyms and "
+                        "cross-language equivalents (e.g. both English and "
+                        "Chinese terms) that should auto-recall this "
+                        "memory. Omit to keep the current ones, \"\" to "
+                        "remove them."
+                    ),
+                },
+                "related": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Memory names, as the index lists them, that "
+                        "recall surfaces alongside this one when this "
+                        "memory is recalled. Omit to keep the current "
+                        "ones, [] to remove them."
                     ),
                 },
             },
@@ -497,6 +546,12 @@ class MemoryWriteTool:
         description = arguments.get("description")
         mem_type = arguments.get("type")
         keywords = arguments.get("keywords")
+        related = arguments.get("related")
+        # Every first-class field reads the same way: ABSENT keeps what the
+        # memory has, an EMPTY value removes it. Empty has to be a legal
+        # value the params can express, or the frontmatter fence is the only
+        # way to remove a description — and that recipe is what used to empty
+        # the body (see the body rule below).
         if description is not None:
             # One line means one ``splitlines`` line — the same rule the
             # frontmatter parser applies on read-back.
@@ -504,19 +559,38 @@ class MemoryWriteTool:
                 description.splitlines()
             ) > 1:
                 return _err(
-                    self.name, "'description' must be a one-line string"
+                    self.name,
+                    "'description' must be a one-line string; \"\" removes it",
                 )
-        if mem_type is not None and mem_type not in MEMORY_TYPES:
+        if mem_type is not None and mem_type not in (*MEMORY_TYPES, ""):
             return _err(
                 self.name,
                 f"invalid 'type' {mem_type!r} (one of: "
-                f"{', '.join(MEMORY_TYPES)})",
+                f"{', '.join(MEMORY_TYPES)}; \"\" removes it)",
             )
         if keywords is not None and (
             not isinstance(keywords, str)
             or len(keywords.splitlines()) > 1
         ):
-            return _err(self.name, "'keywords' must be a one-line string")
+            return _err(
+                self.name,
+                "'keywords' must be a one-line comma-separated string; "
+                "\"\" removes them",
+            )
+        if related is not None:
+            if not isinstance(related, (list, tuple)):
+                return _err(
+                    self.name,
+                    "'related' must be a list of memory names; [] removes "
+                    "them",
+                )
+            invalid = [item for item in related if not _is_valid_name(item)]
+            if invalid:
+                return _err(
+                    self.name,
+                    f"invalid 'related' memory name {invalid[0]!r}: use the "
+                    f"names the memory index lists",
+                )
 
         # Per-field merge, lowest to highest: the fence already on disk,
         # then the text's own fence, then the params — each layer
@@ -533,13 +607,37 @@ class MemoryWriteTool:
             _split_frontmatter(prior)[0] if prior is not None else {}
         )
         text_fields, body = _split_frontmatter(text)
+        # The body is a field like any other. Removing a frontmatter key is
+        # documented as sending ``---\nkey:\n---`` — text whose body is
+        # empty — and the wholesale body replacement below turned that recipe
+        # into "empty the page, report success". An empty body now means
+        # "this write is about the fields": keep the body the memory has. A
+        # memory that has none yet cannot keep one, so it is refused before
+        # anything is written.
+        if not body.strip():
+            if prior is None:
+                return _err(
+                    self.name,
+                    "a new memory needs a body: 'text' carried only a "
+                    "frontmatter fence, so nothing was written — send the "
+                    "note itself as 'text'",
+                )
+            body = _split_frontmatter(prior)[1]
+            kept_body = True
+        else:
+            kept_body = False
         fields = {**prior_fields, **text_fields}
-        if description:
+        if description is not None:
             fields["description"] = description[:_SUMMARY_MAX_CHARS]
-        if mem_type:
+        if mem_type is not None:
             fields["type"] = mem_type
-        if keywords:
+        if keywords is not None:
             fields["keywords"] = keywords
+        if related is not None:
+            # The one-line form ``related: a, b`` the fence parser and
+            # ``_related_names`` already read; order preserved, duplicates
+            # collapsed, and an empty list composes to nothing at all.
+            fields["related"] = ", ".join(dict.fromkeys(related))
 
         # Timestamps are the tool's, not the model's: ``created`` sticks
         # to the value the memory already holds (on disk first — the text
@@ -589,17 +687,32 @@ class MemoryWriteTool:
             "name": name,
             "bytes": len(text.encode("utf-8")),
         }
-        summary = f"{self.name}: stored {name!r}"
+        # Advisory notes ride ``output``, not ``summary``: on a SUCCESSFUL
+        # result only ``output`` reaches the model (``summary`` is read on
+        # failure), so a near-duplicate warning written into the summary was
+        # a warning nobody ever saw. The two notes are mutually exclusive —
+        # "similar" fires only for a new name, "kept body" only for an
+        # existing one — so one field carries whichever applies.
         if similar:
             shown = similar[:_SIMILAR_MAX]
             output["similar"] = shown
-            summary += (
-                f" — similar existing memor"
+            output["note"] = (
+                f"Similar existing memor"
                 f"{'y' if len(shown) == 1 else 'ies'}: "
-                f"{', '.join(shown)}; consider updating instead of "
-                f"duplicating"
+                f"{', '.join(shown)}. Update one of those rather than "
+                f"keeping a near-duplicate."
             )
-        return ToolResult(success=True, output=output, summary=summary)
+        elif kept_body:
+            output["note"] = (
+                "'text' carried only a frontmatter fence, so the fields "
+                "were updated and the existing body kept. To replace the "
+                "body, send it as 'text'."
+            )
+        return ToolResult(
+            success=True,
+            output=output,
+            summary=f"{self.name}: stored {name!r}",
+        )
 
 
 @dataclass
@@ -638,12 +751,29 @@ class MemoryReadTool:
         text = self.store.read(name)  # type: ignore[arg-type]
         if text is None:
             return _err(self.name, f"no memory named {name!r}")
-        truncated = len(text.encode("utf-8")) > INLINE_CONTENT_MAX_BYTES
-        if truncated:
+        total = len(text.encode("utf-8"))
+        output: dict[str, Any] = {"name": name, "text": text}
+        if total > INLINE_CONTENT_MAX_BYTES:
+            # A bare ``truncated: true`` told the model something was missing
+            # without saying how much or how to reach it. Both numbers and
+            # the way through are in the result; there is no offset parameter
+            # because this tool's contract is "the page, in one result", and
+            # ``memory_search`` already returns matching lines from the whole
+            # file — a page this long is one the store should have split.
             text = truncate_bytes(text, INLINE_CONTENT_MAX_BYTES)
+            shown = len(text.encode("utf-8"))
+            output["text"] = text
+            output["bytes"] = shown
+            output["total_bytes"] = total
+            output["note"] = (
+                f"Showing the first {shown} of {total} bytes. Use "
+                f"'{MEMORY_SEARCH_TOOL_NAME}' to find specific lines in the "
+                f"rest."
+            )
+        output["truncated"] = total > INLINE_CONTENT_MAX_BYTES
         return ToolResult(
             success=True,
-            output={"name": name, "text": text, "truncated": truncated},
+            output=output,
             summary=f"{self.name}: loaded {name!r}",
         )
 
@@ -688,16 +818,18 @@ class MemorySearchTool:
             {"name": name, "lines": list(lines)}
             for name, lines in hits[:_SEARCH_MAX_MEMORIES]
         ]
-        summary = f"{self.name}: {len(results)} hit(s)"
-        if truncated:
-            summary = (
-                f"{self.name}: {len(hits)} hit(s), first "
-                f"{_SEARCH_MAX_MEMORIES} shown"
-            )
+        # ``total`` sits next to ``truncated`` because only ``output`` reaches
+        # the model on a successful result: the count lived in ``summary``,
+        # which is read on failure, so a trimmed search looked complete.
         return ToolResult(
             success=True,
-            output={"query": query, "results": results, "truncated": truncated},
-            summary=summary,
+            output={
+                "query": query,
+                "results": results,
+                "total": len(hits),
+                "truncated": truncated,
+            },
+            summary=f"{self.name}: {len(results)} of {len(hits)} hit(s)",
         )
 
 

@@ -30,7 +30,11 @@ import json
 import httpx
 import respx
 
-from noeta.context.composer import COMPOSER_VERSION, ThreeSegmentComposer
+from noeta.context.composer import (
+    COMPOSER_VERSION,
+    _SUMMARY_FRAME,
+    ThreeSegmentComposer,
+)
 from noeta.core.engine import Engine
 from noeta.core.hooks import HookManager
 from noeta.core.wiring import wire_default_observers
@@ -418,16 +422,22 @@ def test_later_summarize_inputs_open_on_the_previous_note() -> None:
         head = req.messages[0]
         assert head.role == "user"
         assert isinstance(head.content[0], TextBlock)
-        assert head.content[0].text.startswith(f"CONDENSED NOTE {i - 1}:"), (
+        # The composer frames the note at compose time, so the head reads
+        # frame-then-note. The frame is applied ONCE however many compactions
+        # ran: it is never stored, so it can never nest.
+        assert head.content[0].text.startswith(_SUMMARY_FRAME)
+        assert head.content[0].text.count(_SUMMARY_FRAME) == 1
+        body = head.content[0].text[len(_SUMMARY_FRAME) :].lstrip("\n")
+        assert body.startswith(f"CONDENSED NOTE {i - 1}:"), (
             f"summarize #{i} did not open on the previous note: "
-            f"{head.content[0].text[:60]!r}"
+            f"{body[:60]!r}"
         )
         # Exactly one note, never a chain of them.
         assert sum(
             1
             for m in req.messages
             for b in m.content
-            if isinstance(b, TextBlock) and b.text.startswith("CONDENSED NOTE")
+            if isinstance(b, TextBlock) and "CONDENSED NOTE" in b.text
         ) == 1
 
 
@@ -464,8 +474,10 @@ def test_safety_constraint_survives_a_chain_of_compactions() -> None:
         note = req.messages[0].content[0]
         assert isinstance(note, TextBlock)
         # The head really is the previous NOTE — not the original turn, which a
-        # from-zero input would have re-sent verbatim.
-        assert note.text.startswith("CONDENSED NOTE")
+        # from-zero input would have re-sent verbatim — behind the compose-time
+        # frame that says the note stands in for what it replaced.
+        assert note.text.startswith(_SUMMARY_FRAME)
+        assert "CONDENSED NOTE" in note.text
         assert constraint in note.text, (
             f"the note fed into summarize #{i} lost the constraint"
         )

@@ -18,7 +18,10 @@ read still sits in the history the model sees (the seam's
 ``RecallView.visible_history``, which stops at the compaction boundary): the
 page is already in context as a tool result, so recall must neither inject the
 body again nor point at a page the model has already read. Once a compaction
-summary swallows the read, the page is recallable again.
+summary swallows the read, the page is recallable again — and so is a page
+whose file no longer matches the bytes pinned for it
+(:func:`changed_resident_names`), whose refreshed body replaces the stale one
+in place.
 
 The ``memory`` built-in plugin's manifest declares
 :func:`memory_reminder_provider` on the ``reminder_provider`` surface (the
@@ -27,6 +30,7 @@ listing / reference declaration); the store binding stays host wiring.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Collection, Iterable, Mapping, Optional
 
 from noeta.builtins.memory.impl.index import (
@@ -61,6 +65,7 @@ from noeta.builtins.memory.impl.store import MEMORY_READ_TOOL_NAME, MemoryStore
 
 __all__ = [
     "append_user_message_with_recall",
+    "changed_resident_names",
     "memory_reminder_provider",
     "read_memory_names",
     "recall_memories",
@@ -68,8 +73,8 @@ __all__ = [
 ]
 
 
-def resident_memory_names(task_state: Any) -> frozenset[str]:
-    """The memory names already active as residents of this task.
+def _resident_hashes(task_state: Any) -> Mapping[str, str]:
+    """``{memory name: the hash its resident is pinned at}`` for this task.
 
     Read off the generic activation map ``TaskState.active_content`` under the
     ``memory`` kind, minus the index (a resident of the kind, never a memory).
@@ -78,9 +83,48 @@ def resident_memory_names(task_state: Any) -> frozenset[str]:
     """
     active = getattr(task_state, "active_content", None)
     if not isinstance(active, Mapping):
-        return frozenset()
+        return {}
     names = active.get(MEMORY_KIND, {})
-    return frozenset(n for n in names if n != MEMORY_INDEX_NAME)
+    if not isinstance(names, Mapping):
+        return {n: "" for n in names if n != MEMORY_INDEX_NAME}
+    return {
+        name: value
+        for name, value in names.items()
+        if name != MEMORY_INDEX_NAME
+    }
+
+
+def resident_memory_names(task_state: Any) -> frozenset[str]:
+    """The memory names already active as residents of this task."""
+    return frozenset(_resident_hashes(task_state))
+
+
+def changed_resident_names(task_state: Any, store: MemoryStore) -> frozenset[str]:
+    """Resident names whose page no longer matches the bytes pinned for it.
+
+    A recalled body is an **activate-once** resident: it enters a task at one
+    hash and stays there for the task's life, which is what stops a
+    long-lived task from re-injecting the same page on every goal. The cost
+    was that ``memory_write`` could rewrite the page underneath it — the
+    index goes on to show the new summary while the pinned body still shows
+    the old text, and nothing in the task ever says so.
+
+    A page whose current bytes differ from the pinned ones is therefore
+    eligible again: it matches like any other page, and its activation
+    carries ``refresh=True`` so the recorder actually records the move. The
+    resident's anchor is first-write-wins, so the refreshed body stays where
+    the original one was — bytes move, placement does not. A page that is
+    simply gone is left out: there is nothing to refresh to, and the stale
+    body is the only copy anyone has.
+    """
+    changed: set[str] = set()
+    for name, pinned in _resident_hashes(task_state).items():
+        text = store.read(name)
+        if text is None or not pinned:
+            continue
+        if hashlib.sha256(text.encode("utf-8")).hexdigest() != pinned:
+            changed.add(name)
+    return frozenset(changed)
 
 
 def read_memory_names(history: Iterable[Any]) -> frozenset[str]:
@@ -255,7 +299,10 @@ def memory_reminder_provider(
     already recalled; so are the pages the model loaded itself with
     ``memory_read`` while that read is still in ``view.visible_history``, so
     a goal that names a page the model just read neither injects the body a
-    second time nor points at it. Bound to a live ``store`` at wiring time, exactly like
+    second time nor points at it. Silence is dropped for a page whose content
+    has MOVED since it was pinned: it matches again and its activation carries
+    ``refresh=True``, so a page the model rewrote mid-task stops contradicting
+    the index. Bound to a live ``store`` at wiring time, exactly like
     the memory tools — the ``memory`` built-in plugin *declares* this provider
     (the listing surface), while the store binding stays host wiring.
 
@@ -273,9 +320,14 @@ def memory_reminder_provider(
     ``memory_read`` still reads them.
     """
     def provider(view: RecallView) -> tuple[IntakeItem, ...]:
-        resident = resident_memory_names(view.task_state) | read_memory_names(
-            getattr(view, "visible_history", ())
-        )
+        # A page whose content moved since it was pinned is out of the silent
+        # set whichever way it got there — resident, or read by the model —
+        # because the stale copy in context is what needs correcting.
+        changed = changed_resident_names(view.task_state, store)
+        resident = (
+            resident_memory_names(view.task_state)
+            | read_memory_names(getattr(view, "visible_history", ()))
+        ) - changed
         hits = recall_memories(
             store, view.text, resident=resident, exclude=exclude, judge=judge
         )
@@ -288,6 +340,12 @@ def memory_reminder_provider(
                 body=hit.text.encode("utf-8"),
                 version=MEMORY_BODY_VERSION,
                 policy=MEMORY_DRIFT_POLICY,
+                # Activate-once stays the rule for a page entering the task
+                # (that is the per-goal repetition fix). Only a page already
+                # resident at DIFFERENT bytes asks for a refresh, so the
+                # recorder writes exactly one event per rewrite, never one
+                # per goal.
+                refresh=hit.name in changed,
             )
             for hit in hits
             if hit.full

@@ -77,10 +77,11 @@ def _with_memory_policy(prompt: str) -> str:
 #: (``main`` is the one official preset that activates ``memory``; the
 #: three subagents are memory-free and get no fragment).
 MAIN_SYSTEM_PROMPT = _with_memory_policy(_load_prompt("main"))
-#: The sandbox-browser variant of ``main``'s prompt: identical to ``main.md``
-#: except the delegation bullet also names the ``web`` specialist. A separate file
-#: so ``main.md`` — every non-sandbox deployment's stable prefix — is never touched
-#: by the browser variant, and a test pins the two to differ ONLY in that bullet.
+#: The sandbox-browser variant of ``main``'s prompt: ``main.md`` plus exactly
+#: ONE extra rule, naming the ``web`` specialist as the only route to a browser.
+#: A separate file so ``main.md`` — every non-sandbox deployment's stable prefix
+#: — is never touched by the browser variant, and a test pins the two to differ
+#: by that one line and nothing else.
 #: Used by :func:`sandbox_browser_options`, because the prompt must not name
 #: ``web`` unless ``web`` is actually in the roster. It inherits ``main``'s
 #: activation, memory included, hence the same policy fragment.
@@ -97,7 +98,9 @@ _WEB_PROMPT = _load_prompt("web")
 #: (ls / find / git status / git log / git diff); reading and searching go
 #: through ``Read`` / ``Glob`` / ``Grep``, never the shell. "No writes" is
 #: enforced by the prompt, with the approval gate on ``high``-risk shell as the
-#: backstop.
+#: backstop. ``WebSearch`` is here for the same reason ``WebFetch`` is: both are
+#: read-only lookups, and a scout that can fetch a URL but cannot find one has
+#: to guess at addresses. It mounts only where a search backend is configured.
 _SCOUT_TOOLS = (
     "Glob",
     "Grep",
@@ -105,6 +108,7 @@ _SCOUT_TOOLS = (
     "Bash",
     "BashOutput",
     "KillShell",
+    "WebSearch",
     "WebFetch",
 )
 
@@ -130,7 +134,9 @@ _GENERAL_PURPOSE_TOOLS = (
 
 #: The ``web`` subagent's whitelist-filtered base tools — the supporting cast
 #: around browsing: read/write to save findings, read-only shell, and
-#: ``WebFetch`` for a raw fetch when no interaction is needed. The browser pack
+#: ``WebSearch`` / ``WebFetch`` for finding and reading a page when no
+#: interaction is needed (driving the browser to a search engine costs far
+#: more). The browser pack
 #: (``browser_*``) is deliberately absent: it is gated by the ``browser``
 #: activation plus a live sandbox backend, not by this whitelist. No ``Edit``
 #: either — a browser worker writes fresh notes rather than editing a
@@ -142,6 +148,7 @@ _WEB_TOOLS = (
     "Bash",
     "BashOutput",
     "KillShell",
+    "WebSearch",
     "WebFetch",
     "Write",
 )

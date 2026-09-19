@@ -21,7 +21,7 @@ a fence.
 
 `smart_approve` classifies by **tool name**, not by a tool's declared
 `risk_level`, so the guard needs no tool registry and stays self-contained. The
-default low-risk set is only the read-only `read` / `grep` / `glob` / `ls`: a
+default low-risk set is only the read-only `Read` / `Grep` / `Glob` / `ls`: a
 tool missing from the set asks, so a classification gap fails towards the human.
 Replace the set wholesale with the `low_risk_tools` key.
 
@@ -35,8 +35,8 @@ A per-tool override wins over the mode outright:
 | `ask`    | require approval   |
 | `never`  | deny               |
 
-So `mode: auto` with `overrides: {write: never}` runs everything except `write`;
-`mode: chat` with `overrides: {read: always}` runs nothing except `read`.
+So `mode: auto` with `overrides: {Write: never}` runs everything except `Write`;
+`mode: chat` with `overrides: {Read: always}` runs nothing except `Read`.
 
 Only tool calls are gated. Subtask spawns and finishes pass through — approval
 modes are about tool execution, and blocking a finish would strand a turn rather
@@ -60,8 +60,8 @@ The finer knobs stay available to a host that constructs its own guard:
 ```python
 guard = ApprovalModesGuard(build_policy({
     "mode": "smart_approve",
-    "overrides": {"write": "never", "read": "always"},
-    "low_risk_tools": ["read", "grep", "glob", "ls"],
+    "overrides": {"Write": "never", "Read": "always"},
+    "low_risk_tools": ["Read", "Grep", "Glob", "ls"],
 }))
 ```
 

@@ -37,6 +37,12 @@ class TestSandboxBrowserOptions:
         assert "web" in opts.agents
         assert opts.agents["web"] is WEB_SUBAGENT
 
+    def test_web_agent_can_find_a_page_as_well_as_read_one(self) -> None:
+        """``WebSearch`` sits beside ``WebFetch`` in the browsing specialist's
+        whitelist: driving the browser to a search engine costs far more than
+        one read-only lookup, and ``webfetch.md`` already points at it."""
+        assert {"WebSearch", "WebFetch"} <= set(WEB_SUBAGENT.tools)
+
     def test_main_browser_stays_off(self) -> None:
         # main never opens ``browser``: it holds no browser tools and must
         # delegate to ``web``, the one identity that opens the capability.

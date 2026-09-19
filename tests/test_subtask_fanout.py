@@ -242,8 +242,12 @@ def test_spawn_mixed_with_nonspawn_returns_recoverable_ack() -> None:
     for b in ack.content:
         assert isinstance(b, ToolResultBlock)
         assert b.success is False
-        assert b.error is not None
-        assert "Task cannot be mixed with other tool calls" in b.output
+        # A failed ack carries its text once, on ``error`` (the renderer puts
+        # ``error`` ahead of ``output``, so filling both repeats it).
+        assert b.output == ""
+        assert "a response carrying Task may carry only Task calls" in (
+            b.error or ""
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -322,19 +326,45 @@ def test_group_wake_fires_only_after_last_member(tmp_path: Path) -> None:
 
 
 def _assert_zero_child(host, task_id: str) -> None:
+    """The all-or-none contract after a refused batch: the audit record is
+    written, no child exists, the conversation did NOT fail, and every
+    ``Task`` tool_use of the refused turn got exactly one failed result so the
+    next request is balanced."""
     types = _types(host, task_id)
     assert "SubtaskDenied" in types
-    assert "TaskFailed" in types
+    assert "TaskFailed" not in types
     assert "SubtaskSpawned" not in types  # ZERO child created
+    task = fold(host.event_log, host.content_store, task_id)
+    # One result per tool_use BLOCK — a model that reused one call_id across
+    # two blocks still gets two, so nothing is left dangling.
+    pending = [
+        b.call_id
+        for m in task.runtime.messages
+        if m.role == "assistant"
+        for b in m.content
+        if isinstance(b, ToolUseBlock) and b.tool_name == SPAWN_SUBAGENT_TOOL
+    ]
+    answered = [
+        b
+        for m in task.runtime.messages
+        if m.role == "tool"
+        for b in m.content
+        if isinstance(b, ToolResultBlock) and b.call_id in set(pending)
+    ]
+    assert sorted(b.call_id for b in answered) == sorted(pending)
+    assert all(b.success is False for b in answered)
+    return answered
 
 
 def test_duplicate_call_id_denies_whole_batch(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     host, driver = _session(ws, [
         _spawn_pair(("dup", "explore", "A"), ("dup", "general-purpose", "B")),
+        _end("re-issued separately instead"),
     ])
     out = driver.start(goal="root", agent="main")
-    _assert_zero_child(host, out.task_id)
+    answered = _assert_zero_child(host, out.task_id)
+    assert "share one call id" in (answered[0].error or "")
     denied = [e for e in host.event_log.read(out.task_id)
               if e.type == "SubtaskDenied"][0]
     assert denied.payload.reason == "fanout_batch_duplicate_call_id"
@@ -344,11 +374,20 @@ def test_size_cap_denies_whole_batch(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     # 17 > MAX_FANOUT(16)
     pairs = tuple((f"c{i}", "explore", f"g{i}") for i in range(17))
-    host, driver = _session(ws, [_spawn_pair(*pairs)])
+    host, driver = _session(
+        ws, [_spawn_pair(*pairs), _end("will batch them")]
+    )
     out = driver.start(goal="root", agent="main")
-    _assert_zero_child(host, out.task_id)
+    answered = _assert_zero_child(host, out.task_id)
+    # The model is told the count, the cap, and the batch size to retry with.
+    assert (
+        "17 Task calls in one response exceeds the limit of 16"
+        in (answered[0].error or "")
+    )
+    assert "batches of 16 or fewer" in (answered[0].error or "")
     denied = [e for e in host.event_log.read(out.task_id)
               if e.type == "SubtaskDenied"][0]
+    # The audit code stays machine-greppable even though the model reads prose.
     assert denied.payload.reason == "fanout_batch_size:17>16"
 
 
@@ -358,11 +397,17 @@ def test_budget_kth_failure_denies_whole_batch(tmp_path: Path) -> None:
     # sees spawned=1 >= 1 → deny → whole batch denied, zero child.
     host, driver = _session(
         ws,
-        [_spawn_pair(("a", "explore", "A"), ("b", "general-purpose", "B"))],
+        [
+            _spawn_pair(("a", "explore", "A"), ("b", "general-purpose", "B")),
+            _end("doing it myself"),
+        ],
         budget=Budget(max_iterations=15, max_tool_calls=30, max_spawned_subtasks=1),
     )
     out = driver.start(goal="root", agent="main")
-    _assert_zero_child(host, out.task_id)
+    answered = _assert_zero_child(host, out.task_id)
+    assert "Delegation refused" in (answered[0].error or "")
+    # The turn survived the refusal and the model ended it on its own terms.
+    assert "TaskCompleted" in _types(host, out.task_id)
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +518,7 @@ def test_malformed_task_args_return_recoverable_ack() -> None:
         assert isinstance(d, StatePatchDecision), bad
         block = d.messages_after[0].content[0]
         assert isinstance(block, ToolResultBlock) and block.success is False
-        assert "subagent_type" in block.output
+        assert "subagent_type" in (block.error or "")
 
 
 def test_parallel_task_fanout_e2e_one_result_per_call(tmp_path: Path) -> None:
@@ -512,6 +557,7 @@ def test_noncontiguous_duplicate_call_id_still_denied(tmp_path: Path) -> None:
     host, driver = _session(ws, [
         _spawn_pair(("dup", "explore", "A"), ("other", "general-purpose", "B"),
                     ("dup", "explore", "C")),
+        _end("re-issued separately instead"),
     ])
     out = driver.start(goal="root", agent="main")
     _assert_zero_child(host, out.task_id)

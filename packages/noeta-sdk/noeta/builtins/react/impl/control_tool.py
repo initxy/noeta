@@ -115,7 +115,12 @@ def _maybe_workflow_decision(
             assistant_message,
             assistant_thinking,
             patch=None,
-            text="run_workflow must be the only tool call in the turn",
+            # Stamped on every tool_use of the response, so it must read
+            # correctly on a neighbour that never ran too.
+            text=(
+                "Nothing in this response ran: run_workflow must be called on "
+                "its own. Re-issue the other calls in a separate response."
+            ),
             valid=False,
         )
     args = dict(workflow_blocks[0].arguments)

@@ -23,11 +23,7 @@ from noeta.execution.session_pack import (
     SessionBuildContext,
 )
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
-from noeta.tools.limits import (
-    INLINE_CONTENT_MAX_BYTES,
-    fit_output_fields,
-)
-from noeta.tools.refs import ref_json
+from noeta.tools.limits import elide_middle
 from noeta.protocols.resources import load_markdown
 
 
@@ -76,6 +72,13 @@ BROWSER_TOOL_NAMES: tuple[str, ...] = (
 _TEXT_MEDIA_TYPE = "text/plain"
 _PNG_MEDIA_TYPE = "image/png"
 
+#: Inline cap on a page snapshot, in characters — the same order as ``Bash``'s
+#: 30 000 (``SHELL_INLINE_MAX_CHARS``). The old 1 MiB byte fence let one page
+#: buy a whole context window, and the model reads a snapshot for its opening
+#: text and its numbered element indices, not for a megabyte of boilerplate.
+#: The untouched snapshot is always the artifact.
+_SNAPSHOT_INLINE_MAX_CHARS = 30000
+
 
 def _fail(name: str, message: str) -> ToolResult:
     """A tool failure — never raised out of ``invoke``, always a ``ToolResult``."""
@@ -112,26 +115,25 @@ def _require_int(
 def _snapshot_result(name: str, snapshot: str, ctx: ToolContext) -> ToolResult:
     """Wrap a page snapshot as a success ``ToolResult``.
 
-    A snapshot under the inline byte budget rides inline as ``{"snapshot": ...}``;
-    a larger one is stored as a ``text/plain`` artifact and the model gets a
-    bounded excerpt plus ``snapshot_ref``, so one huge page cannot flood the
-    context.
+    An over-cap snapshot is elided in the MIDDLE, with the marker naming the
+    dropped count: both ends carry meaning here — the page text opens at the
+    top, the numbered elements the model clicks by index sit at the bottom —
+    and a silent trim would let the model address an index it can no longer
+    see without knowing anything went missing. The untouched snapshot is the
+    artifact; no ``snapshot_ref`` rides in the output, because the model has no
+    ref-deref tool and the hash would be dead token weight.
     """
-    output: dict[str, Any] = {"snapshot": snapshot}
+    inline = elide_middle(snapshot, _SNAPSHOT_INLINE_MAX_CHARS)
     artifacts = []
-    if len(snapshot.encode("utf-8")) > INLINE_CONTENT_MAX_BYTES:
-        ref = ctx.artifact_store.put(
-            snapshot.encode("utf-8"), media_type=_TEXT_MEDIA_TYPE
-        )
-        artifacts.append(ref)
-        output = fit_output_fields(
-            {"snapshot": snapshot, "snapshot_ref": ref_json(ref)},
-            shrink_order=["snapshot"],
-            max_bytes=INLINE_CONTENT_MAX_BYTES,
+    if inline != snapshot:
+        artifacts.append(
+            ctx.artifact_store.put(
+                snapshot.encode("utf-8"), media_type=_TEXT_MEDIA_TYPE
+            )
         )
     return ToolResult(
         success=True,
-        output=output,
+        output={"snapshot": inline},
         summary=f"{name}: {len(snapshot)} chars",
         artifacts=artifacts,
     )
@@ -243,6 +245,15 @@ class BrowserExtractTool(_BrowserTool):
             snapshot = self._backend.extract()
         except OSError as exc:
             return _fail(self.name, str(exc))
+        if not snapshot.strip():
+            # success=True with zero chars reads as "the page had nothing on
+            # it", and the model moves on instead of looking again.
+            return _fail(
+                self.name,
+                "the page returned no content — it may still be loading, or "
+                "render nothing without scripting; navigate again, or take a "
+                "browser_screenshot to see what is on screen",
+            )
         return _snapshot_result(self.name, snapshot, ctx)
 
 

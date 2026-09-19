@@ -276,6 +276,45 @@ def test_worker_claimed_child_declared_default_beats_the_inherited_binding(
     assert shape["req_model"] == "haiku-test"
 
 
+def test_root_cancel_abandons_a_worker_claimed_child(tmp_path: Path) -> None:
+    """A cancel on the ROOT reaches a child a resident worker already claimed.
+
+    ``cancel`` marks the tree's root in the process-local registry and nothing
+    walks it downward, so a predicate bound to the claimed child's own id never
+    trips: the stolen child would run its whole turn out — spending an LLM
+    round and applying whatever its tools do — and only then hand a result to
+    an already-terminal parent that drops it. Bound to the root (what the
+    in-request drain has always done), it abandons at its first step boundary.
+    """
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    provider = FakeLLMProvider(
+        responses=[_spawn("explore"), _end("child-done"), _end("parent-done")]
+    )
+    host, driver = _host(ws, provider, preset_spec("explore"))
+    thieves: list[Any] = []
+    _steal_children_at_enqueue(host, thieves)
+
+    out = driver.start(goal=PARENT_GOAL, agent="main")
+    assert out.status == "suspended"
+    assert len(thieves) == 1, "the interposed poll did not claim the child"
+    child_id = thieves[0].task_id
+    assert child_id == _spawned_child_id(host, out.task_id)
+
+    # The human cancels the conversation while the pool holds the child's
+    # lease. Only the root is marked — the child is not, and never will be.
+    driver.cancel(out.task_id)
+    assert host.is_cancelled(out.task_id) is True
+    assert host.is_cancelled(child_id) is False
+
+    assert run_leased_task(host, thieves[0]) == "cancelled"
+    child_types = [e.type for e in host.event_log.read(child_id)]
+    assert "TaskCompleted" not in child_types
+    assert "LLMRequestStarted" not in child_types  # no round was spent
+    # Only the parent's own spawn turn ever reached the provider.
+    assert len(provider.received_requests) == 1
+
+
 def test_resolve_engine_inherits_from_the_root_through_an_unbound_middle_child(
     tmp_path: Path,
 ) -> None:

@@ -20,6 +20,10 @@ and auth / quota failures surface at the transport (HTTP 401/403 or a connection
 error) and degrade to a clear ``ToolResult(success=False, ...)`` — these
 limitations are documented in the tools' description resources.
 
+Whether a ``webfetch`` call needs a human is decided per call by the SDK host
+from ``HostConfig.webfetch_allowed_hosts`` (:mod:`noeta.client.webfetch_policy`)
+— the tool itself fences no address.
+
 This module is reached only through the plugin loader's ``ref`` resolution;
 nothing imports it statically.
 """

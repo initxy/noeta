@@ -63,6 +63,8 @@ _INTERPRETER_FOR_SUFFIX: dict[str, str] = {
 #: argv hygiene caps — keep the arg list a bounded surface.
 _MAX_ARGS = 16
 _MAX_ARG_LEN = 4096
+#: How many of a skill's scripts a "not a discovered script" refusal names.
+_MAX_LISTED_SCRIPTS = 20
 
 
 def is_skill_script_resource(relpath: str) -> bool:
@@ -113,9 +115,29 @@ class RunSkillScriptTool:
         default_factory=lambda: {
             "type": "object",
             "properties": {
-                "skill": {"type": "string"},
-                "relpath": {"type": "string"},
-                "args": {"type": "array", "items": {"type": "string"}},
+                "skill": {
+                    "type": "string",
+                    "description": "Name of the active skill that bundles the script.",
+                },
+                "relpath": {
+                    "type": "string",
+                    # The model is only ever shown the skill's ABSOLUTE base
+                    # directory, so without this it guesses an absolute or a
+                    # workspace-relative path and the call is refused.
+                    "description": (
+                        "Path to the script relative to that skill's own "
+                        "directory (the 'Base directory for this skill' path), "
+                        "e.g. 'scripts/check.sh'."
+                    ),
+                },
+                "args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Arguments for the script, one list element each. No "
+                        "shell metacharacters; there is no shell."
+                    ),
+                },
             },
             "required": ["skill", "relpath"],
             "additionalProperties": False,
@@ -148,7 +170,24 @@ class RunSkillScriptTool:
 
         root = self._root_for(skill, relpath)
         if root is None:
-            return _err(f"{skill!r}/{relpath!r} is not a discovered skill script")
+            # The usual cause is an absolute or workspace-relative 'relpath':
+            # the only path the model is shown is the skill's absolute base
+            # directory. Naming the form and the actual scripts turns the
+            # refusal into the one thing the model needs to retry correctly.
+            known = sorted(rel for s, rel, _ in self.scripts if s == skill)
+            if known:
+                hint = "discovered scripts for it: " + ", ".join(
+                    known[:_MAX_LISTED_SCRIPTS]
+                )
+                if len(known) > _MAX_LISTED_SCRIPTS:
+                    hint += f", … ({len(known)} total)"
+            else:
+                hint = f"skill {skill!r} bundles no scripts"
+            return _err(
+                f"{relpath!r} is not a discovered script of skill {skill!r}. "
+                "'relpath' must be relative to the skill's own directory; "
+                + hint
+            )
         interpreter = _INTERPRETER_FOR_SUFFIX.get(Path(relpath).suffix.lower())
         if interpreter is None:
             return _err(f"no allowlisted interpreter for {relpath!r}")
@@ -249,8 +288,11 @@ class RunSkillScriptTool:
         if outcome.timed_out:
             status = "timeout"
         artifacts = [r for r in (stdout_ref, stderr_ref) if r is not None]
+        # A non-zero exit or a timeout is a failed run, flagged the way ``Bash``
+        # flags it — the body is unchanged, so the model still reads the output
+        # that explains why.
         return ToolResult(
-            success=True,
+            success=outcome.returncode == 0 and not outcome.timed_out,
             output=output,
             artifacts=artifacts,
             summary=(

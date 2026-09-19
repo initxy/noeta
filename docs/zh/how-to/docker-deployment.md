@@ -8,19 +8,24 @@ Noeta 自己不提供 Dockerfile —— 库是进程内的，也没有守护进�
 
 Noeta 是一个纯 Python 库。你的镜像装上 `noeta-sdk`、拷进你的 host 代码，然后运行它。运行时是进程内的 —— 没有 Noeta 守护进程要启动。
 
+有一个系统包不能省：**`ripgrep`**。从 0.6.9 起，`Grep` 和 `Glob` 两个工具是通过执行环境调 `rg` 来干活的，镜像里没装的话，agent 第一次搜索就会失败。
+
 ```dockerfile
 # Dockerfile
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# System deps your tools need (git, curl, …). Trim to what your agent uses.
+# System deps. `ripgrep` is required — the Grep and Glob tools shell out to
+# `rg` through the execution environment, so without it both fail at runtime.
+# The rest (git, curl, …) is what your own tools need; trim to taste.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git ca-certificates \
+        ripgrep git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Noeta. Pin the version your host was built against.
-RUN pip install --no-cache-dir "noeta-sdk>=0.4.0,<0.5.0"
+# Install Noeta. Pin the version your host was built against — the current
+# line is `0.6.x`; see the release notes for the exact patch.
+RUN pip install --no-cache-dir "noeta-sdk>=0.6,<0.7"
 
 # Copy your host.
 COPY host.py .

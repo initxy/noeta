@@ -95,7 +95,9 @@ all workers exited: True
 
 多个进程只有在 **Postgres** 上才可以排空同一个存储 —— 那里追加会在事务内对着活跃 lease 加围栏，而 lease 过期按数据库时钟计算。SQLite 没有跨主机围栏 —— 把它限制在单台主机上，在那台主机上跑一个多 worker 的池是没问题的。
 
-就绪队列不做任何路由：worker 排空它租到的任何东西，所以一个存储里的每个 Task 都必须是那个池跑得了的。给不同的工作负载画像各自的存储。
+不同的工作负载画像**不需要**各占一个存储。每一行调度记录都带一个队列名：根任务生在播种它的那个 client 的队列上（`HostConfig.queue`），子任务继承它，而一个 worker 池的无定向租用只认自己的队列 —— 所以共用一套存储的两个配置不同的 client，谁也抢不走谁的活。给每个画像起一个队列名，再让它的池子报同一个名字就行。
+
+队列内部还是老规矩：落在这个队列上的每个 Task，都得是那个池跑得了的。见 [ADR: Worker queue routing](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md)。
 
 ## 自己驱动这个循环
 
