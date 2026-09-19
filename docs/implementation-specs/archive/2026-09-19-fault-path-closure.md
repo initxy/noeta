@@ -1,9 +1,12 @@
 # Fault-path closure: the fixes confirmed by the 2026-09-18 audit fact-check
 
-Status: IMPLEMENTED, NOT RELEASED (2026-09-18 on `fix/fault-path-closure`, base
-`89622fd`, noeta-runtime 0.6.24 / noeta-sdk 0.6.27). All work packages are in
-the working tree with their tests, WP-G and WP-H included; `make check` green
-(see "Handoff"). Not committed, not bumped, not tagged — see "Handoff" at the end.
+Status: SHIPPED 2026-09-19 in noeta-runtime + noeta-sdk 0.6.28 (lockstep,
+together with `2026-09-19-prompt-surface-truthfulness.md`; `make check` green
+4199/87.41%). Distilled into `CONTEXT.md` (Guard, web egress gate) and the ADRs
+`worker-lease-model`, `guard-observer-hooks`, `mid-turn-goal-injection`,
+`mcp-connectors`, `tool-description-canonical`, `shell-permission-and-background`
+and `unified-context-supply`. The benchmark rerun WP-G called for was not run
+before the release. "Handoff" below records the state before the commit.
 
 ## Goal
 

@@ -1,7 +1,10 @@
 # Prompt surface truthfulness
 
-Status: implemented 2026-09-19 on `fix/fault-path-closure`, uncommitted; K2 and
-the K8 residual are open. Same branch as `fault-path-closure.md`.
+Status: SHIPPED 2026-09-19 in noeta-runtime + noeta-sdk 0.6.28 (lockstep,
+together with `2026-09-19-fault-path-closure.md`). Distilled into `CONTEXT.md`
+(reminders, memory), `docs/adr/subtask-fanout-and-durable-wake.md` and
+`docs/adr/unified-context-supply.md`. K2 and the K8 residual stay open — see
+their entries below.
 
 ## Goal
 
