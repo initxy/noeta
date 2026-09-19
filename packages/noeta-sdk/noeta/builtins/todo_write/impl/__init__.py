@@ -184,7 +184,11 @@ def _maybe_todo_write_decision(
             assistant_message,
             assistant_thinking,
             patch=None,
-            text="TodoWrite may appear at most once per turn",
+            text=(
+                "Nothing in this response ran: TodoWrite may be called only "
+                "once per response. Re-issue it as a single call carrying the "
+                "whole checklist."
+            ),
             valid=False,
         )
     todo_block = todo_blocks[0]
@@ -215,8 +219,10 @@ def _maybe_todo_write_decision(
             assistant_thinking,
             patch=None,
             text=(
-                "TodoWrite cannot be batched with another control tool "
-                f"({control_others[0].tool_name}); issue them in separate turns"
+                "Nothing in this response ran: TodoWrite cannot share a "
+                f"response with {control_others[0].tool_name}, and the "
+                "checklist was not saved. Re-issue the other calls in a "
+                "separate response."
             ),
             valid=False,
         )

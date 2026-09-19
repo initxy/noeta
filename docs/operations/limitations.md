@@ -122,8 +122,8 @@ task may need inspection: check whether it is still viable or should be closed.
 
 **What it means:** The worker emits `ReliabilityEvent`s — `stale_requeued`,
 `suspended_without_wake`, `step_failed_retryable`, `heartbeat_invalid_lease`,
-`shutdown_abandoned`, `timers_fired`, `attempt_abandoned`, `attempt_parked` —
-to an injectable sink that defaults to structured logs. They are **not**
+`shutdown_abandoned`, `timers_fired`, `attempt_abandoned`, `attempt_parked`,
+`cap_terminal_reconciled`, `dispatcher_unavailable` — to an injectable sink that defaults to structured logs. They are **not**
 EventLog events, are not persisted, and do not survive a restart.
 
 **When you hit it:** You are building monitoring or alerting on worker

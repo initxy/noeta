@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from noeta.context.composer import (
     ThreeSegmentComposer,
+    _MIN_CLEARABLE_OUTPUT_CHARS,
     _clear_tool_outputs,
     _is_cleared_marker,
 )
@@ -58,13 +59,59 @@ def test_clear_still_wraps_nonempty_output() -> None:
         puts.append(output)
         return "HASH"
 
-    msg = _result_msg("real output")
+    bulk = "real output " * 100
+    msg = _result_msg(bulk)
     out, cleared_refs = _clear_tool_outputs(msg, put_full)
     assert cleared_refs == ["HASH"]  # one ref returned for the plan
     block = out.content[0]
     assert isinstance(block, ToolResultBlock)
     assert _is_cleared_marker(block.output)
-    assert puts == ["real output"]
+    assert puts == [bulk]
+
+
+# ---------------------------------------------------------------------------
+# a SHORT output is not bulk — clearing it saves nothing and may be
+# unrecoverable (a user's AskUserQuestion answer, a control-tool ack).
+# ---------------------------------------------------------------------------
+
+
+def test_clear_leaves_short_outputs_verbatim() -> None:
+    puts: list[object] = []
+
+    def put_full(output: object) -> str:
+        puts.append(output)
+        return "HASH"
+
+    short = "yes, use the second option"
+    assert len(short) < _MIN_CLEARABLE_OUTPUT_CHARS
+    out, cleared_refs = _clear_tool_outputs(_result_msg(short), put_full)
+    assert cleared_refs == []
+    block = out.content[0]
+    assert isinstance(block, ToolResultBlock)
+    assert block.output == short
+    # nothing offloaded either — a short output was never bulk to reclaim.
+    assert puts == []
+
+
+def test_clear_size_floor_measures_structured_output_as_json() -> None:
+    """A non-string output reaches the model as canonical JSON, so that is what
+    the floor measures — a small dict stays, a big one clears."""
+    puts: list[object] = []
+
+    def put_full(output: object) -> str:
+        puts.append(output)
+        return "HASH"
+
+    small = {"ok": True}
+    _out, refs = _clear_tool_outputs(_result_msg(small), put_full)
+    assert refs == []
+
+    big = {"rows": ["x" * 40 for _ in range(20)]}
+    out, refs = _clear_tool_outputs(_result_msg(big), put_full)
+    assert refs == ["HASH"]
+    block = out.content[0]
+    assert isinstance(block, ToolResultBlock)
+    assert _is_cleared_marker(block.output)
 
 
 # ---------------------------------------------------------------------------

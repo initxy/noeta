@@ -184,7 +184,7 @@ def test_translate_skill_success() -> None:
     # The ack text is contractual: byte-stable so the model can rely on it.
     assert block.output == (
         "Skill 'alpha' loaded; its instructions will appear in your "
-        "context from the next turn."
+        "context from your next step."
     )
 
 
@@ -223,8 +223,8 @@ def test_translate_skill_unknown_name() -> None:
     assert block.error is not None
     # The ack lists the available names, sorted, so the model can retry
     # without a second round trip.
-    assert block.output.startswith("unknown skill 'nope'; available:")
-    assert "alpha, beta, gamma" in block.output
+    assert (block.error or "").startswith("unknown skill 'nope'; available:")
+    assert "alpha, beta, gamma" in (block.error or "")
 
 
 def test_translate_skill_unknown_name_empty_menu() -> None:
@@ -234,7 +234,7 @@ def test_translate_skill_unknown_name_empty_menu() -> None:
     assert decision.patch is None
     block = decision.messages_after[0].content[0]
     assert isinstance(block, ToolResultBlock)
-    assert block.output.endswith("available: (none)")
+    assert (block.error or "").endswith("available: (none)")
 
 
 def test_translate_skill_missing_argument() -> None:
@@ -252,7 +252,7 @@ def test_translate_skill_missing_argument() -> None:
     block = decision.messages_after[0].content[0]
     assert isinstance(block, ToolResultBlock)
     assert block.success is False
-    assert "skill must be a non-empty string" in block.output
+    assert "skill must be a non-empty string" in (block.error or "")
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +273,13 @@ def test_translate_skill_mixed_with_other_tool() -> None:
     for b in ack.content:
         assert isinstance(b, ToolResultBlock)
         assert b.success is False
-        assert b.output == "skill must be the only tool call in the turn"
+        # A failed ack carries its text once, on ``error``: the renderer puts
+        # ``error`` ahead of ``output``, so filling both repeats the sentence.
+        assert b.output == ""
+        assert b.error == (
+            "Nothing in this response ran: skill must be called on its own. "
+            "Re-issue the other calls in a separate response."
+        )
     call_ids = sorted(b.call_id for b in ack.content)
     assert call_ids == ["s1", "sk"]
 
@@ -289,7 +295,11 @@ def test_translate_skill_two_skill_calls_is_sole_call_violation() -> None:
     for b in decision.messages_after[0].content:
         assert isinstance(b, ToolResultBlock)
         assert b.success is False
-        assert b.output == "skill must be the only tool call in the turn"
+        assert b.output == ""
+        assert b.error == (
+            "Nothing in this response ran: skill must be called on its own. "
+            "Re-issue the other calls in a separate response."
+        )
 
 
 def test_translate_spawn_mixed_with_skill_recoverable_with_both_toggles() -> None:
@@ -319,8 +329,10 @@ def test_translate_spawn_mixed_with_skill_recoverable_with_both_toggles() -> Non
     for b in ack.content:
         assert isinstance(b, ToolResultBlock)
         assert b.success is False
-        assert b.error is not None
-        assert "Task cannot be mixed with other tool calls" in b.output
+        assert b.output == ""
+        assert "a response carrying Task may carry only Task calls" in (
+            b.error or ""
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +356,7 @@ def test_translate_skill_duplicate_name_same_ack() -> None:
     assert first_ack.output == second_ack.output
     assert first_ack.output == (
         "Skill 'gamma' loaded; its instructions will appear in your "
-        "context from the next turn."
+        "context from your next step."
     )
 
 

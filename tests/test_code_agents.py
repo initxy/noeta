@@ -259,13 +259,17 @@ def test_explore_is_read_only() -> None:
 
 def test_plan_whitelist_and_capabilities() -> None:
     # Plan's whitelist is the read-mostly scout set (same as explore) —
-    # read/grep/glob + shell triplet + webfetch — and NO write family at all.
+    # read/grep/glob + shell triplet + the two read-only web lookups — and NO
+    # write family at all.
     # Activation opens ONLY ask_user_question (no todo_write).
     plan_tools = _tools(PLAN_SPEC)
     for mutating in ("Edit", "Write", "apply_patch"):
         assert mutating not in plan_tools
     assert plan_tools == frozenset(
-        {"Read", "Grep", "Glob", "Bash", "BashOutput", "KillShell", "WebFetch"}
+        {
+            "Read", "Grep", "Glob", "Bash", "BashOutput", "KillShell",
+            "WebSearch", "WebFetch",
+        }
     )
     assert agent_activates(PLAN_SPEC, "todo_write") is False
     assert agent_activates(PLAN_SPEC, "ask_user_question") is True

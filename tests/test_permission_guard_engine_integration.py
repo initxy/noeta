@@ -121,7 +121,10 @@ def test_permission_guard_fail_closed_unknown_tool_does_not_crash_engine() -> No
 
 def test_permission_guard_blocks_disallowed_subtask_agent() -> None:
     policy = StubScriptedPolicy(
-        [SpawnSubtaskDecision(agent_name="hacker", goal="g", inputs={})]
+        [
+            SpawnSubtaskDecision(agent_name="hacker", goal="g", inputs={}),
+            FinishDecision(answer="did it myself"),
+        ]
     )
     hooks = HookManager()
     hooks.register(
@@ -135,4 +138,6 @@ def test_permission_guard_blocks_disallowed_subtask_agent() -> None:
     assert finished.status == "terminal"
     types = [e.type for e in log.read(task.task_id)]
     assert "SubtaskDenied" in types
-    assert "TaskFailed" in types
+    assert "SubtaskSpawned" not in types
+    # A refused delegation is feedback, not the end of the conversation.
+    assert "TaskFailed" not in types

@@ -41,19 +41,11 @@ from noeta.builtins.mcp.impl.tool import (
 
 
 __all__ = [
-    "MCP_PROMPT_ORIGIN_PREFIX",
     "discover_prompts",
     "expand_prompt",
     "flatten_prompt_messages",
     "make_mcp_prompt_name",
 ]
-
-
-#: A human-readable provenance prefix the host prepends to an injected prompt's
-#: text so the conversation transcript shows "this came from an MCP prompt"
-#: (the structural origin is ``Message.origin="system"``; this is the visible
-#: label, mirroring how memory recall reads as an attributed turn).
-MCP_PROMPT_ORIGIN_PREFIX = "mcp-prompt"
 
 
 def make_mcp_prompt_name(alias: str, raw_prompt_name: object) -> str:

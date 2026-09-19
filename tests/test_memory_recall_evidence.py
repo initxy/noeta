@@ -2,10 +2,11 @@
 
 The acceptance criteria of the two 2026-09 memory specs, in one place:
 
-* **Evidence** — a body rides only when the text NAMES the page (two
-  non-common name tokens, or the whole of a shorter name); one shared word is
-  a pointer; a token many names share is no evidence at all; the cap keeps the
-  strongest hits, not the start of the alphabet.
+* **Evidence** — a body rides only when the text NAMES the page (at least two
+  of the name's tokens and at least half of them, counting every token the
+  name carries); one shared word is a pointer; a token many names share is no
+  evidence at all; the cap keeps the strongest hits, not the start of the
+  alphabet; only the head of a long message is matched.
 * **Exclusions** — ``recall_exclude`` names are silent in every tier, and do
   not move what counts as common.
 * **Judge** — consulted only when nothing was named and the cap has room.
@@ -19,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from noeta.builtins.memory.impl.matching import (
+    RECALL_KEY_MAX_CHARS,
     common_name_tokens,
     match_memories_tiered,
     rank_memories,
@@ -129,6 +131,78 @@ def test_the_cap_keeps_the_strongest_hits_not_the_first() -> None:
         ("eee-fff-ggg", True),
         ("hhh-iii-jjj", True),
     )
+
+
+def test_a_name_the_filters_ate_cannot_be_named_by_what_survived() -> None:
+    """Tier 1 counts the WHOLE name, including tokens nothing can match.
+
+    ``ci-cd-flow`` carries three tokens; the length floor eats ``ci`` and
+    ``cd``, and the old rule took its floor against what survived — one
+    token — so any passing "data flow" bought the page whole. Size is now
+    counted before the filters: one of three is a pointer. Writing the slug
+    out still names it, because the text carries those tokens too.
+    """
+    entries = (("ci-cd-flow", "how a build reaches prod", "", ""),)
+    assert match_memories_tiered(
+        entries, "please check the data flow in module X"
+    ) == (("ci-cd-flow", False),)
+    assert match_memories_tiered(entries, "the ci-cd flow broke again") == (
+        ("ci-cd-flow", True),
+    )
+    # Same shape with a stopword doing the eating rather than the floor.
+    how = (("how-we-deploy", "release steps", "", ""),)
+    assert match_memories_tiered(how, "what is our deploy process?") == (
+        ("how-we-deploy", False),
+    )
+    assert match_memories_tiered(how, "remind me how we deploy") == (
+        ("how-we-deploy", True),
+    )
+
+
+def test_cjk_function_words_are_not_a_naming() -> None:
+    """One rule for every script — no CJK word list anywhere.
+
+    "我们" and "流程" are two of the six bigrams of 我们的部署流程, which used
+    to be exactly the two the tier-1 floor asked for: a question about any
+    process at all bought the deployment page whole. Half of six is three.
+    A message that does name the page still gets its body.
+    """
+    entries = (("我们的部署流程", "怎么发布", "", ""),)
+    assert match_memories_tiered(entries, "我们这个流程是什么样的？") == (
+        ("我们的部署流程", False),
+    )
+    assert match_memories_tiered(entries, "我们的部署流程是什么") == (
+        ("我们的部署流程", True),
+    )
+    # A page whose name IS one word is named by that word — nothing is
+    # filtered out of it, so there is nothing else to carry.
+    assert match_memories_tiered((("部署", "", "", ""),), "部署怎么做") == (
+        ("部署", True),
+    )
+    # And half of a longer CJK name is still a naming: 技能同步 is 3 of the
+    # 7 bigrams of 工具技能同步做法.
+    assert match_memories_tiered(
+        (("工具技能同步做法", "", "", ""),), "技能同步怎么做来着"
+    ) == (("工具技能同步做法", True),)
+
+
+def test_a_pasted_wall_of_text_is_not_the_whole_recall_key() -> None:
+    """Only the head of the message is matched.
+
+    The key is the whole goal, and a goal is routinely a sentence followed by
+    a pasted log. Tokenised whole, a 40 KB paste shares a token with nearly
+    every page and recall answers with five bodies of noise.
+    """
+    entries = (
+        ("deploy-process", "how we ship", "", ""),
+        ("naming-rules", "module naming conventions", "", ""),
+    )
+    paste = "\n".join(f"line {i}: nothing to see" for i in range(2000))
+    assert len(paste) > RECALL_KEY_MAX_CHARS
+    asked = "what is our deploy process?\n" + paste
+    buried = paste + "\nmodule naming conventions, please"
+    assert match_memories_tiered(entries, asked) == (("deploy-process", True),)
+    assert match_memories_tiered(entries, buried) == ()
 
 
 def test_a_keyword_phrase_leads_the_pointer_tier() -> None:
@@ -386,6 +460,42 @@ def test_host_threads_recall_exclude_and_the_write_cap(tmp_path: Path) -> None:
     spec = host._lookup_agent("main", task_id="<unbound>")
     config = host._plugin_config(shell_mode="deny", spec=spec)
     assert config["memory"]["max_bytes"] == 3000
+
+
+def test_host_derives_the_index_budget_from_the_bound_model(
+    tmp_path: Path,
+) -> None:
+    """The index budget is derived exactly like the skill roster's — a share
+    of the bound model's window — and an explicit host number wins."""
+    from noeta.client.host import memory_index_budget_tokens, skill_menu_budget_tokens
+    from noeta.testing.fake_llm import FakeLLMProvider
+    from tests._sdk_session import make_host, make_registry, runner_main_spec
+
+    registry = make_registry(runner_main_spec("main", memory=True))
+    host = make_host(
+        registry,
+        workspace_dir=tmp_path,
+        provider=FakeLLMProvider(responses=[]),
+        model="stub-model",
+    )
+    spec = host._lookup_agent("main", task_id="<unbound>")
+    derived = host._plugin_config(shell_mode="deny", spec=spec, model="stub-model")
+    assert derived["memory"]["index_budget_tokens"] == memory_index_budget_tokens(
+        "stub-model"
+    )
+    assert derived["memory"]["index_budget_tokens"] == skill_menu_budget_tokens(
+        "stub-model"
+    )
+
+    pinned = make_host(
+        registry,
+        workspace_dir=tmp_path,
+        provider=FakeLLMProvider(responses=[]),
+        model="stub-model",
+        memory_index_budget_tokens=500,
+    )
+    config = pinned._plugin_config(shell_mode="deny", spec=spec, model="stub-model")
+    assert config["memory"]["index_budget_tokens"] == 500
 
 
 def test_the_memory_pack_hands_the_cap_to_its_write_tool(tmp_path: Path) -> None:

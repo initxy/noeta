@@ -114,7 +114,10 @@ def test_read_empty_file_warns(tmp_path: Path) -> None:
     )
     assert result.success is True
     assert "exists but has empty contents" in result.output
-    assert "<system-reminder>" in result.output
+    # A plain parenthetical note, NOT the reserved host-turn tag: that tag may
+    # only be produced by the provider adapter wrapping a host-authored turn.
+    assert result.output.startswith("(") and result.output.endswith(")")
+    assert "<system-reminder" not in result.output
 
 
 def test_read_offset_past_end_warns_with_line_count(tmp_path: Path) -> None:
@@ -578,6 +581,38 @@ def test_grep_head_limit(tmp_path: Path) -> None:
     ]
     assert len(body) == 1
     assert "Showing 1 of 3 matches" in result.output
+
+
+def test_grep_content_byte_fence_trim_is_counted_in_the_footer(
+    tmp_path: Path,
+) -> None:
+    """A trim by the 32 KB inline fence must show up in the footer AND summary.
+
+    ``shown`` used to be counted BEFORE the fence halved the kept lines, so a
+    result cut down to a handful of lines still claimed to be showing all of
+    them and the "(Showing N of M matches…)" footer never fired. Wide lines are
+    what reach the fence: the default head_limit keeps a normal search far
+    below it.
+    """
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    # 40 lines x ~2 KB of visible text = ~80 KB, well over the 32 KB fence and
+    # under the per-line clip, so every line survives whole.
+    wide = "needle " + ("w" * 1900)
+    (workspace.root / "wide.txt").write_text("\n".join([wide] * 40) + "\n")
+
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": "needle", "output_mode": "content"}, ctx
+    )
+    assert result.success is True
+    body = [
+        line
+        for line in result.output.splitlines()
+        if not line.startswith("(Showing")
+    ]
+    assert len(body) < 40, "the byte fence should have dropped lines"
+    assert f"(Showing {len(body)} of 40 matches." in result.output
+    assert result.summary == f"grep: {len(body)} of 40 match(es)"
+    assert len(result.output.encode("utf-8")) <= INLINE_OUTPUT_MAX_BYTES + 200
 
 
 def test_grep_multiline_spans_lines(tmp_path: Path) -> None:

@@ -88,7 +88,7 @@ class OpenAICompatProvider:
         base_url: str,
         api_key: Optional[str] = None,
         *,
-        timeout_seconds: float = 60.0,
+        timeout_seconds: float = 300.0,
         extra_headers: Optional[dict[str, str]] = None,
         reasoning_continuation: ReasoningContinuation = "off",
     ) -> None:
@@ -102,6 +102,20 @@ class OpenAICompatProvider:
         ``os.environ.get("KEY", "")``, the very misconfiguration this check
         exists to name. An endpoint that wants no authentication passes any
         placeholder — the header is sent and the server ignores it.
+
+        ``timeout_seconds`` is the ADR default (300s, because high-effort
+        reasoning routinely runs past a minute) and governs both transports of
+        the one shared client, which is what the number has to cover:
+        :meth:`complete_with_headers` is a non-streaming POST, so the socket
+        stays silent for the WHOLE generation and the read timeout is in
+        practice a wall-clock cap on it — ReAct forwards the catalog's
+        ``max_output_tokens`` as ``max_tokens`` on every turn, so at 60s a long
+        answer on a large cap timed out and then burned the runtime's retry
+        budget re-running the same doomed call. On
+        :meth:`complete_streaming` the same scalar measures *silence* between
+        SSE events instead, where 300s is equally the honest number: a
+        reasoning model can think for minutes before its first token, and a
+        gateway that has gone quiet for five minutes is dead, not slow.
         """
         resolved_key = api_key if api_key is not None else os.environ.get(_API_KEY_ENV)
         if not resolved_key:

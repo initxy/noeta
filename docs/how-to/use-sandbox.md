@@ -162,7 +162,9 @@ Under a sandbox, these side effects route through the session's `ExecEnv`:
 - **foreground shell** — `Bash` (background shell is host-side and refused
   under a container)
 - **web egress** — `WebFetch` / `WebSearch` go out via `curl` inside the
-  container
+  container, so the container's network policy is the egress boundary. Whether
+  a fetch needs human approval is decided host-side from the URL's host — see
+  [WebFetch egress](../reference/tools.md#webfetch-egress)
 - **skill indexing** — `tree_snapshot` batches the walk into one round-trip
 - **browser tools** — `browser_navigate`, `browser_click`, … via the
   `BrowserBackend` wire

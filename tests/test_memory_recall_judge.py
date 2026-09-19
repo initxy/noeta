@@ -24,7 +24,7 @@ from pathlib import Path
 from noeta.builtins.memory.impl.judge import (
     build_recall_judge,
     parse_judge_reply,
-    render_judge_prompt,
+    render_judge_system,
 )
 from noeta.builtins.memory.impl.recall import memory_reminder_provider
 from noeta.builtins.memory.impl.store import MemoryStore
@@ -92,13 +92,31 @@ class _BlockedProvider:
 # ---------------------------------------------------------------------------
 
 
-def test_prompt_lists_index_with_aliases_and_message() -> None:
-    prompt = render_judge_prompt(_ENTRIES, "怎么上线？")
-    assert "JSON array" in prompt  # the reply contract is stated
-    assert "- deploy-process (procedural): How we deploy safely" in prompt
-    assert "[aliases: deploy, 部署]" in prompt  # keywords ride into the prompt
-    assert "- naming-rules: Module naming conventions" in prompt
-    assert prompt.rstrip().endswith("怎么上线？")
+def test_system_text_lists_the_index_with_aliases() -> None:
+    system = render_judge_system(_ENTRIES)
+    assert "JSON array" in system  # the reply contract is stated
+    assert "- deploy-process (procedural): How we deploy safely" in system
+    assert "[aliases: deploy, 部署]" in system  # keywords ride into the prompt
+    assert "- naming-rules: Module naming conventions" in system
+    # The message is NOT in here: it is the one thing that changes per call,
+    # so it rides the user turn and leaves this text cacheable.
+    assert "怎么上线？" not in system
+
+
+def test_judge_sends_instructions_and_index_as_system() -> None:
+    """Everything stable is ``system``; only the message is a user turn.
+
+    Was one user block holding instructions + index + message, so nothing was
+    cacheable and the whole index was re-paid on every lexical miss.
+    """
+    provider = _ScriptedProvider(reply='["deploy-process"]')
+    build_recall_judge(provider, "small-model-1")(_ENTRIES, "怎么上线？")
+    (request,) = provider.requests
+    assert request.system is not None
+    assert request.system.role == "system"
+    assert request.system.content[0].text == render_judge_system(_ENTRIES)
+    assert [m.role for m in request.messages] == ["user"]
+    assert request.messages[0].content[0].text == "怎么上线？"
 
 
 def test_parse_keeps_known_names_in_judge_order() -> None:

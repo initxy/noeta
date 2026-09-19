@@ -1,7 +1,8 @@
 # Compaction continuity + collapsed-history recall
 
-Status: implemented, gate pending final verification (2026-08-06). Deviations
-from the plan as specced: mount gating landed as a host-computed
+Status: SHIPPED 2026-08-06 in noeta-runtime + noeta-sdk 0.6.4. Distilled into
+`docs/adr/context-compaction.md` (2026-08-06 amendment) and `CONTEXT.md`.
+Deviations from the plan as specced: mount gating landed as a host-computed
 `recall_history` flag (always on in `SdkHost`, mirroring the `workflow`
 precedent) rather than unconditional mounting, preserving the "bare build has
 no control schemas" golden; bands landed at 550/550 (not "next free") so

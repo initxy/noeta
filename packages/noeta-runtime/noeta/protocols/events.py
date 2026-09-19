@@ -1234,8 +1234,9 @@ class LeaseGrantedPayload:
 class SubtaskDeniedPayload:
     """A Guard denied a ``spawn_subtask`` decision.
 
-    The parent Task transitions to terminal/failed; the child is never
-    bootstrapped. This is the spawn analogue of ``ToolCallDenied``.
+    The child is never bootstrapped; the parent gets the denial as a failed
+    ``Task`` tool result and its turn continues. This is the spawn analogue of
+    ``ToolCallDenied``.
 
     A large ``goal`` is spilled to the ContentStore via ``goal_ref`` (same
     contract as ``TaskCreated`` — the denied spec's goal is model-controlled
@@ -1517,9 +1518,10 @@ class McpServerSkippedPayload:
     ``McpError`` / ``McpConfigError`` message string (a transport / handshake
     fault description, no user content). New event type ⇒ absent from old
     recordings ⇒ zero canonical-byte drift (same rule as ModelBound). The
-    recording faithfully captures that this server was skipped this run; R-1
-    keeps resume reconnect-free (the recorded tool spec is the durable truth and
-    a skipped server simply contributed no tool spec)."""
+    recording faithfully captures that this server was skipped this run; a
+    resume rebuild skips an unreachable server the same way and records its own
+    event, so a Task whose connector is down loses that server's tools rather
+    than the Task."""
 
     alias: str
     reason: str
@@ -1529,8 +1531,9 @@ class McpServerSkippedPayload:
 class McpProvenanceRecordedPayload:
     """The per-task MCP provenance: which connectors + tool subsets, no creds.
 
-    Emitted (origin ``observer``, actor ``mcp``) ONCE at task-start connect time,
-    in the pre-loop window (after ``TaskCreated`` / before ``TaskStarted``) so
+    Emitted (origin ``observer``, actor ``mcp``) at the build that connects —
+    once per task, and again whenever the enabled set changes — in the
+    pre-loop window (after ``TaskCreated`` / before ``TaskStarted``) so
     the fold rebuilds the
     same ``GovernanceState.mcp_provenance`` — the durable audit answer to "what MCP
     connectors + which of their tools was this task given this run". Only emitted
@@ -1544,7 +1547,10 @@ class McpProvenanceRecordedPayload:
     ticked raw-name subset (sorted) or ``[]`` for "all advertised". It records
     **only names** — never a url / token / header — so credentials never enter any
     recording. The tools' actual shape / behaviour is NOT carried here; the
-    recorded ``request_ref`` tool spec is the durable truth a resume reads back.
+    recorded ``request_ref`` tool spec pins that. This record is ALSO what a
+    resume in another process (a restart, a daemon worker, another machine)
+    reads back to learn which servers to reconnect, the per-turn alias selector
+    having died with that process — see the resolver's ``_recorded_mcp_aliases``.
     Plain JSON lists (not tuples) so the event-log / snapshot round-trip is
     byte-stable. Well under the 4-KB envelope cap (a handful of short names)."""
 

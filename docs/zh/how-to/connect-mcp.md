@@ -53,7 +53,7 @@ mcp__fs__list_directory
 
 - `alias` 必须匹配 `^[a-z0-9_-]{1,32}$`。
 - `McpServerSpec` 需要一个非空的 `argv`；它被直接执行，绝不经过 shell。`env` 为被派生的进程添加环境变量。
-- `McpHttpServerSpec` 需要一个非空的 `url` —— 一个 JSON-RPC 端点。客户端用标准库 POST 一个请求并读取一个响应；如果你需要自己的传输，`HostConfig.mcp_http_post` 会替换掉它。
+- `McpHttpServerSpec` 需要一个非空的 `url` —— 一个 JSON-RPC 端点。客户端用标准库 POST 一个请求并读取一个响应。如果服务器在 `initialize` 时下发了 `Mcp-Session-Id`（Streamable HTTP），这条连接会在之后的每个请求上带回它，并在连接被退役或关闭时发一个 `DELETE`；不下发 id 的服务器保持无状态。如果你需要自己的传输，`HostConfig.mcp_http_post` 会替换掉它 —— 无状态那条路返回原始 `bytes`，想让连接加入会话则返回 `McpHttpResponse`（响应体 + 响应头）。
 - `tool_subset` 按服务器的**原始**工具名过滤。`None` 保留每个被广告出来的工具；传一个元组则只保留列出的那些，其余的永远不会进入工具集。
 
 每个被发现的工具都会变成一个名为 `mcp__{alias}__{tool}` 的普通 Tool，其中 `[A-Za-z0-9_-]` 之外的字符会被替换。整个名字必须匹配 `^[A-Za-z0-9_-]{1,64}$`；空的、过长的或撞车的名字会快速失败，而不是被悄悄截断。因为它们是普通 Tool，所以它们会走过 composer schema、Policy 和权限 Guard，没有任何特殊处理。

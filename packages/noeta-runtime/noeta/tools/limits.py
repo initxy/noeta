@@ -30,6 +30,13 @@ INLINE_OUTPUT_MAX_BYTES = 32 * 1024
 #: widening this does not touch the 4 KB event cap.
 INLINE_CONTENT_MAX_BYTES = 1024 * 1024
 
+#: Ceiling on server-controlled text INJECTED as a conversation turn — an MCP
+#: prompt expansion or a resource snapshot. Deliberately NOT the content
+#: ceiling above: an injected turn is not something the model asked for, it
+#: rides ``origin="system"``, and it stays in the history for the rest of the
+#: task, so it gets a far tighter budget of its own.
+MCP_INJECTION_MAX_BYTES = 64 * 1024
+
 #: Character cap for ``Bash`` / ``BashOutput`` inline output, matching the
 #: reference agent's 30000-char rule. Over-cap output keeps head and tail
 #: halves around an elision marker (:func:`elide_middle`) — for a build or

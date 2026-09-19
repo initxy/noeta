@@ -18,7 +18,15 @@ from noeta.storage.memory import (
     InMemoryEventLog,
 )
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.protocols.messages import LLMResponse, TextBlock, Usage
+from noeta.protocols.messages import (
+    LLMResponse,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    Usage,
+)
+from noeta.protocols.tool import ToolContext, ToolResult
+from noeta.tools.decorator import tool
 
 
 def _finishing_provider() -> FakeLLMProvider:
@@ -212,3 +220,182 @@ def test_invalid_write_mode_raises_at_construction() -> None:
         HostConfig(write_mode="Apply")
     with pytest.raises(ValueError, match="write_mode"):
         HostConfig(write_mode="apply ")
+
+
+# ---------------------------------------------------------------------------
+# Loop and tool-output bounds: both live on SdkHost and were unreachable from
+# the public surface until HostConfig carried them.
+# ---------------------------------------------------------------------------
+
+
+_LOOP_SCHEMA = {
+    "type": "object",
+    "properties": {"k": {"type": "string"}},
+    "additionalProperties": False,
+}
+
+
+@tool(
+    name="loop_echo",
+    version="1",
+    risk_level="low",
+    input_schema=_LOOP_SCHEMA,
+)
+def _loop_echo(arguments: dict, ctx: ToolContext) -> ToolResult:  # noqa: ARG001
+    # 500 characters — long enough that a small inline limit has to cut it.
+    return ToolResult(success=True, output="X" * 500)
+
+
+def _loop_call(call_id: str) -> LLMResponse:
+    """The SAME ``(tool, arguments)`` every time — what the guard watches."""
+    return LLMResponse(
+        stop_reason="tool_use",
+        content=[
+            ToolUseBlock(
+                call_id=call_id, tool_name="loop_echo", arguments={"k": "loop"}
+            )
+        ],
+        usage=Usage(uncached=1, output=1),
+        raw={"id": call_id},
+    )
+
+
+def _looping_provider(calls: int = 2) -> FakeLLMProvider:
+    return FakeLLMProvider(
+        responses=[_loop_call(f"c{i}") for i in range(calls)]
+        + [
+            LLMResponse(
+                stop_reason="end_turn",
+                content=[TextBlock(text="done")],
+                usage=Usage(uncached=1, output=1),
+            )
+        ]
+    )
+
+
+def _loop_options() -> Options:
+    return Options(
+        system_prompt="call loop_echo",
+        name="main",
+        allowed_tools=(_loop_echo,),
+        permission_mode="bypassPermissions",
+    )
+
+
+def _tool_result_outputs(provider: FakeLLMProvider) -> list[str]:
+    """The tool results as the MODEL saw them, off the last request."""
+    return [
+        block.output
+        for message in provider.received_requests[-1].messages
+        for block in message.content
+        if isinstance(block, ToolResultBlock)
+    ]
+
+
+def test_loop_and_output_bounds_default_to_off() -> None:
+    hc = HostConfig()
+    assert hc.repetition_threshold is None
+    assert hc.tool_output_inline_limit is None
+
+
+def test_non_positive_loop_and_output_bounds_raise_at_construction() -> None:
+    # ``None`` is how both spell "off"; a 0 or a negative would read as a
+    # disabled guard to one consumer and an impossible cap to the other.
+    with pytest.raises(ValueError, match="repetition_threshold"):
+        HostConfig(repetition_threshold=0)
+    with pytest.raises(ValueError, match="repetition_threshold"):
+        HostConfig(repetition_threshold=-3)
+    with pytest.raises(ValueError, match="tool_output_inline_limit"):
+        HostConfig(tool_output_inline_limit=0)
+    with pytest.raises(ValueError, match="tool_output_inline_limit"):
+        HostConfig(tool_output_inline_limit=-1)
+
+
+def test_repetition_threshold_registers_the_guard_and_trips(
+    tmp_path: Path,
+) -> None:
+    # threshold=2: the first identical call runs, the second trips the guard
+    # and routes through the HITL suspend path instead of looping forever.
+    provider = _looping_provider()
+    client = Client(
+        _loop_options(),
+        provider=provider,
+        workspace_dir=tmp_path,
+        model="stub-model",
+        multi_turn=False,
+        host_config=HostConfig(repetition_threshold=2),
+    )
+    try:
+        assert client._host.repetition_threshold == 2
+        outcome = client.start(goal="loop")
+        types = [e.type for e in client.events(outcome.task_id)]
+        assert types.count("ToolCallStarted") == 1
+        assert "ToolCallApprovalRequested" in types
+        assert outcome.status == "suspended"
+    finally:
+        client.shutdown()
+
+
+def test_repetition_threshold_unset_leaves_every_call_running(
+    tmp_path: Path,
+) -> None:
+    provider = _looping_provider()
+    client = Client(
+        _loop_options(),
+        provider=provider,
+        workspace_dir=tmp_path,
+        model="stub-model",
+        multi_turn=False,
+    )
+    try:
+        assert client._host.repetition_threshold == 0  # the host's "off"
+        outcome = client.start(goal="loop")
+        types = [e.type for e in client.events(outcome.task_id)]
+        assert types.count("ToolCallStarted") == 2
+        assert "ToolCallApprovalRequested" not in types
+        assert outcome.status == "terminal"
+    finally:
+        client.shutdown()
+
+
+def test_tool_output_inline_limit_truncates_what_the_model_sees(
+    tmp_path: Path,
+) -> None:
+    provider = _looping_provider(calls=1)
+    client = Client(
+        _loop_options(),
+        provider=provider,
+        workspace_dir=tmp_path,
+        model="stub-model",
+        multi_turn=False,
+        host_config=HostConfig(tool_output_inline_limit=50),
+    )
+    try:
+        assert client._host.tool_output_inline_limit == 50
+        outcome = client.start(goal="loop")
+        assert outcome.status == "terminal"
+        outputs = _tool_result_outputs(provider)
+        assert len(outputs) == 1
+        assert outputs[0].startswith("X" * 50)
+        assert "450 of 500 chars dropped" in outputs[0]
+    finally:
+        client.shutdown()
+
+
+def test_tool_output_inline_limit_unset_keeps_the_whole_output(
+    tmp_path: Path,
+) -> None:
+    provider = _looping_provider(calls=1)
+    client = Client(
+        _loop_options(),
+        provider=provider,
+        workspace_dir=tmp_path,
+        model="stub-model",
+        multi_turn=False,
+    )
+    try:
+        assert client._host.tool_output_inline_limit is None
+        client.start(goal="loop")
+        assert _tool_result_outputs(provider) == ["X" * 500]
+    finally:
+        client.shutdown()

@@ -130,7 +130,24 @@ def test_git_status_is_truncated_to_bound(
     big = "?? f\n" * 2000  # well over the 2KB cap
     monkeypatch.setattr(env_exec, "_run_git", lambda wd, args: big)
     out = env_exec._git_status(tmp_path)  # noqa: SLF001
-    assert len(out.encode("utf-8")) <= env_exec._GIT_STATUS_MAX_BYTES  # noqa: SLF001
+    assert len(out.encode("utf-8")) <= env_exec._GIT_STATUS_MAX_BYTES + 200  # noqa: SLF001
+    # A clipped status SAYS it is clipped, names both counts, and names the
+    # command that shows the rest — otherwise the short list reads as the whole
+    # dirty tree and a file the model changed looks clean.
+    lines = out.splitlines()
+    assert lines[-1].startswith("(") and lines[-1].endswith(")")
+    assert f"of {2000} changed paths shown" in lines[-1]
+    assert "run `git status` for the rest" in lines[-1]
+    # Cut on a LINE boundary — never half an entry, which would name a path
+    # that does not exist.
+    assert all(line == "?? f" for line in lines[:-1])
+
+
+def test_git_status_under_the_bound_is_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(env_exec, "_run_git", lambda wd, args: " M a.py\n?? b.py\n")
+    assert env_exec._git_status(tmp_path) == " M a.py\n?? b.py"  # noqa: SLF001
 
 
 def test_run_git_returns_empty_on_failure(tmp_path: Path) -> None:
@@ -212,8 +229,10 @@ def test_render_omits_only_the_empty_fields() -> None:
     assert "Captured at: 2026-06-25T10:00:00" in text
 
 
-def test_environment_version_is_3() -> None:
-    assert ENVIRONMENT_VERSION == "3"
+def test_environment_version_is_4() -> None:
+    # Bumped with the clipped-``git status`` marker: the rendered body's shape
+    # changed, which is what this version declares.
+    assert ENVIRONMENT_VERSION == "4"
 
 
 def test_render_is_stable_for_same_snapshot() -> None:

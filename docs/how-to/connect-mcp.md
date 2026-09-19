@@ -64,8 +64,13 @@ Both specs are frozen dataclasses validated at construction:
 - `McpServerSpec` needs a non-empty `argv`; it is executed directly, never
   through a shell. `env` adds environment variables for the spawned process.
 - `McpHttpServerSpec` needs a non-empty `url` — one JSON-RPC endpoint. The
-  client posts one request and reads one response over the standard library;
-  `HostConfig.mcp_http_post` replaces that transport if you need your own.
+  client posts one request and reads one response over the standard library.
+  If the server assigns an `Mcp-Session-Id` on `initialize` (Streamable HTTP),
+  the connection echoes it on every later request and `DELETE`s it when the
+  connection is retired or closed; a server that assigns none stays stateless.
+  `HostConfig.mcp_http_post` replaces that transport if you need your own —
+  return raw `bytes` for the stateless path, or a `McpHttpResponse` (body +
+  response headers) to let the connection join a session.
 - `tool_subset` filters by the server's **raw** tool name. `None` keeps every
   advertised tool; a tuple keeps only the listed ones, and the rest never enter
   the tool set.

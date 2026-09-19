@@ -1,6 +1,11 @@
 # Claude Code tool-surface alignment
 
-Status: S0–S5 implemented 2026-08-03 (gates green per slice); S6 release pending
+Status: SHIPPED 2026-08-03 in noeta-runtime + noeta-sdk 0.6.0 (S0–S6; gates
+green per slice). Distilled into `CONTEXT.md`,
+`docs/adr/tool-and-agent-catalog.md` and
+`docs/adr/provider-adapters-and-multimodal.md`; the renamed surface itself is
+carried by the tool classes, their description resources and the byte-locked
+goldens.
 Owner: initxy
 
 ## Goal

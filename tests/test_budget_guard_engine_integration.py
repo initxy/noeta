@@ -108,6 +108,7 @@ def test_budget_guard_blocks_subtask_spawn_when_max_spawned_reached() -> None:
     policy = StubScriptedPolicy(
         [
             SpawnSubtaskDecision(agent_name="child", goal="g1", inputs={}),
+            FinishDecision(answer="done without help"),
         ]
     )
     hooks = HookManager()
@@ -117,11 +118,13 @@ def test_budget_guard_blocks_subtask_spawn_when_max_spawned_reached() -> None:
 
     engine, log, lease_id, task = _build(policy=policy, hooks=hooks)
     finished = engine.run_one_step(task, lease_id=lease_id)
-    # Spawn was denied → SubtaskDenied + TaskFailed
+    # Spawn was denied → SubtaskDenied, zero child, and the turn carries on:
+    # a task that merely exhausted its spawn budget may still answer.
     assert finished.status == "terminal"
     types = [e.type for e in log.read(task.task_id)]
     assert "SubtaskDenied" in types
-    assert "TaskFailed" in types
+    assert "SubtaskSpawned" not in types
+    assert "TaskFailed" not in types
 
 
 def test_budget_guard_blocks_finish_when_iterations_exceeded() -> None:

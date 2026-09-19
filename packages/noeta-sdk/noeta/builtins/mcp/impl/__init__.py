@@ -26,14 +26,12 @@ from noeta.builtins.mcp.impl._http_client import (
 )
 from noeta.runtime.mcp import HttpPostFn, McpError
 from noeta.builtins.mcp.impl.prompts import (
-    MCP_PROMPT_ORIGIN_PREFIX,
     discover_prompts,
     expand_prompt,
     flatten_prompt_messages,
     make_mcp_prompt_name,
 )
 from noeta.builtins.mcp.impl.resources import (
-    MCP_RESOURCE_ORIGIN_PREFIX,
     discover_resources,
     flatten_resource_contents,
     make_mcp_resource_ref,
@@ -69,8 +67,6 @@ __all__ = [
     "DEFAULT_MCP_TIMEOUT_S",
     "HttpPostFn",
     "MCP_PREFIX",
-    "MCP_PROMPT_ORIGIN_PREFIX",
-    "MCP_RESOURCE_ORIGIN_PREFIX",
     "McpAnyServerSpec",
     "McpConfigError",
     "McpConnectionPool",

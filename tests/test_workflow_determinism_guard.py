@@ -144,7 +144,9 @@ def test_bad_script_translates_to_ack_not_spawn() -> None:
     ack = decision.messages_after[0]
     assert ack.role == "tool"
     assert ack.content[0].success is False
-    assert "forbids" in ack.content[0].output
+    # A failed ack carries its text once, on ``error``.
+    assert ack.content[0].output == ""
+    assert "forbids" in (ack.content[0].error or "")
 
 
 def test_good_script_translates_to_spawn() -> None:

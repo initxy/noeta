@@ -20,11 +20,11 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Iterator, Literal, Optional, Protocol
 
 from noeta.core.engine import abandon_step_attempt, suspend_on_human_handle
-from noeta.core.fold import BoundedEventLog, fold
+from noeta.core.fold import BoundedEventLog, apply_event, fold
 from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.dispatcher import DEFAULT_QUEUE
 from noeta.protocols.errors import InvalidLease, TaskCancellationRequested
-from noeta.protocols.events import SUSPEND_REASON_INTERRUPTED
+from noeta.protocols.events import SUSPEND_REASON_INTERRUPTED, TaskFailedPayload
 from noeta.protocols.messages import (
     Block,
     MessageOrigin,
@@ -50,6 +50,7 @@ from noeta.runtime.attempt import (
 
 
 __all__ = [
+    "DEFAULT_LEASE_BACKOFF_MAX_S",
     "DEFAULT_SHUTDOWN_GRACE_S",
     "AppendMessagePrelude",
     "AnswerUserQuestionPrelude",
@@ -64,6 +65,8 @@ __all__ = [
     "WorkerRuntime",
     "install_stop_signals",
     "keep_lease_alive",
+    "recover_cap_terminal",
+    "reconcile_cap_terminal",
     "resolve_engine",
     "run_leased_task",
 ]
@@ -72,6 +75,12 @@ __all__ = [
 _log = logging.getLogger(__name__)
 
 DEFAULT_SHUTDOWN_GRACE_S = 30.0
+
+#: Ceiling for the loop's exponential backoff after a Dispatcher fault (see
+#: :meth:`WorkerLoop.tick`). A storage outage is measured in minutes, so the
+#: loop must not spin on it — but it must also come back promptly once the
+#: backend returns.
+DEFAULT_LEASE_BACKOFF_MAX_S = 30.0
 
 
 # Process-local observability, deliberately NOT EventLog events: never
@@ -88,6 +97,8 @@ ReliabilityKind = Literal[
     "timers_fired",
     "attempt_abandoned",
     "attempt_parked",
+    "cap_terminal_reconciled",
+    "dispatcher_unavailable",
 ]
 
 
@@ -343,10 +354,15 @@ class AppendMessagePrelude:
 
 @dataclass(frozen=True, slots=True)
 class ResolveApprovalPrelude:
-    """Approval prelude — run the approved tool call or append the denial.
+    """Approval prelude — carry out the approved action or append the denial.
 
     Mirrors ``engine.resolve_tool_approval(...)`` (the step formerly inlined
-    in the product runner's approval resolver). NOT ``durable_at_seed``:
+    in the product runner's approval resolver), for all three Guard action
+    points: an approved tool call runs, an approved ``finish`` / spawn (whose
+    ``call_id`` is the reserved ``finish-{task_id}`` / ``spawn-{task_id}``)
+    proceeds and SETTLES the turn by itself — ``run_one_step`` then finds a
+    task that is no longer ``running`` and returns it untouched, so the
+    release reads the status the resolution produced. NOT ``durable_at_seed``:
     it executes the approved tool, which must not block the command's
     request thread."""
 
@@ -722,14 +738,14 @@ def run_leased_task(
     # its one Engine. A seed-pinned ``engine`` (see above) wins.
     if engine is None:
         engine = resolve_engine(rt, task)
-    # Human stop, top-level turn: poll the host's process-local cancel
-    # registry at every turn boundary so a cancel/close that lands while THIS
-    # session's ReAct loop is mid-flight abandons the in-flight result (the
-    # same cooperative-cancel the delegation drain already binds for children).
-    # Only the SDK host exposes ``is_cancelled``; a bare WorkerRuntime double
-    # ⇒ ``None`` ⇒ no poll, byte-identical to before. ``lease.task_id`` IS the
-    # tree root on this top-level path, matching what ``cancel``/``close`` mark.
-    cancelled = _cancel_predicate(rt, lease.task_id)
+    # Human stop: poll the host's process-local cancel registry at every turn
+    # boundary so a cancel/close that lands while THIS ReAct loop is mid-flight
+    # abandons the in-flight result (the same cooperative-cancel the delegation
+    # drain already binds for children). Only the SDK host exposes
+    # ``is_cancelled``; a bare WorkerRuntime double ⇒ ``None`` ⇒ no poll,
+    # byte-identical to before. The predicate binds the TREE ROOT, which a
+    # claimed child's ``lease.task_id`` is not — see ``_cancel_predicate``.
+    cancelled = _cancel_predicate(rt, lease.task_id, task=task)
     try:
         if lease.wake_event is not None:
             return _run_woken(
@@ -840,17 +856,39 @@ def _settle_turn_engine(
         forget(task.task_id)
 
 
-def _cancel_predicate(rt: WorkerRuntime, task_id: str) -> Optional[Callable[[], bool]]:
+def _cancel_predicate(
+    rt: WorkerRuntime, task_id: str, *, task: Any = None
+) -> Optional[Callable[[], bool]]:
     """Bind a cooperative-cancel poll off the host's cancel registry.
+
+    The registry holds the id ``cancel`` / ``close`` were called with — the
+    tree's ROOT — and nothing walks it downward, so the poll has to be bound to
+    the root, not to the leased task. On a top-level lease the two are the same
+    id; on a **foreground child a resident worker claimed** ahead of the
+    parent's drain they are not, and binding the child's own id leaves a
+    cancelled tree's child running its turn out (tokens spent, tool side
+    effects applied) while the in-request drain — which binds the root — stops
+    its children at the next step boundary. Resolve the root ONCE here, through
+    the host's ``root_task_id_of`` seam (the same lineage walk the stolen
+    child's Engine is already resolved through), so the poll itself stays the
+    O(1) set lookup the Engine runs at every turn boundary and in the
+    abandonable LLM wait.
 
     Returns ``None`` when the host has no ``is_cancelled`` seam (a bare
     ``WorkerRuntime`` test double), so the Engine never polls and recordings
-    stay byte-identical whether or not a cancel seam is wired.
+    stay byte-identical whether or not a cancel seam is wired. A root task
+    (``task.parent_task_id is None``) skips the walk, and a host without the
+    lineage seam keeps polling the leased id.
     """
     is_cancelled = getattr(rt, "is_cancelled", None)
     if not callable(is_cancelled):
         return None
-    return lambda: bool(is_cancelled(task_id))
+    marked_id = task_id
+    if task is not None and getattr(task, "parent_task_id", None) is not None:
+        root_task_id_of = getattr(rt, "root_task_id_of", None)
+        if callable(root_task_id_of):
+            marked_id = str(root_task_id_of(task_id))
+    return lambda: bool(is_cancelled(marked_id))
 
 
 def _settle_stopped_turn(
@@ -956,6 +994,155 @@ def _discard_cancellation(rt: WorkerRuntime, task_id: str) -> None:
     discard = getattr(rt, "discard_cancellation", None)
     if callable(discard):
         discard(task_id)
+
+
+# ---------------------------------------------------------------------------
+# Cap-terminal reconciliation
+# ---------------------------------------------------------------------------
+#
+# Both Dispatcher caps — ``fail``'s ``max_fail_attempts`` and
+# ``requeue_stale``'s ``reclaim_max`` (ADR ``worker-lease-model``) — drop the
+# task's ROW to terminal and write nothing to the EventLog: the Dispatcher
+# holds no log handle, and handing it one would tie scheduling to the record.
+# The row is then unreachable (only a ``ready`` row leases, only a
+# ``suspended`` one wakes) while ``fold`` still reads the task as running or
+# suspended. Two things break on that split: a parent suspended on
+# ``SubtaskCompleted`` / ``SubtaskGroupCompleted`` waits forever, because the
+# handoff ``ChildLifecycleObserver`` makes fires off a terminal EVENT; and
+# every log-derived read (``task_status``, the task list) disagrees with the
+# queue. The worker closes it from its own side — it already owns the
+# analogous "lease lost ⇒ force terminal" path in
+# ``InteractionDriver._force_terminal_on_lost_lease``.
+
+#: A stream carrying one of these has already reached a terminal; the
+#: reconciliation leaves it alone. Mirrors ``core.observers._TERMINAL_TYPES``,
+#: kept local so the kernel's worker does not reach into the observer.
+_TERMINAL_EVENT_TYPES = ("TaskCompleted", "TaskFailed", "TaskCancelled")
+
+
+def reconcile_cap_terminal(rt: WorkerRuntime, task_id: str) -> bool:
+    """Write the terminal event a Dispatcher cap left unwritten for ``task_id``.
+
+    The observable divergence is "the Dispatcher row is terminal but the stream
+    never recorded a terminal" — what the worker can actually prove through the
+    adapter's ``task_status`` read. When it holds, append a **lease-free**
+    ``TaskFailed`` through ``system_emit``, exactly as
+    ``_force_terminal_on_lost_lease`` does: the cap already released the lease,
+    so there is none to write under, and ``system_emit`` takes no lease check.
+    The append then drives the ordinary handoff — ``ChildLifecycleObserver``
+    sees the terminal, records ``SubtaskCompleted`` on the parent and fires the
+    (group) barrier.
+
+    Returns True iff this call wrote the event. Idempotent and conservative: a
+    stream that already carries a terminal event, a row that is not terminal,
+    and a stream with no genesis at all are all left untouched, so re-running
+    the reconciliation converges instead of stacking duplicates. A runtime
+    whose dispatcher has no ``task_status`` introspection, or whose event log
+    has no ``system_emit`` (bare :class:`WorkerRuntime` doubles), is a no-op.
+    """
+    task_status = getattr(getattr(rt, "dispatcher", None), "task_status", None)
+    if not callable(task_status) or task_status(task_id) != "terminal":
+        return False
+    event_log = getattr(rt, "event_log", None)
+    emit = getattr(event_log, "system_emit", None)
+    if not callable(emit):
+        return False
+    events = list(event_log.read(task_id))
+    if not events or any(e.type in _TERMINAL_EVENT_TYPES for e in events):
+        return False
+    _log.warning(
+        "worker: task %s is terminal in the dispatcher with no terminal event "
+        "on its stream (a fail/reclaim cap); writing TaskFailed so fold and "
+        "the queue agree and any parent barrier can fire",
+        task_id,
+    )
+    emit(
+        task_id=task_id,
+        type="TaskFailed",
+        payload=TaskFailedPayload(
+            reason=_cap_terminal_reason(rt, task_id), retryable=False
+        ),
+        actor="worker",
+        origin="system",
+        trace_id=events[0].trace_id,
+    )
+    return True
+
+
+#: Cap reasons do not always survive on the row: ``fail`` stores the caller's
+#: own ``reason`` when it has one (the worker passes the exception text), so
+#: only the reclaim cap leaves its marker behind. Report what is there and stay
+#: honest about the rest.
+_CAP_TERMINAL_REASON = "dispatcher dropped the task to terminal"
+
+
+def _cap_terminal_reason(rt: WorkerRuntime, task_id: str) -> str:
+    """The reason string the reconciled ``TaskFailed`` carries — the row's own
+    ``suspend_reason`` when the adapter exposes one (bounded, since it may be a
+    caller-supplied exception text and the envelope has a 4-KB cap)."""
+    suspend_reason = getattr(
+        getattr(rt, "dispatcher", None), "suspend_reason", None
+    )
+    detail = suspend_reason(task_id) if callable(suspend_reason) else None
+    if not detail:
+        return f"{_CAP_TERMINAL_REASON} (retry cap reached)"
+    return f"{_CAP_TERMINAL_REASON}: {str(detail)[:500]}"
+
+
+def recover_cap_terminal(rt: WorkerRuntime) -> list[str]:
+    """Reconcile every task a cap dropped to terminal while nobody watched;
+    returns the healed ids.
+
+    The recovery half of :func:`reconcile_cap_terminal`: a process that died
+    between the cap and the write, and a reclaim cap hit by a sweep in another
+    process, both leave the divergence behind with no live caller to notice it.
+    :meth:`WorkerLoop.run_forever` runs this once before it starts leasing, so
+    a restart heals what the previous one left; a host may run it from its own
+    recovery pass. Needs the event log's task-stream index — a log without one
+    recovers nothing, the same degradation
+    ``BackgroundSubagentRegistry.recover`` makes. Idempotent per task (see
+    :func:`reconcile_cap_terminal`), so overlapping workers converge rather
+    than stack.
+    """
+    index = getattr(getattr(rt, "event_log", None), "list_task_streams", None)
+    if not callable(index):
+        return []
+    healed: list[str] = []
+    for summary in index():
+        try:
+            if _ends_on_a_terminal(rt, summary):
+                continue
+            if reconcile_cap_terminal(rt, summary.task_id):
+                healed.append(summary.task_id)
+        except Exception:  # noqa: BLE001 — one bad stream must not stop recovery
+            _log.exception(
+                "worker: cap-terminal reconciliation failed for task %s; "
+                "continuing",
+                summary.task_id,
+            )
+    return healed
+
+
+def _ends_on_a_terminal(rt: WorkerRuntime, summary: Any) -> bool:
+    """Cheap skip for the recovery scan: does this stream's LAST event already
+    end it?
+
+    A finished task ends on its terminal event, so on a mature store — where
+    most streams are finished conversations — this reads one row per stream
+    instead of the whole stream, and the scan stays proportional to the number
+    of tasks rather than to the number of events. Only an ambiguous tail (a
+    live task, or a rewind that re-opened one) falls through to
+    :func:`reconcile_cap_terminal`'s exact whole-stream check, which is what
+    the decision is actually made on. A reader that cannot serve the tail is
+    simply not skipped.
+    """
+    try:
+        tail = list(
+            rt.event_log.read(summary.task_id, after_seq=summary.last_seq - 1)
+        )
+    except Exception:  # noqa: BLE001 — a prefilter never decides anything
+        return False
+    return bool(tail) and tail[-1].type in _TERMINAL_EVENT_TYPES
 
 
 def _run_woken(
@@ -1147,25 +1334,23 @@ def _recover_interrupted_attempt(
     # an attempt the re-drive itself would allow.
     bounded = BoundedEventLog(events, attempt.attempt_start_seq - 1)
     baseline = fold(bounded, rt.content_store, lease.task_id)
-    # mid-turn injection preservation across the seal: an ``InjectionRequested``
+    # mid-turn injection preservation across the seal. The dead window is
+    # folded away wholesale, so BOTH an ``InjectionRequested`` marker and a
+    # drain's consuming ``MessagesAppended`` inside it disappear with it. The
+    # bounded baseline already gets the second case right: a consume lands in
+    # the dead window whenever the crash fell between the drain (top-of-loop)
+    # and that iteration's ``ContextPlanComposed``, leaving the last plan — the
+    # attempt anchor — BEHIND the consume; the baseline stops short of it, so
+    # the marker stays pending and the injected message, now dead history, is
+    # re-delivered rather than lost. What the baseline cannot see is a marker
     # that arrived DURING the interrupted attempt (seq >= attempt_start_seq,
-    # e.g. mid-LLM-round) is excluded by the bounded baseline, so a bare re-base
-    # would drop it and a resume would silently lose the user's injected message.
-    # No consume ever lands in the dead window — the drain only runs at
-    # top-of-loop, before the attempt's ``ContextPlanComposed`` anchor — so the
-    # full-stream fold's ``pending_injections`` is exactly the not-yet-delivered
-    # set and a superset of the baseline's. Carry it onto the sealed baseline so
-    # the re-drive (or the resumed park) re-delivers it exactly once. Guarded by
-    # a cheap type scan so a recovery with no injections pays no extra fold.
-    if any(e.type == "InjectionRequested" for e in events):
-        full = fold(
-            BoundedEventLog(events, events[-1].seq),
-            rt.content_store,
-            lease.task_id,
-        )
-        baseline.governance.pending_injections = dict(
-            full.governance.pending_injections
-        )
+    # e.g. mid-LLM-round), so re-queue those from the dead tail, in arrival
+    # order after the ones the baseline carries. Either way the re-drive (or
+    # the resumed park) delivers each injected message exactly once: the sealed
+    # state holds the marker and not the message, never both.
+    for env in attempt.tail:
+        if env.type == "InjectionRequested":
+            apply_event(baseline, env, rt.content_store)
     classification = classify_attempt(
         attempt.tail,
         engine=engine,
@@ -1536,8 +1721,15 @@ class WorkerLoop:
       about the task's resulting state.
     * Any other exception (policy / tool bug, provider error leaking) —
       ``dispatcher.fail(lease_id, retryable=True, reason=...)``: bounded
-      retry up to the backend's ``max_fail_attempts``, then terminal.
+      retry up to the backend's ``max_fail_attempts``, then terminal —
+      and the terminal event that cap leaves unwritten is reconciled
+      (:func:`reconcile_cap_terminal`).
     * If ``fail()`` itself raises (lease already gone) — log + continue.
+    * A fault in the **Dispatcher itself** (a dropped connection under
+      ``lease()``) — log, emit ``dispatcher_unavailable``, back off
+      (doubling, capped at ``lease_backoff_max_s``) and keep looping. An
+      unguarded ``lease()`` would unwind out of ``run_forever`` and kill
+      the daemon thread while the pool still reported itself running.
     * The loop always proceeds to the next task.
 
     The loop also runs a per-step heartbeat side-thread (keeps a slow
@@ -1566,6 +1758,7 @@ class WorkerLoop:
         step_poll_s: float = 0.05,
         next_goal_handle: Optional[str] = None,
         queue: str = DEFAULT_QUEUE,
+        lease_backoff_max_s: float = DEFAULT_LEASE_BACKOFF_MAX_S,
     ) -> None:
         self._rt = rt
         self._worker_id = worker_id
@@ -1624,6 +1817,16 @@ class WorkerLoop:
         self._abandoned = False
         self._last_sweep = clock()
         self._last_timer_poll = clock()
+        # Dispatcher-fault backoff: 0.0 while the queue answers, then doubling
+        # from ``poll_interval`` up to this ceiling for as long as it does not.
+        self._lease_backoff_max_s = lease_backoff_max_s
+        self._lease_backoff_s = 0.0
+        # The ids the PREVIOUS sweep requeued — the watch list the reclaim cap
+        # is read off (see :meth:`_reconcile_reclaimed`). Empty on a healthy
+        # host.
+        self._reclaimed: set[str] = set()
+        # One-shot guard for the startup cap-terminal recovery pass.
+        self._recovered_cap_terminal = False
 
     def stop(self) -> None:
         """Signal the loop to stop after the current iteration. (Signal
@@ -1652,20 +1855,64 @@ class WorkerLoop:
         """Lease one ready task and advance it one step.
 
         Returns ``True`` if a task was leased (and processed, success or
-        handled-failure), ``False`` if the ready queue was empty. The
-        exception policy is applied here so callers never see a step
-        failure propagate.
+        handled-failure), ``False`` if the ready queue was empty — or if the
+        Dispatcher itself faulted. The exception policy is applied here so
+        callers never see a step failure propagate.
+
+        The **Dispatcher fault** is the one hole the per-step policy does not
+        cover: ``lease()`` talks to the store on every single iteration, and a
+        store that drops a connection (an idle timeout, a restart, a failover)
+        raises straight through it. Unguarded that unwinds out of
+        :meth:`run_forever` and silently kills the daemon thread while the pool
+        keeps reporting itself running — only a process restart recovers. Catch
+        it, report the symptom, back off and keep polling;
+        ``KeyboardInterrupt`` / ``SystemExit`` still propagate, because a
+        process teardown is not a fault to absorb. (Everything after the lease
+        is already covered: the step runs under ``_execute_step``'s policy.)
         """
-        lease = self._rt.dispatcher.lease(
-            worker_id=self._worker_id,
-            lease_seconds=self._lease_seconds,
-            task_id=None,
-            queue=self._queue,
-        )
+        try:
+            lease = self._rt.dispatcher.lease(
+                worker_id=self._worker_id,
+                lease_seconds=self._lease_seconds,
+                task_id=None,
+                queue=self._queue,
+            )
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:  # noqa: BLE001 — a store fault must not kill the loop
+            self._back_off_from_dispatcher_fault(exc)
+            return False
+        self._lease_backoff_s = 0.0
         if lease is None:
             return False
         self._run_one(lease)
         return True
+
+    def _back_off_from_dispatcher_fault(self, exc: Exception) -> None:
+        """Report a Dispatcher fault and sleep a doubling, bounded backoff.
+
+        The backoff opens at ``poll_interval`` (the loop's own idle cadence)
+        and doubles up to ``lease_backoff_max_s``; the next successful
+        ``lease()`` resets it, so a blip costs one short sleep and a real
+        outage settles at the ceiling instead of spinning on a dead socket.
+        """
+        self._lease_backoff_s = min(
+            max(self._poll_interval, 0.1)
+            if self._lease_backoff_s <= 0
+            else self._lease_backoff_s * 2,
+            self._lease_backoff_max_s,
+        )
+        _log.exception(
+            "worker: dispatcher.lease failed; backing off %.3gs and continuing",
+            self._lease_backoff_s,
+        )
+        self._emit(
+            ReliabilityEvent(
+                kind="dispatcher_unavailable",
+                detail={"reason": str(exc), "backoff_s": self._lease_backoff_s},
+            )
+        )
+        self._sleep(self._lease_backoff_s)
 
     def maybe_sweep(self) -> bool:
         """Run `requeue_stale` if `stale_sweep_interval` has elapsed.
@@ -1686,10 +1933,48 @@ class WorkerLoop:
                         detail={"count": len(requeued), "task_ids": list(requeued)},
                     )
                 )
+            self._reconcile_reclaimed(requeued)
         except Exception:  # noqa: BLE001 — sweep failure must not crash the loop
             _log.exception("worker: requeue_stale failed; continuing")
         self._last_sweep = self._clock()
         return True
+
+    def _reconcile_reclaimed(self, requeued: list[str]) -> None:
+        """Close the reclaim cap on the ids this sweep stopped requeueing.
+
+        ``requeue_stale`` returns the ids it moved back to ready and silently
+        omits the ones ``reclaim_max`` just dropped to terminal, so the cap is
+        invisible in its result. What IS visible is that an id an earlier sweep
+        requeued did not come back: read that row and write the terminal event
+        the cap left unwritten (:func:`reconcile_cap_terminal` no-ops on every
+        row that merely went back to work). The watch list is the previous
+        sweep's result, so it is empty on a healthy host and costs one status
+        read per reclaimed task. A cap hit on a row this loop never saw
+        requeued — the first sweep after a restart, or a sweep in another
+        process — is left to :func:`recover_cap_terminal`.
+        """
+        previous = self._reclaimed
+        self._reclaimed = set(requeued)
+        for task_id in sorted(previous - self._reclaimed):
+            self._reconcile_cap_terminal(task_id)
+
+    def _reconcile_cap_terminal(self, task_id: str) -> None:
+        """Write the terminal event a cap left unwritten for ``task_id``, and
+        report it. Self-contained: a reconciliation fault must not perturb the
+        sweep or the settled lease that triggered it."""
+        try:
+            if reconcile_cap_terminal(self._rt, task_id):
+                self._emit(
+                    ReliabilityEvent(
+                        kind="cap_terminal_reconciled", task_id=task_id
+                    )
+                )
+        except Exception:  # noqa: BLE001 — reconciliation must not crash the loop
+            _log.exception(
+                "worker: cap-terminal reconciliation failed for task %s; "
+                "continuing",
+                task_id,
+            )
 
     def maybe_poll_timers(self) -> bool:
         """Run ``fire_due_timers`` if ``timer_poll_interval`` has elapsed.
@@ -1875,7 +2160,7 @@ class WorkerLoop:
             )
             # Symptom only — we called fail(retryable=True); the Dispatcher
             # decides requeue-vs-terminal via max_fail_attempts (fail()
-            # returns nothing, so the worker cannot observe the outcome).
+            # returns nothing, so the outcome is read back below, not from it).
             self._emit(
                 ReliabilityEvent(
                     kind="step_failed_retryable",
@@ -1893,6 +2178,12 @@ class WorkerLoop:
                     "worker: dispatcher.fail also failed for task %s; continuing",
                     lease.task_id,
                 )
+            # ``fail`` returns nothing, but the row it just wrote is readable:
+            # ``terminal`` means this failure was the one that hit
+            # ``max_fail_attempts``, and that cap writes no terminal event. Heal
+            # the split here, while the worker still knows which task it was —
+            # otherwise a parent barrier waits on a child that already ended.
+            self._reconcile_cap_terminal(lease.task_id)
         finally:
             # Best-effort: the abandon path stops the heartbeat from the
             # main thread; this covers the normal/finish path.
@@ -1930,6 +2221,11 @@ class WorkerLoop:
         stale-sweep and timer poll each iteration; sleeps
         ``poll_interval`` whenever the ready queue is empty.
 
+        Starting the loop also runs the cap-terminal recovery pass once
+        (:func:`recover_cap_terminal`), so a task a cap ended while the
+        previous process was dying converges before this one starts handing
+        out leases.
+
         When ``install_signals`` is True, SIGTERM / SIGINT are wired to
         :meth:`stop` for the duration of the loop (best-effort graceful
         shutdown) and the previous handlers are restored on exit. Signal
@@ -1939,6 +2235,7 @@ class WorkerLoop:
         global signal state.
         """
         restore = install_stop_signals(self) if install_signals else None
+        self.recover_cap_terminal()
         try:
             while self._running:
                 self.maybe_sweep()
@@ -1948,6 +2245,31 @@ class WorkerLoop:
         finally:
             if restore is not None:
                 restore()
+
+    def recover_cap_terminal(self) -> list[str]:
+        """Run the startup cap-terminal recovery pass once; return the healed
+        ids (see :func:`recover_cap_terminal`).
+
+        Once per loop instance, and never a reason not to start: a scan fault
+        is logged and the daemon comes up anyway. Under a pool every loop runs
+        it, which is redundant but not harmful — the per-task decision is the
+        same idempotent one the live path makes.
+        """
+        if self._recovered_cap_terminal:
+            return []
+        self._recovered_cap_terminal = True
+        try:
+            healed = recover_cap_terminal(self._rt)
+        except Exception:  # noqa: BLE001 — recovery never blocks startup
+            _log.exception(
+                "worker: cap-terminal recovery pass failed; starting anyway"
+            )
+            return []
+        for task_id in healed:
+            self._emit(
+                ReliabilityEvent(kind="cap_terminal_reconciled", task_id=task_id)
+            )
+        return healed
 
 
 def install_stop_signals(loop: WorkerLoop) -> Callable[[], None]:

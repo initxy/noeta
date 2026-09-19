@@ -1,25 +1,27 @@
-"""Goldens for the three built-in compose-time reminders.
+"""Goldens for the built-in compose-time reminders.
 
 Reminder text is model-facing prose that no other assertion reads, so a
 one-word edit changes what every session's model sees while every behavioural
 test stays green. These goldens are the only thing that makes such an edit
-deliberate. The three are:
+deliberate. The two are:
 
 * **unfinished-todos** — surfaces the unfinished ``TaskState.todos`` the model
   would otherwise never see again;
-* **delegation-nudge** — the just-in-time fan-out note, live only while
-  delegation is offered AND no ``spawn_subagent`` has landed yet;
 * **read-suggestion** — the "different reading strategy" hint, live only while
   ``ContextState.compaction_thrashing`` is latched.
+
+There used to be a third, ``delegation-nudge``, which fired on every step of
+every task until the first spawn to restate what main rule 10 and the ``Task``
+description already say. It was removed, and with it its golden.
 
 The test runs the **real** assembly path (``build_session_inputs`` →
 ``ThreeSegmentComposer.compose``) over representative folded states and pins the
 whole ``dynamic_suffix`` — the fixed base user turn followed by whichever
-reminders fire, in the exact order they are appended (todo → delegation →
-read). Because the base message is fixed and the Task activates no
-skills/memory/environment residents, the dynamic suffix contains nothing but
-the base turn and the reminders, so the golden captures the rendered text AND
-the relative order in one artifact.
+reminders fire, in the exact order they are appended (todo → read). Because the
+base message is fixed and the Task activates no skills/memory/environment
+residents, the dynamic suffix contains nothing but the base turn and the
+reminders, so the golden captures the rendered text AND the relative order in
+one artifact.
 
 Re-pin (regenerate goldens) with one command::
 
@@ -57,8 +59,8 @@ _TODOS = [
     {"id": "3", "content": "Second step", "status": "in_progress"},
 ]
 
-# A prior spawn_subagent call in history — suppresses the delegation nudge
-# (self-limiting once the first sub-agent has been spawned).
+# A prior spawn_subagent call in history. No reminder reads it any more; it is
+# kept so the "delegation offered, spawn already landed" state stays covered.
 _SPAWN_HISTORY_BLOCK = ToolUseBlock(
     call_id="c1", tool_name="Task", arguments={"agent": "explore"}
 )
@@ -75,7 +77,7 @@ def _dynamic_suffix_payload(
 
     The composer is built through the real ``build_session_inputs`` path.
     ``delegation_enabled`` drives whether the ``spawn_subagent`` control schema
-    is injected (the condition the concurrency reminder gates on). Every
+    is injected. Every
     reminder is a View-only product appended to the dynamic suffix — never
     written to ``runtime.messages`` — so composing is a pure read of the folded
     state passed in.
@@ -129,28 +131,21 @@ def _dynamic_suffix_payload(
 
 
 #: Representative folded states, label → the four state knobs. Each label pins a
-#: distinct combination: all three reminders together (order), each reminder in
-#: isolation, and the two suppression paths (finished checklist; spawn already
-#: landed).
+#: distinct combination: both reminders together (order), each reminder in
+#: isolation, and the quiet state (finished checklist, no thrashing) where the
+#: dynamic suffix is the base turn alone.
 _STATES: dict[str, dict[str, object]] = {
-    # All three fire — pins the relative order todo -> delegation -> read.
-    "all_three": {
+    # Both fire — pins the relative order todo -> read.
+    "all_reminders": {
         "todos": _TODOS,
         "delegation_enabled": True,
         "already_spawned": False,
         "compaction_thrashing": True,
     },
-    # Only the unfinished-todos reminder (delegation off, no thrashing).
+    # Only the unfinished-todos reminder (no thrashing).
     "todos_only": {
         "todos": _TODOS,
         "delegation_enabled": False,
-        "already_spawned": False,
-        "compaction_thrashing": False,
-    },
-    # Only the delegation nudge (no todos, no thrashing, not yet spawned).
-    "delegation_only": {
-        "todos": [],
-        "delegation_enabled": True,
         "already_spawned": False,
         "compaction_thrashing": False,
     },
@@ -161,8 +156,9 @@ _STATES: dict[str, dict[str, object]] = {
         "already_spawned": False,
         "compaction_thrashing": True,
     },
-    # Suppression: delegation offered but a spawn already landed => no nudge;
-    # nothing else fires => the dynamic suffix is the base turn alone.
+    # Nothing to say: delegation offered and a spawn already landed, no todos,
+    # no thrashing => the dynamic suffix is the base turn alone. Delegation
+    # being offered must not on its own add a turn.
     "suppressed": {
         "todos": [],
         "delegation_enabled": True,
@@ -180,18 +176,34 @@ def test_composer_reminders_golden(label: str) -> None:
     assert_snapshot(f"composer_reminders_{label}.txt", payload)
 
 
-def test_all_three_relative_order_is_todo_delegation_read() -> None:
+def test_relative_order_is_todo_then_read() -> None:
     """Explicit order assertion, independent of the golden bytes.
 
-    Priorities are what put the three in the order todo → delegation → read; a
-    priority edit that re-orders them should fail as an ordering error here,
-    not merely as an unreadable byte diff in the golden.
+    Priorities are what put the two in the order todo → read; a priority edit
+    that re-orders them should fail as an ordering error here, not merely as an
+    unreadable byte diff in the golden.
     """
-    suffix = _dynamic_suffix_payload(**_STATES["all_three"])  # type: ignore[arg-type]
-    # Base turn first (author-neutral), then exactly three system reminders.
+    suffix = _dynamic_suffix_payload(**_STATES["all_reminders"])  # type: ignore[arg-type]
+    # Base turn first (author-neutral), then exactly two system reminders.
     assert suffix[0]["origin"] is None
     reminders = suffix[1:]
-    assert [m["origin"] for m in reminders] == ["system", "system", "system"]
+    assert [m["origin"] for m in reminders] == ["system", "system"]
     assert "todo list" in reminders[0]["text"]
-    assert "Task" in reminders[1]["text"]
-    assert "reading strategy" in reminders[2]["text"]
+    assert "reading strategy" in reminders[1]["text"]
+
+
+def test_offered_delegation_adds_no_reminder() -> None:
+    """Delegation being offered and unused adds NOTHING to the suffix.
+
+    ``delegation-nudge`` used to fire here on every step until the first spawn,
+    restating main rule 10 and the ``Task`` description. Its removal is what
+    this pins: offered-and-unused delegation is not a reason to spend a turn.
+    """
+    suffix = _dynamic_suffix_payload(
+        todos=[],
+        delegation_enabled=True,
+        already_spawned=False,
+        compaction_thrashing=False,
+    )
+    assert len(suffix) == 1
+    assert suffix[0]["text"] == _BASE_GOAL

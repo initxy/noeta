@@ -430,7 +430,12 @@ def _maybe_ask_user_question_decision(
             assistant_message,
             assistant_thinking,
             patch=None,
-            text="AskUserQuestion must be the only tool call in the turn",
+            # Stamped on every tool_use of the response, so it must read
+            # correctly on a neighbour that never ran too.
+            text=(
+                "Nothing in this response ran: AskUserQuestion must be called "
+                "on its own. Re-issue the other calls in a separate response."
+            ),
             valid=False,
         )
     block = ask_blocks[0]

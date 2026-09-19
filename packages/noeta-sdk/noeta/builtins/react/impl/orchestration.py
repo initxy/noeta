@@ -13,7 +13,7 @@ never a clock, randomness, or the EventLog.
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional
 
 from noeta.policies.control_semantics import (
@@ -419,14 +419,27 @@ def _count_structured_output_retries(view: View) -> int:
     return count
 
 
-def _rejection_text(violations: tuple[str, ...]) -> str:
-    """The tool-result body handed back for a payload that missed the schema."""
+def _rejection_text(violations: tuple[str, ...], *, alone: bool) -> str:
+    """The tool-result body handed back for a payload that missed the schema.
+
+    ``alone`` is False when the response carried other tool calls: the same
+    text is stamped on every one of them, and none of them ran, so it has to
+    say so and point at the single-call shape.
+    """
     listed = "\n".join(f"- {v}" for v in violations)
+    if alone:
+        return (
+            "structured_output rejected: the arguments did not match the "
+            f"required JSON schema.\n{listed}\n"
+            "Call structured_output again with the same answer, corrected to "
+            "match the schema."
+        )
     return (
-        "structured_output rejected: the arguments did not match the required "
-        f"JSON schema.\n{listed}\n"
-        "Call structured_output again with the same answer, corrected to match "
-        "the schema."
+        "Nothing in this response ran: structured_output must be called on "
+        "its own, and its arguments did not match the required JSON "
+        f"schema.\n{listed}\n"
+        "Re-issue structured_output on its own, with the answer corrected to "
+        "match the schema."
     )
 
 
@@ -497,16 +510,38 @@ class StructuredOutputPolicy:
                             retryable=False,
                         )
                     if decision.assistant_message is not None:
-                        # Unlike the finish path above there IS a follow-on request, so the
-                        # rejected tool_use must be answered — a dangling function_call is
-                        # exactly what a continuation request rejects.
-                        return ack_patch_decision(
-                            (call,),
+                        # Unlike the finish path above there IS a follow-on request, so
+                        # EVERY tool_use of this response must be answered — a dangling
+                        # function_call is exactly what a continuation request rejects.
+                        # The neighbours never ran (the rejection stops the whole
+                        # response), so they carry the same text.
+                        ack = ack_patch_decision(
+                            tuple(decision.calls),
                             decision.assistant_message,
                             decision.assistant_thinking,
-                            patch=None,
-                            text=_rejection_text(violations),
+                            patch=decision.state_patch,
+                            text=_rejection_text(
+                                violations, alone=len(decision.calls) == 1
+                            ),
                             valid=False,
+                        )
+                        if not decision.preacked_results:
+                            return ack
+                        # A control tool already answered one of this response's
+                        # tool_uses (a TodoWrite batched in). Keep its result in the
+                        # same message so every tool_use still gets exactly one.
+                        (acked,) = ack.messages_after
+                        return replace(
+                            ack,
+                            messages_after=(
+                                Message(
+                                    role="tool",
+                                    content=[
+                                        *decision.preacked_results,
+                                        *acked.content,
+                                    ],
+                                ),
+                            ),
                         )
                     # No assistant turn to record ⇒ no tool_use to answer. Fall back to the
                     # plain user nudge, carrying the same marker so the retry still counts.
@@ -518,7 +553,7 @@ class StructuredOutputPolicy:
                                     TextBlock(
                                         text=STRUCTURED_OUTPUT_NUDGE
                                         + "\n"
-                                        + _rejection_text(violations)
+                                        + _rejection_text(violations, alone=True)
                                     )
                                 ],
                             ),

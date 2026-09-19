@@ -4,7 +4,7 @@
 
 The fs and shell tools perform real side effects — read and write files, spawn
 processes. A `WorkspaceRoot` gives them *containment*, not *isolation*: a tool
-that spawns a process (`shell_run`) can reach the rest of the filesystem. Running
+that spawns a process (`Bash`) can reach the rest of the filesystem. Running
 an untrusted agent's tools directly on the host is the gap a sandboxed execution
 model closes.
 
@@ -91,7 +91,7 @@ flag, so no container means no browser tools. Elements are addressed by the
 numeric `index` a prior extract handed the model; `browser_screenshot` stores the
 PNG as a workspace artifact rather than feeding it to the model as vision. Every
 action can egress anywhere, so the pack is `risk_level="high"` and routes through
-the same approval predicate as `shell_run`. A `web` subagent owns page work so
+the same approval predicate as `Bash`. A `web` subagent owns page work so
 browsing token bloat stays in a child context.
 
 **Two host hooks tune the container without reshaping the seam.** A per-exec
@@ -112,7 +112,7 @@ classes are not. A product swaps the whole wire by injecting its own factories.
 **Cross-generation container writes are not fenced.** Lease fencing rests on there
 being no load-bearing write outside the shared transaction, and a fenced-out
 zombie worker can reach the container regardless. This is accepted as an external,
-at-least-once effect in the same class as a half-run `shell_run`: a reclaiming
+at-least-once effect in the same class as a half-run `Bash`: a reclaiming
 worker reconnects to the same container and re-drives. The seam reserves an opaque
 `fence_token` — always `None` — so a generation fence can fill it without
 reshaping the interface.

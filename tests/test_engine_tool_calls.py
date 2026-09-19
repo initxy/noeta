@@ -270,3 +270,53 @@ def test_fold_without_snapshot_acceleration_also_byte_equal_after_tool_calls() -
     rebuilt = fold(log, cs, task.task_id, ignore_snapshots=True)
 
     assert rebuilt == finished
+
+
+# ---------------------------------------------------------------------------
+# A tool name the model invented is feedback, not a crash.
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_tool_name_answers_that_call_and_runs_the_rest() -> None:
+    """The assistant turn naming the tool is already committed when the batch
+    executes, so raising would strand it (and every sibling call) mid-flight.
+    The unknown call gets a failed result naming the fact; the siblings run."""
+    t1 = FakeTool(name="alpha", script={("a",): "out-a"})
+    policy = StubScriptedPolicy(
+        [
+            ToolCallsDecision(
+                calls=[
+                    ToolCall(
+                        tool_name="ghost", arguments={}, call_id="c-ghost"
+                    ),
+                    ToolCall(
+                        tool_name="alpha", arguments={"k": "a"}, call_id="c-a"
+                    ),
+                ],
+            ),
+            FinishDecision(answer="done"),
+        ]
+    )
+    engine, log, _cs, lease_id, task = _build_engine(
+        policy=policy, tools={"alpha": t1}
+    )
+    final = engine.run_one_step(task, lease_id=lease_id)
+
+    assert final.status == "terminal"
+    assert "TaskFailed" not in [e.type for e in log.read(task.task_id)]
+    results = {
+        b.call_id: b
+        for m in final.runtime.messages
+        if m.role == "tool"
+        for b in m.content
+    }
+    assert set(results) == {"c-ghost", "c-a"}
+    assert results["c-ghost"].success is False
+    assert results["c-ghost"].output == ""
+    assert results["c-ghost"].error == (
+        "No tool named 'ghost' is available in this task; use one of the "
+        "offered tools."
+    )
+    # The sibling really ran — an unknown name does not poison the batch.
+    assert results["c-a"].success is True
+    assert "out-a" in str(results["c-a"].output)

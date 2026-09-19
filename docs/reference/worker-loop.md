@@ -36,8 +36,12 @@ The loop drives any object exposing four read-only properties: `engine`,
 | `settle_subtasks_after_step(task_id)` | drives a delegation subtree the just-driven task barriered on (the resident path has no in-request drain to seed its children) |
 | `take_pending_prelude(task_id)` | hands over a one-shot non-durable woken prelude the host stashed at seed-yield time |
 
-Tasks in a store must be compatible with the loop that drains it (the ready
-queue has no routing): give different profiles their own sqlite files.
+The ready queue **routes**. Every dispatcher row carries a queue name, and this
+loop's untargeted poll claims FIFO within its own `queue` and nothing else — so
+differently-configured profiles can share one store, each naming its own queue,
+instead of being split across separate sqlite files. Inside a queue the old
+rule still holds: every task on it must be one this loop can drive. See
+[ADR: Worker queue routing](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md).
 
 Use a **real sqlite file** for the runtime's storage — cross-process enqueue
 only works through shared on-disk state; `:memory:` is dev/test-only.
@@ -62,6 +66,8 @@ WorkerLoop(
     reliability_sink: Optional[ReliabilitySink] = None,
     step_poll_s: float = 0.05,
     next_goal_handle: Optional[str] = None,
+    queue: str = DEFAULT_QUEUE,                                     # "default"
+    lease_backoff_max_s: float = 30.0,
 )
 ```
 
@@ -78,6 +84,8 @@ WorkerLoop(
 | `reliability_sink` | where `ReliabilityEvent`s go; default: structured logs |
 | `step_poll_s` | poll cadence while waiting on the in-flight step thread |
 | `next_goal_handle` | when set, a human close / cancel suspends the task on this handle (reopenable by typing again) instead of releasing it terminal |
+| `queue` | the only queue this loop's untargeted poll claims from. Match it to the `HostConfig.queue` of the client whose work this pool should drive. The maintenance sweeps stay queue-agnostic — they flip status, never ownership |
+| `lease_backoff_max_s` | ceiling for the doubling backoff after a Dispatcher fault under `lease()` |
 
 There is **no `workers` knob**: one `WorkerLoop` is one drain thread. You scale
 by running several loops (each with its own `worker_id`) against the same
@@ -88,10 +96,11 @@ whose lease was reclaimed cannot write behind the loop that took over.
 
 | Member | Behavior |
 | --- | --- |
-| `run_forever(*, install_signals=False)` | drive until `stop()`; each iteration: `maybe_sweep()` → `maybe_poll_timers()` → `tick()`, sleeping `poll_interval` when idle. `install_signals=True` wires SIGTERM/SIGINT to `stop()` (main thread only) and restores handlers on exit |
-| `tick() → bool` | lease one ready task and advance it one step; `False` when the queue is empty. The exception policy is applied inside |
+| `run_forever(*, install_signals=False)` | run `recover_cap_terminal()` once, then drive until `stop()`; each iteration: `maybe_sweep()` → `maybe_poll_timers()` → `tick()`, sleeping `poll_interval` when idle. `install_signals=True` wires SIGTERM/SIGINT to `stop()` (main thread only) and restores handlers on exit |
+| `tick() → bool` | lease one ready task and advance it one step; `False` when the queue is empty — or when `lease()` itself faulted. The exception policy is applied inside |
 | `maybe_sweep() → bool` | run `requeue_stale()` if the interval elapsed |
 | `maybe_poll_timers() → bool` | run `fire_due_timers()` if the interval elapsed; degrades to a no-op on a dispatcher without timers |
+| `recover_cap_terminal() → list[str]` | the startup reconciliation pass, once per loop; returns the healed task ids |
 | `stop()` | signal the loop to stop after the current iteration |
 | `running: bool` | loop still running |
 | `abandoned: bool` | set when the shutdown grace elapsed with a step still in flight. The host **must exit the process** — the abandoned step thread may still write the EventLog; in-process reuse is unsupported |
@@ -108,6 +117,11 @@ Module-level helpers:
   reliability_sink=None)` — the per-step heartbeat context manager, for callers
   that drive a leased step with no resident loop around it.
 - `resolve_engine(rt, task) → Engine` — the seam behind the per-task resolver.
+- `reconcile_cap_terminal(rt, task_id) → bool` — write the terminal event a
+  Dispatcher cap left unwritten for one task (idempotent; a no-op unless the
+  row is terminal and the stream is not).
+- `recover_cap_terminal(rt) → list[str]` — the same decision over every task
+  stream, for rows capped while no worker was watching.
 
 ## Exception policy
 
@@ -117,13 +131,38 @@ A resident loop must not crash on a poisoned task:
   ours).
 - Any other exception → `dispatcher.fail(lease_id, retryable=True,
   reason=…)`: bounded retry up to the backend's `max_fail_attempts`, then
-  terminal.
+  terminal — and the terminal EventLog event that cap leaves unwritten is
+  reconciled (see below).
 - If `fail()` itself raises → log + continue.
+- A fault in the Dispatcher itself, under `lease()` (a dropped connection, a
+  restart, a failover) → log, emit `dispatcher_unavailable`, sleep a doubling
+  backoff capped at `lease_backoff_max_s`, keep polling. `KeyboardInterrupt` /
+  `SystemExit` still propagate.
 - The loop always proceeds to the next task.
 
 Provider failures never reach this backstop: `runtime/llm.py` translates a
 provider exception into an error `LLMResponse` the policy reads, so retries are
 consumed there rather than double-counted here.
+
+## Cap-terminal reconciliation
+
+Both Dispatcher caps — `fail()`'s `max_fail_attempts` and `requeue_stale()`'s
+`reclaim_max` — drop the task's **row** to `terminal` and write nothing to the
+EventLog. The row is then unleasable and unwakeable while `fold` still reads the
+task as live, so a parent suspended on a subtask barrier waits on a child that
+already ended. The loop closes that split from its own side, by reading the row
+it just wrote through:
+
+- after `fail()`, for the task it just failed;
+- after a sweep, for every id an earlier sweep requeued that this one did not
+  (the reclaim cap omits capped ids from the result);
+- once at `run_forever()` startup, over every task stream, for rows capped
+  while no worker was watching.
+
+Each writes a lease-free `TaskFailed` through `system_emit` — the same
+convergence the driver makes for a lost lease — and emits
+`cap_terminal_reconciled`. The decision is idempotent: a stream that already
+carries a terminal event is left alone.
 
 ## Outcome and reliability types
 
@@ -137,9 +176,10 @@ a system notice, and typing a message resumes it.
 `ReliabilityEvent` — process-local signals (**not** EventLog events), sent to
 `reliability_sink`. Kinds: `stale_requeued`, `suspended_without_wake`,
 `step_failed_retryable`, `heartbeat_invalid_lease`, `shutdown_abandoned`,
-`timers_fired`, `attempt_abandoned`, `attempt_parked` (the last two are the
+`timers_fired`, `attempt_abandoned`, `attempt_parked` (these two are the
 crash-recovery moments: an interrupted attempt sealed and re-driven
-automatically, or sealed and parked for a human). Every kind names what the loop
+automatically, or sealed and parked for a human), `cap_terminal_reconciled`,
+`dispatcher_unavailable`. Every kind names what the loop
 can actually prove from the Dispatcher seam, never a root cause it cannot
 observe.
 

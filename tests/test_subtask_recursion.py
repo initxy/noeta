@@ -232,28 +232,38 @@ def test_nested_delegation_records_depths(tmp_path: Path) -> None:
 def test_depth_cap_denies_grandchild_before_creation(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     # max_subtask_depth=1: root(0)→child(1) allowed; child(1)→grandchild(2)
-    # DENIED. The child's spawn attempt fails it; the parent resumes with a
-    # failed subtask result and finishes.
+    # DENIED. The refusal is handed back to the child as a failed tool result,
+    # so the child keeps its turn and answers the parent itself.
     host, driver, _ = _session(ws, [
         _spawn("explore", "review", "c1"),
         _spawn("general-purpose", "fix", "c2"),   # denied at the child (depth 1)
-        _end("parent handled failure"),
+        _end("child did it alone"),
+        _end("parent handled it"),
     ], max_subtask_depth=1)
     out = driver.start(goal="root goal", agent="main")
     assert out.status == "terminal"
     root_id = out.task_id
     child_id = _spawned_child(host, root_id)
     child_types = [e.type for e in host.event_log.read(child_id)]
-    # deny happened: SubtaskDenied + TaskFailed, and crucially NO
-    # SubtaskSpawned (no grandchild was ever created).
+    # deny happened, and crucially NO SubtaskSpawned (no grandchild was ever
+    # created) and NO TaskFailed (the child was not killed by the refusal).
     assert "SubtaskDenied" in child_types
-    assert "TaskFailed" in child_types
+    assert "TaskFailed" not in child_types
     assert "SubtaskSpawned" not in child_types
-    # deterministic ordering: SubtaskDenied precedes TaskFailed.
-    assert child_types.index("SubtaskDenied") < child_types.index("TaskFailed")
-    # the parent saw a FAILED subtask result.
+    # the child answered the refusal itself, so the parent saw a COMPLETED
+    # subtask result rather than a failed one.
     parent = fold(host.event_log, host.content_store, root_id)
-    assert parent.governance.subtask_results[-1].status == "failed"
+    assert parent.governance.subtask_results[-1].status == "completed"
+    # the refusal reached the child as a failed tool result it could adapt to.
+    child = fold(host.event_log, host.content_store, child_id)
+    refusal = [
+        b
+        for m in child.runtime.messages
+        if m.role == "tool"
+        for b in m.content
+        if getattr(b, "success", True) is False
+    ]
+    assert refusal and "Delegation refused" in (refusal[-1].error or "")
 
 
 # ---------------------------------------------------------------------------

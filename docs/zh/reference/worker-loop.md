@@ -26,7 +26,7 @@ loop.run_forever(install_signals=True)   # blocks until stop()
 | `settle_subtasks_after_step(task_id)` | 驱动刚被推进的任务所栅栏等待的那棵委派子树（常驻路径没有请求内的排空来 seed 它的子任务） |
 | `take_pending_prelude(task_id)` | 交出宿主在 seed-yield 时暂存的一次性、非持久的唤醒前导 |
 
-一个存储里的任务必须与排空它的那个循环兼容（就绪队列没有路由）：不同的 profile 请各用各的 sqlite 文件。
+就绪队列**是会路由的**。每一行调度记录都带一个队列名，这个循环的无定向轮询只在自己的 `queue` 里按 FIFO 认领，别的队列一概不碰 —— 所以配置不同的多个 profile 可以共用一个存储，各报各的队列名，不必再拆成好几个 sqlite 文件。队列内部原来那条规矩还在：落在这个队列上的每个任务，都得是这个循环跑得了的。见 [ADR: Worker queue routing](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md)。
 
 runtime 的存储请用一个**真实的 sqlite 文件**——跨进程入队只能通过共享的磁盘状态实现；`:memory:` 仅限开发/测试。
 
@@ -50,6 +50,8 @@ WorkerLoop(
     reliability_sink: Optional[ReliabilitySink] = None,
     step_poll_s: float = 0.05,
     next_goal_handle: Optional[str] = None,
+    queue: str = DEFAULT_QUEUE,                                     # "default"
+    lease_backoff_max_s: float = 30.0,
 )
 ```
 
@@ -66,6 +68,8 @@ WorkerLoop(
 | `reliability_sink` | `ReliabilityEvent` 的去向；默认：结构化日志 |
 | `step_poll_s` | 等待进行中步骤线程时的轮询节奏 |
 | `next_goal_handle` | 设置后，一次人类的 close / cancel 会把任务挂在这个句柄上（再打字即可重开），而不是把它以终止状态释放 |
+| `queue` | 这个循环的无定向轮询唯一会认领的队列。想让这个池子跑哪个 client 的活，就填那个 client 的 `HostConfig.queue`。维护性清扫与队列无关 —— 它们只改状态，不改归属 |
+| `lease_backoff_max_s` | `lease()` 出故障后那段退避的上限（每次翻倍，到此为止） |
 
 **没有 `workers` 这个旋钮**：一个 `WorkerLoop` 就是一条排空线程。你通过对同一个存储跑多个循环（每个带自己的 `worker_id`）来扩容。并发的循环是安全的：带 lease 校验的 append 有 fencing 保护，因此一个租约已被回收的循环无法把写落在接手它的那个循环之后。
 
@@ -73,10 +77,11 @@ WorkerLoop(
 
 | 成员 | 行为 |
 | --- | --- |
-| `run_forever(*, install_signals=False)` | 一直驱动到 `stop()`；每次迭代：`maybe_sweep()` → `maybe_poll_timers()` → `tick()`，空闲时睡 `poll_interval`。`install_signals=True` 把 SIGTERM/SIGINT 接到 `stop()`（仅限主线程），并在退出时恢复处理器 |
-| `tick() → bool` | 租用一个就绪任务并把它推进一步；队列为空时返回 `False`。异常策略在内部生效 |
+| `run_forever(*, install_signals=False)` | 先跑一次 `recover_cap_terminal()`，再一直驱动到 `stop()`；每次迭代：`maybe_sweep()` → `maybe_poll_timers()` → `tick()`，空闲时睡 `poll_interval`。`install_signals=True` 把 SIGTERM/SIGINT 接到 `stop()`（仅限主线程），并在退出时恢复处理器 |
+| `tick() → bool` | 租用一个就绪任务并把它推进一步；队列为空、或者 `lease()` 自己出故障时返回 `False`。异常策略在内部生效 |
 | `maybe_sweep() → bool` | 若间隔已到则运行 `requeue_stale()` |
 | `maybe_poll_timers() → bool` | 若间隔已到则运行 `fire_due_timers()`；在没有定时器的 dispatcher 上退化为空操作 |
+| `recover_cap_terminal() → list[str]` | 启动时的那遍对账扫描，每个循环只跑一次；返回被补上终态事件的任务 id |
 | `stop()` | 通知循环在当前这次迭代之后停下 |
 | `running: bool` | 循环是否仍在运行 |
 | `abandoned: bool` | 当停机宽限期耗尽而仍有步骤在飞行中时被置位。宿主**必须让进程退出**——那个被放弃的步骤线程可能还会写 EventLog；不支持在进程内继续复用 |
@@ -87,23 +92,36 @@ WorkerLoop(
 - `run_leased_task(rt, lease, *, prelude=None, next_goal_handle=None, reliability_sink=None, engine=None) → WorkerOutcome` —— 规范的三态恢复机（含崩溃恢复的封存 / 重新驱动 / 停放），与进程内 runner 共享，因此两者不会漂移。
 - `keep_lease_alive(dispatcher, lease, *, interval=30.0, lease_seconds=600.0, reliability_sink=None)` —— 每步的心跳上下文管理器，供那些在没有常驻循环包裹的情况下驱动一个租约步骤的调用方使用。
 - `resolve_engine(rt, task) → Engine` —— 按任务解析器背后的那个接缝。
+- `reconcile_cap_terminal(rt, task_id) → bool` —— 为一个任务补上 Dispatcher 到达上限时没写的终态事件（幂等；只有当队列行已是终止、而事件流里没有终态事件时才写）。
+- `recover_cap_terminal(rt) → list[str]` —— 对每条任务流做同一个判断，管的是那些没人看着的时候被打到终止的行。
 
 ## 异常策略
 
 一个常驻循环不能因为一个"有毒"的任务而崩溃：
 
 - `InvalidLease` → 记日志并继续；不做 `release` / `fail`（那个租约不是我们的）。
-- 其他任何异常 → `dispatcher.fail(lease_id, retryable=True, reason=…)`：有界重试直到后端的 `max_fail_attempts`，然后转终止。
+- 其他任何异常 → `dispatcher.fail(lease_id, retryable=True, reason=…)`：有界重试直到后端的 `max_fail_attempts`，然后转终止——而到上限那一下没写的终态 EventLog 事件会被补上（见下）。
 - 如果 `fail()` 自身抛出 → 记日志并继续。
+- Dispatcher 自己在 `lease()` 上出故障（连接被掐断、重启、主从切换）→ 记日志、发出 `dispatcher_unavailable`、退避一段（每次翻倍，最多到 `lease_backoff_max_s`），然后继续轮询。`KeyboardInterrupt` / `SystemExit` 仍然照常往上抛。
 - 循环总是继续处理下一个任务。
 
 Provider 故障永远不会走到这个兜底：`runtime/llm.py` 把一个 provider 异常翻译成一个 policy 会读到的错误 `LLMResponse`，因此重试在那里被消化掉，而不是在这里被重复计数。
+
+## 被打到终止之后的对账
+
+Dispatcher 的两个上限——`fail()` 的 `max_fail_attempts` 和 `requeue_stale()` 的 `reclaim_max`——到顶之后都只把任务的**队列行**改成 `terminal`，一个 EventLog 事件都不写。这之后这行既租不出去也唤不醒，而 `fold` 读出来的任务却还活着；于是一个挂在子任务栅栏上的父任务，会一直等一个早就结束的子任务。循环从自己这边把这个裂口补上，办法是回读刚刚写过的那一行：
+
+- `fail()` 之后，针对它刚失败掉的那个任务；
+- 一次清扫之后，针对所有「上一次清扫重新入队过、这次却没再回来」的 id（回收到上限的那些 id 不会出现在结果里）；
+- `run_forever()` 启动时跑一遍，扫过每条任务流，补上那些没人看着时被打到终止的行。
+
+每一次都用 `system_emit` 写一个不带租约的 `TaskFailed`——和 driver 处理租约丢失时用的是同一套收敛——并发出 `cap_terminal_reconciled`。这个判断是幂等的：事件流里已经有终态事件的，原样不动。
 
 ## Outcome 与可靠性类型
 
 `WorkerOutcome`：`"woken" | "drained" | "skipped" | "cancelled" | "stopped"`。`"skipped"` 表示一个尚无唤醒的挂起任务（一个诊断信息，不是错误）；`"cancelled"` / `"stopped"` 表示一次人类的 cancel/close 落在了轮次中途——`"cancelled"` 让任务停在终止状态，`"stopped"` 让它保持可重开。`"stopped"` 也涵盖崩溃恢复中的**停放**：任务带着一条系统通知停在挂起状态，打一条消息就能恢复它。
 
-`ReliabilityEvent` —— 进程本地的信号（**不是** EventLog 事件），发往 `reliability_sink`。种类有：`stale_requeued`、`suspended_without_wake`、`step_failed_retryable`、`heartbeat_invalid_lease`、`shutdown_abandoned`、`timers_fired`、`attempt_abandoned`、`attempt_parked`（后两个是崩溃恢复的两个时刻：一次被中断的尝试被封存并自动重新驱动，或者被封存并停放等人处理）。每一种都只指称这个循环真正能从 Dispatcher 接缝上证明的事，而绝不指称它观察不到的根因。
+`ReliabilityEvent` —— 进程本地的信号（**不是** EventLog 事件），发往 `reliability_sink`。种类有：`stale_requeued`、`suspended_without_wake`、`step_failed_retryable`、`heartbeat_invalid_lease`、`shutdown_abandoned`、`timers_fired`、`attempt_abandoned`、`attempt_parked`（这两个是崩溃恢复的两个时刻：一次被中断的尝试被封存并自动重新驱动，或者被封存并停放等人处理）、`cap_terminal_reconciled`、`dispatcher_unavailable`。每一种都只指称这个循环真正能从 Dispatcher 接缝上证明的事，而绝不指称它观察不到的根因。
 
 `WakeRecoveryError` —— 一个已唤醒租约上的唤醒无法与 fold 出的状态对账；worker 会大声失败。步骤中途的一次崩溃**不是**错误路径：在下一次租约时，被中断的尝试会被 `StepAttemptAbandoned` 封存，并在按审批面判定它无副作用时自动重新驱动，否则任务被停放等人处理（见[已知限制](../operations/limitations.md)）。
 

@@ -4,7 +4,10 @@ The lexical matcher is deterministic and free but literal: a message that
 *means* "deploy" without saying it recalls nothing. When a host sets
 ``Options.recall_model``, a lexical MISS at turn intake is retried through
 one small-model call — the judge reads the incoming message plus the index
-lines and picks the memories worth surfacing. Its picks ride as tier-2
+lines and picks the memories worth surfacing. The stable half (instructions
+plus the index) rides ``LLMRequest.system`` and only the message rides the
+user turn, so an adapter's prompt cache can carry the index across misses
+instead of re-paying it on every one. Its picks ride as tier-2
 pointers (a judge is a guess, and a guess is worth a pointer, not a body),
 and the formatted reminder is RECORDED like any other recall, so
 resume/replay folds the judged recall back without re-invoking the model.
@@ -48,7 +51,7 @@ __all__ = [
     "RecallJudge",
     "build_recall_judge",
     "parse_judge_reply",
-    "render_judge_prompt",
+    "render_judge_system",
 ]
 
 
@@ -70,13 +73,26 @@ DEFAULT_JUDGE_TIMEOUT_SECONDS = 10.0
 _JUDGE_INSTRUCTIONS = load_markdown(__package__, "recall_judge")
 
 
-def render_judge_prompt(entries: MemoryEntries, text: str) -> str:
-    """The one user message the judge sees: instructions, index, message.
+def render_judge_system(entries: MemoryEntries) -> str:
+    """The judge's system text: its instructions plus the whole index.
 
-    Unlike the rendered index resident, the prompt DOES include keywords —
-    they are curator-written aliases, exactly the cross-language hints a
-    selector benefits from, and this prompt is ephemeral (never recorded),
-    so including them moves no ledger bytes.
+    Everything that is the same on every judge call lives here, and only the
+    incoming message rides the user turn — so the bulk of the request is a
+    stable prefix an adapter can cache (the Anthropic adapter puts a
+    cache breakpoint on ``system``; the OpenAI ones render it as the leading
+    system message / ``instructions``). It used to be one user block holding
+    instructions, index AND message, which re-paid the whole index on every
+    lexical miss for a store that had not changed.
+
+    The judge sees the FULL index, never the resident index's budgeted form:
+    the budget bounds bytes charged to every request, this call happens once
+    on a miss, and the pages a budget degrades to a bare name are exactly the
+    ones a semantic selector is there to reach.
+
+    Unlike the rendered index resident, this DOES include keywords — they are
+    curator-written aliases, exactly the cross-language hints a selector
+    benefits from, and the prompt is ephemeral (never recorded), so including
+    them moves no ledger bytes.
     """
     lines = [_JUDGE_INSTRUCTIONS.strip(), "", "Memory index:"]
     for name, summary, mem_type, keywords in entries:
@@ -85,7 +101,6 @@ def render_judge_prompt(entries: MemoryEntries, text: str) -> str:
         if keywords:
             line += f" [aliases: {keywords}]"
         lines.append(line)
-    lines += ["", "User message:", text]
     return "\n".join(lines)
 
 
@@ -193,13 +208,12 @@ def build_recall_judge(
             return ()
         request = LLMRequest(
             model=model,
+            system=Message(
+                role="system",
+                content=[TextBlock(text=render_judge_system(entries))],
+            ),
             messages=[
-                Message(
-                    role="user",
-                    content=[
-                        TextBlock(text=render_judge_prompt(entries, text))
-                    ],
-                )
+                Message(role="user", content=[TextBlock(text=text)])
             ],
             temperature=0.0,
             max_tokens=_JUDGE_MAX_TOKENS,

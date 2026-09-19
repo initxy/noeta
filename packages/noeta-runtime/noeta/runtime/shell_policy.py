@@ -188,6 +188,12 @@ def load_project_shell_allowlist(
     A plain external config read: it never enters the LLM context or the event
     log, it only feeds the effective allowlist when the tools are built.
 
+    No trust check happens here — this reads a file. Whether those rules may
+    apply at all is the caller's decision: the file is repository content, so
+    the SDK host gates it on the workspace trust decision
+    (``SdkHost.project_shell_allowlist_trust``) before merging it into the
+    effective allowlist.
+
     ``exec_env`` (sandbox mode) reads the file THROUGH the container, because
     ``workspace_root`` is then a container path and resolving it against the
     host filesystem would read the wrong rules — or none at all.

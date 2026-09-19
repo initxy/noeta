@@ -237,7 +237,10 @@ def test_engine_tool_calls_without_tool_runtime_raises() -> None:
         engine.run_one_step(task, lease_id="lease-test")
 
 
-def test_engine_resolve_tool_unknown_raises() -> None:
+def test_engine_resolve_tool_unknown_answers_the_call_instead_of_raising() -> None:
+    """A name the model invented reaches the batch AFTER its assistant turn is
+    committed, so raising would strand the turn. It becomes a failed tool
+    result the model can act on, and the task runs on."""
     policy = StubScriptedPolicy(
         [
             ToolCallsDecision(
@@ -245,7 +248,7 @@ def test_engine_resolve_tool_unknown_raises() -> None:
                     ToolCall(call_id="c1", tool_name="missing", arguments={})
                 ]
             ),
-            FinishDecision(answer="never"),
+            FinishDecision(answer="recovered"),
         ]
     )
     engine, _log, _store, dispatcher = _wire(
@@ -255,8 +258,17 @@ def test_engine_resolve_tool_unknown_raises() -> None:
     )
     task = engine.create_task(goal="g", policy_name="scripted")
     lease_id = _lease_for(dispatcher, task.task_id)
-    with pytest.raises(KeyError, match="unknown tool"):
-        engine.run_one_step(task, lease_id=lease_id)
+    final = engine.run_one_step(task, lease_id=lease_id)
+    assert final.status == "terminal"
+    block = [
+        b
+        for m in final.runtime.messages
+        if m.role == "tool"
+        for b in m.content
+        if b.call_id == "c1"
+    ][0]
+    assert block.success is False
+    assert "No tool named 'missing'" in (block.error or "")
 
 
 def test_engine_tool_call_denied_emits_no_messages_appended() -> None:

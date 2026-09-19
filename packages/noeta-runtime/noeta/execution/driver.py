@@ -69,6 +69,7 @@ from noeta.protocols.task import Task
 from noeta.tools.limits import SHELL_INLINE_MAX_CHARS, elide_middle
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.values import LOCAL_PRINCIPAL, ContentRef, Principal
+from noeta.protocols.hooks import approval_wake_handle
 from noeta.protocols.wake import (
     ExternalEvent,
     HumanResponseReceived,
@@ -1551,7 +1552,18 @@ class InteractionDriver:
         reason: Optional[str] = None,
         resolver: str = "driver",
     ) -> DriveOutcome:
-        """Approve a pending gated tool call and resume."""
+        """Approve a pending gated action and resume with it.
+
+        ``call_id`` names which pending approval to resolve, and is the
+        ``call_id`` of the ``ToolCallApprovalRequested`` event the suspend
+        recorded — read it off ``events(task_id)`` rather than parsing the
+        wake handle. For a gated tool call that is the model's own call_id;
+        for a gated ``finish`` / spawn (a Guard returning ``require_approval``
+        at ``before_finish`` / ``before_spawn_subtask``) it is the reserved
+        ``finish-{task_id}`` / ``spawn-{task_id}``. Approving proceeds with
+        the action the human reviewed — the tool runs, the answer ships, the
+        sub-agent launches — without re-consulting the Guard.
+        """
         return self._resolve_approval(
             task_id, call_id=call_id, approved=True, reason=reason,
             resolver=resolver,
@@ -1565,7 +1577,14 @@ class InteractionDriver:
         reason: Optional[str] = None,
         resolver: str = "driver",
     ) -> DriveOutcome:
-        """Deny a pending gated tool call and resume."""
+        """Deny a pending gated action and resume the turn without it.
+
+        ``call_id`` is the same identifier :meth:`approve` takes. The refusal
+        goes back to the model as a failed tool result (``reason`` becomes its
+        error text), so the turn CONTINUES and the model can adapt — a denied
+        ``finish`` keeps working instead of shipping the answer, a denied
+        spawn keeps working instead of delegating.
+        """
         return self._resolve_approval(
             task_id, call_id=call_id, approved=False, reason=reason,
             resolver=resolver,
@@ -2549,7 +2568,7 @@ class InteractionDriver:
         reason: Optional[str],
         resolver: str,
     ) -> SeededTurn:
-        handle = f"approval-{call_id}"
+        handle = approval_wake_handle(call_id)
         self._require_human_suspend(task_id, handle)
         return self._seed_woken(
             task_id,

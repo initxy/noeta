@@ -67,10 +67,15 @@ Three properties fall out:
 recovery ([step-attempt-recovery](step-attempt-recovery.md)) re-bases a crashed
 attempt to its pre-attempt baseline, folding the dead window away. An
 `InjectionRequested` that arrived *during* that attempt (the common case — mid
-LLM round) sits in the dead window and would be lost. Because the drain only
-ever consumes at top-of-loop (never inside the dead window), the full-stream
-fold's `pending_injections` is exactly the not-yet-delivered set; the seal
-overwrites the bounded baseline's copy with it, so the re-drive delivers it once.
+LLM round) sits in the dead window and would be lost, so the seal re-queues
+every marker in that window onto the bounded baseline. A **consuming append**
+can sit in the dead window too — the drain runs at top-of-loop but the attempt
+anchor is the *last* `ContextPlanComposed`, so a crash in the gap between them
+leaves the consume behind the anchor. The bounded baseline covers that case by
+construction: it stops short of the consume, so the marker is still pending
+there and the message — now dead history — is re-delivered rather than lost.
+The sealed state therefore holds the marker or the message, never both, and the
+re-drive delivers each injection exactly once.
 
 ## Rationale
 

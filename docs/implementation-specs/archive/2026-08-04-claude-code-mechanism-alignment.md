@@ -1,9 +1,12 @@
 # Claude Code mechanism alignment (post-audit fixes)
 
-Status: spec drafted 2026-08-04 from the full-mechanism audit; S1–S6 implemented.
-D12's open question is closed — **the owner approved the WIRE option on
-2026-08-04**, so S6 consumes the two live host surfaces and documents the other
-two as host-resolved listings; the "shrink" alternative is not taken.
+Status: SHIPPED 2026-08-04 in noeta-runtime + noeta-sdk 0.6.1 (drafted the same
+day from the full-mechanism audit; S1–S6 implemented). D12's open question was
+closed — **the owner approved the WIRE option on 2026-08-04**, so S6 consumes
+the two live host surfaces and documents the other two as host-resolved
+listings; the "shrink" alternative was not taken. Distilled into `CONTEXT.md`,
+`docs/adr/provider-adapters-and-multimodal.md`, and the plugin how-to /
+reference pages (commit `da8ab62`).
 Owner: initxy
 
 ## Goal

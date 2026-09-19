@@ -222,8 +222,12 @@ def test_shell_triplet_descriptions_load_from_resources() -> None:
 def test_explore_and_plan_whitelist_is_all_but_write_family() -> None:
     # CC alignment: Explore and Plan share the same read-mostly whitelist —
     # every built-in tool EXCEPT the write family (edit/write/apply_patch).
-    # That is glob/grep/read + the shell triplet + webfetch.
-    expected = {"Glob", "Grep", "Read", "Bash", "BashOutput", "KillShell", "WebFetch"}
+    # That is glob/grep/read + the shell triplet + the two read-only web
+    # lookups (``WebSearch`` only mounts where a search backend is configured).
+    expected = {
+        "Glob", "Grep", "Read", "Bash", "BashOutput", "KillShell",
+        "WebSearch", "WebFetch",
+    }
     specs = official_specs()
     for name in ("explore", "plan"):
         names = {t.name for t in specs[name].tools}

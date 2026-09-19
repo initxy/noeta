@@ -1,6 +1,8 @@
 # Worker queue routing (named queues on the Dispatcher)
 
-Status: shipped 2026-08-01 (gates green: 3542 passed, coverage 85.77%, mypy strict, lints) — awaiting owner review/archive
+Status: SHIPPED 2026-08-01 in noeta-runtime + noeta-sdk 0.5.3 (gates green:
+3542 passed, coverage 85.77%, mypy strict, lints). Distilled into
+`docs/adr/worker-queue-routing.md` and `docs/operations/limitations.md`.
 Owner: initxy
 
 ## Goal

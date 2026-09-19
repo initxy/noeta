@@ -88,6 +88,18 @@ built-ins are always kept. An operator-configured rule is looser than the
 curated built-ins: it means "this program may run", accepting any tail args
 that survive the metachar scan.
 
+The workspace can carry its own rules in
+`<workspace>/.noeta/shell-allowlist.json` — the same JSON shape, as a list.
+That file is **repository content**, so it is gated on workspace trust: the
+host loads it only when the workspace path is recorded in the plugin trust
+store (`grant_trust`, `~/.noeta/trust.json` — the same store that gates
+workspace plugin directories and the workspace skill tiers). In an untrusted
+workspace the file contributes nothing, and the host warns once per workspace
+(`UntrustedProjectShellAllowlistWarning`) naming the file. Set
+`SdkHost(project_shell_allowlist_trust="open")` to load it unconditionally, and
+`SdkHost(trust_store=…)` to point the gate at another store. Under
+`bypassPermissions` nothing is gated per call, so the file is never read.
+
 Shell metacharacters (`|`, `;`, `&&`, `>`, …) are rejected before tokenization.
 This is **path-containment plus an allowlist, not a process sandbox** —
 `Bash` spawns external programs in the trusted workspace.
@@ -98,8 +110,54 @@ Declared by the `web` built-in plugin manifest.
 
 | Tool | Risk | What it does | Source |
 | --- | --- | --- | --- |
-| `WebFetch` | low | Fetch a public web page, render it to Markdown, and answer the call's `prompt` against it with an auxiliary model call (`Options.webfetch_model`, defaulting to the session's main model) — the calling model reads the answer, not the raw page. HTTP upgrades to HTTPS, cross-host redirects are returned rather than followed, and fetched pages are cached for 15 minutes per URL. Always available. | `noeta/builtins/web/impl/fetch.py` |
+| `WebFetch` | low | Fetch a public web page, render it to Markdown, and answer the call's `prompt` against it with an auxiliary model call (`Options.webfetch_model`, defaulting to the session's main model) — the calling model reads the answer, not the raw page. HTTP upgrades to HTTPS, cross-host redirects are returned rather than followed, and fetched pages are cached for 15 minutes per URL. Every result opens with a line naming it as external web content. Always available. | `noeta/builtins/web/impl/fetch.py` |
 | `WebSearch` | low | Run a web search and return ranked hits as Markdown. **Mounted only when `NOETA_WEB_SEARCH_API_KEY` is set.** | `noeta/builtins/web/impl/search.py` |
+
+### WebFetch egress
+
+`WebFetch` takes its URL straight from the model, and the tool is `low` risk,
+so the static approval set never gates it. Its reach is fenced per **call**
+instead, by host.
+
+**Upgrade note.** `WebFetch` reaches any host it is pointed at — public,
+intranet, loopback. Under a gating permission mode a host outside
+`webfetch_allowed_hosts` needs approval. The only thing refused outright is a
+scheme `WebFetch` does not fetch: `file:`, `gopher:` and the rest fail with
+"WebFetch fetches http(s) URLs only", which refuses no host.
+
+**Unlisted hosts need approval.** `HostConfig.webfetch_allowed_hosts` names the
+hosts a fetch may reach without asking a human. Two forms, and only two:
+
+| Entry | Matches |
+| --- | --- |
+| `example.com` | that host exactly |
+| `*.example.com` | its subdomains at any depth — `a.example.com`, `a.b.example.com` — but **not** `example.com` itself |
+
+List both to cover the apex too. A malformed entry (a scheme, a path, a port,
+userinfo, a `*` anywhere but as a leading `*.`) raises at `HostConfig`
+construction rather than silently matching nothing. Matching is on the URL's
+real, lowercased, IDNA-normalised host: `https://example.com@evil.test/` is
+judged as `evil.test`, and `allowed.com` never covers `notallowed.com`.
+
+| Permission mode | Unlisted host | Listed host |
+| --- | --- | --- |
+| `default` | approval requested per call | fetched silently |
+| `acceptEdits` | approval requested per call | fetched silently |
+| `bypassPermissions` | fetched silently | fetched silently |
+
+The gate is a per-call predicate, the same shape `Bash` uses for a command
+outside its allowlist — so `WebFetch` keeps `risk_level="low"`, a listed host
+stays prompt-free, and the approval resolves through the ordinary
+`ToolCallApprovalRequested` → `approve` / `deny` path (and through
+`Options.can_use_tool`). A cross-host redirect is handed back to the model to
+re-issue, and that second call is judged by the same predicate — a redirect
+cannot smuggle a fetch to an unapproved host.
+
+**What this gate is not.** It asks a human about an unfamiliar host; it does
+not confine the agent to a network. An agent that holds `Bash` reaches any
+address with one `curl`, so `WebFetch` refuses none of its own — a deployment
+that needs a real egress boundary enforces it at the network or in the sandbox
+container, where it also covers the shell.
 
 ## App tools
 
@@ -136,7 +194,7 @@ route through approval unless the session bypasses permissions.
 | `browser_click` | high | Click the interactive element at `index` (from the snapshot's numbered list). | `noeta/builtins/browser/impl/__init__.py` |
 | `browser_type` | high | Type text into the element at `index`. | `noeta/builtins/browser/impl/__init__.py` |
 | `browser_extract` | high | Re-read the current page as a snapshot (no arguments). | `noeta/builtins/browser/impl/__init__.py` |
-| `browser_screenshot` | high | Capture a PNG and store it as a **workspace artifact**, returning its `ContentRef`. It is not fed to the model as vision. | `noeta/builtins/browser/impl/__init__.py` |
+| `browser_screenshot` | high | Capture a PNG and store it in the `ContentStore` as an artifact, returning its `ContentRef` — no file is written to the workspace. It is not fed to the model as vision. | `noeta/builtins/browser/impl/__init__.py` |
 
 The four text tools return a *page snapshot*: page text plus numbered
 interactive elements. That numbering is what `browser_click` / `browser_type`
@@ -160,14 +218,27 @@ Control tools are model-facing schemas that translate into engine decisions
 rather than into a `Tool.invoke`. Each is a `control_tool` contribution that
 self-gates: mounting *is* enablement.
 
+The **activation name** below is what goes into `Options.plugins`; it is not
+the model-visible tool name in the first column, and using the wrong one fails
+the client build with a `ValueError` that lists the legal names.
+
 | Tool | Mounted when | Plugin |
 | --- | --- | --- |
 | `Task` | the agent activates `delegation` (derived automatically when it has children) | `delegation` |
-| `TodoWrite` | the agent activates `TodoWrite` | `TodoWrite` |
-| `AskUserQuestion` | the agent activates `AskUserQuestion` | `AskUserQuestion` |
+| `TodoWrite` | the agent activates `todo_write` | `todo_write` |
+| `AskUserQuestion` | the agent activates `ask_user_question` | `ask_user_question` |
 | `skill` | the agent activates `skill_invocation` **and** the merged skill menu is non-empty | `skills` |
 | `run_workflow` | `HostConfig.workflow_allowed` is on (and the agent can delegate) | `react` |
+| `RecallHistory` | the host wires compaction — always on under `Client` / `query`, subagents included; the schema is live whether or not anything has been collapsed yet | `react` |
 | `structured_output` | the agent is a subtask / workflow helper spawned with a per-helper schema (**not** `Options.output_schema`, which is served natively by the provider) | `react` |
+
+`RecallHistory` reads back the original messages that compaction collapsed into
+the summary note at the head of the conversation — the originals are kept in
+full, the note only stands in for them in the prompt. Conversation-born content
+(an earlier error's exact text, code discussed before compaction) lives in no
+file, so `Read` could never recover it. Results are a read-only rendering,
+paged with `offset`; the live collapsed range is reported in every result and
+in the `collapsed-context` reminder.
 
 ## MCP tools
 
@@ -190,8 +261,8 @@ There are exactly three levels, ordered `low < medium < high`.
 | `high` | Modifies the filesystem, spawns external processes, or reaches the live web. Goes through the approval gate. |
 
 `Options.permission_mode` decides which levels actually gate: `"default"` gates
-everything above `low`, `"acceptEdits"` exempts the three edit-class tools, and
-`"bypassPermissions"` gates nothing.
+everything above `low`, `"acceptEdits"` exempts the two edit-class tools
+(`Edit` / `Write`), and `"bypassPermissions"` gates nothing.
 
 ## Next
 

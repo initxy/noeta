@@ -253,10 +253,9 @@ class _BuildSpec:
     guards_factory: Optional[GuardsFactory] = None
     #: The bound model's vendor family (``"anthropic"`` / ``"openai"`` /
     #: ``None``), resolved by the SDK host from the providers built-in's
-    #: catalog and exposed to packs through the context
-    #: (the fs pack keys its own edit-tool mutex on it). ``None``
-    #: (kernel-alone / stub) drops neither edit tool — the documented
-    #: no-catalog semantic, NOT a silent fallback.
+    #: catalog and exposed to packs through the context. No built-in pack
+    #: branches on it today (the fs pack's per-family edit-tool mutex went
+    #: with ``apply_patch`` in 0.6.0); ``None`` means kernel-alone / stub.
     provider_family: Optional[str] = None
     #: The manifest-contributed session packs: resolved
     #: by the SDK host (``noeta.client.parts.default_session_packs`` + the
@@ -613,9 +612,9 @@ def build_session_inputs(
     #: by the SDK host and injected here; ``None`` fails loudly.
     guards_factory: Optional[GuardsFactory] = None,
     #: The bound model's vendor family, resolved by the SDK host from the
-    #: providers built-in's catalog (``provider_family(model)``) and consumed
-    #: by the edit-tool mutex. ``None`` ⇒ both edit tools stay (the documented
-    #: unrecognised-model semantic — byte-identical for stub/test builds).
+    #: providers built-in's catalog (``provider_family(model)``) and handed to
+    #: packs through the build context. ``None`` ⇒ unrecognised model / stub
+    #: build.
     provider_family: Optional[str] = None,
     #: Loader-resolved default policy factory builder:
     #: the ``react`` built-in plugin's ``build_react_policy_factory``,

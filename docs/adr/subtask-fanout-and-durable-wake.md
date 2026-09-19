@@ -36,8 +36,10 @@ writes.
   pre-checked: batch size within `MAX_FANOUT`, a `(call_id, member_index)` layout
   the resume pairing can reproduce, and a per-spec guard verdict with the
   spawned-subtask counter simulated at `current + i`. Any deny — a
-  require-approval verdict counts as one — fails the parent with zero subtasks
-  created.
+  require-approval verdict counts as one — creates zero subtasks and answers
+  every `Task` call of the response with a failed tool result, so the parent's
+  turn continues and the model can re-issue (amended 2026-09-19: it used to fail
+  the parent, which turned one over-sized or misnamed batch into a dead task).
 - `group_id` is a hash of the ordered member ids, so it draws no id from the
   factory and recomputes identically on resume. Wake matching projects on
   `group_id` alone; the member id list rides along for diagnosis and result

@@ -159,3 +159,111 @@ def test_oserror_runner_yields_failure_result(tmp_path: Path) -> None:
     )
     res = tool.invoke({"skill": "s", "relpath": "run.sh"}, _ctx())
     assert res.success is False  # typed failure, not a propagated OSError
+
+
+# ---------------------------------------------------------------------------
+# teach at the point of failure: schema descriptions + an actionable refusal
+# ---------------------------------------------------------------------------
+
+
+def test_schema_properties_are_described(tmp_path: Path) -> None:
+    """All three properties carry a description, and ``relpath``'s says what it
+    is relative to.
+
+    The only path the model is ever shown is the skill's ABSOLUTE base
+    directory, so an undescribed ``relpath`` is a guess between an absolute
+    path, a workspace-relative one and a skill-relative one.
+    """
+    tool = RunSkillScriptTool(workspace=_ws(tmp_path))
+    props = tool.input_schema["properties"]
+    assert set(props) == {"skill", "relpath", "args"}
+    for name in props:
+        assert props[name]["description"].strip(), name
+    assert "relative to that skill's own directory" in props["relpath"]["description"]
+
+
+def test_undiscovered_script_error_names_the_form_and_the_real_scripts(
+    tmp_path: Path,
+) -> None:
+    root = _skill_root(tmp_path, {"run.sh": "x\n", "scripts/check.sh": "x\n"})
+    tool = RunSkillScriptTool(
+        workspace=_ws(tmp_path),
+        scripts=(("s", "run.sh", root), ("s", "scripts/check.sh", root)),
+        runner=_boom_runner(),
+    )
+    res = tool.invoke({"skill": "s", "relpath": str(root / "run.sh")}, _ctx())
+    assert res.success is False
+    assert "is not a discovered script of skill 's'" in res.summary
+    assert "'relpath' must be relative to the skill's own directory" in res.summary
+    assert "discovered scripts for it: run.sh, scripts/check.sh" in res.summary
+
+
+def test_undiscovered_script_error_when_the_skill_bundles_none(
+    tmp_path: Path,
+) -> None:
+    tool = RunSkillScriptTool(
+        workspace=_ws(tmp_path), scripts=(), runner=_boom_runner()
+    )
+    res = tool.invoke({"skill": "s", "relpath": "run.sh"}, _ctx())
+    assert res.success is False
+    assert "skill 's' bundles no scripts" in res.summary
+
+
+# ---------------------------------------------------------------------------
+# a run that failed says so, the way Bash does
+# ---------------------------------------------------------------------------
+
+
+def _exit_runner(code: int, out: bytes = b"", err: bytes = b"") -> Any:
+    def runner(argv: list[str], **kwargs: Any) -> "subprocess.CompletedProcess[bytes]":
+        return subprocess.CompletedProcess(
+            args=argv, returncode=code, stdout=out, stderr=err
+        )
+    return runner
+
+
+def test_nonzero_exit_is_a_failed_result(tmp_path: Path) -> None:
+    """A script that exited 3 did not do what it was asked.
+
+    It used to come back ``success=True`` with the exit code buried in an
+    output field, so the model read a failed run as a successful one — ``Bash``
+    has always flagged the same thing as a failure.
+    """
+    root = _skill_root(tmp_path, {"run.sh": "exit 3\n"})
+    tool = RunSkillScriptTool(
+        workspace=_ws(tmp_path),
+        scripts=(("s", "run.sh", root),),
+        runner=_exit_runner(3, err=b"boom"),
+    )
+    res = tool.invoke({"skill": "s", "relpath": "run.sh"}, _ctx())
+    assert res.success is False
+    # Same body — the model still reads what went wrong.
+    assert res.output["exit_code"] == 3
+    assert res.output["stderr_tail"] == "boom"
+    assert "exit=3" in res.summary
+
+
+def test_timeout_is_a_failed_result(tmp_path: Path) -> None:
+    root = _skill_root(tmp_path, {"run.sh": "sleep 1\n"})
+
+    def runner(argv: list[str], **kwargs: Any) -> "subprocess.CompletedProcess[bytes]":
+        raise subprocess.TimeoutExpired(argv, 1.0, output=b"partial", stderr=b"")
+
+    tool = RunSkillScriptTool(
+        workspace=_ws(tmp_path), scripts=(("s", "run.sh", root),), runner=runner
+    )
+    res = tool.invoke({"skill": "s", "relpath": "run.sh"}, _ctx())
+    assert res.success is False
+    assert res.output["timed_out"] is True
+    assert "timeout" in res.summary
+
+
+def test_clean_exit_is_still_a_success(tmp_path: Path) -> None:
+    root = _skill_root(tmp_path, {"run.sh": "echo hi\n"})
+    tool = RunSkillScriptTool(
+        workspace=_ws(tmp_path),
+        scripts=(("s", "run.sh", root),),
+        runner=_ran_runner(b"hi"),
+    )
+    res = tool.invoke({"skill": "s", "relpath": "run.sh"}, _ctx())
+    assert res.success is True

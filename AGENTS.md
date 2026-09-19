@@ -24,7 +24,7 @@
 - Read `CONTEXT.md` first whenever you touch domain concepts, system boundaries, or stable conventions.
 - Read `docs/adr/` first whenever a long-term architecture trade-off is involved.
 - New stable terms go into `CONTEXT.md`; long-term decisions go into an ADR; one-off details are not persisted.
-- Write complex or cross-session implementation specs into `docs/implementation-specs/` — one document per effort, holding the specs for work in flight and nothing else, so the directory sits empty between efforts.
+- Write complex or cross-session implementation specs into `docs/implementation-specs/` — one document per effort. The top level holds work in flight and nothing else, so it sits empty between efforts; a shipped spec is distilled into `CONTEXT.md` / an ADR and moved to `archive/` (see the directory's `index.md`).
 
 ## Engineering constraints
 

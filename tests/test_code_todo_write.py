@@ -277,6 +277,15 @@ def test_todo_write_mixed_with_spawn_is_recoverable(
     tool_messages = [m for m in task.runtime.messages if m.role == "tool"]
     assert tool_messages
     assert len(tool_messages[-1].content) == 2
+    # The refusal says nothing ran, names the other control tool, and warns
+    # that the checklist was NOT saved — the model must re-issue it.
+    for block in tool_messages[-1].content:
+        assert block.success is False
+        assert block.output == ""
+        text = block.error or ""
+        assert text.startswith("Nothing in this response ran")
+        assert SPAWN_SUBAGENT_TOOL in text
+        assert "the checklist was not saved" in text
     assert "TaskCompleted" in types
 
 

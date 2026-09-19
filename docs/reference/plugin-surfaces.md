@@ -193,8 +193,8 @@ wiring · per-agent · collision `name` · **priority**. Track B: a
 `render(view) -> str | None` that is a **pure** function of a folded projection,
 rendered at the tail of the dynamic suffix. Never recorded and re-derived on
 every compose, so the stable prefix is untouched by construction. Built-in
-corpus: `reminders` contributes `unfinished-todos` (100), `delegation-nudge`
-(200) and `read-suggestion` (300); `react` contributes `collapsed-context`
+corpus: `reminders` contributes `unfinished-todos` (100) and `read-suggestion`
+(300) — band 200 is vacant; `react` contributes `collapsed-context`
 (350), the pointer at the compaction-collapsed range its `RecallHistory` tool
 reads back.
 

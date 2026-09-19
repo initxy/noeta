@@ -82,6 +82,7 @@ from noeta.client.plugins import (
     grant_trust,
     is_trusted,
 )
+from noeta.client.host import UntrustedProjectShellAllowlistWarning
 from noeta.client.plugin_manifest import (
     ManifestContribution,
     PluginBuilder,
@@ -195,6 +196,7 @@ from noeta.runtime.mcp import (
     McpAnyServerSpec,
     McpConfigError,
     McpError,
+    McpHttpResponse,
     McpHttpServerSpec,
     McpServerSpec,
 )
@@ -272,6 +274,7 @@ __all__ = [
     "McpConfigError",
     "McpError",
     "HttpPostFn",
+    "McpHttpResponse",
     # public error surface (typed / coded)
     "CodedError",
     "QueryFailedError",
@@ -356,6 +359,7 @@ __all__ = [
     "PluginVersionWarning",
     "UnnamedPluginFileWarning",
     "UntrustedPluginDirWarning",
+    "UntrustedProjectShellAllowlistWarning",
     "grant_trust",
     "is_trusted",
     "SurfaceSpec",

@@ -531,49 +531,31 @@ def _system_reminders(view: Any) -> list[str]:
     ]
 
 
-def test_concurrency_reminder_appended_when_delegation_offered_and_not_spawned() -> None:
-    """While delegation is offered AND no sub-agent has spawned yet, a trailing
-    ``origin="system"`` reminder restates that parallel delegation = multiple
-    ``spawn_subagent`` calls in one turn. It carries PLAIN text — the
-    ``<system-reminder>`` tag is the adapter's job (provider-neutral)."""
+def test_offered_delegation_appends_no_reminder() -> None:
+    """Delegation being offered and unused appends NOTHING.
+
+    ``delegation-nudge`` used to append a turn here on every step until the
+    first spawn, restating main rule 10 and the ``Task`` description. It was
+    removed; offering delegation must cost no tokens of its own.
+    """
     view = _delegating_composer().compose(
         _task_with([Message(role="user", content=[TextBlock(text="hi")])])
-    )
-    reminders = _system_reminders(view)
-    assert len(reminders) == 1
-    text = reminders[0]
-    assert "Task" in text
-    # The neutral View must not bake in the Anthropic-only tag (else Anthropic
-    # double-wraps and OpenAI leaks the literal tag into its system message).
-    assert "<system-reminder>" not in text
-
-
-def test_concurrency_reminder_self_limits_after_first_spawn() -> None:
-    """Once a ``spawn_subagent`` call lands in the rolling history the nudge
-    disappears — a long delegation run is not nagged every turn."""
-    spawned = Message(
-        role="assistant",
-        content=[ToolUseBlock(call_id="c1", tool_name="Task", arguments={})],
-    )
-    view = _delegating_composer().compose(
-        _task_with(
-            [Message(role="user", content=[TextBlock(text="hi")]), spawned]
-        )
     )
     assert _system_reminders(view) == []
 
 
-def test_todo_and_concurrency_reminders_coexist() -> None:
-    """Regression: a todo list does NOT displace the concurrency reminder.
-    When both conditions hold (unfinished todos AND delegation offered AND not
-    yet spawned) BOTH reminders are appended — they are independent products,
-    not a single shared slot."""
+def test_todo_reminder_is_the_only_one_under_offered_delegation() -> None:
+    """With unfinished todos AND delegation offered, the todo reminder is the
+    whole dynamic tail — nothing rides along with it.
+
+    It also carries PLAIN text: the ``<system-reminder>`` tag is the adapter's
+    job, so the provider-neutral View must not bake it in (else Anthropic
+    double-wraps and OpenAI leaks the literal tag into its system message)."""
     task = _task_with([Message(role="user", content=[TextBlock(text="hi")])])
     task.state.todos = [_todo("a", "wire it", "in_progress")]
     view = _delegating_composer().compose(task)
 
     reminders = _system_reminders(view)
-    assert len(reminders) == 2
-    assert any("todo list" in r for r in reminders)
-    assert any("Task" in r for r in reminders)
-    assert all("<system-reminder>" not in r for r in reminders)
+    assert len(reminders) == 1
+    assert "todo list" in reminders[0]
+    assert "<system-reminder>" not in reminders[0]

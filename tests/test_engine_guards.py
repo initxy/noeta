@@ -343,12 +343,16 @@ def test_tool_call_require_approval_does_not_run_the_tool() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_spawn_subtask_deny_fails_parent_and_appends_subtask_denied() -> None:
+def test_spawn_subtask_deny_keeps_the_turn_running() -> None:
+    """A refused delegation is feedback, not the end of the conversation: the
+    audit record is written, no child exists, and the Policy gets another
+    turn (here it wraps up)."""
     policy = StubScriptedPolicy(
         [
             SpawnSubtaskDecision(
                 agent_name="child", goal="do thing", inputs={"k": "v"}
             ),
+            FinishDecision(answer="did it myself"),
         ]
     )
     hooks = HookManager()
@@ -362,7 +366,9 @@ def test_spawn_subtask_deny_fails_parent_and_appends_subtask_denied() -> None:
     assert result.status == "terminal"
     types = [e.type for e in log.read(task.task_id)]
     assert "SubtaskDenied" in types
-    assert "TaskFailed" in types
+    # The parent finished on its own terms — no TaskFailed anywhere.
+    assert "TaskFailed" not in types
+    assert "TaskCompleted" in types
     # SubtaskSpawned MUST NOT appear — the child was never created.
     assert "SubtaskSpawned" not in types
 
@@ -373,6 +379,7 @@ def test_spawn_subtask_denied_payload_carries_decision_and_reason() -> None:
             SpawnSubtaskDecision(
                 agent_name="child", goal="do thing", inputs={"k": "v"}
             ),
+            FinishDecision(answer="done"),
         ]
     )
     hooks = HookManager()
@@ -381,7 +388,7 @@ def test_spawn_subtask_denied_payload_carries_decision_and_reason() -> None:
     engine, log, _cs, lease_id, task = _build_engine(
         policy=policy, hooks=hooks
     )
-    engine.run_one_step(task, lease_id=lease_id)
+    result = engine.run_one_step(task, lease_id=lease_id)
 
     denied = [
         e for e in log.read(task.task_id) if e.type == "SubtaskDenied"
@@ -390,10 +397,17 @@ def test_spawn_subtask_denied_payload_carries_decision_and_reason() -> None:
     assert denied.payload.goal == "do thing"
     assert "forbidden" in denied.payload.reason
 
-    failed = [
-        e for e in log.read(task.task_id) if e.type == "TaskFailed"
-    ][0]
-    assert "subtask denied" in failed.payload.reason
+    # A scripted Policy proposes the spawn with no tool_use to pair, so the
+    # refusal rides a host-authored user message the model reads next turn.
+    feedback = [
+        m
+        for m in result.runtime.messages
+        if m.role == "user" and m.origin == "system"
+    ][-1]
+    text = feedback.content[0].text  # type: ignore[union-attr]
+    assert "Delegation refused" in text
+    assert "forbidden" in text
+    assert "none of this response's Task calls ran" in text
 
 
 def test_spawn_subtask_require_approval_suspends_for_human() -> None:

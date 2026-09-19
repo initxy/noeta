@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional, Protocol, Union
+from typing import Any, Literal, Optional, Protocol, Union
 
 from noeta.protocols.decisions import SpawnSubtaskDecision, ToolCall
 from noeta.protocols.task import GovernanceState
@@ -84,6 +84,65 @@ class ProposedFinish:
 
 
 ProposedAction = Union[ProposedToolCall, ProposedSpawnSubtask, ProposedFinish]
+
+
+# -- approval identity ------------------------------------------------------
+#
+# A ``REQUIRE_APPROVAL`` verdict suspends the Task on
+# ``HumanResponseReceived(handle="approval-{call_id}")`` and records the
+# blocked action as a ``ToolCallApprovalRequested`` anchor under that same
+# ``call_id``; ``approve`` / ``deny`` name the ``call_id`` to resolve it.
+# ``before_tool_call`` already has an identifier to use — the model's own
+# call_id. The two *decision* points have none, so they mint a reserved one
+# derived from the Task id: derived, so any process can recompute it from the
+# log, and unique, because a Task has at most one finish and one spawn in
+# flight at a time.
+
+#: Prefix of every approval suspend handle.
+APPROVAL_WAKE_HANDLE_PREFIX = "approval-"
+
+#: ``tool_name`` recorded on a gated finish / spawn anchor. These name the
+#: guard action point, not a real tool: they are what the human-facing
+#: surfaces that read the field (the SDK's ``can_use_tool`` callback, the
+#: ``governance.approvals`` audit list) show for a gated decision.
+FINISH_APPROVAL_TOOL = "finish"
+SPAWN_APPROVAL_TOOL = "spawn_subtask"
+
+#: Which of the two guard *decision* points an approval belongs to.
+DecisionApprovalKind = Literal["finish", "spawn"]
+
+
+def approval_wake_handle(call_id: str) -> str:
+    """The suspend handle a pending approval on ``call_id`` waits on."""
+    return f"{APPROVAL_WAKE_HANDLE_PREFIX}{call_id}"
+
+
+def finish_approval_call_id(task_id: str) -> str:
+    """The reserved ``call_id`` of a gated ``finish`` — handle
+    ``approval-finish-{task_id}``."""
+    return f"finish-{task_id}"
+
+
+def spawn_approval_call_id(task_id: str) -> str:
+    """The reserved ``call_id`` of a gated spawn — handle
+    ``approval-spawn-{task_id}``."""
+    return f"spawn-{task_id}"
+
+
+def decision_approval_kind(
+    call_id: str, task_id: str
+) -> Optional[DecisionApprovalKind]:
+    """Which guard decision point ``call_id`` names, or ``None`` when it is an
+    ordinary gated tool call.
+
+    Exact equality against the two derived ids, never a prefix test, so a
+    model-minted call_id can never be mistaken for a decision approval.
+    """
+    if call_id == finish_approval_call_id(task_id):
+        return "finish"
+    if call_id == spawn_approval_call_id(task_id):
+        return "spawn"
+    return None
 
 
 @dataclass(frozen=True, slots=True)

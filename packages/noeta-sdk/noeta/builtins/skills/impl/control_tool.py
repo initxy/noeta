@@ -245,7 +245,12 @@ def _maybe_skill_decision(
             assistant_message,
             assistant_thinking,
             patch=None,
-            text="skill must be the only tool call in the turn",
+            # The same text is stamped on every tool_use of the response, so it
+            # has to read correctly on a neighbour that never ran too.
+            text=(
+                "Nothing in this response ran: skill must be called on its "
+                "own. Re-issue the other calls in a separate response."
+            ),
             valid=False,
         )
 
@@ -281,8 +286,11 @@ def _maybe_skill_decision(
         assistant_message,
         assistant_thinking,
         patch=TaskStatePatch(activate_skills=[name]),
+        # "next step", not "next turn": the instructions are composed into the
+        # very next request of this same turn (CONTEXT.md — one turn is wake →
+        # many steps → park).
         text=f"Skill '{name}' loaded; its instructions will appear in your "
-        f"context from the next turn.",
+        f"context from your next step.",
         valid=True,
     )
 

@@ -189,7 +189,8 @@ class PermissionGuard:
             self._policy.allowed_subtask_agents is not None
             and agent not in self._policy.allowed_subtask_agents
         ):
+            available = ", ".join(sorted(self._policy.allowed_subtask_agents))
             return VerdictResult.deny(
-                f"agent {agent!r} not in subtask allowlist"
+                f"no sub-agent named {agent!r} (available: {available or 'none'})"
             )
         return VerdictResult.allow()

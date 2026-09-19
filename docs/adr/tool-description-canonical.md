@@ -28,9 +28,10 @@ rebuilds the tool set from the recorded request stays byte-identical with it.
 **A first-party description is hand-written LLM-facing text, never a
 docstring.** Both the `Tool` classes and the `@tool` decorator take an explicit
 `description`; nothing auto-pulls `fn.__doc__`. An MCP tool's description comes
-from the remote server, so `McpToolSpec` and `parse_mcp_tool_specs` carry it and
-record it verbatim — a resume reconstructs the tool set from the first recorded
-request without reconnecting, and reproduces the same text.
+from the remote server, so the first recorded request pins it verbatim — the
+audit record of what the run was given. A resume rebuilds the tool set by
+reconnecting the servers the recording names (see the MCP connectors ADR), and
+reproduces the same text as long as the server does.
 
 **The prompt keeps role plus cross-tool working strategy.** The dividing line:
 what a tool *is* goes in its `description`; how this agent *works* across tools

@@ -6,16 +6,19 @@ and want them to reach us privately.
 
 ## Supported versions
 
-Noeta is pre-1.0 (`0.4.0`). Only the latest `main` is supported — fixes land on
-`main`, and there are no backports to older tags or branches. If you're on an
-older checkout, update to `main` before reporting so we're looking at the same
-code.
+Noeta is pre-1.0. Only the latest `main` is supported — fixes land on `main`,
+and there are no backports to older tags or branches. If you're on an older
+checkout, update to `main` before reporting so we're looking at the same code.
 
-| Version        | Supported          |
-| -------------- | ------------------ |
-| latest `main`  | :white_check_mark: |
-| `0.4.0` tag    | best-effort        |
-| anything older | :x:                |
+| Version                        | Supported          |
+| ------------------------------ | ------------------ |
+| latest `main`                  | :white_check_mark: |
+| the most recent published tag  | best-effort        |
+| anything older                 | :x:                |
+
+The released versions are listed in [CHANGELOG.md](CHANGELOG.md); the package
+versions themselves live in `packages/noeta-runtime/pyproject.toml` and
+`packages/noeta-sdk/pyproject.toml`.
 
 ## Reporting a vulnerability
 

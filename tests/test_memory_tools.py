@@ -428,6 +428,152 @@ def test_write_tool_empty_value_in_text_fence_drops_disk_field(
     )
 
 
+def test_write_tool_frontmatter_only_text_keeps_the_body(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The recipe for removing a frontmatter key does not empty the page.
+
+    ``---\\ndue:\\n---`` is text whose BODY is empty, and a wholesale body
+    replacement turned the documented way to drop a field into "delete the
+    note, report success". The body is a field like any other: unmentioned
+    means unchanged.
+    """
+    _pin_today(monkeypatch, "2026-08-01")
+    store = _store(tmp_path)
+    tool = MemoryWriteTool(store=store)
+    assert tool.invoke(
+        {
+            "name": "deploy-notes",
+            "text": "Run make deploy.\nThen smoke-test.",
+            "description": "how we ship",
+            "keywords": "release",
+        },
+        _ctx(),
+    ).success
+    _pin_today(monkeypatch, "2026-08-05")
+
+    result = tool.invoke(
+        {"name": "deploy-notes", "text": "---\ndue:\n---"}, _ctx()
+    )
+
+    assert result.success
+    assert store.read("deploy-notes") == (
+        "---\ndescription: how we ship\nkeywords: release\n"
+        "created: 2026-08-01\nupdated: 2026-08-05\n---\n"
+        "Run make deploy.\nThen smoke-test."
+    )
+    assert result.output["note"] == (
+        "'text' carried only a frontmatter fence, so the fields were "
+        "updated and the existing body kept. To replace the body, send it "
+        "as 'text'."
+    )
+    # A blank / whitespace-only text reads the same way — it too replaces
+    # the body with nothing.
+    assert tool.invoke({"name": "deploy-notes", "text": "   \n"}, _ctx()).success
+    assert (store.read("deploy-notes") or "").endswith(
+        "Run make deploy.\nThen smoke-test."
+    )
+
+
+def test_write_tool_refuses_a_new_memory_with_no_body(tmp_path: Path) -> None:
+    # Nothing to keep, so the write is refused before anything lands — and
+    # the message says what did not happen and what to send instead.
+    store = _store(tmp_path)
+    result = MemoryWriteTool(store=store).invoke(
+        {"name": "ghost", "text": "---\ntype: user\n---\n"}, _ctx()
+    )
+    assert not result.success
+    assert "a new memory needs a body" in result.summary
+    assert store.read("ghost") is None
+
+
+def test_write_tool_empty_params_clear_the_first_class_fields(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Absent keeps, empty removes — for all four param fields.
+
+    Without this the params could only ever SET a field, so removing a
+    description meant hand-writing a fence, which is the recipe that used to
+    eat the body.
+    """
+    _pin_today(monkeypatch)
+    store = _store(tmp_path)
+    tool = MemoryWriteTool(store=store)
+    assert tool.invoke(
+        {
+            "name": "note",
+            "text": "body",
+            "description": "a summary",
+            "type": "project",
+            "keywords": "one, two",
+            "related": ["other-page"],
+        },
+        _ctx(),
+    ).success
+    assert store.read("note") == (
+        "---\ndescription: a summary\ntype: project\nkeywords: one, two\n"
+        "related: other-page\ncreated: 2026-08-05\nupdated: 2026-08-05\n---\n"
+        "body"
+    )
+
+    # Absent: every field survives.
+    assert tool.invoke({"name": "note", "text": "body2"}, _ctx()).success
+    assert "description: a summary" in (store.read("note") or "")
+
+    # Empty: each one goes.
+    assert tool.invoke(
+        {
+            "name": "note",
+            "text": "body3",
+            "description": "",
+            "type": "",
+            "keywords": "",
+            "related": [],
+        },
+        _ctx(),
+    ).success
+    assert store.read("note") == (
+        "---\ncreated: 2026-08-05\nupdated: 2026-08-05\n---\nbody3"
+    )
+    assert store.entries() == (("note", "body3", "", ""),)
+
+
+def test_write_tool_related_is_the_fence_recall_already_reads(
+    tmp_path: Path,
+) -> None:
+    # ``related`` was implemented in recall and documented, with no sanctioned
+    # way for the model to set it (``additionalProperties: False``).
+    store = _store(tmp_path)
+    tool = MemoryWriteTool(store=store)
+    assert "related" in tool.input_schema["properties"]
+    assert tool.invoke(
+        {
+            "name": "rollout-canary",
+            "text": "Ship to one cell first.",
+            "related": ["rollback-steps", "pager-rules", "rollback-steps"],
+        },
+        _ctx(),
+    ).success
+    assert store.related("rollout-canary") == ("rollback-steps", "pager-rules")
+
+
+def test_write_tool_rejects_a_related_name_that_is_not_a_name(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    tool = MemoryWriteTool(store=store)
+    bad = tool.invoke(
+        {"name": "note", "text": "body", "related": ["ok-page", "../up"]},
+        _ctx(),
+    )
+    assert not bad.success
+    assert "invalid 'related' memory name '../up'" in bad.summary
+    assert store.read("note") is None
+    assert not tool.invoke(
+        {"name": "note", "text": "body", "related": "one, two"}, _ctx()
+    ).success
+
+
 def test_write_tool_stamps_source_task_from_runtime_metadata(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -468,7 +614,13 @@ def test_write_tool_new_name_reports_similar_existing(
     )
     assert result.success
     assert result.output["similar"] == ["deploy-process"]
-    assert "consider updating instead" in result.summary
+    # The advisory rides ``output``: on a successful result that is the only
+    # half the model is shown, so a warning written into ``summary`` was a
+    # warning nobody read.
+    assert result.output["note"] == (
+        "Similar existing memory: deploy-process. Update one of those "
+        "rather than keeping a near-duplicate."
+    )
     assert store.read("deploy-pipeline") is not None  # advisory, not a veto
 
 
@@ -538,6 +690,33 @@ def test_read_tool_bounds_oversized_inline_output(tmp_path: Path) -> None:
     assert result.success
     assert result.output["truncated"] is True
     assert len(result.output["text"].encode("utf-8")) <= INLINE_CONTENT_MAX_BYTES
+    # A bare ``truncated: true`` said something was missing without saying
+    # how much or how to reach it: both sizes and the way through now ride
+    # the output.
+    assert result.output["total_bytes"] == INLINE_CONTENT_MAX_BYTES + 10_000
+    assert result.output["bytes"] == len(
+        result.output["text"].encode("utf-8")
+    )
+    assert result.output["note"] == (
+        f"Showing the first {result.output['bytes']} of "
+        f"{result.output['total_bytes']} bytes. Use 'memory_search' to find "
+        f"specific lines in the rest."
+    )
+
+
+def test_read_tool_of_a_page_that_fits_says_nothing_extra(
+    tmp_path: Path,
+) -> None:
+    # Prompt growth is measured: the sizes and the note appear only when
+    # something is actually missing.
+    store = _store(tmp_path)
+    store.write("small", "one line")
+    result = MemoryReadTool(store=store).invoke({"name": "small"}, _ctx())
+    assert result.output == {
+        "name": "small",
+        "text": "one line",
+        "truncated": False,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +766,9 @@ def test_search_tool_caps_memories_and_reports_truncation(
     assert result.success
     assert len(result.output["results"]) == 10  # memory cap, name-sorted
     assert result.output["truncated"] is True
-    assert "12 hit(s), first 10 shown" in result.summary
+    # The count the model sees: ``output``, not ``summary`` — a trimmed
+    # search used to look complete.
+    assert result.output["total"] == 12
 
 
 def test_store_search_never_sees_archived_memories(tmp_path: Path) -> None:
@@ -608,9 +789,9 @@ def test_search_tool_returns_grep_shaped_output(tmp_path: Path) -> None:
     assert result.output == {
         "query": "smoke",
         "results": [{"name": "deploy", "lines": ["then smoke test"]}],
+        "total": 1,
         "truncated": False,
     }
-    assert "1 hit(s)" in result.summary
 
 
 def test_search_tool_zero_hits_is_success_empty_query_is_error(
@@ -619,7 +800,12 @@ def test_search_tool_zero_hits_is_success_empty_query_is_error(
     tool = MemorySearchTool(store=_store(tmp_path))
     result = tool.invoke({"query": "ghost"}, _ctx())
     assert result.success
-    assert result.output == {"query": "ghost", "results": [], "truncated": False}
+    assert result.output == {
+        "query": "ghost",
+        "results": [],
+        "total": 0,
+        "truncated": False,
+    }
     assert not tool.invoke({"query": ""}, _ctx()).success
     assert not tool.invoke({"query": 7}, _ctx()).success
 

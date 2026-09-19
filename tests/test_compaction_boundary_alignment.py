@@ -18,7 +18,11 @@ cannot exercise it — it puts every message in ``dynamic_suffix`` with an empty
 from __future__ import annotations
 
 
-from noeta.context.composer import ThreeSegmentComposer, RenderedContent
+from noeta.context.composer import (
+    _SUMMARY_FRAME,
+    RenderedContent,
+    ThreeSegmentComposer,
+)
 from noeta.builtins.react.impl import ReActPolicy
 from noeta.builtins.react.impl.react import _SUMMARIZE_PROMPT
 
@@ -148,7 +152,11 @@ def test_boundary_indexes_raw_runtime_not_view_projection() -> None:
     # is taken with ``summary_boundary`` and the fresh boundary, never with an
     # iter_messages() index. The fake provider records what it saw.
     summarize_req = provider.received_requests[0]
-    assert summarize_req.messages[0].content[0].text == "earlier summary"
+    # The composer frames the note at compose time, so the previous-summary
+    # message the policy hands back carries the frame ahead of the body.
+    assert summarize_req.messages[0].content[0].text == (
+        f"{_SUMMARY_FRAME}\n\nearlier summary"
+    )
     assert summarize_req.messages[1:-1] == list(
         task.runtime.messages[4:boundary]
     )
@@ -169,7 +177,9 @@ def test_boundary_indexes_raw_runtime_not_view_projection() -> None:
     dynamic_after = composer._apply_summary(task)
     # First message is the single summary; the rest is raw_runtime[boundary:].
     assert dynamic_after[1:] == list(task.runtime.messages[boundary:])
-    assert dynamic_after[0].content[0].text == "fresh summary"
+    assert dynamic_after[0].content[0].text == (
+        f"{_SUMMARY_FRAME}\n\nfresh summary"
+    )
 
 
 def test_boundary_protects_the_tail_window() -> None:

@@ -152,9 +152,13 @@ client.send_goal(outcome.task_id, goal="Now add a test for it.")
 ```
 
 A gated tool call suspends on `approval-{call_id}`; a gated `finish` or spawn
-uses `approval-finish-{task_id}` / `approval-spawn-{task_id}` instead. Read the
+uses `approval-finish-{task_id}` / `approval-spawn-{task_id}` instead, whose
+`call_id` is the reserved `finish-{task_id}` / `spawn-{task_id}`. Read the
 `call_id` off the `ToolCallApprovalRequested` event in `client.events(task_id)`
-rather than parsing the handle.
+rather than parsing the handle; `approve` / `deny` take it verbatim whichever
+kind it is. Approving a gated decision proceeds with the answer or the
+delegation the human reviewed — the model is not asked again; denying returns
+the refusal to the model and the turn continues.
 
 ## Seed / drive split
 

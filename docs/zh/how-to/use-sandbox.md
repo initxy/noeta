@@ -142,7 +142,7 @@ host_config = HostConfig(
 
 - **fs 工具** —— `Read`、`Write`、`Edit`、`Glob`、`Grep`
 - **前台 shell** —— `Bash`（后台 shell 在 host 侧，在容器下会被拒绝）
-- **网络出口** —— `WebFetch` / `WebSearch` 经由容器内的 `curl` 出去
+- **网络出口** —— `WebFetch` / `WebSearch` 经由容器内的 `curl` 出去。所以出网边界就是容器自己的网络策略。一次抓取要不要人点头，则是宿主这边按 URL 的主机判的——见 [WebFetch 能打到哪里](../reference/tools.md#webfetch-能打到哪里)
 - **skill 索引** —— `tree_snapshot` 把整次遍历打包成一次往返
 - **浏览器工具** —— `browser_navigate`、`browser_click`、…… 经由 `BrowserBackend` 线
 

@@ -1,4 +1,4 @@
-"""The three built-in compose-time reminder renders.
+"""The two built-in compose-time reminder renders.
 
 Each render is a pure function of the narrow
 :class:`~noeta.context.reminders.ReminderView` projection — no clock, no
@@ -18,7 +18,6 @@ __all__ = [
     "BUILTIN_REMINDER_PRIORITIES",
     "default_reminder_specs",
     "todo_reminder",
-    "delegation_reminder",
     "read_suggestion_reminder",
 ]
 
@@ -49,22 +48,6 @@ def todo_reminder(view: ReminderView) -> Optional[str]:
     )
 
 
-def delegation_reminder(view: ReminderView) -> Optional[str]:
-    """Just-in-time fan-out nudge while delegation is offered and unused.
-
-    Live only while ``delegation_enabled`` and no ``Task`` spawn has landed
-    yet, so it stops nudging the moment the first sub-agent is spawned.
-    """
-    if not view.delegation_enabled or view.already_spawned:
-        return None
-    return (
-        "When you delegate independent work to sub-agents, emit ALL the "
-        "Task calls in ONE assistant turn so they run concurrently and the "
-        "results return together. Issuing one Task per turn is sequential, "
-        "not parallel."
-    )
-
-
 def read_suggestion_reminder(view: ReminderView) -> Optional[str]:
     """Suggest a different read strategy while compaction is thrashing.
 
@@ -82,18 +65,21 @@ def read_suggestion_reminder(view: ReminderView) -> Optional[str]:
     )
 
 
-#: Name -> priority, chosen so the composed order is todo -> delegation ->
-#: read and spread by 100 so third-party reminders can interleave. The manifest
-#: declarations must carry the same numbers.
+#: Name -> priority, chosen so the composed order is todo -> read and spread
+#: by 100 so third-party reminders can interleave. The manifest declarations
+#: must carry the same numbers. Band 200 is free: it belonged to
+#: ``delegation-nudge``, which fired on every step of every task until the
+#: first spawn to repeat what main rule 10 and the ``Task`` description
+#: already say, and was removed rather than renumbered so the two surviving
+#: bands keep their positions.
 BUILTIN_REMINDER_PRIORITIES: dict[str, int] = {
     "unfinished-todos": 100,
-    "delegation-nudge": 200,
     "read-suggestion": 300,
 }
 
 
 def default_reminder_specs() -> tuple[ReminderSpec, ...]:
-    """The three built-in reminders as specs — the impl-side equivalent of
+    """The two built-in reminders as specs — the impl-side equivalent of
     resolving the manifest, for a caller that already holds this module.
     """
     return (
@@ -101,11 +87,6 @@ def default_reminder_specs() -> tuple[ReminderSpec, ...]:
             "unfinished-todos",
             BUILTIN_REMINDER_PRIORITIES["unfinished-todos"],
             todo_reminder,
-        ),
-        ReminderSpec(
-            "delegation-nudge",
-            BUILTIN_REMINDER_PRIORITIES["delegation-nudge"],
-            delegation_reminder,
         ),
         ReminderSpec(
             "read-suggestion",

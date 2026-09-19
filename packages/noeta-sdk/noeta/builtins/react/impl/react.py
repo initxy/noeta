@@ -83,6 +83,7 @@ from noeta.protocols.messages import (
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
+    is_host_injected,
 )
 from noeta.protocols.resources import load_markdown
 from noeta.protocols.step_context import StepContext
@@ -111,7 +112,9 @@ __all__ = [
 #: beside this module. It rides the summarize request TWICE — as the request's
 #: ``system`` and as a trailing ``user`` turn (see
 #: :meth:`ReActPolicy._summary_prompt_request` for why). Its closing HARD RULE
-#: is the model-facing half of the verbatim rule: the deterministic post-check
+#: is the model-facing half of the verbatim rule, restricted to constraints the
+#: user or the system stated (never one found in a tool result): the
+#: deterministic post-check
 #: (:func:`enforce_verbatim_constraints`) is the actual guarantee; the prompt
 #: nudges the model so the common case produces a clean summary without the
 #: appended block.
@@ -567,13 +570,13 @@ class ReActPolicy:
 
         A fixed structured-section instruction over the
         history-to-be-collapsed. The sections are adopted from Claude Code's
-        compaction template but trimmed to a durable subset: Noeta only ever
-        summarises the OLD PREFIX (everything before the protected verbatim tail
-        window), so the recent state already sits verbatim in that tail.
-        Asking the summary to also restate Current Work / Next Step would make
-        the model re-narrate text already present word-for-word — wasteful and
-        prone to disagree with the tail — so those two sections are deliberately
-        DROPPED (left to the tail).
+        compaction template. Noeta only ever summarises the OLD PREFIX
+        (everything before the protected verbatim tail window), so the recent
+        state already sits verbatim in that tail — which is why Current Work
+        and Next Step (sections 8 and 9) are the two the instruction has the
+        model REWRITE from the newest messages rather than carry forward from
+        an earlier note: an earlier note's version of them describes a moment
+        the tail has already moved past (see ``summarize.md``).
 
         The "Files & Code" section keeps a PATH LIST only, never the file
         bodies. Re-injecting bodies is a false need here: re-reading disk breaks
@@ -1263,8 +1266,9 @@ def extract_safety_constraints(messages: list[Message]) -> list[str]:
 
     A "don't touch this file" / "do not touch X" instruction must keep
     binding the session after its turn is collapsed into a compaction summary.
-    This is the detector — it walks every ``TextBlock`` of every message, splits
-    on newlines, and keeps each line whose text contains a constraint trigger
+    This is the detector — it walks every ``TextBlock`` of every message the
+    model did not write, splits on newlines, and keeps each line whose text
+    contains a constraint trigger
     (:data:`_CONSTRAINT_TRIGGERS`), STRIPPED of surrounding whitespace and of a
     leading list bullet (:data:`_BULLET_PREFIXES`) but otherwise verbatim (so
     the exact wording — including the path it protects — is preserved for
@@ -1275,10 +1279,24 @@ def extract_safety_constraints(messages: list[Message]) -> list[str]:
     duplicates are dropped so a constraint repeated across turns is re-injected
     only once. The summary post-check (:func:`enforce_verbatim_constraints`) and
     the model-facing prompt rule both build on this single detector.
+
+    Source-restricted, like the prompt rule: a ``ToolResultBlock`` is never
+    read, neither is an ``assistant`` message, and neither is a HOST-INJECTED
+    turn (:func:`is_host_injected` — ``origin`` ``"system"`` / ``"memory"``).
+    The model restating a "never edit Y" it found in a web page must not turn
+    that text into a constraint that outlives every compaction, and neither
+    must a background job's stdout, a sub-agent's notice, an attachment or a
+    recalled memory body — all of which stand in for text from elsewhere while
+    riding the user channel. A constraint the user stated is detected in the
+    user's own message (``origin`` ``None`` / ``"human"``), and the compaction
+    summary re-enters with ``origin`` UNSET, so a constraint preserved once
+    survives every later compaction.
     """
     seen: set[str] = set()
     out: list[str] = []
     for msg in messages:
+        if msg.role == "assistant" or is_host_injected(msg):
+            continue
         for block in msg.content:
             if not isinstance(block, TextBlock):
                 continue

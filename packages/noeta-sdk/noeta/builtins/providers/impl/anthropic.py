@@ -53,6 +53,7 @@ from noeta.protocols.values import ContentRef
 from noeta.builtins.providers.impl import catalog
 from noeta.builtins.providers.impl._sse import iter_sse_events
 from noeta.builtins.providers.impl.codecs import (
+    neutralize_reserved_tags,
     parse_retry_after,
     render_tool_result_body,
 )
@@ -652,8 +653,15 @@ def _flatten_text_blocks(message: Message) -> str:
 
 
 def _wrap_system_reminder(text: str) -> str:
-    """Anthropic-only tag syntax; it lives here so it never enters the ledger."""
-    return f"<system-reminder>\n{text}\n</system-reminder>"
+    """Anthropic-only tag syntax; it lives here so it never enters the ledger.
+
+    The wrapped text is neutralised first: several host-authored turns stand in
+    for text produced elsewhere (a background job's stdout, a sub-agent's
+    answer, an attachment, a recalled memory body), and this wrapper is the
+    only thing allowed to open or close the turn."""
+    return (
+        f"<system-reminder>\n{neutralize_reserved_tags(text)}\n</system-reminder>"
+    )
 
 
 def _message_to_anthropic(

@@ -15,6 +15,7 @@ import dataclasses
 import functools
 import logging
 import threading
+import warnings
 import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -84,7 +85,13 @@ from noeta.client.parts import (
 )
 from noeta.client.consolidation import CONSOLIDATION_AGENT_NAME
 from noeta.client.host_config import SandboxExecEnvConfig
+from noeta.client.plugins import is_trusted
 from noeta.client.skill_usage import SkillUsageRanker
+from noeta.client.webfetch_policy import (
+    host_in_allowlist,
+    normalize_allowed_hosts,
+    url_host,
+)
 from noeta.client.sandbox import (
     BackendFactory,
     BrowserBackendFactory,
@@ -101,11 +108,12 @@ from noeta.runtime.shell_policy import (
     build_allowlist,
     command_in_allowlist,
     load_project_shell_allowlist,
+    project_shell_allowlist_path,
 )
 from noeta.runtime.mcp import HttpPostFn, McpAnyServerSpec
 
 
-__all__ = ["SdkHost"]
+__all__ = ["SdkHost", "UntrustedProjectShellAllowlistWarning"]
 
 _log = logging.getLogger(__name__)
 
@@ -129,6 +137,35 @@ _MCP_STREAM_NOTE_SLOT = "mcp.stream_note"
 #: module-level set so tests and permission-mode logic refer to the same list.
 _EDIT_TOOL_NAMES: frozenset[str] = frozenset({"Edit", "Write"})
 
+#: The two admissible :attr:`SdkHost.project_shell_allowlist_trust` values,
+#: spelled like the skills pack's ``workspace_skills_trust``. Anything else
+#: raises: a fail-open typo on a security knob must not read as "open".
+_PROJECT_SHELL_TRUST_MODES = ("open", "trust-store")
+
+
+class UntrustedProjectShellAllowlistWarning(UserWarning):
+    """A workspace's ``.noeta/shell-allowlist.json`` was ignored: not trusted.
+
+    Carries ``workspace_dir`` (the trust subject — the HOST-side path an
+    operator would ``grant_trust``, never a container mount point) and ``path``
+    (the file whose rules were dropped) as attributes, so a host can consume
+    them without parsing the message. Mirrors the plugin loader's
+    ``UntrustedPluginDirWarning`` and the skills pack's
+    ``UntrustedWorkspaceSkillsWarning``; the host raises it once per workspace
+    (the gate re-runs on every per-turn Engine build), so an interactive host
+    that wants a per-session prompt calls ``is_trusted`` itself.
+    """
+
+    def __init__(self, workspace_dir: Path, path: Path, rule_count: int) -> None:
+        self.workspace_dir = workspace_dir
+        self.path = path
+        self.rule_count = rule_count
+        super().__init__(
+            f"workspace {workspace_dir} is not trusted; ignoring the "
+            f"{rule_count} shell rule(s) in {path} — those commands still need "
+            "approval (grant_trust the workspace to honour the file)"
+        )
+
 
 def _make_shell_approval_predicate(
     rules: tuple[Any, ...],
@@ -147,6 +184,56 @@ def _make_shell_approval_predicate(
         if not isinstance(command, str) or not command.strip():
             return True
         return not command_in_allowlist(command, rules)
+
+    return _needs_approval
+
+
+def _make_webfetch_approval_predicate(
+    allowed_hosts: tuple[str, ...],
+) -> Callable[[str, Mapping[str, Any]], bool]:
+    """Build the per-call web gate: ``True`` ⇒ this ``WebFetch`` needs approval.
+
+    The twin of :func:`_make_shell_approval_predicate`, for the other argument
+    a model fully controls. A fetch whose URL names a host in ``allowed_hosts``
+    (the operator's own list) runs silently; every other host — and a URL that
+    names no host at all — is gated. ``WebFetch`` therefore keeps
+    ``risk_level="low"``: raising the grade would prompt on every fetch with no
+    way to open one, and would churn the recorded risk of a tool whose reach is
+    a matter of deployment, not of the tool.
+
+    Judged on the URL's REAL host, so ``https://listed.example@evil.test/`` is
+    judged as ``evil.test``; a cross-host redirect is handed back to the model
+    to re-issue, and that second call arrives here like any other.
+    """
+
+    def _needs_approval(tool_name: str, arguments: Mapping[str, Any]) -> bool:
+        if tool_name != "WebFetch":
+            return False
+        url = arguments.get("url")
+        if not isinstance(url, str) or not url.strip():
+            return True
+        return not host_in_allowlist(url_host(url), allowed_hosts)
+
+    return _needs_approval
+
+
+def _combine_approval_predicates(
+    predicates: Sequence[Callable[[str, Mapping[str, Any]], bool]],
+) -> Optional[Callable[[str, Mapping[str, Any]], bool]]:
+    """OR the per-call gates into the single ``conditional_approval`` slot.
+
+    ``PermissionPolicy`` holds one per-call predicate, and each gate here
+    answers for its own tool and returns ``False`` for every other, so "any of
+    them asks" is the whole composition. ``None`` when nothing gates — the
+    value a session that bypasses permissions passes.
+    """
+    if not predicates:
+        return None
+    if len(predicates) == 1:
+        return predicates[0]
+
+    def _needs_approval(tool_name: str, arguments: Mapping[str, Any]) -> bool:
+        return any(gate(tool_name, arguments) for gate in predicates)
 
     return _needs_approval
 
@@ -236,6 +323,20 @@ def skill_menu_budget_tokens(model: str) -> int:
     catalog context window (an uncatalogued model takes the catalog's
     conservative window, with the same one-time warning compaction logs).
     Deterministic in ``model``, so live and resume derive the same roster."""
+    window = derive_compaction_config(model).context_window
+    if not window:
+        window = _SKILL_MENU_FALLBACK_WINDOW
+    return max(1, int(window * SKILL_MENU_BUDGET_FRACTION))
+
+
+def memory_index_budget_tokens(model: str) -> int:
+    """The ``memory`` pack's ``index_budget_tokens`` for ``model``.
+
+    The same derivation and the same 1 % share as
+    :func:`skill_menu_budget_tokens`, for the same reason: both are resident
+    material in the cached head of every request, and a store's page count is
+    no more the model's to pay unbounded than a workspace's skill count is.
+    Deterministic in ``model``, so live and resume render the same index."""
     window = derive_compaction_config(model).context_window
     if not window:
         window = _SKILL_MENU_FALLBACK_WINDOW
@@ -372,6 +473,18 @@ class SdkHost(GenericEngineResolver):
     # built-in defaults only (git/pytest/npm test etc.). Effective only when
     # shell_mode=ALLOWLIST; ignored under ARBITRARY/OFF.
     shell_allowlist: Sequence[Mapping[str, Any]] = ()
+    # Trust gate for the workspace's OWN rules file
+    # (``<workspace>/.noeta/shell-allowlist.json``). Unlike the operator rules
+    # above, that file is repository content — a cloned repo can carry one, and
+    # every rule in it exempts a program from per-call approval. ``"trust-store"``
+    # (the default) loads it only when the HOST-side workspace path is recorded
+    # in the plugin trust store; ``"open"`` always loads it. Any other value
+    # raises in ``__post_init__``.
+    project_shell_allowlist_trust: str = "trust-store"
+    # Trust-store path for that gate — the same store ``load_plugins`` consults
+    # for workspace plugin directories, so one ``grant_trust`` covers both.
+    # ``None`` ⇒ ``~/.noeta/trust.json`` (``DEFAULT_TRUST_STORE``).
+    trust_store: Optional[Path] = None
     # Per-session background-job concurrency cap. Over the cap, ``ProcessRegistry``
     # **rejects** (does not queue) a ``shell_run(background)`` spawn. Injected into
     # the process registry built in ``__post_init__`` below.
@@ -438,6 +551,11 @@ class SdkHost(GenericEngineResolver):
     # reaches the memory pack as ``plugin_config["memory"]["max_bytes"]``.
     # ``None`` ⇒ no cap.
     memory_max_bytes: Optional[int] = None
+    # Rendered-memory-index budget in estimated tokens
+    # (``HostConfig.memory_index_budget_tokens``); reaches the memory pack as
+    # ``plugin_config["memory"]["index_budget_tokens"]``. ``None`` ⇒ derived
+    # from the bound model's window, like the skill roster's.
+    memory_index_budget_tokens: Optional[int] = None
     # Per-task keep order for the ``skill`` control tool's roster (task id →
     # ``{skill: score}`` or ``None``): the same tenancy seam and contract as
     # ``memory_root_resolver`` (cheap, total, deterministic per task id — a
@@ -554,6 +672,13 @@ class SdkHost(GenericEngineResolver):
     # model; None keeps the digest on the session's main model. Served by the
     # session's own provider either way.
     webfetch_model: Optional[str] = None
+    # Hosts ``WebFetch`` may reach without asking a human
+    # (``HostConfig.webfetch_allowed_hosts``): ``"example.com"`` exactly, or
+    # ``"*.example.com"`` for its subdomains. Operator configuration, trusted
+    # like ``shell_allowlist``. Under a gating permission mode every other host
+    # — intranet or public — routes the call through per-call approval;
+    # ``bypassPermissions`` gates nothing. Validated in ``__post_init__``.
+    webfetch_allowed_hosts: Sequence[str] = ()
     # Positive int or None; engine-level inline char cap for tool output. None = no
     # truncation. A resumed session must reuse the value the original run used, or
     # it re-derives different tool-output bytes.
@@ -830,6 +955,27 @@ class SdkHost(GenericEngineResolver):
         repr=False,
         compare=False,
     )
+    # Trust subjects already warned about for the project shell rules file. The
+    # gate runs on every per-turn Engine build, so without this every turn of an
+    # untrusted workspace would warn again. A per-host accelerator like
+    # ``_file_checkpoint`` — never written to the event log. Two concurrent
+    # first builds of the same workspace can both warn; harmless.
+    _untrusted_shell_workspaces: set[str] = field(
+        default_factory=set,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    # ``webfetch_allowed_hosts``, validated and normalised once in
+    # ``__post_init__`` (lowercased, IDNA, trailing root dot dropped) so the
+    # per-turn predicate compares like against like instead of re-parsing the
+    # operator's spelling on every call.
+    _webfetch_hosts: tuple[str, ...] = field(
+        default=(),
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         """Fold the single-provider convenience field into a ``providers`` table.
@@ -864,6 +1010,13 @@ class SdkHost(GenericEngineResolver):
                 f"SdkHost: default_provider {self.default_provider!r} is not a "
                 f"key of the providers registry {sorted(self.providers)!r}"
             )
+        if self.project_shell_allowlist_trust not in _PROJECT_SHELL_TRUST_MODES:
+            raise ValueError(
+                f"SdkHost: unknown project_shell_allowlist_trust "
+                f"{self.project_shell_allowlist_trust!r}; expected one of "
+                f"{_PROJECT_SHELL_TRUST_MODES}"
+            )
+        self._webfetch_hosts = normalize_allowed_hosts(self.webfetch_allowed_hosts)
         if self.skill_menu_rank_resolver is not None and "menu_rank" in (
             self.plugin_config_overrides.get("skills") or {}
         ):
@@ -1360,15 +1513,40 @@ class SdkHost(GenericEngineResolver):
         """Compare this build's ``(servers, skipped)`` with the last build's
         for ``task_id`` (kept in the task's local slot); return
         ``(emit provenance?, aliases newly skipped)`` and remember this build.
-        First sighting — the task's first build in this process — emits
-        provenance and every skip."""
+        First sighting — the task's first build in this process — compares
+        against the stream's own last record instead, so a Task resumed here
+        (a restart, a daemon worker, another machine) that reconnects the same
+        servers adds no duplicate provenance; a first sighting with nothing
+        recorded emits. Every skip is reported on a first sighting: a new
+        process has surfaced no outage yet."""
         note = self._task_locals.slot(task_id, _MCP_STREAM_NOTE_SLOT, dict)
         previous = note.get("last")
         note["last"] = (servers, skipped)
         if previous is None:
-            return True, skipped
+            recorded = self._recorded_mcp_servers(task_id)
+            return recorded is None or servers != recorded, skipped
         prev_servers, prev_skipped = previous
         return servers != prev_servers, skipped - prev_skipped
+
+    def _recorded_mcp_servers(
+        self, task_id: str
+    ) -> Optional[tuple[tuple[str, tuple[str, ...]], ...]]:
+        """The aliases + ticked tools the Task's LAST durable
+        ``McpProvenanceRecorded`` carries, in :meth:`_note_mcp_stream`'s
+        comparison shape; ``None`` when the stream records none. Read once per
+        task per process — only on a build that actually connected servers."""
+        recorded: Optional[tuple[tuple[str, tuple[str, ...]], ...]] = None
+        for env in self.event_log.read(task_id):
+            if env.type != "McpProvenanceRecorded":
+                continue
+            servers = getattr(env.payload, "servers", None)
+            if isinstance(servers, list):
+                recorded = tuple(
+                    (str(row.get("alias")), tuple(row.get("tools") or ()))
+                    for row in servers
+                    if isinstance(row, dict)
+                )
+        return recorded
 
     def _mcp_scope_override(self, task_id: Optional[str]) -> Optional[str]:
         """The MCP pool scope ``task_id``'s connections live in, or ``None``
@@ -1418,8 +1596,14 @@ class SdkHost(GenericEngineResolver):
         Returns ``None`` when no live MCP tools resulted — empty aliases, no
         resolver wired, no alias resolved to a spec, OR every server was skipped —
         so the caller passes ``None`` as ``mcp_tools_override`` and the builder
-        merges no MCP tools (resume passes empty aliases and so never reaches here).
-        A returned dict takes the live override path.
+        merges no MCP tools. A returned dict takes the live override path.
+
+        A resume in another process reaches here too: with no per-turn carrier
+        the resolver passes the aliases the Task's durable provenance recorded
+        (``_recorded_mcp_aliases``), and they connect exactly as a turn-open
+        build's do — same resolver, same pool, same scope. Reconnecting is
+        what makes the rebuilt tools callable; a schema alone cannot execute
+        the call an approval resumes into.
         """
         resolver = self.mcp_server_resolver
         if not mcp_aliases or resolver is None:
@@ -1504,6 +1688,52 @@ class SdkHost(GenericEngineResolver):
         if leases:
             weakref.finalize(engine, self._mcp_pool_get().release_all, leases)
         return engine
+
+    def _project_shell_rules(
+        self,
+        workspace_dir: Path,
+        trust_subject: Path,
+        *,
+        exec_env: Optional[ExecEnv],
+    ) -> tuple[dict[str, Any], ...]:
+        """The workspace's ``.noeta/shell-allowlist.json`` rules, trust-gated.
+
+        The file is **repository content**: a cloned repo can ship one, and each
+        rule it names exempts that program — with any tail args — from per-call
+        approval. So it loads only when the workspace is trusted, the same
+        decision the workspace plugin directories and the workspace skill tiers
+        take, on the same store: one ``grant_trust`` covers all three. Untrusted
+        ⇒ no rules and one :class:`UntrustedProjectShellAllowlistWarning` per
+        workspace (the build runs every turn). ``project_shell_allowlist_trust
+        = "open"`` restores the ungated load for a host that wants it.
+
+        ``trust_subject`` is the HOST-side workspace path, captured before any
+        sandbox substitution: in sandbox mode ``workspace_dir`` is the container
+        workdir every session shares, so gating on it would collapse per-repo
+        trust into a global on/off. The file itself is still READ through
+        ``exec_env``, because that is where it lives.
+
+        The rules are loaded before the gate decides so the warning can say how
+        many were dropped and stay silent when there is no file at all —
+        reading a JSON config is not running it.
+        """
+        specs = load_project_shell_allowlist(workspace_dir, exec_env=exec_env)
+        if not specs or self.project_shell_allowlist_trust != "trust-store":
+            return specs
+        if is_trusted(trust_subject, self.trust_store):
+            return specs
+        key = str(trust_subject)
+        if key not in self._untrusted_shell_workspaces:
+            self._untrusted_shell_workspaces.add(key)
+            warnings.warn(
+                UntrustedProjectShellAllowlistWarning(
+                    trust_subject,
+                    project_shell_allowlist_path(workspace_dir),
+                    len(specs),
+                ),
+                stacklevel=2,
+            )
+        return ()
 
     def _assemble_engine(
         self,
@@ -1600,7 +1830,8 @@ class SdkHost(GenericEngineResolver):
         #   * default / acceptEdits -> the tool runs ARBITRARY (no self-refusal)
         #     and a per-call predicate gates it: a command in the EFFECTIVE
         #     allowlist (built-in + host config + this project's remembered
-        #     rules) runs silently; an unknown one routes through HITL approval.
+        #     rules, the last only when the workspace is trusted) runs silently;
+        #     an unknown one routes through HITL approval.
         #   * shell_mode OFF stays off (tool absent) regardless of permission.
         effective_permission = (
             permission_mode if permission_mode is not None else self.permission_mode
@@ -1614,11 +1845,10 @@ class SdkHost(GenericEngineResolver):
             if effective_permission != "bypassPermissions":
                 effective_rules = build_allowlist(
                     tuple(self.shell_allowlist)
-                    # Sandbox mode reads the project allowlist from INSIDE the
-                    # container (``workspace_dir`` is the container workdir here);
-                    # ``bound_exec_env`` is ``None`` on the local path.
-                    + load_project_shell_allowlist(
-                        workspace_dir, exec_env=bound_exec_env
+                    # The project's own rules file — repo content, so it is
+                    # trust-gated (``bypassPermissions`` never reads it at all).
+                    + self._project_shell_rules(
+                        workspace_dir, trust_subject, exec_env=bound_exec_env
                     ),
                     # The curated base is the fs built-in's table — the same rules
                     # the Bash tool enforces.
@@ -1642,6 +1872,23 @@ class SdkHost(GenericEngineResolver):
             require_approval_tools = tuple(require_approval_tools) + tuple(
                 n for n in browser_tool_names() if n not in require_approval_tools
             )
+        # WebFetch's egress gate, on the same per-call footing as Bash's: the
+        # operator's ``webfetch_allowed_hosts`` runs silently, every other host
+        # asks a human. Per call rather than by risk grade so a listed host
+        # stays prompt-free and the recorded tool descriptor is unchanged.
+        # ``bypassPermissions`` gates nothing.
+        webfetch_approval_predicate = (
+            _make_webfetch_approval_predicate(self._webfetch_hosts)
+            if effective_permission != "bypassPermissions"
+            else None
+        )
+        conditional_approval = _combine_approval_predicates(
+            [
+                gate
+                for gate in (shell_approval_predicate, webfetch_approval_predicate)
+                if gate is not None
+            ]
+        )
         directory = (
             self._subagent_directory(allowed_subtask_agents)
             if delegation_enabled
@@ -1655,9 +1902,9 @@ class SdkHost(GenericEngineResolver):
         # ``mcp_server_resolver`` (the SDK never holds the config store). ``()``
         # aliases / ``None`` resolver ⇒ ``build_mcp_tools(())`` builds nothing. The
         # connections come from the host pool and are leased to this Engine for
-        # its turn (``mcp_leases``). Resume stays reconnect-free: the recorded
-        # tool spec is the durable truth, and the resume path passes empty
-        # aliases.
+        # its turn (``mcp_leases``). A resume in another process arrives with
+        # the aliases its durable provenance recorded and connects the same
+        # way — the tools have to be live to be callable.
         mcp_tools_override = self._resolve_live_mcp_tools(
             mcp_aliases, task_id=task_id, leases=mcp_leases
         )
@@ -1709,7 +1956,11 @@ class SdkHost(GenericEngineResolver):
             max_steps=self.max_steps,
             # The write/shell safety inputs ride ``plugin_config["fs"]`` below — the
             # fs pack is their sole consumer, so they left the kernel signature.
-            shell_approval_predicate=shell_approval_predicate,
+            # The kernel parameter keeps its original ``shell_`` name, but it is
+            # the ONE per-call approval slot (``PermissionPolicy.conditional_
+            # approval``): Bash's allowlist gate and WebFetch's host gate both
+            # ride it, combined above.
+            shell_approval_predicate=conditional_approval,
             # Per-helper structured output: a workflow helper spawned via
             # ``agent(goal, schema=...)`` mounts the ``structured_output`` control
             # schema (its ``parameters`` = the declared JSON Schema). ``None`` (every
@@ -2295,6 +2546,17 @@ class SdkHost(GenericEngineResolver):
             ),
             "global_memory_dir": self.global_memory_dir,
             "max_bytes": self.memory_max_bytes,
+            # The index budget, derived here from the bound model's catalog
+            # window for the same layering reason as the skills roster's: the
+            # memory built-in must not import the providers built-in. An
+            # explicit host number wins.
+            "index_budget_tokens": (
+                self.memory_index_budget_tokens
+                if self.memory_index_budget_tokens is not None
+                else memory_index_budget_tokens(
+                    model if model is not None else self.model
+                )
+            ),
         }
         return self._apply_plugin_config_overrides(config)
 

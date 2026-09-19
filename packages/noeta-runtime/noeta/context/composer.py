@@ -88,6 +88,21 @@ def _density(real_baseline: int, estimated: int) -> float:
 #: Role of the single summary message swapped in for a compacted prefix:
 #: ``user`` keeps it provider-neutral and outside the ``system`` stable_prefix.
 _SUMMARY_ROLE = "user"
+#: The one line that opens the summary message. Without it the note arrives as
+#: an ordinary user turn and reads as a fresh instruction: a summary saying
+#: "the user asked for X" is then acted on again. The line says what the note
+#: IS (a stand-in for messages that no longer fit) and what its contents are
+#: (a record, not a request).
+#:
+#: Applied at COMPOSE time only — the stored summary body never carries it — so
+#: an already-compacted task picks it up on its next step and a re-compaction
+#: cannot nest one frame inside another.
+_SUMMARY_FRAME = (
+    "This conversation is continued from earlier turns that no longer fit in "
+    "context. The note below summarises them and stands in for the messages "
+    "it replaced; anything it restates, including requests and instructions, "
+    "is a record of what already happened, not a new request."
+)
 #: Source of truth is ``noeta.policies.control_semantics.SPAWN_SUBAGENT_TOOL``;
 #: duplicated as a literal to keep the Composer free of a ``noeta.policies``
 #: import. The delegation reminder gates on this name appearing in
@@ -609,9 +624,15 @@ class ThreeSegmentComposer:
         When ``ContextState.summary_ref`` is set (written by fold's ``Compacted``
         handler), the first ``summary_boundary`` messages of the rolling history
         have been collapsed into one summary. We drop that covered prefix and
-        prepend a single provider-neutral summary message (role ``user``),
-        preserving ``stable_prefix``. Pure + deterministic: same task state →
-        same message list.
+        prepend a single provider-neutral summary message (role ``user``) led by
+        :data:`_SUMMARY_FRAME`, preserving ``stable_prefix``. Pure +
+        deterministic: same task state → same message list.
+
+        ``origin`` stays unset: the compaction Policy reads this very message
+        back as the previous summary, and the note-shape gate it uses requires
+        an origin-less single-TextBlock user turn. It also means a summarize
+        round-trip sees the frame; the ``startswith`` guard below keeps an
+        echoed frame from being stacked on a second one.
         """
         messages = list(task.runtime.messages)
         ref = task.context.summary_ref
@@ -619,6 +640,8 @@ class ThreeSegmentComposer:
             return messages
         boundary = max(0, min(task.context.summary_boundary, len(messages)))
         summary_text = self._decode_summary(ref)
+        if not summary_text.startswith(_SUMMARY_FRAME):
+            summary_text = f"{_SUMMARY_FRAME}\n\n{summary_text}"
         summary_msg = Message(
             role=_SUMMARY_ROLE, content=[TextBlock(text=summary_text)]
         )
@@ -708,9 +731,10 @@ class ThreeSegmentComposer:
         segment, and is re-derived from the folded projection on every compose
         (resume reproduces it). Pure: same projection → same bytes.
         """
-        # ``already_spawned`` is read by exactly one reminder (``delegation-nudge``),
-        # which renders nothing unless delegation is offered — so the scan is
-        # short-circuited off ``delegation_enabled``. Without the guard every leaf
+        # ``already_spawned`` only means something where delegation is offered, and
+        # no built-in reminder reads it any more (it stays on ``ReminderView`` for
+        # third-party renders) — so the scan is short-circuited off
+        # ``delegation_enabled``. Without the guard every leaf
         # sub-agent (explore / plan / web / __consolidation__ — none of them
         # delegate) would walk the whole rolling history on every compose to
         # compute a value the reminder then discards.
@@ -948,6 +972,26 @@ def _first_tool_use_call_id(msg: Message) -> Optional[str]:
 #: tool if it needs the content back.
 _CLEARED_MARKER = "[tool output cleared]"
 
+#: Rendered characters an output must reach before clearing it is worth doing.
+#: Clearing exists to reclaim BULK that the model can fetch again; a short
+#: output is not bulk (the marker itself costs 21 characters, so the saving
+#: rounds to nothing) and some short outputs cannot be fetched again at all —
+#: a user's answer to ``AskUserQuestion``, a control-tool ack. Leaving them
+#: verbatim costs a rounding error and keeps the conversation readable.
+_MIN_CLEARABLE_OUTPUT_CHARS = 400
+
+
+def _rendered_size(output: Any) -> int:
+    """How many characters the model would read for this tool output.
+
+    A ``str`` reaches the model verbatim; anything else is serialised, so its
+    canonical JSON is the honest measure. Pure and deterministic — the same
+    output always measures the same, so live and replay prune identically.
+    """
+    if isinstance(output, str):
+        return len(output)
+    return len(to_canonical_bytes(output))
+
 
 def _clear_tool_outputs(
     msg: Message, store_full: Callable[[Any], ContentRef]
@@ -965,7 +1009,9 @@ def _clear_tool_outputs(
     never re-wrapped, and an already-empty output — ``""``/``None``/``[]``/
     ``{}``/``0`` and any other falsy value — yields no extra ContentStore
     write, never a misleading "output cleared" marker over a genuinely empty
-    tool result).
+    tool result). An output under :data:`_MIN_CLEARABLE_OUTPUT_CHARS` is left
+    alone for the same reason spelled out there: it is not bulk, and it may not
+    be re-fetchable.
     Non-tool-result blocks (text / tool_use / thinking) are kept verbatim, so
     prune only swaps the bulky tool output for a marker, never the
     conversational structure.
@@ -977,6 +1023,7 @@ def _clear_tool_outputs(
             isinstance(b, ToolResultBlock)
             and b.output
             and not _is_cleared_marker(b.output)
+            and _rendered_size(b.output) >= _MIN_CLEARABLE_OUTPUT_CHARS
         ):
             cleared_refs.append(store_full(b.output))
             new_blocks.append(

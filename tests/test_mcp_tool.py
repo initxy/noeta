@@ -22,7 +22,11 @@ from noeta.builtins.mcp.impl import (
     make_mcp_tool_name,
     parse_mcp_tool_specs,
 )
-from noeta.builtins.mcp.impl.tool import _result_to_tool_result
+from noeta.builtins.mcp.impl.tool import (
+    _MCP_DESCRIPTION_MAX_BYTES,
+    _result_to_tool_result,
+    describe_mcp_tool,
+)
 from noeta.runtime.mcp import McpConfigError, McpServerSpec
 
 
@@ -174,8 +178,9 @@ def test_build_stdio_env_reaches_spawn() -> None:
     )
     tools, clients, _skipped = build_mcp_tools((spec,))
     try:
-        # The fixture reflects FAKE_TOKEN back as the tool description.
-        assert tools["mcp__fake__seen"].description == "sekret"
+        # The fixture reflects FAKE_TOKEN back as the tool description; the
+        # server's words reach the model behind the source prefix.
+        assert tools["mcp__fake__seen"].description == "[MCP server 'fake'] sekret"
     finally:
         for c in clients:
             c.shutdown()
@@ -201,7 +206,14 @@ def test_result_mapping_is_error() -> None:
     assert res.success is False
 
 
-def test_result_mapping_large_text_offloads() -> None:
+def test_result_mapping_large_text_offloads_with_a_marker() -> None:
+    """An over-budget result is MARKED as a head, not silently shortened.
+
+    The body used to be halved with nothing to show for it, so the model read
+    a cut result as everything the server had to say and answered from half an
+    answer. The marker LEADS the text because every later trim cuts from the
+    end.
+    """
     big = "z" * (1200 * 1024)  # over the 1 MiB content budget
     res = _result_to_tool_result(
         "mcp__x__t", {"content": [{"type": "text", "text": big}]}, _ctx()
@@ -209,6 +221,18 @@ def test_result_mapping_large_text_offloads() -> None:
     assert res.success is True
     assert res.artifacts  # offloaded to a ContentStore artifact
     assert "text_ref" in res.output  # ref handed back so the model can deref
+    text = res.output["text"]
+    assert text.startswith("[truncated: the server returned 1228800 bytes; ")
+    assert "what follows is the first " in text.splitlines()[0]
+    assert len(text) < len(big)
+
+
+def test_result_mapping_small_text_is_unmarked() -> None:
+    res = _result_to_tool_result(
+        "mcp__x__t", {"content": [{"type": "text", "text": "hello"}]}, _ctx()
+    )
+    assert res.output["text"] == "hello"
+    assert res.artifacts == []
 
 
 def test_result_mapping_counts_non_text() -> None:
@@ -235,3 +259,30 @@ def test_parse_specs_filters_mcp_in_order() -> None:
     specs = parse_mcp_tool_specs(tools)
     assert [s.name for s in specs] == ["mcp__a__one", "mcp__a__two"]
     assert specs[0].input_schema == {"k": "mcp__a__one"}
+
+
+# -- server-supplied tool descriptions --------------------------------------
+
+
+def test_description_is_prefixed_with_its_source() -> None:
+    """A server writes this text and it lands in the tool list beside noeta's
+    own descriptions, where "always call this first" reads as harness
+    documentation. The prefix names whose sentence it is."""
+    assert describe_mcp_tool("github", "Search issues.") == (
+        "[MCP server 'github'] Search issues."
+    )
+
+
+def test_missing_description_is_still_attributed() -> None:
+    assert describe_mcp_tool("github", None) == "[MCP server 'github']"
+    assert describe_mcp_tool("github", 42) == "[MCP server 'github']"
+
+
+def test_long_description_is_capped_with_a_marker() -> None:
+    """The description rides the tool schema on EVERY request for the rest of
+    the session, so an unbounded one is paid for forever."""
+    essay = "w" * (_MCP_DESCRIPTION_MAX_BYTES + 5000)
+    out = describe_mcp_tool("chatty", essay)
+    assert out.startswith("[MCP server 'chatty'] ")
+    assert f"[truncated: description exceeded {_MCP_DESCRIPTION_MAX_BYTES} bytes]" in out
+    assert len(out.encode("utf-8")) < len(essay.encode("utf-8"))
