@@ -8,7 +8,11 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
-Touches both packages. The defects were confirmed against the code by a fact-check of the 2026-09-18
+## [0.6.28] - 2026-09-19
+
+Covers both packages, lockstep — 0.6.24 → 0.6.28 for `noeta-runtime`, 0.6.27 →
+0.6.28 for `noeta-sdk` (`noeta-sdk`'s `noeta-runtime>=` floor rises with it).
+The defects were confirmed against the code by a fact-check of the 2026-09-18
 audit. Most entries close a fault path or make a documented knob reachable and
 change nothing on the happy path; **two change a default** — `WebFetch` asks
 before an unlisted host under a gating permission mode, and the prompt every
@@ -2740,7 +2744,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.27...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.28...HEAD
+[0.6.28]: https://github.com/initxy/noeta/compare/v0.6.27...v0.6.28
 [0.6.27]: https://github.com/initxy/noeta/compare/v0.6.26...v0.6.27
 [0.6.26]: https://github.com/initxy/noeta/compare/v0.6.25...v0.6.26
 [0.6.25]: https://github.com/initxy/noeta/compare/v0.6.24...v0.6.25
