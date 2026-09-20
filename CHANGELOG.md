@@ -8,6 +8,23 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.29] - 2026-09-20
+
+Covers `noeta-sdk` only: 0.6.28 → 0.6.29. `noeta-runtime` stays at 0.6.28; the
+change is in the `memory` built-in and its host wiring. An addition — nothing
+changes for a host that does not set it.
+
+### Added — a memory store the agent reads and someone else writes (`noeta-sdk`)
+
+- **`HostConfig.memory_read_only`.** The agent is offered `memory_read` and
+  `memory_search` only; `memory_write` and `memory_archive` are absent from its
+  tool list rather than refused, so the model never plans around a call it
+  cannot make. For a host whose store is kept by a curation pass, another agent
+  or the operator. The index resident and auto-recall are unchanged, and the
+  reserved `__consolidation__` curator keeps all four tools. Reaches the pack as
+  `plugin_config["memory"]["read_only"]`; a value that is not a bool fails the
+  build.
+
 ## [0.6.28] - 2026-09-19
 
 Covers both packages, lockstep — 0.6.24 → 0.6.28 for `noeta-runtime`, 0.6.27 →
@@ -2745,7 +2762,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.28...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.29...HEAD
+[0.6.29]: https://github.com/initxy/noeta/compare/v0.6.28...v0.6.29
 [0.6.28]: https://github.com/initxy/noeta/compare/v0.6.27...v0.6.28
 [0.6.27]: https://github.com/initxy/noeta/compare/v0.6.26...v0.6.27
 [0.6.26]: https://github.com/initxy/noeta/compare/v0.6.25...v0.6.26
