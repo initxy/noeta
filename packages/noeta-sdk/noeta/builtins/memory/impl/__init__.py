@@ -42,6 +42,8 @@ from noeta.builtins.memory.impl.recall import (
     resident_memory_names,
 )
 from noeta.builtins.memory.impl.store import (
+    MEMORY_READ_TOOL_NAME,
+    MEMORY_SEARCH_TOOL_NAME,
     MemoryArchiveTool,
     MemoryReadTool,
     MemorySearchTool,
@@ -59,6 +61,12 @@ from noeta.execution.session_pack import (
 )
 from noeta.protocols.tool import Tool
 
+
+#: What a read-only pack still offers: the two tools that leave the store as
+#: they found it.
+READ_TOOLS: frozenset[str] = frozenset(
+    {MEMORY_READ_TOOL_NAME, MEMORY_SEARCH_TOOL_NAME}
+)
 
 __all__ = [
     "DEFAULT_INDEX_BUDGET_TOKENS",
@@ -121,7 +129,9 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
     the module default. ``max_bytes`` (the host's ``memory_max_bytes``) caps a
     ``memory_write`` body; absent means no cap. ``index_budget_tokens`` (the
     host's ``memory_index_budget_tokens``, derived per model) caps the rendered
-    index; absent means :data:`DEFAULT_INDEX_BUDGET_TOKENS`.
+    index; absent means :data:`DEFAULT_INDEX_BUDGET_TOKENS`. ``read_only`` (the
+    host's ``memory_read_only``) leaves the two tools that change the store out
+    of the pack — absent, not refused; the index and recall are the same.
     """
     if not ctx.flag("memory"):
         return EMPTY_CONTRIBUTION
@@ -143,6 +153,13 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
             f"memory config: index_budget_tokens must be a positive int, "
             f"got {raw_budget!r}"
         )
+    read_only = cfg.get("read_only", False)
+    if not isinstance(read_only, bool):
+        raise ValueError(
+            f"memory config: read_only must be a bool, got {read_only!r}"
+        )
+    if read_only:
+        tools = {name: tool for name, tool in tools.items() if name in READ_TOOLS}
     content_store = ctx.content_store
 
     def _init(rec: SessionRecorder) -> None:

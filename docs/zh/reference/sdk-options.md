@@ -180,6 +180,7 @@ compile_options(options, *, plugins=None, preset_prompts=None)
 | `memory_root_resolver` | `None` | `(task_id) -> Path \| None`，按任务的根 |
 | `recall_exclude` | `()` | 自动召回永远不提的记忆名——不给正文、不给指针，别的页也不能通过 `related` 把它带出来，recall judge 的候选里也没有它。用在 host 自己已经用别的办法放进上下文的页上：召回看不到那份内容，不排除就会再塞一遍。索引里照样列出这页，`memory_read` 照样能读 |
 | `memory_max_bytes` | `None` | `memory_write` 正文的字节上限（UTF-8，指可选 frontmatter 之后的部分）。超了就在落盘之前拒绝，报错里带上实际大小和上限。建议设在 4096 以下：那是自动召回整页注入的上限，超过的页召回时只剩一行指针 |
+| `memory_read_only` | `False` | 只给 `memory_read` 和 `memory_search`，用在记忆库由别人来写的场合（整理任务、另一个 agent、运维）。`memory_write` 和 `memory_archive` 直接不出现在工具列表里，而不是调了再拒绝；索引和自动召回不变，`__consolidation__` 整理 agent 仍然四个都有 |
 
 **技能菜单。** `skill` control tool 渲染出来的技能列表有总预算（默认是模型上下文窗口的 1%，估算 token 时中日韩字符按一个字一个 token 算）。超出预算后分两步收缩：先给每个技能一句短描述（取第一句，最多 24 token）；所有技能都放下之后，剩下的预算再按保留顺序把短描述换回完整描述；连短描述都放不下时，排在最后的技能只留名字。保留顺序是：host 给的分数，然后工作区层先于借入层，再按 frontmatter `priority`，最后按名字。
 

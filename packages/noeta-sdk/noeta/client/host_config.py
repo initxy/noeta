@@ -312,6 +312,13 @@ class HostConfig:
     #: 4096-byte inline limit: a page past that limit is recalled as a
     #: one-line pointer, never whole. ``None`` ⇒ no cap.
     memory_max_bytes: Optional[int] = None
+    #: Offer the agent ``memory_read`` and ``memory_search`` only: the store is
+    #: someone else's to write — a curation pass, another agent, the operator.
+    #: ``memory_write`` and ``memory_archive`` are absent from the tool list
+    #: rather than refused, so the model never plans around a call it cannot
+    #: make. The index resident and auto-recall are untouched, and the reserved
+    #: ``__consolidation__`` curator keeps all four. ``False`` ⇒ all four tools.
+    memory_read_only: bool = False
     #: Total budget for the rendered memory index, in estimated tokens. The
     #: index sits in the cached head of every request, so an unbounded one
     #: charges the store's page count to every turn. Over budget, entries

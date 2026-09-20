@@ -551,6 +551,9 @@ class SdkHost(GenericEngineResolver):
     # reaches the memory pack as ``plugin_config["memory"]["max_bytes"]``.
     # ``None`` ⇒ no cap.
     memory_max_bytes: Optional[int] = None
+    # Read and search only (``HostConfig.memory_read_only``); reaches the memory
+    # pack as ``plugin_config["memory"]["read_only"]``.
+    memory_read_only: bool = False
     # Rendered-memory-index budget in estimated tokens
     # (``HostConfig.memory_index_budget_tokens``); reaches the memory pack as
     # ``plugin_config["memory"]["index_budget_tokens"]``. ``None`` ⇒ derived
@@ -2546,6 +2549,13 @@ class SdkHost(GenericEngineResolver):
             ),
             "global_memory_dir": self.global_memory_dir,
             "max_bytes": self.memory_max_bytes,
+            # The reserved curator is the writer a read-only host leaves the
+            # store to: it keeps all four tools.
+            "read_only": (
+                self.memory_read_only
+                and spec is not None
+                and spec.name != CONSOLIDATION_AGENT_NAME
+            ),
             # The index budget, derived here from the bound model's catalog
             # window for the same layering reason as the skills roster's: the
             # memory built-in must not import the providers built-in. An
