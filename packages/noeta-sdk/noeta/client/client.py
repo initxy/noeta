@@ -672,6 +672,7 @@ class Client:
             memory_root_resolver=hc.memory_root_resolver,
             recall_exclude=frozenset(hc.recall_exclude),
             memory_max_bytes=hc.memory_max_bytes,
+            memory_read_only=hc.memory_read_only,
             memory_index_budget_tokens=hc.memory_index_budget_tokens,
             skill_menu_rank_resolver=hc.skill_menu_rank_resolver,
             skill_usage_ranking=hc.skill_usage_ranking,

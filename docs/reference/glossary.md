@@ -434,7 +434,8 @@ retried through one small-model call over the message plus the index (the
 **recall judge**) unless the pointers already fill the cap; its picks ride in
 as pointers and are recorded like any recall. `HostConfig.recall_exclude`
 names pages recall never surfaces; `HostConfig.memory_max_bytes` caps a
-`memory_write` body. Page names are letters and digits of any script plus
+`memory_write` body; `HostConfig.memory_read_only` offers `memory_read` and
+`memory_search` only, for a store someone else writes. Page names are letters and digits of any script plus
 `.` `_` `-`. `memory_write` stamps `created` / `updated` dates and a
 `source_task` ledger receipt. Activated by `plugins=("memory", …)`, part
 of agent identity — among the official agents only `main` opens it.

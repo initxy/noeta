@@ -13,11 +13,15 @@ The acceptance criteria of the two 2026-09 memory specs, in one place:
 * **Neighbours** — a named page brings its ``related`` pages as pointers.
 * **Names** — a page named in Chinese is a page like any other.
 * **Cap** — ``memory_max_bytes`` refuses an oversized body before the write.
+* **Read-only** — ``memory_read_only`` leaves the two mutating tools out of the
+  pack for everyone but the curator.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+
+import pytest
 
 from noeta.builtins.memory.impl.matching import (
     RECALL_KEY_MAX_CHARS,
@@ -520,3 +524,75 @@ def test_the_memory_pack_hands_the_cap_to_its_write_tool(tmp_path: Path) -> None
     write = build_memory_session_pack(ctx).tools["memory_write"]
     assert not write.invoke({"name": "note", "text": "x" * 11}, _ctx()).success
     assert write.invoke({"name": "note", "text": "x" * 10}, _ctx()).success
+
+
+def _pack_ctx(tmp_path: Path, memory: dict[str, object]):
+    from noeta.execution.session_pack import SessionBuildContext
+    from noeta.runtime.workspace import WorkspaceRoot
+
+    return SessionBuildContext(
+        workspace=WorkspaceRoot.from_path(tmp_path),
+        workspace_dir=tmp_path,
+        content_store=InMemoryContentStore(),
+        exec_env=None,
+        model="test-model",
+        provider_family=None,
+        allowed_tools=frozenset(),
+        backends={},
+        capability_flags={"memory": True},
+        plugin_config={"memory": {"memory_dir": tmp_path / "memories", **memory}},
+    )
+
+
+def test_a_read_only_pack_offers_read_and_search_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    """Absent, not refused: a model never plans around a call it cannot make.
+    The index resident is the same either way."""
+    from noeta.builtins.memory.impl import build_memory_session_pack
+
+    MemoryStore(root=tmp_path / "memories").write("note", "kept by someone else")
+    whole = build_memory_session_pack(_pack_ctx(tmp_path, {}))
+    reading = build_memory_session_pack(_pack_ctx(tmp_path, {"read_only": True}))
+
+    assert set(whole.tools) == {
+        "memory_write", "memory_read", "memory_search", "memory_archive",
+    }
+    assert set(reading.tools) == {"memory_read", "memory_search"}
+    assert reading.tools["memory_read"].invoke({"name": "note"}, _ctx()).success
+    assert len(reading.content_kinds) == len(whole.content_kinds) == 1
+    assert reading.init is not None
+
+    with pytest.raises(ValueError, match="read_only must be a bool"):
+        build_memory_session_pack(_pack_ctx(tmp_path, {"read_only": "yes"}))
+
+
+def test_host_threads_read_only_to_everyone_but_the_curator(tmp_path: Path) -> None:
+    """The curator is the writer a read-only host leaves the store to."""
+    from dataclasses import replace
+
+    from noeta.client.consolidation import CONSOLIDATION_AGENT_NAME
+    from noeta.testing.fake_llm import FakeLLMProvider
+    from tests._sdk_session import make_host, make_registry, runner_main_spec
+
+    spec = runner_main_spec("main", memory=True)
+    host = make_host(
+        make_registry(spec),
+        workspace_dir=tmp_path,
+        provider=FakeLLMProvider(responses=[]),
+        model="stub-model",
+        memory_read_only=True,
+    )
+    assert host._plugin_config(shell_mode="deny", spec=spec)["memory"]["read_only"]
+    curator = replace(spec, name=CONSOLIDATION_AGENT_NAME)
+    config = host._plugin_config(shell_mode="deny", spec=curator)
+    assert config["memory"]["read_only"] is False
+
+    open_host = make_host(
+        make_registry(spec),
+        workspace_dir=tmp_path,
+        provider=FakeLLMProvider(responses=[]),
+        model="stub-model",
+    )
+    config = open_host._plugin_config(shell_mode="deny", spec=spec)
+    assert config["memory"]["read_only"] is False

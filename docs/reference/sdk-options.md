@@ -227,6 +227,7 @@ Supplying both forms raises `ValueError`, as does a partial explicit triple. All
 | `memory_root_resolver` | `None` | `(task_id) -> Path \| None` per-task root |
 | `recall_exclude` | `()` | memory names auto-recall never surfaces — not as a body, a pointer, a `related` neighbour, or a recall-judge candidate. For a page the host already puts in context by its own means, which recall cannot see and would inject a second time. The index still lists the page and `memory_read` still reads it |
 | `memory_max_bytes` | `None` | cap on a `memory_write` body, in UTF-8 bytes (the text after its optional fence). A larger write is refused before anything is written, with both numbers in the message. Worth setting under 4096, auto-recall's inline limit: a page past that is recalled as a one-line pointer, never whole |
+| `memory_read_only` | `False` | offer `memory_read` and `memory_search` only, for a store someone else writes (a curation pass, another agent, the operator). `memory_write` and `memory_archive` are absent from the tool list, not refused; the index and auto-recall are unchanged, and the `__consolidation__` curator keeps all four |
 
 **Skill menu.** The roster the `skill` control tool renders is fitted to a
 budget (1 % of the model's context window, CJK-aware estimate). Over it, every
