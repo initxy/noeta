@@ -157,15 +157,27 @@ const sidebarZh = [
 
 export default defineConfig({
   title: 'Noeta',
-  description: 'A Python SDK for agents that survive crashes, wait for days, and scale from a script to a cluster.',
+  description: 'Noeta is a Python SDK for durable AI agents: they survive crashes, pause for human approval at no cost, and scale from one script to a multi-host cluster. Works with Anthropic, OpenAI and any OpenAI-compatible model.',
 
   // GitHub Pages subpath.
   base: '/noeta/',
 
   // Favicon (the icon lives in docs/public/, served at the base root).
+  // Search and link previews: every page gets the share card (docs/public/
+  // og.png, rendered from docs/assets/logo/social-preview.svg) and a sitemap
+  // is emitted for crawlers.
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/noeta/logo.svg' }],
+    ['meta', { property: 'og:type', content: 'website' }],
+    ['meta', { property: 'og:site_name', content: 'Noeta' }],
+    ['meta', { property: 'og:image', content: 'https://initxy.github.io/noeta/og.png' }],
+    ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
+    ['meta', { name: 'twitter:image', content: 'https://initxy.github.io/noeta/og.png' }],
   ],
+
+  sitemap: {
+    hostname: 'https://initxy.github.io/noeta/',
+  },
 
   // Dead-link checking is ON (VitePress default): a broken internal link
   // fails the build. Pages excluded from the site (see srcExclude — ADRs and
@@ -250,7 +262,7 @@ export default defineConfig({
       label: '中文',
       lang: 'zh-CN',
       link: '/zh/',
-      description: '一个 Python SDK：agent 崩了能接着跑，等人审批不占资源，从脚本扩到多机集群不用改代码。',
+      description: 'Noeta 是一个 Python AI agent SDK：进程崩了能接着跑，等人审批不占资源，从一个脚本扩到多机集群不用改代码。支持 Anthropic、OpenAI 和任何兼容 OpenAI 的模型。',
       themeConfig: {
         nav: navZh,
         sidebar: sidebarZh,

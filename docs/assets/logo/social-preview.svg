@@ -13,6 +13,6 @@
     <rect x="30" y="40" width="20" height="20" rx="5" fill="#10b981"/>
   </g>
   <text x="640" y="352" text-anchor="middle" font-size="96" font-weight="700" letter-spacing="2" fill="#f8fafc">noeta</text>
-  <text x="640" y="432" text-anchor="middle" font-size="34" fill="#94a3b8">An agent&#8217;s entire run as a replayable event ledger.</text>
-  <text x="640" y="482" text-anchor="middle" font-size="24" fill="#475569">Resume anywhere. Exactly once. Provider-neutral.</text>
+  <text x="640" y="432" text-anchor="middle" font-size="34" fill="#94a3b8">A Python SDK for AI agents that keep running.</text>
+  <text x="640" y="482" text-anchor="middle" font-size="24" fill="#475569">Survives crashes · waits for free · scales from a script to a cluster</text>
 </svg>

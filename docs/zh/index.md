@@ -1,5 +1,7 @@
 ---
 layout: home
+title: "Noeta — 能扛崩溃、能长时间运行的 Python AI agent SDK"
+titleTemplate: false
 
 hero:
   name: Noeta
