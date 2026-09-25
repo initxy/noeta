@@ -1182,11 +1182,10 @@ def _entry_point_iter(entry_points: "bool | Iterable[Any]", group: str) -> Itera
     if entry_points is False:
         return ()
     if entry_points is True:
-        eps = importlib.metadata.entry_points()
-        try:
-            return list(eps.select(group=group))
-        except AttributeError:  # pragma: no cover — legacy mapping API
-            return list(eps.get(group, []))  # type: ignore[attr-defined]  # pre-3.10 dict API; stubs only know EntryPoints
+        # Python 3.11+ (the package floor) always returns ``EntryPoints`` with
+        # ``select``; the pre-3.10 mapping fallback was dead code whose
+        # ``type: ignore`` mypy flagged as unused on 3.11 and required on 3.12+.
+        return list(importlib.metadata.entry_points().select(group=group))
     return list(entry_points)
 
 
