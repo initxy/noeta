@@ -41,6 +41,11 @@ class FakeAio:
         self.calls: list[tuple[str, dict[str, Any], Mapping[str, str]]] = []
         #: socket read timeout the adapter resolved for each POST, in order.
         self.timeouts: list[float] = []
+        #: ``run_argv``'s per-command session bookkeeping
+        #: (``/v1/shell/sessions/create`` / ``/v1/shell/kill``), answered with
+        #: success unless scripted and kept out of ``calls`` so the assertions
+        #: below read the command traffic only.
+        self.session_calls: list[tuple[str, dict[str, Any]]] = []
 
     def __call__(
         self,
@@ -52,6 +57,9 @@ class FakeAio:
     ) -> bytes:
         path = url[len(BASE):]
         parsed = json.loads(body.decode("utf-8"))
+        if path in _SESSION_PATHS and path not in self._responses:
+            self.session_calls.append((path, parsed))
+            return json.dumps(_ok({})).encode("utf-8")
         self.calls.append((path, parsed, headers))
         self.timeouts.append(timeout_s)
         queue = self._responses.get(path)
@@ -59,6 +67,9 @@ class FakeAio:
             raise AssertionError(f"unexpected call to {path!r}")
         envelope = queue.pop(0)
         return json.dumps(envelope).encode("utf-8")
+
+
+_SESSION_PATHS = frozenset({"/v1/shell/sessions/create", "/v1/shell/kill"})
 
 
 def _ok(data: dict[str, Any]) -> dict[str, Any]:
@@ -153,7 +164,8 @@ def test_run_argv_reads_spill_tail_when_output_is_spilled() -> None:
         "/v1/shell/exec": [
             _exec_ok(exit_code=0, output="INLINE",
                      full_output_file_path="/tmp/aio-out.log"),
-            _exec_ok(exit_code=0, output="Y" * 10),  # the tail -c result
+            # the tail -c result, base64-encoded in the container
+            _exec_ok(exit_code=0, output=base64.b64encode(b"Y" * 10).decode()),
         ]
     })
     outcome = _env(fake).run_argv(
@@ -162,7 +174,9 @@ def test_run_argv_reads_spill_tail_when_output_is_spilled() -> None:
     # second call is the bounded tail read of the spill file (cap + 1 bytes)
     tail_path, tail_body, _ = fake.calls[1]
     assert tail_path == "/v1/shell/exec"
-    assert tail_body["command"] == "tail -c 11 -- /tmp/aio-out.log"
+    assert tail_body["command"] == (
+        "( set -o pipefail; tail -c 11 -- /tmp/aio-out.log | base64 -w0 )"
+    )
     assert outcome.stdout == b"Y" * 10  # recovered, not the "INLINE" echo
     assert outcome.returncode == 0
 
@@ -172,7 +186,7 @@ def test_run_argv_spill_tail_flags_truncation_past_cap() -> None:
     fake = FakeAio({
         "/v1/shell/exec": [
             _exec_ok(output="INLINE", full_output_file_path="/tmp/o.log"),
-            _exec_ok(output="Z" * 11),
+            _exec_ok(output=base64.b64encode(b"Z" * 11).decode()),
         ]
     })
     outcome = _env(fake).run_argv(["big"], cwd=Path("/w"), timeout_s=5, output_cap=10)
@@ -211,14 +225,15 @@ def test_run_argv_remote_fault_is_a_reported_failed_run_not_a_raise() -> None:
 
 
 def test_run_argv_threads_caller_budget_as_socket_timeout() -> None:
-    # There is no remote hard-kill, so the transport read timeout IS the bound:
-    # the caller's per-command budget must reach the transport, not a fixed
-    # adapter constant.
+    # The container stops the command at ``hard_timeout``; the transport read
+    # timeout sits a little above the caller's per-command budget (not a fixed
+    # adapter constant) so a wedged container still hands the call back.
     fake = FakeAio({"/v1/shell/exec": _exec_ok(output="ok")})
     _env(fake, timeout_s=60.0).run_argv(
         ["sleep", "1"], cwd=Path("/w"), timeout_s=300, output_cap=99
     )
-    assert fake.timeouts == [300]
+    assert fake.timeouts == [310.0]
+    assert fake.calls[0][1]["hard_timeout"] == 300
 
 
 def test_non_shell_ops_use_the_adapter_default_timeout() -> None:

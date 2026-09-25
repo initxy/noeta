@@ -8,6 +8,412 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+Covers both packages, lockstep. Closes the defects a seven-track audit of the
+SDK found on 2026-09-25 (shell policy, providers, MCP, built-in tools, the
+client surface, token economy, packaging) — most were reproduced before they
+were fixed, and each fix carries a regression test. **Entries that change a
+default are listed first**; everything else closes a fault path, makes a
+recorded fact visible, or spends fewer tokens on the same turn. Additive
+signatures only; one Protocol gains a method it already required. A second
+pass the same day closed what the first left out: sandbox interrupt, Postgres
+reconnect, `TodoWrite` with `Task`, hooks and `Principal` on the public
+surface, a usage / cost read model, `max_completion_tokens`, and the
+recovery-cost and deferred-delivery residuals.
+
+### Changed — defaults (`noeta-sdk`, `noeta-runtime`)
+
+- **`Bash` is not approval-free when the shell would expand something the
+  policy did not see.** The allowlist tokenised with `shlex` but the command
+  ran under `bash -c`, so an unquoted `{-exec,touch}` passed the `find` rule and
+  bash expanded it into `-exec`. A command with an unquoted `{`, `*`, `?`,
+  `[`, or a leading `~` now always needs approval under a gating mode; quoted
+  or escaped forms (`find . -name '*.py'`) are unchanged.
+- **The built-in rules that run repository code follow workspace trust.**
+  `pytest`, `uv run pytest`, `npm test` and `pnpm test` load `conftest.py` /
+  `package.json` scripts, so they are approval-free only in a trusted
+  workspace (`grant_trust`, or `SdkHost(project_shell_allowlist_trust="open")`)
+  — the same gate 0.6.28 put on `.noeta/shell-allowlist.json`. `git status` /
+  `diff` / `log` stay approval-free but run hardened (`-c core.fsmonitor=`,
+  `--no-ext-diff --no-textconv`), so a repository's `.git/config` cannot run a
+  helper through them.
+- **`Read` serves at most 100 KB per call** (about 25K tokens) and says how to
+  continue with `offset`; it also streams only the requested window instead of
+  loading the whole file (a 200 MB log read with `limit=5` no longer costs
+  900 MB of memory and a 190 MB ContentStore entry). The ContentStore keeps the
+  whole file up to 1 MiB, the served window above that.
+- **Sub-agents do not carry the `Task` tool unless their definition activates
+  `delegation`.** The presets say explore / plan / general-purpose "spawn
+  nothing further" and their spec has no `spawnable`, but the resolver inherited
+  delegation regardless — 2.9 KB of schema on every sub-agent step and
+  unbounded nesting. To let a sub-agent delegate, list `("delegation",)` in
+  `AgentDefinition.plugins`.
+- **`memory_read_only=True` also removes the write guidance from the prompt.**
+  0.6.29 dropped `memory_write` / `memory_archive` from the tool list but the
+  compiled memory-policy fragment still told the model to call them; a
+  read-only host now gets a 305-byte read-only fragment instead of the
+  1,783-byte one. The default prompt is byte-identical.
+- **`memory_write`'s `max_bytes` counts the whole page** (frontmatter and
+  body), and `created` is stamped by the tool — a model-supplied value is
+  ignored.
+- **`HostConfig` rejects values it used to accept silently:** a bare string
+  for `recall_exclude` (it became a set of characters), non-positive
+  `memory_max_bytes` / `memory_index_budget_tokens` / `max_background_*`, a
+  negative `mcp_idle_ttl`, `instructions_file` without `instructions_enabled`,
+  and an empty `storage_path`. An unknown plugin name in `plugin_config` warns.
+- **`shutdown()` owns the Client's background work:** it kills the tree's
+  background shells, stops driving background sub-agents at their next step
+  boundary (without cancelling them — the next Client resumes them), and closes
+  the storage adapters it opened from `storage_path`. Reading events through a
+  `storage_path` Client after `shutdown()` now fails, as it should.
+- **`send_goal` / `start` validate per-turn options at the door.** An unknown
+  `permission_mode`, an unknown `effort`, or `effort="max"` on a conversation
+  whose `Options` disabled thinking raise `InvalidTurnOptionError`
+  (`invalid_turn_option`) before any event is written; previously a bare
+  `ValueError` escaped after the lease was taken and the task sat leased for
+  up to 600 s.
+- **`TodoWrite` may share a response with `Task`.** The checklist is saved
+  and the sub-agent spawns in the same turn; the `TodoWrite` ack rides the
+  spawn's result message (for a foreground spawn it waits for the child's
+  result, so the provider still sees one tool message per assistant turn — the
+  Anthropic API rejects two in a row). `AskUserQuestion`, `skill` and a second
+  `TodoWrite` in the same response are still refused. The tool description
+  grows by 15 bytes.
+- **`OpenAICompatProvider` sends `max_completion_tokens` to OpenAI reasoning
+  models.** `max_tokens_param="auto"` (the default) picks it for a catalogued
+  reasoning row of the OpenAI family or an uncatalogued `o1` / `o3` / `o4` /
+  `gpt-5` id — OpenAI's own endpoint rejects `max_tokens` there — and
+  `max_tokens` for everything else. A gateway that only reads `max_tokens`
+  passes `max_tokens_param="max_tokens"`. The shipped `gpt-5.4` / `gpt-5.5`
+  rows are affected when sent through this adapter.
+- **A compensated seed parks the task with suspend reason `seed_failed`**
+  (it read `waiting_human`). That reason is what lets a retried `send_goal`
+  reuse the goal already on the stream instead of recording it twice.
+- **Construction-time handoff recovery serves only parents still waiting.** A
+  child that finished after its parent stopped waiting (interrupted, or woken
+  by something else) no longer gets a `SubtaskCompleted` and a wake written
+  onto the parent stream at Client construction; that wake never matched.
+- **An empty Anthropic text block is dropped** from the assembled message. A
+  response that is empty after the drop fails the turn as
+  `llm_empty_response` instead of writing a `TextBlock("")` that made every
+  later request a 400.
+
+### Fixed — a turn that failed no longer takes the conversation with it (`noeta-sdk`, `noeta-runtime`)
+
+- **A `max_tokens` cut mid-tool-call poisoned every later turn.** The
+  truncated assistant message kept its parseable `tool_use` blocks, the next
+  user turn followed with no `tool_result`, and Anthropic / OpenAI answered 400
+  from then on. The truncated message keeps its text and drops the calls (or is
+  not recorded when nothing is left).
+- **Truncated arguments are `max_tokens`, not a transient error.** The OpenAI
+  adapters raised `MalformedToolArgumentsError` on `finish_reason="length"`,
+  which the retry loop re-generated eight times at full cost before failing
+  with `llm_error`; the Anthropic adapter raised a bare `ValueError` with the
+  wrong message. All three now drop the incomplete call and return
+  `stop_reason="max_tokens"`.
+- **A refusal that interrupts a tool call** is an `end_turn` with the tool
+  blocks dropped, not an "inconsistent response" error.
+- **A stream that ends cleanly before its terminal event is retried** as a
+  transient fault (Anthropic without `message_delta`; OpenAI-compatible without
+  `[DONE]` or `finish_reason`) instead of failing the task.
+- **OpenAI-compatible streaming no longer merges parallel tool calls that
+  arrive without `index`**: a delta with a new `id` starts a new call.
+- **`structured_output` sent with other calls in one response** is rejected
+  with a tool error naming the fix (send it alone) instead of silently ending
+  the turn and dropping the neighbours.
+
+### Fixed — the provider's error text reaches whoever has to act on it (`noeta-runtime`, `noeta-sdk`)
+
+- **`TaskFailed` carries `detail`.** A 4xx from the provider used to survive
+  only as "llm_error": the adapters built the error from `str(HTTPStatusError)`
+  (no body), `FailDecision` had no text field, and `QueryFailedError.reason`
+  was the bare tag — the three image-reading tasks that died in the
+  2026-09-19 benchmark run were undiagnosable. The adapters now append the
+  response body (`error.message` when JSON, 500 characters), `FailDecision.detail`
+  → `TaskFailedPayload.detail` (optional, omitted when absent, so old
+  recordings and their bytes are unchanged; capped at 1,000 characters) →
+  `QueryFailedError.detail`. A failed turn in a multi-turn conversation suspends
+  with `turn_failed: <reason>: <detail>`, and a failed sub-agent's
+  `SubtaskResult.error` reads the same way, so the parent model sees why.
+- **Audit rows and OTLP spans carry `latency_ms` and the five usage
+  dimensions** of `LLMRequestFinished` (plus OTel GenAI
+  `gen_ai.usage.input_tokens` / `output_tokens`); they were stripped to
+  `cost_usd`. A failed task's span carries `noeta.fail_detail`.
+- **OTLP parent links survive a machine boundary:** a child exported on another
+  host derives `parentSpanId` from its parent task id instead of a
+  process-local map.
+
+### Fixed — background sub-agents and approvals in a multi-Client deployment (`noeta-runtime`, `noeta-sdk`)
+
+- **A second `Client` on the same store re-ran another Client's running
+  background sub-agent.** Recovery treated every started-but-undelivered
+  sub-task as a crash orphan: the child's LLM was called twice, the parent got
+  two completion notices and ran an extra turn, and the loser of the lease
+  race delivered a false "did not complete". Recovery now skips a sub-task
+  whose lease is live (probed through the storage adapters' existing
+  read-only `has_active_lease` / `task_status`; the `Dispatcher` Protocol is
+  unchanged), a ready queue row is claimed rather than re-enqueued, and a lost
+  claim delivers nothing.
+- **A sub-agent's tool approval was invisible.** The root suspended on
+  `waiting_subtask` with `wake_handle=None`, `can_use_tool` was never called,
+  and `query()` reported "no terminal event". The root's `DriveOutcome` now
+  names the child's handle (`approval-…`), `can_use_tool` sees the request,
+  and `approve` / `deny` / `answer` accept the root's id (forwarded to the
+  waiting child) or the child's.
+- **A background result deferred past the delivery window** (parent parked on
+  an approval for over an hour) is re-delivered at the end of the next turn,
+  not only at the next Client construction.
+- **Client construction reads snapshots, not every task stream**, to find
+  recovery candidates (400 tasks: 0.27 s → 0.05 s).
+- **The MCP connection pool could deadlock under garbage collection:** an
+  Engine's `weakref.finalize` release ran while the same thread held the pool
+  lock. Releases that arrive re-entrantly are deferred past the lock.
+- **Handoff recovery at construction reads stream tails, not whole streams:**
+  the last 32 envelopes decide whether a parent is still waiting on a child
+  before anything is read in full (300 finished tasks: 496 full reads and
+  45,428 envelopes → 46 full reads and 10,061).
+- **A background result deferred past the delivery window is re-scanned
+  after worker-driven turns too** (`WorkerLoop`, `dispatch_seeded`), not only
+  after turns the Client drives itself.
+
+### Fixed — the Postgres adapters survive a dropped connection (`noeta-sdk`)
+
+A server restart, an idle kill, a network reset or `pg_terminate_backend`
+used to make the event log, dispatcher, content store and read-only store
+unusable for the rest of the process. Each adapter now reopens its
+connection once and retries where that is safe: a statement outside a
+transaction is re-sent once; a transaction that fails before its `COMMIT` is
+issued is re-run from `BEGIN` (advisory locks are per transaction); a failure
+raised by `COMMIT` itself is ambiguous and propagates — the connection is
+still reopened for the next call — except an `emit` carrying an idempotency
+key, which the key makes safe to retry. Only connection loss qualifies
+(SQLSTATE class `08`, `57P01`–`57P03`, a closed or broken connection);
+`LockNotAvailable` and data errors are never retried. There is still one
+connection per adapter and no pool.
+
+### Fixed — model binding (`noeta-sdk`, `noeta-runtime`)
+
+- **Aliases resolve on every path, not only the host default.** 0.6.30 fixed
+  `Client(model=None)`; `AgentDefinition(model="haiku")` was still sent
+  verbatim, a `ModelBound("sonnet")` recorded by a pre-0.6.30 store replayed
+  the alias on resume, and the inheritance check compared an alias with an id.
+  The resolver canonicalises once at engine build.
+- **A failed engine rebuild after a model switch no longer strands the task
+  as `running`/leased**: the rebuild runs inside the seed's compensation, so a
+  failure re-suspends and releases the lease.
+
+### Fixed — built-in tools (`noeta-sdk`, `noeta-runtime`)
+
+- **`Bash` caps output while it streams** (bounded head + tail per pipe; the
+  rendered result is unchanged). An 800 MB output used to be buffered whole
+  (1.5 GB RSS) before the 256 KB truncation.
+- **`Edit` on a CRLF file** matches and writes with the file's own line
+  ending; multi-line edits never matched and single-line edits mixed `LF` in.
+- **`Glob` accepts `{a,b}` alternatives**, as `Grep`'s glob already did.
+- **`Read` / `Edit` number lines on `\n` only**, matching `rg` — a form feed
+  or U+2028 in a file no longer makes Grep and Read disagree.
+- **`WebFetch` honours `Content-Type`.** Source code and Markdown were run
+  through the HTML pipeline (`if (a<b && c>d)` became `if (a d)`), a PNG came
+  back as a successful page of garbage, and a `<meta charset>` was ignored.
+  HTML converts as before; `text/*`, JSON and XML return as-is; images, PDF
+  and binary types are a tool error naming the type; the charset comes from
+  the header or the meta tag. A same-host redirect compares scheme and port.
+  The sandbox `curl` gets `-g`.
+- **`Write`'s `allowed_path_globs`**: `*` no longer crosses `/` (`**` does;
+  `{a,b}` works).
+- **Sandbox `run_argv` treats a missing `exit_code` as a failed run**, and
+  spill reads truncate on a UTF-8 boundary and follow a second overflow.
+- **`Task` rejects `background="false"`** (a string is not a bool) and an
+  empty `prompt`.
+- The fs plugin warns once when `rg` is not on `PATH`.
+- **A foreground `Bash` in the sandbox can be interrupted, cancelled and
+  closed** like a local one, and a timed-out command is killed in the
+  container instead of running on until its lease cap. Each foreground
+  command runs in its own container shell session (created first, then
+  `exec` with `id`, `hard_timeout`, and `no_change_timeout = timeout + 10 s`,
+  since the image's 120 s default returned a quiet build as `exit_code -1`),
+  the session kill table accepts a kill callable next to a `Popen`, and the
+  stop cascade posts `/v1/shell/kill`; the tool result says *interrupted*.
+  The stopped command's partial output is not returned (the local backend
+  returns it) — documented in the limitations page.
+- **Sandbox `Read` fetches only the window it serves** through a byte-range
+  read (`dd` + base64 in the container), so a 3 MB file read with `limit=5`
+  no longer downloads whole; the 1 MiB whole-file ContentStore rule is
+  unchanged. Backends declare both capabilities optionally
+  (`supports_foreground_kill` / `read_range`); `ExecEnv` gains no member.
+
+### Fixed — MCP (`noeta-sdk`, `noeta-runtime`)
+
+- **Paginated servers expose all of their tools, prompts and resources**
+  (`nextCursor` is followed, up to 100 pages); only the first page was taken.
+- **One bad tool name no longer drops the whole server.** A sanitised name
+  over 64 characters is truncated with an 8-character hash suffix (prefix
+  kept), an intra-server collision keeps the already-valid name and suffixes
+  the other; a cross-server collision raises `McpConfigError` at build time
+  naming both aliases.
+- **A wedged connection is retired on a call timeout or EOF** instead of
+  costing the full timeout on every later call; a server `isError` result is
+  not a connection fault.
+- **An SSE reply returns as soon as the matching JSON-RPC id arrives**; a
+  keep-alive stream used to hold the call until the server closed it.
+- **Tool results keep `structuredContent`** (`structured_content`, or
+  `structured_content_ref` when large), displayable images reach the model as
+  images, and audio / resource links are listed as text.
+- **stdio answers the server's `ping`** and never mistakes a request for a
+  response with a colliding id.
+- `OpenAICompatProvider` renders tool-result images as an
+  `[image omitted: …]` line instead of dropping them silently.
+
+### Added (`noeta-sdk`, `noeta-runtime`)
+
+- `McpServerSpec.call_timeout_s` / `McpHttpServerSpec.call_timeout_s`: a per-server
+  timeout for `tools/call` (initialize and list keep the 30 s default).
+- `OpenAICompatProvider(image_resolver=...)`: images in a user message are sent
+  as `image_url` data URIs (Chat Completions supports them); without a
+  resolver the adapter still refuses, loudly. `gpt-4o` / `gpt-4o-mini` are
+  catalogued `supports_vision=True`.
+- `HostConfig.reliability_sink` (forwarded to the `WorkerLoop`) and
+  `start_workers(lease_backoff_max_s=...)`.
+- `HostConfig.provider_headers` now also reaches the WebFetch digest and the
+  memory recall judge (both call `complete_with_headers` when the provider has
+  it); they used to drop the per-task headers.
+- Typed, exported errors: `WorkspaceEscape` (`workspace_escape`),
+  `AnswerValidationError` (`invalid_answer`), `QuestionNotPendingError`
+  (`question_not_pending`, replacing a bare `RuntimeError`),
+  `InvalidTurnOptionError`. `noeta.sdk` also exports `WorkerLoop`,
+  `ReliabilityEvent` and `resolve_tool_call_arguments`.
+- `ToolResultView.tool_name` is populated and `ToolResultView.error` is new,
+  so `messages()` shows a failed call the way the model saw it.
+- The recall judge's index is bounded by `memory_index_budget_tokens`.
+- **Hooks are configured from `HostConfig.hooks`.** `HooksConfig` carries
+  `pre_tool_use` rules (the HookGuard: deny / require approval by tool name
+  and argument match), `post_tool_use` and `notification` commands (the
+  HookObserver: live-only, queued, never on the writer thread), the command
+  timeout and the queue bound; it is validated at construction. The guard and
+  observer existed since 0.5 but nothing on the public surface could feed
+  them. `noeta.sdk` exports `HooksConfig`, `PreToolUseRule`, `MatchArg`,
+  `PostToolUseRule`, `NotificationRule`.
+- **`Client(principal=)` and a per-turn `principal=` on `start` /
+  `send_goal` / `seed_start` / `seed_send_goal`.** The acting principal gates
+  `model_selector` (`principal.allowed_models ∩ allowed_models`, the same
+  `ModelSelectorError`) and is stamped on `ModelBound.principal_identity`, so
+  one Client can serve many authenticated users. `noeta.sdk` exports
+  `Principal`, `LOCAL_PRINCIPAL`.
+- **`Client.usage(task_id, include_children=True)` and
+  `QueryResult.usage()`** return a `UsageReport`: per-model requests, input /
+  output / cache-read / cache-write / reasoning tokens, `cost_usd`, latency,
+  and `unpriced_models` — the models whose calls were charged $0 because the
+  catalog has no rates for them (register them with `HostConfig.extra_models`
+  to get real numbers). Children are found through the spawn events, any
+  depth. `noeta.sdk` exports `UsageReport`, `ModelUsage`.
+- `OpenAICompatProvider(max_tokens_param=)` (see the defaults above).
+
+### Changed — fewer tokens for the same turn (`noeta-runtime`, `noeta-sdk`)
+
+Measured with the audit's request-capture script (bytes/4 as tokens, the
+provider's documented cache rules simulated); the numbers are that script's.
+
+- **Tool-call arguments are key-sorted on the live path.** The model's own key
+  order was kept in memory while the recorded copy was canonical (sorted), so
+  after every resume — a new user turn, a sub-agent returning, an approval —
+  the cached prefix broke at the first multi-key call and the rest of the
+  history was re-written at 1.25×. Live and replayed requests are now
+  byte-identical; a three-turn coding session costs 17.5 % less.
+- **Anthropic requests use the fourth `cache_control` breakpoint**, placed on
+  the previous step's last recorded block. A step with ten or more parallel
+  tool calls used to fall outside the provider's 20-block look-back and
+  re-write the whole history (a 12-way `Grep` step: 49K → 10.5K cost units).
+- **The compaction summarize request reuses the task's own prefix** — its
+  system prompt, semi-stable blocks and tools — and carries the summarize
+  instruction only as the trailing user turn; the duplicate system copy
+  (~3.4 KB per compaction) is gone. The first attempt is sent **without
+  `tool_choice`**, so the provider's message-layer cache entry can be served
+  too; if the model answers with a tool call or no text, the request is
+  retried exactly once with `tool_choice: none` (an ordinary recorded
+  round-trip). On OpenAI-style automatic prefix caching the whole prefix is
+  served from cache (about −87 % per compaction in the simulation); on
+  Anthropic the message layer hits when a cached prefix exists near the
+  summary boundary and inside its TTL. **A fake provider that recognised the
+  summarize call by its system text must look at the trailing user turn
+  instead.**
+- **Old tool outputs are cleared before the window fills.** Once a request
+  reaches half of the usable window, tool outputs older than the newest five
+  tool results are replaced by the lean `[tool output cleared]` marker (same
+  400-character floor and off-prompt provenance as the existing relief valve,
+  which stays as the backstop at the water mark). `RecallHistory` pages a
+  cleared output back by message index even before any summary, so a needed
+  file read is a recall, not a re-run. Knobs: `CompactionConfig.
+  microcompact_keep_recent` (5; `None` disables) and `microcompact_fraction`
+  (0.5). In a measured production session 72 % of message bytes were tool
+  outputs that used to survive until 87 % of a 1M window.
+- **The memory index is frozen for the life of a task.** It is recorded
+  first-write-wins like the environment block, so a `memory_write` no longer
+  rewrites the cached prefix from the index on (a write on turn two used to
+  invalidate 730 bytes of turn three's prefix, growing with the
+  conversation; now 0). What D9 guaranteed — the model learns about the page
+  on its next turn — now rides a one-line note recorded after the next goal
+  (`Memory index changed this task: +release-steps (…), ~deploy-notes,
+  -old-page`, 62 bytes measured, capped at 512), naming pages created,
+  re-described or removed since the task's index snapshot. Tier-1 resident
+  bodies keep their refresh.
+- **`McpServerSpec(deferred=True)` / `McpHttpServerSpec(deferred=True)`
+  keep a large server's schemas out of every request.** The server's tools
+  stay registered — guarded, audited and approved under their real
+  `mcp__alias__tool` names — but are not advertised; two small tools are
+  advertised once for all deferred servers: `ToolSearch(query)` returns up to
+  five matching tools with their full input schema (an empty query lists
+  names), and `McpCall(tool, arguments)` is rewritten at translate time into
+  a call on the real tool with the same `call_id`. The tool set never grows
+  mid-task, so the stable prefix is unchanged by what the model looked up. A
+  40-tool server: 25,867 → 1,200 bytes of MCP schema per request. A tool may
+  ask not to be advertised through the optional `advertised` attribute.
+- **The host-derived skill-menu and memory-index budgets are capped at 4,096
+  tokens each** (`SKILL_MENU_BUDGET_CEILING_TOKENS`); 1 % of a 1M window was
+  admitting ~10K tokens of each at the head of every request. An operator's
+  explicit `plugin_config["skills"]["menu_budget_tokens"]` or
+  `HostConfig.memory_index_budget_tokens` is taken as given.
+- **`ReminderView.already_spawned` is removed** (and the composer no longer
+  scans the history to compute it); nothing built-in has read it since the
+  delegation nudge went in 0.6.28. A third-party reminder that read it breaks
+  at import — the one removal in this release.
+- The `composer_view_main` / `composer_view_explore` goldens are built through
+  the real `Client(main_options())` path and now lock the actual default
+  prefix (main: 18 tools, 37,939 bytes; explore: 9 tools, 16,206 bytes) — the
+  old ones were 6 and 3 tools short and never saw the memory tools, `skill`
+  or `RecallHistory`.
+
+### Packaging, CI and documentation
+
+- **`mypy --strict` gates both packages** (231 files), not only
+  `noeta.protocols`; the 85 accumulated errors are cleared with real types
+  (one `type: ignore`, reasoned). `ResidentHost` now declares
+  `note_turn_permission` and a read-only `agent_registry`, and `WorkerRuntime`
+  no longer requires `engine` — the code already relied on both.
+- **Every wheel and sdist now ships `LICENSE`** and a PEP 561 `py.typed`
+  marker in each sub-package — a downstream `mypy --strict` no longer reports
+  `import-untyped` for `noeta.sdk`.
+- CI runs `ruff` (also in `make check`), tests on Python 3.11 / 3.12 / 3.13,
+  builds the docs on pull requests, has `timeout-minutes`, and the release
+  workflow runs the suite on the tagged commit before publishing.
+- `packages/noeta-runtime/README.md` (the PyPI page) is rewritten; it
+  described the 0.4 layout.
+- **Benchmarks are stated with their provenance.** `docs/benchmarks.md`
+  records the 2026-09-19 run at sdk 0.6.28 (Terminal-Bench 2.1, 40-task
+  sample: 24/40 on the first pass with 9 infrastructure errors, 33/40
+  best-of-three after re-running every unsolved task, 27/40 if only the
+  errored tasks are re-run) and the sample-vs-leaderboard caveat; "Proven on
+  public benchmarks" became "Measured on". The landing pages lead with the
+  first pass (24/40) and show best-of-three beside it.
+- Install docs name ripgrep as a runtime dependency; the docs' approval
+  sample, error table, `WorkerLoop` import, default tool list, sub-agent
+  approval flow and MCP naming rules match the code.
+- The Postgres reconnect tests run against CI's service container; a new
+  `-m live` test drives a real sandbox container (`NOETA_TEST_AIO_IMAGE`)
+  through interrupt-while-sleeping, kill-on-timeout and a windowed read. The
+  `composer_view_main` golden is re-locked for the 15-byte `TodoWrite` line.
+  The ADRs for interrupt responsiveness, the execution-environment seam,
+  multi-host lease fencing, control tools, guard / observer hooks and worker
+  queue routing carry dated amendments.
+
 ## [0.6.30] - 2026-09-24
 
 Covers both packages, lockstep — 0.6.28 → 0.6.30 for `noeta-runtime`, 0.6.29 →

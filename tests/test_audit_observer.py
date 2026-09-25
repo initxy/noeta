@@ -190,8 +190,15 @@ def test_summarize_llm_request_finished_surfaces_cost_usd() -> None:
     )
     summary = _summarize("LLMRequestFinished", payload)
     assert summary["cost_usd"] == 0.42
-    # latency_ms not in allowlist.
-    assert "latency_ms" not in summary
+    # latency_ms and usage are allowlisted too (token counters, no content).
+    assert summary["latency_ms"] == 120
+    assert summary["usage"] == {
+        "uncached": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "output": 0,
+        "reasoning_tokens": 0,
+    }
 
 
 def test_summarize_context_plan_composed_projects_plan_ref_metadata_only() -> None:

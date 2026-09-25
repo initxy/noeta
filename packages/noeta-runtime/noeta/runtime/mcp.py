@@ -76,6 +76,20 @@ HttpPostFn = Callable[
 ]
 
 
+def _check_call_timeout(alias: str, call_timeout_s: Optional[float]) -> None:
+    if call_timeout_s is not None and not call_timeout_s > 0:
+        raise McpConfigError(
+            f"MCP server {alias!r} call_timeout_s must be > 0, got {call_timeout_s!r}"
+        )
+
+
+def _check_deferred(alias: str, deferred: object) -> None:
+    if not isinstance(deferred, bool):
+        raise McpConfigError(
+            f"MCP server {alias!r} deferred must be a bool, got {deferred!r}"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class McpServerSpec:
     """One operator-named local stdio MCP server.
@@ -85,12 +99,21 @@ class McpServerSpec:
     any event or recording. ``tool_subset`` is the per-server **raw tool
     name** allow-list (``None`` ⇒ keep every advertised tool): names outside
     it never enter the tool set, so they never reach the model, and the
-    subset itself stays host-side and never rides a request body."""
+    subset itself stays host-side and never rides a request body.
+    ``call_timeout_s`` bounds one ``tools/call`` (``None`` ⇒ the connector's
+    30 s default); the handshake and the list calls keep the default.
+    ``deferred`` keeps the server's tool schemas out of the provider tool
+    list: the tools stay registered, guarded and audited under their real
+    ``mcp__{alias}__{tool}`` names, and the model reaches them through the
+    ``ToolSearch`` / ``McpCall`` pair advertised once for every deferred
+    server (``False`` ⇒ every schema rides every request, as before)."""
 
     alias: str
     argv: tuple[str, ...]
     env: tuple[tuple[str, str], ...] = ()
     tool_subset: Optional[tuple[str, ...]] = None
+    call_timeout_s: Optional[float] = None
+    deferred: bool = False
 
     def __post_init__(self) -> None:
         if not _ALIAS_RE.match(self.alias):
@@ -100,6 +123,8 @@ class McpServerSpec:
             )
         if not self.argv or not self.argv[0]:
             raise McpConfigError(f"MCP server {self.alias!r} has an empty command")
+        _check_call_timeout(self.alias, self.call_timeout_s)
+        _check_deferred(self.alias, self.deferred)
 
     def env_dict(self) -> dict[str, str]:
         return {k: v for k, v in self.env}
@@ -113,12 +138,15 @@ class McpHttpServerSpec:
     credential headers injected on every request. **Credentials live here
     only** — they ride on the wire and are NEVER written to any event,
     recording, or request body. ``tool_subset`` is the same per-server
-    raw-name allow-list as the stdio spec."""
+    raw-name allow-list as the stdio spec, ``call_timeout_s`` the same
+    per-``tools/call`` bound, and ``deferred`` the same schema deferral."""
 
     alias: str
     url: str
     headers: tuple[tuple[str, str], ...] = ()
     tool_subset: Optional[tuple[str, ...]] = None
+    call_timeout_s: Optional[float] = None
+    deferred: bool = False
 
     def __post_init__(self) -> None:
         if not _ALIAS_RE.match(self.alias):
@@ -128,6 +156,8 @@ class McpHttpServerSpec:
             )
         if not self.url:
             raise McpConfigError(f"MCP server {self.alias!r} has an empty url")
+        _check_call_timeout(self.alias, self.call_timeout_s)
+        _check_deferred(self.alias, self.deferred)
 
     def headers_dict(self) -> dict[str, str]:
         return {k: v for k, v in self.headers}

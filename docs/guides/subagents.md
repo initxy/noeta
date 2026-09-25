@@ -34,16 +34,19 @@ Filling `agents` is the whole opt-in: the parent gets the `Task` tool with
 | `description` | required | shown to the parent model in the agent roster |
 | `prompt` | required | the child's system prompt |
 | `tools` | `None` = every built-in tool | built-in names or `@tool` functions |
-| `model` | `None` = host default | model for this child |
-| `plugins` | `()` | plugins this child activates (e.g. `"memory"`, `"mcp"`) |
+| `model` | `None` = host default | model for this child; an alias such as `haiku` resolves to the catalog id |
+| `plugins` | `()` | plugins this child activates (e.g. `"memory"`, `"mcp"`, `"delegation"`) |
 
 A child has no `agents` field of its own. For a deeper tree, declare every agent
-at the top level.
+at the top level, and give each child that should delegate further
+`plugins=("delegation",)` — without it a child gets no `Task` tool. The
+official `explore`, `plan` and `general-purpose` agents don't carry it.
 
 ## How the parent calls it
 
 The model calls `Task` with `{description, prompt, subagent_type}` — one child
-per call:
+per call. An empty `prompt`, or a `background` that is not a boolean, comes back
+to the model as a tool error:
 
 | The model emits | What happens |
 | --- | --- |
@@ -57,6 +60,19 @@ worker dies in between, another one resumes the parent when the children finish.
 
 A response that mixes `Task` with other tool calls is refused and the model is
 told to retry — the task keeps running.
+
+### When a child needs approval or an answer
+
+A child in the foreground that makes a gated tool call, or asks the person a
+question, waits like any task, and the wait surfaces on the root. With
+`Options.can_use_tool` set, the callback is called for the child's call (its
+signature is `(tool_name, args)`, so it does not see which task made it).
+Otherwise the turn returns to you: the root's `DriveOutcome.wake_handle` is the
+child's handle (for example `approval-cw1`), and `query()` fails with a reason
+that names the handle and the sub-agent's task id. Call `approve`, `deny` or
+`answer` with either the root's task id or the child's; the parent carries on
+when the child finishes. A child waiting on a timer leaves the root at
+`wake_handle=None`.
 
 ## Tune parallelism
 

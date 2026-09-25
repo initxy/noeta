@@ -119,6 +119,28 @@ class ExecEnv(Protocol):
     Every method takes an **already-resolved absolute path**: containment is
     the caller's ``WorkspaceRoot``'s job, and an implementation must not
     re-interpret or re-root what it is handed.
+
+    **Optional capabilities.** A backend may offer more than the members
+    below; tools discover these with ``getattr`` and fall back when absent, so
+    none of them is part of the Protocol and a third-party backend that
+    implements only the members below keeps working unchanged:
+
+    * ``supports_foreground_kill: bool`` — when true, :meth:`run_argv` accepts
+      an extra keyword ``on_start: Callable[[Callable[[], None]], None]``. The
+      backend calls it once, before it blocks on the command, with a
+      zero-argument ``kill`` that terminates that one command wherever it
+      runs; ``kill`` may be called from another thread, possibly after the
+      command ended, and must not raise. Once ``kill`` has been called,
+      ``run_argv`` returns promptly (``returncode=-1``, not ``timed_out``).
+      ``Bash`` registers ``kill`` in the session's foreground kill table so
+      interrupt / cancel / close reach a command the host has no process for
+      (a sandbox container). Without it only the local subprocess path is
+      interruptible.
+    * ``read_range(path, offset, length) -> bytes`` — up to ``length`` bytes
+      of ``path`` starting at byte ``offset``, byte-exact; fewer only at end
+      of file (empty past it). Raises the same ``OSError`` subclasses as
+      :meth:`read_bytes`. ``Read`` pulls a large file through it in bounded
+      chunks instead of one whole-file ``read_bytes``.
     """
 
     # -- file reads --------------------------------------------------------
@@ -209,7 +231,9 @@ class ExecEnv(Protocol):
 
         The timeout and the output cap are the implementation's obligation,
         not the caller's: a backend that ignores them lets one command hang or
-        flood the recorded stream.
+        flood the recorded stream. A backend declaring
+        ``supports_foreground_kill`` also takes ``on_start`` (see the class
+        docstring).
         """
         ...
 

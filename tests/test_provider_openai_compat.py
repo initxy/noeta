@@ -1143,16 +1143,17 @@ def test_three_fields_none_omitted_from_body() -> None:
 # ImageBlock defense
 # ---------------------------------------------------------------------------
 #
-# This Chat Completions adapter does not support image input. Mis-routing an
-# image task to it must raise **explicitly**, never silently drop the image
-# (_flatten_text_blocks only picks TextBlock, so the image would be swallowed).
-# The error is raised while building the wire body; no HTTP request is sent.
+# Chat Completions carries images only as content parts of a plain user turn
+# (see tests/test_provider_truncation_paths.py for that path). An image anywhere
+# else — or a user image with no image_resolver configured — must raise
+# **explicitly**, never silently drop the image. The error is raised while
+# building the wire body; no HTTP request is sent.
 
 _IMG_REF = ContentRef(hash="sha256:img", size=3, media_type="image/png")
 
 
 @respx.mock
-def test_image_block_in_user_message_raises_explicit_error() -> None:
+def test_image_block_in_user_message_without_resolver_raises_explicit_error() -> None:
     route = respx.post(CHAT_ENDPOINT).mock(
         return_value=httpx.Response(200, json=_chat_response())
     )
@@ -1165,7 +1166,7 @@ def test_image_block_in_user_message_raises_explicit_error() -> None:
             )
         ]
     )
-    with pytest.raises(ValueError, match="does not support image"):
+    with pytest.raises(ValueError, match="no image_resolver"):
         provider.complete(request)
     assert not route.called
 

@@ -148,8 +148,13 @@ options = presets.sandbox_browser_options()   # main + the web subagent
 
 - Sandbox calls are not fenced by the task lease: a worker whose lease expired
   can still reach the container until it notices.
-- `Bash`'s `timeout` is enforced on the client side; the command keeps running in
-  the container after the call returns.
+- A foreground `Bash` in the container stops like a local one: interrupt, cancel
+  and close end it inside the container and the call returns at once, reading
+  *interrupted*; a command that runs past its `timeout` is killed there too. A
+  stopped command's partial output is not returned.
+- `Read` pulls a large file from the container in 1 MiB pieces instead of one
+  whole-file download; the window it shows and the audit record it keeps are the
+  same as on the host.
 
 ## Next
 

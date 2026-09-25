@@ -11,7 +11,10 @@ One `vX.Y.Z` tag triggers `release.yml`. The build job builds both
 distributions once — a wheel and an sdist for each of the two packages, four
 files in total — and two publish jobs then run, one per package. **Each publish
 job is gated on the tag version**: it uploads only if the build produced a wheel
-whose version equals `X.Y.Z`, and otherwise skips with a notice.
+whose version equals `X.Y.Z`, and otherwise skips with a notice. Both publish
+jobs also wait for a `test` job that runs ruff, the test suite (coverage gate
+included) and the wheel-contents / install smoke on the tagged commit itself;
+if it fails, nothing is published.
 
 The practical consequence: bump only the packages you are actually releasing.
 The unbumped ones skip cleanly instead of failing on a duplicate upload. Both

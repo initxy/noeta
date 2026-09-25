@@ -40,6 +40,9 @@ print(result.answer())
 The agent explores the directory with its built-in file tools and answers.
 `result` also holds every model call, tool call and token count from the run.
 
+Python 3.11+. The `Glob` and `Grep` tools need [ripgrep](https://github.com/BurntSushi/ripgrep)
+on `PATH` (`apt install ripgrep`, `brew install ripgrep`).
+
 ## What sets it apart
 
 **Survives crashes.** Task state is rebuilt from an append-only event log,
@@ -77,15 +80,18 @@ recover, audit and scale it. [Full comparison, and when not to use it](https://i
 
 ## Benchmarks
 
-| Benchmark | Scope | `noeta-agent` `main` (Claude Opus 4.8) | Field |
-|---|---|---|---|
-| Terminal-Bench 2.1 | 40-task stratified sample | **82.5%** (33/40) | public board spans 58.7%–83.8% |
-| SWE-bench Verified | 15-instance subset | **86.7%** (13/15) | top ~79%, mid-pack ~66–77% |
+Measured on public benchmarks — one run each, over a sample:
+
+| Benchmark | Scope | Measured on | `noeta-agent` `main` (Claude Opus 4.8) | Field (full set) |
+|---|---|---|---|---|
+| Terminal-Bench 2.1 | 40-task stratified sample | `noeta-sdk` 0.6.28, 2026-09-19 | first pass **24/40**; **33/40** best of 3 attempts | public board spans 58.7%–83.8% |
+| SWE-bench Verified | 15-instance subset | `noeta-sdk` 0.6.10, 2026-08-09 | **13/15** after re-running 4 setup timeouts (first pass 9/15) | not comparable to a subset |
 
 An agent built only on the public SDK ([noeta-agent](https://github.com/initxy/noeta-agent)),
 run on the official harness ([harbor](https://github.com/harbor-framework/harbor))
-and scored by each task's own verifier. Both rows are samples, not full
-leaderboard runs. [Method and caveats](https://initxy.github.io/noeta/benchmarks.html).
+and scored by each task's own verifier. Both rows are single runs over samples,
+not full leaderboard runs, and the higher figures count re-runs of tasks the
+first pass missed. [Method and caveats](https://initxy.github.io/noeta/benchmarks.html).
 
 ## Documentation
 

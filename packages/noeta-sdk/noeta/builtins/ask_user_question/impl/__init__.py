@@ -26,6 +26,7 @@ from noeta.policies.control_semantics import (
 )
 from noeta.protocols.canonical import from_canonical_bytes, to_canonical_bytes
 from noeta.protocols.content_store import ContentStore
+from noeta.protocols.errors import CodedError
 from noeta.protocols.decisions import (
     Decision,
     HitlRequestAnchor,
@@ -83,8 +84,14 @@ class QuestionDecodeError(ValueError):
     """A stored questions/answers body could not be decoded as expected."""
 
 
-class AnswerValidationError(ValueError):
-    """User answer JSON does not match the pending question body."""
+class AnswerValidationError(CodedError, ValueError):
+    """User answer JSON does not match the pending question body.
+
+    Raised by ``Client.answer`` / ``seed_answer`` before anything is written;
+    a :class:`ValueError` too, so an ``except ValueError`` contract keeps
+    matching."""
+
+    code = "invalid_answer"
 
 
 def is_question_id(value: str) -> bool:
@@ -389,7 +396,7 @@ def normalize_answer_document(
                 f"answer {qid!r} selected the same label twice"
             )
         other: Optional[str] = None
-        if has_other:
+        if has_other and raw_other is not None:
             if len(raw_other) > _MAX_ANSWER_TEXT_LEN:
                 raise AnswerValidationError(
                     f"answer {qid!r} other text too long "

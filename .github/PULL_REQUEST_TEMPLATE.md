@@ -17,7 +17,7 @@ ADR touched, or write "none — no decision changed".
 ## How verified
 
 ```bash
-make check   # pytest + coverage, mypy --strict on protocols, naming + import lints — mirrors CI
+make check   # pytest + coverage, mypy --strict on both packages, naming + import lints — mirrors CI
 ```
 
 Note anything that couldn't be verified and why. The Postgres storage contract

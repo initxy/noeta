@@ -5,7 +5,9 @@ Speaks the newline-delimited JSON-RPC 2.0 subset Noeta's
 ``tools/list`` / ``tools/call``. The first argv selects a behaviour
 ``mode`` so tests can exercise discovery, the echo happy path, an
 ``isError`` result, a sanitize collision, a slow (timeout) call, a server
-that dies mid-call, and an oversized output line.
+that dies mid-call, an oversized output line, a paginated ``tools/list``
+(``page``), an over-long tool name (``longname``), and a server ping whose id
+collides with the pending request (``ping``).
 
 Run unbuffered: ``[python, "-u", this_file, mode]``.
 """
@@ -29,6 +31,11 @@ def _tools_for(mode: str) -> list[dict[str, Any]]:
         return [
             {"name": "a.b", "inputSchema": {"type": "object"}},
             {"name": "a/b", "inputSchema": {"type": "object"}},
+        ]
+    if mode == "longname":
+        return [
+            {"name": "ok", "inputSchema": {"type": "object"}},
+            {"name": "x" * 60, "inputSchema": {"type": "object"}},
         ]
     if mode == "empty_name":
         return [{"name": "", "inputSchema": {"type": "object"}}]
@@ -82,6 +89,14 @@ def _handle_call(mid: object, mode: str, params: dict[str, Any]) -> None:
         sys.stdout.flush()
         _respond(mid, {"content": [{"type": "text", "text": "ok"}]})
         return
+    if mode == "ping":
+        # A server-initiated ping whose id equals the pending request's id,
+        # then the real reply once the client has answered the ping.
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": mid, "method": "ping"}) + "\n")
+        sys.stdout.flush()
+        pong = json.loads(sys.stdin.readline())
+        _respond(mid, {"content": [{"type": "text", "text": json.dumps(pong, sort_keys=True)}]})
+        return
     if mode == "error":
         _respond(mid, {"content": [{"type": "text", "text": "boom"}], "isError": True})
         return
@@ -124,7 +139,15 @@ def main() -> None:
         elif method == "notifications/initialized":
             continue  # a notification — no response
         elif method == "tools/list":
-            _respond(mid, {"tools": _tools_for(mode)})
+            cursor = (msg.get("params") or {}).get("cursor")
+            if mode == "page":
+                # Two pages: ``alpha`` then ``beta``, joined by ``nextCursor``.
+                if cursor is None:
+                    _respond(mid, {"tools": [{"name": "alpha"}], "nextCursor": "p2"})
+                else:
+                    _respond(mid, {"tools": [{"name": "beta"}]})
+            else:
+                _respond(mid, {"tools": _tools_for(mode)})
         elif method == "tools/call":
             _handle_call(mid, mode, msg.get("params") or {})
         # unknown methods are ignored

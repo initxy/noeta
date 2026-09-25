@@ -102,10 +102,11 @@ def test_supports_vision_defaults_to_false() -> None:
     assert spec.supports_vision is False
 
 
-def test_existing_text_only_rows_are_not_vision() -> None:
-    """The text-only rows must stay on the non-vision side of the guard."""
+def test_gpt_4o_rows_are_vision_capable() -> None:
+    """gpt-4o / gpt-4o-mini accept image input; marking them text-only made
+    every adapter's vision guard refuse images they read fine."""
     for model_id in ("gpt-4o", "gpt-4o-mini"):
-        assert spec_for(model_id).supports_vision is False
+        assert spec_for(model_id).supports_vision is True
 
 
 def test_claude_rows_are_vision_capable() -> None:

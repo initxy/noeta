@@ -12,19 +12,21 @@ on it without a cycle and keeps the kernel free of any ``noeta.builtins`` edge.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from typing import Any, Callable, Optional, Sequence
+from dataclasses import dataclass, replace
+from typing import Any, Callable, Optional, Protocol, Sequence
 
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.decisions import (
     Decision,
     StatePatchDecision,
+    TaskStatePatch,
 )
 from noeta.protocols.messages import (
     LLMResponse,
     Message,
     ThinkingBlock,
     ToolResultBlock,
+    ToolUseBlock,
 )
 from noeta.protocols.view import View
 
@@ -60,7 +62,9 @@ def validate_required_string(
     return True, value
 
 
-def enum_roster_prop(base_description: str, items) -> dict[str, Any]:
+def enum_roster_prop(
+    base_description: str, items: Sequence[tuple[str, Optional[str]]]
+) -> dict[str, Any]:
     """Build a string property with an enum constraint and a roster description; with empty ``items`` it is just the bare description."""
     prop: dict[str, Any] = {"type": "string", "description": base_description}
     if items:
@@ -72,12 +76,19 @@ def enum_roster_prop(base_description: str, items) -> dict[str, Any]:
     return prop
 
 
+class _CallRef(Protocol):
+    """Anything that names a tool call: a ``ToolUseBlock`` or a ``ToolCall``."""
+
+    @property
+    def call_id(self) -> str: ...
+
+
 def ack_patch_decision(
-    tool_uses,
-    assistant_message,
-    assistant_thinking,
+    tool_uses: Sequence[_CallRef],
+    assistant_message: Message,
+    assistant_thinking: tuple[ThinkingBlock, ...],
     *,
-    patch,
+    patch: Optional[TaskStatePatch],
     text: str,
     valid: bool,
 ) -> StatePatchDecision:
@@ -139,6 +150,14 @@ class ControlTranslateContext:
     #: caller predates the field; a translate that needs it must degrade to a
     #: recoverable ack, not raise.
     view: Optional[View] = None
+    #: Translate this same turn with the named tool_use blocks taken out,
+    #: through every mounted spec. A translate that answers some calls in
+    #: place hands the rest of the response on with it and folds its own
+    #: answer into the Decision that comes back (TodoWrite riding a Task
+    #: spawn). ``None`` when the caller predates the field.
+    translate_rest: Optional[
+        Callable[[frozenset[str]], Optional[Decision]]
+    ] = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +195,24 @@ def translate_control_tool(
     ``routing_priority`` sort, and it decides the winner when several control
     tools co-occur in one turn.
     """
+
+    def translate_rest(answered: frozenset[str]) -> Optional[Decision]:
+        rest = replace(
+            response,
+            content=[
+                b
+                for b in response.content
+                if not (isinstance(b, ToolUseBlock) and b.call_id in answered)
+            ],
+        )
+        return translate_control_tool(
+            rest,
+            assistant_message,
+            specs=specs,
+            content_store=content_store,
+            view=view,
+        )
+
     ctx = ControlTranslateContext(
         response=response,
         assistant_message=assistant_message,
@@ -187,6 +224,7 @@ def translate_control_tool(
         content_store=content_store,
         control_tool_names=frozenset(spec.name for spec in specs),
         view=view,
+        translate_rest=translate_rest,
     )
     for spec in specs:
         decision = spec.translate(ctx)

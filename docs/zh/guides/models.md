@@ -28,6 +28,8 @@ responses = OpenAIResponsesProvider(
 
 - 找不到密钥时，构造阶段就抛 `ValueError`，不会等到第一次调用才报 401。
 - 三个都接受 `extra_headers={...}`（网关或代理要的额外请求头）和 `timeout_seconds`。
+- 要把用户消息里的图片发给模型，传 `image_resolver=`：一个 `ContentRef -> bytes` 的回调，一般就是 content store 的 `get`。图片直接内联发出（OpenAI 兼容适配器用 data URL）；没传 resolver 时，带图片的请求会报错，而不是悄悄丢掉图片。
+- `OpenAICompatProvider(max_tokens_param=...)` 决定输出上限用哪个字段名发。默认 `"auto"`：OpenAI 的推理模型（目录里标了 `is_reasoning` 的 OpenAI 模型，或不在目录里、id 以 `o1` / `o3` / `o4` / `gpt-5` 开头的）不接受 `max_tokens`，就发 `max_completion_tokens`；其他模型一律发 `max_tokens`。网关要的和默认不一样时，传 `"max_tokens"` 或 `"max_completion_tokens"` 固定用其中一个。
 - 适配器建一次反复用。它内部共用一个 HTTP 客户端，什么模型都能服务；用哪个模型是在 client 上指定的，不绑在适配器上。
 
 ## 交给 agent
@@ -91,6 +93,18 @@ client = Client(options, provider=chat, model="my-gateway-model", host_config=ho
 - 也可以在进程启动时调 `noeta.sdk.providers` 里的 `register_models({...})`，效果相同。别直接改 `CATALOG`；走注册时，和自带条目重名会直接报错。
 - 每次启动都注册同样的条目。模型目录会影响拼出来的提示词，恢复的任务必须看到同一份目录。
 
+## 看一个任务花了多少钱
+
+`client.usage(task_id)`（`query()` 之后用 `result.usage()`）把这个任务和它所有子 agent 的调用按模型加起来：调用次数、token、耗时和 `cost_usd`。没有价格的模型，那一行的 `priced` 是 `False`，还会列进 `unpriced_models`；它的费用是 `0.0`，意思是没法计价，不是免费。用上面的 `extra_models` 给它补上价格。
+
+```python
+report = client.usage(task_id)
+for row in report.per_model:
+    print(row.model, row.requests, row.input_tokens, row.output_tokens, row.cost_usd)
+if report.unpriced_models:
+    print("no rates for:", report.unpriced_models)
+```
+
 ## 辅助调用用便宜模型
 
 | `Options` 字段 | 作用 |
@@ -111,6 +125,10 @@ client = Client(options, provider=chat, model="my-gateway-model", host_config=ho
 | 401 / 认证失败 | 密钥错了或过期了。公司代理可以用 `HTTPS_PROXY`。 |
 | 找不到模型 | `model` 必须是接口支持的 id。 |
 | 费用一直是 `$0.00` | 模型不在目录里，按上面的方法注册。 |
+| 一轮以 `max_tokens` 结束 | 回复撞到了输出上限。参数没写完的工具调用会被丢掉（写完整的保留），这一轮不会重试。调大上限，或者让模型分小步做。 |
+| 想知道任务为什么失败 | `TaskFailed.detail` 和 `QueryFailedError.detail` 里有模型服务返回的错误文字，包括 HTTP 错误正文。 |
+
+流式回复没报错就提前结束（连接在中途断开），按临时故障处理，会像超时一样重试。
 
 ## 下一步
 

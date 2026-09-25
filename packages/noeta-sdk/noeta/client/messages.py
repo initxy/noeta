@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Iterable, Optional, TypeVar, Union
+from typing import Any, Callable, Iterable, Optional, TypeVar, Union
 
 from noeta.core.fold import messages_from_appended
 from noeta.core.prefetch import prefetched
@@ -112,7 +112,7 @@ class ToolUse:
 
     call_id: str
     tool_name: str
-    arguments: dict
+    arguments: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,12 +121,16 @@ class ToolResultView:
 
     ``output`` is ``None`` when the body could not be resolved; the call and its
     outcome are still identifiable from ``success`` + ``call_id``.
+    ``tool_name`` is the name of the call this result answers (``""`` when the
+    stream holds no matching call). ``error`` is the failure text the model
+    was shown for a failed call; ``None`` on success.
     """
 
     call_id: str
     tool_name: str
     success: bool
     output: Optional[str]
+    error: Optional[str] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,8 +226,8 @@ def as_messages(
             out.append(Result(answer=str(answer), status="completed"))
 
         elif t == "TaskFailed":
-            payload = _expect_payload(env, TaskFailedPayload)
-            out.append(Result(answer=payload.reason, status="failed"))
+            failed = _expect_payload(env, TaskFailedPayload)
+            out.append(Result(answer=failed.reason, status="failed"))
 
     return out
 
@@ -253,8 +257,9 @@ def _project_one_message(
     # all-ToolResultBlock user message — the standard tool-feedback shape —
     # needs no special case; the walk emits one view per block and no text.
     text_factory: Callable[[str], ViewItem]
-    if is_host_injected(msg):
-        # The predicate guarantees origin is "system" or "memory" — never None.
+    if is_host_injected(msg) and msg.origin is not None:
+        # The predicate guarantees origin is "system" or "memory" — never None;
+        # the second test only narrows the type.
         text_factory = partial(InjectedMessage, origin=msg.origin)
     elif role == "assistant":
         text_factory = AssistantMessage
@@ -309,9 +314,10 @@ def _walk_blocks(
                 out.append(
                     ToolResultView(
                         call_id=block.call_id,
-                        tool_name="",
+                        tool_name=_tool_name_for(out, block.call_id),
                         success=block.success,
                         output=_block_output_to_str(block.output),
+                        error=block.error,
                     )
                 )
                 seen_tool_result.add(block.call_id)
@@ -364,13 +370,24 @@ def _project_tool_result_recorded(
     out.append(
         ToolResultView(
             call_id=payload.call_id,
-            # ToolResultRecordedPayload carries no tool_name; left empty in the view
-            tool_name="",
+            # The payload carries no tool name; the call it answers does.
+            tool_name=_tool_name_for(out, payload.call_id),
             success=payload.success,
             output=output,
+            # The same text the model's ``ToolResultBlock.error`` carries.
+            error=None if payload.success else (payload.summary or "tool failed"),
         )
     )
     seen_tool_result.add(payload.call_id)
+
+
+def _tool_name_for(out: list[ViewItem], call_id: str) -> str:
+    """The name of the projected :class:`ToolUse` for ``call_id`` — searched
+    from the end, since a result follows its call closely; ``""`` if none."""
+    for item in reversed(out):
+        if isinstance(item, ToolUse) and item.call_id == call_id:
+            return item.tool_name
+    return ""
 
 
 def _block_output_to_str(output: object) -> Optional[str]:

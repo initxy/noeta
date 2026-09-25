@@ -13,8 +13,10 @@ turns an exception into ``stop_reason="error"``.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import re
 from typing import Any, Callable, Literal, Optional
 
 import httpx
@@ -23,6 +25,7 @@ from noeta.protocols.errors import (
     AbortedError,
     ContextOverflowError,
     FatalError,
+    MalformedToolArgumentsError,
     TransientError,
 )
 from noeta.protocols.messages import (
@@ -39,10 +42,13 @@ from noeta.protocols.messages import (
     Usage,
     is_host_injected,
 )
+from noeta.protocols.values import ContentRef
+from noeta.builtins.providers.impl import catalog
 from noeta.builtins.providers.impl._sse import iter_sse_events
 from noeta.builtins.providers.impl.codecs import (
     HOST_INJECTED_PREAMBLE,
     decode_tool_arguments,
+    describe_http_error,
     encode_tool_arguments,
     parse_retry_after,
     render_tool_result_body,
@@ -72,6 +78,20 @@ _REASONING_FIELDS: tuple[str, ...] = (
 #: symmetry with the Responses adapter and behaves like ``"chat"`` here.
 ReasoningContinuation = Literal["off", "chat", "responses"]
 
+#: Which body key carries ``LLMRequest.max_tokens``. OpenAI's own API refuses
+#: ``max_tokens`` for its reasoning models and wants ``max_completion_tokens``;
+#: many OpenAI-compatible gateways still only read ``max_tokens``. ``"auto"``
+#: picks per request (see :func:`_output_cap_key`); the literals force one.
+MaxTokensParam = Literal["auto", "max_tokens", "max_completion_tokens"]
+
+#: OpenAI reasoning-model ids, for a model the catalog does not know.
+_OPENAI_REASONING_ID = re.compile(r"^(o1|o3|o4|gpt-5)")
+
+#: The adapter's only image dependency, the same narrow ``ContentRef → bytes``
+#: callback the Anthropic and Responses adapters take — never a ContentStore.
+#: The base64 it feeds exists only in the outgoing wire body.
+ImageResolver = Callable[[ContentRef], bytes]
+
 
 class OpenAICompatProvider:
     """Adapter for OpenAI-style ``/chat/completions`` endpoints.
@@ -91,6 +111,8 @@ class OpenAICompatProvider:
         timeout_seconds: float = 300.0,
         extra_headers: Optional[dict[str, str]] = None,
         reasoning_continuation: ReasoningContinuation = "off",
+        image_resolver: Optional[ImageResolver] = None,
+        max_tokens_param: MaxTokensParam = "auto",
     ) -> None:
         """``api_key`` defaults to the ``OPENAI_API_KEY`` environment variable.
 
@@ -116,7 +138,23 @@ class OpenAICompatProvider:
         SSE events instead, where 300s is equally the honest number: a
         reasoning model can think for minutes before its first token, and a
         gateway that has gone quiet for five minutes is dead, not slow.
+
+        ``image_resolver`` derefs a user turn's ``ImageBlock`` bytes so they
+        ride the wire as an ``image_url`` data URI. Without it an image-bearing
+        request fails loudly rather than dropping the image.
+
+        ``max_tokens_param`` names the body key for the output cap. ``"auto"``
+        sends ``max_completion_tokens`` to an OpenAI reasoning model (a
+        catalogued ``is_reasoning`` row of the OpenAI family, or an
+        uncatalogued ``o1`` / ``o3`` / ``o4`` / ``gpt-5`` id) and
+        ``max_tokens`` to everything else; ``"max_tokens"`` /
+        ``"max_completion_tokens"`` force one for a gateway that wants it.
         """
+        if max_tokens_param not in ("auto", "max_tokens", "max_completion_tokens"):
+            raise ValueError(
+                "max_tokens_param must be 'auto', 'max_tokens' or "
+                f"'max_completion_tokens', got {max_tokens_param!r}"
+            )
         resolved_key = api_key if api_key is not None else os.environ.get(_API_KEY_ENV)
         if not resolved_key:
             raise ValueError(
@@ -125,6 +163,8 @@ class OpenAICompatProvider:
             )
         self._base_url = base_url.rstrip("/")
         self._reasoning_continuation = reasoning_continuation
+        self._image_resolver = image_resolver
+        self._max_tokens_param: MaxTokensParam = max_tokens_param
         headers: dict[str, str] = {
             "Authorization": f"Bearer {resolved_key}",
             "Content-Type": "application/json",
@@ -246,9 +286,13 @@ class OpenAICompatProvider:
                         accumulator.feed(chunk)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             raise TransientError(str(exc)) from exc
-        if not accumulator.saw_done and not accumulator.has_usable_content:
+        # No ``[DONE]`` and no ``finish_reason``: the stream was cut
+        # mid-generation, which is a dropped connection (retryable), not a
+        # finished turn — whatever partial content arrived. A gateway that
+        # omits ``[DONE]`` but sent a ``finish_reason`` finished normally.
+        if not accumulator.saw_done and not accumulator.finished:
             raise TransientError(
-                "OpenAI stream ended without [DONE] and produced no content"
+                "OpenAI stream ended without [DONE] or a finish_reason"
             )
         return self._parse_response(accumulator.terminal_payload())
 
@@ -257,6 +301,9 @@ class OpenAICompatProvider:
     # ------------------------------------------------------------------
 
     def _build_request_body(self, request: LLMRequest) -> dict[str, Any]:
+        # Both transports assemble here, so one guard covers them before any
+        # byte goes on the wire.
+        _guard_vision_capability(request)
         outbound_messages: list[dict[str, Any]] = []
         if request.system is not None:
             outbound_messages.append(_system_message_to_openai(request.system))
@@ -266,7 +313,9 @@ class OpenAICompatProvider:
                     "system must use LLMRequest.system field, not messages array"
                 )
             outbound_messages.extend(
-                _message_to_openai(message, self._reasoning_continuation)
+                _message_to_openai(
+                    message, self._reasoning_continuation, self._image_resolver
+                )
             )
 
         body: dict[str, Any] = {
@@ -285,7 +334,9 @@ class OpenAICompatProvider:
         if request.temperature is not None:
             body["temperature"] = request.temperature
         if request.max_tokens is not None:
-            body["max_tokens"] = request.max_tokens
+            body[_output_cap_key(self._max_tokens_param, request.model)] = (
+                request.max_tokens
+            )
         if request.output_schema is not None:
             body["response_format"] = {
                 "type": "json_schema",
@@ -346,10 +397,18 @@ class OpenAICompatProvider:
             # Reading an empty arguments string as ``{}`` is this adapter's own
             # convention (the shared codec only defaults ``None``), and
             # ``tool_call arguments`` is this adapter's own error vocabulary.
-            arguments = decode_tool_arguments(
-                function.get("arguments") or "{}",
-                error_label="tool_call arguments",
-            )
+            try:
+                arguments = decode_tool_arguments(
+                    function.get("arguments") or "{}",
+                    error_label="tool_call arguments",
+                )
+            except MalformedToolArgumentsError:
+                if finish_reason != "length":
+                    raise
+                # The output cap cut this call's arguments mid-JSON. That is a
+                # ``max_tokens`` stop, not a garbled stream worth regenerating:
+                # keep the complete calls only.
+                continue
             content.append(
                 ToolUseBlock(
                     call_id=call.get("id", ""),
@@ -401,14 +460,9 @@ class _ChatStreamAccumulator:
         self.saw_done = False
 
     @property
-    def has_usable_content(self) -> bool:
-        return bool(
-            self._finish_reason is not None
-            or self._text_parts
-            or self._reasoning_parts
-            or self._signature_parts
-            or self._tool_calls
-        )
+    def finished(self) -> bool:
+        """Did the stream carry a ``finish_reason`` for the choice?"""
+        return self._finish_reason is not None
 
     def feed(self, chunk: dict[str, Any]) -> None:
         usage = chunk.get("usage")
@@ -469,13 +523,26 @@ class _ChatStreamAccumulator:
         return self._thinking_index
 
     def _feed_tool_call(self, fragment: dict[str, Any]) -> None:
+        call_id = fragment.get("id")
         index = fragment.get("index")
         if not isinstance(index, int):
-            index = 0
+            # Some gateways omit ``index`` on parallel calls. A fragment then
+            # continues the latest call, unless it carries an ``id`` other than
+            # that call's — which starts the next call instead of splicing two
+            # argument strings into one undecodable blob.
+            index = max(self._tool_calls, default=0)
+            latest = self._tool_calls.get(index)
+            if (
+                latest is not None
+                and isinstance(call_id, str)
+                and call_id
+                and latest["id"]
+                and call_id != latest["id"]
+            ):
+                index += 1
         entry = self._tool_calls.setdefault(
             index, {"id": "", "name": "", "arguments": []}
         )
-        call_id = fragment.get("id")
         if isinstance(call_id, str) and call_id:
             entry["id"] = call_id
         function = fragment.get("function")
@@ -540,16 +607,17 @@ def _translate_http_error(exc: httpx.HTTPStatusError) -> Exception:
     """
     response = exc.response
     status = response.status_code
+    message = describe_http_error(exc)
     if status == 429:
         return TransientError(
-            str(exc),
+            message,
             retry_after=parse_retry_after(response.headers.get("Retry-After")),
         )
     if status >= 500:
-        return TransientError(str(exc))
+        return TransientError(message)
     if status == 400 and _is_context_overflow(response):
-        return ContextOverflowError(str(exc))
-    return FatalError(str(exc))
+        return ContextOverflowError(message)
+    return FatalError(message)
 
 
 def _is_context_overflow(response: httpx.Response) -> bool:
@@ -575,20 +643,101 @@ def _is_context_overflow(response: httpx.Response) -> bool:
 # ---------------------------------------------------------------------------
 
 
-#: This adapter carries no image input; an ``ImageBlock`` belongs on a
-#: vision-capable Responses provider. One task is pinned to one provider, so
-#: an image arriving here can only be a misroute — and a misroute must be
-#: loud, never a silently dropped image.
+#: Chat Completions carries images only as content parts of a plain user
+#: turn. An ``ImageBlock`` anywhere else (an assistant turn, a tool message, a
+#: host-injected turn that renders as ``system``) has no wire shape here, and
+#: dropping it silently is never an option — so it is loud.
 _NO_IMAGE_SUPPORT = (
-    "this provider does not support image input (ImageBlock); "
-    "route image tasks to a vision-capable Responses provider instead of "
-    "silently dropping the image."
+    "this provider does not support image input (ImageBlock) outside a plain "
+    "user turn; refusing to silently drop the image."
 )
 
 
 def _reject_image_block(block: Block) -> None:
     if isinstance(block, ImageBlock):
         raise ValueError(_NO_IMAGE_SUPPORT)
+
+
+def _output_cap_key(setting: MaxTokensParam, model: str) -> str:
+    """The body key for the output cap under ``setting`` for ``model``.
+
+    ``"auto"``: a catalogued row decides by its own columns — an
+    ``is_reasoning`` row of the OpenAI family (declared, inferred from a
+    ``gpt`` real id, or an ``o1`` / ``o3`` / ``o4`` / ``gpt-5`` real id) gets
+    ``max_completion_tokens``. An uncatalogued id gets it only when it is an
+    ``o1`` / ``o3`` / ``o4`` / ``gpt-5`` id. Everything else keeps
+    ``max_tokens``, the key every compatible gateway reads.
+    """
+    if setting != "auto":
+        return setting
+    spec = catalog.find_spec(model)
+    if spec is None:
+        reasoning = bool(_OPENAI_REASONING_ID.match(catalog.resolve_alias(model)))
+    else:
+        family = catalog.provider_family(model)
+        reasoning = spec.is_reasoning and (
+            family == "openai"
+            or (family is None and bool(_OPENAI_REASONING_ID.match(spec.real_model_id)))
+        )
+    return "max_completion_tokens" if reasoning else "max_tokens"
+
+
+def _guard_vision_capability(request: LLMRequest) -> None:
+    """An ``ImageBlock`` bound for a model **catalogued** ``supports_vision=
+    False`` → :class:`FatalError` before anything goes on the wire.
+
+    An uncatalogued model is unknown, not text-only, so it passes and the
+    endpoint judges — the same rule the Anthropic and Responses adapters apply.
+    """
+    has_image = any(
+        isinstance(block, ImageBlock)
+        for message in request.messages
+        for block in message.content
+    )
+    if not has_image:
+        return
+    spec = catalog.find_spec(request.model)
+    if spec is None or spec.supports_vision:
+        return
+    raise FatalError(
+        f"request carries an ImageBlock but model {request.model!r} is "
+        "catalogued with supports_vision=False; refusing to send the image to "
+        "a model that cannot read it."
+    )
+
+
+def _user_content_parts(
+    message: Message, image_resolver: Optional[ImageResolver]
+) -> list[dict[str, Any]]:
+    """A user turn carrying images → Chat content parts, in block order.
+
+    Text blocks become ``{"type": "text"}`` parts; each ``ImageBlock`` becomes
+    ``{"type": "image_url", "image_url": {"url": "data:<media>;base64,…"}}``
+    with its bytes deref'd through ``image_resolver`` at wire-assembly time.
+    No resolver is incomplete configuration → ``ValueError``.
+    """
+    parts: list[dict[str, Any]] = []
+    for block in message.content:
+        if isinstance(block, TextBlock):
+            parts.append({"type": "text", "text": block.text})
+        elif isinstance(block, ImageBlock):
+            if image_resolver is None:
+                raise ValueError(
+                    "request carries an ImageBlock but provider has no "
+                    "image_resolver configured; cannot deref image bytes (set "
+                    "image_resolver to content_store.get). Refusing to "
+                    "silently drop the image."
+                )
+            data = base64.b64encode(image_resolver(block.source)).decode("ascii")
+            parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{block.source.media_type};base64,{data}"
+                    },
+                }
+            )
+    return parts
 
 
 def _flatten_text_blocks(message: Message) -> str:
@@ -604,13 +753,11 @@ def _system_message_to_openai(system: Message) -> dict[str, Any]:
 
 
 def _message_to_openai(
-    message: Message, reasoning_continuation: ReasoningContinuation
+    message: Message,
+    reasoning_continuation: ReasoningContinuation,
+    image_resolver: Optional[ImageResolver] = None,
 ) -> list[dict[str, Any]]:
     if message.role == "user":
-        # ``_flatten_text_blocks`` keeps only TextBlock, so an image would
-        # vanish without a trace — scan first to make the misroute loud.
-        for block in message.content:
-            _reject_image_block(block)
         # Host-injected turns ride the user channel in the ledger but render as
         # a mid-history ``system`` wire message, which OpenAI's chat shape
         # supports natively. The role alone does not reliably tell an arbitrary
@@ -619,12 +766,23 @@ def _message_to_openai(
         # ``human`` / ``None`` mean the role's natural author, i.e. a plain
         # user turn.
         if is_host_injected(message):
+            # Rendered as ``system``, which carries text only; an image here
+            # would vanish without a trace, so it is refused.
+            for block in message.content:
+                _reject_image_block(block)
             return [
                 {
                     "role": "system",
                     "content": (
                         f"{HOST_INJECTED_PREAMBLE}\n{_flatten_text_blocks(message)}"
                     ),
+                }
+            ]
+        if any(isinstance(block, ImageBlock) for block in message.content):
+            return [
+                {
+                    "role": "user",
+                    "content": _user_content_parts(message, image_resolver),
                 }
             ]
         return [{"role": "user", "content": _flatten_text_blocks(message)}]
@@ -687,6 +845,10 @@ def _tool_message_to_openai(message: Message) -> list[dict[str, Any]]:
         if not isinstance(block, ToolResultBlock):
             continue
         content = render_tool_result_body(block.output, block.error)
+        if block.images:
+            # Chat tool messages carry text only. Say the image existed so the
+            # model does not act as if the tool returned nothing but text.
+            content += "\n[image omitted: this provider sends tool results as text only]"
         expanded.append(
             {
                 "role": "tool",

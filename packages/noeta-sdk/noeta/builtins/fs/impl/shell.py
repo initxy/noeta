@@ -29,9 +29,9 @@ from noeta.runtime.shell_policy import (
     ShellMode,
     AllowRule,
     _has_shell_meta,
-    _matches_allowlist,
     _parse_argv,
     _resolve_timeout,
+    matching_rule,
 )
 from noeta.runtime.subproc import RunOutcome, runner_with_spawn_hook
 from noeta.runtime.workspace import WorkspaceRoot
@@ -156,7 +156,8 @@ class ShellRunTool:
                 return _err(
                     self.name, "could not parse 'command' (unbalanced quotes?)"
                 )
-            if not _matches_allowlist(argv, self.rules):
+            rule = next((r for r in self.rules if r.matches(argv)), None)
+            if rule is None:
                 return _err(
                     self.name,
                     f"{argv[0]!r} is not in this host's allowlist and was not "
@@ -164,9 +165,18 @@ class ShellRunTool:
                     "Grep / Glob cover inspection — otherwise tell the user "
                     "which command is needed and why.",
                 )
-            exec_argv = argv
+            exec_argv = rule.harden(argv) if rule.harden is not None else argv
         else:  # ShellMode.ARBITRARY — full bash
             exec_argv = ["bash", "-c", command]
+            # A command matching a hardening rule runs as that rule's rewritten
+            # argv instead: ``matching_rule`` admits it only when the ``shlex``
+            # argv is exactly what bash would run, so nothing but the injected
+            # flags changes.
+            rule = matching_rule(command, self.rules)
+            if rule is not None and rule.harden is not None:
+                argv = _parse_argv(command)
+                assert argv  # ``matching_rule`` parsed it already
+                exec_argv = rule.harden(argv)
         timeout_s = _resolve_timeout(arguments.get("timeout"), self.timeout_s)
         # The tier gate above still applies; the sync timeout does NOT — a
         # backgrounded process outlives this call.
@@ -203,25 +213,38 @@ class ShellRunTool:
         group while this thread is blocked in ``communicate()``: the wait
         returns immediately and the second value reports *interrupted*, so the
         result never masquerades as a plain exit or a timeout. Registration
-        engages only where a real HOST group exists to kill: the default local
-        runner (an injected test runner spawns nothing; a sandbox backend
-        ignores ``runner`` and runs remotely) and a host whose runner exposes
-        the foreground surface (``getattr`` so a plain spawn/poll/kill double
-        skips cleanly). Unregistration always lands, in the ``finally``."""
+        engages only where something can actually be killed: the default
+        local runner (an injected test runner spawns nothing), or a backend
+        that declares ``supports_foreground_kill`` and hands back a terminator
+        for the remote command through ``run_argv(on_start=...)`` — a sandbox
+        container, where there is no host group. Either way the host's runner
+        must expose the foreground surface (``getattr`` so a plain
+        spawn/poll/kill double skips cleanly). Unregistration always lands, in
+        the ``finally``."""
         runner = self.runner
         registry = ctx.background_runner
         register = getattr(registry, "register_foreground", None)
         unregister = getattr(registry, "unregister_foreground", None)
         task_id = str(ctx.metadata.get("task_id", ""))
         handle_box: list[Any] = []
+        extra: dict[str, Any] = {}
         if runner is None and callable(register) and callable(unregister) and task_id:
+            if getattr(self.exec_env, "supports_foreground_kill", False):
 
-            def _on_spawn(proc: subprocess.Popen[bytes]) -> None:
-                handle_box.append(
-                    register(popen=proc, spawned_by_task_id=task_id)
-                )
+                def _on_start(kill: Callable[[], None]) -> None:
+                    handle_box.append(
+                        register(kill=kill, spawned_by_task_id=task_id)
+                    )
 
-            runner = runner_with_spawn_hook(_on_spawn)
+                extra["on_start"] = _on_start
+            else:
+
+                def _on_spawn(proc: subprocess.Popen[bytes]) -> None:
+                    handle_box.append(
+                        register(popen=proc, spawned_by_task_id=task_id)
+                    )
+
+                runner = runner_with_spawn_hook(_on_spawn)
         interrupted = False
         try:
             outcome = self.exec_env.run_argv(
@@ -230,6 +253,7 @@ class ShellRunTool:
                 timeout_s=timeout_s,
                 output_cap=self.output_cap,
                 runner=runner,
+                **extra,
             )
         finally:
             if handle_box:

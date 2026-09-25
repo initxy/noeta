@@ -10,6 +10,8 @@ uninitialised schema raises :class:`PostgresSchemaVersionError` rather than
 being silently read. Reads reuse the live adapter's
 :func:`noeta.builtins.storage.impl.postgres.eventlog._row_to_envelope` so the
 two read shapes cannot drift, and a single consumer needs no adapter lock.
+A dropped connection is reopened (with the read-only setting re-applied) and
+the read re-sent once, like the live adapters.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from __future__ import annotations
 from typing import Optional
 
 import psycopg
-from psycopg.rows import dict_row
+from psycopg.rows import DictRow, dict_row
 
 from noeta.protocols.errors import ContentNotFound, NoetaError
 from noeta.protocols.event_log import (
@@ -27,6 +29,9 @@ from noeta.protocols.event_log import (
 from noeta.protocols.events import EventEnvelope
 from noeta.protocols.values import ContentRef
 
+from noeta.builtins.storage.impl.postgres._connection import (
+    _ReconnectingConnection,
+)
 from noeta.builtins.storage.impl.postgres.eventlog import _row_to_envelope
 from noeta.builtins.storage.impl.postgres.migrations import SCHEMA_VERSION
 
@@ -69,6 +74,19 @@ class PostgresReadOnlyError(NoetaError):
     """A write was attempted on a read-only store (e.g. ``put``)."""
 
 
+def _connect_read_only(dsn: str) -> psycopg.Connection[DictRow]:
+    conn = psycopg.connect(dsn, autocommit=True, row_factory=dict_row)
+    try:
+        # Server-side write rejection for every subsequent statement, so no
+        # DDL, migration, or version bump can slip through. Set on every
+        # (re)connect: it is a per-connection setting.
+        conn.execute("SET default_transaction_read_only = on")
+    except Exception:
+        conn.close()
+        raise
+    return conn
+
+
 class PostgresReadOnlyStore:
     """Strictly read-only view over a Postgres Noeta store.
 
@@ -77,11 +95,8 @@ class PostgresReadOnlyStore:
     """
 
     def __init__(self, dsn: str) -> None:
-        self._conn = psycopg.connect(dsn, autocommit=True, row_factory=dict_row)
+        self._conn = _ReconnectingConnection(lambda: _connect_read_only(dsn))
         try:
-            # Server-side write rejection for every subsequent statement, so
-            # no DDL, migration, or version bump can slip through.
-            self._conn.execute("SET default_transaction_read_only = on")
             found = self._read_version()
             if found != SCHEMA_VERSION:
                 raise PostgresSchemaVersionError(

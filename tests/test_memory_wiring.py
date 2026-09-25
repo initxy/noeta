@@ -423,19 +423,21 @@ def test_product_resume_recalls_memory_written_earlier(tmp_path: Path) -> None:
     assert "Tag, build, publish." in texts[goal_at + 1]
 
 
-def test_index_resident_refreshes_on_the_next_turn(tmp_path: Path) -> None:
-    """D9 — a memory written mid-conversation reaches the index resident on
-    the NEXT turn of the SAME task.
+def test_index_resident_is_frozen_and_the_delta_note_names_the_new_page(
+    tmp_path: Path,
+) -> None:
+    """2026-09-25 — the index resident is frozen per task; a page written
+    mid-task reaches the model through the ``turn_intake`` delta note.
 
-    Before: ``run_content_init`` ran at ``seed_start`` only, and the pack's
-    init hook closed over an ``entries()`` snapshot taken when the Engine was
-    built — so the index the model reads was frozen at task start (and, through
-    the warm Engine cache, could be older still). Now the hook re-reads at
-    invocation and the new-goal path re-runs it.
-
-    The refresh is a REFRESH, not a re-activation: the hash moves, the
-    activation anchor does not (first-write-wins), so the resident's placement
-    is untouched.
+    History: D9 (2026-08-04) made the init hook re-read the store at each new
+    goal and REFRESH the index, so a page written mid-conversation showed up
+    in the index on the next turn. That refresh moved the semi-stable bytes,
+    which rewrote the cached prompt prefix from the index block on for every
+    turn after a ``memory_write`` — in a long session, the whole
+    conversation. Now the init hook records the index first-write-wins
+    (``refresh=False``, like the environment block) and D9's guarantee rides
+    the volatile suffix: one recorded line after the next goal naming the
+    pages created or re-described since the task's index snapshot.
     """
     from noeta.protocols.messages import LLMResponse, ToolUseBlock, Usage
 
@@ -473,36 +475,40 @@ def test_index_resident_refreshes_on_the_next_turn(tmp_path: Path) -> None:
     seeded = fold(host.event_log, host.content_store, first.task_id)
     seed_hash = seeded.state.active_content[MEMORY_KIND][MEMORY_INDEX_NAME]
     seed_anchor = dict(seeded.context.content_anchors)
-    # The seed index knows only the pre-existing memory.
-    assert "release-steps" not in host.content_store.get(
-        _ref_for(host, seed_hash)
-    ).decode("utf-8")
+    seed_text = host.content_store.get(_ref_for(host, seed_hash)).decode("utf-8")
+    assert "release-steps" not in seed_text
 
     driver.send_goal(first.task_id, goal="anything at all")
 
     folded = fold(host.event_log, host.content_store, first.task_id)
-    live_hash = folded.state.active_content[MEMORY_KIND][MEMORY_INDEX_NAME]
-    assert live_hash != seed_hash
-    assert live_hash == memory_index_hash(load_memory_store(root=mem).entries())
-    index_text = host.content_store.get(_ref_for(host, live_hash)).decode("utf-8")
-    assert "release-steps" in index_text
-    assert "deploy-notes" in index_text  # a refresh, not a replacement
-    # Exactly one refresh event — the second turn re-records once, and only
-    # because the store actually changed.
+    # The resident did not move: same hash, one recording, same anchor.
+    assert folded.state.active_content[MEMORY_KIND][MEMORY_INDEX_NAME] == seed_hash
     recordings = [
         e for e in host.event_log.read(first.task_id)
         if e.type == "ContextContentRecorded"
         and getattr(e.payload, "kind", "") == MEMORY_KIND
     ]
-    assert [e.payload.content_hash for e in recordings] == [seed_hash, live_hash]
-    # Bytes moved, placement did not.
+    assert [e.payload.content_hash for e in recordings] == [seed_hash]
     assert dict(folded.context.content_anchors) == seed_anchor
+    # The next turn's request carries the frozen index bytes and, right after
+    # the goal, the delta note naming the new page.
+    request = host.provider.received_requests[-1]
+    texts = [
+        "".join(b.text for b in m.content if hasattr(b, "text"))
+        for m in request.messages
+    ]
+    assert seed_text in texts
+    goal_at = texts.index("anything at all")
+    assert request.messages[goal_at + 1].origin == "system"
+    assert texts[goal_at + 1] == (
+        "Memory index changed this task: +release-steps (Release)"
+    )
 
 
 def test_index_resident_refresh_is_a_no_op_when_unchanged(tmp_path: Path) -> None:
     """The rerun costs nothing on an untouched store: the recorder drops a
-    re-record whose hash is unchanged, so the follow-up turn is byte-identical
-    to what it was before D9."""
+    re-record whose hash is unchanged (and the delta note is silent), so the
+    follow-up turn is byte-identical to what it was before D9."""
     ws = tmp_path / "ws"
     ws.mkdir()
     mem = tmp_path / "global-memories"

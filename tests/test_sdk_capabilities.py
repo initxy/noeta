@@ -37,7 +37,7 @@ def test_effort_modes_are_in_increasing_intensity_order() -> None:
         Options(system_prompt="x", effort=mode)
 
 
-def test_model_capabilities_projects_catalog_vision() -> None:
+def test_model_capabilities_projects_catalog_vision(monkeypatch) -> None:
     from noeta.builtins.providers.impl import catalog
 
     # A known vision-capable id, an alias, and an uncatalogued stub.
@@ -58,9 +58,18 @@ def test_model_capabilities_projects_catalog_vision() -> None:
     # catalogued supports_vision=False row refuses.
     assert caps[vision_ids[0]]["supports_vision"] is True
     assert caps["stub-model"]["supports_vision"] is True
-    non_vision = [k for k, v in catalog.CATALOG.items() if not v.supports_vision]
-    assert non_vision, "catalog should carry at least one non-vision row"
-    assert model_capabilities([non_vision[0]])[non_vision[0]][
+    # No shipped row is text-only today, so the refusing side of the gate is
+    # exercised with a registered one.
+    text_only = catalog.ModelSpec(
+        real_model_id="text-only-model",
+        context_window=128_000,
+        max_output_tokens=16_384,
+        supports_vision=False,
+    )
+    monkeypatch.setattr(
+        catalog, "_EXTENSIONS", {**catalog._EXTENSIONS, "text-only-model": text_only}
+    )
+    assert model_capabilities(["text-only-model"])["text-only-model"][
         "supports_vision"
     ] is False
 

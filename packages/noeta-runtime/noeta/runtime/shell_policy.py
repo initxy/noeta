@@ -25,12 +25,14 @@ __all__ = [
     "DEFAULT_SHELL_OUTPUT_CAP",
     "DEFAULT_SHELL_TIMEOUT_S",
     "MAX_SHELL_TIMEOUT_MS",
+    "SHELL_EXPANSION_CHARS",
     "SHELL_META_CHARS",
     "ShellMode",
     "append_project_shell_rule",
     "build_allowlist",
     "command_in_allowlist",
     "load_project_shell_allowlist",
+    "matching_rule",
     "project_shell_allowlist_path",
     "rule_spec_from_command",
 ]
@@ -53,6 +55,14 @@ _STDOUT_TAIL_BYTES = 2048
 _STDERR_TAIL_BYTES = 1024
 
 SHELL_META_CHARS = frozenset(";&|<>`$()\n\r")
+
+#: Characters bash expands in an UNQUOTED word — brace expansion, pathname
+#: globbing, tilde expansion — that ``shlex`` leaves literal. The allowlist
+#: judges the ``shlex`` argv while the arbitrary tier executes ``bash -c``, so
+#: a command carrying one of these unquoted would be judged on an argv bash
+#: never runs (``find . {-exec,touch} x {} +`` hides ``-exec`` from the
+#: validator).
+SHELL_EXPANSION_CHARS = frozenset("{*?[~")
 
 
 class ShellMode(str, Enum):
@@ -86,6 +96,13 @@ class AllowRule:
     subcommand: Optional[str]
     validate: _ArgValidator
     label: str
+    #: The matched command runs code or config the WORKSPACE controls (a test
+    #: runner loading ``conftest.py`` or ``package.json`` scripts), so the host
+    #: honours the rule only when the workspace is trusted.
+    runs_workspace_code: bool = False
+    #: Rewrites a matched argv before it runs — e.g. ``git`` flags that switch
+    #: off repo-configured helper programs. ``None`` ⇒ run as parsed.
+    harden: Optional[Callable[[list[str]], list[str]]] = None
 
     def matches(self, argv: list[str]) -> bool:
         if not argv or argv[0] != self.program:
@@ -143,17 +160,29 @@ def build_allowlist(
 def command_in_allowlist(command: str, rules: Sequence["AllowRule"]) -> bool:
     """True iff ``command`` is a well-formed, metachar-free argv matching a rule.
 
-    Shared by the tool's own ALLOWLIST gate and the host approval predicate
-    ("does this need human sign-off?" = ``not command_in_allowlist``). A
-    command carrying shell metacharacters or unbalanced quotes is never
-    allowlisted, whatever the mode.
+    The host approval predicate's judgement ("does this need human sign-off?"
+    = ``not command_in_allowlist``). A command carrying shell metacharacters,
+    an unquoted expansion character (:data:`SHELL_EXPANSION_CHARS`) or
+    unbalanced quotes is never allowlisted, whatever the mode: past those
+    checks the ``shlex`` argv is exactly the argv ``bash -c`` would run.
     """
-    if _has_shell_meta(command):
-        return False
+    return matching_rule(command, rules) is not None
+
+
+def matching_rule(
+    command: str, rules: Sequence["AllowRule"]
+) -> Optional["AllowRule"]:
+    """The first rule ``command`` matches under :func:`command_in_allowlist`'s
+    checks, or ``None``."""
+    if _has_shell_meta(command) or _has_unquoted_expansion(command):
+        return None
     argv = _parse_argv(command)
     if not argv:
-        return False
-    return _matches_allowlist(argv, tuple(rules))
+        return None
+    for rule in rules:
+        if rule.matches(argv):
+            return rule
+    return None
 
 
 def rule_spec_from_command(command: str) -> Optional[dict[str, str]]:
@@ -242,6 +271,40 @@ def _has_shell_meta(command: str) -> bool:
     return any(c in SHELL_META_CHARS for c in command)
 
 
+def _has_unquoted_expansion(command: str) -> bool:
+    """True iff a :data:`SHELL_EXPANSION_CHARS` character sits outside quotes.
+
+    Mirrors bash's quoting: a backslash escapes the next character, nothing
+    inside single quotes is special, and inside double quotes brace, glob and
+    tilde expansion do not happen. ``~`` expands only as a tilde prefix — at
+    the start of a word or after ``=`` / ``:`` — so ``HEAD~1`` stays allowed.
+    Unbalanced quotes are left to ``shlex``, which rejects them.
+    """
+    quote: Optional[str] = None
+    escaped = False
+    prev = " "
+    for ch in command:
+        if escaped:
+            escaped = False
+        elif quote == "'":
+            if ch == "'":
+                quote = None
+        elif ch == "\\":
+            escaped = True
+        elif quote == '"':
+            if ch == '"':
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "~":
+            if prev.isspace() or prev in "=:":
+                return True
+        elif ch in SHELL_EXPANSION_CHARS:
+            return True
+        prev = ch
+    return False
+
+
 def _resolve_timeout(raw: Any, default_s: int) -> int:
     """Per-call ``timeout`` (milliseconds) → seconds, clamped to
     :data:`MAX_SHELL_TIMEOUT_MS`. Absent / non-positive / non-numeric falls
@@ -258,8 +321,3 @@ def _parse_argv(command: str) -> Optional[list[str]]:
         return shlex.split(command, posix=True)
     except ValueError:
         return None
-
-
-def _matches_allowlist(argv: list[str], rules: tuple[AllowRule, ...]) -> bool:
-    return any(rule.matches(argv) for rule in rules)
-

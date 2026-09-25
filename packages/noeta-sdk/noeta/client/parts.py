@@ -26,9 +26,12 @@ __all__ = [
     "COMPOSER_REF",
     "POLICY_REF",
     "ReactImpl",
+    "StoppableObserver",
     "builtin_tool_classes",
     "builtin_tool_ref",
     "browser_tool_names",
+    "build_hook_observer",
+    "catalog_is_priced",
     "catalog_price",
     "default_guards_factory",
     "default_policy_factory",
@@ -177,6 +180,17 @@ def catalog_price(model: str, usage: Usage) -> float:
     return cost
 
 
+def catalog_is_priced(model: str) -> bool:
+    """True when the merged catalog has all four rates for ``model``.
+
+    Alias-resolved. ``False`` for a catalogued row without published prices
+    and for an uncatalogued selector — the two cases ``catalog_price`` charges
+    $0 for. The usage read model uses it to flag a $0 that means "unknown".
+    """
+    spec = _catalog().find_spec(model)
+    return spec is not None and bool(spec.is_priced)
+
+
 def resolve_model_alias(selector: str) -> str:
     """Friendly alias → real model id; identity for any non-alias selector."""
     resolved: str = _catalog().resolve_alias(selector)
@@ -252,7 +266,8 @@ def default_policy_factory() -> Callable[..., Any]:
     implementation of its own. ``Options.policy`` and the plugin ``policy``
     surface override it at the builder.
     """
-    return _resolve_ref("noeta.builtins.react.impl:build_react_policy_factory")
+    factory: Callable[..., Any] = _resolve_ref("noeta.builtins.react.impl:build_react_policy_factory")
+    return factory
 
 
 class ReactImpl(Protocol):
@@ -301,7 +316,42 @@ def default_guards_factory() -> Callable[..., Any]:
     Resolved from the ``governance`` built-in so the kernel imports no guard
     implementation of its own.
     """
-    return _resolve_ref("noeta.builtins.governance.impl:build_default_guards")
+    factory: Callable[..., Any] = _resolve_ref("noeta.builtins.governance.impl:build_default_guards")
+    return factory
+
+
+class StoppableObserver(Protocol):
+    """A live event-log observer the Client owns and stops on shutdown."""
+
+    def stop(self) -> None: ...
+
+
+def build_hook_observer(
+    *,
+    event_log: Any,
+    post_tool_use: tuple[Any, ...],
+    notification: tuple[Any, ...],
+    cwd: str,
+    timeout_s: float,
+    max_queue: int,
+) -> StoppableObserver:
+    """The ``governance`` built-in's ``HookObserver``, loader-resolved.
+
+    Built once per Client from ``HostConfig.hooks`` (post-tool-use and
+    notification rules) and subscribed to its event log; the Client stops it
+    in ``shutdown``.
+    """
+    factory: Callable[..., StoppableObserver] = _resolve_ref(
+        "noeta.builtins.governance.impl:build_hook_observer"
+    )
+    return factory(
+        event_log=event_log,
+        post_tool_use=post_tool_use,
+        notification=notification,
+        cwd=cwd,
+        timeout_s=timeout_s,
+        max_queue=max_queue,
+    )
 
 
 _SESSION_PACK_CACHE: dict[frozenset[str], tuple[SessionPackEntry, ...]] = {}

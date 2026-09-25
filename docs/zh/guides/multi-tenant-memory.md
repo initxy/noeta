@@ -75,7 +75,7 @@ def consolidate_tenant(tenant: str) -> bool:
 - 防抖标记放在各租户自己的目录里，租户之间互不影响。
 - `include_task` 之外的任务完全不进摘要。
 
-如果只让整理任务写记忆，就设 `HostConfig(memory_read_only=True)`：agent 只有 `memory_read` 和 `memory_search`，整理 agent 仍然有全部四个记忆工具。
+如果只让整理任务写记忆，就设 `HostConfig(memory_read_only=True)`：agent 只有 `memory_read` 和 `memory_search`，系统提示里的记忆说明也换成只读版（不再教它怎么写），整理 agent 仍然有全部四个记忆工具。
 
 ## 要注意的
 

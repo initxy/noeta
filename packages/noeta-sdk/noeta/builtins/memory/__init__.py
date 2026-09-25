@@ -49,6 +49,14 @@ MANIFEST = PluginManifest(
             "noeta.builtins.memory.impl.recall:memory_reminder_provider",
             seams=["turn_intake"],
         ),
+        # The one-line note naming pages created, re-described or removed
+        # since the task's (frozen) index snapshot; bound like recall.
+        c(
+            "reminder_provider",
+            "memory-index-delta",
+            "noeta.builtins.memory.impl.index_delta:memory_index_delta_provider",
+            seams=["turn_intake"],
+        ),
         # Band 300 places the pack directly after the base fs/web packs; it
         # self-gates on the agent's ``memory`` capability flag.
         c(

@@ -71,6 +71,10 @@ host = build_reference_host(
 )
 ```
 
+To accept images in user messages, also pass the adapter
+`image_resolver=` — a `ContentRef -> bytes` callback over the host's content
+store; without it, a request carrying an image raises.
+
 The same `delta_sink` then starts carrying real token deltas with no further
 wiring. Point the sink at your transport — an SSE hub, a websocket — instead of
 stdout, and the host streams to a browser.

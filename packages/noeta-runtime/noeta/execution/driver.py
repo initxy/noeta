@@ -29,7 +29,7 @@ import logging
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, ClassVar, Optional
+from typing import Any, Callable, ClassVar, Optional, cast
 
 from noeta.execution.multi_turn import (
     NEXT_GOAL_WAKE_HANDLE,
@@ -44,7 +44,7 @@ from noeta.execution.reminders import (
 )
 from noeta.execution.resolver import agent_name_of
 from noeta.execution.subtask_drain import UnsupportedSubtaskSuspend
-from noeta.core.engine import suspend_on_human_handle
+from noeta.core.engine import Engine, suspend_on_human_handle
 from noeta.core._decision_handlers import put_messages
 from noeta.core.fold import BoundedEventLog, fold
 from noeta.core.snapshot import serialize_task_state, snapshot_media_type
@@ -63,7 +63,13 @@ from noeta.protocols.events import (
     TurnInterruptedPayload,
 )
 from noeta.protocols.decisions import TaskStatePatch
-from noeta.protocols.messages import ImageBlock, Message, MessageOrigin, TextBlock
+from noeta.protocols.messages import (
+    ImageBlock,
+    Message,
+    MessageOrigin,
+    TextBlock,
+    is_host_injected,
+)
 from noeta.protocols.policy import Policy
 from noeta.protocols.task import Task
 from noeta.tools.limits import SHELL_INLINE_MAX_CHARS, elide_middle
@@ -95,6 +101,7 @@ __all__ = [
     "ModelSelectorError",
     "NotResumableError",
     "ProviderSelectorError",
+    "QuestionNotPendingError",
     "SeededTurn",
     "TaskAlreadyTerminalError",
     "UnknownTaskError",
@@ -184,6 +191,22 @@ class NotResumableError(CodedError, RuntimeError):
         if dispatcher_status is not None:
             message += f"; dispatcher status is {dispatcher_status!r}"
         super().__init__(message)
+
+
+class QuestionNotPendingError(CodedError, RuntimeError):
+    """``answer`` targeted a task suspended on a question handle whose
+    question is not pending in its state — nothing to answer. Raised before
+    any write; a :class:`RuntimeError` too, like its lifecycle siblings."""
+
+    code = "question_not_pending"
+
+    def __init__(self, *, task_id: str, question_id: str) -> None:
+        self.task_id = task_id
+        self.question_id = question_id
+        super().__init__(
+            f"task {task_id!r} is suspended on question-{question_id} "
+            "but has no matching pending question"
+        )
 
 
 class TaskAlreadyTerminalError(CodedError, RuntimeError):
@@ -336,6 +359,37 @@ def _intake_providers_for(
     """
     seam = getattr(host, "intake_reminder_providers", None)
     return tuple(seam(agent, task_id=task_id)) if callable(seam) else ()
+
+
+#: ``TaskSuspended.reason`` the seed compensation records: the command's
+#: input may already be on the stream, but no turn ran on it. A ``send_goal``
+#: retry reads it to reuse a goal the failed seed recorded.
+SEED_FAILED_SUSPEND_REASON = "seed_failed"
+
+
+def _undriven_goal(
+    task: Task, *, content: list[Any], origin: Optional[MessageOrigin]
+) -> bool:
+    """Whether this exact goal is already the newest, unanswered user turn.
+
+    True when the transcript ends with a user message carrying ``content``
+    and ``origin``, followed by nothing but host-injected turns (the intake
+    reminders recorded after it). Only half of the retry test: a turn that
+    rested without answering (an interrupt, a compaction that made no
+    progress) looks the same, and there the same goal sent again is a new
+    turn — so the caller also requires the compensation's suspend reason.
+    """
+    for message in reversed(task.runtime.messages):
+        if (
+            message.role == "user"
+            and message.origin == origin
+            and message.content == content
+        ):
+            return True
+        if is_host_injected(message):
+            continue
+        return False
+    return False
 
 
 def _background_exit_notice(summary: str, output_tail: str, job_id: str) -> str:
@@ -551,6 +605,7 @@ class InteractionDriver:
         goal_origin: Optional[MessageOrigin] = None,
         attachment_texts: tuple[str, ...] = (),
         activations: tuple[str, ...] = (),
+        principal: Optional[Principal] = None,
     ) -> DriveOutcome:
         """Create a Task from server-side config and drive its first turn.
 
@@ -582,6 +637,7 @@ class InteractionDriver:
                 goal_origin=goal_origin,
                 attachment_texts=attachment_texts,
                 activations=activations,
+                principal=principal,
             )
         )
 
@@ -601,6 +657,7 @@ class InteractionDriver:
         goal_origin: Optional[MessageOrigin] = None,
         attachment_texts: tuple[str, ...] = (),
         activations: tuple[str, ...] = (),
+        principal: Optional[Principal] = None,
     ) -> SeededTurn:
         """Create a Task from server-side config and seed its first turn.
 
@@ -654,8 +711,13 @@ class InteractionDriver:
         by the new task_id so the seed-time resolve, the first-turn drive, and any
         approval-resume all derive the same gating set. ``None`` ⇒ the host-fixed
         default.
+
+        ``principal`` is the per-turn acting principal — a multi-user host
+        serves many from one driver. ``None`` ⇒ the driver's own. It gates the
+        selector and is stamped on the opening ``ModelBound``.
         """
-        bound_model = self._authorize_selector(model_selector)
+        acting = principal if principal is not None else self._principal
+        bound_model = self._authorize_selector(model_selector, acting)
         # validate the (provider, model) pair on the ORIGINAL selector names
         # before any durable write. ``None`` provider ⇒ host default (no check).
         bound_provider = self._authorize_pair(
@@ -776,7 +838,7 @@ class InteractionDriver:
             task,
             lease_id=lease.lease_id,
             model=bound_model,
-            principal_identity=self._principal.identity,
+            principal_identity=acting.identity,
             provider=bound_provider,
         )
         # Seed the goal as the first user turn (durable, resume-safe) BEFORE
@@ -1023,6 +1085,7 @@ class InteractionDriver:
         goal_origin: Optional[MessageOrigin] = None,
         attachment_texts: tuple[str, ...] = (),
         activations: tuple[str, ...] = (),
+        principal: Optional[Principal] = None,
     ) -> DriveOutcome:
         """Append a new user turn and drive it.
 
@@ -1066,6 +1129,7 @@ class InteractionDriver:
                 goal_origin=goal_origin,
                 attachment_texts=attachment_texts,
                 activations=activations,
+                principal=principal,
             )
         )
 
@@ -1208,6 +1272,7 @@ class InteractionDriver:
         goal_origin: Optional[MessageOrigin] = None,
         attachment_texts: tuple[str, ...] = (),
         activations: tuple[str, ...] = (),
+        principal: Optional[Principal] = None,
     ) -> SeededTurn:
         """Validate + seed an appended-goal turn without driving it.
 
@@ -1227,7 +1292,17 @@ class InteractionDriver:
         least one selector is given the validated ``(provider, model)`` pair is
         checked *before* any durable write; a bad pair raises
         :class:`ProviderSelectorError` (no reopen / ModelBound / turn).
+
+        ``principal`` is the per-turn acting principal (``None`` ⇒ the
+        driver's own): it gates ``model_selector``, is stamped on a switch's
+        ``ModelBound`` and names who reopened a closed conversation.
+
+        A retry after a seed that recorded this very goal and then failed
+        before the turn ran (the post-switch Engine rebuild, compensated back
+        to the next-goal suspend) does not record the goal again: the turn
+        is driven over the goal already on the stream.
         """
+        acting = principal if principal is not None else self._principal
         task = self._require_human_suspend(task_id, NEXT_GOAL_WAKE_HANDLE)
         # Human-stop hygiene: a prior ``close`` (or cancel attempt) pressed while
         # NO turn was in flight leaves its cancel-registry mark behind. An
@@ -1281,18 +1356,24 @@ class InteractionDriver:
                 attachment_texts=tuple(attachment_texts),
                 activate_skills=tuple(activations),
             )
-        prelude: WokenPrelude
+        # A goal a failed seed already recorded (and compensated back to this
+        # suspend) is not appended twice: the retry drives the turn over it.
+        recorded = _undriven_goal(
+            task, content=[TextBlock(text=goal), *images], origin=goal_origin
+        ) and self._last_suspend_reason(task_id) == SEED_FAILED_SUSPEND_REASON
+        inner: Optional[WokenPrelude] = None if recorded else append
+        prelude: Optional[WokenPrelude]
         if model_selector is None and provider_selector is None:
             # No per-turn switch — the conversation keeps both bindings; no
             # ModelBound is written.
-            prelude = append
+            prelude = inner
         else:
             # The model riding this ModelBound: the new selector when given,
             # else the CURRENT folded model binding (a provider-only switch must
             # re-record the model so fold does not lose it). ``None`` current
             # binding (a session that never bound) ⇒ the driver default model.
             if model_selector is not None:
-                bound_model = self._authorize_selector(model_selector)
+                bound_model = self._authorize_selector(model_selector, acting)
             else:
                 current = getattr(task.governance, "model_binding", None)
                 bound_model = (
@@ -1314,12 +1395,24 @@ class InteractionDriver:
             # provider name (``None`` ⇒ provider sticks, fold keeps the current
             # binding). The effective name above is for validation only.
             bound_provider = provider_selector
-            prelude = ModelBindPrelude(
-                model=bound_model,
-                principal_identity=self._principal.identity,
-                inner=append,
-                provider=bound_provider,
+            already_bound = (
+                getattr(task.governance, "model_binding", None) == bound_model
+                and (
+                    bound_provider is None
+                    or getattr(task.governance, "provider_binding", None)
+                    == bound_provider
+                )
             )
+            if recorded and already_bound:
+                # The failed seed wrote this very switch too — nothing to add.
+                prelude = None
+            else:
+                prelude = ModelBindPrelude(
+                    model=bound_model,
+                    principal_identity=acting.identity,
+                    inner=inner,
+                    provider=bound_provider,
+                )
         # Stash this turn's per-turn, NON-durable
         # permission_mode keyed by task_id — set AFTER selector authorization (a
         # rejected selector raises above, leaving the prior turn's mode intact) so
@@ -1350,7 +1443,7 @@ class InteractionDriver:
             engine = self._host.resolve_engine(task)
             engine.note_conversation_reopened(
                 task,
-                reopened_by=self._principal.identity,
+                reopened_by=acting.identity,
                 reason="new goal",
             )
         # ``refresh_content``: a new goal re-runs the contributed init hooks
@@ -1629,10 +1722,7 @@ class InteractionDriver:
         task = self._require_human_suspend(task_id, handle)
         pending = task.governance.pending_questions.get(question_id)
         if pending is None:
-            raise RuntimeError(
-                f"task {task_id!r} is suspended on question-{question_id} "
-                "but has no matching pending question"
-            )
+            raise QuestionNotPendingError(task_id=task_id, question_id=question_id)
         questions = codec.load_questions_body(
             self._host.content_store, pending["questions_ref"]
         )
@@ -2078,7 +2168,8 @@ class InteractionDriver:
         settle_engine = seed.engine or engine
         folded = fold(host.event_log, host.content_store, task_id)
         folded = suspend_on_human_handle(
-            settle_engine,
+            # Hosts hand back the concrete Engine; this helper reads its internals.
+            cast(Engine, settle_engine),
             folded,
             handle=NEXT_GOAL_WAKE_HANDLE,
             lease_id=lease.lease_id,
@@ -2732,6 +2823,18 @@ class InteractionDriver:
                     lease_id=lease.lease_id,
                 )
             prelude(engine, task, lease_id=lease.lease_id)
+            if isinstance(prelude, ModelBindPrelude):
+                # The switch opened this turn, so this turn runs on it: rebuild
+                # the turn's Engine from the post-prelude fold. Driving the
+                # pre-switch Engine would answer the switching goal on the old
+                # model — and a crash mid-turn would then resume on the new
+                # one, so the same turn would change model depending on
+                # whether the process survived. Inside the guard: a failed
+                # rebuild compensates like a failed prelude.
+                self._forget_turn_engine(task_id)
+                engine = host.resolve_engine(
+                    fold(host.event_log, host.content_store, task_id)
+                )
         except Exception:
             # ``TaskWoken`` is already durable; propagating with the turn
             # half-seeded would strand a ``running`` window the worker later
@@ -2745,9 +2848,16 @@ class InteractionDriver:
             try:
                 wake = lease.wake_event
                 if isinstance(wake, HumanResponseReceived):
+                    # Re-fold: the prelude may have written events past the
+                    # ``task`` this frame holds. The ``seed_failed`` tag lets
+                    # a retried ``send_goal`` tell this rest (its goal may be
+                    # recorded, never driven) from an ordinary one.
                     task = suspend_on_human_handle(
-                        engine, task,
+                        # Hosts hand back the concrete Engine; this helper reads its internals.
+                        cast(Engine, engine),
+                        fold(host.event_log, host.content_store, task_id),
                         handle=wake.handle, lease_id=lease.lease_id,
+                        suspend_reason=SEED_FAILED_SUSPEND_REASON,
                     )
                     host.dispatcher.release(
                         lease.lease_id,
@@ -2760,17 +2870,14 @@ class InteractionDriver:
                     "seed-prelude compensation failed for task %s", task_id
                 )
             raise
-        if isinstance(prelude, ModelBindPrelude):
-            # The switch opened this turn, so this turn runs on it: rebuild the
-            # turn's Engine from the post-prelude fold. Driving the pre-switch
-            # Engine would answer the switching goal on the old model — and a
-            # crash mid-turn would then resume on the new one, so the same turn
-            # would change model depending on whether the process survived.
-            self._forget_turn_engine(task_id)
-            engine = host.resolve_engine(
-                fold(host.event_log, host.content_store, task_id)
-            )
         return engine
+
+    def _last_suspend_reason(self, task_id: str) -> Optional[str]:
+        """The ``reason`` on ``task_id``'s newest ``TaskSuspended``, if any."""
+        for env in reversed(self._host.event_log.read(task_id)):
+            if env.type == "TaskSuspended":
+                return str(env.payload.reason)
+        return None
 
     def _require_human_suspend(self, task_id: str, handle: str) -> Task:
         """Refuse a command whose task is not suspended on ``handle``; return
@@ -2834,7 +2941,9 @@ class InteractionDriver:
             )
         return task
 
-    def _authorize_selector(self, selector: Optional[str]) -> str:
+    def _authorize_selector(
+        self, selector: Optional[str], principal: Optional[Principal] = None
+    ) -> str:
         """Validate a model selector and return the model id to bind.
 
         The selector is permitted iff it is in
@@ -2861,14 +2970,18 @@ class InteractionDriver:
         """
         if selector is None:
             return self._default_model
-        allowed = self._authorized_models()
+        allowed = self._authorized_models(
+            principal if principal is not None else self._principal
+        )
         if allowed is not None and selector not in allowed:
             raise ModelSelectorError(
                 selector=selector, allowed=sorted(allowed)
             )
         return self._resolve_alias(selector)
 
-    def _authorized_models(self) -> Optional[frozenset[str]]:
+    def _authorized_models(
+        self, principal: Principal
+    ) -> Optional[frozenset[str]]:
         """The selectors this driver may bind = principal ∩ allowlist.
 
         A ⊤ principal (``allows_any``) contributes no upper bound, so the
@@ -2878,12 +2991,12 @@ class InteractionDriver:
         catalog, no alias table, nothing to bound selectors against).
         """
         if self._model_allowlist is None:
-            if self._principal.allows_any:
+            if principal.allows_any:
                 return None
-            return self._principal.allowed_models
-        if self._principal.allows_any:
+            return principal.allowed_models
+        if principal.allows_any:
             return self._model_allowlist
-        return self._principal.allowed_models & self._model_allowlist
+        return principal.allowed_models & self._model_allowlist
 
     def _authorize_pair(
         self,

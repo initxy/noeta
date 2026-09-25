@@ -257,35 +257,29 @@ def test_todo_write_malformed_no_state_write(tmp_path: Path) -> None:
     assert any(m.role == "tool" for m in task.runtime.messages)
 
 
-def test_todo_write_mixed_with_spawn_is_recoverable(
+def test_todo_write_mixed_with_spawn_saves_and_spawns(
     tmp_path: Path,
 ) -> None:
+    """TodoWrite batched with Task rides the spawn: the checklist is saved and
+    the child runs; the ack and the child result share one tool message
+    (full contract: tests/test_todo_write_with_task.py)."""
     ws = _make_ws(tmp_path)
     host, driver, _provider = _session(
         ws,
-        [_mixed_spawn_todo_call(), _end()],
+        [_mixed_spawn_todo_call(), _end("child"), _end()],
         todo_write_enabled=True,
         delegate_to=("default",),
     )
     out = driver.start(goal="do the work", agent="main")
     types = _types(host, out.task_id)
     assert "TaskFailed" not in types
-    assert "SubtaskSpawned" not in types
-    assert "TaskStatePatched" not in types
-    assert _folded_todos(host, out.task_id) == []
+    assert "SubtaskSpawned" in types
+    assert _folded_todos(host, out.task_id) == _T1
     task = fold(host.event_log, host.content_store, out.task_id)
     tool_messages = [m for m in task.runtime.messages if m.role == "tool"]
-    assert tool_messages
-    assert len(tool_messages[-1].content) == 2
-    # The refusal says nothing ran, names the other control tool, and warns
-    # that the checklist was NOT saved — the model must re-issue it.
-    for block in tool_messages[-1].content:
-        assert block.success is False
-        assert block.output == ""
-        text = block.error or ""
-        assert text.startswith("Nothing in this response ran")
-        assert SPAWN_SUBAGENT_TOOL in text
-        assert "the checklist was not saved" in text
+    assert len(tool_messages) == 1
+    assert [b.call_id for b in tool_messages[0].content] == ["tw", "s1"]
+    assert all(b.success for b in tool_messages[0].content)
     assert "TaskCompleted" in types
 
 

@@ -131,7 +131,7 @@ class TaskLocalRegistry:
             if found is None:
                 found = factory()
                 slots[name] = found
-            return found  # type: ignore[no-any-return]
+            return found
 
     def peek(self, task_id: str, name: str) -> Optional[Any]:
         """``task_id``'s ``name`` slot, or ``None`` when never created —

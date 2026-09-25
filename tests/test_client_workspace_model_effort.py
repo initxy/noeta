@@ -150,9 +150,10 @@ def test_compaction_model_bridges_options_to_the_summarize_request(
     them)."""
 
     def _summarize_call(req) -> bool:  # noqa: ANN001 — request shape
-        if req.system is None or not req.system.content:
+        # The summarize instruction rides as the trailing user turn.
+        if not req.messages or not req.messages[-1].content:
             return False
-        return getattr(req.system.content[0], "text", "").startswith(
+        return getattr(req.messages[-1].content[0], "text", "").startswith(
             "Summarize the conversation"
         )
 

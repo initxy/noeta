@@ -35,7 +35,10 @@ from noeta.storage.spi import enforce_payload_cap, restore_payload
 from noeta.builtins.storage.impl.postgres._connection import (
     _ADVISORY_CLASS_EVENTS,
     _DB_NOW_SQL,
+    _CommitOutcomeUnknown,
+    _TransactionLost,
     _open_connection,
+    _rerun_lost_transaction,
 )
 from noeta.builtins.storage.impl.postgres.migrations import apply_migrations
 
@@ -201,6 +204,51 @@ class PostgresEventLog:
         # to what the cap measured.
         body = to_canonical_bytes(envelope.payload)
 
+        def attempt() -> tuple[EventEnvelope, bool]:
+            return self._append_tx(
+                envelope,
+                body,
+                lease_id=lease_id,
+                expected_seq=expected_seq,
+                idempotency_key=idempotency_key,
+                require_lease=require_lease,
+            )
+
+        # A dropped connection is retried at most once. Lost before COMMIT:
+        # the server discarded the transaction, so re-running it cannot
+        # double-append. Lost during COMMIT: the event may have landed, so
+        # only an idempotency-keyed append retries — its key lookup returns
+        # the stored event instead of appending a second one.
+        try:
+            stamped, inserted = attempt()
+        except _TransactionLost:
+            stamped, inserted = attempt()
+        except _CommitOutcomeUnknown:
+            if lease_id is None or idempotency_key is None:
+                raise
+            stamped, inserted = attempt()
+            # The key lookup hands back this very envelope when the first
+            # COMMIT did land; its subscribers have not seen it yet.
+            inserted = inserted or stamped.id == envelope.id
+
+        # Outside the lock and after COMMIT, so a subscriber that re-enters
+        # ``emit`` opens its own transaction cleanly instead of deadlocking.
+        if inserted:
+            self._notify(stamped)
+        return stamped
+
+    def _append_tx(
+        self,
+        envelope: EventEnvelope,
+        body: bytes,
+        *,
+        lease_id: Optional[str],
+        expected_seq: Optional[int],
+        idempotency_key: Optional[str],
+        require_lease: bool,
+    ) -> tuple[EventEnvelope, bool]:
+        """One append transaction; ``(envelope, inserted)`` where
+        ``inserted`` is False for an idempotency-cache hit."""
         stamped: EventEnvelope
         with self._lock:
             self._conn.execute("BEGIN")
@@ -220,7 +268,7 @@ class PostgresEventLog:
                             envelope.task_id, int(cached["seq"])
                         )
                         self._conn.execute("COMMIT")
-                        return existing
+                        return existing, False
 
                 enforce_payload_cap(envelope.task_id, envelope.type, body)
 
@@ -323,11 +371,7 @@ class PostgresEventLog:
             except Exception:
                 self._conn.execute("ROLLBACK")
                 raise
-
-        # Outside the lock and after COMMIT, so a subscriber that re-enters
-        # ``emit`` opens its own transaction cleanly instead of deadlocking.
-        self._notify(stamped)
-        return stamped
+        return stamped, True
 
     # -- reads -----------------------------------------------------------
 
@@ -427,6 +471,7 @@ class PostgresEventLog:
 
     # -- maintenance -----------------------------------------------------
 
+    @_rerun_lost_transaction
     def purge_task(self, task_id: str) -> bool:
         """Hard-delete every row this task owns (events + idempotency).
 

@@ -125,7 +125,7 @@ ref     = "house_style.provider:GatewayProvider"
 
 ### `reminder_provider`
 
-Runs at a named intake seam (`turn_intake`, `task_seed`) with a `RecallView` (incoming message, folded task state, workspace path, `visible_history`). Returns `Reminder`s (recorded as follow-up turns) and/or `ResidentActivation`s (recorded as residents, activate-once by default). Its output is recorded, so it may call external systems; resume never re-runs it. A raise fails the turn. Built-in: `memory` contributes `memory-recall` on `turn_intake`.
+Runs at a named intake seam (`turn_intake`, `task_seed`) with a `RecallView` (incoming message, folded task state, workspace path, `visible_history`). Returns `Reminder`s (recorded as follow-up turns) and/or `ResidentActivation`s (recorded as residents, activate-once by default). Its output is recorded, so it may call external systems; resume never re-runs it. A raise fails the turn. Built-in: `memory` contributes `memory-recall` and `memory-index-delta` on `turn_intake` — the second records one line naming the pages created, re-described or removed since the task's memory index snapshot, because the index resident itself is frozen per task.
 
 ```toml
 [[tool.noeta.contributions]]
@@ -196,7 +196,7 @@ built-in < plugin < extra_skill_dirs < ~/.agents/skills < ~/.noeta/skills < work
 | `global_agents_skills_dir` | `~/.agents/skills` tier (opt-in) |
 | `skills_dir` | override the workspace set (`.agents/skills` then doesn't mount) |
 | `workspace_skills_trust` | `"trust-store"` gates both workspace tiers on the trust store |
-| `menu_budget_tokens` | cap for the `skill` roster; default 1% of the model's context window |
+| `menu_budget_tokens` | cap for the `skill` roster; default 1% of the model's context window, at most 4,096 tokens |
 | `menu_rank` | `skill name → score`, the keep order when the roster is over budget |
 | `allow_skill_scripts` | mount `run_skill_script` |
 

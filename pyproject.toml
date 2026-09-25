@@ -30,6 +30,19 @@ respect-gitignore = false
 "packages/noeta-sdk/noeta/sdk/storage.py" = ["F822"]
 "packages/noeta-sdk/noeta/client/parts.py" = ["F822"]
 
+# The type gate (`make check`, CI): `uv run mypy` checks both library
+# packages under --strict. The two distributions share the PEP 420 `noeta`
+# namespace, so each package root is a search path.
+[tool.mypy]
+strict = true
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = [
+    "$MYPY_CONFIG_FILE_DIR/packages/noeta-runtime",
+    "$MYPY_CONFIG_FILE_DIR/packages/noeta-sdk",
+]
+files = ["packages/noeta-runtime/noeta", "packages/noeta-sdk/noeta"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra -m 'not install_smoke and not live'"

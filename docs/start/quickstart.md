@@ -8,7 +8,9 @@ Get a real agent working on your files in five minutes.
 uv pip install noeta-sdk        # or: pip install noeta-sdk
 ```
 
-Python 3.11 or newer. Everything you import comes from `noeta.sdk`.
+Python 3.11 or newer. Everything you import comes from `noeta.sdk`. The
+`Glob` and `Grep` tools need [ripgrep](https://github.com/BurntSushi/ripgrep):
+`rg` must be on `PATH` (`apt install ripgrep`, `brew install ripgrep`).
 
 ## 2. Set your API key
 

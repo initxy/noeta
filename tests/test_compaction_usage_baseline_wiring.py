@@ -108,17 +108,18 @@ class _DenseTokenizingProvider:
         self.reported: list[int] = []
 
     def complete(self, request: LLMRequest) -> LLMResponse:
-        system_text = ""
-        if request.system is not None:
-            system_text = "".join(
+        # The summarize instruction rides as the trailing user turn.
+        trailing_text = ""
+        if request.messages:
+            trailing_text = "".join(
                 b.text
-                for b in request.system.content
+                for b in request.messages[-1].content
                 if isinstance(b, TextBlock)
             )
         usage = Usage(
             uncached=estimate_messages_tokens(request.messages) * _DENSITY
         )
-        if _SUMMARY_MARKER in system_text:
+        if trailing_text.startswith(_SUMMARY_MARKER):
             self.summarize_calls += 1
             return LLMResponse(
                 stop_reason="end_turn",

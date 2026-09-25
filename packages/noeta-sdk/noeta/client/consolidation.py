@@ -28,7 +28,8 @@ from typing import Any, Callable, Optional, Protocol
 
 from noeta.core.fold import messages_from_appended
 from noeta.protocols.content_store import ContentStore
-from noeta.protocols.event_log import EventEnvelope, TaskStreamSummary
+from noeta.protocols.event_log import TaskStreamSummary
+from noeta.protocols.events import EventEnvelope
 from noeta.protocols.messages import TextBlock, is_host_injected
 
 

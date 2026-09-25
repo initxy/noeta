@@ -298,9 +298,10 @@ def test_build_reconnects_a_stale_pooled_connection_once(
 def test_build_keeps_a_pooled_connection_on_a_config_error(
     fake_connect: list[_FakeClient],
 ) -> None:
-    """A tool-name collision is the operator's wiring, not the connection's
-    fault: the pooled client is released intact — still live, not retired —
-    so the next build after the fix reuses it instead of reconnecting."""
+    """An unmappable tool name (empty) is a configuration fault, not the
+    connection's: the pooled client is released intact — still live, not
+    retired — so the next build after the fix reuses it instead of
+    reconnecting."""
     from noeta.runtime.mcp import McpConfigError
 
     pool = McpConnectionPool(idle_ttl=None)
@@ -308,8 +309,7 @@ def test_build_keeps_a_pooled_connection_on_a_config_error(
     client, _ = pool.acquire(spec)
     pool.release(client)
     client.list_tools = lambda: [  # type: ignore[method-assign]
-        {"name": "a.b", "inputSchema": {"type": "object"}},
-        {"name": "a/b", "inputSchema": {"type": "object"}},
+        {"name": "", "inputSchema": {"type": "object"}},
     ]
     with pytest.raises(McpConfigError):
         build_mcp_tools((spec,), pool=pool)

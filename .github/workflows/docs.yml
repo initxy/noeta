@@ -1,6 +1,8 @@
 # Build the VitePress documentation site and deploy to GitHub Pages.
 #
-# Triggered on push to main (docs changes) or manual dispatch.
+# Push to main (docs changes) or manual dispatch: build + deploy.
+# Pull request touching the docs: build only, so a broken page fails the PR
+# instead of the deploy after merge. Nothing is uploaded or deployed.
 # Uses actions/deploy-pages — Pages source must be set to "GitHub Actions"
 # in the repository settings (Settings → Pages → Build and deployment → Source).
 
@@ -14,20 +16,31 @@ on:
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/docs.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/docs.yml"
   workflow_dispatch: {}
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
+# Deploys share one queue and are never cancelled mid-flight; PR builds get
+# their own group per ref and a newer push cancels the stale one.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('docs-pr-{0}', github.ref) || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write   # configure-pages reads the site's Pages settings
     steps:
       - uses: actions/checkout@v4
 
@@ -41,6 +54,7 @@ jobs:
         run: npm ci
 
       - name: Configure Pages
+        if: github.event_name != 'pull_request'
         id: pages
         uses: actions/configure-pages@v5
 
@@ -48,13 +62,19 @@ jobs:
         run: npm run docs:build
 
       - name: Upload artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs/.vitepress/dist
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

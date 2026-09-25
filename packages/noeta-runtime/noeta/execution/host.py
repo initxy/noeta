@@ -61,7 +61,11 @@ class ResidentHost(Protocol):
     dispatcher: Dispatcher
 
     model: str
-    agent_registry: AgentRegistryProtocol
+
+    @property
+    def agent_registry(self) -> AgentRegistryProtocol:
+        """The name → :class:`AgentSpec` seam; the driver only reads it."""
+        ...
 
     def resolve_engine(self, task: Any) -> EngineProtocol:
         """Resolve the Engine driving ``task`` by its folded state.
@@ -101,8 +105,23 @@ class ResidentHost(Protocol):
         """
         ...
 
+    def note_turn_permission(
+        self, task_id: str, permission_mode: Optional[str]
+    ) -> None:
+        """Stash a turn's NON-durable ``permission_mode`` for ``task_id``.
+
+        The driver calls it on every turn-opening command, before resolving
+        the turn's Engine, so the seed-time resolve and the later drive derive
+        the same gating set. ``None`` means the host default. Never written to
+        the event log.
+        """
+        ...
+
     # Optional members a Protocol cannot express:
     #   def drive_pending_subtasks(self, parent_task: Any) -> Any: ...
+    #   def note_root_turn_settled(self, root_task_id: str) -> None: ...
+    #     (a resident WorkerLoop calls it when a tree's root parks on the
+    #     next-goal handle — a turn boundary the host did not drive itself)
     #   provider_models: Mapping[str, tuple[str, ...]]
     # A host that downsinks provider selection to session level exposes the
     # provider→model-list table the driver pair-checks against; absent or empty

@@ -95,8 +95,9 @@ def consolidate_tenant(tenant: str) -> bool:
 - Tasks outside `include_task` are left out of the digest entirely.
 
 If consolidation is the only writer, set `HostConfig(memory_read_only=True)`: the
-agent gets `memory_read` and `memory_search` only, while the consolidation agent
-keeps all four memory tools.
+agent gets `memory_read` and `memory_search` only, and its system prompt carries
+the read-only version of the memory guidance (no instructions for writing),
+while the consolidation agent keeps all four memory tools.
 
 ## Things to watch
 

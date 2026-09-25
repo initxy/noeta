@@ -4,13 +4,13 @@ The plugin reaches a session only through the generic surfaces: its content
 kind and init hook ride a ``session_pack`` contribution and recall rides the
 ``intake_reminder_providers`` seam, so the kernel never imports the store.
 
-Freshness is the init hook's job, not the renderer's. The hook re-reads the
-store every time it is invoked — at task seed, at a subtask drain, and at each
-new goal on a resumed task — and records what it finds; the recorder drops a
-re-record whose hash is unchanged, so the common case appends nothing. The
-renderer stays pure over ``(folded state, content store)``: it composes the
-bytes the ledger's active hash resolves to and never looks at disk, so the same
-ledger always composes to the same View.
+The index resident is frozen per task: the init hook records it first-write-
+wins (``refresh=False``), so a ``memory_write`` mid-task never rewrites the
+cached prefix. What changed since that snapshot reaches the model through the
+``turn_intake`` delta note (:mod:`~noeta.builtins.memory.impl.index_delta`)
+instead. The renderer stays pure over ``(folded state, content store)``: it
+composes the bytes the ledger's active hash resolves to and never looks at
+disk, so the same ledger always composes to the same View.
 """
 
 from __future__ import annotations
@@ -29,6 +29,9 @@ from noeta.builtins.memory.impl.index import (
     MemoryEntries,
     memory_content_kind,
     render_memory_index_text,
+)
+from noeta.builtins.memory.impl.index_delta import (
+    memory_index_delta_provider,
 )
 from noeta.builtins.memory.impl.judge import (
     RecallJudge,
@@ -59,6 +62,7 @@ from noeta.execution.session_pack import (
     SessionBuildContext,
     SessionRecorder,
 )
+from noeta.protocols.resources import load_markdown
 from noeta.protocols.tool import Tool
 
 
@@ -69,6 +73,8 @@ READ_TOOLS: frozenset[str] = frozenset(
 )
 
 __all__ = [
+    "MEMORY_POLICY_READ_ONLY_PROMPT",
+    "memory_policy_for",
     "DEFAULT_INDEX_BUDGET_TOKENS",
     "MEMORY_BODY_VERSION",
     "MEMORY_DRIFT_POLICY",
@@ -85,6 +91,7 @@ __all__ = [
     "append_user_message_with_recall",
     "build_recall_judge",
     "memory_content_kind",
+    "memory_index_delta_provider",
     "build_memory_pack",
     "build_memory_session_pack",
     "build_memory_tools",
@@ -108,7 +115,7 @@ def build_memory_pack(
     through the generic ``content_hashes`` seam), and the dates beside it are
     the index's keep order when the store is over budget; what actually enters
     context is whatever the init hook records, which it re-reads from ``store``
-    at invocation. ``max_bytes`` is the write tool's body cap (``None`` = none).
+    at invocation. ``max_bytes`` is the write tool's page cap (``None`` = none).
     """
     resolved = root if root is not None else _store_mod.DEFAULT_GLOBAL_MEMORY_DIR
     memory_store = load_memory_store(root=resolved)
@@ -121,13 +128,40 @@ def build_memory_pack(
     )
 
 
+#: The memory-policy fragment the presets append (``noeta.presets``'
+#: ``MEMORY_POLICY_PROMPT``), read as a resource — the same bytes, no import
+#: edge from a built-in to the presets.
+_MEMORY_POLICY_PROMPT = load_markdown("noeta.presets.prompts", "memory-policy", strip=False)
+#: The read-only variant (``HostConfig.memory_read_only``): the same opening,
+#: naming only the two tools a read-only pack mounts — no write hygiene for
+#: tools the model does not have.
+MEMORY_POLICY_READ_ONLY_PROMPT = load_markdown(
+    __package__, "memory-policy-read-only", strip=False
+)
+
+
+def memory_policy_for(prompt: str, *, read_only: bool) -> str:
+    """``prompt`` with its memory-policy fragment matching the pack's mode.
+
+    Applied by the host at Engine build, where the pack's final ``read_only``
+    is known, so the compiled spec (and its identity) is the same either way.
+    A prompt that ends with the policy fragment (every preset that activates
+    ``memory``, and a custom spec that appended it the documented way) gets
+    the read-only variant in its place when ``read_only``; any other prompt —
+    and every writable pack — is returned unchanged.
+    """
+    if read_only and prompt.endswith(_MEMORY_POLICY_PROMPT):
+        return prompt[: -len(_MEMORY_POLICY_PROMPT)] + MEMORY_POLICY_READ_ONLY_PROMPT
+    return prompt
+
+
 def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
     """The memory pack as a ``session_pack`` contribution.
 
     Self-gates on the agent's ``memory`` capability flag. The store root
     resolves by precedence: explicit ``memory_dir`` > ``global_memory_dir`` >
     the module default. ``max_bytes`` (the host's ``memory_max_bytes``) caps a
-    ``memory_write`` body; absent means no cap. ``index_budget_tokens`` (the
+    ``memory_write`` page (fence + body); absent means no cap. ``index_budget_tokens`` (the
     host's ``memory_index_budget_tokens``, derived per model) caps the rendered
     index; absent means :data:`DEFAULT_INDEX_BUDGET_TOKENS`. ``read_only`` (the
     host's ``memory_read_only``) leaves the two tools that change the store out
@@ -163,22 +197,24 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
     content_store = ctx.content_store
 
     def _init(rec: SessionRecorder) -> None:
-        """Pre-loop activation of the index resident — re-read at invocation.
+        """Pre-loop activation of the index resident — first write wins.
 
-        The store is scanned HERE, not closed over from build time: this hook
-        reruns whenever a turn is seeded, and a memory the model wrote mid-task
-        must reach the index on the next turn. A build-time snapshot could not
-        — the Engine is cached across turns (and across tasks), so the closure
-        would keep re-recording the same stale bytes for the life of the cache
-        entry.
+        The store is scanned HERE, not closed over from build time: the
+        Engine is cached across tasks, so a build-time snapshot could hand a
+        new task a stale index. The recorded ``ref.hash`` is the
+        rendered-index sha256, so the ledger fully determines the composed
+        index and the renderer stays pure.
 
-        The recorded ``ref.hash`` is the rendered-index sha256, so the ledger
-        fully determines the composed index and the renderer stays pure.
-        Rerunning is cheap and idempotent: an unchanged store re-renders the
-        same bytes and the recorder drops the re-record; a changed store
-        records exactly one refresh, which moves bytes but never placement
-        (the activation anchor is first-write-wins). An empty store leaves the
-        ledger untouched.
+        ``refresh=False`` (2026-09-25): once the task's index is active, a
+        rerun — at a subtask drain, at each new goal — appends nothing even
+        when the store changed. A refreshed index would rewrite the cached
+        prefix from the index block on for every turn after a
+        ``memory_write`` (in a long session, the whole conversation). The
+        2026-08-04 D9 guarantee — a page written mid-task reaches the model
+        on the next turn — is kept by the ``turn_intake`` delta note
+        (:func:`memory_index_delta_provider`) instead. A store empty at seed
+        records the index at the first turn it has pages. An empty store
+        leaves the ledger untouched.
         """
         live_entries, live_updated = store.index_snapshot()
         if not live_entries:
@@ -195,6 +231,7 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
             version=MEMORY_INDEX_VERSION,
             ref=ref,
             policy=MEMORY_DRIFT_POLICY,
+            refresh=False,
         )
 
     return PackContribution(

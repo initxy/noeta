@@ -125,7 +125,7 @@ ref     = "house_style.provider:GatewayProvider"
 
 ### `reminder_provider`
 
-在指定的入口（`turn_intake`、`task_seed`）被调用，拿到一个 `RecallView`（新消息、折叠后的任务状态、工作区路径、`visible_history`）。返回 `Reminder`（记录为追加消息）和/或 `ResidentActivation`（记录为常驻内容，默认只激活一次）。输出会被记录下来，所以可以查外部系统；恢复时不会重跑。抛异常会让这一轮失败。内置：`memory` 在 `turn_intake` 上贡献 `memory-recall`。
+在指定的入口（`turn_intake`、`task_seed`）被调用，拿到一个 `RecallView`（新消息、折叠后的任务状态、工作区路径、`visible_history`）。返回 `Reminder`（记录为追加消息）和/或 `ResidentActivation`（记录为常驻内容，默认只激活一次）。输出会被记录下来，所以可以查外部系统；恢复时不会重跑。抛异常会让这一轮失败。内置：`memory` 在 `turn_intake` 上贡献 `memory-recall` 和 `memory-index-delta`。记忆索引在一个任务里只记录一次、之后不再更新，所以后者会在下一轮补一行说明：从这个任务开始到现在，新建了哪些页、哪些页的描述改了、哪些页没了。
 
 ```toml
 [[tool.noeta.contributions]]
@@ -196,7 +196,7 @@ built-in < plugin < extra_skill_dirs < ~/.agents/skills < ~/.noeta/skills < work
 | `global_agents_skills_dir` | `~/.agents/skills` 这一层（需显式打开） |
 | `skills_dir` | 替换工作区技能目录（此时 `.agents/skills` 不再挂载） |
 | `workspace_skills_trust` | `"trust-store"` 让两层工作区技能都要先查信任记录 |
-| `menu_budget_tokens` | `skill` 菜单的总长度上限；默认是模型上下文窗口的 1% |
+| `menu_budget_tokens` | `skill` 菜单的总长度上限；默认是模型上下文窗口的 1%，最多 4,096 token |
 | `menu_rank` | `技能名 → 分数`，菜单超长时按它决定保留顺序 |
 | `allow_skill_scripts` | 挂上 `run_skill_script` |
 

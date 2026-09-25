@@ -361,6 +361,9 @@ def _multi_turn_session(
         write_mode=write_mode,
         shell_mode=shell_mode,
         require_approval_tools=(),
+        # The session runs this workspace's own tests, which is honoured only
+        # in a trusted workspace (the test-runner rules are trust-gated).
+        project_shell_allowlist_trust="open",
     )
     return host, make_driver(host)
 

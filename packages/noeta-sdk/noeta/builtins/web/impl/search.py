@@ -151,7 +151,7 @@ def results_to_markdown(results: list[SearchResult]) -> str:
     return "\n\n".join(blocks)
 
 
-def _parse_tavily_payload(payload: dict) -> list[SearchResult]:
+def _parse_tavily_payload(payload: dict[str, Any]) -> list[SearchResult]:
     """Extract ranked :class:`SearchResult` hits from a Tavily response body.
 
     Shared by both transports (:class:`HttpSearchTransport` over httpx and

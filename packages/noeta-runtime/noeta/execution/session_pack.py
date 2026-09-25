@@ -4,8 +4,8 @@ kernel-built :class:`SessionBuildContext` and returns a
 :class:`PackContribution`; the builder runs every pack through one
 priority-ordered loop and enumerates no capability by name.
 
-Priority is a byte-order contract, not a hint: tool dict insertion order feeds
-the Engine's ``ToolSchemaRecorded`` emission and the stable-prefix hash. Content
+Priority is a byte-order contract, not a hint: tool dict insertion order is the
+provider-visible tool order, and so the stable-prefix hash. Content
 kinds order on their OWN priority because the tool order and the semi_stable
 render order genuinely differ, and one per-pack integer cannot express both.
 Side-state a pack hands the kernel is a typed field on

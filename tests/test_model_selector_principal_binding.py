@@ -327,15 +327,18 @@ def test_resolver_keys_engine_on_agent_and_bound_model(tmp_path: Path) -> None:
 
     eng_a = host.resolve_engine(a_folded)
     eng_b = host.resolve_engine(b_folded)
-    assert _engine_model(eng_a) == "opus"
-    assert _engine_model(eng_b) == "haiku"
+    # A recorded alias resolves through the catalog at Engine build.
+    from noeta.client.parts import resolve_model_alias
+
+    assert _engine_model(eng_a) == resolve_model_alias("opus")
+    assert _engine_model(eng_b) == resolve_model_alias("haiku")
 
     # Within the turn A keeps its Engine; the next turn builds a fresh one
     # on the same model.
     assert host.resolve_engine(a_folded) is eng_a
     host.forget_turn_engine(a.task_id)
     again = host.resolve_engine(a_folded)
-    assert again is not eng_a and _engine_model(again) == "opus"
+    assert again is not eng_a and _engine_model(again) == resolve_model_alias("opus")
 
 
 def test_resolver_falls_back_to_host_model_when_no_binding(

@@ -1,11 +1,14 @@
 """The four enforcement guards and the live-only hook observer.
 
 Their *configuration* vocabulary (``Budget``, ``PermissionPolicy``,
-``RepetitionPolicy``, ``PreToolUseRule``) lives in
+``RepetitionPolicy``, ``PreToolUseRule``, ``PostToolUseRule``,
+``NotificationRule``) lives in
 :mod:`noeta.runtime.governance` instead: the kernel's builder signature and
 the SDK host both speak it, so it cannot sit behind the plugin loader's
 doorway. :func:`build_default_guards` is the guards factory the kernel builder
-calls with the assembly outputs, so the kernel never imports a guard class.
+calls with the assembly outputs, so the kernel never imports a guard class;
+:func:`build_hook_observer` is the doorway ``HostConfig.hooks`` reaches the
+observer through.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from noeta.builtins.governance.impl.hook_observer import (
 from noeta.builtins.governance.impl.permission import PermissionGuard
 from noeta.builtins.governance.impl.repetition import RepetitionGuard
 from noeta.core.hooks import HookManager
+from noeta.protocols.event_log import EventLogSubscriber
 from noeta.protocols.hooks import Guard
 from noeta.protocols.tool import Tool
 from noeta.runtime.governance import (
@@ -44,6 +48,7 @@ __all__ = [
     "PostToolUseRule",
     "RepetitionGuard",
     "build_default_guards",
+    "build_hook_observer",
     "make_subprocess_runner",
 ]
 
@@ -113,3 +118,28 @@ def build_default_guards(
     for guard in extra_guards:
         hooks.register(guard)
     return hooks
+
+
+def build_hook_observer(
+    *,
+    event_log: EventLogSubscriber,
+    post_tool_use: tuple[PostToolUseRule, ...],
+    notification: tuple[NotificationRule, ...],
+    cwd: str,
+    timeout_s: float,
+    max_queue: int,
+) -> HookObserver:
+    """The one live :class:`HookObserver` a Client subscribes at construction.
+
+    ``HostConfig.hooks`` reaches this through the SDK's loader doorway
+    (``noeta.client.parts.build_hook_observer``). Commands run as argv in
+    ``cwd`` (the Client's workspace), each killed after ``timeout_s``; at
+    most ``max_queue`` wait. The caller owns ``stop()``.
+    """
+    return HookObserver(
+        event_log=event_log,
+        post_tool_use=post_tool_use,
+        notification=notification,
+        runner=make_subprocess_runner(cwd=cwd, timeout_s=timeout_s),
+        max_queue=max_queue,
+    )

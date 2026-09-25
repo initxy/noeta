@@ -3,6 +3,7 @@ name = "noeta-sdk"
 version = "0.6.30"
 description = "Python SDK for durable AI agents: survive crashes, pause for human approval at no cost, scale from a script to a multi-host cluster. Anthropic, OpenAI and any OpenAI-compatible model; MCP; self-hosted."
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{ name = "The Noeta Authors" }]
 readme = "README.md"
 requires-python = ">=3.11"

@@ -15,7 +15,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from noeta.context.composer import ContentRenderer, ContentResolve, RenderedContent
 from noeta.protocols.messages import Message, TextBlock
@@ -180,8 +180,10 @@ class SkillIndexer:
         indexer's root is the same lexical ``relative_to`` filter the per-tier
         walks apply. Sorted by normalised POSIX relative path exactly as the
         other two discovery paths are."""
+        prefetched = self._prefetched
+        assert prefetched is not None  # only reached when a snapshot was given
         found: list[tuple[str, Path]] = []
-        for path in self._prefetched.files:
+        for path in prefetched.files:
             if path.name != "SKILL.md":
                 continue
             try:
@@ -197,6 +199,7 @@ class SkillIndexer:
         host walk, and the resulting container paths are sorted by normalised
         POSIX relative path so the Registry stays deterministic."""
         exec_env = self._exec_env
+        assert exec_env is not None  # only reached when an ExecEnv was given
         if not exec_env.is_dir(self._root):
             return []
         found: list[tuple[str, Path]] = []
@@ -343,6 +346,7 @@ class SkillIndexer:
         """
         root = skill_md.parent
         exec_env = self._exec_env
+        is_file: Callable[[Path], bool]
         if self._prefetched is not None:
             # The snapshot lists regular files only — no per-entry probe.
             candidates = list(self._prefetched.files)
@@ -352,7 +356,7 @@ class SkillIndexer:
             is_file = exec_env.is_file
         else:
             candidates = list(root.rglob("*"))
-            is_file = lambda p: p.is_file()  # noqa: E731
+            is_file = Path.is_file
         rels: list[str] = []
         for candidate in candidates:
             if not is_file(candidate):

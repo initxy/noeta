@@ -145,10 +145,12 @@ More detail: [Known limitations](operations/limitations.md).
 
 An agent built only on the public SDK —
 [noeta-agent](https://github.com/initxy/noeta-agent)'s `main` preset on
-Claude Opus 4.8 — scored **82.5%** on a 40-task Terminal-Bench 2.1 sample
-(the public board spans 58.7%–83.8%) and **86.7%** on a 15-instance
-SWE-bench Verified subset, run on the official harness. Both are samples, not
-full leaderboard runs. → [Benchmarks](benchmarks.md)
+Claude Opus 4.8 — solved **24/40** tasks of a Terminal-Bench 2.1 sample on the
+first pass and **33/40** best of three attempts (`noeta-sdk` 0.6.28; the public
+board spans 58.7%–83.8% on the full set), and **13/15** of a SWE-bench Verified
+subset after re-running 4 setup timeouts (`noeta-sdk` 0.6.10), run on the
+official harness. Each is a single run over a sample, not a full leaderboard
+run. → [Benchmarks](benchmarks.md)
 
 ## Next
 

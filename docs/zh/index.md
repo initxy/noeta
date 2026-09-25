@@ -87,14 +87,14 @@ agent 走的每一步都追加进事件日志，所以任何一个 worker 都能
 
 <p class="nt-muted">agent 要长时间无人值守地跑，而且要能恢复、能审计、能扩容，就选 Noeta。<a href="why-noeta.html">完整对比 →</a></p>
 
-## 公开榜单上的成绩
+## 公开基准上的实测
 
 <div class="nt-stats">
-  <div class="nt-stat"><div class="num">82.5%</div><div class="label">Terminal-Bench 2.1</div><div class="sub">40 题抽样 · 公开榜单 58.7%–83.8%</div></div>
-  <div class="nt-stat"><div class="num">86.7%</div><div class="label">SWE-bench Verified</div><div class="sub">15 题子集 · 榜单最高约 79%</div></div>
+  <div class="nt-stat"><div class="num">24/40</div><div class="label">Terminal-Bench 2.1</div><div class="sub">40 题抽样 · 首轮成绩；三次取最好 33/40 · noeta-sdk 0.6.28，跑一次 · 公开榜单（全集）58.7%–83.8%</div></div>
+  <div class="nt-stat"><div class="num">13/15</div><div class="label">SWE-bench Verified</div><div class="sub">15 题子集 · 首轮 9/15，重跑了 4 个环境准备超时 · noeta-sdk 0.6.10，跑一次</div></div>
 </div>
 
-<p class="nt-muted">只用公开 SDK 搭出来的 agent（<a href="https://github.com/initxy/noeta-agent">noeta-agent</a> 的 <code>main</code>，Claude Opus 4.8），在官方评测框架上跑出的成绩。两项都是抽样，不是全量榜单成绩。<a href="benchmarks.html">方法和说明 →</a></p>
+<p class="nt-muted">只用公开 SDK 搭出来的 agent（<a href="https://github.com/initxy/noeta-agent">noeta-agent</a> 的 <code>main</code>，Claude Opus 4.8），在官方评测框架上跑出的成绩。每项都是在抽样上跑一次，不是全量榜单成绩，较高的数算上了重跑。<a href="benchmarks.html">方法和说明 →</a></p>
 
 ## 接下来
 

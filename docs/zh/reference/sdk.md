@@ -15,9 +15,10 @@
 
 | 模块 | 名字 | 见 |
 | --- | --- | --- |
-| `noeta.sdk` | `query`、`QueryResult`、`Client`、`DriveOutcome`、`SeededTurn`、`TaskStatus`、`DeleteTaskResult`、`DEFAULT_MODEL_ALLOWLIST`、`NEXT_GOAL_WAKE_HANDLE`、各类错误 | 本页 |
-| `noeta.sdk` | `Options`、`AgentDefinition`、`SystemPromptPreset`、`compile_options`、`register_preset_prompt`、`BudgetSpec`、`HostConfig`、`PluginActivation`、`DEFAULT_PLUGINS`、`permission_modes`、`effort_modes`、`model_capabilities`，以及沙箱 / MCP / OTLP 的配置类型 | [Options](options.md) |
-| `noeta.sdk` | `tool`、`create_sdk_mcp_server`、扩展用的 Protocol、消息和事件类型、`as_messages`、`envelope_to_dict` | [类型](types.md) |
+| `noeta.sdk` | `query`、`QueryResult`、`Client`、`DriveOutcome`、`SeededTurn`、`TaskStatus`、`DeleteTaskResult`、`UsageReport`、`ModelUsage`、`DEFAULT_MODEL_ALLOWLIST`、`Principal`、`LOCAL_PRINCIPAL`、`NEXT_GOAL_WAKE_HANDLE`、各类错误 | 本页 |
+| `noeta.sdk` | `WorkerLoop`、`ReliabilityEvent` | [WorkerLoop](worker-loop.md) |
+| `noeta.sdk` | `Options`、`AgentDefinition`、`SystemPromptPreset`、`compile_options`、`register_preset_prompt`、`BudgetSpec`、`HostConfig`、`HooksConfig`、`PreToolUseRule`、`MatchArg`、`PostToolUseRule`、`NotificationRule`、`PluginActivation`、`DEFAULT_PLUGINS`、`permission_modes`、`effort_modes`、`model_capabilities`，以及沙箱 / MCP / OTLP 的配置类型 | [Options](options.md) |
+| `noeta.sdk` | `tool`、`create_sdk_mcp_server`、扩展用的 Protocol、消息和事件类型、`as_messages`、`envelope_to_dict`、`resolve_tool_call_arguments`（取出工具调用事件的参数；参数单独存进 content store 时会去那里读） | [类型](types.md) |
 | `noeta.sdk` | `PluginManifest`、`ManifestContribution`、`PluginBuilder`、`PluginSet`、`load_plugins`、`SurfaceSpec`、`SurfaceRegistry`、`standard_registry`、`grant_trust`、`is_trusted`、`PluginError` 和几个插件告警 | [插件清单](plugin-manifest.md)、[插件扩展点](plugin-surfaces.md) |
 | `noeta.sdk` | `Reminder`、`ResidentActivation`、`RecallView`、`ReminderProvider`、`TURN_INTAKE` | [插件扩展点](plugin-surfaces.md) |
 | `noeta.sdk` | `run_consolidation`、`consolidation_due`、`build_consolidation_digest`、`SkillUsage`、`skill_usage_from_events`、`rank_skills_by_usage`、`decayed_usage_score` | [下文](#记忆与技能辅助函数) |
@@ -64,13 +65,14 @@ print(result.answer())
 
 ### `QueryResult`
 
-本身就是 `list[EventEnvelope]`，可以像列表一样遍历和下标访问，另外多三样东西：
+本身就是 `list[EventEnvelope]`，可以像列表一样遍历和下标访问，另外多四样东西：
 
 | 成员 | 返回 | 说明 |
 | --- | --- | --- |
 | `.task_id` | `str` | 跑的是哪个任务 |
 | `.messages()` | `list[ViewItem]` | 可读的对话记录，内容已经取出来了 |
-| `.answer()` | `Any` | 最终答案；任务失败或没跑完会抛 `QueryFailedError` |
+| `.answer()` | `Any` | 最终答案；任务失败或没跑完会抛 `QueryFailedError`。如果还有工具调用（agent 自己的或子 agent 的）在等审批，错误的 `reason` 会直说，并给出 handle 和子任务 id：`query()` 没有人可问，要传 `Options.can_use_tool` |
+| `.usage()` | `UsageReport` | 这次查询花了多少，子 agent 也算在内；和 `Client.usage()` 给的是同一种报告，在临时 client 关掉之前就算好了 |
 
 ::: warning
 这些结果在临时 client 关闭前就已经算好。别拿原始事件去配一个新的 content store 重新算，引用的内容已经找不到了。
@@ -80,7 +82,8 @@ print(result.answer())
 
 ```python
 Client(options, *, provider=None, workspace_dir=None, model=None,
-       multi_turn=True, host_config=None, allowed_models=None, plugins=None)
+       multi_turn=True, host_config=None, allowed_models=None, plugins=None,
+       principal=LOCAL_PRINCIPAL)
 ```
 
 | 参数 | 类型 | 默认值 | 说明 |
@@ -93,6 +96,7 @@ Client(options, *, provider=None, workspace_dir=None, model=None,
 | `host_config` | `HostConfig \| None` | `None` | 存储、沙箱、MCP、记忆等部署配置；`None` 就全在内存里 |
 | `allowed_models` | `Sequence[str] \| None` | `None` | 每轮 `model_selector` 的白名单；`None` 用 `DEFAULT_MODEL_ALLOWLIST`（`opus`、`sonnet`、`haiku`）；`()` 表示一个都不许 |
 | `plugins` | `PluginSet \| None` | `None` | 已加载的插件；影响 agent 本身的部分只在 `Options.plugins` 激活时生效，guard 和 observer 对所有任务都生效 |
+| `principal` | `Principal` | `LOCAL_PRINCIPAL` | 某一轮没单独指定时，由谁来操作。`model_selector` 必须同时在它的 `allowed_models` 和 Client 的 `allowed_models` 里；它的 `identity` 会记到 `ModelBound` 上。`LOCAL_PRINCIPAL` 什么模型都允许，所以只剩 `allowed_models` 这一道限制 |
 
 属性：`registry`（编译好的 `AgentRegistry`）、`main_agent_name`、`workers_running`。
 
@@ -113,17 +117,20 @@ with Client(Options(system_prompt="You are a coding assistant."),
 
 下面每个方法都在当前线程里把这一轮跑完，返回 `DriveOutcome(task_id, status, wake_handle)`。设了 `Options.can_use_tool` 时，需要审批的调用都会先交给它判断。
 
+没有 async 版本的接口：每个方法都会阻塞到这一轮结束。在 asyncio 代码里，把它放到工作线程上调用即可——`await asyncio.to_thread(client.send_goal, task_id, goal=...)`——这样用是安全的。
+
 | 方法 | 签名（`task_id` 之后都是关键字参数） | 说明 |
 | --- | --- | --- |
-| `start` | `(*, goal, agent=None, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), workspace_dir=None, effort=None, activations=(), attachment_texts=())` | 新建任务并跑第一轮 |
-| `send_goal` | `(task_id, *, goal, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), effort=None, activations=(), attachment_texts=())` | 追加一轮 |
+| `start` | `(*, goal, agent=None, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), workspace_dir=None, effort=None, activations=(), attachment_texts=(), principal=None)` | 新建任务并跑第一轮 |
+| `send_goal` | `(task_id, *, goal, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), effort=None, activations=(), attachment_texts=(), principal=None)` | 追加一轮。如果上一次同样内容的 `send_goal` 已经把目标记下、却在开跑前失败了（任务停下时的原因是 `seed_failed`），重试会直接接着这条已记下的目标跑，不会再记一遍 |
 | `inject_goal` | `(task_id, *, goal, images=(), goal_origin=None, drive=True)` | 任务正在跑：先记下这条消息，下一轮边界时送进去，立刻返回；停在等下一句：等同 `send_goal`（`drive=False` 时抛 `NotResumableError`） |
 | `deliver_event` | `(task_id, *, event_kind, payload=None)` | 唤醒在 `wait_external` 上等 `event_kind` 的任务；`payload` 记成一条系统消息 |
 
 | 每轮参数 | 说明 |
 | --- | --- |
 | `agent` | 跑哪个 agent，默认主 agent |
-| `model_selector` | 这一轮用的模型别名，要在 `allowed_models` 里，否则抛 `ModelSelectorError` |
+| `model_selector` | 这一轮用的模型别名，要在 `allowed_models` 里，也要是当前操作者允许的，否则抛 `ModelSelectorError` |
+| `principal` | 这一轮由谁来操作，给一个 Client 同时服务多个用户的宿主用；`None` 就用 Client 的 `principal`。检查和记录都在这一轮被准备好（seed）的时候完成，所以 `seed_start` / `seed_send_goal` 也接收它，`drive_seeded` / `dispatch_seeded` 不用再传 |
 | `permission_mode` | 这一轮的审批模式：`default` / `acceptEdits` / `bypassPermissions` |
 | `enabled_mcp` | 这一轮启用的 MCP 别名（由 `HostConfig.mcp_server_resolver` 解析） |
 | `workspace_dir` | 只有 `start` 有：记到任务上，之后每轮都沿用 |
@@ -142,14 +149,28 @@ with Client(Options(system_prompt="You are a coding assistant."),
 | `answer` | `(task_id, *, question_id, answers, answered_by="client")` | 回答 `AskUserQuestion` 的提问 |
 
 ```python
+APPROVAL = "approval-"
+
+def pending_approval(client, task_id):
+    """某个任务日志里最新一条还没处理的审批请求。"""
+    events = client.events(task_id)
+    resolved = {e.payload.call_id for e in events
+                if e.type == "ToolCallApprovalResolved"}
+    return next((e for e in reversed(events)
+                 if e.type == "ToolCallApprovalRequested"
+                 and e.payload.call_id not in resolved), None)
+
 out = client.start(goal="Refactor utils.py")
-if out.wake_handle and out.wake_handle.startswith("approval-"):
-    req = next(e for e in client.events(out.task_id)
-               if e.type == "ToolCallApprovalRequested")
-    out = client.approve(out.task_id, call_id=req.payload.call_id)
+while out.wake_handle and out.wake_handle.startswith(APPROVAL):
+    call_id = out.wake_handle[len(APPROVAL):]
+    req = pending_approval(client, out.task_id)  # 是子 agent 在问时为 None
+    # 在这里看 req.payload（工具名、参数）决定：批准还是拒绝
+    out = client.approve(out.task_id, call_id=call_id)
 ```
 
-工具调用要审批时等在 `approval-{call_id}` 上。`finish` 或派生子任务要审批时，等在 `approval-finish-{task_id}` / `approval-spawn-{task_id}` 上，对应的 `call_id` 是 `finish-{task_id}` / `spawn-{task_id}`。`call_id` 从 `ToolCallApprovalRequested` 事件里读，别去拆 handle 字符串。
+handle 永远是 `approval-{call_id}`：工具调用要审批时如此；`finish` 或派生子任务要审批时是 `approval-finish-{task_id}` / `approval-spawn-{task_id}`，对应的 `call_id` 是 `finish-{task_id}` / `spawn-{task_id}`；前台子 agent 的请求也会以同样的形式出现在根任务的返回结果上。所以 `call_id` 直接从 handle 取，用根任务 id 调 `approve` / `deny` / `answer` 会转给正在等的那个子 agent（传子 agent 自己的 id 也行）。
+
+想看*在问什么*（工具名、参数），读 `ToolCallApprovalRequested` 事件。它记在发问的那个任务的日志里：根任务自己问就在根任务的日志里，子 agent 问就在子 agent 的日志里（这时 `pending_approval(client, out.task_id)` 是 `None`，要改读子 agent 的事件）。要拿最新一条*还没处理*的请求，别拿日志里的第一条：一轮里问过两次时，第一条已经处理过了，再批一次会抛 `NotResumableError`。
 
 ### 先落盘，再推进
 
@@ -183,6 +204,7 @@ HTTP 请求线程不能一直等一整轮跑完。`seed_*` 在请求线程上把
 | `messages(task_id)` | `list[ViewItem]` | 可读的对话记录 |
 | `task_answer(task_id)` | `Any` | 最近一轮的原始答案（设了 `output_schema` 时是 `dict`）；没有就是 `None` |
 | `task_status(task_id)` | `TaskStatus \| None` | `task_id`、`status`、`closed`、`wake_handle`、`parent_task_id`；任务不存在返回 `None` |
+| `usage(task_id, *, include_children=True)` | `UsageReport` | 按模型汇总的费用、token 和耗时，默认把它派出去的所有子 agent 也算进来；看到 `$0` 先查 `unpriced_models` 再信 |
 | `suspend_reason(task_id)` | `SuspendReason \| None` | 上次为什么停下；拿 `.kind` 和 `SUSPEND_REASON_WAITING_HUMAN` / `_INTERRUPTED` / `_TURN_FAILED` 比较 |
 | `task_streams()` | `list[TaskStreamSummary]` | 所有事件流：`task_id`、`last_seq`、`last_event_time` |
 | `task_summaries()` | `list[dict]` | 每个任务一行汇总；要读完整个日志，适合启动时修复，别拿来渲染列表 |
@@ -196,11 +218,11 @@ HTTP 请求线程不能一直等一整轮跑完。`seed_*` 在请求线程上把
 
 | 方法 | 签名 | 说明 |
 | --- | --- | --- |
-| `start_workers` | `(num_workers=1, *, poll_interval=0.1, heartbeat_interval=30.0, stale_sweep_interval=10.0, timer_poll_interval=1.0, lease_seconds=600.0, shutdown_grace_s=10.0)` | 在这个 client 的队列上起常驻 worker 线程；调第二次抛 `RuntimeError` |
+| `start_workers` | `(num_workers=1, *, poll_interval=0.1, heartbeat_interval=30.0, stale_sweep_interval=10.0, timer_poll_interval=1.0, lease_seconds=600.0, shutdown_grace_s=10.0, lease_backoff_max_s=None)` | 在这个 client 的队列上起常驻 worker 线程；调第二次抛 `RuntimeError`。`lease_backoff_max_s` 是调度一直出错时退避时间的上限（`None` 用 `WorkerLoop` 的默认值）；可靠性信号交给 `HostConfig.reliability_sink` |
 | `stop_workers` | `(timeout=None) -> bool` | 有 worker 没按时退出就返回 `False`，再调一次即可 |
 | `reconnect_mcp` | `(alias=None)` | 断开池里的 MCP 连接（全部或某个别名）；正在跑的这一轮用完才断 |
 | `add_sandbox_lifecycle_listener` | `(on_allocate, on_release)` | 容器分配和释放时的回调；没配沙箱时什么也不做 |
-| `shutdown` | `()` | 可重复调用：停 worker、observer、MCP 连接和沙箱 |
+| `shutdown` | `()` | 可重复调用：停 worker、observer、MCP 连接和沙箱；杀掉这个 client 的后台 shell；后台子 agent 在下一步边界停下，不会被取消，存储上的下一个 `Client` 会接着跑；关闭由 `storage_path` 打开的存储（你自己传进来的存储不关） |
 
 ## 记忆与技能辅助函数
 
@@ -219,14 +241,18 @@ HTTP 请求线程不能一直等一整轮跑完。`seed_*` 在请求线程上把
 
 | 错误 | `code` | 什么时候抛 |
 | --- | --- | --- |
-| `QueryFailedError`（`task_id`、`status`、`reason`、`retryable`） | `query_failed` | 任务失败或没跑完时调 `QueryResult.answer()` |
+| `QueryFailedError`（`task_id`、`status`、`reason`、`retryable`、`detail`） | `query_failed` | 任务失败或没跑完时调 `QueryResult.answer()`；`detail` 是记录下来的失败详情（比如模型服务的报错正文），没有就是 `""` |
+| `InvalidTurnOptionError` | `invalid_turn_option` | `start` / `send_goal` 收到的 `permission_mode` 或 `effort` 是 `Options` 也会拒绝的值；在写入任何东西之前就拒绝 |
+| `AnswerValidationError` | `invalid_answer` | `answer` / `seed_answer` 给的回答和待回答的问题对不上；同时也是 `ValueError` |
+| `QuestionNotPendingError`（`task_id`、`question_id`） | `question_not_pending` | 任务在等一个提问，但这个提问已经不在待回答状态，却调了 `answer` |
+| `WorkspaceEscape` | `workspace_escape` | 路径解析到工作区外面；同时也是 `ValueError` |
 | `ModelSelectorError` | `model_selector_rejected` | `model_selector` 不在白名单里 |
 | `ProviderSelectorError` | `provider_selector_rejected` | 宿主没配置这组 `(provider, model)` |
-| `NotResumableError` | `not_resumable` | 任务没在等这个操作（比如 `deliver_event` 的事件它根本没在等） |
-| `TaskAlreadyTerminalError` | `task_already_terminal` | 对已结束的任务操作 |
+| `NotResumableError` | `not_resumable` | 任务没在等这个操作：`deliver_event` 的事件它根本没在等；`approve` / `deny` / `answer` 针对的请求已经处理过，或任务已结束；对不存在的 id 调 `send_goal` / `approve` |
+| `TaskAlreadyTerminalError` | `task_already_terminal` | 对已结束的任务调 `cancel` / `interrupt` / `close` / `reopen` |
 | `UnknownTaskError`（`task_id`、`verb`、`reason`） | `unknown_task` | 对不存在的 id 调 `cancel` / `interrupt` / `close` / `reopen`；在写入任何东西之前就拒绝 |
 | `NotForkableError`（`task_id`、`reason`） | `not_forkable` | `fork` 的 id 不存在、是子任务，或 `message_seq` 不是用户消息 |
-| `UnsupportedSubtaskSuspend` | `unsupported_subtask_suspend` | 被驱动的子 agent 停下来等审批、提问或定时器（子任务里只支持继续派活） |
+| `UnsupportedSubtaskSuspend` | `unsupported_subtask_suspend` | `Client` 的方法不会抛它：子 agent 的审批和提问都会交到根任务上，子 agent 等定时器时根任务停在 `wake_handle=None`，见[子 agent](../guides/subagents.md) |
 
 ## 下一步
 

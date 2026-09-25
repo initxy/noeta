@@ -201,7 +201,7 @@ class _ScriptHost:
         goal: str,
         *,
         agent: str = _DEFAULT_AGENT,
-        schema: Optional[dict] = None,
+        schema: Optional[dict[str, Any]] = None,
     ) -> Any:
         """Spawn a subtask to run ``goal``, wait for it, and return its output.
 
@@ -230,7 +230,7 @@ class _ScriptHost:
             )
         )
 
-    def parallel(self, items: Any, *, agent: str = _DEFAULT_AGENT) -> list:
+    def parallel(self, items: Any, *, agent: str = _DEFAULT_AGENT) -> list[Any]:
         """Fan out a batch of helpers behind one barrier and return their results
         in **spawn order**.
 
@@ -420,13 +420,22 @@ def _count_structured_output_retries(view: View) -> int:
 
 
 def _rejection_text(violations: tuple[str, ...], *, alone: bool) -> str:
-    """The tool-result body handed back for a payload that missed the schema.
+    """The tool-result body handed back for a rejected ``structured_output`` call.
 
     ``alone`` is False when the response carried other tool calls: the same
     text is stamped on every one of them, and none of them ran, so it has to
     say so and point at the single-call shape.
     """
     listed = "\n".join(f"- {v}" for v in violations)
+    if not violations:
+        # A schema-clean payload sent next to other calls: finishing would
+        # silently drop the neighbours, so the whole response is refused.
+        return (
+            "Nothing in this response ran: structured_output must be called "
+            "on its own, as the only tool call in the response. Finish any "
+            "other work first, then re-issue structured_output alone with the "
+            "same answer."
+        )
     if alone:
         return (
             "structured_output rejected: the arguments did not match the "
@@ -444,7 +453,12 @@ def _rejection_text(violations: tuple[str, ...], *, alone: bool) -> str:
 
 
 def _rejection_fail_reason(violations: tuple[str, ...]) -> str:
-    """The terminal reason once the retry budget is spent on invalid payloads."""
+    """The terminal reason once the retry budget is spent on rejected calls."""
+    if not violations:
+        return (
+            "structured_output was not called on its own after "
+            f"{MAX_STRUCTURED_OUTPUT_NUDGES} nudges"
+        )
     return (
         "structured_output arguments did not match the required JSON schema after "
         f"{MAX_STRUCTURED_OUTPUT_NUDGES} nudges: " + "; ".join(violations)
@@ -460,9 +474,10 @@ class StructuredOutputPolicy:
     host wires it from ``inputs.output_schema``). This wrapper intercepts inner decisions:
 
     * inner emits a ``ToolCallsDecision`` containing a ``structured_output`` call → check the
-      call's **arguments** against the schema. Clean → they are the assistant's final answer,
-      turned into a ``FinishDecision`` (the tool never reaches ToolRuntime, so it is intercepted
-      before execution). Not clean → reject the call the way every control tool acks a malformed
+      call's **arguments** against the schema. Clean and the only call in the response → they
+      are the assistant's final answer, turned into a ``FinishDecision`` (the tool never reaches
+      ToolRuntime, so it is intercepted before execution). Not clean, or sharing the response
+      with other calls (finishing would silently drop them) → reject the call the way every control tool acks a malformed
       input (assistant tool_use + a failed tool_result naming the violations) and let the
       assistant try again, because the provider's tool schema only *steers* the model: an
       unchecked payload would be handed to the ``agent(goal, schema=...)`` caller as a completed
@@ -482,7 +497,7 @@ class StructuredOutputPolicy:
     """
 
     inner: Policy
-    schema: dict
+    schema: dict[str, Any]
 
     def decide(self, ctx: StepContext, view: View) -> Decision:
         decision = self.inner.decide(ctx, view)
@@ -491,7 +506,8 @@ class StructuredOutputPolicy:
                 if call.tool_name == STRUCTURED_OUTPUT_TOOL:
                     payload = dict(call.arguments)
                     violations = validate_structured_payload(payload, self.schema)
-                    if not violations:
+                    alone = len(decision.calls) == 1
+                    if not violations and alone:
                         # The call arguments are the structured answer; carry that assistant turn
                         # (with the tool_use) to record before TaskCompleted. The subtask terminates
                         # here with no follow-on request, so leaving the tool_use without a paired
@@ -520,9 +536,7 @@ class StructuredOutputPolicy:
                             decision.assistant_message,
                             decision.assistant_thinking,
                             patch=decision.state_patch,
-                            text=_rejection_text(
-                                violations, alone=len(decision.calls) == 1
-                            ),
+                            text=_rejection_text(violations, alone=alone),
                             valid=False,
                         )
                         if not decision.preacked_results:

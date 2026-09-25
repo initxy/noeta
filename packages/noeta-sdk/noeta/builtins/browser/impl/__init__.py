@@ -146,10 +146,16 @@ class _BrowserTool:
     each call through the same approval predicate as ``shell_run``.
     """
 
+    name: str
+    description: str
+    input_schema: dict[str, Any]
     risk_level: str = "high"
 
     def __init__(self, backend: BrowserBackend) -> None:
         self._backend = backend
+
+    def invoke(self, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        raise NotImplementedError
 
 
 class BrowserNavigateTool(_BrowserTool):

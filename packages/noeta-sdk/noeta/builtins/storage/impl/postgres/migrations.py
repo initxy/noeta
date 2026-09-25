@@ -15,9 +15,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import psycopg
-
-from noeta.builtins.storage.impl.postgres._connection import _ADVISORY_CLASS_MIGRATIONS
+from noeta.builtins.storage.impl.postgres._connection import (
+    _ADVISORY_CLASS_MIGRATIONS,
+    _ReconnectingConnection,
+)
 
 
 __all__ = [
@@ -289,7 +290,7 @@ MIGRATIONS: list[Migration] = [
 SCHEMA_VERSION: int = MIGRATIONS[-1].version
 
 
-def apply_migrations(conn: psycopg.Connection) -> None:
+def apply_migrations(conn: _ReconnectingConnection) -> None:
     """Advance ``conn``'s database to :data:`SCHEMA_VERSION`.
 
     One transaction per step: each iteration takes the migrations advisory

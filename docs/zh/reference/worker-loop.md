@@ -1,11 +1,11 @@
 # WorkerLoop
 
-`WorkerLoop`（`noeta.runtime.worker`）循环做一件事：租一个就绪任务、推进一步、释放，再来——外加心跳续租、过期租约回收、定时器轮询和有上限的优雅退出。
+`WorkerLoop`（从 `noeta.sdk` 导入）循环做一件事：租一个就绪任务、推进一步、释放，再来——外加心跳续租、过期租约回收、定时器轮询和有上限的优雅退出。
 
 没有东西会自动启动它。宿主自己构造并运行；要扩容就对同一个存储多跑几个循环，每个用不同的 `worker_id`。
 
 ```python
-from noeta.runtime.worker import WorkerLoop
+from noeta.sdk import WorkerLoop
 
 loop = WorkerLoop(rt, worker_id="noeta-worker")
 print(loop.running)                      # → False

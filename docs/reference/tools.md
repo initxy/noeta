@@ -21,6 +21,7 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 | `open_app` | the host sets `HostConfig.app_gateway` |
 | `run_skill_script` | `plugin_config["skills"]["allow_skill_scripts"]` is on and an active skill ships a script |
 | `mcp__<alias>__<tool>` | a remote MCP server is registered and enabled for the task |
+| `ToolSearch`, `McpCall` | an enabled MCP server's spec sets `deferred=True` (its own tools are then not advertised) |
 | control tools | see [Control tools](#control-tools) |
 
 ## Filesystem tools
@@ -29,10 +30,10 @@ From the `fs` built-in (`noeta/builtins/fs/`).
 
 | Tool | Risk | Parameters | What it does |
 | --- | --- | --- | --- |
-| `Read` | low | `file_path`, `offset?`, `limit?` | Read a UTF-8 file, optionally a line slice. The full body is offloaded as an artifact ref. |
-| `Glob` | low | `pattern`, `path?` | Paths matching a glob (`**` recurses), sorted and capped. Walks with `rg --files`: gitignore-aware, hidden files skipped. |
-| `Grep` | low | `pattern`, `path?`, `glob?`, `type?`, `output_mode?`, `-i`, `-n`, `-o`, `-u`, `-A`/`-B`/`-C`, `context?`, `head_limit?`, `offset?`, `multiline?` | Ripgrep content search, run through the `ExecEnv` (which must have `rg` installed). |
-| `Edit` | high | `file_path`, `old_string`, `new_string`, `replace_all?` | Replace an exact substring (unique match unless `replace_all`). The file must have been `Read` first. |
+| `Read` | low | `file_path`, `offset?`, `limit?` | Read a UTF-8 file, optionally a line slice. One call returns at most 100 KB; past that the result says so and the model continues with `offset`. The ContentStore keeps the whole file up to 1 MiB, only the served window above that. |
+| `Glob` | low | `pattern`, `path?` | Paths matching a glob (`**` recurses, `{ts,tsx}` alternatives), sorted and capped. Walks with `rg --files`: gitignore-aware, hidden files skipped. |
+| `Grep` | low | `pattern`, `path?`, `glob?`, `type?`, `output_mode?`, `-i`, `-n`, `-o`, `-u`, `-A`/`-B`/`-C`, `context?`, `head_limit?`, `offset?`, `multiline?` | Ripgrep content search, run through the `ExecEnv` (which must have `rg` installed; without it the fs plugin warns once with a `RuntimeWarning`). |
+| `Edit` | high | `file_path`, `old_string`, `new_string`, `replace_all?` | Replace an exact substring (unique match unless `replace_all`). The file must have been `Read` first. A CRLF file is matched and written with CRLF. |
 | `Write` | high | `file_path`, `content` | Create a file (parents created) or overwrite one already `Read` in this task. `content` caps at 8 MB. |
 | `Bash` | high | `command`, `timeout?` (ms, max 600000), `description?`, `run_in_background?` | Run a command with `cwd` = workspace root. Background mode returns a job id. |
 | `BashOutput` | low | `bash_id`, `filter?` | Status (`running` / `exited`), exit code and new output of a background job. |
@@ -40,7 +41,7 @@ From the `fs` built-in (`noeta/builtins/fs/`).
 
 - **Writes are staged by default.** `HostConfig.write_mode="dry_run"` (default) records a proposed diff; `"apply"` writes to disk.
 - **Writes are fenced, reads are not.** `Write` / `Edit` resolve inside the workspace root; `HostConfig.write_roots` can allow more roots per task. `Read` / `Glob` / `Grep` only anchor *relative* paths — an absolute path is read wherever it points, so the real read boundary is the process's own file permissions.
-- `Write` honours an optional workspace-relative `allowed_path_globs` whitelist bound at construction (empty = unrestricted); `Edit` ignores it.
+- `Write` honours an optional workspace-relative `allowed_path_globs` whitelist bound at construction (empty = unrestricted); `*` matches within one path segment, `**` crosses directories, `{a,b}` lists alternatives. `Edit` ignores it.
 
 ### Shell gating
 
@@ -49,7 +50,7 @@ From the `fs` built-in (`noeta/builtins/fs/`).
 | Setting | Behaviour |
 | --- | --- |
 | `shell_mode=OFF` | `Bash` is not mounted. |
-| `default` / `acceptEdits` | The command runs through `bash -c`. A command matching the effective allowlist runs silently; anything else asks for approval. |
+| `default` / `acceptEdits` | The command runs through `bash -c`. A command matching the effective allowlist runs silently; anything else asks for approval. A command with an unquoted `{`, `*`, `?` or `[`, or a word starting with `~`, always asks — bash would expand it; quoted forms such as `find . -name '*.py'` are unaffected. |
 | `bypassPermissions` | Any command runs, no approval. |
 
 The built-in allowlist (`noeta/builtins/fs/impl/shell_rules.py`) matches metachar-free argv only:
@@ -58,9 +59,11 @@ The built-in allowlist (`noeta/builtins/fs/impl/shell_rules.py`) matches metacha
 | --- | --- |
 | `git status` | no args, `--short`, `-s`, `--porcelain` |
 | `git diff`, `git log` | read-only forms |
-| `pytest`, `uv run pytest` | test runs |
-| `npm test`, `pnpm test` | any tail |
+| `pytest`, `uv run pytest` | test runs — trusted workspace only |
+| `npm test`, `pnpm test` | any tail — trusted workspace only |
 | `grep`, `rg`, `find`, `ls` | read-only; `rg --pre`/`--hostname-bin` and `find -exec`/`-delete`/`-fprint*` are rejected |
+
+The test runners execute repository code (`conftest.py`, `package.json` scripts), so those four rules exempt a call only when the workspace is trusted — the same `grant_trust` that gates `.noeta/shell-allowlist.json`, or `project_shell_allowlist_trust="open"`. The `git` rules stay open but run hardened, with `-c core.fsmonitor=` and `--no-ext-diff --no-textconv`; a `filter.<driver>.clean` in the repository's `.git/config` is the risk left over.
 
 Extend it in three ways:
 
@@ -78,7 +81,7 @@ This is an allowlist plus approval, not a process sandbox. `Bash` spawns real pr
 
 | Tool | Risk | Parameters | What it does |
 | --- | --- | --- | --- |
-| `WebFetch` | low | `url`, `prompt` | Fetch a page, render it to Markdown, and answer `prompt` against it with an auxiliary model call (`Options.webfetch_model`, default: the task's main model). HTTP upgrades to HTTPS; cross-host redirects are returned, not followed; pages are cached 15 minutes. Only `http(s)` URLs. |
+| `WebFetch` | low | `url`, `prompt` | Fetch a page, render it to Markdown, and answer `prompt` against it with an auxiliary model call (`Options.webfetch_model`, default: the task's main model). HTTP upgrades to HTTPS; a redirect is followed only to the same scheme, host and port, others are returned; pages are cached 15 minutes. Only `http(s)` URLs. By `Content-Type`: HTML becomes Markdown, text / JSON / XML pass through as-is, and images, PDF and other binary types are a tool error naming the type. |
 | `WebSearch` | low | `query`, `count?` | Web search, ranked hits as Markdown. Mounted only when `NOETA_WEB_SEARCH_API_KEY` is set. |
 
 `WebFetch` reaches any host. `HostConfig.webfetch_allowed_hosts` lists hosts it may reach without asking:
@@ -107,7 +110,7 @@ Mounted when the agent activates `memory` (among presets: `main` and the consoli
 
 | Tool | Risk | Parameters | What it does |
 | --- | --- | --- | --- |
-| `memory_write` | medium | `name`, `text`, `description?`, `type?`, `keywords?`, `related?` | Write a Markdown memory. Frontmatter fields merge per field over what is on disk (omit = keep, empty = remove). Stamps `created` / `updated` / `source_task`; a new name reports similar existing memories. |
+| `memory_write` | medium | `name`, `text`, `description?`, `type?`, `keywords?`, `related?` | Write a Markdown memory. Frontmatter fields merge per field over what is on disk (omit = keep, empty = remove). Stamps `created` / `updated` / `source_task` itself (a `created` the model sends is ignored); `HostConfig.memory_max_bytes` counts the whole stored page, frontmatter included; a new name reports similar existing memories. |
 | `memory_read` | low | `name` | Full text of one memory. |
 | `memory_search` | low | `query` | Case-insensitive substring search over names and text; up to 3 excerpt lines per memory, 10 memories, `truncated` flag. |
 | `memory_archive` | medium | `name` | Move a memory to `archive/`: out of index, recall and search, never deleted. |
@@ -146,13 +149,15 @@ Model-facing schemas that become engine decisions rather than `Tool.invoke` call
 | `skill` | activated and the merged skill menu is non-empty | `skill_invocation` (mounted by `skills`) |
 | `run_workflow` | `HostConfig.workflow_allowed=True` and the agent can delegate | `react` |
 | `RecallHistory` | compaction is wired — always under `Client` / `query` | `react` |
-| `structured_output` | a subtask / workflow helper spawned with its own schema (`Options.output_schema` uses the provider's native mode instead) | `react` |
+| `structured_output` | a subtask / workflow helper spawned with its own schema (`Options.output_schema` uses the provider's native mode instead); it must be the only call in its response — sent alongside other calls, the whole batch is refused and the model is told to send it alone | `react` |
 
 `RecallHistory` pages back (`offset`) the original messages that compaction collapsed into the summary note — content that exists in no file.
 
 ## MCP tools
 
-Remote MCP tools appear as `mcp__<alias>__<tool>`. In-process SDK servers (`create_sdk_mcp_server`) keep their bare `@tool` names. See [MCP servers](../guides/mcp.md).
+Remote MCP tools appear as `mcp__<alias>__<tool>`. A name over 64 characters is truncated with an 8-character sha256 suffix, keeping the prefix; when two tools of one server collide once sanitised, an already-valid name keeps it and the others take the suffix; a collision across two servers is an `McpConfigError` when the agent is built. In-process SDK servers (`create_sdk_mcp_server`) keep their bare `@tool` names.
+
+A server spec with `deferred=True` keeps its tools registered under those names but leaves their schemas out of the request; the model gets `ToolSearch` (find deferred tools and their schemas) and `McpCall` (run one by name) instead, once for all deferred servers. A `McpCall` is checked and recorded as a call to the real tool. See [MCP servers](../guides/mcp.md).
 
 ## Risk levels
 

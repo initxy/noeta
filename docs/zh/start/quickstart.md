@@ -8,7 +8,7 @@
 uv pip install noeta-sdk        # 或者：pip install noeta-sdk
 ```
 
-需要 Python 3.11 或更高版本。要导入的东西都在 `noeta.sdk` 里。
+需要 Python 3.11 或更高版本。要导入的东西都在 `noeta.sdk` 里。`Glob` 和 `Grep` 工具要用 [ripgrep](https://github.com/BurntSushi/ripgrep)：`rg` 必须在 `PATH` 上（`apt install ripgrep`、`brew install ripgrep`）。
 
 ## 2. 设置 API key
 

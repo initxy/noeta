@@ -219,6 +219,51 @@
         }
       },
       "type": "function"
+    },
+    {
+      "function": {
+        "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nroster of skills indexed for this workspace; its instructions are in your\ncontext from your next step. A roster line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the roster — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
+        "name": "skill",
+        "parameters": {
+          "properties": {
+            "skill": {
+              "description": "Name of the skill to activate. Available: fixed-skill — Use when the user asks for the fixed workflow.",
+              "enum": [
+                "fixed-skill"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "skill"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Recall original messages that compaction collapsed into the summary note at the head of the conversation.\n\nThe originals are retained in full — the note merely stands in for them in the prompt. Use this tool when the note lacks a detail you need: the exact text of an earlier error, code you produced or discussed before compaction, or the precise wording of an earlier exchange. The collapsed range is [0, boundary); the current boundary is reported in every result and in the collapsed-context reminder.\n\nResults are a read-only rendering of the original messages; long blocks are truncated with a marker. Page through a large range with repeated calls, advancing `offset`.",
+        "name": "RecallHistory",
+        "parameters": {
+          "properties": {
+            "limit": {
+              "description": "How many messages to view (default 20, max 50).",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "0-based index of the first collapsed message to view; the valid range is [0, boundary).",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "offset"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
     }
   ],
   "segments": [
@@ -236,7 +281,7 @@
         }
       ],
       "name": "stable_prefix",
-      "segment_hash": "f74431c25926249464e848d26836bcb5e74990f6a5708a566c0686f9e0d47c89"
+      "segment_hash": "a39e3f02f58cadaa4f56e8f0c858d457a3565594f9acfa58312bc29d2e1f9b88"
     },
     {
       "content": [],
@@ -250,14 +295,14 @@
           "content": [
             {
               "__canonical_tag__": "text_block",
-              "text": "Fixed goal: say hi"
+              "text": "Fixed explore prompt: list the files"
             }
           ],
           "role": "user"
         }
       ],
       "name": "dynamic_suffix",
-      "segment_hash": "971eced7c1a951e57218e3ab2a6e884a5ce7a2120dee25d6fdd1d7a65f72bb53"
+      "segment_hash": "076b61d2b29d3baec3aa11a0abe7f8bbfa4f6303b337ee9607803ded3e6bc961"
     }
   ]
 }

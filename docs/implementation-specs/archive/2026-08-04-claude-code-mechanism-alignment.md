@@ -223,6 +223,9 @@ Plugins (`client/plugins.py`, `plugin_set.py`, `surfaces.py`):
   as well as seed. The recorder's no-op-on-unchanged-hash rule makes this
   idempotent, and it fixes both within-task and warm-engine-cache staleness
   without touching cache keys. The renderer stays pure (recorded bytes only).
+  *Amended 2026-09-25:* the index no longer refreshes mid-task; a delta
+  note carries the change instead — see `docs/adr/unified-context-supply.md`,
+  "Amended 2026-09-25".
 - **D10 — Recall precision and budget.** Matching gains a small English
   stopword set and a minimum token length of 3; tier-1 (name) keeps
   threshold 1 but only counts non-stop tokens of length ≥ 3; tier-2 stays

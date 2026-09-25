@@ -731,11 +731,11 @@ class PluginSet:
         out: list[ResolvedContribution] = []
         for surface_entries in self.merged().by_surface.values():
             for entry in surface_entries:
-                rc = by_key.get(
+                found = by_key.get(
                     (entry.plugin, entry.contribution.surface, entry.contribution.name)
                 )
-                if rc is not None:
-                    out.append(rc)
+                if found is not None:
+                    out.append(found)
         return tuple(out)
 
 
@@ -1108,14 +1108,14 @@ def load_plugins(
     )
 
 
-def _enabled_pass(enabled_set: Optional[set], name: Optional[str]) -> bool:
+def _enabled_pass(enabled_set: Optional[set[str]], name: Optional[str]) -> bool:
     return enabled_set is None or (name is not None and name in enabled_set)
 
 
 def _read_builtins(
     builtins: "bool | Iterable[PluginManifest]",
-    disabled: set,
-    enabled_set: Optional[set],
+    disabled: set[str],
+    enabled_set: Optional[set[str]],
 ) -> Iterator[_Candidate]:
     if builtins is False:
         return
@@ -1152,7 +1152,7 @@ def _discover_builtins() -> tuple[PluginManifest, ...]:
 def _read_entry_points(
     entry_points: "bool | Iterable[Any]",
     group: str,
-    enabled_set: Optional[set],
+    enabled_set: Optional[set[str]],
 ) -> Iterator[_Candidate]:
     for ep in _entry_point_iter(entry_points, group):
         ep_name = getattr(ep, "name", "<unnamed>")
@@ -1186,11 +1186,11 @@ def _entry_point_iter(entry_points: "bool | Iterable[Any]", group: str) -> Itera
         try:
             return list(eps.select(group=group))
         except AttributeError:  # pragma: no cover — legacy mapping API
-            return list(eps.get(group, []))
+            return list(eps.get(group, []))  # type: ignore[attr-defined]  # pre-3.10 dict API; stubs only know EntryPoints
     return list(entry_points)
 
 
-def _read_explicit(spec: str, enabled_set: Optional[set]) -> Iterator[_Candidate]:
+def _read_explicit(spec: str, enabled_set: Optional[set[str]]) -> Iterator[_Candidate]:
     if _looks_like_path(spec):
         path = Path(spec)
         if path.suffix == ".toml":
@@ -1222,7 +1222,7 @@ def _read_explicit(spec: str, enabled_set: Optional[set]) -> Iterator[_Candidate
 
 
 def _scan_dir(
-    directory: Path, source: str, enabled_set: Optional[set]
+    directory: Path, source: str, enabled_set: Optional[set[str]]
 ) -> Iterator[_Candidate]:
     if not directory.is_dir():
         return
@@ -1249,7 +1249,7 @@ def _scan_dir(
 
 
 def _load_py_file(
-    path: Path, source: str, enabled_set: Optional[set]
+    path: Path, source: str, enabled_set: Optional[set[str]]
 ) -> Optional[_Candidate]:
     # Gate on a statically declared name BEFORE executing the file. When the file
     # declares no static name, executing a trusted file to read its manifest is
@@ -1295,7 +1295,7 @@ def _looks_like_path(spec: str) -> bool:
         return True
     if os.sep in spec:
         return True
-    return bool(os.altsep) and os.altsep in spec
+    return os.altsep is not None and os.altsep in spec
 
 
 def _import_module(spec: str) -> ModuleType:

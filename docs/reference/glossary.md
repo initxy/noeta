@@ -114,7 +114,7 @@ it. The authoritative source is
 ## W
 
 - **WakeCondition / WakeEvent** — what a task waits for and what arrives: `SubtaskCompleted`, `SubtaskGroupCompleted`, `HumanResponseReceived`, `TimerFired`, `ExternalEvent`. Delivered durably, exactly once. → [Tasks and waking](../how-it-works/tasks-and-waking.md)
-- **Worker** — a process that leases a task and drives it until its next suspend or terminal state. The loop is `noeta.runtime.worker.WorkerLoop`. → [Worker loop](worker-loop.md)
+- **Worker** — a process that leases a task and drives it until its next suspend or terminal state. The loop is `WorkerLoop`, exported from `noeta.sdk`. → [Worker loop](worker-loop.md)
 - **Write fence** — `Edit` and `Write` may only write inside the workspace or host-approved roots (`HostConfig.write_roots`). Reads are not fenced, and `Bash` is not confined. → [Options](options.md)
 
 ## Words Noeta does not use

@@ -17,7 +17,7 @@ import logging
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar, Iterator, Literal, Optional, Protocol
+from typing import Any, Callable, ClassVar, Iterator, Literal, Optional, Protocol, cast
 
 from noeta.core.engine import abandon_step_attempt, suspend_on_human_handle
 from noeta.core.fold import BoundedEventLog, apply_event, fold
@@ -195,10 +195,11 @@ class WorkerRuntime(Protocol):
     satisfy it. L2 never imports those higher layers — the match is purely
     structural.
 
-    ``engine`` is the single-Engine view (one host = one Agent). A
-    resident host that drives many Agents instead implements
-    ``resolve_engine(task) → Engine``: the per-task agent→
-    engine resolver. :func:`resolve_engine` (below) is the L2 seam that
+    Beyond the L0 triple a runtime supplies ONE of two engine seams, which
+    is why neither is a declared member: ``engine`` is the single-Engine view
+    (one host = one Agent, ``_SingleEngineRuntime``); a resident host that
+    drives many Agents instead implements ``resolve_engine(task) → Engine``:
+    the per-task agent→engine resolver. :func:`resolve_engine` (below) is the L2 seam that
     picks between them — it prefers ``rt.resolve_engine(task)`` when the
     runtime provides it, else falls back to the single ``rt.engine``. The
     agent-lookup logic itself lives in the host (L3 ``noeta.agent``), so L2
@@ -206,11 +207,11 @@ class WorkerRuntime(Protocol):
     provides ``seed_claimed_subtask(task, engine=, lease_id=) → Task``, the
     duck-typed seam :func:`run_leased_task` opens a claimed sub-agent child
     through (bind → goal → residents, the drain's own path); a runtime
-    without it gets the goal seeded and nothing else.
+    without it gets the goal seeded and nothing else. A runtime may also
+    provide ``note_root_turn_settled(root_task_id)``, which
+    :class:`WorkerLoop` calls when a step leaves the tree's root parked on
+    the next-goal handle (see :meth:`WorkerLoop._note_root_turn_settled`).
     """
-
-    @property
-    def engine(self) -> Any: ...
 
     @property
     def event_log(self) -> Any: ...
@@ -220,6 +221,13 @@ class WorkerRuntime(Protocol):
 
     @property
     def dispatcher(self) -> Any: ...
+
+
+class _SingleEngineRuntime(WorkerRuntime, Protocol):
+    """A :class:`WorkerRuntime` over one Agent: its single ``engine``."""
+
+    @property
+    def engine(self) -> Any: ...
 
 
 def resolve_engine(rt: WorkerRuntime, task: Any) -> Any:
@@ -237,7 +245,7 @@ def resolve_engine(rt: WorkerRuntime, task: Any) -> Any:
     resolver = getattr(rt, "resolve_engine", None)
     if resolver is not None:
         return resolver(task)
-    return rt.engine
+    return cast(_SingleEngineRuntime, rt).engine
 
 
 # ---------------------------------------------------------------------------
@@ -1045,7 +1053,7 @@ def reconcile_cap_terminal(rt: WorkerRuntime, task_id: str) -> bool:
         return False
     event_log = getattr(rt, "event_log", None)
     emit = getattr(event_log, "system_emit", None)
-    if not callable(emit):
+    if event_log is None or not callable(emit):
         return False
     events = list(event_log.read(task_id))
     if not events or any(e.type in _TERMINAL_EVENT_TYPES for e in events):
@@ -2134,6 +2142,11 @@ class WorkerLoop:
             # Self-contained + never raises, so it perturbs neither the settled
             # lease above nor the non-delegating common path.
             self._settle_subtasks(lease.task_id)
+            # Turn-boundary tail: the step (or the subtree settle above) may
+            # have parked the tree's root on the next-goal handle — a settled
+            # turn. Tell the host, which may have work it holds for exactly
+            # that boundary.
+            self._note_root_turn_settled(lease.task_id)
         except InvalidLease:
             # Lease is no longer ours — do NOT release/fail. No claim
             # about task state (cannot distinguish requeue vs cap-hit).
@@ -2214,6 +2227,38 @@ class WorkerLoop:
         except Exception:  # noqa: BLE001 — a drain fault must not crash the loop
             _log.exception(
                 "worker: subtask drain for task %s failed; continuing", task_id
+            )
+
+    def _note_root_turn_settled(self, task_id: str) -> None:
+        """Call the runtime's ``note_root_turn_settled(root_task_id)`` seam
+        when the tree ``task_id`` belongs to has its root parked on the
+        next-goal handle — the same settled-turn boundary an in-request drive
+        reports to its caller.
+
+        Duck-typed and optional: a runtime without the seam (or a loop with no
+        ``next_goal_handle``) skips it, including the fold, so the common path
+        is untouched. The root comes from the runtime's ``root_task_id_of``
+        lineage seam when it has one. Best-effort: a fault is logged, never
+        raised — the step has already settled its lease.
+        """
+        note = getattr(self._rt, "note_root_turn_settled", None)
+        handle = self._next_goal_handle
+        if not callable(note) or handle is None:
+            return
+        try:
+            root_of = getattr(self._rt, "root_task_id_of", None)
+            root_id = str(root_of(task_id)) if callable(root_of) else task_id
+            root = fold(self._rt.event_log, self._rt.content_store, root_id)
+            wake_on = getattr(root, "wake_on", None)
+            if (
+                getattr(root, "status", None) == "suspended"
+                and isinstance(wake_on, HumanResponseReceived)
+                and wake_on.handle == handle
+            ):
+                note(root_id)
+        except Exception:  # noqa: BLE001 — a turn-boundary hook must not crash the loop
+            _log.exception(
+                "worker: turn-settled hook for task %s failed; continuing", task_id
             )
 
     def run_forever(self, *, install_signals: bool = False) -> None:

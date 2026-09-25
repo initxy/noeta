@@ -1,7 +1,7 @@
 """MCP tool naming, result mapping, and request-side spec extraction.
 
 A remote tool name is rewritten into a provider-safe ``mcp__<alias>__<tool>``
-form, so the collision and length rules have to fail fast at build time rather
+form, so colliding and over-long names are told apart by a hash suffix rather
 than hand the model two tools answering to one name. The result mapping
 (including the offload of an oversized body) and the extraction that filters
 MCP specs out of a request in order are pinned alongside it.
@@ -60,9 +60,11 @@ def test_unsafe_only_name_maps_to_underscores_not_boundary() -> None:
     assert name.startswith("mcp__x__") and len(name) > len("mcp__x__")
 
 
-def test_make_name_rejects_overlong() -> None:
-    with pytest.raises(McpConfigError):
-        make_mcp_tool_name("x", "t" * 80)
+def test_make_name_shortens_overlong_with_hash() -> None:
+    name = make_mcp_tool_name("x", "t" * 80)
+    assert len(name) == 64 and name.startswith("mcp__x__ttt")
+    assert name == make_mcp_tool_name("x", "t" * 80)  # stable
+    assert name != make_mcp_tool_name("x", "t" * 81)
 
 
 def test_server_spec_validates_alias() -> None:
@@ -91,10 +93,15 @@ def test_build_discovers_and_namespaces() -> None:
             c.shutdown()
 
 
-def test_build_collision_fails_fast_and_reaps() -> None:
-    with pytest.raises(McpConfigError):
-        build_mcp_tools((_spec("collision"),))
-    # (clients are reaped inside build_mcp_tools on the raising path)
+def test_build_collision_is_disambiguated_not_fatal() -> None:
+    tools, clients, _skipped = build_mcp_tools((_spec("collision"),))
+    try:
+        assert len(tools) == 2
+        assert {t.remote_tool_name for t in tools.values()} == {"a.b", "a/b"}
+        assert all(n.startswith("mcp__fake__a_b_") for n in tools)
+    finally:
+        for c in clients:
+            c.shutdown()
 
 
 def test_build_empty_name_fails_fast() -> None:

@@ -45,6 +45,27 @@ class _Dispatcher(Protocol):
 #: is then durable-deduped against the parent stream, never process memory.
 _TERMINAL_TYPES = ("TaskCompleted", "TaskFailed", "TaskCancelled")
 
+#: The events that set a task's lifecycle state; the latest one decides
+#: whether the task is running, waiting, or finished.
+_LIFECYCLE_TYPES = frozenset(
+    ("TaskStarted", "TaskWoken", "TaskSuspended", *_TERMINAL_TYPES)
+)
+
+#: How many trailing envelopes the recovery pass reads per stream before it
+#: falls back to the whole stream. The latest lifecycle event sits at or near
+#: the tail: after it come only the few appends a settled turn leaves behind.
+_RECOVERY_TAIL = 32
+
+
+def _scan_lifecycle(
+    events: list[EventEnvelope],
+) -> tuple[Optional[EventEnvelope], list[EventEnvelope]]:
+    """The last lifecycle envelope in ``events`` and the envelopes after it."""
+    for i in range(len(events) - 1, -1, -1):
+        if events[i].type in _LIFECYCLE_TYPES:
+            return events[i], events[i + 1 :]
+    return None, []
+
 
 def _result_of(env: EventEnvelope) -> Optional[SubtaskResult]:
     """The ``SubtaskResult`` a terminal envelope hands the parent, or ``None``
@@ -62,9 +83,14 @@ def _result_of(env: EventEnvelope) -> Optional[SubtaskResult]:
         )
         return SubtaskResult(status="completed", output=output)
     if env.type == "TaskFailed":
+        # ``"<reason>: <detail>"`` when the child recorded a diagnostic (the
+        # same shape a parked conversation turn uses), so the parent's model
+        # sees *why* the child failed, not just the tag.
+        reason = getattr(env.payload, "reason", None)
+        detail = getattr(env.payload, "detail", None)
         return SubtaskResult(
             status="failed",
-            error=getattr(env.payload, "reason", None),
+            error=f"{reason}: {detail}" if detail else reason,
         )
     if env.type == "TaskCancelled":
         # A child that reaches terminal via cancellation (not a full-tree
@@ -125,7 +151,7 @@ class ChildLifecycleObserver:
 
     def _recover_pending_handoffs(self) -> None:
         """Emit the handoff for every non-background child that is terminal
-        but not yet recorded on its parent stream.
+        but not yet recorded on the parent stream still waiting on it.
 
         Runs at construction, over the persisted log. The per-child decision
         is the same durable dedupe the live path uses, so re-running it (N
@@ -135,17 +161,61 @@ class ChildLifecycleObserver:
         distinct members and a stale buffered wake never matches a fresh
         condition (ADR ``worker-queue-routing``).
         """
-        for summary in self._log.list_task_streams():
-            terminal_env: Optional[EventEnvelope] = None
-            for env in self._log.read(summary.task_id):
-                if env.type in _TERMINAL_TYPES:
-                    terminal_env = env
-                    break
-            if terminal_env is None:
-                continue
-            result = _result_of(terminal_env)
-            if result is not None:
-                self._on_terminal(terminal_env, result)
+        # Only a parent still waiting on a sub-agent can be owed a handoff: a
+        # foreground spawn always suspends the parent on the child, and the
+        # parent cannot move on until the handoff lands. So the pass reads a
+        # short tail of each stream to find those waiting parents, then reads
+        # whole streams only for their finished children — a store full of
+        # finished tasks costs one bounded tail read per stream, not the log.
+        summaries = {s.task_id: s for s in self._log.list_task_streams()}
+        for summary in summaries.values():
+            members = self._waiting_on(summary.task_id, summary.last_seq)
+            for child_id in members:
+                child = summaries.get(child_id)
+                if child is None:
+                    continue  # never created: nothing finished
+                latest, _ = self._latest_lifecycle(child_id, child.last_seq)
+                if latest is None or latest.type not in _TERMINAL_TYPES:
+                    continue
+                result = _result_of(latest)
+                if result is not None:
+                    self._on_terminal(latest, result)
+
+    def _latest_lifecycle(
+        self, task_id: str, last_seq: int
+    ) -> tuple[Optional[EventEnvelope], list[EventEnvelope]]:
+        """The stream's latest lifecycle envelope and the envelopes after it.
+
+        Reads the last :data:`_RECOVERY_TAIL` envelopes first and the whole
+        stream only when the tail holds no lifecycle event (a long run of
+        post-turn appends). ``(None, [])`` when the stream has none at all.
+        """
+        after = last_seq - _RECOVERY_TAIL
+        if after >= 0:
+            found = _scan_lifecycle(self._log.read(task_id, after_seq=after))
+            if found[0] is not None:
+                return found
+        return _scan_lifecycle(self._log.read(task_id))
+
+    def _waiting_on(self, task_id: str, last_seq: int) -> tuple[str, ...]:
+        """The children ``task_id`` is suspended on and has no handoff for
+        yet, or ``()`` when it is not waiting on a sub-agent."""
+        latest, after = self._latest_lifecycle(task_id, last_seq)
+        if latest is None or latest.type != "TaskSuspended":
+            return ()
+        wake_on = getattr(latest.payload, "wake_on", None)
+        if isinstance(wake_on, SubtaskGroupCompleted):
+            members: tuple[str, ...] = tuple(wake_on.subtask_ids)
+        elif isinstance(wake_on, SubtaskCompleted):
+            members = (wake_on.subtask_id,)
+        else:
+            return ()
+        recorded = {
+            getattr(e.payload, "subtask_id", None)
+            for e in after
+            if e.type == "SubtaskCompleted"
+        }
+        return tuple(m for m in members if m not in recorded)
 
     # -- callback --------------------------------------------------------
 

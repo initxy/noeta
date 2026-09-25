@@ -19,7 +19,7 @@ help:
 	@echo "noeta — library repo (packages/noeta-runtime + packages/noeta-sdk)"
 	@echo ""
 	@echo "  make install    first time: uv sync (kernel + dev group)"
-	@echo "  make check      the local CI gate: root pytest+coverage, mypy, naming + import lints"
+	@echo "  make check      the local CI gate: ruff, root pytest+coverage, mypy, naming + import lints"
 	@echo "  make test       run the test suite with coverage"
 	@echo "  make lint       static checks only: ruff + naming + import topology"
 
@@ -42,9 +42,8 @@ lint:
 ## (skipped unless NOETA_TEST_POSTGRES_DSN points at a live server) and the
 ## fresh-venv install smoke.
 check:
+	uv run ruff check packages tests scripts
 	uv run pytest -n auto --cov=noeta --cov-report=term --cov-fail-under=85
-	MYPYPATH=packages/noeta-runtime uv run mypy --strict \
-	  --namespace-packages --explicit-package-bases \
-	  packages/noeta-runtime/noeta/protocols
+	uv run mypy
 	uv run python scripts/lint-naming.py
 	uv run lint-imports --config .importlinter

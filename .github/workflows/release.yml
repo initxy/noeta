@@ -16,7 +16,8 @@
 # (The environment name here must match the ``environment:`` key below exactly.)
 #
 # Release procedure: docs/releasing.md (changelog, lockstep versions +
-# lower bounds, tag). The build job gates on a dated CHANGELOG section.
+# lower bounds, tag). The build job gates on a dated CHANGELOG section, and
+# neither publish job runs unless the test job passed on the tagged commit.
 
 name: Release
 
@@ -25,10 +26,44 @@ on:
     tags: ["v*"]
   workflow_dispatch: {}   # manual re-run from the Actions tab
 
+# Nothing here needs write access except the OIDC token the publish jobs mint.
+permissions:
+  contents: read
+
+# Never cancel a release half-way; a second run for the same ref queues.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  # The suite on the exact commit being published. CI already ran on the
+  # merge, but a tag can point anywhere; this is what stops a tag on an
+  # untested commit from reaching PyPI. (The Postgres contract suites skip
+  # here — CI covers them on main.)
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Sync workspace (kernel + dev group)
+        run: uv sync --frozen
+      - name: Install ripgrep
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+      - name: Ruff
+        run: uv run ruff check packages tests scripts
+      - name: Run pytest with coverage
+        run: uv run pytest -n auto --cov=noeta --cov-report=term --cov-fail-under=85
+      - name: Wheel contents + fresh-venv install smoke
+        run: uv run pytest -m install_smoke tests/test_install_smoke.py
+
   # Build once: wheels + sdists for both pure-Python libraries.
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Changelog gate — the tagged version must have a dated section
@@ -63,8 +98,9 @@ jobs:
   # full lockstep release bumps both, so both gates open. The
   # ``dist/<name>-*`` upload globs still carry the wheel + sdist together.
   publish-runtime:
-    needs: build
+    needs: [test, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # No environment: matches the pending publisher registered with a blank one.
     permissions:
       id-token: write   # required: mint the short-lived PyPI OIDC token
@@ -87,8 +123,9 @@ jobs:
         run: uv publish --trusted-publishing always dist/noeta_runtime-*
 
   publish-sdk:
-    needs: build
+    needs: [test, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: pypi-sdk
     permissions:
       id-token: write

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from noeta.protocols.tool import ToolContext, ToolResult
+from noeta.protocols.tool import ToolContext
 from noeta.runtime.tool import InMemoryFileReadRegistry
 from noeta.storage.memory import InMemoryContentStore
 from noeta.tools.limits import INLINE_CONTENT_MAX_BYTES, INLINE_OUTPUT_MAX_BYTES
@@ -140,9 +140,10 @@ def test_read_offload_when_large(tmp_path: Path) -> None:
     assert result.success is True
     assert len(result.output.encode("utf-8")) <= INLINE_CONTENT_MAX_BYTES + 512
     assert "Showing lines 1-" in result.output
-    # The artifact carries the FULL file body, not the shrunk excerpt.
+    # Over the 1 MiB rewind-baseline ceiling the artifact is the served
+    # window, never the whole multi-MB body.
     assert len(result.artifacts) == 1
-    assert result.artifacts[0].size == len(big.encode("utf-8"))
+    assert result.artifacts[0].size < 110 * 1024
 
 
 def test_read_medium_file_fits_in_full(tmp_path: Path) -> None:
@@ -154,7 +155,7 @@ def test_read_medium_file_fits_in_full(tmp_path: Path) -> None:
     result = ReadFileTool(workspace=workspace).invoke({"file_path": "mid.txt"}, ctx)
     assert result.success is True
     assert "Showing lines" not in result.output
-    assert result.output.endswith(f"  1500\tline 1499")
+    assert result.output.endswith("  1500\tline 1499")
 
 
 def test_read_clips_overlong_line(tmp_path: Path) -> None:

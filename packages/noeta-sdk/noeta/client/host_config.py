@@ -10,7 +10,9 @@ storage, a local exec env, and no injections at all.
 
 from __future__ import annotations
 
+import dataclasses
 import os
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,7 +44,16 @@ from noeta.protocols.dispatcher import DEFAULT_QUEUE, Dispatcher
 from noeta.protocols.event_log import EventLogFull
 from noeta.protocols.messages import StreamDelta
 from noeta.protocols.step_context import StepContext
+from noeta.runtime.governance import (
+    DEFAULT_HOOK_COMMAND_TIMEOUT_S,
+    DEFAULT_HOOK_QUEUE_MAX,
+    MatchArg,
+    NotificationRule,
+    PostToolUseRule,
+    PreToolUseRule,
+)
 from noeta.runtime.mcp import HttpPostFn, McpAnyServerSpec
+from noeta.runtime.worker import ReliabilitySink
 
 #: The preview gateway as SDK core sees it: an OPAQUE object. Its real shape is
 #: the app plugin's ``AppPreviewGateway`` Protocol (``noeta.builtins.app.impl``)
@@ -51,7 +62,7 @@ from noeta.runtime.mcp import HttpPostFn, McpAnyServerSpec
 AppPreviewGateway = Any
 
 
-__all__ = ["HostConfig", "SandboxExecEnvConfig", "WRITE_MODES"]
+__all__ = ["HooksConfig", "HostConfig", "SandboxExecEnvConfig", "WRITE_MODES"]
 
 
 #: Legal values for :attr:`HostConfig.write_mode`. ``"dry_run"`` stages a
@@ -99,6 +110,167 @@ class SandboxExecEnvConfig:
         key is fetched only at connect time.
         """
         return os.environ.get(self.api_key_env)
+
+
+_HOOK_ACTIONS = frozenset({"allow", "deny", "require_approval"})
+_MATCH_OPS = frozenset({"equals", "contains", "regex"})
+
+
+def _check_command(where: str, command: Any, log: Any) -> None:
+    if command is not None and (
+        not isinstance(command, tuple)
+        or not command
+        or not all(isinstance(part, str) and part for part in command)
+    ):
+        raise ValueError(
+            f"HooksConfig.{where}.command must be a non-empty tuple of "
+            f"non-empty str (an argv, never run through a shell) or None; "
+            f"got {command!r}"
+        )
+    if command is None and not log:
+        raise ValueError(
+            f"HooksConfig.{where} does nothing: set command, log=True, or both"
+        )
+
+
+def _check_pre_rule(where: str, rule: PreToolUseRule) -> PreToolUseRule:
+    """Validate one pre-tool-use rule; compile a regex given as a string."""
+    if rule.action not in _HOOK_ACTIONS:
+        legal = ", ".join(sorted(_HOOK_ACTIONS))
+        raise ValueError(
+            f"HooksConfig.{where}.action must be one of {{{legal}}}; "
+            f"got {rule.action!r}"
+        )
+    ma = rule.match_arg
+    if ma is None:
+        return rule
+    if not isinstance(ma, MatchArg):
+        raise ValueError(
+            f"HooksConfig.{where}.match_arg must be a MatchArg; got {ma!r}"
+        )
+    if (
+        not isinstance(ma.path, tuple)
+        or not ma.path
+        or not all(isinstance(key, str) and key for key in ma.path)
+    ):
+        raise ValueError(
+            f"HooksConfig.{where}.match_arg.path must be a non-empty tuple of "
+            f"argument keys (str); got {ma.path!r}"
+        )
+    if ma.op not in _MATCH_OPS:
+        legal = ", ".join(sorted(_MATCH_OPS))
+        raise ValueError(
+            f"HooksConfig.{where}.match_arg.op must be one of {{{legal}}}; "
+            f"got {ma.op!r}"
+        )
+    if ma.op == "contains" and not isinstance(ma.value, str):
+        raise ValueError(
+            f"HooksConfig.{where}.match_arg: op 'contains' needs a str value; "
+            f"got {ma.value!r}"
+        )
+    if ma.op == "regex" and ma.pattern is None:
+        # The guard reads only ``pattern``; a regex given as ``value`` is
+        # compiled here, so a bad one fails now rather than never matching.
+        if not isinstance(ma.value, str):
+            raise ValueError(
+                f"HooksConfig.{where}.match_arg: op 'regex' needs a pattern "
+                f"(re.Pattern) or a str value; got {ma.value!r}"
+            )
+        try:
+            pattern = re.compile(ma.value)
+        except re.error as exc:
+            raise ValueError(
+                f"HooksConfig.{where}.match_arg: invalid regex "
+                f"{ma.value!r}: {exc}"
+            ) from exc
+        return dataclasses.replace(
+            rule, match_arg=dataclasses.replace(ma, pattern=pattern)
+        )
+    return rule
+
+
+@dataclass(frozen=True)
+class HooksConfig:
+    """User hooks, set once per Client through :attr:`HostConfig.hooks`.
+
+    * ``pre_tool_use`` — :class:`PreToolUseRule` s the ``HookGuard`` checks
+      before each tool call (first match decides: allow / deny /
+      require approval). They are part of the guard stack, so a resuming host
+      must pass the same rules the original run used.
+    * ``post_tool_use`` — :class:`PostToolUseRule` s: a command run after a
+      matching tool call finishes.
+    * ``notification`` — :class:`NotificationRule` s: a command run when a
+      tool call starts waiting for approval.
+
+    Post-tool-use and notification commands are side-effects only: one
+    ``HookObserver`` per Client runs them in the background, as argv (never
+    a shell) in the Client's workspace directory, with a minimal
+    environment. Each is killed after ``command_timeout_s``; at most
+    ``max_queue`` wait, and one past that is dropped with a warning rather
+    than slowing the agent. They never fire on replay or resume.
+    """
+
+    pre_tool_use: tuple[PreToolUseRule, ...] = ()
+    post_tool_use: tuple[PostToolUseRule, ...] = ()
+    notification: tuple[NotificationRule, ...] = ()
+    command_timeout_s: float = DEFAULT_HOOK_COMMAND_TIMEOUT_S
+    max_queue: int = DEFAULT_HOOK_QUEUE_MAX
+
+    def __post_init__(self) -> None:
+        checked: list[PreToolUseRule] = []
+        for group, kind in (
+            ("pre_tool_use", PreToolUseRule),
+            ("post_tool_use", PostToolUseRule),
+            ("notification", NotificationRule),
+        ):
+            rules = getattr(self, group)
+            if not isinstance(rules, tuple):
+                raise ValueError(
+                    f"HooksConfig.{group} must be a tuple of "
+                    f"{kind.__name__}; got {type(rules).__name__}"
+                )
+            for i, rule in enumerate(rules):
+                where = f"{group}[{i}]"
+                if not isinstance(rule, kind):
+                    raise ValueError(
+                        f"HooksConfig.{where} must be a {kind.__name__}; "
+                        f"got {rule!r}"
+                    )
+                if isinstance(rule, NotificationRule):
+                    if rule.on != "approval":
+                        raise ValueError(
+                            f"HooksConfig.{where}.on must be 'approval' (the "
+                            f"only notification moment); got {rule.on!r}"
+                        )
+                elif not isinstance(rule.match_tool, str) or not rule.match_tool:
+                    raise ValueError(
+                        f"HooksConfig.{where}.match_tool must be a non-empty "
+                        f"tool-name pattern; got {rule.match_tool!r}"
+                    )
+                if isinstance(rule, PreToolUseRule):
+                    checked.append(_check_pre_rule(where, rule))
+                else:
+                    _check_command(where, rule.command, rule.log)
+        object.__setattr__(self, "pre_tool_use", tuple(checked))
+        timeout = self.command_timeout_s
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not timeout > 0
+        ):
+            raise ValueError(
+                "HooksConfig.command_timeout_s must be a positive number of "
+                f"seconds; got {timeout!r}"
+            )
+        if (
+            isinstance(self.max_queue, bool)
+            or not isinstance(self.max_queue, int)
+            or self.max_queue < 1
+        ):
+            raise ValueError(
+                f"HooksConfig.max_queue must be a positive int; "
+                f"got {self.max_queue!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -208,6 +380,12 @@ class HostConfig:
     delta_sink: Optional[
         Callable[[StepContext, str, StreamDelta], None]
     ] = None
+    #: Where the resident worker pool (``Client.start_workers``) reports its
+    #: process-local reliability signals — a lease reclaimed under a running
+    #: step, a heartbeat that lost its lease, a shutdown that abandoned a step,
+    #: a dispatcher outage (``noeta.sdk.ReliabilityEvent``). Never recorded
+    #: in the event log. ``None`` ⇒ each signal is logged as a warning.
+    reliability_sink: Optional[ReliabilitySink] = None
     #: OTLP trace export: when set, the Client wires a
     #: :class:`noeta.observers.trace_export.TraceExportObserver` with an
     #: OTLP/HTTP JSON sink at the configured endpoint and stops it on
@@ -305,8 +483,9 @@ class HostConfig:
     #: time. The index still lists the page and ``memory_read`` still reads
     #: it. Empty ⇒ every page is recallable.
     recall_exclude: Collection[str] = ()
-    #: Cap on a ``memory_write`` body, in UTF-8 bytes (the text after its
-    #: optional fence). A larger write is refused before anything is written,
+    #: Cap on a page ``memory_write`` stores, in UTF-8 bytes — the body plus
+    #: the frontmatter fields the tool writes with it, which is what recall
+    #: and ``memory_read`` load. A larger write is refused before anything is written,
     #: with both numbers in the message, so the model can tighten or split the
     #: page while it still has the context. Worth setting under auto-recall's
     #: 4096-byte inline limit: a page past that limit is recalled as a
@@ -407,6 +586,11 @@ class HostConfig:
     #: the value the original run used, or it re-derives different tool-output
     #: bytes. ``None`` ⇒ no truncation (today's behavior).
     tool_output_inline_limit: Optional[int] = None
+    #: User hooks (:class:`HooksConfig`): pre-tool-use rules join the guard
+    #: stack as the ``HookGuard``; post-tool-use and notification commands
+    #: run from one background ``HookObserver`` the Client starts at
+    #: construction and stops in ``shutdown``. ``None`` ⇒ no hooks.
+    hooks: Optional[HooksConfig] = None
 
     # -- web egress ----------------------------------------------------------
     #: The hosts ``WebFetch`` may reach without asking a human. Operator
@@ -499,6 +683,54 @@ class HostConfig:
                     f"HostConfig.{name} must be a positive int or None "
                     f"(None = off); got {value!r}"
                 )
+        # Values that type-check but mean nothing: each fails here, at
+        # construction, instead of as a silent no-op or a raw driver error
+        # on the first turn.
+        if isinstance(self.recall_exclude, (str, bytes)) or not all(
+            isinstance(name, str) for name in self.recall_exclude
+        ):
+            raise ValueError(
+                "HostConfig.recall_exclude must be a collection of memory "
+                f"names (e.g. a tuple of str), got {self.recall_exclude!r}"
+            )
+        for name, value in (
+            ("memory_max_bytes", self.memory_max_bytes),
+            ("memory_index_budget_tokens", self.memory_index_budget_tokens),
+            (
+                "max_background_jobs_per_root_task",
+                self.max_background_jobs_per_root_task,
+            ),
+            (
+                "max_background_subagents_per_root_task",
+                self.max_background_subagents_per_root_task,
+            ),
+        ):
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(
+                    f"HostConfig.{name} must be a positive int; got {value!r}"
+                )
+        if self.mcp_idle_ttl is not None and self.mcp_idle_ttl < 0:
+            raise ValueError(
+                "HostConfig.mcp_idle_ttl must be >= 0 seconds or None "
+                f"(None = never expire); got {self.mcp_idle_ttl!r}"
+            )
+        if self.instructions_file is not None and not self.instructions_enabled:
+            raise ValueError(
+                "HostConfig.instructions_file is read only when "
+                "instructions_enabled=True; set both, or drop instructions_file"
+            )
+        if self.storage_path is not None and not self.storage_path.strip():
+            raise ValueError(
+                "HostConfig.storage_path must be a sqlite file path, a "
+                "postgresql:// DSN or ':memory:' — got an empty string"
+            )
+        if self.hooks is not None and not isinstance(self.hooks, HooksConfig):
+            raise ValueError(
+                "HostConfig.hooks must be a HooksConfig or None; "
+                f"got {type(self.hooks).__name__}"
+            )
         # The egress allowlist is a security knob, so a typo has to be loud: an
         # entry that quietly matches nothing would gate every fetch the
         # operator meant to open, and one that quietly matched too much would

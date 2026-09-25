@@ -218,9 +218,10 @@ def recall_memories(
     fallback) is consulted only when tier 1 is empty AND the pointers have not
     already filled the cap — a tier-1 hit never spends the call, and neither
     does a turn whose picks would be dropped. It chooses among the pages that
-    are not already pointers, and its picks ride after them as pointers too.
+    are not already pointers — offered most recently written first — and its
+    picks ride after them as pointers too.
     """
-    entries = store.entries()
+    entries, updated = store.index_snapshot()
     skip = frozenset(resident) | frozenset(exclude)
     summaries = {name: summary for name, summary, _type, _kw in entries}
 
@@ -262,8 +263,14 @@ def recall_memories(
                 taken.add(other)
                 room -= 1
     elif judge is not None and room > 0:
+        # Most recently written first: a judge that caps the index it reads
+        # keeps the pages the user is most likely still working with.
         candidates = tuple(
-            e for e in entries if e[0] not in skip and e[0] not in taken
+            sorted(
+                (e for e in entries if e[0] not in skip and e[0] not in taken),
+                key=lambda e: updated.get(e[0], ""),
+                reverse=True,
+            )
         )
         if candidates:
             # Held to the candidates it was shown: the bound judge already

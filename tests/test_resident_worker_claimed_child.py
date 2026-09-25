@@ -230,9 +230,9 @@ def test_worker_claimed_child_is_recorded_like_a_drain_driven_child(
     # the pre-loop residents were activated (the drain's ``run_content_init``)
     assert stolen["resident_actors"], stolen["types"]
     assert "ContextContentRecorded" in stolen["types"]
-    # delegation inherited from the root: the explore leaf (no delegation of
-    # its own) still carries the spawn tool, as it does under the drain
-    assert SPAWN_SUBAGENT_TOOL in stolen["tools"]
+    # the explore leaf activates no delegation of its own, so it carries no
+    # spawn tool — under the worker exactly as under the drain
+    assert SPAWN_SUBAGENT_TOOL not in stolen["tools"]
 
 
 def test_worker_claimed_child_on_a_default_bound_root_stays_unbound(

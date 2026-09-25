@@ -16,7 +16,9 @@ MCP, sandboxes) and the official presets, over the
 pip install noeta-sdk      # noeta-runtime comes along as a dependency
 ```
 
-Python 3.11+.
+Python 3.11+. The `Glob` and `Grep` tools shell out to
+[ripgrep](https://github.com/BurntSushi/ripgrep): `rg` must be on `PATH`
+(`apt install ripgrep`, `brew install ripgrep`).
 
 ## Quickstart
 

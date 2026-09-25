@@ -55,25 +55,29 @@ make install   # uv sync: workspace toolchain, kernel + dev group
 make check     # the gate
 ```
 
-`make check` is four steps, and any one of them failing fails the gate:
+`make check` is five steps, and any one of them failing fails the gate:
 
-1. `pytest -n auto` with coverage over `noeta`, failing under 85%.
-2. `mypy --strict` on `packages/noeta-runtime/noeta/protocols`.
-3. `scripts/lint-naming.py` — the banned class names.
-4. `lint-imports --config .importlinter` — the import topology contracts.
+1. `ruff check packages tests scripts`.
+2. `pytest -n auto` with coverage over `noeta`, failing under 85%.
+3. `mypy --strict` on both packages (`uv run mypy`; settings in `[tool.mypy]` of the root `pyproject.toml`).
+4. `scripts/lint-naming.py` — the banned class names.
+5. `lint-imports --config .importlinter` — the import topology contracts.
 
 Two other targets exist for tighter loops: `make test` runs the suite with
 coverage but no threshold, and `make lint` runs the static checks only — `ruff`
 plus the naming and import-topology lints, no tests.
 
-Two CI steps have no local equivalent — don't chase them:
+Three CI steps have no local equivalent — don't chase them:
 
 - **Postgres storage contract tests.** CI runs the pytest step with
   `NOETA_TEST_POSTGRES_DSN` pointing at a Postgres service, which enables the
   `postgres` parameter of the storage contract suites. Without that variable
   those parameters skip.
+- **Python version matrix.** CI runs the suite on Python 3.11, 3.12 and 3.13;
+  locally you run whichever interpreter `uv sync` picked.
 - **Fresh-venv install smoke.** A separate CI job builds both wheels into a
-  clean virtualenv on Linux and macOS and imports them
+  clean virtualenv on Linux and macOS, checks that each carries `LICENSE` and
+  its `py.typed` markers, and imports them
   (`pytest -m install_smoke tests/test_install_smoke.py`).
 
 The SDK examples under [`examples/`](examples/) are covered by

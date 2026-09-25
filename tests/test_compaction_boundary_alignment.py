@@ -152,12 +152,19 @@ def test_boundary_indexes_raw_runtime_not_view_projection() -> None:
     # is taken with ``summary_boundary`` and the fresh boundary, never with an
     # iter_messages() index. The fake provider records what it saw.
     summarize_req = provider.received_requests[0]
+    # The request opens with the main loop's own head — its system prompt and
+    # semi_stable blocks — so it shares the cached prefix; the summarize input
+    # follows it.
+    assert summarize_req.system == view.segments[0].content[0]
+    semi = list(view.segments[1].content)
+    assert semi and summarize_req.messages[: len(semi)] == semi
+    body = summarize_req.messages[len(semi) :]
     # The composer frames the note at compose time, so the previous-summary
     # message the policy hands back carries the frame ahead of the body.
-    assert summarize_req.messages[0].content[0].text == (
+    assert body[0].content[0].text == (
         f"{_SUMMARY_FRAME}\n\nearlier summary"
     )
-    assert summarize_req.messages[1:-1] == list(
+    assert body[1:-1] == list(
         task.runtime.messages[4:boundary]
     )
     # ... closed by the synthetic instruction turn, which is not history.

@@ -26,6 +26,7 @@ from noeta.builtins.storage.impl.postgres._connection import (
     _ADVISORY_CLASS_DISPATCHER,
     _DB_NOW_SQL,
     _open_connection,
+    _rerun_lost_transaction,
 )
 from noeta.builtins.storage.impl.postgres.migrations import apply_migrations
 
@@ -165,7 +166,7 @@ class PostgresDispatcher:
             return f"{_DB_NOW_SQL} + %s", lease_seconds
         return "%s", self._now() + lease_seconds
 
-    def _now_clause(self) -> tuple[str, tuple]:
+    def _now_clause(self) -> tuple[str, tuple[Any, ...]]:
         """Return ``(sql_expression, params)`` for "now", so that every
         predicate comparing against it renders the same clock base."""
         if self._db_clock:
@@ -237,6 +238,7 @@ class PostgresDispatcher:
     # Dispatcher Protocol
     # ------------------------------------------------------------------
 
+    @_rerun_lost_transaction
     def enqueue(
         self,
         task_id: str,
@@ -310,6 +312,7 @@ class PostgresDispatcher:
                 self._conn.execute("ROLLBACK")
                 raise
 
+    @_rerun_lost_transaction
     def lease(
         self,
         *,
@@ -414,6 +417,7 @@ class PostgresDispatcher:
             wake_event=wake_event,
         )
 
+    @_rerun_lost_transaction
     def heartbeat(self, lease_id: str, *, lease_seconds: float = 30.0) -> float:
         with self._lock:
             self._begin_locked()
@@ -499,6 +503,7 @@ class PostgresDispatcher:
                 raise
         return expires_at
 
+    @_rerun_lost_transaction
     def release(
         self,
         lease_id: str,
@@ -626,6 +631,7 @@ class PostgresDispatcher:
                 self._conn.execute("ROLLBACK")
                 raise
 
+    @_rerun_lost_transaction
     def release_yield(self, lease_id: str) -> None:
         """Voluntary yield of a seeded lease back to the ready queue.
 
@@ -664,6 +670,7 @@ class PostgresDispatcher:
                 self._conn.execute("ROLLBACK")
                 raise
 
+    @_rerun_lost_transaction
     def fail(
         self,
         lease_id: str,
@@ -732,6 +739,7 @@ class PostgresDispatcher:
                 self._conn.execute("ROLLBACK")
                 raise
 
+    @_rerun_lost_transaction
     def wake(self, task_id: str, wake_event: Any, *, reserved: bool = False) -> bool:
         with self._lock:
             self._begin_locked()
@@ -791,6 +799,7 @@ class PostgresDispatcher:
                 self._conn.execute("ROLLBACK")
                 raise
 
+    @_rerun_lost_transaction
     def requeue_stale(self) -> list[str]:
         """Sweep expired leases back to ready; return the requeued ids.
 
@@ -859,6 +868,7 @@ class PostgresDispatcher:
                 raise
         return requeued
 
+    @_rerun_lost_transaction
     def fire_due_timers(self, *, now: float) -> list[str]:
         """Wake every suspended task whose ``TimerFired`` deadline passed.
 
@@ -965,7 +975,7 @@ class PostgresDispatcher:
             now_expr, now_params = self._now_clause()
             if lease_id is not None:
                 lease_clause = "AND lease_id = %s"
-                params: tuple = (task_id, lease_id, *now_params)
+                params: tuple[Any, ...] = (task_id, lease_id, *now_params)
             else:
                 lease_clause = ""
                 params = (task_id, *now_params)
@@ -1004,6 +1014,7 @@ class PostgresDispatcher:
         """
         return self._lease_is_active(task_id)
 
+    @_rerun_lost_transaction
     def restore_task(
         self,
         task_id: str,
@@ -1096,6 +1107,7 @@ class PostgresDispatcher:
                 self._conn.execute("ROLLBACK")
                 raise
 
+    @_rerun_lost_transaction
     def purge_task(self, task_id: str) -> None:
         """Hard-delete all dispatcher state for ``task_id`` (the task row plus
         any buffered pending wakes). A maintenance affordance kept off the

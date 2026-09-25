@@ -101,7 +101,9 @@ def _check(value: Any, schema: Any, path: str, out: list[str]) -> None:
         _check_array(value, schema, path, out)
 
 
-def _check_object(value: dict, schema: dict, path: str, out: list[str]) -> None:
+def _check_object(
+    value: dict[str, Any], schema: dict[str, Any], path: str, out: list[str]
+) -> None:
     properties = schema.get("properties")
     properties = properties if isinstance(properties, dict) else {}
 
@@ -134,7 +136,9 @@ def _check_object(value: dict, schema: dict, path: str, out: list[str]) -> None:
             _check(value[name], sub, _join(path, name), out)
 
 
-def _check_array(value: list, schema: dict, path: str, out: list[str]) -> None:
+def _check_array(
+    value: list[Any], schema: dict[str, Any], path: str, out: list[str]
+) -> None:
     items = schema.get("items")
     if isinstance(items, dict):
         for index, entry in enumerate(value):

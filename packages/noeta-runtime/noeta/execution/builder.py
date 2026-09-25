@@ -9,8 +9,9 @@ session pack or a control-tool entry and merges through one ``(priority,
 name)``-ordered loop. Those priority bands (fs=100 → web=200 → memory=300 →
 instructions=400 → environment=500 → skills=600 → browser=700 → mcp=800 →
 custom=900 → app=1000) are the construction-order contract, because tool dict
-insertion order feeds the Engine's ``ToolSchemaRecorded`` emission; they are
-locked by ``tests/test_session_pack_goldens.py``, so do not renumber them.
+insertion order is the provider-visible tool order (the stable-prefix hash);
+they are locked by ``tests/test_session_pack_goldens.py``, so do not renumber
+them.
 """
 
 from __future__ import annotations
@@ -73,6 +74,12 @@ class CompactionConfig:
     compaction_buffer: int
     tail_token_budget: Optional[int]
     composer_version: str
+    #: The count-based second valve (microcompaction): once the request
+    #: reaches ``microcompact_fraction`` of the available window, the composer
+    #: clears tool outputs older than the newest ``microcompact_keep_recent``
+    #: tool results. ``None`` disables it (the default, and ``COMPACTION_OFF``).
+    microcompact_keep_recent: Optional[int] = None
+    microcompact_fraction: float = 0.5
 
 
 #: Compaction disabled — the default for any model the catalog does not describe.
@@ -177,10 +184,10 @@ class PolicyFactoryBuilder(Protocol):
         control_translate_specs: tuple[ControlToolSpec, ...],
         content_store: ContentStore,
         context_window: Optional[int],
-        max_output_tokens: Optional[int],
-        compaction_buffer: Optional[int],
+        max_output_tokens: int,
+        compaction_buffer: int,
         tail_token_budget: int,
-        composer_version: Optional[str],
+        composer_version: str,
         output_schema: Optional[dict[str, Any]],
         thinking: Optional[str],
         effort: Optional[str],
@@ -279,7 +286,7 @@ class _BuildSpec:
 # construction-order contract (fs=100 → web=200 → memory=300 →
 # instructions=400 → environment=500 → skills=600 → browser=700 → mcp=800 →
 # custom=900 → app=1000), load-bearing for byte-equality (tool dict insertion
-# order feeds the Engine's deterministic ToolSchemaRecorded emission) and
+# order is the provider-visible tool order, hence the stable-prefix hash) and
 # locked by ``tests/test_session_pack_goldens.py``; do not renumber.
 # ---------------------------------------------------------------------------
 
@@ -861,6 +868,14 @@ def build_session_inputs(
             if compaction.context_window is not None
             else None
         ),
+        # Count-based second valve at a fraction of the same window; off with
+        # compaction (no window to take a fraction of).
+        microcompact_keep_recent=(
+            compaction.microcompact_keep_recent
+            if compaction.context_window is not None
+            else None
+        ),
+        microcompact_fraction=compaction.microcompact_fraction,
     )
 
     # ``Options.policy`` extension point: a custom decision policy

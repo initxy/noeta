@@ -59,7 +59,12 @@ process the host watches for an exit code.
   without its matching delivery event, a non-terminal child is re-enqueued and
   re-driven from its own EventLog (the descent skips re-seeding a goal a child
   already has), and a terminal child whose notice was lost is re-delivered
-  without re-driving.
+  without re-driving. A child another Client still holds — a live lease, or a
+  leased queue row — is skipped, so a second Client on the same store never
+  runs it twice. The scan finds candidates from the task-summary snapshot
+  rather than reading every stream, and a result held back past the delivery
+  window is picked up again at the end of each turn of its root, not only at
+  start-up.
 
 - **Determinism rests on the delivery anchor.** When the child terminates
   relative to the parent's turn is genuinely non-deterministic in wall-clock
