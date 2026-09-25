@@ -88,14 +88,14 @@ Every step the agent takes is appended to the event log, so any worker can rebui
 
 <p class="nt-muted">Pick Noeta when an agent runs unattended for a long time and you need to recover, audit and scale it. <a href="why-noeta.html">Full comparison →</a></p>
 
-## Proven on public benchmarks
+## Measured on public benchmarks
 
 <div class="nt-stats">
-  <div class="nt-stat"><div class="num">82.5%</div><div class="label">Terminal-Bench 2.1</div><div class="sub">40-task sample · public board 58.7%–83.8%</div></div>
-  <div class="nt-stat"><div class="num">86.7%</div><div class="label">SWE-bench Verified</div><div class="sub">15-instance subset · field top ~79%</div></div>
+  <div class="nt-stat"><div class="num">24/40</div><div class="label">Terminal-Bench 2.1</div><div class="sub">40-task sample · first pass; 33/40 best of 3 attempts · noeta-sdk 0.6.28, one run · public board 58.7%–83.8% (full set)</div></div>
+  <div class="nt-stat"><div class="num">13/15</div><div class="label">SWE-bench Verified</div><div class="sub">15-instance subset · first pass 9/15, 4 setup timeouts re-run · noeta-sdk 0.6.10, one run</div></div>
 </div>
 
-<p class="nt-muted">An agent built only on the public SDK (<a href="https://github.com/initxy/noeta-agent">noeta-agent</a> <code>main</code>, Claude Opus 4.8), run on the official harness. Both are samples, not full leaderboard runs. <a href="benchmarks.html">Method and caveats →</a></p>
+<p class="nt-muted">An agent built only on the public SDK (<a href="https://github.com/initxy/noeta-agent">noeta-agent</a> <code>main</code>, Claude Opus 4.8), run on the official harness. Each is a single run over a sample, not a full leaderboard run, and the higher figures count re-runs. <a href="benchmarks.html">Method and caveats →</a></p>
 
 ## Where to go next
 

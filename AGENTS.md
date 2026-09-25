@@ -32,7 +32,7 @@
 - Architecturally, prefer deep modules: a small interface hiding a substantial implementation.
 - The interface is the test surface; don't introduce a seam without a real need to substitute the implementation.
 - Respect the two structural rules the repo is built on: `noeta.sdk` is the sole public surface over the pure kernel (`docs/adr/library-sdk-architecture.md`), and the kernel carries no capability implementation — every official capability is a built-in plugin under `packages/noeta-sdk/noeta/builtins/`, reached only through the loader's dynamic `ref` resolution (`.importlinter` refuses any static import of `noeta.builtins`).
-- After a change, run verification matched to the risk; `make check` is the full gate (pytest with coverage ≥ 85, mypy --strict on `noeta.protocols`, `scripts/lint-naming.py`, `lint-imports`). If you can't verify, say why.
+- After a change, run verification matched to the risk; `make check` is the full gate (pytest with coverage ≥ 85, mypy --strict on both packages, `scripts/lint-naming.py`, `lint-imports`). If you can't verify, say why.
 
 ## Release
 

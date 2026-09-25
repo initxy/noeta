@@ -4,7 +4,7 @@ Use this tool to create and manage a structured task list for the current sessio
 
 - Complex multi-step work (roughly three or more distinct steps), or the user handed you several tasks at once.
 - Mark a todo `in_progress` BEFORE you start it and `completed` the moment it is fully done — keep exactly ONE item `in_progress` at a time.
-- Update the list in real time as work lands; you may batch a TodoWrite with file, search and shell calls in the same response — not with `Task`, `AskUserQuestion` or `skill`, which go on their own.
+- Update the list in real time as work lands; you may batch a TodoWrite with file, search and shell calls, or with `Task` calls, in the same response — not with `AskUserQuestion` or `skill`, which go on their own.
 
 ## When NOT to use
 

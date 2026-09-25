@@ -4,7 +4,7 @@
 
 ## 一个 tag 会发布什么 { #what-a-tag-publishes }
 
-一个 `vX.Y.Z` tag 触发 `release.yml`。build job 一次性构建两个分发物——每个包一个 wheel 和一个 sdist，总共四个文件——然后跑两个 publish job，每个包一个。**每个 publish job 都以 tag 版本为闸门**：只有当构建产出的 wheel 版本等于 `X.Y.Z` 时它才上传，否则带一条 notice 干净跳过。
+一个 `vX.Y.Z` tag 触发 `release.yml`。build job 一次性构建两个分发物——每个包一个 wheel 和一个 sdist，总共四个文件——然后跑两个 publish job，每个包一个。**每个 publish job 都以 tag 版本为闸门**：只有当构建产出的 wheel 版本等于 `X.Y.Z` 时它才上传，否则带一条 notice 干净跳过。两个 publish job 还要等一个 `test` job：它在被打 tag 的那个提交上跑 ruff、整套测试（含覆盖率门槛）和 wheel 内容检查 / 安装冒烟测试；这一步挂了，什么都不会发出去。
 
 实际后果是：只 bump 你这次真正要发的包。没 bump 的包会干净跳过，而不是在重复上传上失败。两种形态都受支持、都正常：
 

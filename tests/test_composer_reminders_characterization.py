@@ -70,7 +70,7 @@ def _dynamic_suffix_payload(
     *,
     todos: list[dict[str, str]],
     delegation_enabled: bool,
-    already_spawned: bool,
+    spawn_in_history: bool,
     compaction_thrashing: bool,
 ) -> list[dict[str, object]]:
     """Compose a Task in the given folded state; return its dynamic suffix.
@@ -104,7 +104,7 @@ def _dynamic_suffix_payload(
 
     base = Message(role="user", content=[TextBlock(text=_BASE_GOAL)])
     history: list[Message] = [base]
-    if already_spawned:
+    if spawn_in_history:
         history.append(
             Message(role="assistant", content=[_SPAWN_HISTORY_BLOCK])
         )
@@ -139,21 +139,21 @@ _STATES: dict[str, dict[str, object]] = {
     "all_reminders": {
         "todos": _TODOS,
         "delegation_enabled": True,
-        "already_spawned": False,
+        "spawn_in_history": False,
         "compaction_thrashing": True,
     },
     # Only the unfinished-todos reminder (no thrashing).
     "todos_only": {
         "todos": _TODOS,
         "delegation_enabled": False,
-        "already_spawned": False,
+        "spawn_in_history": False,
         "compaction_thrashing": False,
     },
     # Only the read-suggestion reminder (thrashing latched, nothing else).
     "read_only": {
         "todos": [],
         "delegation_enabled": False,
-        "already_spawned": False,
+        "spawn_in_history": False,
         "compaction_thrashing": True,
     },
     # Nothing to say: delegation offered and a spawn already landed, no todos,
@@ -162,7 +162,7 @@ _STATES: dict[str, dict[str, object]] = {
     "suppressed": {
         "todos": [],
         "delegation_enabled": True,
-        "already_spawned": True,
+        "spawn_in_history": True,
         "compaction_thrashing": False,
     },
 }
@@ -202,7 +202,7 @@ def test_offered_delegation_adds_no_reminder() -> None:
     suffix = _dynamic_suffix_payload(
         todos=[],
         delegation_enabled=True,
-        already_spawned=False,
+        spawn_in_history=False,
         compaction_thrashing=False,
     )
     assert len(suffix) == 1

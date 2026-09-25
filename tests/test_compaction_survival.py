@@ -95,7 +95,14 @@ def _system_text(request: LLMRequest) -> str:
 
 
 def _is_summarize(request: LLMRequest) -> bool:
-    return _SUMMARY_MARKER in _system_text(request)
+    """The summarize instruction rides as the trailing user turn."""
+    if not request.messages:
+        return False
+    return any(
+        b.text.startswith(_SUMMARY_MARKER)
+        for b in request.messages[-1].content
+        if isinstance(b, TextBlock)
+    )
 
 
 def test_summarize_template_carries_the_continuity_sections() -> None:

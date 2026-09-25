@@ -11,6 +11,8 @@ the only doorway.
 
 from __future__ import annotations
 
+import shutil
+import warnings
 from typing import Any, Mapping, Optional, Sequence, cast
 
 from noeta.builtins.fs.impl.edit import (
@@ -84,6 +86,8 @@ def build_fs_tools(
     # ``LocalExecEnv`` is stateless, so one instance is safely shared by the
     # whole pack.
     env: ExecEnv = LocalExecEnv() if exec_env is None else exec_env
+    if isinstance(env, LocalExecEnv):
+        _warn_if_ripgrep_missing()
     tools: list[Tool] = [
         ReadFileTool(workspace=workspace, exec_env=env),
         GlobTool(workspace=workspace, exec_env=env),
@@ -118,6 +122,28 @@ def build_fs_tools(
 
 
 FsToolPack = build_fs_tools
+
+_RG_WARNED = False
+
+
+def _warn_if_ripgrep_missing() -> None:
+    """Warn once per process when ``rg`` is not on the host's PATH.
+
+    ``Grep`` and ``Glob`` run ripgrep, so without it every search fails at
+    call time; saying so when the pack is built points the operator at the
+    install instead. A sandbox backend brings its own ``rg`` and is not
+    checked here."""
+    global _RG_WARNED
+    if _RG_WARNED or shutil.which("rg") is not None:
+        return
+    _RG_WARNED = True
+    warnings.warn(
+        "ripgrep (rg) was not found on PATH; the Grep and Glob tools need it "
+        "and will fail until it is installed "
+        "(https://github.com/BurntSushi/ripgrep)",
+        RuntimeWarning,
+        stacklevel=3,
+    )
 
 
 def build_fs_session_pack(ctx: SessionBuildContext) -> PackContribution:

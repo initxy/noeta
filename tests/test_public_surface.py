@@ -84,6 +84,9 @@ HOST_CONTRACT: dict[str, tuple[str, ...]] = {
         "DeleteTaskResult",
         "TaskStatus",
         "DEFAULT_MODEL_ALLOWLIST",
+        # The cost read model Client.usage / QueryResult.usage return.
+        "UsageReport",
+        "ModelUsage",
         # The read surface's types: the envelope a subscriber and a replay
         # both see, the task_streams row, and the suspend payload a host reads
         # the waiting_human / interrupted / turn_failed tag off.
@@ -113,6 +116,16 @@ HOST_CONTRACT: dict[str, tuple[str, ...]] = {
         "VerdictResult",
         "Observer",
         "ContentKindSpec",
+        # Declarative user hooks (HostConfig.hooks) — a host cannot build the
+        # config without the rule types it holds.
+        "HooksConfig",
+        "PreToolUseRule",
+        "MatchArg",
+        "PostToolUseRule",
+        "NotificationRule",
+        # Who acts on a turn: Client(principal=) and the per-turn override.
+        "Principal",
+        "LOCAL_PRINCIPAL",
         # Streaming + the wire projection a product serves to its clients
         "StreamDelta",
         "envelope_to_dict",

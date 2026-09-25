@@ -715,21 +715,22 @@ def test_activating_delegation_on_a_childless_root_is_additive() -> None:
 
 
 # ===========================================================================
-# Composer — the already_spawned scan is gated on delegation
+# Composer — reminders never walk the rolling history
 # ===========================================================================
 
 
-def test_already_spawned_scan_is_skipped_for_a_non_delegating_agent() -> None:
-    """The scan feeds one reminder that renders nothing without delegation.
+def test_reminder_render_never_scans_history() -> None:
+    """No reminder reads the rolling history, so composing one must not walk it.
 
-    Walking the whole rolling history to compute a value the reminder discards is
-    per-compose waste on every leaf sub-agent.
+    The ``already_spawned`` scan fed the removed delegation nudge; with it gone,
+    walking the whole history on every compose would be pure waste, whether or
+    not delegation is offered.
     """
     from noeta.context.composer import ThreeSegmentComposer
 
     class _ExplodingMessages(list):
         def __iter__(self):  # noqa: D105
-            raise AssertionError("history was scanned despite delegation being off")
+            raise AssertionError("history was scanned to render reminders")
 
     composer = ThreeSegmentComposer(
         system_prompt="p", tools={}, content_store=InMemoryContentStore()
@@ -746,7 +747,7 @@ def test_already_spawned_scan_is_skipped_for_a_non_delegating_agent() -> None:
         )()
 
     assert composer._append_reminders(
-        _Task(), [], delegation_enabled=False
+        _Task(), [], delegation_enabled=True
     ) == []
 
 

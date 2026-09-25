@@ -428,12 +428,15 @@ def test_memory_write_refuses_a_body_over_the_cap(tmp_path: Path) -> None:
 
     refused = capped.invoke({"name": "big-page", "text": "x" * 3001}, _ctx())
     assert not refused.success
-    assert "3001" in refused.summary and "3000" in refused.summary
+    assert "3000" in refused.summary
     assert store.read("big-page") is None
 
-    # The fence is not the model's to shrink, so it is not what is measured.
+    # The page as stored is measured — fence included — because that is what
+    # recall and memory_read load: a body at the cap no longer fits.
     fenced = "---\ndescription: a page at the cap\n---\n" + "x" * 3000
-    assert capped.invoke({"name": "big-page", "text": fenced}, _ctx()).success
+    assert not capped.invoke({"name": "big-page", "text": fenced}, _ctx()).success
+    assert capped.invoke({"name": "big-page", "text": "x" * 2900}, _ctx()).success
+    assert len(store.read("big-page").encode("utf-8")) <= 3000
 
     uncapped = build_memory_tools(store)["memory_write"]
     assert uncapped.invoke({"name": "huge-page", "text": "x" * 9000}, _ctx()).success
@@ -518,12 +521,13 @@ def test_the_memory_pack_hands_the_cap_to_its_write_tool(tmp_path: Path) -> None
         backends={},
         capability_flags={"memory": True},
         plugin_config={
-            "memory": {"memory_dir": tmp_path / "memories", "max_bytes": 10}
+            "memory": {"memory_dir": tmp_path / "memories", "max_bytes": 60}
         },
     )
     write = build_memory_session_pack(ctx).tools["memory_write"]
-    assert not write.invoke({"name": "note", "text": "x" * 11}, _ctx()).success
-    assert write.invoke({"name": "note", "text": "x" * 10}, _ctx()).success
+    # The stamped fence (created / updated) is 48 bytes of the 60.
+    assert not write.invoke({"name": "note", "text": "x" * 13}, _ctx()).success
+    assert write.invoke({"name": "note", "text": "x" * 12}, _ctx()).success
 
 
 def _pack_ctx(tmp_path: Path, memory: dict[str, object]):

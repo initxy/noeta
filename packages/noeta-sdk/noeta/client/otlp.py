@@ -136,6 +136,29 @@ def _ns(occurred_at: float) -> int:
     return int(occurred_at * 1_000_000_000)
 
 
+def _usage_attributes(usage: Mapping[str, Any]) -> dict[str, Any]:
+    """Span attributes for an ``LLMRequestFinished`` usage projection.
+
+    Every stored counter rides as ``noeta.usage.<name>``; the OTel GenAI
+    ``gen_ai.usage.input_tokens`` / ``output_tokens`` pair is added so a
+    stock GenAI dashboard reads the totals without knowing Noeta's split
+    (input = uncached + cache_read + cache_write, as ``Usage.input``).
+    """
+    counters = {
+        k: v
+        for k, v in usage.items()
+        if isinstance(v, int) and not isinstance(v, bool)
+    }
+    attrs: dict[str, Any] = {f"noeta.usage.{k}": v for k, v in counters.items()}
+    attrs["gen_ai.usage.input_tokens"] = (
+        counters.get("uncached", 0)
+        + counters.get("cache_read", 0)
+        + counters.get("cache_write", 0)
+    )
+    attrs["gen_ai.usage.output_tokens"] = counters.get("output", 0)
+    return attrs
+
+
 class _SpanAssembler:
     """Pair start/finish :class:`AuditRecord`\\ s into finished spans.
 
@@ -147,7 +170,10 @@ class _SpanAssembler:
     def __init__(self) -> None:
         # task_id -> (trace_id_hex, parent_span_id_hex | None)
         self._task_trace: dict[str, tuple[str, Optional[str]]] = {}
-        # subtask_id -> (trace_id_hex, parent task-span hex) from SubtaskSpawned
+        # subtask_id -> (trace_id_hex, parent task-span hex) from SubtaskSpawned.
+        # A fast path only: a child whose TaskCreated names its parent links
+        # without it (see ``_linkage``), so the edge survives a child exported
+        # by another host.
         self._pending_parent: dict[str, tuple[str, str]] = {}
         self._open_tasks: dict[str, _OpenSpan] = {}
         # (task_id, call_id) -> open tool/llm span
@@ -162,6 +188,7 @@ class _SpanAssembler:
             return known
         pending = self._pending_parent.pop(record.task_id, None)
         if pending is not None:
+            # Fast path: this process saw the parent's SubtaskSpawned.
             linkage: tuple[str, Optional[str]] = pending
         else:
             key = (
@@ -169,7 +196,16 @@ class _SpanAssembler:
                 if record.trace_id and record.trace_id != _UNKNOWN_TRACE
                 else record.correlation_id or record.task_id
             )
-            linkage = (_hex_id(f"trace:{key}", 16), None)
+            # A child's TaskCreated names its parent, and a child inherits the
+            # parent's trace id, so the edge is derivable with no shared state:
+            # the parent's primary task-span id is a pure function of its id.
+            # This is what links a child exported by a different host than the
+            # one that recorded the parent's SubtaskSpawned.
+            parent_task_id = record.payload_summary.get("parent_task_id")
+            parent_span = (
+                self._task_span_id(str(parent_task_id)) if parent_task_id else None
+            )
+            linkage = (_hex_id(f"trace:{key}", 16), parent_span)
         self._task_trace[record.task_id] = linkage
         return linkage
 
@@ -291,10 +327,12 @@ class _SpanAssembler:
         return self._close_task(record, status=_STATUS_OK)
 
     def _on_task_failed(self, record: AuditRecord) -> list[dict[str, Any]]:
+        detail = record.payload_summary.get("detail")
         return self._close_task(
             record,
             status=_STATUS_ERROR,
             message=str(record.payload_summary.get("reason") or ""),
+            extra={"noeta.fail_detail": str(detail)} if detail else None,
         )
 
     def _on_task_cancelled(self, record: AuditRecord) -> list[dict[str, Any]]:
@@ -418,6 +456,12 @@ class _SpanAssembler:
             attrs["noeta.success"] = bool(success)
         if isinstance(cost, (int, float)):
             attrs["noeta.cost_usd"] = float(cost)
+        latency = record.payload_summary.get("latency_ms")
+        if isinstance(latency, int) and not isinstance(latency, bool):
+            attrs["noeta.latency_ms"] = latency
+        usage = record.payload_summary.get("usage")
+        if isinstance(usage, Mapping):
+            attrs.update(_usage_attributes(usage))
         self._annotate_call(record, attrs, failed=success is False)
         return self._close_call(record)
 

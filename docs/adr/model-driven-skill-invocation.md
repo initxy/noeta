@@ -66,8 +66,11 @@ of truth).
 
 - **A total budget in estimated tokens, fitted at session build.** The host
   derives `plugin_config["skills"]["menu_budget_tokens"]` as 1 % of the bound
-  model's catalog context window (the skills built-in must not import the
-  providers built-in); the pack defaults to 2000 when a host passes nothing;
+  model's catalog context window, capped at 4,096 tokens since 2026-09-25 (at
+  a 1M window the bare fraction admitted ~10K tokens of roster on every
+  request; an operator's explicit value is not capped — the skills built-in
+  must not import the providers built-in); the pack defaults to 2000 when a
+  host passes nothing;
   an operator override rides `HostConfig.plugin_config`. The estimate is
   CJK-aware — a Han / Kana / Hangul character counts as one token — because
   the kernel's `chars/4` heuristic undercounts a Chinese roster three- to

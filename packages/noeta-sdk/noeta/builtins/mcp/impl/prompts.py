@@ -33,11 +33,11 @@ from typing import Any, Optional
 from noeta.builtins.mcp.impl._client import McpError, SpawnFn
 from noeta.builtins.mcp.impl._http_client import HttpPostFn
 from noeta.builtins.mcp.impl.tool import (
-    McpAnyServerSpec,
     _connect_client,
     cap_injected,
     make_mcp_tool_name,
 )
+from noeta.runtime.mcp import McpAnyServerSpec
 
 
 __all__ = [
@@ -51,9 +51,9 @@ __all__ = [
 def make_mcp_prompt_name(alias: str, raw_prompt_name: object) -> str:
     """Map a raw prompt name to the slash-command name ``mcp__alias__prompt``.
 
-    Reuses the tool-name mapper (same provider-safe sanitisation, same fail-fast
-    on empty / over-long / collision-prone names) so a prompt slash command and
-    an MCP tool share one naming rule."""
+    Reuses the tool-name mapper (same provider-safe sanitisation, same hash
+    suffix on an over-long name, same fail-fast on an empty one) so a prompt
+    slash command and an MCP tool share one naming rule."""
     return make_mcp_tool_name(alias, raw_prompt_name)
 
 

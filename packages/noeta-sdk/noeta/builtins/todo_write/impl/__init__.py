@@ -10,18 +10,23 @@ bands are a byte-order contract the control-tool schema goldens pin.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from dataclasses import replace
+from typing import Any, Callable, Optional
 
 from noeta.execution.control_tool import (
     ControlToolBuildContext,
     ControlToolMount,
 )
 from noeta.policies.control_semantics import (
+    SPAWN_SUBAGENT_TOOL,
     ControlTranslateContext,
     ack_patch_decision,
 )
 from noeta.protocols.decisions import (
     Decision,
+    SpawnSubtaskDecision,
+    SpawnSubtasksDecision,
+    StatePatchDecision,
     TaskStatePatch,
     ToolCall,
     ToolCallsDecision,
@@ -161,6 +166,9 @@ def _maybe_todo_write_decision(
     *,
     assistant_thinking: tuple[ThinkingBlock, ...] = (),
     control_tool_names: frozenset[str] = frozenset(),
+    translate_rest: Optional[
+        Callable[[frozenset[str]], Optional[Decision]]
+    ] = None,
 ) -> Decision | None:
     """Translate a ``TodoWrite`` call into a neutral Decision, or ``None`` when
     the turn holds no ``TodoWrite``.
@@ -169,9 +177,13 @@ def _maybe_todo_write_decision(
     runtime tool calls — the reference agent's habitual shape — becomes a
     :class:`ToolCallsDecision` carrying the todos patch, the TodoWrite ack as a
     pre-answered result, and the remaining calls for the ToolRuntime, so the
-    batching costs no extra round trip. A malformed ``todos`` arg (or a second
-    TodoWrite in the same turn) yields a recoverable error ack instead — the
-    task is NOT terminated.
+    batching costs no extra round trip. A call batched with ``Task`` calls
+    hands the rest of the response to the delegation translate
+    (``translate_rest``) and rides the spawn Decision that comes back: the
+    patch is saved at spawn time and the ack joins the spawn's one result
+    message. A malformed ``todos`` arg, a second TodoWrite in the same turn,
+    or any other control tool alongside yields a recoverable error ack
+    instead — the task is NOT terminated.
     """
     tool_uses = [b for b in response.content if isinstance(b, ToolUseBlock)]
     todo_blocks = [b for b in tool_uses if b.tool_name == TODO_WRITE_TOOL]
@@ -210,9 +222,39 @@ def _maybe_todo_write_decision(
         b for b in others if b.tool_name in control_tool_names
     ]
     if control_others:
-        # Another CONTROL tool shares the turn (Task / AskUserQuestion): the
-        # ToolRuntime could never answer it, so the mix stays a recoverable
-        # error rather than a half-run batch.
+        ack = ToolResultBlock(
+            call_id=todo_block.call_id, output=TODO_WRITE_ACK, success=True
+        )
+        if translate_rest is not None and all(
+            b.tool_name == SPAWN_SUBAGENT_TOOL for b in control_others
+        ):
+            rest = translate_rest(frozenset({todo_block.call_id}))
+            if (
+                isinstance(rest, (SpawnSubtaskDecision, SpawnSubtasksDecision))
+                and rest.state_patch is None
+            ):
+                # The patch is saved when the Engine applies the spawn
+                # Decision; the ack joins the spawn's one result message.
+                return replace(
+                    rest,
+                    state_patch=patch,
+                    preacked_results=(ack, *rest.preacked_results),
+                )
+            refusal = _refusal_text(rest)
+            if refusal is not None:
+                # The Task calls were refused, so nothing runs: the checklist
+                # is not saved either, and every call reads the same reason.
+                return ack_patch_decision(
+                    tool_uses,
+                    assistant_message,
+                    assistant_thinking,
+                    patch=None,
+                    text=refusal,
+                    valid=False,
+                )
+        # Any other CONTROL tool shares the turn (AskUserQuestion, skill, …):
+        # the ToolRuntime could never answer it, so the mix stays a
+        # recoverable error rather than a half-run batch.
         return ack_patch_decision(
             tool_uses,
             assistant_message,
@@ -260,6 +302,18 @@ def _maybe_todo_write_decision(
     )
 
 
+def _refusal_text(decision: Optional[Decision]) -> Optional[str]:
+    """The error text of a recoverable refusal ack, or ``None`` when
+    ``decision`` is not one."""
+    if not isinstance(decision, StatePatchDecision) or decision.patch is not None:
+        return None
+    for message in decision.messages_after:
+        for block in message.content:
+            if isinstance(block, ToolResultBlock) and not block.success:
+                return block.error or ""
+    return None
+
+
 def translate_todo_write(ctx: ControlTranslateContext) -> Optional[Decision]:
     """The ``TodoWrite`` routing seam the mount binds into a ``ControlToolSpec``."""
     return _maybe_todo_write_decision(
@@ -267,6 +321,7 @@ def translate_todo_write(ctx: ControlTranslateContext) -> Optional[Decision]:
         ctx.assistant_message,
         assistant_thinking=ctx.assistant_thinking,
         control_tool_names=ctx.control_tool_names,
+        translate_rest=ctx.translate_rest,
     )
 
 

@@ -21,6 +21,7 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 | `open_app` | 宿主设置了 `HostConfig.app_gateway` |
 | `run_skill_script` | `plugin_config["skills"]["allow_skill_scripts"]` 打开，且某个已启用的技能带了脚本 |
 | `mcp__<alias>__<tool>` | 这个任务注册并启用了远程 MCP server |
+| `ToolSearch`、`McpCall` | 启用的某个 MCP server 的 spec 设了 `deferred=True`（它自己的工具就不再发给模型） |
 | 控制类工具 | 见[控制类工具](#控制类工具) |
 
 ## 文件系统工具
@@ -29,10 +30,10 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 
 | 工具 | 风险 | 参数 | 做什么 |
 | --- | --- | --- | --- |
-| `Read` | low | `file_path`、`offset?`、`limit?` | 读 UTF-8 文件，可按行截一段。完整内容另存为 artifact 引用。 |
-| `Glob` | low | `pattern`、`path?` | 列出匹配 glob 的路径（`**` 递归），排好序并有上限。用 `rg --files` 遍历：遵守 gitignore，跳过隐藏文件。 |
-| `Grep` | low | `pattern`、`path?`、`glob?`、`type?`、`output_mode?`、`-i`、`-n`、`-o`、`-u`、`-A`/`-B`/`-C`、`context?`、`head_limit?`、`offset?`、`multiline?` | 用 ripgrep 搜内容，经 `ExecEnv` 执行（环境里必须装有 `rg`）。 |
-| `Edit` | high | `file_path`、`old_string`、`new_string`、`replace_all?` | 精确替换一段文本（默认要求唯一匹配，`replace_all` 则全部替换）。文件必须先 `Read` 过。 |
+| `Read` | low | `file_path`、`offset?`、`limit?` | 读 UTF-8 文件，可按行截一段。一次最多返回 100 KB，超出时结果里会说明，模型用 `offset` 接着读。内容库里存的是整个文件（不超过 1 MiB 时），超过就只存这次返回的那一段。 |
+| `Glob` | low | `pattern`、`path?` | 列出匹配 glob 的路径（`**` 递归，支持 `{ts,tsx}` 这种多选），排好序并有上限。用 `rg --files` 遍历：遵守 gitignore，跳过隐藏文件。 |
+| `Grep` | low | `pattern`、`path?`、`glob?`、`type?`、`output_mode?`、`-i`、`-n`、`-o`、`-u`、`-A`/`-B`/`-C`、`context?`、`head_limit?`、`offset?`、`multiline?` | 用 ripgrep 搜内容，经 `ExecEnv` 执行（环境里必须装有 `rg`；没装时 fs 插件会发一次 `RuntimeWarning`）。 |
+| `Edit` | high | `file_path`、`old_string`、`new_string`、`replace_all?` | 精确替换一段文本（默认要求唯一匹配，`replace_all` 则全部替换）。文件必须先 `Read` 过。CRLF 换行的文件按 CRLF 匹配和写回。 |
 | `Write` | high | `file_path`、`content` | 新建文件（自动建父目录），或覆盖本任务里已经 `Read` 过的文件。`content` 上限 8 MB。 |
 | `Bash` | high | `command`、`timeout?`（毫秒，最多 600000）、`description?`、`run_in_background?` | 在工作区根目录执行命令。后台模式返回一个作业 id。 |
 | `BashOutput` | low | `bash_id`、`filter?` | 查后台作业的状态（`running` / `exited`）、退出码和新输出。 |
@@ -40,7 +41,7 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 
 - **默认不真写盘。** `HostConfig.write_mode="dry_run"`（默认）只记录一份拟改的 diff；`"apply"` 才真正写入。
 - **写有边界，读没有。** `Write` / `Edit` 只能写工作区根目录以内；`HostConfig.write_roots` 可以按任务放开更多目录。`Read` / `Glob` / `Grep` 只把*相对*路径锚到工作区，绝对路径指到哪就读哪，所以真正的读取边界是进程自己的文件权限。
-- `Write` 可以在构造时绑定一个相对工作区的 `allowed_path_globs` 白名单（空 = 不限）；`Edit` 不看它。
+- `Write` 可以在构造时绑定一个相对工作区的 `allowed_path_globs` 白名单（空 = 不限）；`*` 只匹配一层路径，`**` 跨目录，`{a,b}` 表示多选。`Edit` 不看它。
 
 ### Shell 审批
 
@@ -49,7 +50,7 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 | 设置 | 行为 |
 | --- | --- |
 | `shell_mode=OFF` | 不挂 `Bash`。 |
-| `default` / `acceptEdits` | 命令经 `bash -c` 执行。命中白名单的直接跑，其余要审批。 |
+| `default` / `acceptEdits` | 命令经 `bash -c` 执行。命中白名单的直接跑，其余要审批。命令里有没加引号的 `{`、`*`、`?`、`[`，或有以 `~` 开头的词，一律要审批，因为 bash 会展开它们；加了引号的写法（如 `find . -name '*.py'`）不受影响。 |
 | `bypassPermissions` | 什么命令都跑，不审批。 |
 
 内置白名单（`noeta/builtins/fs/impl/shell_rules.py`）只认不含 shell 元字符的命令：
@@ -58,9 +59,11 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 | --- | --- |
 | `git status` | 无参数、`--short`、`-s`、`--porcelain` |
 | `git diff`、`git log` | 只读用法 |
-| `pytest`、`uv run pytest` | 跑测试 |
-| `npm test`、`pnpm test` | 任意后续参数 |
+| `pytest`、`uv run pytest` | 跑测试；仅限受信任的工作区 |
+| `npm test`、`pnpm test` | 任意后续参数；仅限受信任的工作区 |
 | `grep`、`rg`、`find`、`ls` | 只读；拒绝 `rg --pre`/`--hostname-bin` 和 `find -exec`/`-delete`/`-fprint*` |
+
+跑测试的这几条会执行仓库里的代码（`conftest.py`、`package.json` 里的脚本），所以只有工作区受信任时才免审批——和 `.noeta/shell-allowlist.json` 用同一套 `grant_trust`，或者设 `project_shell_allowlist_trust="open"`。`git` 那几条仍然免审批，但执行时会加上 `-c core.fsmonitor=` 和 `--no-ext-diff --no-textconv`；剩下的风险是仓库 `.git/config` 里配置的 `filter.<driver>.clean`。
 
 扩展白名单有三种办法：
 
@@ -78,7 +81,7 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 
 | 工具 | 风险 | 参数 | 做什么 |
 | --- | --- | --- | --- |
-| `WebFetch` | low | `url`、`prompt` | 抓网页、转成 Markdown，再用一次辅助模型调用按 `prompt` 回答（`Options.webfetch_model`，默认用任务的主模型）。HTTP 自动升 HTTPS；跨域名重定向不跟随，交回给模型；页面缓存 15 分钟。只支持 `http(s)`。 |
+| `WebFetch` | low | `url`、`prompt` | 抓网页、转成 Markdown，再用一次辅助模型调用按 `prompt` 回答（`Options.webfetch_model`，默认用任务的主模型）。HTTP 自动升 HTTPS；只有协议、主机、端口都相同的重定向才跟随，其余交回给模型；页面缓存 15 分钟。只支持 `http(s)`。按 `Content-Type` 处理：HTML 转成 Markdown，文本 / JSON / XML 原样返回，图片、PDF 和其他二进制类型报工具错误并写明类型。 |
 | `WebSearch` | low | `query`、`count?` | 网页搜索，返回排好序的 Markdown 结果。只有设置了 `NOETA_WEB_SEARCH_API_KEY` 才挂上。 |
 
 `WebFetch` 什么地址都能访问。`HostConfig.webfetch_allowed_hosts` 列出不用问人就能访问的域名：
@@ -107,7 +110,7 @@ agent 启用 `memory` 时挂上（预设里是 `main` 和后台整理记忆的 a
 
 | 工具 | 风险 | 参数 | 做什么 |
 | --- | --- | --- | --- |
-| `memory_write` | medium | `name`、`text`、`description?`、`type?`、`keywords?`、`related?` | 写一条 Markdown 记忆。frontmatter 按字段合并进磁盘上已有的（不传 = 保留，传空 = 删除）。自动写入 `created` / `updated` / `source_task`；新名字会提示相似的已有记忆。 |
+| `memory_write` | medium | `name`、`text`、`description?`、`type?`、`keywords?`、`related?` | 写一条 Markdown 记忆。frontmatter 按字段合并进磁盘上已有的（不传 = 保留，传空 = 删除）。`created` / `updated` / `source_task` 由工具自己写（模型传来的 `created` 会被忽略）；`HostConfig.memory_max_bytes` 按落盘的整页算，字段也算在内；新名字会提示相似的已有记忆。 |
 | `memory_read` | low | `name` | 读一条记忆的全文。 |
 | `memory_search` | low | `query` | 在名字和正文里做不分大小写的子串搜索；每条最多 3 行摘录，最多 10 条，超出时带 `truncated` 标记。 |
 | `memory_archive` | medium | `name` | 把记忆移到 `archive/`：不再出现在索引、召回和搜索里，但文件不删。 |
@@ -146,13 +149,15 @@ agent 启用 `memory` 时挂上（预设里是 `main` 和后台整理记忆的 a
 | `skill` | 启用了它，且合并后的技能菜单非空 | `skill_invocation`（由 `skills` 挂上） |
 | `run_workflow` | `HostConfig.workflow_allowed=True` 且 agent 能派子任务 | `react` |
 | `RecallHistory` | 接了上下文压缩——在 `Client` / `query` 下总是接的 | `react` |
-| `structured_output` | 带独立 schema 派出的子任务 / workflow 助手（`Options.output_schema` 走 provider 原生的结构化输出） | `react` |
+| `structured_output` | 带独立 schema 派出的子任务 / workflow 助手（`Options.output_schema` 走 provider 原生的结构化输出）；必须单独调用，和别的调用放在同一条回复里时整批被退回，模型会被告知单独发 | `react` |
 
 `RecallHistory` 按 `offset` 翻回被压缩进摘要的原始消息——这些内容不在任何文件里。
 
 ## MCP 工具
 
-远程 MCP 工具名是 `mcp__<alias>__<tool>`。进程内的 SDK server（`create_sdk_mcp_server`）保留 `@tool` 的原名。见 [MCP server](../guides/mcp.md)。
+远程 MCP 工具名是 `mcp__<alias>__<tool>`。超过 64 个字符的名字会被截短并加 8 位 sha256 后缀，前缀保留；同一个服务器里两个工具名清洗后撞上，本来合法的保持原名，其余加后缀；两个服务器之间撞名，会在构建 agent 时抛 `McpConfigError`。进程内的 SDK server（`create_sdk_mcp_server`）保留 `@tool` 的原名。
+
+spec 设了 `deferred=True` 的服务器，工具仍以这些名字注册，但 schema 不随请求发送；模型改为拿到 `ToolSearch`（查找这些工具和它们的 schema）和 `McpCall`（按名字调用其中一个），所有这类服务器共用这一对。一次 `McpCall` 在权限检查和记录里都按真实工具处理。见 [MCP server](../guides/mcp.md)。
 
 ## 风险等级
 

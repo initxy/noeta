@@ -26,6 +26,7 @@ from noeta.protocols.errors import (
     AbortedError,
     ContextOverflowError,
     FatalError,
+    MalformedToolArgumentsError,
     TransientError,
 )
 from noeta.protocols.messages import (
@@ -48,6 +49,7 @@ from noeta.builtins.providers.impl._sse import iter_sse_events
 from noeta.builtins.providers.impl.codecs import (
     HOST_INJECTED_PREAMBLE,
     decode_tool_arguments,
+    describe_http_error,
     encode_tool_arguments,
     parse_retry_after,
     render_tool_result_body,
@@ -473,6 +475,7 @@ class OpenAIResponsesProvider:
 
         content: list[Block] = []
         has_function_call = False
+        truncated = _hit_output_cap(payload)
         for item in output:
             if not isinstance(item, dict):
                 continue
@@ -481,7 +484,14 @@ class OpenAIResponsesProvider:
                 content.extend(_message_item_to_blocks(item))
             elif item_type == "function_call":
                 has_function_call = True
-                content.append(_function_call_item_to_block(item))
+                try:
+                    content.append(_function_call_item_to_block(item))
+                except MalformedToolArgumentsError:
+                    if not truncated:
+                        raise
+                    # The output cap cut this call's arguments mid-JSON: a
+                    # ``max_tokens`` stop, not a garbled stream worth
+                    # regenerating. Keep the complete calls only.
             elif item_type == "reasoning":
                 content.append(_reasoning_item_to_block(item))
             # Other item types are skipped.
@@ -501,6 +511,15 @@ class OpenAIResponsesProvider:
 # ---------------------------------------------------------------------------
 
 
+def _hit_output_cap(payload: dict[str, Any]) -> bool:
+    """``status == "incomplete"`` because the output-token cap was reached."""
+    if payload.get("status") != "incomplete":
+        return False
+    details = payload.get("incomplete_details")
+    reason = details.get("reason") if isinstance(details, dict) else None
+    return reason == "max_output_tokens"
+
+
 def _infer_stop_reason(
     payload: dict[str, Any], has_function_call: bool
 ) -> Literal["tool_use", "end_turn", "max_tokens", "error"]:
@@ -515,11 +534,8 @@ def _infer_stop_reason(
     4. Otherwise (``failed`` / ``content_filter`` etc.) → ``error``.
     """
     status = payload.get("status")
-    if status == "incomplete":
-        details = payload.get("incomplete_details")
-        reason = details.get("reason") if isinstance(details, dict) else None
-        if reason == "max_output_tokens":
-            return "max_tokens"
+    if _hit_output_cap(payload):
+        return "max_tokens"
     if has_function_call:
         return "tool_use"
     if status == "completed":
@@ -580,16 +596,17 @@ def _translate_http_error(exc: httpx.HTTPStatusError) -> Exception:
     """
     response = exc.response
     status = response.status_code
+    message = describe_http_error(exc)
     if status == 429:
         return TransientError(
-            str(exc),
+            message,
             retry_after=parse_retry_after(response.headers.get("Retry-After")),
         )
     if status >= 500:
-        return TransientError(str(exc))
+        return TransientError(message)
     if status == 400 and _is_context_overflow(response):
-        return ContextOverflowError(str(exc))
-    return FatalError(str(exc))
+        return ContextOverflowError(message)
+    return FatalError(message)
 
 
 def _is_context_overflow(response: httpx.Response) -> bool:
@@ -1117,7 +1134,9 @@ def _function_call_item_to_block(item: dict[str, Any]) -> ToolUseBlock:
     ``arguments`` is a JSON string; a decode failure → a
     ``MalformedToolArgumentsError`` (a ``ValueError`` subclass bucketed
     ``transient``, since a non-decodable arguments string is in practice a
-    truncated stream) which RuntimeLLMClient retries on its transient budget.
+    truncated stream) which RuntimeLLMClient retries on its transient budget —
+    unless the response hit the output cap, where ``_parse_response`` drops
+    the cut-off call and reports ``max_tokens``.
     """
     # ``function_call arguments`` is this provider's own wire vocabulary,
     # passed in verbatim; defaulting (None→"{}") and exception convergence

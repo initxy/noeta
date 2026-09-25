@@ -11,7 +11,6 @@ re-records the new digest, so consecutive edits chain without a re-read.
 
 from __future__ import annotations
 
-import fnmatch
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +23,7 @@ from noeta.tools.limits import (
     truncate_bytes,
 )
 from noeta.protocols.resources import load_markdown
+from noeta.builtins.fs.impl._glob import compile_glob, glob_matches
 from noeta.builtins.fs.impl._diff import (
     DIFF_MEDIA_TYPE,
     compute_diff,
@@ -117,10 +117,34 @@ def _cat_n_snippet(after_lines: list[str], center: int, span: int) -> str:
     )
 
 
+def _lines(text: str) -> list[str]:
+    """``text`` split the way ``Read`` numbers it: on ``\\n`` only (the ``rg``
+    boundary), each line's trailing ``\\r`` dropped, no phantom empty line
+    after a final newline."""
+    if not text:
+        return []
+    parts = text.split("\n")
+    if parts[-1] == "":
+        parts.pop()
+    return [p[:-1] if p.endswith("\r") else p for p in parts]
+
+
+def _to_eol(text: str, eol: str) -> str:
+    """``text`` with every line ending rewritten to ``eol``."""
+    lf = text.replace("\r\n", "\n")
+    return lf if eol == "\n" else lf.replace("\n", eol)
+
+
+def _dominant_eol(text: str) -> str:
+    """``"\\r\\n"`` when most of ``text``'s line endings are CRLF, else ``"\\n"``."""
+    crlf = text.count("\r\n")
+    return "\r\n" if crlf and crlf >= text.count("\n") - crlf else "\n"
+
+
 def _first_changed_line(before: str, after: str) -> int:
     """0-based index of the first line where ``after`` differs from ``before``."""
-    b_lines = before.splitlines()
-    a_lines = after.splitlines()
+    b_lines = _lines(before)
+    a_lines = _lines(after)
     for i, (b, a) in enumerate(zip(b_lines, a_lines)):
         if b != a:
             return i
@@ -206,6 +230,13 @@ class ReplaceTextTool:
         if precondition is not None:
             return precondition
 
+        # ``Read`` shows lines without their ``\\r``, so the model writes
+        # ``old_string`` / ``new_string`` with bare ``\\n``. In a CRLF file,
+        # match and write with the file's own ending — never a mixed file.
+        if _dominant_eol(before) == "\r\n":
+            old_eol, new_eol = _to_eol(old, "\r\n"), _to_eol(new, "\r\n")
+            if before.count(old_eol):
+                old, new = old_eol, new_eol
         count = before.count(old)
         if count == 0:
             return tool_error(self.name, "String to replace not found in file.")
@@ -244,11 +275,11 @@ class ReplaceTextTool:
             # ``Write`` can produce it.
             file_changes = [{"path": rel, "before": raw}]
 
-        after_lines = after.splitlines()
+        after_lines = _lines(after)
         snippet = _cat_n_snippet(
             after_lines,
             _first_changed_line(before, after),
-            len(new.splitlines()),
+            len(_lines(new)),
         )
         if applied:
             head = (
@@ -331,7 +362,15 @@ class WriteFileTool:
         whitelist. Empty whitelist ⇒ always allowed."""
         if not self.allowed_path_globs:
             return True
-        return any(fnmatch.fnmatch(rel, pat) for pat in self.allowed_path_globs)
+        parts = tuple(p for p in rel.split("/") if p not in ("", "."))
+        for pat in self.allowed_path_globs:
+            try:
+                compiled = compile_glob(pat)
+            except ValueError:
+                continue  # an unusable operator glob admits nothing
+            if glob_matches(parts, compiled):
+                return True
+        return False
 
     def invoke(self, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = require_str(

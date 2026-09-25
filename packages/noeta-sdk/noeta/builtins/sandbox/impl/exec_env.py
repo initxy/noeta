@@ -12,9 +12,11 @@ import base64
 import codecs
 import json
 import shlex
+import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol
@@ -44,6 +46,23 @@ DEFAULT_AIO_TIMEOUT_S = 60.0
 #: HTTP client does.
 _DEFAULT_AIO_TOTAL_CAP = 32 * 1024 * 1024
 
+#: Seconds added on top of a command's own budget. The container stops the
+#: command at ``hard_timeout = timeout_s``; the transport read timeout sits
+#: this far above so a wedged container still hands the call back, and the
+#: exec's ``no_change_timeout`` sits here too so a quiet command (a long build
+#: printing nothing) is never cut short before its real deadline.
+_AIO_EXEC_SLACK_S = 10
+
+#: Read timeout for the ``/v1/shell/kill`` call that stops one command.
+_AIO_KILL_TIMEOUT_S = 10.0
+
+#: ``status`` values of a ``/v1/shell/exec`` response that mean the container
+#: stopped waiting before the command ended. Observed live (AIO image
+#: v1.11): ``hard_timeout`` returns without reliably killing the process, and
+#: ``no_change_timeout`` leaves it running, so both are followed by an
+#: explicit ``/v1/shell/kill``.
+_AIO_EXEC_CUT_SHORT = frozenset({"hard_timeout", "no_change_timeout"})
+
 class AioHttpPost(Protocol):
     """Injectable HTTP transport: ``(url, json_body, headers, *, timeout_s)`` →
     raw response body bytes.
@@ -51,9 +70,10 @@ class AioHttpPost(Protocol):
     Injectable so tests substitute a fake and never open a socket; leaving it
     ``None`` uses stdlib ``urllib``. ``timeout_s`` is the already-resolved socket
     read timeout for THIS call — the adapter default for file/stat ops, or the
-    caller's per-command budget for a ``run_argv`` shell exec. The container
-    never hard-kills a slow exec, so this transport timeout IS the effective
-    bound.
+    caller's per-command budget plus a few seconds for a ``run_argv`` shell
+    exec (the container itself stops the command at the budget, and
+    ``run_argv`` kills it explicitly when it does not). ``run_argv`` calls it
+    from a worker thread, so a transport must be safe to call concurrently.
     """
 
     def __call__(
@@ -89,6 +109,44 @@ _READ_EXIT_NOT_FOUND = 40
 _READ_EXIT_NO_PERM = 41
 
 
+def _skip_partial_utf8_head(buf: bytes) -> bytes:
+    """Drop the continuation bytes a tail cut left at the head of ``buf`` (at
+    most three), so the kept output starts on a UTF-8 character boundary."""
+    i = 0
+    while i < min(3, len(buf)) and 0x80 <= buf[i] <= 0xBF:
+        i += 1
+    return buf[i:]
+
+
+def _failed_run(
+    start: float, exc: BaseException, *, timed_out: bool = False
+) -> RunOutcome:
+    """A run that produced no command result: the fault text as stderr."""
+    return RunOutcome(
+        returncode=-1,
+        duration_ms=int((time.monotonic() - start) * 1000),
+        stdout=b"",
+        stderr=str(exc).encode("utf-8"),
+        stdout_truncated=False,
+        stderr_truncated=False,
+        timed_out=timed_out,
+    )
+
+
+def _stopped_run(start: float) -> RunOutcome:
+    """A run ended by its ``on_start`` kill. Not a timeout: the caller's
+    foreground kill table already knows it was a stop and says so."""
+    return RunOutcome(
+        returncode=-1,
+        duration_ms=int((time.monotonic() - start) * 1000),
+        stdout=b"",
+        stderr=b"",
+        stdout_truncated=False,
+        stderr_truncated=False,
+        timed_out=False,
+    )
+
+
 class AioSandboxExecEnv:
     """:class:`ExecEnv` backed by an AIO Sandbox container over HTTP.
 
@@ -102,9 +160,19 @@ class AioSandboxExecEnv:
     ``base64`` read path, the merged ``output`` stream) is captured only here
     and pinned by fake-transport tests. The mapping decisions worth calling out:
 
-    * **``run_argv``** joins the argv with :func:`shlex.join` and prefixes
-      ``cd <cwd> && `` — cwd is expressed lexically rather than relying on an
-      unconfirmed request field. An optional host-supplied ``preamble``, minted
+    * **``run_argv``** runs each command in its own shell session (a fresh
+      ``id`` created through ``/v1/shell/sessions/create``, since an exec
+      naming an unknown id is refused) with ``hard_timeout`` set to the
+      command's budget. The session id is what makes the command stoppable:
+      ``/v1/shell/kill {id}`` ends that session's whole process tree. The
+      exec waits on a worker thread so a stop returns the caller at once —
+      the container keeps an exec request open until ``hard_timeout`` even
+      after a kill — and a timeout is followed by an explicit kill, because
+      ``hard_timeout`` alone returns without reliably ending the process.
+      ``supports_foreground_kill`` advertises the ``on_start`` hook that
+      hands the kill to ``Bash``'s foreground kill table. It joins the argv
+      with :func:`shlex.join` and prefixes ``cd <cwd> && `` — cwd is expressed
+      lexically rather than relying on an unconfirmed request field. An optional host-supplied ``preamble``, minted
       fresh each call, is inserted between the ``cd`` and the command so a
       session can establish per-exec shell state. The container returns a single
       merged ``output`` stream, so it lands in ``stdout`` and ``stderr`` stays
@@ -122,7 +190,9 @@ class AioSandboxExecEnv:
       the bytes for TOCTOU, image reads need them verbatim) instead runs
       ``base64 -w0`` through ``/v1/shell/exec`` and decodes locally, with
       guard exit codes refining missing/unreadable into ``FileNotFoundError``
-      / ``PermissionError``. Writes send base64 to ``/v1/file/write``.
+      / ``PermissionError``. ``read_range`` is the same path over a ``dd``
+      byte window, so ``Read`` can pull a large file in bounded chunks. Writes
+      send base64 to ``/v1/file/write``.
     * **``glob`` / ``rglob``** are expressed with shell ``globstar`` (``rglob``
       = ``glob('**/'+pattern)``, matching pathlib's own definition), so they
       depend on ``bash`` with ``globstar`` in the image. Their pathlib semantics
@@ -199,10 +269,8 @@ class AioSandboxExecEnv:
         :class:`AioSandboxError` on any transport / protocol fault. ``timeout_s``
         is the socket read timeout for this one call; ``None`` uses the
         adapter-level default (file/stat ops), while ``run_argv`` passes the
-        caller's per-command budget so a long ``shell_run`` is bounded by the
-        timeout the model asked for. The container does not hard-kill a slow
-        ``exec``, so this client timeout IS the effective bound — when it fires
-        the command may still be running there until its lease cap.
+        caller's per-command budget plus slack, so a wedged container still
+        hands the call back; ``run_argv`` then kills the command's session.
         """
         url = self._base + path
         data = json.dumps(body, separators=(",", ":")).encode("utf-8")
@@ -259,10 +327,36 @@ class AioSandboxExecEnv:
         # run in a subshell because the exec session's shell is persistent — a
         # bare ``exit`` kills it and wedges the request (verified live).
         q = shlex.quote(str(path))
+        return self._read_encoded(path, f"base64 -w0 -- {q}")
+
+    def read_range(self, path: Path, offset: int, length: int) -> bytes:
+        """Up to ``length`` bytes of ``path`` from byte ``offset`` — the
+        optional ``ExecEnv`` capability ``Read`` uses to stream a large file.
+
+        Same guarded, byte-exact base64 path as :meth:`read_bytes`, over a
+        ``dd`` window (``skip_bytes`` / ``count_bytes`` make both numbers
+        byte counts whatever the block size). Short only at end of file.
+        """
+        if offset < 0 or length < 0:
+            raise ValueError("read_range: offset and length must be >= 0")
+        if length == 0:
+            return b""
+        q = shlex.quote(str(path))
+        return self._read_encoded(
+            path,
+            f"set -o pipefail; dd if={q} bs=1048576 "
+            f"iflag=skip_bytes,count_bytes skip={offset} count={length} "
+            "status=none | base64 -w0",
+        )
+
+    def _read_encoded(self, path: Path, emit: str) -> bytes:
+        """Run ``emit`` (a command printing base64 of the wanted bytes) behind
+        the not-found / no-permission guards and decode its output."""
+        q = shlex.quote(str(path))
         outcome = self._shell(
             f"( if [ ! -e {q} ]; then exit {_READ_EXIT_NOT_FOUND}; "
             f"elif [ ! -r {q} ]; then exit {_READ_EXIT_NO_PERM}; "
-            f"else base64 -w0 -- {q}; fi )"
+            f"else {emit}; fi )"
         )
         code = int(outcome.get("exit_code", 1))
         if code == _READ_EXIT_NOT_FOUND:
@@ -339,6 +433,12 @@ class AioSandboxExecEnv:
         outcome = self._shell(f"mkdir -p -- {shlex.quote(str(path))}")
         if int(outcome.get("exit_code", 1)) != 0:
             raise AioSandboxError(f"mkdir {path}: {outcome.get('output', '')!r}")
+
+    @property
+    def supports_foreground_kill(self) -> bool:
+        # ``run_argv`` takes ``on_start`` and hands it a terminator for the
+        # command's shell session (see the class docstring).
+        return True
 
     @property
     def supports_background(self) -> bool:
@@ -469,6 +569,7 @@ class AioSandboxExecEnv:
         timeout_s: int,
         output_cap: int,
         runner: Optional[SubprocRunner] = None,
+        on_start: Optional[Callable[[Callable[[], None]], None]] = None,
     ) -> RunOutcome:
         # ``runner`` is the local subprocess seam — irrelevant remotely, ignored.
         # cwd is expressed lexically (cd &&) rather than via an unconfirmed
@@ -477,43 +578,81 @@ class AioSandboxExecEnv:
         del runner
         preamble = self._preamble(argv) if self._preamble is not None else ""
         command = f"cd {shlex.quote(str(cwd))} && {preamble}{shlex.join(argv)}"
-        # No remote hard-kill, so the transport read timeout IS the bound: thread
-        # the caller's per-command budget through so ``timeout=`` behaves like the
-        # local backend's ``subprocess`` timeout. A wedged command keeps running
-        # in the container until its lease cap; we still report it as a timed-out
-        # run below.
         start = time.monotonic()
+        # A session of its own gives the command an id to kill it by.
+        shell_id = uuid.uuid4().hex
         try:
-            data = self._shell(command, timeout_s=timeout_s)
-        except TimeoutError as exc:
-            # socket.timeout is TimeoutError on 3.10+; a URLError-wrapped
-            # timeout instead surfaces as AioSandboxError below (still a
-            # reported failed run, not a crash).
-            duration_ms = int((time.monotonic() - start) * 1000)
-            return RunOutcome(
-                returncode=-1,
-                duration_ms=duration_ms,
-                stdout=b"",
-                stderr=str(exc).encode("utf-8"),
-                stdout_truncated=False,
-                stderr_truncated=False,
-                timed_out=True,
-            )
-        except AioSandboxError as exc:
-            # A remote fault is reported to the model as a failed run rather
-            # than crashing the worker, mirroring the local backend which never
-            # lets a spawn fault escape run_argv.
-            duration_ms = int((time.monotonic() - start) * 1000)
-            return RunOutcome(
-                returncode=-1,
-                duration_ms=duration_ms,
-                stdout=b"",
-                stderr=str(exc).encode("utf-8"),
-                stdout_truncated=False,
-                stderr_truncated=False,
-                timed_out=False,
-            )
+            self._call("/v1/shell/sessions/create", {"id": shell_id})
+        except (TimeoutError, AioSandboxError) as exc:
+            return _failed_run(start, exc)
+        stopped = threading.Event()
+        wake = threading.Event()
+
+        def _kill() -> None:
+            # Mark first so the waiting caller returns at once, then end the
+            # command's process tree in the container. Never raises.
+            stopped.set()
+            wake.set()
+            self._kill_shell(shell_id)
+
+        if on_start is not None:
+            on_start(_kill)
+        if stopped.is_set():
+            # Stopped before the command was even sent.
+            return _stopped_run(start)
+        body: dict[str, Any] = {
+            "id": shell_id,
+            "command": command,
+            "hard_timeout": timeout_s,
+            "no_change_timeout": timeout_s + _AIO_EXEC_SLACK_S,
+        }
+        transport_timeout = float(timeout_s + _AIO_EXEC_SLACK_S)
+        box: dict[str, Any] = {}
+
+        def _exec() -> None:
+            try:
+                box["data"] = self._call(
+                    "/v1/shell/exec", body, timeout_s=transport_timeout
+                )
+            except BaseException as exc:  # handed to the waiting caller
+                box["error"] = exc
+            finally:
+                wake.set()
+
+        threading.Thread(
+            target=_exec, name=f"aio-exec-{shell_id[:8]}", daemon=True
+        ).start()
+        # The transport timeout bounds the worker; the extra seconds only cover
+        # a transport that ignores its own timeout.
+        wake.wait(transport_timeout + _AIO_EXEC_SLACK_S)
+        if stopped.is_set():
+            # Interrupt / cancel / close: the kill is already on its way. The
+            # exec request stays open in the container until its hard timeout,
+            # so its eventual answer is left to the daemon worker.
+            return _stopped_run(start)
+        error = box.get("error")
+        if "data" not in box:
+            # No answer: a transport timeout, a transport fault, or a worker
+            # that never came back. The command may still be running there.
+            self._kill_shell(shell_id)
+            if error is None or isinstance(error, TimeoutError):
+                return _failed_run(
+                    start,
+                    error or TimeoutError("sandbox exec did not answer"),
+                    timed_out=True,
+                )
+            if isinstance(error, (AioSandboxError, OSError)):
+                # A remote fault is reported to the model as a failed run
+                # rather than crashing the worker, mirroring the local backend
+                # which never lets a spawn fault escape run_argv.
+                return _failed_run(start, error)
+            raise error
+        data: dict[str, Any] = box["data"]
         duration_ms = int((time.monotonic() - start) * 1000)
+        cut_short = data.get("status") in _AIO_EXEC_CUT_SHORT
+        if cut_short:
+            # The container gave up waiting; make sure the command is gone.
+            self._kill_shell(shell_id)
         # The container merges stdout+stderr into one ``output`` stream, so
         # ``stderr`` stays empty. When that stream is large the inline ``output``
         # is truncated and the FULL stream spilled to a container file named by
@@ -530,34 +669,78 @@ class AioSandboxExecEnv:
         else:
             output = inline
         stdout, stdout_truncated = cap_stream(output, output_cap)
+        if stdout_truncated:
+            stdout = _skip_partial_utf8_head(stdout)
+        if cut_short:
+            return RunOutcome(
+                returncode=-1,
+                duration_ms=duration_ms,
+                stdout=stdout,
+                stderr=b"",
+                stdout_truncated=stdout_truncated,
+                stderr_truncated=False,
+                timed_out=True,
+            )
+        # A response without an exit code says nothing about how the command
+        # ended, so it is a failed run — never a silent success.
+        raw_code: Any = data.get("exit_code")
+        stderr = b""
+        try:
+            returncode = int(raw_code)
+        except (TypeError, ValueError):
+            returncode = -1
+            stderr = (
+                f"sandbox exec response carried no usable exit code "
+                f"({raw_code!r}); treating the run as failed"
+            ).encode("utf-8")
         return RunOutcome(
-            returncode=int(data.get("exit_code", 0)),
+            returncode=returncode,
             duration_ms=duration_ms,
             stdout=stdout,
-            stderr=b"",
+            stderr=stderr,
             stdout_truncated=stdout_truncated,
             stderr_truncated=False,
             timed_out=False,
         )
 
+    def _kill_shell(self, shell_id: str) -> None:
+        """``/v1/shell/kill`` one command's session — best effort, never
+        raises (the session may already be gone, which is the goal)."""
+        try:
+            self._call(
+                "/v1/shell/kill", {"id": shell_id}, timeout_s=_AIO_KILL_TIMEOUT_S
+            )
+        except Exception:  # noqa: BLE001 — best effort
+            pass
+
     def _read_spill(self, path: str, cap: int) -> bytes:
         """Return the bounded tail of a ``full_output_file_path`` spill.
 
         Reading the whole file would hit the very response ``_total_cap`` the
-        spill exists to dodge, so pull only the last
-        ``cap + 1`` bytes with ``tail -c`` (the ``+1`` lets ``cap_stream`` still
-        flag truncation). ``tail``'s own output is bounded by ``cap`` and so is
-        always well under the response cap. Any read fault (missing file,
-        transport error, non-zero ``tail`` exit) returns empty so the caller
-        falls back to the truncated inline output rather than crashing the run.
+        spill exists to dodge, so pull only the last ``cap + 1`` bytes with
+        ``tail -c`` (the ``+1`` lets ``cap_stream`` still flag truncation).
+        Those bytes travel base64-encoded: a raw byte cut can land inside a
+        UTF-8 character, which the text-only exec response cannot carry
+        faithfully. The encoded tail can itself overflow the inline echo and be
+        spilled again — that second spill is plain ASCII, bounded by ``cap``,
+        and read whole. Any read fault (missing file, transport error, non-zero
+        exit, bad base64) returns empty so the caller falls back to the
+        truncated inline output rather than crashing the run.
         """
         try:
-            outcome = self._shell(f"tail -c {cap + 1} -- {shlex.quote(path)}")
-        except OSError:
+            outcome = self._shell(
+                f"( set -o pipefail; tail -c {cap + 1} -- {shlex.quote(path)} "
+                "| base64 -w0 )"
+            )
+            if int(outcome.get("exit_code", 1)) != 0:
+                return b""
+            text = outcome.get("output") or ""
+            second = outcome.get("full_output_file_path")
+            if isinstance(second, str) and second:
+                text = self._read_content(second)
+            return base64.b64decode("".join(text.split()), validate=True)
+        except (OSError, ValueError, TypeError):
             return b""
-        if int(outcome.get("exit_code", 1)) != 0:
-            return b""
-        return (outcome.get("output") or "").encode("utf-8")
 
     # -- default transport ------------------------------------------------ #
 
@@ -570,4 +753,5 @@ class AioSandboxExecEnv:
         with urllib.request.urlopen(  # noqa: S310 — operator-configured endpoint
             request, timeout=timeout_s
         ) as resp:
-            return resp.read(self._total_cap + 1)
+            data: bytes = resp.read(self._total_cap + 1)
+            return data

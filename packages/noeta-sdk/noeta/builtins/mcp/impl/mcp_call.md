@@ -1,0 +1,1 @@
+Run a tool found with ToolSearch. `tool` is its exact name (`mcp__<server>__<tool>`) and `arguments` is an object that follows the input schema ToolSearch returned for it. A tool that is already in your tool list is called directly, not through McpCall.

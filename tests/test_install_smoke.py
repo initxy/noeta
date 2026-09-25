@@ -570,6 +570,67 @@ def test_repo_root_license_file_exists() -> None:
     text = license_path.read_text(encoding="utf-8")
     assert "Apache License" in text
     assert "Version 2.0" in text
+    # Each distribution ships its own copy (a symlink does not survive into a
+    # wheel) and declares it, so the wheel and sdist carry the text.
+    for package_dir in _PACKAGE_DIRS:
+        copy = package_dir / "LICENSE"
+        assert copy.is_file() and not copy.is_symlink(), (
+            f"{package_dir.name}/LICENSE missing (copy of the repo root one)"
+        )
+        assert copy.read_text(encoding="utf-8") == text, (
+            f"{package_dir.name}/LICENSE drifted from the repo-root LICENSE"
+        )
+        pyproject = (package_dir / "pyproject.toml").read_text(encoding="utf-8")
+        assert 'license-files = ["LICENSE"]' in pyproject
+
+
+def _top_level_packages(source_root: Path) -> list[str]:
+    """Every immediate package directory under a distribution's ``noeta/``."""
+    return sorted(
+        child.name
+        for child in source_root.iterdir()
+        if child.is_dir()
+        and child.name != "__pycache__"
+        and any(child.glob("*.py"))
+    )
+
+
+def test_every_top_level_package_carries_py_typed() -> None:
+    """PEP 561: without a ``py.typed`` marker a type checker treats the
+    installed package as untyped (``import-untyped``). Both wheels share the
+    ``noeta`` namespace, so the marker sits in each immediate sub-package."""
+    for dist, (source_root, _closure) in _DISTRIBUTIONS.items():
+        missing = [
+            name
+            for name in _top_level_packages(source_root)
+            if not (source_root / name / "py.typed").is_file()
+        ]
+        assert missing == [], f"{dist}: no py.typed in {missing}"
+
+
+@pytest.mark.install_smoke
+def test_wheels_ship_license_and_py_typed(tmp_path: Path) -> None:
+    """The built wheels carry the Apache-2.0 LICENSE text and every
+    ``py.typed`` marker — the source tree having them is not enough if the
+    build backend leaves them out."""
+    uv_bin = _require_uv()
+    env = _clean_env()
+    dist_dir = tmp_path / "dist"
+    for dist, (source_root, _closure) in _DISTRIBUTIONS.items():
+        wheel = _build_wheel(uv_bin, source_root.parent, dist_dir, env)
+        with zipfile.ZipFile(wheel) as zf:
+            names = set(zf.namelist())
+            licenses = [
+                n for n in names if n.endswith(".dist-info/licenses/LICENSE")
+            ]
+            assert licenses, f"{dist}: wheel has no dist-info/licenses/LICENSE"
+            assert b"Apache License" in zf.read(licenses[0])
+        missing = [
+            name
+            for name in _top_level_packages(source_root)
+            if f"noeta/{name}/py.typed" not in names
+        ]
+        assert missing == [], f"{dist}: wheel lacks py.typed in {missing}"
 
 
 def test_pyproject_dependencies_use_lower_bounds_only() -> None:

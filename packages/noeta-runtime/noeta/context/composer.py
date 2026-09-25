@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Callable, Literal, Optional, Protocol
 
 from noeta.context.reminders import ReminderRegistry, ReminderView
 from noeta.protocols.canonical import to_canonical_bytes
@@ -87,7 +87,7 @@ def _density(real_baseline: int, estimated: int) -> float:
     return min(_DENSITY_MAX, max(_DENSITY_MIN, real_baseline / estimated))
 #: Role of the single summary message swapped in for a compacted prefix:
 #: ``user`` keeps it provider-neutral and outside the ``system`` stable_prefix.
-_SUMMARY_ROLE = "user"
+_SUMMARY_ROLE: Literal["user"] = "user"
 #: The one line that opens the summary message. Without it the note arrives as
 #: an ordinary user turn and reads as a fresh instruction: a summary saying
 #: "the user asked for X" is then acted on again. The line says what the note
@@ -244,7 +244,16 @@ class ThreeSegmentComposer:
         control_action_schemas: Optional[list[dict[str, Any]]] = None,
         tail_token_budget: Optional[int] = None,
         available_window: Optional[int] = None,
+        microcompact_keep_recent: Optional[int] = None,
+        microcompact_fraction: float = 0.5,
     ) -> None:
+        if microcompact_keep_recent is not None and microcompact_keep_recent < 1:
+            raise ValueError(
+                "microcompact_keep_recent must be >= 1 (or None to disable): "
+                "the newest tool result always stays verbatim"
+            )
+        if not 0.0 < microcompact_fraction <= 1.0:
+            raise ValueError("microcompact_fraction must be in (0, 1]")
         self._system_prompt = system_prompt
         self._tools = dict(tools)
         self._content_store = content_store
@@ -289,6 +298,14 @@ class ThreeSegmentComposer:
         # Deterministic (a pure function of the model), so live + resume gate
         # identically.
         self._available_window = available_window
+        # The count-based second valve (microcompaction). Once the request
+        # reaches ``microcompact_fraction`` of ``available_window`` — read in
+        # the same unit as the relief-valve gate — every tool output older
+        # than the newest ``microcompact_keep_recent`` tool-result blocks is
+        # cleared, well before the water mark. ``None`` disables it; it also
+        # needs ``available_window`` (no window, no fraction of one).
+        self._microcompact_keep_recent = microcompact_keep_recent
+        self._microcompact_fraction = microcompact_fraction
         # Provider-visible **control** action schemas that are NOT executable
         # workspace tools (e.g. ``spawn_subagent``, which the policy translates
         # into a Decision and the ToolRuntime never invokes). They are appended
@@ -369,17 +386,28 @@ class ThreeSegmentComposer:
                 ),
             )
         )
-        # Compose-time reminders: the todo re-injection, the delegation fan-out
-        # nudge, and the compaction-thrashing read hint are rendered through the
-        # reminder registry and appended, in priority order, to the END of the
+        # Where the cleared outputs sit in RAW-history coordinates, so the
+        # recall reminder and ``RecallHistory`` can address them by the same
+        # message index they use for the collapsed prefix.
+        cleared_boundary = (
+            _raw_cleared_boundary(
+                task.runtime.messages,
+                _cleared_call_ids(dynamic_source, dynamic_content),
+            )
+            if cleared_refs
+            else 0
+        )
+        # Compose-time reminders (the built-ins: the todo re-injection, the
+        # compaction-thrashing read hint and the collapsed-context pointer) are
+        # rendered through the reminder registry and appended, in priority
+        # order, to the END of the
         # dynamic_suffix (the volatile segment), then hashed. Each is a View-only
         # product: NOT written to ``runtime.messages`` and emitting no event, so
         # it never enters the folded truth; regenerated from the folded
         # projection on every compose ⇒ resume reproduces it automatically; and,
         # landing in dynamic_content only, it cannot churn the stable_prefix /
         # semi_stable hashes the prompt cache rides on. ``delegation_enabled`` is
-        # whether the ``spawn_subagent`` control schema is offered this compose
-        # (the fan-out nudge gates on it).
+        # whether the ``spawn_subagent`` control schema is offered this compose.
         delegation_enabled = any(
             isinstance(schema, dict)
             and schema.get("function", {}).get("name")
@@ -387,7 +415,10 @@ class ThreeSegmentComposer:
             for schema in provider_tool_schemas
         )
         dynamic_content = self._append_reminders(
-            task, dynamic_content, delegation_enabled=delegation_enabled
+            task,
+            dynamic_content,
+            delegation_enabled=delegation_enabled,
+            cleared_boundary=cleared_boundary,
         )
         dynamic_hash = _sha256_hex(to_canonical_bytes(dynamic_content))
 
@@ -441,6 +472,7 @@ class ThreeSegmentComposer:
             # already collapsed a prefix.
             rolling_history=list(task.runtime.messages),
             summary_boundary=task.context.summary_boundary,
+            cleared_boundary=cleared_boundary,
         )
 
     # ------------------------------------------------------------------
@@ -710,13 +742,14 @@ class ThreeSegmentComposer:
         dynamic_content: list[Message],
         *,
         delegation_enabled: bool,
+        cleared_boundary: int = 0,
     ) -> list[Message]:
         """Render the compose-time reminder registry onto the dynamic-suffix tail.
 
         Builds the narrow :class:`~noeta.context.reminders.ReminderView`
-        projection from folded state (plus the two compose-time facts the
-        composer alone knows: whether ``spawn_subagent`` is offered this compose,
-        and whether a spawn already landed in history), runs every registered
+        projection from folded state (plus the one compose-time fact the
+        composer alone knows: whether ``spawn_subagent`` is offered this
+        compose), runs every registered
         reminder in ``(priority, name)`` order, and wraps each non-``None`` text
         in one ``Message(role="user", origin="system")`` — the existing
         ``Message.origin`` rendering that each adapter turns into a
@@ -731,25 +764,12 @@ class ThreeSegmentComposer:
         segment, and is re-derived from the folded projection on every compose
         (resume reproduces it). Pure: same projection → same bytes.
         """
-        # ``already_spawned`` only means something where delegation is offered, and
-        # no built-in reminder reads it any more (it stays on ``ReminderView`` for
-        # third-party renders) — so the scan is short-circuited off
-        # ``delegation_enabled``. Without the guard every leaf
-        # sub-agent (explore / plan / web / __consolidation__ — none of them
-        # delegate) would walk the whole rolling history on every compose to
-        # compute a value the reminder then discards.
-        already_spawned = delegation_enabled and any(
-            isinstance(block, ToolUseBlock)
-            and block.tool_name == _SPAWN_SUBAGENT_TOOL_NAME
-            for message in task.runtime.messages
-            for block in (getattr(message, "content", None) or [])
-        )
         view = ReminderView(
             todos=tuple(task.state.todos),
             delegation_enabled=delegation_enabled,
-            already_spawned=already_spawned,
             compaction_thrashing=task.context.compaction_thrashing,
             summary_boundary=max(0, task.context.summary_boundary),
+            cleared_boundary=cleared_boundary,
         )
         texts = self._reminders.render_all(view)
         if not texts:
@@ -811,8 +831,19 @@ class ThreeSegmentComposer:
 
         Still pure: both inputs are already-recorded numbers folded off the task,
         so live + resume derive identical cutoffs.
+
+        A second, count-based valve (``microcompact_keep_recent``) opens at
+        ``microcompact_fraction`` of the same window, read the same way: it
+        clears every tool output older than the newest N tool-result blocks,
+        with the same size floor, marker and cleared-output refs. The relief
+        valve still clears by token budget once the water mark is reached; a
+        block either valve selects is cleared.
         """
-        if self._tail_token_budget is None:
+        micro_armed = (
+            self._microcompact_keep_recent is not None
+            and self._available_window is not None
+        )
+        if self._tail_token_budget is None and not micro_armed:
             return messages, [], [], []
         # Prune is a relief valve, not an always-on clamp. Below the usable
         # window the whole history stays verbatim — a half-empty window must NOT
@@ -843,11 +874,90 @@ class ThreeSegmentComposer:
         # backstops it, and firing early would clear outputs the model still
         # needs.
         estimated = prefix_estimate + estimate_messages_tokens(messages)
-        if (
-            self._available_window is not None
-            and max(estimated, real_baseline) < self._available_window
-        ):
+        size = max(estimated, real_baseline)
+        relief_open = self._tail_token_budget is not None and (
+            self._available_window is None or size >= self._available_window
+        )
+        # The count-based second valve (amended 2026-09-25, see
+        # docs/adr/context-compaction.md): the same size reading, compared
+        # against a FRACTION of the same window. Measured on a production
+        # session, tool outputs were 72 % of the message bytes and the relief
+        # valve only opened at 87 % of a 1M window — so the bulk rode every
+        # request for most of the session. Past the fraction only the newest
+        # ``keep_recent`` tool results stay verbatim; an older one the model
+        # needs again is a ``RecallHistory`` page-back, not a re-run.
+        micro_open = (
+            micro_armed
+            and self._available_window is not None
+            and size >= self._microcompact_fraction * self._available_window
+        )
+        if not relief_open and not micro_open:
             return messages, [], [], []
+        # Block positions (message index, block index) of the newest
+        # ``keep_recent`` tool results — counted in blocks, not messages, so a
+        # parallel batch does not shelter every result it carries. Pure: a
+        # positional walk over the composed messages.
+        protected: Optional[set[tuple[int, int]]] = None
+        if micro_open:
+            assert self._microcompact_keep_recent is not None
+            protected = set()
+            for i in range(len(messages) - 1, -1, -1):
+                blocks = messages[i].content
+                for j in range(len(blocks) - 1, -1, -1):
+                    if len(protected) >= self._microcompact_keep_recent:
+                        break
+                    if isinstance(blocks[j], ToolResultBlock):
+                        protected.add((i, j))
+                if len(protected) >= self._microcompact_keep_recent:
+                    break
+        # Messages at index >= cutoff are outside the relief valve's reach
+        # (its protected tail, or everything while it is shut).
+        cutoff = (
+            self._relief_cutoff(messages, real_baseline, estimated)
+            if relief_open
+            else 0
+        )
+        out: list[Message] = []
+        selected: list[ContentRef] = []
+        dropped: list[ContentRef] = []
+        cleared_outputs: list[ContentRef] = []
+        for i, msg in enumerate(messages):
+            if i >= cutoff:
+                spare: Optional[frozenset[int]] = None
+                if protected is not None:
+                    spare = frozenset(
+                        j
+                        for j, b in enumerate(msg.content)
+                        if not isinstance(b, ToolResultBlock)
+                        or (i, j) in protected
+                    )
+                if spare is None or len(spare) == len(msg.content):
+                    out.append(msg)
+                    selected.append(self._msg_ref(msg))
+                    continue
+            else:
+                spare = None
+            pruned_msg, cleared_refs = _clear_tool_outputs(
+                msg, self._cleared_output_ref, spare=spare
+            )
+            out.append(pruned_msg)
+            if cleared_refs:
+                dropped.append(self._msg_ref(pruned_msg))
+                # Original bodies stay audit-deref-able via the plan, never via
+                # a hash leaked into the model-facing marker.
+                cleared_outputs.extend(cleared_refs)
+            else:
+                # An old message with no tool output (e.g. plain text) is
+                # kept verbatim; record it as selected provenance.
+                selected.append(self._msg_ref(pruned_msg))
+        return out, selected, dropped, cleared_outputs
+
+    def _relief_cutoff(
+        self, messages: list[Message], real_baseline: int, estimated: int
+    ) -> int:
+        """The relief valve's message cutoff: indices ``>= cutoff`` are the
+        protected tail, older ones have their tool outputs cleared."""
+        assert self._tail_token_budget is not None
         # Same unit trap one level down, and the one that BITES once the gate
         # opens: ``tail_token_budget`` counts real tokens while the cutoff walk
         # below accumulates chars/4. At the measured density the whole history
@@ -874,29 +984,7 @@ class ThreeSegmentComposer:
         # cutoff so the newest message is never swept into the cleared tail.
         if messages:
             cutoff = min(cutoff, len(messages) - 1)
-        out: list[Message] = []
-        selected: list[ContentRef] = []
-        dropped: list[ContentRef] = []
-        cleared_outputs: list[ContentRef] = []
-        for i, msg in enumerate(messages):
-            if i >= cutoff:
-                out.append(msg)
-                selected.append(self._msg_ref(msg))
-                continue
-            pruned_msg, cleared_refs = _clear_tool_outputs(
-                msg, self._cleared_output_ref
-            )
-            out.append(pruned_msg)
-            if cleared_refs:
-                dropped.append(self._msg_ref(pruned_msg))
-                # Original bodies stay audit-deref-able via the plan, never via
-                # a hash leaked into the model-facing marker.
-                cleared_outputs.extend(cleared_refs)
-            else:
-                # An old message with no tool output (e.g. plain text) is
-                # kept verbatim; record it as selected provenance.
-                selected.append(self._msg_ref(pruned_msg))
-        return out, selected, dropped, cleared_outputs
+        return cutoff
 
     def _cleared_output_ref(self, output: Any) -> ContentRef:
         """Offload a tool output being cleared to the ContentStore; return its ref.
@@ -938,8 +1026,13 @@ class ThreeSegmentComposer:
                 function["description"] = description
             return {"type": "function", "function": function}
 
+        # A tool whose optional ``advertised`` attribute is ``False`` stays
+        # registered (callable, guarded, audited) but is not offered to the
+        # provider; absent means advertised, so ordinary tools are untouched.
         executable_tool_schemas: list[dict[str, Any]] = [
-            _function_schema(tool) for tool in self._tools.values()
+            _function_schema(tool)
+            for tool in self._tools.values()
+            if getattr(tool, "advertised", True) is not False
         ]
         # Control action schemas (e.g. spawn_subagent) follow the real
         # executable tools, deterministically, so they are visible to the provider
@@ -994,7 +1087,10 @@ def _rendered_size(output: Any) -> int:
 
 
 def _clear_tool_outputs(
-    msg: Message, store_full: Callable[[Any], ContentRef]
+    msg: Message,
+    store_full: Callable[[Any], ContentRef],
+    *,
+    spare: Optional[frozenset[int]] = None,
 ) -> tuple[Message, list[ContentRef]]:
     """Return a copy of ``msg`` with every ToolResultBlock output replaced by
     the lean cleared-marker, plus the ContentStore refs of the originals.
@@ -1014,13 +1110,15 @@ def _clear_tool_outputs(
     be re-fetchable.
     Non-tool-result blocks (text / tool_use / thinking) are kept verbatim, so
     prune only swaps the bulky tool output for a marker, never the
-    conversational structure.
+    conversational structure. ``spare`` names block indices to leave alone —
+    the microcompaction valve's newest-N tool results.
     """
     cleared_refs: list[ContentRef] = []
     new_blocks: list[Any] = []
-    for b in msg.content:
+    for j, b in enumerate(msg.content):
         if (
-            isinstance(b, ToolResultBlock)
+            (spare is None or j not in spare)
+            and isinstance(b, ToolResultBlock)
             and b.output
             and not _is_cleared_marker(b.output)
             and _rendered_size(b.output) >= _MIN_CLEARABLE_OUTPUT_CHARS
@@ -1046,6 +1144,44 @@ def _clear_tool_outputs(
     )
 
 
+def _cleared_call_ids(before: list[Message], after: list[Message]) -> set[str]:
+    """``call_id`` of every tool result the prune turned into the marker.
+
+    ``after`` is ``before`` with some outputs swapped (same length, same block
+    order), so a positional diff is exact.
+    """
+    ids: set[str] = set()
+    for old, new in zip(before, after):
+        if old is new:
+            continue
+        for ob, nb in zip(old.content, new.content):
+            if (
+                isinstance(nb, ToolResultBlock)
+                and isinstance(ob, ToolResultBlock)
+                and _is_cleared_marker(nb.output)
+                and not _is_cleared_marker(ob.output)
+            ):
+                ids.add(nb.call_id)
+    return ids
+
+
+def _raw_cleared_boundary(raw: list[Message], call_ids: set[str]) -> int:
+    """One past the newest RAW-history message holding a cleared tool result.
+
+    ``0`` when nothing was cleared. Raw indices are the coordinate
+    ``RecallHistory`` pages by, and they never shift (the raw history is
+    append-only), so ``[0, boundary)`` stays a valid range until the next
+    compose moves it forward.
+    """
+    if not call_ids:
+        return 0
+    for i in range(len(raw) - 1, -1, -1):
+        for b in raw[i].content:
+            if isinstance(b, ToolResultBlock) and b.call_id in call_ids:
+                return i + 1
+    return 0
+
+
 def _is_cleared_marker(output: Any) -> bool:
     """True iff ``output`` is the lean cleared-marker string.
 
@@ -1054,7 +1190,7 @@ def _is_cleared_marker(output: Any) -> bool:
     ContentStore write). Exact match — a real tool output that merely starts
     with the marker text is not mistaken for an already-cleared one.
     """
-    return output == _CLEARED_MARKER
+    return bool(output == _CLEARED_MARKER)
 
 
 def _text_blocks(prompt: str) -> list[Any]:

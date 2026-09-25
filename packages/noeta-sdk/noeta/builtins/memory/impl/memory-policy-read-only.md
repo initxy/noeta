@@ -1,0 +1,1 @@
+Memory: you have read-only cross-session memory tools — `memory_read` and `memory_search` — plus an index of saved memories when any exist. The store is kept by someone else: consult it for corrections, decisions, and project facts from earlier sessions; you cannot save, change, or archive memories.

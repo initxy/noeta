@@ -32,6 +32,7 @@ from noeta.client.parts import (
     builtin_tool_ref,
 )
 from noeta.context.content_channel import ContentKindSpec
+from noeta.protocols.errors import CodedError
 from noeta.protocols.event_log import Subscriber
 from noeta.protocols.hooks import Guard
 from noeta.protocols.messages import LLMProvider
@@ -41,6 +42,7 @@ from noeta.protocols.policy import Policy
 __all__ = [
     "AgentDefinition",
     "EFFORT_MODES",
+    "InvalidTurnOptionError",
     "Options",
     "PERMISSION_MODES",
     "PolicyFactory",
@@ -332,6 +334,59 @@ intensity ramp and not the alphabet.
 _THINKING_REQUIRED_EFFORTS: frozenset[str] = frozenset(
     EFFORT_MODES[EFFORT_MODES.index("high") + 1 :]
 )
+
+
+class InvalidTurnOptionError(CodedError, ValueError):
+    """A per-turn knob (``permission_mode`` / ``effort``) passed to ``start``
+    / ``send_goal`` / ``seed_*`` is illegal — the same rules
+    :class:`Options` applies at construction. Raised before any event is
+    written, so the conversation is untouched and the call can be retried.
+    A :class:`ValueError` too, so an ``except ValueError`` contract keeps
+    matching."""
+
+    code = "invalid_turn_option"
+
+    def __init__(self, *, option: str, value: object, message: str) -> None:
+        self.option = option
+        self.value = value
+        super().__init__(message)
+
+
+def check_turn_options(
+    *,
+    permission_mode: Optional[str],
+    effort: Optional[str],
+    thinking: Optional[str],
+) -> None:
+    """Validate one turn's ``permission_mode`` / ``effort`` against the
+    session's ``thinking`` — :class:`Options`' rules, raised as
+    :class:`InvalidTurnOptionError`. ``None`` means "host default" and is
+    always legal."""
+    if permission_mode is not None and permission_mode not in PERMISSION_MODES:
+        raise InvalidTurnOptionError(
+            option="permission_mode",
+            value=permission_mode,
+            message=(
+                f"permission_mode must be one of {PERMISSION_MODES} or None; "
+                f"got {permission_mode!r}"
+            ),
+        )
+    if effort is not None and effort not in EFFORT_MODES:
+        raise InvalidTurnOptionError(
+            option="effort",
+            value=effort,
+            message=f"effort must be one of {EFFORT_MODES} or None; got {effort!r}",
+        )
+    if thinking == "disabled" and effort in _THINKING_REQUIRED_EFFORTS:
+        raise InvalidTurnOptionError(
+            option="effort",
+            value=effort,
+            message=(
+                f"effort={effort!r} cannot be combined with the session's "
+                "thinking='disabled' (a hard 400 on current Anthropic models); "
+                f"use {EFFORT_MODES[EFFORT_MODES.index('high')]!r} or below"
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -695,11 +750,11 @@ def _append_fragments(
 
 
 def _resolve_effective_policy(
-    base_policy: object,
+    base_policy: Optional[PolicyFactory],
     external: tuple[tuple[str, PluginActivation], ...],
     *,
     where: str,
-) -> object:
+) -> Optional[PolicyFactory]:
     """The single decision-policy factory for an agent (single-valued).
 
     Combines the base ``Options.policy`` with the ``policy`` contribution of each
@@ -708,7 +763,7 @@ def _resolve_effective_policy(
     policies — is a loud collision naming **both** sides (the same rule as
     ``provider``); there is no override.
     """
-    sources: list[tuple[str, object]] = []
+    sources: list[tuple[str, PolicyFactory]] = []
     if base_policy is not None:
         sources.append((f"{where}.policy", base_policy))
     for plugin, act in external:
@@ -897,7 +952,7 @@ def _activation_tuple(
 def effective_root_policy(
     options: Options,
     plugins: Optional[Mapping[str, PluginActivation]] = None,
-) -> object:
+) -> Optional[PolicyFactory]:
     """The single ``(llm) -> Policy`` factory a root agent runs, or ``None``.
 
     The ``Client`` wires this as the host's process-wide ``policy_override`` — the
@@ -1065,6 +1120,7 @@ def compile_options(
     # whichever base applies — an explicit, separate source, so they are added
     # even under a replacement allow-list. External plugin activation contributes
     # its tools on top.
+    base: tuple[str | ToolLike, ...]
     if options.allowed_tools is None:
         base = tuple(sorted(builtin_tool_classes()))
     else:

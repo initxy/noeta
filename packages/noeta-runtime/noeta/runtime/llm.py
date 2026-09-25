@@ -15,8 +15,9 @@ from __future__ import annotations
 import inspect
 import threading
 import time
+import dataclasses
 import uuid
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Iterator, Mapping, Optional
 
 from noeta.protocols.canonical import (
     from_canonical_bytes,
@@ -127,6 +128,51 @@ def _rebuild_block_list(items: list[Any]) -> list[Block]:
             "through to_canonical_bytes?"
         )
     return out
+
+
+def _key_sorted(value: Any) -> Any:
+    """``value`` with every nested dict's keys in sorted order (lists keep
+    their element order) — the order ``to_canonical_bytes`` records."""
+    if isinstance(value, dict):
+        return {k: _key_sorted(value[k]) for k in sorted(value)}
+    if isinstance(value, list):
+        return [_key_sorted(v) for v in value]
+    return value
+
+
+def _canonical_tool_arguments(resp: LLMResponse) -> LLMResponse:
+    """Return ``resp`` with every ``ToolUseBlock.arguments`` key-sorted.
+
+    The recorded bytes are canonical (``sort_keys``), so a resumed task
+    rebuilds each tool call's arguments in sorted key order, while the live
+    task keeps the order the model emitted. The two histories then render
+    different wire bytes at the first multi-key call, and every request after
+    a resume misses the provider's prompt cache from that point on. Sorting
+    here — the one place every provider's decoded response passes through —
+    makes the live history equal the replayed one. Returns ``resp`` itself
+    when nothing needs reordering.
+    """
+    changed = False
+    content: list[Block] = []
+    for block in resp.content:
+        if isinstance(block, ToolUseBlock):
+            args = _key_sorted(block.arguments)
+            if list(_walk_keys(args)) != list(_walk_keys(block.arguments)):
+                block = dataclasses.replace(block, arguments=args)
+                changed = True
+        content.append(block)
+    return dataclasses.replace(resp, content=content) if changed else resp
+
+
+def _walk_keys(value: Any) -> Iterator[Any]:
+    """Every dict key in ``value``, depth-first in iteration order."""
+    if isinstance(value, dict):
+        for k, v in value.items():
+            yield k
+            yield from _walk_keys(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _walk_keys(v)
 
 
 def _put_request(cs: ContentStore, req: LLMRequest) -> ContentRef:
@@ -338,6 +384,7 @@ class RuntimeLLMClient:
         )
         t1 = self._clock()
         latency_ms = max(0, int((t1 - t0) * 1000))
+        resp = _canonical_tool_arguments(resp)
 
         response_ref = _put_response(self._content_store, resp)
         self._emit(

@@ -124,9 +124,10 @@ agent。两者可以配合：终端前端去驱动一个跑在 Noeta worker 池�
 ## 实测成绩
 
 只用公开 SDK 搭的 agent——[noeta-agent](https://github.com/initxy/noeta-agent) 的
-`main` 预设，模型 Claude Opus 4.8——在官方评测框架上，Terminal-Bench 2.1 的 40 题抽样拿到
-**82.5%**（公开榜单区间 58.7%–83.8%），SWE-bench Verified 的 15 题子集拿到 **86.7%**。
-两项都是抽样，不是全量榜单成绩。→ [基准测试](benchmarks.md)
+`main` 预设，模型 Claude Opus 4.8——在官方评测框架上，Terminal-Bench 2.1 的 40 题抽样首轮解出
+**24/40**，每题最多三次取最好 **33/40**（`noeta-sdk` 0.6.28；公开榜单全集区间 58.7%–83.8%）；
+SWE-bench Verified 的 15 题子集在重跑 4 个环境准备超时后解出 **13/15**（`noeta-sdk` 0.6.10）。
+每项都是在抽样上跑一次，不是全量榜单成绩。→ [基准测试](benchmarks.md)
 
 ## 接下来
 

@@ -11,13 +11,13 @@ the ContentStore as the audit artifact, never into the model-facing text.
 
 from __future__ import annotations
 
-import fnmatch
+import codecs
 import hashlib
 import json
 import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional
 
 from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.tools.invocation import (
@@ -25,7 +25,6 @@ from noeta.tools.invocation import (
     resolve_readable_file,
 )
 from noeta.tools.limits import (
-    INLINE_CONTENT_MAX_BYTES,
     INLINE_OUTPUT_MAX_BYTES,
     SUMMARY_EMBED_MAX_BYTES,
     truncate_bytes,
@@ -38,6 +37,7 @@ from noeta.runtime.workspace import (
 )
 from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
 from noeta.runtime.subproc import RunOutcome
+from noeta.builtins.fs.impl._glob import compile_glob, glob_matches
 
 
 __all__ = [
@@ -165,26 +165,6 @@ def _detect_image_media_type(raw: bytes) -> Optional[str]:
     return None
 
 
-def _glob_segments(pattern: str) -> tuple[str, ...]:
-    """Split a relative glob pattern into path segments, dropping no-ops."""
-    return tuple(seg for seg in pattern.split("/") if seg not in ("", "."))
-
-
-def _glob_match(parts: tuple[str, ...], pats: tuple[str, ...]) -> bool:
-    """pathlib-style glob over path segments: ``*`` / ``?`` / ``[...]`` stay
-    inside one segment, ``**`` spans zero or more segments."""
-    if not pats:
-        return not parts
-    head, rest = pats[0], pats[1:]
-    if head == "**":
-        return any(_glob_match(parts[i:], rest) for i in range(len(parts) + 1))
-    return (
-        bool(parts)
-        and fnmatch.fnmatchcase(parts[0], head)
-        and _glob_match(parts[1:], rest)
-    )
-
-
 @dataclass
 class _FileHits:
     """One file's rows decoded from the ``rg --json`` event stream."""
@@ -193,6 +173,16 @@ class _FileHits:
     #: ``(1-based line number, text, is_match)`` in stream order.
     rows: list[tuple[int, str, bool]]
     match_lines: int = 0
+
+
+def _rg_lines(text: str) -> list[str]:
+    """Split rg's ``lines.text`` on ``\\n`` only — rg's own line boundary, so a
+    form feed or U+2028 inside a line never shifts the numbering — dropping
+    each line's ``\\r\\n`` / ``\\n`` ending."""
+    parts = text.split("\n")
+    if len(parts) > 1 and parts[-1] == "":
+        parts.pop()
+    return [p[:-1] if p.endswith("\r") else p for p in parts]
 
 
 def _decode_rg_events(
@@ -241,11 +231,11 @@ def _decode_rg_events(
                 sub_text = (sub.get("match") or {}).get("text")
                 if sub_text is None:
                     continue
-                for j, part in enumerate(sub_text.splitlines() or [""]):
+                for j, part in enumerate(_rg_lines(sub_text)):
                     hits.rows.append((first_line + j, part, True))
                     hits.match_lines += 1
             continue
-        for i, line in enumerate(text.splitlines() or [""]):
+        for i, line in enumerate(_rg_lines(text)):
             hits.rows.append((first_line + i, line, is_match))
             if is_match:
                 hits.match_lines += 1
@@ -329,28 +319,45 @@ class ReadFileTool:
         )
 
         try:
-            raw = self.exec_env.read_bytes(resolved)
+            size, head, chunks = self._open(resolved)
         except OSError as exc:
             return tool_error(self.name, f"read failed: {exc}")
 
         # A PDF or an over-limit image degrades with a precise message instead
         # of the misleading generic "not utf-8 text" error below.
-        media_label = _detect_visual_media(raw)
+        media_label = _detect_visual_media(head)
         if media_label is not None:
-            image_media_type = _detect_image_media_type(raw)
+            image_media_type = _detect_image_media_type(head)
             if image_media_type is None:
                 return tool_error(
                     self.name,
                     f"{path!r} is a {media_label}, not text — reading PDFs "
                     "into the conversation is not supported yet",
                 )
-            if len(raw) > IMAGE_MAX_BYTES:
+            too_big = (
+                f"over the {IMAGE_MAX_BYTES // 1024 // 1024}MB inline limit — "
+                "crop/resize it smaller before reading"
+            )
+            if size is not None and size > IMAGE_MAX_BYTES:
                 return tool_error(
                     self.name,
-                    f"{path!r} is a {media_label} of {len(raw)} bytes, over "
-                    f"the {IMAGE_MAX_BYTES // 1024 // 1024}MB inline limit — "
-                    "crop/resize it smaller before reading",
+                    f"{path!r} is a {media_label} of {size} bytes, {too_big}",
                 )
+            # An unknown size (a large file on a ranged backend) is bounded
+            # while it streams: stop pulling once past the limit.
+            buf = bytearray()
+            try:
+                for chunk in chunks():
+                    buf += chunk
+                    if len(buf) > IMAGE_MAX_BYTES:
+                        return tool_error(
+                            self.name,
+                            f"{path!r} is a {media_label} of more than "
+                            f"{IMAGE_MAX_BYTES} bytes, {too_big}",
+                        )
+            except OSError as exc:
+                return tool_error(self.name, f"read failed: {exc}")
+            raw = bytes(buf)
             ref = ctx.artifact_store.put(raw, media_type=image_media_type)
             rel = self._display(resolved)
             summary_path = truncate_bytes(rel, SUMMARY_EMBED_MAX_BYTES)
@@ -361,39 +368,42 @@ class ReadFileTool:
                 images=[ref],
             )
 
+        start = offset - 1
+        try:
+            scan = _scan_window(
+                chunks(),
+                start,
+                limit,
+                keep_all=size is not None and size <= _READ_STORE_FULL_MAX,
+            )
+        except OSError as exc:
+            return tool_error(self.name, f"read failed: {exc}")
         # A NUL byte marks real binary regardless of decodability (NUL is a
         # "valid" UTF-8 code point, but no text file carries one).
-        if b"\x00" in raw:
+        if scan.has_nul:
             return tool_error(self.name, f"{path!r} is not utf-8 text")
-        try:
-            full_text = raw.decode("utf-8")
-            bytes_replaced = False
-        except UnicodeDecodeError:
-            # A text file with stray invalid bytes (legacy encodings, BOM
-            # remnants) — decode leniently so the file stays readable instead
-            # of failing outright.
-            full_text = raw.decode("utf-8", errors="replace")
-            bytes_replaced = True
 
-        # The artifact is always the FULL file body, independent of the sliced
-        # view returned inline, so the recorded artifact hash stays stable
-        # across different slices.
-        ref = ctx.artifact_store.put(raw, media_type=_READ_FILE_MEDIA_TYPE)
+        # The artifact is the whole body for a file up to the rewind-baseline
+        # size (so a later edit's baseline dedups to the same blob and the ref
+        # is stable across slices); a larger file stores only the window that
+        # was served — never hundreds of MB for a five-line read. Nothing reads
+        # a ``Read`` artifact back: it is the audit record of what was seen.
+        stored = scan.whole if scan.whole is not None else scan.window_text().encode(
+            "utf-8"
+        )
+        ref = ctx.artifact_store.put(stored, media_type=_READ_FILE_MEDIA_TYPE)
         # Register the read for the Edit/Write read-first precondition. Keyed
         # by the canonical absolute path — the same form those tools resolve to
-        # — and digesting the RAW bytes, so a later mutation check compares
-        # like with like.
+        # — and digesting the RAW bytes of the WHOLE file (hashed while
+        # streaming), so a later mutation check compares like with like.
         if ctx.file_read_registry is not None:
-            ctx.file_read_registry.record(
-                str(resolved), hashlib.sha256(raw).hexdigest()
-            )
+            ctx.file_read_registry.record(str(resolved), scan.digest)
 
         rel = self._display(resolved)
         summary_path = truncate_bytes(rel, SUMMARY_EMBED_MAX_BYTES)
-        note = "; non-utf8 bytes replaced" if bytes_replaced else ""
+        note = "; non-utf8 bytes replaced" if scan.bytes_replaced else ""
 
-        lines = full_text.splitlines()
-        total_lines = len(lines)
+        total_lines = scan.total_lines
         if total_lines == 0:
             return ToolResult(
                 success=True,
@@ -401,7 +411,6 @@ class ReadFileTool:
                 artifacts=[ref],
                 summary=f"read {summary_path} (empty{note})",
             )
-        start = offset - 1
         if start >= total_lines:
             return ToolResult(
                 success=True,
@@ -412,27 +421,27 @@ class ReadFileTool:
                 artifacts=[ref],
                 summary=f"read {summary_path} (offset past end{note})",
             )
-        end = min(start + limit, total_lines)
 
         # cat -n form: right-aligned 1-based line number, a tab, the line. The
-        # inline byte ceiling is a safety fence only — trim whole lines from
-        # the end until the rendering fits, and say so.
-        numbered = [
-            f"{start + i + 1:>6}\t{_clip_line(line)}"
-            for i, line in enumerate(lines[start:end])
-        ]
-        shown_end = end
-        rendered = "\n".join(numbered)
-        while numbered and len(rendered.encode("utf-8")) > INLINE_CONTENT_MAX_BYTES:
-            drop = max(1, len(numbered) // 4)
-            numbered = numbered[:-drop]
-            shown_end = start + len(numbered)
-            rendered = "\n".join(numbered)
+        # window already stopped at the served-text cap.
+        rendered = "\n".join(
+            f"{start + i + 1:>6}\t{line}" for i, line in enumerate(scan.window)
+        )
+        shown_end = start + len(scan.window)
 
         notes: list[str] = []
-        if bytes_replaced:
+        if scan.bytes_replaced:
             notes.append(_note("Non-utf8 bytes were replaced with U+FFFD."))
-        if shown_end < total_lines or start > 0:
+        if scan.capped:
+            notes.append(
+                _note(
+                    f"Output capped at {_READ_MAX_SERVED_BYTES // 1024} KB. "
+                    f"Showing lines {start + 1}-{shown_end} of {total_lines} "
+                    f"total lines. Use offset={shown_end + 1} to continue "
+                    "reading, or Grep to find the part you need."
+                )
+            )
+        elif shown_end < total_lines or start > 0:
             notes.append(
                 _note(
                     f"Showing lines {start + 1}-{shown_end} of {total_lines} "
@@ -453,6 +462,183 @@ class ReadFileTool:
                 f"(lines {start + 1}–{shown_end} of {total_lines}{note})"
             ),
         )
+
+    def _open(
+        self, resolved: Path
+    ) -> tuple[Optional[int], bytes, Callable[[], Iterator[bytes]]]:
+        """``(size, first bytes, chunk iterator factory)`` for ``resolved``.
+
+        On the local host the file is streamed in bounded chunks, so memory
+        stays flat however large it is. A backend with the optional
+        ``read_range`` capability (a sandbox container) is streamed the same
+        way, one bounded range per chunk; its first range asks for one byte
+        more than the whole-body store limit, so a small file still costs one
+        call and has an exact size, while a larger one reports ``None`` (only
+        known to exceed that limit) and is pulled lazily. Any other backend
+        has only ``read_bytes``, so the body arrives whole and is served from
+        memory.
+        """
+        if isinstance(self.exec_env, LocalExecEnv):
+            size = os.stat(resolved).st_size
+            with open(resolved, "rb") as fh:
+                head = fh.read(_SNIFF_BYTES)
+
+            def _local_chunks() -> Iterator[bytes]:
+                with open(resolved, "rb") as fh:
+                    while True:
+                        chunk = fh.read(_READ_CHUNK_BYTES)
+                        if not chunk:
+                            return
+                        yield chunk
+
+            return size, head, _local_chunks
+        read_range = getattr(self.exec_env, "read_range", None)
+        if callable(read_range):
+            probe = _READ_STORE_FULL_MAX + 1
+            first: bytes = read_range(resolved, 0, probe)
+            if len(first) < probe:
+                return len(first), first[:_SNIFF_BYTES], lambda: iter((first,))
+
+            def _ranged_chunks() -> Iterator[bytes]:
+                yield first
+                offset = len(first)
+                while True:
+                    chunk: bytes = read_range(resolved, offset, _READ_CHUNK_BYTES)
+                    if chunk:
+                        yield chunk
+                    if len(chunk) < _READ_CHUNK_BYTES:
+                        return
+                    offset += len(chunk)
+
+            return None, first[:_SNIFF_BYTES], _ranged_chunks
+        raw = self.exec_env.read_bytes(resolved)
+        return len(raw), raw[:_SNIFF_BYTES], lambda: iter((raw,))
+
+
+#: Ceiling on the text ``Read`` serves in one call (~25K tokens). A window
+#: that would exceed it stops at the last whole line that fits, with a note
+#: naming the ``offset`` to continue from.
+_READ_MAX_SERVED_BYTES = 100 * 1024
+#: Files up to this size store their whole body as the ``Read`` artifact —
+#: the same ceiling the rewind baseline uses, so the two dedup to one blob.
+_READ_STORE_FULL_MAX = 1_048_576
+_READ_CHUNK_BYTES = 1024 * 1024
+_SNIFF_BYTES = 16
+#: Bytes of one line kept while streaming: enough for ``_MAX_LINE_CHARS``
+#: characters of up to four UTF-8 bytes each, plus a trailing ``\r``.
+_LINE_KEEP_BYTES = _MAX_LINE_CHARS * 4 + 1
+
+
+@dataclass
+class _Scan:
+    """What one streaming pass over a file yields."""
+
+    digest: str
+    total_lines: int
+    window: list[str]
+    capped: bool
+    bytes_replaced: bool
+    has_nul: bool
+    #: The whole raw body, kept only when the caller asked for it.
+    whole: Optional[bytes]
+
+    def window_text(self) -> str:
+        return "\n".join(self.window)
+
+
+def _decode_line(raw: bytes, clipped: bool) -> tuple[str, bool]:
+    """One line's display text (a trailing ``\\r`` dropped, a long line
+    clipped) and whether invalid UTF-8 was replaced. A clipped line may end
+    mid-character; the incremental decoder holds that partial back instead of
+    reporting it as a bad byte."""
+    if raw.endswith(b"\r"):
+        raw = raw[:-1]
+    try:
+        text = codecs.getincrementaldecoder("utf-8")("strict").decode(
+            raw, final=not clipped
+        )
+        replaced = False
+    except UnicodeDecodeError:
+        text = codecs.getincrementaldecoder("utf-8")("replace").decode(
+            raw, final=not clipped
+        )
+        replaced = True
+    if clipped or len(text) > _MAX_LINE_CHARS:
+        return text[:_MAX_LINE_CHARS] + _LINE_TRUNC_MARKER, replaced
+    return text, replaced
+
+
+def _scan_window(
+    chunks: Iterable[bytes], start: int, limit: int, *, keep_all: bool
+) -> _Scan:
+    """Stream ``chunks`` once: hash every byte, count lines, and keep only the
+    lines ``[start, start + limit)`` that fit :data:`_READ_MAX_SERVED_BYTES`.
+
+    Lines split on ``\n`` only — the same boundary ``rg`` and ``Grep`` use —
+    so a form feed or U+2028 inside a line never shifts the numbering. A
+    trailing segment without ``\n`` is the last line. Stops early at a NUL
+    byte (the file is binary; nothing else matters).
+    """
+    hasher = hashlib.sha256()
+    whole: Optional[bytearray] = bytearray() if keep_all else None
+    window: list[str] = []
+    served = 0
+    capped = False
+    replaced_any = False
+    total = 0  # completed (newline-terminated) lines so far
+    cur = bytearray()
+    cur_len = 0
+    end = start + limit
+
+    def _take(line_no: int) -> bool:
+        return start <= line_no < end and not capped
+
+    def _finish(raw: bytes, clipped: bool) -> None:
+        nonlocal served, capped, replaced_any
+        text, replaced = _decode_line(raw, clipped)
+        cost = len(text.encode("utf-8")) + 8  # number column + tab + newline
+        if window and served + cost > _READ_MAX_SERVED_BYTES:
+            capped = True
+            return
+        window.append(text)
+        served += cost
+        replaced_any = replaced_any or replaced
+
+    for chunk in chunks:
+        if b"\x00" in chunk:
+            return _Scan("", 0, [], False, False, True, None)
+        hasher.update(chunk)
+        if whole is not None:
+            whole += chunk
+        pos = 0
+        n = len(chunk)
+        while pos < n:
+            nl = chunk.find(b"\n", pos)
+            stop = n if nl < 0 else nl
+            if _take(total) and len(cur) < _LINE_KEEP_BYTES:
+                cur += chunk[pos : min(stop, pos + _LINE_KEEP_BYTES - len(cur))]
+            cur_len += stop - pos
+            if nl < 0:
+                break
+            if _take(total):
+                _finish(bytes(cur), cur_len > _LINE_KEEP_BYTES)
+            total += 1
+            cur.clear()
+            cur_len = 0
+            pos = nl + 1
+    if cur_len:
+        if _take(total):
+            _finish(bytes(cur), cur_len > _LINE_KEEP_BYTES)
+        total += 1
+    return _Scan(
+        digest=hasher.hexdigest(),
+        total_lines=total,
+        window=window,
+        capped=capped,
+        bytes_replaced=replaced_any,
+        has_nul=False,
+        whole=bytes(whole) if whole is not None else None,
+    )
 
 
 def _looks_relative(pattern: str) -> bool:
@@ -550,7 +736,10 @@ class GlobTool:
         if ran.returncode not in (0, 1) and reason:
             return tool_error(self.name, f"rg: {reason}")
 
-        pats = _glob_segments(pattern)
+        try:
+            compiled = compile_glob(pattern)
+        except ValueError as exc:
+            return tool_error(self.name, str(exc))
         entries: list[tuple[float, str]] = []
         for line in ran.stdout.decode("utf-8", errors="replace").splitlines():
             match = Path(line)
@@ -558,7 +747,7 @@ class GlobTool:
                 rel_parts = match.relative_to(root).parts
             except ValueError:  # pragma: no cover - rg stays under its root
                 continue
-            if not _glob_match(rel_parts, pats):
+            if not glob_matches(rel_parts, compiled):
                 continue
             try:
                 entries.append(

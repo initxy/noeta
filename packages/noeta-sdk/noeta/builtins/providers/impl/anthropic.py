@@ -53,6 +53,7 @@ from noeta.protocols.values import ContentRef
 from noeta.builtins.providers.impl import catalog
 from noeta.builtins.providers.impl._sse import iter_sse_events
 from noeta.builtins.providers.impl.codecs import (
+    describe_http_error,
     neutralize_reserved_tags,
     parse_retry_after,
     render_tool_result_body,
@@ -301,6 +302,15 @@ class AnthropicProvider:
         # tail outside the cache. ``None`` (every message injected) falls back
         # to the last block in ``_apply_cache_control``.
         breakpoint_block: Optional[dict[str, Any]] = None
+        # The fourth breakpoint: the last recorded block BEFORE the newest
+        # assistant message — i.e. where the previous step's request put its
+        # last-recorded-block breakpoint. Anthropic looks back at most ~20
+        # blocks from a breakpoint for an entry an earlier request wrote, so a
+        # step that appends more than that (one response with ten parallel tool
+        # calls is ~21 blocks with their results) would otherwise find nothing
+        # and rewrite the whole history; this stamp re-reads the previous
+        # step's entry exactly.
+        previous_step_block: Optional[dict[str, Any]] = None
         for message in request.messages:
             if message.role == "system":
                 raise ValueError(
@@ -309,6 +319,8 @@ class AnthropicProvider:
             wire = _message_to_anthropic(message, self._image_resolver, vision)
             injected = is_host_injected(message)
             if not injected and wire["content"]:
+                if message.role == "assistant":
+                    previous_step_block = breakpoint_block
                 # The block dict is shared by reference with the outbound
                 # list (merging below spreads the same dicts), so stamping it
                 # later lands on the wire body.
@@ -351,7 +363,11 @@ class AnthropicProvider:
             )
         # ``cache_control`` is an Anthropic wire concern and must never reach
         # LLMRequest / request_ref, so it is stamped on the just-built body.
-        _apply_cache_control(body, message_block=breakpoint_block)
+        _apply_cache_control(
+            body,
+            message_block=breakpoint_block,
+            previous_step_block=previous_step_block,
+        )
         if request.temperature is not None:
             body["temperature"] = request.temperature
         if request.output_schema is not None:
@@ -411,6 +427,11 @@ class AnthropicProvider:
 
         raw_stop = payload.get("stop_reason")
         stop_reason = _STOP_REASON_MAP.get(raw_stop or "", "error")
+        if raw_stop == "refusal":
+            # A refusal can interrupt a tool call mid-generation. The call
+            # never completes and must not run, so the turn ends on whatever
+            # text came with it.
+            content = [b for b in content if not isinstance(b, ToolUseBlock)]
 
         has_tool_use = any(isinstance(b, ToolUseBlock) for b in content)
         if stop_reason == "tool_use" and not has_tool_use:
@@ -472,16 +493,17 @@ def _translate_http_error(exc: httpx.HTTPStatusError) -> Exception:
     """
     response = exc.response
     status = response.status_code
+    message = describe_http_error(exc)
     if status == 429:
         return TransientError(
-            str(exc),
+            message,
             retry_after=parse_retry_after(response.headers.get("retry-after")),
         )
     if status == 529 or status >= 500:
-        return TransientError(str(exc))
+        return TransientError(message)
     if status == 400 and _is_context_overflow(response):
-        return ContextOverflowError(str(exc))
-    return FatalError(str(exc))
+        return ContextOverflowError(message)
+    return FatalError(message)
 
 
 def _is_context_overflow(response: httpx.Response) -> bool:
@@ -501,7 +523,7 @@ def _is_context_overflow(response: httpx.Response) -> bool:
 #: In-band SSE ``error`` event types that bucket as :class:`TransientError` —
 #: the same failure classes their HTTP-status counterparts land in (429 / 500 /
 #: 529).
-_TRANSIENT_STREAM_ERROR_TYPES: frozenset = frozenset(
+_TRANSIENT_STREAM_ERROR_TYPES: frozenset[str] = frozenset(
     {"rate_limit_error", "api_error", "overloaded_error"}
 )
 
@@ -743,7 +765,10 @@ def _assistant_message_to_anthropic(
             entry["signature"] = thinking.signature
         content.append(entry)
     for text in text_blocks:
-        content.append({"type": "text", "text": text.text})
+        # History recorded before empty text blocks were dropped on the way
+        # in may still hold one; the API rejects it, so it never goes out.
+        if text.text.strip():
+            content.append({"type": "text", "text": text.text})
     for image in image_blocks:
         content.append(_image_block_to_anthropic(image, image_resolver))
     for tool_use in tool_use_blocks:
@@ -822,7 +847,10 @@ _CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
 
 
 def _apply_cache_control(
-    body: dict[str, Any], *, message_block: Optional[dict[str, Any]] = None
+    body: dict[str, Any],
+    *,
+    message_block: Optional[dict[str, Any]] = None,
+    previous_step_block: Optional[dict[str, Any]] = None,
 ) -> None:
     """Stamp ephemeral prompt-cache breakpoints onto the outbound wire body.
 
@@ -831,7 +859,7 @@ def _apply_cache_control(
 
     Anthropic renders the prefix in the order ``tools`` → ``system`` →
     ``messages``, and a breakpoint caches everything *before* it, so each of
-    the three stamps below (≤4 is the vendor cap) covers strictly more than the
+    the four stamps below (4 is the vendor cap) covers strictly more than the
     one above it:
 
     * **last tool**: stamp the final tool dict — caches the tool schemas
@@ -852,6 +880,14 @@ def _apply_cache_control(
       message is injected — falls back to the last block of the last message.
       Every wire content block is already a dict here, so it can carry the
       field directly.
+    * **previous step's last recorded block**: stamp ``previous_step_block`` —
+      the last non-injected block before the newest assistant message, which
+      is where the previous step's request put the stamp above. Anthropic
+      looks back only ~20 blocks from a breakpoint for an entry an earlier
+      request wrote; a step that appended more (ten parallel tool calls plus
+      their results) would miss it and rewrite the whole history. This stamp
+      reads that entry back directly. Skipped when absent or when it is the
+      same block as the one above.
 
     (The stamps are applied system-first below purely because the system block
     needs re-shaping first; order of application is irrelevant — only wire
@@ -880,6 +916,8 @@ def _apply_cache_control(
                 target = last_content[-1]
         if target is not None:
             target["cache_control"] = dict(_CACHE_CONTROL_EPHEMERAL)
+        if previous_step_block is not None and previous_step_block is not target:
+            previous_step_block["cache_control"] = dict(_CACHE_CONTROL_EPHEMERAL)
 
 
 def _translate_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -938,7 +976,14 @@ def _parse_response_content(content_raw: list[Any]) -> list[Block]:
                 raise ValueError(
                     f"Anthropic 'text' block 'text' not a str: {entry!r}"
                 )
-            blocks.append(TextBlock(text=text))
+            # A text block with no visible text (a streamed block that started
+            # and stopped with no ``text_delta``, or a whitespace-only one)
+            # carries nothing, and resending it is a 400 ("text content blocks
+            # must be non-empty"). Dropped here, the one parser both transports
+            # share; a response left with no content at all reaches the Policy
+            # as an empty list, which it already refuses to record.
+            if text.strip():
+                blocks.append(TextBlock(text=text))
         elif entry_type == "thinking":
             text = entry.get("thinking", "")
             signature = entry.get("signature")
@@ -1004,6 +1049,10 @@ class _StreamAccumulator:
         self._message: Optional[dict[str, Any]] = None
         self._blocks: dict[int, dict[str, Any]] = {}
         self._json_fragments: dict[int, list[str]] = {}
+        #: ``tool_use`` blocks whose argument JSON did not decode, with the
+        #: decode error. Judged at assembly: cut off by ``max_tokens`` they are
+        #: dropped, otherwise the stream is corrupt and the error is raised.
+        self._undecodable: dict[int, str] = {}
 
     def feed(self, event_name: Optional[str], data: str) -> None:
         try:
@@ -1093,6 +1142,8 @@ class _StreamAccumulator:
         (``json.loads``, then ``_parse_response_content`` enforces the
         JSON-object check). An empty accumulation keeps the ``input`` the
         block started with (``{}`` on the wire — a no-argument tool call).
+        A decode failure is only noted here — whether it is a truncation or
+        a corrupt stream depends on the stop reason, which arrives later.
         Idempotent: fragments are popped, so the defensive re-finalize at
         assembly time is a no-op for already-stopped blocks.
         """
@@ -1108,9 +1159,7 @@ class _StreamAccumulator:
         try:
             block["input"] = json.loads(joined)
         except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Anthropic streamed tool_use input was not valid JSON: {exc}"
-            ) from exc
+            self._undecodable[index] = str(exc)
 
     def _apply_message_delta(self, payload: dict[str, Any]) -> None:
         """``message_delta``: the terminal stop signal + output-side usage.
@@ -1147,11 +1196,28 @@ class _StreamAccumulator:
             raise ValueError(
                 "Anthropic stream ended without a message_start event"
             )
+        # ``message_delta`` carries the stop reason; a stream that closed
+        # cleanly without one was cut mid-generation. That is the same failure
+        # as a dropped connection — retryable — not a finished turn.
+        if self._message.get("stop_reason") is None:
+            raise TransientError(
+                "Anthropic stream ended before message_delta (no stop_reason)"
+            )
         # Defensive: decode any tool_use block whose content_block_stop never
         # arrived (clean-but-unterminated close). Already-stopped blocks were
         # finalized in feed(); the pop makes this a no-op for them.
         for index in list(self._json_fragments):
             self._finalize_block(index)
+        if self._undecodable:
+            if self._message.get("stop_reason") != "max_tokens":
+                first = self._undecodable[min(self._undecodable)]
+                raise ValueError(
+                    f"Anthropic streamed tool_use input was not valid JSON: {first}"
+                )
+            # The output cap cut the call's arguments mid-JSON: keep the
+            # complete calls and report the truncation as ``max_tokens``.
+            for index in self._undecodable:
+                self._blocks.pop(index, None)
         self._message["content"] = [
             self._blocks[index] for index in sorted(self._blocks)
         ]

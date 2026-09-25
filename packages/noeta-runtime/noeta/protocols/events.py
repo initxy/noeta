@@ -425,10 +425,40 @@ def answer_from_payload(
 
 @dataclass(frozen=True, slots=True)
 class TaskFailedPayload:
-    """Terminal event: Task failed with ``reason``."""
+    """Terminal event: Task failed with ``reason``.
+
+    ``reason`` is the stable tag a host branches on (``llm_error``,
+    ``react_max_steps_exceeded``, …). ``detail`` is the optional free-text
+    diagnostic behind it — for ``llm_error`` the provider's own error message —
+    capped at :data:`FAIL_DETAIL_MAX_CHARS` by the writer so the payload stays
+    far under the 4 KB cap. ``None`` when the failure has nothing to add, and
+    ``__canonical_omit_none__`` keeps it out of the byte stream then, so a
+    detail-less failure encodes byte-identically to a pre-``detail`` recording
+    and an old recording (no ``detail`` key) restores via the dataclass
+    default — additive, byte-safe, no ``schema_version`` bump.
+    """
 
     reason: str
     retryable: bool = False
+    detail: Optional[str] = None
+
+    __canonical_omit_none__ = frozenset({"detail"})
+
+
+#: Upper bound on ``TaskFailedPayload.detail`` (and on the detail suffix a
+#: failed conversation turn appends to ``TaskSuspended.reason``). Long enough
+#: for a provider's error body, short enough to stay far under the payload cap.
+FAIL_DETAIL_MAX_CHARS = 1000
+
+
+def cap_fail_detail(detail: Optional[str]) -> Optional[str]:
+    """Normalise a failure detail for recording: ``None`` / empty → ``None``,
+    otherwise truncated to :data:`FAIL_DETAIL_MAX_CHARS`."""
+    if not detail:
+        return None
+    if len(detail) <= FAIL_DETAIL_MAX_CHARS:
+        return detail
+    return detail[: FAIL_DETAIL_MAX_CHARS - 1] + "…"
 
 
 # -- Tool events ------------------------------------------------------------
@@ -533,8 +563,15 @@ class SubtaskSpawnedPayload:
     inputs: dict[str, Any] = field(default_factory=dict)
     #: Spill escape for an oversized ``goal`` — see :func:`spill_goal`.
     goal_ref: Optional[ContentRef] = None
+    #: The spawning turn's pre-answered tool results (a ``TodoWrite`` that
+    #: rode this spawn), as canonical ``list[ToolResultBlock]`` bytes in the
+    #: ContentStore. They are held until the child's result is rendered at
+    #: resume so both land in ONE tool-role message. Set on the first member
+    #: of a fan-out only; ``None`` (omitted from the bytes) for an ordinary
+    #: spawn, so a recording without it encodes and restores unchanged.
+    preacked_ref: Optional[ContentRef] = None
 
-    __canonical_omit_none__ = frozenset({"goal_ref"})
+    __canonical_omit_none__ = frozenset({"goal_ref", "preacked_ref"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -1254,12 +1291,17 @@ class SubtaskDeniedPayload:
 
 @dataclass(frozen=True, slots=True)
 class ToolSchemaRecordedPayload:
-    """Per-task, per-tool schema-hash provenance.
+    """Per-task, per-tool schema-hash provenance — **legacy, no longer emitted**.
 
-    Emitted **once** per task, immediately *before* a tool's first
-    ``ToolCallStarted``. A new additive event type:
-    absent from old recordings → zero canonical drift; adding a field to
-    ``ToolCallStarted`` instead would drift every historical envelope.
+    Nothing in the current runtime or SDK writes this event. It was designed
+    to be emitted once per task, immediately *before* a tool's first
+    ``ToolCallStarted``; the type stays registered (payload restore, fold,
+    audit allowlist) only so recordings that carry it still restore and fold.
+    Do not build on it: new code should not emit or consume it.
+
+    It was an additive event type: absent from old recordings → zero
+    canonical drift; adding a field to ``ToolCallStarted`` instead would have
+    drifted every historical envelope.
 
     ``version`` is the declared ``ToolRef.version`` this task was wired
     against; ``schema_hash`` is ``sha256(canonical_bytes(input_schema))``

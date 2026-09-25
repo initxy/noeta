@@ -113,7 +113,7 @@ Noeta 用到的术语，按字母排，每条一两句话，后面链到详细�
 ## W
 
 - **WakeCondition / WakeEvent**：task 在等什么、等来了什么：`SubtaskCompleted`、`SubtaskGroupCompleted`、`HumanResponseReceived`、`TimerFired`、`ExternalEvent`。持久投递，恰好一次。→ [任务与唤醒](../how-it-works/tasks-and-waking.md)
-- **Worker**：拿租约驱动 task 的进程，一直跑到下一次挂起或结束。循环本体是 `noeta.runtime.worker.WorkerLoop`。→ [Worker 循环](worker-loop.md)
+- **Worker**：拿租约驱动 task 的进程，一直跑到下一次挂起或结束。循环本体是 `WorkerLoop`，从 `noeta.sdk` 导入。→ [Worker 循环](worker-loop.md)
 - **写入范围限制**：`Edit` 和 `Write` 只能写工作区或宿主放行的目录（`HostConfig.write_roots`）。读不受限，`Bash` 也不受限。→ [Options](options.md)
 
 ## 不用的词

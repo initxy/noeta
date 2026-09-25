@@ -39,6 +39,30 @@ from noeta.protocols.values import ContentRef
 from noeta.builtins.providers.impl.openai_responses import OpenAIResponsesProvider
 
 
+#: No shipped catalog row is text-only (``gpt-4o`` / ``gpt-4o-mini`` read
+#: images), so the non-vision paths run against a row registered for the test.
+_TEXT_ONLY_MODEL = "text-only-model"
+
+
+@pytest.fixture(autouse=True)
+def _text_only_catalog_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.builtins.providers.impl import catalog as catalog_mod
+
+    monkeypatch.setattr(
+        catalog_mod,
+        "_EXTENSIONS",
+        {
+            **catalog_mod._EXTENSIONS,
+            _TEXT_ONLY_MODEL: catalog_mod.ModelSpec(
+                real_model_id=_TEXT_ONLY_MODEL,
+                context_window=128_000,
+                max_output_tokens=16_384,
+                supports_vision=False,
+            ),
+        },
+    )
+
+
 # base_url IS the complete responses endpoint: the provider POSTs to that URL as-is, adding only the
 # ?api-version query. Appending a /openai/responses path would produce a doubled segment that a real
 # gateway rejects, so ENDPOINT and BASE_URL are deliberately the same string.
@@ -1926,7 +1950,7 @@ def test_image_bytes_not_written_back_resolver_called_per_request() -> None:
 
 @respx.mock
 def test_image_with_non_vision_model_raises_fatal_before_request() -> None:
-    """ImageBlock + non-vision model (gpt-4o, catalog supports_vision False) → FatalError, and
+    """ImageBlock + non-vision model (catalog supports_vision False) → FatalError, and
     NOT a single HTTP request is sent (the guard runs before wire assembly / POST)."""
     route = respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
@@ -1935,7 +1959,7 @@ def test_image_with_non_vision_model_raises_fatal_before_request() -> None:
         image_resolver=_fake_resolver({_PNG_REF: _PNG_BYTES})
     )
     request = _basic_request(
-        model="gpt-4o",  # supports_vision=False in the catalog
+        model=_TEXT_ONLY_MODEL,  # supports_vision=False in the catalog
         messages=[Message(role="user", content=[ImageBlock(source=_PNG_REF)])],
     )
     with pytest.raises(FatalError, match="vision"):
@@ -1988,7 +2012,7 @@ def test_image_in_historical_message_also_triggers_guard() -> None:
         image_resolver=_fake_resolver({_PNG_REF: _PNG_BYTES})
     )
     request = _basic_request(
-        model="gpt-4o",
+        model=_TEXT_ONLY_MODEL,
         messages=[
             Message(role="user", content=[ImageBlock(source=_PNG_REF)]),
             Message(role="assistant", content=[TextBlock(text="got it")]),
@@ -2030,7 +2054,7 @@ def test_text_only_request_with_non_vision_model_passes_guard() -> None:
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )
     provider = _make_provider()
-    provider.complete(_basic_request(model="gpt-4o", text="plain text, no image"))
+    provider.complete(_basic_request(model=_TEXT_ONLY_MODEL, text="plain text, no image"))
     assert route.called
 
 
@@ -2171,7 +2195,7 @@ def test_tool_result_image_with_unregistered_model_becomes_input_image_array() -
 
 @respx.mock
 def test_tool_result_image_with_non_vision_model_degrades_to_string() -> None:
-    """A ToolResultBlock with an image + a non-vision model (gpt-4o, supports_vision False) → the
+    """A ToolResultBlock with an image + a non-vision model (supports_vision False) → the
     output stays a plain STRING with a degrade note appended; no crash, and the image is dropped.
     The vision guard does NOT fire (a tool-result image is not a top-level ImageBlock)."""
     route = respx.post(ENDPOINT).mock(
@@ -2179,7 +2203,7 @@ def test_tool_result_image_with_non_vision_model_degrades_to_string() -> None:
     )
     provider = _make_provider(image_resolver=_fake_resolver({_PNG_REF: _PNG_BYTES}))
     request = _basic_request(
-        model="gpt-4o",  # supports_vision=False in the catalog
+        model=_TEXT_ONLY_MODEL,  # supports_vision=False in the catalog
         messages=[_tool_message_with_image(output="read /tmp/pic.png")],
     )
     provider.complete(request)

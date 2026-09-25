@@ -19,7 +19,6 @@ import pytest
 from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.runtime.tool import _encode_output
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools.limits import INLINE_CONTENT_MAX_BYTES, encoded_len
 from noeta.runtime.subproc import RunOutcome
 from noeta.builtins.web.impl import (
     ContainerCurlSearchTransport,

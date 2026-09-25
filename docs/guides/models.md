@@ -31,6 +31,16 @@ responses = OpenAIResponsesProvider(
 - A missing key raises `ValueError` at construction, not a 401 on the first call.
 - All three take `extra_headers={...}` for gateway or proxy headers, and
   `timeout_seconds`.
+- To send images from user messages, pass `image_resolver=` — a
+  `ContentRef -> bytes` callback, typically your content store's `get`. The
+  image goes out inline (a data URL on the OpenAI-compatible adapter); without
+  a resolver, a request carrying an image raises instead of dropping it.
+- `OpenAICompatProvider(max_tokens_param=...)` picks the body key for the
+  output cap. The default `"auto"` sends `max_completion_tokens` to OpenAI
+  reasoning models (a catalogued `is_reasoning` OpenAI row, or an uncatalogued
+  `o1` / `o3` / `o4` / `gpt-5` id), which reject `max_tokens`, and
+  `max_tokens` to everything else. Pass `"max_tokens"` or
+  `"max_completion_tokens"` to force one when a gateway wants the other.
 - Build an adapter once and reuse it. It holds a shared HTTP client and serves
   any model; the model is chosen per client, not per adapter.
 
@@ -106,6 +116,22 @@ client = Client(options, provider=chat, model="my-gateway-model", host_config=ho
 - Register the same rows on every run. The catalog shapes the prompt, and a
   resumed task must see the same one.
 
+## See what a task cost
+
+`client.usage(task_id)` (or `result.usage()` after `query()`) adds up every
+call the task and its sub-agents made, per model: requests, tokens, latency
+and `cost_usd`. A model with no rates shows `priced=False` on its row and is
+listed in `unpriced_models`; its calls cost `0.0` because nothing was charged,
+not because they were free. Give it prices through `extra_models` above.
+
+```python
+report = client.usage(task_id)
+for row in report.per_model:
+    print(row.model, row.requests, row.input_tokens, row.output_tokens, row.cost_usd)
+if report.unpriced_models:
+    print("no rates for:", report.unpriced_models)
+```
+
 ## Use cheaper models for side calls
 
 | `Options` field | What it does |
@@ -126,6 +152,11 @@ All of these are wiring: they never change the agent's identity.
 | 401 / authentication error | Wrong or expired key. `HTTPS_PROXY` is honored for corporate proxies. |
 | Model not found | `model` must be an id the endpoint serves. |
 | Cost stays at `$0.00` | The model is not in the catalog. Register it as above. |
+| A turn ends with `max_tokens` | The reply hit the output limit. Tool calls whose arguments were cut off are dropped (the complete ones are kept) and the turn is not retried. Raise the limit or ask for smaller steps. |
+| Why the task failed | `TaskFailed.detail` and `QueryFailedError.detail` carry the provider's error text, including the HTTP error body. |
+
+A stream that ends early without an error — the connection closed mid-reply —
+is treated as a transient fault and retried, like a timeout.
 
 ## Next
 

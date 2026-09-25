@@ -29,7 +29,7 @@ __all__ = [
 ]
 
 
-def _timer_fire_at(blob: object) -> Optional[float]:
+def _timer_fire_at(blob: Optional[bytes]) -> Optional[float]:
     """Decode a ``wake_on_canonical`` blob and return the ``TimerFired``
     deadline, or ``None`` for a NULL / non-timer / undecodable blob.
 
@@ -42,7 +42,7 @@ def _timer_fire_at(blob: object) -> Optional[float]:
     if blob is None:
         return None
     try:
-        wake = from_canonical_bytes(bytes(blob))  # type: ignore[arg-type]
+        wake = from_canonical_bytes(bytes(blob))
     except Exception:  # noqa: BLE001 — a poison row must not abort the migration
         return None
     return float(wake.fire_at) if isinstance(wake, TimerFired) else None

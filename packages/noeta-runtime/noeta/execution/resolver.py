@@ -474,7 +474,7 @@ class GenericEngineResolver:
         task_id = str(getattr(task, "task_id", ""))
         locals_ = getattr(self, "_task_locals", None)
         if locals_ is not None:
-            held = locals_.held_engine(task_id)
+            held: Optional[Engine] = locals_.held_engine(task_id)
             if held is not None:
                 return held
         engine = self._build_turn_engine(task, task_id)
@@ -574,8 +574,9 @@ class GenericEngineResolver:
         # provider / model_binding None and the carriers empty. A delegation
         # tree runs in ONE container / fs root / provider, on the ROOT
         # session's bound model and per-turn effort / permission mode / MCP
-        # selection, with delegation INHERITED from the root (its spawnable
-        # set, not the leaf agent's own identity) — exactly the choices
+        # selection; a child whose own spec activates ``delegation`` spawns
+        # from the root's spawnable set, any other child gets no ``Task``
+        # tool (:meth:`_child_may_delegate`) — exactly the choices
         # ``_build_drain_host``'s child-engine builder makes for the foreground
         # drain path. This branch makes the resident-worker path (an idle
         # worker's untargeted ``tick()`` claiming a child ahead of the drain's
@@ -603,7 +604,7 @@ class GenericEngineResolver:
                 binding = self._child_binding_for(
                     task_id, self._inherited_model_of(root)
                 )
-                model = binding[0] if binding else self.model
+                model = binding[0] if binding else self._canonical_model(self.model)
             if effort is None:
                 effort = getattr(self, "_turn_effort", {}).get(root_id)
             if permission_mode is None:
@@ -614,8 +615,12 @@ class GenericEngineResolver:
             # stream with no genesis (hand-emitted child, purged parent) has
             # none to inherit, so the child keeps its own delegation identity.
             if self._task_created_of(root_id) is not None:
-                delegation_enabled = True
-                allowed_subtask_agents = self._inherited_spawnable_of(root_id)
+                delegation_enabled = self._child_may_delegate(agent)
+                allowed_subtask_agents = (
+                    self._inherited_spawnable_of(root_id)
+                    if delegation_enabled
+                    else frozenset()
+                )
         # A workflow helper spawned via ``agent(goal, schema=...)`` carries its
         # per-helper JSON Schema in the durable ``TaskCreated.inputs`` — thread
         # it so a child claimed HERE (a resident worker's untargeted ``tick()``,
@@ -653,15 +658,38 @@ class GenericEngineResolver:
             allowed_subtask_agents=allowed_subtask_agents,
         )
 
+    def _child_may_delegate(self, child_agent: Any) -> bool:
+        """Whether a sub-agent gets the ``Task`` tool: only when its own spec
+        activates ``delegation`` (and the host allows delegation at all). A
+        child that may spawn spawns from the ROOT's roster; a leaf child —
+        every official subagent, every ``AgentDefinition`` without the
+        activation — gets no spawn tool rather than one it must not use."""
+        return bool(
+            self.delegation_allowed and agent_activates(child_agent, "delegation")
+        )
+
+    def _canonical_model(self, model: str) -> str:
+        """``model`` as the real id the provider is sent.
+
+        Identity here — the kernel owns no alias table. A host that has one
+        (the SDK's model catalog) overrides this, so a friendly alias from any
+        source — an agent's declared ``default_model``, a ``ModelBound`` an
+        older release recorded unresolved — reaches the build, the child
+        binding and the inheritance comparison as the same id.
+        """
+        return model
+
     def _bound_model_for(self, task: Any) -> str:
         """The model binding the Task resolves on.
 
         The latest ``ModelBound`` the Engine folded into
         ``GovernanceState.model_binding``; ``None`` (a recording that never
         switched) falls back to the host-fixed default :attr:`model` so the
-        recorded ``LLMRequestStartedPayload.model`` is unchanged.
+        recorded ``LLMRequestStartedPayload.model`` is unchanged. Resolved
+        through :meth:`_canonical_model`, so a legacy alias binding replays
+        on the real id.
         """
-        return self._own_model_binding(task) or self.model
+        return self._canonical_model(self._own_model_binding(task) or self.model)
 
     @staticmethod
     def _own_model_binding(task: Any) -> Optional[str]:
@@ -754,7 +782,10 @@ class GenericEngineResolver:
         ``None`` — the driver binds every session at open, so a root on the
         default model keeps its children unbound."""
         bound = self._own_model_binding(root_task)
-        return bound if bound and bound != self.model else None
+        if not bound:
+            return None
+        bound = self._canonical_model(bound)
+        return bound if bound != self._canonical_model(self.model) else None
 
     def _child_binding_for(
         self, task_id: str, inherited_model: Optional[str]
@@ -773,7 +804,7 @@ class GenericEngineResolver:
             return None
         declared = getattr(self._agent_of(task_id), "default_model", None)
         if declared:
-            return (str(declared), "agent-default")
+            return (self._canonical_model(str(declared)), "agent-default")
         if inherited_model:
             return (inherited_model, "inherited")
         return None
@@ -918,14 +949,12 @@ class GenericEngineResolver:
         ``SubtaskGroupCompleted`` wake is driven to its resumed terminal via
         the SHARED :func:`drive_pending_subtasks` state machine.
 
-        Child inheritance (mirroring the child-engine build): every child
-        Engine is built with delegation INHERITED — ``delegation_enabled=True``
-        + the **root parent's** ``spawnable`` set + the same depth-capped Budget
-        — NOT sourced from the leaf child agent's own (possibly delegation-free)
-        identity. Recursion is bounded by the depth-capped Budget
-        (``BudgetGuard.max_subtask_depth``), never by the absence of a child
-        spawn schema, so the child's recorded ``spawn_subagent`` schema matches
-        what resume rebuilds.
+        Child inheritance (mirroring the child-engine build): a child whose own
+        spec activates ``delegation`` is built with the **root parent's**
+        ``spawnable`` set + the same depth-capped Budget; any other child gets
+        no spawn tool (:meth:`_child_may_delegate`). Recursion is bounded by the
+        depth-capped Budget (``BudgetGuard.max_subtask_depth``); the rule reads
+        only durable identity, so resume rebuilds the same tool set.
         """
         host = self._build_drain_host(parent_task)
         return drive_pending_subtasks(host, parent_task)
@@ -1083,8 +1112,8 @@ class GenericEngineResolver:
                     task_id, allowed_subtask_agents=inherited_subtasks
                 )
             # The child's own agent (its tools / system prompt / read-only
-            # allowlist) — but delegation is INHERITED from the root, not read
-            # from this leaf agent's identity. No policy_wrapper:
+            # allowlist); delegation only when its own spec activates it, and
+            # then from the ROOT's spawnable set. No policy_wrapper:
             # children are one-shot, never multi-turn wrapped.
             # ``ask_user_question`` is OFF for children (depth>0), mirroring
             # the resolve_engine mask.
@@ -1098,16 +1127,18 @@ class GenericEngineResolver:
             child_agent = self._lookup_agent(
                 agent_name_of(self.event_log, task_id), task_id=task_id
             )
-            child_model = (
-                getattr(child_agent, "default_model", None)
-                or inherited_model
-                or self.model
+            declared_model = getattr(child_agent, "default_model", None)
+            child_model = self._canonical_model(
+                declared_model or inherited_model or self.model
             )
+            may_delegate = self._child_may_delegate(child_agent)
             return self._build_engine(
                 child_agent,
                 child_model,
-                delegation_enabled=True,
-                allowed_subtask_agents=inherited_subtasks,
+                delegation_enabled=may_delegate,
+                allowed_subtask_agents=(
+                    inherited_subtasks if may_delegate else frozenset()
+                ),
                 ask_user_question_enabled=False,
                 policy_wrapper=None,
                 workspace=inherited_workspace,
@@ -1223,7 +1254,7 @@ class GenericEngineResolver:
         Schema) shapes this one build: the ``structured_output`` control mount
         plus the ``StructuredOutputPolicy`` receipt wrapper.
         """
-        resolved_model = model if model else self.model
+        resolved_model = self._canonical_model(model if model else self.model)
         effective_ask = (
             agent_activates(agent, "ask_user_question")
             if ask_user_question_enabled is None

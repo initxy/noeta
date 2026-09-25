@@ -70,8 +70,8 @@ with Client(options, provider=AnthropicProvider(), model="claude-sonnet-5", host
 | `description` | `str` | 必填 | 在 `Task` 工具里给父模型看；空白会抛 `ValueError` |
 | `prompt` | `str` | 必填 | 子 agent 的提示词 |
 | `tools` | `tuple \| None` | `None` | `None` 是内置工具 |
-| `model` | `str \| None` | `None` | 子 agent 用的模型；`None` 用宿主默认 |
-| `plugins` | `tuple[str, ...]` | `()` | 没有 `fs`/`web` 默认值；`("delegation",)` 让它也能派子 agent |
+| `model` | `str \| None` | `None` | 子 agent 用的模型（`haiku` 这类别名会按模型目录解析）；`None` 用宿主默认 |
+| `plugins` | `tuple[str, ...]` | `()` | 没有 `fs`/`web` 默认值；只有这里写了 `("delegation",)`，子 agent 才有 `Task` 工具 |
 | `metadata` | `Mapping[str, str]` | `{}` | 标签，不算身份 |
 
 ### `SystemPromptPreset`
@@ -114,7 +114,7 @@ from noeta.sdk import effort_modes, model_capabilities, permission_modes
 permission_modes()   # ('default', 'acceptEdits', 'bypassPermissions')
 effort_modes()       # ('low', 'medium', 'high', 'xhigh', 'max')
 model_capabilities(["claude-sonnet-4-6", "gpt-4o-mini"])
-# {'claude-sonnet-4-6': {'supports_vision': True}, 'gpt-4o-mini': {'supports_vision': False}}
+# {'claude-sonnet-4-6': {'supports_vision': True}, 'gpt-4o-mini': {'supports_vision': True}}
 ```
 
 目录里没有的模型，`supports_vision` 报 `True`。
@@ -147,7 +147,7 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `storage_path` | `str \| None` | `None` | sqlite 文件路径、`postgresql://` 连接串，或 `":memory:"` |
+| `storage_path` | `str \| None` | `None` | sqlite 文件路径、`postgresql://` 连接串，或 `":memory:"`；空字符串报错。由它打开的存储会在 `shutdown()` 时关闭 |
 | `event_log`、`content_store`、`dispatcher` | 适配器 | `None` | 直接传存储对象；三个要么都给，要么都不给 |
 | `queue` | `str` | `"default"` | 共享存储时这个 client 的 worker 队列；它的 worker 只领这个队列的活 |
 
@@ -162,9 +162,9 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 | `extra_models` | `Mapping[str, ModelSpec]` | `{}` | 追加到模型目录的条目；重名会报错；每次运行都要注册同样的条目 |
 | `mcp_server_resolver` | `(alias) -> McpAnyServerSpec \| None` | `None` | 每轮把 MCP 别名解析成 server 配置 |
 | `mcp_http_post` | `HttpPostFn` | `None` | 远程 MCP 用的自定义 HTTP 传输 |
-| `mcp_idle_ttl` | `float \| None` | `1800.0` | 池里没人用的 MCP 连接保留多少秒；`None` 永不关闭 |
+| `mcp_idle_ttl` | `float \| None` | `1800.0` | 池里没人用的 MCP 连接保留多少秒；`None` 永不关闭；负数报错 |
 | `mcp_scope_resolver` | `(task_id) -> str \| None` | `None` | 连接池分区（比如租户 id）；只有同一分区的任务才共用连接 |
-| `otlp_traces` | `OtlpTraceConfig` | `None` | OTLP/HTTP 链路导出：`endpoint`、`headers=()`、`service_name="noeta"` |
+| `otlp_traces` | `OtlpTraceConfig` | `None` | OTLP/HTTP 链路导出：`endpoint`、`headers=()`、`service_name="noeta"`。模型调用的 span 带 `latency_ms`、五项用量和 `gen_ai.usage.input_tokens` / `output_tokens`；失败任务的 span 带 `noeta.fail_detail`；子 agent 在另一台机器上导出时，span 仍然挂在父任务下面 |
 | `otlp_http_post` | 函数 | `None` | 导出用的自定义传输 |
 
 ### 沙箱
@@ -189,10 +189,10 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 | --- | --- | --- | --- |
 | `memory_dir`、`global_memory_dir` | `Path \| None` | `None` | 宿主级的记忆目录 |
 | `memory_root_resolver` | `(task_id) -> Path \| None` | `None` | 按任务决定记忆目录；同一任务每次必须返回同样的结果 |
-| `recall_exclude` | `Collection[str]` | `()` | 自动召回永远不带的页面（索引里仍能看到，也能读） |
-| `memory_max_bytes` | `int \| None` | `None` | `memory_write` 正文超过这么多 UTF-8 字节就拒绝；建议小于 4096，这样召回时能整页带上 |
-| `memory_read_only` | `bool` | `False` | 只给 `memory_read` 和 `memory_search` |
-| `memory_index_budget_tokens` | `int \| None` | `None` | 记忆索引的长度上限；`None` 是上下文窗口的 1% |
+| `recall_exclude` | `Collection[str]` | `()` | 自动召回永远不带的页面（索引里仍能看到，也能读）；必须是字符串集合，直接给一个 `str` 会报错 |
+| `memory_max_bytes` | `int \| None` | `None` | `memory_write` 落盘的整页（字段加正文）超过这么多 UTF-8 字节就拒绝；必须是正数；建议小于 4096，这样召回时能整页带上 |
+| `memory_read_only` | `bool` | `False` | 只给 `memory_read` 和 `memory_search`，记忆提示里也去掉怎么写的说明 |
+| `memory_index_budget_tokens` | `int \| None` | `None` | 记忆索引的长度上限，召回判断用的索引也受它限制；`None` 是上下文窗口的 1%；必须是正数 |
 
 ### 技能与插件
 
@@ -200,9 +200,9 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 | --- | --- | --- | --- |
 | `skill_menu_rank_resolver` | `(task_id) -> {skill: score} \| None` | `None` | 技能菜单超长时，哪些技能保留完整描述 |
 | `skill_usage_ranking` | `bool` | `True` | 没有 resolver 时按整个存储里的近期使用排序；设了记忆或 MCP 分区 resolver 时自动关闭 |
-| `plugin_config` | `Mapping[str, Mapping[str, Any]]` | `{}` | 给各插件的运维配置；对 `fs` / `skills` / `workspace` / `memory`，你给的键逐个覆盖 SDK 自己算出来的 |
+| `plugin_config` | `Mapping[str, Mapping[str, Any]]` | `{}` | 给各插件的运维配置；对 `fs` / `skills` / `workspace` / `memory`，你给的键逐个覆盖 SDK 自己算出来的；Client 不认识的插件名会发 `UserWarning` |
 
-技能菜单占上下文窗口的 1%。超了就先把描述缩成一句话，再不够就只留名字，排名低的先缩。静态排序可以直接写在 `plugin_config["skills"]["menu_rank"]`，和 resolver 二选一。
+技能菜单占上下文窗口的 1%，最多 4,096 token（宿主推导出的记忆索引预算也用同一个上限）。超了就先把描述缩成一句话，再不够就只留名字，排名低的先缩。静态排序可以直接写在 `plugin_config["skills"]["menu_rank"]`，和 resolver 二选一。
 
 ### 限制与开关
 
@@ -210,18 +210,58 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 | --- | --- | --- | --- |
 | `repetition_threshold` | `int \| None` | `None` | 同样的 `(tool, arguments)` 调用重复这么多次后要审批；必须是正数 |
 | `tool_output_inline_limit` | `int \| None` | `None` | 工具结果超过这么多字符就截断再给模型看（完整内容仍有记录）；必须是正数；恢复任务时要保持同一个值 |
+| `hooks` | `HooksConfig \| None` | `None` | 用户自定义钩子：工具调用前先过一遍规则，调用结束后、或者等审批时跑一条命令；见[钩子](#钩子) |
 | `webfetch_allowed_hosts` | `Sequence[str]` | `()` | `WebFetch` 不用审批就能访问的站点：`"example.com"` 精确匹配，`"*.example.com"` 只匹配子域名；写错会报错 |
 | `workflow_allowed` | `bool` | `False` | 提供 `run_workflow`（还需要能派子 agent） |
-| `max_background_jobs_per_root_task` | `int` | `8` | 后台 `Bash` 任务超过这个数直接拒绝 |
-| `max_background_subagents_per_root_task` | `int` | `8` | `Task(background=True)` 同理 |
+| `max_background_jobs_per_root_task` | `int` | `8` | 后台 `Bash` 任务超过这个数直接拒绝；必须是正数 |
+| `max_background_subagents_per_root_task` | `int` | `8` | `Task(background=True)` 同理；必须是正数 |
 | `environment_enabled` | `bool` | `True` | 任务开始时记录工作目录 / git / 平台信息 |
 | `instructions_enabled` | `bool` | `False` | 从工作目录根加载 `NOETA.md`，没有就 `AGENTS.md`，再没有就 `CLAUDE.md` |
-| `instructions_file` | `Path \| None` | `None` | 只加载这个文件，不再查找 |
+| `instructions_file` | `Path \| None` | `None` | 只加载这个文件，不再查找；设了它却没开 `instructions_enabled=True` 会报错 |
 | `instructions_discovery` | `bool` | `False` | agent 读到子目录时，也加载那里的说明文件 |
+| `reliability_sink` | `(ReliabilityEvent) -> None` | `None` | 接收 `start_workers` 起的 worker 池发出的可靠性信号（`stale_requeued`、`heartbeat_invalid_lease`、`step_failed_retryable` 等）；`None` 时写日志。这些不是日志里的事件 |
 
 ::: warning
 `webfetch_allowed_hosts` 只管要不要弹审批。`WebFetch` 自己不拦任何地址，出网限制要在网络层或沙箱里做。
 :::
+
+### 钩子
+
+`HooksConfig` 在构造时就做校验，写了等于没写的规则直接抛 `ValueError`。
+
+| 字段 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `pre_tool_use` | `tuple[PreToolUseRule, ...]` | `()` | 每次调用工具前检查，第一条命中的规则说了算。只能在内置检查放行的基础上再收紧。这些规则属于检查链的一部分，恢复任务的宿主必须传同一套 |
+| `post_tool_use` | `tuple[PostToolUseRule, ...]` | `()` | 命中的工具调用结束后跑一条命令 |
+| `notification` | `tuple[NotificationRule, ...]` | `()` | 有工具调用开始等审批时跑一条命令 |
+| `command_timeout_s` | `float` | `30.0` | 钩子命令跑超过这么多秒就杀掉；必须是正数 |
+| `max_queue` | `int` | `256` | 最多排队这么多条命令；再多的直接丢掉并记一条警告，不拖慢 agent；必须是正数 |
+
+| 规则 | 字段 |
+| --- | --- |
+| `PreToolUseRule` | `match_tool`（按工具名做 `fnmatch` 匹配，比如 `"mcp__*"`）、`action`（`"allow"` / `"deny"` / `"require_approval"`）、`match_arg=None`、`reason=None`（模型或审批人看到的理由） |
+| `MatchArg` | `path`（参数键组成的元组，比如 `("opts", "force")`）、`op`（`"equals"` / `"contains"` / `"regex"`）、`value`、`pattern`；`regex` 如果用字符串写在 `value` 里，构造配置时会编译好 |
+| `PostToolUseRule` | `match_tool`、`command=None`（argv 元组，不经过 shell）、`log=False`（记一行日志，可以代替命令，也可以和命令一起用） |
+| `NotificationRule` | `on`（目前只有 `"approval"`）、`command=None`、`log=False` |
+
+调用后和等审批时跑的命令只是附带动作。每个 Client 起一个后台观察者来跑，工作目录是 Client 的工作目录，环境变量只留 `PATH`、`HOME`、`LANG`、`LC_ALL`、`TERM`、`TMPDIR`。它们不会卡住 agent，不写事件日志，任务恢复时也不会重跑。`shutdown()` 会停掉观察者，并取消还在跑的命令。
+
+```python
+from noeta.sdk import HooksConfig, HostConfig, MatchArg, PostToolUseRule, PreToolUseRule
+
+hooks = HooksConfig(
+    pre_tool_use=(
+        PreToolUseRule(
+            match_tool="Bash",
+            action="require_approval",
+            match_arg=MatchArg(path=("command",), op="regex", value=r"\bgit push\b"),
+            reason="推代码需要人确认",
+        ),
+    ),
+    post_tool_use=(PostToolUseRule(match_tool="Edit", command=("make", "fmt")),),
+)
+client = Client(options, provider=provider, host_config=HostConfig(hooks=hooks))
+```
 
 ## 接线用到的类型
 
@@ -234,7 +274,7 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 | `encode_exec_env_ref`、`decode_exec_env_ref` | 记录下来的容器引用的编解码 |
 | `ExecEnv`、`BrowserBackend` | 命令执行和浏览器的 Protocol |
 | `BackendFactory`、`BrowserBackendFactory`、`BoundPreamble` | 沙箱工厂字段的类型 |
-| `McpServerSpec`、`McpHttpServerSpec`、`McpAnyServerSpec` | `mcp_server_resolver` 的返回值（stdio、HTTP、二者之一） |
+| `McpServerSpec`、`McpHttpServerSpec`、`McpAnyServerSpec` | `mcp_server_resolver` 的返回值（stdio、HTTP、二者之一）；`call_timeout_s`（默认 `None`，即 30 秒）限制每次 `tools/call` 的时长，必须是正数；`deferred=True` 让这个服务器的工具 schema 不随请求发送，模型改用 `ToolSearch` / `McpCall`（见 [MCP server](../guides/mcp.md)） |
 | `HttpPostFn`、`McpHttpResponse`、`McpError`、`McpConfigError` | MCP 传输和错误 |
 | `OtlpTraceConfig` | 链路导出配置 |
 | `path_within(resolved, root) -> bool` | 写入围栏用的路径包含判断，按路径分段比较（`/srv/app-old` 不在 `/srv/app` 里面） |

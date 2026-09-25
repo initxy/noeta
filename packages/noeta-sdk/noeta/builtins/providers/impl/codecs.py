@@ -17,6 +17,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+import httpx
+
 from noeta.protocols.errors import MalformedToolArgumentsError
 
 
@@ -24,6 +26,7 @@ __all__ = [
     "HOST_INJECTED_PREAMBLE",
     "encode_tool_arguments",
     "decode_tool_arguments",
+    "describe_http_error",
     "neutralize_reserved_tags",
     "parse_retry_after",
     "render_tool_result_body",
@@ -122,7 +125,8 @@ def decode_tool_arguments(raw: Optional[str], *, error_label: str) -> dict[str, 
     if raw is None:
         raw = "{}"
     try:
-        return json.loads(raw)
+        parsed: dict[str, Any] = json.loads(raw)
+        return parsed
     except (json.JSONDecodeError, TypeError) as exc:
         raise MalformedToolArgumentsError(
             f"{error_label} not JSON-decodable: {exc}"
@@ -160,3 +164,38 @@ def parse_retry_after(
         when = when.replace(tzinfo=timezone.utc)
     current = now or datetime.now(timezone.utc)
     return max(0.0, (when - current).total_seconds())
+
+
+#: How much of an error response body :func:`describe_http_error` keeps.
+_ERROR_BODY_LIMIT = 500
+
+
+def describe_http_error(exc: httpx.HTTPStatusError) -> str:
+    """``str(exc)`` plus what the provider said in the response body.
+
+    ``httpx.HTTPStatusError`` renders only the status line and URL, so the
+    reason a request was refused (an invalid model id, a bad key, a malformed
+    tool schema) would otherwise never reach a log or a task failure. Both wire
+    shapes this package speaks nest the human text at ``error.message``; that
+    is preferred when present, else the raw body. Either is capped at
+    :data:`_ERROR_BODY_LIMIT` characters. A body that was never read (or is
+    empty) leaves the text unchanged.
+    """
+    text = str(exc)
+    try:
+        body = exc.response.text
+    except (httpx.ResponseNotRead, UnicodeDecodeError):
+        return text
+    detail = body.strip()
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        message = error.get("message") if isinstance(error, dict) else None
+        if isinstance(message, str) and message.strip():
+            detail = message.strip()
+    if not detail:
+        return text
+    return f"{text}: {detail[:_ERROR_BODY_LIMIT]}"

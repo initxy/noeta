@@ -113,6 +113,12 @@ _SUMMARY_MAX_CHARS = 200
 #: The frontmatter fence line.
 _FENCE = "---"
 
+#: The shape of a custom fence key in ``memory_write``'s text: a lowercase
+#: field name (``status``, ``due_date``). A ``Key: value`` line that is not
+#: one — capitalised, spaced, numbered — is prose, so a fence holding it is
+#: body.
+_FIELD_KEY_RE = re.compile(r"[a-z][a-z0-9_]*\Z")
+
 #: Tool-composed fence keys, in the order they are written. Unknown keys a
 #: memory already carries (on disk, or in the text's own fence) are preserved
 #: after these, sorted — the write tool merges per-field and never drops data
@@ -517,7 +523,7 @@ class MemoryWriteTool:
             "additionalProperties": False,
         }
     )
-    #: Host-set body cap in UTF-8 bytes (``HostConfig.memory_max_bytes``);
+    #: Host-set page cap (fence + body) in UTF-8 bytes (``HostConfig.memory_max_bytes``);
     #: ``None`` accepts any size. See ``invoke`` for what is measured.
     max_bytes: Optional[int] = None
 
@@ -528,21 +534,6 @@ class MemoryWriteTool:
             return _err(self.name, f"invalid memory name {name!r}")
         if not isinstance(text, str) or not text:
             return _err(self.name, "requires non-empty string 'text'")
-        # The size cap, refused BEFORE anything is written: a page that
-        # outgrows recall's inline budget silently degrades to a one-line
-        # pointer, and a host that checks after the write can only complain
-        # about a commit. The body is what is measured — the fence carries
-        # fields this tool stamps itself, and a refusal the model cannot fix
-        # by editing its text would be useless.
-        if self.max_bytes is not None:
-            size = len(_split_frontmatter(text)[1].encode("utf-8"))
-            if size > self.max_bytes:
-                return _err(
-                    self.name,
-                    f"body is {size} bytes, over this store's cap of "
-                    f"{self.max_bytes}: tighten it, or split it into two "
-                    f"memories",
-                )
         description = arguments.get("description")
         mem_type = arguments.get("type")
         keywords = arguments.get("keywords")
@@ -606,7 +597,19 @@ class MemoryWriteTool:
         prior_fields = (
             _split_frontmatter(prior)[0] if prior is not None else {}
         )
+        # The text's own fence counts only when every key in it reads as a
+        # field — a tool field, a key already on disk, or a lowercase
+        # field name like ``status`` / ``due``. A note that merely OPENS
+        # with a ``---`` rule and a ``Step 1: …`` line is body, and must not
+        # have its first lines eaten as fields.
         text_fields, body = _split_frontmatter(text)
+        if not all(
+            key in _FENCE_KEY_ORDER
+            or key in prior_fields
+            or _FIELD_KEY_RE.match(key)
+            for key in text_fields
+        ):
+            text_fields, body = {}, text
         # The body is a field like any other. Removing a frontmatter key is
         # documented as sending ``---\nkey:\n---`` — text whose body is
         # empty — and the wholesale body replacement below turned that recipe
@@ -639,15 +642,14 @@ class MemoryWriteTool:
             # collapsed, and an empty list composes to nothing at all.
             fields["related"] = ", ".join(dict.fromkeys(related))
 
-        # Timestamps are the tool's, not the model's: ``created`` sticks
-        # to the value the memory already holds (on disk first — the text
-        # a model resends often predates the file), ``updated`` always
-        # moves. Staleness judgement needs dates no one remembered to ask
-        # for, so the tool stamps them unconditionally.
+        # Timestamps are the tool's, not the model's: ``created`` is stamped
+        # when the page is first written and sticks to the value on disk
+        # after that (a date the text supplies is ignored — the model does
+        # not know when the page was made); ``updated`` always moves.
+        # Staleness judgement needs dates no one remembered to ask for, so
+        # the tool stamps them unconditionally.
         today = _today()
-        fields["created"] = (
-            prior_fields.get("created") or fields.get("created") or today
-        )
+        fields["created"] = prior_fields.get("created") or today
         fields["updated"] = today
 
         # The ledger receipt: which task's history backs this note. Turns
@@ -679,6 +681,20 @@ class MemoryWriteTool:
             ]
 
         text = _compose_frontmatter(fields) + body
+        # The size cap, refused BEFORE anything is written: a page that
+        # outgrows recall's inline budget silently degrades to a one-line
+        # pointer, and a host that checks after the write can only complain
+        # about a commit. What is measured is the page as stored — fence and
+        # body — because that is what recall and ``memory_read`` load.
+        if self.max_bytes is not None:
+            size = len(text.encode("utf-8"))
+            if size > self.max_bytes:
+                return _err(
+                    self.name,
+                    f"page is {size} bytes with its fields, over this "
+                    f"store's cap of {self.max_bytes}: tighten it, or split "
+                    f"it into two memories",
+                )
         try:
             self.store.write(name, text)  # type: ignore[arg-type]
         except (OSError, ValueError) as exc:

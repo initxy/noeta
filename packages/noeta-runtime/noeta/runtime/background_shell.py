@@ -14,6 +14,7 @@ every job buffer are lock-guarded.
 from __future__ import annotations
 
 import enum
+import io
 import os
 import signal
 import subprocess
@@ -22,12 +23,12 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 from noeta.core.fold import fold
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
-from noeta.protocols.event_log import EventLogReader, EventLogWriter
+from noeta.protocols.event_log import EventLog, EventLogReader
 from noeta.protocols.events import (
     BackgroundShellExitedPayload,
     BackgroundShellKilledPayload,
@@ -167,7 +168,7 @@ class _JobHandle:
     kill_signal: int = int(signal.SIGTERM)
 
 
-@dataclass
+@dataclass(eq=False)
 class _ForegroundHandle:
     """Live state for one FOREGROUND shell command (off-ledger, never persisted).
 
@@ -176,9 +177,14 @@ class _ForegroundHandle:
     human-stop family (interrupt / cancel / close) can reap the process group a
     step thread is blocked on in ``communicate()``; the tool thread owns the
     ``Popen`` and does the reap itself once the group dies and the pipes close.
+
+    A run that has no host process — a command executing inside a sandbox
+    container — carries a ``kill`` callable instead of a ``Popen``: the
+    backend's own way to terminate that one command (an HTTP call). Exactly one
+    of the two is set.
     """
 
-    popen: subprocess.Popen[bytes]
+    popen: Optional[subprocess.Popen[bytes]]
     #: Lifetime OWNER = the session root task, same keying as ``_JobHandle`` so
     #: one ``kill_root_task`` cascade reaches both kinds.
     root_task_id: str
@@ -186,6 +192,9 @@ class _ForegroundHandle:
     #: the tool call — once ``communicate`` returns — reports *interrupted*
     #: rather than a plain non-zero exit. Read via ``unregister_foreground``.
     killed: bool = False
+    #: Backend terminator for a run with no host ``Popen`` (see the class
+    #: docstring). Called at most once, off the control-plane thread.
+    kill: Optional[Callable[[], None]] = None
 
 
 @dataclass(frozen=True)
@@ -212,7 +221,7 @@ class ProcessRegistry:
     def __init__(
         self,
         *,
-        event_log: EventLogWriter,
+        event_log: EventLog,
         content_store: ContentStore,
         output_cap: int = DEFAULT_BACKGROUND_OUTPUT_CAP,
         max_jobs_per_root_task: int = DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK,
@@ -413,7 +422,11 @@ class ProcessRegistry:
     # -- foreground tracking -----------------------------------------------
 
     def register_foreground(
-        self, *, popen: subprocess.Popen[bytes], spawned_by_task_id: str
+        self,
+        *,
+        popen: Optional[subprocess.Popen[bytes]] = None,
+        kill: Optional[Callable[[], None]] = None,
+        spawned_by_task_id: str,
     ) -> _ForegroundHandle:
         """Track a FOREGROUND command for the session kill cascade.
 
@@ -424,9 +437,18 @@ class ProcessRegistry:
         caller MUST pair this with :meth:`unregister_foreground` in a
         ``finally``. Root resolution mirrors ``spawn``: a subtask-run command
         is owned by the session, so the session-level stop reaches it.
+
+        Pass exactly one of ``popen`` (a host process group, signalled) or
+        ``kill`` (a zero-argument terminator for a run the host does not own,
+        such as a command inside a sandbox container; it must be safe to call
+        after the command already ended and should not raise).
         """
+        if (popen is None) == (kill is None):
+            raise ValueError("register_foreground takes exactly one of popen / kill")
         root_task_id = self._resolve_root_task_id(spawned_by_task_id)
-        handle = _ForegroundHandle(popen=popen, root_task_id=root_task_id)
+        handle = _ForegroundHandle(
+            popen=popen, kill=kill, root_task_id=root_task_id
+        )
         with self._lock:
             self._foreground.setdefault(root_task_id, []).append(handle)
         return handle
@@ -459,20 +481,40 @@ class ProcessRegistry:
         thread blocked in ``communicate()`` owns the ``Popen`` and reaps it as
         soon as the group dies and the pipes close, so this only signals — and
         the grace wait runs on a short-lived daemon thread so the caller
-        (the control-plane interrupt / cancel / close) is never blocked."""
-        self._terminate(handle.popen, signal.SIGTERM)
+        (the control-plane interrupt / cancel / close) is never blocked.
+
+        A handle registered with a ``kill`` callable (no host process) runs
+        that callable on a daemon thread instead — it is typically a network
+        call, which must not stall the control plane either; a raise is
+        swallowed, the ``killed`` mark already stands."""
+        backend_kill = handle.kill
+        if backend_kill is not None:
+
+            def _run_backend_kill() -> None:
+                try:
+                    backend_kill()
+                except Exception:  # noqa: BLE001 — best effort, mark stands
+                    pass
+
+            threading.Thread(
+                target=_run_backend_kill, name="fg-kill-backend", daemon=True
+            ).start()
+            return
+        popen = handle.popen
+        assert popen is not None  # exactly one of popen / kill is set
+        self._terminate(popen, signal.SIGTERM)
 
         def _escalate() -> None:
             try:
-                handle.popen.wait(timeout=grace_s)
+                popen.wait(timeout=grace_s)
                 return  # SIGTERM reaped it within the grace.
             except subprocess.TimeoutExpired:
                 pass
-            self._terminate(handle.popen, signal.SIGKILL)
+            self._terminate(popen, signal.SIGKILL)
 
         threading.Thread(
             target=_escalate,
-            name=f"fg-kill-{handle.popen.pid}",
+            name=f"fg-kill-{popen.pid}",
             daemon=True,
         ).start()
 
@@ -586,7 +628,7 @@ class ProcessRegistry:
             return []
         active_probe = probe or self._identity_probe
         recovered: list[str] = []
-        for summary in index.list_task_streams():  # type: ignore[attr-defined]
+        for summary in index.list_task_streams():
             for orphan in self._scan_orphans(summary.task_id):
                 self._mark_lost(orphan)
                 self._best_effort_kill(orphan, active_probe)
@@ -681,7 +723,9 @@ class ProcessRegistry:
 
     def _watch(self, handle: _JobHandle) -> None:
         """Drain the merged pipe into the buffer, then reap + record exit."""
-        stdout = handle.popen.stdout
+        # Popen with the default ``bufsize=-1`` hands back a BufferedReader;
+        # ``IO[bytes]`` in the stubs hides its ``read1``.
+        stdout = cast(Optional[io.BufferedReader], handle.popen.stdout)
         if stdout is not None:
             while True:
                 # ``read1``, not ``read``: a plain ``read(_READ_CHUNK)`` blocks

@@ -19,7 +19,12 @@ response. We accept either a bare JSON object (the simplest servers) or a
 ``text/event-stream`` body carrying one ``data:`` JSON line (the shape the MCP
 Streamable HTTP spec returns even for a one-shot request-response); we read the
 first JSON-RPC object whose ``id`` matches and stop — we never hold the stream
-open to listen for pushes.
+open to listen for pushes. The client's own transport returns the moment that
+object arrives, so a server that keeps the stream open afterwards (keep-alive
+comments, pushes) costs nothing; the whole read is bounded by the call's
+timeout, not just the gap between two reads. An object carrying ``method`` is a
+server request or notification, never the reply. The list calls follow
+``nextCursor`` to the last page.
 
 Sessions: a Streamable HTTP server (MCP 2025-03-26 / 2025-06-18) may assign an
 ``Mcp-Session-Id`` on ``initialize`` and then reject any later request that does
@@ -46,13 +51,16 @@ from __future__ import annotations
 
 import threading
 import json
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Mapping, Optional, Union
 
 from noeta.builtins.mcp.impl._client import (
+    DEFAULT_MCP_LINE_CAP,
     DEFAULT_MCP_TIMEOUT_S,
     DEFAULT_MCP_TOTAL_CAP,
+    collect_pages,
 )
 from noeta.runtime.mcp import HttpPostFn, McpError, McpHttpResponse
 
@@ -96,6 +104,35 @@ def _assigned_id(headers: Mapping[str, str]) -> Optional[str]:
     return None
 
 
+class _TransportFault(McpError):
+    """A timeout inside the client's own transport; marks the connection
+    broken the way a socket timeout does."""
+
+
+def _sse_reply(line: str, req_id: object) -> Optional[dict[str, Any]]:
+    """The JSON-RPC reply to ``req_id`` carried by one SSE line, or ``None``.
+
+    Only a ``data:`` line whose JSON object has no ``method`` (a server
+    request / notification is never the reply) and whose ``id`` matches
+    counts. Ids compare as strings: a spec-compliant server may echo the id
+    as ``"1"`` while ours is ``1``."""
+    line = line.strip()
+    if not line.startswith("data:"):
+        return None
+    payload = line[len("data:") :].strip()
+    if not payload:
+        return None
+    try:
+        obj = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(obj, dict) or "method" in obj:
+        return None
+    if str(obj.get("id")) != str(req_id):
+        return None
+    return obj
+
+
 def _reply_parts(
     reply: Union[bytes, McpHttpResponse],
 ) -> tuple[bytes, Optional[str], int]:
@@ -129,6 +166,7 @@ class McpHttpClient:
         url: str,
         headers: Optional[Mapping[str, str]] = None,
         timeout_s: float = DEFAULT_MCP_HTTP_TIMEOUT_S,
+        call_timeout_s: Optional[float] = None,
         total_cap: int = DEFAULT_MCP_TOTAL_CAP,
         post: Optional[HttpPostFn] = None,
     ) -> None:
@@ -137,8 +175,12 @@ class McpHttpClient:
         self._url = url
         self._headers = dict(headers or {})
         self._timeout_s = timeout_s
+        #: ``tools/call`` budget; ``None`` ⇒ ``timeout_s``. Only the client's
+        #: own transport can honour it — an injected ``HttpPostFn`` owns its
+        #: timeouts.
+        self._call_timeout_s = call_timeout_s
         self._total_cap = total_cap
-        self._post = post or self._default_post
+        self._post = post
         # Only our own transport can send the session-ending ``DELETE``: a
         # host that injected one owns its network path (proxy, auth, mTLS),
         # and going around it with a bare ``urlopen`` would be wrong.
@@ -151,6 +193,16 @@ class McpHttpClient:
         # (written once, on the initialize reply, and read on every request).
         self._connection_id: Optional[str] = None
         self._id_lock = threading.Lock()
+        #: Set when an exchange timed out or the transport failed: each POST
+        #: is independent, so later calls still go out, but the pool should
+        #: not hand this connection to the next build.
+        self._broken: Optional[str] = None
+
+    @property
+    def broken(self) -> bool:
+        """True once a timeout or transport fault was seen on this
+        connection; the tool wrapper then retires it from the pool."""
+        return self._broken is not None
 
     # -- lifecycle -------------------------------------------------------
 
@@ -181,15 +233,13 @@ class McpHttpClient:
             self._notify("notifications/initialized", {})
 
     def list_tools(self) -> list[dict[str, Any]]:
-        result = self._request("tools/list", {})
-        tools = result.get("tools")
-        if not isinstance(tools, list):
-            raise McpError("tools/list result missing 'tools' array")
-        return [t for t in tools if isinstance(t, dict)]
+        return collect_pages(self._request, "tools/list", "tools")
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return self._request(
-            "tools/call", {"name": name, "arguments": dict(arguments)}
+            "tools/call",
+            {"name": name, "arguments": dict(arguments)},
+            timeout_s=self._call_timeout_s,
         )
 
     def list_prompts(self) -> list[dict[str, Any]]:
@@ -198,11 +248,7 @@ class McpHttpClient:
         Same request-response subset as the stdio client: one POST, one JSON-RPC
         response, never a server-push stream. Returns the raw
         ``[{name, description?, arguments?}]`` entries."""
-        result = self._request("prompts/list", {})
-        prompts = result.get("prompts")
-        if not isinstance(prompts, list):
-            raise McpError("prompts/list result missing 'prompts' array")
-        return [p for p in prompts if isinstance(p, dict)]
+        return collect_pages(self._request, "prompts/list", "prompts")
 
     def get_prompt(
         self, name: str, arguments: dict[str, Any]
@@ -222,11 +268,7 @@ class McpHttpClient:
         Returns the raw ``[{uri, name?, description?, mimeType?}]`` entries — the
         v1 static clip-list only (resource templates / parameterised URIs are out
         of scope)."""
-        result = self._request("resources/list", {})
-        resources = result.get("resources")
-        if not isinstance(resources, list):
-            raise McpError("resources/list result missing 'resources' array")
-        return [r for r in resources if isinstance(r, dict)]
+        return collect_pages(self._request, "resources/list", "resources")
 
     def read_resource(self, uri: str) -> dict[str, Any]:
         """Read one resource (``resources/read``) by URI.
@@ -260,13 +302,20 @@ class McpHttpClient:
 
     # -- JSON-RPC over HTTP ---------------------------------------------
 
-    def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    def _request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout_s: Optional[float] = None,
+    ) -> dict[str, Any]:
         with self._id_lock:
             self._next_id += 1
             req_id = self._next_id
         body = self._exchange(
             method,
             {"jsonrpc": "2.0", "id": req_id, "method": method, "params": params},
+            timeout_s=timeout_s,
         )
         if len(body) > self._total_cap:
             raise McpError("server output exceeded total cap")
@@ -287,7 +336,13 @@ class McpHttpClient:
         :class:`McpError` as they do for a request."""
         self._exchange(method, {"jsonrpc": "2.0", "method": method, "params": params})
 
-    def _exchange(self, method: str, req: dict[str, Any]) -> bytes:
+    def _exchange(
+        self,
+        method: str,
+        req: dict[str, Any],
+        *,
+        timeout_s: Optional[float] = None,
+    ) -> bytes:
         """POST one JSON-RPC message and hand back the raw response body.
 
         The shared half of a request and a notification: the credential and
@@ -304,15 +359,27 @@ class McpHttpClient:
         if held_id is not None:
             headers[_CONNECTION_ID_HEADER] = held_id
         try:
-            reply = self._post(req, headers)
+            if self._post is not None:
+                reply = self._post(req, headers)
+            else:
+                reply = self._default_post(
+                    req,
+                    headers,
+                    timeout_s=self._timeout_s if timeout_s is None else timeout_s,
+                )
+        except _TransportFault as exc:
+            self._broken = str(exc)
+            raise
         except McpError:
             raise
         except urllib.error.HTTPError as exc:  # noqa: PERF203
             self._note_status(exc.code, held_id)
             raise McpError(f"{method} http error: {exc.code} {exc.reason}") from exc
         except urllib.error.URLError as exc:
+            self._broken = f"url error: {exc.reason}"
             raise McpError(f"{method} url error: {exc.reason}") from exc
-        except OSError as exc:
+        except OSError as exc:  # a socket timeout lands here
+            self._broken = f"transport error: {exc}"
             raise McpError(f"{method} transport error: {exc}") from exc
         body, assigned_id, status = _reply_parts(reply)
         if status >= 400:
@@ -349,21 +416,8 @@ class McpHttpClient:
             raise McpError(f"{method}: JSON-RPC response is not an object")
         # SSE path: scan ``data:`` lines for the matching JSON-RPC object.
         for line in text.splitlines():
-            line = line.strip()
-            if not line.startswith("data:"):
-                continue
-            payload = line[len("data:") :].strip()
-            if not payload:
-                continue
-            try:
-                obj = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            # Compare ids as strings: a spec-compliant server may echo the
-            # JSON-RPC id as a string ("1") while ``req_id`` is our int (1),
-            # so a raw ``==`` would never match and the call would spuriously
-            # raise below. Normalising both sides keeps int/str echoes matching.
-            if isinstance(obj, dict) and str(obj.get("id")) == str(req_id):
+            obj = _sse_reply(line, req_id)
+            if obj is not None:
                 return obj
         raise McpError(f"{method}: no matching JSON-RPC response in body")
 
@@ -385,21 +439,57 @@ class McpHttpClient:
                     self._connection_id = None
 
     def _default_post(
-        self, req: dict[str, Any], headers: Mapping[str, str]
+        self,
+        req: dict[str, Any],
+        headers: Mapping[str, str],
+        *,
+        timeout_s: float,
     ) -> McpHttpResponse:
+        """POST ``req``; for an SSE reply, stop at the matching JSON-RPC object.
+
+        A plain JSON reply is read whole (capped). A ``text/event-stream``
+        reply is read line by line and returned — as a one-line SSE body the
+        parser already understands — the moment the ``data:`` object whose
+        ``id`` matches ours arrives; whatever the server keeps streaming
+        after it is never read. ``timeout_s`` bounds the whole exchange, not
+        just the gap between reads, so a stream of keep-alive comments that
+        never carries the reply still ends."""
+        deadline = time.monotonic() + timeout_s
         data = json.dumps(req, separators=(",", ":")).encode("utf-8")
         request = urllib.request.Request(  # noqa: S310 — url is operator config
             self._url, data=data, headers=dict(headers), method="POST"
         )
         with urllib.request.urlopen(  # noqa: S310 — operator-configured endpoint
-            request, timeout=self._timeout_s
+            request, timeout=timeout_s
         ) as resp:
-            body = resp.read(self._total_cap + 1)
-            return McpHttpResponse(
-                body=body,
-                headers={k: v for k, v in resp.headers.items()},
-                status=int(getattr(resp, "status", 200) or 200),
-            )
+            reply_headers = {k: v for k, v in resp.headers.items()}
+            status = int(getattr(resp, "status", 200) or 200)
+            content_type = str(resp.headers.get("Content-Type", "")).lower()
+            req_id = req.get("id")
+            if "text/event-stream" not in content_type or req_id is None:
+                body = resp.read(self._total_cap + 1)
+                return McpHttpResponse(body=body, headers=reply_headers, status=status)
+            consumed = 0
+            while True:
+                if time.monotonic() >= deadline:
+                    raise _TransportFault(
+                        f"{req.get('method')}: timeout waiting for server response"
+                    )
+                line = resp.readline(DEFAULT_MCP_LINE_CAP + 1)
+                if not line:
+                    # End of stream without the reply: hand back nothing and
+                    # let the parser report the missing response.
+                    return McpHttpResponse(body=b"", headers=reply_headers, status=status)
+                consumed += len(line)
+                if consumed > self._total_cap:
+                    raise McpError("server output exceeded total cap")
+                text = line.decode("utf-8", errors="replace")
+                if _sse_reply(text, req_id) is not None:
+                    return McpHttpResponse(
+                        body=text.strip().encode("utf-8"),
+                        headers=reply_headers,
+                        status=status,
+                    )
 
     def _default_delete(self, connection_id: str) -> None:
         """``DELETE`` the session id — the spec's explicit end of a session.

@@ -59,11 +59,12 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Callable, Mapping, Optional, Protocol
 
 import httpx
 
 from noeta.client.webfetch_policy import unsupported_scheme_refusal
+from noeta.protocols.step_context import StepContext
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
 from noeta.tools.limits import (
     SUMMARY_EMBED_MAX_BYTES,
@@ -83,6 +84,7 @@ from noeta.builtins.web.impl.search import (
 __all__ = [
     "CrossHostRedirect",
     "FetchTransport",
+    "FetchedPage",
     "HttpFetchTransport",
     "ContainerCurlFetchTransport",
     "PAGE_CACHE_SLOT",
@@ -304,11 +306,134 @@ class CrossHostRedirect(RuntimeError):
         self.location = location
 
 
-class FetchTransport(Protocol):
-    """A url → raw page text seam. Raises on transport / HTTP failure and
-    raises :class:`CrossHostRedirect` on a redirect that leaves the host."""
+class FetchedPage(str):
+    """A fetched body, already decoded, that also carries the
+    ``Content-Type`` it came with.
 
-    def fetch(self, url: str) -> str: ...
+    A ``str`` subclass so every caller that reads a transport's return as the
+    page text keeps working. ``content_type`` is the raw header value
+    (``"text/html; charset=gbk"``); ``""`` when the server sent none."""
+
+    content_type: str
+
+    def __new__(cls, text: str, content_type: str = "") -> "FetchedPage":
+        page = super().__new__(cls, text)
+        page.content_type = content_type
+        return page
+
+
+class FetchTransport(Protocol):
+    """A url → page seam. Raises on transport / HTTP failure, on a body that
+    is not text (:func:`check_text_media`), and :class:`CrossHostRedirect` on a
+    redirect that leaves the origin. A bare ``str`` return is read as HTML."""
+
+    def fetch(self, url: str) -> "str | FetchedPage": ...
+
+
+#: Media types rendered through :func:`html_to_markdown`.
+_HTML_MEDIA_TYPES = frozenset({"text/html", "application/xhtml+xml"})
+#: Non-``text/*`` media types that are text all the same, returned as-is.
+_TEXT_MEDIA_TYPES = frozenset(
+    {
+        "application/json",
+        "application/xml",
+        "application/javascript",
+        "application/ecmascript",
+        "application/x-javascript",
+        "application/yaml",
+        "application/x-yaml",
+        "application/toml",
+        "application/sql",
+        "application/graphql",
+        "application/x-sh",
+        "application/x-httpd-php",
+    }
+)
+_CHARSET_PARAM_RE = re.compile(r"charset\s*=\s*[\"']?([\w.:-]+)", re.IGNORECASE)
+_META_CHARSET_RE = re.compile(
+    rb"<meta[^>]+charset\s*=\s*[\"']?\s*([\w.:-]+)", re.IGNORECASE
+)
+
+
+def media_type_of(content_type: str) -> str:
+    """``"text/html; charset=utf-8"`` → ``"text/html"`` (lower-cased)."""
+    return content_type.split(";", 1)[0].strip().lower()
+
+
+def _is_html_media(media: str) -> bool:
+    return media in _HTML_MEDIA_TYPES
+
+
+def _is_text_media(media: str) -> bool:
+    return (
+        media.startswith("text/")
+        or media in _TEXT_MEDIA_TYPES
+        or media.endswith("+json")
+        or media.endswith("+xml")
+    )
+
+
+def check_text_media(url: str, content_type: str) -> None:
+    """Raise when ``content_type`` names a body WebFetch cannot read.
+
+    HTML and text (``text/*``, JSON, XML, a few script / config types) pass;
+    every other declared type — images, PDF, ``application/octet-stream``,
+    archives — is refused with the type named, before the body is rendered as
+    if it were a page. A missing header passes (the body is sniffed)."""
+    media = media_type_of(content_type)
+    if not media or _is_html_media(media) or _is_text_media(media):
+        return
+    raise ValueError(
+        f"{url} returned {media} content, which WebFetch cannot read — it "
+        "reads HTML and text (text/*, JSON, XML)"
+    )
+
+
+def decode_body(raw: bytes, content_type: str) -> str:
+    """Decode a fetched body: the header's ``charset``, else an HTML
+    ``<meta charset>`` (either form) in the first 4 KB, else UTF-8. An unknown
+    charset name falls back to UTF-8; undecodable bytes are replaced."""
+    match = _CHARSET_PARAM_RE.search(content_type)
+    charset = match.group(1) if match else ""
+    if not charset:
+        media = media_type_of(content_type)
+        if not media or _is_html_media(media):
+            meta = _META_CHARSET_RE.search(raw[:4096])
+            charset = meta.group(1).decode("ascii", "replace") if meta else ""
+    try:
+        return raw.decode(charset or "utf-8", errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
+
+
+def _looks_like_html(text: str) -> bool:
+    """A body with no ``Content-Type`` is HTML when it opens with a tag."""
+    return text.lstrip()[:1] == "<"
+
+
+def _same_origin(a: str, b: str) -> bool:
+    """Whether two URLs share scheme, host and (default-normalised) port — the
+    boundary a silently followed redirect may not cross."""
+    ua, ub = httpx.URL(a), httpx.URL(b)
+    defaults = {"http": 80, "https": 443}
+
+    def _port(u: httpx.URL) -> Optional[int]:
+        return u.port if u.port is not None else defaults.get(u.scheme)
+
+    return (ua.scheme, ua.host, _port(ua)) == (ub.scheme, ub.host, _port(ub))
+
+
+def _render(fetched: "str | FetchedPage") -> tuple[str, str]:
+    """``(title, text)`` for a fetched body: HTML through
+    :func:`html_to_markdown`, any other text as-is. A bare ``str`` (a legacy
+    transport) is HTML; a body with no ``Content-Type`` is sniffed."""
+    text = str(fetched)
+    if not isinstance(fetched, FetchedPage):
+        return _extract_title(text), html_to_markdown(text)
+    media = media_type_of(fetched.content_type)
+    if _is_html_media(media) or (not media and _looks_like_html(text)):
+        return _extract_title(text), html_to_markdown(text)
+    return "", text.strip()
 
 
 @dataclass
@@ -344,6 +469,9 @@ class WebFetchTool:
     #: task's own (see :class:`PageCache`); a bare tool keeps a private one,
     #: and a test passes ``PageCache(clock=...)``.
     cache: PageCache = field(default_factory=PageCache)
+    #: The host's per-call provider headers (``HostConfig.provider_headers``),
+    #: attached to the digest call for the calling task. ``None`` ⇒ none.
+    provider_headers: Optional[Callable[[StepContext], Mapping[str, str]]] = None
 
     def invoke(self, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         url = arguments.get("url")
@@ -376,7 +504,7 @@ class WebFetchTool:
             title, markdown = cached
         else:
             try:
-                raw = self.transport.fetch(url)
+                fetched = self.transport.fetch(url)
             except CrossHostRedirect as redirect:
                 # The location comes from the server, so it gets the same
                 # provenance line a fetched page gets, and it is stated as a
@@ -398,8 +526,7 @@ class WebFetchTool:
                 )
             except Exception as exc:  # noqa: BLE001 — degrade, don't crash the step
                 return ToolResult(success=False, summary=f"WebFetch failed: {exc}")
-            title = _extract_title(raw)
-            markdown = html_to_markdown(raw)
+            title, markdown = _render(fetched)
             if not markdown.strip():
                 # An empty rendering is a failed fetch, not a successful empty
                 # page: reporting success=True with 0 bytes reads as "the page
@@ -409,7 +536,7 @@ class WebFetchTool:
                     success=False,
                     summary=(
                         f"WebFetch got no readable text from {summary_url} — the page "
-                        "rendered to empty Markdown (blocked, empty, or script-only); "
+                        "rendered to empty text (blocked, empty, or script-only); "
                         "try another source"
                     ),
                 )
@@ -443,9 +570,15 @@ class WebFetchTool:
         )
 
         if self.digester is not None:
+            # Headers ride as a keyword only when the host wired some, so a
+            # digester written against the plain protocol keeps working.
+            extra: dict[str, Any] = {}
+            if self.provider_headers is not None:
+                extra["request_headers"] = self._request_headers(ctx)
             try:
                 answer = self.digester.digest(
-                    url=url, title=title, page_markdown=page, prompt=prompt
+                    url=url, title=title, page_markdown=page, prompt=prompt,
+                    **extra,
                 )
             except Exception:  # noqa: BLE001 — a digest failure degrades to the raw render
                 answer = ""
@@ -474,6 +607,15 @@ class WebFetchTool:
             artifacts=[ref],
             summary=f"fetched {summary_url} ({ref.size}B markdown)",
         )
+
+    def _request_headers(self, ctx: ToolContext) -> Mapping[str, str]:
+        assert self.provider_headers is not None
+        step = StepContext(
+            task_id=str(ctx.metadata.get("task_id", "")),
+            lease_id="",
+            trace_id=str(ctx.metadata.get("trace_id", "")),
+        )
+        return dict(self.provider_headers(step))
 
     def _cache_get(self, url: str) -> Optional[tuple[str, str]]:
         return self.cache.get(url)
@@ -506,7 +648,7 @@ class HttpFetchTransport:
     #: the tool already offloads the rendered body to an artifact + inline cap).
     max_bytes: int = 5 * 1024 * 1024
 
-    def fetch(self, url: str) -> str:
+    def fetch(self, url: str) -> FetchedPage:
         client = self.client or httpx.Client(timeout=self.timeout)
         try:
             current = url
@@ -522,11 +664,14 @@ class HttpFetchTransport:
                     if resp.is_redirect:
                         location = resp.headers.get("location", "")
                         target = str(httpx.URL(current).join(location))
-                        if httpx.URL(target).host != httpx.URL(current).host:
+                        if not _same_origin(target, current):
                             raise CrossHostRedirect(current, target)
                         current = target
                         continue
                     resp.raise_for_status()
+                    content_type = resp.headers.get("content-type", "")
+                    # Refused before a byte of the body is read.
+                    check_text_media(current, content_type)
                     chunks: list[bytes] = []
                     total = 0
                     for chunk in resp.iter_bytes():
@@ -536,8 +681,9 @@ class HttpFetchTransport:
                                 f"response exceeds {self.max_bytes} byte limit"
                             )
                         chunks.append(chunk)
-                    encoding = resp.encoding or "utf-8"
-                    return b"".join(chunks).decode(encoding, errors="replace")
+                    return FetchedPage(
+                        decode_body(b"".join(chunks), content_type), content_type
+                    )
             raise RuntimeError(
                 f"too many redirects (>{_MAX_REDIRECT_HOPS}) fetching {url}"
             )
@@ -549,6 +695,8 @@ class HttpFetchTransport:
 #: Stem of the ``curl -w`` status marker; the full prefix carries a per-call
 #: nonce (:func:`_curl_meta_prefix`).
 _CURL_META_STEM = "__noeta_webfetch_meta_"
+#: Stem of the ``Content-Type`` write-out line's marker.
+_CURL_CTYPE_STEM = "__noeta_webfetch_ctype_"
 
 
 def _curl_meta_prefix() -> str:
@@ -567,9 +715,35 @@ def _curl_meta_prefix() -> str:
 def _curl_meta_format(prefix: str) -> str:
     """``curl -w`` format for the container transport: written to STDERR
     (``%{stderr}``) so a split stream keeps the body on stdout pure; a merged
-    stream simply carries the line along with the body. Requires curl >= 7.63
-    (2018); the sandbox images already carry far newer."""
-    return "%{stderr}" + prefix + "%{http_code} %{redirect_url}\n"
+    stream simply carries the lines along with the body. The status line comes
+    first, then a ``Content-Type`` line under its own marker
+    (:func:`_curl_ctype_prefix`). Requires curl >= 7.63 (2018); the sandbox
+    images already carry far newer."""
+    return (
+        "%{stderr}"
+        + prefix
+        + "%{http_code} %{redirect_url}\n"
+        + _curl_ctype_prefix(prefix)
+        + "%{content_type}\n"
+    )
+
+
+def _curl_ctype_prefix(prefix: str) -> str:
+    """The marker of the ``Content-Type`` write-out line, carrying the same
+    nonce as the status marker ``prefix`` (and never containing it)."""
+    return prefix.replace(_CURL_META_STEM, _CURL_CTYPE_STEM, 1)
+
+
+def _split_curl_line(stream: bytes, marker: bytes) -> tuple[bytes, Optional[str]]:
+    """Cut the last ``marker`` line out of ``stream`` → ``(rest, its text)``;
+    ``(stream, None)`` when absent. Byte-preserving like :func:`_split_curl_meta`."""
+    index = stream.rfind(marker)
+    if index < 0:
+        return stream, None
+    end = stream.find(b"\n", index)
+    text = stream[index + len(marker) : end if end >= 0 else len(stream)]
+    rest = stream[:index] + (stream[end + 1 :] if end >= 0 else b"")
+    return rest, text.decode("utf-8", errors="replace").strip()
 
 
 def _split_curl_meta(
@@ -650,12 +824,12 @@ class ContainerCurlFetchTransport:
     #: truncated body raises instead of rendering half a page.
     max_bytes: int = 5 * 1024 * 1024
 
-    def fetch(self, url: str) -> str:
+    def fetch(self, url: str) -> "str | FetchedPage":
         current = url
         for _ in range(_MAX_REDIRECT_HOPS + 1):
-            body, status, redirect_url = self._fetch_hop(current)
+            body, status, redirect_url, content_type = self._fetch_hop(current)
             if 300 <= status < 400 and redirect_url:
-                if _url_host(redirect_url) != _url_host(current):
+                if not _same_origin(redirect_url, current):
                     raise CrossHostRedirect(current, redirect_url)
                 current = redirect_url
                 continue
@@ -663,17 +837,25 @@ class ContainerCurlFetchTransport:
                 raise RuntimeError(
                     f"webfetch failed: HTTP {status} from {current}"
                 )
-            return body
+            if content_type is None:
+                # A curl whose write-out carried no Content-Type line: the body
+                # is read the way it always was.
+                return body.decode("utf-8", errors="replace")
+            check_text_media(current, content_type)
+            return FetchedPage(decode_body(body, content_type), content_type)
         raise RuntimeError(
             f"too many redirects (>{_MAX_REDIRECT_HOPS}) fetching {url}"
         )
 
-    def _fetch_hop(self, url: str) -> tuple[str, int, str]:
-        """One redirect-less curl round-trip → (body, status, redirect url)."""
+    def _fetch_hop(self, url: str) -> tuple[bytes, int, str, Optional[str]]:
+        """One redirect-less curl round-trip → (body, status, redirect url,
+        Content-Type or ``None`` when the write-out carried no such line)."""
         prefix = _curl_meta_prefix()
         argv = [
             "curl",
             "-sS",
+            # No URL globbing: ``[]`` / ``{}`` in a URL are literal characters.
+            "-g",
             "--max-time",
             str(int(self.timeout)),
             "-A",
@@ -711,8 +893,12 @@ class ContainerCurlFetchTransport:
         # untouched; with merged streams (the shipped sandbox ExecEnv, which
         # always reports ``stderr=b""``) the line rides inside the body,
         # wherever curl's buffering put it, and is cut back out.
-        body, merged_meta = _split_curl_meta(outcome.stdout, marker)
-        _, split_meta = _split_curl_meta(outcome.stderr, marker)
+        ctype_marker = _curl_ctype_prefix(prefix).encode("utf-8")
+        stdout, merged_ctype = _split_curl_line(outcome.stdout, ctype_marker)
+        stderr, split_ctype = _split_curl_line(outcome.stderr, ctype_marker)
+        content_type = split_ctype if split_ctype is not None else merged_ctype
+        body, merged_meta = _split_curl_meta(stdout, marker)
+        _, split_meta = _split_curl_meta(stderr, marker)
         meta = split_meta if split_meta is not None else merged_meta
         if meta is None:
             raise RuntimeError(
@@ -721,13 +907,14 @@ class ContainerCurlFetchTransport:
                 "(needs >= 7.63)"
             )
         status, redirect_url = meta
-        return body.decode("utf-8", errors="replace"), status, redirect_url
+        return body, status, redirect_url, content_type
 
 
 def build_web_tools(
     exec_env: Optional[ExecEnv] = None,
     digester: Optional[PageDigester] = None,
     page_cache: Optional[PageCache] = None,
+    provider_headers: Optional[Callable[[StepContext], Mapping[str, str]]] = None,
 ) -> dict[str, Tool]:
     """Build the web tool pack (``webfetch`` always; ``web_search`` if keyed).
 
@@ -763,6 +950,7 @@ def build_web_tools(
             transport=fetch_transport,
             digester=digester,
             cache=page_cache if page_cache is not None else PageCache(),
+            provider_headers=provider_headers,
         )
     ]
     search = build_web_search_tool(exec_env=exec_env)

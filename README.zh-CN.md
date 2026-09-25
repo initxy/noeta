@@ -39,6 +39,9 @@ print(result.answer())
 agent 用内置的文件工具看一遍目录，然后回答。`result` 里还有这次运行的每一次模型调用、
 工具调用和 token 用量。
 
+需要 Python 3.11 及以上。`Glob` 和 `Grep` 工具要用 [ripgrep](https://github.com/BurntSushi/ripgrep)，
+`rg` 必须在 `PATH` 上（`apt install ripgrep`、`brew install ripgrep`）。
+
 ## 和别的方案不一样的地方
 
 **崩了能接着跑。** 任务状态不放在内存里，而是从一条只追加的事件日志里重建。worker 跑到一半被杀掉，
@@ -71,14 +74,16 @@ agent 要长时间无人值守地跑，而且要能恢复、能审计、能扩�
 
 ## 基准测试
 
-| 基准 | 范围 | `noeta-agent` `main`（Claude Opus 4.8） | 榜单情况 |
-|---|---|---|---|
-| Terminal-Bench 2.1 | 40 题分层抽样 | **82.5%**（33/40） | 公开榜单区间 58.7%–83.8% |
-| SWE-bench Verified | 15 题子集 | **86.7%**（13/15） | 最高约 79%，中游约 66–77% |
+公开基准上的实测，每项都是在抽样上跑一次：
+
+| 基准 | 范围 | 测于 | `noeta-agent` `main`（Claude Opus 4.8） | 榜单情况（全集） |
+|---|---|---|---|---|
+| Terminal-Bench 2.1 | 40 题分层抽样 | `noeta-sdk` 0.6.28，2026-09-19 | 首轮 **24/40**；三次取最好 **33/40** | 公开榜单区间 58.7%–83.8% |
+| SWE-bench Verified | 15 题子集 | `noeta-sdk` 0.6.10，2026-08-09 | 重跑 4 个环境准备超时后 **13/15**（首轮 9/15） | 子集没法和全集比 |
 
 只用公开 SDK 搭出来的 agent（[noeta-agent](https://github.com/initxy/noeta-agent)），
 在官方评测框架（[harbor](https://github.com/harbor-framework/harbor)）上运行，由每道题自带的校验器判分。
-两项都是抽样，不是全量榜单成绩。[方法和说明](https://initxy.github.io/noeta/zh/benchmarks.html)。
+两项都是在抽样上跑一次，不是全量榜单成绩，较高的数算上了首轮没解出来的题的重跑。[方法和说明](https://initxy.github.io/noeta/zh/benchmarks.html)。
 
 ## 文档
 

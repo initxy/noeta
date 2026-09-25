@@ -162,6 +162,11 @@ class FailDecision:
     retryable: bool = False
     state_patch: Optional[TaskStatePatch] = None
     assistant_message: Optional[Message] = None
+    #: Free-text diagnostic behind ``reason`` (e.g. the provider's own error
+    #: message for ``reason="llm_error"``). ``reason`` stays the stable tag a
+    #: host branches on; ``detail`` is what a human reads. Copied onto
+    #: ``TaskFailedPayload.detail`` (capped at ``FAIL_DETAIL_MAX_CHARS``).
+    detail: Optional[str] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,6 +209,13 @@ class SpawnSubtaskDecision:
     #: background spawn is always a SINGLE child — the
     #: :class:`SpawnSubtasksDecision` fan-out stays foreground-only.
     background: bool = False
+    #: Tool-result blocks for tool_use blocks a CONTROL tool already answered
+    #: in this same turn (a ``TodoWrite`` riding the spawn). Mirrors
+    #: :attr:`ToolCallsDecision.preacked_results`: they join the one result
+    #: message that answers the spawn — the "started" result for a background
+    #: launch, the child's result at resume for a foreground one — so every
+    #: tool_use still gets exactly one result. Empty for ordinary turns.
+    preacked_results: tuple[ToolResultBlock, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +259,10 @@ class SpawnSubtasksDecision:
     #: events, so ``handle_spawn_subtasks`` copies it onto the persisted
     #: :class:`~noeta.protocols.wake.SubtaskGroupCompleted` suspend condition.
     concurrent: bool = False
+    #: Pre-answered results riding the fan-out; see
+    #: :attr:`SpawnSubtaskDecision.preacked_results`. They join the group's
+    #: result message at resume.
+    preacked_results: tuple[ToolResultBlock, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -44,8 +44,8 @@ class ReminderView:
     """Narrow, read-only projection of folded state a reminder renders from.
 
     Built by the composer once per ``compose`` from the task's folded state (and
-    the composer's own compose-time facts — whether the ``Task`` control schema
-    is offered, whether a spawn already landed in history). A
+    the composer's own compose-time fact — whether the ``Task`` control schema
+    is offered). A
     reminder ``render`` sees only this projection, never the raw ``Task`` — the
     same narrowing ``ContentKindSpec`` renderers get (post-fold names only), so a
     render cannot reach past its inputs and break compose purity.
@@ -60,8 +60,6 @@ class ReminderView:
     todos: tuple[Mapping[str, object], ...] = ()
     #: Whether the ``Task`` control schema is offered this compose.
     delegation_enabled: bool = False
-    #: Whether a ``Task`` call already landed in the rolling history.
-    already_spawned: bool = False
     #: ``ContextState.compaction_thrashing`` — the latched thrash flag.
     compaction_thrashing: bool = False
     #: ``ContextState.summary_boundary`` — how many leading raw-history
@@ -70,6 +68,10 @@ class ReminderView:
     #: ``collapsed-context`` reminder names the ``RecallHistory`` tool over
     #: ``[0, summary_boundary)``).
     summary_boundary: int = 0
+    #: One past the newest raw-history message whose tool output the prune
+    #: cleared this compose (``0`` = none) — lets the same reminder point at
+    #: cleared-but-not-summarized outputs (``View.cleared_boundary``).
+    cleared_boundary: int = 0
 
 
 #: A reminder render: the folded-state projection -> reminder text (or ``None``

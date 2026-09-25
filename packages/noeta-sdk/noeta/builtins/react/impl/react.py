@@ -55,7 +55,7 @@ import json
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Optional, Protocol
+from typing import Any, Optional, Protocol, Sequence
 
 from noeta.policies.control_semantics import (
     SPAWN_SUBAGENT_TOOL,
@@ -90,6 +90,8 @@ from noeta.protocols.step_context import StepContext
 from noeta.protocols.tool import Tool
 from noeta.protocols.view import View
 
+from .call_routing import route_tool_calls
+
 
 __all__ = [
     "ReActPolicy",
@@ -109,9 +111,10 @@ __all__ = [
 #: built-in's ``control_tool`` module).
 
 #: The compaction summarize instruction, externalized to ``summarize.md``
-#: beside this module. It rides the summarize request TWICE — as the request's
-#: ``system`` and as a trailing ``user`` turn (see
-#: :meth:`ReActPolicy._summary_prompt_request` for why). Its closing HARD RULE
+#: beside this module. It rides the summarize request once, as a trailing
+#: ``user`` turn after the history; the request keeps the task's own system
+#: prompt so it shares the main loop's cached prefix (see
+#: :meth:`ReActPolicy._summary_prompt_request`). Its closing HARD RULE
 #: is the model-facing half of the verbatim rule, restricted to constraints the
 #: user or the system stated (never one found in a tool result): the
 #: deterministic post-check
@@ -550,12 +553,29 @@ class ReActPolicy:
         return window is not None and estimated >= window
 
     def _summary_prompt_request(
-        self, history: list[Message], tools: list[dict[str, Any]]
+        self,
+        history: list[Message],
+        tools: list[dict[str, Any]],
+        *,
+        system: Optional[Message] = None,
+        context: Sequence[Message] = (),
+        forbid_tools: bool = False,
     ) -> LLMRequest:
         """Build the deterministic summarize round-trip request.
 
-        **The instruction rides twice: as the request's ``system`` AND as a
-        trailing ``user`` turn appended after the history.** A model handed a
+        **The request is the main loop's request with the instruction as a
+        trailing ``user`` turn.** ``system`` is the task's own system prompt
+        (the View's ``stable_prefix``), ``context`` its ``semi_stable`` blocks,
+        and ``tools`` its live schemas — the exact head a normal step sends —
+        so the summarize call reads the cached prefix the main loop already
+        wrote instead of paying a fresh write for the whole window. How much
+        of it a provider can reuse is the provider's business: an automatic
+        prefix cache reuses the history too, and so does Anthropic's message
+        tier as long as the request carries no ``tool_choice`` (a changed
+        ``tool_choice`` resets that tier — which is why the first attempt
+        sends none; see ``forbid_tools`` below).
+
+        The instruction rides ONLY as the trailing user turn. A model handed a
         tool-result-ending history and a system-only instruction can weigh the
         conversation's momentum over the system text and simply continue the
         task. Observed on a relay-served frontier model: every proactive
@@ -564,9 +584,8 @@ class ReActPolicy:
         narration that then silently replaced the whole collapsed prefix. The
         identical request with the instruction as the final user message is
         answered with the note — which is also how Claude Code sends its
-        compaction prompt. The system copy stays for models that do honour it
-        (and keeps the summarize call recognisable by its system text); the
-        duplication costs under a thousand tokens per compaction.
+        compaction prompt. A system copy on top of it would both duplicate
+        the instruction and swap out the prefix the cache rides on.
 
         A fixed structured-section instruction over the
         history-to-be-collapsed. The sections are adopted from Claude Code's
@@ -599,12 +618,15 @@ class ReActPolicy:
         though: a summarizer that SEES live tools may answer with a tool call
         instead of the note — a history ending on a tool result invites exactly
         that — and an only-``tool_use`` response has no text, so the same
-        empty-summary guard would kill the task. ``metadata["tool_choice"] =
-        "none"`` closes that at the wire for the first-party adapters (each
-        maps it to its vendor spelling; ``tool_choice`` sits below the
-        tools+system cache tiers, so the shared prefix survives), and the
-        prompt's closing no-tools instruction covers any third-party adapter
-        that ignores the metadata.
+        empty-summary guard would kill the task. The prompt's closing no-tools
+        instruction is the first line of defence, and the first attempt relies
+        on it alone: it carries no ``tool_choice``, so on Anthropic the whole
+        prefix — messages tier included — is served from the main loop's
+        cache. Only when that attempt answers with a tool call (or no text) does
+        ``_compaction_decision`` retry once with ``forbid_tools=True``, which
+        sets ``metadata["tool_choice"] = "none"``: the first-party adapters map
+        it to their vendor spelling and close the door at the wire, at the
+        price of the messages-tier cache for that one retry.
 
         The MODEL is the one thing this request may not share with a normal
         turn: ``compaction_model`` (when the host set it) routes the summarize
@@ -622,22 +644,20 @@ class ReActPolicy:
         provider. Goes through the same ``_llm`` as a normal turn, so it records
         LLMRequestStarted/Recorded/Finished.
         """
-        summary_system = Message(
-            role="system",
-            content=[TextBlock(text=_SUMMARIZE_PROMPT)],
-        )
         instruction_turn = Message(
             role="user",
             content=[TextBlock(text=_SUMMARIZE_PROMPT)],
         )
         return LLMRequest(
             model=self._compaction_model or self._model,
-            messages=[*history, instruction_turn],
+            messages=[*context, *history, instruction_turn],
             tools=list(tools),
-            system=summary_system,
-            # The summarize round-trip must not tool-call (see the docstring):
-            # first-party adapters map this to their vendor tool_choice.
-            metadata={"tool_choice": "none"},
+            system=system,
+            # Only the retry forbids tool calls at the wire (see the
+            # docstring): a first attempt without ``tool_choice`` keeps the
+            # Anthropic message-tier cache entry; first-party adapters map the
+            # retry's value to their vendor tool_choice.
+            metadata={"tool_choice": "none"} if forbid_tools else {},
             # Forward an output ceiling for the model that SERVES this request.
             # Without one, a gateway that caps output at a stingy default when
             # the client sends no ``max_tokens`` (the aidp Responses gateway
@@ -787,17 +807,42 @@ class ReActPolicy:
                 previous_summary,
                 *history[view.summary_boundary : boundary],
             ]
-        summary_req = self._summary_prompt_request(
-            to_summarize, view.provider_tool_schemas
-        )
+        system = view.segments[0].content[0] if view.segments else None
+        context = view.segments[1].content if len(view.segments) > 1 else ()
         # The summarize round-trip is not user-facing output: opt out of
         # token streaming so a live UI never previews compaction internals.
-        summary_resp = self._llm.complete(summary_req, ctx, allow_stream=False)
-        summary = "\n".join(
-            b.text
-            for b in summary_resp.content
-            if isinstance(b, TextBlock)
+        # The first attempt carries no ``tool_choice`` so Anthropic serves the
+        # message tier from the main loop's cache entry too.
+        summary_resp = self._llm.complete(
+            self._summary_prompt_request(
+                to_summarize,
+                view.provider_tool_schemas,
+                system=system,
+                context=context,
+            ),
+            ctx,
+            allow_stream=False,
         )
+        summary = _joined_text(summary_resp)
+        if _summary_needs_tool_free_retry(summary_resp, summary):
+            # The model answered with a tool call (or no text at all): retry
+            # exactly once with ``tool_choice: none``. The retry is an ordinary
+            # recorded round-trip (Started / Recorded / Finished), and whether
+            # it happens is a pure function of the recorded first response, so
+            # a resumed run takes the same branch. Whatever the retry returns
+            # goes through the guards below unchanged.
+            summary_resp = self._llm.complete(
+                self._summary_prompt_request(
+                    to_summarize,
+                    view.provider_tool_schemas,
+                    system=system,
+                    context=context,
+                    forbid_tools=True,
+                ),
+                ctx,
+                allow_stream=False,
+            )
+            summary = _joined_text(summary_resp)
         # The summarize round-trip can come back failed — an ``error``
         # stop_reason (the LLM client's transient retries already exhausted, or
         # a fatal/overflow error) — empty (a model that emitted only a
@@ -1042,8 +1087,10 @@ class ReActPolicy:
                 content_store=self._content_store,
                 view=view,
             )
+            # A call to a routing tool (``McpCall``) becomes a call to the
+            # tool it names here, whichever translate built the batch.
             if control is not None:
-                return control
+                return route_tool_calls(control, self._tools)
             calls = [
                 ToolCall(
                     call_id=block.call_id,
@@ -1063,10 +1110,13 @@ class ReActPolicy:
             thinking = tuple(
                 b for b in response.content if isinstance(b, ThinkingBlock)
             )
-            return ToolCallsDecision(
-                calls=calls,
-                assistant_message=assistant_message,
-                assistant_thinking=thinking,
+            return route_tool_calls(
+                ToolCallsDecision(
+                    calls=calls,
+                    assistant_message=assistant_message,
+                    assistant_thinking=thinking,
+                ),
+                self._tools,
             )
         if response.stop_reason == "end_turn":
             # An ``end_turn`` with no renderable content (e.g. a safety-classifier
@@ -1121,11 +1171,18 @@ class ReActPolicy:
                     retryable=False,
                     assistant_message=None,
                 )
+            # The turn stops here, so no tool call of a truncated response ever
+            # runs — and a recorded tool_use with no paired result is rejected
+            # (HTTP 400) by Anthropic and OpenAI on the next request. Keep the
+            # text, drop the calls; a turn left with nothing is not recorded.
+            kept: list[Block] = [
+                b for b in history_content if not isinstance(b, ToolUseBlock)
+            ]
             return FailDecision(
                 reason="llm_truncated",
                 retryable=True,
-                assistant_message=Message(
-                    role="assistant", content=history_content
+                assistant_message=(
+                    Message(role="assistant", content=kept) if kept else None
                 ),
             )
         # stop_reason == "error".
@@ -1157,12 +1214,29 @@ class ReActPolicy:
         # ``_response_to_decision``). Kept as one arm so the identity is
         # explicit rather than a duplicated branch. We attach no
         # assistant_message so a failed turn does not pollute the rolling
-        # history.
+        # history. The provider's own error text rides along as ``detail`` so
+        # a host reading the failure sees *why* (a 401, a 400 body, a content
+        # filter) instead of a bare ``llm_error``.
         return FailDecision(
             reason="llm_error",
             retryable=False,
             assistant_message=None,
+            detail=_provider_error_detail(response),
         )
+
+
+def _provider_error_detail(response: LLMResponse) -> Optional[str]:
+    """The provider's error text for an error ``LLMResponse``, if it has one.
+
+    The runtime stamps ``raw['error']`` when it translates a provider
+    exception; an adapter-produced ``stop_reason="error"`` (an unknown vendor
+    stop reason) carries none, and ``None`` means "no detail".
+    """
+    raw = response.raw if isinstance(response.raw, dict) else {}
+    error = raw.get("error")
+    if isinstance(error, str) and error:
+        return error
+    return None
 
 
 def _strip_thinking(content: list[Block]) -> list[Block]:
@@ -1404,6 +1478,30 @@ def _excerpt(text: str, limit: int = _FAILURE_EXCERPT_CHARS) -> str:
     """One-line, whitespace-collapsed excerpt for a failure reason."""
     flat = " ".join(text.split())
     return flat if len(flat) <= limit else flat[: limit - 3] + "..."
+
+
+def _joined_text(response: LLMResponse) -> str:
+    """The response's text blocks joined by newlines (the summary candidate)."""
+    return "\n".join(
+        b.text for b in response.content if isinstance(b, TextBlock)
+    )
+
+
+def _summary_needs_tool_free_retry(response: LLMResponse, text: str) -> bool:
+    """Whether a first summarize attempt sent without ``tool_choice`` must be
+    retried once with ``tool_choice: none``.
+
+    True when the model answered with any tool call, or with no usable text.
+    An errored round-trip is not retried here: the LLM client has already
+    spent its transient retries, and forbidding tools does not change an
+    error. A text reply that is not a note is not retried either — the note
+    gate handles it. Pure over ``(response, text)``.
+    """
+    if response.stop_reason == "error":
+        return False
+    if any(isinstance(b, ToolUseBlock) for b in response.content):
+        return True
+    return not text.strip()
 
 
 def _summary_failure(response: LLMResponse, text: str) -> Optional[str]:

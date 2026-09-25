@@ -15,6 +15,7 @@ never leak into an LLMRequest.
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from typing import Any
 
@@ -91,13 +92,20 @@ def _session(
     """A one-shot SDK host that may recursively delegate to ``delegate_to``.
 
     ``delegate_to=(...)`` → ``plugins=("delegation", …)`` + ``spawnable=(...)``
-    on the main spec (children inherit delegation through the drain);
+    on the main spec; each child activates ``delegation`` too, so it spawns
+    from the root's roster (a child without the activation gets no spawn
+    tool);
     ``max_subtask_depth`` rides the host Budget. Returns ``(host, driver,
     provider)`` — the shared ``FakeLLMProvider`` carries ``received_requests``.
     """
     provider = FakeLLMProvider(responses=responses)
     main = runner_main_spec("main", delegation=True, spawnable=delegate_to)
-    children = [preset_spec(n) for n in delegate_to]
+    children = [
+        dataclasses.replace(
+            preset_spec(n), plugins=preset_spec(n).plugins + ("delegation",)
+        )
+        for n in delegate_to
+    ]
     host = make_host(
         make_registry(main, *children),
         workspace_dir=ws,
@@ -273,8 +281,8 @@ def test_depth_cap_denies_grandchild_before_creation(tmp_path: Path) -> None:
 
 def test_child_inherits_delegation_and_can_spawn(tmp_path: Path) -> None:
     """The nested run only completes because the CHILD engine was built
-    WITH the spawn_subagent schema. A grandchild stream existing is
-    direct proof the child could delegate."""
+    WITH the spawn_subagent schema (its spec activates ``delegation``). A
+    grandchild stream existing is direct proof the child could delegate."""
     ws = _ws(tmp_path)
     host, driver, _ = _session(ws, [
         _spawn("explore", "review", "c1"),

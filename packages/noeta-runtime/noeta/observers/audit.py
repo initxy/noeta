@@ -22,6 +22,7 @@ from typing import Any, Callable, Optional
 
 from noeta.protocols.event_log import EventLogSubscriber, subscribe_with_stop
 from noeta.protocols.events import EventEnvelope, MessageSelection
+from noeta.protocols.messages import Usage
 from noeta.protocols.values import ContentRef
 
 
@@ -91,7 +92,9 @@ _SUMMARY_FIELDS_BY_EVENT: dict[str, tuple[str, ...]] = {
     "SubtaskDenied":       ("agent_name", "reason"),
     "TaskSuspended":       ("reason",),
     "TaskWoken":           (),
-    "TaskFailed":          ("reason", "retryable"),
+    # ``detail`` is the failure's diagnostic text (e.g. the provider error
+    # message) — the same class of text ``LLMRetryScheduled.error`` surfaces.
+    "TaskFailed":          ("reason", "retryable", "detail"),
     "TaskCancelled":       ("reason", "cascade"),
     "ModelBound":          ("model", "principal_identity", "provider"),
     "AgentBound":          ("agent_name",),
@@ -109,7 +112,8 @@ _SUMMARY_FIELDS_BY_EVENT: dict[str, tuple[str, ...]] = {
     "LLMRequestStarted":   ("call_id", "model", "request_ref", "selection"),
     "LLMResponseRecorded": ("call_id", "stop_reason", "response_ref"),
     "AssistantThinkingRecorded": ("call_id", "thinking_ref", "block_count"),
-    "LLMRequestFinished":  ("call_id", "success", "cost_usd"),
+    # ``usage`` flattens to its five token counters (see ``_flatten_value``).
+    "LLMRequestFinished":  ("call_id", "success", "cost_usd", "latency_ms", "usage"),
     "LLMRetryScheduled":   ("call_id", "attempt", "max_retries", "delay_seconds", "category", "error"),
     "BackgroundShellStarted": ("job_id", "command", "spawned_by_task_id", "pid", "ref"),
     "BackgroundShellPolled":  ("job_id", "ref", "offset"),
@@ -141,6 +145,15 @@ _TYPE_ONLY_EVENTS: frozenset[str] = frozenset(
         "TaskCompleted",
     }
 )
+
+
+# Identifier fields a type-only event may still surface as values, alongside
+# its structural projection. Ids only — never content. ``TaskCreated`` exposes
+# ``parent_task_id`` so a trace exporter on any host can link a child task's
+# span to its parent without having seen the parent's ``SubtaskSpawned``.
+_TYPE_ONLY_ID_FIELDS: dict[str, tuple[str, ...]] = {
+    "TaskCreated": ("parent_task_id",),
+}
 
 
 class AuditObserver:
@@ -205,7 +218,12 @@ def _summarize(event_type: str, payload: Any) -> dict[str, Any]:
     if event_type in _SUMMARY_FIELDS_BY_EVENT:
         return _summarize_whitelisted(event_type, payload)
     if event_type in _TYPE_ONLY_EVENTS:
-        return _summarize_type_only(payload)
+        summary = _summarize_type_only(payload)
+        for name in _TYPE_ONLY_ID_FIELDS.get(event_type, ()):
+            value = getattr(payload, name, None)
+            if value is not None:
+                summary[name] = value
+        return summary
     return _summarize_fallback(payload)
 
 
@@ -250,7 +268,7 @@ def _summarize_fallback(payload: Any) -> dict[str, Any]:
 def _flatten_value(value: Any) -> Any:
     """Reduce a payload field value to a sink-safe representation.
 
-    Only ``ContentRef`` and ``MessageSelection`` are narrowed; every other value
+    Only ``ContentRef``, ``MessageSelection`` and ``Usage`` are narrowed; every other value
     passes through as-is, so keeping a body out of the projection is the
     allowlist's job, not this function's.
     """
@@ -270,6 +288,15 @@ def _flatten_value(value: Any) -> Any:
             "selected": value.selected,
             "dropped": value.dropped,
             "limit": value.limit,
+        }
+    if isinstance(value, Usage):
+        # The five stored token counters, fixed for the same reason as above.
+        return {
+            "uncached": value.uncached,
+            "cache_read": value.cache_read,
+            "cache_write": value.cache_write,
+            "output": value.output,
+            "reasoning_tokens": value.reasoning_tokens,
         }
     return value
 

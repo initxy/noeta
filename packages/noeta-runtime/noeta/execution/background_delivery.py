@@ -35,10 +35,11 @@ _log = logging.getLogger("noeta.execution.background_delivery")
 #: still mid-turn (its spawning turn outran the activity). A settled parent
 #: delivers on the first attempt.
 #:
-#: The bound is a leak guard, NOT a delivery deadline: nothing re-attempts after
-#: it expires until the process restarts and the registry's recovery scan finds
-#: the undelivered child, so a bound shorter than a long turn silently drops the
-#: result of work that actually finished. It is therefore set well past any
+#: The bound is a leak guard, NOT a delivery deadline: once it expires a
+#: sub-agent result is re-pushed only by the host's re-scan when one of the
+#: session's turns settles (or by the recovery scan at the next Client start),
+#: so a bound shorter than a long turn delays the result of work that actually
+#: finished. It is therefore set well past any
 #: plausible turn, and the loop stops early on the one state that really has
 #: nowhere to deliver to — a terminal parent.
 DEFAULT_DELIVER_TIMEOUT_S = 3600.0
@@ -74,10 +75,32 @@ class BackgroundDelivery:
         self._event_log = event_log
         self._content_store = content_store
         self._notifier: Optional[Any] = None
+        self._lock = threading.Lock()
+        # Keys of deliveries whose drive thread is still running (waiting for
+        # the parent to settle, or pushing). A second hand-off for the same
+        # key is dropped, so a re-scan can never push one result twice.
+        self._pending: set[str] = set()
+        # Set by :meth:`close`: nothing new is handed off and a waiting drive
+        # stops instead of driving a turn on a shut-down host.
+        self._closed = False
 
     def set_notifier(self, notifier: Any) -> None:
         """Wire the completion notifier (the ``InteractionDriver``). Idempotent."""
         self._notifier = notifier
+
+    def close(self) -> None:
+        """Stop delivering — the owning Client is shutting down.
+
+        A hand-off after this is a no-op and a drive still waiting for its
+        parent returns at its next attempt without pushing. The activity's
+        durable exit event stands; a background sub-agent's result stays
+        undelivered for the next Client's recovery scan. Idempotent."""
+        self._closed = True
+
+    def is_pending(self, key: str) -> bool:
+        """True while a delivery handed off under ``key`` is still running."""
+        with self._lock:
+            return key in self._pending
 
     def on_exit(
         self,
@@ -87,22 +110,42 @@ class BackgroundDelivery:
         thread_name: str,
         retry_timeout_s: float = DEFAULT_DELIVER_TIMEOUT_S,
         poll_s: float = DEFAULT_DELIVER_POLL_S,
+        key: Optional[str] = None,
     ) -> None:
         """Hand a finished background activity to a daemon delivery thread.
 
         Runs on the watcher / executor callback thread, so it MUST NOT block —
-        hence the short-lived daemon thread. No-op until a notifier is wired; the
-        durable exit event is the authoritative record either way."""
+        hence the short-lived daemon thread. No-op until a notifier is wired, and
+        after :meth:`close`; the durable exit event is the authoritative record
+        either way. ``key`` names the activity: while a delivery under the same
+        key is still running, another hand-off for it is dropped."""
         notifier = self._notifier
-        if notifier is None:
+        if notifier is None or self._closed:
             return
-        threading.Thread(
-            target=self.drive,
-            args=(notifier, task_id, plan),
-            kwargs={"retry_timeout_s": retry_timeout_s, "poll_s": poll_s},
-            name=thread_name,
-            daemon=True,
-        ).start()
+        if key is not None:
+            with self._lock:
+                if key in self._pending:
+                    return
+                self._pending.add(key)
+
+        def _run() -> None:
+            try:
+                self.drive(
+                    notifier, task_id, plan,
+                    retry_timeout_s=retry_timeout_s, poll_s=poll_s,
+                )
+            finally:
+                if key is not None:
+                    with self._lock:
+                        self._pending.discard(key)
+
+        try:
+            threading.Thread(target=_run, name=thread_name, daemon=True).start()
+        except BaseException:
+            if key is not None:
+                with self._lock:
+                    self._pending.discard(key)
+            raise
 
     def drive(
         self,
@@ -127,12 +170,16 @@ class BackgroundDelivery:
         parent stayed busy loses it until the next process start. A background
         backstop must never crash, so the leak guard expiring is still swallowed
         — but loudly, because by then a finished sub-agent's answer is gone."""
+        if self._closed:
+            return
         deliver = plan()
         if deliver is None:
             return  # cancelled / nothing to deliver
         deadline = time.monotonic() + retry_timeout_s
         wait = poll_s
         while True:
+            if self._closed:
+                return  # the host shut down — leave it for the next start
             task = fold(self._event_log, self._content_store, task_id)
             if task.status == "terminal":
                 return  # no turn to wake — the exit event stands for audit
@@ -142,9 +189,10 @@ class BackgroundDelivery:
             except Exception:  # noqa: BLE001 — mid-turn defer; never crash a backstop
                 if time.monotonic() >= deadline:
                     _log.warning(
-                        "background completion for session %s DROPPED (still "
-                        "not idle-suspended on next-goal after %.1fs); it is "
-                        "re-delivered only by the recovery scan at next start",
+                        "background completion for session %s DEFERRED (still "
+                        "not idle-suspended on next-goal after %.1fs); a "
+                        "sub-agent result is re-pushed when a turn of the "
+                        "session settles or at the next start",
                         task_id,
                         retry_timeout_s,
                     )

@@ -43,6 +43,30 @@ from noeta.protocols.values import ContentRef
 from noeta.builtins.providers.impl.anthropic import AnthropicProvider
 
 
+#: No shipped catalog row is text-only (``gpt-4o`` / ``gpt-4o-mini`` read
+#: images), so the non-vision paths run against a row registered for the test.
+_TEXT_ONLY_MODEL = "text-only-model"
+
+
+@pytest.fixture(autouse=True)
+def _text_only_catalog_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.builtins.providers.impl import catalog as catalog_mod
+
+    monkeypatch.setattr(
+        catalog_mod,
+        "_EXTENSIONS",
+        {
+            **catalog_mod._EXTENSIONS,
+            _TEXT_ONLY_MODEL: catalog_mod.ModelSpec(
+                real_model_id=_TEXT_ONLY_MODEL,
+                context_window=128_000,
+                max_output_tokens=16_384,
+                supports_vision=False,
+            ),
+        },
+    )
+
+
 BASE_URL = "https://api.anthropic.test"
 MESSAGES_ENDPOINT = f"{BASE_URL}/v1/messages"
 
@@ -584,7 +608,7 @@ def test_vision_guard_applies_before_stream_open() -> None:
     request = LLMRequest(
         # Must be a CATALOGUED non-vision row: an absent model is unknown, not
         # text-only, and images now pass through for the provider to judge.
-        model="gpt-4o",
+        model=_TEXT_ONLY_MODEL,
         messages=[Message(role="user", content=[ImageBlock(source=ref)])],
     )
     with pytest.raises(FatalError, match="supports_vision=False"):

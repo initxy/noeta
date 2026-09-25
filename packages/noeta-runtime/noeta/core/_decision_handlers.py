@@ -18,9 +18,14 @@ import json
 import uuid
 from dataclasses import dataclass
 from dataclasses import replace as dc_replace
-from typing import Any, Callable, Container, Optional, Protocol
+from typing import Any, Callable, Container, Iterable, Optional, Protocol, Sequence
 
-from noeta.protocols.canonical import to_canonical_bytes
+from noeta.protocols.canonical import (
+    from_canonical,
+    from_canonical_bytes,
+    to_canonical,
+    to_canonical_bytes,
+)
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.errors import TaskCancellationRequested
 from noeta.protocols.values import ContentRef, EVENT_PAYLOAD_MAX_BYTES
@@ -59,6 +64,7 @@ from noeta.protocols.events import (
     TaskSuspendedPayload,
     ToolCallDeniedPayload,
     UserQuestionRequestedPayload,
+    cap_fail_detail,
     spill_goal,
 )
 from noeta.protocols.hooks import (
@@ -127,6 +133,7 @@ __all__ = [
     "handle_wait_external",
     "handle_wait_timer",
     "handle_yield_for_human",
+    "held_preacked_results",
     "invoke_approved_tool_call",
     "maybe_emit_provenance",
     "maybe_emit_skill_content_recorded",
@@ -289,7 +296,7 @@ class SkillHashesFn(Protocol):
     hash is computed host-side), so noeta-runtime never imports noeta-sdk.
     """
 
-    def __call__(self, skill_name: str) -> Optional[tuple[str, str]]: ...
+    def __call__(self, skill_name: str, /) -> Optional[tuple[str, str]]: ...
 
 
 class ContentHashesFn(Protocol):
@@ -303,7 +310,7 @@ class ContentHashesFn(Protocol):
     kernel, so noeta-runtime never imports noeta-sdk.
     """
 
-    def __call__(self, kind: str, name: str) -> Optional[tuple[str, str]]: ...
+    def __call__(self, kind: str, name: str, /) -> Optional[tuple[str, str]]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +408,75 @@ def put_messages(
     body = to_canonical_bytes(messages)
     ref = content_store.put(body, media_type=_MESSAGES_MEDIA_TYPE)
     return MessagesAppendedPayload(messages_ref=ref, count=len(messages))
+
+
+def _put_preacked(
+    content_store: ContentStore, preacked: Sequence[ToolResultBlock]
+) -> Optional[ContentRef]:
+    """Store a foreground spawn's pre-answered results for resume, or
+    ``None`` (the payload field is then omitted from the bytes)."""
+    if not preacked:
+        return None
+    return content_store.put(
+        to_canonical_bytes(list(preacked)), media_type=_MESSAGES_MEDIA_TYPE
+    )
+
+
+def _preacked_from_arguments(
+    arguments: dict[str, Any],
+) -> tuple[ToolResultBlock, ...]:
+    """The pre-answered results a held spawn's approval anchor carries.
+
+    The anchor is read back either live (typed blocks) or from the log's
+    JSON (tagged dicts), so both shapes restore; anything else is dropped.
+    """
+    raw = arguments.get("preacked_results") or ()
+    out: list[ToolResultBlock] = []
+    for item in raw:
+        block = from_canonical(item) if isinstance(item, dict) else item
+        if isinstance(block, ToolResultBlock):
+            out.append(block)
+    return tuple(out)
+
+
+def held_preacked_results(
+    task: Task,
+    answering: Container[str],
+    *,
+    read_events: Callable[[], Iterable[EventEnvelope]],
+    content_store: ContentStore,
+) -> list[ToolResultBlock]:
+    """Pre-answered results a foreground spawn held for its resume message.
+
+    A control tool that rode a foreground spawn (a ``TodoWrite`` in the same
+    response) was answered at spawn time, but its result is written only
+    when the child's result is — so the provider sees ONE tool-role message
+    for the turn. Returns the held blocks whose ``tool_use`` is still
+    unpaired, in record order; ``answering`` is the set of call ids the
+    caller is answering now. The log is read only when some other tool_use
+    is still dangling, so an ordinary resume pays nothing. Idempotent: once
+    written, a block's call id is paired and it is not returned again.
+    """
+    dangling = [
+        call_id
+        for call_id in _unpaired_tool_use_call_ids(task)
+        if call_id not in answering
+    ]
+    if not dangling:
+        return []
+    wanted = set(dangling)
+    held: list[ToolResultBlock] = []
+    for env in read_events():
+        if env.type != "SubtaskSpawned":
+            continue
+        ref = getattr(env.payload, "preacked_ref", None)
+        if ref is None:
+            continue
+        for block in from_canonical_bytes(content_store.get(ref)):
+            if isinstance(block, ToolResultBlock) and block.call_id in wanted:
+                wanted.discard(block.call_id)
+                held.append(block)
+    return held
 
 
 #: Answer bytes above this go to the ContentStore so neither the worker's
@@ -1077,14 +1153,22 @@ def _finish_approval_call(task: Task, decision: FinishDecision) -> ToolCall:
 def _spawn_approval_call(task: Task, decision: SpawnSubtaskDecision) -> ToolCall:
     """The reserved gated "call" standing in for a held spawn — the delegation
     spec the human reviews, and the one the resume launches."""
+    arguments: dict[str, Any] = {
+        "agent_name": decision.agent_name,
+        "goal": decision.goal,
+        "inputs": dict(decision.inputs),
+        "background": decision.background,
+    }
+    if decision.preacked_results:
+        # Held with the delegation so approve AND deny still answer the
+        # control call that rode it (key absent otherwise: the anchor of an
+        # ordinary spawn stays byte-identical).
+        arguments["preacked_results"] = [
+            to_canonical(b) for b in decision.preacked_results
+        ]
     return ToolCall(
         tool_name=SPAWN_APPROVAL_TOOL,
-        arguments={
-            "agent_name": decision.agent_name,
-            "goal": decision.goal,
-            "inputs": dict(decision.inputs),
-            "background": decision.background,
-        },
+        arguments=arguments,
         call_id=spawn_approval_call_id(task.task_id),
     )
 
@@ -1297,7 +1381,9 @@ def handle_fail(
         task,
         type_="TaskFailed",
         payload=TaskFailedPayload(
-            reason=decision.reason, retryable=decision.retryable
+            reason=decision.reason,
+            retryable=decision.retryable,
+            detail=cap_fail_detail(decision.detail),
         ),
         lease_id=lease_id,
         trace_id=trace_id,
@@ -1353,6 +1439,7 @@ def handle_spawn_subtask(
             task,
             result_text=_SPAWN_DENIED_MESSAGE.format(reason=reason),
             fallback_text=_SPAWN_DENIED_MESSAGE.format(reason=reason),
+            preacked=decision.preacked_results,
             lease_id=lease_id,
             trace_id=trace_id,
         )
@@ -1425,6 +1512,7 @@ def _spawn_body(
             goal=goal_inline,
             inputs=dict(decision.inputs),
             goal_ref=goal_ref,
+            preacked_ref=_put_preacked(ctx.content_store, decision.preacked_results),
         ),
         lease_id=lease_id,
         trace_id=trace_id,
@@ -1495,12 +1583,17 @@ def _append_background_spawn_result(
     call_id: str,
     success: bool,
     text: str,
+    preacked: Sequence[ToolResultBlock] = (),
     lease_id: str,
     trace_id: str,
 ) -> None:
     """Append the parent's ``role="tool"`` result for a background spawn and
     continue the turn (mirrors :func:`append_tool_denial_feedback`, but the
     success/error shape is caller-chosen).
+
+    ``preacked`` — results a control tool already produced for other
+    tool_use blocks of the same turn — lead the SAME message, so the turn
+    still gets one tool-role message answering every call.
 
     A successful launch carries the "started #N" acknowledgement (``output``);
     a guard-denied launch carries the denial as the ``error`` — either way one
@@ -1515,7 +1608,7 @@ def _append_background_spawn_result(
         success=success,
         error=None if success else text,
     )
-    msg = Message(role="tool", content=[block])
+    msg = Message(role="tool", content=[*preacked, block])
     task.runtime.messages.append(msg)
     ctx.emit(
         task_id=task.task_id,
@@ -1586,6 +1679,7 @@ def handle_spawn_background_subtask(
         _append_background_spawn_result(
             ctx, task, call_id=call_id, success=False,
             text=_SPAWN_DENIED_MESSAGE.format(reason=reason),
+            preacked=decision.preacked_results,
             lease_id=lease_id, trace_id=trace_id,
         )
         return None
@@ -1604,10 +1698,11 @@ def handle_spawn_background_subtask(
             lease_id=lease_id,
             trace_id=trace_id,
         )
-    return _background_spawn_body(
+    _background_spawn_body(
         ctx, task, decision,
         call_id=call_id, lease_id=lease_id, trace_id=trace_id,
     )
+    return None
 
 
 def _background_spawn_body(
@@ -1638,6 +1733,7 @@ def _background_spawn_body(
             _append_background_spawn_result(
                 ctx, task, call_id=call_id, success=False,
                 text=f"background sub-agent not started: {rejection}",
+                preacked=decision.preacked_results,
                 lease_id=lease_id, trace_id=trace_id,
             )
             return None
@@ -1687,6 +1783,7 @@ def _background_spawn_body(
             "completion notice. If you need its result to answer the user, "
             "say so explicitly and move on to other work in the meantime."
         ),
+        preacked=decision.preacked_results,
         lease_id=lease_id, trace_id=trace_id,
     )
     # Hand off to the executor-driven background driver. Guarded against a
@@ -1765,6 +1862,7 @@ def resume_approved_decision(
         goal=arguments["goal"],
         inputs=dict(arguments.get("inputs") or {}),
         background=bool(arguments.get("background")),
+        preacked_results=_preacked_from_arguments(arguments),
     )
     call_id = (
         _pending_background_spawn_call_id(task) if decision.background else None
@@ -1791,10 +1889,15 @@ def append_decision_denial_feedback(
     reason: str,
     lease_id: str,
     trace_id: str,
+    arguments: Optional[dict[str, Any]] = None,
 ) -> Task:
     """Return a human's denial of a gated finish / spawn to the model so the
     turn CONTINUES — the decision-point twin of
     :func:`append_tool_denial_feedback`.
+
+    ``arguments`` is the held anchor; results a control tool pre-answered in
+    the spawning turn ride it and are replayed here instead of being
+    overwritten by the denial.
 
     A human denial is feedback, not a verdict on the conversation: the human
     declined this one answer / delegation and the model gets to adapt. Every
@@ -1810,6 +1913,7 @@ def append_decision_denial_feedback(
         task,
         result_text=reason,
         fallback_text=f"{kind} not approved: {reason}",
+        preacked=_preacked_from_arguments(arguments or {}),
         lease_id=lease_id,
         trace_id=trace_id,
     )
@@ -1821,10 +1925,15 @@ def _append_denial_feedback(
     *,
     result_text: str,
     fallback_text: str,
+    preacked: Sequence[ToolResultBlock] = (),
     lease_id: str,
     trace_id: str,
 ) -> Task:
     """Hand a refusal back to the model and keep the turn balanced.
+
+    A call a control tool already answered in this turn (``preacked`` — a
+    ``TodoWrite`` whose checklist the Engine saved before the spawn was
+    refused) keeps its own result rather than the refusal.
 
     One failed ``ToolResultBlock`` per UNPAIRED ``tool_use``, in one
     ``MessagesAppended`` — the structural invariant this module repeats: a
@@ -1836,10 +1945,12 @@ def _append_denial_feedback(
     """
     pending = _unpaired_tool_use_call_ids(task)
     if pending:
+        answered = {b.call_id: b for b in preacked}
         msg = Message(
             role="tool",
             content=[
-                ToolResultBlock(
+                answered.get(call_id)
+                or ToolResultBlock(
                     call_id=call_id, output="", success=False, error=result_text
                 )
                 for call_id in pending
@@ -1911,6 +2022,7 @@ def _deny_fanout_batch(
     *,
     reason: str,
     message: str,
+    preacked: Sequence[ToolResultBlock] = (),
     lease_id: str,
     trace_id: str,
 ) -> None:
@@ -1937,6 +2049,7 @@ def _deny_fanout_batch(
         task,
         result_text=message,
         fallback_text=message,
+        preacked=preacked,
         lease_id=lease_id,
         trace_id=trace_id,
     )
@@ -1978,6 +2091,7 @@ def handle_spawn_subtasks(
                 f"{MAX_FANOUT}. None were started — re-issue them in batches "
                 f"of {MAX_FANOUT} or fewer."
             ),
+            preacked=decision.preacked_results,
             lease_id=lease_id, trace_id=trace_id,
         )
         return None
@@ -1995,6 +2109,7 @@ def handle_spawn_subtasks(
                 "results could not be told apart. None were started — "
                 "re-issue them as separate calls with distinct ids."
             ),
+            preacked=decision.preacked_results,
             lease_id=lease_id, trace_id=trace_id,
         )
         return None
@@ -2012,6 +2127,7 @@ def handle_spawn_subtasks(
             _deny_fanout_batch(
                 ctx, task, spec, reason=reason,
                 message=_SPAWN_DENIED_MESSAGE.format(reason=reason),
+                preacked=decision.preacked_results,
                 lease_id=lease_id, trace_id=trace_id,
             )
             return None
@@ -2027,6 +2143,7 @@ def handle_spawn_subtasks(
                     f"batch cannot carry. None of the {n} were started — "
                     "re-issue them one Task call per response."
                 ),
+                preacked=decision.preacked_results,
                 lease_id=lease_id, trace_id=trace_id,
             )
             return None
@@ -2042,7 +2159,10 @@ def handle_spawn_subtasks(
             "id_factory produced duplicate subtask ids for a fan-out batch"
         )
     group_id = derive_group_id(subtask_ids)
-    for spec, sid in zip(specs, subtask_ids):
+    # The turn's pre-answered results ride the FIRST member's record only and
+    # are rendered with the group's results at resume (one tool-role message).
+    preacked_ref = _put_preacked(ctx.content_store, decision.preacked_results)
+    for index, (spec, sid) in enumerate(zip(specs, subtask_ids)):
         # SubtaskSpawnedPayload carries no call_id field — the result↔call
         # pairing is positional from the assistant message.
         goal_inline, goal_ref = spill_goal(ctx.content_store, spec.goal)
@@ -2055,6 +2175,7 @@ def handle_spawn_subtasks(
                 goal=goal_inline,
                 inputs=dict(spec.inputs),
                 goal_ref=goal_ref,
+                preacked_ref=preacked_ref if index == 0 else None,
             ),
             lease_id=lease_id,
             trace_id=trace_id,

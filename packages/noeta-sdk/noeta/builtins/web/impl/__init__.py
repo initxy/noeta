@@ -30,13 +30,14 @@ nothing imports it statically.
 
 from __future__ import annotations
 
-from typing import Optional, cast
+from typing import Callable, Mapping, Optional, cast
 
 from noeta.builtins.web.impl.digest import LLMPageDigester, PageDigester
 from noeta.builtins.web.impl.fetch import (
     PAGE_CACHE_SLOT,
     ContainerCurlFetchTransport,
     CrossHostRedirect,
+    FetchedPage,
     FetchTransport,
     HttpFetchTransport,
     PageCache,
@@ -52,6 +53,7 @@ from noeta.builtins.web.impl.search import (
 )
 from noeta.execution.session_pack import PackContribution, SessionBuildContext
 from noeta.protocols.messages import LLMProvider
+from noeta.protocols.step_context import StepContext
 
 
 def _digester_from(ctx: SessionBuildContext) -> Optional[PageDigester]:
@@ -97,6 +99,11 @@ def build_web_session_pack(ctx: SessionBuildContext) -> PackContribution:
                 exec_env=ctx.exec_env,
                 digester=_digester_from(ctx),
                 page_cache=page_cache,
+                # The host's ``provider_headers``, for the digest call.
+                provider_headers=cast(
+                    "Optional[Callable[[StepContext], Mapping[str, str]]]",
+                    ctx.config("web").get("provider_headers"),
+                ),
             ).items()
             if name in ctx.allowed_tools
         }
@@ -108,6 +115,7 @@ __all__ = [
     "ContainerCurlSearchTransport",
     "CrossHostRedirect",
     "FetchTransport",
+    "FetchedPage",
     "HttpFetchTransport",
     "HttpSearchTransport",
     "LLMPageDigester",

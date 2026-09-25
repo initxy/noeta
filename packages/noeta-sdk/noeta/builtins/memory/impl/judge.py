@@ -31,13 +31,15 @@ from __future__ import annotations
 import json
 import threading
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
+from noeta.builtins.memory.impl.index import estimate_index_tokens
 from noeta.builtins.memory.impl.matching import (
     DEFAULT_RECALL_MAX_HITS,
     MemoryEntries,
 )
 from noeta.protocols.messages import (
+    HeaderAwareProvider,
     LLMProvider,
     LLMRequest,
     LLMResponse,
@@ -73,8 +75,10 @@ DEFAULT_JUDGE_TIMEOUT_SECONDS = 10.0
 _JUDGE_INSTRUCTIONS = load_markdown(__package__, "recall_judge")
 
 
-def render_judge_system(entries: MemoryEntries) -> str:
-    """The judge's system text: its instructions plus the whole index.
+def render_judge_system(
+    entries: MemoryEntries, *, budget_tokens: Optional[int] = None
+) -> str:
+    """The judge's system text: its instructions plus the index.
 
     Everything that is the same on every judge call lives here, and only the
     incoming message rides the user turn — so the bulk of the request is a
@@ -84,23 +88,37 @@ def render_judge_system(entries: MemoryEntries) -> str:
     instructions, index AND message, which re-paid the whole index on every
     lexical miss for a store that had not changed.
 
-    The judge sees the FULL index, never the resident index's budgeted form:
-    the budget bounds bytes charged to every request, this call happens once
-    on a miss, and the pages a budget degrades to a bare name are exactly the
-    ones a semantic selector is there to reach.
+    The judge sees full index lines, never the resident index's degraded
+    form: the pages a budget degrades to a bare name are exactly the ones a
+    semantic selector is there to reach. But not an unbounded number of them:
+    ``budget_tokens`` (the host's memory-index budget) caps the listed lines,
+    kept in the order ``entries`` arrives — recall passes the most recently
+    written first — and rendered name-sorted, so the text under budget is the
+    whole index, byte for byte. ``None`` ⇒ no cap.
 
     Unlike the rendered index resident, this DOES include keywords — they are
     curator-written aliases, exactly the cross-language hints a selector
     benefits from, and the prompt is ephemeral (never recorded), so including
     them moves no ledger bytes.
     """
-    lines = [_JUDGE_INSTRUCTIONS.strip(), "", "Memory index:"]
+    rendered: list[tuple[str, str]] = []
     for name, summary, mem_type, keywords in entries:
         label = f"{name} ({mem_type})" if mem_type else name
         line = f"- {label}: {summary}" if summary else f"- {label}"
         if keywords:
             line += f" [aliases: {keywords}]"
-        lines.append(line)
+        rendered.append((name, line))
+    if budget_tokens is not None:
+        kept: list[tuple[str, str]] = []
+        remaining = budget_tokens
+        for name, line in rendered:
+            cost = estimate_index_tokens(line + "\n")
+            if cost <= remaining:
+                remaining -= cost
+                kept.append((name, line))
+        rendered = kept
+    lines = [_JUDGE_INSTRUCTIONS.strip(), "", "Memory index:"]
+    lines.extend(line for _name, line in sorted(rendered))
     return "\n".join(lines)
 
 
@@ -137,6 +155,7 @@ def _complete_bounded(
     request: LLMRequest,
     should_abort: Optional[Callable[[], bool]],
     timeout_seconds: float,
+    request_headers: Optional[Callable[[], Mapping[str, str]]] = None,
 ) -> Optional[LLMResponse]:
     """One provider call under a bounded, abort-aware wait; ``None`` ⇒ give up.
 
@@ -150,15 +169,24 @@ def _complete_bounded(
     pure: the orphan call writes nothing and its eventual result simply has
     no consumer. A provider exception is re-raised on the intake thread, so
     the caller's total degrade-to-miss catch keeps owning failures.
+
+    ``request_headers`` (the host's ``provider_headers``, bound to the intake
+    task) rides ``complete_with_headers`` when the provider accepts headers —
+    the same per-call routing a gateway sees on the session's own calls.
     """
     if should_abort is not None and should_abort():
         return None
+    headers = dict(request_headers()) if request_headers is not None else None
     outcome: list[tuple[str, Any]] = []
     done = threading.Event()
 
     def _run() -> None:
         try:
-            outcome.append(("ok", provider.complete(request)))
+            if headers is not None and isinstance(provider, HeaderAwareProvider):
+                result = provider.complete_with_headers(request, headers)
+            else:
+                result = provider.complete(request)
+            outcome.append(("ok", result))
         except BaseException as exc:  # noqa: BLE001 — re-raised on the intake thread
             outcome.append(("err", exc))
         finally:
@@ -190,6 +218,8 @@ def build_recall_judge(
     *,
     should_abort: Optional[Callable[[], bool]] = None,
     timeout_seconds: float = DEFAULT_JUDGE_TIMEOUT_SECONDS,
+    budget_tokens: Optional[int] = None,
+    request_headers: Optional[Callable[[], Mapping[str, str]]] = None,
 ) -> RecallJudge:
     """Bind provider + model into a :data:`RecallJudge`.
 
@@ -201,6 +231,9 @@ def build_recall_judge(
     intake task) and ``timeout_seconds`` bound the provider call — a stop
     pressed during recall, or a wedged provider, degrades to the SAME lexical
     miss instead of stalling turn entry (see :func:`_complete_bounded`).
+    ``budget_tokens`` caps the index the judge reads
+    (:func:`render_judge_system`); ``request_headers`` supplies the
+    per-call provider headers.
     """
 
     def judge(entries: MemoryEntries, text: str) -> tuple[str, ...]:
@@ -210,7 +243,13 @@ def build_recall_judge(
             model=model,
             system=Message(
                 role="system",
-                content=[TextBlock(text=render_judge_system(entries))],
+                content=[
+                    TextBlock(
+                        text=render_judge_system(
+                            entries, budget_tokens=budget_tokens
+                        )
+                    )
+                ],
             ),
             messages=[
                 Message(role="user", content=[TextBlock(text=text)])
@@ -220,7 +259,7 @@ def build_recall_judge(
         )
         try:
             response = _complete_bounded(
-                provider, request, should_abort, timeout_seconds
+                provider, request, should_abort, timeout_seconds, request_headers
             )
             if response is None:
                 return ()

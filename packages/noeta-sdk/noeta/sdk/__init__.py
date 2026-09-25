@@ -39,7 +39,14 @@ from noeta.client.skill_usage import (
     rank_skills_by_usage,
     skill_usage_from_events,
 )
-from noeta.client.host_config import HostConfig, SandboxExecEnvConfig
+from noeta.client.usage import ModelUsage, UsageReport
+from noeta.client.host_config import HooksConfig, HostConfig, SandboxExecEnvConfig
+from noeta.runtime.governance import (
+    MatchArg,
+    NotificationRule,
+    PostToolUseRule,
+    PreToolUseRule,
+)
 # The factory seam types behind ``HostConfig.sandbox_backend_factory`` /
 # ``sandbox_browser_factory``, so a host can annotate its injected factories
 # without reaching into ``noeta.client``.
@@ -170,7 +177,7 @@ from noeta.protocols.messages import (
     Usage,
 )
 from noeta.protocols.policy import Policy
-from noeta.protocols.values import ContentRef
+from noeta.protocols.values import LOCAL_PRINCIPAL, ContentRef, Principal
 # ``MemoryStore`` is re-exported LAZILY via the module ``__getattr__`` below:
 # it lives in the ``memory`` built-in, and nothing statically imports
 # ``noeta.builtins``.
@@ -215,6 +222,15 @@ from noeta.execution import (
     UnsupportedSubtaskSuspend,
 )
 from noeta.protocols.errors import CodedError
+from noeta.client.options import InvalidTurnOptionError
+from noeta.execution.driver import QuestionNotPendingError
+from noeta.runtime.workspace import WorkspaceEscape
+
+# The resident worker loop a host runs in its own process (what
+# ``Client.start_workers`` starts in threads), its reliability signal type, and
+# the tool-argument decoder a provider adapter or a custom Policy uses.
+from noeta.runtime.worker import ReliabilityEvent, WorkerLoop
+from noeta.protocols.tool_args import resolve_tool_call_arguments
 
 
 __all__ = [
@@ -234,8 +250,16 @@ __all__ = [
     "DeleteTaskResult",
     # the read-only twin of a DriveOutcome: where a task rests, without driving
     "TaskStatus",
+    # what Client.usage / QueryResult.usage return: per-model cost and tokens,
+    # with the models whose $0 means "no rates" rather than "free"
+    "UsageReport",
+    "ModelUsage",
     # the deployment allowlist applied when HostConfig sets no allowed_models
     "DEFAULT_MODEL_ALLOWLIST",
+    # who acts on a turn (Client(principal=) / per-turn principal=): gates the
+    # model selector and is stamped on ModelBound
+    "Principal",
+    "LOCAL_PRINCIPAL",
     # memory consolidation: the host-callable entry, plus the guard / digest
     # halves for hosts that orchestrate their own runs
     "run_consolidation",
@@ -266,6 +290,12 @@ __all__ = [
     "BrowserBackendFactory",
     "BoundPreamble",
     "OtlpTraceConfig",
+    # user hooks (HostConfig.hooks) and their rule types
+    "HooksConfig",
+    "PreToolUseRule",
+    "MatchArg",
+    "PostToolUseRule",
+    "NotificationRule",
     "AppPreviewGateway",
     "AppMount",
     "McpAnyServerSpec",
@@ -285,6 +315,13 @@ __all__ = [
     "TaskAlreadyTerminalError",
     "UnknownTaskError",
     "NotForkableError",
+    "InvalidTurnOptionError",
+    "QuestionNotPendingError",
+    "WorkspaceEscape",
+    "AnswerValidationError",
+    "WorkerLoop",
+    "ReliabilityEvent",
+    "resolve_tool_call_arguments",
     "permission_modes",
     "effort_modes",
     "model_capabilities",
@@ -401,6 +438,14 @@ def __getattr__(name: str) -> object:
         return importlib.import_module(
             "noeta.builtins.browser.impl"
         ).BrowserBackend
+    # ``AnswerValidationError`` lives beside the answer codec in the
+    # ``ask_user_question`` built-in.
+    if name == "AnswerValidationError":
+        import importlib
+
+        return importlib.import_module(
+            "noeta.builtins.ask_user_question.impl"
+        ).AnswerValidationError
     if name in ("AppMount", "AppPreviewGateway"):
         import importlib
 

@@ -275,6 +275,117 @@
     },
     {
       "function": {
+        "description": "Persist a named memory as a markdown file; reusing a name updates that memory, and 'created'/'updated' dates are stamped automatically. Names are slugs (letters, digits, '.', '_', '-'; max 128 chars). Every field follows one rule — omit it to keep what the memory has, pass it empty to remove it, pass a value to replace it — so a rewrite never drops what it does not mention. Frontmatter keys without a parameter of their own ride a leading `---` block in the text under the same rule, and text that is only such a block leaves the body as it is. If the result lists similar existing memories, update one of those instead of keeping a near-duplicate.",
+        "name": "memory_write",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "description": "One-line summary shown in the memory index instead of the first body line. Omit to keep the current one, \"\" to remove it.",
+              "type": "string"
+            },
+            "keywords": {
+              "description": "Comma-separated retrieval aliases — synonyms and cross-language equivalents (e.g. both English and Chinese terms) that should auto-recall this memory. Omit to keep the current ones, \"\" to remove them.",
+              "type": "string"
+            },
+            "name": {
+              "description": "Slug-style memory name (letters, digits, '.', '_', '-'); reusing a name updates that memory.",
+              "type": "string"
+            },
+            "related": {
+              "description": "Memory names, as the index lists them, that recall surfaces alongside this one when this memory is recalled. Omit to keep the current ones, [] to remove them.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "text": {
+              "description": "Full memory body (markdown), replacing the body the memory has. Without a 'description' parameter, the first line becomes the index summary. Text that carries only a frontmatter fence keeps the existing body.",
+              "type": "string"
+            },
+            "type": {
+              "description": "Memory category shown in the index. Omit to keep the current one, \"\" to remove it.",
+              "enum": [
+                "user",
+                "project",
+                "procedural",
+                "reference",
+                ""
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "text"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Load the full markdown body of a named memory on demand. A body over the inline limit comes back as a prefix, with both sizes and a pointer to `memory_search` for the rest.",
+        "name": "memory_read",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "description": "Memory name as listed in the memory index.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Find stored memories by content: case-insensitive substring match (no regex) over memory names and full text. Returns up to 10 memories with up to 3 matching lines each; 'total' counts every memory that matched, so when it exceeds what is shown, refine the query. Use memory_read for a hit's full text. Archived memories are not searched.",
+        "name": "memory_search",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "query": {
+              "description": "Plain substring to look for (case-insensitive).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Retire an outdated or superseded memory: move it into the memory directory's archive/ subdirectory, removing it from the index, recall and search. Nothing is ever deleted — a human can restore the file from archive/.",
+        "name": "memory_archive",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "description": "Memory name as listed in the memory index.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
         "description": "Launch a sub-agent to handle a focused, self-contained task and get its result back.\n\n## What it does\n\nSpawns one sub-agent per call: pick a `subagent_type` from the roster, give it the full task as `prompt`, and label it with a short `description` (3–5 words, shown to the user). The agent works in its own context and returns its final text as this call's result; that text is NOT shown to the user, so relay what matters.\n\n**Parallelism**: emit SEVERAL Task calls in ONE assistant turn — they run CONCURRENTLY and their results come back together. Issuing one Task per turn is strictly sequential; when work is independent, always batch the calls into a single turn.\n\nOnce you have delegated a piece of work, do not also do it yourself — wait for the result and build on it.\n\n## When to use\n\n- The task fits a sub-agent type: a read-only scout for broad searches, a general-purpose worker for a self-contained coding task, an architect for a plan.\n- Delegating independent work keeps your own context clean, or the answer means sweeping many files and you only need the conclusion, not the file dumps.\n\n## When NOT to use\n\n- A single-fact lookup where you already know the file or symbol — just look it up yourself.\n- Work that needs your accumulated conversation context — a sub-agent starts fresh and sees ONLY its `prompt`, so make the prompt self-contained: the goal, the constraints, and what to return.",
         "name": "Task",
         "parameters": {
@@ -292,7 +403,7 @@
               "type": "string"
             },
             "subagent_type": {
-              "description": "The type of specialized agent to use for this task. Available: explore; general-purpose; plan",
+              "description": "The type of specialized agent to use for this task. Available: explore — Read-only scout: fans out (glob/grep/read + read-only shell) to investigate the workspace and report facts (never edits).; general-purpose — General-purpose worker for self-contained coding tasks: search, read, write, edit, run shell commands, then return the result.; plan — Architect: reads the code and returns a concrete ordered implementation plan (read-only — never writes any file).",
               "enum": [
                 "explore",
                 "general-purpose",
@@ -313,7 +424,7 @@
     },
     {
       "function": {
-        "description": "Use this tool to create and manage a structured task list for the current session.\n\n## When to use\n\n- Complex multi-step work (roughly three or more distinct steps), or the user handed you several tasks at once.\n- Mark a todo `in_progress` BEFORE you start it and `completed` the moment it is fully done — keep exactly ONE item `in_progress` at a time.\n- Update the list in real time as work lands; you may batch a TodoWrite with file, search and shell calls in the same response — not with `Task`, `AskUserQuestion` or `skill`, which go on their own.\n\n## When NOT to use\n\n- A single, straightforward step, or a purely conversational / informational request — the bookkeeping overhead is not worth it.\n\n## Shape\n\nA call replaces the entire list — always send the FULL list, never a delta; omitting an item deletes it. Each item is `{content, status, activeForm}`: `content` in imperative form (\"Run tests\"), `status` one of `pending` / `in_progress` / `completed`, `activeForm` in present-continuous form (\"Running tests\"), shown while the item is in progress.\n\nOnly mark `completed` when the item truly succeeded; if it is blocked, errored, or tests still fail, keep it `in_progress` and add a follow-up item.",
+        "description": "Use this tool to create and manage a structured task list for the current session.\n\n## When to use\n\n- Complex multi-step work (roughly three or more distinct steps), or the user handed you several tasks at once.\n- Mark a todo `in_progress` BEFORE you start it and `completed` the moment it is fully done — keep exactly ONE item `in_progress` at a time.\n- Update the list in real time as work lands; you may batch a TodoWrite with file, search and shell calls, or with `Task` calls, in the same response — not with `AskUserQuestion` or `skill`, which go on their own.\n\n## When NOT to use\n\n- A single, straightforward step, or a purely conversational / informational request — the bookkeeping overhead is not worth it.\n\n## Shape\n\nA call replaces the entire list — always send the FULL list, never a delta; omitting an item deletes it. Each item is `{content, status, activeForm}`: `content` in imperative form (\"Run tests\"), `status` one of `pending` / `in_progress` / `completed`, `activeForm` in present-continuous form (\"Running tests\"), shown while the item is in progress.\n\nOnly mark `completed` when the item truly succeeded; if it is blocked, errored, or tests still fail, keep it `in_progress` and add a follow-up item.",
         "name": "TodoWrite",
         "parameters": {
           "properties": {
@@ -419,6 +530,51 @@
         }
       },
       "type": "function"
+    },
+    {
+      "function": {
+        "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nroster of skills indexed for this workspace; its instructions are in your\ncontext from your next step. A roster line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the roster — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
+        "name": "skill",
+        "parameters": {
+          "properties": {
+            "skill": {
+              "description": "Name of the skill to activate. Available: fixed-skill — Use when the user asks for the fixed workflow.",
+              "enum": [
+                "fixed-skill"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "skill"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Recall original messages that compaction collapsed into the summary note at the head of the conversation.\n\nThe originals are retained in full — the note merely stands in for them in the prompt. Use this tool when the note lacks a detail you need: the exact text of an earlier error, code you produced or discussed before compaction, or the precise wording of an earlier exchange. The collapsed range is [0, boundary); the current boundary is reported in every result and in the collapsed-context reminder.\n\nResults are a read-only rendering of the original messages; long blocks are truncated with a marker. Page through a large range with repeated calls, advancing `offset`.",
+        "name": "RecallHistory",
+        "parameters": {
+          "properties": {
+            "limit": {
+              "description": "How many messages to view (default 20, max 50).",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "0-based index of the first collapsed message to view; the valid range is [0, boundary).",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "offset"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
     }
   ],
   "segments": [
@@ -436,7 +592,7 @@
         }
       ],
       "name": "stable_prefix",
-      "segment_hash": "d321234a65fbaa28a530746b07a3b5ec1fc249ece88ce557ff931f49d9b0dfbb"
+      "segment_hash": "61cbe4642815655c723b363e0d52176df84bfaa07e5c42fefec60126840ef882"
     },
     {
       "content": [],

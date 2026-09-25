@@ -13,13 +13,17 @@ threads.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
 from concurrent.futures import Future
 from typing import Any, Callable, Optional
 
+from noeta.core.fold import fold
+from noeta.core.snapshot import deserialize_task_state
 from noeta.execution.subtask_drain import (
     DrainHost,
+    _ChildNotReady,
     _drive_member_to_terminal,
     _global_executor,
 )
@@ -28,6 +32,7 @@ from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.errors import TaskCancellationRequested
 from noeta.protocols.event_log import EventLogFull
 from noeta.protocols.events import TaskCancelledPayload
+from noeta.protocols.wake import SubtaskCompleted, SubtaskGroupCompleted
 
 
 _log = logging.getLogger(__name__)
@@ -55,6 +60,13 @@ BuildHostFn = Callable[[str], DrainHost]
 #: raised). It MUST NOT block — it hands off to a daemon drive thread.
 DeliverFn = Callable[[str, str], None]
 
+#: ``(child_id) -> bool`` — True while this host already has a delivery in
+#: flight for the child (its drive thread is waiting for the parent to settle).
+#: A re-scan skips such a child so the same notice is never pushed twice.
+DeliveryPendingFn = Callable[[str], bool]
+
+_TERMINAL_TYPES = ("TaskCompleted", "TaskFailed", "TaskCancelled")
+
 
 class BackgroundSubagentRegistry:
     """Live table of in-flight background sub-agents + their drive futures."""
@@ -68,6 +80,7 @@ class BackgroundSubagentRegistry:
         build_host: BuildHostFn,
         deliver: DeliverFn,
         max_per_root_task: int = DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_ROOT_TASK,
+        delivery_pending: Optional[DeliveryPendingFn] = None,
     ) -> None:
         self._event_log = event_log
         self._content_store = content_store
@@ -75,9 +88,29 @@ class BackgroundSubagentRegistry:
         self._build_host = build_host
         self._deliver = deliver
         self._max_per_root_task = max_per_root_task
+        self._delivery_pending = delivery_pending
         self._lock = threading.Lock()
         # session-root task id -> set of in-flight background child ids.
         self._inflight: dict[str, set[str]] = {}
+        # Set by :meth:`close` (the owning Client shut down): in-flight drives
+        # stop at their next cancel poll and nothing is delivered or launched.
+        self._closed = False
+
+    def close(self) -> None:
+        """Stop driving and delivering — the owning Client is shutting down.
+
+        In-flight drives stop cooperatively at their next cancel poll (step
+        start / between tool calls). Unlike a session cancel, a stopped child
+        is NOT marked cancelled and its result is NOT delivered: it is left
+        exactly as a crash would leave it — started, undelivered, resumable —
+        so the next Client on the same store re-drives or re-delivers it.
+        Idempotent."""
+        with self._lock:
+            self._closed = True
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     def capacity(self, parent_task_id: str) -> Optional[str]:
         """Return a rejection reason when the session is at its background cap,
@@ -103,7 +136,9 @@ class BackgroundSubagentRegistry:
             self._inflight.setdefault(parent_task_id, set()).add(child_task_id)
         self._submit(parent_task_id, child_task_id)
 
-    def _submit(self, parent_task_id: str, child_task_id: str) -> None:
+    def _submit(
+        self, parent_task_id: str, child_task_id: str, *, enqueue: bool = True
+    ) -> None:
         # A background child is not enqueued by the lifecycle observer, so the
         # registry must do it or the targeted child-lease finds nothing to lease.
         # ``reserved=True`` keeps it targeted-lease-only: only the descent that
@@ -111,16 +146,31 @@ class BackgroundSubagentRegistry:
         # untargeted poll cannot steal the unseeded child and drive it with an
         # empty message history. ``parent_task_id`` routes the child onto its
         # parent's queue for the re-enqueues after its first claim.
-        self._dispatcher.enqueue(
-            child_task_id, reserved=True, parent_task_id=parent_task_id
-        )
-        host = self._build_host(parent_task_id)
+        # ``enqueue=False`` (recovery of a row that is already ready): an
+        # enqueue would be a no-op at best, and skipping it keeps recovery from
+        # ever force-flipping a row another driver leased in the meantime —
+        # the targeted lease below is the atomic claim.
+        if enqueue:
+            self._dispatcher.enqueue(
+                child_task_id, reserved=True, parent_task_id=parent_task_id
+            )
+        host = self._stoppable(self._build_host(parent_task_id))
         future = _global_executor().submit(
             _drive_member_to_terminal, host, child_task_id
         )
         future.add_done_callback(
             lambda f: self._on_done(f, parent_task_id, child_task_id)
         )
+
+    def _stoppable(self, host: DrainHost) -> DrainHost:
+        """Thread the registry's own stop flag into the drive's cancel poll, so
+        :meth:`close` halts an in-flight child at its next step boundary."""
+        inner = host.cancel_check
+
+        def _check() -> bool:
+            return self._closed or (inner is not None and inner())
+
+        return dataclasses.replace(host, cancel_check=_check)
 
     def _on_done(
         self, future: "Future[Any]", parent_task_id: str, child_task_id: str
@@ -137,29 +187,58 @@ class BackgroundSubagentRegistry:
         Its ``TaskCancelled`` must be written here, or the child stays a
         non-terminal orphan and a later crash-recovery scan re-drives a cancelled
         child to completion. Delivery is skipped: the session is being torn down,
-        so there is nothing to push."""
+        so there is nothing to push.
+
+        Two more cases deliver nothing. A drive that lost the child's targeted
+        lease (``_ChildNotReady``) never ran it: another driver — a second
+        Client's recovery on the same store — holds the child and delivers it
+        itself, so reporting "did not complete" here would be false. And once
+        the registry is closed (the Client shut down) a stopped or finished
+        child is left undelivered and un-cancelled for the next Client's
+        recovery, so no parent turn is driven on torn-down resources.
+
+        The delivery hook runs BEFORE the in-flight entry is dropped, so a
+        concurrent :meth:`redeliver` always sees the child as either in flight
+        or delivery-pending — never neither — and cannot push it twice."""
+        exc = future.exception()
+        try:
+            if self._closed:
+                return
+            if isinstance(exc, _ChildNotReady):
+                _log.info(
+                    "background sub-agent %s is driven elsewhere; not delivering",
+                    child_task_id,
+                )
+                return
+            if isinstance(exc, TaskCancellationRequested):
+                self._mark_child_cancelled(child_task_id)
+                return
+            if exc is not None:
+                _log.warning(
+                    "background sub-agent %s drive raised: %r", child_task_id, exc
+                )
+            try:
+                self._deliver(parent_task_id, child_task_id)
+            except Exception:  # noqa: BLE001 — a background backstop never crashes
+                _log.warning(
+                    "background sub-agent %s delivery failed",
+                    child_task_id,
+                    exc_info=True,
+                )
+        finally:
+            self._drop_inflight(parent_task_id, child_task_id)
+
+    def _drop_inflight(self, parent_task_id: str, child_task_id: str) -> None:
         with self._lock:
             kids = self._inflight.get(parent_task_id)
             if kids is not None:
                 kids.discard(child_task_id)
                 if not kids:
                     self._inflight.pop(parent_task_id, None)
-        exc = future.exception()
-        if isinstance(exc, TaskCancellationRequested):
-            self._mark_child_cancelled(child_task_id)
-            return
-        if exc is not None:
-            _log.warning(
-                "background sub-agent %s drive raised: %r", child_task_id, exc
-            )
-        try:
-            self._deliver(parent_task_id, child_task_id)
-        except Exception:  # noqa: BLE001 — a background backstop never crashes
-            _log.warning(
-                "background sub-agent %s delivery failed",
-                child_task_id,
-                exc_info=True,
-            )
+
+    def _is_inflight(self, child_task_id: str) -> bool:
+        with self._lock:
+            return any(child_task_id in kids for kids in self._inflight.values())
 
     def _mark_child_cancelled(self, child_task_id: str) -> None:
         """Write a terminal ``TaskCancelled`` on a cancelled background child's
@@ -199,36 +278,102 @@ class BackgroundSubagentRegistry:
 
         A restart loses the in-memory table, so the log is the truth: every
         ``BackgroundSubagentStarted`` without a matching
-        ``BackgroundSubagentDelivered`` is an orphan. A non-terminal child is
-        re-enqueued and re-submitted — the descent is resume-safe, skipping the
-        goal re-seed when the child already has messages — while a terminal child
-        only lost its turn-boundary notice and is re-delivered without a
-        re-drive.
+        ``BackgroundSubagentDelivered`` is a candidate. A terminal child only
+        lost its turn-boundary notice and is re-delivered without a re-drive; a
+        non-terminal child is re-submitted — the descent is resume-safe,
+        skipping the goal re-seed when the child already has messages.
+
+        A candidate is NOT an orphan when another driver holds it: a second
+        Client on the same store constructed while the first is still running
+        the child. Recovery therefore skips a child (or one whose running
+        sub-agent) holds a live lease, and claims a still-unleased ready row
+        only through the atomic targeted lease — never by re-enqueueing a row
+        someone else may be about to lease. The probes are the adapters'
+        read-only ``has_active_lease`` / ``task_status`` (duck-typed: they are
+        not on the ``Dispatcher`` Protocol); an adapter without them falls back
+        to the pre-probe behaviour.
+
+        Candidates come from each stream's latest fold snapshot plus the events
+        after it, not a full read of every stream, so a large store does not
+        make every Client construction pay for the whole log.
 
         Runs ONCE at live host startup as a side effect, never re-derived by a
         resume that folds the log. Requires the event log to expose the
         task-stream index; a test double without one recovers nothing."""
         index = self._event_log
-        if not hasattr(index, "list_task_streams"):
+        if self._closed or not hasattr(index, "list_task_streams"):
             return []
         recovered: list[str] = []
-        for summary in index.list_task_streams():  # type: ignore[attr-defined]
+        for summary in index.list_task_streams():
             for parent_id, child_id in self._undelivered(summary.task_id):
+                if self._is_inflight(child_id):
+                    continue
                 if self._child_is_terminal(child_id):
                     self._safe_deliver(parent_id, child_id)
-                elif not self._safe_submit(parent_id, child_id):
+                    recovered.append(child_id)
+                    continue
+                enqueue = self._recovery_claim(child_id)
+                if enqueue is None:
+                    continue  # driven by another Client right now
+                if not self._safe_submit(parent_id, child_id, enqueue=enqueue):
                     # One unrecoverable record must not be counted as recovered
                     # nor stop the scan.
                     continue
                 recovered.append(child_id)
         return recovered
 
+    def redeliver(self, parent_task_id: str) -> list[str]:
+        """Re-push one session's finished-but-undelivered background results.
+
+        The delivery thread gives up after its (long) window; before this, a
+        result that outlived it waited for the next Client construction. The
+        host calls this when a turn of ``parent_task_id`` settles, so such a
+        result lands at the next turn boundary instead. Skips a child still in
+        flight here or whose delivery is already pending, and never re-drives a
+        non-terminal child (that is :meth:`recover`'s job). Returns the child
+        ids handed to delivery."""
+        if self._closed:
+            return []
+        pushed: list[str] = []
+        for parent_id, child_id in self._undelivered(parent_task_id):
+            if self._is_inflight(child_id):
+                continue
+            pending = self._delivery_pending
+            if pending is not None and pending(child_id):
+                continue
+            if self._child_is_terminal(child_id):
+                self._safe_deliver(parent_id, child_id)
+                pushed.append(child_id)
+        return pushed
+
     def _undelivered(self, task_id: str) -> list[tuple[str, str]]:
         """``(parent_id, child_id)`` pairs started on ``task_id``'s stream but
-        never delivered."""
+        never delivered.
+
+        Reads the stream's latest fold snapshot (its ``background_subagents``
+        audit: a ``"running"`` entry is undelivered) plus only the events
+        after it; falls back to the full stream when there is no snapshot or
+        its body predates the audit."""
         started: dict[str, str] = {}
         delivered: set[str] = set()
-        for env in self._event_log.read(task_id):
+        tail: Optional[list[Any]] = None
+        find = getattr(self._event_log, "find_latest_snapshot", None)
+        snap = find(task_id) if callable(find) else None
+        if snap is not None:
+            audit = self._snapshot_audit(snap)
+            if audit is not None:
+                for entry in audit:
+                    sid = entry.get("subtask_id") if isinstance(entry, dict) else None
+                    if not isinstance(sid, str):
+                        continue
+                    if entry.get("status") == "running":
+                        started[sid] = task_id
+                    else:
+                        delivered.add(sid)
+                tail = list(self._event_log.read(task_id, after_seq=snap.seq))
+        if tail is None:
+            tail = list(self._event_log.read(task_id))
+        for env in tail:
             if env.type == "BackgroundSubagentStarted":
                 started[env.payload.subtask_id] = task_id
             elif env.type == "BackgroundSubagentDelivered":
@@ -239,11 +384,69 @@ class BackgroundSubagentRegistry:
             if child not in delivered
         ]
 
+    def _snapshot_audit(self, snap: Any) -> Optional[list[Any]]:
+        """The ``background_subagents`` audit off a snapshot body, or ``None``
+        when it cannot be read (the caller then reads the full stream)."""
+        try:
+            body = self._content_store.get(snap.payload.state_ref)
+            state = deserialize_task_state(body)
+        except Exception:  # noqa: BLE001 — any fault ⇒ the full-read fallback
+            return None
+        governance = state.get("governance") if isinstance(state, dict) else None
+        if not isinstance(governance, dict):
+            return None
+        audit = governance.get("background_subagents")
+        return list(audit) if isinstance(audit, (list, tuple)) else None
+
     def _child_is_terminal(self, child_id: str) -> bool:
         for env in self._event_log.read(child_id):
-            if env.type in ("TaskCompleted", "TaskFailed", "TaskCancelled"):
+            if env.type in _TERMINAL_TYPES:
                 return True
         return False
+
+    def _recovery_claim(self, child_id: str) -> Optional[bool]:
+        """Decide how recovery may claim a non-terminal child.
+
+        ``None`` — another driver holds it (a live lease on the child or on
+        the sub-agent it is waiting on): leave it alone. ``False`` — its row is
+        already ready: submit without enqueueing, so the targeted lease is the
+        one atomic claim. ``True`` — no row, an expired lease, or a released
+        row: enqueue (re-open it) and submit, as crash recovery always did."""
+        status_of = getattr(self._dispatcher, "task_status", None)
+        status = status_of(child_id) if callable(status_of) else None
+        if self._subtree_leased(child_id, status, seen=set()):
+            return None
+        return status != "ready"
+
+    def _subtree_leased(
+        self, task_id: str, status: Optional[str], *, seen: set[str]
+    ) -> bool:
+        active = getattr(self._dispatcher, "has_active_lease", None)
+        if not callable(active) or task_id in seen:
+            return False
+        seen.add(task_id)
+        if active(task_id):
+            return True
+        if status != "suspended":
+            return False
+        # A child waiting on its own sub-agent has released its lease while
+        # that sub-agent runs; the driver is live iff the sub-agent is.
+        wake = getattr(
+            fold(self._event_log, self._content_store, task_id), "wake_on", None
+        )
+        if isinstance(wake, SubtaskGroupCompleted):
+            members: tuple[str, ...] = tuple(wake.subtask_ids)
+        elif isinstance(wake, SubtaskCompleted):
+            members = (wake.subtask_id,)
+        else:
+            return False
+        status_of = getattr(self._dispatcher, "task_status", None)
+        return any(
+            self._subtree_leased(
+                m, status_of(m) if callable(status_of) else None, seen=seen
+            )
+            for m in members
+        )
 
     def _safe_deliver(self, parent_id: str, child_id: str) -> None:
         try:
@@ -255,7 +458,9 @@ class BackgroundSubagentRegistry:
                 exc_info=True,
             )
 
-    def _safe_submit(self, parent_id: str, child_id: str) -> bool:
+    def _safe_submit(
+        self, parent_id: str, child_id: str, *, enqueue: bool = True
+    ) -> bool:
         """Wrap a recovery re-submit so ONE corrupted record cannot abort host
         startup — the caller invokes ``recover()`` with no try/except of its own.
         Registers the child in-flight first, so a drive that starts before
@@ -264,7 +469,7 @@ class BackgroundSubagentRegistry:
         with self._lock:
             self._inflight.setdefault(parent_id, set()).add(child_id)
         try:
-            self._submit(parent_id, child_id)
+            self._submit(parent_id, child_id, enqueue=enqueue)
         except Exception:  # noqa: BLE001 — recovery never crashes startup
             with self._lock:
                 kids = self._inflight.get(parent_id)

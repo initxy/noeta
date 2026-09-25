@@ -55,7 +55,7 @@ _REPRESENTATIVE_INVOCATIONS: tuple[str, ...] = (
     "ls",
     "ls -la packages",
     "find . -name shell_rules.py",
-    "find packages -type f -name *.md",
+    "find packages -type f -name '*.md'",
     "git status",
     "git status --short",
     "git log",
@@ -73,6 +73,9 @@ _STILL_GATED: tuple[str, ...] = (
     # ``--ext-diff`` is the one ``git log`` flag that can invoke a
     # repo-configured external program per file.
     "git log --ext-diff",
+    # An unquoted glob is expanded by bash before ``find`` sees it, so the
+    # judged argv is not the one that runs.
+    "find packages -type f -name *.md",
     "git log --format=%H",
     "git commit -m wip",
     "git add .",

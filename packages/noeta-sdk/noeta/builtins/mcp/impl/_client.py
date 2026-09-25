@@ -25,9 +25,16 @@ in ``noeta.runtime.shell_policy``:
 Request-response subset: ``initialize`` +
 ``notifications/initialized`` + ``tools/list`` + ``tools/call`` +
 ``prompts/list`` + ``prompts/get`` + ``resources/list`` +
-``resources/read``. No streaming, no server→client requests (we
-advertise no sampling/roots capability), no server-push half
-(``list_changed`` / ``sampling`` / ``elicitation``).
+``resources/read``; the three list calls follow ``nextCursor`` to the last
+page. No streaming and no server-push half (``list_changed`` /
+``sampling`` / ``elicitation``). A message carrying ``method`` is a server
+request or notification, never our reply: a ``ping`` is answered with an
+empty result, anything else is ignored.
+
+A call timeout, an EOF, or a read fault leaves the pipe in an unknown state
+(a late reply may still be in flight), so the connection marks itself
+:attr:`McpStdioClient.broken` and every later request fails at once instead
+of waiting out its own timeout; the tool wrapper retires it from the pool.
 """
 
 from __future__ import annotations
@@ -45,6 +52,8 @@ from noeta.runtime.mcp import McpError
 
 
 __all__ = [
+    "MAX_LIST_PAGES",
+    "collect_pages",
     "DEFAULT_MCP_TIMEOUT_S",
     "DEFAULT_MCP_LINE_CAP",
     "DEFAULT_MCP_TOTAL_CAP",
@@ -59,6 +68,38 @@ DEFAULT_MCP_LINE_CAP = 1 * 1024 * 1024  # 1 MB per JSON-RPC line
 DEFAULT_MCP_TOTAL_CAP = 8 * 1024 * 1024  # 8 MB cumulative per call
 _PROTOCOL_VERSION = "2024-11-05"
 _MAX_INTERLEAVED_MESSAGES = 64  # notifications tolerated before a response
+#: Upper bound on pages one list call follows — a server that keeps handing
+#: back a cursor must not loop the build forever.
+MAX_LIST_PAGES = 100
+
+
+def collect_pages(
+    request: Callable[[str, dict[str, Any]], dict[str, Any]],
+    method: str,
+    key: str,
+) -> list[dict[str, Any]]:
+    """Run a paginated MCP list call (``tools/list`` / ``prompts/list`` /
+    ``resources/list``) to its last page and return every entry.
+
+    Follows ``nextCursor`` until the server stops sending one, a cursor
+    repeats, or :data:`MAX_LIST_PAGES` pages have been read. A page whose
+    ``key`` is not an array is a shape fault (:class:`McpError`). Shared by
+    the stdio and HTTP clients."""
+    out: list[dict[str, Any]] = []
+    cursor: Optional[str] = None
+    seen: set[str] = set()
+    for _ in range(MAX_LIST_PAGES):
+        result = request(method, {"cursor": cursor} if cursor else {})
+        entries = result.get(key)
+        if not isinstance(entries, list):
+            raise McpError(f"{method} result missing {key!r} array")
+        out.extend(e for e in entries if isinstance(e, dict))
+        nxt = result.get("nextCursor")
+        if not isinstance(nxt, str) or not nxt or nxt in seen:
+            break
+        seen.add(nxt)
+        cursor = nxt
+    return out
 
 
 #: The process-launch entrypoint. Injectable so tests can (a) substitute
@@ -77,6 +118,11 @@ def _default_spawn(argv: list[str], env: dict[str, str]) -> "subprocess.Popen[by
     )
 
 
+class _PipeFault(McpError):
+    """A fault that leaves the pipe unusable (timeout / EOF / read error);
+    :meth:`McpStdioClient._request` marks the connection broken on it."""
+
+
 class McpStdioClient:
     """A live connection to one stdio MCP server."""
 
@@ -86,6 +132,7 @@ class McpStdioClient:
         argv: list[str],
         env: Optional[dict[str, str]] = None,
         timeout_s: float = DEFAULT_MCP_TIMEOUT_S,
+        call_timeout_s: Optional[float] = None,
         line_cap: int = DEFAULT_MCP_LINE_CAP,
         total_cap: int = DEFAULT_MCP_TOTAL_CAP,
         spawn: Optional[SpawnFn] = None,
@@ -98,6 +145,8 @@ class McpStdioClient:
         #: in env). Empty/None ⇒ the bare scrubbed env, byte-identical to F2.
         self._extra_env = dict(env or {})
         self._timeout_s = timeout_s
+        #: ``tools/call`` budget; ``None`` ⇒ ``timeout_s``.
+        self._call_timeout_s = call_timeout_s
         self._line_cap = line_cap
         self._total_cap = total_cap
         self._spawn = spawn or _default_spawn
@@ -105,6 +154,9 @@ class McpStdioClient:
         self._readbuf = b""
         self._next_id = 0
         self._closed = False
+        #: Why this connection may no longer be used (a timeout / EOF / read
+        #: fault), or ``None`` while it is healthy.
+        self._broken: Optional[str] = None
         # Serializes a whole request/reply exchange (and a notification), so
         # concurrent holders of one pooled connection never interleave on the
         # pipe. ``shutdown`` deliberately does NOT take it: it runs only once
@@ -117,6 +169,12 @@ class McpStdioClient:
     @property
     def pid(self) -> Optional[int]:
         return self._proc.pid if self._proc is not None else None
+
+    @property
+    def broken(self) -> bool:
+        """True once a timeout / EOF / read fault left the pipe unusable;
+        every later request then fails at once."""
+        return self._broken is not None
 
     def start(self) -> None:
         """Spawn the server and complete the MCP handshake. Fail-fast:
@@ -141,15 +199,13 @@ class McpStdioClient:
         self._notify("notifications/initialized", {})
 
     def list_tools(self) -> list[dict[str, Any]]:
-        result = self._request("tools/list", {})
-        tools = result.get("tools")
-        if not isinstance(tools, list):
-            raise McpError("tools/list result missing 'tools' array")
-        return [t for t in tools if isinstance(t, dict)]
+        return collect_pages(self._request, "tools/list", "tools")
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return self._request(
-            "tools/call", {"name": name, "arguments": dict(arguments)}
+            "tools/call",
+            {"name": name, "arguments": dict(arguments)},
+            timeout_s=self._call_timeout_s,
         )
 
     def list_prompts(self) -> list[dict[str, Any]]:
@@ -157,11 +213,7 @@ class McpStdioClient:
 
         Returns the raw ``[{name, description?, arguments?}]`` entries (the
         request-response subset, no server-push). Fail-fast on a shape fault."""
-        result = self._request("prompts/list", {})
-        prompts = result.get("prompts")
-        if not isinstance(prompts, list):
-            raise McpError("prompts/list result missing 'prompts' array")
-        return [p for p in prompts if isinstance(p, dict)]
+        return collect_pages(self._request, "prompts/list", "prompts")
 
     def get_prompt(
         self, name: str, arguments: dict[str, Any]
@@ -181,11 +233,7 @@ class McpStdioClient:
         request-response subset, no server-push). v1 static clip-list only —
         resource templates / parameterised URIs are out of scope. Fail-fast on a
         shape fault."""
-        result = self._request("resources/list", {})
-        resources = result.get("resources")
-        if not isinstance(resources, list):
-            raise McpError("resources/list result missing 'resources' array")
-        return [r for r in resources if isinstance(r, dict)]
+        return collect_pages(self._request, "resources/list", "resources")
 
     def read_resource(self, uri: str) -> dict[str, Any]:
         """Read one resource (``resources/read``) by URI.
@@ -230,11 +278,29 @@ class McpStdioClient:
 
     # -- JSON-RPC --------------------------------------------------------
 
-    def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    def _request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout_s: Optional[float] = None,
+    ) -> dict[str, Any]:
         with self._exchange_lock:
-            return self._request_locked(method, params)
+            if self._broken is not None:
+                raise McpError(f"{method}: connection unusable ({self._broken})")
+            try:
+                return self._request_locked(
+                    method,
+                    params,
+                    self._timeout_s if timeout_s is None else timeout_s,
+                )
+            except _PipeFault as exc:
+                self._broken = str(exc)
+                raise
 
-    def _request_locked(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    def _request_locked(
+        self, method: str, params: dict[str, Any], timeout_s: float
+    ) -> dict[str, Any]:
         if self._proc is None:
             raise McpError("client not started")
         self._next_id += 1
@@ -242,7 +308,7 @@ class McpStdioClient:
         self._send(
             {"jsonrpc": "2.0", "id": req_id, "method": method, "params": params}
         )
-        deadline = time.monotonic() + self._timeout_s
+        deadline = time.monotonic() + timeout_s
         # Per-request cumulative byte budget — bounds memory across the
         # whole call, not just one line. Any bytes already buffered (rest
         # carried over from a prior request) count against this request,
@@ -256,8 +322,14 @@ class McpStdioClient:
         # bounded number of interleaved notifications / other-id messages.
         for _ in range(_MAX_INTERLEAVED_MESSAGES):
             msg = self._recv_line(deadline, consumed)
+            if "method" in msg:
+                # A server request or notification — never our reply, even
+                # when its id happens to equal ours.
+                if msg.get("method") == "ping" and msg.get("id") is not None:
+                    self._send({"jsonrpc": "2.0", "id": msg["id"], "result": {}})
+                continue
             if msg.get("id") != req_id:
-                continue  # a notification or unrelated message — skip
+                continue  # an unrelated reply — skip
             if "error" in msg and msg["error"] is not None:
                 err = msg["error"]
                 raise McpError(f"{method} error: {err}")
@@ -279,7 +351,7 @@ class McpStdioClient:
             self._proc.stdin.write(line)
             self._proc.stdin.flush()
         except (OSError, ValueError) as exc:
-            raise McpError(f"write failed: {exc}") from exc
+            raise _PipeFault(f"write failed: {exc}") from exc
 
     def _recv_line(self, deadline: float, consumed: list[int]) -> dict[str, Any]:
         """Return one decoded JSON object from stdout, honouring the
@@ -294,16 +366,16 @@ class McpStdioClient:
         while b"\n" not in self._readbuf:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise McpError("timeout waiting for server response")
+                raise _PipeFault("timeout waiting for server response")
             ready, _, _ = select.select([fd], [], [], remaining)
             if not ready:
-                raise McpError("timeout waiting for server response")
+                raise _PipeFault("timeout waiting for server response")
             try:
                 chunk = os.read(fd, 65536)
             except OSError as exc:
-                raise McpError(f"read failed: {exc}") from exc
+                raise _PipeFault(f"read failed: {exc}") from exc
             if chunk == b"":
-                raise McpError("server closed stdout (process exited?)")
+                raise _PipeFault("server closed stdout (process exited?)")
             self._readbuf += chunk
             consumed[0] += len(chunk)
             if consumed[0] > self._total_cap:

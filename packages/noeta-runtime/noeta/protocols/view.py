@@ -90,6 +90,11 @@ class View:
     #: anti-spiral progress checks. ``0`` (default) when nothing is collapsed
     #: yet → byte-safe.
     summary_boundary: int = 0
+    #: One past the newest ``rolling_history`` message whose tool output the
+    #: Composer's prune cleared this compose (``0`` = none). Together with
+    #: ``summary_boundary`` it bounds what a recall tool may page back:
+    #: ``[0, max(summary_boundary, cleared_boundary))``.
+    cleared_boundary: int = 0
 
     def iter_messages(self) -> list[Message]:
         """The message history a Policy hands to the LLM.

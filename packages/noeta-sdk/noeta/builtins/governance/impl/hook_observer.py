@@ -17,13 +17,21 @@ import logging
 import queue
 import subprocess
 import threading
-from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from typing import Callable, Optional, Protocol
 
 from noeta.protocols.event_log import EventLogSubscriber, subscribe_with_stop
 from noeta.protocols.events import EventEnvelope
 from noeta.runtime.env import scrub_env
+
+# The rule vocabulary lives kernel-side so ``HostConfig.hooks`` can name it
+# without importing this built-in; re-exported here for existing callers.
+from noeta.runtime.governance import (
+    DEFAULT_HOOK_COMMAND_TIMEOUT_S,
+    DEFAULT_HOOK_QUEUE_MAX,
+    NotificationRule,
+    PostToolUseRule,
+)
 
 
 __all__ = [
@@ -39,28 +47,14 @@ __all__ = [
 
 _log = logging.getLogger(__name__)
 
-DEFAULT_NOTIFY_TIMEOUT_S = 30.0
-_DEFAULT_QUEUE_MAX = 256
+DEFAULT_NOTIFY_TIMEOUT_S = DEFAULT_HOOK_COMMAND_TIMEOUT_S
+_DEFAULT_QUEUE_MAX = DEFAULT_HOOK_QUEUE_MAX
 _WORKER_POLL_S = 0.1
 
 #: Minimal env a notify command inherits — deliberately narrower than the
 #: default ``ENV_ALLOWLIST`` (a user notify hook has no business seeing the
 #: Python interpreter keys).
 _OBS_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR")
-
-
-@dataclass(frozen=True, slots=True)
-class PostToolUseRule:
-    match_tool: str
-    command: Optional[tuple[str, ...]] = None
-    log: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class NotificationRule:
-    on: str  # the only recognised value is "approval"
-    command: Optional[tuple[str, ...]] = None
-    log: bool = False
 
 
 class NotifyHandle(Protocol):

@@ -93,7 +93,7 @@ suspended approval-call_ln6dcrmn0w80aqou15fyyryt
 suspended noeta-code-next-goal
 UserMessage(text="How many words are in 'hello world from noeta'?")
 ToolUse(call_id='call_ln6dcrmn0w80aqou15fyyryt', tool_name='word_count', arguments={'text': 'hello world from noeta'})
-ToolResultView(call_id='call_ln6dcrmn0w80aqou15fyyryt', tool_name='', success=True, output='"4 words"')
+ToolResultView(call_id='call_ln6dcrmn0w80aqou15fyyryt', tool_name='word_count', success=True, output='"4 words"', error=None)
 AssistantMessage(text='There are **4 words** in "hello world from noeta".')
 ```
 

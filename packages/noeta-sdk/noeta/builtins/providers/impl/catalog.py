@@ -200,6 +200,7 @@ CATALOG: dict[str, ModelSpec] = {
         cache_read_price_per_mtok=1.25,  # OpenAI cached input ≈ 0.5× input
         cache_write_price_per_mtok=2.50,  # OpenAI has no write tier → = input
         is_reasoning=False,
+        supports_vision=True,
     ),
     "gpt-4o-mini": ModelSpec(
         real_model_id="gpt-4o-mini",
@@ -210,6 +211,7 @@ CATALOG: dict[str, ModelSpec] = {
         cache_read_price_per_mtok=0.075,  # OpenAI cached input ≈ 0.5× input
         cache_write_price_per_mtok=0.15,  # no write tier → = input
         is_reasoning=False,
+        supports_vision=True,
     ),
     # --- OpenAI Responses gateway models (reasoning + vision) ---------------
     # These are served by an internal gateway that publishes no pricing, so
@@ -522,6 +524,13 @@ _COMPACTION_BUFFER_TOKENS = 2_000
 #: summary covers a longer prefix. Constant for the same live/resume reason.
 _TAIL_FRACTION_DENOM = 3
 
+#: Microcompaction: past this fraction of the available window, only the
+#: newest ``_MICROCOMPACT_KEEP_RECENT`` tool results stay verbatim (older bulky
+#: outputs become the cleared marker, recallable with ``RecallHistory``).
+#: Constants for the same live/resume reason as the tail fraction.
+_MICROCOMPACT_FRACTION = 0.5
+_MICROCOMPACT_KEEP_RECENT = 5
+
 #: The window an UNCATALOGUED model is assumed to have. Deliberately at the
 #: small end of what any current model ships (128 K is the floor of the
 #: generation, not an average), because the failure modes are asymmetric:
@@ -588,4 +597,6 @@ def derive_compaction_config(model: str) -> CompactionConfig:
         compaction_buffer=_COMPACTION_BUFFER_TOKENS,
         tail_token_budget=tail,
         composer_version=COMPOSER_VERSION,
+        microcompact_keep_recent=_MICROCOMPACT_KEEP_RECENT,
+        microcompact_fraction=_MICROCOMPACT_FRACTION,
     )

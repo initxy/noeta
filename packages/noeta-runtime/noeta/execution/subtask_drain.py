@@ -17,9 +17,9 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
-from noeta.core.engine import suspend_on_human_handle
+from noeta.core.engine import Engine, suspend_on_human_handle
 from noeta.core.fold import fold
 from noeta.execution.recorder import run_content_init
 from noeta.policies.control_semantics import (
@@ -799,7 +799,8 @@ def _settle_stopped_root(host: DrainHost, root: Any) -> Any:
             lease_id=lease.lease_id,
         )
     settled = suspend_on_human_handle(
-        engine,
+        # Hosts hand back the concrete Engine; this helper reads its internals.
+        cast(Engine, engine),
         settled,
         handle=NEXT_GOAL_WAKE_HANDLE,
         lease_id=lease.lease_id,

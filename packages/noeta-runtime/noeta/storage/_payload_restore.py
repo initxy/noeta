@@ -172,7 +172,8 @@ _PAYLOAD_RESTORERS: dict[str, Callable[[Any], Any]] = {
     "TurnInterrupted":     lambda d: TurnInterruptedPayload(**d),
     "ContextPlanComposed": lambda d: ContextPlanComposedPayload(**d),
     "TaskCompleted":       lambda d: TaskCompletedPayload(**d),
-    "TaskFailed":          lambda d: TaskFailedPayload(**d),
+    # Bodies written before ``detail`` existed lack the key → default ``None``.
+    "TaskFailed":          lambda d: restore_dataclass(TaskFailedPayload, d),
     "ToolCallStarted":     lambda d: ToolCallStartedPayload(**d),
     "ToolResultRecorded":  lambda d: ToolResultRecordedPayload(**d),
     "ToolCallFinished":    lambda d: ToolCallFinishedPayload(**d),

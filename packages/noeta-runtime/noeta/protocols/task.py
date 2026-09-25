@@ -205,10 +205,10 @@ class GovernanceState:
     closed_by: Optional[str] = None
     close_reason: Optional[str] = None
     conversation_lifecycle: list[dict[str, Any]] = field(default_factory=list)
-    # Per-tool provenance folded from the single ``ToolSchemaRecorded`` emitted
-    # before a tool's first call: tool_name → sha256(canonical input_schema) and
-    # tool_name → declared ``ToolRef.version``. Keeping both lets drift
-    # diagnostics tell "schema changed but version didn't" from a normal bump.
+    # Per-tool provenance folded from ``ToolSchemaRecorded``: tool_name →
+    # sha256(canonical input_schema) and tool_name → declared ``ToolRef.version``.
+    # That event is legacy and no longer emitted, so these stay empty except
+    # for tasks folded from old recordings that carry it.
     tool_schema_hashes: dict[str, str] = field(default_factory=dict)
     tool_schema_versions: dict[str, str] = field(default_factory=dict)
     # Per-skill provenance folded from the single ``SkillContentRecorded`` per

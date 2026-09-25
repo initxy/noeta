@@ -22,9 +22,25 @@ faults, see [troubleshooting](troubleshooting.md).
   SQLite file is unsafe.
 - **Workaround:** use Postgres across machines. On one host, a worker pool is fine, and
   any number of clients in one process can share storage — each has its own
-  `HostConfig.queue`, children inherit it, and workers never cross queues. See ADRs
+  `HostConfig.queue`, children inherit it, and workers never cross queues. Fixed in
+  this release: a second `Client` opened on the same store used to re-run another
+  `Client`'s background sub-agents when it recovered at start-up; recovery now skips a
+  sub-agent another client is still running. See ADRs
   [multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md)
   and [worker queue routing](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md).
+
+### Postgres: one connection per adapter, no pool
+
+- **Boundary:** each Postgres adapter (event log, dispatcher, content store) holds one
+  connection behind a lock, so calls on one adapter queue behind each other. A dropped
+  connection (server restart, idle kill, network reset) is reopened automatically: a
+  standalone statement is re-sent once, and a transaction lost before its `COMMIT` is
+  re-run from the start. A connection lost *during* `COMMIT` raises, because the write
+  may or may not have landed — except an append with an idempotency key, which is
+  retried safely. A server that stays down still fails the call.
+- **Workaround:** for more database throughput, run more worker processes (each opens
+  its own connections). See ADR
+  [multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md).
 
 ## Durability
 
@@ -114,12 +130,15 @@ faults, see [troubleshooting](troubleshooting.md).
 - **Workaround:** none automatic; the same re-drive and human review as crashed steps
   apply.
 
-### Sandbox `Bash` timeout does not kill the command
+### A stopped sandbox `Bash` returns no output
 
-- **Boundary:** with no remote cancel, `timeout` is enforced by the HTTP read timeout.
-  The model sees a timed-out run, but the command keeps running in the container.
-- **Workaround:** treat a timeout as "may still be running" and check with a follow-up
-  command; give long commands a larger `timeout`.
+- **Boundary:** each foreground command runs in its own container shell and is
+  killed there on interrupt, cancel, close, or `timeout` (since 2026-09-25). A command
+  stopped that way returns no partial output, where a local one returns what it
+  printed so far. A process the command put in the background (`server &`) is not
+  killed when the command finishes normally — the same as on the host.
+- **Workaround:** send long output to a file in the workspace and `Read` it after a
+  stop.
 
 ### Background shell is host-only
 

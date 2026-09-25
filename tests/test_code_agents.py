@@ -450,6 +450,8 @@ def test_bug_fixer_fake_llm_full_loop_fixes_failing_test(
         # The host's default permission mode gates the write family; disable
         # approval so the scripted edit applies in one shot.
         require_approval_tools=(),
+        # ``pytest`` runs workspace code, so its rule needs a trusted workspace.
+        project_shell_allowlist_trust="open",
     )
     out = make_driver(host).start(
         goal="fix the failing test",

@@ -15,9 +15,10 @@ Everything public is imported from `noeta.sdk`; this page covers the verbs that 
 
 | Import from | Names | Page |
 | --- | --- | --- |
-| `noeta.sdk` | `query`, `QueryResult`, `Client`, `DriveOutcome`, `SeededTurn`, `TaskStatus`, `DeleteTaskResult`, `DEFAULT_MODEL_ALLOWLIST`, `NEXT_GOAL_WAKE_HANDLE`, the errors | this page |
-| `noeta.sdk` | `Options`, `AgentDefinition`, `SystemPromptPreset`, `compile_options`, `register_preset_prompt`, `BudgetSpec`, `HostConfig`, `PluginActivation`, `DEFAULT_PLUGINS`, `permission_modes`, `effort_modes`, `model_capabilities`, sandbox / MCP / OTLP wiring types | [Options](options.md) |
-| `noeta.sdk` | `tool`, `create_sdk_mcp_server`, extension Protocols, message and event types, `as_messages`, `envelope_to_dict` | [Types](types.md) |
+| `noeta.sdk` | `query`, `QueryResult`, `Client`, `DriveOutcome`, `SeededTurn`, `TaskStatus`, `DeleteTaskResult`, `UsageReport`, `ModelUsage`, `DEFAULT_MODEL_ALLOWLIST`, `Principal`, `LOCAL_PRINCIPAL`, `NEXT_GOAL_WAKE_HANDLE`, the errors | this page |
+| `noeta.sdk` | `WorkerLoop`, `ReliabilityEvent` | [WorkerLoop](worker-loop.md) |
+| `noeta.sdk` | `Options`, `AgentDefinition`, `SystemPromptPreset`, `compile_options`, `register_preset_prompt`, `BudgetSpec`, `HostConfig`, `HooksConfig`, `PreToolUseRule`, `MatchArg`, `PostToolUseRule`, `NotificationRule`, `PluginActivation`, `DEFAULT_PLUGINS`, `permission_modes`, `effort_modes`, `model_capabilities`, sandbox / MCP / OTLP wiring types | [Options](options.md) |
+| `noeta.sdk` | `tool`, `create_sdk_mcp_server`, extension Protocols, message and event types, `as_messages`, `envelope_to_dict`, `resolve_tool_call_arguments` (a tool-call event's arguments, fetched from the content store when they were stored out of line) | [Types](types.md) |
 | `noeta.sdk` | `PluginManifest`, `ManifestContribution`, `PluginBuilder`, `PluginSet`, `load_plugins`, `SurfaceSpec`, `SurfaceRegistry`, `standard_registry`, `grant_trust`, `is_trusted`, `PluginError` and the plugin warnings | [Plugin manifest](plugin-manifest.md), [Plugin surfaces](plugin-surfaces.md) |
 | `noeta.sdk` | `Reminder`, `ResidentActivation`, `RecallView`, `ReminderProvider`, `TURN_INTAKE` | [Plugin surfaces](plugin-surfaces.md) |
 | `noeta.sdk` | `run_consolidation`, `consolidation_due`, `build_consolidation_digest`, `SkillUsage`, `skill_usage_from_events`, `rank_skills_by_usage`, `decayed_usage_score` | [below](#memory-and-skill-helpers) |
@@ -64,13 +65,14 @@ print(result.answer())
 
 ### `QueryResult`
 
-A `list[EventEnvelope]` (iterate and index it like a list) with three extras.
+A `list[EventEnvelope]` (iterate and index it like a list) with four extras.
 
 | Member | Returns | Meaning |
 | --- | --- | --- |
 | `.task_id` | `str` | the task that ran |
 | `.messages()` | `list[ViewItem]` | readable transcript, content already resolved |
-| `.answer()` | `Any` | the terminal answer; raises `QueryFailedError` if the task failed or never finished |
+| `.answer()` | `Any` | the terminal answer; raises `QueryFailedError` if the task failed or never finished. When a tool call — the agent's own or a sub-agent's — is still waiting for approval, the error's `reason` says so and names the handle and the sub-agent task: `query()` has no one to ask, so pass `Options.can_use_tool` |
+| `.usage()` | `UsageReport` | what the query cost, sub-agents included — the same report as `Client.usage()`, taken before the temporary client shut down |
 
 ::: warning
 The projections are resolved before the temporary client shuts down. Don't re-project the raw envelopes against a fresh content store — the bodies they reference won't be there.
@@ -80,7 +82,8 @@ The projections are resolved before the temporary client shuts down. Don't re-pr
 
 ```python
 Client(options, *, provider=None, workspace_dir=None, model=None,
-       multi_turn=True, host_config=None, allowed_models=None, plugins=None)
+       multi_turn=True, host_config=None, allowed_models=None, plugins=None,
+       principal=LOCAL_PRINCIPAL)
 ```
 
 | Parameter | Type | Default | Meaning |
@@ -93,6 +96,7 @@ Client(options, *, provider=None, workspace_dir=None, model=None,
 | `host_config` | `HostConfig \| None` | `None` | durable storage, sandbox, MCP, memory wiring; `None` = in-memory |
 | `allowed_models` | `Sequence[str] \| None` | `None` | per-turn `model_selector` allowlist; `None` = `DEFAULT_MODEL_ALLOWLIST` (`opus`, `sonnet`, `haiku`); `()` allows no selector |
 | `plugins` | `PluginSet \| None` | `None` | loaded plugins; their agent-level contributions apply only where `Options.plugins` activates them, guards and observers apply to every task |
+| `principal` | `Principal` | `LOCAL_PRINCIPAL` | who acts when a turn names no principal of its own. A `model_selector` must be in both its `allowed_models` and the Client's `allowed_models`; its `identity` is recorded on `ModelBound`. `LOCAL_PRINCIPAL` allows every model, so only `allowed_models` applies |
 
 Properties: `registry` (the compiled `AgentRegistry`), `main_agent_name`, `workers_running`.
 
@@ -113,17 +117,20 @@ with Client(Options(system_prompt="You are a coding assistant."),
 
 Each verb runs the turn on the calling thread and returns a `DriveOutcome(task_id, status, wake_handle)`. All of them pass gated calls through `Options.can_use_tool` when it is set.
 
+There is no async API: every verb blocks until the turn ends. From asyncio code, call it on a worker thread — `await asyncio.to_thread(client.send_goal, task_id, goal=...)` — which is safe.
+
 | Method | Signature (keyword-only after `task_id`) | Meaning |
 | --- | --- | --- |
-| `start` | `(*, goal, agent=None, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), workspace_dir=None, effort=None, activations=(), attachment_texts=())` | create a task and run its first turn |
-| `send_goal` | `(task_id, *, goal, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), effort=None, activations=(), attachment_texts=())` | add a follow-up turn |
+| `start` | `(*, goal, agent=None, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), workspace_dir=None, effort=None, activations=(), attachment_texts=(), principal=None)` | create a task and run its first turn |
+| `send_goal` | `(task_id, *, goal, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), effort=None, activations=(), attachment_texts=(), principal=None)` | add a follow-up turn. If an earlier `send_goal` of the same goal failed after recording it (its task rests with suspend reason `seed_failed`), the retry runs the turn on the recorded goal instead of adding it twice |
 | `inject_goal` | `(task_id, *, goal, images=(), goal_origin=None, drive=True)` | running task: record the message, deliver it at the next turn boundary, return at once; parked on next-goal: acts like `send_goal` (or raises `NotResumableError` if `drive=False`) |
 | `deliver_event` | `(task_id, *, event_kind, payload=None)` | wake a task waiting in `wait_external` on exactly `event_kind`; `payload` is recorded as a system message |
 
 | Per-turn argument | Meaning |
 | --- | --- |
 | `agent` | which compiled agent to run; default is the main agent |
-| `model_selector` | model alias for this turn, checked against `allowed_models` (else `ModelSelectorError`) |
+| `model_selector` | model alias for this turn, checked against `allowed_models` and the acting principal (else `ModelSelectorError`) |
+| `principal` | who acts on this turn, for a host serving many users from one Client; `None` = the Client's `principal`. Checked and recorded when the turn is seeded, so `seed_start` / `seed_send_goal` take it too and `drive_seeded` / `dispatch_seeded` need nothing more |
 | `permission_mode` | override for this turn: `default` / `acceptEdits` / `bypassPermissions` |
 | `enabled_mcp` | MCP aliases enabled for this turn (resolved by `HostConfig.mcp_server_resolver`) |
 | `workspace_dir` | `start` only: recorded once on the task; later turns reuse it |
@@ -142,14 +149,28 @@ Each verb runs the turn on the calling thread and returns a `DriveOutcome(task_i
 | `answer` | `(task_id, *, question_id, answers, answered_by="client")` | answer an `AskUserQuestion` |
 
 ```python
+APPROVAL = "approval-"
+
+def pending_approval(client, task_id):
+    """The newest unresolved approval request in one task's stream."""
+    events = client.events(task_id)
+    resolved = {e.payload.call_id for e in events
+                if e.type == "ToolCallApprovalResolved"}
+    return next((e for e in reversed(events)
+                 if e.type == "ToolCallApprovalRequested"
+                 and e.payload.call_id not in resolved), None)
+
 out = client.start(goal="Refactor utils.py")
-if out.wake_handle and out.wake_handle.startswith("approval-"):
-    req = next(e for e in client.events(out.task_id)
-               if e.type == "ToolCallApprovalRequested")
-    out = client.approve(out.task_id, call_id=req.payload.call_id)
+while out.wake_handle and out.wake_handle.startswith(APPROVAL):
+    call_id = out.wake_handle[len(APPROVAL):]
+    req = pending_approval(client, out.task_id)  # None when a sub-agent asked
+    # decide here from req.payload (tool name, arguments): approve or deny
+    out = client.approve(out.task_id, call_id=call_id)
 ```
 
-A gated tool call waits on `approval-{call_id}`. A gated `finish` or spawn waits on `approval-finish-{task_id}` / `approval-spawn-{task_id}` with `call_id` `finish-{task_id}` / `spawn-{task_id}`. Read the `call_id` from the `ToolCallApprovalRequested` event instead of parsing the handle.
+The handle is always `approval-{call_id}`: for a gated tool call, for a gated `finish` or spawn (`approval-finish-{task_id}` / `approval-spawn-{task_id}`, whose `call_id` is `finish-{task_id}` / `spawn-{task_id}`), and for a foreground sub-agent's request, which surfaces on the root's outcome. So the `call_id` comes from the handle, and `approve` / `deny` / `answer` on the root's task id are forwarded to the sub-agent that is waiting (the sub-agent's own id works too).
+
+To see *what* is being asked — the tool name and arguments — read the `ToolCallApprovalRequested` event. It sits in the stream of the task that asked: the root's own when the root asked, the sub-agent's when a sub-agent did (then `pending_approval(client, out.task_id)` is `None` and you read the sub-agent's events instead). Take the newest *unresolved* request, not the first one in the log: once a turn has asked twice, the first request is already resolved, and approving it again raises `NotResumableError`.
 
 ### Seed now, drive later
 
@@ -183,6 +204,7 @@ Reads only; nothing is written.
 | `messages(task_id)` | `list[ViewItem]` | readable transcript |
 | `task_answer(task_id)` | `Any` | latest turn's answer as the raw value (an `output_schema` answer is a `dict`); `None` if none |
 | `task_status(task_id)` | `TaskStatus \| None` | `task_id`, `status`, `closed`, `wake_handle`, `parent_task_id`; `None` for an unknown id |
+| `usage(task_id, *, include_children=True)` | `UsageReport` | cost, tokens and latency per model, summed over the task and (by default) every sub-agent it spawned; check `unpriced_models` before trusting a `$0` |
 | `suspend_reason(task_id)` | `SuspendReason \| None` | why it last paused; compare `.kind` with `SUSPEND_REASON_WAITING_HUMAN` / `_INTERRUPTED` / `_TURN_FAILED` |
 | `task_streams()` | `list[TaskStreamSummary]` | every stream: `task_id`, `last_seq`, `last_event_time` |
 | `task_summaries()` | `list[dict]` | every task folded into a row; reads the whole log — for boot-time repair, not list rendering |
@@ -196,11 +218,11 @@ Reads only; nothing is written.
 
 | Method | Signature | Meaning |
 | --- | --- | --- |
-| `start_workers` | `(num_workers=1, *, poll_interval=0.1, heartbeat_interval=30.0, stale_sweep_interval=10.0, timer_poll_interval=1.0, lease_seconds=600.0, shutdown_grace_s=10.0)` | start a resident pool of worker threads on this client's queue; a second call raises `RuntimeError` |
+| `start_workers` | `(num_workers=1, *, poll_interval=0.1, heartbeat_interval=30.0, stale_sweep_interval=10.0, timer_poll_interval=1.0, lease_seconds=600.0, shutdown_grace_s=10.0, lease_backoff_max_s=None)` | start a resident pool of worker threads on this client's queue; a second call raises `RuntimeError`. `lease_backoff_max_s` caps the backoff while the dispatcher keeps failing (`None` = the `WorkerLoop` default); reliability signals go to `HostConfig.reliability_sink` |
 | `stop_workers` | `(timeout=None) -> bool` | `False` if a worker did not exit in time; call again to finish |
 | `reconnect_mcp` | `(alias=None)` | drop pooled MCP connections (all, or one alias); running turns keep theirs until they settle |
 | `add_sandbox_lifecycle_listener` | `(on_allocate, on_release)` | hooks for container allocation; no-op without a sandbox |
-| `shutdown` | `()` | idempotent: stops workers, observers, MCP connections, the sandbox |
+| `shutdown` | `()` | idempotent: stops workers, observers, MCP connections, the sandbox; kills this client's background shells; background sub-agents stop at their next step boundary without being cancelled, and the next `Client` on the store carries them on; closes storage it opened from `storage_path` (storage you passed in stays open) |
 
 ## Memory and skill helpers
 
@@ -219,14 +241,18 @@ Match errors by `isinstance(exc, CodedError)` and `exc.code`, never by message t
 
 | Error | `code` | Raised when |
 | --- | --- | --- |
-| `QueryFailedError` (`task_id`, `status`, `reason`, `retryable`) | `query_failed` | `QueryResult.answer()` on a failed or unfinished task |
+| `QueryFailedError` (`task_id`, `status`, `reason`, `retryable`, `detail`) | `query_failed` | `QueryResult.answer()` on a failed or unfinished task; `detail` is the failure's diagnosis when recorded (e.g. the provider's error text), else `""` |
+| `InvalidTurnOptionError` | `invalid_turn_option` | `start` / `send_goal` got a `permission_mode` or `effort` that `Options` would also reject; raised before anything is written |
+| `AnswerValidationError` | `invalid_answer` | `answer` / `seed_answer` with answers that don't match the pending question; also a `ValueError` |
+| `QuestionNotPendingError` (`task_id`, `question_id`) | `question_not_pending` | `answer` on a task waiting on a question that is no longer pending |
+| `WorkspaceEscape` | `workspace_escape` | a path resolves outside the workspace; also a `ValueError` |
 | `ModelSelectorError` | `model_selector_rejected` | `model_selector` not in the allowlist |
 | `ProviderSelectorError` | `provider_selector_rejected` | a `(provider, model)` pair the host has not configured |
-| `NotResumableError` | `not_resumable` | the task isn't waiting for this verb (e.g. `deliver_event` for an event it isn't waiting on) |
-| `TaskAlreadyTerminalError` | `task_already_terminal` | a verb on a finished task |
+| `NotResumableError` | `not_resumable` | the task isn't waiting for this verb: `deliver_event` for an event it isn't waiting on, `approve` / `deny` / `answer` for a request that is already resolved or on a finished task, `send_goal` / `approve` on an id with no task |
+| `TaskAlreadyTerminalError` | `task_already_terminal` | `cancel` / `interrupt` / `close` / `reopen` on a finished task |
 | `UnknownTaskError` (`task_id`, `verb`, `reason`) | `unknown_task` | `cancel` / `interrupt` / `close` / `reopen` on an id with no stream; refused before anything is written |
 | `NotForkableError` (`task_id`, `reason`) | `not_forkable` | `fork` on an unknown id, a subtask, or a `message_seq` that isn't a user message |
-| `UnsupportedSubtaskSuspend` | `unsupported_subtask_suspend` | a driven subagent paused on an approval, question or timer (only delegation is supported inside a child) |
+| `UnsupportedSubtaskSuspend` | `unsupported_subtask_suspend` | never raised by a `Client` method: a sub-agent's approvals and questions surface on the root, and a sub-agent waiting on a timer leaves the root at `wake_handle=None` — see [Subagents](../guides/subagents.md) |
 
 ## Next
 

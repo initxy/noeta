@@ -68,7 +68,10 @@ def _drive(summarize_response: LLMResponse):
     """Compose a proactive-compaction-tripping view and drive one decide().
 
     Returns ``(decision, provider)`` — ``provider.received_requests`` proves the
-    summarize round-trip actually happened."""
+    summarize round-trip actually happened. The response is scripted twice: a
+    text-less first answer is retried once with ``tool_choice: none``
+    (``test_summarize_tool_choice_retry.py``), and the retry gets the same
+    answer, so the guard sees it unchanged."""
     store = InMemoryContentStore()
     log = InMemoryEventLog()
     composer = ThreeSegmentComposer(
@@ -82,7 +85,9 @@ def _drive(summarize_response: LLMResponse):
     task.runtime.messages = _runtime_messages(12)
     view = composer.compose(task)
 
-    provider = FakeLLMProvider(responses=[summarize_response])
+    provider = FakeLLMProvider(
+        responses=[summarize_response, summarize_response]
+    )
     client = RuntimeLLMClient(
         provider=provider, event_log=log, content_store=store
     )
@@ -115,7 +120,8 @@ def test_empty_summary_fails_cleanly_without_recording_compaction() -> None:
     decision, provider = _drive(
         LLMResponse(stop_reason="end_turn", content=[TextBlock(text="   ")])
     )
-    assert len(provider.received_requests) == 1
+    # The text-less first answer is retried once, then the guard refuses it.
+    assert len(provider.received_requests) == 2
     assert isinstance(decision, FailDecision)
     assert decision.reason.startswith(f"{SUMMARY_FAILED_REASON}: ")
 
@@ -126,7 +132,7 @@ def test_reasoning_model_maxtokens_truncation_fails_cleanly() -> None:
     # return ``stop_reason="max_tokens"`` with no text block — a "successful"
     # response carrying nothing. The guard must fail cleanly here too.
     decision, provider = _drive(LLMResponse(stop_reason="max_tokens", content=[]))
-    assert len(provider.received_requests) == 1
+    assert len(provider.received_requests) == 2  # one tool-free retry
     assert isinstance(decision, FailDecision)
     assert decision.reason.startswith(f"{SUMMARY_FAILED_REASON}: ")
 
@@ -341,10 +347,11 @@ def test_failure_reason_stays_one_short_line() -> None:
 
 
 def test_summarize_request_carries_instruction_as_trailing_user_turn() -> None:
-    """The instruction rides twice: the request's ``system`` (unchanged, so
-    the summarize call stays recognisable by its system text) and a trailing
-    ``user`` turn after the history — the placement a model that weighs the
-    conversation's momentum over ``system`` still answers with the note."""
+    """The instruction rides once, as a trailing ``user`` turn after the
+    history — the placement a model that weighs the conversation's momentum
+    over ``system`` still answers with the note. The request's ``system`` is
+    the task's own system prompt, so the summarize call shares the main
+    loop's cached prefix instead of swapping it out."""
     _, provider = _drive(
         LLMResponse(stop_reason="end_turn", content=[TextBlock(text=_NOTE)])
     )
@@ -352,14 +359,18 @@ def test_summarize_request_carries_instruction_as_trailing_user_turn() -> None:
     system_text = "".join(
         b.text for b in request.system.content if isinstance(b, TextBlock)
     )
-    assert system_text == _SUMMARIZE_PROMPT
+    assert system_text == "sys"
+    # A text answer is not retried, and the first attempt sends no
+    # ``tool_choice`` so the message-tier cache entry survives.
+    assert "tool_choice" not in request.metadata
     last = request.messages[-1]
     assert last.role == "user"
     assert last.origin is None  # a plain user turn, not a host injection
     assert [b.text for b in last.content if isinstance(b, TextBlock)] == [
         _SUMMARIZE_PROMPT
     ]
-    # Only the trailing turn is synthetic: everything before it is history.
+    # Only the trailing turn is synthetic: everything before it is the main
+    # loop's head (semi_stable) followed by history.
     assert all(
         _SUMMARIZE_PROMPT not in b.text
         for m in request.messages[:-1]

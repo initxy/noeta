@@ -20,7 +20,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
 
 from noeta.core.fold import fold
 from noeta.protocols.canonical import to_canonical_bytes

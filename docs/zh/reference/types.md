@@ -33,6 +33,22 @@
 | `GuardContext` | `task_id`、`governance`、`metadata`、`active_skills`、`subtask_depth`、`recent_tool_calls` |
 | `VerdictResult` | 用 `VerdictResult.allow()`、`.deny(reason)`、`.require_approval(reason)` 构造 |
 
+### 钩子规则
+
+声明式的钩子写在 `HostConfig.hooks` 里，不用自己写 `Guard`。完整字段见 [Options → 钩子](options.md#钩子)。
+
+| 类型 | 说明 |
+| --- | --- |
+| `HooksConfig` | `pre_tool_use`、`post_tool_use`、`notification`、`command_timeout_s=30.0`、`max_queue=256`；构造时校验 |
+| `PreToolUseRule` | `match_tool`（`fnmatch` 模式）、`action`（`"allow"` / `"deny"` / `"require_approval"`）、`match_arg=None`、`reason=None`；第一条命中的规则说了算 |
+| `MatchArg` | `path`（参数键）、`op`（`"equals"` / `"contains"` / `"regex"`）、`value`、`pattern` |
+| `PostToolUseRule` | `match_tool`、`command=None`（argv 元组）、`log=False`；命中的工具调用结束后执行 |
+| `NotificationRule` | `on="approval"`、`command=None`、`log=False`；有调用开始等审批时执行 |
+
+### `Principal`
+
+`Principal(identity, allowed_models=frozenset(), allows_any=False)`：这一轮由谁来操作。`permits(selector)` 在 `allows_any` 为真、或者 selector 在 `allowed_models` 里时返回真。某一轮的 `model_selector` 要同时过这道检查和 Client 的 `allowed_models`；`identity` 会记到 `ModelBound.principal_identity` 上。默认值 `LOCAL_PRINCIPAL` 就是 `Principal("local", allows_any=True)`。可以传给 `Client(principal=...)`，也可以按轮传给 `start` / `send_goal` 以及对应的 `seed_` 版本。
+
 ### Policy 相关类型
 
 | 类型 | 说明 |
@@ -99,6 +115,32 @@ for env in client.events(task_id):
 
 相关导出：`TaskStreamSummary`（`Client.task_streams()` 的一行）、`TaskSuspendedPayload`、`SuspendReason(kind, detail)`、`parse_suspend_reason(reason)`，以及 `SUSPEND_REASON_WAITING_HUMAN`、`SUSPEND_REASON_INTERRUPTED`、`SUSPEND_REASON_TURN_FAILED`。
 
+失败时，给机器判断用的 `reason` 和给人看的诊断分开放。`TaskFailed` 的 payload 有 `detail`（最多 1000 个字符，没有就是 `""`，比如模型服务的报错正文）。多轮对话里某一轮失败不会结束任务，而是挂起，`reason` 是 `turn_failed: <reason>: <detail>`（没有 detail 时就是 `turn_failed: <reason>`），用 `parse_suspend_reason` 可以拆成 `SuspendReason(kind, detail)`。子 agent 失败时，父任务收到的 `SubtaskResult.error` 也是 `<reason>: <detail>` 的形式。代码里按 `reason` 判断，别按 `detail`。
+
+## 用量报告
+
+`Client.usage(task_id)` 和 `QueryResult.usage()` 返回 `UsageReport`，数据来自每次模型调用记下的 `LLMRequestStarted`（用的哪个模型）和 `LLMRequestFinished`（用量、费用、耗时）。两个类型都是不可变的 dataclass。
+
+| `UsageReport` 字段 | 说明 |
+| --- | --- |
+| `task_id` | 查的是哪个任务 |
+| `tasks` | 算进来的所有任务：`task_id` 排第一，后面是它的子 agent（前台、后台，不限层数）；任务不存在时是 `()` |
+| `per_model` | 每个模型一行 `ModelUsage`，按模型 id 排序 |
+| `requests`、`unfinished_requests`、`input_tokens`、`output_tokens`、`cache_read_tokens`、`cache_write_tokens`、`reasoning_tokens`、`cost_usd`、`latency_ms_total`、`latency_ms_max` | 和 `ModelUsage` 同名的计数，对 `per_model` 求和（`latency_ms_max` 取最大值） |
+| `unpriced_models` | 模型目录里没有价格的模型；它们的调用按 `0.0` 记，所以只要这里不空，`cost_usd` 就只是下限 |
+
+| `ModelUsage` 字段 | 说明 |
+| --- | --- |
+| `model` | 调用时用的模型 id |
+| `requests` | 已经结束的调用次数，成功失败都算 |
+| `unfinished_requests` | 有开始没结束的调用：还在跑，或者进程崩了被打断；这些没有用量 |
+| `input_tokens` | 全部输入 token（`Usage.input`），命中缓存的也算 |
+| `output_tokens` | 输出 token，`reasoning_tokens` 包含在里面 |
+| `cache_read_tokens`、`cache_write_tokens`、`reasoning_tokens` | 对应 `Usage` 里的同名计数 |
+| `cost_usd` | 调用当时记下的费用 |
+| `latency_ms_total`、`latency_ms_max` | 调模型服务的往返耗时，总和与最大值 |
+| `priced` | 当前模型目录里没有 `model` 的价格时为 `False` |
+
 ## 对话记录
 
 `as_messages(envelopes, content_store) -> list[ViewItem]` 把事件流转成可读的对话记录。store 必须是写这条流时用的那个。`Client.messages()` 和 `QueryResult.messages()` 已经替你调好了。
@@ -109,7 +151,7 @@ for env in client.events(task_id):
 | `AssistantMessage` | `text` |
 | `InjectedMessage` | `text`、`origin`（宿主上下文是 `"system"`，记忆召回是 `"memory"`），不会被当成用户说的话 |
 | `ToolUse` | `call_id`、`tool_name`、`arguments` |
-| `ToolResultView` | `call_id`、`tool_name`、`success`、`output: str \| None` |
+| `ToolResultView` | `call_id`、`tool_name`（取自对应的 `ToolUse`，找不到时为 `""`）、`success`、`output: str \| None`、`error: str \| None`（调用失败时模型看到的错误文字；成功时为 `None`） |
 | `Result` | `answer`（字符串形式）、`status`；`"failed"` 时 answer 是失败原因 |
 
 ## 消息与内容

@@ -250,10 +250,10 @@ def test_summarize_prompt_carries_verbatim_rule() -> None:
     policy.decide(_ctx(), _big_view_with_constraint(constraint))
     # The summarize round-trip is the single recorded LLM call.
     assert len(provider.received_requests) == 1
-    system = provider.received_requests[0].system
-    assert system is not None
+    # The instruction rides as the trailing user turn.
+    instruction = provider.received_requests[0].messages[-1]
     system_text = "".join(
-        b.text for b in system.content if isinstance(b, TextBlock)
+        b.text for b in instruction.content if isinstance(b, TextBlock)
     ).lower()
     assert "verbatim" in system_text
     assert "safety" in system_text or "permission" in system_text
@@ -261,13 +261,13 @@ def test_summarize_prompt_carries_verbatim_rule() -> None:
 
 def _summarize_system_text(policy: ReActPolicy, provider: FakeLLMProvider,
                            view: Any) -> str:
-    """Run a compaction and return the summarize system prompt text."""
+    """Run a compaction and return the summarize instruction text (the
+    request's trailing user turn)."""
     policy.decide(_ctx(), view)
     assert len(provider.received_requests) == 1
-    system = provider.received_requests[0].system
-    assert system is not None
+    instruction = provider.received_requests[0].messages[-1]
     return "".join(
-        b.text for b in system.content if isinstance(b, TextBlock)
+        b.text for b in instruction.content if isinstance(b, TextBlock)
     )
 
 

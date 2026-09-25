@@ -1,11 +1,11 @@
 # WorkerLoop
 
-`WorkerLoop` (`noeta.runtime.worker`) leases a ready task, advances it one step, releases it, and repeats — with heartbeats, stale-lease sweeps, timer polling and a bounded shutdown.
+`WorkerLoop` (exported from `noeta.sdk`) leases a ready task, advances it one step, releases it, and repeats — with heartbeats, stale-lease sweeps, timer polling and a bounded shutdown.
 
 Nothing launches it for you. A host constructs and runs it, and scales by running several loops, each with its own `worker_id`, against one store.
 
 ```python
-from noeta.runtime.worker import WorkerLoop
+from noeta.sdk import WorkerLoop
 
 loop = WorkerLoop(rt, worker_id="noeta-worker")
 print(loop.running)                      # → False

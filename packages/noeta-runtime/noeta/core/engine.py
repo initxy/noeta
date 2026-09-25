@@ -13,14 +13,14 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TypeGuard
 
 import copy
 
 from noeta.core._decision_handlers import (
     ContentHashesFn,
     HandlerContext,
-    SkillHashesFn,
+    SkillHashesFn as SkillHashesFn,  # re-exported: skills builtin imports it from here
     _validate_tool_output_inline_limit,
     append_decision_denial_feedback,
     append_tool_denial_feedback,
@@ -32,6 +32,7 @@ from noeta.core._decision_handlers import (
     handle_spawn_subtask,
     handle_spawn_subtasks,
     handle_state_patch,
+    held_preacked_results,
     handle_tool_calls,
     handle_yield_for_human,
     invoke_approved_tool_call,
@@ -173,7 +174,9 @@ def _background_subagent_seams(
     return launcher.launch, launcher.capacity
 
 
-def _is_background_spawn(decision: Any, launch_seam: Optional[Any]) -> bool:
+def _is_background_spawn(
+    decision: Any, launch_seam: Optional[Any]
+) -> TypeGuard[SpawnSubtaskDecision]:
     """True iff this decision is a background ``spawn_subagent`` AND a launcher
     is wired. Without a launcher the decision must fall through to the
     foreground barrier spawn in ``dispatch_exit``, so a resume or a child
@@ -482,8 +485,21 @@ class Engine:
             success=success,
             error=None if success else (error or "sub-agent failed"),
         )
-        msg = Message(role="tool", content=[block])
+        # Results a control tool pre-answered in the spawning turn were held
+        # for this message, so the turn gets ONE tool-role message.
+        held = self._held_preacked_results(task, {call_id})
+        msg = Message(role="tool", content=[*held, block])
         return self._append_message(task, msg, lease_id=lease_id, trace_id=trace_id)
+
+    def _held_preacked_results(
+        self, task: Task, answering: set[str]
+    ) -> list[ToolResultBlock]:
+        return held_preacked_results(
+            task,
+            answering,
+            read_events=lambda: self._event_log.read(task.task_id),
+            content_store=self._content_store,
+        )
 
     def _deref_subagent_output(self, output: Any) -> Any:
         """A subtask result output may be a ``ContentRef`` (a large answer
@@ -581,7 +597,8 @@ class Engine:
                     )
                 )
             start = end
-        msg = Message(role="tool", content=blocks)
+        held = self._held_preacked_results(task, set(call_ids))
+        msg = Message(role="tool", content=[*held, *blocks])
         return self._append_message(task, msg, lease_id=lease_id, trace_id=trace_id)
 
     # -- operator-driven state patch -------------------------------------
@@ -767,6 +784,7 @@ class Engine:
                 kind=kind,
                 reason=reason or "denied by human",
                 lease_id=lease_id, trace_id=resolved_trace,
+                arguments=arguments,
             )
         else:
             append_tool_denial_feedback(

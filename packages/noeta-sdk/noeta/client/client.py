@@ -18,6 +18,7 @@ and tears everything down.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import threading
 import time
 from collections.abc import Sequence
@@ -39,14 +40,27 @@ from noeta.execution import (
     multi_turn_policy_wrapper,
 )
 from noeta.client.messages import ViewItem, as_messages
-from noeta.client.parts import register_catalog_models, resolve_model_alias
+from noeta.client.parts import (
+    StoppableObserver,
+    build_hook_observer,
+    catalog_is_priced,
+    register_catalog_models,
+    resolve_model_alias,
+)
+from noeta.client.usage import UsageReport, build_usage_report
 from noeta.execution.driver import DriveOutcome, SeededTurn
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.errors import CodedError
-from noeta.protocols.event_log import EventEnvelope, EventLogFull, TaskStreamSummary
-from noeta.protocols.wake import HumanResponseReceived
+from noeta.protocols.event_log import EventLogFull, TaskStreamSummary
+from noeta.protocols.wake import (
+    NEXT_GOAL_WAKE_HANDLE,
+    HumanResponseReceived,
+    SubtaskCompleted,
+    SubtaskGroupCompleted,
+)
 from noeta.protocols.events import (
+    EventEnvelope,
     SuspendReason,
     TaskCompletedPayload,
     TaskFailedPayload,
@@ -58,8 +72,8 @@ from noeta.protocols.events import (
 from noeta.protocols.messages import ImageBlock, LLMProvider, MessageOrigin
 from noeta.protocols.tool import Tool
 from noeta.protocols.tool_args import resolve_tool_call_arguments
-from noeta.protocols.values import ContentRef
-from noeta.runtime.worker import WorkerLoop
+from noeta.protocols.values import LOCAL_PRINCIPAL, ContentRef, Principal
+from noeta.runtime.worker import DEFAULT_LEASE_BACKOFF_MAX_S, WorkerLoop
 from noeta.storage.memory import (
     InMemoryContentStore,
     InMemoryDispatcher,
@@ -74,11 +88,15 @@ from noeta.client.options import (
     AgentDefinition,
     Options,
     PluginActivation,
+    check_turn_options,
     compile_options,
     effective_root_policy,
 )
 from noeta.client.plugin_set import PluginSet
 from noeta.client.plugins import PluginError
+
+
+_log = logging.getLogger(__name__)
 
 
 __all__ = [
@@ -376,6 +394,7 @@ class Client:
         host_config: Optional[HostConfig] = None,
         allowed_models: Optional[Sequence[str]] = None,
         plugins: Optional["PluginSet"] = None,
+        principal: Principal = LOCAL_PRINCIPAL,
     ) -> None:
         # 0. Resolve provider: explicit kwarg first, then Options.provider
         #    (wiring is NOT identity — the AgentSpec identity never sees it).
@@ -539,10 +558,17 @@ class Client:
         # with shipped rows raise here, at build, never mid-session.
         if hc.extra_models:
             register_catalog_models(hc.extra_models)
+        _warn_unknown_plugin_config(hc.plugin_config, plugins)
         injected = hc.storage_triple()
         dispatcher: Dispatcher
         event_log: EventLogFull
         content_store: ContentStore
+        #: Adapters this Client opened itself from ``HostConfig.storage_path``
+        #: — it owns them, so :meth:`shutdown` closes them. An injected triple
+        #: belongs to the caller and is never closed here.
+        self._owned_storage: tuple[Any, ...] = (
+            injected if injected is not None and hc.storage_path is not None else ()
+        )
         if injected is not None:
             event_log, content_store, dispatcher = injected
         else:
@@ -558,6 +584,8 @@ class Client:
         #: stamps seeded roots (driver) and scopes the resident pool's claims
         #: (``start_workers``). See ``HostConfig.queue``.
         self._queue: str = hc.queue
+        #: The resident pool's reliability sink (``start_workers``).
+        self._reliability_sink = hc.reliability_sink
         # Effect scoping: a loaded plugin's guard / observer contributions are
         # governance authority — in force process-wide for EVERY agent regardless
         # of which plugins that agent activates. Resolved here from the loaded set
@@ -694,6 +722,12 @@ class Client:
             repetition_threshold=(
                 hc.repetition_threshold if hc.repetition_threshold is not None else 0
             ),
+            # User pre-tool-use rules (HostConfig.hooks) — the HookGuard the
+            # governance stack registers after the built-in guards. Empty ⇒
+            # no HookGuard, byte-identical to a host without hooks.
+            hooks_pre_tool_use=(
+                hc.hooks.pre_tool_use if hc.hooks is not None else ()
+            ),
             tool_output_inline_limit=hc.tool_output_inline_limit,
             # The hosts WebFetch may reach without asking a human. Empty (the
             # default) ⇒ every fetch is gated under a gating permission mode.
@@ -755,6 +789,22 @@ class Client:
                 config=hc.otlp_traces,
                 http_post=hc.otlp_http_post,
             )
+        # User post-tool-use / notification hooks (HostConfig.hooks): ONE
+        # live-only observer per Client, loader-resolved from the governance
+        # built-in and stopped on shutdown. Same placement rule as the trace
+        # exporter: its worker thread must not outlive a failed __init__.
+        self._hook_observer: Optional[StoppableObserver] = None
+        if hc.hooks is not None and (
+            hc.hooks.post_tool_use or hc.hooks.notification
+        ):
+            self._hook_observer = build_hook_observer(
+                event_log=event_log,
+                post_tool_use=hc.hooks.post_tool_use,
+                notification=hc.hooks.notification,
+                cwd=str(effective_workspace_dir),
+                timeout_s=hc.hooks.command_timeout_s,
+                max_queue=hc.hooks.max_queue,
+            )
 
         # 5. Interaction driver
         # A local deployment widens the per-turn model-selector allowlist to its
@@ -788,6 +838,10 @@ class Client:
             # Root tasks are born on this client's queue so a seed yielded to
             # the pool lands with this client's own workers.
             queue=self._queue,
+            # Who acts when a turn names no principal of its own: gates the
+            # per-turn ``model_selector`` (principal ∩ ``allowed_models``) and
+            # is stamped on ``ModelBound``. ⊤ LOCAL_PRINCIPAL by default.
+            principal=principal,
         )
         # Wire the driver back into the host as the background-completion
         # notifier. The driver wraps the host, so the host cannot
@@ -822,64 +876,179 @@ class Client:
     # -- can_use_tool auto-resolver ------------------------------------------
 
     def _drain_approvals(self, task_id: str, outcome: DriveOutcome) -> DriveOutcome:
-        """Loop-resolve pending tool-call approvals via ``can_use_tool``.
+        """Loop-resolve pending tool-call approvals via ``can_use_tool``, then
+        settle the turn's background deliveries.
+
+        A root parked on a foreground sub-agent that is itself waiting on a
+        human (a gated tool call, a question) is reported as waiting on the
+        sub-agent's handle — ``wake_handle`` names it instead of ``None`` — and
+        :meth:`approve` / :meth:`deny` / :meth:`answer` on the root reach that
+        sub-agent (see :meth:`_human_wait_target`).
 
         When the callback is configured and the outcome is a suspend on an
-        ``approval-*`` handle (i.e. a gated tool is waiting), scan the
-        event log for the newest ``ToolCallApprovalRequested`` that has no
-        matching ``ToolCallApprovalResolved``, invoke the user's callback,
-        and resume with driver approve/deny. Repeat until the task is no
-        longer suspended on an approval handle, then return the final
-        outcome.
+        ``approval-*`` handle (the root's own, or a sub-agent's surfaced as
+        above), find the newest ``ToolCallApprovalRequested`` without a
+        matching ``ToolCallApprovalResolved`` on the task that holds it, invoke
+        the callback, and resume that task with driver approve/deny. Repeat
+        until nothing waits on an approval, then return the final outcome.
+
+        Once the turn rests on the next-goal handle, finished background
+        sub-agent results whose delivery was deferred past its window are
+        re-pushed (:meth:`SdkHost.redeliver_background_subagents`).
         """
         callback = self._can_use_tool
-        if callback is None:
-            return outcome
         while True:
+            target, outcome = self._surface_waiting_descendant(task_id, outcome)
             handle = outcome.wake_handle
             if (
-                outcome.status != "suspended"
+                callback is None
+                or outcome.status != "suspended"
                 or not isinstance(handle, str)
                 or not handle.startswith("approval-")
             ):
-                return outcome
-            # Find the latest unreplied ToolCallApprovalRequested.
-            events = self._host.event_log.read(task_id)
-            pending: Optional[ToolCallApprovalRequestedPayload] = None
-            resolved_call_ids: set[str] = set()
-            for e in events:
-                if e.type == "ToolCallApprovalResolved":
-                    p = e.payload
-                    if isinstance(p, ToolCallApprovalResolvedPayload):
-                        resolved_call_ids.add(p.call_id)
-            for e in reversed(events):
-                if e.type == "ToolCallApprovalRequested":
-                    p = e.payload
-                    if (
-                        isinstance(p, ToolCallApprovalRequestedPayload)
-                        and p.call_id not in resolved_call_ids
-                    ):
-                        pending = p
-                        break
+                break
+            pending = self._pending_approval(target)
             if pending is None:
-                # No pending request — leave outcome alone.
-                return outcome
+                break  # No pending request — leave outcome alone.
             args = resolve_tool_call_arguments(pending, self._host.content_store)
             approved = bool(callback(pending.tool_name, args))
-            if approved:
-                outcome = self._driver.approve(
-                    task_id,
-                    call_id=pending.call_id,
-                    reason=None,
-                    resolver="can_use_tool",
-                )
-            else:
-                outcome = self._driver.deny(
-                    task_id,
-                    call_id=pending.call_id,
-                    reason=None,
-                    resolver="can_use_tool",
-                )
+            resolve = self._driver.approve if approved else self._driver.deny
+            outcome = resolve(
+                target,
+                call_id=pending.call_id,
+                reason=None,
+                resolver="can_use_tool",
+            )
+            if target != task_id:
+                # The sub-agent's own outcome; the caller asked about the root,
+                # which the child's terminal resumed out-of-band.
+                outcome = self._fold_outcome(task_id)
+        self._redeliver_background(task_id, outcome)
+        return outcome
+
+    def _pending_approval(
+        self, task_id: str
+    ) -> Optional[ToolCallApprovalRequestedPayload]:
+        """The newest ``ToolCallApprovalRequested`` on ``task_id`` with no
+        matching ``ToolCallApprovalResolved``, or ``None``."""
+        events = self._host.event_log.read(task_id)
+        resolved_call_ids: set[str] = set()
+        for e in events:
+            if e.type == "ToolCallApprovalResolved":
+                p = e.payload
+                if isinstance(p, ToolCallApprovalResolvedPayload):
+                    resolved_call_ids.add(p.call_id)
+        for e in reversed(events):
+            if e.type == "ToolCallApprovalRequested":
+                p = e.payload
+                if (
+                    isinstance(p, ToolCallApprovalRequestedPayload)
+                    and p.call_id not in resolved_call_ids
+                ):
+                    return p
+        return None
+
+    def _fold_outcome(self, task_id: str) -> DriveOutcome:
+        """``task_id``'s current rest as a :class:`DriveOutcome` (the shape a
+        drive verb returns), read from the log without driving anything."""
+        task = fold(self._host.event_log, self._host.content_store, task_id)
+        if task.status == "terminal" and getattr(task, "parent_task_id", None) is None:
+            # Same per-session sandbox release the driver's own outcome does
+            # when a root settles terminal. Idempotent; no-op off the sandbox.
+            self._host.release_exec_env(task_id)
+        wake_on = getattr(task, "wake_on", None)
+        handle = wake_on.handle if isinstance(wake_on, HumanResponseReceived) else None
+        return DriveOutcome(task_id=task_id, status=task.status, wake_handle=handle)
+
+    def _waiting_descendant(self, task_id: str) -> Optional[tuple[str, str]]:
+        """``(sub_task_id, handle)`` of the foreground sub-agent a parked
+        ``task_id`` is ultimately waiting on, when that sub-agent is suspended
+        on a human handle (a gated tool call, a question); else ``None``.
+
+        Walks the delegation wake chain from ``task_id`` (member order for a
+        group); only a task suspended on a sub-agent barrier is descended."""
+        log, store = self._host.event_log, self._host.content_store
+        queue = [task_id]
+        seen: set[str] = set()
+        while queue:
+            current = queue.pop(0)
+            if current in seen:
+                continue
+            seen.add(current)
+            task = fold(log, store, current)
+            if task.status != "suspended":
+                continue
+            wake = task.wake_on
+            if isinstance(wake, HumanResponseReceived):
+                if current != task_id:
+                    return current, wake.handle
+            elif isinstance(wake, SubtaskGroupCompleted):
+                queue.extend(wake.subtask_ids)
+            elif isinstance(wake, SubtaskCompleted):
+                queue.append(wake.subtask_id)
+        return None
+
+    def _surface_waiting_descendant(
+        self, task_id: str, outcome: DriveOutcome
+    ) -> tuple[str, DriveOutcome]:
+        """``(task holding the human wait, outcome as the caller sees it)``.
+
+        A suspend with no human handle may be a root parked on a sub-agent
+        that waits on a human; the outcome then names that sub-agent's handle
+        so the host sees what is pending instead of an unexplained suspend."""
+        if (
+            outcome.task_id == task_id
+            and outcome.status == "suspended"
+            and outcome.wake_handle is None
+        ):
+            found = self._waiting_descendant(task_id)
+            if found is not None:
+                child_id, handle = found
+                return child_id, dataclasses.replace(outcome, wake_handle=handle)
+        return task_id, outcome
+
+    def _human_wait_target(self, task_id: str) -> str:
+        """The task a human verb (approve / deny / answer) addressed to
+        ``task_id`` should resolve: ``task_id`` itself, unless it is parked on
+        a sub-agent that is the one waiting on a human — then that sub-agent,
+        so a host can answer a sub-agent's approval through the root it
+        started."""
+        task = fold(self._host.event_log, self._host.content_store, task_id)
+        if task.status == "suspended" and isinstance(
+            task.wake_on, (SubtaskCompleted, SubtaskGroupCompleted)
+        ):
+            found = self._waiting_descendant(task_id)
+            if found is not None:
+                return found[0]
+        return task_id
+
+    def _redeliver_background(self, task_id: str, outcome: DriveOutcome) -> None:
+        """At a settled turn boundary, re-push this session's background
+        sub-agent results whose delivery was deferred past its window."""
+        if (
+            self._shutdown
+            or outcome.task_id != task_id
+            or outcome.status != "suspended"
+            or outcome.wake_handle != NEXT_GOAL_WAKE_HANDLE
+        ):
+            return
+        try:
+            self._host.redeliver_background_subagents(task_id)
+        except Exception:  # noqa: BLE001 — a delivery backstop never fails a turn
+            _log.warning(
+                "background re-delivery scan failed for %s", task_id, exc_info=True
+            )
+
+    def _check_turn_options(
+        self, permission_mode: Optional[str], effort: Optional[str]
+    ) -> None:
+        """Refuse an illegal per-turn ``permission_mode`` / ``effort`` before
+        the driver writes anything (``InvalidTurnOptionError``)."""
+        check_turn_options(
+            permission_mode=permission_mode,
+            effort=effort,
+            thinking=self._host.thinking,
+        )
 
     def start(
         self,
@@ -894,6 +1063,7 @@ class Client:
         effort: Optional[str] = None,
         activations: tuple[str, ...] = (),
         attachment_texts: tuple[str, ...] = (),
+        principal: Optional[Principal] = None,
     ) -> DriveOutcome:
         """Create a Task and drive the first turn (driver ``start``).
 
@@ -931,7 +1101,14 @@ class Client:
         rather than reaching for a reminder provider when the text is already
         settled at send time; a provider is for text that must be computed at
         recording time and lands *after* the goal.
+
+        ``principal`` is who acts for this turn (``None`` ⇒ the Client's own,
+        see the constructor): ``model_selector`` must lie in its
+        ``allowed_models`` ∩ the Client's ``allowed_models`` or
+        ``ModelSelectorError`` is raised before anything is written, and its
+        ``identity`` is stamped on the opening ``ModelBound``.
         """
+        self._check_turn_options(permission_mode, effort)
         outcome = self._driver.start(
             goal=goal,
             agent=agent if agent is not None else self._main_agent_name,
@@ -943,6 +1120,7 @@ class Client:
             effort=effort,
             activations=activations,
             attachment_texts=attachment_texts,
+            principal=principal,
         )
         return self._drain_approvals(outcome.task_id, outcome)
 
@@ -958,6 +1136,7 @@ class Client:
         effort: Optional[str] = None,
         activations: tuple[str, ...] = (),
         attachment_texts: tuple[str, ...] = (),
+        principal: Optional[Principal] = None,
     ) -> DriveOutcome:
         """Append a new user turn (driver ``send_goal``).
 
@@ -980,7 +1159,10 @@ class Client:
         ``attachment_texts`` are host-composed reference snapshots recorded as
         their own ``origin="system"`` messages before the goal — see
         :meth:`start`.
+
+        ``principal`` is who acts for this turn — see :meth:`start`.
         """
+        self._check_turn_options(permission_mode, effort)
         outcome = self._driver.send_goal(
             task_id=task_id,
             goal=goal,
@@ -991,6 +1173,7 @@ class Client:
             effort=effort,
             activations=activations,
             attachment_texts=attachment_texts,
+            principal=principal,
         )
         return self._drain_approvals(task_id, outcome)
 
@@ -1041,10 +1224,18 @@ class Client:
         callback resolves that one too. Without the drain the same session
         behaved differently depending on which verb resumed it — auto-resolving
         after ``send_goal`` but stalling after ``approve``.
+
+        ``task_id`` may be the root a foreground sub-agent was started from
+        when that sub-agent is the one waiting (the root's outcome then names
+        the sub-agent's ``approval-{call_id}`` handle): the approval reaches the
+        sub-agent and the returned outcome is the root's.
         """
+        target = self._human_wait_target(task_id)
         outcome = self._driver.approve(
-            task_id=task_id, call_id=call_id, reason=reason, resolver=resolver
+            task_id=target, call_id=call_id, reason=reason, resolver=resolver
         )
+        if target != task_id:
+            outcome = self._fold_outcome(task_id)
         return self._drain_approvals(task_id, outcome)
 
     def deny(
@@ -1057,11 +1248,15 @@ class Client:
     ) -> DriveOutcome:
         """Deny a pending gated tool call (driver ``deny``).
 
-        The resumed turn drains through ``can_use_tool`` (see :meth:`approve`).
+        The resumed turn drains through ``can_use_tool`` and may address a
+        waiting sub-agent through its root (see :meth:`approve`).
         """
+        target = self._human_wait_target(task_id)
         outcome = self._driver.deny(
-            task_id=task_id, call_id=call_id, reason=reason, resolver=resolver
+            task_id=target, call_id=call_id, reason=reason, resolver=resolver
         )
+        if target != task_id:
+            outcome = self._fold_outcome(task_id)
         return self._drain_approvals(task_id, outcome)
 
     def answer(
@@ -1074,14 +1269,18 @@ class Client:
     ) -> DriveOutcome:
         """Answer a pending structured user question (driver ``answer``).
 
-        The resumed turn drains through ``can_use_tool`` (see :meth:`approve`).
+        The resumed turn drains through ``can_use_tool`` and may address a
+        waiting sub-agent through its root (see :meth:`approve`).
         """
+        target = self._human_wait_target(task_id)
         outcome = self._driver.answer(
-            task_id=task_id,
+            task_id=target,
             question_id=question_id,
             answers=answers,
             answered_by=answered_by,
         )
+        if target != task_id:
+            outcome = self._fold_outcome(task_id)
         return self._drain_approvals(task_id, outcome)
 
     def deliver_event(
@@ -1130,6 +1329,7 @@ class Client:
         effort: Optional[str] = None,
         activations: tuple[str, ...] = (),
         attachment_texts: tuple[str, ...] = (),
+        principal: Optional[Principal] = None,
     ) -> SeededTurn:
         """Create + validate + lease a first turn WITHOUT driving it
         (driver ``seed_start``); pass the result to :meth:`drive_seeded`.
@@ -1142,7 +1342,12 @@ class Client:
 
         ``attachment_texts`` are host-composed reference snapshots recorded as
         their own ``origin="system"`` messages before the goal — see
-        :meth:`start`."""
+        :meth:`start`.
+
+        ``principal`` is who acts for this turn — see :meth:`start`. It is
+        consumed here, at seed time (selector check + ``ModelBound``), so
+        :meth:`drive_seeded` / :meth:`dispatch_seeded` need nothing more."""
+        self._check_turn_options(permission_mode, effort)
         return self._driver.seed_start(
             goal=goal,
             agent=agent if agent is not None else self._main_agent_name,
@@ -1154,6 +1359,7 @@ class Client:
             effort=effort,
             activations=activations,
             attachment_texts=attachment_texts,
+            principal=principal,
         )
 
     def seed_send_goal(
@@ -1168,6 +1374,7 @@ class Client:
         effort: Optional[str] = None,
         activations: tuple[str, ...] = (),
         attachment_texts: tuple[str, ...] = (),
+        principal: Optional[Principal] = None,
     ) -> SeededTurn:
         """Validate + seed a follow-up user turn WITHOUT driving it
         (driver ``seed_send_goal``).
@@ -1179,7 +1386,10 @@ class Client:
 
         ``attachment_texts`` are host-composed reference snapshots recorded as
         their own ``origin="system"`` messages before the goal — see
-        :meth:`start`."""
+        :meth:`start`.
+
+        ``principal`` is who acts for this turn — see :meth:`seed_start`."""
+        self._check_turn_options(permission_mode, effort)
         return self._driver.seed_send_goal(
             task_id=task_id,
             goal=goal,
@@ -1190,6 +1400,7 @@ class Client:
             effort=effort,
             activations=activations,
             attachment_texts=attachment_texts,
+            principal=principal,
         )
 
     def seed_approve(
@@ -1480,6 +1691,28 @@ class Client:
                 return None
         return None
 
+    def usage(self, task_id: str, *, include_children: bool = True) -> UsageReport:
+        """What ``task_id`` cost so far: per-model rows and totals.
+
+        Folded from the recorded ``LLMRequestStarted`` / ``LLMRequestFinished``
+        pairs of the task and, with ``include_children`` (the default), every
+        sub-agent it spawned — foreground and background, any depth. Read-only
+        and safe on a running task: calls still in flight show up as
+        ``unfinished_requests``.
+
+        A ``$0`` is only a real number when ``unpriced_models`` is empty: a
+        model the catalog has no rates for is charged nothing and listed there
+        (and its row carries ``priced=False``). Register its rates through
+        ``HostConfig.extra_models``. An unknown ``task_id`` yields an empty
+        report.
+        """
+        return build_usage_report(
+            self._host.event_log,
+            task_id,
+            is_priced=catalog_is_priced,
+            include_children=include_children,
+        )
+
     def task_summaries(self) -> list[dict[str, Any]]:
         """Every task stream folded into a lifecycle row, most-recent first.
 
@@ -1667,8 +1900,13 @@ class Client:
         timer_poll_interval: float = 1.0,
         lease_seconds: float = 600.0,
         shutdown_grace_s: Optional[float] = 10.0,
+        lease_backoff_max_s: Optional[float] = None,
     ) -> None:
         """Start ``num_workers`` resident WorkerLoop daemon threads.
+
+        ``lease_backoff_max_s`` caps the backoff a worker applies while the
+        dispatcher keeps failing (``None`` ⇒ the WorkerLoop default); the
+        pool's reliability signals go to ``HostConfig.reliability_sink``.
 
         When workers are running, the ``background_drive`` verbs (start /
         send_goal / approve / deny / answer / deliver_event) seed
@@ -1705,6 +1943,12 @@ class Client:
                 # The pool claims only this client's queue — on a shared
                 # store it can never drive another client's work.
                 queue=self._queue,
+                reliability_sink=self._reliability_sink,
+                lease_backoff_max_s=(
+                    lease_backoff_max_s
+                    if lease_backoff_max_s is not None
+                    else DEFAULT_LEASE_BACKOFF_MAX_S
+                ),
             )
             self._worker_loops.append(loop)
             th = threading.Thread(
@@ -1809,15 +2053,28 @@ class Client:
         self.shutdown()
 
     def shutdown(self) -> None:
-        """Stop resident workers (if any), then unsubscribe observers.
+        """Stop background work and resident workers, then release resources.
+
+        Background work goes first: this Client's background shells are killed,
+        in-flight background sub-agents stop at their next step (left started
+        and undelivered, so the next Client on the same store resumes them),
+        and no completion notice drives a turn afterwards. Then the worker
+        pool, observers, tracing, MCP and the sandbox are torn down, and last
+        the storage adapters this Client opened itself from
+        ``HostConfig.storage_path`` are closed — so reading this Client's
+        events after ``shutdown`` fails for such a store. An injected
+        ``event_log`` / ``content_store`` / ``dispatcher`` triple and the
+        default in-memory store are never closed.
 
         Idempotent, so it is safe to call explicitly inside a ``with`` block.
-        Does **not** explicitly close in-memory stores (they are
-        process-owned).
         """
         if self._shutdown:
             return
         self._shutdown = True
+        try:
+            self._host.shutdown_background()
+        except Exception:
+            _log.warning("background shutdown failed", exc_info=True)
         # Stop the worker pool first so no worker is mid-step when we
         # tear down observers / the trace sink below.
         if self._workers_started:
@@ -1844,6 +2101,13 @@ class Client:
                 # container, and letting an exporter flush failure skip it
                 # leaked a live container per Client.
                 pass
+        if self._hook_observer is not None:
+            try:
+                # Unsubscribes, cancels an in-flight hook command, drops the
+                # queue — no user command outlives the Client.
+                self._hook_observer.stop()
+            except Exception:
+                _log.warning("hook observer stop failed", exc_info=True)
         # Close every pooled MCP connection: the workers are stopped, so no
         # turn is mid-call, and a stdio server's subprocess must not outlive
         # this Client. No-op when MCP was never connected.
@@ -1858,11 +2122,51 @@ class Client:
         except Exception:
             # Shutdown must never raise from teardown; swallow defensively.
             pass
+        # Last: close the adapters this Client opened from ``storage_path``.
+        # Each open holds file descriptors / connections, so a process that
+        # builds a Client per request leaked a set per Client without this.
+        for adapter in self._owned_storage:
+            close = getattr(adapter, "close", None)
+            if not callable(close):
+                # A read-through cache wrapper (``CachedContentStore``) has no
+                # ``close`` of its own; the adapter it wraps holds the handles.
+                close = getattr(getattr(adapter, "_inner", None), "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    _log.warning("storage close failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
 # one-shot query
 # ---------------------------------------------------------------------------
+
+
+def _warn_unknown_plugin_config(
+    plugin_config: Mapping[str, Any], plugins: Optional[PluginSet]
+) -> None:
+    """Warn once per Client for a ``HostConfig.plugin_config`` entry naming
+    no built-in and no loaded plugin — a typo there is otherwise a silent
+    no-op (nothing ever reads the entry)."""
+    if not plugin_config:
+        return
+    import importlib
+    import warnings
+
+    known = {
+        m.name for m in importlib.import_module("noeta.builtins").builtin_manifests()
+    }
+    if plugins is not None:
+        known.update(plugins.names())
+    unknown = sorted(name for name in plugin_config if name not in known)
+    if unknown:
+        warnings.warn(
+            f"HostConfig.plugin_config names no known plugin: {unknown}; "
+            f"known: {sorted(known)}",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 class QueryFailedError(CodedError):
@@ -1876,6 +2180,11 @@ class QueryFailedError(CodedError):
     failure on the exception path — instead of folding the reason into a
     ``Result.answer`` string — is what stops a caller from mistaking a failure
     reason for a successful answer.
+
+    ``detail`` is the failure's free-text diagnosis when the terminal carries
+    one (``TaskFailedPayload.detail`` — e.g. the provider's error text); it is
+    appended to the message, while ``reason`` stays the stable tag to branch
+    on. ``""`` when there is none.
     """
 
     code = "query_failed"
@@ -1887,14 +2196,19 @@ class QueryFailedError(CodedError):
         status: str,
         reason: str,
         retryable: bool = False,
+        detail: str = "",
     ) -> None:
         self.task_id = task_id
         self.status = status
         self.reason = reason
         self.retryable = retryable
-        super().__init__(
+        self.detail = detail
+        message = (
             f"query task {task_id!r} did not complete (status={status!r}): {reason}"
         )
+        if detail:
+            message += f" — {detail}"
+        super().__init__(message)
 
 
 class QueryResult(list[EventEnvelope]):
@@ -1911,7 +2225,7 @@ class QueryResult(list[EventEnvelope]):
     that store is gone by the time ``query`` returns.
     """
 
-    __slots__ = ("task_id", "_view", "_answer", "_failure")
+    __slots__ = ("task_id", "_view", "_answer", "_failure", "_usage")
 
     def __init__(
         self,
@@ -1921,12 +2235,14 @@ class QueryResult(list[EventEnvelope]):
         view: list[ViewItem],
         answer: Any,
         failure: Optional[QueryFailedError],
+        usage: Optional[UsageReport] = None,
     ) -> None:
         super().__init__(envelopes)
         self.task_id = task_id
         self._view = view
         self._answer = answer
         self._failure = failure
+        self._usage = usage if usage is not None else UsageReport(task_id=task_id)
 
     def messages(self) -> list[ViewItem]:
         """The human-readable view of the stream (``as_messages`` output).
@@ -1948,6 +2264,16 @@ class QueryResult(list[EventEnvelope]):
         if self._failure is not None:
             raise self._failure
         return self._answer
+
+    def usage(self) -> UsageReport:
+        """What the query cost, sub-agents included — ``Client.usage`` for the
+        one-shot path.
+
+        Materialized before the temporary Client shut down, so it is final for
+        every call recorded by then. Check ``unpriced_models`` before trusting
+        a ``$0``.
+        """
+        return self._usage
 
     def __repr__(self) -> str:
         """A compact summary, not the whole envelope stream.
@@ -1996,14 +2322,28 @@ def _materialize_query_result(client: Client, outcome: Any) -> QueryResult:
             status="failed",
             reason=payload.reason,
             retryable=payload.retryable,
+            # ``TaskFailedPayload.detail`` is additive (0.6.31); a payload
+            # restored from an older store has none.
+            detail=str(getattr(payload, "detail", "") or ""),
         )
     else:
         wake = getattr(outcome, "wake_handle", None)
-        detail = f"; waiting on {wake!r}" if wake else ""
+        if isinstance(wake, str) and wake.startswith("approval-"):
+            # A gated tool call nobody resolved — the root's own, or a
+            # sub-agent's surfaced on the root's outcome. Say so plainly.
+            waiting = client._waiting_descendant(task_id)
+            where = f" in sub-agent task {waiting[0]!r}" if waiting else ""
+            reason = (
+                f"a tool call is waiting for approval ({wake!r}){where}; "
+                "pass Options.can_use_tool to resolve approvals in query()"
+            )
+        else:
+            detail = f"; waiting on {wake!r}" if wake else ""
+            reason = f"no terminal event in the stream{detail}"
         failure = QueryFailedError(
             task_id=task_id,
             status=str(outcome.status),
-            reason=f"no terminal event in the stream{detail}",
+            reason=reason,
         )
     return QueryResult(
         envelopes,
@@ -2011,6 +2351,7 @@ def _materialize_query_result(client: Client, outcome: Any) -> QueryResult:
         view=view,
         answer=answer,
         failure=failure,
+        usage=client.usage(task_id),
     )
 
 

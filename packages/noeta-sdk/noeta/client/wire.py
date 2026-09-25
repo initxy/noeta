@@ -14,7 +14,7 @@ import dataclasses
 from typing import Any
 
 from noeta.protocols.canonical import to_canonical
-from noeta.protocols.event_log import EventEnvelope
+from noeta.protocols.events import EventEnvelope
 
 
 __all__ = ["envelope_to_dict"]

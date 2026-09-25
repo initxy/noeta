@@ -191,7 +191,7 @@ in-process, so the CI job is a plain Python job:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - run: uv sync --frozen

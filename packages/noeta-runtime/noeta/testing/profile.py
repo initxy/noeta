@@ -170,13 +170,14 @@ def build_policy_factory(
     ReActPolicy = importlib.import_module("noeta.builtins.react.impl").ReActPolicy
 
     def factory(llm: Any) -> "Policy":
-        return ReActPolicy(
+        policy: Policy = ReActPolicy(
             llm=llm,
             tools=tools,
             system_prompt=system_prompt,
             model=model,
             max_steps=max_steps,
         )
+        return policy
 
     return factory
 

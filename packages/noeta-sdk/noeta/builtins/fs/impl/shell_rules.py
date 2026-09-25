@@ -44,14 +44,14 @@ def _git_diff_validate(tail: list[str]) -> bool:
 
 
 def _git_log_validate(tail: list[str]) -> bool:
-    # ``git log`` is pure history inspection: it writes no file, and unlike
-    # ``git diff`` it does NOT honour a repo-configured external diff driver
-    # unless ``--ext-diff`` is passed — so with that flag off the whole
-    # subcommand executes nothing. Bound the shape the way ``git diff`` is
-    # bounded: a curated flag set plus path-shaped args (which also covers
-    # ``-n``'s count and ``-L``'s range), rejecting every other ``-``-prefixed
-    # token, so ``--ext-diff`` (and any future flag) has to be added here
-    # deliberately rather than arriving for free.
+    # ``git log`` is history inspection and writes no file, but with ``-p`` it
+    # still honours a repo-configured ``textconv`` driver (a program named in
+    # ``.git/config``); :func:`_harden_git` switches that off when the rule
+    # runs. Bound the shape the way ``git diff`` is bounded: a curated flag set
+    # plus path-shaped args (which also covers ``-n``'s count and ``-L``'s
+    # range), rejecting every other ``-``-prefixed token, so ``--ext-diff``
+    # (and any future flag) has to be added here deliberately rather than
+    # arriving for free.
     allowed_flags = {
         "--oneline",
         "--stat",
@@ -136,14 +136,48 @@ def _find_validate(tail: list[str]) -> bool:
     return all(a not in forbidden for a in tail)
 
 
+#: Per-subcommand flags that switch off the helper programs a repository's
+#: own ``.git/config`` can name: the ``core.fsmonitor`` hook (index refresh in
+#: ``status`` / ``diff``), an external diff driver and ``textconv`` filters.
+#: Global ``-c`` flags go before the subcommand, the rest right after it (ahead
+#: of any ``--``). Residual: a ``filter.<driver>.clean`` program has no global
+#: off switch, so a ``.git/config`` that names one still runs it on ``status``
+#: / ``diff`` of a modified file.
+_GIT_HARDENING: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "status": (("-c", "core.fsmonitor="), ()),
+    "diff": (("-c", "core.fsmonitor="), ("--no-ext-diff", "--no-textconv")),
+    "log": ((), ("--no-ext-diff", "--no-textconv")),
+}
+
+
+def _harden_git(argv: list[str]) -> list[str]:
+    """``git <sub> …`` → the same command with :data:`_GIT_HARDENING` applied."""
+    before, after = _GIT_HARDENING[argv[1]]
+    return [argv[0], *before, argv[1], *after, *argv[2:]]
+
+
 DEFAULT_SHELL_RULES: tuple[AllowRule, ...] = (
-    AllowRule("git", "status", _git_status_validate, "git_status"),
-    AllowRule("git", "diff", _git_diff_validate, "git_diff"),
-    AllowRule("git", "log", _git_log_validate, "git_log"),
-    AllowRule("pytest", None, _pytest_validate, "pytest"),
-    AllowRule("uv", "run", _uv_run_pytest_validate, "uv_run_pytest"),
-    AllowRule("npm", "test", _trivial_validate, "npm_test"),
-    AllowRule("pnpm", "test", _trivial_validate, "pnpm_test"),
+    AllowRule(
+        "git", "status", _git_status_validate, "git_status", harden=_harden_git
+    ),
+    AllowRule("git", "diff", _git_diff_validate, "git_diff", harden=_harden_git),
+    AllowRule("git", "log", _git_log_validate, "git_log", harden=_harden_git),
+    # Test runners execute repository code by design (``conftest.py``,
+    # ``package.json`` scripts), so the host honours them only in a trusted
+    # workspace — the same trust that gates ``.noeta/shell-allowlist.json``.
+    AllowRule(
+        "pytest", None, _pytest_validate, "pytest", runs_workspace_code=True
+    ),
+    AllowRule(
+        "uv", "run", _uv_run_pytest_validate, "uv_run_pytest",
+        runs_workspace_code=True,
+    ),
+    AllowRule(
+        "npm", "test", _trivial_validate, "npm_test", runs_workspace_code=True
+    ),
+    AllowRule(
+        "pnpm", "test", _trivial_validate, "pnpm_test", runs_workspace_code=True
+    ),
     # Read-only search / listing, so an ALLOWLIST-mode agent with no grep/glob
     # tool of its own can still search the workspace through the shell.
     AllowRule("grep", None, _grep_validate, "grep"),

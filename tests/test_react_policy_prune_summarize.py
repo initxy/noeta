@@ -505,12 +505,13 @@ def test_compaction_model_unset_is_byte_identical() -> None:
     assert sent[0] == sent[1]
 
 
-def test_summarize_request_opts_out_of_tool_use() -> None:
+def test_summarize_request_first_attempt_sends_no_tool_choice() -> None:
     """The summarize round-trip carries the live tool schemas (the collapsed
-    prefix still holds tool blocks), so only the metadata opt-out stops a
-    summarizer from answering with a tool call — an only-``tool_use`` response
-    has no text and would die as ``compaction_summary_failed``. Decide turns
-    must NOT carry the opt-out: the main loop's whole point is tool use."""
+    prefix still holds tool blocks). Its first attempt sends no
+    ``tool_choice`` — on Anthropic a changed ``tool_choice`` drops the
+    message-tier cache entry — and a note answer needs no retry, so neither
+    request carries the opt-out (the retry path is covered in
+    ``test_summarize_tool_choice_retry.py``)."""
     policy, provider, *_ = _policy(
         [_usage_response("ok", input_tokens=400), _summary_resp()]
     )
@@ -522,7 +523,7 @@ def test_summarize_request_opts_out_of_tool_use() -> None:
 
     decide_request, summarize_request = provider.received_requests
     assert decide_request.metadata.get("tool_choice") is None
-    assert summarize_request.metadata.get("tool_choice") == "none"
+    assert "tool_choice" not in summarize_request.metadata
 
 
 def test_compaction_model_ceiling_caps_the_summarize_request() -> None:

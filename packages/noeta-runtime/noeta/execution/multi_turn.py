@@ -17,7 +17,7 @@ from noeta.protocols.decisions import (
     FinishDecision,
     YieldForHumanDecision,
 )
-from noeta.protocols.events import SUSPEND_REASON_TURN_FAILED
+from noeta.protocols.events import SUSPEND_REASON_TURN_FAILED, cap_fail_detail
 from noeta.protocols.policy import Policy
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.view import View
@@ -44,8 +44,9 @@ class MultiTurnReActPolicy:
 
     With ``final=False`` a ``FinishDecision`` and a ``FailDecision`` both become
     the next-goal suspend (the failure carrying
-    ``suspend_reason="turn_failed: <reason>"``); every other Decision shape
-    passes through untouched. With ``final=True`` everything passes through,
+    ``suspend_reason="turn_failed: <reason>"``, or
+    ``"turn_failed: <reason>: <detail>"`` when ``FailDecision.detail`` is set);
+    every other Decision shape passes through untouched. With ``final=True`` everything passes through,
     because there is no next human turn to park for.
 
     **Why a failed turn suspends rather than terminates.** ``TaskFailed`` seals
@@ -111,7 +112,7 @@ class MultiTurnReActPolicy:
                 prompt=self._wake_handle,
                 state_patch=result.state_patch,
                 assistant_message=result.assistant_message,
-                suspend_reason=f"{TURN_FAILED_SUSPEND_TAG}: {result.reason}",
+                suspend_reason=_turn_failed_reason(result),
             )
         return result
 
@@ -119,3 +120,15 @@ class MultiTurnReActPolicy:
     # keeps any attribute the inner policy exposes reachable through it.
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
+
+
+def _turn_failed_reason(decision: FailDecision) -> str:
+    """``turn_failed: <reason>``, or ``turn_failed: <reason>: <detail>`` when the
+    failure carries a diagnostic — the detail a one-shot task records on
+    ``TaskFailed.detail`` must not vanish just because the turn parked instead.
+    :func:`parse_suspend_reason` splits on the first ``": "``, so its ``detail``
+    is ``"<reason>: <detail>"``."""
+    detail = cap_fail_detail(decision.detail)
+    if detail is None:
+        return f"{TURN_FAILED_SUSPEND_TAG}: {decision.reason}"
+    return f"{TURN_FAILED_SUSPEND_TAG}: {decision.reason}: {detail}"

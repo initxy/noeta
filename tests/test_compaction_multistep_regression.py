@@ -90,14 +90,15 @@ class _MultiCompactionProvider:
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         self.calls.append(request)
-        system_text = ""
-        if request.system is not None:
-            system_text = "".join(
+        # The summarize instruction rides as the trailing user turn.
+        trailing_text = ""
+        if request.messages:
+            trailing_text = "".join(
                 b.text
-                for b in request.system.content
+                for b in request.messages[-1].content
                 if isinstance(b, TextBlock)
             )
-        if _SUMMARY_MARKER in system_text:
+        if trailing_text.startswith(_SUMMARY_MARKER):
             self.summarize_calls += 1
             return LLMResponse(
                 stop_reason="end_turn",
@@ -235,10 +236,10 @@ def test_second_summarize_input_is_previous_summary_plus_delta() -> None:
     summarize_requests = [
         req
         for req in provider.calls
-        if req.system is not None
+        if req.messages
         and any(
-            _SUMMARY_MARKER in b.text
-            for b in req.system.content
+            b.text.startswith(_SUMMARY_MARKER)
+            for b in req.messages[-1].content
             if isinstance(b, TextBlock)
         )
     ]

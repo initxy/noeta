@@ -149,6 +149,20 @@ class Tool(Protocol):
     provider tool schema by the ContextComposer, never restated in the
     system prompt. Authored by hand, not derived from the docstring
     (docstrings carry developer-facing internal references).
+
+    Two optional attributes are read with ``getattr`` and are not members of
+    this Protocol; an ordinary tool has neither:
+
+    * ``advertised: bool`` (absent ⇒ ``True``) — ``False`` keeps the tool
+      registered, callable, guarded and audited under its name, but the
+      ContextComposer leaves its schema out of the provider tool list (a
+      deferred MCP server's tools, reached through a routing tool).
+    * ``route_call(arguments) -> (tool_name, arguments)`` — marks a routing
+      tool: the default policy rewrites a call to it into a call to the named
+      tool with the same ``call_id`` before any Guard sees it, and answers the
+      call with the message of a ``ValueError`` instead when the routing is
+      refused. The recorded assistant message keeps the tool_use the provider
+      saw.
     """
 
     name: str

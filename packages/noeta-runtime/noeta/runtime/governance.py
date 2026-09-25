@@ -17,11 +17,15 @@ from typing import Any, Callable, Literal, Mapping, Optional
 
 __all__ = [
     "Budget",
+    "DEFAULT_HOOK_COMMAND_TIMEOUT_S",
+    "DEFAULT_HOOK_QUEUE_MAX",
     "HookAction",
     "KNOWN_RISK_LEVELS",
     "MATCH_STRING_CAP",
     "MatchArg",
+    "NotificationRule",
     "PermissionPolicy",
+    "PostToolUseRule",
     "PreToolUseRule",
     "RepetitionAction",
     "RepetitionPolicy",
@@ -204,7 +208,57 @@ class MatchArg:
 
 @dataclass(frozen=True, slots=True)
 class PreToolUseRule:
+    """One user PreToolUse rule, evaluated by the ``HookGuard``.
+
+    ``match_tool`` is an ``fnmatch`` pattern over the tool name
+    (``"mcp__*"``); ``match_arg`` optionally narrows it to calls whose
+    argument matches. The first matching rule decides: ``"allow"`` stops the
+    scan, ``"deny"`` refuses the call, ``"require_approval"`` routes it
+    through human approval — ``reason`` is the text the model / approver
+    sees. A rule can only tighten what the built-in guards already allowed.
+    """
+
     match_tool: str
     action: HookAction
     match_arg: Optional[MatchArg] = None
     reason: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# PostToolUse / Notification hook rules (the live-only ``HookObserver``)
+# ---------------------------------------------------------------------------
+
+
+#: Seconds one hook command may run before it is killed.
+DEFAULT_HOOK_COMMAND_TIMEOUT_S = 30.0
+#: Hook commands waiting to run; past this a new one is dropped (logged)
+#: rather than stalling the event writer.
+DEFAULT_HOOK_QUEUE_MAX = 256
+
+
+@dataclass(frozen=True, slots=True)
+class PostToolUseRule:
+    """Run ``command`` (argv, never a shell) after a matching tool finishes.
+
+    ``match_tool`` is an ``fnmatch`` pattern over the tool name. ``log``
+    writes a one-line ``hook: post_tool_use <tool>`` record instead of, or
+    as well as, running a command. A side-effect only: it never changes the
+    result or the event log.
+    """
+
+    match_tool: str
+    command: Optional[tuple[str, ...]] = None
+    log: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationRule:
+    """Run ``command`` (argv, never a shell) when the agent waits on a human.
+
+    ``on`` names the moment; ``"approval"`` (a tool call awaiting approval)
+    is the only one recognised. ``log`` as on :class:`PostToolUseRule`.
+    """
+
+    on: str  # the only recognised value is "approval"
+    command: Optional[tuple[str, ...]] = None
+    log: bool = False

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,48 @@ def _kill_process_group(proc: "subprocess.Popen[bytes]") -> None:
     send_group_signal(proc.pid, signal.SIGKILL)
 
 
+class _TailReader:
+    """Drain one pipe on a thread, keeping only its last ``keep`` bytes.
+
+    ``keep=None`` keeps everything. Bounding while reading is what stops a
+    command that prints hundreds of MB from being buffered whole before the
+    cap applies."""
+
+    _CHUNK = 64 * 1024
+
+    def __init__(self, pipe: Any, keep: Optional[int]) -> None:
+        self._pipe = pipe
+        self._keep = keep
+        self._buf = bytearray()
+        self._thread = threading.Thread(target=self._drain, daemon=True)
+        self._thread.start()
+
+    def _drain(self) -> None:
+        try:
+            while True:
+                chunk = self._pipe.read1(self._CHUNK)
+                if not chunk:
+                    break
+                self._buf += chunk
+                if self._keep is not None and len(self._buf) > self._keep:
+                    del self._buf[: len(self._buf) - self._keep]
+        except (OSError, ValueError):  # pipe closed under us
+            pass
+        finally:
+            try:
+                self._pipe.close()
+            except OSError:
+                pass
+
+    def join(self, timeout: Optional[float] = None) -> bool:
+        """Wait for EOF; ``True`` once the pipe is fully drained."""
+        self._thread.join(timeout)
+        return not self._thread.is_alive()
+
+    def data(self) -> bytes:
+        return bytes(self._buf)
+
+
 def _default_run(
     argv: list[str],
     *,
@@ -64,6 +107,7 @@ def _default_run(
     timeout: Optional[float] = None,
     check: bool = False,
     on_spawn: Optional[Callable[["subprocess.Popen[bytes]"], None]] = None,
+    output_cap: Optional[int] = None,
 ) -> "subprocess.CompletedProcess[bytes]":
     """``subprocess.run``-shaped default runner that reaps the WHOLE process
     group on timeout.
@@ -78,6 +122,12 @@ def _default_run(
     wait — the seam ``shell_run`` uses to register the group in the session
     kill table so a human stop can reap it mid-run. A hook that raises must
     not leak a running child, so the group is reaped before re-raising.
+
+    ``output_cap`` bounds each captured stream WHILE it is read: only the last
+    ``output_cap + 1`` bytes are kept, so :func:`cap_stream` renders exactly
+    what it would from the whole stream and still sees that it overflowed.
+    Like ``communicate``, the run ends at EOF on both pipes plus the child's
+    exit, and the timeout covers all of it.
     """
     del check  # parity with the subprocess.run call shape; never used here
     kwargs: dict[str, Any] = {}
@@ -101,17 +151,51 @@ def _default_run(
         except BaseException:
             _kill_process_group(proc)
             raise
+    keep = None if output_cap is None else max(0, output_cap) + 1
+    readers = [
+        _TailReader(pipe, keep)
+        for pipe in (proc.stdout, proc.stderr)
+        if pipe is not None
+    ]
+    deadline = None if timeout is None else time.monotonic() + timeout
+
+    def _remaining() -> Optional[float]:
+        return None if deadline is None else max(0.0, deadline - time.monotonic())
+
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
+        drained = all(reader.join(_remaining()) for reader in readers)
+        if not drained:
+            raise subprocess.TimeoutExpired(argv, timeout or 0.0)
+        proc.wait(timeout=_remaining())
     except subprocess.TimeoutExpired:
         _kill_process_group(proc)
-        # The whole group is dead, so the pipes close and this second drain
-        # returns promptly with whatever output was produced.
-        stdout, stderr = proc.communicate()
+        # The whole group is dead, so the pipes close and the readers finish
+        # promptly with whatever output was produced.
+        for reader in readers:
+            reader.join()
+        proc.wait()
+        out, err = _streams(proc, readers)
         raise subprocess.TimeoutExpired(
-            argv, timeout or 0.0, output=stdout, stderr=stderr
+            argv, timeout or 0.0, output=out, stderr=err
         )
-    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+    out, err = _streams(proc, readers)
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
+# ``run_argv`` passes ``output_cap`` only to a runner that declares it takes
+# one; an injected ``subprocess.run``-shaped runner keeps the plain call shape.
+_default_run._accepts_output_cap = True  # type: ignore[attr-defined]
+
+
+def _streams(
+    proc: "subprocess.Popen[bytes]", readers: list[_TailReader]
+) -> tuple[Optional[bytes], Optional[bytes]]:
+    """``(stdout, stderr)`` in ``communicate`` shape: ``None`` for an
+    uncaptured stream."""
+    it = iter(readers)
+    out = next(it).data() if proc.stdout is not None else None
+    err = next(it).data() if proc.stderr is not None else None
+    return out, err
 
 
 def runner_with_spawn_hook(
@@ -128,6 +212,7 @@ def runner_with_spawn_hook(
     ) -> "subprocess.CompletedProcess[bytes]":
         return _default_run(argv, on_spawn=on_spawn, **kwargs)
 
+    _run._accepts_output_cap = True  # type: ignore[attr-defined]
     return _run
 
 
@@ -176,6 +261,11 @@ def run_argv(
     env = _scrub_env()
     start = time.monotonic()
     timed_out = False
+    extra: dict[str, Any] = (
+        {"output_cap": output_cap}
+        if getattr(run, "_accepts_output_cap", False)
+        else {}
+    )
     try:
         proc = run(
             argv,
@@ -184,6 +274,7 @@ def run_argv(
             capture_output=True,
             timeout=timeout_s,
             check=False,
+            **extra,
         )
         stdout = proc.stdout or b""
         stderr = proc.stderr or b""

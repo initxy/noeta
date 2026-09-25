@@ -9,8 +9,8 @@ expects to keep between turns (a browser, a database handle, a login) — so
 it outlives the turn here, shared by every build that names the same server.
 
 Identity is the server plus the host's **scope**: ``(transport, scope,
-alias, argv, env)`` for a stdio spec, ``(transport, scope, alias, url,
-headers)`` for HTTP. Two tenants whose resolver hands out different
+alias, argv, env, call_timeout_s)`` for a stdio spec, ``(transport, scope,
+alias, url, headers, call_timeout_s)`` for HTTP. Two tenants whose resolver hands out different
 credentials therefore get different connections; two tasks on the same
 server in the same scope share one; and a host that resolves a scope per
 task (``HostConfig.mcp_scope_resolver`` — a tenant id, a workspace) keeps a
@@ -46,8 +46,10 @@ import logging
 import threading
 import time
 import weakref
+from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Iterator, Optional, Union
 
 from noeta.builtins.mcp.impl._client import McpStdioClient, SpawnFn
 from noeta.builtins.mcp.impl._http_client import McpHttpClient
@@ -80,8 +82,14 @@ def connection_key(
     credentials included, in memory only. ``tool_subset`` is deliberately
     left out; ``scope`` (``None`` = shared) is the host's partition."""
     if isinstance(spec, McpHttpServerSpec):
-        return ("http", scope, spec.alias, spec.url, tuple(spec.headers))
-    return ("stdio", scope, spec.alias, tuple(spec.argv), tuple(spec.env))
+        return (
+            "http", scope, spec.alias, spec.url, tuple(spec.headers),
+            spec.call_timeout_s,
+        )
+    return (
+        "stdio", scope, spec.alias, tuple(spec.argv), tuple(spec.env),
+        spec.call_timeout_s,
+    )
 
 
 def _connect_client(
@@ -92,8 +100,18 @@ def _connect_client(
 ) -> McpClient:
     """Construct (not yet started) the transport client for ``spec``."""
     if isinstance(spec, McpHttpServerSpec):
-        return McpHttpClient(url=spec.url, headers=spec.headers_dict(), post=http_post)
-    return McpStdioClient(argv=list(spec.argv), env=spec.env_dict(), spawn=spawn)
+        return McpHttpClient(
+            url=spec.url,
+            headers=spec.headers_dict(),
+            post=http_post,
+            call_timeout_s=spec.call_timeout_s,
+        )
+    return McpStdioClient(
+        argv=list(spec.argv),
+        env=spec.env_dict(),
+        spawn=spawn,
+        call_timeout_s=spec.call_timeout_s,
+    )
 
 
 def _close_all(by_client: dict[int, "_Entry"]) -> None:
@@ -142,6 +160,14 @@ class McpConnectionPool:
         # retired ones included, until their last holder lets go.
         self._by_client: dict[int, _Entry] = {}
         self._lock = threading.Lock()
+        # The thread inside ``self._lock``, if any. A built Engine releases
+        # its leases from a ``weakref.finalize``, and a garbage collection can
+        # run that finalizer on the very thread that already holds the lock
+        # (any allocation inside a critical section may trigger one); taking
+        # the non-reentrant lock again there would deadlock. Such a release
+        # is queued on ``_pending`` instead and applied once the lock is let go.
+        self._owner: Optional[int] = None
+        self._pending: deque[Any] = deque()
         # One connect at a time per key; builds for different servers connect
         # concurrently, and a second build for the same server waits for the
         # first connect instead of spawning a duplicate.
@@ -153,6 +179,27 @@ class McpConnectionPool:
 
     # -- acquire / release ----------------------------------------------
 
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        me = threading.get_ident()  # computed before the lock: no allocation inside
+        with self._lock:
+            self._owner = me
+            try:
+                yield
+            finally:
+                self._owner = None
+
+    def _drain_pending(self) -> None:
+        """Apply releases a finalizer queued while this thread held the lock."""
+        if self._owner == threading.get_ident():
+            return
+        while True:
+            try:
+                client = self._pending.popleft()
+            except IndexError:
+                return
+            self.release(client)
+
     def acquire(
         self, spec: McpAnyServerSpec, scope: Optional[str] = None
     ) -> tuple[McpClient, bool]:
@@ -162,8 +209,16 @@ class McpConnectionPool:
         per-key lock. A connect or handshake fault raises ``McpError`` and
         leaves nothing behind. The caller must :meth:`release` the client.
         """
+        try:
+            return self._acquire(spec, scope)
+        finally:
+            self._drain_pending()
+
+    def _acquire(
+        self, spec: McpAnyServerSpec, scope: Optional[str] = None
+    ) -> tuple[McpClient, bool]:
         key = connection_key(spec, scope)
-        with self._lock:
+        with self._locked():
             expired = self._sweep_locked()
             hit = self._take_locked(key)
             if hit is None:
@@ -174,7 +229,7 @@ class McpConnectionPool:
             return hit.client, True
         with connect_lock:
             try:
-                with self._lock:
+                with self._locked():
                     hit = self._take_locked(key)
                     if hit is not None:
                         return hit.client, True
@@ -186,7 +241,7 @@ class McpConnectionPool:
                 except BaseException:
                     _shutdown_quietly(client)
                     raise
-                with self._lock:
+                with self._locked():
                     entry = _Entry(
                         key=key,
                         alias=spec.alias,
@@ -206,15 +261,20 @@ class McpConnectionPool:
             finally:
                 # Never leak a per-key lock, whether the connect succeeded,
                 # failed, or lost the race to a concurrent build.
-                with self._lock:
+                with self._locked():
                     self._connect_locks.pop(key, None)
 
     def release(self, client: Any) -> None:
         """Uncount one holder of ``client``. Closes it when it was retired
         and this was its last holder; sweeps idle connections. Unknown or
-        already-closed clients are ignored, so a late finalizer is harmless."""
+        already-closed clients are ignored, so a late finalizer is harmless.
+        Called from a finalizer on the thread that holds the pool lock, it is
+        queued and applied when that thread lets go."""
+        if self._owner == threading.get_ident():
+            self._pending.append(client)
+            return
         to_close: list[Any] = []
-        with self._lock:
+        with self._locked():
             entry = self._by_client.get(id(client))
             if entry is not None:
                 entry.holders = max(0, entry.holders - 1)
@@ -225,6 +285,7 @@ class McpConnectionPool:
             to_close.extend(self._sweep_locked())
         for c in to_close:
             _shutdown_quietly(c)
+        self._drain_pending()
 
     def release_all(self, clients: Any) -> None:
         """:meth:`release` each of ``clients`` — the ``weakref.finalize``
@@ -237,11 +298,12 @@ class McpConnectionPool:
         connects fresh; the client itself closes when its holders are gone.
         The build path calls this on a pooled connection that stopped
         answering (a stale stdio server, a restarted HTTP endpoint)."""
-        with self._lock:
+        with self._locked():
             entry = self._by_client.get(id(client))
             if entry is None:
                 return
             self._retire_locked(entry)
+        self._drain_pending()
 
     # -- host verbs ------------------------------------------------------
 
@@ -250,7 +312,7 @@ class McpConnectionPool:
         alias. In-flight holders keep theirs until they release; the next
         build reconnects."""
         to_close: list[Any] = []
-        with self._lock:
+        with self._locked():
             for entry in list(self._entries.values()):
                 if alias is None or entry.alias == alias:
                     self._retire_locked(entry)
@@ -259,11 +321,12 @@ class McpConnectionPool:
                         to_close.append(entry.client)
         for c in to_close:
             _shutdown_quietly(c)
+        self._drain_pending()
 
     def shutdown(self) -> None:
         """Close every connection now, holders or not. The host calls this
         after its workers have stopped, so no turn is mid-call."""
-        with self._lock:
+        with self._locked():
             clients = [e.client for e in self._by_client.values()]
             self._entries.clear()
             self._by_client.clear()
@@ -275,11 +338,13 @@ class McpConnectionPool:
 
     def live_count(self) -> int:
         """Connections the pool still holds open — retired-but-held included."""
-        with self._lock:
+        self._drain_pending()
+        with self._locked():
             return len(self._by_client)
 
     def holders_of(self, client: Any) -> int:
-        with self._lock:
+        self._drain_pending()
+        with self._locked():
             entry = self._by_client.get(id(client))
             return entry.holders if entry is not None else 0
 

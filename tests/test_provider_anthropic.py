@@ -40,6 +40,30 @@ from noeta.protocols.values import ContentRef
 from noeta.builtins.providers.impl.anthropic import AnthropicProvider
 
 
+#: No shipped catalog row is text-only (``gpt-4o`` / ``gpt-4o-mini`` read
+#: images), so the non-vision paths run against a row registered for the test.
+_TEXT_ONLY_MODEL = "text-only-model"
+
+
+@pytest.fixture(autouse=True)
+def _text_only_catalog_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.builtins.providers.impl import catalog as catalog_mod
+
+    monkeypatch.setattr(
+        catalog_mod,
+        "_EXTENSIONS",
+        {
+            **catalog_mod._EXTENSIONS,
+            _TEXT_ONLY_MODEL: catalog_mod.ModelSpec(
+                real_model_id=_TEXT_ONLY_MODEL,
+                context_window=128_000,
+                max_output_tokens=16_384,
+                supports_vision=False,
+            ),
+        },
+    )
+
+
 BASE_URL = "https://api.anthropic.test"
 MESSAGES_ENDPOINT = f"{BASE_URL}/v1/messages"
 
@@ -1064,14 +1088,15 @@ def test_unknown_stop_reason_maps_to_error_without_raising() -> None:
 
 
 @respx.mock
-def test_missing_stop_reason_maps_to_error_without_raising() -> None:
-    """Missing stop_reason maps to error (not raise)."""
+def test_missing_stop_reason_is_a_transient_cut_stream() -> None:
+    """A stream that closes without ever carrying a stop_reason was cut
+    mid-generation: retryable, not a finished ``error`` turn."""
     respx.post(MESSAGES_ENDPOINT).mock(
         return_value=_stream(_anthropic_response(stop_reason=None))
     )
     provider = _make_provider()
-    response = provider.complete(_basic_request())
-    assert response.stop_reason == "error"
+    with pytest.raises(TransientError, match="no stop_reason"):
+        provider.complete(_basic_request())
 
 
 # ---------------------------------------------------------------------------
@@ -1658,8 +1683,11 @@ def test_cache_control_skips_every_trailing_injected_turn() -> None:
     assert [b["type"] for b in blocks] == ["tool_result", "text", "text"]
     assert blocks[0]["cache_control"] == {"type": "ephemeral"}
     assert all("cache_control" not in b for b in blocks[1:])
-    # exactly one breakpoint in the messages array
-    assert json.dumps(wire).count('"cache_control"') == 1
+    # two breakpoints in the messages array: the last recorded block and the
+    # previous step's (the user turn before the newest assistant message);
+    # neither lands on an injection
+    assert json.dumps(wire).count('"cache_control"') == 2
+    assert wire[0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
 
 
 @respx.mock
@@ -1697,6 +1725,113 @@ def test_cache_control_prefix_is_stable_when_only_the_reminder_tail_changes() ->
     assert through_breakpoint(step_one) == through_breakpoint(step_two)
     # and the tails really did differ, so the equality above is not vacuous
     assert step_one[-1]["content"][-1] != step_two[-1]["content"][-1]
+
+
+def _parallel_step_history(n_calls: int) -> list[Message]:
+    """One prior step (a read + its result), then a step of ``n_calls``
+    parallel tool calls with their results — the shape that overruns the
+    ~20-block lookback from the last breakpoint."""
+    first = Message(
+        role="assistant",
+        content=[ToolUseBlock(call_id="r0", tool_name="read", arguments={"p": "a"})],
+    )
+    first_result = Message(
+        role="tool",
+        content=[ToolResultBlock(call_id="r0", output="body", success=True)],
+    )
+    fan = Message(
+        role="assistant",
+        content=[TextBlock(text="Reading in parallel.")]
+        + [
+            ToolUseBlock(call_id=f"p{k}", tool_name="grep", arguments={"k": k})
+            for k in range(n_calls)
+        ],
+    )
+    fan_results = Message(
+        role="tool",
+        content=[
+            ToolResultBlock(call_id=f"p{k}", output=f"hit {k}", success=True)
+            for k in range(n_calls)
+        ],
+    )
+    return [_user("q"), first, first_result, fan, fan_results]
+
+
+@respx.mock
+def test_fourth_breakpoint_sits_on_the_previous_steps_last_recorded_block() -> None:
+    """A step of twelve parallel calls appends ~25 blocks — past Anthropic's
+    lookback from the newest breakpoint. The fourth breakpoint sits on the
+    block the previous step's request stamped (the last recorded block before
+    the newest assistant message), so the prior history is read back rather
+    than rewritten."""
+    route = respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=_stream(_anthropic_response())
+    )
+    provider = _make_provider()
+    sys = Message(role="system", content=[TextBlock(text="sys")])
+    tools = [
+        {"type": "function", "function": {"name": "t", "parameters": {"type": "object"}}}
+    ]
+    history = _parallel_step_history(12)
+    provider.complete(
+        _basic_request(
+            system=sys,
+            tools=tools,
+            messages=[*history, _injected("todo: 1 left", "system")],
+        )
+    )
+    body = json.loads(route.calls.last.request.content.decode("utf-8"))
+    stamped = [
+        (mi, bi)
+        for mi, m in enumerate(body["messages"])
+        for bi, blk in enumerate(m["content"])
+        if "cache_control" in blk
+    ]
+    # messages: user q | assistant read | user result | assistant fan | user results+reminder
+    last_results = len(body["messages"][4]["content"]) - 2  # before the reminder
+    assert stamped == [(2, 0), (4, last_results)]
+    # the reminder never carries one
+    assert "cache_control" not in body["messages"][4]["content"][-1]
+    # the vendor cap: tools + system + two message breakpoints
+    assert json.dumps(body).count('"cache_control"') == 4
+
+    # The previous step's request stamped exactly that block: its prefix
+    # through the breakpoint equals this request's prefix through the fourth.
+    provider.complete(
+        _basic_request(
+            system=sys,
+            tools=tools,
+            messages=[*history[:3], _injected("todo: 2 left", "system")],
+        )
+    )
+    prev = json.loads(route.calls.last.request.content.decode("utf-8"))
+    prev_stamped = [
+        (mi, bi)
+        for mi, m in enumerate(prev["messages"])
+        for bi, blk in enumerate(m["content"])
+        if "cache_control" in blk
+    ]
+    assert prev_stamped[-1] == (2, 0)
+
+    def strip(x: Any) -> Any:
+        if isinstance(x, dict):
+            return {k: strip(v) for k, v in x.items() if k != "cache_control"}
+        if isinstance(x, list):
+            return [strip(v) for v in x]
+        return x
+
+    def through(wire: dict[str, Any]) -> str:
+        msgs = wire["messages"]
+        return json.dumps(strip([*msgs[:2], {**msgs[2], "content": msgs[2]["content"][:1]}]))
+
+    assert through(prev) == through(body)
+
+
+@respx.mock
+def test_fourth_breakpoint_is_skipped_without_an_earlier_recorded_block() -> None:
+    """A lone user turn has no previous step: one messages breakpoint only."""
+    wire = _wire_messages([_user("q")])
+    assert json.dumps(wire).count('"cache_control"') == 1
 
 
 @respx.mock
@@ -1824,13 +1959,13 @@ def test_all_three_fields_none_omitted_from_body() -> None:
 # (see ``_model_admits_images``). The default ``_basic_request`` model
 # (``claude-opus-4-7``) is absent from the catalog and therefore exercises the
 # unknown path; ``_NON_VISION_MODEL`` has to be a row that actually declares
-# ``supports_vision=False``, and the only such rows are OpenAI-family ones. That
-# is fine here — the adapter pins no model, it just reads the catalog bit off
-# whatever ``LLMRequest.model`` says.
+# ``supports_vision=False``; no shipped row does, so it is the test-registered
+# ``_TEXT_ONLY_MODEL``. The adapter pins no model, it just reads the catalog bit
+# off whatever ``LLMRequest.model`` says.
 
 _IMG_REF = ContentRef(hash="sha256:img", size=3, media_type="image/png")
 _VISION_MODEL = "claude-opus-4-8"
-_NON_VISION_MODEL = "gpt-4o"
+_NON_VISION_MODEL = _TEXT_ONLY_MODEL
 _UNKNOWN_MODEL = "claude-opus-4-7"
 _PNG_BYTES = b"\x89PNG\r\n\x1a\nFAKEPNGDATA"
 

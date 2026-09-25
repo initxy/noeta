@@ -20,6 +20,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
 
+from noeta.protocols.errors import CodedError
 from noeta.protocols.tool import ToolResult
 
 
@@ -46,8 +47,13 @@ def path_within(resolved: Path, root: Path) -> bool:
     return resolved == root or resolved.is_relative_to(root)
 
 
-class WorkspaceEscape(ValueError):
-    """Raised when a user-supplied path resolves outside the workspace."""
+class WorkspaceEscape(CodedError, ValueError):
+    """Raised when a user-supplied path resolves outside the workspace.
+
+    A :class:`ValueError` too, so an ``except ValueError`` contract keeps
+    matching."""
+
+    code = "workspace_escape"
 
 
 @dataclass(frozen=True, slots=True)

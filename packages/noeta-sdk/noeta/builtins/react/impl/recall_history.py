@@ -9,8 +9,10 @@ translate time via a pre-answered result — no runtime handler, no new Decision
 type, no event vocabulary.
 
 The companion ``collapsed-context`` reminder (also here, declared by the react
-manifest) renders only while ``summary_boundary > 0``, so a session that never
-compacts never sees either surface do anything.
+manifest) renders only while ``summary_boundary > 0`` or the composer's prune
+has cleared a tool output (``cleared_boundary > 0``) — those cleared bodies
+are still verbatim in the raw history, so the same tool pages them back — and
+a session that never compacts never sees either surface do anything.
 
 Determinism: rendering is a pure function of ``(view, arguments)`` and every
 cap is a module constant, so a resumed run rebuilds the identical decision from
@@ -127,42 +129,52 @@ def _validate_args(arguments: Any) -> tuple[bool, "tuple[int, int] | str"]:
     return True, (offset, min(limit, _MAX_LIMIT))
 
 
-def _cap(text: str) -> str:
-    if len(text) <= _BLOCK_CHAR_CAP:
+def _cap(text: str, cap: int = _BLOCK_CHAR_CAP) -> str:
+    if len(text) <= cap:
         return text
-    return text[:_BLOCK_CHAR_CAP] + _TRUNCATION_MARKER
+    return text[:cap] + _TRUNCATION_MARKER
 
 
-def _render_block(block: Any) -> str:
+def _render_block(block: Any, cap: int = _BLOCK_CHAR_CAP) -> str:
     """One content block as one deterministic line (type-tagged, capped)."""
     if isinstance(block, TextBlock):
-        return f"text: {_cap(block.text)}"
+        return f"text: {_cap(block.text, cap)}"
     if isinstance(block, ToolUseBlock):
         args = json.dumps(
             dict(block.arguments), ensure_ascii=False, sort_keys=True
         )
-        return f"tool_use {block.tool_name}: {_cap(args)}"
+        return f"tool_use {block.tool_name}: {_cap(args, cap)}"
     if isinstance(block, ToolResultBlock):
         status = "ok" if block.success else "error"
-        return f"tool_result({status}): {_cap(str(block.output))}"
+        return f"tool_result({status}): {_cap(str(block.output), cap)}"
     return f"{type(block).__name__}"
 
 
-def _render_message(index: int, message: Message) -> str:
+def _render_message(
+    index: int, message: Message, cap: int = _BLOCK_CHAR_CAP
+) -> str:
     lines = [f"[{index}] {message.role}:"]
     for block in message.content:
-        lines.append("  " + _render_block(block))
+        lines.append("  " + _render_block(block, cap))
     return "\n".join(lines)
 
 
 def render_collapsed_slice(view: View, offset: int, limit: int) -> str:
-    """The tool's answer text: a bounded rendering of the collapsed prefix.
+    """The tool's answer text: a bounded rendering of the recallable range.
+
+    The range is the collapsed prefix ``[0, summary_boundary)`` widened to
+    ``view.cleared_boundary`` when the composer's prune cleared tool outputs
+    past it — those bodies are still verbatim in ``rolling_history`` (the raw,
+    append-only history), so paging one back is a read, not a re-run. A
+    single-message call (``limit == 1``) lifts the per-block cap to the
+    whole-result cap, so one cleared output comes back whole.
 
     Pure over ``(view, offset, limit)``. The header always reports the live
     boundary so the model can page without guessing; a slice cut short by the
     output cap reports the exact resume offset.
     """
-    boundary = max(0, view.summary_boundary)
+    collapsed_end = max(0, view.summary_boundary)
+    boundary = max(collapsed_end, view.cleared_boundary)
     if boundary == 0:
         return (
             "No messages have been collapsed yet — the summary note is either "
@@ -176,15 +188,24 @@ def render_collapsed_slice(view: View, offset: int, limit: int) -> str:
         )
     collapsed = view.rolling_history[:boundary]
     end = min(offset + limit, boundary)
-    header = (
-        f"Collapsed range: {boundary} messages (indices 0..{boundary - 1}). "
-        f"Showing {offset}..{end - 1}."
-    )
+    if boundary == collapsed_end:
+        header = (
+            f"Collapsed range: {boundary} messages (indices 0..{boundary - 1}). "
+            f"Showing {offset}..{end - 1}."
+        )
+    else:
+        header = (
+            f"Recallable range: {boundary} messages (indices "
+            f"0..{boundary - 1}; the first {collapsed_end} are collapsed into "
+            f"the note, later ones may have cleared tool outputs). "
+            f"Showing {offset}..{end - 1}."
+        )
+    cap = _OUTPUT_CHAR_CAP if limit == 1 else _BLOCK_CHAR_CAP
     parts = [header]
     used = len(header)
     shown_to = offset
     for i in range(offset, end):
-        rendered = _render_message(i, collapsed[i])
+        rendered = _render_message(i, collapsed[i], cap)
         if used + len(rendered) > _OUTPUT_CHAR_CAP and shown_to > offset:
             parts.append(
                 f"(output cap reached — continue with offset={i}.)"
@@ -337,16 +358,28 @@ def build_recall_history_control_tool(
 
 
 def collapsed_context_reminder(view: ReminderView) -> Optional[str]:
-    """Point at the collapsed range while one exists.
+    """Point at the collapsed range and the cleared outputs while either exists.
 
-    Live only while ``summary_boundary > 0`` — a session that never compacted
-    renders nothing. The boundary self-updates every compose, so the pointer
+    Live only while ``summary_boundary > 0`` or the composer cleared a tool
+    output past it (``cleared_boundary``) — a session that never compacted
+    renders nothing. The boundaries self-update every compose, so the pointer
     is always current (unlike a line baked into the note, which would go stale
     and be carried forward by the summarizer).
     """
-    if view.summary_boundary <= 0:
-        return None
-    n = view.summary_boundary
+    parts: list[str] = []
+    if view.summary_boundary > 0:
+        parts.append(_collapsed_line(view.summary_boundary))
+    m = view.cleared_boundary
+    if m > view.summary_boundary:
+        parts.append(
+            f"Earlier tool outputs shown as [tool output cleared] are retained "
+            f"too (in messages 0..{m - 1}): view one with RecallHistory rather "
+            "than re-running the tool; limit 1 shows a single message in full."
+        )
+    return " ".join(parts) or None
+
+
+def _collapsed_line(n: int) -> str:
     return (
         f"The note at the head of this conversation stands in for the first "
         f"{n} original messages (indices 0..{n - 1}), which remain retained. "

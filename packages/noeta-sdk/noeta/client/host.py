@@ -15,6 +15,7 @@ import dataclasses
 import functools
 import logging
 import threading
+import time
 import warnings
 import weakref
 from collections import OrderedDict
@@ -275,6 +276,11 @@ def _approval_set_for(mode: str, tool_refs: Sequence[ToolRef]) -> tuple[str, ...
     raise ValueError(f"Unsupported permission_mode: {mode!r}")
 
 
+def _subagent_delivery_key(child_task_id: str) -> str:
+    """The :class:`BackgroundDelivery` key of one background sub-agent's push."""
+    return f"subagent:{child_task_id}"
+
+
 # ---------------------------------------------------------------------------
 # Catalog-pricing callback. Unknown-model handling lives inside catalog.price
 # (warn-once + 0.0); this wrapper only keeps the injected-callback seam.
@@ -306,6 +312,13 @@ def _catalog_pricing(model: str, usage: Usage) -> float:
 #: looser fit overrides the absolute number in ``plugin_config["skills"]``.
 SKILL_MENU_BUDGET_FRACTION = 0.01
 
+#: Absolute ceiling on the derived 1 % — at a 1M-token window the fraction
+#: alone would admit ~10K tokens of resident roster and another ~10K of memory
+#: index on every request. Applies to the host-derived defaults only; an
+#: operator's explicit ``plugin_config["skills"]["menu_budget_tokens"]`` or
+#: ``HostConfig.memory_index_budget_tokens`` is taken as given.
+SKILL_MENU_BUDGET_CEILING_TOKENS = 4096
+
 #: Window assumed if the catalog ever reports none. ``derive_compaction_config``
 #: gives an uncatalogued model a conservative window rather than
 #: ``COMPACTION_OFF``, so this is a defensive floor, not a reachable path
@@ -326,7 +339,10 @@ def skill_menu_budget_tokens(model: str) -> int:
     window = derive_compaction_config(model).context_window
     if not window:
         window = _SKILL_MENU_FALLBACK_WINDOW
-    return max(1, int(window * SKILL_MENU_BUDGET_FRACTION))
+    return min(
+        max(1, int(window * SKILL_MENU_BUDGET_FRACTION)),
+        SKILL_MENU_BUDGET_CEILING_TOKENS,
+    )
 
 
 def memory_index_budget_tokens(model: str) -> int:
@@ -340,7 +356,10 @@ def memory_index_budget_tokens(model: str) -> int:
     window = derive_compaction_config(model).context_window
     if not window:
         window = _SKILL_MENU_FALLBACK_WINDOW
-    return max(1, int(window * SKILL_MENU_BUDGET_FRACTION))
+    return min(
+        max(1, int(window * SKILL_MENU_BUDGET_FRACTION)),
+        SKILL_MENU_BUDGET_CEILING_TOKENS,
+    )
 
 
 def _spec_write_path_globs(spec: AgentSpec) -> tuple[str, ...]:
@@ -1067,6 +1086,9 @@ class SdkHost(GenericEngineResolver):
             build_host=self._drain_host_for_id,
             deliver=self._on_background_subagent_exit,
             max_per_root_task=self.max_background_subagents_per_root_task,
+            delivery_pending=lambda child_id: self._delivery.is_pending(
+                _subagent_delivery_key(child_id)
+            ),
         )
         # Sandbox backend lifecycle: only when the host configured one. Absent it,
         # ``_sandbox`` stays ``None`` and ``_build_engine`` runs the local host.
@@ -1300,12 +1322,101 @@ class SdkHost(GenericEngineResolver):
         persisted streams for a ``BackgroundSubagentStarted`` with no matching
         ``BackgroundSubagentDelivered`` and re-drives a non-terminal child (it
         resumes from its own EventLog) or re-delivers a terminal one whose notice
-        was lost. Startup side effect, never resumed. Safe no-op when the
-        registry is unbuilt. Returns the recovered child ids."""
+        was lost. A child another Client on the same store is driving right
+        now (live lease) is left to that Client. Startup side effect, never
+        resumed. Safe no-op when the registry is unbuilt. Returns the recovered
+        child ids."""
         registry = self._background_subagents
         if registry is None:
             return []
         return registry.recover()
+
+    def redeliver_background_subagents(self, root_task_id: str) -> list[str]:
+        """Re-push ``root_task_id``'s finished-but-undelivered sub-agent results.
+
+        Called when a turn of the session settles, so a result whose delivery
+        thread gave up (the parent stayed busy past the window) lands at this
+        turn boundary rather than at the next Client start. Skips children
+        still running or already being delivered. Safe no-op when the registry
+        is unbuilt. Returns the child ids handed to delivery."""
+        registry = self._background_subagents
+        if registry is None:
+            return []
+        return registry.redeliver(root_task_id)
+
+    def note_root_turn_settled(self, root_task_id: str) -> None:
+        """Turn-boundary seam for turns this host did not drive itself.
+
+        A resident :class:`~noeta.runtime.worker.WorkerLoop` worker (the pool
+        :meth:`Client.dispatch_seeded` hands turns to) calls it when a tree's
+        root parks on the next-goal handle, so a background sub-agent result
+        deferred past its delivery window lands at that boundary exactly as
+        it does after a ``Client``-driven turn. Never raises."""
+        try:
+            self.redeliver_background_subagents(root_task_id)
+        except Exception:  # noqa: BLE001 — a delivery backstop never fails a turn
+            _log.warning(
+                "background re-delivery scan failed for %s",
+                root_task_id,
+                exc_info=True,
+            )
+
+    def shutdown_background(self, *, timeout: float = 2.0) -> None:
+        """Stop this host's background work — the Client is shutting down.
+
+        * Background sub-agents: in-flight drives stop at their next step
+          boundary and no result is delivered. A stopped child stays started
+          and undelivered (not cancelled), so the next Client on the same
+          store resumes it — exactly the state a crash leaves.
+        * Deliveries: nothing new is pushed and a waiting push stops, so no
+          parent turn is driven once MCP / sandbox / tracing are torn down.
+        * Background shells this host started are killed (SIGTERM, then
+          SIGKILL), waiting up to ``timeout`` seconds for their watchers to
+          record ``BackgroundShellKilled`` before storage is closed.
+
+        Only this host's own processes are touched — never another Client's
+        jobs on a shared store (the store-wide orphan sweep,
+        :meth:`recover_background_orphans`, is a startup-only tool). Idempotent.
+        """
+        registry = self._background_subagents
+        if registry is not None:
+            registry.close()
+        self._delivery.close()
+        processes = self._process_registry
+        if processes is None:
+            return
+        index = getattr(self.event_log, "list_task_streams", None)
+        if not callable(index):
+            return
+        killing: dict[str, set[str]] = {}
+        for summary in index():
+            try:
+                killed = processes.kill_root_task(summary.task_id)
+            except Exception:  # noqa: BLE001 — shutdown never raises
+                _log.warning(
+                    "background shell kill failed for %s",
+                    summary.task_id,
+                    exc_info=True,
+                )
+                continue
+            jobs = {str(k["job_id"]) for k in killed if k.get("status") == "killing"}
+            if jobs:
+                killing[summary.task_id] = jobs
+        # Wait (bounded) for each watcher's durable terminal, read off the
+        # root stream — ``poll`` would itself write an event.
+        deadline = time.monotonic() + timeout
+        while killing and time.monotonic() < deadline:
+            for root_task_id in list(killing):
+                done = {
+                    env.payload.job_id
+                    for env in self.event_log.read(root_task_id)
+                    if env.type in ("BackgroundShellKilled", "BackgroundShellExited")
+                }
+                killing[root_task_id] -= done
+                if not killing[root_task_id]:
+                    del killing[root_task_id]
+            if killing:
+                time.sleep(0.02)
 
     def forget_background_subagents(self, root_task_id: str) -> None:
         """Drop a session's background sub-agent tracking (cancel/close cascade).
@@ -1329,7 +1440,13 @@ class SdkHost(GenericEngineResolver):
         reads the child's REAL terminal from its own EventLog and dereferences its
         result into an inlined notice (:meth:`_background_subagent_result`); it runs
         ONCE on the delivery thread (not the retry loop) and returns ``None`` for a
-        cancelled child (session teardown — nothing to push)."""
+        cancelled child (session teardown — nothing to push).
+
+        Keyed per child, so a second hand-off while one is still pending (a
+        re-scan racing the done-callback) is dropped; and ``_deliver`` re-checks
+        the parent's audit right before pushing, so a result another deliverer
+        (a second Client on the same store) already anchored is not pushed
+        twice."""
 
         def _plan() -> Optional[DeliverFn]:
             result = self._background_subagent_result(child_task_id)
@@ -1338,6 +1455,10 @@ class SdkHost(GenericEngineResolver):
             status, ref, summary = result
 
             def _deliver(notifier: Any) -> None:
+                if self._background_subagent_delivered(
+                    parent_task_id, child_task_id
+                ):
+                    return
                 notifier.notify_background_subagent_exit(
                     parent_task_id,
                     subtask_id=child_task_id,
@@ -1352,7 +1473,18 @@ class SdkHost(GenericEngineResolver):
             task_id=parent_task_id,
             plan=_plan,
             thread_name=f"noeta-bg-subagent-notify-{child_task_id}",
+            key=_subagent_delivery_key(child_task_id),
         )
+
+    def _background_subagent_delivered(
+        self, parent_task_id: str, child_task_id: str
+    ) -> bool:
+        """True once the parent's audit records ``child_task_id`` delivered."""
+        parent = fold(self.event_log, self.content_store, parent_task_id)
+        for entry in parent.governance.background_subagents:
+            if entry.get("subtask_id") == child_task_id:
+                return entry.get("status") != "running"
+        return False
 
     def _background_subagent_result(
         self, child_task_id: str
@@ -1393,7 +1525,13 @@ class SdkHost(GenericEngineResolver):
                 ref,
                 f'Background sub-agent "{agent_name}" finished. Here is its result:',
             )
-        # failed, or no terminal (stuck on an unsupported suspend).
+        # failed, or no terminal (stuck on an unsupported suspend). A child
+        # with no terminal that some driver is still running is not stuck —
+        # it is merely not ours to report; its driver delivers it.
+        if terminal_type is None:
+            active = getattr(self.dispatcher, "has_active_lease", None)
+            if callable(active) and active(child_task_id):
+                return None
         detail = reason or (
             "the sub-agent stopped without completing (it needed an interaction "
             "that is unavailable to a background agent)"
@@ -1522,7 +1660,9 @@ class SdkHost(GenericEngineResolver):
         servers adds no duplicate provenance; a first sighting with nothing
         recorded emits. Every skip is reported on a first sighting: a new
         process has surfaced no outage yet."""
-        note = self._task_locals.slot(task_id, _MCP_STREAM_NOTE_SLOT, dict)
+        note: dict[str, tuple[tuple[Any, ...], frozenset[str]]] = self._task_locals.slot(
+            task_id, _MCP_STREAM_NOTE_SLOT, dict
+        )
         previous = note.get("last")
         note["last"] = (servers, skipped)
         if previous is None:
@@ -1667,6 +1807,12 @@ class SdkHost(GenericEngineResolver):
         if not tools:
             return None
         return dict(tools)
+
+    def _canonical_model(self, model: str) -> str:
+        """Resolve a friendly alias through the model catalog (identity for a
+        real id), so an agent's declared ``model="haiku"`` and a ``ModelBound``
+        a pre-0.6.30 store recorded unresolved are sent as the real id."""
+        return resolve_model_alias(model)
 
     def _build_engine(self, *args: Any, **kwargs: Any) -> Engine:
         """Build this turn's Engine, never leaking a pooled MCP connection.
@@ -1846,6 +1992,10 @@ class SdkHost(GenericEngineResolver):
         if self.shell_mode is not ShellMode.OFF:
             shell_mode = ShellMode.ARBITRARY
             if effective_permission != "bypassPermissions":
+                workspace_code_ok = (
+                    self.project_shell_allowlist_trust != "trust-store"
+                    or is_trusted(trust_subject, self.trust_store)
+                )
                 effective_rules = build_allowlist(
                     tuple(self.shell_allowlist)
                     # The project's own rules file — repo content, so it is
@@ -1854,8 +2004,14 @@ class SdkHost(GenericEngineResolver):
                         workspace_dir, trust_subject, exec_env=bound_exec_env
                     ),
                     # The curated base is the fs built-in's table — the same rules
-                    # the Bash tool enforces.
-                    base_rules=default_shell_rules(),
+                    # the Bash tool enforces. Its rules that run workspace code
+                    # (test runners) ride the same trust as the project file.
+                    base_rules=tuple(
+                        rule
+                        for rule in default_shell_rules()
+                        if workspace_code_ok
+                        or not getattr(rule, "runs_workspace_code", False)
+                    ),
                 )
                 shell_approval_predicate = _make_shell_approval_predicate(
                     effective_rules
@@ -1934,6 +2090,36 @@ class SdkHost(GenericEngineResolver):
         # a build without a task (the seed / by-name path): those never run a
         # tool or a step.
         task_slot = self._task_locals.bind_slot(task_id) if task_id else None
+        # The per-plugin config bag: each pack parses only its own entry. The
+        # per-task memory root rides the top-precedence ``memory_dir`` slot so
+        # the builder's tool pack + resident index target that tenant's store;
+        # ``None`` override (single-tenant / resolver fallback) keeps the host
+        # fields. Built first because the system prompt follows the memory
+        # pack's final mode.
+        plugin_config = self._plugin_config(
+            shell_mode=shell_mode,
+            model=model,
+            spec=spec,
+            memory_override=memory_override,
+            trust_subject=trust_subject,
+            # A roster exists only for an agent that activates skill
+            # invocation, so no other agent asks for a rank.
+            skill_menu_rank=(
+                self._skill_menu_rank_override(task_id)
+                if agent_activates(spec, "skill_invocation")
+                else None
+            ),
+            task_slot=task_slot,
+        )
+        # A read-only memory pack mounts only memory_read / memory_search, so
+        # the policy fragment names only those (default bytes unchanged).
+        system_prompt = memory_impl().memory_policy_for(
+            spec.instructions,
+            read_only=bool(
+                agent_activates(spec, "memory")
+                and plugin_config.get("memory", {}).get("read_only", False)
+            ),
+        )
         inputs = build_session_inputs(
             session_packs=self._session_packs(agent.name),
             # The built-in + this agent's activated control tools, merged with the
@@ -1943,7 +2129,7 @@ class SdkHost(GenericEngineResolver):
             guards_factory=default_guards_factory(),
             default_policy_factory=self._policy_factory_builder(task_slot),
             workspace_dir=workspace_dir,
-            system_prompt=spec.instructions,
+            system_prompt=system_prompt,
             allowed_tools=spec_tool_names,
             content_store=self.content_store,
             model=model,
@@ -2008,26 +2194,7 @@ class SdkHost(GenericEngineResolver):
                 # converses, so it has nothing to recall.
                 "recall_history": True,
             },
-            # The per-plugin config bag: each pack parses only its own entry. The
-            # per-task memory root rides the top-precedence ``memory_dir`` slot so
-            # the builder's tool pack +
-            # resident index target that tenant's store; ``None`` override
-            # (single-tenant / resolver fallback) keeps the host fields.
-            plugin_config=self._plugin_config(
-                shell_mode=shell_mode,
-                model=model,
-                spec=spec,
-                memory_override=memory_override,
-                trust_subject=trust_subject,
-                # A roster exists only for an agent that activates skill
-                # invocation, so no other agent asks for a rank.
-                skill_menu_rank=(
-                    self._skill_menu_rank_override(task_id)
-                    if agent_activates(spec, "skill_invocation")
-                    else None
-                ),
-                task_slot=task_slot,
-            ),
+            plugin_config=plugin_config,
             hooks_pre_tool_use=self.hooks_pre_tool_use,
             repetition_threshold=self.repetition_threshold,
             repetition_action=self.repetition_action,
@@ -2351,15 +2518,44 @@ class SdkHost(GenericEngineResolver):
                         return self.is_cancelled(tid)
 
                     should_abort = _judge_abort
+                # The host's per-call provider headers ride the judge's call
+                # too (a gateway routing on them sees every call a task
+                # makes); the intake has no step yet, so the context names
+                # only the task.
+                request_headers: Optional[Callable[[], Mapping[str, str]]] = None
+                if self.provider_headers is not None:
+                    header_fn = self.provider_headers
+                    header_ctx = StepContext(
+                        task_id=str(task_id or ""), lease_id="", trace_id=""
+                    )
+
+                    def _judge_headers() -> Mapping[str, str]:
+                        return header_fn(header_ctx)
+
+                    request_headers = _judge_headers
                 judge = impl.build_recall_judge(
                     llm,
                     resolve_model_alias(self.recall_model),
                     should_abort=should_abort,
+                    # The judge reads at most what the resident index may
+                    # hold, most recently written pages first.
+                    budget_tokens=(
+                        self.memory_index_budget_tokens
+                        if self.memory_index_budget_tokens is not None
+                        else memory_index_budget_tokens(self.model)
+                    ),
+                    request_headers=request_headers,
                 )
             providers.append(
                 impl.memory_reminder_provider(
                     store, judge=judge, exclude=self.recall_exclude
                 )
+            )
+            # The index resident is frozen per task; this note names the
+            # pages created, re-described or removed since its snapshot.
+            # Silent when nothing changed, so existing streams are untouched.
+            providers.append(
+                impl.memory_index_delta_provider(store, self.content_store)
             )
         if agent != CONSOLIDATION_AGENT_NAME and agent_activates(
             spec, "skill_invocation"
@@ -2463,7 +2659,6 @@ class SdkHost(GenericEngineResolver):
         :meth:`_apply_plugin_config_overrides` for why that ordering is the safe
         one.
         """
-        reduced = spec is None
         config: dict[str, dict[str, Any]] = {
             # The fs pack's own write/shell safety inputs. ``shell_mode`` is the
             # permission-derived effective value on the session path and the raw
@@ -2501,6 +2696,10 @@ class SdkHost(GenericEngineResolver):
             config["web"] = {
                 "digest_model": resolve_model_alias(self.webfetch_model)
             }
+        # The host's per-call provider headers ride the digest call too, so a
+        # gateway routing on them sees every call a task makes.
+        if self.provider_headers is not None:
+            config.setdefault("web", {})["provider_headers"] = self.provider_headers
         if skill_menu_rank:
             # The per-task keep order (``skill_menu_rank_resolver``), fixed for
             # the build. Absent ⇒ no key, so a host without the seam derives
@@ -2515,7 +2714,7 @@ class SdkHost(GenericEngineResolver):
             # keep nothing past the build.
             config["skills"]["task_slot"] = task_slot
             config.setdefault("web", {})["task_slot"] = task_slot
-        if reduced:
+        if spec is None:  # the reduced orchestration environment
             return self._apply_plugin_config_overrides(config)
         config["fs"]["write_path_globs"] = _spec_write_path_globs(spec)
         config["fs"]["write_roots"] = self.write_roots
@@ -2568,7 +2767,16 @@ class SdkHost(GenericEngineResolver):
                 )
             ),
         }
-        return self._apply_plugin_config_overrides(config)
+        config = self._apply_plugin_config_overrides(config)
+        # An operator ``plugin_config={"memory": {"read_only": True}}``
+        # overlays every agent, the curator included — but the curator is
+        # the store's writer, so it keeps all four tools whatever the bag
+        # says.
+        if spec is not None and spec.name == CONSOLIDATION_AGENT_NAME:
+            memory_entry = config.get("memory")
+            if memory_entry is not None and memory_entry.get("read_only"):
+                memory_entry["read_only"] = False
+        return config
 
     def _apply_plugin_config_overrides(
         self, config: dict[str, dict[str, Any]]

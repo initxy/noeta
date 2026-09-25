@@ -130,6 +130,29 @@ def _spawn_call_members(args: dict[str, Any]) -> list[tuple[str, str]] | None:
     return None
 
 
+def _spawn_argument_refusal(args: dict[str, Any]) -> str | None:
+    """Why a ``Task`` call's values are unusable, or ``None``.
+
+    The shape check (:func:`_spawn_call_members`) accepts any string; these
+    are the values a type check lets through but that would spawn the wrong
+    thing: a ``background`` that is not a JSON boolean (``"false"`` is truthy,
+    so it would run in the background) and an empty ``prompt``.
+    """
+    background = args.get("background")
+    if background is not None and not isinstance(background, bool):
+        return (
+            "'background' must be true or false (a JSON boolean), got "
+            f"{background!r}. Re-issue the call with a boolean or without it."
+        )
+    prompt = args.get("prompt")
+    if isinstance(prompt, str) and not prompt.strip():
+        return (
+            "'prompt' is empty. Re-issue the call with the task the agent "
+            "should perform."
+        )
+    return None
+
+
 def _maybe_spawn_decision(
     response: LLMResponse,
     assistant_message: Message,
@@ -177,6 +200,16 @@ def _maybe_spawn_decision(
         )
     members_per_call: list[tuple[ToolUseBlock, list[tuple[str, str]]]] = []
     for block in spawn_blocks:
+        refusal = _spawn_argument_refusal(dict(block.arguments))
+        if refusal is not None:
+            return ack_patch_decision(
+                tool_uses,
+                assistant_message,
+                assistant_thinking,
+                patch=None,
+                text=f"Nothing in this response ran: {refusal}",
+                valid=False,
+            )
         members = _spawn_call_members(dict(block.arguments))
         if members is None:
             return ack_patch_decision(
@@ -204,7 +237,7 @@ def _maybe_spawn_decision(
             # barrier: the Engine launches it on the background-subagent driver
             # and the parent keeps its turn. Only this single-spawn path reads
             # the flag — the fan-out below stays foreground and ignores it.
-            background=bool(dict(block.arguments).get("background", False)),
+            background=dict(block.arguments).get("background") is True,
         )
     # Members of one batch call share its call_id, contiguously, numbered
     # 0..k-1: the resume pairing expands each assistant tool_use by its member

@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Mapping, Optional, Protocol
 
 from noeta.protocols.messages import (
+    HeaderAwareProvider,
     LLMProvider,
     LLMRequest,
     LLMResponse,
@@ -86,7 +87,10 @@ def render_digest_prompt(
 
 
 def _complete_bounded(
-    provider: LLMProvider, request: LLMRequest, timeout_seconds: float
+    provider: LLMProvider,
+    request: LLMRequest,
+    timeout_seconds: float,
+    request_headers: Optional[Mapping[str, str]] = None,
 ) -> Optional[LLMResponse]:
     """One provider call under a wall-clock cap; ``None`` ⇒ timed out.
 
@@ -95,13 +99,26 @@ def _complete_bounded(
     the orphan call writes nothing and its eventual result has no consumer. A
     provider exception is re-raised on the calling thread, so the tool's
     degrade-to-raw-render catch keeps owning failures.
+
+    ``request_headers`` (the host's ``provider_headers`` for the calling task)
+    ride ``complete_with_headers`` when the provider accepts headers, so a
+    gateway routing on them sees the digest call like every other call the
+    task makes.
     """
     outcome: list[tuple[str, object]] = []
     done = threading.Event()
 
     def _run() -> None:
         try:
-            outcome.append(("ok", provider.complete(request)))
+            if request_headers is not None and isinstance(
+                provider, HeaderAwareProvider
+            ):
+                result = provider.complete_with_headers(
+                    request, dict(request_headers)
+                )
+            else:
+                result = provider.complete(request)
+            outcome.append(("ok", result))
         except BaseException as exc:  # noqa: BLE001 — re-raised on the calling thread
             outcome.append(("err", exc))
         finally:
@@ -137,7 +154,13 @@ class LLMPageDigester:
     timeout_seconds: float = DEFAULT_DIGEST_TIMEOUT_SECONDS
 
     def digest(
-        self, *, url: str, title: str, page_markdown: str, prompt: str
+        self,
+        *,
+        url: str,
+        title: str,
+        page_markdown: str,
+        prompt: str,
+        request_headers: Optional[Mapping[str, str]] = None,
     ) -> str:
         request = LLMRequest(
             model=self.model,
@@ -159,7 +182,9 @@ class LLMPageDigester:
             temperature=0.0,
             max_tokens=_DIGEST_MAX_TOKENS,
         )
-        response = _complete_bounded(self.provider, request, self.timeout_seconds)
+        response = _complete_bounded(
+            self.provider, request, self.timeout_seconds, request_headers
+        )
         if response is None:
             raise TimeoutError(
                 f"webfetch digest call exceeded {self.timeout_seconds}s"
