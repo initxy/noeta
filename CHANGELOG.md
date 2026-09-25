@@ -8,6 +8,45 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.30] - 2026-09-24
+
+Covers both packages, lockstep — 0.6.28 → 0.6.30 for `noeta-runtime`, 0.6.29 →
+0.6.30 for `noeta-sdk` (`noeta-sdk`'s `noeta-runtime>=` floor rises with it).
+Two model-binding fixes, found while rewriting the docs, plus the rewritten
+documentation site. No public signature changes.
+
+### Fixed — the default model is sent as a real model id (`noeta-sdk`)
+
+- **A `Client` / `query()` built without `model` sent `"sonnet"` verbatim.**
+  The fallback alias never went through the model catalog, so a real Anthropic
+  endpoint rejected the request. The host model now resolves through the catalog
+  exactly as a per-turn `model_selector` does — `"sonnet"` becomes
+  `claude-sonnet-5`, an alias you pass as `model=` resolves too, and an id the
+  catalog does not know (a gateway's own name) passes through unchanged.
+
+### Fixed — a per-turn model switch applies to the turn that asks for it (`noeta-runtime`)
+
+- **`send_goal(..., model_selector=...)` answered the goal on the old model.**
+  The `ModelBound` was recorded, but the turn ran on the Engine resolved before
+  the switch, so the new model only took over on the *following* turn — and a
+  crash-resume of the switching turn would have folded the new binding, so the
+  same turn could change model depending on whether the process survived. The
+  seed now rebuilds the turn's Engine after the switch; the switching turn and
+  every later one run on the new model.
+
+### Documentation
+
+- **The site is rewritten** around what sets Noeta apart: Why Noeta (with a
+  comparison against the Claude Agent SDK, LangGraph and Temporal), a
+  real-model quickstart, a tutorial, task guides, a six-page "How it works",
+  reference and operations — 30 pages in English and Chinese, replacing 45.
+- **New diagrams** drawn as inline SVG that follow dark mode and both locales;
+  the old ones had drifted from the code (for example, a crash-recovery diagram
+  promising an exactly-once re-run the runtime does not make).
+- **About twenty factual errors fixed** in the old pages, among them the `Task`
+  tool's call shape, environment variables Noeta never read, the plugin
+  manifest's TOML shape and stale model ids.
+
 ## [0.6.29] - 2026-09-20
 
 Covers `noeta-sdk` only: 0.6.28 → 0.6.29. `noeta-runtime` stays at 0.6.28; the
@@ -2763,6 +2802,7 @@ Initial preview release.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
 [Unreleased]: https://github.com/initxy/noeta/compare/v0.6.29...HEAD
+[0.6.30]: https://github.com/initxy/noeta/compare/v0.6.29...v0.6.30
 [0.6.29]: https://github.com/initxy/noeta/compare/v0.6.28...v0.6.29
 [0.6.28]: https://github.com/initxy/noeta/compare/v0.6.27...v0.6.28
 [0.6.27]: https://github.com/initxy/noeta/compare/v0.6.26...v0.6.27
