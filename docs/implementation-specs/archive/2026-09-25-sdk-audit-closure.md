@@ -1,6 +1,6 @@
 # SDK audit closure — 2026-09-25
 
-Status: IMPLEMENTED 2026-09-25 on branch `fix/sdk-audit-closure-2026-09-25` (base 5f75aca, runtime 0.6.30 / sdk 0.6.30) — uncommitted, awaiting the maintainer's commit and release call. `make check` green: ruff, 4400 passed / 141 skipped, coverage 88.49 %, `mypy --strict` on both packages (231 files), naming and import lints. See "Outcome" at the end for what shipped, what changed shape, and what was left out.
+Status: SHIPPED in 0.6.31 (2026-09-25, lockstep). Implemented on branch `fix/sdk-audit-closure-2026-09-25` (base 5f75aca, runtime 0.6.30 / sdk 0.6.30) in three phases the same day; distilled into CONTEXT.md and the amended ADRs, archived here for the construction detail. `make check` green: ruff, 4400 passed / 141 skipped, coverage 88.49 %, `mypy --strict` on both packages (231 files), naming and import lints. See "Outcome" at the end for what shipped, what changed shape, and what was left out.
 
 ## Goal
 
