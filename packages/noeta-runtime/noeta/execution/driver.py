@@ -275,9 +275,10 @@ class ModelBindPrelude:
 
     The Engine ``run_leased_task`` resolves for a woken task is keyed on the
     Task's *folded* model binding; ``note_model_bound`` runs ON that resolved
-    Engine (the current-model one) and only writes the event — the new
-    binding takes effect on the **next** resolve (the switch drives the next
-    turn). ``note_model_bound`` simply appends the ``ModelBound`` to the same
+    Engine (the current-model one) and only writes the event; the seed then
+    rebuilds the turn's Engine from the post-prelude fold, so the switching
+    turn itself runs on the new binding (see ``_apply_seed_prelude``).
+    ``note_model_bound`` simply appends the ``ModelBound`` to the same
     EventLog regardless of which Engine instance emits it.
     """
 
@@ -1038,17 +1039,15 @@ class InteractionDriver:
         durable write) and emitted as a ``ModelBound`` in the same
         post-``TaskWoken`` window as the appended goal (a
         :class:`ModelBindPrelude` chaining the append). The new binding takes
-        effect **going forward**: the seed resolves the driving Engine *before*
-        applying the prelude and the drive reuses that pinned Engine, so this
-        turn runs on the binding in force when it started and the switch drives
-        the **next** turn (whose fold now sees the new ``ModelBound``). With no
-        selector the conversation keeps its current binding (no ``ModelBound``
-        written).
+        effect **from this turn**: the seed rebuilds the turn's Engine from the
+        post-switch fold, so the goal sent with the selector is answered on the
+        new model — the same binding a crash-resume of this turn would fold.
+        With no selector the conversation keeps its current binding (no
+        ``ModelBound`` written).
 
         ``provider_selector`` is the per-turn provider switch
         (folded into the SAME ``ModelBound`` as the model). Like
-        ``model_selector`` the new binding takes effect **going forward** (the
-        next turn). When only one of the two selectors is given the other sticks
+        ``model_selector`` the new binding takes effect from this turn. When only one of the two selectors is given the other sticks
         at its current binding (switchable per turn: a model-only turn leaves the
         provider unchanged, and vice-versa). A bad ``(provider, model)`` pair raises
         :class:`ProviderSelectorError` before any durable write — see
@@ -2700,9 +2699,10 @@ class InteractionDriver:
         """Apply an append-type prelude synchronously under the seed's lease:
         ``note_woken`` + the prelude's durable events land before the
         202 ack, in exactly the order (and bytes) the drive-side path
-        records them. Returns the Engine resolved from the PRE-prelude fold
-        so the drive runs this turn on the binding in force when it started
-        (a prelude-written ``ModelBound`` drives the next turn);
+        records them. Returns the Engine the drive runs this turn on: the one
+        resolved from the pre-prelude fold, or — when the prelude wrote a
+        ``ModelBound`` (a per-turn switch) — one rebuilt from the post-prelude
+        fold, so the switching turn itself runs on the new binding;
         the drive itself is then prelude-less — its woken machine reconciles
         the already-durable ``TaskWoken`` and runs the bare step.
 
@@ -2760,6 +2760,16 @@ class InteractionDriver:
                     "seed-prelude compensation failed for task %s", task_id
                 )
             raise
+        if isinstance(prelude, ModelBindPrelude):
+            # The switch opened this turn, so this turn runs on it: rebuild the
+            # turn's Engine from the post-prelude fold. Driving the pre-switch
+            # Engine would answer the switching goal on the old model — and a
+            # crash mid-turn would then resume on the new one, so the same turn
+            # would change model depending on whether the process survived.
+            self._forget_turn_engine(task_id)
+            engine = host.resolve_engine(
+                fold(host.event_log, host.content_store, task_id)
+            )
         return engine
 
     def _require_human_suspend(self, task_id: str, handle: str) -> Task:

@@ -582,8 +582,11 @@ class Client:
         self._worker_threads: list[threading.Thread] = []
         self._workers_started = False
 
-        # 4. Assemble host
-        host_model = (
+        # 4. Assemble host. The host model is what every request carries when
+        # no per-turn selector is given, so a catalog alias (the "sonnet"
+        # fallback, or one the caller passed) resolves to its real id here —
+        # the driver binds the host default as-is and never resolves it.
+        host_model = resolve_model_alias(
             model
             if model is not None
             else main_spec.default_model
