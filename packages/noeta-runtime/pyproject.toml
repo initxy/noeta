@@ -1,6 +1,6 @@
 [project]
 name = "noeta-runtime"
-version = "0.6.30"
+version = "0.6.31"
 description = "The kernel under noeta-sdk: an event-sourced, dependency-free runtime that records, schedules and replays AI agent tasks. Install noeta-sdk to build agents."
 license = "Apache-2.0"
 license-files = ["LICENSE"]

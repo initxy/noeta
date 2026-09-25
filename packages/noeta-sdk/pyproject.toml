@@ -1,6 +1,6 @@
 [project]
 name = "noeta-sdk"
-version = "0.6.30"
+version = "0.6.31"
 description = "Python SDK for durable AI agents: survive crashes, pause for human approval at no cost, scale from a script to a multi-host cluster. Anthropic, OpenAI and any OpenAI-compatible model; MCP; self-hosted."
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -39,7 +39,7 @@ dependencies = [
     # installed at skewed versions. Under 0.x a minor bump is the breaking one,
     # so the SDK tracks the kernel minor-for-minor rather than failing at first
     # build.
-    "noeta-runtime>=0.6.30,<0.7.0",
+    "noeta-runtime>=0.6.31,<0.7.0",
 ]
 
 [project.urls]

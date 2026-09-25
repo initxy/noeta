@@ -8,7 +8,11 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
-Covers both packages, lockstep. Closes the defects a seven-track audit of the
+## [0.6.31] - 2026-09-25
+
+Covers both packages, lockstep — 0.6.30 → 0.6.31 for `noeta-runtime` and
+`noeta-sdk` (`noeta-sdk`'s `noeta-runtime>=` floor rises with it). Closes the
+defects a seven-track audit of the
 SDK found on 2026-09-25 (shell policy, providers, MCP, built-in tools, the
 client surface, token economy, packaging) — most were reproduced before they
 were fixed, and each fix carries a regression test. **Entries that change a
@@ -3207,7 +3211,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.29...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.31...HEAD
+[0.6.31]: https://github.com/initxy/noeta/compare/v0.6.30...v0.6.31
 [0.6.30]: https://github.com/initxy/noeta/compare/v0.6.29...v0.6.30
 [0.6.29]: https://github.com/initxy/noeta/compare/v0.6.28...v0.6.29
 [0.6.28]: https://github.com/initxy/noeta/compare/v0.6.27...v0.6.28
