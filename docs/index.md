@@ -1,5 +1,7 @@
 ---
 layout: home
+title: "Noeta — Python SDK for durable, crash-safe AI agents"
+titleTemplate: false
 
 hero:
   name: Noeta

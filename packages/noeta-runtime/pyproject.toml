@@ -1,11 +1,12 @@
 [project]
 name = "noeta-runtime"
 version = "0.6.30"
-description = "Noeta runtime engine: the event-sourced kernel that hosts, records, and schedules agent execution server-side. Durable, multi-worker, crash-safe — the substrate underneath the SDK and the coding agent app."
+description = "The kernel under noeta-sdk: an event-sourced, dependency-free runtime that records, schedules and replays AI agent tasks. Install noeta-sdk to build agents."
 license = "Apache-2.0"
 authors = [{ name = "The Noeta Authors" }]
 readme = "README.md"
 requires-python = ">=3.11"
+keywords = ["ai-agents", "agent-framework", "llm", "llm-agents", "agentic-ai", "durable-execution", "event-sourcing", "human-in-the-loop", "anthropic", "claude", "openai", "mcp", "self-hosted"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -16,6 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries",
 ]
 # The kernel wheel is dependency-free (stdlib only). It is transport-free:
@@ -25,7 +27,9 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/initxy/noeta"
+Homepage = "https://initxy.github.io/noeta/"
+Documentation = "https://initxy.github.io/noeta/"
+Changelog = "https://github.com/initxy/noeta/blob/main/CHANGELOG.md"
 Repository = "https://github.com/initxy/noeta"
 
 [build-system]
