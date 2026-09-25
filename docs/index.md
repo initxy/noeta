@@ -2,158 +2,103 @@
 layout: home
 
 hero:
-  name: "Noeta"
-  text: "A Python runtime + SDK for agents that have to keep running"
-  tagline: Drive an agent in your own process today; run the same agent on a multi-worker, multi-host pool tomorrow — without touching the agent. Every capability is a plugin, every model vendor is one line of wiring, and every run is durable enough to survive kill -9 and replay afterwards.
+  name: Noeta
+  text: Agents that keep running.
+  tagline: A Python SDK for agents that survive crashes, wait days for a human, and scale from one script to a cluster — without changing the agent.
+  image:
+    src: /logo.svg
+    alt: Noeta
   actions:
     - theme: brand
-      text: Quickstart (5 min)
-      link: /tutorials/quickstart
+      text: Quickstart
+      link: /start/quickstart
     - theme: alt
-      text: Benchmarks
-      link: /benchmarks
+      text: Why Noeta
+      link: /why-noeta
     - theme: alt
       text: GitHub
       link: https://github.com/initxy/noeta
 
 features:
-  - title: Server-ready, not just a loop you call
-    details: Client.start_workers(n) turns the same process into a resident worker pool; point the store at Postgres and several hosts share one database with lease-fenced writes. The Engine is stateless, so scaling out is a storage swap, not a rewrite — and there is no daemon to operate and no HTTP hop.
-
-  - title: Every capability is a plugin — including ours
-    details: The kernel ships zero capabilities. File tools, web tools, memory, browser, MCP, sandboxes, storage backends, and every provider adapter are built-in plugins reaching the kernel through one doorway. Your plugin rides the identical path; there is no privileged internal API you are locked out of.
-
-  - title: Sixteen extension surfaces, declared as inert data
-    details: A plugin is a package with a static manifest, so Noeta can list and collision-check everything it contributes before importing a line of its code. Tools, agents, policies, guards, observers, MCP servers, and sandbox providers are all contributions.
-
-  - title: Kill the process mid-task; it resumes
-    details: State is never held in memory — it is fold(events), recomputed from an append-only log, with a heartbeat-renewed lease making exactly one writer per task. The next worker seals the interrupted attempt and carries on from the last durable point, exactly once.
-
-  - title: Waiting is free and first class
-    details: A task suspends for a human answer, a timer, a subtask, or an external event, and costs nothing while it sleeps. The wake is durable, single-worker, and delivered exactly once — a month-long approval loop is the same machinery as a five-second tool call.
-
-  - title: Any model, enforced — not promised
-    details: Anthropic, any OpenAI chat-completions gateway, and the OpenAI Responses API sit behind one internal protocol that never names a vendor. Swapping endpoints is wiring, not a rewrite — the kernel is barred from importing a provider package, and the build fails if it tries.
+  - title: Survives crashes
+    details: State is rebuilt from an append-only event log, never held in memory. Kill a worker mid-task and another one carries on from the last step. The same log is a complete audit trail.
+    link: /how-it-works/event-log
+    linkText: How recovery works
+  - title: Waiting costs nothing
+    details: A task can pause for a human approval, a timer, a subtask or an outside event — for seconds or for months. It uses no resources while it sleeps and is woken exactly once.
+    link: /how-it-works/tasks-and-waking
+    linkText: How waking works
+  - title: From a script to a cluster
+    details: Call query() in a script, run a worker pool inside your service, then point several hosts at one Postgres. The agent code is the same at every step. No daemon, no extra service.
+    link: /guides/deploy
+    linkText: Deploy it
 ---
 
-## In the top band of the public leaderboard
+## A working agent in a few lines
 
-| Benchmark | Scope | `noeta-agent` `main` (Claude Opus 4.8) | Field |
-|---|---|---|---|
-| Terminal-Bench 2.1 | 40-task stratified sample | **82.5%** (33/40) | public board spans 58.7%–83.8% |
-| SWE-bench Verified | 15-instance subset | **86.7%** (13/15) | top ~79%, mid-pack ~66–77% |
-
-Run through [harbor](https://github.com/harbor-framework/harbor), the official
-Terminal-Bench harness, on the official datasets, scored by each task's own
-verifier. The agent is [`noeta-agent`](https://github.com/initxy/noeta-agent)'s
-`main` preset, assembled entirely from this SDK's public surface. Both rows are
-**samples**, labelled as such — see [Benchmarks](/benchmarks) for the full
-methodology, exclusions, and re-runnable commands.
-
-## 60-second taste
-
-```bash
-uv pip install noeta-sdk      # noeta-runtime comes along as a transitive dep
-```
-
-Zero credentials, no network — drive one turn with the offline `FakeLLMProvider`:
+<p class="nt-lead">Install <code>noeta-sdk</code>, set <code>ANTHROPIC_API_KEY</code>, and the agent explores your project with its built-in file tools.</p>
 
 ```python
-from noeta.sdk import Options, query, LLMResponse, TextBlock, Usage
-from noeta.sdk.testing import FakeLLMProvider
-
-provider = FakeLLMProvider(responses=[
-    LLMResponse(stop_reason="end_turn",
-                content=[TextBlock(text="Hello from Noeta.")],
-                usage=Usage(uncached=1, output=1))
-])
+from noeta.sdk import Options, query
+from noeta.sdk.providers import AnthropicProvider
 
 result = query(
-    Options(system_prompt="You are concise.",
-            allowed_tools=("Read",),
-            permission_mode="bypassPermissions"),
-    goal="Say hello.",
-    provider=provider,
-    model="stub-model",
+    Options(system_prompt="You are a concise coding assistant."),
+    goal="What files are in this directory, and what does each one do?",
+    provider=AnthropicProvider(),
+    model="claude-sonnet-5",
 )
-assert result.answer() == "Hello from Noeta."
+print(result.answer())
 ```
 
-Point it at a real model by swapping the provider — see
-[Configure a provider](/how-to/configure-provider).
+The result is more than the answer: it holds every model call, tool call and
+token count from the run. [Quickstart →](/start/quickstart)
 
-## Find your way
+## How it fits together
 
-New here? Read the [Quickstart](/tutorials/quickstart), then
-[Your first agent](/tutorials/first-agent). Everything else is below.
+<NtArchitecture />
 
-### Tutorials — learn by doing
+Every step the agent takes is appended to the event log, so any worker can rebuild the task from it. Everything the agent can do — tools, MCP, memory, the model itself — is a plugin. [How it works →](/how-it-works/)
 
-| Page | What you get |
-|---|---|
-| [Quickstart (5 min)](/tutorials/quickstart) | Install, run one turn offline, read the event log it produced. |
-| [Your first agent](/tutorials/first-agent) | A real agent with a custom tool and a permission gate. |
-| [CI integration](/tutorials/ci-integration) | Run agents deterministically in CI, no API key needed. |
+## Built to be extended
 
-### How-to — solve one problem
+<div class="nt-cards">
+  <div class="nt-card"><strong>Everything is a plugin</strong><span>The kernel ships no capabilities. File tools, web, memory, MCP, sandboxes and model adapters are all plugins that use the same public API yours does.</span></div>
+  <div class="nt-card"><strong>Any model</strong><span>Anthropic, any OpenAI-compatible gateway, or the OpenAI Responses API. Switching is one line; the agent and its history stay the same.</span></div>
+  <div class="nt-card"><strong>Approval before action</strong><span>Risky tool calls pause for a human. Guards can block a call before it runs; observers watch without being able to interfere.</span></div>
+</div>
 
-| Page | Use it when |
-|---|---|
-| [Configure a provider](/how-to/configure-provider) | You want a real model: Anthropic, an OpenAI-compatible gateway, or Responses. |
-| [Build custom tools](/how-to/build-custom-tools) | Your agent needs to call your own code. |
-| [Spawn sub-agents](/how-to/spawn-subagents) | A task should delegate part of the work and wait for the result. |
-| [Connect MCP](/how-to/connect-mcp) | You want tools from an existing MCP server. |
-| [Write a plugin](/how-to/write-a-plugin) | You want to package tools, agents, or policies for reuse. |
-| [Deploy a worker](/how-to/deploy-worker) | Tasks should keep running outside the process that started them. |
-| [Deploy with Docker](/how-to/docker-deployment) | You are shipping the worker as a container. |
-| [Use a sandbox](/how-to/use-sandbox) | Tool calls must run isolated from the host. |
-| [Multi-tenant memory](/how-to/multi-tenant-memory) | Several tenants share one deployment and must not see each other. |
-| [Swap providers](/how-to/swap-providers) | An existing agent has to move to a different endpoint. |
+## How it compares
 
-### Concepts — understand the model
+<div class="nt-compare">
 
-| Page | The idea |
-|---|---|
-| [All concepts](/concepts/) | The reading order, plus one line per concept. |
-| [Event sourcing](/concepts/event-sourcing) | Why state is `fold(events)` and what that buys you. |
-| [Task model](/concepts/task-model) | Task is the only primitive: states, attempts, subtasks. |
-| [Engine & execution](/concepts/engine-execution) | What one step does: lease, fold, compose, decide, dispatch. |
-| [Fold & snapshot](/concepts/fold-and-snapshot) | Rebuilding state from the log, and the snapshot that keeps it fast. |
-| [Wake & resume](/concepts/wake-resume) | Suspending on a human, timer, or subtask — and waking exactly once. |
-| [Guard vs Observer](/concepts/guard-observer) | Who can block a tool call, and who may only watch. |
-| [Composer & cache](/concepts/composer-and-cache) | How the prompt is assembled in three segments to hit the provider cache. |
-| [Provider neutrality](/concepts/provider-neutrality) | One internal protocol, three adapters, no vendor inside the kernel. |
+| | **Noeta** | Claude Agent SDK | LangGraph | Temporal |
+|---|---|---|---|---|
+| What it is | Durable agent runtime, as a library | Agent loop library for Claude | Graph-based agent framework | Durable workflow platform |
+| Control flow | The model decides each step | The model decides | A graph you define | Workflow code you write |
+| What is saved | Every event; state is derived from it | The conversation | Checkpoints of graph state | Workflow history |
+| Waiting for a human / timer | Built in, woken exactly once | Resume the conversation | Interrupt, then the caller resumes | Built in |
+| Scaling out | Worker pool; many hosts on Postgres | One process | Up to you, or the hosted platform | A Temporal cluster |
+| Models | Any, one line to switch | Claude | Any | — |
+| Extra service to run | None — your process, your database | None | None | Temporal server |
 
-### Architecture — how it is built
+</div>
 
-| Page | Covers |
-|---|---|
-| [Overview](/architecture/overview) | The guided tour of the whole system. |
-| [Packages & import rules](/architecture/packages) | `noeta-sdk` over `noeta-runtime`, one namespace, the rules that keep them apart. |
-| [State & writers](/architecture/state-and-writers) | State slices, the single-writer invariant, the versioned fold. |
-| [Extension planes](/architecture/extension-planes) | Sixteen surfaces across three planes, and how built-ins ride them. |
+<p class="nt-muted">Pick Noeta when an agent runs unattended for a long time and you need to recover, audit and scale it. <a href="why-noeta.html">Full comparison →</a></p>
 
-### Reference — look things up
+## Proven on public benchmarks
 
-| Page | Contains |
-|---|---|
-| [SDK API map](/reference/sdk) | Everything importable from `noeta.sdk`, with links into the detail pages. |
-| [query / Client](/reference/sdk-client) | The two entry points, their arguments, and what they return. |
-| [Options](/reference/sdk-options) | Every `Options` field and the permission modes. |
-| [Types & testing](/reference/sdk-types) | Events, content blocks, results, and the offline test doubles. |
-| [Plugins overview](/reference/plugins) | What a plugin is and how it becomes active for an agent. |
-| [Plugin manifest](/reference/plugin-manifest) | The manifest shape, loading, and version pinning. |
-| [Plugin surfaces](/reference/plugin-surfaces) | All sixteen extension surfaces, one section each. |
-| [Tools](/reference/tools) | The built-in tool catalog. |
-| [Presets](/reference/presets) | The preset agents and what each is wired with. |
-| [WorkerLoop](/reference/worker-loop) | Worker pool API, leases, polling behaviour. |
-| [Comparison](/reference/comparison) | Noeta next to other agent frameworks. |
-| [Glossary](/reference/glossary) | Every term, grouped by domain, with an A–Z index. |
+<div class="nt-stats">
+  <div class="nt-stat"><div class="num">82.5%</div><div class="label">Terminal-Bench 2.1</div><div class="sub">40-task sample · public board 58.7%–83.8%</div></div>
+  <div class="nt-stat"><div class="num">86.7%</div><div class="label">SWE-bench Verified</div><div class="sub">15-instance subset · field top ~79%</div></div>
+</div>
 
-### Operations — run it in production
+<p class="nt-muted">An agent built only on the public SDK (<a href="https://github.com/initxy/noeta-agent">noeta-agent</a> <code>main</code>, Claude Opus 4.8), run on the official harness. Both are samples, not full leaderboard runs. <a href="benchmarks.html">Method and caveats →</a></p>
 
-| Page | Answers |
-|---|---|
-| [Troubleshooting](/operations/troubleshooting) | Symptom, cause, fix for the failures you will actually hit. |
-| [Known limitations](/operations/limitations) | What Noeta does not do yet, stated plainly. |
-| [Benchmarks](/benchmarks) | How an agent built on Noeta scores on public benchmarks, and how that was measured. |
+## Where to go next
+
+<div class="nt-cards">
+  <a class="nt-card" href="start/quickstart.html"><strong>Quickstart</strong><span>A real agent running in five minutes.</span></a>
+  <a class="nt-card" href="start/tutorial.html"><strong>Tutorial</strong><span>Custom tools, approvals, multi-turn conversation and durable storage.</span></a>
+  <a class="nt-card" href="how-it-works/"><strong>How it works</strong><span>The event log, tasks and waking, and the plugin system, one page each.</span></a>
+</div>

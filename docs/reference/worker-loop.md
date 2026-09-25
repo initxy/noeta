@@ -1,13 +1,8 @@
 # WorkerLoop
 
-A worker is the thing that picks up a waiting task and pushes it one step
-forward. `WorkerLoop` is that loop, shipped as a library primitive: it leases a
-ready task, advances it, releases, and repeats — plus heartbeats, stale-lease
-sweeps, timer polling and a bounded graceful shutdown.
+`WorkerLoop` (`noeta.runtime.worker`) leases a ready task, advances it one step, releases it, and repeats — with heartbeats, stale-lease sweeps, timer polling and a bounded shutdown.
 
-There is no console script and nothing launches it for you. An embedding host
-constructs and runs it, and scales by running several loops — each with its own
-`worker_id` — against one store.
+Nothing launches it for you. A host constructs and runs it, and scales by running several loops, each with its own `worker_id`, against one store.
 
 ```python
 from noeta.runtime.worker import WorkerLoop
@@ -17,199 +12,103 @@ print(loop.running)                      # → False
 loop.run_forever(install_signals=True)   # blocks until stop()
 ```
 
-If you only need workers inside an existing `Client`, call
-`client.start_workers(n)` instead — see [query / Client](sdk-client.md).
+Inside a `Client`, use `client.start_workers(n)` instead — see [SDK](sdk.md).
 
-Members below are named, not line-numbered: line numbers drift on every edit, so
-the module path plus the member name is the stable coordinate.
+## `WorkerRuntime`
 
-## `WorkerRuntime` protocol
-
-The loop drives any object exposing four read-only properties: `engine`,
-`event_log`, `content_store`, `dispatcher`. The in-repo
-`noeta.testing.profile.RuntimeBundle` satisfies it. Three further methods are
-**duck-typed** — a runtime that omits them degrades to a no-op:
+The loop drives any object with four read-only properties: `engine`, `event_log`, `content_store`, `dispatcher` (`noeta.testing.profile.RuntimeBundle` is one). Three optional methods are duck-typed:
 
 | Method | Effect when present |
 | --- | --- |
-| `resolve_engine(task) → Engine` | the per-task engine resolver a multi-agent host supplies; without it the loop always uses the single `rt.engine`, so one loop binds one provider / model / tool set / policy |
-| `settle_subtasks_after_step(task_id)` | drives a delegation subtree the just-driven task barriered on (the resident path has no in-request drain to seed its children) |
-| `take_pending_prelude(task_id)` | hands over a one-shot non-durable woken prelude the host stashed at seed-yield time |
+| `resolve_engine(task) -> Engine` | per-task engine; without it every task uses `rt.engine` |
+| `settle_subtasks_after_step(task_id)` | drives a subtask tree the just-stepped task is waiting on |
+| `take_pending_prelude(task_id)` | hands over a one-shot wake prelude the host stashed |
 
-The ready queue **routes**. Every dispatcher row carries a queue name, and this
-loop's untargeted poll claims FIFO within its own `queue` and nothing else — so
-differently-configured profiles can share one store, each naming its own queue,
-instead of being split across separate sqlite files. Inside a queue the old
-rule still holds: every task on it must be one this loop can drive. See
-[ADR: Worker queue routing](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md).
-
-Use a **real sqlite file** for the runtime's storage — cross-process enqueue
-only works through shared on-disk state; `:memory:` is dev/test-only.
+Each loop claims only from its own `queue`, so pools with different configurations can share one store; every task in a queue must be drivable by that queue's loops ([ADR](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md)). Cross-process work needs a real SQLite file or Postgres; `:memory:` is for tests.
 
 ## Constructor
 
-```python
-WorkerLoop(
-    rt: WorkerRuntime,
-    *,
-    worker_id: str = "noeta-worker",
-    lease_seconds: float = 600.0,
-    poll_interval: float = 0.5,
-    heartbeat_interval: float = 30.0,
-    stale_sweep_interval: float = 10.0,
-    timer_poll_interval: float = 1.0,
-    shutdown_grace_s: Optional[float] = DEFAULT_SHUTDOWN_GRACE_S,   # 30.0
-    sleep: Optional[Callable[[float], None]] = None,
-    clock: Optional[Callable[[], float]] = None,
-    now_fn: Optional[Callable[[], float]] = None,
-    heartbeat_wait: Optional[Callable[[float], bool]] = None,
-    reliability_sink: Optional[ReliabilitySink] = None,
-    step_poll_s: float = 0.05,
-    next_goal_handle: Optional[str] = None,
-    queue: str = DEFAULT_QUEUE,                                     # "default"
-    lease_backoff_max_s: float = 30.0,
-)
-```
+| Parameter | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `rt` | `WorkerRuntime` | required | the runtime to drive |
+| `worker_id` | `str` | `"noeta-worker"` | lease owner id |
+| `lease_seconds` | `float` | `600.0` | initial lease per task |
+| `poll_interval` | `float` | `0.5` | sleep when the queue is empty |
+| `heartbeat_interval` | `float` | `30.0` | lease keepalive cadence; `<= 0` disables |
+| `stale_sweep_interval` | `float` | `10.0` | `requeue_stale` cadence; `<= 0` disables |
+| `timer_poll_interval` | `float` | `1.0` | `fire_due_timers` cadence; `<= 0` disables |
+| `shutdown_grace_s` | `float \| None` | `30.0` | max wait for the in-flight step after `stop()`, then abandon; `None` / `<= 0` waits forever |
+| `sleep`, `clock`, `now_fn`, `heartbeat_wait` | callables | `None` | time seams for tests; `now_fn` is the wall clock for timers, `clock` is monotonic |
+| `reliability_sink` | `ReliabilitySink \| None` | `None` | receives `ReliabilityEvent`s; default: structured logs |
+| `step_poll_s` | `float` | `0.05` | poll cadence while waiting on the step thread |
+| `next_goal_handle` | `str \| None` | `None` | when set, a human stop suspends the task on this handle (reopenable) instead of ending it |
+| `queue` | `str` | `"default"` | the only queue this loop claims from; match the client's `HostConfig.queue` |
+| `lease_backoff_max_s` | `float` | `30.0` | cap on the doubling backoff after a dispatcher fault |
 
-| Knob | Meaning |
+One loop is one drive thread; there is no `workers` knob. Concurrent loops are safe: writes are lease-fenced.
+
+## Methods
+
+| Member | Behaviour |
 | --- | --- |
-| `worker_id` | lease owner id |
-| `lease_seconds` | initial lease deadline granted per task |
-| `poll_interval` | sleep when the ready queue is empty |
-| `heartbeat_interval` | per-step lease keepalive cadence (`<= 0` disables) |
-| `stale_sweep_interval` | cadence of `requeue_stale` sweeps (`<= 0` disables) |
-| `timer_poll_interval` | cadence of the `fire_due_timers` poll (the `TimerFired` producer; `<= 0` disables) |
-| `shutdown_grace_s` | max wait for an in-flight step after `stop()`, then **abandon**; `None` / `<= 0` = unbounded wait |
-| `sleep` / `clock` / `now_fn` / `heartbeat_wait` | injectable time seams (tests); `now_fn` is the **wall** clock the timer due-check uses, kept separate from the monotonic `clock` |
-| `reliability_sink` | where `ReliabilityEvent`s go; default: structured logs |
-| `step_poll_s` | poll cadence while waiting on the in-flight step thread |
-| `next_goal_handle` | when set, a human close / cancel suspends the task on this handle (reopenable by typing again) instead of releasing it terminal |
-| `queue` | the only queue this loop's untargeted poll claims from. Match it to the `HostConfig.queue` of the client whose work this pool should drive. The maintenance sweeps stay queue-agnostic — they flip status, never ownership |
-| `lease_backoff_max_s` | ceiling for the doubling backoff after a Dispatcher fault under `lease()` |
-
-There is **no `workers` knob**: one `WorkerLoop` is one drain thread. You scale
-by running several loops (each with its own `worker_id`) against the same
-store. Concurrent loops are safe: lease-checked appends are fenced, so a loop
-whose lease was reclaimed cannot write behind the loop that took over.
-
-## Methods and properties
-
-| Member | Behavior |
-| --- | --- |
-| `run_forever(*, install_signals=False)` | run `recover_cap_terminal()` once, then drive until `stop()`; each iteration: `maybe_sweep()` → `maybe_poll_timers()` → `tick()`, sleeping `poll_interval` when idle. `install_signals=True` wires SIGTERM/SIGINT to `stop()` (main thread only) and restores handlers on exit |
-| `tick() → bool` | lease one ready task and advance it one step; `False` when the queue is empty — or when `lease()` itself faulted. The exception policy is applied inside |
-| `maybe_sweep() → bool` | run `requeue_stale()` if the interval elapsed |
-| `maybe_poll_timers() → bool` | run `fire_due_timers()` if the interval elapsed; degrades to a no-op on a dispatcher without timers |
-| `recover_cap_terminal() → list[str]` | the startup reconciliation pass, once per loop; returns the healed task ids |
-| `stop()` | signal the loop to stop after the current iteration |
-| `running: bool` | loop still running |
-| `abandoned: bool` | set when the shutdown grace elapsed with a step still in flight. The host **must exit the process** — the abandoned step thread may still write the EventLog; in-process reuse is unsupported |
+| `run_forever(*, install_signals=False)` | run `recover_cap_terminal()` once, then loop `maybe_sweep()` → `maybe_poll_timers()` → `tick()` until `stop()`. `install_signals=True` wires SIGTERM/SIGINT (main thread only). |
+| `tick() -> bool` | lease and advance one task; `False` if the queue was empty or `lease()` faulted |
+| `maybe_sweep() -> bool` | run `requeue_stale()` if due |
+| `maybe_poll_timers() -> bool` | run `fire_due_timers()` if due; no-op without timer support |
+| `recover_cap_terminal() -> list[str]` | startup reconciliation; returns healed task ids |
+| `stop()` | stop after the current iteration |
+| `running: bool` | still running |
+| `abandoned: bool` | shutdown grace ran out with a step in flight — **exit the process** |
 
 Module-level helpers:
 
-- `install_stop_signals(loop) → restore()` — wire SIGTERM/SIGINT to
-  `loop.stop()`; off the main thread it warns and returns a no-op restore.
-- `run_leased_task(rt, lease, *, prelude=None, next_goal_handle=None,
-  reliability_sink=None, engine=None) → WorkerOutcome` — the canonical 3-state
-  resume machine (including crash-recovery seal / re-drive / park), shared with
-  the in-process runner so the two cannot drift.
-- `keep_lease_alive(dispatcher, lease, *, interval=30.0, lease_seconds=600.0,
-  reliability_sink=None)` — the per-step heartbeat context manager, for callers
-  that drive a leased step with no resident loop around it.
-- `resolve_engine(rt, task) → Engine` — the seam behind the per-task resolver.
-- `reconcile_cap_terminal(rt, task_id) → bool` — write the terminal event a
-  Dispatcher cap left unwritten for one task (idempotent; a no-op unless the
-  row is terminal and the stream is not).
-- `recover_cap_terminal(rt) → list[str]` — the same decision over every task
-  stream, for rows capped while no worker was watching.
+| Function | Purpose |
+| --- | --- |
+| `install_stop_signals(loop) -> restore` | wire SIGTERM/SIGINT to `loop.stop()`; off the main thread warns and returns a no-op |
+| `run_leased_task(rt, lease, *, prelude=None, next_goal_handle=None, reliability_sink=None, engine=None) -> WorkerOutcome` | advance one leased task one step, including crash recovery; shared with the in-process runner |
+| `keep_lease_alive(dispatcher, lease, *, interval=30.0, lease_seconds=600.0, reliability_sink=None)` | heartbeat context manager for a step driven without a loop |
+| `resolve_engine(rt, task) -> Engine` | the per-task engine lookup |
+| `reconcile_cap_terminal(rt, task_id) -> bool` | write the missing terminal event for one capped task (idempotent) |
+| `recover_cap_terminal(rt) -> list[str]` | the same over every task |
 
-## Exception policy
+## Errors
 
-A resident loop must not crash on a poisoned task:
+| Situation | What the loop does |
+| --- | --- |
+| `InvalidLease` | log and continue; the lease isn't ours |
+| any other exception in a step | `dispatcher.fail(lease_id, retryable=True, reason=…)`; retried up to the backend's `max_fail_attempts`, then terminal |
+| `fail()` itself raises | log and continue |
+| dispatcher fault under `lease()` | log, emit `dispatcher_unavailable`, back off (doubling, capped at `lease_backoff_max_s`), keep polling |
+| `KeyboardInterrupt` / `SystemExit` | propagate |
 
-- `InvalidLease` → log + continue; no `release` / `fail` (the lease is not
-  ours).
-- Any other exception → `dispatcher.fail(lease_id, retryable=True,
-  reason=…)`: bounded retry up to the backend's `max_fail_attempts`, then
-  terminal — and the terminal EventLog event that cap leaves unwritten is
-  reconciled (see below).
-- If `fail()` itself raises → log + continue.
-- A fault in the Dispatcher itself, under `lease()` (a dropped connection, a
-  restart, a failover) → log, emit `dispatcher_unavailable`, sleep a doubling
-  backoff capped at `lease_backoff_max_s`, keep polling. `KeyboardInterrupt` /
-  `SystemExit` still propagate.
-- The loop always proceeds to the next task.
+Provider errors never reach this: they become error `LLMResponse`s the policy handles.
 
-Provider failures never reach this backstop: `runtime/llm.py` translates a
-provider exception into an error `LLMResponse` the policy reads, so retries are
-consumed there rather than double-counted here.
+**Cap-terminal reconciliation.** When a dispatcher cap (`max_fail_attempts` or `reclaim_max`) marks a row terminal, it writes nothing to the event log, so a waiting parent would never wake. The loop writes a `TaskFailed` for such tasks after `fail()`, after each sweep, and once at startup, and emits `cap_terminal_reconciled`.
 
-## Cap-terminal reconciliation
+## Outcomes and signals
 
-Both Dispatcher caps — `fail()`'s `max_fail_attempts` and `requeue_stale()`'s
-`reclaim_max` — drop the task's **row** to `terminal` and write nothing to the
-EventLog. The row is then unleasable and unwakeable while `fold` still reads the
-task as live, so a parent suspended on a subtask barrier waits on a child that
-already ended. The loop closes that split from its own side, by reading the row
-it just wrote through:
+`WorkerOutcome`:
 
-- after `fail()`, for the task it just failed;
-- after a sweep, for every id an earlier sweep requeued that this one did not
-  (the reclaim cap omits capped ids from the result);
-- once at `run_forever()` startup, over every task stream, for rows capped
-  while no worker was watching.
+| Value | Meaning |
+| --- | --- |
+| `"woken"` | the lease carried a wake; the task advanced one step |
+| `"drained"` | a pending or running task advanced one step |
+| `"skipped"` | suspended with no wake yet (diagnostic) |
+| `"cancelled"` | a human cancel landed; task is terminal |
+| `"stopped"` | a human stop landed, or crash recovery parked it; task is reopenable |
 
-Each writes a lease-free `TaskFailed` through `system_emit` — the same
-convergence the driver makes for a lost lease — and emits
-`cap_terminal_reconciled`. The decision is idempotent: a stream that already
-carries a terminal event is left alone.
+`ReliabilityEvent(kind, task_id=None, lease_id=None, detail={})` — process-local, not event-log events. Kinds: `stale_requeued`, `suspended_without_wake`, `step_failed_retryable`, `heartbeat_invalid_lease`, `shutdown_abandoned`, `timers_fired`, `attempt_abandoned` (interrupted attempt sealed and re-driven), `attempt_parked` (sealed and parked for a human), `cap_terminal_reconciled`, `dispatcher_unavailable`.
 
-## Outcome and reliability types
+`WakeRecoveryError` — a wake can't be matched to folded state; the worker fails loudly. A crash mid-step is not an error: the next lease seals the attempt with `StepAttemptAbandoned` and re-drives it if side-effect-free, otherwise parks it.
 
-`WorkerOutcome`: `"woken" | "drained" | "skipped" | "cancelled" | "stopped"`.
-`"skipped"` means a suspended task with no wake yet (a diagnostic, not an
-error); `"cancelled"` / `"stopped"` mean a human cancel/close landed mid-turn —
-`"cancelled"` left the task terminal, `"stopped"` left it reopenable.
-`"stopped"` also covers a crash-recovery **park**: the task rests suspended with
-a system notice, and typing a message resumes it.
+## Shutdown
 
-`ReliabilityEvent` — process-local signals (**not** EventLog events), sent to
-`reliability_sink`. Kinds: `stale_requeued`, `suspended_without_wake`,
-`step_failed_retryable`, `heartbeat_invalid_lease`, `shutdown_abandoned`,
-`timers_fired`, `attempt_abandoned`, `attempt_parked` (these two are the
-crash-recovery moments: an interrupted attempt sealed and re-driven
-automatically, or sealed and parked for a human), `cap_terminal_reconciled`,
-`dispatcher_unavailable`. Every kind names what the loop
-can actually prove from the Dispatcher seam, never a root cause it cannot
-observe.
+`stop()` stops leasing and waits up to `shutdown_grace_s` for the in-flight step. On timeout the loop stops the heartbeat, emits `shutdown_abandoned`, sets `abandoned` and returns without releasing the lease; the process must exit, and `requeue_stale` reclaims the task on the next start.
 
-`WakeRecoveryError` — a woken lease's wake cannot be reconciled against folded
-state; the worker fails loud. A crash mid-step is **not** an error path: on the
-next lease the interrupted attempt is sealed with `StepAttemptAbandoned` and
-re-driven automatically when it is side-effect-free per the approval surface, or
-the task is parked for a human (see
-[known limitations](../operations/limitations.md)).
-
-## Shutdown semantics
-
-`stop()` stops leasing and waits up to `shutdown_grace_s` for the in-flight
-step (its lease kept alive by the heartbeat). On timeout the loop
-**abandons** the step: stops its heartbeat, emits `shutdown_abandoned`, sets
-`abandoned`, and returns without releasing or failing the lease. Python cannot
-interrupt the step thread — abandon is only safe because the process exits; the
-lease then expires and `requeue_stale` reclaims the task on the next start.
-
-The heartbeat cannot extend a lease forever: the dispatcher caps extensions at
-`heartbeat_max`, so `heartbeat_interval × heartbeat_max` bounds one step's hold;
-past the cap the lease is force-released and the step's next write fails with
-`InvalidLease`. Boundary conditions — the SQLite single-host limit,
-crash-recovery scope — are catalogued in
-[known limitations](../operations/limitations.md).
+A heartbeat can't hold a lease forever: the dispatcher caps renewals at `heartbeat_max`, after which the step's next write fails with `InvalidLease`.
 
 ## Next
 
-- [Deploy a worker](../how-to/deploy-worker.md) — the task-oriented guide
-- [Wake & resume](../concepts/wake-resume.md) — the durable, single-worker,
-  exactly-once delivery guarantee
-- [query / Client](sdk-client.md) — the in-process pool alternative
-- [Known limitations](../operations/limitations.md) — the boundary conditions
+- [Deploy](../guides/deploy.md) — workers, Docker, Postgres
+- [Tasks and waking](../how-it-works/tasks-and-waking.md) — how suspend and wake work
+- [Limitations](../operations/limitations.md) — boundary conditions

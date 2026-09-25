@@ -10,8 +10,8 @@ import { defineConfig } from 'vitepress'
 // i18n: English at /noeta/, Chinese at /noeta/zh/
 //
 // Navigation contract: the single global sidebar (same on every page) is the
-// one complete table of contents; the top nav carries only two shortcuts +
-// GitHub and must not duplicate the sidebar. Path-scoped sidebars are
+// one complete table of contents; the top nav carries only shortcuts (GitHub
+// lives in the social links) and must not duplicate the sidebar. Path-scoped sidebars are
 // deliberately not used — they hid whole sections from readers who had not
 // already guessed the URL.
 
@@ -20,85 +20,64 @@ import { defineConfig } from 'vitepress'
 // ---------------------------------------------------------------------------
 
 const navEn = [
-  { text: 'Quickstart', link: '/tutorials/quickstart' },
+  { text: 'Why Noeta', link: '/why-noeta' },
+  { text: 'Quickstart', link: '/start/quickstart' },
   { text: 'Reference', link: '/reference/sdk' },
-  { text: 'GitHub', link: 'https://github.com/initxy/noeta' },
 ]
 
-// One global sidebar — rendered identically on every page, so no section can
-// hide behind a path prefix. Long groups start collapsed.
+// One global sidebar, ordered the way a reader goes: decide, start, build,
+// understand, look up, operate.
 const sidebarEn = [
   {
-    text: 'Tutorials',
-    collapsed: false,
+    text: 'Get started',
     items: [
-      { text: 'Quickstart (5 min)', link: '/tutorials/quickstart' },
-      { text: 'Your first agent', link: '/tutorials/first-agent' },
-      { text: 'CI integration', link: '/tutorials/ci-integration' },
+      { text: 'Why Noeta', link: '/why-noeta' },
+      { text: 'Quickstart', link: '/start/quickstart' },
+      { text: 'Tutorial: build an agent', link: '/start/tutorial' },
     ],
   },
   {
-    text: 'How-to guides',
-    collapsed: false,
+    text: 'Guides',
     items: [
-      { text: 'Configure a provider', link: '/how-to/configure-provider' },
-      { text: 'Build custom tools', link: '/how-to/build-custom-tools' },
-      { text: 'Spawn sub-agents', link: '/how-to/spawn-subagents' },
-      { text: 'Connect MCP', link: '/how-to/connect-mcp' },
-      { text: 'Write a plugin', link: '/how-to/write-a-plugin' },
-      { text: 'Deploy a worker', link: '/how-to/deploy-worker' },
-      { text: 'Deploy with Docker', link: '/how-to/docker-deployment' },
-      { text: 'Use a sandbox', link: '/how-to/use-sandbox' },
-      { text: 'Multi-tenant memory', link: '/how-to/multi-tenant-memory' },
-      { text: 'Swap providers', link: '/how-to/swap-providers' },
+      { text: 'Connect a model', link: '/guides/models' },
+      { text: 'Custom tools', link: '/guides/tools' },
+      { text: 'MCP servers', link: '/guides/mcp' },
+      { text: 'Subagents', link: '/guides/subagents' },
+      { text: 'Write a plugin', link: '/guides/plugins' },
+      { text: 'Test offline & in CI', link: '/guides/testing' },
+      { text: 'Deploy to production', link: '/guides/deploy' },
+      { text: 'Run tools in a sandbox', link: '/guides/sandbox' },
+      { text: 'Per-tenant memory', link: '/guides/multi-tenant-memory' },
     ],
   },
   {
-    text: 'Concepts',
-    collapsed: false,
+    text: 'How it works',
     items: [
-      { text: 'All concepts', link: '/concepts/' },
-      { text: 'Event sourcing', link: '/concepts/event-sourcing' },
-      { text: 'Task model', link: '/concepts/task-model' },
-      { text: 'Engine & execution', link: '/concepts/engine-execution' },
-      { text: 'Fold & snapshot', link: '/concepts/fold-and-snapshot' },
-      { text: 'Wake & resume', link: '/concepts/wake-resume' },
-      { text: 'Guard vs Observer', link: '/concepts/guard-observer' },
-      { text: 'Composer & cache', link: '/concepts/composer-and-cache' },
-      { text: 'Provider neutrality', link: '/concepts/provider-neutrality' },
-    ],
-  },
-  {
-    text: 'Architecture',
-    collapsed: false,
-    items: [
-      { text: 'Overview', link: '/architecture/overview' },
-      { text: 'Packages & boundaries', link: '/architecture/packages' },
-      { text: 'State & writers', link: '/architecture/state-and-writers' },
-      { text: 'Extension planes', link: '/architecture/extension-planes' },
+      { text: 'Overview', link: '/how-it-works/' },
+      { text: 'Event log & recovery', link: '/how-it-works/event-log' },
+      { text: 'Tasks & waking', link: '/how-it-works/tasks-and-waking' },
+      { text: 'The engine loop', link: '/how-it-works/engine' },
+      { text: 'Context & caching', link: '/how-it-works/context' },
+      { text: 'Plugin system', link: '/how-it-works/plugin-system' },
     ],
   },
   {
     text: 'Reference',
     collapsed: true,
     items: [
-      { text: 'SDK API map', link: '/reference/sdk' },
-      { text: 'query / Client', link: '/reference/sdk-client' },
-      { text: 'Options', link: '/reference/sdk-options' },
-      { text: 'Types & testing', link: '/reference/sdk-types' },
-      { text: 'Plugins overview', link: '/reference/plugins' },
+      { text: 'SDK: query & Client', link: '/reference/sdk' },
+      { text: 'Options', link: '/reference/options' },
+      { text: 'Types & test doubles', link: '/reference/types' },
+      { text: 'Built-in tools', link: '/reference/tools' },
+      { text: 'Presets', link: '/reference/presets' },
       { text: 'Plugin manifest', link: '/reference/plugin-manifest' },
       { text: 'Plugin surfaces', link: '/reference/plugin-surfaces' },
-      { text: 'Tools', link: '/reference/tools' },
-      { text: 'Presets', link: '/reference/presets' },
       { text: 'WorkerLoop', link: '/reference/worker-loop' },
-      { text: 'Comparison', link: '/reference/comparison' },
       { text: 'Glossary', link: '/reference/glossary' },
     ],
   },
   {
     text: 'Operations',
-    collapsed: false,
     items: [
       { text: 'Troubleshooting', link: '/operations/troubleshooting' },
       { text: 'Known limitations', link: '/operations/limitations' },
@@ -112,84 +91,62 @@ const sidebarEn = [
 // ---------------------------------------------------------------------------
 
 const navZh = [
-  { text: '快速上手', link: '/zh/tutorials/quickstart' },
+  { text: '为什么选 Noeta', link: '/zh/why-noeta' },
+  { text: '快速上手', link: '/zh/start/quickstart' },
   { text: '参考', link: '/zh/reference/sdk' },
-  { text: 'GitHub', link: 'https://github.com/initxy/noeta' },
 ]
 
-// One global sidebar for the Chinese locale — mirrors sidebarEn entry for entry.
 const sidebarZh = [
   {
-    text: '教程',
-    collapsed: false,
+    text: '入门',
     items: [
-      { text: '快速上手（5 分钟）', link: '/zh/tutorials/quickstart' },
-      { text: '你的第一个 agent', link: '/zh/tutorials/first-agent' },
-      { text: 'CI 集成', link: '/zh/tutorials/ci-integration' },
+      { text: '为什么选 Noeta', link: '/zh/why-noeta' },
+      { text: '快速上手', link: '/zh/start/quickstart' },
+      { text: '教程：搭一个完整的 agent', link: '/zh/start/tutorial' },
     ],
   },
   {
-    text: '操作指南',
-    collapsed: false,
+    text: '使用指南',
     items: [
-      { text: '配置 Provider', link: '/zh/how-to/configure-provider' },
-      { text: '构建自定义工具', link: '/zh/how-to/build-custom-tools' },
-      { text: '生成子代理', link: '/zh/how-to/spawn-subagents' },
-      { text: '连接 MCP', link: '/zh/how-to/connect-mcp' },
-      { text: '编写插件', link: '/zh/how-to/write-a-plugin' },
-      { text: '部署 Worker', link: '/zh/how-to/deploy-worker' },
-      { text: '用 Docker 部署', link: '/zh/how-to/docker-deployment' },
-      { text: '使用 Sandbox', link: '/zh/how-to/use-sandbox' },
-      { text: '多租户记忆', link: '/zh/how-to/multi-tenant-memory' },
-      { text: '切换 Provider', link: '/zh/how-to/swap-providers' },
+      { text: '接入模型', link: '/zh/guides/models' },
+      { text: '自定义工具', link: '/zh/guides/tools' },
+      { text: '接入 MCP', link: '/zh/guides/mcp' },
+      { text: '子代理', link: '/zh/guides/subagents' },
+      { text: '写一个插件', link: '/zh/guides/plugins' },
+      { text: '离线测试与 CI', link: '/zh/guides/testing' },
+      { text: '部署上线', link: '/zh/guides/deploy' },
+      { text: '在沙箱里跑工具', link: '/zh/guides/sandbox' },
+      { text: '按租户隔离记忆', link: '/zh/guides/multi-tenant-memory' },
     ],
   },
   {
-    text: '核心概念',
-    collapsed: false,
+    text: '原理',
     items: [
-      { text: '概念总览', link: '/zh/concepts/' },
-      { text: '事件溯源', link: '/zh/concepts/event-sourcing' },
-      { text: '任务模型', link: '/zh/concepts/task-model' },
-      { text: '引擎与执行', link: '/zh/concepts/engine-execution' },
-      { text: 'Fold 与快照', link: '/zh/concepts/fold-and-snapshot' },
-      { text: '唤醒与恢复', link: '/zh/concepts/wake-resume' },
-      { text: 'Guard 与 Observer', link: '/zh/concepts/guard-observer' },
-      { text: 'Composer 与缓存', link: '/zh/concepts/composer-and-cache' },
-      { text: 'Provider 中立', link: '/zh/concepts/provider-neutrality' },
-    ],
-  },
-  {
-    text: '架构',
-    collapsed: false,
-    items: [
-      { text: '概览', link: '/zh/architecture/overview' },
-      { text: '包与导入规则', link: '/zh/architecture/packages' },
-      { text: '状态与写入者', link: '/zh/architecture/state-and-writers' },
-      { text: '扩展平面', link: '/zh/architecture/extension-planes' },
+      { text: '总览', link: '/zh/how-it-works/' },
+      { text: '事件日志与故障恢复', link: '/zh/how-it-works/event-log' },
+      { text: '任务与唤醒', link: '/zh/how-it-works/tasks-and-waking' },
+      { text: '引擎主循环', link: '/zh/how-it-works/engine' },
+      { text: '上下文与缓存', link: '/zh/how-it-works/context' },
+      { text: '插件系统', link: '/zh/how-it-works/plugin-system' },
     ],
   },
   {
     text: '参考',
     collapsed: true,
     items: [
-      { text: 'SDK API 地图', link: '/zh/reference/sdk' },
-      { text: 'query / Client', link: '/zh/reference/sdk-client' },
-      { text: 'Options', link: '/zh/reference/sdk-options' },
-      { text: '类型与测试替身', link: '/zh/reference/sdk-types' },
-      { text: '插件总览', link: '/zh/reference/plugins' },
+      { text: 'SDK：query 与 Client', link: '/zh/reference/sdk' },
+      { text: 'Options', link: '/zh/reference/options' },
+      { text: '类型与测试替身', link: '/zh/reference/types' },
+      { text: '内置工具', link: '/zh/reference/tools' },
+      { text: '预设 agent', link: '/zh/reference/presets' },
       { text: '插件 manifest', link: '/zh/reference/plugin-manifest' },
-      { text: '插件 Surface', link: '/zh/reference/plugin-surfaces' },
-      { text: '工具', link: '/zh/reference/tools' },
-      { text: '预设代理', link: '/zh/reference/presets' },
+      { text: '插件扩展点', link: '/zh/reference/plugin-surfaces' },
       { text: 'WorkerLoop', link: '/zh/reference/worker-loop' },
-      { text: '对比', link: '/zh/reference/comparison' },
       { text: '术语表', link: '/zh/reference/glossary' },
     ],
   },
   {
     text: '运维',
-    collapsed: false,
     items: [
       { text: '故障排查', link: '/zh/operations/troubleshooting' },
       { text: '已知限制', link: '/zh/operations/limitations' },
@@ -200,7 +157,7 @@ const sidebarZh = [
 
 export default defineConfig({
   title: 'Noeta',
-  description: 'Open-source, self-hostable runtime for AI agents.',
+  description: 'A Python SDK for agents that survive crashes, wait for days, and scale from a script to a cluster.',
 
   // GitHub Pages subpath.
   base: '/noeta/',
@@ -229,11 +186,6 @@ export default defineConfig({
   themeConfig: {
     // Brand mark in the top-left of the nav.
     logo: '/logo.svg',
-
-    // GitHub link in nav.
-    nav: [
-      { text: 'GitHub', link: 'https://github.com/initxy/noeta' },
-    ],
 
     // Social links in footer.
     socialLinks: [
@@ -298,6 +250,7 @@ export default defineConfig({
       label: '中文',
       lang: 'zh-CN',
       link: '/zh/',
+      description: '一个 Python SDK：agent 崩了能接着跑，等人审批不占资源，从脚本扩到多机集群不用改代码。',
       themeConfig: {
         nav: navZh,
         sidebar: sidebarZh,
@@ -310,6 +263,10 @@ export default defineConfig({
         lightModeSwitchTitle: '切换到浅色模式',
         darkModeSwitchTitle: '切换到深色模式',
         sidebarMenuLabel: '菜单',
+        footer: {
+          message: '基于 Apache License 2.0 发布。',
+          copyright: 'Copyright &copy; 2025–2026 Noeta Contributors',
+        },
         docFooter: {
           prev: '上一页',
           next: '下一页',

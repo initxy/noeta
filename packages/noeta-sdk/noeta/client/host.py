@@ -2579,7 +2579,7 @@ class SdkHost(GenericEngineResolver):
 
         * a plugin name the SDK derives nothing for (every third party) — the
           host mapping is the whole entry, verbatim. This is the channel
-          ``docs/how-to/write-a-plugin.md`` documents and the only way a pack
+          ``docs/guides/plugins.md`` documents and the only way a pack
           that the SDK has never heard of gets configured at all.
         * a name the SDK does derive (``fs`` / ``skills`` / ``workspace`` /
           ``memory``, plus ``web`` when ``webfetch_model`` is set) — a

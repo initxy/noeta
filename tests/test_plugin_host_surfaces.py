@@ -11,7 +11,7 @@ fixed:
 * a plugin's ``mcp_server`` joins the effective ``Options.mcp_servers``, with
   one alias namespace and no override;
 * ``HostConfig.plugin_config`` is the operator-config channel
-  ``docs/how-to/write-a-plugin.md`` documents, so a third-party pack's
+  ``docs/guides/plugins.md`` documents, so a third-party pack's
   ``ctx.config("<name>")`` is no longer always ``{}``;
 * ``requires-noeta`` is evaluated — a warning by default, a refusal under
   ``strict=True``, never a crash on a spelling the loader cannot parse.

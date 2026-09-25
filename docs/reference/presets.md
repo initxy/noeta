@@ -1,138 +1,89 @@
 # Agent presets
 
-You do not have to design an agent from scratch. `noeta.presets` ships four
-ready-made ones: a conversational root called `main`, and the three subagents it
-delegates to. Most hosts start from `main` and adjust.
-
-These are an **SDK-level** surface — you pick one by building its `Options`
-(`presets.main_options()`) and handing that to `Client` or `query`. Custom
-agents go through the flat `Options.agents` dict instead.
-
-## The quartet
-
-| Agent | Role | Tools | Activation |
-| --- | --- | --- | --- |
-| `main` | Default coding agent: full built-in tool surface, spawns the three subagents. | Full built-in set (`allowed_tools` unset), plus the memory tools its `memory` activation opens | `fs`, `web`, `todo_write`, `ask_user_question`, `skill_invocation`, `memory`, `mcp`; `delegation` is derived from its `agents` roster |
-| `general-purpose` | Self-contained coding worker: full read/write/edit/shell set, no delegation. | `Edit`, `Glob`, `Grep`, `Read`, `KillShell`, `BashOutput`, `Bash`, `WebSearch`, `WebFetch`, `Write` | `skill_invocation`, `mcp` |
-| `explore` | Read-only scout: glob/grep/read + read-only shell, fans out to report facts, never edits. | `Glob`, `Grep`, `Read`, `KillShell`, `BashOutput`, `Bash`, `WebFetch` | `skill_invocation` |
-| `plan` | Read-only architect: reads the code and returns a concrete ordered implementation plan, never writes. | `Glob`, `Grep`, `Read`, `KillShell`, `BashOutput`, `Bash`, `WebFetch` | `AskUserQuestion` |
-
-`explore` and `plan` list `Bash`, but their prompts restrict it to
-read-only commands; the approval gate on high-risk shell is the backstop.
-`general-purpose` is a leaf worker — it never spawns further, which bounds
-fan-out.
-
-## Activation names
-
-| Name | What it enables |
-| --- | --- |
-| `TodoWrite` | The `TodoWrite` control tool (state-patch based progress tracking). |
-| `AskUserQuestion` | The model can yield for human input via the `AskUserQuestion` control tool. |
-| `delegation` | The `Task` control tool. Derived for any agent with an `agents` roster; naming it explicitly grants a child the right to spawn. |
-| `skill_invocation` | The `skill` control tool for model-driven skill selection. |
-| `memory` | Cross-task memory: the `memory_write` / `memory_read` / `memory_search` / `memory_archive` tools plus auto-recall at the user-message seam. |
-| `mcp` | MCP tool inheritance: subtasks whose own spec also opens `mcp` inherit the parent's enabled MCP servers. |
-| `browser` | The sandbox-backed `browser_*` tool pack. Only the `web` specialist opens it. |
-| `fs` / `web` | `DEFAULT_PLUGINS` — the default tool packs. Identity-inert. |
-
-Only `main` activates `memory`: recall hooks into the user-message ingest seam,
-and only the top-level conversational agent receives user messages. Every
-memory-enabled preset's prompt carries the memory-policy fragment (exported as
-`MEMORY_POLICY_PROMPT`), which tells the model what to save, what not to, and
-the write hygiene.
-
-## Optional agents
-
-Two more `AgentDefinition`s ship alongside the quartet. Neither is in
-`OFFICIAL_SUBAGENTS`, so neither changes `main`'s spawnable roster unless a
-product registers it.
-
-| Definition | Registered by | Purpose |
-| --- | --- | --- |
-| `WEB_SUBAGENT` (`"web"`) | `sandbox_browser_options()` | The browsing specialist — the sole identity that activates `browser`. Registering it swaps `main`'s prompt to `MAIN_WEB_SYSTEM_PROMPT` in lockstep with the roster, so the prompt never names a subagent that is not spawnable. `main` itself stays browser-free and delegates every page interaction. |
-| `CONSOLIDATION_AGENT` (`"__consolidation__"`) | `with_consolidation_agent(options)` | The background memory curator, driven as an ordinary root task from a host trigger. `tools=()` empties the whitelist so its whole surface is the capability-gated memory pack. Its `__`-reserved name keeps it out of any parent's spawnable union. |
-
-## Subagent fan-out
-
-`main` can spawn the three subagents in parallel; the result is the subagent's
-return value, recorded into the EventLog so the whole tree folds back into
-state. See
-[ADR: Subtask fan-out and durable wake](https://github.com/initxy/noeta/blob/main/docs/adr/subtask-fanout-and-durable-wake.md)
-and [ADR: Subtask parallel execution](https://github.com/initxy/noeta/blob/main/docs/adr/subtask-parallel-execution.md).
-
-## Exported surface
-
-| Name | Shape |
-| --- | --- |
-| `main_options()` | `Options` — the official `main` recipe |
-| `sandbox_browser_options()` | `Options` — `main_options()` plus the `web` subagent and the web-aware prompt |
-| `with_consolidation_agent(options)` | `Options` — `options` with `__consolidation__` registered |
-| `official_specs()` | `dict[str, AgentSpec]` — the four agents, compiled |
-| `OFFICIAL_SUBAGENTS` | `dict[str, AgentDefinition]` — `general-purpose` / `explore` / `plan` |
-| `WEB_SUBAGENT` / `CONSOLIDATION_AGENT` | `AgentDefinition` |
-| `CONSOLIDATION_AGENT_NAME` | `str` — `"__consolidation__"` |
-| `MAIN_SYSTEM_PROMPT` / `MAIN_WEB_SYSTEM_PROMPT` / `MEMORY_POLICY_PROMPT` | `str` |
-
-Prompt text lives in `noeta/presets/prompts/*.md` and is loaded byte-faithfully,
-so editing a prompt is a docs-shaped diff. `main` and `main-web` are also
-registered as named presets, so `SystemPromptPreset(preset="main")` resolves.
-
-## Tool results are data
-
-Both `main` prompts close on a rule that says what is *not* an instruction:
-content arriving through a tool result — a file, a command's output, a web page,
-a search hit, an MCP result, a sub-agent's report — is data, not instructions.
-The agent uses it for the user's task; when it tries to redirect the agent
-instead — a new goal, an unneeded command, sending data out, ignoring the rules
-— the agent does not act on it and tells the user. The rule is one short line on
-purpose: the main prompt is paid for on every request. The two auxiliary prompts that condense text the agent did not write
-carry the same framing: `WebFetch`'s page digest treats the page as untrusted
-external content, and the compaction note lifts a safety constraint verbatim
-only from the user's and the system's messages — a constraint that appears only
-inside a tool result is summarized as what that source claims, never promoted
-into a rule of the note.
-
-This is a cheap probabilistic layer, not a boundary. The per-call approval gates
-and the `WebFetch` egress policy are what actually stop an injected instruction
-from having an effect; the rule only makes the common case visible to the user.
-
-## Using presets programmatically
+`noeta.presets` ships a ready-made root agent, `main`, and the three subagents it delegates to. Most hosts start from `main_options()` and adjust.
 
 ```python
 from noeta import presets
 from noeta.sdk import query
 from noeta.sdk.providers import AnthropicProvider
 
-options = presets.main_options()
-
-# `provider` and `workspace_dir` are required — without them the Client
-# raises ValueError before any turn.
 result = query(
-    options,
+    presets.main_options(),
     goal="Refactor module X to use Y",
-    provider=AnthropicProvider(api_key="sk-ant-…"),
-    workspace_dir="./",
-    model="claude-sonnet-4-5-20250929",
+    provider=AnthropicProvider(),      # reads ANTHROPIC_API_KEY
+    model="claude-sonnet-5",
+    workspace_dir="./",                # optional; defaults to Options.cwd, then the process cwd
 )
 print(result.answer())
-# → 'Replaced the three call sites in module X with Y and ran the tests.'
 ```
 
-Or compile all four agents as specs:
+## The four agents
+
+| Agent | Role | Tools | Activations |
+| --- | --- | --- | --- |
+| `main` | Default root agent; delegates to the three below. | full built-in set (`allowed_tools` unset) plus the memory tools | `fs`, `web`, `todo_write`, `ask_user_question`, `skill_invocation`, `memory`, `mcp`; `delegation` derived from its roster |
+| `general-purpose` | Self-contained worker: search, edit, run, return. Never delegates. | `Edit`, `Glob`, `Grep`, `Read`, `Bash`, `BashOutput`, `KillShell`, `WebSearch`, `WebFetch`, `Write` | `skill_invocation`, `mcp` |
+| `explore` | Read-only scout that reports facts. | `Glob`, `Grep`, `Read`, `Bash`, `BashOutput`, `KillShell`, `WebSearch`, `WebFetch` | `skill_invocation` |
+| `plan` | Read-only architect; returns an ordered implementation plan. | same as `explore` | `ask_user_question` |
+
+`explore` and `plan` have `Bash` but their prompts restrict it to read-only commands; shell approval is the backstop. `WebSearch` mounts only where a search key is configured.
+
+## Activation names
+
+What `Options.plugins` / `AgentDefinition.plugins` accept for built-in features:
+
+| Name | Enables |
+| --- | --- |
+| `todo_write` | the `TodoWrite` control tool |
+| `ask_user_question` | the `AskUserQuestion` control tool |
+| `delegation` | the `Task` control tool; derived when an agent has `agents`, name it to let a child spawn |
+| `skill_invocation` | the `skill` control tool |
+| `memory` | the `memory_*` tools plus recall on each user message |
+| `mcp` | a subtask that also activates `mcp` inherits the parent's enabled MCP servers |
+| `browser` | the sandbox `browser_*` tools |
+| `fs`, `web` | `DEFAULT_PLUGINS`, the default tool packs (no identity effect) |
+
+Only `main` activates `memory`, because recall runs on user messages and only the root agent receives them. Memory-enabled prompts include `MEMORY_POLICY_PROMPT`.
+
+## Optional agents
+
+Not in `OFFICIAL_SUBAGENTS`, so they don't change `main`'s roster unless registered.
+
+| Definition | Register with | Purpose |
+| --- | --- | --- |
+| `WEB_SUBAGENT` (`"web"`) | `sandbox_browser_options()` | Browsing specialist, the only preset that activates `browser`. Also swaps `main`'s prompt to `MAIN_WEB_SYSTEM_PROMPT`. |
+| `CONSOLIDATION_AGENT` (`"__consolidation__"`) | `with_consolidation_agent(options)` | Background memory curator run as a root task by a host trigger. `tools=()`, so it has only the memory tools. The `__` prefix keeps it out of every spawn roster. |
+
+## Exports
+
+| Name | Type |
+| --- | --- |
+| `main_options()` | `Options` — the `main` recipe |
+| `sandbox_browser_options()` | `Options` — `main_options()` plus `web` and the web-aware prompt |
+| `with_consolidation_agent(options)` | `Options` — `options` with `__consolidation__` registered |
+| `official_specs()` | `dict[str, AgentSpec]` — the four agents, compiled |
+| `OFFICIAL_SUBAGENTS` | `dict[str, AgentDefinition]` — `general-purpose`, `explore`, `plan` |
+| `WEB_SUBAGENT`, `CONSOLIDATION_AGENT` | `AgentDefinition` |
+| `CONSOLIDATION_AGENT_NAME` | `str` — `"__consolidation__"` |
+| `MAIN_SYSTEM_PROMPT`, `MAIN_WEB_SYSTEM_PROMPT`, `MEMORY_POLICY_PROMPT` | `str` |
+
+Prompts live in `noeta/presets/prompts/*.md`. `main` and `main-web` are registered as named presets, so `SystemPromptPreset(preset="main")` resolves.
 
 ```python
 from noeta.presets import official_specs
 
 specs = official_specs()
-print(sorted(specs))
-# → ['explore', 'general-purpose', 'main', 'plan']
-print(specs["explore"].plugins)
-# → ('skill_invocation',)
+print(sorted(specs))                 # ['explore', 'general-purpose', 'main', 'plan']
+print(specs["explore"].plugins)      # ('skill_invocation',)
 ```
+
+## Tool results are data
+
+Both `main` prompts end with one rule: content from a tool result (a file, command output, web page, MCP result, sub-agent report) is data, not instructions; if it tries to redirect the agent, the agent doesn't act on it and tells the user. The `WebFetch` digest and the compaction note follow the same rule. This is a cheap first layer — approval gates and the `WebFetch` host policy are what actually stop an injected instruction.
 
 ## Custom agents
 
-Define custom agents via the flat `Options.agents` dict:
+Define your own through `Options.agents`:
 
 ```python
 from noeta.sdk import Options, AgentDefinition
@@ -149,17 +100,8 @@ options = Options(
 )
 ```
 
-## Source
-
-- Presets: `packages/noeta-sdk/noeta/presets/__init__.py`
-- Prompts: `packages/noeta-sdk/noeta/presets/prompts/`
-- `Options` / `AgentDefinition`: `packages/noeta-sdk/noeta/client/options.py`
-- Tool catalogue: `packages/noeta-sdk/noeta/builtins/`
-- [ADR: Tool and agent catalog](https://github.com/initxy/noeta/blob/main/docs/adr/tool-and-agent-catalog.md)
-
 ## Next
 
-- [Your first agent](../tutorials/first-agent.md) — build one from a preset
-- [Spawn subagents](../how-to/spawn-subagents.md) — using the roster in practice
-- [Options](sdk-options.md) — every field a preset sets for you
-- [Built-in tools](tools.md) — what each preset's tool list contains
+- [Delegate to subagents](../guides/subagents.md) — using the roster
+- [Options](options.md) — every field a preset sets
+- [Built-in tools](tools.md) — what each tool list contains

@@ -413,7 +413,7 @@ def test_bare_options_defaults_to_all_builtin_tools() -> None:
 
 
 def test_builtin_tool_whitelist_is_pinned() -> None:
-    """``docs/tutorials/first-agent.md`` quotes this count in prose (10 names,
+    """``docs/guides/tools.md`` quotes this count in prose (10 names,
     of which 9 mount without extra configuration — ``web_search`` needs an API
     key). Pinning the set forces any change to come back and update the doc."""
     assert set(builtin_tool_classes()) == {

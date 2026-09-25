@@ -1,71 +1,48 @@
 # noeta-sdk
 
-The thin in-process **client surface** (`noeta.sdk` facade — `query` / `Client`
-/ `Options` / `tool` / extension interfaces) over the
-[noeta-runtime](https://github.com/initxy/noeta) kernel, plus **the built-in
-plugin catalogue** (`noeta.builtins` — every official capability
-implementation: the fs/web tool packs, provider adapters, guards, reminders,
-memory, browser, app, MCP, sandbox backends, skills, the ReAct policy) and
-the official presets. Like
-claude-agent-sdk / LangChain: `import noeta.sdk`, run an agent in-process; no
-engine internals, no HTTP server.
+**Agents that keep running.** A Python SDK for agents that survive crashes,
+wait days for a human, and scale from one script to a cluster — without
+changing the agent.
 
-Part of the [Noeta](https://github.com/initxy/noeta) workspace. Apache-2.0.
+`noeta-sdk` is the package you import (`noeta.sdk`). It carries the client
+API, every built-in capability (file and web tools, model adapters, memory,
+MCP, sandboxes) and the official presets, over the
+[noeta-runtime](https://pypi.org/project/noeta-runtime/) kernel. Part of
+[Noeta](https://github.com/initxy/noeta). Apache-2.0.
 
 ## Install
 
 ```bash
-pip install noeta-sdk      # noeta-runtime comes along as a transitive dependency
+pip install noeta-sdk      # noeta-runtime comes along as a dependency
 ```
 
-Then `import noeta.sdk` — that single module is the whole public surface. Python 3.11+.
+Python 3.11+.
 
-## Quickstart — zero credentials
-
-No API key, no network: drive one turn with the deterministic offline provider
-from `noeta.sdk.testing`.
+## Quickstart
 
 ```python
-import tempfile
-from pathlib import Path
+from noeta.sdk import Options, query
+from noeta.sdk.providers import AnthropicProvider   # reads ANTHROPIC_API_KEY
 
-from noeta.sdk import Options, query, LLMResponse, TextBlock, Usage
-from noeta.sdk.testing import FakeLLMProvider
-
-provider = FakeLLMProvider(
-    responses=[
-        LLMResponse(
-            stop_reason="end_turn",
-            content=[TextBlock(text="Hello from a Noeta SDK agent!")],
-            usage=Usage(uncached=1, output=1),
-        )
-    ]
+result = query(
+    Options(system_prompt="You are a concise coding assistant."),
+    goal="What files are in this directory, and what does each one do?",
+    provider=AnthropicProvider(),
+    model="claude-sonnet-5",
 )
-
-with tempfile.TemporaryDirectory() as tmp:
-    result = query(
-        Options(
-            system_prompt="You are a concise assistant.",
-            allowed_tools=("Read",),
-            permission_mode="bypassPermissions",
-        ),
-        goal="Say hello.",
-        provider=provider,
-        workspace_dir=Path(tmp),
-        model="stub-model",
-    )
-    assert result.answer() == "Hello from a Noeta SDK agent!"
+print(result.answer())
 ```
 
-`query` returns the full event-envelope stream for the turn; `result.answer()`
-reads the answer off the terminal envelope. Swap the `FakeLLMProvider` for a live
-adapter from `noeta.sdk.providers` (`AnthropicProvider` / `OpenAICompatProvider`)
-to connect a real model — the provider is wiring, not agent identity.
+`OpenAICompatProvider` and `OpenAIResponsesProvider` in the same module connect
+any OpenAI-compatible gateway; the agent does not change. To run with no API
+key, `noeta.sdk.testing.FakeLLMProvider` replays scripted responses offline.
 
 ## Learn more
 
+- [Documentation](https://initxy.github.io/noeta/) — quickstart, tutorial,
+  guides and the SDK reference
+- [Why Noeta](https://initxy.github.io/noeta/why-noeta.html) — what sets it
+  apart, and how it compares
 - Runnable [`examples/`](https://github.com/initxy/noeta/tree/main/examples) —
-  a minimal agent, custom tools, an in-process MCP server, a permission gate,
-  provider swapping, sub-agent delegation, and surviving `kill -9` mid-task.
-- [Documentation](https://initxy.github.io/noeta/tutorials/first-agent/) —
-  tutorials, how-to guides, and the SDK reference.
+  custom tools, an in-process MCP server, a permission gate, subagents, and
+  surviving `kill -9` mid-task
