@@ -1,17 +1,8 @@
 # Built-in tools
 
-This page is the catalogue of everything an agent can call out of the box: what
-each tool does, what it costs you in risk, and what has to be true before it
-appears in the model's tool list at all.
+Every tool an agent can call out of the box: what it does, its risk level, and what has to be true before it is mounted.
 
-Tool names are provider-safe `snake_case` and are the exact strings the model
-calls. Each tool carries a `risk_level` that decides whether a call needs
-approval.
-
-A bare `Options()` — that is, `allowed_tools=None` — mounts **ten** tools:
-the `fs` pack (`Read`, `Glob`, `Grep`, `Edit`, `Write`,
-`Bash`, `BashOutput`, `KillShell`) and the `web` pack (`WebFetch`,
-`WebSearch`).
+A bare `Options()` (`allowed_tools=None`) mounts the `fs` pack and the `web` pack:
 
 ```python
 from noeta.sdk import Options
@@ -20,253 +11,161 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 #                 Bash, BashOutput, KillShell, WebFetch, WebSearch
 ```
 
-Ten of those need no configuration; `WebSearch` needs an API key. Everything
-else on this page is gated somewhere else — memory and browser on an agent
-activation, `open_app` on a host-wired gateway, `run_skill_script` on the
-`skills` plugin config, MCP on a per-session registration.
+`WebSearch` also needs `NOETA_WEB_SEARCH_API_KEY`. Everything else is gated elsewhere:
+
+| Tools | Mounted when |
+| --- | --- |
+| `fs`, `web` packs | always (subject to `allowed_tools` / `disallowed_tools`) |
+| `memory_*` | the agent activates `memory` |
+| `browser_*` | the agent activates `browser` **and** the task is bound to a live sandbox |
+| `open_app` | the host sets `HostConfig.app_gateway` |
+| `run_skill_script` | `plugin_config["skills"]["allow_skill_scripts"]` is on and an active skill ships a script |
+| `mcp__<alias>__<tool>` | a remote MCP server is registered and enabled for the task |
+| control tools | see [Control tools](#control-tools) |
 
 ## Filesystem tools
 
-Declared by the `fs` built-in plugin manifest
-(`packages/noeta-sdk/noeta/builtins/fs/__init__.py`).
+From the `fs` built-in (`noeta/builtins/fs/`).
 
-| Tool | Risk | What it does | Source |
+| Tool | Risk | Parameters | What it does |
 | --- | --- | --- | --- |
-| `Read` | low | Read a file (UTF-8), optionally sliced by line `offset` / `limit`. The full body is always offloaded as an artifact ref. **Reads are unfenced** — see below. | `noeta/builtins/fs/impl/read.py` |
-| `Glob` | low | Match a glob pattern (`**` recurses) under `path` and return the matching paths, sorted and capped. The walk is `rg --files`: gitignore-aware, hidden skipped. | `noeta/builtins/fs/impl/read.py` |
-| `Grep` | low | Content search with a ripgrep regex, scoped by `path`, filtered by `glob` / `type`, opened up by `-u`. Runs `rg` through the `ExecEnv`, which must have it installed. | `noeta/builtins/fs/impl/read.py` |
-| `Edit` | high | Replace an exact `old` substring in an existing file; `replace_all` switches from unique-match to every occurrence. | `noeta/builtins/fs/impl/edit.py` |
-| `Write` | high | Write a file — create it (missing parent directories are created), or overwrite one already `Read` this session. `content` caps at 8 MB. | `noeta/builtins/fs/impl/edit.py` |
-| `Bash` | high | Run a command in the workspace; `run_in_background` detaches it and returns a `job_id`. | `noeta/builtins/fs/impl/shell.py` |
-| `BashOutput` | low | Read status (`running` / `exited`), exit code, and a fresh output snapshot of a background job. | `noeta/builtins/fs/impl/shell.py` |
-| `KillShell` | high | Stop a background job you started (SIGTERM, then SIGKILL after a grace period). | `noeta/builtins/fs/impl/shell.py` |
+| `Read` | low | `file_path`, `offset?`, `limit?` | Read a UTF-8 file, optionally a line slice. The full body is offloaded as an artifact ref. |
+| `Glob` | low | `pattern`, `path?` | Paths matching a glob (`**` recurses), sorted and capped. Walks with `rg --files`: gitignore-aware, hidden files skipped. |
+| `Grep` | low | `pattern`, `path?`, `glob?`, `type?`, `output_mode?`, `-i`, `-n`, `-o`, `-u`, `-A`/`-B`/`-C`, `context?`, `head_limit?`, `offset?`, `multiline?` | Ripgrep content search, run through the `ExecEnv` (which must have `rg` installed). |
+| `Edit` | high | `file_path`, `old_string`, `new_string`, `replace_all?` | Replace an exact substring (unique match unless `replace_all`). The file must have been `Read` first. |
+| `Write` | high | `file_path`, `content` | Create a file (parents created) or overwrite one already `Read` in this task. `content` caps at 8 MB. |
+| `Bash` | high | `command`, `timeout?` (ms, max 600000), `description?`, `run_in_background?` | Run a command with `cwd` = workspace root. Background mode returns a job id. |
+| `BashOutput` | low | `bash_id`, `filter?` | Status (`running` / `exited`), exit code and new output of a background job. |
+| `KillShell` | high | `shell_id` | Stop a background job (SIGTERM, then SIGKILL after a grace period). |
 
-The three write tools stage a proposed diff instead of touching disk while
-`HostConfig.write_mode` is `"dry_run"` (the default); `"apply"` performs real
-writes.
+- **Writes are staged by default.** `HostConfig.write_mode="dry_run"` (default) records a proposed diff; `"apply"` writes to disk.
+- **Writes are fenced, reads are not.** `Write` / `Edit` resolve inside the workspace root; `HostConfig.write_roots` can allow more roots per task. `Read` / `Glob` / `Grep` only anchor *relative* paths — an absolute path is read wherever it points, so the real read boundary is the process's own file permissions.
+- `Write` honours an optional workspace-relative `allowed_path_globs` whitelist bound at construction (empty = unrestricted); `Edit` ignores it.
 
-### Reads are unfenced
+### Shell gating
 
-The workspace root fences **writes**. For `Read`, `Glob` and `Grep` it only
-anchors *relative* paths: an absolute path is read where it points — a
-neighbouring checkout, a skill pack's bundled reference, anything the server
-process can read. This is deliberate (an agent routinely needs to read outside
-its workspace) and it is why the boundary that matters is the **process's own**
-file permissions, not the workspace root. A deployment that must not expose a
-path should not run the agent as a user who can read it.
+`SdkHost.shell_mode` (default `ShellMode.ALLOWLIST`) and the permission mode decide what `Bash` may run:
 
-Writes are the fenced half: `Write` / `Edit` resolve inside the
-workspace root. `HostConfig.write_roots` answers "may this task write here,
-outside its workspace?" per call; with no resolver an out-of-workspace write
-simply fails. `Write` additionally honours an optional workspace-relative
-`allowed_path_globs` whitelist bound at construction (empty = unrestricted);
-`Edit` ignores it.
-
-### Shell modes
-
-`ShellMode` (`noeta/runtime/shell_policy.py`) is bound when the pack is built:
-
-| Mode | Effect |
+| Setting | Behaviour |
 | --- | --- |
-| `OFF` | `Bash` is not in the pack at all. |
-| `ALLOWLIST` | Default. Only the structural allowlist below passes, argv-only. |
-| `ARBITRARY` | Any command without shell metacharacters runs through bash. |
+| `shell_mode=OFF` | `Bash` is not mounted. |
+| `default` / `acceptEdits` | The command runs through `bash -c`. A command matching the effective allowlist runs silently; anything else asks for approval. |
+| `bypassPermissions` | Any command runs, no approval. |
 
-Under `ALLOWLIST` these argv patterns pass
-(`noeta/builtins/fs/impl/shell_rules.py`):
+The built-in allowlist (`noeta/builtins/fs/impl/shell_rules.py`) matches metachar-free argv only:
 
-- `git status` / `git diff`
-- `pytest` / `uv run pytest`
-- `npm test` / `pnpm test`
-- `Grep` / `rg` / `find` / `ls` — read-only search and listing, so an
-  ALLOWLIST-mode agent without its own `Grep` / `Glob` tool can still search the
-  workspace. Their validators reject the flags that shell out to another program
-  or mutate the filesystem.
+| Program | Accepted |
+| --- | --- |
+| `git status` | no args, `--short`, `-s`, `--porcelain` |
+| `git diff`, `git log` | read-only forms |
+| `pytest`, `uv run pytest` | test runs |
+| `npm test`, `pnpm test` | any tail |
+| `grep`, `rg`, `find`, `ls` | read-only; `rg --pre`/`--hostname-bin` and `find -exec`/`-delete`/`-fprint*` are rejected |
 
-Host config can append more rules (`{"program": …, "subcommand": …}`); the
-built-ins are always kept. An operator-configured rule is looser than the
-curated built-ins: it means "this program may run", accepting any tail args
-that survive the metachar scan.
+Extend it in three ways:
 
-The workspace can carry its own rules in
-`<workspace>/.noeta/shell-allowlist.json` — the same JSON shape, as a list.
-That file is **repository content**, so it is gated on workspace trust: the
-host loads it only when the workspace path is recorded in the plugin trust
-store (`grant_trust`, `~/.noeta/trust.json` — the same store that gates
-workspace plugin directories and the workspace skill tiers). In an untrusted
-workspace the file contributes nothing, and the host warns once per workspace
-(`UntrustedProjectShellAllowlistWarning`) naming the file. Set
-`SdkHost(project_shell_allowlist_trust="open")` to load it unconditionally, and
-`SdkHost(trust_store=…)` to point the gate at another store. Under
-`bypassPermissions` nothing is gated per call, so the file is never read.
+| Source | Shape | Notes |
+| --- | --- | --- |
+| `SdkHost.shell_allowlist` | `[{"program": …, "subcommand": …}]` | operator rules; any tail args that pass the metachar scan |
+| `<workspace>/.noeta/shell-allowlist.json` | same JSON list | repository content, loaded only when the workspace is trusted (`grant_trust`); otherwise `UntrustedProjectShellAllowlistWarning`, once per workspace |
+| `SdkHost(project_shell_allowlist_trust="open")` | — | load the workspace file unconditionally; `trust_store=` points at another store |
 
-Shell metacharacters (`|`, `;`, `&&`, `>`, …) are rejected before tokenization.
-This is **path-containment plus an allowlist, not a process sandbox** —
-`Bash` spawns external programs in the trusted workspace.
+::: warning
+This is an allowlist plus approval, not a process sandbox. `Bash` spawns real processes that can write anywhere the server user can. Use a [sandbox](../guides/sandbox.md) for isolation.
+:::
 
 ## Web tools
 
-Declared by the `web` built-in plugin manifest.
-
-| Tool | Risk | What it does | Source |
+| Tool | Risk | Parameters | What it does |
 | --- | --- | --- | --- |
-| `WebFetch` | low | Fetch a public web page, render it to Markdown, and answer the call's `prompt` against it with an auxiliary model call (`Options.webfetch_model`, defaulting to the session's main model) — the calling model reads the answer, not the raw page. HTTP upgrades to HTTPS, cross-host redirects are returned rather than followed, and fetched pages are cached for 15 minutes per URL. Every result opens with a line naming it as external web content. Always available. | `noeta/builtins/web/impl/fetch.py` |
-| `WebSearch` | low | Run a web search and return ranked hits as Markdown. **Mounted only when `NOETA_WEB_SEARCH_API_KEY` is set.** | `noeta/builtins/web/impl/search.py` |
+| `WebFetch` | low | `url`, `prompt` | Fetch a page, render it to Markdown, and answer `prompt` against it with an auxiliary model call (`Options.webfetch_model`, default: the task's main model). HTTP upgrades to HTTPS; cross-host redirects are returned, not followed; pages are cached 15 minutes. Only `http(s)` URLs. |
+| `WebSearch` | low | `query`, `count?` | Web search, ranked hits as Markdown. Mounted only when `NOETA_WEB_SEARCH_API_KEY` is set. |
 
-### WebFetch egress
-
-`WebFetch` takes its URL straight from the model, and the tool is `low` risk,
-so the static approval set never gates it. Its reach is fenced per **call**
-instead, by host.
-
-**Upgrade note.** `WebFetch` reaches any host it is pointed at — public,
-intranet, loopback. Under a gating permission mode a host outside
-`webfetch_allowed_hosts` needs approval. The only thing refused outright is a
-scheme `WebFetch` does not fetch: `file:`, `gopher:` and the rest fail with
-"WebFetch fetches http(s) URLs only", which refuses no host.
-
-**Unlisted hosts need approval.** `HostConfig.webfetch_allowed_hosts` names the
-hosts a fetch may reach without asking a human. Two forms, and only two:
+`WebFetch` reaches any host. `HostConfig.webfetch_allowed_hosts` lists hosts it may reach without asking:
 
 | Entry | Matches |
 | --- | --- |
-| `example.com` | that host exactly |
-| `*.example.com` | its subdomains at any depth — `a.example.com`, `a.b.example.com` — but **not** `example.com` itself |
-
-List both to cover the apex too. A malformed entry (a scheme, a path, a port,
-userinfo, a `*` anywhere but as a leading `*.`) raises at `HostConfig`
-construction rather than silently matching nothing. Matching is on the URL's
-real, lowercased, IDNA-normalised host: `https://example.com@evil.test/` is
-judged as `evil.test`, and `allowed.com` never covers `notallowed.com`.
+| `example.com` | exactly that host |
+| `*.example.com` | subdomains at any depth, **not** `example.com` itself |
 
 | Permission mode | Unlisted host | Listed host |
 | --- | --- | --- |
-| `default` | approval requested per call | fetched silently |
-| `acceptEdits` | approval requested per call | fetched silently |
-| `bypassPermissions` | fetched silently | fetched silently |
+| `default`, `acceptEdits` | approval per call | silent |
+| `bypassPermissions` | silent | silent |
 
-The gate is a per-call predicate, the same shape `Bash` uses for a command
-outside its allowlist — so `WebFetch` keeps `risk_level="low"`, a listed host
-stays prompt-free, and the approval resolves through the ordinary
-`ToolCallApprovalRequested` → `approve` / `deny` path (and through
-`Options.can_use_tool`). A cross-host redirect is handed back to the model to
-re-issue, and that second call is judged by the same predicate — a redirect
-cannot smuggle a fetch to an unapproved host.
-
-**What this gate is not.** It asks a human about an unfamiliar host; it does
-not confine the agent to a network. An agent that holds `Bash` reaches any
-address with one `curl`, so `WebFetch` refuses none of its own — a deployment
-that needs a real egress boundary enforces it at the network or in the sandbox
-container, where it also covers the shell.
+A malformed entry raises at `HostConfig` construction. Matching uses the URL's real, lowercased, IDNA-normalised host (`https://example.com@evil.test/` is `evil.test`). A redirect handed back to the model is judged again on the next call. This asks a human about unfamiliar hosts; it is not an egress boundary — an agent with `Bash` can `curl` anything. Enforce egress at the network or sandbox.
 
 ## App tools
 
-| Tool | Risk | What it does | Source |
+| Tool | Risk | Parameters | What it does |
 | --- | --- | --- | --- |
-| `open_app` | low | Publish a workspace HTML app through the host's preview gateway. Mounted only when the host wires `HostConfig.app_gateway`. | `noeta/builtins/app/impl/__init__.py` |
+| `open_app` | low | `dir`, `proxy_to` | Publish a workspace HTML app through `HostConfig.app_gateway`. |
 
 ## Memory tools
 
-Mounted only when the agent activates `memory`. Among the official presets that
-is `main` (and the internal consolidation curator).
+Mounted when the agent activates `memory` (among presets: `main` and the consolidation curator).
 
-| Tool | Risk | What it does | Source |
+| Tool | Risk | Parameters | What it does |
 | --- | --- | --- | --- |
-| `memory_write` | medium | Write a Markdown memory file to the store. Optional `description` (one-line index summary), `type` (`user` / `project` / `procedural` / `reference`) and `keywords` (comma-separated retrieval aliases — the cross-lingual recall bridge) are stored as a frontmatter block the tool composes itself, merged per-field over the fence already on disk and any fence the text carries (fields a rewrite does not mention survive — a curator's `keywords` outlive a body-only rewrite — and a key named with an empty value is dropped); the tool also stamps `created` / `updated` dates and a `source_task` ledger receipt, and a write under a new name reports similar existing memories so the model can merge instead of duplicating. | `noeta/builtins/memory/impl/store.py` |
-| `memory_read` | low | Read the full text of a stored memory on demand. | `noeta/builtins/memory/impl/store.py` |
-| `memory_search` | low | Case-insensitive substring match over names and full text, with grep-style excerpts (up to 3 lines per memory, 10 memories; a `truncated` flag reports when more matched). | `noeta/builtins/memory/impl/store.py` |
-| `memory_archive` | medium | Retire an outdated memory into the store's `archive/` subdirectory — it drops out of the index, recall and search, but the file is never deleted, so a human can restore it. | `noeta/builtins/memory/impl/store.py` |
+| `memory_write` | medium | `name`, `text`, `description?`, `type?`, `keywords?`, `related?` | Write a Markdown memory. Frontmatter fields merge per field over what is on disk (omit = keep, empty = remove). Stamps `created` / `updated` / `source_task`; a new name reports similar existing memories. |
+| `memory_read` | low | `name` | Full text of one memory. |
+| `memory_search` | low | `query` | Case-insensitive substring search over names and text; up to 3 excerpt lines per memory, 10 memories, `truncated` flag. |
+| `memory_archive` | medium | `name` | Move a memory to `archive/`: out of index, recall and search, never deleted. |
+
+`type` is one of `user` / `project` / `procedural` / `reference`. `keywords` is a comma-separated list of retrieval aliases (useful across languages); `related` lists memory names recalled alongside this one.
 
 ## Browser tools
 
-Mounted only when **both** hold: the agent activates `browser`
-(`"browser" in AgentSpec.plugins`), and the session is bound to a live sandbox
-container. Among the official presets that is the `web` subagent alone — `main`
-stays browser-free and delegates to it, so a non-sandbox deployment's tool set
-and stable prefix are untouched.
+Mounted only when the agent activates `browser` and the task has a live sandbox. Among presets only the `web` subagent does. All are `high` risk.
 
-All five are `high` risk (any browser action can egress to any site), so they
-route through approval unless the session bypasses permissions.
+| Tool | Parameters | What it does |
+| --- | --- | --- |
+| `browser_navigate` | `url` | Go to a URL; returns a page snapshot. |
+| `browser_click` | `index` | Click the numbered element from the last snapshot. |
+| `browser_type` | `index`, `text` | Type into the numbered element. |
+| `browser_extract` | — | Re-read the current page as a snapshot. |
+| `browser_screenshot` | — | Store a PNG in the `ContentStore` and return its `ContentRef`. Not fed to the model as vision. |
 
-| Tool | Risk | What it does | Source |
-| --- | --- | --- | --- |
-| `browser_navigate` | high | Go to a `url`; returns the page snapshot. | `noeta/builtins/browser/impl/__init__.py` |
-| `browser_click` | high | Click the interactive element at `index` (from the snapshot's numbered list). | `noeta/builtins/browser/impl/__init__.py` |
-| `browser_type` | high | Type text into the element at `index`. | `noeta/builtins/browser/impl/__init__.py` |
-| `browser_extract` | high | Re-read the current page as a snapshot (no arguments). | `noeta/builtins/browser/impl/__init__.py` |
-| `browser_screenshot` | high | Capture a PNG and store it in the `ContentStore` as an artifact, returning its `ContentRef` — no file is written to the workspace. It is not fed to the model as vision. | `noeta/builtins/browser/impl/__init__.py` |
-
-The four text tools return a *page snapshot*: page text plus numbered
-interactive elements. That numbering is what `browser_click` / `browser_type`
-address, so a snapshot must precede them.
-
-Name, schema, and description are pinned by noeta, not by the container image —
-the model-facing contract (and therefore the stable-prefix cache bytes) must not
-drift when the sandbox changes its own tool names. Each tool delegates to a
-`BrowserBackend`, the one place the container's browser wire is pinned. It is a
-per-session tool pack injected like the fs pack, not an MCP connector.
+A snapshot is page text plus numbered interactive elements. Names and schemas are pinned by Noeta, not by the container image.
 
 ## Skill tools
 
-| Tool | Risk | What it does | Source |
+| Tool | Risk | Parameters | What it does |
 | --- | --- | --- | --- |
-| `run_skill_script` | high | Run an active skill's bundled script via an allowlisted interpreter. Present only when the `skills` plugin config sets `allow_skill_scripts` and an active skill ships a script. | `noeta/builtins/skills/impl/script.py` |
+| `run_skill_script` | high | `skill`, `relpath`, `args?` | Run an active skill's bundled script through an allowlisted interpreter. No shell. |
 
 ## Control tools
 
-Control tools are model-facing schemas that translate into engine decisions
-rather than into a `Tool.invoke`. Each is a `control_tool` contribution that
-self-gates: mounting *is* enablement.
+Model-facing schemas that become engine decisions rather than `Tool.invoke` calls. The activation name goes in `Options.plugins`; a wrong name fails the build with a `ValueError` listing the legal ones.
 
-The **activation name** below is what goes into `Options.plugins`; it is not
-the model-visible tool name in the first column, and using the wrong one fails
-the client build with a `ValueError` that lists the legal names.
-
-| Tool | Mounted when | Plugin |
+| Tool | Mounted when | Activation / plugin |
 | --- | --- | --- |
-| `Task` | the agent activates `delegation` (derived automatically when it has children) | `delegation` |
-| `TodoWrite` | the agent activates `todo_write` | `todo_write` |
-| `AskUserQuestion` | the agent activates `ask_user_question` | `ask_user_question` |
-| `skill` | the agent activates `skill_invocation` **and** the merged skill menu is non-empty | `skills` |
-| `run_workflow` | `HostConfig.workflow_allowed` is on (and the agent can delegate) | `react` |
-| `RecallHistory` | the host wires compaction — always on under `Client` / `query`, subagents included; the schema is live whether or not anything has been collapsed yet | `react` |
-| `structured_output` | the agent is a subtask / workflow helper spawned with a per-helper schema (**not** `Options.output_schema`, which is served natively by the provider) | `react` |
+| `Task` | the agent can delegate (derived when it has `agents`) | `delegation` |
+| `TodoWrite` | the agent activates it | `todo_write` |
+| `AskUserQuestion` | the agent activates it | `ask_user_question` |
+| `skill` | activated and the merged skill menu is non-empty | `skill_invocation` (mounted by `skills`) |
+| `run_workflow` | `HostConfig.workflow_allowed=True` and the agent can delegate | `react` |
+| `RecallHistory` | compaction is wired — always under `Client` / `query` | `react` |
+| `structured_output` | a subtask / workflow helper spawned with its own schema (`Options.output_schema` uses the provider's native mode instead) | `react` |
 
-`RecallHistory` reads back the original messages that compaction collapsed into
-the summary note at the head of the conversation — the originals are kept in
-full, the note only stands in for them in the prompt. Conversation-born content
-(an earlier error's exact text, code discussed before compaction) lives in no
-file, so `Read` could never recover it. Results are a read-only rendering,
-paged with `offset`; the live collapsed range is reported in every result and
-in the `collapsed-context` reminder.
+`RecallHistory` pages back (`offset`) the original messages that compaction collapsed into the summary note — content that exists in no file.
 
 ## MCP tools
 
-Remote MCP tools appear dynamically as `mcp__<alias>__<tool>` when MCP servers
-are registered and enabled per session. See
-[ADR: MCP connectors](https://github.com/initxy/noeta/blob/main/docs/adr/mcp-connectors.md).
+Remote MCP tools appear as `mcp__<alias>__<tool>`. In-process SDK servers (`create_sdk_mcp_server`) keep their bare `@tool` names. See [MCP servers](../guides/mcp.md).
 
-In-process SDK MCP servers (`create_sdk_mcp_server`) are different: their tools
-keep their **bare** `@tool` names, with no `mcp__` prefix. See
-[Build custom tools](../how-to/build-custom-tools.md).
+## Risk levels
 
-## Tool risk levels
+| Level | Meaning | Gated under `default` |
+| --- | --- | --- |
+| `low` | no side effects outside the agent's own state | no |
+| `medium` | durable writes inside a confined directory (the memory store) | yes |
+| `high` | filesystem writes, processes, live web | yes |
 
-There are exactly three levels, ordered `low < medium < high`.
-
-| Level | Meaning |
-| --- | --- |
-| `low` | No side effects outside the agent's own state. Always allowed. |
-| `medium` | Mutates durable state, but only inside a confined directory — the memory store, for example. |
-| `high` | Modifies the filesystem, spawns external processes, or reaches the live web. Goes through the approval gate. |
-
-`Options.permission_mode` decides which levels actually gate: `"default"` gates
-everything above `low`, `"acceptEdits"` exempts the two edit-class tools
-(`Edit` / `Write`), and `"bypassPermissions"` gates nothing.
+`Options.permission_mode`: `"default"` gates every tool above `low`; `"acceptEdits"` additionally exempts `Edit` / `Write`; `"bypassPermissions"` gates nothing. `Bash` and `WebFetch` add the per-call checks above.
 
 ## Next
 
-- [Build custom tools](../how-to/build-custom-tools.md) — add your own with `@tool`
-- [Options](sdk-options.md) — `allowed_tools`, `disallowed_tools`, permission modes
-- [Guard vs Observer](../concepts/guard-observer.md) — how a call gets denied or approved
-- [Plugin surfaces](plugin-surfaces.md) — how a tool reaches an agent through a plugin
+- [Custom tools](../guides/tools.md) — add your own with `@tool`
+- [Options](options.md) — `allowed_tools`, `disallowed_tools`, `permission_mode`
+- [Engine](../how-it-works/engine.md) — how a call is approved or denied

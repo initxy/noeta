@@ -1,144 +1,91 @@
 # 故障排查
 
-实践中真正会出问题的地方，以及该怎么办。每一条都遵循同样的形状 —— **症状**（你看到什么）、**原因**（运行时实际做了什么）、**修法**（该改什么）。
+每条都是：看到什么现象、运行时实际做了什么、该改什么。如果碰到的是设计上的边界而不是故障，看[已知限制](limitations.md)。
 
-如果你碰到的是设计的边界而不是故障，那它收录在[已知限制](limitations.md)里。
+## 被拦下了
 
-跳到匹配的那一组：
+### Task 因预算超限而结束
 
-- [有东西被拦下了](#有东西被拦下了) —— 预算、权限、写入围栏
-- [有东西一直不发生](#有东西一直不发生) —— 一个不肯唤醒的 Task
-- [配置被拒绝](#配置被拒绝) —— 插件、模型、provider
-- [有东西在静默降级](#有东西在静默降级) —— 目录里没有的模型
-- [Worker 表现异常](#worker-表现异常) —— 关闭与 lease 相关的现象
+- **现象：** Task 结束，原因类似 `max_iterations=5 exceeded` 或 `max_tool_calls=3 reached`。
+- **原因：** `BudgetGuard` 发现某项预算超了，拒绝了下一步。预算项有 `max_iterations`、`max_tool_calls`、`max_cost_usd`、`max_spawned_subtasks`、`max_subtask_depth`。
+- **解决：** 先看 Task 的事件日志，确认是哪一项触发的；再通过 `Options.budget` 传一个 `BudgetSpec` 调高上限，或者把任务拆小。`max_cost_usd` 只对模型目录里有价格的模型生效（见下文「悄悄变差了」）。
 
-## 有东西被拦下了
+### 工具调用被拒
 
-### Task 因预算拒绝而终止
+- **现象：** 出现 `ToolCallDenied` 事件，原因是 `tool 'X' denied by policy`、`tool 'X' not in allowlist` 或 `tool 'X' risk_level 'high' exceeds max 'medium'`。
+- **原因：** `PermissionGuard` 先查 `denied_tools`（来自 `Options.disallowed_tools`）和 `allowed_tools` 白名单，再拿工具的 `risk_level` 跟这个 agent 允许的上限比。
+- **解决：** 把工具加进 `Options.allowed_tools`（注意它会**替换**默认列表，不是追加），或者从 `disallowed_tools` 里去掉。如果是风险等级超了，给这个工具单开一个 agent，别为了它把所有工具的上限都调高。
 
-**症状。** 一个 Task 以类似 `max_iterations=5 exceeded` 或 `max_tool_calls=3 reached` 的原因终止。
+### 工具调用在等审批
 
-**原因。** `BudgetGuard` 拒绝了下一个动作，因为越过了某条配置的预算轴：`max_iterations`、`max_tool_calls`、`max_cost_usd`、`max_spawned_subtasks` 或 `max_subtask_depth`。这个 Task 确实运行过并产生了持久信封 —— 只是以不成功的方式终止了。
+- **现象：** Task 挂起，原因是 `tool 'X' requires human approval`（逐次判断的情况是 `tool 'X' call requires human approval`）。
+- **原因：** 由 `permission_mode` 决定。`default` 下所有 `risk_level` 不是 `low` 的工具都要审批；`acceptEdits` 相同，但 `Edit` 和 `Write` 不用；`bypassPermissions` 什么都不拦。`Bash` 的命令不在 shell 白名单里时，无论哪种模式都要逐次审批。
+- **解决：** 用 `Client.approve` / `Client.deny` 处理，或者在代码里用 `Options.can_use_tool` 自动裁决。如果这一类调用本来就该直接放行，换一个 `permission_mode`。
 
-**修法。**
+### 写文件被拒：路径在工作区之外
 
-1. 读这个 Task 的事件日志，看是哪条轴触发的，以及为什么它需要这么多步。
-2. 通过 `Options.budget` 传一个 `BudgetSpec` 来提高上限。
-3. 或者收窄 Task 的范围，让它需要更少的步数。
+- **现象：** `Edit` 或 `Write` 报错，说路径落在工作区或可写目录之外。
+- **原因：** 写操作只允许落在 Task 的工作区里。路径会先规范化（`..` 和符号链接都会展开），并且按路径分段比较，所以 `/srv/app-old` 不算在 `/srv/app` 里面。读操作不受限。
+- **解决：** 写到工作区里，或者通过 `HostConfig.write_roots` 授权目录。它是一个 `task_id -> 目录列表` 的函数，每次调用都会重新查，所以 Task 暂停期间加的授权，恢复后马上生效。
 
-`max_cost_usd` 只会对目录已定价的模型触发 —— 见[静默降级那一条](#长对话从不-compaction-成本停在-0-00)。
+## 该发生的没发生
 
-### 工具调用被 PermissionGuard 拒绝
+### 挂起的 Task 一直不醒
 
-**症状。** 一个 `ToolCallDenied` 事件，其原因是 `tool 'X' denied by policy`、`tool 'X' not in allowlist` 或 `tool 'X' risk_level 'high' exceeds max 'medium'` 之一。
+- **现象：** Task 一直是 `suspended`，但它等的条件看上去已经满足了。
+- **原因：** 三种可能：唤醒事件还没发生（定时器的 `fire_at` 还没到，子任务还没结束）；事件发生了，但跟 Task 的 `WakeCondition` 对不上；或者根本没有 worker 在处理队列。
+- **解决：** 查定时器的 `fire_at` 或子任务状态，看一下 Task 的原始事件流，并确认有 worker 在跑。没人会替你启动 worker（见[部署](../guides/deploy.md)）。
 
-**原因。** `PermissionGuard` 驳回了这次调用。先检查 Policy 的 `denied_tools` 集合（由 `Options.disallowed_tools` 喂入）和 `allowed_tools` 白名单，再用工具声明的 `risk_level` 对照这个 agent 运行时的上限。
+## 配置被拒
 
-**修法。** 扩大 `Options.allowed_tools` 以包含该工具，或把它从 `disallowed_tools` 里去掉 —— 记住 `allowed_tools` 是*替换*默认集合，而不是往里追加。如果拒绝与风险级别有关，说明该工具高于这个 agent 的上限：给它一个自己的 agent，而不是为所有东西抬高上限。
+### 报 "unknown plugin activation"
 
-### 工具调用一直等待审批
+- **现象：** `compile_options` 抛出 `ValueError: unknown plugin activation 'x' on ...`。
+- **原因：** `Options.plugins` 或 `AgentDefinition.plugins` 里的名字既不是内置插件，也不在传给 `Client` 的 `PluginSet` 里。拼错了会直接报错，免得某项能力悄悄被关掉。
+- **解决：** 改正拼写，或者先 `load_plugins(...)`，再用 `Client(options, plugins=...)` 传进去。报错信息里会列出所有合法名字。
 
-**症状。** Task 挂起而不是运行工具；原因写着 `tool 'X' requires human approval`。
+### 模型或 provider 在开跑前被拒
 
-**原因。** `permission_mode` 选定了一个审批集合。`default` 对每一个声明 `risk_level` 不为 `low` 的工具设门；`acceptEdits` 应用同样的规则，但豁免 `Edit` 和 `Write`；`bypassPermissions` 不设任何门。一个命令落在生效 shell 白名单之外的 `Bash` 会按调用设门，与模式无关。
+- **现象：** 抛出 `ModelSelectorError`（`model_selector_rejected`）或 `ProviderSelectorError`（`provider_selector_rejected`），不会写入任何 Task。
+- **原因：** 模型不在 `principal.allowed_models` 与部署白名单的交集里；或者 `(provider, model)` 指向了没配置的 provider，或该 provider 没声明的模型。
+- **解决：** 从错误上附带的 `allowed` / `available` 列表里挑一个，或者放宽 host 的白名单和 provider 注册。
 
-**修法。** 用 `Client.approve` / `Client.deny` 处理它，或者用一个编程式的 `Options.can_use_tool` 回调，它的裁决会被记录成一个普通的审批事件。如果整类调用都应该无人值守地运行，就改 `permission_mode`。
+### 401 或其他鉴权错误
 
-### 写入被拒：路径解析到工作区之外
+- **现象：** 每一轮都因为 LLM 接口的鉴权或权限错误失败。
+- **原因：** API key 没配、过期了，或者没有这个模型的权限。
+- **解决：** 检查传给 provider 的 key，或它读取的环境变量。走代理的话设 `HTTPS_PROXY`，provider 用的 `httpx` 会读它。
 
-**症状。** `Edit` 或 `Write` 返回一个错误，说路径解析到工作区之外，或落在可写白名单之外。
+### 接口报 "Model not found"
 
-**原因。** 写入工具通过 `WorkspaceRoot` 围栏解析。目标会被规范化 —— 因此 `..` 和符号链接逃逸已经被折叠 —— 并且必须落在会话工作区之内，或落在 host 授权的某个额外根目录之内。包含判断是按路径分量进行的，因此 `/srv/app-old` 不在 `/srv/app` 之内。读取不设围栏；只有写入设围栏。
+- **现象：** provider 返回模型不存在。
+- **原因：** `model` 不是这个接口认识的 id。
+- **解决：** 传接口实际提供的完整 id（比如 `claude-sonnet-5`；Noeta 认识的 id 可以用 `catalog_models()` 查），并确认 key 的权限等级。
 
-**修法。** 写在工作区之内，或通过 `HostConfig.write_roots` 授权该目录 —— 它是一个 `task_id -> directories` 解析器，按调用查询。因为它按调用查询，一个在 Task 暂停期间授予的授权，会在恢复后的那次调用上生效，而无需重建工具集。
+## 悄悄变差了
 
-## 有东西一直不发生
+### 目录里没有的模型：告警且成本为 $0
 
-### 挂起的 Task 永远不唤醒
+- **现象：** 日志里有一次性的 `noeta` 告警，点名这个模型；即使模型实际窗口更大，压缩也按 128K 算；`GovernanceState.cost` 一直是 0。
+- **原因：** 压缩、输出上限和计价都来自模型目录。不认识的模型会按 128,000 token 窗口、16,384 token 输出上限、价格 `0.0` 处理，每项在日志里提示一次。
+- **解决：** 给它注册一条 `ModelSpec`：`HostConfig(extra_models={...})`，或 `noeta.sdk.providers` 里的 `register_models`。见[接入模型](../guides/models.md)。
 
-**症状。** 一个 Task 停在 `suspended` 且从不回到 `running`，尽管它所等待的条件看起来已经满足。
+## worker 异常
 
-**原因。** 三种情况之一：
+### 关闭时放弃了正在跑的一步
 
-- 唤醒事件尚未产生 —— 一个 `fire_at` 还在未来的定时器，或一个尚未到达终态的子任务。
-- 唤醒事件已产生，但不匹配这个 Task 的 `WakeCondition`（身份字段上的投影不匹配）。
-- 没有 worker 在排空队列。
+- **现象：** SIGTERM 之后日志出现 `shutdown_abandoned`，`loop.abandoned` 为 `True`。
+- **原因：** 正在跑的那一步超过了 `shutdown_grace_s`（`WorkerLoop` 默认 30 秒，`Client.start_workers` 默认 10 秒）。
+- **解决：** 直接退出进程。Python 停不掉被放弃的线程，在同一进程里继续用这个 loop 是不支持的。进程退出后租约会过期，下次启动时 `requeue_stale()` 会把 Task 捡回来。想避免这种情况就调大 `shutdown_grace_s`，或设为 `None` 无限等待（那样卡死的一步只能 `kill -KILL <pid>`）。
 
-**修法。**
+### 跑得很久的一步报 `InvalidLease`
 
-1. 检查唤醒事件是否存在：对定时器核实 `fire_at` 已在过去；对子任务核实子任务已到终态。
-2. 读这个 Task 的原始事件流。一个在等待尚未发生之事的 Task 是按设计工作的。
-3. 确保有一个 `WorkerLoop` 在排空 Dispatcher —— 见[部署 Worker](../how-to/deploy-worker.md)。没有任何东西替你启动它。
-
-## 配置被拒绝
-
-### 编译失败并报 "unknown plugin activation"
-
-**症状。** `compile_options` 抛出 `ValueError: unknown plugin activation 'x' on ... — not a built-in activation (...) and not in the loaded plugin set (...)`。
-
-**原因。** `Options.plugins` 或 `AgentDefinition.plugins` 里的这个名字，既不是一个已识别的内置 activation，也不是交给 `Client` 的那个 `PluginSet` 里的插件。activation 名称按设计会大声失败，因此一个拼写错误不可能静默地关掉一项能力。
-
-**修法。** 改正拼写，或者先用 `load_plugins(...)` 加载插件并把结果作为 `Client(options, plugins=...)` 传入。错误消息会同时列出已识别的内置名称和已加载的集合。
-
-### 模型在这一轮开始前就被拒绝
-
-**症状。** `ModelSelectorError`（`model_selector_rejected`）或 `ProviderSelectorError`（`provider_selector_rejected`）—— 并且没有 Task、没有 `ModelBound`、没有这一轮。
-
-**原因。** 这些是在任何持久写入之前本地抛出的。要么选择器落在 `principal.allowed_models ∩` 部署白名单之外，要么 `(provider, model)` 这一对指向一个未配置的 provider，或指向一个该 provider 未声明的模型。
-
-**修法。** 两个错误都携带一个 `allowed` / `available` 列表，说明你本可以挑选什么。从中挑选，或扩大 host 的白名单和 provider 注册表。
-
-### provider 返回 401 或其他认证错误
-
-**症状。** 轮次因来自 LLM 端点的认证或权限错误而失败。
-
-**原因。** API key 缺失、过期，或无权访问所请求的模型。
-
-**修法。** 核实传给 provider 适配器的 key，或它回退到的那个环境变量。在企业代理后面，在环境里设置 `HTTPS_PROXY` —— 适配器使用 `httpx`，它会尊重这个变量。
-
-### 端点返回 "Model not found"
-
-**症状。** provider 本身返回一个模型未找到或未知模型的错误。
-
-**原因。** 你传入的 `model` 不是那个端点提供的 id。
-
-**修法。** 使用一个你的端点确实提供的精确模型名。Anthropic 的 id 带日期后缀（`claude-sonnet-4-5-20250929`）；同时检查你这把 key 的访问层级。
-
-## 有东西在静默降级
-
-### 长对话从不 compaction，成本停在 $0.00
-
-**症状。** 上下文一直增长，直到 provider 拒绝请求；而无论跑多少轮，`GovernanceState.cost` 都停在零。
-
-**原因。** compaction 和定价都源自模型目录。目录未描述的模型每次往返会得到 `COMPACTION_OFF` 和 `0.0` 的价格。这两种退化都不抛异常，所以没有任何东西告诉你。
-
-**修法。** 为该模型注册一行 `ModelSpec` —— `HostConfig(extra_models={...})`，或在进程启动时调用 `noeta.sdk.providers` 的 `register_models`；这一行的 `context_window`、`max_output_tokens` 和价格字段，就是两处推导所读取的全部内容。见[配置 Provider](../how-to/configure-provider.md)。
-
-## Worker 表现异常
-
-### 关闭时 Step 被放弃
-
-**症状。** SIGTERM 之后，日志显示 `shutdown_abandoned` 且 `loop.abandoned` 为 `True`。
-
-**原因。** 进行中的 Step 没有在 `shutdown_grace_s` 内完成 —— `WorkerLoop` 默认 30 秒，`Client.start_workers` 是 10 秒 —— 因此循环放弃了它。
-
-**修法。**
-
-- **退出进程。** Python 无法中断被放弃的 Step 线程，它可能仍在写入事件日志。放弃之后在进程内重用这个循环是不受支持的。
-- 一旦进程退出，lease 就会过期，`requeue_stale()` 会在下一次启动时回收该 Task。
-- 要避免它，提高 `shutdown_grace_s`，或把它设为 `None` 以无限等待 —— 那样一个真正卡住的 Step 就需要 `kill -KILL <pid>`。
-
-### 一个长 Step 以 InvalidLease 死亡
-
-**症状。** 一个已经运行很久的 Step 在它下一次写事件日志时失败；worker 发出了 `heartbeat_invalid_lease`。
-
-**原因。** Dispatcher 把心跳延长次数限制在 `heartbeat_max`（默认 360），因此一个 Step 至多能持有 lease `heartbeat_interval × heartbeat_max` 那么久。超过上限后 lease 被强制释放，下一次经 lease 校验的追加就会失败。
-
-**修法。** 把这当作一个运维故障信号，而不是恢复路径 —— 循环会继续前进，但这个 Task 需要检查。如果这个 Step 确实就是这么慢，就提高 `heartbeat_interval` 或 Dispatcher 的 `heartbeat_max`；否则找出是什么在挂着。
+- **现象：** 一个跑了很久的步骤在下次写事件日志时失败，worker 发出了 `heartbeat_invalid_lease`。
+- **原因：** 心跳续租次数有上限，就是 dispatcher 的 `heartbeat_max`（360），所以一步最多持有租约 `heartbeat_interval × heartbeat_max` 这么久。
+- **解决：** 把它当成需要人去看的信号，不要指望它自动恢复。如果这一步确实就要跑这么久，调大 `heartbeat_interval` 或 `heartbeat_max`；否则去查是什么卡住了。
 
 ## 下一步
 
-- [已知限制](limitations.md) —— 设计的边界，而不是 bug
-- [部署 Worker](../how-to/deploy-worker.md) —— 上面多数现象的来源，那个 worker 池
-- [唤醒与恢复](../concepts/wake-resume.md) —— 唤醒机制如何工作
-- [WorkerLoop 参考](../reference/worker-loop.md) —— 构造函数参数与关闭语义
+- [已知限制](limitations.md)
+- [部署 worker](../guides/deploy.md)
+- [`WorkerLoop` 参考](../reference/worker-loop.md)

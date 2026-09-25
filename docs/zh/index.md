@@ -2,155 +2,102 @@
 layout: home
 
 hero:
-  name: "Noeta"
-  text: "给「必须一直跑下去的 agent」用的 Python 运行时 + SDK"
-  tagline: 今天在你自己的进程里驱动一个 agent；明天把同一个 agent 放到多 worker、多 host 的池子上跑 —— agent 本身一行不用改。每一项能力都是插件，每一家模型厂商都只隔着一行接线，每一次运行都持久到能扛住 kill -9、事后还能 replay。
+  name: Noeta
+  text: 一直跑下去的 agent
+  tagline: 一个 Python SDK。进程崩了能接着跑，等人审批等几天也不占资源，从一个脚本扩到多机集群，agent 代码一行不用改。
+  image:
+    src: /logo.svg
+    alt: Noeta
   actions:
     - theme: brand
-      text: 快速上手（5 分钟）
-      link: /zh/tutorials/quickstart
+      text: 快速上手
+      link: /zh/start/quickstart
     - theme: alt
-      text: 基准测试
-      link: /zh/benchmarks
+      text: 为什么选 Noeta
+      link: /zh/why-noeta
     - theme: alt
       text: GitHub
       link: https://github.com/initxy/noeta
 
 features:
-  - title: 面向 server，而不只是一个能调用的循环
-    details: Client.start_workers(n) 把同一个进程变成常驻 worker 池；把存储指向 Postgres，多个 host 就共享同一个数据库，写入由 lease 围栏保护。Engine 是无状态的，所以横向扩展是换一次存储、不是重写 —— 而且没有要运维的 daemon，也没有 HTTP 跳转。
-
-  - title: 每一项能力都是插件 —— 包括我们自己的
-    details: 内核出厂时零能力。文件工具、web 工具、memory、browser、MCP、sandbox、存储后端，以及每一个 provider 适配器，都是内置插件，只经由唯一一道门触达内核。你的插件走的是同一条路；不存在一个把你挡在门外的特权内部 API。
-
-  - title: 16 个扩展 Surface，以惰性数据声明
-    details: 插件就是一个带静态 manifest 的包，所以在 import 它的任何一行代码之前，Noeta 就能列出它贡献了什么并检查冲突。工具、agent、policy、Guard、Observer、MCP server、sandbox provider 全都是贡献。
-
-  - title: 中途杀掉进程，它会自己恢复
-    details: 状态从不攥在内存里 —— 它是 fold(events)，由只追加的日志重新算出来，靠 heartbeat 续期的 lease 保证每个 Task 只有一个写者。下一个 worker 会封存被打断的 Attempt，并从最后一个持久点精确一次地继续。
-
-  - title: 等待是免费的，而且是一等公民
-    details: Task 可以为一个人工回答、一个定时器、一个子任务或一个外部事件挂起，睡着期间不产生任何成本。唤醒是持久的、单 worker 的、精确一次投递的 —— 跨月的审批循环和五秒的工具调用用的是同一套机器。
-
-  - title: 任何模型，靠强制而非承诺
-    details: Anthropic、任意 OpenAI chat-completions 网关，以及 OpenAI Responses API 都位于同一个从不点名厂商的内部协议之后。切换端点是接线、不是重写 —— 内核被禁止导入任何 provider 包，一旦尝试，构建就失败。
+  - title: 崩了能接着跑
+    details: 任务状态不放在内存里，而是从一条只追加的事件日志里重建。worker 跑到一半被杀掉，另一个 worker 从最后一步接着做。这条日志同时就是完整的审计记录。
+    link: /zh/how-it-works/event-log
+    linkText: 恢复是怎么做的
+  - title: 等待不花钱
+    details: 任务可以停下来等人审批、等定时器、等子任务、等外部事件，等几秒或者等几个月都行。等的时候不占任何资源，条件满足时恰好被唤醒一次。
+    link: /zh/how-it-works/tasks-and-waking
+    linkText: 唤醒是怎么做的
+  - title: 从脚本到集群
+    details: 脚本里调 query()，服务里起一个 worker 池，再让几台机器共用一个 Postgres。每一步 agent 代码都一样，不需要额外部署守护进程或服务。
+    link: /zh/guides/deploy
+    linkText: 部署上线
 ---
 
-## 落在公开排行榜的第一梯队
+## 几行代码跑起一个 agent
 
-| 基准 | 范围 | `noeta-agent` `main`（Claude Opus 4.8） | 领域水平 |
-|---|---|---|---|
-| Terminal-Bench 2.1 | 40 题分层抽样 | **82.5%**（33/40） | 公开榜单区间 58.7%–83.8% |
-| SWE-bench Verified | 15 实例子集 | **86.7%**（13/15） | 榜首约 79%，中段约 66–77% |
-
-跑在 [harbor](https://github.com/harbor-framework/harbor)（官方 Terminal-Bench
-harness）上，用官方数据集，由每道题自己的 verifier 打分。参赛的是
-[`noeta-agent`](https://github.com/initxy/noeta-agent) 的 `main` 预设，完全由本
-SDK 的公开面组装而成。两行都是**抽样**，并如实标注 —— 完整方法学、排除项与可复跑命令见[基准测试](/zh/benchmarks)。
-
-## 60 秒试用
-
-```bash
-uv pip install noeta-sdk      # noeta-runtime 会作为传递依赖一起装上
-```
-
-零凭证、零网络 —— 用离线的 `FakeLLMProvider` 驱动一轮：
+<p class="nt-lead">装好 <code>noeta-sdk</code>，设好 <code>ANTHROPIC_API_KEY</code>，agent 就能用内置的文件工具去看你的项目。</p>
 
 ```python
-from noeta.sdk import Options, query, LLMResponse, TextBlock, Usage
-from noeta.sdk.testing import FakeLLMProvider
-
-provider = FakeLLMProvider(responses=[
-    LLMResponse(stop_reason="end_turn",
-                content=[TextBlock(text="Hello from Noeta.")],
-                usage=Usage(uncached=1, output=1))
-])
+from noeta.sdk import Options, query
+from noeta.sdk.providers import AnthropicProvider
 
 result = query(
-    Options(system_prompt="You are concise.",
-            allowed_tools=("Read",),
-            permission_mode="bypassPermissions"),
-    goal="Say hello.",
-    provider=provider,
-    model="stub-model",
+    Options(system_prompt="You are a concise coding assistant."),
+    goal="What files are in this directory, and what does each one do?",
+    provider=AnthropicProvider(),
+    model="claude-sonnet-5",
 )
-assert result.answer() == "Hello from Noeta."
+print(result.answer())
 ```
 
-换一个 provider 就能接上真实模型 —— 见
-[配置 Provider](/zh/how-to/configure-provider)。
+返回的不只是答案：这次运行里每一次模型调用、工具调用和 token 用量都在里面。[快速上手 →](/zh/start/quickstart)
 
-## 找到你要的页面
+## 整体结构
 
-第一次来？先看[快速上手](/zh/tutorials/quickstart)，再看[你的第一个 agent](/zh/tutorials/first-agent)。其余内容都在下面。
+<NtArchitecture lang="zh" />
 
-### 教程 —— 边做边学
+agent 走的每一步都追加进事件日志，所以任何一个 worker 都能靠它把任务重建出来。agent 能做的一切——工具、MCP、记忆，连模型本身——都是插件。[原理 →](/zh/how-it-works/)
 
-| 页面 | 你会得到 |
-|---|---|
-| [快速上手（5 分钟）](/zh/tutorials/quickstart) | 安装、离线跑通一轮、读懂它产生的事件日志。 |
-| [你的第一个 agent](/zh/tutorials/first-agent) | 一个带自定义工具和权限闸门的真实 agent。 |
-| [CI 集成](/zh/tutorials/ci-integration) | 在 CI 里确定性地跑 agent，不需要 API key。 |
+## 天生可扩展
 
-### 操作指南 —— 解决一个具体问题
+<div class="nt-cards">
+  <div class="nt-card"><strong>一切都是插件</strong><span>内核本身不带任何能力。文件工具、网页、记忆、MCP、沙箱、模型适配器全是插件，走的是和你的插件同一套公开接口。</span></div>
+  <div class="nt-card"><strong>什么模型都能接</strong><span>Anthropic、任何兼容 OpenAI 的网关、OpenAI Responses API。换模型只改一行，agent 和它的历史记录都不变。</span></div>
+  <div class="nt-card"><strong>先审批，再动手</strong><span>有风险的工具调用会停下来等人批准。guard 可以在调用执行前拦下它；observer 只能旁观，干扰不了任务。</span></div>
+</div>
 
-| 页面 | 什么时候用 |
-|---|---|
-| [配置 Provider](/zh/how-to/configure-provider) | 你想接真实模型：Anthropic、OpenAI 兼容网关，或 Responses API。 |
-| [构建自定义工具](/zh/how-to/build-custom-tools) | agent 需要调用你自己的代码。 |
-| [生成子代理](/zh/how-to/spawn-subagents) | 一个 Task 需要把部分工作委派出去并等待结果。 |
-| [连接 MCP](/zh/how-to/connect-mcp) | 你想用现成 MCP server 提供的工具。 |
-| [编写插件](/zh/how-to/write-a-plugin) | 你想把工具、agent 或 policy 打包复用。 |
-| [部署 Worker](/zh/how-to/deploy-worker) | Task 需要在启动它的进程之外继续运行。 |
-| [用 Docker 部署](/zh/how-to/docker-deployment) | 你要把 worker 作为容器发布。 |
-| [使用 Sandbox](/zh/how-to/use-sandbox) | 工具调用必须与宿主机隔离运行。 |
-| [多租户记忆](/zh/how-to/multi-tenant-memory) | 多个租户共用一套部署，且彼此不可见。 |
-| [切换 Provider](/zh/how-to/swap-providers) | 已有的 agent 要换到另一个端点。 |
+## 和其他方案比
 
-### 核心概念 —— 理解这个模型
+<div class="nt-compare">
 
-| 页面 | 讲什么 |
-|---|---|
-| [概念总览](/zh/concepts/) | 阅读顺序，以及每个概念的一句话定义。 |
-| [事件溯源](/zh/concepts/event-sourcing) | 为什么状态是 `fold(events)`，以及这带来了什么。 |
-| [任务模型](/zh/concepts/task-model) | Task 是唯一原语：状态、Attempt、子任务。 |
-| [引擎与执行](/zh/concepts/engine-execution) | 一个 Step 做的事：取 lease、fold、组装上下文、决策、派发工具。 |
-| [Fold 与快照](/zh/concepts/fold-and-snapshot) | 如何从日志重建状态，以及让它保持快速的快照。 |
-| [唤醒与恢复](/zh/concepts/wake-resume) | 为人、定时器或子任务挂起 —— 并恰好唤醒一次。 |
-| [Guard 与 Observer](/zh/concepts/guard-observer) | 谁能拦下一次工具调用，谁只能旁观。 |
-| [Composer 与缓存](/zh/concepts/composer-and-cache) | prompt 如何按三段组装以命中 provider 缓存。 |
-| [Provider 中立](/zh/concepts/provider-neutrality) | 一个内部协议、三个适配器，内核里没有任何厂商。 |
+| | **Noeta** | Claude Agent SDK | LangGraph | Temporal |
+|---|---|---|---|---|
+| 是什么 | 可持久运行的 agent 运行时（一个库） | Claude 的 agent 循环库 | 基于图的 agent 框架 | 持久化工作流平台 |
+| 谁决定下一步 | 模型一步步决定 | 模型决定 | 你预先定义的图 | 你写好的工作流代码 |
+| 存下来的是什么 | 每一个事件，状态由事件推出来 | 对话记录 | 图状态的检查点 | 工作流历史 |
+| 等人 / 等定时器 | 内置，恰好唤醒一次 | 恢复对话 | 中断后由调用方恢复 | 内置 |
+| 横向扩展 | worker 池；多机共用 Postgres | 单进程 | 自己想办法，或用托管平台 | Temporal 集群 |
+| 模型 | 任意，一行切换 | Claude | 任意 | — |
+| 要额外运维的服务 | 没有，只有你的进程和数据库 | 没有 | 没有 | Temporal 服务端 |
 
-### 架构 —— 它是怎么搭起来的
+</div>
 
-| 页面 | 覆盖 |
-|---|---|
-| [概览](/zh/architecture/overview) | 整个系统的导览。 |
-| [包与导入规则](/zh/architecture/packages) | `noeta-sdk` 位于 `noeta-runtime` 之上、同一个命名空间，以及隔开二者的规则。 |
-| [状态与写入者](/zh/architecture/state-and-writers) | 状态切片、单写入者不变式、带版本的 fold。 |
-| [扩展平面](/zh/architecture/extension-planes) | 三个平面上的十六个 Surface，以及 built-in plugin 如何走同一条路。 |
+<p class="nt-muted">agent 要长时间无人值守地跑，而且要能恢复、能审计、能扩容，就选 Noeta。<a href="why-noeta.html">完整对比 →</a></p>
 
-### 参考 —— 查具体细节
+## 公开榜单上的成绩
 
-| 页面 | 内容 |
-|---|---|
-| [SDK API 地图](/zh/reference/sdk) | 所有可从 `noeta.sdk` 导入的东西，并链到细节页。 |
-| [query / Client](/zh/reference/sdk-client) | 两个入口、它们的参数，以及返回什么。 |
-| [Options](/zh/reference/sdk-options) | 每一个 `Options` 字段和各个权限模式。 |
-| [类型与测试替身](/zh/reference/sdk-types) | 事件、内容块、结果，以及离线测试替身。 |
-| [插件总览](/zh/reference/plugins) | 插件是什么，以及它如何对某个 agent 生效。 |
-| [插件 manifest](/zh/reference/plugin-manifest) | manifest 结构、加载过程与版本锁定。 |
-| [插件 Surface](/zh/reference/plugin-surfaces) | 全部十六个扩展 Surface，每个一节。 |
-| [工具](/zh/reference/tools) | 内置工具清单。 |
-| [预设代理](/zh/reference/presets) | 预设 agent 及各自的接线。 |
-| [WorkerLoop](/zh/reference/worker-loop) | worker 池 API、lease 与轮询行为。 |
-| [对比](/zh/reference/comparison) | Noeta 与其他 agent 框架的对比。 |
-| [术语表](/zh/reference/glossary) | 按领域分组的全部术语，附 A–Z 索引。 |
+<div class="nt-stats">
+  <div class="nt-stat"><div class="num">82.5%</div><div class="label">Terminal-Bench 2.1</div><div class="sub">40 题抽样 · 公开榜单 58.7%–83.8%</div></div>
+  <div class="nt-stat"><div class="num">86.7%</div><div class="label">SWE-bench Verified</div><div class="sub">15 题子集 · 榜单最高约 79%</div></div>
+</div>
 
-### 运维 —— 让它跑在生产上
+<p class="nt-muted">只用公开 SDK 搭出来的 agent（<a href="https://github.com/initxy/noeta-agent">noeta-agent</a> 的 <code>main</code>，Claude Opus 4.8），在官方评测框架上跑出的成绩。两项都是抽样，不是全量榜单成绩。<a href="benchmarks.html">方法和说明 →</a></p>
 
-| 页面 | 回答 |
-|---|---|
-| [故障排查](/zh/operations/troubleshooting) | 你真正会遇到的故障：现象、原因、修法。 |
-| [已知限制](/zh/operations/limitations) | Noeta 目前还做不到什么，直说。 |
-| [基准测试](/zh/benchmarks) | 建在 Noeta 上的 agent 在公开基准上的成绩，以及这是怎么测的。 |
+## 接下来
+
+<div class="nt-cards">
+  <a class="nt-card" href="start/quickstart.html"><strong>快速上手</strong><span>五分钟跑起一个真正的 agent。</span></a>
+  <a class="nt-card" href="start/tutorial.html"><strong>教程</strong><span>自定义工具、审批、多轮对话、重启不丢的存储。</span></a>
+  <a class="nt-card" href="how-it-works/"><strong>原理</strong><span>事件日志、任务与唤醒、插件系统，一页讲一件事。</span></a>
+</div>

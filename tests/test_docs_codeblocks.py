@@ -45,7 +45,7 @@ def _extract_runnable_blocks(md_path: Path) -> list[tuple[str, str, str]]:
 
 _RUNNABLE_MD_FILES = (
     _REPO_ROOT / "README.md",
-    _REPO_ROOT / "docs" / "tutorials" / "quickstart.md",
+    _REPO_ROOT / "docs" / "guides" / "testing.md",
 )
 
 # Subtrees the user-doc gates skip: an ADR argues its rejected alternatives on
@@ -81,7 +81,7 @@ def test_at_least_one_smoke_block_is_discoverable() -> None:
     runnables = _collect_runnables()
     smoke_blocks = [r for r in runnables if r[1] == "smoke"]
     assert smoke_blocks, (
-        "no `<!-- runnable: smoke -->` blocks found in README/quickstart"
+        "no `<!-- runnable: smoke -->` blocks found in README/testing guide"
     )
 
 

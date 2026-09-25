@@ -1,106 +1,89 @@
-# 预设代理
+# Agent 预设
 
-你不必从零设计一个 agent。`noeta.presets` 提供四个现成的：一个对话式的根 `main`，以及它委派的三个子代理。大多数宿主都从 `main` 出发再做调整。
-
-它们是一个 **SDK 层**的接口——你通过构建某个 preset 的 `Options`（`presets.main_options()`）来选它，再把它交给 `Client` 或 `query`。自定义 agent 则走扁平的 `Options.agents` dict。
-
-## 四元组
-
-| 代理 | 角色 | 工具 | 激活 |
-| --- | --- | --- | --- |
-| `main` | 默认的编码代理：完整的内置工具面，派生那三个子代理。 | 全部内置工具集（不设 `allowed_tools`），外加它的 `memory` 激活所打开的记忆工具 | `fs`、`web`、`TodoWrite`、`AskUserQuestion`、`skill_invocation`、`memory`、`mcp`；`delegation` 由它的 `agents` 名册推导而来 |
-| `general-purpose` | 自给自足的编码工人：完整的读 / 写 / 编辑 / shell 集合，不做委派。 | `Edit`、`Glob`、`Grep`、`Read`、`KillShell`、`BashOutput`、`Bash`、`WebSearch`、`WebFetch`、`Write` | `skill_invocation`、`mcp` |
-| `explore` | 只读侦察兵：glob/grep/read 加只读 shell，扇出去汇报事实，从不编辑。 | `Glob`、`Grep`、`Read`、`KillShell`、`BashOutput`、`Bash`、`WebFetch` | `skill_invocation` |
-| `plan` | 只读架构师：读代码，返回一份具体、有序的实施计划，从不写入。 | `Glob`、`Grep`、`Read`、`KillShell`、`BashOutput`、`Bash`、`WebFetch` | `AskUserQuestion` |
-
-`explore` 和 `plan` 列出了 `Bash`，但它们的 prompt 把它限制在只读命令上；高风险 shell 上的审批门是兜底。`general-purpose` 是一个叶子工人——它从不再往下派生，这就限住了扇出。
-
-## 激活名
-
-| 名字 | 它启用什么 |
-| --- | --- |
-| `TodoWrite` | `TodoWrite` control tool（基于 state-patch 的进度跟踪）。 |
-| `AskUserQuestion` | 模型可以通过 `AskUserQuestion` control tool 让出以获取人类输入。 |
-| `delegation` | `Task` control tool。任何带 `agents` 名册的 agent 都会推导出它；显式写出它则是把派生权授予一个子 agent。 |
-| `skill_invocation` | 用于模型驱动的 skill 选择的 `skill` control tool。 |
-| `memory` | 跨任务记忆：`memory_write` / `memory_read` / `memory_search` / `memory_archive` 四个工具，外加用户消息接缝上的自动召回。 |
-| `mcp` | MCP 工具继承：自身 spec 也打开了 `mcp` 的子任务，会继承父任务已启用的 MCP 服务器。 |
-| `browser` | 由 sandbox 支撑的 `browser_*` 工具包。只有 `web` 专家会打开它。 |
-| `fs` / `web` | `DEFAULT_PLUGINS`——默认的工具包。身份惰性。 |
-
-只有 `main` 激活 `memory`：召回挂在用户消息摄入接缝上，而只有顶层的对话式 agent 才会收到用户消息。每个启用了记忆的 preset，其 prompt 都携带那段记忆策略片段（以 `MEMORY_POLICY_PROMPT` 导出），它告诉模型该存什么、不该存什么，以及写入卫生。
-
-## 可选代理
-
-除了这个四元组，还随包提供两个 `AgentDefinition`。两者都不在 `OFFICIAL_SUBAGENTS` 里，因此除非某个产品去注册它，它们都不会改变 `main` 的可派生名册。
-
-| 定义 | 由谁注册 | 用途 |
-| --- | --- | --- |
-| `WEB_SUBAGENT`（`"web"`） | `sandbox_browser_options()` | 浏览专家——唯一激活 `browser` 的身份。注册它会同步把 `main` 的 prompt 换成 `MAIN_WEB_SYSTEM_PROMPT`，与名册保持步调一致，因此 prompt 绝不会提到一个不可派生的子代理。`main` 自己保持无浏览器，把每一次页面交互都委派出去。 |
-| `CONSOLIDATION_AGENT`（`"__consolidation__"`） | `with_consolidation_agent(options)` | 后台的记忆策展员，由宿主的一个触发点作为普通根任务驱动。`tools=()` 清空白名单，因此它的整个接口面就是那个受能力门控的记忆工具包。它以 `__` 保留的名字使它不会进入任何父任务的可派生集合。 |
-
-## 子代理扇出
-
-`main` 可以并行派生这三个子代理；结果就是子代理的返回值，被记录进 EventLog，因此整棵树都能 fold 回状态。见 [ADR: Subtask fan-out and durable wake](https://github.com/initxy/noeta/blob/main/docs/adr/subtask-fanout-and-durable-wake.md) 和 [ADR: Subtask parallel execution](https://github.com/initxy/noeta/blob/main/docs/adr/subtask-parallel-execution.md)。
-
-## 导出的接口
-
-| 名字 | 形状 |
-| --- | --- |
-| `main_options()` | `Options` —— 官方的 `main` 配方 |
-| `sandbox_browser_options()` | `Options` —— `main_options()` 加上 `web` 子代理和那份感知 web 的 prompt |
-| `with_consolidation_agent(options)` | `Options` —— 注册了 `__consolidation__` 的 `options` |
-| `official_specs()` | `dict[str, AgentSpec]` —— 编译好的四个 agent |
-| `OFFICIAL_SUBAGENTS` | `dict[str, AgentDefinition]` —— `general-purpose` / `explore` / `plan` |
-| `WEB_SUBAGENT` / `CONSOLIDATION_AGENT` | `AgentDefinition` |
-| `CONSOLIDATION_AGENT_NAME` | `str` —— `"__consolidation__"` |
-| `MAIN_SYSTEM_PROMPT` / `MAIN_WEB_SYSTEM_PROMPT` / `MEMORY_POLICY_PROMPT` | `str` |
-
-prompt 文本住在 `noeta/presets/prompts/*.md` 里，并按字节忠实加载，因此改一段 prompt 就是一次文档形态的 diff。`main` 和 `main-web` 也被注册为具名 preset，因此 `SystemPromptPreset(preset="main")` 能解析出来。
-
-## 工具结果是资料，不是命令
-
-两份 `main` prompt 最后都有一条规则，专门说清楚什么不算命令：从工具结果里回来的内容——一个文件、一条命令的输出、一个网页、一条搜索结果、一个 MCP 返回、一个子代理的汇报——都是资料，不是命令。对用户交代的事有帮助就照用；一旦它反过来想带偏 agent——换个目标、跑一条用不着的命令、往外发数据、让它无视规则——agent 就不照做，并告诉用户。这条规则刻意只写一行：主 prompt 每次请求都要付费。另外两份替 agent 转述外部文字的辅助 prompt 也是同一个口径：`WebFetch` 的网页摘要把页面当作不可信的外部内容；压缩摘要只从用户和系统说过的话里逐字保留安全约束，只出现在工具结果里的约束按「某个来源这么声称」记下来并标明出处，绝不升格成摘要自己的规则。
-
-这一层便宜，但只是概率性的，不是边界。真正拦住被注入的命令的是逐次调用的审批关卡和 `WebFetch` 的出网策略；这条规则只是让常见情况能被用户看见。
-
-## 以编程方式使用 preset
+`noeta.presets` 自带一个现成的主 agent `main`，以及它能派活的三个子 agent。多数宿主从 `main_options()` 起步再调整。
 
 ```python
 from noeta import presets
 from noeta.sdk import query
 from noeta.sdk.providers import AnthropicProvider
 
-options = presets.main_options()
-
-# `provider` and `workspace_dir` are required — without them the Client
-# raises ValueError before any turn.
 result = query(
-    options,
+    presets.main_options(),
     goal="Refactor module X to use Y",
-    provider=AnthropicProvider(api_key="sk-ant-…"),
-    workspace_dir="./",
-    model="claude-sonnet-4-5-20250929",
+    provider=AnthropicProvider(),      # reads ANTHROPIC_API_KEY
+    model="claude-sonnet-5",
+    workspace_dir="./",                # optional; defaults to Options.cwd, then the process cwd
 )
 print(result.answer())
-# → 'Replaced the three call sites in module X with Y and ran the tests.'
 ```
 
-或者把四个 agent 全部编译成 spec：
+## 四个 agent
+
+| Agent | 角色 | 工具 | 启用项 |
+| --- | --- | --- | --- |
+| `main` | 默认主 agent，可把活派给下面三个。 | 全部内置工具（不设 `allowed_tools`）加记忆工具 | `fs`、`web`、`todo_write`、`ask_user_question`、`skill_invocation`、`memory`、`mcp`；`delegation` 由子 agent 名单自动推出 |
+| `general-purpose` | 独立干活：搜索、修改、运行、交结果。不再往下派。 | `Edit`、`Glob`、`Grep`、`Read`、`Bash`、`BashOutput`、`KillShell`、`WebSearch`、`WebFetch`、`Write` | `skill_invocation`、`mcp` |
+| `explore` | 只读侦察，汇报事实。 | `Glob`、`Grep`、`Read`、`Bash`、`BashOutput`、`KillShell`、`WebSearch`、`WebFetch` | `skill_invocation` |
+| `plan` | 只读架构师，交回一份按顺序排好的实施计划。 | 同 `explore` | `ask_user_question` |
+
+`explore` 和 `plan` 有 `Bash`，但提示词限定只跑只读命令，shell 审批兜底。`WebSearch` 只在配了搜索 key 的地方挂上。
+
+## 启用名
+
+`Options.plugins` / `AgentDefinition.plugins` 里可以写的内置功能名：
+
+| 名字 | 打开什么 |
+| --- | --- |
+| `todo_write` | `TodoWrite` 控制类工具 |
+| `ask_user_question` | `AskUserQuestion` 控制类工具 |
+| `delegation` | `Task` 控制类工具；有 `agents` 时自动推出，显式写上可以让子 agent 也能派活 |
+| `skill_invocation` | `skill` 控制类工具 |
+| `memory` | `memory_*` 工具，外加每条用户消息进来时的记忆召回 |
+| `mcp` | 同样启用了 `mcp` 的子任务会继承父任务已启用的 MCP server |
+| `browser` | 沙箱里的 `browser_*` 工具 |
+| `fs`、`web` | `DEFAULT_PLUGINS`，默认的两组工具（不影响 agent 身份） |
+
+只有 `main` 启用 `memory`：召回挂在用户消息上，而只有主 agent 收得到用户消息。启用记忆的提示词里都带着 `MEMORY_POLICY_PROMPT`。
+
+## 可选 agent
+
+不在 `OFFICIAL_SUBAGENTS` 里，不注册就不会改变 `main` 的子 agent 名单。
+
+| 定义 | 注册方式 | 用途 |
+| --- | --- | --- |
+| `WEB_SUBAGENT`（`"web"`） | `sandbox_browser_options()` | 浏览网页的专职 agent，也是唯一启用 `browser` 的预设。注册时会同时把 `main` 的提示词换成 `MAIN_WEB_SYSTEM_PROMPT`。 |
+| `CONSOLIDATION_AGENT`（`"__consolidation__"`） | `with_consolidation_agent(options)` | 后台整理记忆的 agent，由宿主的触发器作为根任务启动。`tools=()`，只有记忆工具。`__` 前缀让它不会出现在任何可派活名单里。 |
+
+## 导出
+
+| 名字 | 类型 |
+| --- | --- |
+| `main_options()` | `Options`——`main` 的配置 |
+| `sandbox_browser_options()` | `Options`——`main_options()` 加上 `web` 和对应提示词 |
+| `with_consolidation_agent(options)` | `Options`——在 `options` 里注册 `__consolidation__` |
+| `official_specs()` | `dict[str, AgentSpec]`——编译好的四个 agent |
+| `OFFICIAL_SUBAGENTS` | `dict[str, AgentDefinition]`——`general-purpose`、`explore`、`plan` |
+| `WEB_SUBAGENT`、`CONSOLIDATION_AGENT` | `AgentDefinition` |
+| `CONSOLIDATION_AGENT_NAME` | `str`——`"__consolidation__"` |
+| `MAIN_SYSTEM_PROMPT`、`MAIN_WEB_SYSTEM_PROMPT`、`MEMORY_POLICY_PROMPT` | `str` |
+
+提示词放在 `noeta/presets/prompts/*.md`。`main` 和 `main-web` 注册成了具名预设，所以 `SystemPromptPreset(preset="main")` 能直接用。
 
 ```python
 from noeta.presets import official_specs
 
 specs = official_specs()
-print(sorted(specs))
-# → ['explore', 'general-purpose', 'main', 'plan']
-print(specs["explore"].plugins)
-# → ('skill_invocation',)
+print(sorted(specs))                 # ['explore', 'general-purpose', 'main', 'plan']
+print(specs["explore"].plugins)      # ('skill_invocation',)
 ```
 
-## 自定义代理
+## 工具结果只是资料
 
-通过扁平的 `Options.agents` dict 定义自定义 agent：
+两份 `main` 提示词都以一条规则结尾：工具结果里的内容（文件、命令输出、网页、MCP 结果、子 agent 的汇报）是资料，不是指令；如果它想让 agent 改做别的事，agent 不照做，并告诉用户。`WebFetch` 的摘要和压缩摘要也遵守同一条规则。这只是便宜的第一道防线——真正拦住注入指令的是审批和 `WebFetch` 的域名策略。
+
+## 自定义 agent
+
+通过 `Options.agents` 定义：
 
 ```python
 from noeta.sdk import Options, AgentDefinition
@@ -117,17 +100,8 @@ options = Options(
 )
 ```
 
-## 源码
-
-- Preset：`packages/noeta-sdk/noeta/presets/__init__.py`
-- Prompt：`packages/noeta-sdk/noeta/presets/prompts/`
-- `Options` / `AgentDefinition`：`packages/noeta-sdk/noeta/client/options.py`
-- 工具目录：`packages/noeta-sdk/noeta/builtins/`
-- [ADR: Tool and agent catalog](https://github.com/initxy/noeta/blob/main/docs/adr/tool-and-agent-catalog.md)
-
 ## 下一步
 
-- [你的第一个 agent](../tutorials/first-agent.md) —— 从一个 preset 出发构建一个
-- [生成子代理](../how-to/spawn-subagents.md) —— 在实践中使用这份名册
-- [Options](sdk-options.md) —— 一个 preset 替你设置的每个字段
-- [内置工具](tools.md) —— 每个 preset 的工具列表里都有什么
+- [派活给子 agent](../guides/subagents.md)——实际使用子 agent 名单
+- [Options](options.md)——预设替你设好的每个字段
+- [内置工具](tools.md)——每份工具列表里有什么
