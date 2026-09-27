@@ -23,7 +23,7 @@ from noeta.protocols.canonical import (
     from_canonical_bytes,
     to_canonical_bytes,
 )
-from noeta.protocols.content_store import ContentStore
+from noeta.protocols.content_store import ContentStore, content_ref_for
 from noeta.protocols.errors import (
     CATEGORY_FATAL,
     AbortedError,
@@ -175,8 +175,20 @@ def _walk_keys(value: Any) -> Iterator[Any]:
             yield from _walk_keys(v)
 
 
-def _put_request(cs: ContentStore, req: LLMRequest) -> ContentRef:
-    return cs.put(_serialize_request(req), media_type=_LLM_MEDIA_TYPE)
+def _request_ref(cs: ContentStore, req: LLMRequest, *, record: bool) -> ContentRef:
+    """The request's identity — and, only when ``record`` is on, its body.
+
+    The canonical request is the whole View: system prompt, tool schemas and
+    the entire history, different on every step, so storing it grows the
+    content store by the square of a task's length while nothing ever reads
+    it back (fold treats ``LLMRequestStarted`` as a no-op; the request is
+    derivable from folded state plus the composer). The hash is what a replay
+    or a derive-and-compare needs, so by default only the hash is minted.
+    """
+    body = _serialize_request(req)
+    if record:
+        return cs.put(body, media_type=_LLM_MEDIA_TYPE)
+    return content_ref_for(body, media_type=_LLM_MEDIA_TYPE)
 
 
 def _put_response(cs: ContentStore, resp: LLMResponse) -> ContentRef:
@@ -306,10 +318,16 @@ class RuntimeLLMClient:
         max_retries: int = _DEFAULT_MAX_RETRIES,
         sleep: Optional[Callable[[float], None]] = None,
         abandon_poll_seconds: float = _DEFAULT_ABANDON_POLL_SECONDS,
+        record_requests: bool = False,
     ) -> None:
         self._provider = provider
         self._event_log = event_log
         self._content_store = content_store
+        # ``record_requests`` stores each round-trip's full canonical request
+        # body behind ``request_ref``; off (the default) the ref carries the
+        # hash alone — see ``_request_ref``. A debugging aid: a content sweep
+        # treats a recorded request body as transient.
+        self._record_requests = record_requests
         self._id_factory = id_factory or _default_id_factory
         self._clock = clock or _default_clock
         # ``pricing(model, usage) -> USD`` is injected because the kernel
@@ -335,7 +353,9 @@ class RuntimeLLMClient:
         allow_stream: bool = True,
     ) -> LLMResponse:
         call_id = self._id_factory()
-        request_ref = _put_request(self._content_store, req)
+        request_ref = _request_ref(
+            self._content_store, req, record=self._record_requests
+        )
 
         # ``allow_stream=False`` is the per-call opt-out for round-trips that
         # are not user-facing output (the compaction summarize call). Sink

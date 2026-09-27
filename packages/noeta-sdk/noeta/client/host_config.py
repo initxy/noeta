@@ -342,6 +342,15 @@ class HostConfig:
     #: supplying both is a loud error, because the two would disagree about
     #: which store the session actually writes to.
     storage_path: Optional[str] = None
+    #: Store each model call's full canonical request body behind
+    #: ``LLMRequestStarted.request_ref``. Off by default: the request is the
+    #: whole View (system prompt, tool schemas, the entire history), different
+    #: on every step and derivable from folded state, so recording it grows
+    #: the content store by the square of a task's length while nothing reads
+    #: it back — the ref keeps the hash either way. A debugging aid for "what
+    #: exactly did the model see"; ``Client.collect_garbage`` treats the
+    #: recorded bodies as transient.
+    record_llm_requests: bool = False
     #: This client's worker queue over the (possibly shared) store: root tasks
     #: it seeds are born on this queue, children inherit it, and its resident
     #: worker pool claims ONLY it — so differently-configured clients sharing

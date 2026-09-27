@@ -15,7 +15,7 @@
 
 | 模块 | 名字 | 见 |
 | --- | --- | --- |
-| `noeta.sdk` | `query`、`QueryResult`、`Client`、`DriveOutcome`、`SeededTurn`、`TaskStatus`、`DeleteTaskResult`、`UsageReport`、`ModelUsage`、`DEFAULT_MODEL_ALLOWLIST`、`Principal`、`LOCAL_PRINCIPAL`、`NEXT_GOAL_WAKE_HANDLE`、各类错误 | 本页 |
+| `noeta.sdk` | `query`、`QueryResult`、`Client`、`DriveOutcome`、`SeededTurn`、`TaskStatus`、`DeleteTaskResult`、`CollectGarbageResult`、`UsageReport`、`ModelUsage`、`DEFAULT_MODEL_ALLOWLIST`、`Principal`、`LOCAL_PRINCIPAL`、`NEXT_GOAL_WAKE_HANDLE`、各类错误 | 本页 |
 | `noeta.sdk` | `WorkerLoop`、`ReliabilityEvent` | [WorkerLoop](worker-loop.md) |
 | `noeta.sdk` | `Options`、`AgentDefinition`、`SystemPromptPreset`、`compile_options`、`register_preset_prompt`、`BudgetSpec`、`HostConfig`、`HooksConfig`、`PreToolUseRule`、`MatchArg`、`PostToolUseRule`、`NotificationRule`、`PluginActivation`、`DEFAULT_PLUGINS`、`permission_modes`、`effort_modes`、`model_capabilities`，以及沙箱 / MCP / OTLP 的配置类型 | [Options](options.md) |
 | `noeta.sdk` | `tool`、`create_sdk_mcp_server`、扩展用的 Protocol、消息和事件类型、`as_messages`、`envelope_to_dict`、`resolve_tool_call_arguments`（取出工具调用事件的参数；参数单独存进 content store 时会去那里读） | [类型](types.md) |
@@ -23,7 +23,7 @@
 | `noeta.sdk` | `Reminder`、`ResidentActivation`、`RecallView`、`ReminderProvider`、`TURN_INTAKE` | [插件扩展点](plugin-surfaces.md) |
 | `noeta.sdk` | `run_consolidation`、`consolidation_due`、`build_consolidation_digest`、`SkillUsage`、`skill_usage_from_events`、`rank_skills_by_usage`、`decayed_usage_score` | [下文](#记忆与技能辅助函数) |
 | `noeta.sdk.providers` | `AnthropicProvider`、`OpenAICompatProvider`、`OpenAIResponsesProvider`、`CATALOG`、`ModelSpec`、`register_models`、`find_spec`、`catalog_models` | [接入模型](../guides/models.md) |
-| `noeta.sdk.storage` | `open_storage_stack`、`build_storage_stack`、`is_memory_path`、`is_postgres_url`，以及 Sqlite / Postgres 适配器 | [Options → 存储](options.md#存储) |
+| `noeta.sdk.storage` | `open_storage_stack`、`build_storage_stack`、`is_memory_path`、`is_postgres_url`、`collect_garbage`、`CollectGarbageResult`，以及 Sqlite / Postgres 适配器 | [Options → 存储](options.md#存储) |
 | `noeta.sdk.testing` | `FakeLLMProvider`、`FakeStreamingLLMProvider` | [类型 → 测试替身](types.md#测试替身) |
 | `noeta.presets`（也可以 `noeta.sdk.presets`） | 官方 agent | [Presets](presets.md) |
 
@@ -213,6 +213,7 @@ HTTP 请求线程不能一直等一整轮跑完。`seed_*` 在请求线程上把
 | `put_content(body, *, media_type)` | `ContentRef` | 存一段字节（比如上传的图片） |
 | `memory_root(task_id=None)` | `Path` | 这个任务用的记忆目录 |
 | `delete_task(task_id)` | `DeleteTaskResult` | 彻底删除任务和它的子任务：`{ok, task_id, deleted, reason?}`；正在跑返回 `reason="running"`，找不到返回 `"not_found"` |
+| `collect_garbage(*, grace_seconds=3600.0, vacuum=False)` | `CollectGarbageResult` | 删掉所有已经没有事件引用的内容块（已删任务的正文、被取代的旧快照、记录下来的模型请求），且只删比宽限期老的，所以任务在跑也能调。返回 `ok`、`live`、`swept`、`bytes_freed`、`vacuumed`、`reason?`（content store 没有 `sweep` 时为 `"unsupported"`）。`vacuum=True` 会顺带收缩 sqlite 文件，期间占住写锁；见[限制](../operations/limitations.md#内容只在你主动要求时回收) |
 
 ### worker 与收尾
 

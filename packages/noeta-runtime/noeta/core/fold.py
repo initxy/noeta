@@ -8,13 +8,14 @@ state: resume refolds the same prefix and has to reach the same content address.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from noeta.core.prefetch import prefetched
 from noeta.core.snapshot import deserialize_task_state, rehydrate_task
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.decisions import TaskStatePatch
+from noeta.protocols.errors import ContentNotFound
 from noeta.protocols.event_log import (
     SNAPSHOT_BASELINE_EVENT_TYPES,
     EventLogReader,
@@ -41,9 +42,26 @@ def fold(
     produces byte-equal state to the snapshot-accelerated fold.
     """
     snap = None if ignore_snapshots else event_log.find_latest_snapshot(task_id)
+    state_dict: Optional[dict[str, Any]] = None
     if snap is not None:
-        body = content_store.get(snap.payload.state_ref)
-        state_dict = deserialize_task_state(body)
+        try:
+            state_dict = deserialize_task_state(
+                content_store.get(snap.payload.state_ref)
+            )
+        except ContentNotFound:
+            # A ``TaskSnapshot`` body is an acceleration, and only the latest
+            # one per task survives a content sweep — a bounded fold (rewind,
+            # fork, step recovery) can land on a reclaimed one. The events are
+            # the truth, so rebuild from them; the re-base bodies a
+            # ``TaskRewound`` / ``StepAttemptAbandoned`` / ``TaskForked`` tail
+            # handler reads are never reclaimed and still raise if absent.
+            if snap.type != "TaskSnapshot":
+                raise
+            _log.debug(
+                "fold: snapshot body %s for task %s reclaimed; folding from scratch",
+                snap.payload.state_ref.hash, task_id,
+            )
+    if state_dict is not None and snap is not None:
         if _snapshot_is_legacy_for_issue18(state_dict):
             # This snapshot body predates the governance accumulation fields
             # fold relies on. Treating it as authoritative would let BudgetGuard

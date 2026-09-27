@@ -120,13 +120,13 @@ def test_default_off_no_mcp_in_schema(tmp_path: Path) -> None:
         responses=[_call("c1", "glob", {"pattern": "*"}), _end()],
         mcp_servers=(),
     )
-    out = driver.start(goal="use the mcp tool", agent="main", enabled_mcp=enabled)
-    import json
+    driver.start(goal="use the mcp tool", agent="main", enabled_mcp=enabled)
 
-    events = host.event_log.read(out.task_id)
-    first_req = next(e for e in events if e.type == "LLMRequestStarted")
-    body = host.content_store.get(first_req.payload.request_ref)
-    tools = json.loads(body.decode("utf-8")).get("tools", [])
+    # Request bodies are not stored by default; the fake provider keeps every
+    # request it was sent.
+    provider = host.provider
+    assert isinstance(provider, FakeLLMProvider)
+    tools = provider.received_requests[0].tools or []
     assert not any(
         t.get("function", {}).get("name", "").startswith("mcp__") for t in tools
     )

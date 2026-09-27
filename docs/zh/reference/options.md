@@ -150,8 +150,9 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 | `storage_path` | `str \| None` | `None` | sqlite 文件路径、`postgresql://` 连接串，或 `":memory:"`；空字符串报错。由它打开的存储会在 `shutdown()` 时关闭 |
 | `event_log`、`content_store`、`dispatcher` | 适配器 | `None` | 直接传存储对象；三个要么都给，要么都不给 |
 | `queue` | `str` | `"default"` | 共享存储时这个 client 的 worker 队列；它的 worker 只领这个队列的活 |
+| `record_llm_requests` | `bool` | `False` | 把每次模型调用的完整请求正文存到 `LLMRequestStarted.request_ref` 后面。关着时 ref 只带哈希：请求本来就能从状态推导出来，存下来会让存储按任务长度的平方增长。排查问题时才开；`Client.collect_garbage` 会把这些正文再删掉 |
 
-`storage_path` 和三个对象同时给，或三个只给了一部分，都会抛 `ValueError`。`noeta.sdk.storage.open_storage_stack(path)` 用一个字符串建出这三个对象；同一模块还导出 `build_storage_stack`、`is_memory_path`、`is_postgres_url` 以及 Sqlite / Postgres 适配器。
+`storage_path` 和三个对象同时给，或三个只给了一部分，都会抛 `ValueError`。`noeta.sdk.storage.open_storage_stack(path)` 用一个字符串建出这三个对象；同一模块还导出 `build_storage_stack`、`is_memory_path`、`is_postgres_url`、Sqlite / Postgres 适配器，以及 `collect_garbage`（见[限制 → 增长](../operations/limitations.md#内容只在你主动要求时回收)）。
 
 ### 模型调用与 MCP
 

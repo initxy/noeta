@@ -228,6 +228,7 @@ def test_ledger_identical_with_and_without_streaming() -> None:
             id_factory=lambda: "call-FIXED",
             clock=lambda: 0.0,
             delta_sink=delta_sink,
+            record_requests=True,
         )
         client.complete(_req(), _ctx())
         events = log.read("task-1")

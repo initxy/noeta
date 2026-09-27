@@ -15,7 +15,7 @@ Everything public is imported from `noeta.sdk`; this page covers the verbs that 
 
 | Import from | Names | Page |
 | --- | --- | --- |
-| `noeta.sdk` | `query`, `QueryResult`, `Client`, `DriveOutcome`, `SeededTurn`, `TaskStatus`, `DeleteTaskResult`, `UsageReport`, `ModelUsage`, `DEFAULT_MODEL_ALLOWLIST`, `Principal`, `LOCAL_PRINCIPAL`, `NEXT_GOAL_WAKE_HANDLE`, the errors | this page |
+| `noeta.sdk` | `query`, `QueryResult`, `Client`, `DriveOutcome`, `SeededTurn`, `TaskStatus`, `DeleteTaskResult`, `CollectGarbageResult`, `UsageReport`, `ModelUsage`, `DEFAULT_MODEL_ALLOWLIST`, `Principal`, `LOCAL_PRINCIPAL`, `NEXT_GOAL_WAKE_HANDLE`, the errors | this page |
 | `noeta.sdk` | `WorkerLoop`, `ReliabilityEvent` | [WorkerLoop](worker-loop.md) |
 | `noeta.sdk` | `Options`, `AgentDefinition`, `SystemPromptPreset`, `compile_options`, `register_preset_prompt`, `BudgetSpec`, `HostConfig`, `HooksConfig`, `PreToolUseRule`, `MatchArg`, `PostToolUseRule`, `NotificationRule`, `PluginActivation`, `DEFAULT_PLUGINS`, `permission_modes`, `effort_modes`, `model_capabilities`, sandbox / MCP / OTLP wiring types | [Options](options.md) |
 | `noeta.sdk` | `tool`, `create_sdk_mcp_server`, extension Protocols, message and event types, `as_messages`, `envelope_to_dict`, `resolve_tool_call_arguments` (a tool-call event's arguments, fetched from the content store when they were stored out of line) | [Types](types.md) |
@@ -23,7 +23,7 @@ Everything public is imported from `noeta.sdk`; this page covers the verbs that 
 | `noeta.sdk` | `Reminder`, `ResidentActivation`, `RecallView`, `ReminderProvider`, `TURN_INTAKE` | [Plugin surfaces](plugin-surfaces.md) |
 | `noeta.sdk` | `run_consolidation`, `consolidation_due`, `build_consolidation_digest`, `SkillUsage`, `skill_usage_from_events`, `rank_skills_by_usage`, `decayed_usage_score` | [below](#memory-and-skill-helpers) |
 | `noeta.sdk.providers` | `AnthropicProvider`, `OpenAICompatProvider`, `OpenAIResponsesProvider`, `CATALOG`, `ModelSpec`, `register_models`, `find_spec`, `catalog_models` | [Connect a model](../guides/models.md) |
-| `noeta.sdk.storage` | `open_storage_stack`, `build_storage_stack`, `is_memory_path`, `is_postgres_url`, the Sqlite / Postgres adapters | [Options → storage](options.md#storage) |
+| `noeta.sdk.storage` | `open_storage_stack`, `build_storage_stack`, `is_memory_path`, `is_postgres_url`, `collect_garbage`, `CollectGarbageResult`, the Sqlite / Postgres adapters | [Options → storage](options.md#storage) |
 | `noeta.sdk.testing` | `FakeLLMProvider`, `FakeStreamingLLMProvider` | [Types → test doubles](types.md#test-doubles) |
 | `noeta.presets` (also `noeta.sdk.presets`) | the official agents | [Presets](presets.md) |
 
@@ -213,6 +213,7 @@ Reads only; nothing is written.
 | `put_content(body, *, media_type)` | `ContentRef` | store bytes (for example an image upload) |
 | `memory_root(task_id=None)` | `Path` | the memory store this task resolves to |
 | `delete_task(task_id)` | `DeleteTaskResult` | hard-delete a task and its subtasks: `{ok, task_id, deleted, reason?}`; refuses with `reason="running"` or `"not_found"` |
+| `collect_garbage(*, grace_seconds=3600.0, vacuum=False)` | `CollectGarbageResult` | delete every content blob no event references any more (deleted tasks' bodies, superseded snapshots, recorded model requests), once it is older than the grace — safe while turns run. `ok`, `live`, `swept`, `bytes_freed`, `vacuumed`, `reason?` (`"unsupported"` for a content store without `sweep`). `vacuum=True` also shrinks a sqlite file, holding the write lock meanwhile; see [Limitations](../operations/limitations.md#content-is-reclaimed-only-when-you-ask) |
 
 ### Workers and lifecycle
 
