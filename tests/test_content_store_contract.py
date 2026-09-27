@@ -319,3 +319,124 @@ def test_sqlite_stored_row_records_first_put_media_type() -> None:
         assert rows[0]["media_type"] == "text/plain"
     finally:
         store.close()
+
+
+# ---------------------------------------------------------------------------
+# ``sweep`` — the maintenance affordance every built-in adapter carries
+# ---------------------------------------------------------------------------
+
+
+def _age_every_row(store) -> None:
+    """Push every row's last-put time to the epoch so a grace of any length
+    treats it as old — the backend's private clock, not the wall clock."""
+    if isinstance(store, InMemoryContentStore):
+        for hash_ in store._touched:
+            store._touched[hash_] = 0.0
+    else:
+        store._conn.execute("UPDATE content SET touched_at = 0")
+
+
+def test_content_ref_for_mints_the_ref_put_returns(make_store) -> None:
+    from noeta.protocols.content_store import content_ref_for
+
+    store = make_store()
+    body = b"identity without storage"
+    assert store.put(body, media_type="text/plain") == content_ref_for(
+        body, media_type="text/plain"
+    )
+
+
+def test_sweep_reclaims_only_unreferenced_rows_older_than_the_grace(
+    make_store,
+) -> None:
+    store = make_store()
+    live = store.put(b"still referenced", media_type="text/plain")
+    dead = store.put(b"orphaned long ago", media_type="text/plain")
+    _age_every_row(store)
+
+    outcome = store.sweep({live.hash}, grace_seconds=3600.0)
+
+    assert (outcome.rows, outcome.bytes) == (1, dead.size)
+    assert store.get(live) == b"still referenced"
+    with pytest.raises(ContentNotFound):
+        store.get(dead)
+    assert store.get_many([live, dead]) == {live.hash: b"still referenced"}
+
+
+def test_sweep_keeps_an_unreferenced_row_inside_the_grace(make_store) -> None:
+    store = make_store()
+    fresh = store.put(b"just written by a running turn", media_type="text/plain")
+
+    outcome = store.sweep(set(), grace_seconds=3600.0)
+
+    assert (outcome.rows, outcome.bytes) == (0, 0)
+    assert store.get(fresh) == b"just written by a running turn"
+
+
+def test_sweep_treats_a_dedup_put_as_a_fresh_write(make_store) -> None:
+    """A body re-``put`` after it aged — the dedup hit a live turn makes on a
+    row an earlier task left behind — is as young as that put."""
+    store = make_store()
+    ref = store.put(b"shared across tasks", media_type="text/plain")
+    _age_every_row(store)
+    assert store.put(b"shared across tasks", media_type="text/plain") == ref
+
+    outcome = store.sweep(set(), grace_seconds=3600.0)
+
+    assert outcome.rows == 0
+    assert store.get(ref) == b"shared across tasks"
+
+
+def test_sweep_with_nothing_to_do_reports_zero(make_store) -> None:
+    store = make_store()
+    outcome = store.sweep(set(), grace_seconds=0.0)
+    assert (outcome.rows, outcome.bytes) == (0, 0)
+
+
+def test_sweep_vacuum_flag_reports_what_the_backend_did(make_store) -> None:
+    store = make_store()
+    outcome = store.sweep(set(), grace_seconds=0.0, vacuum=True)
+    # The in-memory store has no file to compact; the durable ones do.
+    assert outcome.vacuumed is not isinstance(store, InMemoryContentStore)
+
+
+def test_sqlite_sweep_reevaluates_the_age_under_its_own_lock() -> None:
+    """The DELETE re-checks ``touched_at`` — a row the candidate listing saw
+    as old but a ``put`` refreshed before the DELETE ran is kept."""
+    clock = [1_000.0]
+    store = SqliteContentStore(":memory:", clock=lambda: clock[0])
+    try:
+        ref = store.put(b"raced", media_type="text/plain")
+        clock[0] = 5_000.0
+        real = store._conn
+
+        class _RacingConnection:
+            """The adapter's connection, with a turn's re-put wedged in right
+            after the sweep lists its candidates."""
+
+            def execute(self, sql, *args):
+                cursor = real.execute(sql, *args)
+                if sql.startswith("SELECT hash, size FROM content"):
+                    rows = cursor.fetchall()
+                    real.execute(
+                        "UPDATE content SET touched_at = ? WHERE hash = ?",
+                        (clock[0], ref.hash),
+                    )
+
+                    class _Listed:
+                        def fetchall(self_inner):
+                            return rows
+
+                    return _Listed()
+                return cursor
+
+            def close(self):
+                real.close()
+
+        store._conn = _RacingConnection()  # type: ignore[assignment]
+        outcome = store.sweep(set(), grace_seconds=100.0)
+        assert (outcome.rows, outcome.bytes) == (0, 0)
+        store._conn = real
+        assert store.get(ref) == b"raced"
+    finally:
+        store.close()

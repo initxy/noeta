@@ -180,8 +180,13 @@ def _engine_and_run(*, tool_output_inline_limit: int | None, tool_size: int = 20
             ),
         ]
     )
+    # Recording on: (c) below reads the request the model saw back from the
+    # store rather than from the fake provider.
     llm = RuntimeLLMClient(
-        provider=provider, event_log=event_log, content_store=content_store
+        provider=provider,
+        event_log=event_log,
+        content_store=content_store,
+        record_requests=True,
     )
     policy = policy_fn(llm)
     composer = ThreeSegmentComposer(

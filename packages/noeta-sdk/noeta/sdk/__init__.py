@@ -18,6 +18,7 @@ from noeta.client.capabilities import (
 from noeta.client.client import (
     DEFAULT_MODEL_ALLOWLIST,
     Client,
+    CollectGarbageResult,
     DeleteTaskResult,
     QueryFailedError,
     QueryResult,
@@ -244,10 +245,12 @@ __all__ = [
     "query",
     "QueryResult",
     # what the Client verbs hand back: every command returns a DriveOutcome,
-    # every seed_* a SeededTurn, delete_task a DeleteTaskResult
+    # every seed_* a SeededTurn, delete_task a DeleteTaskResult,
+    # collect_garbage a CollectGarbageResult
     "DriveOutcome",
     "SeededTurn",
     "DeleteTaskResult",
+    "CollectGarbageResult",
     # the read-only twin of a DriveOutcome: where a task rests, without driving
     "TaskStatus",
     # what Client.usage / QueryResult.usage return: per-model cost and tokens,

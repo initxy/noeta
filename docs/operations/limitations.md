@@ -100,14 +100,26 @@ faults, see [troubleshooting](troubleshooting.md).
 - **Workaround:** register a `ModelSpec` via `HostConfig(extra_models={...})` or
   `register_models` from `noeta.sdk.providers`.
 
-### Content is never garbage-collected
+### Content is reclaimed only when you ask
 
-- **Boundary:** the content store is content-addressed and append-only; no GC ships.
-  `Client.delete_task` purges a task tree's events and dispatcher state but keeps the
-  blobs, which may be shared by hash with other tasks. It refuses with
-  `reason="running"` while any task in the tree holds a live lease.
-- **Workaround:** size storage for retention, or write an offline sweep that walks the
-  remaining streams' refs.
+- **Boundary:** nothing sweeps the content store on its own. `Client.delete_task`
+  purges a task tree's events and dispatcher state but leaves the blobs, which may be
+  shared by hash with other tasks (it refuses with `reason="running"` while any task in
+  the tree holds a live lease). Superseded `TaskSnapshot` bodies — one per turn, each the
+  whole task state — stay on disk until swept too. Model requests are the one thing that
+  is never stored: `LLMRequestStarted.request_ref` carries the hash of the request the
+  model saw, but the body behind it is written only with
+  `HostConfig(record_llm_requests=True)`, and a sweep drops it again.
+- **Workaround:** call `Client.collect_garbage(grace_seconds=3600.0, vacuum=False)` from
+  your own schedule (a nightly job, a health check). It keeps every blob some event still
+  references, directly or through another blob, and deletes the rest once it is older than
+  the grace — so it is safe while turns are running. `vacuum=True` shrinks a sqlite file
+  afterwards but holds the write lock for the whole rewrite; run that in a quiet window.
+  On Postgres it runs a plain `VACUUM content` (space reused, not returned; `VACUUM FULL`
+  is yours to schedule). Without a `Client`, `noeta.sdk.storage.collect_garbage(event_log,
+  content_store, ...)` does the same over a stack you opened yourself. Storage you plugged
+  in from elsewhere needs a `sweep` method on its content store, or the call reports
+  `reason="unsupported"`.
 
 ## Sandbox
 

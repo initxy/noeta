@@ -383,3 +383,53 @@ def test_concurrent_apply_migrations_safe(tmp_path):
         assert _user_version(conn) == SCHEMA_VERSION
     finally:
         conn.close()
+
+
+def test_migration_v11_db_upgrades_to_v12_with_null_touched_at(tmp_path, monkeypatch):
+    """A content row written before migration 12 upgrades with a NULL
+    ``touched_at`` (which a sweep treats as old), the candidate index exists,
+    and the row stays readable through the adapter."""
+    from noeta.protocols.values import ContentRef
+    from noeta.builtins.storage.impl.sqlite.contentstore import SqliteContentStore
+
+    db = tmp_path / "noeta.db"
+    body = b"legacy body"
+    digest = __import__("hashlib").sha256(body).hexdigest()
+
+    v11_only = [m for m in MIGRATIONS if m.version <= 11]
+    monkeypatch.setattr(migrations_module, "MIGRATIONS", v11_only)
+    conn = _open_connection(db)
+    try:
+        apply_migrations(conn)
+        assert _user_version(conn) == 11
+        conn.execute(
+            "INSERT INTO content (hash, size, media_type, body) VALUES (?, ?, ?, ?)",
+            (digest, len(body), "text/plain", body),
+        )
+    finally:
+        conn.close()
+
+    monkeypatch.undo()
+    store = SqliteContentStore(db)
+    try:
+        assert _user_version(store._conn) == SCHEMA_VERSION
+        row = store._conn.execute(
+            "SELECT touched_at FROM content WHERE hash = ?", (digest,)
+        ).fetchone()
+        assert row["touched_at"] is None
+        indexes = {
+            r[0]
+            for r in store._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            ).fetchall()
+        }
+        assert "ix_content_touched_at" in indexes
+        ref = ContentRef(hash=digest, size=len(body), media_type="text/plain")
+        assert store.get(ref) == body
+
+        # NULL is "as old as it gets": a generous grace still reclaims it
+        # once nothing references it.
+        outcome = store.sweep(set(), grace_seconds=86_400.0)
+        assert (outcome.rows, outcome.bytes) == (1, len(body))
+    finally:
+        store.close()

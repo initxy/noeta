@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict
-from typing import Iterable
+from typing import Collection, Iterable
 
-from noeta.protocols.content_store import ContentStore
+from noeta.protocols.content_store import ContentStore, SweepOutcome
 from noeta.protocols.values import ContentRef
 
 
@@ -72,6 +72,30 @@ class CachedContentStore:
         # of the same tail.
         self._admit(ref.hash, body)
         return ref
+
+    def sweep(
+        self,
+        live: Collection[str],
+        *,
+        grace_seconds: float,
+        vacuum: bool = False,
+    ) -> SweepOutcome:
+        """Forward the maintenance sweep to the inner store, then drop the
+        whole cache: the reclaimed hashes are not reported individually, and a
+        stale hit here would serve a body the store no longer has. Raises
+        ``NotImplementedError`` when the inner store has no ``sweep``."""
+        inner_sweep = getattr(self._inner, "sweep", None)
+        if inner_sweep is None:
+            raise NotImplementedError(
+                f"{type(self._inner).__name__} does not support sweep"
+            )
+        outcome: SweepOutcome = inner_sweep(
+            live, grace_seconds=grace_seconds, vacuum=vacuum
+        )
+        with self._lock:
+            self._cache.clear()
+            self._bytes = 0
+        return outcome
 
     def get(self, ref: ContentRef) -> bytes:
         hit = self._take(ref.hash)

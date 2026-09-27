@@ -399,8 +399,8 @@ class SqliteEventLog:
         deliberately NOT on the L0 ``EventLog`` Protocols: the record/fold path
         is append-only and never deletes. ``content`` blobs the events
         referenced are left untouched because that table is addressed by hash
-        and shared across tasks, so reclaiming orphans is a separate offline GC
-        concern.
+        and shared across tasks; the content sweep (``noeta.storage.gc``)
+        reclaims the orphans on the host's schedule.
 
         Returns ``True`` iff at least one ``events`` row was removed.
         """

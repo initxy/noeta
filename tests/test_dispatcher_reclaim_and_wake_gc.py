@@ -303,6 +303,12 @@ def test_migration_6_reclaim_count_backfills_zero(tmp_path) -> None:
         "CREATE INDEX ix_events_snapshot ON events (task_id, seq DESC) "
         "WHERE type = 'TaskSnapshot'"
     )
+    # ...and the content table from migration 2, which migration 12 alters.
+    bootstrap.execute(
+        "CREATE TABLE content ("
+        " hash TEXT NOT NULL, size INTEGER NOT NULL, media_type TEXT NOT NULL,"
+        " body BLOB NOT NULL, PRIMARY KEY (hash)) WITHOUT ROWID"
+    )
     bootstrap.execute("PRAGMA user_version = 3")
     bootstrap.commit()
     bootstrap.close()

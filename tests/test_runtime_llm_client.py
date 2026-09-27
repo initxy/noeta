@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from noeta.protocols.canonical import from_canonical_bytes, to_canonical_bytes
+from noeta.protocols.errors import ContentNotFound
 from noeta.protocols.messages import (
     LLMRequest,
     LLMResponse,
@@ -84,7 +85,7 @@ def test_normal_client_emits_three_events_on_success() -> None:
     cs = InMemoryContentStore()
     provider = FakeLLMProvider(responses=[_ok_response("hello")])
     client = RuntimeLLMClient(
-        provider=provider, event_log=log, content_store=cs
+        provider=provider, event_log=log, content_store=cs, record_requests=True
     )
 
     resp = client.complete(_req(), _ctx())
@@ -115,6 +116,43 @@ def test_normal_client_emits_three_events_on_success() -> None:
     resp_body = cs.get(recorded.payload.response_ref)
     rebuilt_resp = from_canonical_bytes(resp_body)
     assert rebuilt_resp["stop_reason"] == "end_turn"
+
+
+def test_request_body_is_not_stored_by_default_but_ref_keeps_its_identity() -> None:
+    """The default client mints ``request_ref`` from the canonical request
+    bytes without storing them: the hash is the same one a recording client
+    writes, so replay identity and derive-and-compare are unchanged, while the
+    content store no longer grows by the whole View on every call."""
+    from noeta.protocols.content_store import content_ref_for
+    from noeta.runtime.llm import RuntimeLLMClient
+
+    log = InMemoryEventLog()
+    cs = InMemoryContentStore()
+    client = RuntimeLLMClient(
+        provider=FakeLLMProvider(responses=[_ok_response("hello")]),
+        event_log=log,
+        content_store=cs,
+    )
+    client.complete(_req(), _ctx())
+
+    started = log.read("task-1")[0]
+    ref = started.payload.request_ref
+    assert ref == content_ref_for(
+        to_canonical_bytes(_req()), media_type="application/json"
+    )
+    with pytest.raises(ContentNotFound):
+        cs.get(ref)
+    # The response body is still recorded — it is small and fold reads it.
+    cs.get(log.read("task-1")[1].payload.response_ref)
+
+    recording_log = InMemoryEventLog()
+    RuntimeLLMClient(
+        provider=FakeLLMProvider(responses=[_ok_response("hello")]),
+        event_log=recording_log,
+        content_store=InMemoryContentStore(),
+        record_requests=True,
+    ).complete(_req(), _ctx())
+    assert recording_log.read("task-1")[0].payload.request_ref == ref
 
 
 def test_normal_client_uses_injected_id_factory_for_call_id() -> None:
@@ -204,6 +242,7 @@ def test_normal_client_passes_task_id_provider_headers_without_changing_request(
         provider=provider,
         event_log=log,
         content_store=cs,
+        record_requests=True,
         provider_headers=lambda ctx: {
             "extra": f'{{"root_task_id":"{ctx.task_id}"}}',
             "X-TT-logid": ctx.task_id,
@@ -614,7 +653,7 @@ def openai_normal_recording() -> tuple[
         )
         provider = OpenAICompatProvider(base_url=base_url, api_key="sk-test")
         client = RuntimeLLMClient(
-            provider=provider, event_log=log, content_store=cs
+            provider=provider, event_log=log, content_store=cs, record_requests=True
         )
         resp = client.complete(req, _ctx())
 

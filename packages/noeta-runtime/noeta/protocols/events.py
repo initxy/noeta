@@ -877,10 +877,14 @@ class LLMRequestStartedPayload:
     """Marks the start of an LLM round-trip.
 
     ``request_ref`` is the ContentStore hash of the canonicalized View
-    that was sent (body lives in ContentStore so the 4-KB envelope cap
-    is respected). ``model`` is the model id (e.g.
-    ``claude-opus-4-7``); ``input_tokens`` is the adapter's pre-call
-    token count (or 0 if unknown).
+    that was sent — the call's replay identity. The body behind it is
+    stored only when the runtime client records requests
+    (``RuntimeLLMClient(record_requests=True)``); by default the ref is
+    minted without storing, because the request is derivable from folded
+    state and nothing reads it back, and a content sweep never retains
+    one. ``model`` is the model id (e.g. ``claude-opus-4-7``);
+    ``input_tokens`` is the adapter's pre-call token count (or 0 if
+    unknown).
 
     ``selection`` (MS1) is the policy's message-selection provenance for
     this round-trip — counts + truncation strategy. Defaulted ``None`` so

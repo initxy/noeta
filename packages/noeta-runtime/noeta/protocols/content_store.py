@@ -6,16 +6,50 @@ tool outputs, snapshot bodies, provider documents). The surface stays at
 ``put`` + ``get`` + ``get_many`` — deletion is a GC concern that belongs to the
 adapter, existence is implicit in ``get`` raising ``ContentNotFound``, and
 listing is a debug helper.
+
+Reclaiming is a maintenance affordance outside the Protocol: an adapter that
+supports it exposes ``sweep(live, *, grace_seconds, vacuum)`` (see
+:mod:`noeta.storage.gc`), the way the event log exposes ``purge_task``. The
+Protocol itself only promises that a body outside the fold / resume window
+*may* be gone, which is why ``get_many`` omits rather than raises.
 """
 
 from __future__ import annotations
 
+import hashlib
+from dataclasses import dataclass
 from typing import Iterable, Protocol
 
 from noeta.protocols.values import ContentRef
 
 
-__all__ = ["ContentStore"]
+__all__ = ["ContentStore", "SweepOutcome", "content_ref_for"]
+
+
+@dataclass(frozen=True, slots=True)
+class SweepOutcome:
+    """What one ``sweep`` reclaimed: rows and bytes deleted, and whether the
+    backend also compacted its file (``vacuum`` requested *and* the backend has
+    something to compact — the in-memory store never does)."""
+
+    rows: int
+    bytes: int
+    vacuumed: bool
+
+
+def content_ref_for(body: bytes, *, media_type: str) -> ContentRef:
+    """The :class:`ContentRef` a ``put`` of ``body`` would mint, without storing.
+
+    The one home of the hash rule (hex SHA-256, ``size == len(body)``): every
+    built-in adapter mints its refs through it, and a caller that wants a
+    body's identity without retaining the body — the LLM request a round-trip
+    is keyed by — calls it directly.
+    """
+    return ContentRef(
+        hash=hashlib.sha256(body).hexdigest(),
+        size=len(body),
+        media_type=media_type,
+    )
 
 
 class ContentStore(Protocol):

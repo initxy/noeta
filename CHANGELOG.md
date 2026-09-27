@@ -8,6 +8,54 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+Content-store retention (`noeta-runtime` + `noeta-sdk`). A host reported a
+8.7 GB `tasks.sqlite` after 14 days; reproduced: every model call stored the
+whole request (system prompt, tool schemas, the entire history — 82–88 % of
+the store, growing with the square of a task's length) and nothing ever
+reclaimed anything. Spec:
+`docs/implementation-specs/2026-09-27-content-store-retention.md`.
+
+### Changed — defaults (`noeta-runtime`)
+
+- **A model call no longer stores its request body.** `RuntimeLLMClient` mints
+  `LLMRequestStarted.request_ref` from the canonical request bytes without
+  writing them (`noeta.protocols.content_store.content_ref_for`): the hash —
+  the call's replay identity — is unchanged, the body is gone. Nothing read
+  it back (fold treats the event as a no-op; usage and audit use the ref's
+  metadata), and the request is derivable from folded state plus the
+  composer. `RuntimeLLMClient(record_requests=True)` /
+  `HostConfig(record_llm_requests=True)` restore the old behaviour for a
+  debugging session; a sweep treats those bodies as transient. Tests that
+  read the request back use `FakeLLMProvider.received_requests` or the flag.
+- **`fold` survives a reclaimed `TaskSnapshot` body** by folding from scratch
+  (debug-logged). The re-base bodies behind `TaskRewound` /
+  `StepAttemptAbandoned` / `TaskForked` are still required.
+
+### Added (`noeta-sdk`, `noeta-runtime`)
+
+- **`Client.collect_garbage(*, grace_seconds=3600.0, vacuum=False)`** —
+  mark-and-sweep over the content store (`noeta.storage.gc`; also
+  `noeta.sdk.storage.collect_garbage(event_log, content_store, ...)` over a
+  stack opened without a `Client`). Keeps every blob some event references,
+  directly or through another blob; reclaims what `delete_task` left behind,
+  every `TaskSnapshot` body but a task's latest, and recorded request bodies.
+  Only rows older than the grace are candidates, so the call is safe while
+  turns run. `vacuum=True` compacts a sqlite file afterwards (holds the write
+  lock for the rewrite — a quiet-window call) or runs `VACUUM content` on
+  Postgres. Returns `CollectGarbageResult` (`ok`, `live`, `swept`,
+  `bytes_freed`, `vacuumed`, `reason?`); a content store without a `sweep`
+  method reports `reason="unsupported"`.
+- **`sweep(live, *, grace_seconds, vacuum)`** on `SqliteContentStore`,
+  `PostgresContentStore`, `InMemoryContentStore` and the `CachedContentStore`
+  wrapper (which forwards and drops its cache), returning `SweepOutcome`.
+  **Schema migration** — sqlite 12 / Postgres 7: `content.touched_at`
+  (stamped by every `put`, including a dedup hit; NULL on rows written
+  before, which a sweep treats as old) plus a covering index
+  `(touched_at, size)`. The sqlite `put` is now an upsert (needs sqlite ≥
+  3.24, 2018). The first open of a large existing file builds the index once.
+- `docs/operations/limitations.md`: "Content is never garbage-collected" is
+  replaced by how to schedule the sweep.
+
 ## [0.6.31] - 2026-09-25
 
 Covers both packages, lockstep — 0.6.30 → 0.6.31 for `noeta-runtime` and

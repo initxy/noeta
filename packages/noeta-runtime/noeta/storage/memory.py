@@ -10,16 +10,19 @@ backend ships.
 
 from __future__ import annotations
 
-import hashlib
 import threading
 import time
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Collection, Iterable
 
 from noeta.protocols.canonical import to_canonical_bytes
-from noeta.protocols.content_store import ContentStore
+from noeta.protocols.content_store import (
+    ContentStore,
+    SweepOutcome,
+    content_ref_for,
+)
 from noeta.protocols.dispatcher import (
     DEFAULT_QUEUE,
     Dispatcher,
@@ -63,19 +66,51 @@ MAX_PAYLOAD_BYTES = EVENT_PAYLOAD_MAX_BYTES
 
 
 class InMemoryContentStore:
-    """Content-addressed, immutable, dedup-by-hash blob store (in-memory)."""
+    """Content-addressed, immutable, dedup-by-hash blob store (in-memory).
 
-    def __init__(self) -> None:
+    Also the reference for the ``sweep`` maintenance affordance the durable
+    adapters implement: every ``put`` — a fresh body or a dedup hit — stamps
+    the hash's ``touched`` time, and a sweep removes only the hashes that are
+    both unreferenced *and* older than the grace, so a body a running turn
+    just re-used can never be reclaimed under it.
+    """
+
+    def __init__(self, *, clock: Callable[[], float] = time.time) -> None:
         self._blobs: dict[str, bytes] = {}
+        self._touched: dict[str, float] = {}
+        self._clock = clock
         self._lock = threading.Lock()
 
     def put(self, body: bytes, *, media_type: str) -> ContentRef:
-        digest = hashlib.sha256(body).hexdigest()
+        ref = content_ref_for(body, media_type=media_type)
         with self._lock:
             # Content-addressed and immutable: an identical hash is an
-            # identical body, so an existing entry is never overwritten.
-            self._blobs.setdefault(digest, body)
-        return ContentRef(hash=digest, size=len(body), media_type=media_type)
+            # identical body, so an existing entry is never overwritten —
+            # only its touched time moves.
+            self._blobs.setdefault(ref.hash, body)
+            self._touched[ref.hash] = self._clock()
+        return ref
+
+    def sweep(
+        self,
+        live: Collection[str],
+        *,
+        grace_seconds: float,
+        vacuum: bool = False,  # noqa: ARG002 — nothing to compact in memory
+    ) -> SweepOutcome:
+        """Delete every body whose hash is not in ``live`` and whose last
+        ``put`` is older than ``grace_seconds``."""
+        cutoff = self._clock() - grace_seconds
+        rows = 0
+        freed = 0
+        with self._lock:
+            for hash_ in [h for h in self._blobs if h not in live]:
+                if self._touched.get(hash_, 0.0) >= cutoff:
+                    continue
+                freed += len(self._blobs.pop(hash_))
+                self._touched.pop(hash_, None)
+                rows += 1
+        return SweepOutcome(rows=rows, bytes=freed, vacuumed=False)
 
     def get(self, ref: ContentRef) -> bytes:
         try:

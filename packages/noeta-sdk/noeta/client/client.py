@@ -52,6 +52,7 @@ from noeta.execution.driver import DriveOutcome, SeededTurn
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.errors import CodedError
+from noeta.storage.gc import CollectGarbageResult, collect_garbage
 from noeta.protocols.event_log import EventLogFull, TaskStreamSummary
 from noeta.protocols.wake import (
     NEXT_GOAL_WAKE_HANDLE,
@@ -101,6 +102,7 @@ _log = logging.getLogger(__name__)
 
 __all__ = [
     "Client",
+    "CollectGarbageResult",
     "DeleteTaskResult",
     "QueryFailedError",
     "QueryResult",
@@ -742,6 +744,9 @@ class Client:
             # supplies its own directory / clock context turns it off through
             # HostConfig.
             environment_enabled=hc.environment_enabled,
+            # Full request bodies per model call: off by default (they are
+            # derivable and grow quadratically); a debugging opt-in.
+            record_llm_requests=hc.record_llm_requests,
             # Workspace instruction files: the root NOETA.md / AGENTS.md at
             # session start, and the subdirectory files discovered as the model
             # reads (anchored-content placement ADR). Both off by default; a
@@ -1736,6 +1741,29 @@ class Client:
         log = self._host.event_log
         return list_task_summaries(log, log, self._host.content_store)
 
+    def collect_garbage(
+        self, *, grace_seconds: float = 3600.0, vacuum: bool = False
+    ) -> CollectGarbageResult:
+        """Reclaim content no event references any more.
+
+        Mark-and-sweep over this client's storage (:mod:`noeta.storage.gc`):
+        every body some event still points at, directly or through another
+        body, stays; LLM request bodies (never retained) and a task's
+        superseded ``TaskSnapshot`` bodies go, and so does everything a
+        :meth:`delete_task` left behind. Only bodies older than
+        ``grace_seconds`` are candidates, which is what makes the call safe
+        while turns are running. ``vacuum=True`` also compacts the file —
+        on sqlite that rewrites the database under the write lock, so call
+        it in a quiet window. A storage backend without a sweep reports
+        ``ok=False, reason="unsupported"``.
+        """
+        return collect_garbage(
+            self._host.event_log,
+            self._host.content_store,
+            grace_seconds=grace_seconds,
+            vacuum=vacuum,
+        )
+
     def delete_task(self, task_id: str) -> DeleteTaskResult:
         """Hard-delete a task and its subtask tree from storage.
 
@@ -1744,9 +1772,10 @@ class Client:
         tree (a subtask rides its root). Refuses with ``reason="running"`` when a
         worker is actively running any task in the tree (the purge never races an
         in-flight turn) and ``reason="not_found"`` when the root is unknown.
-        Hash-addressed content blobs are shared across tasks and left for offline
-        GC — never touched here. Returns a typed result the caller maps onto a
-        status: ``{"ok", "reason"?, "task_id", "deleted": [...]}``.
+        Hash-addressed content blobs are shared across tasks and never touched
+        here; :meth:`collect_garbage` reclaims the ones nothing references any
+        more. Returns a typed result the caller maps onto a status:
+        ``{"ok", "reason"?, "task_id", "deleted": [...]}``.
         """
         event_log = self._host.event_log
         dispatcher = self._host.dispatcher

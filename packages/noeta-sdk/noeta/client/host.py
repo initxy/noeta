@@ -601,6 +601,10 @@ class SdkHost(GenericEngineResolver):
     #: start and renders it as the first semi-stable message; False wires no
     #: environment pack at all — nothing recorded, nothing rendered.
     environment_enabled: bool = True
+    #: Forwarded to ``RuntimeLLMClient(record_requests=...)``: store each model
+    #: call's full request body, or (default) mint ``request_ref`` from the
+    #: bytes without keeping them. See ``HostConfig.record_llm_requests``.
+    record_llm_requests: bool = False
     #: Project-instructions-file switch. Like memory, this is workspace environment
     #: material (not agent identity), so the activation tuple carries no flag and
     #: SdkHost configures it directly. When True, looks for NOETA.md → AGENTS.md in
@@ -2247,6 +2251,7 @@ class SdkHost(GenericEngineResolver):
             pricing=_catalog_pricing,
             provider_headers=self.provider_headers,
             delta_sink=self.delta_sink,
+            record_requests=self.record_llm_requests,
         )
         policy: Policy = inputs.policy_factory(llm)
         if policy_wrapper is not None:

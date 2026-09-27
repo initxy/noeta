@@ -26,10 +26,16 @@ from noeta.client.storage_resolve import (
     is_postgres_url,
     open_storage_stack,
 )
+# Reclaiming without a ``Client``: a host that opened a stack itself (an
+# offline sweep, a doctor) hands the pair straight to the same mark-and-sweep
+# ``Client.collect_garbage`` runs.
+from noeta.storage.gc import CollectGarbageResult, collect_garbage
 
 
 __all__ = [
+    "CollectGarbageResult",
     "build_storage_stack",
+    "collect_garbage",
     "is_memory_path",
     "is_postgres_url",
     "open_storage_stack",

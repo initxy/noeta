@@ -55,10 +55,10 @@
 - **限制：** 不认识的模型按 128,000 token 窗口、16,384 token 输出上限处理（压缩照常开启，但可能压得偏早），价格按 `0.0` 算，所以 `GovernanceState.cost` 一直是 0，`max_cost_usd` 永远不会触发。每项在日志里提示一次。
 - **办法：** 通过 `HostConfig(extra_models={...})` 或 `noeta.sdk.providers` 的 `register_models` 注册一条 `ModelSpec`。
 
-### 内容永远不会被回收
+### 内容只在你主动要求时回收
 
-- **限制：** 内容存储按哈希寻址、只增不删，没有垃圾回收。`Client.delete_task` 会删掉整棵任务树的事件和调度状态，但保留内容块，因为它们可能按哈希被别的 Task 共用。树里还有 Task 持有租约时，它会返回 `reason="running"` 拒绝删除。
-- **办法：** 按保留期规划存储容量，或自己写一个离线清理脚本，遍历剩余事件流引用到的内容。
+- **限制：** 内容存储不会自己清理。`Client.delete_task` 会删掉整棵任务树的事件和调度状态，但保留内容块，因为它们可能按哈希被别的 Task 共用（树里还有 Task 持有租约时，它会返回 `reason="running"` 拒绝删除）。被新快照取代的旧 `TaskSnapshot` 正文（每轮一份，每份都是完整任务状态）也会一直留在盘上，直到有人清。唯一从来不落盘的是发给模型的请求：`LLMRequestStarted.request_ref` 只记模型看到的那份请求的哈希，正文只有在 `HostConfig(record_llm_requests=True)` 时才写，而且清理时会一并删掉。
+- **办法：** 按你自己的节奏（每晚一次的定时任务、健康检查里）调 `Client.collect_garbage(grace_seconds=3600.0, vacuum=False)`。它会保留所有还有事件引用的内容（直接引用或经由别的内容间接引用），其余的只要比宽限期老就删，所以任务正在跑也能安全调用。`vacuum=True` 会在删完后收缩 sqlite 文件，但整个重写期间会占住写锁，放到空闲时段跑。Postgres 上跑的是普通的 `VACUUM content`（空间可复用但不归还系统；`VACUUM FULL` 由你自己安排）。没有 `Client` 的话，`noeta.sdk.storage.collect_garbage(event_log, content_store, ...)` 对你自己打开的存储做同样的事。自己接入的第三方存储需要在 content store 上实现 `sweep` 方法，否则调用会返回 `reason="unsupported"`。
 
 ## Sandbox
 

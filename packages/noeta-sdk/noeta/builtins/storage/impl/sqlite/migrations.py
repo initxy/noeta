@@ -372,6 +372,20 @@ _MIGRATION_11_READY_INDEX = (
 )
 
 
+# Migration 12: content retention (``noeta.storage.gc``).
+#
+# ``touched_at`` is the epoch second of a row's last ``put`` — the insert or
+# any later dedup hit — and what a sweep's grace period compares against;
+# NULL on rows written before this migration, which a sweep treats as old.
+# The index covers ``(touched_at, size)`` so listing the sweep candidates is
+# an index walk rather than a scan of a table whose rows are mostly blob.
+_MIGRATION_12_TOUCHED_AT = "ALTER TABLE content ADD COLUMN touched_at REAL"
+
+_MIGRATION_12_TOUCHED_AT_INDEX = (
+    "CREATE INDEX ix_content_touched_at ON content (touched_at, size)"
+)
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version=1,
@@ -453,6 +467,14 @@ MIGRATIONS: list[Migration] = [
             _MIGRATION_11_QUEUE_COLUMN,
             _MIGRATION_11_DROP_READY_INDEX,
             _MIGRATION_11_READY_INDEX,
+        ),
+    ),
+    Migration(
+        version=12,
+        description="content retention (touched_at column + candidate index)",
+        statements=(
+            _MIGRATION_12_TOUCHED_AT,
+            _MIGRATION_12_TOUCHED_AT_INDEX,
         ),
     ),
 ]

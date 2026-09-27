@@ -48,14 +48,17 @@ PUBLIC_ROOTS = ("noeta.sdk", "noeta.presets")
 #: internal path.
 HOST_CONTRACT: dict[str, tuple[str, ...]] = {
     # Durable storage: the single public doorway — the stack builders + path
-    # predicates it defines itself, and the 12 lazy adapter re-exports
-    # (6 sqlite + 6 postgres).
+    # predicates it defines itself, the content sweep over a bare stack, and
+    # the 12 lazy adapter re-exports (6 sqlite + 6 postgres).
     "noeta.sdk.storage": (
         # The four functions the doorway defines itself.
         "build_storage_stack",
         "open_storage_stack",
         "is_memory_path",
         "is_postgres_url",
+        # Reclaiming without a Client (noeta.storage.gc).
+        "collect_garbage",
+        "CollectGarbageResult",
         # The 12 lazy class re-exports (PEP 562).
         "SqliteContentStore",
         "SqliteDispatcher",
