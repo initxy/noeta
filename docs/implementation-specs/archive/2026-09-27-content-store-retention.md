@@ -1,8 +1,12 @@
 # Content store retention — 2026-09-27
 
-Status: IMPLEMENTED, unreleased. Branch `fix/content-store-growth-2026-09-27`
-(base 6496404, runtime 0.6.31 / sdk 0.6.31). Distil into CONTEXT.md and archive
-once the release that carries it is cut.
+Status: SHIPPED 2026-09-27 in noeta-runtime 0.6.32 / noeta-sdk 0.6.32 (lockstep,
+tag `v0.6.32`, commit 1048580; base 6496404). Distilled into CONTEXT.md
+(ContentStore, Snapshot) and the amended `docs/adr/storage-protocols-l0.md`;
+archived here for the construction detail. `make check` green: ruff, 4611 passed /
+155 skipped, coverage 89.04 %, `mypy --strict` on both packages (also under
+Python 3.11), naming and import lints; the release run's four jobs green and a
+clean-venv install from PyPI verified.
 
 ## Problem
 
