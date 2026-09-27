@@ -8,7 +8,11 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
-Content-store retention (`noeta-runtime` + `noeta-sdk`). A host reported a
+## [0.6.32] - 2026-09-27
+
+Covers both packages, lockstep — 0.6.31 → 0.6.32 for `noeta-runtime` and
+`noeta-sdk` (`noeta-sdk`'s `noeta-runtime>=` floor rises with it).
+Content-store retention. A host reported a
 8.7 GB `tasks.sqlite` after 14 days; reproduced: every model call stored the
 whole request (system prompt, tool schemas, the entire history — 82–88 % of
 the store, growing with the square of a task's length) and nothing ever
@@ -3259,7 +3263,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.31...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.32...HEAD
+[0.6.32]: https://github.com/initxy/noeta/compare/v0.6.31...v0.6.32
 [0.6.31]: https://github.com/initxy/noeta/compare/v0.6.30...v0.6.31
 [0.6.30]: https://github.com/initxy/noeta/compare/v0.6.29...v0.6.30
 [0.6.29]: https://github.com/initxy/noeta/compare/v0.6.28...v0.6.29
