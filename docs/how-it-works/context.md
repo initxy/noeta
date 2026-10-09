@@ -67,8 +67,10 @@ forward fails the Task instead of looping.
 
 ## Two tail-only relief valves
 
-- **Tool output pruning.** Only when the request nears the model's usable window,
-  old tool outputs are replaced by `[tool output cleared]`. The call ids stay so
+- **Tool output pruning.** Only when the request nears the usable window — the
+  model's, or the smaller `HostConfig.auto_compact_window` a host sets so a
+  large-window model trims and compacts earlier — old tool outputs are replaced
+  by `[tool output cleared]`. The call ids stay so
   the conversation remains valid, and the originals remain in the content store.
 - **Reminders.** Short notes rendered at the very end of each prompt — unfinished
   todos, a pointer to compacted history. They are recomputed from state every

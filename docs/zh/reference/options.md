@@ -211,6 +211,7 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 | --- | --- | --- | --- |
 | `repetition_threshold` | `int \| None` | `None` | 同样的 `(tool, arguments)` 调用重复这么多次后要审批；必须是正数 |
 | `tool_output_inline_limit` | `int \| None` | `None` | 工具结果超过这么多字符就截断再给模型看（完整内容仍有记录）；必须是正数；恢复任务时要保持同一个值 |
+| `auto_compact_window` | `int \| None` | `None` | 把压缩当作上下文窗口只有这么多 token 来算（Claude Code 的 `autoCompactWindow`）：摘要的触发点、保留原文的尾巴、清理旧工具输出的阈值都按 `min(模型窗口, 这个值)` 推导；输出上限和技能、记忆索引的 1% 预算仍按真实窗口；必须是正数；恢复任务时要保持同一个值 |
 | `hooks` | `HooksConfig \| None` | `None` | 用户自定义钩子：工具调用前先过一遍规则，调用结束后、或者等审批时跑一条命令；见[钩子](#钩子) |
 | `webfetch_allowed_hosts` | `Sequence[str]` | `()` | `WebFetch` 不用审批就能访问的站点：`"example.com"` 精确匹配，`"*.example.com"` 只匹配子域名；写错会报错 |
 | `workflow_allowed` | `bool` | `False` | 提供 `run_workflow`（还需要能派子 agent） |

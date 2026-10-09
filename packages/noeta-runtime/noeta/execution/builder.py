@@ -67,6 +67,9 @@ class CompactionConfig:
     ``context_window is None`` ⇒ compaction OFF. When set, the policy's available
     window is ``context_window - max_output_tokens - compaction_buffer`` and the
     composer protects / the policy summarises against ``tail_token_budget``.
+    ``context_window`` is the window compaction is measured against — the
+    model's, or the smaller cap a host set (``HostConfig.auto_compact_window``);
+    ``max_output_tokens`` is always the model's own ceiling.
     """
 
     context_window: Optional[int]

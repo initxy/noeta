@@ -595,6 +595,17 @@ class HostConfig:
     #: the value the original run used, or it re-derives different tool-output
     #: bytes. ``None`` ⇒ no truncation (today's behavior).
     tool_output_inline_limit: Optional[int] = None
+    #: Compact as if the model's context window were this many tokens —
+    #: Claude Code's ``autoCompactWindow``. Every number compaction derives
+    #: (the usable window the summarize trigger reads, the protected verbatim
+    #: tail, the microcompaction threshold) follows ``min(model window,
+    #: this)``; the model's output ceiling and the 1 % skill-roster and
+    #: memory-index budgets keep the real window. Without it a long task on a
+    #: 1M-token model re-sends every tool output it ever read for hundreds of
+    #: thousands of tokens before either valve opens. Changes the composed
+    #: bytes, so a resumed task must be given the same value — the
+    #: ``tool_output_inline_limit`` rule. ``None`` ⇒ the model's window.
+    auto_compact_window: Optional[int] = None
     #: User hooks (:class:`HooksConfig`): pre-tool-use rules join the guard
     #: stack as the ``HookGuard``; post-tool-use and notification commands
     #: run from one background ``HookObserver`` the Client starts at
@@ -705,6 +716,7 @@ class HostConfig:
         for name, value in (
             ("memory_max_bytes", self.memory_max_bytes),
             ("memory_index_budget_tokens", self.memory_index_budget_tokens),
+            ("auto_compact_window", self.auto_compact_window),
             (
                 "max_background_jobs_per_root_task",
                 self.max_background_jobs_per_root_task,

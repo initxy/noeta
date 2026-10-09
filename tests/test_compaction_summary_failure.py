@@ -401,3 +401,55 @@ def test_note_gate_counts_the_prompt_section_titles() -> None:
     )
     assert not looks_like_summary_note(_NARRATION)
     assert not looks_like_summary_note("")
+
+
+# ---------------------------------------------------------------------------
+# Localised section headings
+# ---------------------------------------------------------------------------
+
+#: The head of a summary a relay-served summarizer produced in production with
+#: the nine titles translated (10 009 characters in all). Refused as "not a
+#: note" while the gate matched English titles only, which killed the task.
+_LOCALISED_NOTE = (
+    "# 会话持久笔记\n\n"
+    "## 1. 主要请求与意图\n\n用户（扮演老板的助理，向子代理下达任务）只发出了一条指令。\n\n"
+    "## 2. 关键技术概念\n\n- 事件日志\n\n"
+    "## 5. 用户消息\n\n- 审计助理自己过去一周的事件日志\n"
+)
+_BOLD_LOCALISED_NOTE = "**1) 主要请求**：整理资料。\n**6) 待办**：无。\n"
+#: What a narration's plan looks like: numbered, but neither a heading nor a
+#: title the prompt asked for. It must stay on the refused side.
+_NUMBERED_PLAN = (
+    "Next I will:\n1. Read the file again.\n2. Fix the import.\n3. Rerun the tests.\n"
+)
+
+
+def test_note_gate_counts_localised_section_headings() -> None:
+    assert looks_like_summary_note(_LOCALISED_NOTE)
+    assert looks_like_summary_note(_BOLD_LOCALISED_NOTE)
+    # Indented headings and full-width separators count too.
+    assert looks_like_summary_note("  ## 1、主要请求\n  ## 9：下一步\n")
+    # The same number twice is one section, not two.
+    assert not looks_like_summary_note("## 1. 主要请求\n\n## 1. 主要请求（续）\n")
+    # Headings without a section number, and a bare numbered plan, are not it.
+    assert not looks_like_summary_note("## 主要请求与意图\n## 关键技术概念\n")
+    assert not looks_like_summary_note(_NUMBERED_PLAN)
+    assert not looks_like_summary_note("1. 主要请求：整理。\n5. 用户消息：一条。\n")
+
+
+def test_localised_note_is_recorded_as_a_compaction() -> None:
+    decision, _ = _drive(
+        LLMResponse(
+            stop_reason="end_turn",
+            content=[TextBlock(text=_LOCALISED_NOTE)],
+            usage=Usage(uncached=68_336, output=8_830),
+        )
+    )
+    assert isinstance(decision, CompactionRequestedDecision)
+    assert decision.summary == _LOCALISED_NOTE
+
+
+def test_prompt_asks_for_the_titles_verbatim_in_english() -> None:
+    # The common path stays the English one: the gate's title count is what
+    # every note was passing before, and the prompt now says so outright.
+    assert "exactly as written above, in English" in _SUMMARIZE_PROMPT

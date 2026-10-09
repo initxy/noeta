@@ -688,6 +688,11 @@ class SdkHost(GenericEngineResolver):
     # Wiring-only summarizer model override (Options.compaction_model): when set,
     # the ReActPolicy routes ONLY the compaction summarize call to this model.
     compaction_model: Optional[str] = None
+    # Wiring-only cap on the window compaction derives from
+    # (HostConfig.auto_compact_window); None = the bound model's catalog
+    # window. The skill-roster and memory-index budgets ignore it on purpose:
+    # they size against the model, as Claude Code's skill listing does.
+    auto_compact_window: Optional[int] = None
     # Wiring-only recall-judge model (Options.recall_model): when set, a lexical
     # auto-recall miss at turn intake is retried through this model, which reads
     # the message + memory index and picks the relevant memories. None = judge
@@ -2137,7 +2142,9 @@ class SdkHost(GenericEngineResolver):
             allowed_tools=spec_tool_names,
             content_store=self.content_store,
             model=model,
-            compaction=derive_compaction_config(model),
+            compaction=derive_compaction_config(
+                model, auto_compact_window=self.auto_compact_window
+            ),
             # The catalog's vendor-family judgment (the kernel holds no model
             # opinions); the edit-tool mutex table lives inside the fs pack.
             provider_family=provider_family(model),
