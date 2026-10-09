@@ -310,6 +310,13 @@ class HostConfig:
     approved directory is open when the paused call resumes. Reads are never
     fenced and never consult it.
 
+    ``shell_env`` answers "what does this task's shell need to know?" —
+    ``root task id -> variables`` laid over the scrubbed environment of every
+    ``Bash`` command the task (or a sub-agent under it) runs, foreground or
+    background. Asked per command, never recorded: a host hands a session its
+    own coordinates (which job it is working on) without widening the
+    process-wide allow-list. ``None`` adds nothing.
+
     Loop and tool-output bounds
     ---------------------------
     ``repetition_threshold`` registers the built-in ``RepetitionGuard`` (a
@@ -364,6 +371,9 @@ class HostConfig:
     #: ``task_id -> the directories this task may write outside its workspace``
     #: (see the class docstring). A wiring concern, never part of identity.
     write_roots: Optional[Callable[[str], Sequence[str]]] = None
+    #: ``root task id -> variables for its shell commands`` (see the class
+    #: docstring). A wiring concern, never part of identity.
+    shell_env: Optional[Callable[[str], Mapping[str, str]]] = None
     mcp_server_resolver: Optional[
         Callable[[str], Optional[McpAnyServerSpec]]
     ] = None

@@ -17,10 +17,10 @@ from __future__ import annotations
 import re
 import subprocess
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from noeta.protocols.tool import ToolContext, ToolResult
-from noeta.runtime.env import scrub_env
+from noeta.runtime.env import ShellEnvResolver, scrub_env
 from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
 from noeta.builtins.fs.impl.shell_rules import DEFAULT_SHELL_RULES
 from noeta.runtime.shell_policy import (
@@ -81,6 +81,40 @@ def _capture_notice(outcome: RunOutcome, output_cap: int) -> str:
     )
 
 
+#: What a variable name the host hands ``Bash`` must look like: a POSIX shell
+#: name, so a backend that exports it into a shell line cannot be steered.
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _task_env(resolver: Optional[ShellEnvResolver], ctx: ToolContext) -> dict[str, str]:
+    """The variables the host adds for the task behind ``ctx``, or ``{}``.
+
+    Keyed by the ROOT task, so a sub-agent's commands carry what its session's
+    do. Fails soft in every degenerate case — no resolver, no task on the
+    context, a resolver that raises, a malformed entry — since a missing
+    variable only costs the command what the host meant to tell it."""
+    if resolver is None:
+        return {}
+    metadata = ctx.metadata or {}
+    task_id = metadata.get("root_task_id") or metadata.get("task_id")
+    if not isinstance(task_id, str) or not task_id:
+        return {}
+    try:
+        raw = resolver(task_id)
+    except Exception:  # noqa: BLE001 - a broken resolver must not fail the command
+        return {}
+    if not isinstance(raw, Mapping):
+        return {}
+    return {
+        name: value
+        for name, value in raw.items()
+        if isinstance(name, str)
+        and isinstance(value, str)
+        and _ENV_NAME.fullmatch(name)
+        and "\x00" not in value
+    }
+
+
 def _render_streams(stdout: bytes, stderr: bytes) -> str:
     """The model-facing body: stdout, then stderr under a label only when both
     streams carry content (matching the familiar single-stream view when only
@@ -117,6 +151,9 @@ class ShellRunTool:
     #: sandbox container. Background spawns always go through the host's
     #: ``background_runner`` instead.
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
+    #: ``root task id -> variables`` the host adds to this task's commands, on
+    #: top of the scrubbed environment (``HostConfig.shell_env``).
+    shell_env: Optional[ShellEnvResolver] = None
     name: str = "Bash"
     description: str = field(default=load_markdown(__package__, "shell_run"))
     # High risk so PermissionGuard treats this as privileged.
@@ -192,7 +229,9 @@ class ShellRunTool:
                     "run the command in the foreground instead",
                 )
             return self._spawn_background(exec_argv, command, ctx)
-        outcome, interrupted = self._run_foreground(exec_argv, timeout_s, ctx)
+        outcome, interrupted = self._run_foreground(
+            exec_argv, timeout_s, ctx, _task_env(self.shell_env, ctx)
+        )
         return _build_shell_result(
             self.name,
             command=command,
@@ -204,7 +243,11 @@ class ShellRunTool:
         )
 
     def _run_foreground(
-        self, exec_argv: list[str], timeout_s: int, ctx: ToolContext
+        self,
+        exec_argv: list[str],
+        timeout_s: int,
+        ctx: ToolContext,
+        extra_env: Optional[Mapping[str, str]] = None,
     ) -> tuple[RunOutcome, bool]:
         """Run the blocking command, registered in the session kill table.
 
@@ -245,6 +288,8 @@ class ShellRunTool:
                     )
 
                 runner = runner_with_spawn_hook(_on_spawn)
+        if extra_env and getattr(self.exec_env, "supports_extra_env", False):
+            extra["extra_env"] = dict(extra_env)
         interrupted = False
         try:
             outcome = self.exec_env.run_argv(
@@ -278,7 +323,7 @@ class ShellRunTool:
         spawned = runner.spawn(
             argv=argv,
             cwd=self.workspace.root,
-            env=scrub_env(),
+            env={**scrub_env(), **_task_env(self.shell_env, ctx)},
             command=command,
             spawned_by_task_id=spawned_by_task_id,
             trace_id=trace_id,

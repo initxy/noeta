@@ -17,7 +17,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from noeta.runtime._proc_group import send_group_signal
 from noeta.runtime.env import scrub_env
@@ -250,15 +250,17 @@ def run_argv(
     timeout_s: int,
     output_cap: int,
     runner: Optional[Callable[..., subprocess.CompletedProcess[bytes]]] = None,
+    extra_env: Optional[Mapping[str, str]] = None,
 ) -> RunOutcome:
     """Spawn ``argv``, capture output, enforce timeout + scrubbed env.
 
     ``runner`` is injectable so tests need not shell out for happy-path
     coverage; the default :func:`_default_run` is what makes a timeout reap
-    the child's whole process group.
+    the child's whole process group. ``extra_env`` is laid over the scrubbed
+    environment — what the host chose to hand this one command.
     """
     run = runner or _default_run
-    env = _scrub_env()
+    env = {**_scrub_env(), **(extra_env or {})}
     start = time.monotonic()
     timed_out = False
     extra: dict[str, Any] = (

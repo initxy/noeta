@@ -133,7 +133,11 @@ class ToolRuntime:
 
         ctx = ToolContext(
             artifact_store=self._content_store,
-            metadata={"task_id": task_id, "trace_id": trace_id},
+            metadata={
+                "task_id": task_id,
+                "root_task_id": self._root_task_id(task_id),
+                "trace_id": trace_id,
+            },
             background_runner=self._background_runner,
             file_read_registry=self._file_read_registry,
         )

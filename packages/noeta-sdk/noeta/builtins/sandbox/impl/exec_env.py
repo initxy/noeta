@@ -441,6 +441,11 @@ class AioSandboxExecEnv:
         return True
 
     @property
+    def supports_extra_env(self) -> bool:
+        # ``run_argv`` exports ``extra_env`` ahead of the command.
+        return True
+
+    @property
     def supports_background(self) -> bool:
         # There is no container-side durable job handle, and the host runner
         # would spawn on the HOST rather than in the container — so ``shell_run``
@@ -570,6 +575,7 @@ class AioSandboxExecEnv:
         output_cap: int,
         runner: Optional[SubprocRunner] = None,
         on_start: Optional[Callable[[Callable[[], None]], None]] = None,
+        extra_env: Optional[Mapping[str, str]] = None,
     ) -> RunOutcome:
         # ``runner`` is the local subprocess seam — irrelevant remotely, ignored.
         # cwd is expressed lexically (cd &&) rather than via an unconfirmed
@@ -577,7 +583,13 @@ class AioSandboxExecEnv:
         # exact tokens.
         del runner
         preamble = self._preamble(argv) if self._preamble is not None else ""
-        command = f"cd {shlex.quote(str(cwd))} && {preamble}{shlex.join(argv)}"
+        exports = "".join(
+            f"export {name}={shlex.quote(value)} && "
+            for name, value in (extra_env or {}).items()
+        )
+        command = (
+            f"cd {shlex.quote(str(cwd))} && {exports}{preamble}{shlex.join(argv)}"
+        )
         start = time.monotonic()
         # A session of its own gives the command an id to kill it by.
         shell_id = uuid.uuid4().hex
