@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import weakref
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Iterator, Literal, Optional, Protocol, cast
@@ -2295,26 +2296,49 @@ class WorkerLoop:
         """Run the startup cap-terminal recovery pass once; return the healed
         ids (see :func:`recover_cap_terminal`).
 
-        Once per loop instance, and never a reason not to start: a scan fault
-        is logged and the daemon comes up anyway. Under a pool every loop runs
-        it, which is redundant but not harmful — the per-task decision is the
-        same idempotent one the live path makes.
+        Once per event log per process, and never a reason not to start: a
+        scan fault is logged and the daemon comes up anyway. Under a pool the
+        loops share one event log, and the first to start scans while the rest
+        wait and then skip — every loop scanning the whole store in turn held
+        its single connection for seconds per loop at every restart.
         """
         if self._recovered_cap_terminal:
             return []
         self._recovered_cap_terminal = True
-        try:
-            healed = recover_cap_terminal(self._rt)
-        except Exception:  # noqa: BLE001 — recovery never blocks startup
-            _log.exception(
-                "worker: cap-terminal recovery pass failed; starting anyway"
-            )
-            return []
+        log = getattr(self._rt, "event_log", None)
+        with _CAP_RECOVERY_LOCK:
+            if log is not None and _cap_recovered(log):
+                return []
+            try:
+                healed = recover_cap_terminal(self._rt)
+            except Exception:  # noqa: BLE001 — recovery never blocks startup
+                _log.exception(
+                    "worker: cap-terminal recovery pass failed; starting anyway"
+                )
+                return []
         for task_id in healed:
             self._emit(
                 ReliabilityEvent(kind="cap_terminal_reconciled", task_id=task_id)
             )
         return healed
+
+
+#: The event logs this process already ran the cap-terminal recovery over.
+_CAP_RECOVERY_LOCK = threading.Lock()
+_CAP_RECOVERED: "weakref.WeakSet[Any]" = weakref.WeakSet()
+
+
+def _cap_recovered(log: Any) -> bool:
+    """Whether ``log`` was already scanned; marks it scanned when not. A log
+    that cannot be weakly referenced is never remembered, so it is scanned per
+    loop as before."""
+    try:
+        if log in _CAP_RECOVERED:
+            return True
+        _CAP_RECOVERED.add(log)
+    except TypeError:
+        return False
+    return False
 
 
 def install_stop_signals(loop: WorkerLoop) -> Callable[[], None]:

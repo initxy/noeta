@@ -293,3 +293,24 @@ def test_run_forever_runs_the_recovery_pass_once(world: Any) -> None:
     _assert_barrier_fired(world)
     # One-shot per loop: a later call is a no-op.
     assert loop.recover_cap_terminal() == []
+
+
+def test_a_pool_scans_its_shared_event_log_once(
+    world: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Loops in one pool share one event log; only the first scans it — every
+    loop scanning a mature store in turn held its connection for seconds each."""
+    _cap_out_of_band(world, CHILD_B)
+    scans: list[int] = []
+    real = world.event_log.list_task_streams
+
+    def counted() -> Any:
+        scans.append(1)
+        return real()
+
+    monkeypatch.setattr(world.event_log, "list_task_streams", counted)
+    first = WorkerLoop(world, heartbeat_interval=0, stale_sweep_interval=0)
+    second = WorkerLoop(world, heartbeat_interval=0, stale_sweep_interval=0)
+    assert first.recover_cap_terminal() == [CHILD_B]
+    assert second.recover_cap_terminal() == []
+    assert scans == [1]

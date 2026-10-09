@@ -353,6 +353,21 @@ class SqliteEventLog:
             for row in rows
         ]
 
+    def task_ids_with_event_type(self, event_type: str) -> set[str]:
+        """Every task whose stream holds at least one ``event_type`` event.
+
+        One pass over the table, so a recovery scan can visit the handful of
+        streams a rare event type lives on instead of folding every stream.
+        Events leave the table only with their whole task, so a stream absent
+        here never held one.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT task_id FROM events WHERE type = ?",
+                (event_type,),
+            ).fetchall()
+        return {row[0] for row in rows}
+
     def _fetch_envelope(self, task_id: str, seq: int) -> EventEnvelope:
         # Caller already holds ``self._lock`` (only ``_append`` invokes this,
         # from inside its BEGIN IMMEDIATE block). Acquiring it again would

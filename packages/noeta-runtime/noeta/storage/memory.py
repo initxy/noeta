@@ -350,6 +350,15 @@ class InMemoryEventLog:
 
     # -- task index --------------------------------------------------------
 
+    def task_ids_with_event_type(self, event_type: str) -> set[str]:
+        """Every task whose stream holds at least one ``event_type`` event."""
+        with self._lock:
+            return {
+                task_id
+                for task_id, stream in self._streams.items()
+                if any(envelope.type == event_type for envelope in stream.events)
+            }
+
     def list_task_streams(self) -> list[TaskStreamSummary]:
         """Enumerate non-empty task streams, most-recent-update first.
 

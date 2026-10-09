@@ -733,3 +733,39 @@ def test_render_subagent_result_str_passthrough_and_structured_json() -> None:
     rendered = _render_subagent_result(to_canonical_bytes({"score": 3, "ok": True}))
     assert json.loads(rendered) == {"score": 3, "ok": True}  # valid JSON, key-order agnostic
     assert "'" not in rendered and "True" not in rendered  # JSON true, not Python repr
+
+
+def test_recover_reads_only_the_streams_that_started_a_background_child(
+    tmp_path: Path,
+) -> None:
+    """A mature store holds thousands of finished streams; recovery folds a
+    snapshot only for the ones a ``BackgroundSubagentStarted`` lives on."""
+    from noeta.execution.background_subagent import BackgroundSubagentRegistry
+
+    ws = _make_ws(tmp_path)
+    provider = FakeLLMProvider(responses=[_spawn_bg(), _end("chatting"), _end("plain")])
+    host, driver = _host(ws, provider)
+    stub = _RecordingLauncher()
+    _install_stub(host, stub)
+    out = driver.start(goal=PARENT_GOAL, agent="main")
+    _, child_id = stub.launched[0]
+    plain = driver.start(goal="just answer", agent="main")
+
+    real = BackgroundSubagentRegistry(
+        event_log=host.event_log,
+        content_store=host.content_store,
+        dispatcher=host.dispatcher,
+        build_host=host._drain_host_for_id,
+        deliver=lambda parent, child: None,
+    )
+    read: list[str] = []
+    undelivered = real._undelivered
+
+    def spied(task_id: str) -> list[tuple[str, str]]:
+        read.append(task_id)
+        return undelivered(task_id)
+
+    object.__setattr__(real, "_undelivered", spied)
+    assert child_id in real.recover()
+    assert read == [out.task_id]
+    assert plain.task_id not in read

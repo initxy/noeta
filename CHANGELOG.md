@@ -8,6 +8,25 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed (`noeta-runtime`)
+
+- **Startup recovery no longer stalls a mature store.** A worker pool ran the
+  cap-terminal recovery once per loop — each a full `GROUP BY` over the event
+  log plus a tail read per stream, all serialised on the store's single
+  connection — so a fourteen-loop pool on a 3,600-stream, 19 GB store held
+  every other reader (a host's `task_status`, its API) for seconds after each
+  restart. It now runs once per event log per process; the other loops wait
+  and skip. `BackgroundSubagentRegistry.recover` deserialised every stream's
+  latest snapshot to read its background-subagent audit (~15 s before the
+  host could serve); it now visits only the streams holding a
+  `BackgroundSubagentStarted`.
+
+### Added (`noeta-sdk`)
+
+- `task_ids_with_event_type(event_type)` on the sqlite and postgres event
+  logs (and the in-memory one): one pass naming every stream that holds the
+  type — the prefilter recovery reads through, duck-typed and optional.
+
 ## [0.6.33] - 2026-10-09
 
 Covers both packages, lockstep — 0.6.32 → 0.6.33 for `noeta-runtime` and
