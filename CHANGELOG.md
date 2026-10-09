@@ -8,6 +8,37 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.35] - 2026-10-09
+
+Covers both packages, lockstep — 0.6.34 → 0.6.35 for `noeta-runtime` and
+`noeta-sdk` (`noeta-sdk`'s `noeta-runtime>=` floor rises with it). Per-task
+shell variables, and closed conversations that stay closed.
+
+### Added (`noeta-sdk`)
+
+- **`HostConfig.shell_env`** — `root task id -> variables` laid over the
+  scrubbed environment of every `Bash` command a task (or a sub-agent under
+  it) runs, foreground and background. Asked per command and never recorded,
+  so a host running many sessions in one process can tell each one's shell
+  which job it is working on without widening the process-wide allow-list.
+  Names must be shell names; a resolver that raises adds nothing.
+- `ExecEnv` backends may declare `supports_extra_env` and take an
+  `extra_env` keyword on `run_argv`; the local and AIO sandbox backends do.
+  A third-party backend without the flag is never handed it.
+
+### Changed (`noeta-runtime`)
+
+- The tool context's metadata carries `root_task_id` beside `task_id`.
+
+### Fixed (`noeta-runtime`)
+
+- **A closed conversation is no longer woken by a background completion.**
+  `close` kills the session's background commands, and each kill pushed a
+  completion notice that drove a fresh turn on the closed conversation — a
+  turn nobody reads, on the whole context. Background shell and sub-agent
+  notices are now dropped for a closed conversation like for a terminal one;
+  the durable exit event stands, and a human goal still reopens it.
+
 ## [0.6.34] - 2026-10-09
 
 Covers both packages, lockstep — 0.6.33 → 0.6.34 for `noeta-runtime` and
@@ -3316,7 +3347,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.34...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.35...HEAD
+[0.6.35]: https://github.com/initxy/noeta/compare/v0.6.34...v0.6.35
 [0.6.34]: https://github.com/initxy/noeta/compare/v0.6.33...v0.6.34
 [0.6.33]: https://github.com/initxy/noeta/compare/v0.6.32...v0.6.33
 [0.6.32]: https://github.com/initxy/noeta/compare/v0.6.31...v0.6.32
