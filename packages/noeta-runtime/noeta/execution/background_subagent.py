@@ -304,7 +304,15 @@ class BackgroundSubagentRegistry:
         if self._closed or not hasattr(index, "list_task_streams"):
             return []
         recovered: list[str] = []
+        # A parent's audit folds from the ``BackgroundSubagentStarted`` events
+        # on its own stream, so a stream without one has nothing undelivered:
+        # skip it before reading its snapshot. Folding every stream's snapshot
+        # cost a mature store tens of seconds at every Client construction.
+        holders = getattr(index, "task_ids_with_event_type", None)
+        started = holders("BackgroundSubagentStarted") if callable(holders) else None
         for summary in index.list_task_streams():
+            if started is not None and summary.task_id not in started:
+                continue
             for parent_id, child_id in self._undelivered(summary.task_id):
                 if self._is_inflight(child_id):
                     continue

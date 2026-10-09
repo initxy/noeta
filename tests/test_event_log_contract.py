@@ -892,6 +892,27 @@ def test_list_task_streams_skips_empty_streams(make_log: Any) -> None:
     assert [s.task_id for s in summaries] == ["t1"]
 
 
+def test_task_ids_with_event_type_names_only_the_streams_holding_one(
+    make_log: Any,
+) -> None:
+    """The recovery prefilter: every stream with at least one event of the
+    type, each once, and nothing else."""
+    log = make_log()
+    for task_id in ("t1", "t2"):
+        log.emit(
+            task_id=task_id,
+            type="TaskCreated",
+            payload=TaskCreatedPayload(goal="g", policy_name="p"),
+        )
+    log.emit(
+        task_id="t1",
+        type="TaskCreated",
+        payload=TaskCreatedPayload(goal="again", policy_name="p"),
+    )
+    assert log.task_ids_with_event_type("TaskCreated") == {"t1", "t2"}
+    assert log.task_ids_with_event_type("TaskCompleted") == set()
+
+
 def test_list_task_streams_orders_by_recency_then_task_id(make_log: Any) -> None:
     """Most-recent ``last_event_time`` first; a deterministic ``task_id`` ASC
     tie-break so equal timestamps never reorder flakily — and the tie-break is

@@ -411,6 +411,16 @@ class PostgresEventLog:
                 return None
             return _row_to_envelope(row)
 
+    def task_ids_with_event_type(self, event_type: str) -> set[str]:
+        """Every task whose stream holds at least one ``event_type`` event;
+        see the sqlite adapter's twin."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT task_id FROM events WHERE type = %s",
+                (event_type,),
+            ).fetchall()
+        return {row["task_id"] for row in rows}
+
     def list_task_streams(self) -> list[TaskStreamSummary]:
         """Enumerate task streams, most-recent-update first.
 
