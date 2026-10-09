@@ -728,6 +728,9 @@ class SdkHost(GenericEngineResolver):
     #: ``task_id -> extra writable directories``, forwarded verbatim into the
     #: fs pack. ``None`` ⇒ the single-root wall.
     write_roots: Optional[Callable[[str], Sequence[str]]] = None
+    #: Variables a task's shell commands run with (HostConfig.shell_env):
+    #: ``root task id -> variables``, forwarded verbatim into the fs pack.
+    shell_env: Optional[Callable[[str], Mapping[str, str]]] = None
     extra_guards: tuple[Guard, ...] = ()
     extra_content_kinds: tuple[ContentKindSpec, ...] = ()
     #: Per-agent ``tool_result_transform`` stages — ``agent name -> ordered
@@ -2730,6 +2733,7 @@ class SdkHost(GenericEngineResolver):
             return self._apply_plugin_config_overrides(config)
         config["fs"]["write_path_globs"] = _spec_write_path_globs(spec)
         config["fs"]["write_roots"] = self.write_roots
+        config["fs"]["shell_env"] = self.shell_env
         # The lowest skill tier: the host's own built-in dirs first, then the
         # dirs loaded plugins contribute on the ``skills`` surface. Both sit
         # below ``global_skills_dir`` and the workspace pack, which the skills

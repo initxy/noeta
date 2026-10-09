@@ -19,7 +19,7 @@ import subprocess
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Protocol, runtime_checkable
+from typing import Callable, Mapping, Optional, Protocol, runtime_checkable
 
 from noeta.runtime.subproc import (
     RunOutcome,
@@ -136,6 +136,11 @@ class ExecEnv(Protocol):
       interrupt / cancel / close reach a command the host has no process for
       (a sandbox container). Without it only the local subprocess path is
       interruptible.
+    * ``supports_extra_env: bool`` — when true, :meth:`run_argv` accepts an
+      extra keyword ``extra_env: Mapping[str, str]``: variables the command
+      runs with on top of whatever environment the backend gives it. ``Bash``
+      passes it only when the host's ``shell_env`` names something for the
+      task; a backend without the flag runs the command without them.
     * ``read_range(path, offset, length) -> bytes`` — up to ``length`` bytes
       of ``path`` starting at byte ``offset``, byte-exact; fewer only at end
       of file (empty past it). Raises the same ``OSError`` subclasses as
@@ -289,6 +294,10 @@ class LocalExecEnv:
     def supports_background(self) -> bool:
         return True
 
+    @property
+    def supports_extra_env(self) -> bool:
+        return True
+
     def exists(self, path: Path) -> bool:
         return path.exists()
 
@@ -358,6 +367,7 @@ class LocalExecEnv:
         timeout_s: int,
         output_cap: int,
         runner: Optional[SubprocRunner] = None,
+        extra_env: Optional[Mapping[str, str]] = None,
     ) -> RunOutcome:
         return _local_run_argv(
             argv,
@@ -365,4 +375,5 @@ class LocalExecEnv:
             timeout_s=timeout_s,
             output_cap=output_cap,
             runner=runner,
+            extra_env=extra_env,
         )

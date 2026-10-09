@@ -158,8 +158,9 @@ class BackgroundDelivery:
     ) -> None:
         """Turn-boundary completion push (synchronous; the daemon-thread body).
 
-        Three parent states, one loop: a terminal session has no turn to wake, so
-        the push is dropped and the durable exit event stands for audit; a
+        Three parent states, one loop: a terminal or closed session has no turn
+        to wake, so the push is dropped and the durable exit event stands for
+        audit; a
         session idle-suspended on its next-goal handle is woken and driven
         through one notice turn; anything else makes ``deliver`` raise and is
         re-attempted — with a backing-off wait — until the session settles, goes
@@ -183,6 +184,12 @@ class BackgroundDelivery:
             task = fold(self._event_log, self._content_store, task_id)
             if task.status == "terminal":
                 return  # no turn to wake — the exit event stands for audit
+            if getattr(task.governance, "closed", False):
+                # A closed conversation is done until a human goal reopens it:
+                # a notice is not one, so it wakes nothing — the exit event
+                # stands, and the close's own kill cascade is what ended most
+                # of these jobs in the first place.
+                return
             try:
                 deliver(notifier)
                 return

@@ -28,6 +28,7 @@ from noeta.builtins.fs.impl.shell import (
 )
 from noeta.execution.session_pack import PackContribution, SessionBuildContext
 from noeta.protocols.tool import Tool
+from noeta.runtime.env import ShellEnvResolver
 from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
 from noeta.builtins.fs.impl.shell_rules import DEFAULT_SHELL_RULES
 from noeta.runtime.shell_policy import ShellMode, build_allowlist
@@ -63,6 +64,7 @@ def build_fs_tools(
     write_path_globs: tuple[str, ...] = (),
     write_roots: Optional[WriteRootsResolver] = None,
     exec_env: Optional[ExecEnv] = None,
+    shell_env: Optional[ShellEnvResolver] = None,
 ) -> dict[str, Tool]:
     """Build the fs tool pack sharing one ``WorkspaceRoot`` + write/shell modes.
 
@@ -76,7 +78,9 @@ def build_fs_tools(
     OUTSIDE the workspace, consulted per call by ``Edit`` / ``Write``: ``None``
     keeps the single-root wall, while a host able to obtain a human grant
     passes a resolver so the approved directory is open on the resumed call.
-    Reads are never fenced and ignore both.
+    Reads are never fenced and ignore both. ``shell_env`` is the host's seam
+    for variables a task's ``Bash`` commands run with on top of the scrubbed
+    environment.
 
     ``exec_env`` is the backend the pack's real IO routes through; a sandbox
     backend paired with a container ``workspace`` moves the whole pack into a
@@ -112,6 +116,7 @@ def build_fs_tools(
                     shell_allowlist, base_rules=DEFAULT_SHELL_RULES
                 ),
                 exec_env=env,
+                shell_env=shell_env,
             )
         )
         # Both act only on background jobs ``shell_run`` started, so they ride
@@ -170,6 +175,7 @@ def build_fs_session_pack(ctx: SessionBuildContext) -> PackContribution:
             "Optional[WriteRootsResolver]", cfg.get("write_roots")
         ),
         exec_env=ctx.exec_env,
+        shell_env=cast("Optional[ShellEnvResolver]", cfg.get("shell_env")),
     )
     return PackContribution(
         tools={
