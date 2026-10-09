@@ -8,6 +8,12 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.34] - 2026-10-09
+
+Covers both packages, lockstep — 0.6.33 → 0.6.34 for `noeta-runtime` and
+`noeta-sdk` (`noeta-sdk`'s `noeta-runtime>=` floor rises with it). Startup
+recovery that no longer stalls a mature store.
+
 ### Fixed (`noeta-runtime`)
 
 - **Startup recovery no longer stalls a mature store.** A worker pool ran the
@@ -3310,7 +3316,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.33...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.34...HEAD
+[0.6.34]: https://github.com/initxy/noeta/compare/v0.6.33...v0.6.34
 [0.6.33]: https://github.com/initxy/noeta/compare/v0.6.32...v0.6.33
 [0.6.32]: https://github.com/initxy/noeta/compare/v0.6.31...v0.6.32
 [0.6.31]: https://github.com/initxy/noeta/compare/v0.6.30...v0.6.31
