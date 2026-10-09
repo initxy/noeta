@@ -111,13 +111,19 @@ def _catalog() -> Any:
     return _CATALOG_MOD
 
 
-def derive_compaction_config(model: str) -> CompactionConfig:
+def derive_compaction_config(
+    model: str, *, auto_compact_window: Optional[int] = None
+) -> CompactionConfig:
     """Catalog-derived compaction knobs for ``model``, loader-resolved.
 
     The kernel builder takes this pre-resolved via
     ``build_session_inputs(compaction=…)``; it reads no catalog itself.
+    ``auto_compact_window`` (``HostConfig.auto_compact_window``) caps the
+    window the knobs derive from; the catalog function says how.
     """
-    config: CompactionConfig = _catalog().derive_compaction_config(model)
+    config: CompactionConfig = _catalog().derive_compaction_config(
+        model, auto_compact_window=auto_compact_window
+    )
     return config
 
 

@@ -8,6 +8,27 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Added (`noeta-sdk`)
+
+- **`HostConfig.auto_compact_window`** — compact as if the model's context
+  window were this many tokens (Claude Code's `autoCompactWindow`). The
+  summarize trigger, the protected verbatim tail and the composer's two
+  tool-output valves all derive from `min(model window, cap)`; the output
+  ceiling and the 1 % skill-roster / memory-index budgets keep the model's
+  real window. On a 1M-token model neither compaction layer opened before a
+  job ended, so every request re-sent every tool output the task had read.
+  `derive_compaction_config(model, auto_compact_window=…)` carries the cap.
+  Spec: `docs/implementation-specs/2026-10-09-auto-compact-window-and-localised-notes.md`.
+
+### Fixed (`noeta-sdk`)
+
+- **A summary note with translated headings is a note.** The compaction note
+  gate refused a summarizer that localised the nine section titles
+  (`## 1. 主要请求与意图 …`) as "not a note" and killed the task. The gate
+  now also counts numbered markdown / bold section headings in any language;
+  a plain numbered plan still fails it. `summarize.md` asks for the titles
+  verbatim in English.
+
 ## [0.6.32] - 2026-09-27
 
 Covers both packages, lockstep — 0.6.31 → 0.6.32 for `noeta-runtime` and

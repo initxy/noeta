@@ -52,6 +52,7 @@ adapter (provider injection happens at the call site, behind a
 from __future__ import annotations
 
 import json
+import re
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -1447,6 +1448,14 @@ _SUMMARY_SECTION_TITLES: tuple[str, ...] = (
 #: least sections 1 and 5.
 _SUMMARY_MIN_SECTIONS = 2
 
+#: A localised note's section heading: a markdown heading or a bold run that
+#: opens with the section's number — ``## 1. 主要请求与意图``, ``**3) 文件**``.
+#: A bare ``1. 主要请求`` does not match: that is also what a narration's
+#: numbered plan looks like, and the gate fails closed.
+_LOCALISED_SECTION_HEADING = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]*|\*\*[ \t]*)([1-9])[ \t]*[.)、．:：]", re.MULTILINE
+)
+
 #: Longest excerpt a failure reason quotes. The reason rides an inline event
 #: payload with a 4 KB ceiling, and a host renders it as one line.
 _FAILURE_EXCERPT_CHARS = 160
@@ -1458,20 +1467,27 @@ def looks_like_summary_note(text: str) -> bool:
     The check is deliberately structural, not semantic: at least
     :data:`_SUMMARY_MIN_SECTIONS` of the prompt's section titles appear
     (case-insensitive, markdown decoration around them ignored by construction
-    since only the title words are matched). It separates a note from the one
-    failure the prompt cannot prevent — a model that ignores the instruction
-    and answers with what it would have said next ("The file is long and got
-    cut off. Fetching the rest.") — which is otherwise indistinguishable from
-    a short but genuine note by length or stop reason. Titles are matched in
-    the prompt's own language; a note that localises its headings fails the
-    gate, and the failure reason quotes its head so that case is diagnosable.
-    Pure over ``text`` so a resumed run takes the same branch.
+    since only the title words are matched), or at least that many distinct
+    section numbers open a markdown heading or a bold run
+    (:data:`_LOCALISED_SECTION_HEADING`) — a note whose headings the model
+    translated (``## 1. 主要请求与意图``) is still a note, whatever the
+    language. It separates a note from the one failure the prompt cannot
+    prevent — a model that ignores the instruction and answers with what it
+    would have said next ("The file is long and got cut off. Fetching the
+    rest.") — which is otherwise indistinguishable from a short but genuine
+    note by length or stop reason. A plain numbered line (``1. 主要请求``)
+    counts for neither: that is also the shape of a narration's plan. The
+    failure reason quotes the head of a refused reply so a new shape is
+    diagnosable. Pure over ``text`` so a resumed run takes the same branch.
     """
     lowered = text.lower()
     found = sum(
         1 for title in _SUMMARY_SECTION_TITLES if title.lower() in lowered
     )
-    return found >= _SUMMARY_MIN_SECTIONS
+    if found >= _SUMMARY_MIN_SECTIONS:
+        return True
+    numbered = {m.group(1) for m in _LOCALISED_SECTION_HEADING.finditer(text)}
+    return len(numbered) >= _SUMMARY_MIN_SECTIONS
 
 
 def _excerpt(text: str, limit: int = _FAILURE_EXCERPT_CHARS) -> str:

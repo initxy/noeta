@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from noeta.client.parts import derive_compaction_config
 from noeta.builtins.providers.impl.catalog import resolve_alias, spec_for
 
@@ -112,3 +114,79 @@ def test_unknown_model_logs_one_warning_per_model_id(
     ]
     assert len(records) == 1
     assert "not in the catalog" in records[0].getMessage()
+
+
+# ---------------------------------------------------------------------------
+# ``auto_compact_window`` — Claude Code's ``autoCompactWindow``
+# ---------------------------------------------------------------------------
+
+
+def test_auto_compact_window_caps_every_derived_number() -> None:
+    """Below the model's window the cap IS the window the knobs derive from:
+    the available window, the protected tail and (through the fraction) the
+    microcompaction threshold all shrink in proportion; the output ceiling
+    stays the model's, because it rides ``max_tokens`` on the wire."""
+    from noeta.builtins.providers.impl.catalog import _COMPACTION_BUFFER_TOKENS
+
+    spec = spec_for(resolve_alias("opus"))
+    cap = 300_000
+    assert spec.max_output_tokens + _COMPACTION_BUFFER_TOKENS < cap < spec.context_window
+    cfg = derive_compaction_config("opus", auto_compact_window=cap)
+    uncapped = derive_compaction_config("opus")
+    assert cfg.context_window == cap
+    assert cfg.max_output_tokens == spec.max_output_tokens == uncapped.max_output_tokens
+    assert cfg.tail_token_budget == (
+        (cap - spec.max_output_tokens - _COMPACTION_BUFFER_TOKENS) // 3
+    )
+    assert cfg.tail_token_budget < (uncapped.tail_token_budget or 0)
+    assert cfg.microcompact_keep_recent == uncapped.microcompact_keep_recent
+    assert cfg.microcompact_fraction == uncapped.microcompact_fraction
+    assert cfg.compaction_buffer == uncapped.compaction_buffer
+
+
+def test_auto_compact_window_at_or_above_the_window_is_a_no_op() -> None:
+    """A cap that does not bind derives the uncapped config byte for byte, so
+    a host that sets one value for every model is safe on the small ones."""
+    spec = spec_for(resolve_alias("opus"))
+    uncapped = derive_compaction_config("opus")
+    assert derive_compaction_config("opus", auto_compact_window=None) == uncapped
+    assert (
+        derive_compaction_config("opus", auto_compact_window=spec.context_window)
+        == uncapped
+    )
+    assert (
+        derive_compaction_config(
+            "opus", auto_compact_window=spec.context_window * 10
+        )
+        == uncapped
+    )
+
+
+def test_auto_compact_window_also_caps_an_uncatalogued_model() -> None:
+    cfg = derive_compaction_config(
+        "totally-made-up-model", auto_compact_window=50_000
+    )
+    assert cfg.context_window == 50_000
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, 1.5, "200000"])
+def test_auto_compact_window_refuses_anything_but_a_positive_int(
+    bad: object,
+) -> None:
+    with pytest.raises(ValueError, match="auto_compact_window"):
+        derive_compaction_config("opus", auto_compact_window=bad)  # type: ignore[arg-type]
+
+
+def test_auto_compact_window_under_the_output_ceiling_is_refused() -> None:
+    """A cap that leaves no window under the model's output ceiling plus the
+    buffer would compact on every step with a boundary that cannot advance;
+    the host's number is wrong for this model, and the error names both."""
+    from noeta.builtins.providers.impl.catalog import _COMPACTION_BUFFER_TOKENS
+
+    spec = spec_for(resolve_alias("opus"))
+    floor = spec.max_output_tokens + _COMPACTION_BUFFER_TOKENS
+    with pytest.raises(ValueError, match="leaves no usable window"):
+        derive_compaction_config("opus", auto_compact_window=floor)
+    cfg = derive_compaction_config("opus", auto_compact_window=floor + 3)
+    assert cfg.context_window == floor + 3
+    assert cfg.tail_token_budget == 1

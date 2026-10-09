@@ -25,6 +25,7 @@ from noeta.agent.spec import (
     agent_activates,
 )
 from noeta.client.host import SdkHost
+from noeta.client.host_config import HostConfig
 from noeta.client.parts import derive_compaction_config
 from noeta.execution.builder import build_session_inputs
 from noeta.runtime.governance import Budget
@@ -405,3 +406,79 @@ def test_sdk_host_main_write_is_unrestricted(tmp_path: Path) -> None:
         policy_wrapper=None,
     )
     assert engine._tools["Write"].allowed_path_globs == ()  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# auto_compact_window — Claude Code's autoCompactWindow
+# ---------------------------------------------------------------------------
+
+
+def test_auto_compact_window_reaches_the_composer_not_the_roster_budget(
+    tmp_path: Path,
+) -> None:
+    """SdkHost(auto_compact_window=N) → the built composer measures its two
+    valves against a window derived from N, while the skill-roster budget —
+    1 % of the MODEL's window, as Claude Code sizes its skill listing — is
+    the same as without the cap."""
+    from noeta.builtins.providers.impl.catalog import _COMPACTION_BUFFER_TOKENS
+
+    main_spec = _simple_main_spec()
+    registry = AgentRegistry()
+    registry.add(main_spec)
+    cap = 50_000
+    uncapped = derive_compaction_config("stub-model")
+    assert uncapped.context_window is not None and cap < uncapped.context_window
+
+    capped_dir = tmp_path / "capped"
+    capped_dir.mkdir()
+    host = _make_host(registry, capped_dir, auto_compact_window=cap)
+    engine = host._build_engine(
+        main_spec,
+        "stub-model",
+        delegation_enabled=False,
+        allowed_subtask_agents=frozenset(),
+        ask_user_question_enabled=False,
+        policy_wrapper=None,
+    )
+    composer = engine._composer
+    assert composer._available_window == (
+        cap - uncapped.max_output_tokens - _COMPACTION_BUFFER_TOKENS
+    )
+    assert composer._tail_token_budget == composer._available_window // 3
+
+    plain_dir = tmp_path / "plain"
+    plain_dir.mkdir()
+    plain = _make_host(registry, plain_dir)
+    assert (
+        host._plugin_config(shell_mode=ShellMode.OFF)["skills"]["menu_budget_tokens"]
+        == plain._plugin_config(shell_mode=ShellMode.OFF)["skills"]["menu_budget_tokens"]
+    )
+
+
+def test_host_config_forwards_auto_compact_window_to_the_host(
+    tmp_path: Path,
+) -> None:
+    from noeta.sdk import Client, Options
+
+    options = Options(
+        system_prompt="you finish immediately",
+        name="main",
+        allowed_tools=(),
+        permission_mode="bypassPermissions",
+    )
+    client = Client(
+        options,
+        provider=FakeLLMProvider(responses=[]),
+        workspace_dir=tmp_path,
+        host_config=HostConfig(auto_compact_window=200_000),
+    )
+    assert client._host.auto_compact_window == 200_000
+    assert HostConfig().auto_compact_window is None
+
+
+@pytest.mark.parametrize("bad", [0, -3, True, 2.5])
+def test_host_config_refuses_a_non_positive_auto_compact_window(
+    bad: object,
+) -> None:
+    with pytest.raises(ValueError, match="auto_compact_window"):
+        HostConfig(auto_compact_window=bad)  # type: ignore[arg-type]

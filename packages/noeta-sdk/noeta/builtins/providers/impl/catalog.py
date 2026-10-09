@@ -546,12 +546,26 @@ _UNKNOWN_MODEL_CONTEXT_WINDOW = 128_000
 _UNKNOWN_MODEL_MAX_OUTPUT_TOKENS = 16_384
 
 
-def derive_compaction_config(model: str) -> CompactionConfig:
+def derive_compaction_config(
+    model: str, *, auto_compact_window: Optional[int] = None
+) -> CompactionConfig:
     """Derive the compaction knobs for ``model``.
 
     The alias is resolved before the lookup: an unresolved alias — the common
     selector a host passes — would miss the catalog and take the unknown-model
     path for a model this table actually knows.
+
+    ``auto_compact_window`` caps the window the knobs derive from — Claude
+    Code's ``autoCompactWindow``. A host that wants a long task on a 1M-token
+    model to compact at 200K passes ``200_000``: the available window, the
+    protected tail and the microcompaction threshold all follow
+    ``min(window, cap)`` in their usual proportions, while the output ceiling
+    stays the model's (it rides ``max_tokens`` on the wire). A cap at or
+    above the window is a no-op and ``None`` keeps the model's window, so live
+    and resume derive identical knobs from identical inputs. A positive int
+    or ``None``, and one that leaves a usable window under the model's output
+    ceiling plus the buffer; anything else raises here rather than running
+    uncapped or compacting on every step.
 
     **An uncatalogued model gets conservative knobs, not ``COMPACTION_OFF``.**
     Returning ``COMPACTION_OFF`` disables compaction *and* the composer's tail
@@ -584,6 +598,28 @@ def derive_compaction_config(model: str) -> CompactionConfig:
     else:
         context_window = spec.context_window
         max_output_tokens = spec.max_output_tokens
+    if auto_compact_window is not None:
+        if (
+            isinstance(auto_compact_window, bool)
+            or not isinstance(auto_compact_window, int)
+            or auto_compact_window < 1
+        ):
+            raise ValueError(
+                "auto_compact_window must be a positive int or None; "
+                f"got {auto_compact_window!r}"
+            )
+        if auto_compact_window - max_output_tokens - _COMPACTION_BUFFER_TOKENS <= 0:
+            # A cap under the output ceiling plus the buffer would leave a
+            # zero window: compaction on every step, and a boundary that can
+            # never advance. The host's number is wrong for this model; say
+            # so here rather than thrash.
+            raise ValueError(
+                f"auto_compact_window {auto_compact_window} leaves no usable "
+                f"window under model {real!r}'s {max_output_tokens}-token "
+                f"output ceiling plus the {_COMPACTION_BUFFER_TOKENS}-token "
+                "compaction buffer"
+            )
+        context_window = min(context_window, auto_compact_window)
     available = max(
         0,
         context_window - max_output_tokens - _COMPACTION_BUFFER_TOKENS,
