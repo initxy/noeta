@@ -8,6 +8,13 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.33] - 2026-10-09
+
+Covers both packages, lockstep — 0.6.32 → 0.6.33 for `noeta-runtime` and
+`noeta-sdk` (`noeta-sdk`'s `noeta-runtime>=` floor rises with it). An
+absolute auto-compact window, and a compaction note gate that reads
+localised headings.
+
 ### Added (`noeta-sdk`)
 
 - **`HostConfig.auto_compact_window`** — compact as if the model's context
@@ -3284,7 +3291,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.32...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.33...HEAD
+[0.6.33]: https://github.com/initxy/noeta/compare/v0.6.32...v0.6.33
 [0.6.32]: https://github.com/initxy/noeta/compare/v0.6.31...v0.6.32
 [0.6.31]: https://github.com/initxy/noeta/compare/v0.6.30...v0.6.31
 [0.6.30]: https://github.com/initxy/noeta/compare/v0.6.29...v0.6.30
