@@ -1,7 +1,11 @@
 # An absolute auto-compact window, and a note gate that reads localised headings — 2026-10-09
 
-Status: ACTIVE (implementation in progress on branch
-`auto-compact-window-and-localised-notes`; base `5022d01`, v0.6.32).
+Status: SHIPPED 2026-10-09 in noeta-runtime 0.6.33 / noeta-sdk 0.6.33 (lockstep,
+tag `v0.6.33`, commit b440763; base 5022d01). Distilled into the amended
+`docs/adr/context-compaction.md` and `docs/reference/options.md`; archived here
+for the construction detail. `make check` green: ruff, 4629 passed / 155 skipped,
+coverage 89 %, `mypy --strict` on both packages, naming and import lints; the
+release run's four jobs green.
 
 ## Problem
 
