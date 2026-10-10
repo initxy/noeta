@@ -358,6 +358,16 @@ class HostConfig:
     #: exactly did the model see"; ``Client.collect_garbage`` treats the
     #: recorded bodies as transient.
     record_llm_requests: bool = False
+    #: How many times a failed model call is retried before the step fails —
+    #: transient failures only (a 429, a 5xx, a timeout, a dropped stream:
+    #: whatever the provider adapter types as ``TransientError``), with
+    #: exponential backoff or the provider's ``Retry-After``. Each scheduled
+    #: retry records an ``LLMRetryScheduled``. Per client, so two clients over
+    #: one store can differ: a long-running worker can take one or two quick
+    #: retries while an interactive client keeps the default. ``0`` ⇒ every
+    #: call is tried once; ``None`` ⇒ the runtime default (8, about two
+    #: minutes of backoff).
+    llm_max_retries: Optional[int] = None
     #: This client's worker queue over the (possibly shared) store: root tasks
     #: it seeds are born on this queue, children inherit it, and its resident
     #: worker pool claims ONLY it — so differently-configured clients sharing
@@ -742,6 +752,15 @@ class HostConfig:
                 raise ValueError(
                     f"HostConfig.{name} must be a positive int; got {value!r}"
                 )
+        if self.llm_max_retries is not None and (
+            isinstance(self.llm_max_retries, bool)
+            or not isinstance(self.llm_max_retries, int)
+            or self.llm_max_retries < 0
+        ):
+            raise ValueError(
+                "HostConfig.llm_max_retries must be an int >= 0 or None "
+                f"(None = the runtime default); got {self.llm_max_retries!r}"
+            )
         if self.mcp_idle_ttl is not None and self.mcp_idle_ttl < 0:
             raise ValueError(
                 "HostConfig.mcp_idle_ttl must be >= 0 seconds or None "

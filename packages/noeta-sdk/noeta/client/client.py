@@ -749,6 +749,7 @@ class Client:
             # Full request bodies per model call: off by default (they are
             # derivable and grow quadratically); a debugging opt-in.
             record_llm_requests=hc.record_llm_requests,
+            llm_max_retries=hc.llm_max_retries,
             # Workspace instruction files: the root NOETA.md / AGENTS.md at
             # session start, and the subdirectory files discovered as the model
             # reads (anchored-content placement ADR). Both off by default; a

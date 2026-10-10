@@ -605,6 +605,9 @@ class SdkHost(GenericEngineResolver):
     #: call's full request body, or (default) mint ``request_ref`` from the
     #: bytes without keeping them. See ``HostConfig.record_llm_requests``.
     record_llm_requests: bool = False
+    #: Forwarded to ``RuntimeLLMClient(max_retries=...)`` when set; ``None``
+    #: keeps the runtime's default. See ``HostConfig.llm_max_retries``.
+    llm_max_retries: Optional[int] = None
     #: Project-instructions-file switch. Like memory, this is workspace environment
     #: material (not agent identity), so the activation tuple carries no flag and
     #: SdkHost configures it directly. When True, looks for NOETA.md → AGENTS.md in
@@ -2262,6 +2265,11 @@ class SdkHost(GenericEngineResolver):
             provider_headers=self.provider_headers,
             delta_sink=self.delta_sink,
             record_requests=self.record_llm_requests,
+            **(
+                {"max_retries": self.llm_max_retries}
+                if self.llm_max_retries is not None
+                else {}
+            ),
         )
         policy: Policy = inputs.policy_factory(llm)
         if policy_wrapper is not None:
