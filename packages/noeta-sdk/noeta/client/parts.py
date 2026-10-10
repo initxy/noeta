@@ -112,17 +112,24 @@ def _catalog() -> Any:
 
 
 def derive_compaction_config(
-    model: str, *, auto_compact_window: Optional[int] = None
+    model: str,
+    *,
+    auto_compact_window: Optional[int] = None,
+    clear_tool_outputs_at: Optional[int] = None,
 ) -> CompactionConfig:
     """Catalog-derived compaction knobs for ``model``, loader-resolved.
 
     The kernel builder takes this pre-resolved via
     ``build_session_inputs(compaction=…)``; it reads no catalog itself.
     ``auto_compact_window`` (``HostConfig.auto_compact_window``) caps the
-    window the knobs derive from; the catalog function says how.
+    window the knobs derive from and ``clear_tool_outputs_at``
+    (``HostConfig.clear_tool_outputs_at``) moves the microcompaction
+    threshold; the catalog function says how.
     """
     config: CompactionConfig = _catalog().derive_compaction_config(
-        model, auto_compact_window=auto_compact_window
+        model,
+        auto_compact_window=auto_compact_window,
+        clear_tool_outputs_at=clear_tool_outputs_at,
     )
     return config
 

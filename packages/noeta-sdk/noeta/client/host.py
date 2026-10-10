@@ -696,6 +696,9 @@ class SdkHost(GenericEngineResolver):
     # window. The skill-roster and memory-index budgets ignore it on purpose:
     # they size against the model, as Claude Code's skill listing does.
     auto_compact_window: Optional[int] = None
+    # Wiring-only request size, in tokens, at which old tool outputs start
+    # clearing (HostConfig.clear_tool_outputs_at); None = half the window.
+    clear_tool_outputs_at: Optional[int] = None
     # Wiring-only recall-judge model (Options.recall_model): when set, a lexical
     # auto-recall miss at turn intake is retried through this model, which reads
     # the message + memory index and picks the relevant memories. None = judge
@@ -2149,7 +2152,9 @@ class SdkHost(GenericEngineResolver):
             content_store=self.content_store,
             model=model,
             compaction=derive_compaction_config(
-                model, auto_compact_window=self.auto_compact_window
+                model,
+                auto_compact_window=self.auto_compact_window,
+                clear_tool_outputs_at=self.clear_tool_outputs_at,
             ),
             # The catalog's vendor-family judgment (the kernel holds no model
             # opinions); the edit-tool mutex table lives inside the fs pack.
