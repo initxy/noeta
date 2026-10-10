@@ -1,6 +1,6 @@
 # Skill listing: out of the tool schema, into a recorded resident
 
-Status: IMPLEMENTED 2026-10-10 on `feat/skill-listing-resident`, uncommitted; `make check` green (4698 passed, 89.13%).
+Status: SHIPPED 2026-10-10 in noeta-sdk 0.6.37 (`make check` green 4698/89.13%). Distilled into `docs/adr/model-driven-skill-invocation.md` (2026-10-10 amendment) and `CONTEXT.md` (Skill).
 Owner: initxy
 Packages: `noeta-sdk` only (the `skills` built-in and the client host). `noeta-runtime` is untouched (`enum_roster_prop` stays for `spawn_subagent`). Release: sdk-only patch.
 
