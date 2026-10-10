@@ -25,6 +25,18 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
   and says to page through it with `Read`, instead of the rest being out of
   the model's reach.
 
+### Changed (`noeta-runtime`)
+
+- **Old tool calls shed their arguments with their outputs.** When a
+  compaction valve clears old tool outputs it now also swaps a tool call's
+  argument strings of 400+ characters (a `Write`'s file body, an `Edit`'s
+  strings) for `[cleared, N chars]`, keeping keys and small values. The newest
+  assistant turn that called a tool is never touched.
+- **A cleared output names its call** —
+  `[tool output cleared: Read(/src/app.py), 12345 chars]` — so the model
+  knows which file it already read; the bare marker remains for a result
+  whose call is out of view.
+
 ## [0.6.35] - 2026-10-09
 
 Covers both packages, lockstep — 0.6.34 → 0.6.35 for `noeta-runtime` and

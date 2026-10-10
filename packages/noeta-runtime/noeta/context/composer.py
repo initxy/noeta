@@ -15,6 +15,7 @@ invariant).
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, Optional, Protocol
 
@@ -807,8 +808,13 @@ class ThreeSegmentComposer:
         empty string that reads as "the tool returned nothing", and never a
         ContentStore hash it has no tool to deref. The original output's ref is
         returned (4th tuple element) for ``ContextPlan.cleared_outputs`` so the
-        full body stays audit-deref-able OFF the prompt. Text / tool_use blocks
-        are never touched. Returns the rewritten list plus the kept / cleared
+        full body stays audit-deref-able OFF the prompt. The marker names the
+        call it answered when that call is in view (``[tool output cleared:
+        Read(/a.py), 12345 chars]``), so the model knows what it already
+        fetched. A tool_use block either valve reaches has its large argument
+        strings cleared the same way (``[cleared, N chars]``) — except in the
+        newest assistant turn that called a tool, which stays as sent. Text
+        blocks are never touched. Returns the rewritten list plus the kept / cleared
         message refs and the cleared outputs' refs for ``ContextPlan``
         provenance.
 
@@ -917,11 +923,30 @@ class ThreeSegmentComposer:
             if relief_open
             else 0
         )
+        # Tool-call arguments age out under the same two valves as outputs —
+        # a Write / Edit carries the file body in its input, and that bulk rode
+        # every request — except the newest assistant turn that called a tool,
+        # kept whole whatever the valves say: it is the one whose reasoning a
+        # provider checks as sent.
+        uses = _tool_uses_by_call_id(messages)
+        keep_uses = _newest_tool_use_turn(messages)
+        if micro_open:
+            assert self._microcompact_keep_recent is not None
+            keep_uses |= _newest_tool_uses(
+                messages, self._microcompact_keep_recent
+            )
         out: list[Message] = []
         selected: list[ContentRef] = []
         dropped: list[ContentRef] = []
         cleared_outputs: list[ContentRef] = []
         for i, msg in enumerate(messages):
+            clear_inputs = frozenset(
+                j
+                for j, b in enumerate(msg.content)
+                if isinstance(b, ToolUseBlock)
+                and (i, j) not in keep_uses
+                and (i < cutoff or micro_open)
+            )
             if i >= cutoff:
                 spare: Optional[frozenset[int]] = None
                 if protected is not None:
@@ -931,17 +956,23 @@ class ThreeSegmentComposer:
                         if not isinstance(b, ToolResultBlock)
                         or (i, j) in protected
                     )
-                if spare is None or len(spare) == len(msg.content):
+                if (spare is None or len(spare) == len(msg.content)) and not (
+                    clear_inputs
+                ):
                     out.append(msg)
                     selected.append(self._msg_ref(msg))
                     continue
             else:
                 spare = None
             pruned_msg, cleared_refs = _clear_tool_outputs(
-                msg, self._cleared_output_ref, spare=spare
+                msg,
+                self._cleared_output_ref,
+                spare=spare,
+                uses=uses,
+                clear_inputs=clear_inputs,
             )
             out.append(pruned_msg)
-            if cleared_refs:
+            if cleared_refs or pruned_msg is not msg:
                 dropped.append(self._msg_ref(pruned_msg))
                 # Original bodies stay audit-deref-able via the plan, never via
                 # a hash leaked into the model-facing marker.
@@ -1065,6 +1096,97 @@ def _first_tool_use_call_id(msg: Message) -> Optional[str]:
 #: tool if it needs the content back.
 _CLEARED_MARKER = "[tool output cleared]"
 
+#: Any form of the cleared-marker: the bare one, or one naming the call it
+#: answered — ``[tool output cleared: Read(/src/app.py), 12345 chars]`` — so the
+#: model still knows WHAT it fetched (and need not fetch it again to find out).
+_CLEARED_MARKER_RE = re.compile(r"\[tool output cleared(?:: [^\n]*)?\]")
+
+#: Argument names, in order, whose value says what a call was about — the file
+#: it read, the command it ran, the page it fetched.
+_CALL_TARGET_KEYS = (
+    "file_path", "path", "notebook_path", "url", "command", "pattern", "query",
+    "name", "skill",
+)
+
+#: Characters of a call target quoted in a marker.
+_CALL_TARGET_MAX_CHARS = 160
+
+#: Characters an argument string must reach before clearing it is worth
+#: doing — the outputs' floor, for the same reasons.
+_MIN_CLEARABLE_INPUT_CHARS = 400
+
+
+def _call_label(use: ToolUseBlock) -> str:
+    """``Read(/src/app.py)`` — the tool and what it was pointed at, or the
+    bare tool name when no argument says."""
+    for key in _CALL_TARGET_KEYS:
+        value = use.arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            target = " ".join(value.split())
+            if len(target) > _CALL_TARGET_MAX_CHARS:
+                target = target[: _CALL_TARGET_MAX_CHARS - 3] + "..."
+            return f"{use.tool_name}({target})"
+    return use.tool_name
+
+
+def _cleared_marker(use: Optional[ToolUseBlock], output: Any) -> str:
+    if use is None:
+        return _CLEARED_MARKER
+    return (
+        f"[tool output cleared: {_call_label(use)}, "
+        f"{_rendered_size(output)} chars]"
+    )
+
+
+def _cleared_arguments(value: Any) -> Any:
+    """``value`` with every string of :data:`_MIN_CLEARABLE_INPUT_CHARS` or
+    more replaced by a short marker naming its length; keys, list shape and
+    small values kept, so the call still reads as the call it was."""
+    if isinstance(value, str):
+        if len(value) >= _MIN_CLEARABLE_INPUT_CHARS:
+            return f"[cleared, {len(value)} chars]"
+        return value
+    if isinstance(value, dict):
+        return {k: _cleared_arguments(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_cleared_arguments(v) for v in value]
+    return value
+
+
+def _tool_uses_by_call_id(messages: list[Message]) -> dict[str, ToolUseBlock]:
+    return {
+        b.call_id: b
+        for msg in messages
+        for b in msg.content
+        if isinstance(b, ToolUseBlock)
+    }
+
+
+def _newest_tool_use_turn(messages: list[Message]) -> set[tuple[int, int]]:
+    """Positions of every tool_use in the newest message that has one."""
+    for i in range(len(messages) - 1, -1, -1):
+        found = {
+            (i, j)
+            for j, b in enumerate(messages[i].content)
+            if isinstance(b, ToolUseBlock)
+        }
+        if found:
+            return found
+    return set()
+
+
+def _newest_tool_uses(messages: list[Message], keep: int) -> set[tuple[int, int]]:
+    """Positions of the newest ``keep`` tool_use blocks."""
+    kept: set[tuple[int, int]] = set()
+    for i in range(len(messages) - 1, -1, -1):
+        blocks = messages[i].content
+        for j in range(len(blocks) - 1, -1, -1):
+            if len(kept) >= keep:
+                return kept
+            if isinstance(blocks[j], ToolUseBlock):
+                kept.add((i, j))
+    return kept
+
 #: Rendered characters an output must reach before clearing it is worth doing.
 #: Clearing exists to reclaim BULK that the model can fetch again; a short
 #: output is not bulk (the marker itself costs 21 characters, so the saving
@@ -1091,6 +1213,8 @@ def _clear_tool_outputs(
     store_full: Callable[[Any], ContentRef],
     *,
     spare: Optional[frozenset[int]] = None,
+    uses: Optional[dict[str, ToolUseBlock]] = None,
+    clear_inputs: frozenset[int] = frozenset(),
 ) -> tuple[Message, list[ContentRef]]:
     """Return a copy of ``msg`` with every ToolResultBlock output replaced by
     the lean cleared-marker, plus the ContentStore refs of the originals.
@@ -1112,8 +1236,17 @@ def _clear_tool_outputs(
     prune only swaps the bulky tool output for a marker, never the
     conversational structure. ``spare`` names block indices to leave alone —
     the microcompaction valve's newest-N tool results.
+
+    ``uses`` maps a ``call_id`` to the tool_use it answers, so the marker can
+    name the call (``[tool output cleared: Read(/a.py), 12345 chars]``); a
+    result with no call in view keeps the bare marker. ``clear_inputs`` names
+    tool_use blocks whose large argument strings are swapped for a length
+    marker (:func:`_cleared_arguments`) — the call keeps its id, name and
+    shape, so the result it pairs with still pairs. The arguments need no
+    ref: they are recorded verbatim with the assistant message.
     """
     cleared_refs: list[ContentRef] = []
+    inputs_cleared = False
     new_blocks: list[Any] = []
     for j, b in enumerate(msg.content):
         if (
@@ -1127,14 +1260,29 @@ def _clear_tool_outputs(
             new_blocks.append(
                 ToolResultBlock(
                     call_id=b.call_id,
-                    output=_CLEARED_MARKER,
+                    output=_cleared_marker(
+                        (uses or {}).get(b.call_id), b.output
+                    ),
                     success=b.success,
                     error=b.error,
                 )
             )
+        elif j in clear_inputs and isinstance(b, ToolUseBlock):
+            arguments = _cleared_arguments(b.arguments)
+            if arguments != b.arguments:
+                inputs_cleared = True
+                new_blocks.append(
+                    ToolUseBlock(
+                        call_id=b.call_id,
+                        tool_name=b.tool_name,
+                        arguments=arguments,
+                    )
+                )
+            else:
+                new_blocks.append(b)
         else:
             new_blocks.append(b)
-    if not cleared_refs:
+    if not cleared_refs and not inputs_cleared:
         return msg, []
     # The pruned rebuild keeps ``origin`` (same transform discipline as
     # ``_reattach_thinking`` — source tags survive).
@@ -1187,10 +1335,11 @@ def _is_cleared_marker(output: Any) -> bool:
 
     Guards idempotency: re-composing a View whose tool outputs are already
     markers must not re-wrap them (which would also spawn a redundant
-    ContentStore write). Exact match — a real tool output that merely starts
-    with the marker text is not mistaken for an already-cleared one.
+    ContentStore write). Whole-string match on either marker form — a real
+    tool output that merely starts with the marker text is not mistaken for
+    an already-cleared one.
     """
-    return bool(output == _CLEARED_MARKER)
+    return isinstance(output, str) and _CLEARED_MARKER_RE.fullmatch(output) is not None
 
 
 def _text_blocks(prompt: str) -> list[Any]:
