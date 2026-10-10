@@ -19,7 +19,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from noeta.context.composer import COMPOSER_VERSION, ThreeSegmentComposer
+from noeta.context.composer import (
+    COMPOSER_VERSION,
+    ThreeSegmentComposer,
+    _is_cleared_marker,
+)
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.token_estimate import estimate_messages_tokens
 from noeta.protocols.context_plan import ContextPlan
@@ -127,7 +131,7 @@ def test_prune_clears_old_tool_outputs_outside_tail() -> None:
         out = by_call[cid].output
         assert out != ""  # never blanked to empty
         # Lean marker: no hash leaked into the model-facing string.
-        assert out == "[tool output cleared]"
+        assert _is_cleared_marker(out)
     # role / call_id / success preserved on the cleared blocks.
     assert by_call["c1"].success is True
 
@@ -148,9 +152,9 @@ def test_cleared_output_is_dereferenceable_via_plan() -> None:
         for m in dynamic
         for b in m.content
         if isinstance(b, ToolResultBlock)
-        and b.output == "[tool output cleared]"
+        and _is_cleared_marker(b.output)
     )
-    assert cleared.output == "[tool output cleared]"
+    assert _is_cleared_marker(cleared.output)
     # The full body is recoverable through the plan's cleared_outputs refs.
     plan = from_canonical_bytes(store.get(view.plan_ref))
     assert isinstance(plan, ContextPlan)
@@ -184,7 +188,7 @@ def test_prune_marker_is_idempotent_on_recompose() -> None:
     for cid in ("c1", "c2"):
         out = by_call[cid].output
         # Idempotent: still exactly the lean marker, not a nested re-wrap.
-        assert out == "[tool output cleared]"
+        assert _is_cleared_marker(out)
 
 
 def test_prune_is_deterministic_byte_equal() -> None:
@@ -303,8 +307,8 @@ def test_relief_valve_prunes_once_history_exceeds_window() -> None:
         if isinstance(b, ToolResultBlock)
     }
     assert by_call["c3"].output == "c" * 400  # newest verbatim
-    assert by_call["c1"].output == "[tool output cleared]"
-    assert by_call["c2"].output == "[tool output cleared]"
+    assert _is_cleared_marker(by_call["c1"].output)
+    assert _is_cleared_marker(by_call["c2"].output)
 
 
 def test_relief_valve_opens_on_real_tokens_not_chars_over_four() -> None:
@@ -345,8 +349,8 @@ def test_relief_valve_opens_on_real_tokens_not_chars_over_four() -> None:
         if isinstance(b, ToolResultBlock)
     }
     assert by_call["c3"].output == "c" * 400  # newest always verbatim
-    assert by_call["c1"].output == "[tool output cleared]"
-    assert by_call["c2"].output == "[tool output cleared]"
+    assert _is_cleared_marker(by_call["c1"].output)
+    assert _is_cleared_marker(by_call["c2"].output)
 
 
 def test_no_baseline_reproduces_pure_estimate_behaviour() -> None:
@@ -423,5 +427,5 @@ def test_density_clamp_keeps_a_nonsense_baseline_from_erasing_the_tail() -> None
         if isinstance(b, ToolResultBlock)
     }
     assert by_call["c3"].output == "c" * 400  # newest always verbatim
-    assert by_call["c1"].output == "[tool output cleared]"
-    assert by_call["c2"].output == "[tool output cleared]"
+    assert _is_cleared_marker(by_call["c1"].output)
+    assert _is_cleared_marker(by_call["c2"].output)

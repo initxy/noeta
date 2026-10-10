@@ -22,6 +22,7 @@ from noeta.builtins.react.impl.recall_history import (
 from noeta.context.composer import (
     _MIN_CLEARABLE_OUTPUT_CHARS,
     ThreeSegmentComposer,
+    _is_cleared_marker,
 )
 from noeta.context.reminders import ReminderRegistry, ReminderSpec, ReminderView
 from noeta.core.engine import Engine
@@ -113,8 +114,10 @@ def _composer(
 
 
 def _outputs(view: View) -> dict[str, Any]:
+    """Each result's output, with every form of the cleared-marker (the
+    bare one or one naming its call) read as the bare one."""
     return {
-        b.call_id: b.output
+        b.call_id: _MARKER if _is_cleared_marker(b.output) else b.output
         for m in view.segments[2].content
         for b in m.content
         if isinstance(b, ToolResultBlock)
