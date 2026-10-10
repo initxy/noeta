@@ -473,3 +473,81 @@ def test_tool_runtime_populates_output_ref() -> None:
     # Matches the ref in the event
     ev = [e for e in el.read("tid") if e.type == "ToolResultRecorded"][0]
     assert ev.payload.output_ref.hash == result.output_ref.hash
+
+
+# ---------------------------------------------------------------------------
+# HostConfig.tool_output_spill_dir — a cut result is saved whole, by path
+# ---------------------------------------------------------------------------
+
+
+def test_truncate_names_the_saved_file() -> None:
+    out = truncate_tool_output("A" * 100, 10, saved_to="/spill/t/c1.txt")
+    assert out.startswith("A" * 10 + "\n...[tool output truncated: 90 of 100 chars dropped")
+    assert "saved to /spill/t/c1.txt" in out
+    assert "offset/limit" in out
+
+
+def test_spiller_paths_are_a_function_of_task_and_call(tmp_path: Path) -> None:
+    from noeta.core._decision_handlers import tool_output_spiller
+
+    assert tool_output_spiller(None, "t1") is None
+    spill = tool_output_spiller(tmp_path, "task/1")
+    assert spill is not None
+    path = spill("toolu_01:x", "whole body")
+    assert path == str(tmp_path / "task_1" / "toolu_01_x.txt")
+    assert Path(path).read_text(encoding="utf-8") == "whole body"
+
+
+def test_spiller_that_cannot_write_cuts_without_a_path(tmp_path: Path) -> None:
+    from noeta.core._decision_handlers import tool_output_spiller
+
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    spill = tool_output_spiller(blocker, "t1")  # a file where a dir must go
+    assert spill is not None
+    assert spill("c1", "body") is None
+
+
+def test_client_spills_a_cut_read_and_the_marker_names_the_file(tmp_path: Path) -> None:
+    from noeta.sdk import Client, HostConfig, Options
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "big.txt").write_text("\n".join(f"line {i:05d}" for i in range(2000)))
+    spill_dir = tmp_path / "spill"
+    read_call = LLMResponse(
+        stop_reason="tool_use",
+        content=[
+            ToolUseBlock(
+                call_id="c1", tool_name="Read", arguments={"file_path": "big.txt"}
+            )
+        ],
+        usage=Usage(uncached=1, output=1),
+    )
+    client = Client(
+        Options(system_prompt="x", permission_mode="bypassPermissions"),
+        provider=FakeLLMProvider(responses=[read_call, _end_resp()]),
+        workspace_dir=ws,
+        model="stub-model",
+        multi_turn=False,
+        host_config=HostConfig(
+            tool_output_inline_limit=1_000, tool_output_spill_dir=spill_dir
+        ),
+    )
+    try:
+        outcome = client.start(goal="read it")
+        folded = fold(client._host.event_log, client._host.content_store, outcome.task_id)
+    finally:
+        client.shutdown()
+    [block] = [
+        b
+        for m in folded.runtime.messages
+        if m.role == "tool"
+        for b in m.content
+        if isinstance(b, ToolResultBlock)
+    ]
+    saved = spill_dir / outcome.task_id / "c1.txt"
+    assert f"the full output was saved to {saved}" in block.output
+    assert len(block.output) < 1_300
+    body = saved.read_text(encoding="utf-8")
+    assert "line 01999" in body and len(body) > 1_000

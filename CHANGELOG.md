@@ -19,6 +19,11 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
   which old tool outputs start clearing (the second compaction valve), apart
   from the summarize trigger. Unset, it stays half the usable window, so a
   host that sets only `auto_compact_window` sees no change.
+- **`HostConfig.tool_output_spill_dir`** — a result cut by
+  `tool_output_inline_limit` is written whole to
+  `<dir>/<task_id>/<call_id>.txt`, and the truncation marker names the file
+  and says to page through it with `Read`, instead of the rest being out of
+  the model's reach.
 
 ## [0.6.35] - 2026-10-09
 

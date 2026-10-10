@@ -734,6 +734,7 @@ class Client:
                 hc.hooks.pre_tool_use if hc.hooks is not None else ()
             ),
             tool_output_inline_limit=hc.tool_output_inline_limit,
+            tool_output_spill_dir=hc.tool_output_spill_dir,
             # The hosts WebFetch may reach without asking a human. Empty (the
             # default) ⇒ every fetch is gated under a gating permission mode.
             webfetch_allowed_hosts=hc.webfetch_allowed_hosts,
