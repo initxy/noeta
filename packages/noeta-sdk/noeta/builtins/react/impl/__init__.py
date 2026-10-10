@@ -89,6 +89,7 @@ def build_react_policy_factory(
     compaction_model: Optional[str] = None,
     compaction_max_output_tokens: Optional[int] = None,
     task_slot: Optional[Callable[[str, Callable[[], Any]], Any]] = None,
+    step_limit: Optional[int] = None,
 ) -> Callable[[Any], Policy]:
     """The ``(llm) -> Policy`` factory the builder falls back to; ``Options.policy``
     and a plugin's ``policy`` contribution both outrank it.
@@ -100,7 +101,8 @@ def build_react_policy_factory(
     is the host's get-or-create over the task's local slots (bound by the SDK
     host with ``functools.partial`` — the builder protocol does not name it):
     the policy keeps its compaction-trigger calibration there, so it spans the
-    task's turns instead of resetting with each turn's Engine.
+    task's turns instead of resetting with each turn's Engine. ``step_limit``
+    is bound the same way (``HostConfig.max_steps_per_turn``).
     """
     baselines = (
         task_slot(TRIGGER_BASELINES_SLOT, TriggerBaselines)
@@ -115,6 +117,7 @@ def build_react_policy_factory(
             system_prompt=system_prompt,
             model=model,
             max_steps=max_steps,
+            step_limit=step_limit,
             control_translate_specs=control_translate_specs,
             content_store=content_store,
             context_window=context_window,

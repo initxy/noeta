@@ -752,6 +752,7 @@ class Client:
             # derivable and grow quadratically); a debugging opt-in.
             record_llm_requests=hc.record_llm_requests,
             llm_max_retries=hc.llm_max_retries,
+            step_limit=hc.max_steps_per_turn,
             # Workspace instruction files: the root NOETA.md / AGENTS.md at
             # session start, and the subdirectory files discovered as the model
             # reads (anchored-content placement ADR). Both off by default; a

@@ -24,6 +24,11 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
   `<dir>/<task_id>/<call_id>.txt`, and the truncation marker names the file
   and says to page through it with `Read`, instead of the rest being out of
   the model's reach.
+- **`HostConfig.max_steps_per_turn`** — a working step budget per turn. At
+  the budget the turn is wound up, not failed: one more model call, tools
+  forbidden, asks for a report of what was done and where the work stands,
+  and the turn finishes with it, opened by "Stopped at the N-step limit
+  before finishing." The 1,000,000-step runaway backstop is unchanged.
 
 ### Changed (`noeta-runtime`)
 
