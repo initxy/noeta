@@ -533,7 +533,7 @@
     },
     {
       "function": {
-        "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nroster of skills indexed for this workspace; its instructions are in your\ncontext from your next step. A roster line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the roster — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
+        "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nroster of skills indexed for this workspace; its instructions are in your\ncontext from your next step. A roster line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the roster — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
         "name": "skill",
         "parameters": {
           "properties": {
@@ -592,7 +592,7 @@
         }
       ],
       "name": "stable_prefix",
-      "segment_hash": "61cbe4642815655c723b363e0d52176df84bfaa07e5c42fefec60126840ef882"
+      "segment_hash": "1be63fb807c5e60edbe40c36219a6089478f328622cc5d4ccb2f65844d5e8e58"
     },
     {
       "content": [],

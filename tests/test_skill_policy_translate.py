@@ -30,11 +30,12 @@ from noeta.builtins.skills.impl import (
 # Deliberately the deep module rather than the package door: the parity
 # assertion below pins the re-export against the definition.
 from noeta.builtins.skills.impl.control_tool import (
+    SKILL_NOT_ALONE,
     SKILL_TOOL as _SKILLS_SKILL_TOOL,
 )
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.context_plan import ContextPlan
-from noeta.protocols.decisions import StatePatchDecision
+from noeta.protocols.decisions import StatePatchDecision, ToolCallsDecision
 from noeta.protocols.messages import (
     LLMResponse,
     Message,
@@ -261,8 +262,17 @@ def test_translate_skill_missing_argument() -> None:
 
 
 def test_translate_skill_mixed_with_other_tool() -> None:
+    """Beside another CONTROL tool nothing runs: the runtime could never
+    answer that call, so the whole response is refused."""
     response = _mixed_skill_and_other_call()
-    decision = _translate(response)
+    decision = translate_control_tool(
+        response,
+        _assistant_message(response),
+        specs=(
+            ControlToolSpec(SKILL_TOOL, make_skill_translate(_MENU)),
+            ControlToolSpec("Task", translate_spawn_subagent),
+        ),
+    )
     assert isinstance(decision, StatePatchDecision)
     assert decision.patch is None
     # One tool-result block per call_id, or the provider rejects the next
@@ -277,11 +287,36 @@ def test_translate_skill_mixed_with_other_tool() -> None:
         # ``error`` ahead of ``output``, so filling both repeats the sentence.
         assert b.output == ""
         assert b.error == (
-            "Nothing in this response ran: skill must be called on its own. "
-            "Re-issue the other calls in a separate response."
+            "Nothing in this response ran: skill must be called on its own, "
+            "once per response. Call skill by itself first, then re-issue the "
+            "other calls in a separate response."
         )
     call_ids = sorted(b.call_id for b in ack.content)
     assert call_ids == ["s1", "sk"]
+
+
+def test_skill_beside_ordinary_tools_lets_them_run() -> None:
+    """Batched with ordinary tool calls, those calls still run and only the
+    activation is refused — with words saying what ran and what to do."""
+    response = LLMResponse(
+        stop_reason="tool_use",
+        content=[
+            ToolUseBlock(call_id="sk", tool_name=SKILL_TOOL, arguments={"skill": "alpha"}),
+            ToolUseBlock(call_id="r1", tool_name="Read", arguments={"file_path": "a"}),
+            ToolUseBlock(call_id="b1", tool_name="Bash", arguments={"command": "ls"}),
+        ],
+        usage=Usage(uncached=1, output=1),
+    )
+    decision = _translate(response)
+    assert isinstance(decision, ToolCallsDecision)
+    assert decision.state_patch is None  # nothing activated
+    assert [c.call_id for c in decision.calls] == ["r1", "b1"]
+    assert decision.assistant_message == _assistant_message(response)
+    [ack] = decision.preacked_results
+    assert ack.call_id == "sk"
+    assert ack.success is False
+    assert ack.error == SKILL_NOT_ALONE
+    assert "did run" in ack.error and "by itself" in ack.error
 
 
 def test_translate_skill_two_skill_calls_is_sole_call_violation() -> None:
@@ -297,8 +332,9 @@ def test_translate_skill_two_skill_calls_is_sole_call_violation() -> None:
         assert b.success is False
         assert b.output == ""
         assert b.error == (
-            "Nothing in this response ran: skill must be called on its own. "
-            "Re-issue the other calls in a separate response."
+            "Nothing in this response ran: skill must be called on its own, "
+            "once per response. Call skill by itself first, then re-issue the "
+            "other calls in a separate response."
         )
 
 
@@ -380,6 +416,7 @@ def _build_engine_for_tests(
     skill_invocation_enabled: bool = True,
     system_prompt: str = "you are helpful",
     pass_content_hashes: bool = True,
+    allowed_tools: frozenset[str] = frozenset({"read_file"}),
 ):
     """Wire an Engine from ``build_session_inputs`` the way a host does.
 
@@ -407,7 +444,7 @@ def _build_engine_for_tests(
         **default_factory_kwargs(),
         workspace_dir=ws,
         system_prompt=system_prompt,
-        allowed_tools=frozenset({"read_file"}),
+        allowed_tools=allowed_tools,
         content_store=cs,
         model="stub-model",
         compaction=COMPACTION_OFF,
@@ -958,3 +995,38 @@ def test_product_flag_on_with_skills_grows_skill_tool(tmp_path: Path) -> None:
         s["function"]["name"] for s in inputs_empty.composer._control_action_schemas
     }
     assert SKILL_TOOL not in names_empty
+
+
+def test_engine_skill_beside_a_read_runs_the_read_and_loads_nothing(
+    tmp_path: Path,
+) -> None:
+    """End to end: the Read runs through the ToolRuntime, the skill call is
+    answered in the same result message, every tool_use has exactly one
+    result, and no skill is activated."""
+    ws = _make_ws_with_skill(tmp_path)
+    read_name = "Read"
+    mixed = LLMResponse(
+        stop_reason="tool_use",
+        content=[
+            ToolUseBlock(call_id="sk", tool_name=SKILL_TOOL, arguments={"skill": "alpha"}),
+            ToolUseBlock(call_id="r1", tool_name=read_name, arguments={"file_path": "x.py"}),
+        ],
+        usage=Usage(uncached=1, output=1),
+    )
+    engine, disp, cs, log = _build_engine_for_tests(
+        ws, [mixed, _end("done")], allowed_tools=frozenset({"Read"})
+    )
+    task = engine.create_task(goal="go", policy_name="react")
+    disp.enqueue(task.task_id)
+    _run_to_terminal(engine, disp, task)
+
+    folded = fold(log, cs, task.task_id)
+    assert "alpha" not in folded.state.active_skills
+    [results] = [m for m in folded.runtime.messages if m.role == "tool"]
+    by_id = {b.call_id: b for b in results.content if isinstance(b, ToolResultBlock)}
+    assert set(by_id) == {"sk", "r1"}
+    assert by_id["r1"].success is True
+    assert "foo" in str(by_id["r1"].output)
+    assert by_id["sk"].success is False and by_id["sk"].error == SKILL_NOT_ALONE
+    types = [e.type for e in log.read(task.task_id)]
+    assert types.count("ToolCallStarted") == 1

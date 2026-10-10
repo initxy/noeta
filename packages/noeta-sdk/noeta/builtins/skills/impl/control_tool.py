@@ -26,11 +26,17 @@ from noeta.policies.control_semantics import (
     enum_roster_prop,
     validate_required_string,
 )
-from noeta.protocols.decisions import Decision, TaskStatePatch
+from noeta.protocols.decisions import (
+    Decision,
+    TaskStatePatch,
+    ToolCall,
+    ToolCallsDecision,
+)
 from noeta.protocols.messages import (
     LLMResponse,
     Message,
     ThinkingBlock,
+    ToolResultBlock,
     ToolUseBlock,
 )
 from noeta.protocols.resources import load_markdown
@@ -43,6 +49,7 @@ __all__ = [
     "MENU_DESCRIPTION_MAX_TOKENS",
     "MENU_SHORT_SUMMARY_MAX_TOKENS",
     "SKILL_TOOL",
+    "SKILL_NOT_ALONE",
     "estimate_menu_tokens",
     "fit_menu_to_budget",
     "menu_keep_order",
@@ -213,18 +220,37 @@ def skill_tool_schema(
 _SKILL_NAME_MAX_LEN = 200
 
 
+#: The answer to a ``skill`` call that shared its response with ordinary tool
+#: calls. Those calls ran; only the activation was refused.
+SKILL_NOT_ALONE = (
+    "Skill not loaded: skill must be the only tool call in its response, "
+    "because its instructions arrive with the step after it. The other tool "
+    "calls in this response did run - their results are here. Call skill by "
+    "itself now if you still need it."
+)
+
+
 def _maybe_skill_decision(
     response: LLMResponse,
     assistant_message: Message,
     *,
     menu_names: frozenset[str],
     assistant_thinking: tuple[ThinkingBlock, ...] = (),
+    control_tool_names: frozenset[str] = frozenset(),
 ) -> Decision | None:
     """Translate a ``skill`` control-tool call into a neutral
     :class:`StatePatchDecision`, or ``None`` when no ``skill`` is present.
 
-    The ``skill`` call must be the **sole** tool call in the turn (mixed with
-    any other tool → recoverable error ack, no state write). The ``skill``
+    The ``skill`` call must be the **sole** tool call in the turn. Batched with
+    ordinary tool calls, those calls still run — a :class:`ToolCallsDecision`
+    carrying them, with the ``skill`` call answered in place by
+    :data:`SKILL_NOT_ALONE` — and only the activation is refused, so a model
+    that habitually batches loses one round trip, not its work. The skill is
+    not loaded alongside them: its activation anchors where the patch lands,
+    which on that path is ahead of the very assistant turn that asked for it,
+    and the body would be written in front of a turn already sent. Two
+    ``skill`` calls, or ``skill`` beside another control tool, stay a
+    recoverable refusal of the whole response. The ``skill``
     argument is validated against the menu set: a known name becomes a
     ``StatePatchDecision(activate_skills=[name])``; an unknown name becomes an
     error ack listing the available names so the model can retry.
@@ -239,6 +265,32 @@ def _maybe_skill_decision(
         return None
 
     # Sole-call rule — exactly one `skill` block and nothing else.
+    others = [b for b in tool_uses if b.tool_name != SKILL_TOOL]
+    if (
+        len(skill_blocks) == 1
+        and others
+        and not any(b.tool_name in control_tool_names for b in others)
+    ):
+        return ToolCallsDecision(
+            calls=[
+                ToolCall(
+                    tool_name=b.tool_name,
+                    arguments=dict(b.arguments),
+                    call_id=b.call_id,
+                )
+                for b in others
+            ],
+            assistant_message=assistant_message,
+            assistant_thinking=assistant_thinking,
+            preacked_results=(
+                ToolResultBlock(
+                    call_id=skill_blocks[0].call_id,
+                    output="",
+                    success=False,
+                    error=SKILL_NOT_ALONE,
+                ),
+            ),
+        )
     if len(skill_blocks) != len(tool_uses) or len(skill_blocks) != 1:
         return ack_patch_decision(
             tool_uses,
@@ -249,7 +301,8 @@ def _maybe_skill_decision(
             # has to read correctly on a neighbour that never ran too.
             text=(
                 "Nothing in this response ran: skill must be called on its "
-                "own. Re-issue the other calls in a separate response."
+                "own, once per response. Call skill by itself first, then "
+                "re-issue the other calls in a separate response."
             ),
             valid=False,
         )
@@ -312,6 +365,7 @@ def make_skill_translate(
             ctx.assistant_message,
             menu_names=menu_names,
             assistant_thinking=ctx.assistant_thinking,
+            control_tool_names=ctx.control_tool_names,
         )
 
     return translate

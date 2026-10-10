@@ -7,6 +7,9 @@ roster of skills indexed for this workspace; its instructions are in your
 context from your next step. A roster line may be shortened to save context —
 the skill behind it is complete, and activating it loads everything.
 
+Make it the only tool call in its response. Batched with other tool calls,
+those calls run but the skill is not loaded.
+
 ## When to use
 
 - The task matches an available skill — activate it BEFORE producing other output
