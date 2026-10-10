@@ -547,7 +547,10 @@ _UNKNOWN_MODEL_MAX_OUTPUT_TOKENS = 16_384
 
 
 def derive_compaction_config(
-    model: str, *, auto_compact_window: Optional[int] = None
+    model: str,
+    *,
+    auto_compact_window: Optional[int] = None,
+    clear_tool_outputs_at: Optional[int] = None,
 ) -> CompactionConfig:
     """Derive the compaction knobs for ``model``.
 
@@ -566,6 +569,13 @@ def derive_compaction_config(
     or ``None``, and one that leaves a usable window under the model's output
     ceiling plus the buffer; anything else raises here rather than running
     uncapped or compacting on every step.
+
+    ``clear_tool_outputs_at`` moves the microcompaction threshold off its
+    default of half the available window to this request size in tokens, so a
+    host can clear old tool outputs early and summarize late (a worker at
+    120K / 280K) with two independent numbers. A value at or past the
+    available window clears no earlier than the relief valve. A positive int
+    or ``None`` (half the window).
 
     **An uncatalogued model gets conservative knobs, not ``COMPACTION_OFF``.**
     Returning ``COMPACTION_OFF`` disables compaction *and* the composer's tail
@@ -627,6 +637,19 @@ def derive_compaction_config(
     # Strictly smaller than the available window, so summarising always has a
     # non-empty prefix to collapse when the trigger fires.
     tail = available // _TAIL_FRACTION_DENOM
+    fraction = _MICROCOMPACT_FRACTION
+    if clear_tool_outputs_at is not None:
+        if (
+            isinstance(clear_tool_outputs_at, bool)
+            or not isinstance(clear_tool_outputs_at, int)
+            or clear_tool_outputs_at < 1
+        ):
+            raise ValueError(
+                "clear_tool_outputs_at must be a positive int or None; "
+                f"got {clear_tool_outputs_at!r}"
+            )
+        if available > 0:
+            fraction = min(1.0, clear_tool_outputs_at / available)
     return CompactionConfig(
         context_window=context_window,
         max_output_tokens=max_output_tokens,
@@ -634,5 +657,5 @@ def derive_compaction_config(
         tail_token_budget=tail,
         composer_version=COMPOSER_VERSION,
         microcompact_keep_recent=_MICROCOMPACT_KEEP_RECENT,
-        microcompact_fraction=_MICROCOMPACT_FRACTION,
+        microcompact_fraction=fraction,
     )

@@ -15,6 +15,7 @@ model nobody wrote a row for). It now logs once and derives from a conservative
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 
 import pytest
@@ -190,3 +191,43 @@ def test_auto_compact_window_under_the_output_ceiling_is_refused() -> None:
     cfg = derive_compaction_config("opus", auto_compact_window=floor + 3)
     assert cfg.context_window == floor + 3
     assert cfg.tail_token_budget == 1
+
+
+# ---------------------------------------------------------------------------
+# ``clear_tool_outputs_at`` — the microcompaction threshold on its own number
+# ---------------------------------------------------------------------------
+
+
+def test_clear_tool_outputs_at_moves_only_the_microcompaction_threshold() -> None:
+    """A worker clears at 120K and summarizes at the 300K window: the
+    microcompaction fraction is the clear point over the available window,
+    and every other knob is the one ``auto_compact_window`` alone derives."""
+    base = derive_compaction_config("opus", auto_compact_window=300_000)
+    cfg = derive_compaction_config(
+        "opus", auto_compact_window=300_000, clear_tool_outputs_at=120_000
+    )
+    available = base.context_window - base.max_output_tokens - base.compaction_buffer  # type: ignore[operator]
+    assert cfg.microcompact_fraction * available == pytest.approx(120_000)
+    assert cfg.microcompact_fraction != base.microcompact_fraction
+    assert cfg == dataclasses.replace(base, microcompact_fraction=cfg.microcompact_fraction)
+
+
+def test_clear_tool_outputs_at_past_the_window_clears_with_the_relief_valve() -> None:
+    cfg = derive_compaction_config(
+        "opus", auto_compact_window=300_000, clear_tool_outputs_at=10_000_000
+    )
+    assert cfg.microcompact_fraction == 1.0
+
+
+def test_clear_tool_outputs_at_unset_keeps_half_the_window() -> None:
+    assert derive_compaction_config("opus", clear_tool_outputs_at=None) == (
+        derive_compaction_config("opus")
+    )
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, 1.5])
+def test_clear_tool_outputs_at_refuses_anything_but_a_positive_int(
+    bad: object,
+) -> None:
+    with pytest.raises(ValueError, match="clear_tool_outputs_at"):
+        derive_compaction_config("opus", clear_tool_outputs_at=bad)  # type: ignore[arg-type]

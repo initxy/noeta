@@ -626,6 +626,17 @@ class HostConfig:
     #: bytes, so a resumed task must be given the same value — the
     #: ``tool_output_inline_limit`` rule. ``None`` ⇒ the model's window.
     auto_compact_window: Optional[int] = None
+    #: The request size, in tokens, at which tool outputs older than the newest
+    #: five start clearing to ``[tool output cleared]`` (microcompaction).
+    #: ``None`` ⇒ half the usable window ``auto_compact_window`` (or the model)
+    #: leaves, the summarize trigger being the whole of it — so by default the
+    #: two valves move together. Set it to clear early and summarize late, on
+    #: two independent numbers: a long-running worker on a 1M model at
+    #: ``clear_tool_outputs_at=120_000`` and ``auto_compact_window=300_000``.
+    #: A value at or past the usable window clears no earlier than the relief
+    #: valve. Changes the composed bytes, so a resumed task must be given the
+    #: same value — the ``tool_output_inline_limit`` rule.
+    clear_tool_outputs_at: Optional[int] = None
     #: User hooks (:class:`HooksConfig`): pre-tool-use rules join the guard
     #: stack as the ``HookGuard``; post-tool-use and notification commands
     #: run from one background ``HookObserver`` the Client starts at
@@ -737,6 +748,7 @@ class HostConfig:
             ("memory_max_bytes", self.memory_max_bytes),
             ("memory_index_budget_tokens", self.memory_index_budget_tokens),
             ("auto_compact_window", self.auto_compact_window),
+            ("clear_tool_outputs_at", self.clear_tool_outputs_at),
             (
                 "max_background_jobs_per_root_task",
                 self.max_background_jobs_per_root_task,

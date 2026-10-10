@@ -649,6 +649,7 @@ class Client:
             effort=options.effort,
             compaction_model=options.compaction_model,
             auto_compact_window=hc.auto_compact_window,
+            clear_tool_outputs_at=hc.clear_tool_outputs_at,
             recall_model=options.recall_model,
             webfetch_model=options.webfetch_model,
             # Extension points.

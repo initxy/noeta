@@ -15,6 +15,10 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
   `LLMRetryScheduled`. Per client, so a worker client can ride out one gateway
   5xx while another keeps the default. `0` tries once; `None` keeps the
   runtime default of 8.
+- **`HostConfig.clear_tool_outputs_at`** — the request size, in tokens, at
+  which old tool outputs start clearing (the second compaction valve), apart
+  from the summarize trigger. Unset, it stays half the usable window, so a
+  host that sets only `auto_compact_window` sees no change.
 
 ## [0.6.35] - 2026-10-09
 

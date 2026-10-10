@@ -482,3 +482,45 @@ def test_host_config_refuses_a_non_positive_auto_compact_window(
 ) -> None:
     with pytest.raises(ValueError, match="auto_compact_window"):
         HostConfig(auto_compact_window=bad)  # type: ignore[arg-type]
+
+
+def test_clear_tool_outputs_at_reaches_the_composer(tmp_path: Path) -> None:
+    """The composer's microcompaction valve opens at the host's clear point
+    while its summarize-side window stays the one the window cap derives."""
+    main_spec = _simple_main_spec()
+    registry = AgentRegistry()
+    registry.add(main_spec)
+    host = _make_host(
+        registry, tmp_path, auto_compact_window=100_000, clear_tool_outputs_at=40_000
+    )
+    engine = host._build_engine(
+        main_spec,
+        "stub-model",
+        delegation_enabled=False,
+        allowed_subtask_agents=frozenset(),
+        ask_user_question_enabled=False,
+        policy_wrapper=None,
+    )
+    composer = engine._composer
+    assert composer._microcompact_fraction * composer._available_window == (
+        pytest.approx(40_000)
+    )
+    assert composer._available_window == (
+        derive_compaction_config("stub-model", auto_compact_window=100_000).context_window
+        - derive_compaction_config("stub-model").max_output_tokens
+        - derive_compaction_config("stub-model").compaction_buffer
+    )
+
+
+def test_host_config_forwards_clear_tool_outputs_at(tmp_path: Path) -> None:
+    from noeta.sdk import Client, Options
+
+    client = Client(
+        Options(system_prompt="x", name="main", allowed_tools=()),
+        provider=FakeLLMProvider(responses=[]),
+        workspace_dir=tmp_path,
+        host_config=HostConfig(clear_tool_outputs_at=120_000),
+    )
+    assert client._host.clear_tool_outputs_at == 120_000
+    with pytest.raises(ValueError, match="clear_tool_outputs_at"):
+        HostConfig(clear_tool_outputs_at=0)
