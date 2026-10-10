@@ -2271,6 +2271,12 @@ class SdkHost(GenericEngineResolver):
         # Route to the bound provider's adapter instance (``None`` ⇒ host default),
         # so a session on a different provider runs its LLM round-trips on that
         # adapter — the registry, not a host-fixed single instance, is the source.
+        # Only a host-set budget is passed: unset keeps the runtime's default.
+        retry_budget: dict[str, Any] = (
+            {"max_retries": self.llm_max_retries}
+            if self.llm_max_retries is not None
+            else {}
+        )
         llm = RuntimeLLMClient(
             provider=bound_provider,
             event_log=self.event_log,
@@ -2279,11 +2285,7 @@ class SdkHost(GenericEngineResolver):
             provider_headers=self.provider_headers,
             delta_sink=self.delta_sink,
             record_requests=self.record_llm_requests,
-            **(
-                {"max_retries": self.llm_max_retries}
-                if self.llm_max_retries is not None
-                else {}
-            ),
+            **retry_budget,
         )
         policy: Policy = inputs.policy_factory(llm)
         if policy_wrapper is not None:
