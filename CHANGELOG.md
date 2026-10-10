@@ -8,6 +8,14 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Added (`noeta-sdk`)
+
+- **`HostConfig.llm_max_retries`** — the client's budget of retries for a
+  model call that failed transiently (429, 5xx, timeout), each recorded as
+  `LLMRetryScheduled`. Per client, so a worker client can ride out one gateway
+  5xx while another keeps the default. `0` tries once; `None` keeps the
+  runtime default of 8.
+
 ## [0.6.35] - 2026-10-09
 
 Covers both packages, lockstep — 0.6.34 → 0.6.35 for `noeta-runtime` and
