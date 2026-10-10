@@ -8,6 +8,14 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.36] - 2026-10-10
+
+Covers both packages, lockstep — 0.6.35 → 0.6.36 for `noeta-runtime` and
+`noeta-sdk` (`noeta-sdk`'s `noeta-runtime>=` floor rises with it). The knobs a
+worker client needs: per-client retries, a clear point of its own, spilled tool
+output, a step budget, cleared tool-call arguments, and a `skill` call that no
+longer blocks the tools beside it.
+
 ### Added (`noeta-sdk`)
 
 - **`HostConfig.llm_max_retries`** — the client's budget of retries for a
@@ -3392,7 +3400,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.35...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.36...HEAD
+[0.6.36]: https://github.com/initxy/noeta/compare/v0.6.35...v0.6.36
 [0.6.35]: https://github.com/initxy/noeta/compare/v0.6.34...v0.6.35
 [0.6.34]: https://github.com/initxy/noeta/compare/v0.6.33...v0.6.34
 [0.6.33]: https://github.com/initxy/noeta/compare/v0.6.32...v0.6.33
