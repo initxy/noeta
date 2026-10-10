@@ -615,6 +615,17 @@ class HostConfig:
     #: the value the original run used, or it re-derives different tool-output
     #: bytes. ``None`` ⇒ no truncation (today's behavior).
     tool_output_inline_limit: Optional[int] = None
+    #: Where a result cut by ``tool_output_inline_limit`` is written whole, as
+    #: ``<dir>/<task_id>/<call_id>.txt``; the truncation marker then names the
+    #: file and tells the model to page through it with ``Read`` — Claude
+    #: Code's "output too large, saved to …" — instead of the rest being out of
+    #: reach. The file holds what the tool returned (``Bash`` has already
+    #: elided its middle past 30,000 characters). The directory must be one
+    #: the session's ``Read`` can reach; under a remote sandbox that means a
+    #: path the host's own side serves. Nothing removes the files: the host
+    #: owns the directory's lifetime. ``None`` (the default) writes nothing;
+    #: without ``tool_output_inline_limit`` it is never used.
+    tool_output_spill_dir: Optional[Path] = None
     #: Compact as if the model's context window were this many tokens —
     #: Claude Code's ``autoCompactWindow``. Every number compaction derives
     #: (the usable window the summarize trigger reads, the protected verbatim

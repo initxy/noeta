@@ -720,6 +720,10 @@ class SdkHost(GenericEngineResolver):
     # truncation. A resumed session must reuse the value the original run used, or
     # it re-derives different tool-output bytes.
     tool_output_inline_limit: Optional[int] = None
+    # Where a result cut by ``tool_output_inline_limit`` is written whole, for
+    # the model to page through (HostConfig.tool_output_spill_dir). None = no
+    # file; the marker then only counts what was dropped.
+    tool_output_spill_dir: Optional[Path] = None
     # SDK Options extension points threaded into every Engine this host builds. All
     # default to inert values; the SDK host feeds the SAME values to the live and
     # resume paths (single _build_engine call site), so a resumed turn rebuilds the
@@ -2303,6 +2307,7 @@ class SdkHost(GenericEngineResolver):
             # exactly one event per (task, skill).
             content_hashes=inputs.content_hashes,
             tool_output_inline_limit=inputs.tool_output_inline_limit,
+            tool_output_spill_dir=self.tool_output_spill_dir,
             # The turn's tool runtime: the host's background-shell registry,
             # its per-turn file-checkpoint gate, this agent's
             # ``tool_result_transform`` stages, and the TASK's read-first record
@@ -2403,6 +2408,7 @@ class SdkHost(GenericEngineResolver):
             hooks=inputs.hooks,
             content_hashes=inputs.content_hashes,
             tool_output_inline_limit=inputs.tool_output_inline_limit,
+            tool_output_spill_dir=self.tool_output_spill_dir,
             tool_runtime=self._tool_runtime(None, task_id),
             content_init_hooks=inputs.init_hooks,
         )

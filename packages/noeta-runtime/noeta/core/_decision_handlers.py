@@ -15,9 +15,11 @@ Decision raises ``NotImplementedError("Unknown decision type: <name>")``.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from dataclasses import replace as dc_replace
+from pathlib import Path
 from typing import Any, Callable, Container, Iterable, Optional, Protocol, Sequence
 
 from noeta.protocols.canonical import (
@@ -141,6 +143,7 @@ __all__ = [
     "record_assistant_thinking",
     "resume_approved_decision",
     "strip_message_origin",
+    "tool_output_spiller",
     "wrap_tool_result_block",
 ]
 
@@ -373,6 +376,10 @@ class HandlerContext:
     #: messages-stream shape. For byte-equivalent resume the recording's host
     #: must wire the same value.
     tool_output_inline_limit: Optional[int] = None
+    #: Where a result cut by ``tool_output_inline_limit`` is written whole, as
+    #: ``<dir>/<task_id>/<call_id>.txt``, so the model can page through it with
+    #: ``Read``; the truncation marker names the file. ``None`` ⇒ no file.
+    tool_output_spill_dir: Optional[Path] = None
     #: background sub-agent launch hook. Wired only on a top-level interactive
     #: Engine; ``None`` everywhere else (oneshot / child engines / resume) so a
     #: ``spawn_subagent(background=True)`` degrades to the ordinary foreground
@@ -520,6 +527,7 @@ def wrap_tool_result_block(
     result: ToolResult,
     *,
     tool_output_inline_limit: Optional[int] = None,
+    spill: Optional[Callable[[str, str], Optional[str]]] = None,
 ) -> ToolResultBlock:
     """Render a tool result as a typed :class:`ToolResultBlock`.
 
@@ -539,6 +547,11 @@ def wrap_tool_result_block(
     When the limit is ``None`` (the default, host-unspecified) the raw
     ``result.output`` is passed through **unchanged** so dict / list / ContentRef
     shapes the tools return stay typed.
+
+    ``spill(call_id, text)`` writes a cut output whole to a file the model can
+    ``Read`` and returns its path (``None`` when it could not), which the
+    marker then names — the hash stays out of the prompt, a path the model
+    can open goes in.
     """
     error: Optional[str] = None
     if not result.success:
@@ -551,7 +564,12 @@ def wrap_tool_result_block(
         inline = raw_output
     else:
         inline = _coerce_inline_output(raw_output)
-        inline = truncate_tool_output(inline, tool_output_inline_limit)
+        saved_to: Optional[str] = None
+        if spill is not None and len(inline) > tool_output_inline_limit:
+            saved_to = spill(call.call_id, inline)
+        inline = truncate_tool_output(
+            inline, tool_output_inline_limit, saved_to=saved_to
+        )
 
     # Image content the tool surfaced (e.g. ``read`` on a .png) rides into the
     # canonical message stream as ``ToolResultBlock.images``; the adapter
@@ -595,6 +613,8 @@ def _coerce_inline_output(raw: Any) -> str:
 def truncate_tool_output(
     output: str,
     limit: Optional[int],
+    *,
+    saved_to: Optional[str] = None,
 ) -> str:
     """Return ``output`` unchanged unless ``limit`` is positive and the
     output is strictly longer than ``limit`` characters.
@@ -608,7 +628,8 @@ def truncate_tool_output(
     and auditors can recognise the shape without parsing the payload. It does
     NOT name the full body's ref: that is recorded separately as
     ``ToolResultRecorded.output_ref`` (the model has no ref-deref tool, so a
-    hash in the prompt is dead weight it could only misread).
+    hash in the prompt is dead weight it could only misread). ``saved_to``,
+    a file holding the whole output, is named instead when there is one.
     """
     if limit is None:
         return output
@@ -620,15 +641,53 @@ def truncate_tool_output(
     if total <= limit:
         return output
     dropped = total - limit
-    suffix = (
-        "\n...[tool output truncated: "
-        f"{dropped} of {total} chars dropped]"
-    )
+    if saved_to is None:
+        suffix = (
+            "\n...[tool output truncated: "
+            f"{dropped} of {total} chars dropped]"
+        )
+    else:
+        suffix = (
+            "\n...[tool output truncated: "
+            f"{dropped} of {total} chars dropped; the full output was saved "
+            f"to {saved_to} - Read it with offset/limit to see the rest]"
+        )
     # If the suffix itself is longer than the drop we *still* append it
     # verbatim: the marker is contract and must be present for audit
     # tooling to recognise. The caller is responsible for setting a
     # limit that leaves room (typically 200+ chars).
     return output[:limit] + suffix
+
+
+_SPILL_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def tool_output_spiller(
+    spill_dir: Optional[Path], task_id: str
+) -> Optional[Callable[[str, str], Optional[str]]]:
+    """The ``spill`` callback :func:`wrap_tool_result_block` takes for one
+    task, or ``None`` when the host named no directory.
+
+    The path is a pure function of the directory, the task and the call, so
+    the marker a resumed run would write is the one the live run wrote. A
+    write that fails returns ``None``: the result is still cut, only without
+    a file to point at.
+    """
+    if spill_dir is None:
+        return None
+
+    def spill(call_id: str, text: str) -> Optional[str]:
+        task_part = _SPILL_NAME_UNSAFE.sub("_", task_id) or "task"
+        call_part = _SPILL_NAME_UNSAFE.sub("_", call_id) or "call"
+        path = Path(spill_dir) / task_part / f"{call_part}.txt"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(text.encode("utf-8", errors="surrogateescape"))
+        except (OSError, UnicodeEncodeError):
+            return None
+        return str(path)
+
+    return spill
 
 
 def _validate_tool_output_inline_limit(
@@ -751,6 +810,9 @@ def invoke_approved_tool_call(
                 call,
                 result,
                 tool_output_inline_limit=ctx.tool_output_inline_limit,
+                spill=tool_output_spiller(
+                    ctx.tool_output_spill_dir, task.task_id
+                ),
             )
         ],
     )
@@ -2597,6 +2659,9 @@ def handle_tool_calls(
                 call,
                 result,
                 tool_output_inline_limit=ctx.tool_output_inline_limit,
+                spill=tool_output_spiller(
+                    ctx.tool_output_spill_dir, task.task_id
+                ),
             )
         )
 
