@@ -37,6 +37,17 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
   knows which file it already read; the bare marker remains for a result
   whose call is out of view.
 
+### Changed (`noeta-sdk`)
+
+- **A `skill` call batched with ordinary tool calls no longer stops them.**
+  The other calls run; the `skill` call alone is answered with a refusal that
+  says they ran and to call `skill` by itself. The skill is not loaded in that
+  step, because its body would be placed ahead of the turn that asked for it.
+  `skill` beside another control tool, or two `skill` calls, still refuse the
+  whole response, with clearer words. The `skill` tool description now says
+  to call it alone (one cache write on upgrade: the schema is in the stable
+  prefix).
+
 ## [0.6.35] - 2026-10-09
 
 Covers both packages, lockstep — 0.6.34 → 0.6.35 for `noeta-runtime` and
