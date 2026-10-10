@@ -8,6 +8,35 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Changed (`noeta-sdk`)
+
+- **The `skill` tool's schema is fixed; the roster is a recorded listing.**
+  The schema no longer carries an `enum` or an "Available: …" roster, so it
+  is the same bytes for every task and every turn and an installed, removed
+  or re-ranked skill no longer rewrites the head of the prompt. The roster
+  is recorded once per task, pre-loop, as a `skill_listing` resident
+  ("The following skills are available via the `skill` tool:", one
+  `- name: summary` line per skill, fitted to the same budget and rank as
+  before) and is never rewritten. A skill installed mid-task is announced by
+  an appended `added-<k>` resident naming only it; removals and edited
+  summaries are not announced, and calling a removed skill gets the usual
+  "unknown skill" answer. What was already announced is read from the
+  recorded listings, so a restart or another replica announces the same; the
+  listing re-hangs after a compaction summary. Replaces the process-local
+  "new skills" reminder (`roster_note` is gone). Claude Code's shape, kept on
+  the content channel (`docs/adr/model-driven-skill-invocation.md`,
+  2026-10-10 amendment).
+  - Measured on an 80-skill roster (`~/.claude/skills`): the `skill`
+    parameter shrinks from 8,911 to 107 bytes at the 2,000-token budget
+    (17,009 → 107 at 4,096) and the listing message is 7,375 bytes (15,443),
+    a net −1.4 KB per request. The tool description is 28 bytes shorter
+    (980 → 952).
+  - A task started before this release changes its tool schema once (one
+    prompt-cache miss) and records its listing at its next goal; earlier
+    messages keep their bytes.
+  - Without the `enum`, a provider's strict-schema mode no longer constrains
+    the name; a wrong name costs one round trip.
+
 ## [0.6.36] - 2026-10-10
 
 Covers both packages, lockstep — 0.6.35 → 0.6.36 for `noeta-runtime` and

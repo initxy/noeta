@@ -61,8 +61,16 @@ GOLDEN_LOADED_TOOLS: list[str] = [
     "open_app",
 ]
 
-GOLDEN_DEFAULT_KINDS: list[str] = ["skill", "memory", "environment"]
-GOLDEN_LOADED_KINDS: list[str] = ["skill", "memory", "instructions", "environment"]
+# ``skill_listing`` (band 110) rides the skills pack only when the agent
+# activates ``skill_invocation`` — ``main`` does.
+GOLDEN_DEFAULT_KINDS: list[str] = ["skill", "skill_listing", "memory", "environment"]
+GOLDEN_LOADED_KINDS: list[str] = [
+    "skill",
+    "skill_listing",
+    "memory",
+    "instructions",
+    "environment",
+]
 
 
 class _FakeBrowserBackend:

@@ -200,7 +200,7 @@ built-in < plugin < extra_skill_dirs < ~/.agents/skills < ~/.noeta/skills < work
 | `menu_rank` | `技能名 → 分数`，菜单超长时按它决定保留顺序 |
 | `allow_skill_scripts` | 挂上 `run_skill_script` |
 
-`global_skills_dir` 是宿主字段。默认只挂工作区两层。菜单超长时，先把每条简介缩成第一句（≤ 24 token），还不够就让排在最后的只留名字；每条简介本身上限 384 token。没有 `menu_rank` 也没有 `HostConfig.skill_menu_rank_resolver` 时，按记录下来的使用次数排序。
+`global_skills_dir` 是宿主字段。默认只挂工作区两层。菜单超长时，先把每条简介缩成第一句（≤ 24 token），还不够就让排在最后的只留名字；每条简介本身上限 384 token。没有 `menu_rank` 也没有 `HostConfig.skill_menu_rank_resolver` 时，按记录下来的使用次数排序。技能清单在每个任务开头记录一次，之后不再改；后来新装的技能会追加一条消息单独列出，所以 `skill` 工具的定义对所有任务、每一轮都一样。
 
 ```toml
 [[tool.noeta.contributions]]

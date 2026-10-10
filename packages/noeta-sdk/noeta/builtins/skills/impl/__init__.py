@@ -33,11 +33,11 @@ from .script import (
     RunSkillScriptTool,
     is_skill_script_resource,
 )
-from .roster_note import (
+from .listing import (
     ROSTER_SLOT,
+    SKILL_LISTING_KIND,
     SkillRoster,
-    new_skills_note,
-    new_skills_reminder_provider,
+    skill_listing_provider,
 )
 from .wiring import (
     DEFAULT_SKILLS_SUBDIR,
@@ -61,6 +61,7 @@ __all__ = [
     "WORKSPACE_AGENTS_SKILLS_SUBDIR",
     "SKILL_DRIFT_POLICY",
     "SKILL_KIND",
+    "SKILL_LISTING_KIND",
     "SKILL_SCRIPT_TOOL_NAME",
     "SKILL_TOOL",
     "RunSkillScriptTool",
@@ -83,11 +84,10 @@ __all__ = [
     "make_skill_translate",
     "make_skills_control_tool",
     "merge_skill_registries",
-    "new_skills_note",
-    "new_skills_reminder_provider",
     "resolve_skill_allowed_tools",
     "resolve_skill_scripts",
     "skill_content_hash",
     "skill_content_kind",
+    "skill_listing_provider",
     "skill_tool_schema",
 ]

@@ -2,12 +2,14 @@
 
 A control tool, not an Engine/ToolRuntime tool: a ``skill`` call activates a
 named skill via a ``StatePatchDecision``, the same channel pre-loop activations
-use. This module owns the tool's whole story — provider schema, menu-name
-validator, response→neutral-Decision translate body, and its ``skill.md``
-description. It builds on kernel-side neutral mechanism only (the control-tool
-mount types, ``ControlTranslateContext``, and shared helpers like
-``enum_roster_prop`` that several plugins reuse), and is reached solely through
-the plugin loader's ``ref`` resolution.
+use. This module owns the tool's whole story — provider schema, skill-name
+validator, response→neutral-Decision translate body, its ``skill.md``
+description, and the budget fitting of the roster lines the skill listing
+records (:mod:`~noeta.builtins.skills.impl.listing`). The schema carries no
+roster: it is byte-identical for every task and turn, so the head of the prompt
+never moves with the skill set. It builds on kernel-side neutral mechanism only
+(the control-tool mount types, ``ControlTranslateContext``, shared validators),
+and is reached solely through the plugin loader's ``ref`` resolution.
 """
 
 from __future__ import annotations
@@ -23,7 +25,6 @@ from noeta.execution.control_tool import (
 from noeta.policies.control_semantics import (
     ControlTranslateContext,
     ack_patch_decision,
-    enum_roster_prop,
     validate_required_string,
 )
 from noeta.protocols.decisions import (
@@ -52,12 +53,14 @@ __all__ = [
     "SKILL_NOT_ALONE",
     "estimate_menu_tokens",
     "fit_menu_to_budget",
+    "listing_lines",
     "menu_keep_order",
     "short_summary",
     "skill_tool_schema",
     "make_skill_translate",
     "make_skills_control_tool",
     "model_invocable_names",
+    "roster_line",
 ]
 
 
@@ -69,10 +72,10 @@ SKILL_TOOL = "skill"
 
 
 #: Per-skill budget for the roster line, in estimated tokens
-#: (:func:`estimate_menu_tokens`). Every menu description concatenates into ONE
-#: property description that sits inside the stable-prefix hash, so an author's
-#: unbounded ``description:`` is unbounded prompt on every single turn of every
-#: session that indexes it. Tokens, not characters, so a Chinese summary is
+#: (:func:`estimate_menu_tokens`). Every roster line is recorded into the skill
+#: listing every task carries for its whole life, so an author's unbounded
+#: ``description:`` is unbounded prompt on every single turn of every session
+#: that indexes it. Tokens, not characters, so a Chinese summary is
 #: capped at the same cost as an English one; 384 is Claude Code's 1,536
 #: characters for an ASCII summary.
 MENU_DESCRIPTION_MAX_TOKENS = 384
@@ -172,19 +175,26 @@ def short_summary(text: str) -> str:
     return _clip_to_tokens(first, MENU_SHORT_SUMMARY_MAX_TOKENS, _SHORT_MARKER)
 
 
-#: The roster joins entries with this separator (see ``enum_roster_prop``);
-#: the cost model charges it per entry so the estimate tracks the rendered
-#: string rather than the bare summaries.
-_ROSTER_SEPARATOR = "; "
-_ROSTER_DASH = " — "
+#: One roster line is ``- name: summary`` (``- name`` with no summary), one
+#: per line; the cost model charges the whole line so the estimate tracks the
+#: recorded listing rather than the bare summaries.
+_LINE_BULLET = "- "
+_LINE_COLON = ": "
+
+
+def roster_line(name: str, summary: str) -> str:
+    """The listing line for ``name`` showing ``summary`` (``""`` ⇒ name only)."""
+    return _LINE_BULLET + name + (_LINE_COLON + summary if summary else "")
 
 
 _SKILL_DESCRIPTION = load_markdown(__package__, "skill")
 
+_SKILL_PROP_DESCRIPTION = (
+    "Name of the skill to activate, from the skill listing in your context."
+)
 
-def skill_tool_schema(
-    menu: tuple[tuple[str, str], ...] = (),
-) -> dict[str, Any]:
+
+def skill_tool_schema() -> dict[str, Any]:
     """Provider-visible schema for :data:`SKILL_TOOL`.
 
     A control tool (never an Engine/ToolRuntime tool): a ``skill`` call
@@ -193,11 +203,13 @@ def skill_tool_schema(
     ``control_action_schemas`` only when ``skill_invocation_enabled`` AND the
     workspace has at least one indexed skill.
 
-    ``menu`` is a sorted sequence of ``(name, description)`` pairs. The name is
-    rendered into the ``skill`` property's ``enum``; the description is appended
-    as a human-readable roster. A single required ``skill`` string parameter.
+    A single required ``skill`` string parameter, with no ``enum`` and no
+    roster: the names and summaries reach the model through the recorded skill
+    listing, and the translate validates the name. The schema is therefore the
+    same bytes for every task and every turn (Claude Code's ``Skill`` tool has
+    the same shape).
     """
-    skill_prop = enum_roster_prop("Name of the skill to activate.", menu)
+    skill_prop = {"type": "string", "description": _SKILL_PROP_DESCRIPTION}
     return {
         "type": "function",
         "function": {
@@ -215,7 +227,7 @@ def skill_tool_schema(
 
 
 # Max length for a skill name string (generous upper bound; the real gate is
-# the menu enum, but this catches obviously-malformed payloads before we
+# the name set, but this catches obviously-malformed payloads before we
 # format the error roster).
 _SKILL_NAME_MAX_LEN = 200
 
@@ -251,7 +263,7 @@ def _maybe_skill_decision(
     and the body would be written in front of a turn already sent. Two
     ``skill`` calls, or ``skill`` beside another control tool, stay a
     recoverable refusal of the whole response. The ``skill``
-    argument is validated against the menu set: a known name becomes a
+    argument is validated against the model-invocable name set: a known name becomes a
     ``StatePatchDecision(activate_skills=[name])``; an unknown name becomes an
     error ack listing the available names so the model can retry.
 
@@ -351,12 +363,13 @@ def _maybe_skill_decision(
 def make_skill_translate(
     menu_names: frozenset[str],
 ) -> Callable[[ControlTranslateContext], Optional[Decision]]:
-    """Build the ``skill`` translate closure over its indexed menu names.
+    """Build the ``skill`` translate closure over the model-invocable names.
 
-    The closure captures ``menu_names`` so :func:`_maybe_skill_decision`
-    validates an ordered skill against the same set the schema's enum was built
-    from, without the neutral :class:`ControlTranslateContext` carrying a
-    feature-named field.
+    The closure captures ``menu_names`` — this build's live roster, not the
+    listing the task recorded — so :func:`_maybe_skill_decision` accepts a
+    skill installed since the listing and refuses one removed since, without
+    the neutral :class:`ControlTranslateContext` carrying a feature-named
+    field.
     """
 
     def translate(ctx: ControlTranslateContext) -> Optional[Decision]:
@@ -377,7 +390,7 @@ def _menu_description(text: str) -> str:
     Truncation is a suffix marker rather than a hard cut, so the model can tell
     a clipped summary from a terse one and knows the body holds the rest. The
     result stays within :data:`MENU_DESCRIPTION_MAX_TOKENS` estimated tokens,
-    marker included. ``$ARGUMENTS`` is excised first — the menu is a
+    marker included. ``$ARGUMENTS`` is excised first — the listing is a
     model-visible surface and Noeta has no argument channel to substitute from
     (same rule as the activation render; see
     ``indexer.strip_argument_placeholder``).
@@ -430,9 +443,8 @@ def menu_keep_order(
 
 
 def _entry_tokens(name: str, description: str) -> int:
-    """Estimated cost of one rendered roster entry plus its separator."""
-    text = name + (_ROSTER_DASH + description if description else "")
-    return estimate_menu_tokens(text + _ROSTER_SEPARATOR)
+    """Estimated cost of one roster line plus its newline."""
+    return estimate_menu_tokens(roster_line(name, description) + "\n")
 
 
 def fit_menu_to_budget(
@@ -444,7 +456,7 @@ def fit_menu_to_budget(
     its full summary, its :func:`short_summary`, or ``""`` (name only).
 
     The cost model is the rendered roster: every entry pays for its name (a
-    name is never dropped — the ``enum`` must list every skill the model may
+    name is never dropped — the listing must name every skill the model may
     activate), and a summary pays its increment over the bare name. Below the
     budget every summary stays full, so today's rosters are byte-identical.
     Over it, two greedy passes run in ``keep_order``:
@@ -510,8 +522,9 @@ def fit_menu_to_budget(
 
 
 def model_invocable_names(registry: Any) -> tuple[str, ...]:
-    """The sorted skill names ``registry`` lets the model invoke — the
-    ``skill`` tool's enum, before any budget fitting. A skill whose
+    """The sorted skill names ``registry`` lets the model invoke — what the
+    ``skill`` translate accepts and the listing names, before any budget
+    fitting. A skill whose
     frontmatter declares ``disable-model-invocation: true`` is left out (it
     stays loadable through the host preload channel). ``()`` for no registry."""
     if registry is None:
@@ -525,35 +538,31 @@ def model_invocable_names(registry: Any) -> tuple[str, ...]:
     return tuple(out)
 
 
-def _skill_menu(
+def listing_lines(
     registry: Any,
     *,
     budget_tokens: int = DEFAULT_MENU_BUDGET_TOKENS,
     rank: Optional[Mapping[str, float]] = None,
-) -> tuple[tuple[tuple[str, str], ...], frozenset[str]]:
-    """The ``skill`` tool's ``(menu, menu_names)``, derived from the plugin's
-    own registry.
-
-    ``menu`` is the sorted ``(name, description)`` tuple the schema renders;
-    ``menu_names`` is the frozenset the translate closure validates against —
-    and the mount's gate. An empty index reads the same as no registry: the
-    tool is not grown.
+) -> tuple[tuple[str, str], ...]:
+    """The roster as ``(name, line)`` pairs, name-sorted and fitted to
+    ``budget_tokens`` — what the skill listing records.
 
     A skill whose frontmatter declares ``disable-model-invocation: true`` is
-    excluded from **both**, so the model can neither see it nor name it. It
-    stays in the Registry, which is what keeps the host preload channel
-    (``Options.skills``, a seed activation) able to load it — the same split
-    Claude Code draws between what the model may invoke and what the user may.
+    left out, so the model neither sees it nor can name it. It stays in the
+    Registry, which is what keeps the host preload channel (``Options.skills``,
+    a seed activation) able to load it — the same split Claude Code draws
+    between what the model may invoke and what the user may.
 
-    The roster is then fitted to ``budget_tokens`` (:func:`fit_menu_to_budget`
-    in :func:`menu_keep_order`): over the budget a skill shows a shortened
-    summary or its name alone. The menu stays name-sorted whatever the keep
-    order, so the ``enum`` bytes never depend on ``rank``; only how much of
-    each summary survives does. Going over budget is logged once per build —
-    the operator's cue to trim the skill tiers or raise the budget.
+    Over the budget a skill shows a shortened summary or its name alone
+    (:func:`fit_menu_to_budget` in :func:`menu_keep_order`). The lines stay
+    name-sorted whatever the keep order; rank decides only how much of each
+    summary survives. The listing records these lines once per task, so rank
+    and budget shape a task's bytes exactly once. Going over budget is logged
+    once per build — the operator's cue to trim the skill tiers or raise the
+    budget.
     """
     if registry is None:
-        return (), frozenset()
+        return ()
     entries: list[tuple[str, str]] = []
     for name in model_invocable_names(registry):
         desc = registry.get(name)
@@ -561,7 +570,7 @@ def _skill_menu(
             continue
         entries.append((name, _menu_description(desc.description)))
     if not entries:
-        return (), frozenset()
+        return ()
     names = tuple(name for name, _ in entries)
     fitted = fit_menu_to_budget(
         entries, menu_keep_order(registry, names, rank), budget_tokens
@@ -582,45 +591,32 @@ def _skill_menu(
             sum(_entry_tokens(name, desc) for name, desc in entries),
             budget_tokens,
         )
-        entries = [(name, fitted[name]) for name, _ in entries]
-    return tuple(entries), frozenset(names)
+    return tuple((name, roster_line(name, fitted[name])) for name in names)
 
 
 def make_skills_control_tool(
     registry: Any,
-    *,
-    menu_budget_tokens: Optional[int] = None,
-    menu_rank: Optional[Mapping[str, float]] = None,
 ) -> Callable[[ControlToolBuildContext], Optional[ControlToolMount]]:
     """Build the ``skill`` control-tool mount factory over ``registry``.
 
     The returned factory closes over the pack's merged registry and rides
     ``PackContribution.control_tools`` into the builder's generic mount loop. It
     self-gates on the effective ``skill_invocation`` capability flag AND a
-    non-empty indexed menu — mounting IS enablement. The rendered menu tuple may
-    be empty (descriptions absent) while the tool is still grown.
-
-    ``menu_budget_tokens`` (``None`` ⇒ :data:`DEFAULT_MENU_BUDGET_TOKENS`) and
-    ``menu_rank`` (``None`` ⇒ no host ranking) are the session pack's reading
-    of its ``menu_budget_tokens`` / ``menu_rank`` config keys; both are fixed
-    for the closure's life, so every mount of one session composes the same
-    roster bytes.
+    non-empty model-invocable roster — mounting IS enablement. The schema is
+    fixed (:func:`skill_tool_schema`); only the translate's name set follows
+    the registry.
     """
-    budget = (
-        DEFAULT_MENU_BUDGET_TOKENS if menu_budget_tokens is None else menu_budget_tokens
-    )
-    rank: Optional[Mapping[str, float]] = dict(menu_rank) if menu_rank else None
 
     def factory(ctx: ControlToolBuildContext) -> Optional[ControlToolMount]:
         if not ctx.flag("skill_invocation"):
             return None
-        menu, menu_names = _skill_menu(registry, budget_tokens=budget, rank=rank)
-        if not menu_names:
+        names = frozenset(model_invocable_names(registry))
+        if not names:
             return None
         return ControlToolMount(
             name=SKILL_TOOL,
-            schema=skill_tool_schema(menu),
-            translate=make_skill_translate(menu_names),
+            schema=skill_tool_schema(),
+            translate=make_skill_translate(names),
             routing_priority=400,
             schema_priority=400,
         )

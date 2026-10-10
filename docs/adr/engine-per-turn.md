@@ -65,7 +65,8 @@ build's task — so the runtime names no built-in type: the ReAct policy keeps
 its compaction-trigger calibration there (the host binds the slot onto the
 react factory with `functools.partial`, leaving `PolicyFactoryBuilder`
 unchanged), the web pack its page cache, the skills pack the roster it
-composed, the host its last MCP provenance. A restart starts every task's
+composed (what the roster is now — what the task was already told is read
+from its recorded skill listing), the host its last MCP provenance. A restart starts every task's
 local state empty; nothing here is recorded or resumed.
 
 **Only the MCP connection outlives the turn, in a host-owned pool keyed by
@@ -87,11 +88,12 @@ their JSON-RPC exchanges on an instance lock. A tool-name collision
 operator's wiring, not the connection's fault.
 
 **Mutable inputs are therefore read per turn, and "next turn" is the unit of
-change.** A skill installed, edited or removed shows in every task's next
-`skill` roster; the skills built-in additionally records a "new skills" note
-on the turn the roster grew (a `turn_intake` reminder over the task-local
-roster slot: silent on a task's opening turn and after a restart — Claude
-Code's behaviour). An MCP server's tool-list change shows next turn because
+change.** A skill installed shows on every task's next turn: the skills
+built-in records an `added-<k>` skill-listing resident naming it (a
+`turn_intake` provider comparing the task-local roster slot with the recorded
+listings — `model-driven-skill-invocation.md`, 2026-10-10 amendment). A
+removed skill is refused by name from the next turn; an edited one loads its
+new body. The listing itself is never rewritten. An MCP server's tool-list change shows next turn because
 `tools/list` runs per build on the pooled connection. MCP provenance is
 emitted once per task and again when the enabled aliases change; a skipped
 server is reported once per outage, both tracked in the task's local state.
@@ -109,7 +111,7 @@ server is reported once per outage, both tracked in the task's local state.
 - **Within a turn, reuse is correctness, not economy.** The spec's own
   non-goal is "no mid-turn tool-set change: the turn is the unit". Rebuilding
   on an approval resume would let a skill installed while the user was
-  deciding change the `skill` schema in the middle of one goal — and it
+  deciding change the `skill` name set in the middle of one goal — and it
   rebuilt three times for one message. Holding the turn's Engine also gives
   the ask-answer path (`_answer_codec`) its Engine for free and keeps the MCP
   lease's span equal to the turn.
@@ -183,7 +185,9 @@ server is reported once per outage, both tracked in the task's local state.
 - A model switched on `send_goal` drives the *next* turn (the pre-prelude
   fold, as before); the switching turn now runs on one Engine throughout,
   approval resumes included.
-- The `skill_menu_rank` per-task memo stays, for prefix stability alone.
+- The `skill_menu_rank` per-task memo stays, to keep the rank resolver to one
+  call per task (the recorded skill listing, not the memo, keeps the bytes
+  stable).
 - Cross-turn state on a Policy or Tool instance is gone by construction. A
   host-supplied `Options.policy` that keeps state across turns must key it by
   task itself.

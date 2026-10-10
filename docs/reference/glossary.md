@@ -93,7 +93,7 @@ it. The authoritative source is
 - **SandboxProvider** — provisions and reaps a container per root task (`allocate`, `release`, `attach`). `ExecEnv` then talks to it. → [Sandbox](../guides/sandbox.md)
 - **Session pack** — a `session_pack` contribution that builds part of a task's tool set and residents from a `SessionBuildContext`. It returns an empty contribution when it does not apply. → [Plugin surfaces](plugin-surfaces.md)
 - **SessionBuildContext** — the frozen input every session pack reads: workspace, content store, exec env, model, allowed tools, backend bag, plugin config. → [Plugin surfaces](plugin-surfaces.md)
-- **Skill** — a static workflow template at `.noeta/skills/<name>/SKILL.md`. The model sees a menu of names and summaries; the body loads only when chosen. Not a tool. → [Presets](presets.md)
+- **Skill** — a static workflow template at `.noeta/skills/<name>/SKILL.md`. The model sees a listing of names and summaries, recorded once per task; the body loads only when chosen. Not a tool. → [Presets](presets.md)
 - **Snapshot** — a `TaskSnapshot` event pointing at the full state in the `ContentStore`, written before each suspend and terminal event. Speeds up folding; not required. → [Event log](../how-it-works/event-log.md)
 - **Step** — one Engine pass: compose → decide → dispatch, looping on tool calls until a suspend or terminal. → [Engine](../how-it-works/engine.md)
 - **Subtask** — a task spawned by a parent, linked by `parent_task_id` and `subtask_depth`. Otherwise an ordinary task. → [Subagents](../guides/subagents.md)

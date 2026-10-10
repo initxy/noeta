@@ -228,8 +228,8 @@ _SKILLS_MOD: Optional[Any] = None
 def skills_impl() -> Any:
     """The ``skills`` built-in's impl module, loader-resolved (memoized).
 
-    The host's doorway to the per-task roster ledger and the "new skills"
-    ``turn_intake`` provider (``roster_note``); the pack itself still arrives
+    The host's doorway to the skill listing's ``turn_intake`` provider
+    (``listing``); the pack itself still arrives
     through the ``session_pack`` contribution.
     """
     global _SKILLS_MOD

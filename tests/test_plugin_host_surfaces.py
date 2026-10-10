@@ -51,7 +51,7 @@ from noeta.storage.memory import (
 )
 from noeta.testing.fake_llm import FakeLLMProvider
 
-from tests._skill_fixtures import write_skill_raw
+from tests._skill_fixtures import listing_entries, write_skill_raw
 
 
 # ---------------------------------------------------------------------------
@@ -112,12 +112,12 @@ def _tool_names(provider: FakeLLMProvider, index: int = 0) -> frozenset[str]:
     )
 
 
-def _skill_menu(provider: FakeLLMProvider, index: int = 0) -> dict[str, Any]:
-    """The ``skill`` control tool's schema off a composed request, or ``{}``."""
-    for spec in provider.received_requests[index].tools or ():
-        if spec.get("function", {}).get("name") == "skill":
-            return spec["function"]["parameters"]["properties"]["skill"]
-    return {}
+def _skill_menu(provider: FakeLLMProvider, index: int = 0) -> dict[str, str]:
+    """The skill listing the model saw in a composed request — ``name →
+    summary`` — or ``{}``. The ``skill`` tool itself must be mounted."""
+    request = provider.received_requests[index]
+    assert "skill" in _tool_names(provider, index)
+    return listing_entries(request.messages)
 
 
 def _host(workspace: Path, *, overrides: dict[str, dict[str, Any]]) -> SdkHost:
@@ -181,9 +181,7 @@ def test_plugin_skills_path_reaches_the_session_menu(tmp_path: Path) -> None:
     provider = _drive(
         tmp_path, _bare(plugins=("fs", "web", "skill_invocation")), plugins
     )
-    menu = _skill_menu(provider)
-    assert menu.get("enum") == ["runbook"]
-    assert "operate the thing" in menu["description"]
+    assert _skill_menu(provider) == {"runbook": "operate the thing"}
 
 
 def test_workspace_skill_shadows_a_plugin_skill(tmp_path: Path) -> None:
@@ -203,10 +201,7 @@ def test_workspace_skill_shadows_a_plugin_skill(tmp_path: Path) -> None:
     provider = _drive(
         tmp_path, _bare(plugins=("fs", "web", "skill_invocation")), plugins
     )
-    menu = _skill_menu(provider)
-    assert menu.get("enum") == ["runbook"]
-    assert "MY version" in menu["description"]
-    assert "PLUGIN version" not in menu["description"]
+    assert _skill_menu(provider) == {"runbook": "MY version"}
 
 
 def test_nonexistent_plugin_skills_path_contributes_nothing(tmp_path: Path) -> None:
@@ -226,7 +221,7 @@ def test_nonexistent_plugin_skills_path_contributes_nothing(tmp_path: Path) -> N
     provider = _drive(
         tmp_path, _bare(plugins=("fs", "web", "skill_invocation")), plugins
     )
-    assert _skill_menu(provider).get("enum") == ["tidy"]
+    assert _skill_menu(provider) == {"tidy": "t"}
 
 
 def test_relative_skills_path_is_refused_naming_the_plugin(tmp_path: Path) -> None:

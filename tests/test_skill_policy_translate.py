@@ -771,8 +771,12 @@ def test_e2e_presets_flag_full_chain(
         s for s in live_inputs.composer._control_action_schemas
         if s["function"]["name"] == SKILL_TOOL
     )
-    enum = skill_schema["function"]["parameters"]["properties"]["skill"]["enum"]
-    assert "bravo" in enum
+    # The schema carries no roster; the recorded skill listing names bravo.
+    assert "enum" not in skill_schema["function"]["parameters"]["properties"]["skill"]
+    from tests._skill_fixtures import init_listing, parse_listing_lines
+
+    listing = init_listing(live_inputs.init_hooks, cs)
+    assert "bravo" in parse_listing_lines(listing["roster"])
 
     responses = [_skill_call("bravo"), _end("done")]
     provider = FakeLLMProvider(responses=list(responses))

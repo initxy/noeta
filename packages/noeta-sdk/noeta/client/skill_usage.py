@@ -20,8 +20,9 @@ skill first forever.
 
 A rank derived here decays with ``now``. The host asks its
 ``skill_menu_rank_resolver`` once per task (the first non-empty answer is
-kept for the task's life in that process), so a fresh ``now`` per call never
-rotates a running task's roster; feed it the tenant's fold at task start.
+kept for the task's life in that process), and the skill listing records the
+fitted roster once per task, so a fresh ``now`` never rewrites a running
+task's roster; feed it the tenant's fold at task start.
 
 A host that binds no tenancy seam at all does not need a resolver: the SDK
 host then ranks with :class:`SkillUsageRanker`, the same fold over the most

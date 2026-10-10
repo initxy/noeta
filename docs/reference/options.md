@@ -200,11 +200,11 @@ Store root precedence: `memory_root_resolver` > `memory_dir` > `global_memory_di
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `skill_menu_rank_resolver` | `(task_id) -> {skill: score} \| None` | `None` | which skills keep full descriptions when the menu is over budget |
+| `skill_menu_rank_resolver` | `(task_id) -> {skill: score} \| None` | `None` | which skills keep full descriptions when the listing is over budget |
 | `skill_usage_ranking` | `bool` | `True` | with no resolver, rank by recent usage across the store; off automatically when a memory or MCP scope resolver is set |
 | `plugin_config` | `Mapping[str, Mapping[str, Any]]` | `{}` | per-plugin operator config; for `fs` / `skills` / `workspace` / `memory` your keys override the derived ones key by key; a plugin name the Client does not know raises a `UserWarning` |
 
-The skill menu takes 1% of the context window, at most 4,096 tokens (the same ceiling bounds the derived memory-index budget). Over that, entries shrink to a one-sentence summary, then to the name alone, lowest rank first. A static rank can go in `plugin_config["skills"]["menu_rank"]` instead of a resolver (not both).
+The skill listing takes 1% of the context window, at most 4,096 tokens (the same ceiling bounds the derived memory-index budget). Over that, entries shrink to a one-sentence summary, then to the name alone, lowest rank first. A static rank can go in `plugin_config["skills"]["menu_rank"]` instead of a resolver (not both). The listing is fitted once, when a task starts, and kept for its life.
 
 ### Limits and switches
 

@@ -146,7 +146,7 @@ Model-facing schemas that become engine decisions rather than `Tool.invoke` call
 | `Task` | the agent can delegate (derived when it has `agents`) | `delegation` |
 | `TodoWrite` | the agent activates it | `todo_write` |
 | `AskUserQuestion` | the agent activates it | `ask_user_question` |
-| `skill` | activated and the merged skill menu is non-empty | `skill_invocation` (mounted by `skills`) |
+| `skill` | activated and at least one skill is model-invocable | `skill_invocation` (mounted by `skills`) |
 | `run_workflow` | `HostConfig.workflow_allowed=True` and the agent can delegate | `react` |
 | `RecallHistory` | compaction is wired — always under `Client` / `query` | `react` |
 | `structured_output` | a subtask / workflow helper spawned with its own schema (`Options.output_schema` uses the provider's native mode instead); it must be the only call in its response — sent alongside other calls, the whole batch is refused and the model is told to send it alone | `react` |

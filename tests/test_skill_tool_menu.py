@@ -1,9 +1,11 @@
-"""The ``skill`` tool's schema is the model's only view of what skills exist.
+"""The ``skill`` tool and the skill listing it points at.
 
-It appears exactly when the capability is activated AND the workspace holds a
-skill, so a workspace without skills causes zero schema drift. The enum is
-sorted by name regardless of the order files landed on disk, which keeps the
-schema bytes stable across machines and preserves the provider's prompt cache.
+The tool appears exactly when the capability is activated AND the workspace
+holds a model-invocable skill, and its schema is the same bytes whatever the
+roster: no ``enum``, no names. The roster reaches the model as the recorded
+``skill_listing`` resident (``skills.impl.listing``), whose lines are
+name-sorted regardless of the order files landed on disk and fitted to the
+roster budget once per task.
 """
 
 from __future__ import annotations
@@ -15,7 +17,12 @@ from typing import Any
 
 import pytest
 
-from tests._skill_fixtures import write_skill, write_skill_raw
+from tests._skill_fixtures import (
+    init_listing,
+    parse_listing_lines,
+    write_skill,
+    write_skill_raw,
+)
 
 from tests._session_inputs import default_factory_kwargs
 from noeta.agent.registry import AgentRegistry
@@ -42,7 +49,9 @@ from noeta.builtins.skills.impl.control_tool import (
     MENU_SHORT_SUMMARY_MAX_TOKENS,
     estimate_menu_tokens,
     fit_menu_to_budget,
+    listing_lines,
     menu_keep_order,
+    roster_line,
     short_summary,
 )
 from noeta.builtins.skills.impl.indexer import SkillDescription, SkillRegistry
@@ -77,72 +86,106 @@ def _canonical(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
-def test_skill_schema_empty_menu_shape() -> None:
-    """Empty menu still produces the one-parameter shape (single ``skill``)."""
-    schema = skill_tool_schema(())
+def test_skill_schema_shape_carries_no_roster() -> None:
+    """One required ``skill`` string, with no ``enum`` and no roster text: the
+    names live in the skill listing, the translate validates them."""
+    schema = skill_tool_schema()
     assert schema["type"] == "function"
     assert schema["function"]["name"] == SKILL_TOOL
     params = schema["function"]["parameters"]
     assert params["required"] == ["skill"]
     prop = params["properties"]["skill"]
-    assert prop["type"] == "string"
-    # An empty enum is invalid in several provider schemas, so it is omitted.
-    assert "enum" not in prop
-    assert prop["description"] == "Name of the skill to activate."
+    assert prop == {
+        "type": "string",
+        "description": (
+            "Name of the skill to activate, from the skill listing in your context."
+        ),
+    }
 
 
 def test_skill_schema_no_args_no_reason() -> None:
     """The tool takes a name and nothing else: extra parameters would invite
     the model to pass state the activation path has nowhere to put."""
-    schema = skill_tool_schema((("alpha", "does things"),))
-    props = schema["function"]["parameters"]["properties"]
+    props = skill_tool_schema()["function"]["parameters"]["properties"]
     assert set(props.keys()) == {"skill"}
 
 
-def test_skill_schema_nonempty_menu_enum_and_desc() -> None:
-    """Menu entries populate the ``enum`` and append roster to description."""
-    menu = (
-        ("coder", "Writes Python code"),
-        ("reviewer", "Finds bugs in code"),
+def test_roster_line_renders_name_and_summary_or_the_bare_name() -> None:
+    """A listing line is ``- name: summary``; an empty summary (or one the
+    budget dropped) leaves the bare ``- name``."""
+    assert roster_line("coder", "Writes Python code") == "- coder: Writes Python code"
+    assert roster_line("anonymous", "") == "- anonymous"
+
+
+def test_listing_lines_are_name_sorted_pairs() -> None:
+    registry = _registry(
+        ("reviewer", "Finds bugs in code", 100),
+        ("coder", "Writes Python code", 100),
+        ("anonymous", "", 100),
     )
-    schema = skill_tool_schema(menu)
-    prop = schema["function"]["parameters"]["properties"]["skill"]
-    assert prop["enum"] == ["coder", "reviewer"]
-    desc = prop["description"]
-    assert desc.startswith("Name of the skill to activate.")
-    assert "Available: " in desc
-    roster = desc.split("Available: ", 1)[1]
-    assert "coder — Writes Python code" in roster
-    assert "reviewer — Finds bugs in code" in roster
-
-
-def test_skill_schema_bare_name_when_description_empty() -> None:
-    """Skill with empty description renders as bare name (no `` — `` tail)."""
-    menu = (
-        ("named", "Has description"),
-        ("anonymous", ""),
+    assert listing_lines(registry) == (
+        ("anonymous", "- anonymous"),
+        ("coder", "- coder: Writes Python code"),
+        ("reviewer", "- reviewer: Finds bugs in code"),
     )
-    schema = skill_tool_schema(menu)
-    prop = schema["function"]["parameters"]["properties"]["skill"]
-    assert prop["enum"] == ["named", "anonymous"]
-    roster = prop["description"].split("Available: ", 1)[1]
-    assert "named — Has description" in roster
-    assert "anonymous" in roster
-    assert "anonymous — " not in roster
+    assert listing_lines(None) == ()
+    assert listing_lines(_registry()) == ()
 
 
-def test_skill_schema_deterministic_bytes_for_same_input() -> None:
-    """The schema feeds a hashed prompt prefix, so identical input must give
-    byte-identical output."""
-    menu = (("a", "first"), ("b", "second"))
-    assert _canonical(skill_tool_schema(menu)) == _canonical(
-        skill_tool_schema(menu)
-    )
+def test_skill_schema_deterministic_bytes() -> None:
+    """The schema feeds a hashed prompt prefix and takes no input, so every
+    call — and every mount, whatever its registry — gives the same bytes."""
+    assert _canonical(skill_tool_schema()) == _canonical(skill_tool_schema())
+    one = make_skills_control_tool(_registry(("a", "first", 100)))(_FlagCtx())
+    two = make_skills_control_tool(
+        _registry(("b", "second", 100), ("c", "third", 100))
+    )(_FlagCtx())
+    assert one is not None and two is not None
+    assert _canonical(one.schema) == _canonical(two.schema)
+    assert _canonical(one.schema) == _canonical(skill_tool_schema())
 
 
 # ---------------------------------------------------------------------------
 # build_session_inputs integration — flag on/off, empty/non-empty registry
 # ---------------------------------------------------------------------------
+
+
+def _build_inputs(
+    ws: Path,
+    *,
+    skill_invocation_enabled: bool = True,
+    skills_config: dict[str, Any] | None = None,
+) -> tuple[Any, InMemoryContentStore]:
+    """Call ``build_session_inputs``; return the inputs and their store."""
+    content_store = InMemoryContentStore()
+    plugin_config: dict[str, Any] = {
+        "fs": {"write_mode": FsWriteMode.DRY_RUN, "shell_mode": ShellMode.OFF},
+    }
+    if skills_config is not None:
+        plugin_config["skills"] = skills_config
+    inputs = build_session_inputs(
+        **default_factory_kwargs(),
+        workspace_dir=ws,
+        system_prompt="you are helpful",
+        allowed_tools=frozenset({"read"}),
+        content_store=content_store,
+        model="stub-model",
+        compaction=COMPACTION_OFF,
+        budget=Budget(),
+        capability_flags={"skill_invocation": skill_invocation_enabled},
+        # The fs write/shell knobs ride plugin_config under the plugin's name.
+        plugin_config=plugin_config,
+    )
+    return inputs, content_store
+
+
+def _listing(ws: Path, **kwargs: Any) -> dict[str, str]:
+    """The ``roster`` resident the build's init hook records, as ``name →
+    summary`` (``""`` = name only); ``{}`` when it records none."""
+    inputs, store = _build_inputs(ws, **kwargs)
+    residents = init_listing(inputs.init_hooks, store)
+    assert set(residents) <= {"roster"}
+    return parse_listing_lines(residents.get("roster", ()))
 
 
 def _build_composer_schemas(
@@ -185,6 +228,10 @@ def test_flag_off_no_skill_schema_even_with_skills(tmp_path: Path) -> None:
     write_skill(ws, "coder", "Writes code")
     schemas = _build_composer_schemas(ws, skill_invocation_enabled=False)
     assert _find_skill_schema(schemas) is None
+    # ...and no listing: neither the kind nor a recorded roster.
+    inputs, _ = _build_inputs(ws, skill_invocation_enabled=False)
+    assert "skill_listing" not in inputs.composer._content_renderers.kinds()
+    assert _listing(ws, skill_invocation_enabled=False) == {}
 
 
 def test_flag_on_empty_registry_no_skill_schema(tmp_path: Path) -> None:
@@ -193,10 +240,12 @@ def test_flag_on_empty_registry_no_skill_schema(tmp_path: Path) -> None:
     ws.mkdir()
     schemas = _build_composer_schemas(ws, skill_invocation_enabled=True)
     assert _find_skill_schema(schemas) is None
+    assert _listing(ws) == {}
 
 
 def test_flag_on_with_skills_renders_sorted_menu(tmp_path: Path) -> None:
-    """Registry non-empty + flag on → enum sorted by name, descriptions present."""
+    """Registry non-empty + flag on → the tool is grown and the recorded
+    listing names every skill, sorted by name, summaries present."""
     ws = tmp_path / "ws"
     ws.mkdir()
     # Written out of order on purpose so the sort has something to do.
@@ -206,13 +255,11 @@ def test_flag_on_with_skills_renders_sorted_menu(tmp_path: Path) -> None:
     schemas = _build_composer_schemas(ws, skill_invocation_enabled=True)
     schema = _find_skill_schema(schemas)
     assert schema is not None
-    prop = schema["function"]["parameters"]["properties"]["skill"]
-    assert prop["enum"] == ["alpha", "beta", "zeta"]
-    desc = prop["description"]
-    assert "alpha — first letter" in desc
-    assert "zeta — last letter" in desc
-    assert "beta" in desc
-    assert "beta — " not in desc
+    assert "enum" not in schema["function"]["parameters"]["properties"]["skill"]
+    inputs, store = _build_inputs(ws)
+    assert init_listing(inputs.init_hooks, store) == {
+        "roster": ["- alpha: first letter", "- beta", "- zeta: last letter"]
+    }
 
 
 def test_menu_built_from_registry_not_caller(tmp_path: Path) -> None:
@@ -311,11 +358,11 @@ def test_sdkhost_capability_on_preserves_schema_with_skills(
 
     schema = _skill_schema_from_engine(engine)
     assert schema is not None, "skill schema missing when capability is on"
-    prop = schema["function"]["parameters"]["properties"]["skill"]
-    assert prop["enum"] == ["coder", "reviewer"]
-    assert "coder — Writes code" in prop["description"]
-    assert "reviewer" in prop["description"]
-    assert "reviewer — " not in prop["description"]
+    assert _canonical(schema) == _canonical(skill_tool_schema())
+    # The Engine carries the listing's init hook: it records the roster.
+    assert init_listing(engine.content_init_hooks, host.content_store) == {
+        "roster": ["- coder: Writes code", "- reviewer"]
+    }
 
 
 def test_sdkhost_capability_off_masks_schema_even_with_skills(
@@ -340,6 +387,7 @@ def test_sdkhost_capability_off_masks_schema_even_with_skills(
     )
 
     assert _skill_schema_from_engine(engine) is None
+    assert init_listing(engine.content_init_hooks, host.content_store) == {}
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +407,7 @@ def test_disable_model_invocation_skill_is_absent_from_the_menu(
     tmp_path: Path,
 ) -> None:
     """(a) first half — a skill declaring ``disable-model-invocation: true``
-    never enters the model's menu, while its neighbours still do."""
+    never enters the model's listing, while its neighbours still do."""
     ws = tmp_path / "ws"
     ws.mkdir()
     write_skill(ws, "visible", "on the menu")
@@ -370,11 +418,8 @@ def test_disable_model_invocation_skill_is_absent_from_the_menu(
         "Body of the hidden skill.\n",
     )
     schemas = _build_composer_schemas(ws, skill_invocation_enabled=True)
-    schema = _find_skill_schema(schemas)
-    assert schema is not None
-    prop = schema["function"]["parameters"]["properties"]["skill"]
-    assert prop["enum"] == ["visible"]
-    assert "hidden" not in prop["description"]
+    assert _find_skill_schema(schemas) is not None
+    assert _listing(ws) == {"visible": "on the menu"}
 
 
 def test_disable_model_invocation_skill_still_preloads_and_renders(
@@ -432,7 +477,7 @@ class _FlagCtx:
 
 
 def test_hidden_skill_cannot_be_named_by_the_model(tmp_path: Path) -> None:
-    """The translate validates against the SAME set the enum was built from, so
+    """The translate validates against the SAME set the listing names, so
     a model that guesses the name gets a recoverable error rather than a
     back door into an off-menu skill."""
     ws = tmp_path / "ws"
@@ -475,12 +520,11 @@ def test_hidden_skill_cannot_be_named_by_the_model(tmp_path: Path) -> None:
 
 def test_oversized_description_is_truncated_in_the_roster(tmp_path: Path) -> None:
     """(d) One skill's description is capped at 384 estimated tokens in the
-    roster — 1,536 characters of ASCII, 384 of Chinese.
+    listing — 1,536 characters of ASCII, 384 of Chinese.
 
-    Every description concatenates into ONE property description that sits
-    inside the stable-prefix hash, so an unbounded ``description:`` is unbounded
-    prompt on every turn. The cap is in tokens so a Chinese summary cannot cost
-    four times an English one.
+    Every description lands in the listing a task carries for its whole life,
+    so an unbounded ``description:`` is unbounded prompt on every turn. The cap
+    is in tokens so a Chinese summary cannot cost four times an English one.
     """
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -489,14 +533,7 @@ def test_oversized_description_is_truncated_in_the_roster(tmp_path: Path) -> Non
     write_skill(ws, "chinese", "中" * 1024)
     write_skill(ws, "terse", "short one")
 
-    schemas = _build_composer_schemas(ws, skill_invocation_enabled=True)
-    schema = _find_skill_schema(schemas)
-    assert schema is not None
-    desc = schema["function"]["parameters"]["properties"]["skill"]["description"]
-    roster = desc.split("Available: ", 1)[1]
-    entries = dict(
-        entry.split(" — ", 1) for entry in roster.split("; ") if " — " in entry
-    )
+    entries = _listing(ws)
     assert MENU_DESCRIPTION_MAX_TOKENS == 384
     assert len(entries["verbose"]) == 1536
     assert entries["verbose"].startswith("x" * 100)
@@ -511,34 +548,25 @@ def test_oversized_description_is_truncated_in_the_roster(tmp_path: Path) -> Non
 
 
 def test_arguments_placeholder_excised_from_the_roster(tmp_path: Path) -> None:
-    """The menu is a model-visible surface: a description carrying
+    """The listing is a model-visible surface: a description carrying
     ``$ARGUMENTS`` (a Claude Code-ism) has the token excised, same rule as the
     activation render — Noeta has no argument channel to substitute from."""
     ws = tmp_path / "ws"
     ws.mkdir()
     write_skill(ws, "argy", "Summarize $ARGUMENTS into a report")
 
-    schemas = _build_composer_schemas(ws, skill_invocation_enabled=True)
-    schema = _find_skill_schema(schemas)
-    assert schema is not None
-    desc = schema["function"]["parameters"]["properties"]["skill"]["description"]
-    assert "$ARGUMENTS" not in desc
-    assert "Summarize into a report" in desc
+    assert _listing(ws) == {"argy": "Summarize into a report"}
 
 
 # ---------------------------------------------------------------------------
 # The roster budget — a total cap on the menu: short summaries, then name-only
 # ---------------------------------------------------------------------------
 
-def _roster_entries(schema: dict[str, Any]) -> dict[str, str]:
-    """``name → summary`` as the rendered roster shows them (``""`` = bare name)."""
-    desc = schema["function"]["parameters"]["properties"]["skill"]["description"]
-    roster = desc.split("Available: ", 1)[1]
-    out: dict[str, str] = {}
-    for entry in roster.split("; "):
-        name, _, summary = entry.partition(" — ")
-        out[name] = summary
-    return out
+def _roster_entries(lines: tuple[tuple[str, str], ...]) -> dict[str, str]:
+    """``name → summary`` as the listing lines show them (``""`` = bare name)."""
+    entries = parse_listing_lines(line for _, line in lines)
+    assert list(entries) == [name for name, _ in lines]
+    return entries
 
 
 def _registry(*skills: tuple[str, str, int]) -> SkillRegistry:
@@ -553,10 +581,8 @@ def _registry(*skills: tuple[str, str, int]) -> SkillRegistry:
     )
 
 
-def _schema_for(registry: SkillRegistry, **kwargs: Any) -> dict[str, Any]:
-    mount = make_skills_control_tool(registry, **kwargs)(_FlagCtx())
-    assert mount is not None
-    return mount.schema
+def _lines_for(registry: SkillRegistry, **kwargs: Any) -> tuple[tuple[str, str], ...]:
+    return listing_lines(registry, **kwargs)
 
 
 def test_estimate_counts_cjk_characters_one_each() -> None:
@@ -572,11 +598,11 @@ def test_estimate_counts_cjk_characters_one_each() -> None:
 
 
 def test_under_budget_roster_is_byte_identical_to_the_unbudgeted_one() -> None:
-    """Below the budget nothing changes: today's rosters keep their bytes."""
+    """Below the budget nothing changes: the listing keeps every full summary."""
     registry = _registry(("alpha", "first", 100), ("beta", "second", 100))
-    tight = _schema_for(registry, menu_budget_tokens=DEFAULT_MENU_BUDGET_TOKENS)
-    loose = _schema_for(registry, menu_budget_tokens=10_000_000)
-    assert _canonical(tight) == _canonical(loose)
+    tight = _lines_for(registry, budget_tokens=DEFAULT_MENU_BUDGET_TOKENS)
+    loose = _lines_for(registry, budget_tokens=10_000_000)
+    assert tight == loose
     assert _roster_entries(tight) == {"alpha": "first", "beta": "second"}
 
 
@@ -585,22 +611,20 @@ def test_over_budget_shortens_every_summary_and_keeps_the_top_ranked_one_full(
 ) -> None:
     """Past the budget every skill first gets its short summary; the leftover
     upgrades summaries back to full from the top of the keep order. The
-    ``enum`` still lists every skill, and the operator gets one warning naming
+    listing still names every skill, and the operator gets one warning naming
     the three counts and the knob."""
     registry = _registry(
         ("aaa", "x" * 400, 100),
         ("bbb", "y" * 400, 100),
         ("ccc", "z" * 400, 100),
     )
-    # Names ~6 tokens, three short summaries 24 each, one upgrade to the full
-    # 400-char summary 76 more: 160 pays for exactly one upgrade.
+    # Bare lines ``- aaa\n`` ~2 tokens each, three short summaries 24 more
+    # each, one upgrade to the full 400-char summary 76 more: 160 pays for
+    # exactly one upgrade.
     with caplog.at_level(logging.WARNING, logger="noeta.builtins.skills"):
-        schema = _schema_for(
-            registry, menu_budget_tokens=160, menu_rank={"ccc": 5.0}
-        )
-    prop = schema["function"]["parameters"]["properties"]["skill"]
-    assert prop["enum"] == ["aaa", "bbb", "ccc"]
-    assert _roster_entries(schema) == {
+        lines = _lines_for(registry, budget_tokens=160, rank={"ccc": 5.0})
+    assert [name for name, _ in lines] == ["aaa", "bbb", "ccc"]
+    assert _roster_entries(lines) == {
         "aaa": short_summary("x" * 400),
         "bbb": short_summary("y" * 400),
         "ccc": "z" * 400,
@@ -623,10 +647,9 @@ def test_name_only_starts_when_the_short_summaries_overflow(
         ("ccc", "z" * 400, 100),
     )
     with caplog.at_level(logging.WARNING, logger="noeta.builtins.skills"):
-        schema = _schema_for(registry, menu_budget_tokens=60, menu_rank={"ccc": 5.0})
-    prop = schema["function"]["parameters"]["properties"]["skill"]
-    assert prop["enum"] == ["aaa", "bbb", "ccc"]
-    assert _roster_entries(schema) == {
+        lines = _lines_for(registry, budget_tokens=60, rank={"ccc": 5.0})
+    assert [name for name, _ in lines] == ["aaa", "bbb", "ccc"]
+    assert _roster_entries(lines) == {
         "aaa": short_summary("x" * 400),
         "bbb": "",
         "ccc": short_summary("z" * 400),
@@ -664,13 +687,13 @@ def test_depth_pass_waits_until_every_skill_has_a_short_summary() -> None:
     cheap_upgrade = "中" * 20 + "。" + "文" * 6
     entries = (("aaa", cheap_upgrade), ("zzz", "z" * 400))
     keep_order = ("aaa", "zzz")
-    names = estimate_menu_tokens("aaa; ") + estimate_menu_tokens("zzz; ")
+    names = estimate_menu_tokens("- aaa\n") + estimate_menu_tokens("- zzz\n")
     aaa_short = estimate_menu_tokens(
-        f"aaa — {short_summary(cheap_upgrade)}; "
-    ) - estimate_menu_tokens("aaa; ")
+        f"- aaa: {short_summary(cheap_upgrade)}\n"
+    ) - estimate_menu_tokens("- aaa\n")
     zzz_short = estimate_menu_tokens(
-        f"zzz — {short_summary('z' * 400)}; "
-    ) - estimate_menu_tokens("zzz; ")
+        f"- zzz: {short_summary('z' * 400)}\n"
+    ) - estimate_menu_tokens("- zzz\n")
 
     # Room for aaa's short form plus 10: zzz's short form (24) does not fit,
     # so aaa stays short although its 6-token upgrade would.
@@ -697,16 +720,18 @@ def test_a_measured_roster_profile_lists_every_skill_with_a_summary() -> None:
             desc = f"飞书平台{i}的操作：查询、创建、更新、删除资源，管理权限与成员。" + "适用于相关任务。" * 12
         rows.append((f"skill-{i:02d}", desc, 100))
     registry = _registry(*rows)
-    schema = _schema_for(registry, menu_budget_tokens=2000)
-    entries = _roster_entries(schema)
+    lines = _lines_for(registry, budget_tokens=2000)
+    entries = _roster_entries(lines)
     assert len(entries) == 67
     assert all(entries.values())
+    # ...and the recorded listing stays inside the budget it was fitted to.
+    assert estimate_menu_tokens("\n".join(line for _, line in lines)) <= 2000
 
 
 def test_under_budget_logs_no_warning(caplog: pytest.LogCaptureFixture) -> None:
     registry = _registry(("aaa", "short", 100))
     with caplog.at_level(logging.WARNING, logger="noeta.builtins.skills"):
-        _schema_for(registry, menu_budget_tokens=1000)
+        _lines_for(registry, budget_tokens=1000)
     assert "over budget" not in caplog.text
 
 
@@ -774,7 +799,7 @@ def test_fit_is_greedy_so_a_shorter_later_summary_can_still_fit() -> None:
     later, shorter one in the keep order still gets in."""
     entries = (("big", "x" * 400), ("small", "y" * 20), ("tiny", "z" * 4))
     keep_order = ("big", "small", "tiny")
-    # Baseline (names + separators) ~6 tokens; big's short form ≈ 24,
+    # Baseline (bare ``- name`` lines) ~6 tokens; big's short form ≈ 24,
     # small ≈ 6, tiny ≈ 2 (both within the cap, so their own short form).
     fitted = fit_menu_to_budget(entries, keep_order, budget_tokens=20)
     assert fitted == {"big": "", "small": "y" * 20, "tiny": "z" * 4}
@@ -789,44 +814,32 @@ def test_fit_drops_every_summary_when_names_alone_exceed_the_budget() -> None:
     assert fit_menu_to_budget(bare, [n for n, _ in bare], 10) == dict(bare)
 
 
-def test_menu_bytes_do_not_depend_on_rank_when_under_budget() -> None:
+def test_listing_does_not_depend_on_rank_when_under_budget() -> None:
     """Rank only decides which summaries survive; it never reorders the
-    name-sorted menu, so an under-budget roster is rank-independent."""
+    name-sorted listing, so an under-budget roster is rank-independent."""
     registry = _registry(("alpha", "first", 100), ("beta", "second", 100))
-    plain = _schema_for(registry, menu_budget_tokens=1000)
-    ranked = _schema_for(registry, menu_budget_tokens=1000, menu_rank={"beta": 9})
-    assert _canonical(plain) == _canonical(ranked)
+    plain = _lines_for(registry, budget_tokens=1000)
+    ranked = _lines_for(registry, budget_tokens=1000, rank={"beta": 9})
+    assert plain == ranked
+    # Over budget the order is still by name, whatever the rank.
+    tight = _lines_for(registry, budget_tokens=4, rank={"beta": 9})
+    assert [name for name, _ in tight] == ["alpha", "beta"]
 
 
 def test_session_pack_reads_budget_and_rank_from_its_config(
     tmp_path: Path,
 ) -> None:
     """``plugin_config["skills"]["menu_budget_tokens"]`` and ``["menu_rank"]``
-    reach the mount: the top-ranked skill keeps its full summary, the rest are
-    shortened."""
+    reach the recorded listing: the top-ranked skill keeps its full summary,
+    the rest are shortened."""
     ws = tmp_path / "ws"
     ws.mkdir()
     write_skill(ws, "aaa", "a" * 400)
     write_skill(ws, "bbb", "b" * 400)
     write_skill(ws, "ccc", "c" * 400)
-    inputs = build_session_inputs(
-        **default_factory_kwargs(),
-        workspace_dir=ws,
-        system_prompt="you are helpful",
-        allowed_tools=frozenset({"read"}),
-        content_store=InMemoryContentStore(),
-        model="stub-model",
-        compaction=COMPACTION_OFF,
-        budget=Budget(),
-        capability_flags={"skill_invocation": True},
-        plugin_config={
-            "fs": {"write_mode": FsWriteMode.DRY_RUN, "shell_mode": ShellMode.OFF},
-            "skills": {"menu_budget_tokens": 160, "menu_rank": {"bbb": 2, "aaa": 1}},
-        },
+    entries = _listing(
+        ws, skills_config={"menu_budget_tokens": 160, "menu_rank": {"bbb": 2, "aaa": 1}}
     )
-    schema = _find_skill_schema(list(inputs.composer._control_action_schemas))
-    assert schema is not None
-    entries = _roster_entries(schema)
     assert entries == {
         "aaa": short_summary("a" * 400),
         "bbb": "b" * 400,
@@ -948,24 +961,7 @@ def test_session_pack_keeps_builtin_plugin_and_borrowed_packs_on_one_tier(
     write_skill(glob, "ccc", "c" * 400)
 
     def roster(skills_cfg: dict[str, Any]) -> dict[str, str]:
-        inputs = build_session_inputs(
-            **default_factory_kwargs(),
-            workspace_dir=ws,
-            system_prompt="you are helpful",
-            allowed_tools=frozenset({"read"}),
-            content_store=InMemoryContentStore(),
-            model="stub-model",
-            compaction=COMPACTION_OFF,
-            budget=Budget(),
-            capability_flags={"skill_invocation": True},
-            plugin_config={
-                "fs": {"write_mode": FsWriteMode.DRY_RUN, "shell_mode": ShellMode.OFF},
-                "skills": {"menu_budget_tokens": 160, **skills_cfg},
-            },
-        )
-        schema = _find_skill_schema(list(inputs.composer._control_action_schemas))
-        assert schema is not None
-        return _roster_entries(schema)
+        return _listing(ws, skills_config={"menu_budget_tokens": 160, **skills_cfg})
 
     # Built-in + borrowed only: one tier, name order ⇒ ``aaa`` keeps its full
     # summary although the borrowed dir was folded later.
@@ -996,8 +992,12 @@ def test_fit_charges_every_entry_even_outside_the_keep_order() -> None:
     # With room for exactly one short summary the keep order's pick gets it
     # and the left-out names come after it.
     short = short_summary("x" * 400)
-    names = sum(estimate_menu_tokens(f"{n}; ") for n, _ in entries)
-    one = names + estimate_menu_tokens(f"s7 — {short}; ") - estimate_menu_tokens("s7; ")
+    names = sum(estimate_menu_tokens(f"- {n}\n") for n, _ in entries)
+    one = (
+        names
+        + estimate_menu_tokens(f"- s7: {short}\n")
+        - estimate_menu_tokens("- s7\n")
+    )
     fitted = fit_menu_to_budget(entries, ["s7"], budget_tokens=one)
     assert fitted["s7"] == short
     assert [n for n, summary in fitted.items() if not summary] == [

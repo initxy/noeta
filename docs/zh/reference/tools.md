@@ -146,7 +146,7 @@ agent 启用 `memory` 时挂上（预设里是 `main` 和后台整理记忆的 a
 | `Task` | agent 能派子任务（有 `agents` 时自动推出） | `delegation` |
 | `TodoWrite` | agent 启用了它 | `todo_write` |
 | `AskUserQuestion` | agent 启用了它 | `ask_user_question` |
-| `skill` | 启用了它，且合并后的技能菜单非空 | `skill_invocation`（由 `skills` 挂上） |
+| `skill` | 启用了它，且至少有一个模型可调用的技能 | `skill_invocation`（由 `skills` 挂上） |
 | `run_workflow` | `HostConfig.workflow_allowed=True` 且 agent 能派子任务 | `react` |
 | `RecallHistory` | 接了上下文压缩——在 `Client` / `query` 下总是接的 | `react` |
 | `structured_output` | 带独立 schema 派出的子任务 / workflow 助手（`Options.output_schema` 走 provider 原生的结构化输出）；必须单独调用，和别的调用放在同一条回复里时整批被退回，模型会被告知单独发 | `react` |
