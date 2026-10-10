@@ -13,6 +13,8 @@ surface the Engine consumes. The hot path is::
                                               assistant_message=None)
     step counter at ceiling    → FailDecision(reason="react_max_steps_exceeded",
                                               retryable=False)
+    step counter at step_limit → one tool-free round-trip asking for a
+                                 report, then FinishDecision(that report)
 
 The Engine writes the assistant message to ``RuntimeState.messages``
 (single writer); ReActPolicy never touches RuntimeState
@@ -56,6 +58,7 @@ import re
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
+from dataclasses import replace as dc_replace
 from typing import Any, Optional, Protocol, Sequence
 
 from noeta.policies.control_semantics import (
@@ -123,6 +126,17 @@ __all__ = [
 #: nudges the model so the common case produces a clean summary without the
 #: appended block.
 _SUMMARIZE_PROMPT = load_markdown(__package__, "summarize")
+
+#: The trailing user turn of the step-limit round-trip. ``{n}`` is the limit.
+_STEP_LIMIT_PROMPT = (
+    "You have reached the limit of {n} steps for this task, and no more tool "
+    "calls will run. Stop here and reply with your final report: what you "
+    "did, what you found, where the work stands, and what is left to do."
+)
+
+#: Opens the answer a step-limit stop finishes with, so whoever reads it —
+#: the host, or the model on a later turn — knows the work was cut off.
+_STEP_LIMIT_HEAD = "Stopped at the {n}-step limit before finishing."
 
 #: The stable head of every summarize-failure reason. A host branches on the
 #: prefix (``reason.startswith(SUMMARY_FAILED_REASON)``); the free text after
@@ -299,6 +313,11 @@ class ReActPolicy:
         #: own long before it, and a tight default has already bricked long
         #: conversations once (the counter used to live on the instance).
         max_steps: int = 1_000_000,
+        #: Per-turn step count at which the turn is wound up instead of
+        #: continued: one more round-trip, tools forbidden, asks the model for
+        #: a report of where the work got to, and the turn finishes with it.
+        #: A working budget, unlike ``max_steps``; ``None`` ⇒ none.
+        step_limit: Optional[int] = None,
         max_history_messages: Optional[int] = None,
         #: The routing-ordered control-tool translate specs.
         #: Each spec's ``translate`` closure carries its own build inputs (the
@@ -343,6 +362,7 @@ class ReActPolicy:
         self._system_prompt = system_prompt
         self._model = model
         self._max_steps = max_steps
+        self._step_limit = step_limit
         self._max_history_messages = max_history_messages
         self._baselines = (
             trigger_baselines if trigger_baselines is not None else TriggerBaselines()
@@ -422,6 +442,8 @@ class ReActPolicy:
             return FailDecision(
                 reason="react_max_steps_exceeded", retryable=False
             )
+        if self._step_limit is not None and ctx.steps_in_turn >= self._step_limit:
+            return self._step_limit_decision(ctx, view)
         state = self._baseline_state(ctx.task_id)
         request, selection = self._build_request_and_selection(view)
         # ③ (D-3a) proactive trigger. The trigger size is no
@@ -474,6 +496,44 @@ class ReActPolicy:
                 ctx, view, state, reason="overflow", estimated=estimated
             )
         return self._response_to_decision(response, view)
+
+    def _step_limit_decision(self, ctx: StepContext, view: View) -> Decision:
+        """Wind the turn up at ``step_limit``: the normal request plus a
+        trailing user turn asking for a report, with ``tool_choice: none``
+        (the history still holds tool blocks, so the schemas must ride), and
+        finish with whatever text comes back under :data:`_STEP_LIMIT_HEAD`.
+
+        The instruction is not recorded as a message — only the answer is —
+        exactly like the summarize instruction. A model that answers with a
+        tool call anyway (a gateway that ignores ``tool_choice``) has its
+        calls dropped; with no text at all the head stands alone. An errored
+        round-trip fails the turn as any errored round-trip does.
+        """
+        assert self._step_limit is not None
+        request, _selection = self._build_request_and_selection(view)
+        instruction = Message(
+            role="user",
+            content=[TextBlock(text=_STEP_LIMIT_PROMPT.format(n=self._step_limit))],
+        )
+        response = self._llm.complete(
+            dc_replace(
+                request,
+                messages=[*request.messages, instruction],
+                metadata={**request.metadata, "tool_choice": "none"},
+            ),
+            ctx,
+        )
+        if response.stop_reason == "error":
+            return self._error_to_decision(response)
+        text = _joined_text(response).strip()
+        head = _STEP_LIMIT_HEAD.format(n=self._step_limit)
+        answer = f"{head}\n\n{text}" if text else head
+        return FinishDecision(
+            answer=answer,
+            assistant_message=Message(
+                role="assistant", content=[TextBlock(text=answer)]
+            ),
+        )
 
     # ------------------------------------------------------------------
     # ③ compaction (D-3)

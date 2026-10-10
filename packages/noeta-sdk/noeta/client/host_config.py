@@ -604,6 +604,18 @@ class HostConfig:
     #: 3 is the guard's own threshold default. ``None`` ⇒ the guard is not
     #: registered at all (today's behavior).
     repetition_threshold: Optional[int] = None
+    #: A working step budget for one turn — from a goal to its answer, which
+    #: for a one-shot worker job is the whole task. At this many steps the
+    #: turn is wound up rather than failed: one more model call, with tools
+    #: forbidden, asks for a report of what was done and where the work
+    #: stands, and the turn finishes with that report as its answer, opened
+    #: by "Stopped at the N-step limit before finishing." A step is one
+    #: model decision (a batch of parallel tool calls is one step). The next
+    #: goal on the same conversation gets a fresh budget. Sub-agents the
+    #: task spawns each get the same budget for their own turn. ``None``
+    #: (the default) ⇒ no budget; ReAct's 1,000,000-step runaway backstop
+    #: still fails the turn outright.
+    max_steps_per_turn: Optional[int] = None
     #: Inline character cap on a tool result BEFORE it is appended to the
     #: history (``docs/adr/unified-context-supply.md``): over the cap the model
     #: sees the first N characters plus a deterministic ``[tool output
@@ -760,6 +772,7 @@ class HostConfig:
             ("memory_index_budget_tokens", self.memory_index_budget_tokens),
             ("auto_compact_window", self.auto_compact_window),
             ("clear_tool_outputs_at", self.clear_tool_outputs_at),
+            ("max_steps_per_turn", self.max_steps_per_turn),
             (
                 "max_background_jobs_per_root_task",
                 self.max_background_jobs_per_root_task,

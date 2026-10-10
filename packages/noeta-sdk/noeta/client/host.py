@@ -482,6 +482,11 @@ class SdkHost(GenericEngineResolver):
     # cap has already bricked long conversations once (when the counter lived
     # on the cached Policy instance and never reset).
     max_steps: int = 1_000_000
+    # The working step budget per driven turn (HostConfig.max_steps_per_turn):
+    # at this many steps the ReAct policy asks the model, tools forbidden, for
+    # a report of where the work got to and finishes the turn with it. None =
+    # no budget (only the backstop above).
+    step_limit: Optional[int] = None
     # Filesystem write mode; DRY_RUN is the safe default.
     write_mode: FsWriteMode = FsWriteMode.DRY_RUN
     # shell_run allowlist / allow-all switch; ALLOWLIST by default, matching the
@@ -2442,13 +2447,17 @@ class SdkHost(GenericEngineResolver):
         """The react built-in's policy-factory builder, with the task's slot
         bound so the ReAct policy keeps its compaction-trigger calibration
         across the task's turns (a per-turn policy instance would otherwise
-        start every turn's first request from the bare chars/4 estimate).
+        start every turn's first request from the bare chars/4 estimate), and
+        the host's per-turn step budget when it set one.
         Binding a keyword the builder's protocol does not name keeps
         ``PolicyFactoryBuilder`` unchanged for third-party builders."""
         builder = default_policy_factory()
-        if task_slot is None:
-            return builder
-        return functools.partial(builder, task_slot=task_slot)
+        bound: dict[str, Any] = {}
+        if task_slot is not None:
+            bound["task_slot"] = task_slot
+        if self.step_limit is not None:
+            bound["step_limit"] = self.step_limit
+        return functools.partial(builder, **bound) if bound else builder
 
     def _read_task_inputs(self, task_id: str) -> dict[str, Any]:
         """Read a task's recorded ``TaskCreated.inputs`` (durable, resume-safe)."""

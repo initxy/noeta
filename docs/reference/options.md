@@ -211,6 +211,7 @@ The skill menu takes 1% of the context window, at most 4,096 tokens (the same ce
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `repetition_threshold` | `int \| None` | `None` | after this many identical `(tool, arguments)` calls, ask for approval; must be positive |
+| `max_steps_per_turn` | `int \| None` | `None` | a working step budget per turn (a one-shot task's whole run): at this many steps one more model call, tools forbidden, asks for a report of where the work got to, and the turn finishes with it under "Stopped at the N-step limit before finishing." instead of failing; sub-agents get the same budget; must be positive |
 | `tool_output_inline_limit` | `int \| None` | `None` | truncate any tool result over this many characters before the model sees it (full bytes stay recorded); must be positive; keep it stable across resumes |
 | `tool_output_spill_dir` | `Path \| None` | `None` | with `tool_output_inline_limit` set, write a cut result whole to `<dir>/<task_id>/<call_id>.txt` and name the file in the marker, so the model can page through it with `Read`; must be a path the session's `Read` reaches; the host owns cleanup |
 | `auto_compact_window` | `int \| None` | `None` | compact as if the context window were this many tokens (Claude Code's `autoCompactWindow`): the summarize trigger, the protected tail and the tool-output valves all derive from `min(model window, this)`; the output ceiling and the 1% skill / memory budgets keep the real window; must be positive; keep it stable across resumes |

@@ -211,6 +211,7 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `repetition_threshold` | `int \| None` | `None` | 同样的 `(tool, arguments)` 调用重复这么多次后要审批；必须是正数 |
+| `max_steps_per_turn` | `int \| None` | `None` | 每一轮（一次性任务就是整个任务）的步数预算：走到这么多步时，再调一次模型、禁止调工具，让它交代做到哪了，这一轮就以这份交代收尾，开头写「Stopped at the N-step limit before finishing.」，而不是直接失败；子代理也用同一个预算；必须是正数 |
 | `tool_output_inline_limit` | `int \| None` | `None` | 工具结果超过这么多字符就截断再给模型看（完整内容仍有记录）；必须是正数；恢复任务时要保持同一个值 |
 | `tool_output_spill_dir` | `Path \| None` | `None` | 配合 `tool_output_inline_limit`：被截断的结果整份写到 `<dir>/<task_id>/<call_id>.txt`，截断标记里写明路径，模型可以用 `Read` 分页看完；必须是这个会话的 `Read` 读得到的路径；文件由宿主负责清理 |
 | `auto_compact_window` | `int \| None` | `None` | 把压缩当作上下文窗口只有这么多 token 来算（Claude Code 的 `autoCompactWindow`）：摘要的触发点、保留原文的尾巴、清理旧工具输出的阈值都按 `min(模型窗口, 这个值)` 推导；输出上限和技能、记忆索引的 1% 预算仍按真实窗口；必须是正数；恢复任务时要保持同一个值 |
