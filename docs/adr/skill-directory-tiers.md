@@ -105,8 +105,9 @@ content.
 ## Consequences
 
 - The trust store is a file outside the workspace: a grant or revocation
-  changes the tier set — and with it the skill-menu bytes in the composed
-  stable prefix — on the next session build. An interactive host that wants a
+  changes the tier set on the next session build — the skills a task may
+  load from then on; a recorded skill listing keeps its bytes, and newly
+  admitted skills are announced by an appended listing. An interactive host that wants a
   per-session prompt calls `is_trusted` itself rather than listening for the
   (per-process-deduplicated) warning.
 - A borrowed directory can shadow a shipped skill of the same name. That is

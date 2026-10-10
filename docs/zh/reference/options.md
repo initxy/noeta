@@ -200,11 +200,11 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `skill_menu_rank_resolver` | `(task_id) -> {skill: score} \| None` | `None` | 技能菜单超长时，哪些技能保留完整描述 |
+| `skill_menu_rank_resolver` | `(task_id) -> {skill: score} \| None` | `None` | 技能清单超长时，哪些技能保留完整描述 |
 | `skill_usage_ranking` | `bool` | `True` | 没有 resolver 时按整个存储里的近期使用排序；设了记忆或 MCP 分区 resolver 时自动关闭 |
 | `plugin_config` | `Mapping[str, Mapping[str, Any]]` | `{}` | 给各插件的运维配置；对 `fs` / `skills` / `workspace` / `memory`，你给的键逐个覆盖 SDK 自己算出来的；Client 不认识的插件名会发 `UserWarning` |
 
-技能菜单占上下文窗口的 1%，最多 4,096 token（宿主推导出的记忆索引预算也用同一个上限）。超了就先把描述缩成一句话，再不够就只留名字，排名低的先缩。静态排序可以直接写在 `plugin_config["skills"]["menu_rank"]`，和 resolver 二选一。
+技能清单占上下文窗口的 1%，最多 4,096 token（宿主推导出的记忆索引预算也用同一个上限）。超了就先把描述缩成一句话，再不够就只留名字，排名低的先缩。静态排序可以直接写在 `plugin_config["skills"]["menu_rank"]`，和 resolver 二选一。清单在任务开始时排一次，之后整个任务都不变。
 
 ### 限制与开关
 

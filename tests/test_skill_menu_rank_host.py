@@ -2,9 +2,11 @@
 
 ``HostConfig.skill_menu_rank_resolver`` is the same tenancy seam as
 ``memory_root_resolver`` — the SDK hands over task ids, the product maps them
-to tenants. The resolved rank reaches the ``skills`` pack as ``menu_rank``;
-the Engine is built per turn, so two tenants never share a roster; the
-budget itself is derived by the host from the bound model's catalog window.
+to tenants. The resolved rank reaches the ``skills`` pack as ``menu_rank``,
+which fits the roster the task's ``skill_listing`` resident records once
+(pre-loop, activate-once); the Engine is built per turn, so two tenants never
+share a roster; the budget itself is derived by the host from the bound
+model's catalog window.
 """
 
 from __future__ import annotations
@@ -29,9 +31,11 @@ from noeta.runtime.workspace import FsWriteMode
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.builtins.skills.impl import SKILL_TOOL
 from noeta.builtins.skills.impl.control_tool import short_summary
+from noeta.builtins.skills.impl.listing import ROSTER_SLOT, decode_listing
+from noeta.protocols.values import ContentRef
 
 from tests._sdk_session import make_driver, make_host, make_registry, runner_main_spec
-from tests._skill_fixtures import write_skill
+from tests._skill_fixtures import parse_listing_lines, write_skill
 
 
 def _skill_host(
@@ -61,16 +65,22 @@ def _skill_host(
 _SHORT = {name: short_summary(name[0] * 400) for name in ("aaa", "bbb", "ccc")}
 
 
-def _roster(engine: Any) -> dict[str, str]:
-    for schema in engine._composer._control_action_schemas:
-        if isinstance(schema, dict) and schema["function"]["name"] == SKILL_TOOL:
-            desc = schema["function"]["parameters"]["properties"]["skill"]["description"]
-            out: dict[str, str] = {}
-            for entry in desc.split("Available: ", 1)[1].split("; "):
-                name, _, summary = entry.partition(" — ")
-                out[name] = summary
-            return out
-    raise AssertionError("skill schema missing")
+def _roster(host: Any, task_id: str) -> dict[str, str]:
+    """The roster the latest build composed for ``task_id`` — the lines the
+    skills pack reported into the task's local slot (``ROSTER_SLOT``)."""
+    roster = host._task_locals.peek(task_id, ROSTER_SLOT)
+    assert roster is not None and roster.lines, "no roster built for the task"
+    return parse_listing_lines(line for _, line in roster.lines)
+
+
+def _recorded(host: Any, task_id: str) -> dict[str, str]:
+    """The roster the task's ``skill_listing:roster`` resident recorded."""
+    task = fold(host.event_log, host.content_store, task_id)
+    content_hash = task.state.active_content["skill_listing"]["roster"]
+    raw = host.content_store.get(
+        ContentRef(hash=content_hash, size=0, media_type="application/json")
+    )
+    return parse_listing_lines(decode_listing(raw)[1])
 
 
 def test_bare_host_derives_the_budget_and_no_rank(tmp_path: Path) -> None:
@@ -91,29 +101,38 @@ def test_bare_host_derives_the_budget_and_no_rank(tmp_path: Path) -> None:
 
 
 def test_rank_resolver_reaches_the_roster(tmp_path: Path) -> None:
-    """Two tasks equal on every binding but ranked differently compose
+    """Two tasks equal on every binding but ranked differently record
     different rosters; a task composes the same roster on every build."""
+    # A resolver that knows each tenant's rank when the task is seeded: the
+    # first task it is asked about ranks ``aaa``, the second ``ccc``.
+    ranks = [{"aaa": 1.0}, {"ccc": 1.0}]
     mapping: dict[str, dict[str, float]] = {}
+
+    def resolver(task_id: str) -> Optional[dict[str, float]]:
+        if task_id not in mapping:
+            mapping[task_id] = ranks[len(mapping)]
+        return mapping[task_id]
+
     host, driver = _skill_host(
         tmp_path,
-        skill_menu_rank_resolver=mapping.get,
+        skill_menu_rank_resolver=resolver,
         plugin_config_overrides={"skills": {"menu_budget_tokens": 160}},
     )
-    # The product pattern: seed (task id minted), bind the tenant's rank,
-    # then resolve — the driving Engine composes with that rank.
     seeded_a = driver.seed_start(goal="g", agent="main")
-    mapping[seeded_a.task_id] = {"aaa": 1.0}
     seeded_b = driver.seed_start(goal="g", agent="main")
-    mapping[seeded_b.task_id] = {"ccc": 1.0}
+
+    # The seed build recorded each task's listing with its own rank.
+    assert _recorded(host, seeded_a.task_id) == {**_SHORT, "aaa": "a" * 400}
+    assert _recorded(host, seeded_b.task_id) == {**_SHORT, "ccc": "c" * 400}
 
     task_a = fold(host.event_log, host.content_store, seeded_a.task_id)
     task_b = fold(host.event_log, host.content_store, seeded_b.task_id)
-    engine_a = host.resolve_engine(task_a)
-    engine_b = host.resolve_engine(task_b)
-
-    assert _roster(engine_a) == {**_SHORT, "aaa": "a" * 400}
-    assert _roster(engine_b) == {**_SHORT, "ccc": "c" * 400}
-    assert _roster(host.resolve_engine(task_a)) == _roster(engine_a)
+    host.resolve_engine(task_a)
+    host.resolve_engine(task_b)
+    assert _roster(host, seeded_a.task_id) == {**_SHORT, "aaa": "a" * 400}
+    assert _roster(host, seeded_b.task_id) == {**_SHORT, "ccc": "c" * 400}
+    host.resolve_engine(task_a)
+    assert _roster(host, seeded_a.task_id) == {**_SHORT, "aaa": "a" * 400}
 
 
 def test_host_config_forwards_the_resolver_to_the_host(tmp_path: Path) -> None:
@@ -144,7 +163,10 @@ def test_rank_is_resolved_once_per_task_in_this_process(tmp_path: Path) -> None:
     """The first non-empty answer sticks for the task's life: a resolver whose
     score decays with the clock (``rank_skills_by_usage(now=...)``) cannot
     rotate a running task's roster from one per-turn build to the next. A
-    declining resolver is asked again; its later answer then sticks."""
+    declining resolver is asked again; its later answer then sticks for the
+    builds — but the recorded listing keeps the bytes its first build fitted
+    (activate-once), so a rank bound after the seed shapes only the lines of
+    skills announced later."""
     calls: list[str] = []
     tick = {"n": 0}
     answers: dict[str, Optional[dict[str, float]]] = {}
@@ -166,27 +188,32 @@ def test_rank_is_resolved_once_per_task_in_this_process(tmp_path: Path) -> None:
     seeded = driver.seed_start(goal="g", agent="main")
     answers[seeded.task_id] = {"ccc": 1.0}
     task = fold(host.event_log, host.content_store, seeded.task_id)
-    engine = host.resolve_engine(task)
+    host.resolve_engine(task)
     # ``seed_start`` already resolved once (declined: no answer yet) and the
     # build above asked once more; from here on the memo answers.
     asked = calls.count(seeded.task_id)
-    roster = _roster(engine)
+    roster = _roster(host, seeded.task_id)
     for _ in range(3):
-        assert _roster(host.resolve_engine(task)) == roster
+        host.resolve_engine(task)
+        assert _roster(host, seeded.task_id) == roster
     assert roster == {**_SHORT, "ccc": "c" * 400}
     assert calls.count(seeded.task_id) == asked
+    # The listing was recorded by the seed build, before the rank was bound.
+    assert _recorded(host, seeded.task_id) == {**_SHORT, "aaa": "a" * 400}
 
     # A task the resolver declines at first is asked again on the next
     # build, and the answer it then gives is the one that sticks.
     late = driver.seed_start(goal="g", agent="main")
     late_task = fold(host.event_log, host.content_store, late.task_id)
-    unranked = host.resolve_engine(late_task)
+    host.resolve_engine(late_task)
     # Unranked: tier + priority + name order keeps the first name's summary.
-    assert _roster(unranked) == {**_SHORT, "aaa": "a" * 400}
+    assert _roster(host, late.task_id) == {**_SHORT, "aaa": "a" * 400}
     answers[late.task_id] = {"aaa": 1.0}
-    ranked = host.resolve_engine(late_task)
-    assert _roster(ranked) == {**_SHORT, "aaa": "a" * 400}
-    assert _roster(host.resolve_engine(late_task)) == _roster(ranked)
+    host.resolve_engine(late_task)
+    ranked = _roster(host, late.task_id)
+    assert ranked == {**_SHORT, "aaa": "a" * 400}
+    host.resolve_engine(late_task)
+    assert _roster(host, late.task_id) == ranked
 
 
 def test_static_menu_rank_and_a_resolver_together_are_refused(tmp_path: Path) -> None:
@@ -243,10 +270,14 @@ def test_bare_host_ranks_the_roster_by_usage_in_the_ledger(tmp_path: Path) -> No
     )
     assert isinstance(second._skill_usage_ranker, SkillUsageRanker)
     seeded = second_driver.seed_start(goal="g", agent="main")
+    # The seed build already recorded the listing with the usage rank.
+    assert _recorded(second, seeded.task_id) == {**_SHORT, "ccc": "c" * 400}
     task = fold(second.event_log, second.content_store, seeded.task_id)
-    ranked = _roster(second.resolve_engine(task))
+    second.resolve_engine(task)
+    ranked = _roster(second, seeded.task_id)
     assert ranked == {**_SHORT, "ccc": "c" * 400}
-    assert _roster(second.resolve_engine(task)) == ranked
+    second.resolve_engine(task)
+    assert _roster(second, seeded.task_id) == ranked
 
 
 def test_default_rank_without_usage_keeps_tier_priority_name_order(
@@ -259,8 +290,10 @@ def test_default_rank_without_usage_keeps_tier_priority_name_order(
     )
     assert host._skill_usage_ranker is not None
     seeded = driver.seed_start(goal="g", agent="main")
+    assert _recorded(host, seeded.task_id) == {**_SHORT, "aaa": "a" * 400}
     task = fold(host.event_log, host.content_store, seeded.task_id)
-    assert _roster(host.resolve_engine(task)) == {**_SHORT, "aaa": "a" * 400}
+    host.resolve_engine(task)
+    assert _roster(host, seeded.task_id) == {**_SHORT, "aaa": "a" * 400}
 
 
 @pytest.mark.parametrize(

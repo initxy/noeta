@@ -593,8 +593,8 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
     workspace-tier trust gate; the subject is the HOST-side workspace path —
     see :func:`_workspace_skills_trusted`), ``allow_skill_scripts``,
     ``tool_enforcement``, ``task_slot`` (the host-bound get-or-create over
-    the task's local slots; the model-invocable roster this build composed
-    is reported into it — see :mod:`~noeta.builtins.skills.impl.roster_note`)
+    the task's local slots; the fitted roster this build composed is
+    reported into it — see :mod:`~noeta.builtins.skills.impl.listing`)
     — and assembles the tiered kit. It runs once per turn (the Engine is a
     per-turn value), so a skill installed, edited or removed shows on the
     next turn.
@@ -688,44 +688,62 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
         tools[kit.script_tool.name] = kit.script_tool
     # Late import: control_tool.py imports nothing from wiring; keeping the
     # dependency one-way at module load mirrors the layering.
-    from .control_tool import make_skills_control_tool, model_invocable_names
-    from .roster_note import ROSTER_SLOT, SkillRoster
+    from .control_tool import (
+        DEFAULT_MENU_BUDGET_TOKENS,
+        listing_lines,
+        make_skills_control_tool,
+    )
+    from .listing import (
+        ROSTER_SLOT,
+        SkillRoster,
+        build_listing_init_hook,
+        skill_listing_content_kind,
+    )
 
-    # Report the model-invocable roster this build composed into the task's
-    # local slot (``roster_note.SkillRoster``), when the host bound one: the
-    # ``turn_intake`` note naming skills that joined the roster since the task
-    # last saw it reads from there. A build without a task (the seed /
-    # by-name path, the orchestration engine) binds no slot.
-    task_slot = cfg.get("task_slot")
-    if callable(task_slot):
-        task_slot(ROSTER_SLOT, SkillRoster).note_built(
-            model_invocable_names(kit.registry)
+    # The skill listing (``listing``): the roster fitted to the budget and
+    # the host's keep-order ranking, recorded once per task by the init hook.
+    # The host derives ``menu_budget_tokens`` from the bound model's catalog
+    # window (this pack must not import the providers built-in) and resolves
+    # ``menu_rank`` per task. An agent without ``skill_invocation`` gets no
+    # tool and no listing.
+    listing_enabled = ctx.flag("skill_invocation")
+    lines: tuple[tuple[str, str], ...] = ()
+    if listing_enabled:
+        budget = _read_menu_budget(cfg.get("menu_budget_tokens"))
+        lines = listing_lines(
+            kit.registry,
+            budget_tokens=DEFAULT_MENU_BUDGET_TOKENS if budget is None else budget,
+            rank=_read_menu_rank(cfg.get("menu_rank")),
         )
+        # The current roster rides the task's local slot, when the host bound
+        # one: the ``turn_intake`` provider announces from it what no recorded
+        # listing names yet. A build without a task (the seed / by-name path,
+        # the orchestration engine) binds no slot.
+        task_slot = cfg.get("task_slot")
+        if callable(task_slot):
+            task_slot(ROSTER_SLOT, SkillRoster).note_built(lines)
 
-    # The roster budget and the host's keep-order ranking. Both are plain
-    # data fixed at session build: the host derives ``menu_budget_tokens``
-    # from the bound model's catalog window (this pack must not import the
-    # providers built-in) and resolves ``menu_rank`` per task, so the mount
-    # composes the same roster bytes for the task's whole life.
-    menu_budget = _read_menu_budget(cfg.get("menu_budget_tokens"))
-    menu_rank = _read_menu_rank(cfg.get("menu_rank"))
-    # The skill resident leads the semi_stable layout (kind band 100); the
-    # ``skill`` control tool rides this contribution as a closure over the
-    # merged registry (band 400), and the guard facts travel as one opaque
-    # bundle the governance factory unpacks.
+    # The skill resident leads the semi_stable layout (kind band 100), the
+    # listing follows it (110); the ``skill`` control tool rides this
+    # contribution as a closure over the merged registry (band 400), and the
+    # guard facts travel as one opaque bundle the governance factory unpacks.
     return PackContribution(
         tools=tools,
-        content_kinds=(ContentKindContribution(100, kit.content_kind),),
+        content_kinds=(
+            (
+                ContentKindContribution(100, kit.content_kind),
+                ContentKindContribution(110, skill_listing_content_kind()),
+            )
+            if listing_enabled
+            else (ContentKindContribution(100, kit.content_kind),)
+        ),
+        init=(
+            build_listing_init_hook(lines, ctx.content_store)
+            if listing_enabled
+            else None
+        ),
         control_tools=(
-            ControlToolEntry(
-                "skill",
-                400,
-                make_skills_control_tool(
-                    kit.registry,
-                    menu_budget_tokens=menu_budget,
-                    menu_rank=menu_rank,
-                ),
-            ),
+            ControlToolEntry("skill", 400, make_skills_control_tool(kit.registry)),
         ),
         guard_facts=SkillGuardFacts(
             tool_enforcement=cast(

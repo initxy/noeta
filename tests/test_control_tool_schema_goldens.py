@@ -47,7 +47,7 @@ _SCHEMA_TODO_WRITE = r'''{"function":{"description":"Use this tool to create and
 
 _SCHEMA_ASK_USER_QUESTION = r'''{"function":{"description":"Use this tool only when you are blocked on a decision that is genuinely the user's to make: one you cannot resolve from the request, the code, or sensible defaults.\n\n- Presents 1\u20134 questions at once. Each question has the complete `question` text (ending with a question mark), a very short `header` chip (max 12 chars, e.g. \"Auth method\"), 2\u20134 `options` (each `{label, description}` \u2014 concise label, trade-off in the description), and `multiSelect` (true when several answers may be picked together).\n- Do not add an \"Other\" option \u2014 the user can always type a custom answer; it is provided automatically.\n- If you recommend an option, put it first and append \"(Recommended)\" to its label.\n- The user's selections are returned so you can proceed.\n\nWhen NOT to use: a reasonable default exists (make it, state the assumption, keep working); \"should I proceed?\" / \"is this right?\" check-ins; facts you can verify yourself in the codebase.","name":"AskUserQuestion","parameters":{"properties":{"questions":{"items":{"properties":{"header":{"description":"Very short chip label (max 12 chars), e.g. 'Auth method'.","type":"string"},"multiSelect":{"description":"Allow selecting several options.","type":"boolean"},"options":{"description":"Distinct choices. An 'Other' free-text option is always added automatically.","items":{"properties":{"description":{"type":"string"},"label":{"type":"string"}},"required":["label","description"],"type":"object"},"maxItems":4,"minItems":2,"type":"array"},"question":{"description":"The complete question, ending with a question mark.","type":"string"}},"required":["question","header","options","multiSelect"],"type":"object"},"maxItems":4,"minItems":1,"type":"array"}},"required":["questions"],"type":"object"}},"type":"function"}'''
 
-_SCHEMA_SKILL = r'''{"function":{"description":"Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nroster of skills indexed for this workspace; its instructions are in your\ncontext from your next step. A roster line may be shortened to save context \u2014\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill \u2014 activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the roster \u2014 never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active \u2014 do not re-activate it.\n- No listed skill covers the task \u2014 just proceed without one.","name":"skill","parameters":{"properties":{"skill":{"description":"Name of the skill to activate. Available: alpha-skill \u2014 alpha desc; beta-skill \u2014 beta desc","enum":["alpha-skill","beta-skill"],"type":"string"}},"required":["skill"],"type":"object"}},"type":"function"}'''
+_SCHEMA_SKILL = r'''{"function":{"description":"Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing; its instructions are in your context from your next step. A\nlisting line may be shortened to save context \u2014\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill \u2014 activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing \u2014 never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active \u2014 do not re-activate it.\n- No listed skill covers the task \u2014 just proceed without one.","name":"skill","parameters":{"properties":{"skill":{"description":"Name of the skill to activate, from the skill listing in your context.","type":"string"}},"required":["skill"],"type":"object"}},"type":"function"}'''
 
 _SCHEMA_RUN_WORKFLOW = r'''{"function":{"description":"Run a short Python orchestration script that fans work out to sub-agents and returns a result.\n\n## What it does\n\nThe script runs in a sandbox that adds these names to the ordinary builtins:\n\n- `parallel(items, agent=\"general-purpose\")`: spawn a BATCH of sub-agents at\n  once, wait for them all, and return their answers as a list in spawn order.\n  Each item is a goal string, or a `{\"goal\": ..., \"agent\": ...}` dict to pick a\n  specific sub-agent per item.\n- `agent(goal, agent=\"general-purpose\")`: spawn ONE sub-agent, wait for it, and\n  return its final answer (a string). Sequential `agent()` calls run one after\n  another, so chain them ONLY when a later call needs an earlier result; for\n  independent work use `parallel()` instead.\n- `args`: the dict supplied via this tool's `args` parameter.\n\nFinish with `return <value>` \u2014 that value becomes the workflow's answer.\n\n## When to use\n\n- You need to ORCHESTRATE sub-agents programmatically: loop over a list, branch\n  the next call on a prior result, or chain steps where each one feeds the next.\n\n## When NOT to use\n\n- For a single delegation \u2014 use `Task` instead.\n- For plain parallelism with no loop / branch / dependency \u2014 emit several\n  `Task` calls in one response; they run concurrently without a workflow.\n- For work you can do yourself with the file/search/shell tools.\n\n## Preconditions\n\n- The script must be deterministic: it may be replayed from the top after a\n  crash, so every run must make the same calls \u2014 no imports, no clock or\n  randomness, no I/O of its own (`print` included); the sub-agents do the I/O.\n  A script that breaks this is rejected before any sub-agent starts.\n\n## Example\n\nA dependency chain \u2014 the fan-out depends on the scout's output, which is what\nneeds a workflow:\n\n    modules = agent(\n        'List the modules missing a docstring, one bare name per line.',\n        agent='explore',\n    )\n    parts = [m.strip() for m in modules.splitlines() if m.strip()]\n    docs = parallel(\n        ['Write a one-line docstring for module: ' + m for m in parts],\n        agent='general-purpose',\n    )\n    return '\\n'.join(docs)","name":"run_workflow","parameters":{"properties":{"args":{"description":"Optional arguments exposed to the script as `args`.","type":"object"},"script":{"description":"The orchestration script (Python). Calls parallel()/agent()/log(), reads args, and uses `return` for the final answer.","type":"string"}},"required":["script"],"type":"object"}},"type":"function"}'''
 
@@ -103,7 +103,7 @@ def _canonical(schemas: list[dict[str, Any]]) -> str:
 
 def _index_two_skills(tmp_path: Path) -> None:
     """Index two workspace-local skills with distinct descriptions so the
-    ``skill`` schema's enum + roster is populated (mirrors the skill fixtures in
+    ``skill`` schema is grown (mirrors the skill fixtures in
     ``test_session_pack_goldens.py``)."""
     for name, desc in (("alpha-skill", "alpha desc"), ("beta-skill", "beta desc")):
         d = tmp_path / ".noeta" / "skills" / name
@@ -162,8 +162,29 @@ def test_skill_alone(tmp_path: Path) -> None:
     schemas = _control_schemas(tmp_path)
     assert _names(schemas) == ["skill"]
     assert _canonical(schemas) == _list(_SCHEMA_SKILL)
+    # The schema carries no roster: no ``enum``, no skill names. The names
+    # reach the model through the recorded ``skill_listing`` resident.
     skill_prop = schemas[0]["function"]["parameters"]["properties"]["skill"]
-    assert skill_prop["enum"] == ["alpha-skill", "beta-skill"]
+    assert "enum" not in skill_prop
+    assert "alpha-skill" not in _canonical(schemas)
+
+
+# (b) the skill schema is the same bytes whatever the roster: one skill, or
+# two different ones.
+def test_skill_schema_bytes_do_not_depend_on_the_roster(tmp_path: Path) -> None:
+    rosters = ((("alpha-skill", "alpha desc"),), (("zeta", "z"), ("omega", "o")))
+    seen = set()
+    for i, roster in enumerate(rosters):
+        ws = tmp_path / f"ws{i}"
+        for name, desc in roster:
+            skill_dir = ws / ".noeta" / "skills" / name
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: {desc}\n---\nbody\n",
+                encoding="utf-8",
+            )
+        seen.add(_canonical(_control_schemas(ws)))
+    assert seen == {_list(_SCHEMA_SKILL)}
 
 
 # (b) workflow alone.

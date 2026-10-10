@@ -200,7 +200,7 @@ built-in < plugin < extra_skill_dirs < ~/.agents/skills < ~/.noeta/skills < work
 | `menu_rank` | `skill name → score`, the keep order when the roster is over budget |
 | `allow_skill_scripts` | mount `run_skill_script` |
 
-`global_skills_dir` is a host field. Only the workspace tiers mount by default. Over budget, the roster shortens every summary (first sentence, ≤ 24 tokens), then drops the lowest-ranked to name only; each summary is capped at 384 tokens. Without `menu_rank` or `HostConfig.skill_menu_rank_resolver`, skills rank by recorded usage.
+`global_skills_dir` is a host field. Only the workspace tiers mount by default. Over budget, the roster shortens every summary (first sentence, ≤ 24 tokens), then drops the lowest-ranked to name only; each summary is capped at 384 tokens. Without `menu_rank` or `HostConfig.skill_menu_rank_resolver`, skills rank by recorded usage. The roster is recorded once per task as a skill-listing message and never rewritten; a skill installed later is announced by one appended message naming it, so the `skill` tool schema stays the same for every task and turn.
 
 ```toml
 [[tool.noeta.contributions]]

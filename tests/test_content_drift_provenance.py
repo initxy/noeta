@@ -206,16 +206,18 @@ def test_code_session_records_content_provenance(
     assert not [e for e in events if e.type == "ToolSchemaRecorded"]
     assert not [e for e in events if e.type == "SkillContentRecorded"]
     content_events = [e for e in events if e.type == "ContextContentRecorded"]
-    # The always-on workspace-environment resident activates pre-loop through
-    # the workspace pack's init hook, so it records BEFORE the post-goal skill
-    # activation. Record order is not placement order: both are pre-loop
-    # residents and their semi_stable placement is band-ordered
-    # (skill < environment) either way.
+    # The always-on workspace-environment resident and the skill listing's
+    # roster activate pre-loop through their packs' init hooks, so they
+    # record BEFORE the post-goal skill activation. Record order is not
+    # placement order: all are pre-loop residents and their semi_stable
+    # placement is band-ordered (skill < skill_listing < environment) either
+    # way.
     assert [
         (e.payload.kind, e.payload.name, e.payload.policy)
         for e in content_events
     ] == [
         ("environment", "workspace", "evolving"),
+        ("skill_listing", "roster", "pinned"),
         ("skill", "fix-python-test", "pinned"),
     ]
     registry = load_workspace_skills(workspace)

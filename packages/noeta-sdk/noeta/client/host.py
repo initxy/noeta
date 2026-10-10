@@ -2605,13 +2605,14 @@ class SdkHost(GenericEngineResolver):
         if agent != CONSOLIDATION_AGENT_NAME and agent_activates(
             spec, "skill_invocation"
         ):
-            # The "new skills" note: names the skills that joined this task's
-            # roster since it last saw it (``roster_note``). Silent on the
-            # opening turn and whenever nothing joined, so the recorded bytes
-            # of every existing flow are untouched. The curator digests
-            # sessions, it never converses — no note for it either.
+            # The skill listing's additions: records the skills that joined
+            # the roster since every listing this task carries (``listing``).
+            # Silent whenever nothing joined. The curator digests sessions, it
+            # never converses — no listing for it either.
             providers.append(
-                skills_impl().new_skills_reminder_provider(self._task_locals.peek)
+                skills_impl().skill_listing_provider(
+                    self._task_locals.peek, self.content_store
+                )
             )
         providers.extend(self.reminder_providers.get(agent, {}).get(TURN_INTAKE, ()))
         return tuple(providers)
@@ -2943,15 +2944,15 @@ class SdkHost(GenericEngineResolver):
         under the same once-per-task memo.
 
         The resolver is asked ONCE per task: its first non-empty answer is
-        memoised for the task's life in this process. The roster sits in the
-        tool schema (the stable prefix), and the score the SDK itself
-        recommends (``rank_skills_by_usage``) decays with ``now`` — re-asking
-        on every per-turn build would rotate the prefix turn after turn. A
-        declining resolver (``None`` / empty) is asked again on the next
-        build, so a host that binds the tenant after the seed build still
-        ranks from the following turn on. Across processes the resolver's own
-        determinism keeps a resumed task's roster stable — the same contract
-        as ``memory_root_resolver``.
+        memoised for the task's life in this process, so a host pays one
+        resolver call per task rather than one per per-turn build. Byte
+        stability does not hang on it: the skill listing records the fitted
+        roster once per task (``skills.impl.listing``), so a later rank only
+        shapes the lines of skills announced later. A declining resolver
+        (``None`` / empty) is asked again on the next build — but the task's
+        ``roster`` listing is recorded at seed, so a host that binds the
+        tenant only after the seed build gets an unranked roster for that
+        task (rank matters only over budget); bind it before ``seed_start``.
         """
         resolver = self.skill_menu_rank_resolver
         ranker = self._skill_usage_ranker

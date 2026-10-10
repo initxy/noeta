@@ -1,9 +1,9 @@
 """The Engine is a per-turn value: what that buys, end to end.
 
-* A skill installed while the process runs is in the ``skill`` tool's roster
-  on every task's next turn, with a recorded note naming it; the turn that
-  came before is untouched; a removed skill leaves the roster silently; a
-  task's opening turn announces nothing.
+* A skill installed while the process runs reaches every task's next turn as
+  a recorded ``skill_listing`` resident naming only it; the turn that came
+  before is untouched and the ``skill`` schema never moves; a removed skill
+  is not announced; a task's opening turn records its whole roster once.
 * Two tasks naming the same MCP server call through ONE pooled connection;
   ``reconnect_mcp`` never pulls a connection from under a turn; the pool
   closes with the Client.
@@ -32,7 +32,7 @@ from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.builtins.skills.impl import SKILL_TOOL
 
 from tests._sdk_session import make_driver, make_host, make_registry, runner_main_spec
-from tests._skill_fixtures import write_skill
+from tests._skill_fixtures import listing_entries, listing_texts, write_skill
 
 
 _FAKE = str(Path(__file__).parent / "_fixtures" / "fake_mcp_server.py")
@@ -60,21 +60,25 @@ def _tool_name(tool: dict[str, Any]) -> str:
     return str(tool.get("name") or tool["function"]["name"])
 
 
-def _skill_enum(request: Any) -> list[str]:
-    """The ``skill`` tool's roster names as the model saw them in ``request``."""
+def _skill_schema(request: Any) -> str:
+    """The ``skill`` tool's schema bytes as the model saw them in ``request``."""
     for tool in request.tools:
         if _tool_name(tool) == SKILL_TOOL:
-            params = tool.get("parameters") or tool.get("input_schema") or tool["function"]["parameters"]
-            return list(params["properties"]["skill"]["enum"])
+            return json.dumps(tool, sort_keys=True)
     raise AssertionError("skill schema missing from the request")
 
 
-def _system_texts(host: Any, task_id: str) -> list[str]:
-    task = fold(host.event_log, host.content_store, task_id)
+def _listed(request: Any) -> list[str]:
+    """Every skill name the listing residents in ``request`` announce."""
+    return sorted(listing_entries(request.messages))
+
+
+def _listings(host: Any, task_id: str) -> list[str]:
+    """The ``skill_listing`` resident names the task recorded, in order."""
     return [
-        " ".join(getattr(b, "text", "") for b in m.content)
-        for m in task.runtime.messages
-        if m.origin == "system"
+        e.payload.name
+        for e in host.event_log.read(task_id)
+        if e.type == "ContextContentRecorded" and e.payload.kind == "skill_listing"
     ]
 
 
@@ -106,26 +110,33 @@ def test_skill_installed_between_turns_shows_next_turn_with_a_note(
 ) -> None:
     host, driver, provider, ws = _skills_host(tmp_path)
     started = driver.start(goal="first", agent="main")
-    assert _skill_enum(provider.received_requests[0]) == ["alpha"]
-    assert not any("New skills" in t for t in _system_texts(host, started.task_id))
+    first = provider.received_requests[0]
+    assert _listed(first) == ["alpha"]
+    assert _listings(host, started.task_id) == ["roster"]
+    assert not any(t.startswith("New skills") for t in listing_texts(first.messages))
 
     write_skill(ws, "beta", "installed mid-process")
     driver.send_goal(started.task_id, goal="second")
     second = provider.received_requests[1]
-    assert _skill_enum(second) == ["alpha", "beta"]
-    # The earlier turn's recorded request is what it was.
-    assert _skill_enum(provider.received_requests[0]) == ["alpha"]
-    notes = [t for t in _system_texts(host, started.task_id) if "New skills" in t]
-    assert len(notes) == 1 and "beta" in notes[0] and "alpha" not in notes[0]
+    assert _listed(second) == ["alpha", "beta"]
+    # The schema did not move; the earlier request's messages are a prefix.
+    assert _skill_schema(second) == _skill_schema(first)
+    assert second.messages[: len(first.messages)] == first.messages
+    assert _listings(host, started.task_id) == ["roster", "added-0"]
+    added = [t for t in listing_texts(second.messages) if t.startswith("New skills")]
+    assert added == ["New skills are available via the `skill` tool:\n- beta: installed mid-process"]
 
-    # Nothing new: no second note. Removing a skill: gone, silently.
+    # Nothing new: nothing recorded. Removing a skill: not announced, and the
+    # listing the model sees keeps its bytes.
     driver.send_goal(started.task_id, goal="third")
-    assert _skill_enum(provider.received_requests[2]) == ["alpha", "beta"]
+    third = provider.received_requests[2]
+    assert _listed(third) == ["alpha", "beta"]
     shutil.rmtree(ws / ".noeta" / "skills" / "alpha")
     driver.send_goal(started.task_id, goal="fourth")
-    assert _skill_enum(provider.received_requests[3]) == ["beta"]
-    notes = [t for t in _system_texts(host, started.task_id) if "New skills" in t]
-    assert len(notes) == 1
+    fourth = provider.received_requests[3]
+    assert listing_texts(fourth.messages) == listing_texts(third.messages)
+    assert _skill_schema(fourth) == _skill_schema(first)
+    assert _listings(host, started.task_id) == ["roster", "added-0"]
 
 
 def test_every_task_sees_the_new_skill_on_its_own_next_turn(tmp_path: Path) -> None:
@@ -136,16 +147,17 @@ def test_every_task_sees_the_new_skill_on_its_own_next_turn(tmp_path: Path) -> N
     # A task opened AFTER the install lists it at once and announces nothing:
     # its opening roster is its baseline.
     three = driver.start(goal="three", agent="main")
-    assert _skill_enum(provider.received_requests[2]) == ["alpha", "beta"]
-    assert not any("New skills" in t for t in _system_texts(host, three.task_id))
-    # Both earlier tasks get it on their next turn, each with its own note.
+    assert _listed(provider.received_requests[2]) == ["alpha", "beta"]
+    assert _listings(host, three.task_id) == ["roster"]
+    # Both earlier tasks get it on their next turn, each with its own resident.
     driver.send_goal(two.task_id, goal="again")
     driver.send_goal(one.task_id, goal="again")
-    assert _skill_enum(provider.received_requests[3]) == ["alpha", "beta"]
-    assert _skill_enum(provider.received_requests[4]) == ["alpha", "beta"]
+    assert _listed(provider.received_requests[3]) == ["alpha", "beta"]
+    assert _listed(provider.received_requests[4]) == ["alpha", "beta"]
     for task_id in (one.task_id, two.task_id):
-        notes = [t for t in _system_texts(host, task_id) if "New skills" in t]
-        assert len(notes) == 1 and "beta" in notes[0]
+        assert _listings(host, task_id) == ["roster", "added-0"]
+    # Every task, whatever its roster, saw the same schema bytes.
+    assert len({_skill_schema(r) for r in provider.received_requests}) == 1
 
 
 # ---------------------------------------------------------------------------
