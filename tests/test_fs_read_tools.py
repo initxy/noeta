@@ -23,7 +23,7 @@ import pytest
 from noeta.protocols.tool import ToolContext
 from noeta.runtime.tool import InMemoryFileReadRegistry
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools.limits import INLINE_CONTENT_MAX_BYTES, INLINE_OUTPUT_MAX_BYTES
+from noeta.tools.limits import INLINE_OUTPUT_MAX_BYTES
 from noeta.builtins.fs.impl import GlobTool, GrepTool, ReadFileTool, build_fs_tools
 from noeta.runtime.workspace import WorkspaceRoot
 
