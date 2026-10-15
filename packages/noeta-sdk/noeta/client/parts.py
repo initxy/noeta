@@ -495,11 +495,18 @@ def default_reminder_specs() -> tuple[ReminderSpec, ...]:
                         f"built-in reminder {c.name!r} declares no integer "
                         f"priority — the manifest must carry the composed order"
                     )
+                resolved = _resolve_ref(c.ref)
                 specs.append(
                     ReminderSpec(
                         name=c.name,
                         priority=priority,
-                        render=_resolve_ref(c.ref),
+                        place=resolved,
+                    )
+                    if c.params.get("placed") is True
+                    else ReminderSpec(
+                        name=c.name,
+                        priority=priority,
+                        render=resolved,
                     )
                 )
         _REMINDER_SPEC_CACHE = tuple(specs)

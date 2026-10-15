@@ -91,14 +91,14 @@ def test_default_specs_are_the_builtin_corpus() -> None:
     and the surviving bands keep their numbers rather than closing the gap."""
     registry = ReminderRegistry(default_reminder_specs())
     assert [s.name for s in registry.specs()] == [
-        "unfinished-todos",
+        "todo-reminder",
         "read-suggestion",
         "collapsed-context",
     ]
     assert "delegation-nudge" not in BUILTIN_REMINDER_PRIORITIES
     # priorities keep that order and match the declared table
     assert [s.priority for s in registry.specs()] == [
-        BUILTIN_REMINDER_PRIORITIES["unfinished-todos"],
+        BUILTIN_REMINDER_PRIORITIES["todo-reminder"],
         BUILTIN_REMINDER_PRIORITIES["read-suggestion"],
         350,
     ]
@@ -159,9 +159,8 @@ def test_plugin_reminder_renders_at_dynamic_tail() -> None:
     view = inputs.composer.compose(_task_with_todos())
     texts = _dynamic_texts(view)
 
-    # base turn, then the todo reminder, then the plugin reminder LAST.
+    # base turn, then the plugin reminder LAST.
     assert texts[0] == "Do the task."
-    assert "todo list" in texts[1]
     assert texts[-1] == plugin_text
 
 

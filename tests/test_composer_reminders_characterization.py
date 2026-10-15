@@ -5,8 +5,9 @@ one-word edit changes what every session's model sees while every behavioural
 test stays green. These goldens are the only thing that makes such an edit
 deliberate. The two are:
 
-* **unfinished-todos** — surfaces the unfinished ``TaskState.todos`` the model
-  would otherwise never see again;
+* **todo-reminder** — Claude Code's "TodoWrite hasn't been used recently"
+  reminder with the todo list, placed once ten assistant blocks have passed
+  since the last ``TodoWrite`` and the last reminder;
 * **read-suggestion** — the "different reading strategy" hint, live only while
   ``ContextState.compaction_thrashing`` is latched.
 
@@ -39,7 +40,12 @@ import pytest
 from tests._session_inputs import default_factory_kwargs
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
 from noeta.runtime.governance import Budget
-from noeta.protocols.messages import Message, TextBlock, ToolUseBlock
+from noeta.protocols.messages import (
+    Message,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 from noeta.protocols.task import Task
 from noeta.storage.memory import InMemoryContentStore
 
@@ -50,9 +56,8 @@ from tests._snapshot import assert_snapshot, stable_json
 # every message that follows it in the composed dynamic suffix is a reminder.
 _BASE_GOAL = "Do the task."
 
-# Representative unfinished + finished todos. Only the two non-completed items
-# feed the todo reminder; the completed one must NOT appear (a finished item
-# does not nag) — the golden pins that filtering.
+# The list a ``TodoWrite`` in history wrote; the reminder repeats all of it,
+# completed items included, as Claude Code does.
 _TODOS = [
     {"id": "1", "content": "First step", "status": "pending"},
     {"id": "2", "content": "Already done", "status": "completed"},
@@ -104,6 +109,32 @@ def _dynamic_suffix_payload(
 
     base = Message(role="user", content=[TextBlock(text=_BASE_GOAL)])
     history: list[Message] = [base]
+    if todos:
+        # The list is written once, then ten text-only turns pass without
+        # another ``TodoWrite`` — the reminder is due at the tail.
+        history += [
+            Message(
+                role="assistant",
+                content=[
+                    ToolUseBlock(
+                        call_id="todo-1",
+                        tool_name="TodoWrite",
+                        arguments={"todos": list(todos)},
+                    )
+                ],
+            ),
+            Message(
+                role="tool",
+                content=[
+                    ToolResultBlock(call_id="todo-1", output="ok", success=True)
+                ],
+            ),
+        ]
+        for _ in range(10):
+            history += [
+                Message(role="assistant", content=[TextBlock(text="Working.")]),
+                Message(role="user", content=[TextBlock(text="Continue.")]),
+            ]
     if spawn_in_history:
         history.append(
             Message(role="assistant", content=[_SPAWN_HISTORY_BLOCK])
@@ -132,7 +163,7 @@ def _dynamic_suffix_payload(
 
 #: Representative folded states, label → the four state knobs. Each label pins a
 #: distinct combination: both reminders together (order), each reminder in
-#: isolation, and the quiet state (finished checklist, no thrashing) where the
+#: isolation, and the quiet state (no todo list, no thrashing) where the
 #: dynamic suffix is the base turn alone.
 _STATES: dict[str, dict[str, object]] = {
     # Both fire — pins the relative order todo -> read.
@@ -142,7 +173,7 @@ _STATES: dict[str, dict[str, object]] = {
         "spawn_in_history": False,
         "compaction_thrashing": True,
     },
-    # Only the unfinished-todos reminder (no thrashing).
+    # Only the todo reminder (no thrashing).
     "todos_only": {
         "todos": _TODOS,
         "delegation_enabled": False,
@@ -184,10 +215,10 @@ def test_relative_order_is_todo_then_read() -> None:
     unreadable byte diff in the golden.
     """
     suffix = _dynamic_suffix_payload(**_STATES["all_reminders"])  # type: ignore[arg-type]
-    # Base turn first (author-neutral), then exactly two system reminders.
+    # The recorded turns first (author-neutral), then exactly two reminders.
     assert suffix[0]["origin"] is None
-    reminders = suffix[1:]
-    assert [m["origin"] for m in reminders] == ["system", "system"]
+    reminders = [m for m in suffix if m["origin"] == "system"]
+    assert reminders == suffix[-2:]
     assert "todo list" in reminders[0]["text"]
     assert "reading strategy" in reminders[1]["text"]
 

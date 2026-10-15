@@ -136,7 +136,7 @@ seams   = ["turn_intake"]
 
 ### `reminder`
 
-基于折叠状态的纯函数 `render(view) -> str | None`，每次组装提示词时渲染在末尾，从不记录。内置：`reminders` 贡献 `unfinished-todos`（100）和 `read-suggestion`（300）；`react` 贡献 `collapsed-context`（350）。
+基于折叠状态的纯函数 `render(view) -> str | None`，每次组装提示词时渲染在末尾，从不记录。内置：`reminders` 贡献 `todo-reminder`（100）和 `read-suggestion`（300）；`react` 贡献 `collapsed-context`（350）。`todo-reminder` 是一条“定位”提醒（仅内置可用）：它不渲染在末尾，而是返回自己在已记录历史里出现的每个位置，所以一旦出现就一直留在原处。
 
 ```toml
 [[tool.noeta.contributions]]

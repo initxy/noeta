@@ -287,7 +287,7 @@ def test_reminder_ships_in_the_default_base_specs() -> None:
     assert "collapsed-context" in names
     # The surviving classics are still there — the widened loader dropped
     # nothing (``delegation-nudge`` was removed on purpose, not lost here).
-    for classic in ("unfinished-todos", "read-suggestion"):
+    for classic in ("todo-reminder", "read-suggestion"):
         assert classic in names
 
 

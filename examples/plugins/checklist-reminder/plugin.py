@@ -51,8 +51,8 @@ def long_checklist_reminder(view: Any) -> Optional[str]:
 #: — the activation key, not the filename. ``python -m noeta.sdk.plugin_check``
 #: derives TOML from it and verifies the shipped ``noeta-plugin.toml`` matches.
 #:
-#: ``priority=400`` places the nudge after the three built-in reminders
-#: (``unfinished-todos`` 100, ``delegation-nudge`` 200, ``read-suggestion`` 300),
+#: ``priority=400`` places the nudge after the built-in tail reminders
+#: (``read-suggestion`` 300, ``collapsed-context`` 350),
 #: so an advisory note never displaces the ones the agent acts on.
 plugin = PluginBuilder("checklist-reminder", requires_noeta=">=0.4")
 plugin.reminder(long_checklist_reminder, name="long-checklist", priority=400)
