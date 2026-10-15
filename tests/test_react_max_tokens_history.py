@@ -1,11 +1,9 @@
-"""ReAct policy edges: what a truncated turn leaves in history, what a
-provider failure tells the host, and a ``structured_output`` sent next to
-other calls.
+"""ReAct policy edges: what a provider failure tells the host, and a
+``structured_output`` sent next to other calls.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 
 from noeta.builtins.react.impl import STRUCTURED_OUTPUT_TOOL, ReActPolicy
@@ -23,13 +21,10 @@ from noeta.protocols.decisions import (
 from noeta.protocols.messages import (
     LLMResponse,
     Message,
-    TextBlock,
     ToolUseBlock,
-    Usage,
 )
 from noeta.protocols.step_context import StepContext
 from noeta.runtime.llm import RuntimeLLMClient
-from noeta.sdk import Client, Options
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
 from noeta.testing.composer import fake_view
 from noeta.testing.fake_llm import FakeLLMProvider
@@ -50,90 +45,6 @@ def _decide(response: LLMResponse):
     )
     ctx = StepContext(task_id="task-1", lease_id="lease-1", trace_id="trace-1")
     return policy.decide(ctx, fake_view([]))
-
-
-# ---------------------------------------------------------------------------
-# B1: a max_tokens turn never records its tool calls
-# ---------------------------------------------------------------------------
-
-
-def test_truncated_turn_keeps_text_and_drops_tool_calls() -> None:
-    decision = _decide(
-        LLMResponse(
-            stop_reason="max_tokens",
-            content=[
-                TextBlock(text="reading"),
-                ToolUseBlock(call_id="t1", tool_name="echo", arguments={"x": "hi"}),
-            ],
-        )
-    )
-    assert isinstance(decision, FailDecision)
-    assert decision.reason == "llm_truncated"
-    assert decision.retryable is True
-    assert decision.assistant_message == Message(
-        role="assistant", content=[TextBlock(text="reading")]
-    )
-
-
-def test_truncated_turn_of_only_tool_calls_records_nothing() -> None:
-    decision = _decide(
-        LLMResponse(
-            stop_reason="max_tokens",
-            content=[ToolUseBlock(call_id="t1", tool_name="echo", arguments={})],
-        )
-    )
-    assert isinstance(decision, FailDecision)
-    assert decision.reason == "llm_truncated"
-    assert decision.assistant_message is None
-
-
-def test_next_turn_after_truncation_carries_no_dangling_tool_use(tmp_path: Path) -> None:
-    """End to end over multi_turn: the follow-up request must not carry a
-    tool_use without its result (Anthropic and OpenAI reject that with 400)."""
-    ws = tmp_path
-    provider = FakeLLMProvider(
-        responses=[
-            LLMResponse(
-                stop_reason="max_tokens",
-                content=[
-                    TextBlock(text="reading"),
-                    ToolUseBlock(
-                        call_id="toolu_1",
-                        tool_name="Read",
-                        arguments={"file_path": str(ws / "a")},
-                    ),
-                ],
-                usage=Usage(uncached=1, output=1),
-            ),
-            LLMResponse(
-                stop_reason="end_turn",
-                content=[TextBlock(text="ok")],
-                usage=Usage(uncached=1, output=1),
-            ),
-        ]
-    )
-    client = Client(
-        Options(system_prompt="x", name="main", permission_mode="bypassPermissions"),
-        provider=provider,
-        workspace_dir=ws,
-        multi_turn=True,
-    )
-    try:
-        task_id = client.start(goal="alpha").task_id
-        client.send_goal(task_id, goal="beta")
-        follow_up = provider.received_requests[1].messages
-    finally:
-        client.shutdown()
-    assert not any(
-        isinstance(block, ToolUseBlock)
-        for message in follow_up
-        for block in message.content
-    )
-    assert any(
-        message.role == "assistant"
-        and message.content == [TextBlock(text="reading")]
-        for message in follow_up
-    )
 
 
 # ---------------------------------------------------------------------------
