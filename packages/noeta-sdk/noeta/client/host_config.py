@@ -705,8 +705,8 @@ class HostConfig:
     )
     #: The ``<workspace-environment>`` block switch, forwarded verbatim to
     #: ``SdkHost.environment_enabled``. On by default: every session records the
-    #: workspace facts (directory, git repo flag, platform, task-start git
-    #: branch / status / date) once at task start and renders them as the first
+    #: workspace facts (directory, git repo flag, platform, shell, OS version,
+    #: model, task-start git branch / status, today's date) once at task start and renders them as the first
     #: semi-stable message. Off, the block is neither recorded nor rendered —
     #: for a host that supplies its own working-directory and clock context and
     #: does not want a second, task-start-frozen copy in front of the model.
