@@ -71,9 +71,8 @@ forward fails the Task instead of looping.
   model's, or the smaller `HostConfig.auto_compact_window` a host sets so a
   large-window model trims and compacts earlier — old tool outputs are replaced
   by a marker naming the call, such as
-  `[tool output cleared: Read(/src/app.py), 12345 chars]`, and large argument
-  strings of old tool calls (a `Write`'s file body) by `[argument cleared from context, N chars; the call ran with the full value]`;
-  the newest tool-calling turn stays as sent. `HostConfig.clear_tool_outputs_at`
+  `[tool output cleared: Read(/src/app.py), 12345 chars]`; tool calls keep
+  their arguments as sent. `HostConfig.clear_tool_outputs_at`
   starts this earlier than the summarize trigger. The call ids stay so
   the conversation remains valid, and the originals remain in the content store.
 - **Reminders.** Short notes rendered at the very end of each prompt — unfinished
