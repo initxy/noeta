@@ -2428,7 +2428,9 @@ def handle_compaction_requested(
     4. emit ``Compacted`` (only when the policy produced a ``summary``):
        persist the summary body, carry the boundary; fold writes the
        summary slice onto ``ContextState``.
-    5. return ``None`` → the Engine loops back to compose → decide with the
+    5. append ``reattached`` (only with a summary): each text as its own
+       host-injected user turn, in one ``MessagesAppended``.
+    6. return ``None`` → the Engine loops back to compose → decide with the
        compacted history.
     """
     passive = decision.reason == "overflow"
@@ -2501,6 +2503,21 @@ def handle_compaction_requested(
             trace_id=trace_id,
         )
         ctx.apply_event(task, env)
+        if decision.reattached:
+            reattached = [
+                Message(
+                    role="user", content=[TextBlock(text=text)], origin="system"
+                )
+                for text in decision.reattached
+            ]
+            task.runtime.messages.extend(reattached)
+            ctx.emit(
+                task_id=task.task_id,
+                type_="MessagesAppended",
+                payload=put_messages(ctx.content_store, reattached),
+                lease_id=lease_id,
+                trace_id=trace_id,
+            )
     return None
 
 
