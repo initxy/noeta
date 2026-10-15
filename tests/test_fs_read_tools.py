@@ -130,20 +130,18 @@ def test_read_offset_past_end_warns_with_line_count(tmp_path: Path) -> None:
     assert "only 2 lines" in result.output
 
 
-def test_read_offload_when_large(tmp_path: Path) -> None:
+def test_read_refuses_a_window_past_the_token_ceiling(tmp_path: Path) -> None:
     ctx, workspace = _ctx_and_workspace(tmp_path)
     # Lines under the per-line clip whose TOTAL bytes cleanly exceed the
     # inline safety ceiling (this exercises the byte fence, not the window).
     big = ("x" * 1999 + "\n") * 1500  # ~3 MB, well over the 1 MiB ceiling
     (workspace.root / "big.txt").write_text(big)
-    result = ReadFileTool(workspace=workspace).invoke({"file_path": "big.txt"}, ctx)
-    assert result.success is True
-    assert len(result.output.encode("utf-8")) <= INLINE_CONTENT_MAX_BYTES + 512
-    assert "Showing lines 1-" in result.output
-    # Over the 1 MiB rewind-baseline ceiling the artifact is the served
-    # window, never the whole multi-MB body.
-    assert len(result.artifacts) == 1
-    assert result.artifacts[0].size < 110 * 1024
+    result = ReadFileTool(workspace=workspace).invoke(
+        {"file_path": "big.txt", "limit": 1500}, ctx
+    )
+    # The scan stops at its bound and the read is refused, never served.
+    assert result.success is False
+    assert "exceeds maximum allowed tokens (25000)" in result.summary
 
 
 def test_read_medium_file_fits_in_full(tmp_path: Path) -> None:

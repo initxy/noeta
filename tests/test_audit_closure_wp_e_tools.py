@@ -310,24 +310,43 @@ def test_read_streams_the_window_and_hashes_the_whole_file(tmp_path: Path) -> No
     ) == hashlib.sha256(body).hexdigest()
 
 
-def test_read_caps_served_text_with_an_actionable_note(tmp_path: Path) -> None:
+def test_read_refuses_a_whole_file_over_256kb(tmp_path: Path) -> None:
     (tmp_path / "wide.txt").write_text(("y" * 150 + "\n") * 3000)
     result = ReadFileTool(workspace=WorkspaceRoot.from_path(tmp_path)).invoke(
         {"file_path": "wide.txt"}, _ctx()
     )
-    assert result.success
-    body, _, notes = result.output.partition("\n\n(")
-    assert len(body.encode("utf-8")) <= 100 * 1024
-    assert "Output capped at 100 KB" in notes
-    shown = len(body.splitlines())
-    assert f"Use offset={shown + 1}" in notes
+    assert not result.success
+    assert result.summary == (
+        "Read: File content (442.4KB) exceeds maximum allowed size (256KB). "
+        "Use offset and limit parameters to read specific portions of the "
+        "file, or search for specific content instead of reading the whole "
+        "file."
+    )
+
+
+def test_read_refuses_more_than_25000_tokens(tmp_path: Path) -> None:
+    (tmp_path / "wide.txt").write_text(("y" * 150 + "\n") * 3000)
+    result = ReadFileTool(workspace=WorkspaceRoot.from_path(tmp_path)).invoke(
+        {"file_path": "wide.txt", "limit": 1000}, _ctx()
+    )
+    assert not result.success
+    assert result.summary == (
+        "Read: File content (37750 tokens) exceeds maximum allowed tokens "
+        "(25000). Use offset and limit parameters to read specific portions "
+        "of the file, or search for specific content instead of reading the "
+        "whole file."
+    )
+    ok = ReadFileTool(workspace=WorkspaceRoot.from_path(tmp_path)).invoke(
+        {"file_path": "wide.txt", "limit": 500}, _ctx()
+    )
+    assert ok.success
 
 
 def test_read_clips_a_huge_single_line_without_buffering_it(tmp_path: Path) -> None:
     (tmp_path / "min.js").write_bytes(b"x" * (8 * 1024 * 1024) + b"\nnext\n")
     result = ReadFileTool(
         workspace=WorkspaceRoot.from_path(tmp_path), exec_env=_NoWholeReads()
-    ).invoke({"file_path": "min.js"}, _ctx())
+    ).invoke({"file_path": "min.js", "limit": 2}, _ctx())
     lines = result.output.splitlines()
     assert lines[0].endswith("… [line truncated]")
     assert lines[1] == "     2\tnext"
