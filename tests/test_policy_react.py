@@ -16,6 +16,7 @@ from noeta.builtins.react.impl import ReActPolicy
 from noeta.protocols.decisions import (
     FailDecision,
     FinishDecision,
+    StatePatchDecision,
     ToolCallsDecision,
 )
 from noeta.protocols.messages import (
@@ -245,8 +246,9 @@ def test_thinking_only_response_yields_empty_history_content() -> None:
     assert decision.answer == "final answer"
 
 
-def test_max_tokens_response_becomes_retryable_fail_decision() -> None:
-    """A truncated turn is retryable, and its partial text is still recorded."""
+def test_max_tokens_text_response_is_kept_and_continued() -> None:
+    """A truncated turn keeps its partial text and continues with the
+    output-limit nudge instead of failing the task."""
     resp = LLMResponse(
         stop_reason="max_tokens",
         content=[TextBlock(text="partial...")],
@@ -255,21 +257,18 @@ def test_max_tokens_response_becomes_retryable_fail_decision() -> None:
 
     decision = policy.decide(_ctx(), _empty_view())
 
-    assert isinstance(decision, FailDecision)
-    assert decision.reason == "llm_truncated"
-    assert decision.retryable is True
-    assert decision.assistant_message == Message(
-        role="assistant", content=resp.content
+    assert isinstance(decision, StatePatchDecision)
+    assert decision.messages_before == (
+        Message(role="assistant", content=resp.content),
     )
+    assert decision.messages_after[0].role == "user"
+    assert decision.patch is None
 
 
-def test_max_tokens_response_all_thinking_fails_instead_of_recording_empty_message() -> None:
+def test_max_tokens_response_all_thinking_records_no_assistant_turn() -> None:
     """A reasoning model can spend its whole output budget on ThinkingBlock(s),
-    which ``_strip_thinking`` removes — leaving ``history_content`` empty on
-    ``max_tokens`` too. Recording ``Message(content=[])`` here is worse than on
-    ``end_turn``: this branch is normally retryable, so the retry would resend
-    the very history the poisoned turn just wrote. Fail non-retryable with no
-    assistant_message instead."""
+    which ``_strip_thinking`` removes. Recording ``Message(content=[])`` would
+    be a provider 400 on the next request, so only the nudge is recorded."""
     resp = LLMResponse(
         stop_reason="max_tokens",
         content=[ThinkingBlock(text="still reasoning...")],
@@ -278,10 +277,9 @@ def test_max_tokens_response_all_thinking_fails_instead_of_recording_empty_messa
 
     decision = policy.decide(_ctx(), _empty_view())
 
-    assert isinstance(decision, FailDecision)
-    assert decision.reason == "llm_empty_response"
-    assert decision.retryable is False
-    assert decision.assistant_message is None
+    assert isinstance(decision, StatePatchDecision)
+    assert decision.messages_before == ()
+    assert len(decision.messages_after) == 1
 
 
 def test_error_response_becomes_non_retryable_fail_with_none_message() -> None:

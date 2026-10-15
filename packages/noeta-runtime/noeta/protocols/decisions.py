@@ -401,6 +401,11 @@ class CompactionRequestedDecision:
     composer_version: str = ""
     state_patch: Optional[TaskStatePatch] = None
     assistant_message: Optional[Message] = None
+    #: Context the Policy re-attaches once the prefix collapses (recently read
+    #: files, re-read at compaction time). Recorded after ``Compacted`` as
+    #: host-injected user turns, one per text, so a resume folds them back
+    #: and never re-reads. Only with a ``summary``.
+    reattached: tuple[str, ...] = ()
 
 
 Decision = Union[

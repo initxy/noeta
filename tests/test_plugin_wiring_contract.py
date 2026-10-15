@@ -715,43 +715,6 @@ def test_activating_delegation_on_a_childless_root_is_additive() -> None:
 
 
 # ===========================================================================
-# Composer — reminders never walk the rolling history
-# ===========================================================================
-
-
-def test_reminder_render_never_scans_history() -> None:
-    """No reminder reads the rolling history, so composing one must not walk it.
-
-    The ``already_spawned`` scan fed the removed delegation nudge; with it gone,
-    walking the whole history on every compose would be pure waste, whether or
-    not delegation is offered.
-    """
-    from noeta.context.composer import ThreeSegmentComposer
-
-    class _ExplodingMessages(list):
-        def __iter__(self):  # noqa: D105
-            raise AssertionError("history was scanned to render reminders")
-
-    composer = ThreeSegmentComposer(
-        system_prompt="p", tools={}, content_store=InMemoryContentStore()
-    )
-
-    class _Runtime:
-        messages = _ExplodingMessages()
-
-    class _Task:
-        runtime = _Runtime()
-        state = type("S", (), {"todos": ()})()
-        context = type(
-            "C", (), {"compaction_thrashing": False, "summary_boundary": 0}
-        )()
-
-    assert composer._append_reminders(
-        _Task(), [], delegation_enabled=True
-    ) == []
-
-
-# ===========================================================================
 # Loader knobs — builtins=False scopes the loaded set, never the SDK defaults
 # ===========================================================================
 
