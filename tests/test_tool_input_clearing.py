@@ -3,7 +3,7 @@
 A worker's ``Write`` / ``Edit`` calls carry whole file bodies in their
 arguments, and the prune only ever cleared results, so the arguments rode every
 request for the rest of the task. Under the same two valves that clear outputs,
-a tool_use's large argument strings are now swapped for ``[cleared, N chars]``
+a tool_use's large argument strings are now swapped for a marker that names the length and says the call ran with the full value
 — keys and small values kept — except in the newest assistant turn that called
 a tool, which stays as sent. A cleared result's marker names the call it
 answered, so the model knows it already read that file.
@@ -108,7 +108,7 @@ def test_old_write_bodies_are_cleared_and_the_path_kept() -> None:
     for i in range(2):
         assert uses[f"w{i}"] == {
             "file_path": f"/src/f{i}.py",
-            "content": "[cleared, 5000 chars]",
+            "content": "[argument cleared from context, 5000 chars; the call ran with the full value]",
         }
     for i in range(2, 4):
         assert uses[f"w{i}"]["content"] == "x" * 5_000
@@ -135,7 +135,7 @@ def test_nested_strings_are_cleared_in_place() -> None:
     ]
     uses = _uses(_compose(msgs, keep=1))
     assert uses["e0"] == {
-        "edits": [{"old_string": "[cleared, 900 chars]", "new_string": "b"}],
+        "edits": [{"old_string": "[argument cleared from context, 900 chars; the call ran with the full value]", "new_string": "b"}],
         "file_path": "/x",
     }
 
@@ -160,7 +160,7 @@ def test_the_newest_tool_calling_turn_is_never_cleared() -> None:
         ),
     ]
     uses = _uses(_compose(msgs, keep=1))
-    assert uses["w0"]["content"] == "[cleared, 2000 chars]"
+    assert uses["w0"]["content"] == "[argument cleared from context, 2000 chars; the call ran with the full value]"
     for j in range(3):
         assert uses[f"p{j}"]["content"] == "q" * 2_000
 
@@ -220,5 +220,5 @@ def test_the_relief_valve_alone_clears_arguments_outside_its_tail() -> None:
         microcompact_keep_recent=None,
     ).compose(task)
     uses = _uses(view)
-    assert uses["w0"]["content"] == "[cleared, 5000 chars]"
+    assert uses["w0"]["content"] == "[argument cleared from context, 5000 chars; the call ran with the full value]"
     assert uses["w3"]["content"] == "x" * 5_000
