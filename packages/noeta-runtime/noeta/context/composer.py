@@ -812,7 +812,7 @@ class ThreeSegmentComposer:
         call it answered when that call is in view (``[tool output cleared:
         Read(/a.py), 12345 chars]``), so the model knows what it already
         fetched. A tool_use block either valve reaches has its large argument
-        strings cleared the same way (``[cleared, N chars]``) — except in the
+        strings cleared the same way (``_ARGUMENT_CLEARED``, which says the call ran whole) — except in the
         newest assistant turn that called a tool, which stays as sent. Text
         blocks are never touched. Returns the rewritten list plus the kept / cleared
         message refs and the cleared outputs' refs for ``ContextPlan``
@@ -1114,6 +1114,11 @@ _CALL_TARGET_MAX_CHARS = 160
 #: Characters an argument string must reach before clearing it is worth
 #: doing — the outputs' floor, for the same reasons.
 _MIN_CLEARABLE_INPUT_CHARS = 400
+#: What stands in for a cleared argument string. It says the call ran with the
+#: whole value: a bare ``[cleared, N chars]`` read, in a worker's own history, as
+#: what its ``Write`` had put on disk, and the worker wrote the marker into files
+#: (2026-10-15).
+_ARGUMENT_CLEARED = "[argument cleared from context, {n} chars; the call ran with the full value]"
 
 
 def _call_label(use: ToolUseBlock) -> str:
@@ -1144,7 +1149,7 @@ def _cleared_arguments(value: Any) -> Any:
     small values kept, so the call still reads as the call it was."""
     if isinstance(value, str):
         if len(value) >= _MIN_CLEARABLE_INPUT_CHARS:
-            return f"[cleared, {len(value)} chars]"
+            return _ARGUMENT_CLEARED.format(n=len(value))
         return value
     if isinstance(value, dict):
         return {k: _cleared_arguments(v) for k, v in value.items()}

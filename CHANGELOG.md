@@ -8,6 +8,15 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Changed (`noeta-runtime`)
+
+- **A cleared tool argument says the call ran whole.** The marker that
+  replaces a large argument string of an old tool call is now
+  `[argument cleared from context, N chars; the call ran with the full value]`
+  instead of `[cleared, N chars]`. A worker reading its own history took the
+  bare marker for what its `Write` had put on disk ("long payloads get
+  replaced") and wrote the marker itself into files.
+
 ## [0.6.37] - 2026-10-10
 
 `noeta-sdk` only — 0.6.36 → 0.6.37; `noeta-runtime` stays at 0.6.36 (the
