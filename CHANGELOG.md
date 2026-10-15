@@ -6,7 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
-## [Unreleased]
+## [0.6.38] - 2026-10-15
+
+`noeta-runtime` only — 0.6.36 → 0.6.38; `noeta-sdk` stays at 0.6.37 (its
+`noeta-runtime>=0.6.36` floor is unchanged; a host that wants this behaviour pins
+`noeta-runtime>=0.6.38` itself).
 
 ### Removed (`noeta-runtime`)
 
@@ -3444,6 +3448,7 @@ Initial preview release.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
 [Unreleased]: https://github.com/initxy/noeta/compare/v0.6.36...HEAD
+[0.6.38]: https://github.com/initxy/noeta/compare/v0.6.37...v0.6.38
 [0.6.37]: https://github.com/initxy/noeta/compare/v0.6.36...v0.6.37
 [0.6.36]: https://github.com/initxy/noeta/compare/v0.6.35...v0.6.36
 [0.6.35]: https://github.com/initxy/noeta/compare/v0.6.34...v0.6.35
