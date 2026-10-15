@@ -684,6 +684,7 @@ class Client:
             app_gateway=hc.app_gateway,
             write_roots=hc.write_roots,
             shell_env=hc.shell_env,
+            shell_env_inherit=tuple(hc.shell_env_inherit),
             # Sandbox execution backend (host config). ``None`` (default) ⇒
             # the local host; when set, the SdkHost builds a sandbox manager and
             # routes every session's fs / shell IO into the container. ``exec_env``
