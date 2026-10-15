@@ -750,6 +750,9 @@ class SdkHost(GenericEngineResolver):
     #: fixed allow-list (HostConfig.shell_env_inherit), forwarded into the fs
     #: pack.
     shell_env_inherit: Sequence[str] = ()
+    #: Background commands end with their turn
+    #: (HostConfig.background_ends_with_turn), forwarded into the fs pack.
+    background_ends_with_turn: bool = False
     extra_guards: tuple[Guard, ...] = ()
     extra_content_kinds: tuple[ContentKindSpec, ...] = ()
     #: Per-agent ``tool_result_transform`` stages — ``agent name -> ordered
@@ -2770,6 +2773,7 @@ class SdkHost(GenericEngineResolver):
         config["fs"]["write_roots"] = self.write_roots
         config["fs"]["shell_env"] = self.shell_env
         config["fs"]["shell_env_inherit"] = tuple(self.shell_env_inherit)
+        config["fs"]["background_ends_with_turn"] = self.background_ends_with_turn
         # The lowest skill tier: the host's own built-in dirs first, then the
         # dirs loaded plugins contribute on the ``skills`` surface. Both sit
         # below ``global_skills_dir`` and the workspace pack, which the skills

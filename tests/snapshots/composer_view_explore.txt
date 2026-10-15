@@ -127,7 +127,7 @@
     },
     {
       "function": {
-        "description": "Executes a shell command in the workspace and returns its output.\n\n- Runs with `cwd` at the workspace root and a scrubbed (secret-free) environment. Output is stdout (plus a labeled stderr section when both streams have content), capped at 30000 characters with the middle elided.\n- `timeout` is in milliseconds: default 120000, max 600000. A non-zero exit or a timeout comes back as an error carrying the same output.\n- Provide a short `description` (5–10 words) of what the command does — it is shown to the user while the command runs.\n- `run_in_background: true` launches the command detached (a server, a long build or test run): you get a shell ID back immediately and keep working. Read its incremental output with `BashOutput`, stop it with `KillShell`. A background job's lifetime follows the session, not this task.\n- The command runs through bash (pipes, redirection, chaining). The host decides which commands run freely, which need the user's approval, and which are refused — a refusal comes back as an error that says why.\n- To read a file, search content, list files, or edit text, prefer `Read` / `Grep` / `Glob` / `Edit` — they are cheaper and need no approval. Avoid `cat`/`head`/`tail`/`grep`/`find`/`sed` here for those jobs.",
+        "description": "Executes a shell command in the workspace and returns its output.\n\n- Runs with `cwd` at the workspace root and a scrubbed (secret-free) environment. Output is stdout (plus a labeled stderr section when both streams have content), capped at 30000 characters with the middle elided.\n- `timeout` is in milliseconds: default 120000, max 600000. A non-zero exit or a timeout comes back as an error carrying the same output.\n- Provide a short `description` (5–10 words) of what the command does — it is shown to the user while the command runs.\n- You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately. You get a shell ID back at once; `BashOutput` reads its output (with `block: true` it waits for the command to finish) and `KillShell` stops it. A background job's lifetime follows the session, not this task.\n- Avoid unnecessary `sleep` commands:\n  - Do not sleep between commands that can run immediately — just run them.\n  - Do not retry failing commands in a sleep loop — diagnose the root cause.\n  - Long leading `sleep` commands are blocked. To poll until a condition is met, use an until-loop (e.g. `until <check>; do sleep 2; done`). Do not chain shorter sleeps to work around the block.\n  - If waiting for a background task you started with `run_in_background`, call `BashOutput` with `block: true` — do not poll or sleep.\n- The command runs through bash (pipes, redirection, chaining). The host decides which commands run freely, which need the user's approval, and which are refused — a refusal comes back as an error that says why.\n- To read a file, search content, list files, or edit text, prefer `Read` / `Grep` / `Glob` / `Edit` — they are cheaper and need no approval. Avoid `cat`/`head`/`tail`/`grep`/`find`/`sed` here for those jobs.",
         "name": "Bash",
         "parameters": {
           "additionalProperties": false,
@@ -155,7 +155,7 @@
     },
     {
       "function": {
-        "description": "Retrieves the output of a background shell started with `Bash` `run_in_background: true`.\n\n- Give the `bash_id` the launch returned. Each call returns ONLY the output produced since your previous check (like tailing a log), plus a status line (`running`, or `exited`/`killed` with the exit code).\n- Optional `filter`: a regular expression applied per line — only matching lines of the new output are returned.\n- A buffer-overflow note means the job printed faster than you polled and the oldest undelivered output was dropped.\n- Safe and cheap to call repeatedly. To stop the job use `KillShell`.",
+        "description": "Retrieves the output of a background shell started with `Bash` `run_in_background: true`.\n\n- Give the `bash_id` the launch returned. Each call returns ONLY the output produced since your previous check (like tailing a log), plus a status line (`running`, or `exited`/`killed` with the exit code).\n- `block: true` waits for the command to finish before answering, up to `timeout` milliseconds (default 30000, max 600000); the status line says when it is still running after the wait. Use it instead of `sleep` whenever you need a background command's result before going on.\n- Optional `filter`: a regular expression applied per line — only matching lines of the new output are returned.\n- A buffer-overflow note means the job printed faster than you polled and the oldest undelivered output was dropped.\n- Without `block`, safe and cheap to call repeatedly. To stop the job use `KillShell`.",
         "name": "BashOutput",
         "parameters": {
           "additionalProperties": false,
@@ -163,8 +163,14 @@
             "bash_id": {
               "type": "string"
             },
+            "block": {
+              "type": "boolean"
+            },
             "filter": {
               "type": "string"
+            },
+            "timeout": {
+              "type": "number"
             }
           },
           "required": [
@@ -278,7 +284,7 @@
         }
       ],
       "name": "stable_prefix",
-      "segment_hash": "712cc014048ac2531ba10c30df8c11cb0e282c5b224b44eadb978583a1e83efb"
+      "segment_hash": "d8c62bc1de1488f405f37ea6b76c20b06c8ff17a63fd48c215a2eb0b2bd18be7"
     },
     {
       "content": [

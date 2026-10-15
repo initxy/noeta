@@ -285,7 +285,7 @@ def test_backend_advertises_foreground_kill() -> None:
 def test_session_kill_interrupts_a_sandbox_foreground_run(tmp_path: Path) -> None:
     fake = BlockingAio()
     tool, ctx, registry = _tool_ctx(fake, tmp_path)
-    thread, out, ended = _invoke_in_thread(tool, ctx, "sleep 30")
+    thread, out, ended = _invoke_in_thread(tool, ctx, "true && sleep 30")
     assert fake.exec_started.wait(5)
     _await(lambda: bool(_foreground(registry).get("t-sbx")))
     stopped_at = time.monotonic()
@@ -318,7 +318,7 @@ def test_sandbox_timeout_reads_timed_out_not_interrupted(tmp_path: Path) -> None
         exec_answer={"status": "hard_timeout", "output": "", "exit_code": -1}
     )
     tool, ctx, _ = _tool_ctx(fake, tmp_path)
-    result = tool.invoke({"command": "sleep 99", "timeout": 2000}, ctx)
+    result = tool.invoke({"command": "true && sleep 99", "timeout": 2000}, ctx)
     assert result.success is False
     assert result.summary == "Command timed out after 2s"
 

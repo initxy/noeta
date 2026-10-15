@@ -126,6 +126,113 @@ def _inherited_env(names: tuple[str, ...]) -> dict[str, str]:
     }
 
 
+#: Claude Code's threshold for a leading ``sleep`` it refuses, in seconds
+#: (2.1.300: ``zpr=25``).
+LONG_SLEEP_S = 25.0
+
+#: The shell's control operators — where Claude Code splits a command into
+#: the subcommands its leading-``sleep`` check reads.
+_CONTROL_OPERATORS = ("&&", "||", ";", "|", "&", "\n")
+
+
+def _subcommands(command: str) -> list[str]:
+    """``command`` split at its unquoted control operators (empty parts
+    dropped). Quoting is honoured just far enough that an operator inside
+    quotes does not split."""
+    parts: list[str] = []
+    current: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            current.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < len(command):
+                current.append(command[i + 1])
+                i += 1
+            elif ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            current.append(ch)
+            i += 1
+            continue
+        operator = next(
+            (op for op in _CONTROL_OPERATORS if command.startswith(op, i)), None
+        )
+        if operator is not None:
+            parts.append("".join(current))
+            current = []
+            i += len(operator)
+            continue
+        current.append(ch)
+        i += 1
+    parts.append("".join(current))
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _js_number(value: float) -> str:
+    """How JavaScript prints a parsed float: ``110``, never ``110.0``."""
+    return str(int(value)) if value.is_integer() else repr(value)
+
+
+def long_leading_sleep(command: str) -> Optional[str]:
+    """Claude Code's description of a command whose first subcommand is
+    ``sleep N`` with ``N`` of at least :data:`LONG_SLEEP_S` seconds —
+    ``standalone sleep N`` or ``sleep N followed by: <the rest>`` — else
+    ``None``."""
+    parts = _subcommands(command)
+    if not parts:
+        return None
+    match = re.match(r"^sleep\s+(\d+(?:\.\d*)?)\s*$", parts[0])
+    if match is None:
+        return None
+    seconds = float(match.group(1))
+    if seconds < LONG_SLEEP_S:
+        return None
+    rest = " ".join(parts[1:]).strip()
+    shown = _js_number(seconds)
+    return f"sleep {shown} followed by: {rest}" if rest else f"standalone sleep {shown}"
+
+
+def _blocked_sleep(described: str) -> str:
+    """Claude Code's refusal of a long leading ``sleep``, its Monitor advice
+    replaced by what waits here: an until-loop, and ``BashOutput`` with
+    ``block: true`` for a background command."""
+    return (
+        f"Blocked: {described}. To wait for a condition, use an until-loop "
+        "(e.g. `until <check>; do sleep 2; done`). To wait for a command you "
+        "started, use run_in_background: true, then BashOutput with block: "
+        "true. Do not chain shorter sleeps to work around this block."
+    )
+
+
+def _background_started(job_id: str, *, ends_with_turn: bool) -> str:
+    """The launch result: Claude Code's background-command wording for an
+    agent whose turn end is (``ends_with_turn``) or is not its final response.
+    Noeta delivers a completion only once the turn has ended, never between
+    tool calls, so the waiting half points at ``BashOutput``."""
+    if ends_with_turn:
+        return (
+            f"Command running in background with ID: {job_id}. It is "
+            "terminated when you give your final response and no "
+            "notification can follow that — so do not end your turn to wait "
+            "for it; if you need its result, wait for it before giving your "
+            "final response: call BashOutput with block: true, rather than "
+            "checking on it repeatedly."
+        )
+    return (
+        f"Command running in background with ID: {job_id}. When it finishes, "
+        "its result is delivered to you automatically — by starting a new "
+        "turn once you have replied — so there is no need to check whether "
+        "it is done or to sleep; if that result is all you are waiting for, "
+        "end your turn. If you need it before you reply, call BashOutput "
+        "with block: true."
+    )
+
+
 def _render_streams(stdout: bytes, stderr: bytes) -> str:
     """The model-facing body: stdout, then stderr under a label only when both
     streams carry content (matching the familiar single-stream view when only
@@ -168,6 +275,10 @@ class ShellRunTool:
     #: Names of this process's variables the commands inherit past the fixed
     #: allow-list (``HostConfig.shell_env_inherit``); ``shell_env`` wins a tie.
     inherit_env: tuple[str, ...] = ()
+    #: The host ends a background job with the turn that started it (the
+    #: turn's end hands the work back), so the launch result must not promise
+    #: a later notification (``HostConfig.background_ends_with_turn``).
+    background_ends_with_turn: bool = False
     name: str = "Bash"
     description: str = field(default=load_markdown(__package__, "shell_run"))
     # High risk so PermissionGuard treats this as privileged.
@@ -196,6 +307,11 @@ class ShellRunTool:
         command = arguments.get("command")
         if not isinstance(command, str) or not command.strip():
             return _err(self.name, "requires non-empty 'command'")
+        run_in_background = bool(arguments.get("run_in_background"))
+        if not run_in_background:
+            described = long_leading_sleep(command)
+            if described is not None:
+                return _err(self.name, _blocked_sleep(described))
         if self.mode is ShellMode.ALLOWLIST:
             if _has_shell_meta(command):
                 return _err(
@@ -231,7 +347,7 @@ class ShellRunTool:
         timeout_s = _resolve_timeout(arguments.get("timeout"), self.timeout_s)
         # The tier gate above still applies; the sync timeout does NOT — a
         # backgrounded process outlives this call.
-        if bool(arguments.get("run_in_background")):
+        if run_in_background:
             # A sandbox backend cannot run host-side background jobs: the runner
             # spawns HOST subprocesses. Refuse cleanly rather than silently
             # running on the wrong machine. ``getattr`` defaults to True so a
@@ -356,9 +472,8 @@ class ShellRunTool:
         summary_cmd = truncate_bytes(command, SUMMARY_EMBED_MAX_BYTES)
         return ToolResult(
             success=True,
-            output=(
-                f"Command running in background with ID: {job_id}\n"
-                "Read its output with BashOutput; stop it with KillShell."
+            output=_background_started(
+                job_id, ends_with_turn=self.background_ends_with_turn
             ),
             summary=f"{self.name} {summary_cmd} → background ({job_id})",
         )
@@ -445,6 +560,10 @@ class ShellPollTool:
                 "bash_id": {"type": "string"},
                 # optional per-line regex filter on the new output
                 "filter": {"type": "string"},
+                # wait for the job to end before answering
+                "block": {"type": "boolean"},
+                # how long ``block`` waits, in milliseconds (max 600000)
+                "timeout": {"type": "number"},
             },
             "required": ["bash_id"],
             "additionalProperties": False,
@@ -471,6 +590,17 @@ class ShellPollTool:
                 return _err(self.name, f"invalid 'filter' regex: {exc}")
         else:
             filter_re = None
+        waited = ""
+        wait = getattr(runner, "wait", None)
+        if bool(arguments.get("block")) and callable(wait):
+            timeout_s = _wait_timeout_s(arguments.get("timeout"))
+            waited = str(
+                wait(
+                    job_id,
+                    timeout_s=timeout_s,
+                    spawned_by_task_id=str(ctx.metadata.get("task_id", "")),
+                )
+            )
         state = runner.poll(job_id)
         if state.get("status") == "unknown":
             return _err(self.name, f"unknown background job {job_id!r}")
@@ -484,6 +614,13 @@ class ShellPollTool:
             new_output = "\n".join(
                 line for line in new_output.splitlines() if filter_re.search(line)
             )
+        if waited == "timeout" and status == "running":
+            status_line += (
+                f" (still running after waiting "
+                f"{_js_number(_wait_timeout_s(arguments.get('timeout')))}s)"
+            )
+        elif waited == "interrupted":
+            status_line += " (wait interrupted: stop requested)"
         parts = [status_line]
         dropped = int(state.get("new_output_dropped") or 0)
         if dropped:
@@ -499,6 +636,19 @@ class ShellPollTool:
             output="\n".join(parts),
             summary=f"{self.name} {job_id} → {status}",
         )
+
+
+#: The wait bounds of Claude Code's ``TaskOutput`` (``block`` + ``timeout``,
+#: default 30000 ms, max 600000 ms) — the 2.0 tool; 2.1.300 no longer ships it.
+DEFAULT_WAIT_TIMEOUT_MS = 30_000
+MAX_WAIT_TIMEOUT_MS = 600_000
+
+
+def _wait_timeout_s(raw: Any) -> float:
+    """A ``timeout`` in milliseconds, defaulted and clamped, as seconds."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw < 0:
+        return DEFAULT_WAIT_TIMEOUT_MS / 1000
+    return min(float(raw), MAX_WAIT_TIMEOUT_MS) / 1000
 
 
 @dataclass

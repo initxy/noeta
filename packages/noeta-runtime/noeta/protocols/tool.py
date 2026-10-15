@@ -72,6 +72,13 @@ class BackgroundRunner(Protocol):
     background execution, so the tool refuses cleanly. ``kill`` only *requests*
     a SIGTERM→SIGKILL teardown and returns promptly; the watcher reaps the job
     and records ``BackgroundShellKilled``.
+
+    One optional method is read with ``getattr`` and is not a member of this
+    Protocol: ``wait(job_id, *, timeout_s, spawned_by_task_id) -> str`` blocks
+    until the job ends (``"done"``), the timeout passes (``"timeout"``) or a
+    human stop reaches the task (``"interrupted"``) — ``"unknown"`` for a job
+    the runner never ran. A runner without it serves a blocking read as a
+    plain poll.
     """
 
     def spawn(
