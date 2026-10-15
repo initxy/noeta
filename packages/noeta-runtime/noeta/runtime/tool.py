@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import threading
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.decisions import ToolCall
@@ -53,6 +53,120 @@ class InMemoryFileReadRegistry:
         with self._lock:
             return self._digests.get(path)
 
+    def clear(self) -> None:
+        with self._lock:
+            self._digests.clear()
+
+
+#: The side-effect type a read-first recording rides on ``ToolResultRecorded``
+#: (``{"type": "file_read", "path": <canonical>, "digest": <sha256 hex>}``).
+FILE_READ_EFFECT = "file_read"
+
+
+def live_side_effects(events: Iterable[Any]) -> list[dict[str, Any]]:
+    """The side effects a task's LIVE history recorded, oldest first.
+
+    Live = not folded over: a ``StepAttemptAbandoned`` seal kills
+    ``[abandoned_from_seq, seal)`` and a ``TaskRewound`` kills
+    ``(target_seq, rewind)``, exactly the stretches fold rebuilds past, so a
+    result the model no longer has in its conversation vouches for nothing."""
+    envelopes = list(events)
+    dead: list[tuple[int, int]] = []
+    for env in envelopes:
+        payload = env.payload
+        if env.type == "StepAttemptAbandoned":
+            dead.append((int(payload.abandoned_from_seq), int(env.seq)))
+        elif env.type == "TaskRewound":
+            dead.append((int(payload.target_seq) + 1, int(env.seq)))
+    effects: list[dict[str, Any]] = []
+    for env in envelopes:
+        if env.type != "ToolResultRecorded":
+            continue
+        if any(lo <= env.seq < hi for lo, hi in dead):
+            continue
+        for effect in env.payload.side_effects or ():
+            if isinstance(effect, Mapping) and isinstance(effect.get("type"), str):
+                effects.append(dict(effect))
+    return effects
+
+
+class RecordedToolState:
+    """What a task's tools carry from call to call, rebuilt from its record.
+
+    Two things live here: the read-first record (``reads``) and the newest
+    side effect of each type (what :attr:`ToolContext.recorded` answers).
+    Both are a cache over the task's live history — the ``ToolRuntime``
+    seeds it from the event log the first time it serves the task in this
+    process, notes every result it records afterwards, and :meth:`reset`
+    sends it back to the log (a crash-recovery seal folded part of the
+    history away). One per task, kept by the host's task-local registry."""
+
+    def __init__(self, reads: Optional[FileReadRegistry] = None) -> None:
+        self.reads: FileReadRegistry = (
+            reads if reads is not None else InMemoryFileReadRegistry()
+        )
+        self._latest: dict[str, dict[str, Any]] = {}
+        self._seeded = False
+        self._lock = threading.Lock()
+
+    @property
+    def seeded(self) -> bool:
+        with self._lock:
+            return self._seeded
+
+    def seed(self, events: Iterable[Any]) -> None:
+        """Rebuild from ``events`` (the task's stream) unless already seeded."""
+        with self._lock:
+            if self._seeded:
+                return
+            self._seeded = True
+        self.note(live_side_effects(events))
+
+    def note(self, effects: Iterable[Mapping[str, Any]]) -> None:
+        """Take in side effects just recorded (or replayed), oldest first."""
+        for effect in effects:
+            kind = effect.get("type")
+            if not isinstance(kind, str):
+                continue
+            with self._lock:
+                self._latest[kind] = dict(effect)
+            if kind == FILE_READ_EFFECT:
+                path, digest = effect.get("path"), effect.get("digest")
+                if isinstance(path, str) and isinstance(digest, str):
+                    self.reads.record(path, digest)
+
+    def latest(self, kind: str) -> Optional[Mapping[str, Any]]:
+        with self._lock:
+            found = self._latest.get(kind)
+            return dict(found) if found is not None else None
+
+    def reset(self) -> None:
+        """Forget everything; the next serve re-seeds from the log."""
+        with self._lock:
+            self._latest.clear()
+            self._seeded = False
+        clear = getattr(self.reads, "clear", None)
+        if callable(clear):
+            clear()
+
+
+class _CapturingReads:
+    """The call's view of the read-first record: forwards everything and
+    keeps what the call recorded, for the result's side effects."""
+
+    def __init__(self, inner: FileReadRegistry) -> None:
+        self._inner = inner
+        self.recorded: list[dict[str, Any]] = []
+
+    def record(self, path: str, digest: str) -> None:
+        self._inner.record(path, digest)
+        self.recorded.append(
+            {"type": FILE_READ_EFFECT, "path": path, "digest": digest}
+        )
+
+    def digest(self, path: str) -> Optional[str]:
+        return self._inner.digest(path)
+
 
 _OUTPUT_MEDIA_TYPE = "application/json"
 
@@ -82,6 +196,7 @@ class ToolRuntime:
         file_checkpoint_registry: Optional[Any] = None,
         tool_result_transforms: Sequence[Callable[[ToolResult], ToolResult]] = (),
         file_read_registry: Optional[FileReadRegistry] = None,
+        recorded_state: Optional[RecordedToolState] = None,
     ) -> None:
         self._event_log = event_log
         self._content_store = content_store
@@ -111,6 +226,15 @@ class ToolRuntime:
             if file_read_registry is not None
             else InMemoryFileReadRegistry()
         )
+        # The task's carried tool state; a host keeps one per task across
+        # turns (sharing ``file_read_registry`` as its ``reads``), so the
+        # history scan runs once per process. Without one, this runtime
+        # keeps its own and scans on its first call.
+        self._recorded: RecordedToolState = (
+            recorded_state
+            if recorded_state is not None
+            else RecordedToolState(self._file_read_registry)
+        )
 
     def invoke(
         self,
@@ -131,6 +255,8 @@ class ToolRuntime:
             origin="tool",
         )
 
+        self._seed_recorded(task_id)
+        reads = _CapturingReads(self._file_read_registry)
         ctx = ToolContext(
             artifact_store=self._content_store,
             metadata={
@@ -139,7 +265,8 @@ class ToolRuntime:
                 "trace_id": trace_id,
             },
             background_runner=self._background_runner,
-            file_read_registry=self._file_read_registry,
+            file_read_registry=reads,
+            recorded=self._recorded.latest,
         )
         try:
             result = tool.invoke(call.arguments, ctx)
@@ -161,6 +288,9 @@ class ToolRuntime:
         # fold reads them back and the live restore writes them out.
         file_baselines = self._capture_file_baselines(task_id, result)
 
+        # The read-first recordings ride the result, so a later process
+        # rebuilds the record from the log (``RecordedToolState.seed``).
+        side_effects = list(result.side_effects) + reads.recorded
         output_body = _encode_output(result.output)
         output_ref = self._content_store.put(
             output_body, media_type=_OUTPUT_MEDIA_TYPE
@@ -174,7 +304,7 @@ class ToolRuntime:
                 output_ref=output_ref,
                 summary=result.summary,
                 artifacts=list(result.artifacts),
-                side_effects=list(result.side_effects),
+                side_effects=side_effects,
                 file_baselines=file_baselines,
             ),
             lease_id=lease_id,
@@ -193,11 +323,22 @@ class ToolRuntime:
             origin="tool",
         )
 
+        self._recorded.note(side_effects)
+
         # Populate the output_ref on the frozen ToolResult so downstream
         # handlers (e.g. inline truncation markers) can cross-reference the
         # full-audit ContentRef without re-encoding the payload.
         object.__setattr__(result, "output_ref", output_ref)
         return result
+
+    def _seed_recorded(self, task_id: str) -> None:
+        """Seed the carried tool state from the task's stream, once.
+
+        An event log without ``read`` (a write-only double) seeds nothing."""
+        if self._recorded.seeded:
+            return
+        read = getattr(self._event_log, "read", None)
+        self._recorded.seed(read(task_id) if callable(read) else ())
 
     def _apply_transforms(self, result: ToolResult, call: ToolCall) -> ToolResult:
         """Run the ``tool_result_transform`` chain, containing any stage fault.
