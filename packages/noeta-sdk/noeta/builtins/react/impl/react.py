@@ -6,8 +6,12 @@ surface the Engine consumes. The hot path is::
 
     LLM produced tool_use      → ToolCallsDecision(calls, assistant_message)
     LLM produced end_turn      → FinishDecision(answer, assistant_message)
-    LLM produced max_tokens    → FailDecision(reason="llm_truncated",
-                                              retryable=True, ...)
+    LLM produced max_tokens    → its tool calls run as for tool_use; with no
+                                 tool call, the partial text is kept and an
+                                 output-limit nudge continues the turn
+                                 (StatePatchDecision), up to
+                                 MAX_OUTPUT_TOKENS_RECOVERY in a row, then
+                                 FailDecision(reason="llm_truncated")
     LLM produced error         → FailDecision(reason="llm_error",
                                               retryable=False,
                                               assistant_message=None)
@@ -72,6 +76,7 @@ from noeta.protocols.decisions import (
     Decision,
     FailDecision,
     FinishDecision,
+    StatePatchDecision,
     ToolCall,
     ToolCallsDecision,
 )
@@ -133,6 +138,32 @@ _STEP_LIMIT_PROMPT = (
     "calls will run. Stop here and reply with your final report: what you "
     "did, what you found, where the work stands, and what is left to do."
 )
+
+#: Output-limit recovery, copied from Claude Code (2.1.300): a response cut by
+#: the output cap that carries no tool call keeps its partial content and the
+#: turn continues with this user turn instead of failing.
+OUTPUT_LIMIT_RESUME_NUDGE = (
+    "Output token limit hit. Resume directly \u2014 no apology, no recap of "
+    "what you were doing. Pick up mid-thought if that is where the cut "
+    "happened. Break remaining work into smaller pieces."
+)
+
+#: The same recovery when the cap was spent on reasoning alone: thinking is
+#: never recorded, so there is nothing to resume and the model is told so.
+OUTPUT_LIMIT_THINKING_NUDGE = (
+    "Output token limit hit while you were still reasoning, before this "
+    "response produced any text or tool call. That reasoning was not kept and "
+    "is not part of this conversation, so there is nothing to resume. "
+    "Continue from the conversation above: reason much more briefly and "
+    "produce your answer or next tool call well within the output limit."
+)
+
+#: Consecutive recoveries allowed before a cut response fails the turn
+#: (Claude Code's limit). The count restarts after a tool round or a new user
+#: message, and is re-derived from the recorded history, never kept here.
+MAX_OUTPUT_TOKENS_RECOVERY = 3
+
+_OUTPUT_LIMIT_NUDGES = (OUTPUT_LIMIT_RESUME_NUDGE, OUTPUT_LIMIT_THINKING_NUDGE)
 
 #: Opens the answer a step-limit stop finishes with, so whoever reads it —
 #: the host, or the model on a later turn — knows the work was cut off.
@@ -1108,8 +1139,8 @@ class ReActPolicy:
             # Forward the model's output ceiling (catalog ModelSpec.max_output_tokens,
             # injected by the host for compaction math) as the request's hard cap, so a
             # gateway with a stingy default (the aidp Responses gateway caps at 1000 when
-            # the client sends none) doesn't truncate the answer — react would otherwise
-            # treat that truncation as an llm_truncated failure. ``0`` (host didn't inject)
+            # the client sends none) doesn't cut every answer into output-limit
+            # recoveries. ``0`` (host didn't inject)
             # ⇒ ``None`` ⇒ omitted from canonical bytes, keeping the prompt
             # prefix identical whether or not it is set.
             max_tokens=self._max_output_tokens or None,
@@ -1130,7 +1161,13 @@ class ReActPolicy:
         self, response: LLMResponse, view: View
     ) -> Decision:
         history_content = _strip_thinking(response.content)
-        if response.stop_reason == "tool_use":
+        # A cut response's complete tool calls run like any others (the
+        # adapters already dropped a call whose arguments the cap cut off), and
+        # the tool round that follows resumes the work.
+        if response.stop_reason == "tool_use" or (
+            response.stop_reason == "max_tokens"
+            and any(isinstance(b, ToolUseBlock) for b in history_content)
+        ):
             assistant_message = Message(
                 role="assistant", content=history_content
             )
@@ -1218,36 +1255,54 @@ class ReActPolicy:
                 ),
             )
         if response.stop_reason == "max_tokens":
-            # Mirror the end_turn guard above: a reasoning model can spend its
-            # entire output budget on ThinkingBlock(s) before any text/tool_use,
-            # leaving history_content == [] here too (thinking is stripped by
-            # ``_strip_thinking``). Anthropic rejects an assistant message with
-            # content:[] with a 400 on the next request, and this branch is
-            # normally retryable — without this guard a retry would resend the
-            # very history a poisoned turn just wrote. Fail exactly like the
-            # end_turn guard instead of recording an unsendable turn.
+            return self._output_limit_decision(history_content, view)
+        # stop_reason == "error".
+        return self._error_to_decision(response)
+
+    def _output_limit_decision(
+        self, history_content: list[Block], view: View
+    ) -> Decision:
+        """A response the output cap cut with no tool call in it.
+
+        Up to :data:`MAX_OUTPUT_TOKENS_RECOVERY` times in a row the turn
+        continues: the partial content is recorded as the assistant turn and a
+        user turn asks the model to resume (when only thinking came back —
+        never recorded — nothing is kept and the nudge says so). Past the cap
+        the turn fails, keeping whatever text the last response produced; a
+        response with nothing renderable records no assistant turn, since a
+        ``content: []`` assistant message is a provider 400 on the next call.
+        """
+        if _output_limit_recoveries(view.rolling_history) >= (
+            MAX_OUTPUT_TOKENS_RECOVERY
+        ):
             if not history_content:
                 return FailDecision(
                     reason="llm_empty_response",
                     retryable=False,
                     assistant_message=None,
                 )
-            # The turn stops here, so no tool call of a truncated response ever
-            # runs — and a recorded tool_use with no paired result is rejected
-            # (HTTP 400) by Anthropic and OpenAI on the next request. Keep the
-            # text, drop the calls; a turn left with nothing is not recorded.
-            kept: list[Block] = [
-                b for b in history_content if not isinstance(b, ToolUseBlock)
-            ]
             return FailDecision(
                 reason="llm_truncated",
                 retryable=True,
-                assistant_message=(
-                    Message(role="assistant", content=kept) if kept else None
+                assistant_message=Message(
+                    role="assistant", content=history_content
                 ),
             )
-        # stop_reason == "error".
-        return self._error_to_decision(response)
+        nudge = (
+            OUTPUT_LIMIT_RESUME_NUDGE
+            if history_content
+            else OUTPUT_LIMIT_THINKING_NUDGE
+        )
+        return StatePatchDecision(
+            messages_before=(
+                (Message(role="assistant", content=history_content),)
+                if history_content
+                else ()
+            ),
+            messages_after=(
+                Message(role="user", content=[TextBlock(text=nudge)]),
+            ),
+        )
 
     def _error_to_decision(self, response: LLMResponse) -> Decision:
         """Map an error ``LLMResponse`` to a Decision by neutral category.
@@ -1284,6 +1339,32 @@ class ReActPolicy:
             assistant_message=None,
             detail=_provider_error_detail(response),
         )
+
+
+def _output_limit_recoveries(history: Sequence[Message]) -> int:
+    """How many output-limit nudges the current run of cut responses has had.
+
+    Walks back from the newest message over nudges and the text-only
+    assistant turns between them; a tool round or any other user message ends
+    the run, which is when Claude Code resets its count too. A pure function
+    of the recorded history, so a resumed turn counts what the live one did.
+    """
+    count = 0
+    for message in reversed(history):
+        if message.role == "assistant" and not any(
+            isinstance(b, ToolUseBlock) for b in message.content
+        ):
+            continue
+        if (
+            message.role == "user"
+            and len(message.content) == 1
+            and isinstance(message.content[0], TextBlock)
+            and message.content[0].text in _OUTPUT_LIMIT_NUDGES
+        ):
+            count += 1
+            continue
+        break
+    return count
 
 
 def _provider_error_detail(response: LLMResponse) -> Optional[str]:
