@@ -414,6 +414,10 @@ class Engine:
 
     # -- conversation seeding --------------------------------------------
 
+    def tool_named(self, name: str) -> Optional[Tool]:
+        """The tool this Engine runs under ``name``, or ``None``."""
+        return self._tools.get(name)
+
     def append_user_message(
         self,
         task: Task,

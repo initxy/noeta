@@ -2450,6 +2450,9 @@ class SdkHost(GenericEngineResolver):
             file_read_registry=(
                 self._task_locals.read_registry(task_id) if task_id else None
             ),
+            recorded_state=(
+                self._task_locals.tool_state(task_id) if task_id else None
+            ),
         )
 
     def _policy_factory_builder(self, task_slot: Optional[TaskSlot]) -> Any:
