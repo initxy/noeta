@@ -278,6 +278,7 @@ class ReadFileTool:
     name: str = "Read"
     description: str = field(default=load_markdown(__package__, "read"))
     risk_level: str = "low"
+    concurrency_safe: bool = True
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
@@ -679,6 +680,7 @@ class GlobTool:
     name: str = "Glob"
     description: str = field(default=load_markdown(__package__, "glob"))
     risk_level: str = "low"
+    concurrency_safe: bool = True
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
@@ -818,6 +820,7 @@ class GrepTool:
     name: str = "Grep"
     description: str = field(default=load_markdown(__package__, "grep"))
     risk_level: str = "low"
+    concurrency_safe: bool = True
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",

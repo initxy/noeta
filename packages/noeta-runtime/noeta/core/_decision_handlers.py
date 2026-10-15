@@ -20,7 +20,16 @@ import uuid
 from dataclasses import dataclass
 from dataclasses import replace as dc_replace
 from pathlib import Path
-from typing import Any, Callable, Container, Iterable, Optional, Protocol, Sequence
+from typing import (
+    Any,
+    Callable,
+    Container,
+    Iterable,
+    Optional,
+    Protocol,
+    Sequence,
+    runtime_checkable,
+)
 
 from noeta.protocols.canonical import (
     from_canonical,
@@ -92,7 +101,7 @@ from noeta.protocols.messages import (
 )
 from noeta.protocols.step_transition import TransitionReason
 from noeta.protocols.task import Task
-from noeta.protocols.tool import Tool, ToolResult
+from noeta.protocols.tool import Tool, ToolResult, is_concurrency_safe
 from noeta.protocols.tool_args import (
     build_tool_call_approval_requested_payload,
 )
@@ -287,6 +296,27 @@ class ToolInvoker(Protocol):
         lease_id: str,
         trace_id: str,
     ) -> ToolResult: ...
+
+
+@runtime_checkable
+class ConcurrentToolInvoker(ToolInvoker, Protocol):
+    """A :class:`ToolInvoker` that can also run concurrency-safe calls
+    together: ``start`` records each call's ``ToolCallStarted`` in order,
+    ``complete`` runs the bodies concurrently and records the results in the
+    order given. ``ToolRuntime`` is one; an invoker without the pair runs
+    every call alone."""
+
+    def start(
+        self,
+        tool: Tool,
+        call: ToolCall,
+        *,
+        task_id: str,
+        lease_id: str,
+        trace_id: str,
+    ) -> Any: ...
+
+    def complete(self, started: Sequence[Any]) -> list[ToolResult]: ...
 
 
 class SkillHashesFn(Protocol):
@@ -2509,8 +2539,38 @@ def handle_tool_calls(
     # must get exactly one result, so they ride the same batched message.
     result_blocks: list[ToolResultBlock] = list(decision.preacked_results)
     executed: list[tuple[ToolCall, ToolResult]] = []
+    # A run of consecutive concurrency-safe calls is started one by one (each
+    # past its guard, which sees the earlier ones' ``ToolCallStarted``) and
+    # then completed together; anything else flushes the run first, so the
+    # results keep call order.
+    invoker = ctx.tool_invoker
+    concurrent = invoker if isinstance(invoker, ConcurrentToolInvoker) else None
+    pending: list[tuple[ToolCall, Any]] = []
+
+    def _record(call: ToolCall, result: ToolResult) -> None:
+        executed.append((call, result))
+        result_blocks.append(
+            wrap_tool_result_block(
+                call,
+                result,
+                tool_output_inline_limit=ctx.tool_output_inline_limit,
+                spill=tool_output_spiller(
+                    ctx.tool_output_spill_dir, task.task_id
+                ),
+            )
+        )
+
+    def _flush() -> None:
+        if not pending or concurrent is None:
+            return
+        results = concurrent.complete([started for _call, started in pending])
+        for (call, _started), result in zip(pending, results):
+            _record(call, result)
+        pending.clear()
+
     for idx, call in enumerate(decision.calls):
         if cancelled is not None and cancelled():
+            _flush()
             # Structural invariant (see the DENY branch below): every
             # tool_use the model emitted must get a matching tool_result, so
             # the stopped batch closes its remaining calls before the raise —
@@ -2540,6 +2600,8 @@ def handle_tool_calls(
             )
             raise TaskCancellationRequested(task.task_id)
         verdict = ctx.guard(ProposedToolCall(call=call), task)
+        if verdict.verdict is not Verdict.ALLOW:
+            _flush()
         if verdict.verdict is Verdict.DENY:
             reason = verdict.reason or "denied"
             ctx.emit(
@@ -2629,6 +2691,7 @@ def handle_tool_calls(
         try:
             tool = ctx.resolve_tool(call)
         except KeyError:
+            _flush()
             # A name the model invented is model output, not a kernel fault.
             # The assistant turn carrying it is already committed, so raising
             # would strand the whole batch mid-flight (and every sibling call
@@ -2646,6 +2709,21 @@ def handle_tool_calls(
                 )
             )
             continue
+        if concurrent is not None and is_concurrency_safe(tool):
+            pending.append(
+                (
+                    call,
+                    concurrent.start(
+                        tool,
+                        call,
+                        task_id=task.task_id,
+                        lease_id=lease_id,
+                        trace_id=trace_id,
+                    ),
+                )
+            )
+            continue
+        _flush()
         result = ctx.tool_invoker.invoke(
             tool,
             call,
@@ -2653,17 +2731,8 @@ def handle_tool_calls(
             lease_id=lease_id,
             trace_id=trace_id,
         )
-        executed.append((call, result))
-        result_blocks.append(
-            wrap_tool_result_block(
-                call,
-                result,
-                tool_output_inline_limit=ctx.tool_output_inline_limit,
-                spill=tool_output_spiller(
-                    ctx.tool_output_spill_dir, task.task_id
-                ),
-            )
-        )
+        _record(call, result)
+    _flush()
 
     if not result_blocks:
         return None

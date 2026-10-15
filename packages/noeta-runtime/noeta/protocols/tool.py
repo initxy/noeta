@@ -150,8 +150,8 @@ class Tool(Protocol):
     system prompt. Authored by hand, not derived from the docstring
     (docstrings carry developer-facing internal references).
 
-    Two optional attributes are read with ``getattr`` and are not members of
-    this Protocol; an ordinary tool has neither:
+    Three optional attributes are read with ``getattr`` and are not members
+    of this Protocol; an ordinary tool has none:
 
     * ``advertised: bool`` (absent ⇒ ``True``) — ``False`` keeps the tool
       registered, callable, guarded and audited under its name, but the
@@ -163,6 +163,8 @@ class Tool(Protocol):
       call with the message of a ``ValueError`` instead when the routing is
       refused. The recorded assistant message keeps the tool_use the provider
       saw.
+    * ``concurrency_safe: bool`` (absent ⇒ ``False``) — see
+      :func:`is_concurrency_safe`.
     """
 
     name: str
@@ -173,3 +175,10 @@ class Tool(Protocol):
     def invoke(
         self, arguments: dict[str, Any], ctx: ToolContext
     ) -> ToolResult: ...
+
+
+def is_concurrency_safe(tool: object) -> bool:
+    """Whether a tool declared ``concurrency_safe = True``: it only reads and
+    holds no shared mutable state, so it may run alongside other such calls
+    of the same response. Undeclared means no."""
+    return getattr(tool, "concurrency_safe", False) is True
