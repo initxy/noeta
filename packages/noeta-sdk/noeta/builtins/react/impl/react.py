@@ -96,7 +96,7 @@ from noeta.protocols.messages import (
 )
 from noeta.protocols.resources import load_markdown
 from noeta.protocols.step_context import StepContext
-from noeta.protocols.tool import Tool
+from noeta.protocols.tool import Tool, ToolContext
 from noeta.protocols.view import View
 
 from .call_routing import route_tool_calls
@@ -164,6 +164,20 @@ OUTPUT_LIMIT_THINKING_NUDGE = (
 MAX_OUTPUT_TOKENS_RECOVERY = 3
 
 _OUTPUT_LIMIT_NUDGES = (OUTPUT_LIMIT_RESUME_NUDGE, OUTPUT_LIMIT_THINKING_NUDGE)
+
+#: Claude Code's post-compaction file restore (2.1.300): at most this many
+#: recently read files come back after a compaction, each within this many
+#: tokens (larger ones come back as a note), all of them within the budget.
+POST_COMPACT_MAX_FILES_TO_RESTORE = 5
+POST_COMPACT_MAX_TOKENS_PER_FILE = 5_000
+POST_COMPACT_TOKEN_BUDGET = 50_000
+
+#: The file tools whose successful calls mark a file as recently used.
+_READ_TOOL = "Read"
+_FILE_TOOLS = (_READ_TOOL, "Edit", "Write")
+#: Instruction files ride the instructions resident; restoring them would
+#: repeat it.
+_INSTRUCTION_FILE_NAMES = frozenset({"NOETA.md", "AGENTS.md", "CLAUDE.md"})
 
 #: Opens the answer a step-limit stop finishes with, so whoever reads it —
 #: the host, or the model on a later turn — knows the work was cut off.
@@ -986,7 +1000,89 @@ class ReActPolicy:
             summary=summary,
             boundary_count=boundary,
             composer_version=self._composer_version,
+            reattached=self._recent_files_to_reattach(history, boundary),
         )
+
+    def _recent_files_to_reattach(
+        self, history: Sequence[Message], boundary: int
+    ) -> tuple[str, ...]:
+        """Claude Code's post-compaction file restore: the current content of
+        the files most recently read or written, so the model does not have to
+        re-read what it was just working on.
+
+        The newest :data:`POST_COMPACT_MAX_FILES_TO_RESTORE` paths a
+        successful ``Read`` / ``Edit`` / ``Write`` touched, skipping a file
+        whose ``Read`` the kept tail (``history[boundary:]``) already shows and
+        the instruction files the instructions resident already carries, are
+        re-read through the ``Read`` tool (so a sandboxed workspace is read
+        where it lives). Each becomes Claude Code's call/result pair, or its
+        too-large note past :data:`POST_COMPACT_MAX_TOKENS_PER_FILE`; pairs are
+        kept newest first while the total stays within
+        :data:`POST_COMPACT_TOKEN_BUDGET` — and within the protected tail
+        budget, so a small window is never refilled by the restore alone.
+        The texts ride the decision and are recorded, so a resume replays
+        them and never reads the disk.
+        """
+        read_tool = self._tools.get(_READ_TOOL)
+        if read_tool is None or self._content_store is None:
+            return ()
+        succeeded = {
+            block.call_id
+            for message in history
+            if message.role == "tool"
+            for block in message.content
+            if isinstance(block, ToolResultBlock) and block.success
+        }
+        kept_reads = {
+            path
+            for message in history[boundary:]
+            for path, tool_name in _touched_files(message, succeeded)
+            if tool_name == _READ_TOOL
+        }
+        recent: list[str] = []
+        for message in reversed(history):
+            for path, _tool_name in reversed(_touched_files(message, succeeded)):
+                if (
+                    path in recent
+                    or path in kept_reads
+                    or _basename(path) in _INSTRUCTION_FILE_NAMES
+                ):
+                    continue
+                recent.append(path)
+        budget = POST_COMPACT_TOKEN_BUDGET
+        if self._tail_token_budget > 0:
+            budget = min(budget, self._tail_token_budget)
+        tool_ctx = ToolContext(artifact_store=self._content_store)
+        reattached: list[str] = []
+        used = 0
+        for path in recent[:POST_COMPACT_MAX_FILES_TO_RESTORE]:
+            arguments = {"file_path": path}
+            try:
+                result = read_tool.invoke(arguments, tool_ctx)
+            except Exception:  # noqa: BLE001 — a failed restore is skipped
+                continue
+            if not result.success or result.images or not isinstance(
+                result.output, str
+            ):
+                continue
+            if _estimate_text(result.output) > POST_COMPACT_MAX_TOKENS_PER_FILE:
+                texts = [
+                    f"Note: {path} was read before the last conversation was "
+                    f"summarized, but the contents are too large to include. "
+                    f"Use {_READ_TOOL} tool if you need to access it."
+                ]
+            else:
+                texts = [
+                    f"Called the {_READ_TOOL} tool with the following input: "
+                    + json.dumps(arguments, ensure_ascii=False, separators=(",", ":")),
+                    f"Result of calling the {_READ_TOOL} tool:\n{result.output}",
+                ]
+            size = sum(_estimate_text(text) for text in texts)
+            if used + size > budget:
+                continue
+            used += size
+            reattached.extend(texts)
+        return tuple(reattached)
 
     def _tail_budget_in_estimate_units(
         self, state: _TaskTriggerBaseline
@@ -1339,6 +1435,36 @@ class ReActPolicy:
             assistant_message=None,
             detail=_provider_error_detail(response),
         )
+
+
+def _touched_files(
+    message: Message, succeeded: set[str]
+) -> list[tuple[str, str]]:
+    """``(file_path, tool name)`` of each successful file-tool call in an
+    assistant message, in block order."""
+    if message.role != "assistant":
+        return []
+    touched: list[tuple[str, str]] = []
+    for block in message.content:
+        if (
+            isinstance(block, ToolUseBlock)
+            and block.tool_name in _FILE_TOOLS
+            and block.call_id in succeeded
+        ):
+            path = block.arguments.get("file_path")
+            if isinstance(path, str) and path:
+                touched.append((path, block.tool_name))
+    return touched
+
+
+def _basename(path: str) -> str:
+    return path.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _estimate_text(text: str) -> int:
+    return estimate_messages_tokens(
+        [Message(role="user", content=[TextBlock(text=text)])]
+    )
 
 
 def _output_limit_recoveries(history: Sequence[Message]) -> int:
