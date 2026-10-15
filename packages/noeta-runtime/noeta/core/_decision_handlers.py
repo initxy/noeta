@@ -143,6 +143,8 @@ __all__ = [
     "record_assistant_thinking",
     "resume_approved_decision",
     "strip_message_origin",
+    "large_tool_output_message",
+    "result_size_threshold",
     "tool_output_spiller",
     "wrap_tool_result_block",
 ]
@@ -368,17 +370,15 @@ class HandlerContext:
     #: policy="pinned") through it. Keep this field LAST — every field without a
     #: default above is positional public surface.
     content_hashes: Optional[ContentHashesFn] = None
-    #: inline char cap for ``ToolResultBlock.output``. ``None`` ⇒ never truncate.
-    #: When a tool's inline output is longer than this limit, keep the first N
-    #: chars plus a deterministic truncated-marker suffix that references the
-    #: full bytes via ``ToolResultRecorded.output_ref``. The full audit body
-    #: always lives in the ContentStore; truncation applies only to the
-    #: messages-stream shape. For byte-equivalent resume the recording's host
-    #: must wire the same value.
+    #: The size past which a tool's output is persisted instead of inlined
+    #: (``wrap_tool_result_block``). ``None`` ⇒ never. The full audit body
+    #: always lives in the ContentStore; this shapes only the messages stream.
+    #: For byte-equivalent resume the recording's host must wire the same value.
     tool_output_inline_limit: Optional[int] = None
-    #: Where a result cut by ``tool_output_inline_limit`` is written whole, as
+    #: Where an output over ``tool_output_inline_limit`` is written whole, as
     #: ``<dir>/<task_id>/<call_id>.txt``, so the model can page through it with
-    #: ``Read``; the truncation marker names the file. ``None`` ⇒ no file.
+    #: ``Read``; the ``<persisted-output>`` block names the file. ``None`` ⇒ no
+    #: file, and the output is cut instead.
     tool_output_spill_dir: Optional[Path] = None
     #: background sub-agent launch hook. Wired only on a top-level interactive
     #: Engine; ``None`` everywhere else (oneshot / child engines / resume) so a
@@ -528,48 +528,41 @@ def wrap_tool_result_block(
     *,
     tool_output_inline_limit: Optional[int] = None,
     spill: Optional[Callable[[str, str], Optional[str]]] = None,
+    max_result_size_chars: Optional[float] = None,
 ) -> ToolResultBlock:
     """Render a tool result as a typed :class:`ToolResultBlock`.
 
     ``call_id`` pairs back to the original
     :class:`noeta.protocols.decisions.ToolCall.call_id` (also the
     ``ToolUseBlock.call_id`` the LLM emitted). The block keeps the inline
-    ``output`` value when the Tool kept it small (4-KB envelope) and surfaces
-    ``success`` / ``error`` so the next compose can show the model what happened.
+    ``output`` value the tool returned and surfaces ``success`` / ``error`` so
+    the next compose can show the model what happened.
 
-    **Truncation:** when ``tool_output_inline_limit`` is a positive int, the
-    output is stringified (via :func:`_coerce_inline_output`) and capped to the
-    first ``limit`` characters, with a deterministic ``…[tool output truncated:
-    …]`` suffix. The full body is NOT named in that suffix — it is recorded
-    independently as ``ToolResultRecorded.output_ref`` (populated by
-    :class:`ToolRuntime` after offload), which is where audit derefs it; the
-    model has no ref-deref tool, so a hash in the prompt would be dead weight.
-    When the limit is ``None`` (the default, host-unspecified) the raw
-    ``result.output`` is passed through **unchanged** so dict / list / ContentRef
-    shapes the tools return stay typed.
-
-    ``spill(call_id, text)`` writes a cut output whole to a file the model can
-    ``Read`` and returns its path (``None`` when it could not), which the
-    marker then names — the hash stays out of the prompt, a path the model
-    can open goes in.
+    **Large output** — Claude Code's persisted-output rule. When the output's
+    text is longer than the threshold (:func:`result_size_threshold` of
+    ``tool_output_inline_limit`` and the tool's own ``max_result_size_chars``),
+    ``spill(call_id, text)`` writes it whole to a file the model can ``Read``
+    and the model gets :func:`large_tool_output_message` instead: the path plus
+    a 2 KB preview. A spill that cannot write (or no ``spill``) degrades to the
+    first part of the output with a note that the rest was dropped. The full
+    bytes are recorded independently as ``ToolResultRecorded.output_ref`` for
+    audit; the model has no ref-deref tool, so no hash enters the prompt. An
+    output within the threshold — or any output when the threshold is ``None``
+    — passes through **unchanged**, so dict / list / ContentRef shapes the
+    tools return stay typed.
     """
     error: Optional[str] = None
     if not result.success:
         error = result.summary or "tool failed"
     raw_output = result.output if result.output is not None else ""
 
-    if tool_output_inline_limit is None:
-        # Keep whatever type the tool returned (str / dict / list / ContentRef /
-        # bytes).
-        inline = raw_output
-    else:
-        inline = _coerce_inline_output(raw_output)
-        saved_to: Optional[str] = None
-        if spill is not None and len(inline) > tool_output_inline_limit:
-            saved_to = spill(call.call_id, inline)
-        inline = truncate_tool_output(
-            inline, tool_output_inline_limit, saved_to=saved_to
-        )
+    inline: Any = raw_output
+    limit = result_size_threshold(tool_output_inline_limit, max_result_size_chars)
+    if limit is not None:
+        text = _coerce_inline_output(raw_output)
+        if len(text) > limit:
+            saved_to = spill(call.call_id, text) if spill is not None else None
+            inline = large_tool_output_message(text, limit, saved_to=saved_to)
 
     # Image content the tool surfaced (e.g. ``read`` on a .png) rides into the
     # canonical message stream as ``ToolResultBlock.images``; the adapter
@@ -591,72 +584,117 @@ def wrap_tool_result_block(
 
 
 # ---------------------------------------------------------------------------
-# Truncation helper (pure-function contract so it's unit-testable).
+# Large-output helpers (pure functions, so they are unit-testable).
 # ---------------------------------------------------------------------------
 
 
-def _coerce_inline_output(raw: Any) -> str:
-    """Coerce an arbitrary ToolResult.output to a str for inline display.
+#: Characters of a persisted output shown in its preview (Claude Code: 2,000).
+_PERSISTED_PREVIEW_CHARS = 2000
 
-    Strings pass through as-is; bytes decode UTF-8 with surrogateescape so
-    truncation never crashes on binary output. Any other type uses its
-    ``repr`` (which is what the composer / provider adapter already does
-    when rendering dict-shaped tool outputs).
+
+def result_size_threshold(
+    host_limit: Optional[int], tool_limit: Optional[float]
+) -> Optional[int]:
+    """The size past which one tool's output is persisted instead of inlined.
+
+    ``host_limit`` (``tool_output_inline_limit``) is the session-wide value,
+    ``None`` meaning never. ``tool_limit`` is the tool's own
+    ``max_result_size_chars``: ``None`` defers to the host, an infinite value
+    exempts the tool — Claude Code's ``Read``, whose own size check already
+    refuses an over-large read — and a finite one lowers the threshold.
+    """
+    if host_limit is None:
+        return None
+    if tool_limit is None:
+        return host_limit
+    if tool_limit == float("inf"):
+        return None
+    return min(host_limit, int(tool_limit))
+
+
+def _coerce_inline_output(raw: Any) -> str:
+    """Coerce an arbitrary ToolResult.output to the text that is measured and
+    persisted.
+
+    Strings pass through as-is; bytes decode UTF-8 with surrogateescape so a
+    binary output never crashes the cut. Structured values serialize to JSON
+    (non-ASCII kept), the form the provider adapters send; anything JSON cannot
+    carry falls back to its ``repr``.
     """
     if isinstance(raw, str):
         return raw
     if isinstance(raw, (bytes, bytearray)):
         return bytes(raw).decode("utf-8", errors="surrogateescape")
-    return repr(raw)
+    try:
+        return json.dumps(raw, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return repr(raw)
 
 
-def truncate_tool_output(
-    output: str,
-    limit: Optional[int],
-    *,
-    saved_to: Optional[str] = None,
+def _format_size(chars: int) -> str:
+    """Claude Code's size label: ``512 bytes``, ``48.8KB``, ``1.2MB``."""
+    kb = chars / 1024
+    if kb < 1:
+        return f"{chars} bytes"
+    if kb < 1024:
+        return f"{kb:.1f}".removesuffix(".0") + "KB"
+    mb = kb / 1024
+    if mb < 1024:
+        return f"{mb:.1f}".removesuffix(".0") + "MB"
+    return f"{mb / 1024:.1f}".removesuffix(".0") + "GB"
+
+
+def _preview(text: str, limit: int) -> tuple[str, bool]:
+    """The first ``limit`` characters of ``text``, ended at the last newline
+    when that keeps more than half — and whether anything was left out."""
+    if len(text) <= limit:
+        return text, False
+    newline = text[:limit].rfind("\n")
+    end = newline if newline > limit * 0.5 else limit
+    return text[:end], True
+
+
+def large_tool_output_message(
+    output: str, limit: int, *, saved_to: Optional[str] = None
 ) -> str:
-    """Return ``output`` unchanged unless ``limit`` is positive and the
-    output is strictly longer than ``limit`` characters.
+    """What the model sees for an output over the threshold — Claude Code's
+    wording.
 
-    The truncation suffix is a stable pure-ASCII marker with
-    machine-scannable fields:
-    * ``dropped`` — how many characters were elided
-    * ``total`` — the original output length in characters (Python str)
-
-    The marker starts with ``\n…[tool output truncated:`` so callers
-    and auditors can recognise the shape without parsing the payload. It does
-    NOT name the full body's ref: that is recorded separately as
-    ``ToolResultRecorded.output_ref`` (the model has no ref-deref tool, so a
-    hash in the prompt is dead weight it could only misread). ``saved_to``,
-    a file holding the whole output, is named instead when there is one.
+    With ``saved_to`` (the file holding the whole output) it is the
+    ``<persisted-output>`` block: the size, the path and a 2 KB preview, so the
+    model pages the rest with ``Read``. Without one, a ``<truncated-output>``
+    block keeps as much of the start as fits ``limit`` and says the rest was
+    dropped.
     """
-    if limit is None:
-        return output
     if limit <= 0:
         raise ValueError(
             f"tool_output_inline_limit must be > 0 when non-None; got {limit}"
         )
-    total = len(output)
-    if total <= limit:
-        return output
-    dropped = total - limit
-    if saved_to is None:
-        suffix = (
-            "\n...[tool output truncated: "
-            f"{dropped} of {total} chars dropped]"
+    size = _format_size(len(output))
+    if saved_to is not None:
+        preview, has_more = _preview(output, _PERSISTED_PREVIEW_CHARS)
+        return (
+            "<persisted-output>\n"
+            f"Output too large ({size}). Full output saved to: {saved_to}\n\n"
+            f"Preview (first {_format_size(_PERSISTED_PREVIEW_CHARS)}):\n"
+            f"{preview}" + ("\n...\n" if has_more else "\n")
+            + "</persisted-output>"
         )
-    else:
-        suffix = (
-            "\n...[tool output truncated: "
-            f"{dropped} of {total} chars dropped; the full output was saved "
-            f"to {saved_to} - Read it with offset/limit to see the rest]"
+
+    def truncated(shown: str, body: str) -> str:
+        return (
+            "<truncated-output>\n"
+            f"Output too large ({size}). It could not be saved, so only the "
+            f"first {shown} are shown; the rest was dropped. If the tool can "
+            "page or filter its results, call it again for the part you "
+            f"need.\n{body}\n</truncated-output>"
         )
-    # If the suffix itself is longer than the drop we *still* append it
-    # verbatim: the marker is contract and must be present for audit
-    # tooling to recognise. The caller is responsible for setting a
-    # limit that leaves room (typically 200+ chars).
-    return output[:limit] + suffix
+
+    # Sized against the longest label the shown part could get, so the whole
+    # block stays within ``limit``.
+    room = max(0, limit - len(truncated("1023 bytes", "")))
+    head, _ = _preview(output, room)
+    return truncated(_format_size(len(head)), head)
 
 
 _SPILL_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9_.-]")
@@ -669,7 +707,7 @@ def tool_output_spiller(
     task, or ``None`` when the host named no directory.
 
     The path is a pure function of the directory, the task and the call, so
-    the marker a resumed run would write is the one the live run wrote. A
+    the message a resumed run would write is the one the live run wrote. A
     write that fails returns ``None``: the result is still cut, only without
     a file to point at.
     """
@@ -813,6 +851,7 @@ def invoke_approved_tool_call(
                 spill=tool_output_spiller(
                     ctx.tool_output_spill_dir, task.task_id
                 ),
+                max_result_size_chars=getattr(tool, "max_result_size_chars", None),
             )
         ],
     )
@@ -2662,6 +2701,7 @@ def handle_tool_calls(
                 spill=tool_output_spiller(
                     ctx.tool_output_spill_dir, task.task_id
                 ),
+                max_result_size_chars=getattr(tool, "max_result_size_chars", None),
             )
         )
 

@@ -43,6 +43,12 @@ MCP_INJECTION_MAX_BYTES = 64 * 1024
 #: test log both the invocation banner and the final failures matter.
 SHELL_INLINE_MAX_CHARS = 30000
 
+#: Claude Code's default ceiling on one tool result (``maxResultSizeChars`` is
+#: capped at 50,000 characters unless a tool declares less): past it the output
+#: is persisted to a file and the model gets a preview. The hosts' default
+#: ``tool_output_inline_limit``.
+DEFAULT_TOOL_OUTPUT_INLINE_LIMIT = 50_000
+
 #: Max raw bytes for a model-supplied string embedded in a `summary`. Small
 #: enough that even worst-case JSON-escape expansion stays far under the
 #: EventLog 4 KB payload cap.

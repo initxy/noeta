@@ -292,10 +292,10 @@ def _tool_result_outputs(provider: FakeLLMProvider) -> list[str]:
     ]
 
 
-def test_loop_and_output_bounds_default_to_off() -> None:
+def test_loop_bound_defaults_to_off_and_output_bound_to_claude_codes() -> None:
     hc = HostConfig()
     assert hc.repetition_threshold is None
-    assert hc.tool_output_inline_limit is None
+    assert hc.tool_output_inline_limit == 50_000
 
 
 def test_non_positive_loop_and_output_bounds_raise_at_construction() -> None:
@@ -358,7 +358,7 @@ def test_repetition_threshold_unset_leaves_every_call_running(
         client.shutdown()
 
 
-def test_tool_output_inline_limit_truncates_what_the_model_sees(
+def test_tool_output_inline_limit_cuts_what_the_model_sees(
     tmp_path: Path,
 ) -> None:
     provider = _looping_provider(calls=1)
@@ -376,13 +376,14 @@ def test_tool_output_inline_limit_truncates_what_the_model_sees(
         assert outcome.status == "terminal"
         outputs = _tool_result_outputs(provider)
         assert len(outputs) == 1
-        assert outputs[0].startswith("X" * 50)
-        assert "450 of 500 chars dropped" in outputs[0]
+        assert outputs[0].startswith(
+            "<truncated-output>\nOutput too large (500 bytes)."
+        )
     finally:
         client.shutdown()
 
 
-def test_tool_output_inline_limit_unset_keeps_the_whole_output(
+def test_tool_output_inline_limit_default_keeps_a_small_output_whole(
     tmp_path: Path,
 ) -> None:
     provider = _looping_provider(calls=1)
@@ -394,7 +395,7 @@ def test_tool_output_inline_limit_unset_keeps_the_whole_output(
         multi_turn=False,
     )
     try:
-        assert client._host.tool_output_inline_limit is None
+        assert client._host.tool_output_inline_limit == 50_000
         client.start(goal="loop")
         assert _tool_result_outputs(provider) == ["X" * 500]
     finally:
