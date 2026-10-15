@@ -623,14 +623,14 @@ class HostConfig:
     #: block naming the file plus a 2 KB preview, to page through with
     #: ``Read``; the full bytes also stay in ``ToolResultRecorded.output_ref``
     #: so audit loses nothing. ``Read`` is exempt (its own 25,000-token check
-    #: refuses an over-large read). Default 50,000, Claude Code's per-tool
-    #: ceiling. A resumed task must reuse the value the original run used, or
+    #: refuses an over-large read); a tool's own lower
+    #: ``max_result_size_chars`` wins (``Bash`` 30,000, ``Grep`` 20,000, as in
+    #: Claude Code). Default 50,000, Claude Code's per-tool ceiling. A resumed task must reuse the value the original run used, or
     #: it re-derives different tool-output bytes. ``None`` ⇒ never.
     tool_output_inline_limit: Optional[int] = DEFAULT_TOOL_OUTPUT_INLINE_LIMIT
     #: Where an output over ``tool_output_inline_limit`` is written whole, as
     #: ``<dir>/<task_id>/<call_id>.txt``. The file holds what the tool
-    #: returned (``Bash`` has already elided its middle past 30,000
-    #: characters). The directory must be one the session's ``Read`` can
+    #: returned (``Bash``: up to its 256 KB capture). The directory must be one the session's ``Read`` can
     #: reach; under a remote sandbox that means a path the host's own side
     #: serves. Nothing removes the files: the host owns the directory's
     #: lifetime. ``None`` (the default) writes nothing: an over-size output is

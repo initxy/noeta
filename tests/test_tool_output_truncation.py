@@ -603,3 +603,50 @@ def test_hosts_default_to_claude_codes_50000() -> None:
     from noeta.sdk import HostConfig
 
     assert HostConfig().tool_output_inline_limit == 50_000
+
+
+def test_bash_persists_past_its_own_30000_under_the_host_default(
+    tmp_path: Path,
+) -> None:
+    from noeta.sdk import HostConfig
+
+    (tmp_path / "ws").mkdir()
+    spill_dir = tmp_path / "spill"
+    block, task_id = _run_client(
+        tmp_path,
+        ToolUseBlock(call_id="c1", tool_name="Bash", arguments={"command": "seq 1 8000"}),
+        HostConfig(tool_output_spill_dir=spill_dir),  # host cap: 50,000
+    )
+    assert block.output.startswith("<persisted-output>\nOutput too large (")
+    body = (spill_dir / task_id / "c1.txt").read_text(encoding="utf-8")
+    # Saved whole — no middle cut.
+    assert body == "\n".join(str(i) for i in range(1, 8001))
+
+
+def test_bash_under_30000_stays_inline(tmp_path: Path) -> None:
+    from noeta.sdk import HostConfig
+
+    (tmp_path / "ws").mkdir()
+    block, _ = _run_client(
+        tmp_path,
+        ToolUseBlock(call_id="c1", tool_name="Bash", arguments={"command": "seq 1 5000"}),
+        HostConfig(tool_output_spill_dir=tmp_path / "spill"),
+    )
+    assert block.output == "\n".join(str(i) for i in range(1, 5001))
+
+
+def test_builtin_tools_carry_claude_codes_result_sizes(tmp_path: Path) -> None:
+    import math
+
+    from noeta.builtins.fs.impl import build_fs_tools
+    from noeta.runtime.shell_policy import ShellMode
+    from noeta.runtime.workspace import WorkspaceRoot
+
+    tools = build_fs_tools(
+        WorkspaceRoot.from_path(tmp_path), shell_mode=ShellMode.ARBITRARY
+    )
+    sizes = {n: getattr(t, "max_result_size_chars") for n, t in tools.items()}
+    assert sizes["Read"] == math.inf
+    assert sizes["Bash"] == 30_000
+    assert sizes["Grep"] == 20_000
+    assert sizes["Glob"] == sizes["Edit"] == sizes["Write"] == 100_000

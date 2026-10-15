@@ -719,6 +719,9 @@ class GlobTool:
     workspace: WorkspaceRoot
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "Glob"
+    #: Claude Code's ``maxResultSizeChars`` for this tool; past it (or the
+    #: host's ``tool_output_inline_limit``, if lower) the result is persisted.
+    max_result_size_chars: float = 100_000
     description: str = field(default=load_markdown(__package__, "glob"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
@@ -858,6 +861,9 @@ class GrepTool:
     workspace: WorkspaceRoot
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "Grep"
+    #: Claude Code's ``maxResultSizeChars`` for this tool; past it (or the
+    #: host's ``tool_output_inline_limit``, if lower) the result is persisted.
+    max_result_size_chars: float = 20_000
     description: str = field(default=load_markdown(__package__, "grep"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
