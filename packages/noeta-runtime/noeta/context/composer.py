@@ -1198,7 +1198,7 @@ def _is_cleared_marker(output: Any) -> bool:
     tool output that merely starts with the marker text is not mistaken for
     an already-cleared one.
     """
-    return output == _CLEARED_MARKER
+    return isinstance(output, str) and output == _CLEARED_MARKER
 
 
 def _text_blocks(prompt: str) -> list[Any]:
