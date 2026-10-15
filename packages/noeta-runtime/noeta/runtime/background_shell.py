@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, cast
 
 from noeta.core.fold import fold
+from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.event_log import EventLog, EventLogReader
@@ -340,7 +341,7 @@ class ProcessRegistry:
             type="BackgroundShellStarted",
             payload=BackgroundShellStartedPayload(
                 job_id=job_id,
-                command=command,
+                command=_recorded_command(command),
                 spawned_by_task_id=spawned_by_task_id,
                 pid=popen.pid,
                 ref=ref,
@@ -874,6 +875,25 @@ def _ref_json(ref: ContentRef) -> dict[str, Any]:
     noeta-runtime never imports a noeta-sdk (``noeta.tools``) helper (the
     import-linter layering forbids it)."""
     return {"hash": ref.hash, "size": ref.size, "media_type": ref.media_type}
+
+
+#: Encoded bytes of the command a ``BackgroundShellStarted`` records. The rest
+#: of the payload is a few hundred bytes, so this keeps the event under the
+#: EventLog payload cap however long the command is (a heredoc script).
+_STARTED_COMMAND_MAX_BYTES = 2048
+
+
+def _recorded_command(command: str) -> str:
+    """``command`` as the Started event records it: whole when it fits
+    :data:`_STARTED_COMMAND_MAX_BYTES`, otherwise its start plus ``...``. The
+    start is what the event is read for — a label, and the leading program
+    token orphan recovery matches against ``ps``."""
+    if len(to_canonical_bytes(command)) <= _STARTED_COMMAND_MAX_BYTES:
+        return command
+    keep = command[:_STARTED_COMMAND_MAX_BYTES]
+    while keep and len(to_canonical_bytes(keep + "...")) > _STARTED_COMMAND_MAX_BYTES:
+        keep = keep[: len(keep) * 3 // 4]
+    return keep + "..."
 
 
 def _exit_summary(
