@@ -147,7 +147,7 @@ def test_background_command_sees_the_variables(tmp_path: Path) -> None:
         ),
     )
     assert result.success
-    job_id = result.output.split("ID: ")[1].split()[0]
+    job_id = result.output.split("ID: ")[1].split()[0].rstrip(".")
     deadline = time.monotonic() + 5.0
     seen = ""
     while time.monotonic() < deadline:

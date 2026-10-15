@@ -66,6 +66,7 @@ def build_fs_tools(
     exec_env: Optional[ExecEnv] = None,
     shell_env: Optional[ShellEnvResolver] = None,
     shell_env_inherit: Sequence[str] = (),
+    background_ends_with_turn: bool = False,
 ) -> dict[str, Tool]:
     """Build the fs tool pack sharing one ``WorkspaceRoot`` + write/shell modes.
 
@@ -82,7 +83,9 @@ def build_fs_tools(
     Reads are never fenced and ignore both. ``shell_env`` is the host's seam
     for variables a task's ``Bash`` commands run with on top of the scrubbed
     environment; ``shell_env_inherit`` names the host process's own variables
-    those commands inherit past the fixed allow-list.
+    those commands inherit past the fixed allow-list, and
+    ``background_ends_with_turn`` says the host ends background commands with
+    their turn (it changes only what a launch tells the model).
 
     ``exec_env`` is the backend the pack's real IO routes through; a sandbox
     backend paired with a container ``workspace`` moves the whole pack into a
@@ -120,6 +123,7 @@ def build_fs_tools(
                 exec_env=env,
                 shell_env=shell_env,
                 inherit_env=tuple(shell_env_inherit),
+                background_ends_with_turn=background_ends_with_turn,
             )
         )
         # Both act only on background jobs ``shell_run`` started, so they ride
@@ -181,6 +185,9 @@ def build_fs_session_pack(ctx: SessionBuildContext) -> PackContribution:
         shell_env=cast("Optional[ShellEnvResolver]", cfg.get("shell_env")),
         shell_env_inherit=cast(
             "Sequence[str]", cfg.get("shell_env_inherit", ())
+        ),
+        background_ends_with_turn=bool(
+            cfg.get("background_ends_with_turn", False)
         ),
     )
     return PackContribution(
