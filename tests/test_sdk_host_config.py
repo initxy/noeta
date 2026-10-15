@@ -399,3 +399,13 @@ def test_tool_output_inline_limit_unset_keeps_the_whole_output(
         assert _tool_result_outputs(provider) == ["X" * 500]
     finally:
         client.shutdown()
+
+
+def test_shell_env_inherit_is_forwarded_to_the_host(tmp_path: Path) -> None:
+    with Client(
+        _options(),
+        workspace_dir=tmp_path,
+        provider=_finishing_provider(),
+        host_config=HostConfig(shell_env_inherit=["HTTPS_PROXY"]),
+    ) as client:
+        assert client._host.shell_env_inherit == ("HTTPS_PROXY",)  # noqa: SLF001

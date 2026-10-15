@@ -254,3 +254,55 @@ def test_a_closed_conversation_is_not_woken_by_a_background_exit(
     assert len([m for m in task.runtime.messages if m.role == "user"]) == users
     assert task.status == "suspended"
     assert any(env.type == "BackgroundShellExited" for env in event_log.read(task_id))
+
+
+# -- HostConfig.shell_env_inherit: host variables past the fixed allow-list --
+
+PROXY_ECHO = (
+    f"{sys.executable} -c \"import os; "
+    "print(os.environ.get('HTTPS_PROXY', '<unset>'), os.environ.get('JOB', '<unset>'))\""
+)
+
+
+def test_inherited_names_reach_the_command_from_this_process(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy:1")
+    plain = _tool(tmp_path, None).invoke({"command": PROXY_ECHO}, _ctx({}))
+    assert plain.output.split() == ["<unset>", "<unset>"]
+    widened = _tool(tmp_path, None, inherit_env=("HTTPS_PROXY", "NOT_SET_HERE")).invoke(
+        {"command": PROXY_ECHO}, _ctx({})
+    )
+    assert widened.output.split() == ["http://proxy:1", "<unset>"]
+
+
+def test_a_task_variable_wins_over_an_inherited_one(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    monkeypatch.setenv("JOB", "from-host")
+    result = _tool(
+        tmp_path, lambda root: {"JOB": "from-task"}, inherit_env=("JOB",)
+    ).invoke({"command": ECHO}, _ctx({"task_id": "t"}))
+    assert result.output.strip() == "from-task"
+
+
+def test_host_config_shell_env_inherit_reaches_a_sessions_command(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy:2")
+    host, event_log, content_store = _host(
+        tmp_path,
+        [_bash("c1", PROXY_ECHO), _end_turn()],
+        shell_env_inherit=("HTTPS_PROXY",),
+    )
+    driver = InteractionDriver(host)
+    outcome = driver.start(goal="go", agent="main")
+    driver.approve(outcome.task_id, call_id="c1")
+    task = fold(event_log, content_store, outcome.task_id)
+    outputs = [
+        block.output
+        for message in task.runtime.messages
+        for block in message.content
+        if isinstance(block, ToolResultBlock)
+    ]
+    assert outputs and str(outputs[0]).split()[0] == "http://proxy:2"

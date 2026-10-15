@@ -14,6 +14,7 @@ suits a trusted workspace only.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -115,6 +116,16 @@ def _task_env(resolver: Optional[ShellEnvResolver], ctx: ToolContext) -> dict[st
     }
 
 
+def _inherited_env(names: tuple[str, ...]) -> dict[str, str]:
+    """This process's own values of ``names`` (``HostConfig.shell_env_inherit``)
+    — read per command, so a host that changes one mid-run is followed."""
+    return {
+        name: os.environ[name]
+        for name in names
+        if _ENV_NAME.fullmatch(name) and name in os.environ
+    }
+
+
 def _render_streams(stdout: bytes, stderr: bytes) -> str:
     """The model-facing body: stdout, then stderr under a label only when both
     streams carry content (matching the familiar single-stream view when only
@@ -154,6 +165,9 @@ class ShellRunTool:
     #: ``root task id -> variables`` the host adds to this task's commands, on
     #: top of the scrubbed environment (``HostConfig.shell_env``).
     shell_env: Optional[ShellEnvResolver] = None
+    #: Names of this process's variables the commands inherit past the fixed
+    #: allow-list (``HostConfig.shell_env_inherit``); ``shell_env`` wins a tie.
+    inherit_env: tuple[str, ...] = ()
     name: str = "Bash"
     description: str = field(default=load_markdown(__package__, "shell_run"))
     # High risk so PermissionGuard treats this as privileged.
@@ -230,7 +244,7 @@ class ShellRunTool:
                 )
             return self._spawn_background(exec_argv, command, ctx)
         outcome, interrupted = self._run_foreground(
-            exec_argv, timeout_s, ctx, _task_env(self.shell_env, ctx)
+            exec_argv, timeout_s, ctx, self._command_env(ctx)
         )
         return _build_shell_result(
             self.name,
@@ -241,6 +255,11 @@ class ShellRunTool:
             interrupted=interrupted,
             output_cap=self.output_cap,
         )
+
+    def _command_env(self, ctx: ToolContext) -> dict[str, str]:
+        """What a command adds over the scrubbed environment: the inherited
+        host variables, then the host's per-task variables on top."""
+        return {**_inherited_env(self.inherit_env), **_task_env(self.shell_env, ctx)}
 
     def _run_foreground(
         self,
@@ -323,7 +342,7 @@ class ShellRunTool:
         spawned = runner.spawn(
             argv=argv,
             cwd=self.workspace.root,
-            env={**scrub_env(), **_task_env(self.shell_env, ctx)},
+            env={**scrub_env(), **self._command_env(ctx)},
             command=command,
             spawned_by_task_id=spawned_by_task_id,
             trace_id=trace_id,

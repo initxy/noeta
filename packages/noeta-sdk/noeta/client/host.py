@@ -746,6 +746,10 @@ class SdkHost(GenericEngineResolver):
     #: Variables a task's shell commands run with (HostConfig.shell_env):
     #: ``root task id -> variables``, forwarded verbatim into the fs pack.
     shell_env: Optional[Callable[[str], Mapping[str, str]]] = None
+    #: Names of this process's variables every shell command inherits past the
+    #: fixed allow-list (HostConfig.shell_env_inherit), forwarded into the fs
+    #: pack.
+    shell_env_inherit: Sequence[str] = ()
     extra_guards: tuple[Guard, ...] = ()
     extra_content_kinds: tuple[ContentKindSpec, ...] = ()
     #: Per-agent ``tool_result_transform`` stages — ``agent name -> ordered
@@ -2765,6 +2769,7 @@ class SdkHost(GenericEngineResolver):
         config["fs"]["write_path_globs"] = _spec_write_path_globs(spec)
         config["fs"]["write_roots"] = self.write_roots
         config["fs"]["shell_env"] = self.shell_env
+        config["fs"]["shell_env_inherit"] = tuple(self.shell_env_inherit)
         # The lowest skill tier: the host's own built-in dirs first, then the
         # dirs loaded plugins contribute on the ``skills`` surface. Both sit
         # below ``global_skills_dir`` and the workspace pack, which the skills
