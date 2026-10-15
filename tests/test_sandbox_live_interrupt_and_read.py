@@ -144,7 +144,7 @@ def test_session_stop_interrupts_sleep_in_the_container(
     ended: list[float] = []
 
     def _run() -> None:
-        out.append(tool.invoke({"command": "sleep 30.1", "timeout": 120_000}, ctx))
+        out.append(tool.invoke({"command": "true && sleep 30.1", "timeout": 120_000}, ctx))
         ended.append(time.monotonic())
 
     thread = threading.Thread(target=_run, daemon=True)

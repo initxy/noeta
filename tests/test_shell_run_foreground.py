@@ -136,7 +136,7 @@ def test_session_kill_reaps_foreground_run_promptly(tmp_path: Path) -> None:
     tool, ctx, registry = _tool_with_registry(tmp_path, "t-fg")
     results: list[ToolResult] = []
     worker = threading.Thread(
-        target=lambda: results.append(tool.invoke({"command": "sleep 30"}, ctx)),
+        target=lambda: results.append(tool.invoke({"command": "true && sleep 30"}, ctx)),
         daemon=True,
     )
     worker.start()

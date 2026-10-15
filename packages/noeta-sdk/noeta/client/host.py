@@ -755,6 +755,13 @@ class SdkHost(GenericEngineResolver):
     #: Variables a task's shell commands run with (HostConfig.shell_env):
     #: ``root task id -> variables``, forwarded verbatim into the fs pack.
     shell_env: Optional[Callable[[str], Mapping[str, str]]] = None
+    #: Names of this process's variables every shell command inherits past the
+    #: fixed allow-list (HostConfig.shell_env_inherit), forwarded into the fs
+    #: pack.
+    shell_env_inherit: Sequence[str] = ()
+    #: Background commands end with their turn
+    #: (HostConfig.background_ends_with_turn), forwarded into the fs pack.
+    background_ends_with_turn: bool = False
     extra_guards: tuple[Guard, ...] = ()
     extra_content_kinds: tuple[ContentKindSpec, ...] = ()
     #: Per-agent ``tool_result_transform`` stages — ``agent name -> ordered
@@ -2453,6 +2460,9 @@ class SdkHost(GenericEngineResolver):
             file_read_registry=(
                 self._task_locals.read_registry(task_id) if task_id else None
             ),
+            recorded_state=(
+                self._task_locals.tool_state(task_id) if task_id else None
+            ),
         )
 
     def _policy_factory_builder(self, task_slot: Optional[TaskSlot]) -> Any:
@@ -2783,6 +2793,8 @@ class SdkHost(GenericEngineResolver):
             _write_anywhere if writes_anywhere else self.write_roots
         )
         config["fs"]["shell_env"] = self.shell_env
+        config["fs"]["shell_env_inherit"] = tuple(self.shell_env_inherit)
+        config["fs"]["background_ends_with_turn"] = self.background_ends_with_turn
         # The lowest skill tier: the host's own built-in dirs first, then the
         # dirs loaded plugins contribute on the ``skills`` surface. Both sit
         # below ``global_skills_dir`` and the workspace pack, which the skills

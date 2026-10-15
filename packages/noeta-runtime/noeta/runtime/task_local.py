@@ -11,14 +11,18 @@ call it through ``forget_turn_carriers``, and an LRU bounds a process that
 never closes anything. A runtime accelerator like
 :class:`~noeta.runtime.file_checkpoint.FileCheckpointRegistry`: never
 written to the event log, never resumed from, so a restart simply starts
-every task's local state empty.
+every task's local state empty — save the tool state below, which is a
+cache over side effects the tool results DID record, re-seeded from them.
 
 Two kinds of entry:
 
 * the **read registry** — the runtime's own
   :class:`~noeta.runtime.tool.InMemoryFileReadRegistry`, typed because the
   runtime owns both ends (the host threads it into the turn's
-  ``ToolRuntime``);
+  ``ToolRuntime``) — inside the task's
+  :class:`~noeta.runtime.tool.RecordedToolState`, which a fresh process
+  re-seeds from the task's recorded tool results rather than starting
+  empty;
 * **named slots** — opaque objects a built-in keeps for the task
   (``slot(task_id, name, factory)`` get-or-creates one; ``peek`` reads
   without creating). A pack reaches its slot through the
@@ -42,7 +46,7 @@ import threading
 from collections import OrderedDict
 from typing import Any, Callable, Optional, TypeVar
 
-from noeta.runtime.tool import InMemoryFileReadRegistry
+from noeta.runtime.tool import InMemoryFileReadRegistry, RecordedToolState
 
 
 __all__ = [
@@ -65,10 +69,11 @@ DEFAULT_MAX_TASK_LOCALS: int = 4096
 
 
 class _TaskLocal:
-    __slots__ = ("reads", "slots", "engine")
+    __slots__ = ("reads", "tool_state", "slots", "engine")
 
     def __init__(self) -> None:
         self.reads = InMemoryFileReadRegistry()
+        self.tool_state = RecordedToolState(self.reads)
         self.slots: dict[str, Any] = {}
         self.engine: Any = None
 
@@ -120,6 +125,20 @@ class TaskLocalRegistry:
         read-first record, threaded into each turn's ``ToolRuntime``."""
         with self._lock:
             return self._touch(task_id).reads
+
+    def tool_state(self, task_id: str) -> RecordedToolState:
+        """What ``task_id``'s tools carry from call to call (its read-first
+        record included), threaded into each turn's ``ToolRuntime``."""
+        with self._lock:
+            return self._touch(task_id).tool_state
+
+    def reset_tool_state(self, task_id: str) -> None:
+        """Send ``task_id``'s carried tool state back to the log: the next
+        tool call re-seeds it from the live history. Creates nothing."""
+        with self._lock:
+            local = self._tasks.get(str(task_id))
+        if local is not None:
+            local.tool_state.reset()
 
     # -- named slots ----------------------------------------------------
 

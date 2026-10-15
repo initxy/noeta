@@ -356,6 +356,16 @@ class GenericEngineResolver:
         if locals_ is not None:
             locals_.drop_engine(str(task_id))
 
+    def reset_recorded_tool_state(self, task_id: str) -> None:
+        """Make ``task_id``'s next tool call rebuild what its tools carry
+        (the read-first record, the shell's directory) from the live history.
+        The worker calls it after a crash-recovery seal folds an attempt away:
+        reads and directory changes of that dead attempt must not vouch for
+        the re-drive. Idempotent; a no-op without the registry."""
+        locals_ = getattr(self, "_task_locals", None)
+        if locals_ is not None:
+            locals_.reset_tool_state(str(task_id))
+
     def forget_turn_carriers(self, task_id: str) -> None:
         """Drop a task's per-turn carrier entries (permission_mode / effort /
         mcp aliases) and its task-local state (the turn Engine, the read-first

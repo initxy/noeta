@@ -228,7 +228,7 @@ def test_seed_records_the_environment_against_the_container_workdir(
     )
     block = _recorded_environment(triple[0], triple[1], out.task_id)
     assert block is not None, "no environment resident was recorded"
-    assert "Working directory: /workspace\n" in block, block
+    assert "Primary working directory: /workspace\n" in block, block
     assert str(tmp_path) not in block, block
 
 

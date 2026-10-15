@@ -1391,6 +1391,11 @@ def _recover_interrupted_attempt(
         reason=reason,
         lease_id=lease.lease_id,
     )
+    # The sealed attempt's reads and directory changes are dead history now;
+    # what the tools carry is rebuilt from the live history on the next call.
+    reset_tool_state = getattr(rt, "reset_recorded_tool_state", None)
+    if callable(reset_tool_state):
+        reset_tool_state(lease.task_id)
     # Re-fold: the seal is a snapshot-shaped baseline, so this is a cheap
     # rehydrate — and the ONE way to rebuild the working Task that is
     # byte-identical to what any later resume folds.
@@ -1415,6 +1420,14 @@ def _recover_interrupted_attempt(
             attempt.attempt_start_seq,
             lease.task_id,
         )
+        notice = _redrive_notice(engine, attempt.tail)
+        if notice:
+            task = engine.append_user_message(
+                task,
+                content=[TextBlock(text=notice)],
+                lease_id=lease.lease_id,
+                origin="system",
+            )
         task = engine.run_one_step(task, lease_id=lease.lease_id, cancelled=cancelled)
         rt.dispatcher.release(
             lease.lease_id,
@@ -1564,6 +1577,37 @@ def _sealed_tail_blockers(
         content_store=rt.content_store,
         event_log=bounded,
     ).blockers
+
+
+def _redrive_notice(engine: Any, tail: tuple[Any, ...]) -> str:
+    """What the re-driven step is told about the attempt it replaces, or "".
+
+    The sealed attempt is gone from the conversation, but a tool it started
+    may have changed the world (an ``Edit`` already on disk). Claude Code's
+    words for a call whose result was lost: a read-only one "changes nothing,
+    so it is safe to run again" — left unsaid here — and any other one "ran,
+    but its result could not be read. Check its effect before running it
+    again." Nothing to say when only read-only tools (``risk_level`` low)
+    started."""
+    names: list[str] = []
+    for env in tail:
+        if env.type != "ToolCallStarted":
+            continue
+        name = str(env.payload.tool_name)
+        tool = engine.tool_named(name) if hasattr(engine, "tool_named") else None
+        if getattr(tool, "risk_level", None) == "low" or name in names:
+            continue
+        names.append(name)
+    if not names:
+        return ""
+    return " ".join(
+        ["The previous attempt at this response was interrupted before it could complete."]
+        + [
+            f"{name} ran, but its result could not be read. Check its effect "
+            "before running it again."
+            for name in names
+        ]
+    )
 
 
 def _park_notice(reason: str, blockers: tuple[str, ...]) -> str:

@@ -255,7 +255,7 @@ def test_shell_run_background_true_returns_handle(tmp_path: Path) -> None:
     )
     result = tool.invoke({"command": "printf hi", "run_in_background": True}, ctx)
     assert result.success
-    match = re.search(r"background with ID: (\S+)", result.output)
+    match = re.search(r"background with ID: ([\w-]+)", result.output)
     assert match, result.output
     assert "BashOutput" in result.output
     _await_exit(reg, match.group(1))
@@ -309,7 +309,7 @@ def test_shell_poll_tool_returns_status_ref(tmp_path: Path) -> None:
         metadata={"task_id": "t-poll-tool", "trace_id": "tr"},
     )
     started = run.invoke({"command": "printf hi", "run_in_background": True}, ctx)
-    job_id = re.search(r"background with ID: (\S+)", started.output).group(1)
+    job_id = re.search(r"background with ID: ([\w-]+)", started.output).group(1)
     # Poll THROUGH THE TOOL until the job exits: each call returns only the
     # new output, so collecting across calls must yield the whole stream.
     import time

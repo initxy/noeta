@@ -9,7 +9,7 @@ store the host injected.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional, Protocol
+from typing import Any, Callable, Mapping, Optional, Protocol
 
 from noeta.protocols.values import ContentRef
 
@@ -72,6 +72,13 @@ class BackgroundRunner(Protocol):
     background execution, so the tool refuses cleanly. ``kill`` only *requests*
     a SIGTERM→SIGKILL teardown and returns promptly; the watcher reaps the job
     and records ``BackgroundShellKilled``.
+
+    One optional method is read with ``getattr`` and is not a member of this
+    Protocol: ``wait(job_id, *, timeout_s, spawned_by_task_id) -> str`` blocks
+    until the job ends (``"done"``), the timeout passes (``"timeout"``) or a
+    human stop reaches the task (``"interrupted"``) — ``"unknown"`` for a job
+    the runner never ran. A runner without it serves a blocking read as a
+    plain poll.
     """
 
     def spawn(
@@ -98,8 +105,10 @@ class FileReadRegistry(Protocol):
     match the file's current bytes, so the model can neither mutate a file it
     never saw nor one that changed underneath it. Keyed by the canonical
     absolute path; the digest is the sha256 hex of the raw bytes as read.
-    In-memory by design — a resumed session starts empty and requires a fresh
-    ``Read`` before the next mutation, which matches the reference behavior.
+    Each recording also rides the call's ``ToolResultRecorded`` as a
+    ``file_read`` side effect, so a process that never saw the read (a
+    restart, a crash-recovery re-drive) rebuilds the record from the task's
+    live history — what Claude Code's resume does from its transcript.
     """
 
     def record(self, path: str, digest: str) -> None: ...
@@ -126,6 +135,13 @@ class ToolContext:
     #: ``Read`` records nothing and the read-first preconditions are skipped.
     #: The ToolRuntime always wires one, so the builtin flow always enforces.
     file_read_registry: Optional["FileReadRegistry"] = None
+    #: ``type -> the newest side effect of that type this task's live
+    #: history recorded`` (``None`` when none): how a tool carries its own
+    #: state from call to call — it returns the state as a typed side effect,
+    #: and the next call reads it back — so the state survives a restart and
+    #: never outlives a rewound or abandoned stretch of history. ``None`` ⇒
+    #: no record wired (a hand-built context): the tool keeps no state.
+    recorded: Optional[Callable[[str], Optional[Mapping[str, Any]]]] = None
 
 
 class Tool(Protocol):

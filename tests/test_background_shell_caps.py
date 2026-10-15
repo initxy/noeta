@@ -174,7 +174,7 @@ def test_shell_run_tool_surfaces_cap_rejection(tmp_path: Path) -> None:
     assert "KillShell" in second.summary
     import re as _re
 
-    first_id = _re.search(r"background with ID: (\S+)", first.output).group(1)
+    first_id = _re.search(r"background with ID: ([\w-]+)", first.output).group(1)
     reg.kill(first_id)
     _await_terminal(reg, first_id)
 

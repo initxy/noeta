@@ -97,30 +97,40 @@ DEFAULT_INSTRUCTIONS_FILENAMES = ("NOETA.md", "AGENTS.md", "CLAUDE.md")
 def render_environment_text(snapshot: EnvironmentSnapshot) -> str:
     """Deterministic rendered body — the resident's rendered text.
 
-    Wraps the facts in a single ``<workspace-environment>`` tag block so
-    the model can tell this segment apart from surrounding prompt text.
-    The format mirrors instructions' tagged style: one block, fixed field
-    order, trivially diffable. The middle line states the resolution rule
-    explicitly so the model knows the directory is the relative-path
-    anchor, not just trivia.
+    The body is Claude Code's environment section, line for line: the
+    ``# Environment`` heading, the ``You have been invoked in the following
+    environment:`` lead-in, one `` - `` bullet per fact (primary working
+    directory, git, platform, shell, OS version), then the model identity
+    sentence and the ``Today's date is …`` line. Noeta adds the one rule its
+    relative fs-tool paths need, and the git branch / status lines with their
+    task-start-snapshot note (Claude Code's git-status wording), so the model
+    runs git itself for live state instead of trusting stale lines. The whole
+    block sits in one ``<workspace-environment>`` tag so the model (and a
+    host's context accounting) can tell it apart from surrounding text.
 
-    The git branch / status / date lines are appended only when captured —
-    an empty field (non-git workspace, or capture that failed / was
-    skipped) renders no line at all, keeping the block tight. When either
-    git line rendered, a note states that they are a task-start snapshot
-    (the block is recorded activate-once and never refreshed — see
-    :func:`build_environment_session_pack`), mirroring Claude Code's
-    git-status wording, so the model runs git itself for live state
-    instead of trusting stale lines.
+    An empty field renders no line at all (shell / OS version on a sandbox
+    backend, git lines outside a repo, a model or date the capture missed).
     """
     lines = [
         "<workspace-environment>",
-        f"Working directory: {snapshot.workspace_display}",
-        "File paths for read, edit, glob, and grep resolve relative to "
-        "this directory.",
-        f"Is a git repository: {'true' if snapshot.is_git_repo else 'false'}",
-        f"Platform: {snapshot.platform}",
+        "# Environment",
+        "You have been invoked in the following environment: ",
+        f" - Primary working directory: {snapshot.workspace_display}",
+        f" - Is a git repository: {'true' if snapshot.is_git_repo else 'false'}",
+        f" - Platform: {snapshot.platform}",
     ]
+    if snapshot.shell:
+        lines.append(f" - Shell: {snapshot.shell}")
+    if snapshot.os_version:
+        lines.append(f" - OS Version: {snapshot.os_version}")
+    if snapshot.model:
+        lines.append(f"You are powered by the model {snapshot.model}.")
+    if snapshot.today:
+        lines.append(f"Today's date is {snapshot.today}.")
+    lines.append(
+        "File paths for read, edit, glob, and grep resolve relative to the "
+        "primary working directory."
+    )
     if snapshot.git_branch:
         lines.append(f"Git branch: {snapshot.git_branch}")
     if snapshot.git_status:
@@ -131,8 +141,6 @@ def render_environment_text(snapshot: EnvironmentSnapshot) -> str:
             "task started; they do not update as the task runs. Run git "
             "commands for the current state."
         )
-    if snapshot.captured_date:
-        lines.append(f"Captured at: {snapshot.captured_date}")
     lines.append("</workspace-environment>")
     return "\n".join(lines)
 
@@ -434,7 +442,9 @@ def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution
     """
     if not bool(ctx.config("workspace").get("environment_enabled", True)):
         return PackContribution()
-    snapshot = load_environment(ctx.workspace_dir, exec_env=ctx.exec_env)
+    snapshot = load_environment(
+        ctx.workspace_dir, exec_env=ctx.exec_env, model=ctx.model
+    )
     content_store = ctx.content_store
 
     def _init(rec: SessionRecorder) -> None:
