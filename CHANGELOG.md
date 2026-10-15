@@ -6,6 +6,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
+## [0.6.39] - 2026-10-15
+
+`noeta-runtime` and `noeta-sdk`, lockstep (`noeta-sdk` requires
+`noeta-runtime>=0.6.39`). The worker loop and its tools follow Claude Code.
+
+### Changed
+
+- **Large tool output is persisted, not cut.** Past a tool's
+  `max_result_size_chars` (Claude Code's per-tool sizes: Bash 30000, Grep 20000,
+  WebFetch 50000, others 100000; capped by the host's
+  `tool_output_inline_limit`, now 50000 by default) the full output goes to the
+  spill file and the model gets a `<persisted-output>` block with a 2KB preview.
+  Read is exempt: it refuses an over-large read and asks for `offset`/`limit`.
+- **Output-cap recovery.** A `max_tokens` stop continues with Claude Code's
+  recovery message (up to 3 times) instead of failing the turn.
+- **Todo reminder cadence.** Shown only after ten blocks without `TodoWrite` and
+  ten since the last reminder, with Claude Code's text, placed where it first
+  appeared so the cached prefix stays stable.
+- **Concurrent read-only tools.** Consecutive concurrency-safe calls of one
+  response run together (up to 10); results are recorded in call order.
+- **Post-compaction re-attach.** Up to 5 recently used files (5000 tokens each,
+  50000 total) come back after a summarize.
+- **Bash keeps its working directory** between calls (derived from the record);
+  long leading `sleep`s are refused; `BashOutput` takes `block`/`timeout`.
+- **Read-first record survives a restart**, and a re-driven step is told a
+  write may already have applied.
+- **Environment block** uses Claude Code's `# Environment` layout (platform,
+  shell, OS version, model, today's date).
+- Cleared tool output reads `[Old tool result content cleared]`.
+- Read renders PDF pages and reads `.ipynb`; under `bypassPermissions`
+  Write/Edit reach any absolute path.
+
+### Added
+
+- `HostConfig.shell_env_inherit`, `HostConfig.background_ends_with_turn`.
+
+### Fixed
+
+- A background command longer than the event payload cap no longer crashes Bash.
+
 ## [0.6.38] - 2026-10-15
 
 `noeta-runtime` only — 0.6.36 → 0.6.38; `noeta-sdk` stays at 0.6.37 (its
@@ -3448,6 +3488,7 @@ Initial preview release.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
 [Unreleased]: https://github.com/initxy/noeta/compare/v0.6.36...HEAD
+[0.6.39]: https://github.com/initxy/noeta/compare/v0.6.38...v0.6.39
 [0.6.38]: https://github.com/initxy/noeta/compare/v0.6.37...v0.6.38
 [0.6.37]: https://github.com/initxy/noeta/compare/v0.6.36...v0.6.37
 [0.6.36]: https://github.com/initxy/noeta/compare/v0.6.35...v0.6.36
