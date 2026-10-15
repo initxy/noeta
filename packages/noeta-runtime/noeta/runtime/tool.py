@@ -8,12 +8,21 @@ blow up a transform stage — all three events are appended under the active
 ``lease_id``, so an assistant ``tool_use`` is never left without its paired
 ``tool_result``. Output bodies go to the ContentStore, keeping the inline
 ``output_ref`` under the event payload ceiling.
+
+A run of concurrency-safe calls (read-only tools that declare
+``concurrency_safe = True``) may execute together: each call is started (via
+``start``) in order, then ``complete`` runs the tool bodies on up to
+:data:`MAX_TOOL_USE_CONCURRENCY` threads and records each result in call
+order, so the stream is the same whatever order the bodies finished in.
 """
 
 from __future__ import annotations
 
+import contextvars
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Any, Callable, Optional, Sequence
 
 from noeta.protocols.content_store import ContentStore
@@ -52,6 +61,24 @@ class InMemoryFileReadRegistry:
     def digest(self, path: str) -> Optional[str]:
         with self._lock:
             return self._digests.get(path)
+
+
+#: How many concurrency-safe tool calls run at once — Claude Code's
+#: ``CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY`` default.
+MAX_TOOL_USE_CONCURRENCY = 10
+
+
+@dataclass(frozen=True, slots=True)
+class StartedCall:
+    """A call whose ``ToolCallStarted`` is recorded and whose body has not
+    run yet — what :meth:`ToolRuntime.start` hands to
+    :meth:`ToolRuntime.complete`."""
+
+    tool: Tool
+    call: ToolCall
+    task_id: str
+    lease_id: str
+    trace_id: str
 
 
 _OUTPUT_MEDIA_TYPE = "application/json"
@@ -121,6 +148,21 @@ class ToolRuntime:
         lease_id: str,
         trace_id: str,
     ) -> ToolResult:
+        started = self.start(
+            tool, call, task_id=task_id, lease_id=lease_id, trace_id=trace_id
+        )
+        return self.complete([started])[0]
+
+    def start(
+        self,
+        tool: Tool,
+        call: ToolCall,
+        *,
+        task_id: str,
+        lease_id: str,
+        trace_id: str,
+    ) -> StartedCall:
+        """Record ``ToolCallStarted``; the body runs in :meth:`complete`."""
         self._event_log.emit(
             task_id=task_id,
             type="ToolCallStarted",
@@ -130,19 +172,51 @@ class ToolRuntime:
             actor=self._actor,
             origin="tool",
         )
+        return StartedCall(
+            tool=tool,
+            call=call,
+            task_id=task_id,
+            lease_id=lease_id,
+            trace_id=trace_id,
+        )
 
+    def complete(self, started: Sequence[StartedCall]) -> list[ToolResult]:
+        """Run the started calls' bodies and record each result, in order.
+
+        More than one call runs concurrently on up to
+        :data:`MAX_TOOL_USE_CONCURRENCY` threads; the caller passes several only
+        for concurrency-safe tools. Recording waits for every body and walks
+        the calls in the order given, so the recorded stream does not depend
+        on which body finished first.
+        """
+        if len(started) <= 1:
+            raws = [self._run(s) for s in started]
+        else:
+            with ThreadPoolExecutor(
+                max_workers=min(MAX_TOOL_USE_CONCURRENCY, len(started)),
+                thread_name_prefix="noeta-tool",
+            ) as pool:
+                futures = [
+                    pool.submit(contextvars.copy_context().run, self._run, s)
+                    for s in started
+                ]
+                raws = [f.result() for f in futures]
+        return [self._record(s, raw) for s, raw in zip(started, raws)]
+
+    def _run(self, started: StartedCall) -> ToolResult:
+        call = started.call
         ctx = ToolContext(
             artifact_store=self._content_store,
             metadata={
-                "task_id": task_id,
-                "root_task_id": self._root_task_id(task_id),
-                "trace_id": trace_id,
+                "task_id": started.task_id,
+                "root_task_id": self._root_task_id(started.task_id),
+                "trace_id": started.trace_id,
             },
             background_runner=self._background_runner,
             file_read_registry=self._file_read_registry,
         )
         try:
-            result = tool.invoke(call.arguments, ctx)
+            return started.tool.invoke(call.arguments, ctx)
         except Exception as exc:  # noqa: BLE001 — see below
             # A tool that RAISES must not strand the conversation: the
             # assistant ``tool_use`` and this call's ``ToolCallStarted`` are
@@ -150,11 +224,16 @@ class ToolRuntime:
             # with no matching ``tool_result``, and the next compose→decide
             # would take a fatal provider 400 that a resume replays forever.
             # Synthesise a failed result instead, so the trio still records.
-            result = ToolResult(
+            return ToolResult(
                 success=False,
                 summary=f"tool {call.tool_name!r} raised — {_fault_message(exc)}",
             )
 
+    def _record(self, started: StartedCall, result: ToolResult) -> ToolResult:
+        call = started.call
+        task_id = started.task_id
+        lease_id = started.lease_id
+        trace_id = started.trace_id
         result = self._apply_transforms(result, call)
 
         # The recorded ``file_baselines`` are the AUTHORITATIVE rewind record:
