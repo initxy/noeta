@@ -15,7 +15,9 @@ from typing import Callable, Iterable, Mapping, Optional
 __all__ = ["ENV_ALLOWLIST", "ShellEnvResolver", "scrub_env"]
 
 
-#: The only parent-environment keys a launched subprocess inherits.
+#: The only parent-environment keys a launched subprocess inherits. A host
+#: that needs ``Bash`` commands to inherit more names it in
+#: ``HostConfig.shell_env_inherit`` instead of rebinding this constant.
 ENV_ALLOWLIST = frozenset(
     {
         "PATH",

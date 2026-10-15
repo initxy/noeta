@@ -319,6 +319,22 @@ class HostConfig:
     own coordinates (which job it is working on) without widening the
     process-wide allow-list. ``None`` adds nothing.
 
+    ``shell_env_inherit`` names further variables of THIS process's own
+    environment that every ``Bash`` command inherits, on top of the fixed
+    allow-list (``PATH``, ``HOME``, ``LANG``, …) — a proxy or certificate
+    setting the commands need to reach the network the host reaches. The
+    values are read from the host process when each command starts, never
+    recorded; a ``shell_env`` variable of the same name wins. Empty (default)
+    inherits nothing more.
+
+    ``background_ends_with_turn`` tells ``Bash`` that this host ends a
+    session's background commands when the turn that started them ends —
+    the turn's end hands the work back, as a delegated worker's does — so no
+    completion notice can follow. The launch result then tells the model to
+    wait for the command before its final response (``BashOutput`` with
+    ``block: true``) instead of promising a later notification. False
+    (default) keeps the interactive wording.
+
     Loop and tool-output bounds
     ---------------------------
     ``repetition_threshold`` registers the built-in ``RepetitionGuard`` (a
@@ -384,6 +400,12 @@ class HostConfig:
     #: ``root task id -> variables for its shell commands`` (see the class
     #: docstring). A wiring concern, never part of identity.
     shell_env: Optional[Callable[[str], Mapping[str, str]]] = None
+    #: Names of this process's own variables every ``Bash`` command inherits
+    #: past the fixed allow-list (see the class docstring).
+    shell_env_inherit: Sequence[str] = ()
+    #: This host ends background commands with their turn (see the class
+    #: docstring).
+    background_ends_with_turn: bool = False
     mcp_server_resolver: Optional[
         Callable[[str], Optional[McpAnyServerSpec]]
     ] = None
@@ -704,8 +726,8 @@ class HostConfig:
     )
     #: The ``<workspace-environment>`` block switch, forwarded verbatim to
     #: ``SdkHost.environment_enabled``. On by default: every session records the
-    #: workspace facts (directory, git repo flag, platform, task-start git
-    #: branch / status / date) once at task start and renders them as the first
+    #: workspace facts (directory, git repo flag, platform, shell, OS version,
+    #: model, task-start git branch / status, today's date) once at task start and renders them as the first
     #: semi-stable message. Off, the block is neither recorded nor rendered —
     #: for a host that supplies its own working-directory and clock context and
     #: does not want a second, task-start-frozen copy in front of the model.

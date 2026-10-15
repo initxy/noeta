@@ -67,7 +67,11 @@ react factory with `functools.partial`, leaving `PolicyFactoryBuilder`
 unchanged), the web pack its page cache, the skills pack the roster it
 composed (what the roster is now — what the task was already told is read
 from its recorded skill listing), the host its last MCP provenance. A restart starts every task's
-local state empty; nothing here is recorded or resumed.
+local state empty, with one exception: what the task's tools carry from call to
+call — the read-first record and `Bash`'s working directory — rides each
+`ToolResultRecorded` as a typed side effect, so `RecordedToolState` re-seeds it
+from the task's live history (sealed and rewound stretches excluded) on the
+first tool call a process serves, and crash recovery resets it after a seal.
 
 **Only the MCP connection outlives the turn, in a host-owned pool keyed by
 server identity and the host's scope.** `McpConnectionPool` (the `mcp`

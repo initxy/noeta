@@ -376,7 +376,7 @@ def test_shell_kill_tool_happy_path(tmp_path: Path) -> None:
     assert started.success, started.summary
     import re as _re
 
-    job_id = _re.search(r"background with ID: (\S+)", started.output).group(1)
+    job_id = _re.search(r"background with ID: ([\w-]+)", started.output).group(1)
     time.sleep(0.1)
     result = kill.invoke({"shell_id": job_id}, ctx)
     assert result.success

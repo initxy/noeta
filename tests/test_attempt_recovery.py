@@ -1124,3 +1124,79 @@ def test_worker_loop_emits_reliability_and_never_silent_terminal(
     task = fold(log, cs, tid)
     assert task.status == "suspended"        # parked, not terminal
     assert dispatcher.task_status(tid) == "suspended"
+
+
+def _system_texts(log: Any, cs: Any, tid: str) -> list[str]:
+    task = fold(log, cs, tid)
+    return [
+        block.text
+        for message in task.runtime.messages
+        if getattr(message, "origin", None) == "system"
+        for block in message.content
+        if isinstance(block, TextBlock)
+    ]
+
+
+def test_redrive_tells_the_model_a_mutating_call_may_have_applied(stack: Any) -> None:
+    """A hard crash mid-call of a non-read-only tool (an ``Edit`` already on
+    disk, say): the re-drive runs on a conversation that no longer shows the
+    call, so it is told — in Claude Code's words for a call whose result was
+    lost — to check the call's effect before running it again."""
+    log, cs, dispatcher, _ = stack
+    tool = _KillOnceTool(name="editor", script={("x",): "ok"}, risk_level="high")
+    policy = _CrashOncePolicy([
+        YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
+        ToolCallsDecision(calls=[
+            ToolCall(tool_name="editor", arguments={"p": "x"}, call_id="c1")
+        ]),
+        FinishDecision(answer="done"),
+    ])
+    engine, tid = _suspended_session(stack, policy, tools={"editor": tool})
+    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    lease = _reclaim(stack, tid)
+    assert run_leased_task(_RT(engine, log, cs, dispatcher), lease) == "woken"
+    assert _seals(log, tid)[0].payload.reason == "auto_redrive"
+    assert _system_texts(log, cs, tid) == [
+        "The previous attempt at this response was interrupted before it "
+        "could complete. editor ran, but its result could not be read. Check "
+        "its effect before running it again."
+    ]
+
+
+def test_redrive_after_a_read_only_call_says_nothing(stack: Any) -> None:
+    log, cs, dispatcher, _ = stack
+    tool = _KillOnceTool(name="reader", script={("x",): "body"})
+    policy = _CrashOncePolicy([
+        YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
+        ToolCallsDecision(calls=[
+            ToolCall(tool_name="reader", arguments={"p": "x"}, call_id="c1")
+        ]),
+        FinishDecision(answer="done"),
+    ])
+    engine, tid = _suspended_session(stack, policy, tools={"reader": tool})
+    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    lease = _reclaim(stack, tid)
+    assert run_leased_task(_RT(engine, log, cs, dispatcher), lease) == "woken"
+    assert _system_texts(log, cs, tid) == []
+
+
+def test_recovery_resets_what_the_tools_carry(stack: Any) -> None:
+    """The seal folds the attempt's reads and directory changes away, so the
+    host's carried tool state is sent back to the log before the re-drive."""
+    log, cs, dispatcher, _ = stack
+    policy = _CrashOncePolicy([
+        YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
+        RuntimeError("crash"),
+        FinishDecision(answer="done"),
+    ])
+    engine, tid = _suspended_session(stack, policy)
+    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    lease = _reclaim(stack, tid)
+    reset: list[str] = []
+
+    class _Host(_RT):
+        def reset_recorded_tool_state(self, task_id: str) -> None:
+            reset.append(task_id)
+
+    assert run_leased_task(_Host(engine, log, cs, dispatcher), lease) == "woken"
+    assert reset == [tid]

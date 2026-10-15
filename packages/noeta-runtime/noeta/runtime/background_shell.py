@@ -109,6 +109,10 @@ DEFAULT_KILL_GRACE_S = 5.0
 #: mid-run poll catches a partial prefix promptly.
 _READ_CHUNK = 4096
 
+#: How often a blocking :meth:`ProcessRegistry.wait` re-checks for a human stop
+#: while the job runs on.
+_WAIT_SLICE_S = 0.1
+
 #: Bound on the ``parent_task_id`` chain walk. Real lineage is far shallower;
 #: the bound only guarantees termination on a degenerate / cyclic stream.
 _MAX_CHAIN_DEPTH = 64
@@ -167,6 +171,9 @@ class _JobHandle:
     #: escalation).
     killed: bool = False
     kill_signal: int = int(signal.SIGTERM)
+    #: Set once the terminal event is durable and ``status`` has flipped —
+    #: what :meth:`ProcessRegistry.wait` blocks on.
+    done: threading.Event = field(default_factory=threading.Event)
 
 
 @dataclass(eq=False)
@@ -419,6 +426,44 @@ class ProcessRegistry:
         if status in ("exited", "killed"):
             out["exit_code"] = exit_code
         return out
+
+    # -- wait ----------------------------------------------------------------
+
+    def wait(
+        self, job_id: str, *, timeout_s: float, spawned_by_task_id: str = ""
+    ) -> str:
+        """Block until the job has ended, ``timeout_s`` passes, or a human stop
+        reaches the waiting task — ``"done"`` / ``"timeout"`` /
+        ``"interrupted"``, or ``"unknown"`` for a job this registry never ran.
+
+        Records nothing: the caller polls afterwards, and that poll is what
+        the ledger pins. The wait is registered like a foreground command
+        (a ``kill`` that only wakes it), so the interrupt / cancel / close
+        cascade ends it at once instead of leaving the step blocked for the
+        rest of ``timeout_s``."""
+        handle = self._find(job_id)
+        if handle is None:
+            return "unknown"
+        stop = threading.Event()
+        foreground = (
+            self.register_foreground(kill=stop.set, spawned_by_task_id=spawned_by_task_id)
+            if spawned_by_task_id
+            else None
+        )
+        try:
+            deadline = time.monotonic() + max(0.0, timeout_s)
+            while True:
+                if handle.done.is_set():
+                    return "done"
+                if stop.is_set():
+                    return "interrupted"
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return "timeout"
+                handle.done.wait(min(remaining, _WAIT_SLICE_S))
+        finally:
+            if foreground is not None:
+                self.unregister_foreground(foreground)
 
     # -- foreground tracking -----------------------------------------------
 
@@ -807,6 +852,7 @@ class ProcessRegistry:
         # cannot happen.)
         with handle.lock:
             handle.status = "killed" if killed else "exited"
+        handle.done.set()
         # After the durable Exited, hand the completion to the host so it
         # drives a wake-and-notify turn. The ``notified`` dedup above guards
         # exactly-once (a kill and a natural exit cannot both push). The
