@@ -40,7 +40,7 @@ From the `fs` built-in (`noeta/builtins/fs/`).
 | `KillShell` | high | `shell_id` | Stop a background job (SIGTERM, then SIGKILL after a grace period). |
 
 - **Writes are staged by default.** `HostConfig.write_mode="dry_run"` (default) records a proposed diff; `"apply"` writes to disk.
-- **Writes are fenced, reads are not.** `Write` / `Edit` resolve inside the workspace root; `HostConfig.write_roots` can allow more roots per task. `Read` / `Glob` / `Grep` only anchor *relative* paths — an absolute path is read wherever it points, so the real read boundary is the process's own file permissions.
+- **Writes are fenced, reads are not.** `Write` / `Edit` resolve inside the workspace root; `HostConfig.write_roots` can allow more roots per task, and a `bypassPermissions` session writes anywhere (as in Claude Code). `Read` / `Glob` / `Grep` only anchor *relative* paths — an absolute path is read wherever it points, so the real read boundary is the process's own file permissions.
 - `Write` honours an optional workspace-relative `allowed_path_globs` whitelist bound at construction (empty = unrestricted); `*` matches within one path segment, `**` crosses directories, `{a,b}` lists alternatives. `Edit` ignores it.
 
 ### Shell gating

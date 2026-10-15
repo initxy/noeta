@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import logging
+import os
 import threading
 import time
 import warnings
@@ -238,6 +239,12 @@ def _combine_approval_predicates(
         return any(gate(tool_name, arguments) for gate in predicates)
 
     return _needs_approval
+
+
+def _write_anywhere(_task_id: str) -> tuple[str, ...]:
+    """The ``write_roots`` grant of a session that bypasses permissions: the
+    filesystem root, so ``Edit`` / ``Write`` reach any absolute path."""
+    return (os.path.abspath(os.sep),)
 
 
 def _approval_set_for(mode: str, tool_refs: Sequence[ToolRef]) -> tuple[str, ...]:
@@ -2129,6 +2136,7 @@ class SdkHost(GenericEngineResolver):
             shell_mode=shell_mode,
             model=model,
             spec=spec,
+            writes_anywhere=effective_permission == "bypassPermissions",
             memory_override=memory_override,
             trust_subject=trust_subject,
             # A roster exists only for an agent that activates skill
@@ -2680,6 +2688,7 @@ class SdkHost(GenericEngineResolver):
         trust_subject: Optional[Path] = None,
         skill_menu_rank: Optional[Mapping[str, float]] = None,
         task_slot: Optional[TaskSlot] = None,
+        writes_anywhere: bool = False,
     ) -> dict[str, dict[str, Any]]:
         """The per-plugin config bag a build path hands the kernel builder.
 
@@ -2697,6 +2706,11 @@ class SdkHost(GenericEngineResolver):
           neither the lower skills tiers nor instruction discovery. Omitting an
           entry (rather than passing one the pack would self-gate away) is what
           keeps its session correct.
+
+        ``writes_anywhere`` (a session that bypasses permissions) opens
+        ``Edit`` / ``Write`` to any absolute path, as Claude Code's
+        ``bypassPermissions`` does, in place of the host's ``write_roots``; the
+        read-first and staleness checks still hold.
 
         ``model`` is the session's bound model (the per-task binding on the
         session path; ``None`` ⇒ the host's default), from which the skills
@@ -2765,7 +2779,9 @@ class SdkHost(GenericEngineResolver):
         if spec is None:  # the reduced orchestration environment
             return self._apply_plugin_config_overrides(config)
         config["fs"]["write_path_globs"] = _spec_write_path_globs(spec)
-        config["fs"]["write_roots"] = self.write_roots
+        config["fs"]["write_roots"] = (
+            _write_anywhere if writes_anywhere else self.write_roots
+        )
         config["fs"]["shell_env"] = self.shell_env
         # The lowest skill tier: the host's own built-in dirs first, then the
         # dirs loaded plugins contribute on the ``skills`` surface. Both sit

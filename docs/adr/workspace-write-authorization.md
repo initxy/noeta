@@ -18,6 +18,8 @@ Every fs tool resolves a user-supplied path through one `WorkspaceRoot`. That se
 
 **The default is the single-root wall.** `HostConfig.write_roots` defaults to absent, so a bare embedding keeps writes inside the workspace, full stop — the only honest answer for a host with nobody to ask. The seam exists for a host that can actually put the question to a person and remember the answer.
 
+**`bypassPermissions` opens the fence.** A session whose effective permission mode is `bypassPermissions` gets the filesystem root as its grant in place of `write_roots`, as Claude Code's bypass mode lets its file tools write anywhere. Keeping the wall there only sent models to `Bash` heredocs, which skip the read-before-edit and staleness checks that `Edit` / `Write` still apply.
+
 **The predicate is published.** `path_within` is exported on `noeta.sdk` so a host deciding what to authorize asks the question exactly the way the fence will answer it.
 
 **A sandbox session's fence is lexical.** A container workspace root does not exist on the host, so canonicalisation is `normpath` rather than `realpath`: the fence still rejects `..` escapes and absolute escapes above the container work directory, and the container is the real isolation boundary.

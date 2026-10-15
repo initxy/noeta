@@ -40,7 +40,7 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 | `KillShell` | high | `shell_id` | 停掉后台作业（先 SIGTERM，宽限期后 SIGKILL）。 |
 
 - **默认不真写盘。** `HostConfig.write_mode="dry_run"`（默认）只记录一份拟改的 diff；`"apply"` 才真正写入。
-- **写有边界，读没有。** `Write` / `Edit` 只能写工作区根目录以内；`HostConfig.write_roots` 可以按任务放开更多目录。`Read` / `Glob` / `Grep` 只把*相对*路径锚到工作区，绝对路径指到哪就读哪，所以真正的读取边界是进程自己的文件权限。
+- **写有边界，读没有。** `Write` / `Edit` 只能写工作区根目录以内；`HostConfig.write_roots` 可以按任务放开更多目录；`bypassPermissions` 模式下哪里都能写（和 Claude Code 一样）。`Read` / `Glob` / `Grep` 只把*相对*路径锚到工作区，绝对路径指到哪就读哪，所以真正的读取边界是进程自己的文件权限。
 - `Write` 可以在构造时绑定一个相对工作区的 `allowed_path_globs` 白名单（空 = 不限）；`*` 只匹配一层路径，`**` 跨目录，`{a,b}` 表示多选。`Edit` 不看它。
 
 ### Shell 审批
