@@ -49,7 +49,7 @@ from noeta.storage.memory import (
     InMemoryEventLog,
 )
 
-_MARKER = "[tool output cleared]"
+_MARKER = "[Old tool result content cleared]"
 
 
 class _BulkTool:

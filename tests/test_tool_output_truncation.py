@@ -1,11 +1,13 @@
-"""Truncate an oversized tool result on the way into the log, without losing it.
+"""Persist an oversized tool result on the way into the log, without losing it.
 
-When ``tool_output_inline_limit`` is set, the model-facing inline output is
-clipped to the limit with a lean ASCII marker (no ContentStore hash, which the
-model cannot deref), while ``ToolResultRecorded.output_ref`` still holds the
-full original for resume and audit. The limit is off by default (``None`` leaves
-output untouched), must be positive, and threads from ``build_session_inputs``
-through ``SessionInputs`` into the ``Engine`` unchanged.
+Past ``tool_output_inline_limit`` the model-facing output becomes Claude Code's
+``<persisted-output>`` block (the file holding the whole output plus a 2 KB
+preview), or — with nowhere to save it — a ``<truncated-output>`` block keeping
+the start; ``ToolResultRecorded.output_ref`` still holds the full original for
+resume and audit. ``Read`` is exempt. The kernel default is off (``None``), the
+hosts' is Claude Code's 50,000; the limit must be positive and threads from
+``build_session_inputs`` through ``SessionInputs`` into the ``Engine``
+unchanged.
 """
 
 from __future__ import annotations
@@ -20,7 +22,8 @@ from tests._session_inputs import default_factory_kwargs
 from noeta.context.composer import COMPOSER_VERSION, ThreeSegmentComposer
 from noeta.core._decision_handlers import (
     _validate_tool_output_inline_limit,
-    truncate_tool_output,
+    large_tool_output_message,
+    result_size_threshold,
 )
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
@@ -53,42 +56,58 @@ from tests._sdk_session import coding_replay_budget
 # ---------------------------------------------------------------------------
 
 
-def test_truncate_disabled_when_none() -> None:
-    s = "x" * 1000
-    assert truncate_tool_output(s, None) is s
+def test_persisted_output_is_claude_codes_block() -> None:
+    body = "\n".join(f"line {i:04d}" for i in range(6000))  # 59,999 chars
+    out = large_tool_output_message(body, 50_000, saved_to="/spill/t/c1.txt")
+    head, preview_and_tail = out.split("Preview (first 2KB):\n")
+    assert head == (
+        "<persisted-output>\n"
+        "Output too large (58.6KB). Full output saved to: /spill/t/c1.txt\n\n"
+    )
+    preview, tail = preview_and_tail.rsplit("\n...\n", 1)
+    assert tail == "</persisted-output>"
+    # The preview ends at the last whole line inside 2,000 characters.
+    assert body.startswith(preview + "\n")
+    assert 1_000 < len(preview) <= 2_000
 
 
-def test_truncate_noop_at_boundary() -> None:
-    """No truncation when length is exactly at the limit."""
-    s = "abcde"
-    assert truncate_tool_output(s, 5) == s
-    assert truncate_tool_output(s, 6) == s
+def test_persisted_output_without_more_has_no_ellipsis() -> None:
+    out = large_tool_output_message("abc", 2, saved_to="/f.txt")
+    assert out == (
+        "<persisted-output>\n"
+        "Output too large (3 bytes). Full output saved to: /f.txt\n\n"
+        "Preview (first 2KB):\nabc\n</persisted-output>"
+    )
 
 
-def test_truncate_drops_excess_and_appends_marker() -> None:
-    s = "abcdefghij"  # len=10
-    out = truncate_tool_output(s, 4)
-    assert out.startswith("abcd")
-    assert "6 of 10 chars dropped" in out
-    # Lean marker: no ContentStore hash leaked into the model-facing text.
-    assert "content ref" not in out
-    # Stable ASCII-only marker prefix
-    assert "\n...[tool output truncated:" in out
+def test_unsaved_output_keeps_the_start_within_the_limit() -> None:
+    body = "x" * 10_000
+    out = large_tool_output_message(body, 1_000)
+    assert out.startswith(
+        "<truncated-output>\nOutput too large (9.8KB). It could not be saved, "
+        "so only the first "
+    )
+    assert "If the tool can page or filter its results, call it again for the "
+    "part you need." in out
+    assert out.endswith("\n</truncated-output>")
+    assert len(out) <= 1_000
+    assert "x" * 500 in out
 
 
-def test_truncate_marker_order_deterministic() -> None:
-    """Same input and config across calls -> same output (including dropped/total)."""
-    s = "hello world this is a long string" * 3
-    r1 = truncate_tool_output(s, 12)
-    r2 = truncate_tool_output(s, 12)
-    assert r1 == r2
+def test_size_labels_follow_claude_code() -> None:
+    assert "(1023 bytes)" in large_tool_output_message("a" * 1023, 10, saved_to="p")
+    assert "(1KB)" in large_tool_output_message("a" * 1024, 10, saved_to="p")
+    assert "(1.5MB)" in large_tool_output_message(
+        "a" * (3 * 512 * 1024), 10, saved_to="p"
+    )
 
 
-def test_truncate_handles_unicode() -> None:
-    s = "你好世界" * 5  # len=20 (Python char count, not bytes)
-    out = truncate_tool_output(s, 4)
-    assert out.startswith("你好世界")
-    assert "16 of 20 chars dropped" in out
+def test_threshold_lets_a_tool_opt_out_or_lower_it() -> None:
+    assert result_size_threshold(None, None) is None
+    assert result_size_threshold(50_000, None) == 50_000
+    assert result_size_threshold(50_000, float("inf")) is None
+    assert result_size_threshold(50_000, 20_000) == 20_000
+    assert result_size_threshold(10_000, 20_000) == 10_000
 
 
 # ---------------------------------------------------------------------------
@@ -225,10 +244,8 @@ def test_default_no_limit_keeps_dict_and_full_string() -> None:
     folded = fold(event_log, content_store, task.task_id)
     tool_msg = [m for m in folded.runtime.messages if m.role == "tool"][0]
     block: ToolResultBlock = tool_msg.content[0]  # type: ignore[assignment]
-    # Default off: no _coerce_inline_output, so the string passes through whole.
-    assert isinstance(block.output, str)
+    # Default off: the string passes through whole.
     assert block.output == "~" * 2000
-    assert "tool output truncated" not in block.output
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +255,7 @@ def test_default_no_limit_keeps_dict_and_full_string() -> None:
 
 def test_limit_truncates_inline_but_keeps_recorded_full() -> None:
     tool_size = 2000
-    limit = 120
+    limit = 1000
     task, engine, event_log, content_store, call_id = _engine_and_run(
         tool_output_inline_limit=limit, tool_size=tool_size
     )
@@ -250,8 +267,8 @@ def test_limit_truncates_inline_but_keeps_recorded_full() -> None:
     block: ToolResultBlock = tool_msg.content[0]  # type: ignore[assignment]
     inline = block.output
     assert isinstance(inline, str)
-    assert inline.startswith("~" * limit)
-    assert f"{tool_size - limit} of {tool_size} chars dropped" in inline
+    assert inline.startswith("<truncated-output>\nOutput too large (2KB).")
+    assert len(inline) <= limit
     # Lean marker: the model-facing inline form carries NO ContentStore hash
     # (the model has no ref-deref tool). The full body is recovered from the
     # ToolResultRecorded.output_ref event below, not from the prompt text.
@@ -273,8 +290,8 @@ def test_limit_truncates_inline_but_keeps_recorded_full() -> None:
     second_req = llm_request_bodies[1]  # round 2 (after tool result, end_turn)
     # Flatten the user/tool-role message content in the request body, check for the truncated string
     req_text_blob = json.dumps(second_req, default=str)
-    # Truncation suffix must appear in the request (meaning the model saw the truncated version)
-    assert f"{tool_size - limit} of {tool_size} chars dropped" in req_text_blob
+    # The cut form must appear in the request (the model saw it)
+    assert "It could not be saved" in req_text_blob
     # The full original must never appear in the next request (or truncation was pointless)
     assert ("~" * tool_size) not in req_text_blob
 
@@ -393,8 +410,7 @@ def test_product_limit_propagates_to_handler_via_custom_echo(tmp_path: Path) -> 
     assert len(tool_blocks) == 1
     inline = tool_blocks[0].output
     assert isinstance(inline, str)
-    assert inline.startswith("X" * limit)
-    assert f"{500 - limit} of 500 chars dropped" in inline
+    assert inline.startswith("<truncated-output>\nOutput too large (500 bytes).")
     # Red line: ToolResultRecorded still records the full output
     trrs = [e for e in el.read(task.task_id) if e.type == "ToolResultRecorded"]
     assert len(trrs) == 1
@@ -480,13 +496,6 @@ def test_tool_runtime_populates_output_ref() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_truncate_names_the_saved_file() -> None:
-    out = truncate_tool_output("A" * 100, 10, saved_to="/spill/t/c1.txt")
-    assert out.startswith("A" * 10 + "\n...[tool output truncated: 90 of 100 chars dropped")
-    assert "saved to /spill/t/c1.txt" in out
-    assert "offset/limit" in out
-
-
 def test_spiller_paths_are_a_function_of_task_and_call(tmp_path: Path) -> None:
     from noeta.core._decision_handlers import tool_output_spiller
 
@@ -508,35 +517,33 @@ def test_spiller_that_cannot_write_cuts_without_a_path(tmp_path: Path) -> None:
     assert spill("c1", "body") is None
 
 
-def test_client_spills_a_cut_read_and_the_marker_names_the_file(tmp_path: Path) -> None:
-    from noeta.sdk import Client, HostConfig, Options
+def _run_client(
+    tmp_path: Path, call: ToolUseBlock, host_config: Any
+) -> tuple[Any, str]:
+    from noeta.sdk import Client, Options
 
-    ws = tmp_path / "ws"
-    ws.mkdir()
-    (ws / "big.txt").write_text("\n".join(f"line {i:05d}" for i in range(2000)))
-    spill_dir = tmp_path / "spill"
-    read_call = LLMResponse(
-        stop_reason="tool_use",
-        content=[
-            ToolUseBlock(
-                call_id="c1", tool_name="Read", arguments={"file_path": "big.txt"}
-            )
-        ],
-        usage=Usage(uncached=1, output=1),
-    )
     client = Client(
         Options(system_prompt="x", permission_mode="bypassPermissions"),
-        provider=FakeLLMProvider(responses=[read_call, _end_resp()]),
-        workspace_dir=ws,
+        provider=FakeLLMProvider(
+            responses=[
+                LLMResponse(
+                    stop_reason="tool_use",
+                    content=[call],
+                    usage=Usage(uncached=1, output=1),
+                ),
+                _end_resp(),
+            ]
+        ),
+        workspace_dir=tmp_path / "ws",
         model="stub-model",
         multi_turn=False,
-        host_config=HostConfig(
-            tool_output_inline_limit=1_000, tool_output_spill_dir=spill_dir
-        ),
+        host_config=host_config,
     )
     try:
-        outcome = client.start(goal="read it")
-        folded = fold(client._host.event_log, client._host.content_store, outcome.task_id)
+        outcome = client.start(goal="go")
+        folded = fold(
+            client._host.event_log, client._host.content_store, outcome.task_id
+        )
     finally:
         client.shutdown()
     [block] = [
@@ -546,8 +553,100 @@ def test_client_spills_a_cut_read_and_the_marker_names_the_file(tmp_path: Path) 
         for b in m.content
         if isinstance(b, ToolResultBlock)
     ]
-    saved = spill_dir / outcome.task_id / "c1.txt"
-    assert f"the full output was saved to {saved}" in block.output
-    assert len(block.output) < 1_300
+    return block, outcome.task_id
+
+
+def test_client_persists_a_large_bash_output_and_names_the_file(
+    tmp_path: Path,
+) -> None:
+    from noeta.sdk import HostConfig
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "big.txt").write_text("\n".join(f"line {i:05d}" for i in range(2000)))
+    spill_dir = tmp_path / "spill"
+    block, task_id = _run_client(
+        tmp_path,
+        ToolUseBlock(
+            call_id="c1", tool_name="Bash", arguments={"command": "cat big.txt"}
+        ),
+        HostConfig(tool_output_inline_limit=1_000, tool_output_spill_dir=spill_dir),
+    )
+    saved = spill_dir / task_id / "c1.txt"
+    assert block.output.startswith(
+        "<persisted-output>\nOutput too large ("
+    )
+    assert f"Full output saved to: {saved}\n" in block.output
+    assert block.output.endswith("\n...\n</persisted-output>")
     body = saved.read_text(encoding="utf-8")
     assert "line 01999" in body and len(body) > 1_000
+
+
+def test_read_is_never_persisted(tmp_path: Path) -> None:
+    from noeta.sdk import HostConfig
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "big.txt").write_text("\n".join(f"line {i:05d}" for i in range(2000)))
+    block, _ = _run_client(
+        tmp_path,
+        ToolUseBlock(
+            call_id="c1", tool_name="Read", arguments={"file_path": "big.txt"}
+        ),
+        HostConfig(tool_output_inline_limit=1_000, tool_output_spill_dir=tmp_path),
+    )
+    assert "persisted-output" not in block.output
+    assert "line 01999" in block.output
+
+
+def test_hosts_default_to_claude_codes_50000() -> None:
+    from noeta.sdk import HostConfig
+
+    assert HostConfig().tool_output_inline_limit == 50_000
+
+
+def test_bash_persists_past_its_own_30000_under_the_host_default(
+    tmp_path: Path,
+) -> None:
+    from noeta.sdk import HostConfig
+
+    (tmp_path / "ws").mkdir()
+    spill_dir = tmp_path / "spill"
+    block, task_id = _run_client(
+        tmp_path,
+        ToolUseBlock(call_id="c1", tool_name="Bash", arguments={"command": "seq 1 8000"}),
+        HostConfig(tool_output_spill_dir=spill_dir),  # host cap: 50,000
+    )
+    assert block.output.startswith("<persisted-output>\nOutput too large (")
+    body = (spill_dir / task_id / "c1.txt").read_text(encoding="utf-8")
+    # Saved whole — no middle cut.
+    assert body == "\n".join(str(i) for i in range(1, 8001))
+
+
+def test_bash_under_30000_stays_inline(tmp_path: Path) -> None:
+    from noeta.sdk import HostConfig
+
+    (tmp_path / "ws").mkdir()
+    block, _ = _run_client(
+        tmp_path,
+        ToolUseBlock(call_id="c1", tool_name="Bash", arguments={"command": "seq 1 5000"}),
+        HostConfig(tool_output_spill_dir=tmp_path / "spill"),
+    )
+    assert block.output == "\n".join(str(i) for i in range(1, 5001))
+
+
+def test_builtin_tools_carry_claude_codes_result_sizes(tmp_path: Path) -> None:
+    import math
+
+    from noeta.builtins.fs.impl import build_fs_tools
+    from noeta.runtime.shell_policy import ShellMode
+    from noeta.runtime.workspace import WorkspaceRoot
+
+    tools = build_fs_tools(
+        WorkspaceRoot.from_path(tmp_path), shell_mode=ShellMode.ARBITRARY
+    )
+    sizes = {n: getattr(t, "max_result_size_chars") for n, t in tools.items()}
+    assert sizes["Read"] == math.inf
+    assert sizes["Bash"] == 30_000
+    assert sizes["Grep"] == 20_000
+    assert sizes["Glob"] == sizes["Edit"] == sizes["Write"] == 100_000

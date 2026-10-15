@@ -37,11 +37,17 @@ INLINE_CONTENT_MAX_BYTES = 1024 * 1024
 #: task, so it gets a far tighter budget of its own.
 MCP_INJECTION_MAX_BYTES = 64 * 1024
 
-#: Character cap for ``Bash`` / ``BashOutput`` inline output, matching the
-#: reference agent's 30000-char rule. Over-cap output keeps head and tail
-#: halves around an elision marker (:func:`elide_middle`) — for a build or
-#: test log both the invocation banner and the final failures matter.
+#: Character cap for ``BashOutput`` polls and background-completion notices.
+#: Over-cap output keeps head and tail halves around an elision marker
+#: (:func:`elide_middle`). ``Bash``'s own result is not cut: past its
+#: ``max_result_size_chars`` (30,000, Claude Code's) it is persisted.
 SHELL_INLINE_MAX_CHARS = 30000
+
+#: Claude Code's default ceiling on one tool result (``maxResultSizeChars`` is
+#: capped at 50,000 characters unless a tool declares less): past it the output
+#: is persisted to a file and the model gets a preview. The hosts' default
+#: ``tool_output_inline_limit``.
+DEFAULT_TOOL_OUTPUT_INLINE_LIMIT = 50_000
 
 #: Max raw bytes for a model-supplied string embedded in a `summary`. Small
 #: enough that even worst-case JSON-escape expansion stays far under the

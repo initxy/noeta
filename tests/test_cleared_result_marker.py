@@ -1,9 +1,10 @@
-"""A cleared result says what it was, and a tool call keeps its arguments.
+"""A cleared result reads Claude Code's marker, and a tool call keeps its
+arguments.
 
 The prune clears old tool outputs only — a ``Write``'s file body stays in the
-call that wrote it until the summary covers it, as in Claude Code. A cleared
-result's marker names the call it answered, so the model knows it already read
-that file.
+call that wrote it until the summary covers it, as in Claude Code. The call a
+cleared result answered still names the file, so the model knows it already
+read it.
 """
 
 from __future__ import annotations
@@ -105,12 +106,15 @@ def test_old_tool_calls_keep_their_arguments_when_the_valve_is_open() -> None:
     assert all(uses[f"w{i}"]["content"] == "x" * 5_000 for i in range(4))
 
 
-def test_a_cleared_result_names_the_file_it_read() -> None:
+def test_a_cleared_result_reads_claude_codes_marker() -> None:
     msgs: list[Message] = []
     for i in range(3):
         msgs += _read_turn(f"r{i}", f"/src/mod{i}.py", "line\n" * 200)
-    out = _results(_compose(msgs, keep=1))
-    assert out["r0"] == "[tool output cleared: Read(/src/mod0.py), 1000 chars]"
+    view = _compose(msgs, keep=1)
+    out = _results(view)
+    assert out["r0"] == "[Old tool result content cleared]"
+    # The call it answered still names the file.
+    assert _uses(view)["r0"] == {"file_path": "/src/mod0.py"}
     assert _is_cleared_marker(out["r0"])
     assert out["r2"] == "line\n" * 200
 

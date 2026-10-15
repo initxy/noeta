@@ -30,7 +30,7 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 
 | 工具 | 风险 | 参数 | 做什么 |
 | --- | --- | --- | --- |
-| `Read` | low | `file_path`、`offset?`、`limit?` | 读 UTF-8 文件，可按行截一段。一次最多返回 100 KB，超出时结果里会说明，模型用 `offset` 接着读。内容库里存的是整个文件（不超过 1 MiB 时），超过就只存这次返回的那一段。 |
+| `Read` | low | `file_path`、`offset?`、`limit?`、`pages?` | 读 UTF-8 文件，可按行截一段；图片直接给模型看，PDF 每页渲染成图片（用 `pdftoppm`；`pages` 写 `"1-5"` 这样的范围，一次最多 20 页，超过 10 页的 PDF 必须给），`.ipynb` 按单元格连同输出返回。和 Claude Code 一样：不带 `limit` 读超过 256 KB 的文件，或一次返回超过 25000 token（按字符数 / 4 估），直接报错并提示用 `offset`/`limit`；`Read` 的结果从不按大输出存文件。内容库里存的是整个文件（不超过 1 MiB 时），超过就只存这次返回的那一段。 |
 | `Glob` | low | `pattern`、`path?` | 列出匹配 glob 的路径（`**` 递归，支持 `{ts,tsx}` 这种多选），排好序并有上限。用 `rg --files` 遍历：遵守 gitignore，跳过隐藏文件。 |
 | `Grep` | low | `pattern`、`path?`、`glob?`、`type?`、`output_mode?`、`-i`、`-n`、`-o`、`-u`、`-A`/`-B`/`-C`、`context?`、`head_limit?`、`offset?`、`multiline?` | 用 ripgrep 搜内容，经 `ExecEnv` 执行（环境里必须装有 `rg`；没装时 fs 插件会发一次 `RuntimeWarning`）。 |
 | `Edit` | high | `file_path`、`old_string`、`new_string`、`replace_all?` | 精确替换一段文本（默认要求唯一匹配，`replace_all` 则全部替换）。文件必须先 `Read` 过。CRLF 换行的文件按 CRLF 匹配和写回。 |
@@ -40,7 +40,7 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 | `KillShell` | high | `shell_id` | 停掉后台作业（先 SIGTERM，宽限期后 SIGKILL）。 |
 
 - **默认不真写盘。** `HostConfig.write_mode="dry_run"`（默认）只记录一份拟改的 diff；`"apply"` 才真正写入。
-- **写有边界，读没有。** `Write` / `Edit` 只能写工作区根目录以内；`HostConfig.write_roots` 可以按任务放开更多目录。`Read` / `Glob` / `Grep` 只把*相对*路径锚到工作区，绝对路径指到哪就读哪，所以真正的读取边界是进程自己的文件权限。
+- **写有边界，读没有。** `Write` / `Edit` 只能写工作区根目录以内；`HostConfig.write_roots` 可以按任务放开更多目录；`bypassPermissions` 模式下哪里都能写（和 Claude Code 一样）。`Read` / `Glob` / `Grep` 只把*相对*路径锚到工作区，绝对路径指到哪就读哪，所以真正的读取边界是进程自己的文件权限。
 - `Write` 可以在构造时绑定一个相对工作区的 `allowed_path_globs` 白名单（空 = 不限）；`*` 只匹配一层路径，`**` 跨目录，`{a,b}` 表示多选。`Edit` 不看它。
 
 ### Shell 审批

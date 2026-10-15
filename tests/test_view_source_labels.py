@@ -187,6 +187,6 @@ def test_origin_survives_tail_prune() -> None:
     dyn = _segment(view, "dynamic_suffix")
     # Pruning took effect: the old tool output is replaced by the lean
     # placeholder marker, no longer an empty string.
-    assert dyn.content[1].content[0].output == "[tool output cleared]"
+    assert dyn.content[1].content[0].output == "[Old tool result content cleared]"
     # origin pass-through is unaffected by pruning
     assert dyn.content[0].origin == "memory"

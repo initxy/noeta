@@ -54,6 +54,7 @@ from noeta.runtime.governance import (
 )
 from noeta.runtime.mcp import HttpPostFn, McpAnyServerSpec
 from noeta.runtime.worker import ReliabilitySink
+from noeta.tools.limits import DEFAULT_TOOL_OUTPUT_INLINE_LIMIT
 
 #: The preview gateway as SDK core sees it: an OPAQUE object. Its real shape is
 #: the app plugin's ``AppPreviewGateway`` Protocol (``noeta.builtins.app.impl``)
@@ -307,8 +308,9 @@ class HostConfig:
     out-of-workspace write simply fails, which is the only honest answer for a
     host with nobody to ask. A host that *can* ask — suspending the call for an
     owner's ruling and remembering it as a durable grant — wires this so the
-    approved directory is open when the paused call resumes. Reads are never
-    fenced and never consult it.
+    approved directory is open when the paused call resumes. A session in
+    ``bypassPermissions`` writes anywhere instead, as in Claude Code. Reads are
+    never fenced and never consult it.
 
     ``shell_env`` answers "what does this task's shell need to know?" —
     ``root task id -> variables`` laid over the scrubbed environment of every
@@ -320,14 +322,12 @@ class HostConfig:
     Loop and tool-output bounds
     ---------------------------
     ``repetition_threshold`` registers the built-in ``RepetitionGuard`` (a
-    model wedged on the identical ``(tool, arguments)`` call), and
-    ``tool_output_inline_limit`` caps a tool result's inline characters before
-    it is appended to the history. Both are ``None`` = off by default, which is
-    what a host that never sets them has always run; both are positive ints
-    when set. They are the two generic bounds a host with custom or MCP tools
-    wants on — nothing else bounds an arg-identical loop below ReAct's
-    1,000,000-step backstop, and nothing else bounds a third-party tool's
-    inline payload.
+    model wedged on the identical ``(tool, arguments)`` call); ``None`` (the
+    default) is off — nothing else bounds an arg-identical loop below ReAct's
+    1,000,000-step backstop. ``tool_output_inline_limit`` is the size past
+    which a tool result is persisted to a file and previewed instead of
+    inlined (default 50,000, Claude Code's; ``None`` = never). Both are
+    positive ints when set.
 
     Web egress
     ----------
@@ -616,27 +616,25 @@ class HostConfig:
     #: (the default) ⇒ no budget; ReAct's 1,000,000-step runaway backstop
     #: still fails the turn outright.
     max_steps_per_turn: Optional[int] = None
-    #: Inline character cap on a tool result BEFORE it is appended to the
-    #: history (``docs/adr/unified-context-supply.md``): over the cap the model
-    #: sees the first N characters plus a deterministic ``[tool output
-    #: truncated: …]`` marker, while the full bytes stay in
-    #: ``ToolResultRecorded.output_ref`` so audit loses nothing. The built-in
-    #: tools cap themselves (``Read`` by lines, ``Bash`` at 30k, MCP at 1 MiB),
-    #: so this is the generic backstop for host-supplied and MCP tools, which
-    #: may return a multi-megabyte payload inline. A resumed task must reuse
-    #: the value the original run used, or it re-derives different tool-output
-    #: bytes. ``None`` ⇒ no truncation (today's behavior).
-    tool_output_inline_limit: Optional[int] = None
-    #: Where a result cut by ``tool_output_inline_limit`` is written whole, as
-    #: ``<dir>/<task_id>/<call_id>.txt``; the truncation marker then names the
-    #: file and tells the model to page through it with ``Read`` — Claude
-    #: Code's "output too large, saved to …" — instead of the rest being out of
-    #: reach. The file holds what the tool returned (``Bash`` has already
-    #: elided its middle past 30,000 characters). The directory must be one
-    #: the session's ``Read`` can reach; under a remote sandbox that means a
-    #: path the host's own side serves. Nothing removes the files: the host
-    #: owns the directory's lifetime. ``None`` (the default) writes nothing;
-    #: without ``tool_output_inline_limit`` it is never used.
+    #: The size, in characters, past which a tool result is persisted instead
+    #: of inlined — Claude Code's large-output rule
+    #: (``docs/adr/unified-context-supply.md``): the whole output is written to
+    #: ``tool_output_spill_dir`` and the model gets a ``<persisted-output>``
+    #: block naming the file plus a 2 KB preview, to page through with
+    #: ``Read``; the full bytes also stay in ``ToolResultRecorded.output_ref``
+    #: so audit loses nothing. ``Read`` is exempt (its own 25,000-token check
+    #: refuses an over-large read); a tool's own lower
+    #: ``max_result_size_chars`` wins (``Bash`` 30,000, ``Grep`` 20,000, as in
+    #: Claude Code). Default 50,000, Claude Code's per-tool ceiling. A resumed task must reuse the value the original run used, or
+    #: it re-derives different tool-output bytes. ``None`` ⇒ never.
+    tool_output_inline_limit: Optional[int] = DEFAULT_TOOL_OUTPUT_INLINE_LIMIT
+    #: Where an output over ``tool_output_inline_limit`` is written whole, as
+    #: ``<dir>/<task_id>/<call_id>.txt``. The file holds what the tool
+    #: returned (``Bash``: up to its 256 KB capture). The directory must be one the session's ``Read`` can
+    #: reach; under a remote sandbox that means a path the host's own side
+    #: serves. Nothing removes the files: the host owns the directory's
+    #: lifetime. ``None`` (the default) writes nothing: an over-size output is
+    #: then cut to its start with a note that the rest was dropped.
     tool_output_spill_dir: Optional[Path] = None
     #: Compact as if the model's context window were this many tokens —
     #: Claude Code's ``autoCompactWindow``. Every number compaction derives
@@ -650,7 +648,8 @@ class HostConfig:
     #: ``tool_output_inline_limit`` rule. ``None`` ⇒ the model's window.
     auto_compact_window: Optional[int] = None
     #: The request size, in tokens, at which tool outputs older than the newest
-    #: five start clearing to ``[tool output cleared]`` (microcompaction).
+    #: five start clearing to ``[Old tool result content cleared]``
+    #: (microcompaction).
     #: ``None`` ⇒ half the usable window ``auto_compact_window`` (or the model)
     #: leaves, the summarize trigger being the whole of it — so by default the
     #: two valves move together. Set it to clear early and summarize late, on

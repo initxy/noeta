@@ -4,7 +4,7 @@ Prune is a deterministic, pure transform of the dynamic segment: tool-result
 outputs of messages OUTSIDE a protected tail window (sized by a token budget,
 not a hard-coded count) are cleared — the message stays in place with the same
 role / call_id / success, only its ``output`` becomes the lean marker
-``[tool output cleared]`` so the model reads "content elided", never "tool
+``[Old tool result content cleared]`` so the model reads "content elided", never "tool
 returned nothing", and never a hash it cannot deref. Kept / cleared message
 refs land in ``ContextPlan.selected_messages`` / ``dropped_messages``, and each
 cleared output's full body in ``ContextPlan.cleared_outputs`` (internal audit,
