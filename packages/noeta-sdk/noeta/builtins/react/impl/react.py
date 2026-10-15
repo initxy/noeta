@@ -6,8 +6,12 @@ surface the Engine consumes. The hot path is::
 
     LLM produced tool_use      → ToolCallsDecision(calls, assistant_message)
     LLM produced end_turn      → FinishDecision(answer, assistant_message)
-    LLM produced max_tokens    → FailDecision(reason="llm_truncated",
-                                              retryable=True, ...)
+    LLM produced max_tokens    → its tool calls run as for tool_use; with no
+                                 tool call, the partial text is kept and an
+                                 output-limit nudge continues the turn
+                                 (StatePatchDecision), up to
+                                 MAX_OUTPUT_TOKENS_RECOVERY in a row, then
+                                 FailDecision(reason="llm_truncated")
     LLM produced error         → FailDecision(reason="llm_error",
                                               retryable=False,
                                               assistant_message=None)
@@ -72,6 +76,7 @@ from noeta.protocols.decisions import (
     Decision,
     FailDecision,
     FinishDecision,
+    StatePatchDecision,
     ToolCall,
     ToolCallsDecision,
 )
@@ -91,7 +96,7 @@ from noeta.protocols.messages import (
 )
 from noeta.protocols.resources import load_markdown
 from noeta.protocols.step_context import StepContext
-from noeta.protocols.tool import Tool
+from noeta.protocols.tool import Tool, ToolContext
 from noeta.protocols.view import View
 
 from .call_routing import route_tool_calls
@@ -133,6 +138,46 @@ _STEP_LIMIT_PROMPT = (
     "calls will run. Stop here and reply with your final report: what you "
     "did, what you found, where the work stands, and what is left to do."
 )
+
+#: Output-limit recovery, copied from Claude Code (2.1.300): a response cut by
+#: the output cap that carries no tool call keeps its partial content and the
+#: turn continues with this user turn instead of failing.
+OUTPUT_LIMIT_RESUME_NUDGE = (
+    "Output token limit hit. Resume directly \u2014 no apology, no recap of "
+    "what you were doing. Pick up mid-thought if that is where the cut "
+    "happened. Break remaining work into smaller pieces."
+)
+
+#: The same recovery when the cap was spent on reasoning alone: thinking is
+#: never recorded, so there is nothing to resume and the model is told so.
+OUTPUT_LIMIT_THINKING_NUDGE = (
+    "Output token limit hit while you were still reasoning, before this "
+    "response produced any text or tool call. That reasoning was not kept and "
+    "is not part of this conversation, so there is nothing to resume. "
+    "Continue from the conversation above: reason much more briefly and "
+    "produce your answer or next tool call well within the output limit."
+)
+
+#: Consecutive recoveries allowed before a cut response fails the turn
+#: (Claude Code's limit). The count restarts after a tool round or a new user
+#: message, and is re-derived from the recorded history, never kept here.
+MAX_OUTPUT_TOKENS_RECOVERY = 3
+
+_OUTPUT_LIMIT_NUDGES = (OUTPUT_LIMIT_RESUME_NUDGE, OUTPUT_LIMIT_THINKING_NUDGE)
+
+#: Claude Code's post-compaction file restore (2.1.300): at most this many
+#: recently read files come back after a compaction, each within this many
+#: tokens (larger ones come back as a note), all of them within the budget.
+POST_COMPACT_MAX_FILES_TO_RESTORE = 5
+POST_COMPACT_MAX_TOKENS_PER_FILE = 5_000
+POST_COMPACT_TOKEN_BUDGET = 50_000
+
+#: The file tools whose successful calls mark a file as recently used.
+_READ_TOOL = "Read"
+_FILE_TOOLS = (_READ_TOOL, "Edit", "Write")
+#: Instruction files ride the instructions resident; restoring them would
+#: repeat it.
+_INSTRUCTION_FILE_NAMES = frozenset({"NOETA.md", "AGENTS.md", "CLAUDE.md"})
 
 #: Opens the answer a step-limit stop finishes with, so whoever reads it —
 #: the host, or the model on a later turn — knows the work was cut off.
@@ -955,7 +1000,89 @@ class ReActPolicy:
             summary=summary,
             boundary_count=boundary,
             composer_version=self._composer_version,
+            reattached=self._recent_files_to_reattach(history, boundary),
         )
+
+    def _recent_files_to_reattach(
+        self, history: Sequence[Message], boundary: int
+    ) -> tuple[str, ...]:
+        """Claude Code's post-compaction file restore: the current content of
+        the files most recently read or written, so the model does not have to
+        re-read what it was just working on.
+
+        The newest :data:`POST_COMPACT_MAX_FILES_TO_RESTORE` paths a
+        successful ``Read`` / ``Edit`` / ``Write`` touched, skipping a file
+        whose ``Read`` the kept tail (``history[boundary:]``) already shows and
+        the instruction files the instructions resident already carries, are
+        re-read through the ``Read`` tool (so a sandboxed workspace is read
+        where it lives). Each becomes Claude Code's call/result pair, or its
+        too-large note past :data:`POST_COMPACT_MAX_TOKENS_PER_FILE`; pairs are
+        kept newest first while the total stays within
+        :data:`POST_COMPACT_TOKEN_BUDGET` — and within the protected tail
+        budget, so a small window is never refilled by the restore alone.
+        The texts ride the decision and are recorded, so a resume replays
+        them and never reads the disk.
+        """
+        read_tool = self._tools.get(_READ_TOOL)
+        if read_tool is None or self._content_store is None:
+            return ()
+        succeeded = {
+            block.call_id
+            for message in history
+            if message.role == "tool"
+            for block in message.content
+            if isinstance(block, ToolResultBlock) and block.success
+        }
+        kept_reads = {
+            path
+            for message in history[boundary:]
+            for path, tool_name in _touched_files(message, succeeded)
+            if tool_name == _READ_TOOL
+        }
+        recent: list[str] = []
+        for message in reversed(history):
+            for path, _tool_name in reversed(_touched_files(message, succeeded)):
+                if (
+                    path in recent
+                    or path in kept_reads
+                    or _basename(path) in _INSTRUCTION_FILE_NAMES
+                ):
+                    continue
+                recent.append(path)
+        budget = POST_COMPACT_TOKEN_BUDGET
+        if self._tail_token_budget > 0:
+            budget = min(budget, self._tail_token_budget)
+        tool_ctx = ToolContext(artifact_store=self._content_store)
+        reattached: list[str] = []
+        used = 0
+        for path in recent[:POST_COMPACT_MAX_FILES_TO_RESTORE]:
+            arguments = {"file_path": path}
+            try:
+                result = read_tool.invoke(arguments, tool_ctx)
+            except Exception:  # noqa: BLE001 — a failed restore is skipped
+                continue
+            if not result.success or result.images or not isinstance(
+                result.output, str
+            ):
+                continue
+            if _estimate_text(result.output) > POST_COMPACT_MAX_TOKENS_PER_FILE:
+                texts = [
+                    f"Note: {path} was read before the last conversation was "
+                    f"summarized, but the contents are too large to include. "
+                    f"Use {_READ_TOOL} tool if you need to access it."
+                ]
+            else:
+                texts = [
+                    f"Called the {_READ_TOOL} tool with the following input: "
+                    + json.dumps(arguments, ensure_ascii=False, separators=(",", ":")),
+                    f"Result of calling the {_READ_TOOL} tool:\n{result.output}",
+                ]
+            size = sum(_estimate_text(text) for text in texts)
+            if used + size > budget:
+                continue
+            used += size
+            reattached.extend(texts)
+        return tuple(reattached)
 
     def _tail_budget_in_estimate_units(
         self, state: _TaskTriggerBaseline
@@ -1108,8 +1235,8 @@ class ReActPolicy:
             # Forward the model's output ceiling (catalog ModelSpec.max_output_tokens,
             # injected by the host for compaction math) as the request's hard cap, so a
             # gateway with a stingy default (the aidp Responses gateway caps at 1000 when
-            # the client sends none) doesn't truncate the answer — react would otherwise
-            # treat that truncation as an llm_truncated failure. ``0`` (host didn't inject)
+            # the client sends none) doesn't cut every answer into output-limit
+            # recoveries. ``0`` (host didn't inject)
             # ⇒ ``None`` ⇒ omitted from canonical bytes, keeping the prompt
             # prefix identical whether or not it is set.
             max_tokens=self._max_output_tokens or None,
@@ -1130,7 +1257,13 @@ class ReActPolicy:
         self, response: LLMResponse, view: View
     ) -> Decision:
         history_content = _strip_thinking(response.content)
-        if response.stop_reason == "tool_use":
+        # A cut response's complete tool calls run like any others (the
+        # adapters already dropped a call whose arguments the cap cut off), and
+        # the tool round that follows resumes the work.
+        if response.stop_reason == "tool_use" or (
+            response.stop_reason == "max_tokens"
+            and any(isinstance(b, ToolUseBlock) for b in history_content)
+        ):
             assistant_message = Message(
                 role="assistant", content=history_content
             )
@@ -1218,36 +1351,54 @@ class ReActPolicy:
                 ),
             )
         if response.stop_reason == "max_tokens":
-            # Mirror the end_turn guard above: a reasoning model can spend its
-            # entire output budget on ThinkingBlock(s) before any text/tool_use,
-            # leaving history_content == [] here too (thinking is stripped by
-            # ``_strip_thinking``). Anthropic rejects an assistant message with
-            # content:[] with a 400 on the next request, and this branch is
-            # normally retryable — without this guard a retry would resend the
-            # very history a poisoned turn just wrote. Fail exactly like the
-            # end_turn guard instead of recording an unsendable turn.
+            return self._output_limit_decision(history_content, view)
+        # stop_reason == "error".
+        return self._error_to_decision(response)
+
+    def _output_limit_decision(
+        self, history_content: list[Block], view: View
+    ) -> Decision:
+        """A response the output cap cut with no tool call in it.
+
+        Up to :data:`MAX_OUTPUT_TOKENS_RECOVERY` times in a row the turn
+        continues: the partial content is recorded as the assistant turn and a
+        user turn asks the model to resume (when only thinking came back —
+        never recorded — nothing is kept and the nudge says so). Past the cap
+        the turn fails, keeping whatever text the last response produced; a
+        response with nothing renderable records no assistant turn, since a
+        ``content: []`` assistant message is a provider 400 on the next call.
+        """
+        if _output_limit_recoveries(view.rolling_history) >= (
+            MAX_OUTPUT_TOKENS_RECOVERY
+        ):
             if not history_content:
                 return FailDecision(
                     reason="llm_empty_response",
                     retryable=False,
                     assistant_message=None,
                 )
-            # The turn stops here, so no tool call of a truncated response ever
-            # runs — and a recorded tool_use with no paired result is rejected
-            # (HTTP 400) by Anthropic and OpenAI on the next request. Keep the
-            # text, drop the calls; a turn left with nothing is not recorded.
-            kept: list[Block] = [
-                b for b in history_content if not isinstance(b, ToolUseBlock)
-            ]
             return FailDecision(
                 reason="llm_truncated",
                 retryable=True,
-                assistant_message=(
-                    Message(role="assistant", content=kept) if kept else None
+                assistant_message=Message(
+                    role="assistant", content=history_content
                 ),
             )
-        # stop_reason == "error".
-        return self._error_to_decision(response)
+        nudge = (
+            OUTPUT_LIMIT_RESUME_NUDGE
+            if history_content
+            else OUTPUT_LIMIT_THINKING_NUDGE
+        )
+        return StatePatchDecision(
+            messages_before=(
+                (Message(role="assistant", content=history_content),)
+                if history_content
+                else ()
+            ),
+            messages_after=(
+                Message(role="user", content=[TextBlock(text=nudge)]),
+            ),
+        )
 
     def _error_to_decision(self, response: LLMResponse) -> Decision:
         """Map an error ``LLMResponse`` to a Decision by neutral category.
@@ -1284,6 +1435,62 @@ class ReActPolicy:
             assistant_message=None,
             detail=_provider_error_detail(response),
         )
+
+
+def _touched_files(
+    message: Message, succeeded: set[str]
+) -> list[tuple[str, str]]:
+    """``(file_path, tool name)`` of each successful file-tool call in an
+    assistant message, in block order."""
+    if message.role != "assistant":
+        return []
+    touched: list[tuple[str, str]] = []
+    for block in message.content:
+        if (
+            isinstance(block, ToolUseBlock)
+            and block.tool_name in _FILE_TOOLS
+            and block.call_id in succeeded
+        ):
+            path = block.arguments.get("file_path")
+            if isinstance(path, str) and path:
+                touched.append((path, block.tool_name))
+    return touched
+
+
+def _basename(path: str) -> str:
+    return path.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _estimate_text(text: str) -> int:
+    return estimate_messages_tokens(
+        [Message(role="user", content=[TextBlock(text=text)])]
+    )
+
+
+def _output_limit_recoveries(history: Sequence[Message]) -> int:
+    """How many output-limit nudges the current run of cut responses has had.
+
+    Walks back from the newest message over nudges and the text-only
+    assistant turns between them; a tool round or any other user message ends
+    the run, which is when Claude Code resets its count too. A pure function
+    of the recorded history, so a resumed turn counts what the live one did.
+    """
+    count = 0
+    for message in reversed(history):
+        if message.role == "assistant" and not any(
+            isinstance(b, ToolUseBlock) for b in message.content
+        ):
+            continue
+        if (
+            message.role == "user"
+            and len(message.content) == 1
+            and isinstance(message.content[0], TextBlock)
+            and message.content[0].text in _OUTPUT_LIMIT_NUDGES
+        ):
+            count += 1
+            continue
+        break
+    return count
 
 
 def _provider_error_detail(response: LLMResponse) -> Optional[str]:

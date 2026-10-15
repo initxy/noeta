@@ -1,8 +1,9 @@
 """``reminders`` — the two compose-time reminders.
 
 Each declaration carries a render ``ref`` into this plugin's ``impl`` package
-and an integer ``priority``; the registry renders in ``(priority, name)``
-order, so these bands fix the dynamic-suffix tail as todo -> read, spread by
+and an integer ``priority`` (``placed=True`` marks a placed reminder, whose ref
+returns its positions in the history); the registry renders in
+``(priority, name)`` order, so these bands fix the order as todo -> read, spread by
 100 to leave room for third-party reminders to interleave. Band 200 is vacant
 — it held ``delegation-nudge`` until that reminder was removed.
 This manifest is both the listing surface and the resolution source the SDK
@@ -21,9 +22,10 @@ MANIFEST = PluginManifest(
     contributions=(
         c(
             "reminder",
-            "unfinished-todos",
+            "todo-reminder",
             "noeta.builtins.reminders.impl:todo_reminder",
             priority=100,
+            placed=True,
         ),
         c(
             "reminder",

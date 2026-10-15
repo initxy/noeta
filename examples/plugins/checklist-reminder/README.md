@@ -26,7 +26,7 @@ Returning `None` renders nothing, which is what keeps this reminder
 self-limiting: a short or finished list is silent, so the nudge cannot decay
 into noise the model learns to skip.
 
-`priority=400` places it after the built-in reminders (`unfinished-todos` 100,
+`priority=400` places it after the built-in reminders (`todo-reminder` 100,
 `read-suggestion` 300) — an advisory note should
 not displace the ones the agent acts on.
 

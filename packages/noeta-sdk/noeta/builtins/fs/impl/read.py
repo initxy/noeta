@@ -285,6 +285,7 @@ class ReadFileTool:
     #: Never persisted as a large output (Claude Code's Read has an unlimited
     #: result size): the read itself refuses past :data:`MAX_READ_TOKENS`.
     max_result_size_chars: float = math.inf
+    concurrency_safe: bool = True
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
@@ -724,6 +725,7 @@ class GlobTool:
     max_result_size_chars: float = 100_000
     description: str = field(default=load_markdown(__package__, "glob"))
     risk_level: str = "low"
+    concurrency_safe: bool = True
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
@@ -866,6 +868,7 @@ class GrepTool:
     max_result_size_chars: float = 20_000
     description: str = field(default=load_markdown(__package__, "grep"))
     risk_level: str = "low"
+    concurrency_safe: bool = True
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",

@@ -199,6 +199,7 @@ class WebSearchTool:
     max_result_size_chars: float = 100_000
     description: str = field(default=load_markdown(__package__, "web_search"))
     risk_level: str = "low"
+    concurrency_safe: bool = True
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
