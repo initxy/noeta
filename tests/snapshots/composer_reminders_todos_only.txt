@@ -5,8 +5,118 @@
     "text": "Do the task."
   },
   {
+    "origin": null,
+    "role": "assistant",
+    "text": ""
+  },
+  {
+    "origin": null,
+    "role": "tool",
+    "text": ""
+  },
+  {
+    "origin": null,
+    "role": "assistant",
+    "text": "Working."
+  },
+  {
+    "origin": null,
+    "role": "user",
+    "text": "Continue."
+  },
+  {
+    "origin": null,
+    "role": "assistant",
+    "text": "Working."
+  },
+  {
+    "origin": null,
+    "role": "user",
+    "text": "Continue."
+  },
+  {
+    "origin": null,
+    "role": "assistant",
+    "text": "Working."
+  },
+  {
+    "origin": null,
+    "role": "user",
+    "text": "Continue."
+  },
+  {
+    "origin": null,
+    "role": "assistant",
+    "text": "Working."
+  },
+  {
+    "origin": null,
+    "role": "user",
+    "text": "Continue."
+  },
+  {
+    "origin": null,
+    "role": "assistant",
+    "text": "Working."
+  },
+  {
+    "origin": null,
+    "role": "user",
+    "text": "Continue."
+  },
+  {
+    "origin": null,
+    "role": "assistant",
+    "text": "Working."
+  },
+  {
+    "origin": null,
+    "role": "user",
+    "text": "Continue."
+  },
+  {
+    "origin": null,
+    "role": "assistant",
+    "text": "Working."
+  },
+  {
+    "origin": null,
+    "role": "user",
+    "text": "Continue."
+  },
+  {
+    "origin": null,
+    "role": "assistant",
+    "text": "Working."
+  },
+  {
+    "origin": null,
+    "role": "user",
+    "text": "Continue."
+  },
+  {
+    "origin": null,
+    "role": "assistant",
+    "text": "Working."
+  },
+  {
+    "origin": null,
+    "role": "user",
+    "text": "Continue."
+  },
+  {
+    "origin": null,
+    "role": "assistant",
+    "text": "Working."
+  },
+  {
+    "origin": null,
+    "role": "user",
+    "text": "Continue."
+  },
+  {
     "origin": "system",
     "role": "user",
-    "text": "Your current todo list (unfinished items only). Keep it updated as you make progress — mark items in_progress / completed via TodoWrite so it stays accurate:\n- [pending] First step\n- [in_progress] Second step"
+    "text": "The TodoWrite tool hasn't been used recently. If you're working on tasks that would benefit from tracking progress, consider using the TodoWrite tool to track progress. Also consider cleaning up the todo list if has become stale and no longer matches what you are working on. Only use it if it's relevant to the current work. This is just a gentle reminder - ignore if not applicable.\n\nHere are the existing contents of your todo list:\n[1. [pending] First step\n2. [completed] Already done\n3. [in_progress] Second step]"
   }
 ]

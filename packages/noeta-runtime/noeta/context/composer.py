@@ -362,8 +362,12 @@ class ThreeSegmentComposer:
         # residents at their (post-summary) anchor positions, re-attach
         # extended-thinking ahead of each assistant turn's tool_use, then prune
         # tool outputs older than the protected tail window.
+        tool_names = _tool_names(provider_tool_schemas)
+        placed = self._placed_reminders(task, tool_names)
         summarized, anchored_skills, anchored_resources = (
-            self._insert_anchored(task, self._apply_summary(task), anchored)
+            self._insert_anchored(
+                task, self._apply_summary(task), anchored, placed
+            )
         )
         for s in anchored_skills:
             if s not in selected_skills:
@@ -398,8 +402,8 @@ class ThreeSegmentComposer:
             if cleared_refs
             else 0
         )
-        # Compose-time reminders (the built-ins: the todo re-injection, the
-        # compaction-thrashing read hint and the collapsed-context pointer) are
+        # Tail reminders (the built-ins: the compaction-thrashing read hint
+        # and the collapsed-context pointer; placed ones went in above) are
         # rendered through the reminder registry and appended, in priority
         # order, to the END of the
         # dynamic_suffix (the volatile segment), then hashed. Each is a View-only
@@ -420,6 +424,7 @@ class ThreeSegmentComposer:
             dynamic_content,
             delegation_enabled=delegation_enabled,
             cleared_boundary=cleared_boundary,
+            tool_names=tool_names,
         )
         dynamic_hash = _sha256_hex(to_canonical_bytes(dynamic_content))
 
@@ -523,6 +528,7 @@ class ThreeSegmentComposer:
         task: Task,
         summarized: list[Message],
         anchored: list[tuple[int, int, int, str, str]],
+        placed: Optional[list[tuple[int, Message]]] = None,
     ) -> tuple[list[Message], list[str], list[RetrievedResource]]:
         """Render the anchored residents and insert each at its anchor.
 
@@ -542,8 +548,12 @@ class ThreeSegmentComposer:
         Returns the merged list plus the anchored skill names (for
         ``ContextPlan.selected_skills``) and the renderers' retrieved resources
         (for provenance persistence).
+
+        ``placed`` — the placed reminders, each already a message at a raw
+        index — go through the same coordinate mapping, after any resident
+        sharing their slot.
         """
-        if not anchored:
+        if not anchored and not placed:
             return summarized, [], []
         has_summary = task.context.summary_ref is not None
         boundary = task.context.summary_boundary if has_summary else 0
@@ -551,6 +561,17 @@ class ThreeSegmentComposer:
         inserts_at: dict[int, list[Message]] = {}
         skill_names: list[str] = []
         resources: list[RetrievedResource] = []
+
+        def _slot(anchor: int) -> int:
+            if has_summary:
+                eff = anchor - boundary + 1
+                eff = 1 if eff < 1 else (n if eff > n else eff)
+            else:
+                eff = anchor if anchor < n else n
+            while eff < n and summarized[eff].role == "tool":
+                eff += 1
+            return eff
+
         resolve = self._content_resolve(task)
         for anchor, _k_i, _a_i, kind, name in anchored:
             rendered = self._content_renderers.render(kind, [name], resolve)
@@ -559,14 +580,9 @@ class ThreeSegmentComposer:
             resources.extend(rendered.retrieved_resources)
             if not rendered.messages:
                 continue
-            if has_summary:
-                eff = anchor - boundary + 1
-                eff = 1 if eff < 1 else (n if eff > n else eff)
-            else:
-                eff = anchor if anchor < n else n
-            while eff < n and summarized[eff].role == "tool":
-                eff += 1
-            inserts_at.setdefault(eff, []).extend(rendered.messages)
+            inserts_at.setdefault(_slot(anchor), []).extend(rendered.messages)
+        for anchor, message in placed or ():
+            inserts_at.setdefault(_slot(anchor), []).append(message)
         if not inserts_at:
             return summarized, skill_names, resources
         out: list[Message] = []
@@ -737,6 +753,47 @@ class ThreeSegmentComposer:
             )
         return out
 
+    def _reminder_view(
+        self,
+        task: Task,
+        *,
+        delegation_enabled: bool = False,
+        cleared_boundary: int = 0,
+        tool_names: tuple[str, ...] = (),
+    ) -> ReminderView:
+        """The narrow folded-state projection every reminder renders from."""
+        return ReminderView(
+            todos=tuple(task.state.todos),
+            delegation_enabled=delegation_enabled,
+            compaction_thrashing=task.context.compaction_thrashing,
+            summary_boundary=max(0, task.context.summary_boundary),
+            cleared_boundary=cleared_boundary,
+            history=tuple(task.runtime.messages),
+            tool_names=tool_names,
+        )
+
+    def _placed_reminders(
+        self, task: Task, tool_names: tuple[str, ...]
+    ) -> list[tuple[int, Message]]:
+        """The placed reminders as host-injected messages at raw indices.
+
+        Placed reminders are re-derived from the recorded history on every
+        compose, so each keeps its position and bytes once it has appeared
+        and the volatile tail stays the only uncached part of the request.
+        """
+        placements = self._reminders.place_all(
+            self._reminder_view(task, tool_names=tool_names)
+        )
+        return [
+            (
+                index,
+                Message(
+                    role="user", content=[TextBlock(text=text)], origin="system"
+                ),
+            )
+            for index, text in placements
+        ]
+
     def _append_reminders(
         self,
         task: Task,
@@ -744,6 +801,7 @@ class ThreeSegmentComposer:
         *,
         delegation_enabled: bool,
         cleared_boundary: int = 0,
+        tool_names: tuple[str, ...] = (),
     ) -> list[Message]:
         """Render the compose-time reminder registry onto the dynamic-suffix tail.
 
@@ -765,12 +823,11 @@ class ThreeSegmentComposer:
         segment, and is re-derived from the folded projection on every compose
         (resume reproduces it). Pure: same projection → same bytes.
         """
-        view = ReminderView(
-            todos=tuple(task.state.todos),
+        view = self._reminder_view(
+            task,
             delegation_enabled=delegation_enabled,
-            compaction_thrashing=task.context.compaction_thrashing,
-            summary_boundary=max(0, task.context.summary_boundary),
             cleared_boundary=cleared_boundary,
+            tool_names=tool_names,
         )
         texts = self._reminders.render_all(view)
         if not texts:
@@ -1050,6 +1107,19 @@ class ThreeSegmentComposer:
         provider_tool_schemas = executable_tool_schemas
         provider_tool_schemas.extend(self._control_action_schemas)
         return provider_tool_schemas
+
+
+def _tool_names(provider_tool_schemas: list[dict[str, Any]]) -> tuple[str, ...]:
+    """The tool names a compose offers, in schema order."""
+    names: list[str] = []
+    for schema in provider_tool_schemas:
+        if not isinstance(schema, dict):
+            continue
+        function = schema.get("function")
+        name = function.get("name") if isinstance(function, dict) else None
+        if isinstance(name, str):
+            names.append(name)
+    return tuple(names)
 
 
 def _first_tool_use_call_id(msg: Message) -> Optional[str]:

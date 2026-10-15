@@ -7,6 +7,16 @@ function of a narrow folded-state projection (:class:`ReminderView`) returning
 ``Message(role="user", origin="system")`` (the adapter turns ``origin="system"``
 into ``<system-reminder>``); ``None`` renders nothing.
 
+A reminder that must stay where it first appeared — the way an attachment
+another agent recorded into its transcript stays there — is a **placed**
+reminder: instead of ``render`` it has ``place``, a pure function of the same
+projection returning every ``(index, text)`` it stands at, ``index`` counted in
+the raw rolling history (``ReminderView.history``). The composer inserts each
+text before that raw message, or at the tail for ``len(history)``. Because the
+placements are re-derived from recorded history alone, a reminder that first
+showed at the tail keeps its bytes and its position on every later compose, so
+it caches like any recorded message.
+
 This mirrors :mod:`noeta.context.content_channel`: one :class:`ReminderSpec` per
 reminder, collected into an immutable :class:`ReminderRegistry` the
 :class:`~noeta.context.composer.ThreeSegmentComposer` consults — the composer
@@ -28,12 +38,15 @@ composer built without a registry has **no** reminders.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Iterable, Mapping, Optional
+from typing import Callable, Iterable, Mapping, Optional, Sequence
+
+from noeta.protocols.messages import Message
 
 
 __all__ = [
     "ReminderView",
     "ReminderRender",
+    "ReminderPlace",
     "ReminderSpec",
     "ReminderRegistry",
 ]
@@ -50,7 +63,7 @@ class ReminderView:
     same narrowing ``ContentKindSpec`` renderers get (post-fold names only), so a
     render cannot reach past its inputs and break compose purity.
 
-    Fields cover exactly the three built-in reminders; a new reminder that needs
+    Fields cover exactly the built-in reminders; a new reminder that needs
     another folded fact widens this projection (a deliberate, reviewed change to
     the locked composer's contract, not an open-ended ``Task`` handle).
     """
@@ -72,11 +85,21 @@ class ReminderView:
     #: cleared this compose (``0`` = none) — lets the same reminder point at
     #: cleared-but-not-summarized outputs (``View.cleared_boundary``).
     cleared_boundary: int = 0
+    #: The raw rolling history (``RuntimeState.messages``), collapsed prefix
+    #: included; what the model still sees verbatim starts at
+    #: ``summary_boundary``. The coordinate space of a placed reminder.
+    history: tuple[Message, ...] = ()
+    #: Names of the tools offered this compose, control tools included.
+    tool_names: tuple[str, ...] = ()
 
 
 #: A reminder render: the folded-state projection -> reminder text (or ``None``
 #: to render nothing this compose). Must be pure (see the module red line).
 ReminderRender = Callable[[ReminderView], Optional[str]]
+
+#: A placed reminder: the projection -> every ``(raw history index, text)`` it
+#: stands at. Must be pure, like a render.
+ReminderPlace = Callable[[ReminderView], Sequence[tuple[int, str]]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,18 +108,24 @@ class ReminderSpec:
 
     * ``name`` — the collision / ordering key **and** the listing label.
     * ``priority`` — integer sort key (ascending); ties broken by ``name``.
-    * ``render`` — the pure projection -> ``str | None`` function.
+    * ``render`` — the pure projection -> ``str | None`` function, rendered at
+      the dynamic-suffix tail; or
+    * ``place`` — the pure projection -> placements function of a placed
+      reminder. Exactly one of the two is set.
     """
 
     name: str
     priority: int
-    render: ReminderRender
+    render: Optional[ReminderRender] = None
+    place: Optional[ReminderPlace] = None
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("ReminderSpec.name must be non-empty")
-        if not callable(self.render):
-            raise ValueError("ReminderSpec.render must be callable")
+        if (self.render is None) == (self.place is None):
+            raise ValueError("ReminderSpec takes exactly one of render / place")
+        if not callable(self.render if self.render is not None else self.place):
+            raise ValueError("ReminderSpec.render / place must be callable")
 
 
 class ReminderRegistry:
@@ -136,8 +165,23 @@ class ReminderRegistry:
         """
         out: list[str] = []
         for spec in self._specs:
+            if spec.render is None:
+                continue
             text = spec.render(view)
             if text is not None:
                 out.append(text)
         return out
+
+    def place_all(self, view: ReminderView) -> list[tuple[int, str]]:
+        """Every placed reminder's ``(raw history index, text)``, ordered by
+        index, then ``(priority, name)``. Pure over ``view``; a raise
+        propagates loudly, as in :meth:`render_all`."""
+        out: list[tuple[int, int, str]] = []
+        for order, spec in enumerate(self._specs):
+            if spec.place is None:
+                continue
+            for index, text in spec.place(view):
+                out.append((index, order, text))
+        out.sort(key=lambda item: (item[0], item[1]))
+        return [(index, text) for index, _order, text in out]
 

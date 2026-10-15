@@ -136,7 +136,7 @@ seams   = ["turn_intake"]
 
 ### `reminder`
 
-A pure `render(view) -> str | None` over folded state, rendered at the tail of the prompt on every compose and never recorded. Built-ins: `reminders` contributes `unfinished-todos` (100) and `read-suggestion` (300); `react` contributes `collapsed-context` (350).
+A pure `render(view) -> str | None` over folded state, rendered at the tail of the prompt on every compose and never recorded. Built-ins: `reminders` contributes `todo-reminder` (100) and `read-suggestion` (300); `react` contributes `collapsed-context` (350). `todo-reminder` is a *placed* reminder (built-in only): instead of rendering at the tail it returns every position in the recorded history where it stands, so once shown it stays where it appeared.
 
 ```toml
 [[tool.noeta.contributions]]
