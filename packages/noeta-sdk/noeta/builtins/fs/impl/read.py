@@ -14,6 +14,7 @@ from __future__ import annotations
 import codecs
 import hashlib
 import json
+import math
 import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -278,6 +279,9 @@ class ReadFileTool:
     name: str = "Read"
     description: str = field(default=load_markdown(__package__, "read"))
     risk_level: str = "low"
+    #: Never persisted as a large output (Claude Code's Read has an unlimited
+    #: result size): the read itself bounds what it serves.
+    max_result_size_chars: float = math.inf
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",

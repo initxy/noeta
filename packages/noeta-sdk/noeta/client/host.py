@@ -26,6 +26,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 from noeta.agent.registry import AgentRegistry, UnknownAgentError
 from noeta.agent.spec import AgentSpec, BudgetSpec, ToolRef, agent_activates
 from noeta.core.engine import Engine
+from noeta.tools.limits import DEFAULT_TOOL_OUTPUT_INLINE_LIMIT
 from noeta.core.fold import fold
 from noeta.context.content_channel import ContentKindSpec
 from noeta.context.reminders import ReminderSpec
@@ -721,13 +722,14 @@ class SdkHost(GenericEngineResolver):
     # — intranet or public — routes the call through per-call approval;
     # ``bypassPermissions`` gates nothing. Validated in ``__post_init__``.
     webfetch_allowed_hosts: Sequence[str] = ()
-    # Positive int or None; engine-level inline char cap for tool output. None = no
-    # truncation. A resumed session must reuse the value the original run used, or
-    # it re-derives different tool-output bytes.
-    tool_output_inline_limit: Optional[int] = None
-    # Where a result cut by ``tool_output_inline_limit`` is written whole, for
+    # Positive int or None; the size past which a tool output is persisted to
+    # ``tool_output_spill_dir`` and previewed (HostConfig.tool_output_inline_limit).
+    # None = never. A resumed session must reuse the value the original run used,
+    # or it re-derives different tool-output bytes.
+    tool_output_inline_limit: Optional[int] = DEFAULT_TOOL_OUTPUT_INLINE_LIMIT
+    # Where an output over ``tool_output_inline_limit`` is written whole, for
     # the model to page through (HostConfig.tool_output_spill_dir). None = no
-    # file; the marker then only counts what was dropped.
+    # file; the output is then cut to its start.
     tool_output_spill_dir: Optional[Path] = None
     # SDK Options extension points threaded into every Engine this host builds. All
     # default to inert values; the SDK host feeds the SAME values to the live and
