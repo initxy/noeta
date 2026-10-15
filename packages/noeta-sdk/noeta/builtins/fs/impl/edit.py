@@ -169,6 +169,9 @@ class ReplaceTextTool:
     write_roots: Optional[WriteRootsResolver] = None
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "Edit"
+    #: Claude Code's ``maxResultSizeChars`` for this tool; past it (or the
+    #: host's ``tool_output_inline_limit``, if lower) the result is persisted.
+    max_result_size_chars: float = 100_000
     description: str = field(default=load_markdown(__package__, "edit"))
     # High risk so PermissionGuard treats this as privileged: a policy that
     # permits medium-risk tools must not accidentally allow file mutation.
@@ -335,6 +338,9 @@ class WriteFileTool:
     write_roots: Optional[WriteRootsResolver] = None
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "Write"
+    #: Claude Code's ``maxResultSizeChars`` for this tool; past it (or the
+    #: host's ``tool_output_inline_limit``, if lower) the result is persisted.
+    max_result_size_chars: float = 100_000
     description: str = field(default=load_markdown(__package__, "write"))
     # High risk so PermissionGuard treats this as privileged: a policy that
     # permits medium-risk tools must not accidentally allow file creation.

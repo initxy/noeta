@@ -130,7 +130,7 @@
     },
     {
       "function": {
-        "description": "Executes a shell command in the workspace and returns its output.\n\n- Runs with `cwd` at the workspace root and a scrubbed (secret-free) environment. Output is stdout (plus a labeled stderr section when both streams have content), capped at 30000 characters with the middle elided.\n- `timeout` is in milliseconds: default 120000, max 600000. A non-zero exit or a timeout comes back as an error carrying the same output.\n- Provide a short `description` (5–10 words) of what the command does — it is shown to the user while the command runs.\n- `run_in_background: true` launches the command detached (a server, a long build or test run): you get a shell ID back immediately and keep working. Read its incremental output with `BashOutput`, stop it with `KillShell`. A background job's lifetime follows the session, not this task.\n- The command runs through bash (pipes, redirection, chaining). The host decides which commands run freely, which need the user's approval, and which are refused — a refusal comes back as an error that says why.\n- To read a file, search content, list files, or edit text, prefer `Read` / `Grep` / `Glob` / `Edit` — they are cheaper and need no approval. Avoid `cat`/`head`/`tail`/`grep`/`find`/`sed` here for those jobs.",
+        "description": "Executes a shell command in the workspace and returns its output.\n\n- Runs with `cwd` at the workspace root and a scrubbed (secret-free) environment. Output is stdout (plus a labeled stderr section when both streams have content), Output past 30000 characters is saved to a file and you receive a short preview plus the path; `Read` it with `offset`/`limit` for the rest.\n- `timeout` is in milliseconds: default 120000, max 600000. A non-zero exit or a timeout comes back as an error carrying the same output.\n- Provide a short `description` (5–10 words) of what the command does — it is shown to the user while the command runs.\n- `run_in_background: true` launches the command detached (a server, a long build or test run): you get a shell ID back immediately and keep working. Read its incremental output with `BashOutput`, stop it with `KillShell`. A background job's lifetime follows the session, not this task.\n- The command runs through bash (pipes, redirection, chaining). The host decides which commands run freely, which need the user's approval, and which are refused — a refusal comes back as an error that says why.\n- To read a file, search content, list files, or edit text, prefer `Read` / `Grep` / `Glob` / `Edit` — they are cheaper and need no approval. Avoid `cat`/`head`/`tail`/`grep`/`find`/`sed` here for those jobs.",
         "name": "Bash",
         "parameters": {
           "additionalProperties": false,
@@ -281,7 +281,7 @@
         }
       ],
       "name": "stable_prefix",
-      "segment_hash": "0466de02ed22900ab0282bbfc3c47d34f55e8e3ea6694f3d1b0e745ec26fe298"
+      "segment_hash": "80709bb0b2fc896f2c4d4f9a4ff2160f1c3653306de9fdd6e2f46ee02cfc4218"
     },
     {
       "content": [

@@ -125,7 +125,9 @@ def _render_streams(stdout: bytes, stderr: bytes) -> str:
         body = f"{out_text}\nstderr:\n{err_text}"
     else:
         body = out_text or err_text
-    return elide_middle(body, SHELL_INLINE_MAX_CHARS)
+    # Not cut here: past ``max_result_size_chars`` the whole body is persisted
+    # and previewed, as Claude Code does; ``output_cap`` bounds the capture.
+    return body
 
 
 @dataclass
@@ -134,7 +136,7 @@ class ShellRunTool:
     (tool name ``Bash``).
 
     Honest boundary: Noeta guarantees cwd = workspace, scrubbed env, bounded
-    timeout, and a capped inline rendering. It does **not** sandbox the spawned
+    timeout, and a capped capture (an over-size result is persisted). It does **not** sandbox the spawned
     process — commands execute workspace code, which can do arbitrary local IO.
     Trusted-workspace use only.
     """
@@ -155,6 +157,9 @@ class ShellRunTool:
     #: top of the scrubbed environment (``HostConfig.shell_env``).
     shell_env: Optional[ShellEnvResolver] = None
     name: str = "Bash"
+    #: Claude Code's ``maxResultSizeChars`` for this tool; past it (or the
+    #: host's ``tool_output_inline_limit``, if lower) the result is persisted.
+    max_result_size_chars: float = 30_000
     description: str = field(default=load_markdown(__package__, "shell_run"))
     # High risk so PermissionGuard treats this as privileged.
     risk_level: str = "high"
@@ -417,6 +422,9 @@ class ShellPollTool:
     """
 
     name: str = "BashOutput"
+    #: Claude Code's ``maxResultSizeChars`` for this tool; past it (or the
+    #: host's ``tool_output_inline_limit``, if lower) the result is persisted.
+    max_result_size_chars: float = 100_000
     description: str = field(default=load_markdown(__package__, "shell_poll"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
@@ -496,6 +504,9 @@ class ShellKillTool:
     """
 
     name: str = "KillShell"
+    #: Claude Code's ``maxResultSizeChars`` for this tool; past it (or the
+    #: host's ``tool_output_inline_limit``, if lower) the result is persisted.
+    max_result_size_chars: float = 100_000
     description: str = field(default=load_markdown(__package__, "shell_kill"))
     # High risk so PermissionGuard gates it exactly like ``Bash``: an
     # operator policy can deny it or require approval.

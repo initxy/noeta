@@ -1,6 +1,6 @@
 Executes a shell command in the workspace and returns its output.
 
-- Runs with `cwd` at the workspace root and a scrubbed (secret-free) environment. Output is stdout (plus a labeled stderr section when both streams have content), capped at 30000 characters with the middle elided.
+- Runs with `cwd` at the workspace root and a scrubbed (secret-free) environment. Output is stdout (plus a labeled stderr section when both streams have content), Output past 30000 characters is saved to a file and you receive a short preview plus the path; `Read` it with `offset`/`limit` for the rest.
 - `timeout` is in milliseconds: default 120000, max 600000. A non-zero exit or a timeout comes back as an error carrying the same output.
 - Provide a short `description` (5–10 words) of what the command does — it is shown to the user while the command runs.
 - `run_in_background: true` launches the command detached (a server, a long build or test run): you get a shell ID back immediately and keep working. Read its incremental output with `BashOutput`, stop it with `KillShell`. A background job's lifetime follows the session, not this task.
