@@ -14,10 +14,12 @@ suits a trusted workspace only.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
 from noeta.protocols.tool import ToolContext, ToolResult
@@ -35,7 +37,7 @@ from noeta.runtime.shell_policy import (
     matching_rule,
 )
 from noeta.runtime.subproc import RunOutcome, runner_with_spawn_hook
-from noeta.runtime.workspace import WorkspaceRoot
+from noeta.runtime.workspace import WorkspaceRoot, path_within
 from noeta.tools.invocation import require_str
 from noeta.protocols.resources import load_markdown
 from noeta.tools.limits import (
@@ -233,6 +235,46 @@ def _background_started(job_id: str, *, ends_with_turn: bool) -> str:
     )
 
 
+#: The side-effect type the shell's working directory rides on
+#: ``ToolResultRecorded`` — ``{"type": "shell_cwd", "cwd": <absolute>}``,
+#: written whenever a command leaves the session in another directory and read
+#: back (``ToolContext.recorded``) by the next command.
+SHELL_CWD_EFFECT = "shell_cwd"
+
+#: Line a tracked command prints last, carrying ``pwd -P``; stripped before
+#: anything is shown or stored.
+_CWD_MARK = "___NOETA_SHELL_CWD___"
+
+#: A ``cd`` among the command's words — what makes a background launch say the
+#: session's directory did not move.
+_CD_WORD = re.compile(r"(?:^|[\s;&|(])cd(?:\s|$)")
+
+
+def _track_cwd(command: str) -> str:
+    """``command`` with an EXIT trap that prints the shell's final directory,
+    so it is reported however the command ends short of a kill (an ``exit N``
+    included) and the exit status is untouched."""
+    return (
+        f"trap 'printf \"\\n%s%s\\n\" \"{_CWD_MARK}\" \"$(pwd -P)\"' EXIT\n"
+        f"{command}"
+    )
+
+
+def _split_cwd(stdout: bytes) -> tuple[bytes, Optional[str]]:
+    """``stdout`` without the trap's line, and the directory it named."""
+    mark = ("\n" + _CWD_MARK).encode("utf-8")
+    at = stdout.rfind(mark)
+    if at < 0:
+        return stdout, None
+    start = at + len(mark)
+    end = stdout.find(b"\n", start)
+    path = stdout[start : end if end >= 0 else len(stdout)].decode(
+        "utf-8", errors="replace"
+    )
+    rest = stdout[:at] + (stdout[end + 1 :] if end >= 0 else b"")
+    return rest, path or None
+
+
 def _render_streams(stdout: bytes, stderr: bytes) -> str:
     """The model-facing body: stdout, then stderr under a label only when both
     streams carry content (matching the familiar single-stream view when only
@@ -312,6 +354,7 @@ class ShellRunTool:
             described = long_leading_sleep(command)
             if described is not None:
                 return _err(self.name, _blocked_sleep(described))
+        track = False
         if self.mode is ShellMode.ALLOWLIST:
             if _has_shell_meta(command):
                 return _err(
@@ -336,6 +379,9 @@ class ShellRunTool:
         else:  # ShellMode.ARBITRARY — full bash
             exec_argv = ["bash", "-c", command]
             # A command matching a hardening rule runs as that rule's rewritten
+            # argv instead (below) and is not tracked.
+            track = ctx.recorded is not None
+            # A command matching a hardening rule runs as that rule's rewritten
             # argv instead: ``matching_rule`` admits it only when the ``shlex``
             # argv is exactly what bash would run, so nothing but the injected
             # flags changes.
@@ -344,6 +390,14 @@ class ShellRunTool:
                 argv = _parse_argv(command)
                 assert argv  # ``matching_rule`` parsed it already
                 exec_argv = rule.harden(argv)
+                track = False
+        # The allowlist tier runs argv with no shell, so nothing there can
+        # change directory: it always starts at the root.
+        cwd, moved_back = (
+            self._start_cwd(ctx)
+            if self.mode is ShellMode.ARBITRARY
+            else (self.workspace.root, False)
+        )
         timeout_s = _resolve_timeout(arguments.get("timeout"), self.timeout_s)
         # The tier gate above still applies; the sync timeout does NOT — a
         # backgrounded process outlives this call.
@@ -358,11 +412,27 @@ class ShellRunTool:
                     "run_in_background is not supported in sandbox mode (v1); "
                     "run the command in the foreground instead",
                 )
-            return self._spawn_background(exec_argv, command, ctx)
+            return self._spawn_background(
+                exec_argv, command, ctx, cwd=cwd, tracked=track
+            )
+        if track:
+            exec_argv = ["bash", "-c", _track_cwd(command)]
         outcome, interrupted = self._run_foreground(
-            exec_argv, timeout_s, ctx, self._command_env(ctx)
+            exec_argv, timeout_s, ctx, self._command_env(ctx), cwd=cwd
         )
-        return _build_shell_result(
+        final = cwd
+        if track:
+            stdout, reported = _split_cwd(outcome.stdout)
+            stderr = outcome.stderr
+            if reported is None:  # the command sent its stdout to stderr
+                stderr, reported = _split_cwd(stderr)
+            outcome = dataclasses.replace(outcome, stdout=stdout, stderr=stderr)
+            if reported is not None:
+                if path_within(Path(reported), self.workspace.root):
+                    final = Path(reported)
+                else:
+                    final, moved_back = self.workspace.root, True
+        result = _build_shell_result(
             self.name,
             command=command,
             outcome=outcome,
@@ -371,6 +441,43 @@ class ShellRunTool:
             interrupted=interrupted,
             output_cap=self.output_cap,
         )
+        if final == cwd and not moved_back:
+            return result
+        output = result.output
+        if moved_back:
+            # Claude Code's note when a command left the project: the next
+            # one starts back at the root.
+            note = f"Shell cwd was reset to {self.workspace.root}"
+            body = str(output).strip() if output not in (None, "(no output)") else ""
+            output = f"{body}\n{note}" if body else note
+        return dataclasses.replace(
+            result,
+            output=output,
+            side_effects=[
+                *result.side_effects,
+                {"type": SHELL_CWD_EFFECT, "cwd": str(final)},
+            ],
+        )
+
+    def _start_cwd(self, ctx: ToolContext) -> tuple[Path, bool]:
+        """Where this task's next command starts, and whether the recorded
+        directory had to be given up for the workspace root.
+
+        The directory is the last one a command of this task left it in
+        (``shell_cwd`` in the task's live history); the root when none was
+        recorded, when the context carries no record, or when the recorded
+        one is outside the workspace or no longer a directory."""
+        root = self.workspace.root
+        latest = ctx.recorded(SHELL_CWD_EFFECT) if ctx.recorded is not None else None
+        raw = latest.get("cwd") if latest else None
+        if not isinstance(raw, str) or not raw or Path(raw) == root:
+            return root, False
+        cwd = Path(raw)
+        try:
+            usable = path_within(cwd, root) and self.exec_env.is_dir(cwd)
+        except OSError:
+            usable = False
+        return (cwd, False) if usable else (root, True)
 
     def _command_env(self, ctx: ToolContext) -> dict[str, str]:
         """What a command adds over the scrubbed environment: the inherited
@@ -383,6 +490,8 @@ class ShellRunTool:
         timeout_s: int,
         ctx: ToolContext,
         extra_env: Optional[Mapping[str, str]] = None,
+        *,
+        cwd: Optional[Path] = None,
     ) -> tuple[RunOutcome, bool]:
         """Run the blocking command, registered in the session kill table.
 
@@ -429,7 +538,7 @@ class ShellRunTool:
         try:
             outcome = self.exec_env.run_argv(
                 exec_argv,
-                cwd=self.workspace.root,
+                cwd=self.workspace.root if cwd is None else cwd,
                 timeout_s=timeout_s,
                 output_cap=self.output_cap,
                 runner=runner,
@@ -442,7 +551,13 @@ class ShellRunTool:
         return outcome, interrupted
 
     def _spawn_background(
-        self, argv: list[str], command: str, ctx: ToolContext
+        self,
+        argv: list[str],
+        command: str,
+        ctx: ToolContext,
+        *,
+        cwd: Optional[Path] = None,
+        tracked: bool = False,
     ) -> ToolResult:
         """Hand the validated argv to the host's background runner.
 
@@ -455,9 +570,10 @@ class ShellRunTool:
             return _err(self.name, "background execution is not available on this host")
         spawned_by_task_id = str(ctx.metadata.get("task_id", ""))
         trace_id = str(ctx.metadata.get("trace_id", ""))
+        start = self.workspace.root if cwd is None else cwd
         spawned = runner.spawn(
             argv=argv,
-            cwd=self.workspace.root,
+            cwd=start,
             env={**scrub_env(), **self._command_env(ctx)},
             command=command,
             spawned_by_task_id=spawned_by_task_id,
@@ -474,6 +590,14 @@ class ShellRunTool:
             success=True,
             output=_background_started(
                 job_id, ends_with_turn=self.background_ends_with_turn
+            )
+            + (
+                # Claude Code's note for a backgrounded ``cd``.
+                "\n"
+                + f"Session cwd remains {start}; directory changes made by "
+                "the backgrounded command do not apply to subsequent commands."
+                if tracked and _CD_WORD.search(command)
+                else ""
             ),
             summary=f"{self.name} {summary_cmd} → background ({job_id})",
         )
