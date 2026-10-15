@@ -194,6 +194,9 @@ class WebSearchTool:
 
     transport: SearchTransport
     name: str = "WebSearch"
+    #: Claude Code's ``maxResultSizeChars`` for this tool; past it (or the
+    #: host's ``tool_output_inline_limit``, if lower) the result is persisted.
+    max_result_size_chars: float = 100_000
     description: str = field(default=load_markdown(__package__, "web_search"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(

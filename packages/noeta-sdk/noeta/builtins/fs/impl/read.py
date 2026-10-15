@@ -14,6 +14,7 @@ from __future__ import annotations
 import codecs
 import hashlib
 import json
+import math
 import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -38,6 +39,14 @@ from noeta.runtime.workspace import (
 from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
 from noeta.runtime.subproc import RunOutcome
 from noeta.builtins.fs.impl._glob import compile_glob, glob_matches
+from noeta.builtins.fs.impl._read_formats import (
+    MAX_READ_TOKENS,
+    estimate_tokens,
+    format_size,
+    read_notebook,
+    read_pdf,
+    too_many_tokens,
+)
 
 
 __all__ = [
@@ -103,9 +112,9 @@ def _run_rg(exec_env: ExecEnv, argv: list[str], cwd: Path) -> "RunOutcome | str"
 # ``supports_vision`` lives on the catalog ``ModelSpec`` and is consulted inside
 # the adapters at wire time, while ``ToolContext`` carries only task / trace ids
 # — so it ALWAYS emits a detected image and lets the adapter degrade to text.
-# PDFs (a separate wire shape) and images over ``IMAGE_MAX_BYTES`` instead fail
-# with an actionable message; any other binary falls through to the generic
-# "not utf-8" error below.
+# Images over ``IMAGE_MAX_BYTES`` instead fail with an actionable message; a
+# PDF is rendered page by page (``_read_formats``); any other binary falls
+# through to the generic "not utf-8" error below.
 
 #: Leading magic bytes → a human-facing media label. Detection is by content,
 #: not extension, so a mis-named or extension-less image is still caught.
@@ -116,11 +125,10 @@ _VISUAL_MAGIC: tuple[tuple[bytes, str], ...] = (
     (b"\xff\xd8\xff", "JPEG image"),
     (b"GIF87a", "GIF image"),
     (b"GIF89a", "GIF image"),
-    (b"%PDF-", "PDF document"),
 )
 
 #: Leading magic bytes → wire media type for the bytes ``Read`` surfaces to a
-#: vision model. Deliberately excludes PDF, which is not an inline image.
+#: vision model.
 _IMAGE_MAGIC_MEDIA_TYPE: tuple[tuple[bytes, str], ...] = (
     (b"\x89PNG\r\n\x1a\n", "image/png"),
     (b"\xff\xd8\xff", "image/jpeg"),
@@ -135,8 +143,8 @@ IMAGE_MAX_BYTES = 5 * 1024 * 1024
 
 
 def _detect_visual_media(raw: bytes) -> Optional[str]:
-    """Return a media label if ``raw`` is an image (png/jpg/gif/webp) or a
-    PDF, else ``None``.
+    """Return a media label if ``raw`` is an image (png/jpg/gif/webp), else
+    ``None``.
 
     Sniffing by magic bytes rather than extension, so a ``.png`` renamed to
     ``.dat`` is still classified correctly. ``webp`` is a RIFF container, hence
@@ -152,11 +160,7 @@ def _detect_visual_media(raw: bytes) -> Optional[str]:
 
 def _detect_image_media_type(raw: bytes) -> Optional[str]:
     """Return the standard image media type (``image/png`` …) if ``raw`` is a
-    supported image (png/jpeg/gif/webp), else ``None``.
-
-    A PDF is visual but not an inline image, so it yields ``None`` and the
-    caller routes it to the degrade path.
-    """
+    supported image (png/jpeg/gif/webp), else ``None``."""
     for prefix, media_type in _IMAGE_MAGIC_MEDIA_TYPE:
         if raw.startswith(prefix):
             return media_type
@@ -278,6 +282,9 @@ class ReadFileTool:
     name: str = "Read"
     description: str = field(default=load_markdown(__package__, "read"))
     risk_level: str = "low"
+    #: Never persisted as a large output (Claude Code's Read has an unlimited
+    #: result size): the read itself refuses past :data:`MAX_READ_TOKENS`.
+    max_result_size_chars: float = math.inf
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
@@ -285,6 +292,7 @@ class ReadFileTool:
                 "file_path": {"type": "string"},
                 "offset": {"type": "integer", "minimum": 1},
                 "limit": {"type": "integer", "minimum": 1},
+                "pages": {"type": "string"},
             },
             "required": ["file_path"],
             "additionalProperties": False,
@@ -323,17 +331,34 @@ class ReadFileTool:
         except OSError as exc:
             return tool_error(self.name, f"read failed: {exc}")
 
-        # A PDF or an over-limit image degrades with a precise message instead
-        # of the misleading generic "not utf-8 text" error below.
-        media_label = _detect_visual_media(head)
-        if media_label is not None:
-            image_media_type = _detect_image_media_type(head)
-            if image_media_type is None:
-                return tool_error(
-                    self.name,
-                    f"{path!r} is a {media_label}, not text — reading PDFs "
-                    "into the conversation is not supported yet",
+        if head.startswith(b"%PDF-"):
+            return read_pdf(
+                self.name,
+                self.exec_env,
+                resolved,
+                self._display(resolved),
+                size if size is not None else 0,
+                arguments.get("pages"),
+                ctx,
+            )
+        if resolved.suffix == ".ipynb":
+            try:
+                raw_nb = b"".join(chunks())
+            except OSError as exc:
+                return tool_error(self.name, f"read failed: {exc}")
+            if ctx.file_read_registry is not None:
+                ctx.file_read_registry.record(
+                    str(resolved), hashlib.sha256(raw_nb).hexdigest()
                 )
+            return read_notebook(
+                self.name, raw_nb, self._display(resolved), ctx
+            )
+
+        # An over-limit image degrades with a precise message instead of the
+        # misleading generic "not utf-8 text" error below.
+        media_label = _detect_visual_media(head)
+        image_media_type = _detect_image_media_type(head)
+        if media_label is not None and image_media_type is not None:
             too_big = (
                 f"over the {IMAGE_MAX_BYTES // 1024 // 1024}MB inline limit — "
                 "crop/resize it smaller before reading"
@@ -368,6 +393,22 @@ class ReadFileTool:
                 images=[ref],
             )
 
+        # Claude Code's whole-file ceiling: a read with no ``limit`` of a file
+        # over 256 KB is refused before anything is served.
+        if (
+            not (isinstance(limit_raw, int) and limit_raw > 0)
+            and size is not None
+            and size > _READ_MAX_FILE_BYTES
+        ):
+            return tool_error(
+                self.name,
+                f"File content ({format_size(size)}) exceeds maximum allowed "
+                f"size ({format_size(_READ_MAX_FILE_BYTES)}). Use offset and "
+                "limit parameters to read specific portions of the file, or "
+                "search for specific content instead of reading the whole "
+                "file.",
+            )
+
         start = offset - 1
         try:
             scan = _scan_window(
@@ -382,6 +423,14 @@ class ReadFileTool:
         # "valid" UTF-8 code point, but no text file carries one).
         if scan.has_nul:
             return tool_error(self.name, f"{path!r} is not utf-8 text")
+        # Claude Code's token ceiling on what one read returns. A window the
+        # scan had to stop is past it by construction (the scan bound is four
+        # times the ceiling's characters).
+        tokens = estimate_tokens(
+            scan.window_text(), resolved.suffix.lstrip(".").lower()
+        )
+        if scan.capped or tokens > MAX_READ_TOKENS:
+            return tool_error(self.name, too_many_tokens(tokens))
 
         # The artifact is the whole body for a file up to the rewind-baseline
         # size (so a later edit's baseline dedups to the same blob and the ref
@@ -432,16 +481,7 @@ class ReadFileTool:
         notes: list[str] = []
         if scan.bytes_replaced:
             notes.append(_note("Non-utf8 bytes were replaced with U+FFFD."))
-        if scan.capped:
-            notes.append(
-                _note(
-                    f"Output capped at {_READ_MAX_SERVED_BYTES // 1024} KB. "
-                    f"Showing lines {start + 1}-{shown_end} of {total_lines} "
-                    f"total lines. Use offset={shown_end + 1} to continue "
-                    "reading, or Grep to find the part you need."
-                )
-            )
-        elif shown_end < total_lines or start > 0:
+        if shown_end < total_lines or start > 0:
             notes.append(
                 _note(
                     f"Showing lines {start + 1}-{shown_end} of {total_lines} "
@@ -515,10 +555,12 @@ class ReadFileTool:
         return len(raw), raw[:_SNIFF_BYTES], lambda: iter((raw,))
 
 
-#: Ceiling on the text ``Read`` serves in one call (~25K tokens). A window
-#: that would exceed it stops at the last whole line that fits, with a note
-#: naming the ``offset`` to continue from.
-_READ_MAX_SERVED_BYTES = 100 * 1024
+#: Claude Code's whole-file ceiling for a read without ``limit`` (256 KB).
+_READ_MAX_FILE_BYTES = 262_144
+#: Bound on the text one scan keeps — four times the token ceiling's
+#: characters, so a window the scan stops is always one the token check
+#: refuses, and memory stays flat however long the requested range.
+_READ_MAX_SERVED_BYTES = MAX_READ_TOKENS * 4 * 4
 #: Files up to this size store their whole body as the ``Read`` artifact —
 #: the same ceiling the rewind baseline uses, so the two dedup to one blob.
 _READ_STORE_FULL_MAX = 1_048_576
@@ -677,6 +719,9 @@ class GlobTool:
     workspace: WorkspaceRoot
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "Glob"
+    #: Claude Code's ``maxResultSizeChars`` for this tool; past it (or the
+    #: host's ``tool_output_inline_limit``, if lower) the result is persisted.
+    max_result_size_chars: float = 100_000
     description: str = field(default=load_markdown(__package__, "glob"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
@@ -816,6 +861,9 @@ class GrepTool:
     workspace: WorkspaceRoot
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "Grep"
+    #: Claude Code's ``maxResultSizeChars`` for this tool; past it (or the
+    #: host's ``tool_output_inline_limit``, if lower) the result is persisted.
+    max_result_size_chars: float = 20_000
     description: str = field(default=load_markdown(__package__, "grep"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(

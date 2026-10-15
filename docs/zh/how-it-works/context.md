@@ -44,7 +44,7 @@ provider 只有在 prompt 开头逐字节不变时才能复用缓存，开头改
 
 ## 只在末尾生效的两个机制
 
-- **清理旧工具输出。** 只有请求快要超出可用窗口时——模型自己的窗口，或者宿主用 `HostConfig.auto_compact_window` 定的更小的值（让大窗口模型早点清理、早点压缩）——才把较早的工具输出换成一个写明调用的标记，比如 `[tool output cleared: Read(/src/app.py), 12345 chars]`；工具调用自己的参数保持原样（`Write` 写进去的文件正文留在那次调用里，直到摘要把它盖过去，和 Claude Code 一样）。`HostConfig.clear_tool_outputs_at` 可以让这一步早于摘要触发。调用 id 保留，对话结构仍然合法，原始内容仍在内容存储里。
+- **清理旧工具输出。** 只有请求快要超出可用窗口时——模型自己的窗口，或者宿主用 `HostConfig.auto_compact_window` 定的更小的值（让大窗口模型早点清理、早点压缩）——才把较早的工具输出换成 Claude Code 的标记 `[Old tool result content cleared]`；工具调用自己的参数保持原样，调用本身仍写明取的是什么（`Write` 写进去的文件正文留在那次调用里，直到摘要把它盖过去，和 Claude Code 一样）。`HostConfig.clear_tool_outputs_at` 可以让这一步早于摘要触发。调用 id 保留，对话结构仍然合法，原始内容仍在内容存储里。
 - **提醒。** 每次 prompt 最末尾的几句短说明——没做完的待办、被压缩的历史在哪。它们每轮根据状态重新算，从不写进日志。
 
 ## 对你意味着什么

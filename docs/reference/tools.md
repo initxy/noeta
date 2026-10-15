@@ -30,7 +30,7 @@ From the `fs` built-in (`noeta/builtins/fs/`).
 
 | Tool | Risk | Parameters | What it does |
 | --- | --- | --- | --- |
-| `Read` | low | `file_path`, `offset?`, `limit?` | Read a UTF-8 file, optionally a line slice. One call returns at most 100 KB; past that the result says so and the model continues with `offset`. The ContentStore keeps the whole file up to 1 MiB, only the served window above that. |
+| `Read` | low | `file_path`, `offset?`, `limit?`, `pages?` | Read a UTF-8 file, optionally a line slice; an image is shown to the model, a PDF's pages come back as images (`pdftoppm`; `pages` such as `"1-5"`, at most 20 per call, required past 10 pages), a `.ipynb` as its cells with outputs. As in Claude Code, a read without `limit` of a file over 256 KB, or one returning more than 25,000 tokens (characters / 4), is refused with a pointer to `offset`/`limit`; a `Read` result is never persisted as a large output. The ContentStore keeps the whole file up to 1 MiB, only the served window above that. |
 | `Glob` | low | `pattern`, `path?` | Paths matching a glob (`**` recurses, `{ts,tsx}` alternatives), sorted and capped. Walks with `rg --files`: gitignore-aware, hidden files skipped. |
 | `Grep` | low | `pattern`, `path?`, `glob?`, `type?`, `output_mode?`, `-i`, `-n`, `-o`, `-u`, `-A`/`-B`/`-C`, `context?`, `head_limit?`, `offset?`, `multiline?` | Ripgrep content search, run through the `ExecEnv` (which must have `rg` installed; without it the fs plugin warns once with a `RuntimeWarning`). |
 | `Edit` | high | `file_path`, `old_string`, `new_string`, `replace_all?` | Replace an exact substring (unique match unless `replace_all`). The file must have been `Read` first. A CRLF file is matched and written with CRLF. |
@@ -40,7 +40,7 @@ From the `fs` built-in (`noeta/builtins/fs/`).
 | `KillShell` | high | `shell_id` | Stop a background job (SIGTERM, then SIGKILL after a grace period). |
 
 - **Writes are staged by default.** `HostConfig.write_mode="dry_run"` (default) records a proposed diff; `"apply"` writes to disk.
-- **Writes are fenced, reads are not.** `Write` / `Edit` resolve inside the workspace root; `HostConfig.write_roots` can allow more roots per task. `Read` / `Glob` / `Grep` only anchor *relative* paths — an absolute path is read wherever it points, so the real read boundary is the process's own file permissions.
+- **Writes are fenced, reads are not.** `Write` / `Edit` resolve inside the workspace root; `HostConfig.write_roots` can allow more roots per task, and a `bypassPermissions` session writes anywhere (as in Claude Code). `Read` / `Glob` / `Grep` only anchor *relative* paths — an absolute path is read wherever it points, so the real read boundary is the process's own file permissions.
 - `Write` honours an optional workspace-relative `allowed_path_globs` whitelist bound at construction (empty = unrestricted); `*` matches within one path segment, `**` crosses directories, `{a,b}` lists alternatives. `Edit` ignores it.
 
 ### Shell gating

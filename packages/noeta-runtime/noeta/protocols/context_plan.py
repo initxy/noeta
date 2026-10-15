@@ -27,7 +27,7 @@ class ContextPlan:
     # One entry per tool output the prune step cleared outside the tail window:
     # the ContentStore ref of the FULL original body, so audit and trace can
     # deref it. Provenance belongs here rather than in the model-facing
-    # ``[tool output cleared]`` marker, because the model has no ref-deref tool
+    # ``[Old tool result content cleared]`` marker: the model has no ref-deref tool
     # and a hash in the prompt is dead weight.
     cleared_outputs: list[ContentRef] = field(default_factory=list)
     # One entry per body-referenced resource of an active skill:
