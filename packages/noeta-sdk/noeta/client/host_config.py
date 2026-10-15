@@ -650,7 +650,8 @@ class HostConfig:
     #: ``tool_output_inline_limit`` rule. ``None`` ⇒ the model's window.
     auto_compact_window: Optional[int] = None
     #: The request size, in tokens, at which tool outputs older than the newest
-    #: five start clearing to ``[tool output cleared]`` (microcompaction).
+    #: five start clearing to ``[Old tool result content cleared]``
+    #: (microcompaction).
     #: ``None`` ⇒ half the usable window ``auto_compact_window`` (or the model)
     #: leaves, the summarize trigger being the whole of it — so by default the
     #: two valves move together. Set it to clear early and summarize late, on

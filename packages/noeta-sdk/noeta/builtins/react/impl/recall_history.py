@@ -372,7 +372,7 @@ def collapsed_context_reminder(view: ReminderView) -> Optional[str]:
     m = view.cleared_boundary
     if m > view.summary_boundary:
         parts.append(
-            f"Earlier tool outputs shown as [tool output cleared: ...] are retained "
+            f"Earlier tool outputs shown as [Old tool result content cleared] are retained "
             f"too (in messages 0..{m - 1}): view one with RecallHistory rather "
             "than re-running the tool; limit 1 shows a single message in full."
         )
