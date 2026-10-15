@@ -17,7 +17,7 @@ Scope — what this file targets and what it does NOT:
   body is stored and non-empty and carries the fixed structured sections, the
   boundary advanced past 0, and the session stays healthy (no anti-spiral fail).
 * **Micro layer (composer tail-prune)** — the deterministic clearing of stale
-  tool-result output to ``[tool output cleared]``. Deliberately NOT a live test:
+  tool-result output to ``[Old tool result content cleared]``. Deliberately NOT a live test:
   it is a pure function of history (no LLM), already covered end to end by
   ``test_three_segment_composer_prune.py`` (``compose`` →
   ``ContextPlan.cleared_outputs`` populated + off-prompt dereference) and
