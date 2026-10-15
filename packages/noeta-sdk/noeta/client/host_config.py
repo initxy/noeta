@@ -308,8 +308,9 @@ class HostConfig:
     out-of-workspace write simply fails, which is the only honest answer for a
     host with nobody to ask. A host that *can* ask — suspending the call for an
     owner's ruling and remembering it as a durable grant — wires this so the
-    approved directory is open when the paused call resumes. Reads are never
-    fenced and never consult it.
+    approved directory is open when the paused call resumes. A session in
+    ``bypassPermissions`` writes anywhere instead, as in Claude Code. Reads are
+    never fenced and never consult it.
 
     ``shell_env`` answers "what does this task's shell need to know?" —
     ``root task id -> variables`` laid over the scrubbed environment of every
