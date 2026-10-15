@@ -13,7 +13,7 @@ subprocess table, or the wall clock:
 * :func:`build_instructions_preloader` — the resume re-read for discovered
   files.
 * :func:`load_environment` — the session-static workspace facts (path, git
-  branch/short status, platform, capture date).
+  branch/short status, platform, shell, OS version, model, today's date).
 
 All are reached through this plugin's ``session_pack`` factories (the
 ``instructions`` / ``environment`` packs in the parent ``__init__``) or the
@@ -23,6 +23,8 @@ statically.
 
 from __future__ import annotations
 
+import os
+import platform as _platform
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -35,7 +37,7 @@ from noeta.protocols.decisions import ToolCall
 from noeta.protocols.events import ContextContentRecordedPayload
 from noeta.protocols.task import Task
 from noeta.protocols.tool import ToolResult
-from noeta.runtime.exec_env import ExecEnv
+from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
 from noeta.runtime.workspace import WorkspaceRoot, path_within
 
 
@@ -102,8 +104,10 @@ ENVIRONMENT_NAME = "workspace"
 #: activate-once per task, so the note tells the model the git facts are a
 #: task-start snapshot, mirroring Claude Code's git-status wording); to
 #: ``"4"`` when a clipped ``git status`` started saying so instead of
-#: rendering a short list as if it were the whole tree.
-ENVIRONMENT_VERSION = "4"
+#: rendering a short list as if it were the whole tree; to ``"5"`` when the
+#: block took Claude Code's ``# Environment`` layout (shell, OS version, model
+#: and today's date joined; the capture timestamp became a date).
+ENVIRONMENT_VERSION = "5"
 #: The drift policy environment recordings carry: hash recorded, drift
 #: allowed (advisory-only) — an absolute path moves across machines. (Why a
 #: content-channel resident and NOT the system prompt: the system prompt is
@@ -120,11 +124,15 @@ class EnvironmentSnapshot:
     ``workspace_display`` is the directory string the model is told it is
     working in (relative fs-tool paths resolve against it); ``is_git_repo``
     is whether a ``.git`` entry exists at the root; ``platform`` is the
-    host platform tag (``sys.platform``).
+    host platform tag (``sys.platform``). ``shell`` / ``os_version`` describe
+    the machine commands run on, and are empty when that is not this process's
+    machine (a sandbox or remote backend); ``model`` is the model the task
+    started on; ``today`` is the local date (the process's own timezone, which
+    a host sets through ``TZ``).
 
-    ``git_branch`` / ``git_status`` / ``captured_date`` are a once-at-start
+    ``git_branch`` / ``git_status`` / ``today`` are a once-at-start
     snapshot of the git branch, ``git status --short`` (truncated) and the
-    host date/time, captured at wiring time alongside the rest. They are
+    host date, captured at wiring time alongside the rest. They are
     task-static by deliberate choice (mirrors Claude Code's memoized git
     status): the first recording wins for the task's whole life — the pack's
     ``init`` records with ``refresh=False``, so an engine rebuilt in a fresh
@@ -143,7 +151,10 @@ class EnvironmentSnapshot:
     platform: str
     git_branch: str = ""
     git_status: str = ""
-    captured_date: str = ""
+    today: str = ""
+    shell: str = ""
+    os_version: str = ""
+    model: str = ""
 
 
 def load_instructions(
@@ -367,7 +378,10 @@ _GIT_STATUS_MAX_BYTES = 2048
 
 
 def load_environment(
-    workspace_dir: Path, *, exec_env: Optional[ExecEnv] = None
+    workspace_dir: Path,
+    *,
+    exec_env: Optional[ExecEnv] = None,
+    model: str = "",
 ) -> EnvironmentSnapshot:
     """Capture the session-static workspace facts into a snapshot.
 
@@ -379,7 +393,7 @@ def load_environment(
     snapshot — and on the build that seeds the task, record time equals
     compose time by construction.
 
-    Reproducibility scope: the CAPTURE is not reproducible — ``captured_date``
+    Reproducibility scope: the CAPTURE is not reproducible — ``today``
     is a wall clock and ``git_branch`` / ``git_status`` reflect live repo
     state, so a fresh process legitimately captures different values. The
     RECORDING is what stays stable: the pack's ``init`` records activate-once
@@ -403,9 +417,10 @@ def load_environment(
 
     ``exec_env`` (sandbox mode) probes ``.git`` and runs git THROUGH the
     container — ``workspace_dir`` is then the container workdir, so the facts
-    describe the sandbox's checkout. ``None`` keeps the host reads
-    byte-identical.
+    describe the sandbox's checkout, and the shell / OS version of this
+    process's machine are left out because commands do not run there.
     """
+    local = exec_env is None or isinstance(exec_env, LocalExecEnv)
     git_marker = workspace_dir / ".git"
     is_git_repo = (
         exec_env.exists(git_marker) if exec_env is not None else git_marker.exists()
@@ -421,7 +436,10 @@ def load_environment(
         platform=sys.platform,
         git_branch=git_branch,
         git_status=git_status,
-        captured_date=_captured_date(),
+        today=_today(),
+        shell=_shell() if local else "",
+        os_version=_os_version() if local else "",
+        model=model,
     )
 
 
@@ -505,8 +523,28 @@ def _git_status(workspace_dir: Path, exec_env: Optional[ExecEnv] = None) -> str:
     return f"{kept}\n{marker}" if kept else marker
 
 
-def _captured_date() -> str:
+def _today() -> str:
     try:
-        return datetime.now().astimezone().isoformat(timespec="seconds")
+        return datetime.now().astimezone().date().isoformat()
     except Exception:  # noqa: BLE001 — clock read is best-effort.
+        return ""
+
+
+def _shell() -> str:
+    """Claude Code's shell label: ``zsh`` / ``bash`` when ``$SHELL`` names
+    one, else ``$SHELL`` itself, else ``unknown``."""
+    shell = os.environ.get("SHELL") or "unknown"
+    if "zsh" in shell:
+        return "zsh"
+    if "bash" in shell:
+        return "bash"
+    return shell
+
+
+def _os_version() -> str:
+    """``<os type> <release>`` — Node's ``os.type()`` / ``os.release()``,
+    which is what Claude Code prints (``Linux 5.15.0-178-generic``)."""
+    try:
+        return f"{_platform.system()} {_platform.release()}".strip()
+    except Exception:  # noqa: BLE001 — capture is best-effort.
         return ""

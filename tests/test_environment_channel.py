@@ -12,7 +12,9 @@ rendering, and that a task opened through the SDK driver carries the block.
 from __future__ import annotations
 
 import hashlib
+import platform
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -101,13 +103,13 @@ def test_load_captures_branch_status_and_date_in_real_repo(
         return ""
 
     monkeypatch.setattr(env_exec, "_run_git", fake_run)
-    monkeypatch.setattr(env_exec, "_captured_date", lambda: "2026-06-25T10:00:00")
+    monkeypatch.setattr(env_exec, "_today", lambda: "2026-06-25")
     (tmp_path / ".git").mkdir()
 
     snap = load_environment(tmp_path)
     assert snap.git_branch == "feature/x"
     assert snap.git_status == " M a.py\n?? b.py"
-    assert snap.captured_date == "2026-06-25T10:00:00"
+    assert snap.today == "2026-06-25"
 
 
 def test_load_leaves_git_fields_empty_when_not_a_repo(
@@ -163,8 +165,8 @@ def test_run_git_returns_empty_on_failure(tmp_path: Path) -> None:
 def test_render_wraps_facts_in_tag_with_resolution_rule() -> None:
     text = render_environment_text(_SAMPLE)
     assert text.startswith("<workspace-environment>")
-    assert "Working directory: /work/repo" in text
-    assert "resolve relative to this directory" in text
+    assert " - Primary working directory: /work/repo" in text
+    assert "resolve relative to the primary working directory" in text
     assert "Is a git repository: true" in text
     assert "Platform: darwin" in text
     assert text.rstrip().endswith("</workspace-environment>")
@@ -184,7 +186,7 @@ def test_render_includes_branch_status_date_when_present() -> None:
         platform="darwin",
         git_branch="main",
         git_status=" M a.py\n?? b.py",
-        captured_date="2026-06-25T10:00:00",
+        today="2026-06-25",
     )
     text = render_environment_text(snap)
     assert "Git branch: main" in text
@@ -193,7 +195,7 @@ def test_render_includes_branch_status_date_when_present() -> None:
     # Code's git-status wording) so the model never trusts them as live.
     assert "snapshot from when this task started" in text
     assert "Run git commands for the current state." in text
-    assert "Captured at: 2026-06-25T10:00:00" in text
+    assert "Today's date is 2026-06-25." in text
     assert text.rstrip().endswith("</workspace-environment>")
 
 
@@ -207,7 +209,7 @@ def test_render_omits_empty_git_lines() -> None:
     assert "Git status:" not in text
     # No git lines rendered → no snapshot note either.
     assert "snapshot from when this task started" not in text
-    assert "Captured at:" not in text
+    assert "Today's date is" not in text
 
 
 def test_render_omits_only_the_empty_fields() -> None:
@@ -219,20 +221,20 @@ def test_render_omits_only_the_empty_fields() -> None:
         platform="linux",
         git_branch="main",
         git_status="",
-        captured_date="2026-06-25T10:00:00",
+        today="2026-06-25",
     )
     text = render_environment_text(snap)
     assert "Git branch: main" in text
     assert "Git status:" not in text
     # A rendered branch alone still carries the snapshot note.
     assert "snapshot from when this task started" in text
-    assert "Captured at: 2026-06-25T10:00:00" in text
+    assert "Today's date is 2026-06-25." in text
 
 
-def test_environment_version_is_4() -> None:
-    # Bumped with the clipped-``git status`` marker: the rendered body's shape
-    # changed, which is what this version declares.
-    assert ENVIRONMENT_VERSION == "4"
+def test_environment_version_is_5() -> None:
+    # Bumped with Claude Code's ``# Environment`` layout: the rendered body's
+    # shape changed, which is what this version declares.
+    assert ENVIRONMENT_VERSION == "5"
 
 
 def test_render_is_stable_for_same_snapshot() -> None:
@@ -242,7 +244,7 @@ def test_render_is_stable_for_same_snapshot() -> None:
         platform="darwin",
         git_branch="main",
         git_status=" M a.py",
-        captured_date="2026-06-25T10:00:00",
+        today="2026-06-25",
     )
     assert render_environment_text(snap) == render_environment_text(snap)
     assert environment_content_hash(snap) == environment_content_hash(snap)
@@ -269,7 +271,7 @@ def test_renderer_renders_user_message_only_when_active() -> None:
     assert isinstance(rendered, RenderedContent)
     assert len(rendered.messages) == 1
     assert rendered.messages[0].role == "user"
-    assert "Working directory: /work/repo" in rendered.messages[0].content[0].text
+    assert "Primary working directory: /work/repo" in rendered.messages[0].content[0].text
     # Not active → nothing rendered (resolve is never called).
     assert renderer([], _env_resolve).messages == []
     assert renderer(["something-else"], _env_resolve).messages == []
@@ -380,7 +382,7 @@ def test_activation_is_first_write_wins_across_recaptures() -> None:
         platform="darwin",
         git_branch="main",
         git_status=" M changed.py",
-        captured_date="2026-08-21T11:22:33",
+        today="2026-08-22",
     )
     assert environment_content_hash(recaptured) != environment_content_hash(_SAMPLE)
     task = _activate_environment(log, cs, task, snapshot=recaptured)
@@ -410,7 +412,7 @@ def test_compose_places_env_in_semi_stable_not_system_prompt() -> None:
     assert len(semi.content) == 1
     body = semi.content[0].content[0].text
     assert body.startswith("<workspace-environment>")
-    assert "Working directory: /work/repo" in body
+    assert "Primary working directory: /work/repo" in body
     # Activating the env block must NOT touch the stable prefix (it is
     # semi_stable, never the system prompt) — so prompt caching is unaffected.
     stable = [s for s in view.segments if s.name == "stable_prefix"][0]
@@ -533,7 +535,7 @@ def test_new_goal_in_fresh_process_keeps_the_task_start_snapshot(
     ws.mkdir()
     (ws / ".git").mkdir()
     monkeypatch.setattr(env_exec, "_run_git", lambda *a, **k: "")
-    monkeypatch.setattr(env_exec, "_captured_date", lambda: "2026-08-21T10:00:00")
+    monkeypatch.setattr(env_exec, "_today", lambda: "2026-08-21")
     host, event_log, content_store = _server_host(ws)
     driver = InteractionDriver(host)
     first = driver.start(goal="round one", agent="main")
@@ -541,7 +543,7 @@ def test_new_goal_in_fresh_process_keeps_the_task_start_snapshot(
 
     # "Fresh process": a second host over the SAME durable stores builds its
     # own engine, whose pack re-captures the snapshot at a later clock.
-    monkeypatch.setattr(env_exec, "_captured_date", lambda: "2026-08-21T10:05:00")
+    monkeypatch.setattr(env_exec, "_today", lambda: "2026-08-22")
     host2, _log2, _cs2 = _server_host(
         ws, runtime=(event_log, content_store, host.dispatcher)
     )
@@ -561,7 +563,7 @@ def test_new_goal_in_fresh_process_keeps_the_task_start_snapshot(
     body = content_store.get(
         ContentRef(hash=active_hash, size=0, media_type="text/markdown")
     ).decode("utf-8")
-    assert "Captured at: 2026-08-21T10:00:00" in body  # task-start, not resume
+    assert "Today's date is 2026-08-21." in body  # task-start, not resume
 
 
 def test_server_seed_start_records_instructions_when_file_present(
@@ -744,4 +746,69 @@ def test_product_session_records_and_renders_environment(tmp_path: Path) -> None
         if hasattr(block, "text") and "workspace-environment" in block.text
     ]
     assert len(env_blocks) == 1
-    assert f"Working directory: {ws}" in env_blocks[0]
+    assert f"Primary working directory: {ws}" in env_blocks[0]
+
+
+# ---------------------------------------------------------------------------
+# Claude Code's environment layout (shell, OS version, model, today's date)
+# ---------------------------------------------------------------------------
+
+
+def test_render_follows_claude_codes_environment_section() -> None:
+    snap = EnvironmentSnapshot(
+        workspace_display="/work/repo",
+        is_git_repo=True,
+        platform="linux",
+        today="2026-10-15",
+        shell="zsh",
+        os_version="Linux 5.15.0-178-generic",
+        model="claude-opus-5-5",
+    )
+    lines = render_environment_text(snap).splitlines()
+    assert lines[1:9] == [
+        "# Environment",
+        "You have been invoked in the following environment: ",
+        " - Primary working directory: /work/repo",
+        " - Is a git repository: true",
+        " - Platform: linux",
+        " - Shell: zsh",
+        " - OS Version: Linux 5.15.0-178-generic",
+        "You are powered by the model claude-opus-5-5.",
+    ]
+    assert "Today's date is 2026-10-15." in lines
+
+
+def test_load_captures_shell_os_model_and_local_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SHELL", "/usr/bin/zsh")
+    snap = load_environment(tmp_path, model="m-1")
+    assert snap.shell == "zsh"
+    assert snap.os_version.startswith(platform.system())
+    assert snap.model == "m-1"
+    assert snap.today == datetime.now().astimezone().date().isoformat()
+
+
+@pytest.mark.parametrize(
+    ("value", "label"),
+    [("/bin/bash", "bash"), ("/usr/local/bin/fish", "/usr/local/bin/fish"), (None, "unknown")],
+)
+def test_shell_label_matches_claude_code(
+    monkeypatch: pytest.MonkeyPatch, value: str | None, label: str
+) -> None:
+    if value is None:
+        monkeypatch.delenv("SHELL", raising=False)
+    else:
+        monkeypatch.setenv("SHELL", value)
+    assert env_exec._shell() == label  # noqa: SLF001
+
+
+def test_remote_backend_leaves_out_this_machines_shell_and_os(tmp_path: Path) -> None:
+    class _Remote:
+        def exists(self, path: Path) -> bool:
+            return False
+
+    snap = load_environment(tmp_path, exec_env=_Remote())  # type: ignore[arg-type]
+    assert snap.shell == "" and snap.os_version == ""
+    text = render_environment_text(snap)
+    assert " - Shell:" not in text and " - OS Version:" not in text
