@@ -43,7 +43,7 @@ The declarative agent configuration (public surface `noeta.sdk.Options`; interna
 | `system_prompt` | `str \| SystemPromptPreset(preset="main", append=...)` | Required. A verbatim string, or a named preset resolved at compile time with an optional appended section |
 | `name` | `str` | Agent name, default `"main"`; a name that collides with an `agents` key raises `ValueError` |
 | `agents` | `Mapping[str, AgentDefinition]` | A **flat dict**, not nested; `AgentDefinition` fields: `description` (required, non-blank), `prompt`, `tools`, `model`, `plugins` (its own activation list), `metadata`. The keys fill the parent's `spawnable`; a `__`-prefixed name compiles into the registry but stays out of that union |
-| `allowed_tools` | `tuple[str \| ToolLike, ...] \| None` | A **replacement** allowlist: a tuple means *only* those tools. `None` = the full built-in set (loader-resolved from the `fs` / `web` manifests via `builtin_tool_classes()`: the 9 tools Read/Glob/Grep/Edit/Write/Bash/BashOutput/KillShell/WebFetch, plus WebSearch only when `NOETA_WEB_SEARCH_API_KEY` is set; `RecallHistory` also mounts, from `react`, whenever compaction is wired); `()` = no tools. Control tools are not in this set — they mount on **activation** |
+| `allowed_tools` | `tuple[str \| ToolLike, ...] \| None` | A **replacement** allowlist: a tuple means *only* those tools. `None` = the full built-in set (loader-resolved from the `fs` / `web` manifests via `builtin_tool_classes()`: the 10 tools Read/Glob/Grep/Edit/Write/Bash/BashOutput/KillShell/Monitor/WebFetch, plus WebSearch only when `NOETA_WEB_SEARCH_API_KEY` is set; `RecallHistory` also mounts, from `react`, whenever compaction is wired); `()` = no tools. Control tools are not in this set — they mount on **activation** |
 | `disallowed_tools` | `tuple[str, ...]` | A subtractive denylist applied to whichever base list applies; names that are absent are ignored |
 | `permission_mode` | `default \| acceptEdits \| bypassPermissions` | Three approval modes, validated against `PERMISSION_MODES` |
 | `can_use_tool` | `Callable[[str, dict], bool] \| None` | A programmatic approval callback (tool name + arguments, `True` = allow); its ruling **is recorded as an ordinary approval event** (`ToolCallApprovalResolved` with `resolver="can_use_tool"`) |
@@ -279,7 +279,7 @@ Not a first-class concept. Always use Task.
 **Model-visible tool names**:
 The provider-visible tool `name` strings follow the Claude Code surface —
 `Read`, `Glob`, `Grep`, `Edit`, `Write`, `Bash`, `BashOutput`, `KillShell`,
-`WebFetch`, `WebSearch`, `TodoWrite`, `AskUserQuestion`, `Task` — because
+`Monitor`, `WebFetch`, `WebSearch`, `TodoWrite`, `AskUserQuestion`, `Task` — because
 models carry their strongest trained prior on those exact names and schemas.
 Everything that is NOT model-visible keeps its snake_case identifier: plugin
 and contribution names, capability flags (`todo_write`, `ask_user_question`,

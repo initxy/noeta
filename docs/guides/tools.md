@@ -76,7 +76,7 @@ name.
 
 | `allowed_tools` | Tools the agent gets |
 | --- | --- |
-| `None` (default) | the 10 built-ins: `Read`, `Glob`, `Grep`, `Edit`, `Write`, `Bash`, `BashOutput`, `KillShell`, `WebFetch`, `WebSearch` |
+| `None` (default) | the 11 built-ins: `Read`, `Glob`, `Grep`, `Edit`, `Write`, `Bash`, `BashOutput`, `KillShell`, `Monitor`, `WebFetch`, `WebSearch` |
 | a tuple | exactly those entries |
 | `()` | none |
 

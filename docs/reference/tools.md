@@ -8,7 +8,7 @@ A bare `Options()` (`allowed_tools=None`) mounts the `fs` pack and the `web` pac
 from noeta.sdk import Options
 options = Options(system_prompt="…")          # allowed_tools defaults to None
 # the agent sees: Read, Glob, Grep, Edit, Write,
-#                 Bash, BashOutput, KillShell, WebFetch, WebSearch
+#                 Bash, BashOutput, KillShell, Monitor, WebFetch, WebSearch
 ```
 
 `WebSearch` also needs `NOETA_WEB_SEARCH_API_KEY`. Everything else is gated elsewhere:
@@ -35,9 +35,10 @@ From the `fs` built-in (`noeta/builtins/fs/`).
 | `Grep` | low | `pattern`, `path?`, `glob?`, `type?`, `output_mode?`, `-i`, `-n`, `-o`, `-u`, `-A`/`-B`/`-C`, `context?`, `head_limit?`, `offset?`, `multiline?` | Ripgrep content search, run through the `ExecEnv` (which must have `rg` installed; without it the fs plugin warns once with a `RuntimeWarning`). |
 | `Edit` | high | `file_path`, `old_string`, `new_string`, `replace_all?` | Replace an exact substring (unique match unless `replace_all`). The file must have been `Read` first. A CRLF file is matched and written with CRLF. |
 | `Write` | high | `file_path`, `content` | Create a file (parents created) or overwrite one already `Read` in this task. `content` caps at 8 MB. |
-| `Bash` | high | `command`, `timeout?` (ms, max 600000), `description?`, `run_in_background?` | Run a command with `cwd` = workspace root. Background mode returns a job id. |
+| `Bash` | high | `command`, `timeout?` (ms, max 600000), `description?`, `run_in_background?` | Run a command with `cwd` = workspace root. Background mode returns a job id; its end reaches the model as a `<task-notification>`, between tool calls when the turn is still running. |
 | `BashOutput` | low | `bash_id`, `filter?` | Status (`running` / `exited`), exit code and new output of a background job. |
 | `KillShell` | high | `shell_id` | Stop a background job (SIGTERM, then SIGKILL after a grace period). |
+| `Monitor` | high | `command`, `description`, `timeout_ms` (default 300000, capped at 1800000) | Run a script in the background; each stdout line (batched within 200 ms, rate-limited) reaches the model as a `<task-notification>` event. Gated like `Bash`. |
 
 - **Writes are staged by default.** `HostConfig.write_mode="dry_run"` (default) records a proposed diff; `"apply"` writes to disk.
 - **Writes are fenced, reads are not.** `Write` / `Edit` resolve inside the workspace root; `HostConfig.write_roots` can allow more roots per task, and a `bypassPermissions` session writes anywhere (as in Claude Code). `Read` / `Glob` / `Grep` only anchor *relative* paths — an absolute path is read wherever it points, so the real read boundary is the process's own file permissions.
