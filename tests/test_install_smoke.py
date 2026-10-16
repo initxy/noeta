@@ -185,7 +185,7 @@ def test_wheel_install_imports_public_surface(tmp_path: Path) -> None:
                 "load_plugins, PluginBuilder; "
                 "from noeta.client.parts import builtin_tool_classes; "
                 "n = len(builtin_tool_classes()); "
-                "assert n == 10, f'expected the 10 default tools, got {n}'; "
+                "assert n == 11, f'expected the 11 default tools, got {n}'; "
                 # ...and touching one lazy attribute exercises the doorway:
                 # the class arrives from the sdk wheel's storage built-in.
                 "cls = noeta.sdk.storage.SqliteEventLog; "
