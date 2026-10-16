@@ -90,6 +90,9 @@ class BackgroundRunner(Protocol):
         command: str,
         spawned_by_task_id: str,
         trace_id: str,
+        description: str = "",
+        tool_use_id: str = "",
+        monitor_timeout_s: Optional[float] = None,
     ) -> dict[str, Any]: ...
 
     def poll(self, job_id: str) -> dict[str, Any]: ...

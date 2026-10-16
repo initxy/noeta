@@ -1,13 +1,10 @@
-"""Completion wake: a background exit drives a new turn.
+"""Completion wake: a background exit to a parked session drives a new turn.
 
-The host is request-driven, so an exit that lands while the session sits idle on
-its next-goal suspend is surfaced by **reusing the next-goal wake handle** and
-injecting an ``origin="system"`` notice prelude rather than by adding a wake
-primitive: the background-drive thread calls
-``InteractionDriver.notify_background_exit`` at a turn boundary. The notice must
-carry the summary plus a ``ContentRef`` and never the output bytes, must be
-distinguishable from a human turn (whose origin is ``None``), and must fire
-exactly once even when kill and natural exit race.
+The notice is queued as a pending injection and, when no running turn will
+take it in, the parked session is woken on its **next-goal wake handle** — no
+new wake primitive — for a turn whose first drain appends it as an
+``origin="system"`` message, distinguishable from a human turn (whose origin
+is ``None``). It fires exactly once even when kill and natural exit race.
 """
 
 from __future__ import annotations
@@ -22,7 +19,6 @@ from noeta.core.fold import fold
 from noeta.execution.driver import InteractionDriver, multi_turn_policy_wrapper
 from noeta.execution.multi_turn import NEXT_GOAL_WAKE_HANDLE
 from noeta.protocols.messages import LLMResponse, TextBlock, Usage
-from noeta.protocols.values import ContentRef
 from noeta.runtime.background_shell import ProcessRegistry
 from noeta.storage.memory import (
     InMemoryContentStore,
@@ -77,19 +73,17 @@ def _user_messages(event_log: Any, content_store: Any, task_id: str) -> list[Any
 
 
 # ---------------------------------------------------------------------------
-# notify_background_exit — the driver command
+# inject_notice + deliver_injections — the driver commands
 # ---------------------------------------------------------------------------
 
 
-def test_exit_while_idle_suspended_drives_new_turn_with_system_notice(
+def test_notice_to_a_parked_session_drives_a_turn_with_a_system_notice(
     tmp_path: Path,
 ) -> None:
-    """A background exit while the session is idle-suspended on NEXT_GOAL drives
-    a NEW turn with no human input, and the agent's view carries a system-origin
-    notice with the summary + the job's actual output tail inline."""
+    """A notice queued while the session is parked on NEXT_GOAL is taken in by
+    a NEW turn driven with no human input, as an ``origin="system"`` message."""
     ws = tmp_path / "ws"
     ws.mkdir()
-    # Two end-turns: the opening goal turn, then the wake-driven notice turn.
     host, _disp, event_log, content_store = _host(
         ws, responses=[_end_turn("hi"), _end_turn("saw the exit")]
     )
@@ -98,73 +92,37 @@ def test_exit_while_idle_suspended_drives_new_turn_with_system_notice(
     assert outcome.status == "suspended"
     assert outcome.wake_handle == NEXT_GOAL_WAKE_HANDLE
     task_id = outcome.task_id
-
-    before = len(_user_messages(event_log, content_store, task_id))
-
-    ref = content_store.put(b"the full background output bytes", media_type="text/plain")
-    summary = "background npm test → OK (32B output)"
-    out = driver.notify_background_exit(
-        task_id, summary=summary, ref=ref, job_id="bg-abc123"
-    )
-
-    # The session was woken + driven a fresh turn WITHOUT human input.
-    assert out.status == "suspended"  # trailing next-goal suspend again
-    after = _user_messages(event_log, content_store, task_id)
-    assert len(after) == before + 1, "exactly one new (notice) user message"
-    notice = after[-1]
-    text = "".join(b.text for b in notice.content if isinstance(b, TextBlock))
-    assert summary in text
-    # The job handle + the ACTUAL output ride the notice inline; the hash is
-    # audit-side only (the model has no ref-deref tool).
-    assert "the full background output bytes" in text
-    assert "bg-abc123" in text
-    assert ref.hash not in text
-
-
-def test_notice_is_system_origin_not_human(tmp_path: Path) -> None:
-    """The notice is ``origin="system"`` — distinguishable from a human turn
-    (whose origin is ``None``)."""
-    ws = tmp_path / "ws"
-    ws.mkdir()
-    host, _disp, event_log, content_store = _host(
-        ws, responses=[_end_turn("hi"), _end_turn("ack")]
-    )
-    driver = InteractionDriver(host)
-    outcome = driver.start(goal="kick off", agent="main")
-    task_id = outcome.task_id
-
-    # The opening user goal is a human turn (origin None).
     human = _user_messages(event_log, content_store, task_id)[-1]
     assert human.origin is None
 
-    ref = content_store.put(b"out", media_type="text/plain")
-    driver.notify_background_exit(
-        task_id, summary="background sleep → OK (3B output)", ref=ref, job_id="bg-1"
-    )
-    notice = _user_messages(event_log, content_store, task_id)[-1]
-    assert notice.origin == "system"
+    notice = "<task-notification>\n<task-id>bg-1</task-id>\n</task-notification>"
+    driver.inject_notice(task_id, notice=notice)
+    pending = fold(event_log, content_store, task_id).governance.pending_injections
+    assert len(pending) == 1
+    out = driver.deliver_injections(task_id)
+
+    assert out.status == "suspended"  # trailing next-goal suspend again
+    task = fold(event_log, content_store, task_id)
+    assert task.governance.pending_injections == {}
+    last = _user_messages(event_log, content_store, task_id)[-1]
+    assert last.origin == "system"
+    assert [b.text for b in last.content if isinstance(b, TextBlock)] == [notice]
 
 
-def test_notify_requires_next_goal_suspend(tmp_path: Path) -> None:
-    """A notice on a task that is NOT human-suspended on NEXT_GOAL is refused
-    (it must be injected at a turn-suspend boundary, not mid-turn)."""
+def test_deliver_injections_requires_next_goal_suspend(tmp_path: Path) -> None:
+    """Delivery drives a turn only for a session parked on NEXT_GOAL; anything
+    else is refused so the caller waits for the running turn to take it."""
     ws = tmp_path / "ws"
     ws.mkdir()
-    # Opening turn FAILS-to-terminal would not suspend; instead drive to a
-    # terminal via cancel, then assert notify refuses.
-    host, _disp, _event_log, content_store = _host(ws, responses=[_end_turn("hi")])
+    host, _disp, _event_log, _content_store = _host(ws, responses=[_end_turn("hi")])
     driver = InteractionDriver(host)
-    outcome = driver.start(goal="kick off", agent="main")
-    task_id = outcome.task_id
+    task_id = driver.start(goal="kick off", agent="main").task_id
     driver.cancel(task_id)  # → terminal, so not suspended on NEXT_GOAL
 
-    ref = content_store.put(b"out", media_type="text/plain")
     import pytest
 
     with pytest.raises(RuntimeError):
-        driver.notify_background_exit(
-            task_id, summary="x", ref=ref, job_id="bg-1"
-        )
+        driver.deliver_injections(task_id)
 
 
 # ---------------------------------------------------------------------------
@@ -212,20 +170,17 @@ def test_lifecycle_events_are_observer_origin(tmp_path: Path) -> None:
 
 
 def test_exit_invokes_host_callback_once(tmp_path: Path) -> None:
-    """The watcher invokes ``on_background_exit`` exactly once after the Exited
-    event (``notified`` dedup guards against kill + natural-exit double push)."""
+    """The watcher hands the end notice to ``on_notice`` exactly once after the
+    Exited event (``notified`` dedup guards against kill + natural-exit double
+    push)."""
     log = InMemoryEventLog()
     store = InMemoryContentStore()
     calls: list[tuple[str, str, str]] = []
 
-    def _on_exit(root_task_id: str, job_id: str, summary: str, ref: ContentRef) -> None:
-        calls.append((root_task_id, job_id, summary))
+    def _on_exit(root_task_id: str, job_id: str, notice: str) -> None:
+        calls.append((root_task_id, job_id, notice))
 
-    reg = ProcessRegistry(
-        event_log=log,
-        content_store=store,
-        on_background_exit=_on_exit,
-    )
+    reg = ProcessRegistry(event_log=log, content_store=store, on_notice=_on_exit)
     out = reg.spawn(
         argv=_py("print('bye')"),
         cwd=tmp_path,
@@ -241,39 +196,56 @@ def test_exit_invokes_host_callback_once(tmp_path: Path) -> None:
     while time.monotonic() < deadline and not calls:
         time.sleep(0.01)
     assert len(calls) == 1
-    root_task_id, cb_job, summary = calls[0]
+    root_task_id, cb_job, notice = calls[0]
     assert root_task_id == "t-cb"
     assert cb_job == job_id
-    assert "background" in summary
+    assert notice == (
+        "<task-notification>\n"
+        f"<task-id>{job_id}</task-id>\n"
+        "<status>completed</status>\n"
+        '<summary>Background command "python bye" completed (exit code 0)</summary>\n'
+        "</task-notification>\nLast output:\nbye"
+    )
 
 
-def test_exit_callback_carries_session_and_ref(tmp_path: Path) -> None:
-    """The callback receives a ContentRef whose bytes are the final output —
-    the notice rides the ref, not the bytes."""
+def test_end_notice_carries_the_output_and_the_launch_description(
+    tmp_path: Path,
+) -> None:
+    """The end notice names the job by the launch's ``description``, carries
+    the tool call that started it and the output's tail; the final snapshot
+    stays on the Exited event for audit."""
     log = InMemoryEventLog()
     store = InMemoryContentStore()
-    seen: list[ContentRef] = []
+    seen: list[str] = []
 
-    def _on_exit(root_task_id: str, job_id: str, summary: str, ref: ContentRef) -> None:
-        seen.append(ref)
+    def _on_exit(root_task_id: str, job_id: str, notice: str) -> None:
+        seen.append(notice)
 
-    reg = ProcessRegistry(
-        event_log=log, content_store=store, on_background_exit=_on_exit
-    )
+    reg = ProcessRegistry(event_log=log, content_store=store, on_notice=_on_exit)
     out = reg.spawn(
-        argv=_py("print('payload-bytes')"),
+        argv=_py("import sys; print('payload-bytes'); sys.exit(3)"),
         cwd=tmp_path,
         env={},
         command="python payload",
         spawned_by_task_id="t-ref",
         trace_id="tr",
+        description="Write the payload",
+        tool_use_id="toolu_1",
     )
     _await_exit(reg, out["job_id"])
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline and not seen:
         time.sleep(0.01)
-    assert seen, "callback must fire with the final ref"
-    assert b"payload-bytes" in store.get(seen[0])
+    assert seen, "callback must fire with the end notice"
+    assert "<tool-use-id>toolu_1</tool-use-id>" in seen[0]
+    assert "<status>failed</status>" in seen[0]
+    assert (
+        '<summary>Background command "Write the payload" failed with exit code '
+        "3</summary>"
+    ) in seen[0]
+    assert seen[0].endswith("Last output:\npayload-bytes")
+    exited = next(e for e in log.read("t-ref") if e.type == "BackgroundShellExited")
+    assert b"payload-bytes" in store.get(exited.payload.final_ref)
 
 
 # ---------------------------------------------------------------------------
@@ -284,8 +256,8 @@ def test_exit_callback_carries_session_and_ref(tmp_path: Path) -> None:
 def test_host_wired_real_exit_drives_notice_turn_end_to_end(tmp_path: Path) -> None:
     """The host's ``set_background_notifier`` + the registry watcher drive a
     real wake-and-notify turn when a background job exits while idle: a real
-    ``Popen`` exit fires ``_on_background_exit`` → daemon drive thread →
-    ``notify_background_exit`` → a system-origin notice lands in the view."""
+    ``Popen`` exit queues the notice (``inject_notice``) and the settle thread
+    drives the parked session a turn (``deliver_injections``) that takes it in."""
     ws = tmp_path / "ws"
     ws.mkdir()
     host, _disp, event_log, content_store = _host(
@@ -300,7 +272,7 @@ def test_host_wired_real_exit_drives_notice_turn_end_to_end(tmp_path: Path) -> N
     before = len(_user_messages(event_log, content_store, task_id))
 
     # Spawn a real (fast) background job ON THE HOST'S registry so its watcher
-    # carries the host's ``on_background_exit`` hook. The session is idle on
+    # carries the host's notice hook. The session is idle on
     # NEXT_GOAL, so the exit must drive a fresh notice turn with no human input.
     reg = host._process_registry  # noqa: SLF001 — test reaches the wired registry
     assert reg is not None
@@ -325,6 +297,7 @@ def test_host_wired_real_exit_drives_notice_turn_end_to_end(tmp_path: Path) -> N
     notice = msgs[-1]
     assert notice.origin == "system"
     text = "".join(b.text for b in notice.content if isinstance(b, TextBlock))
-    assert "background" in text
-    assert job["job_id"] in text
-    assert "e2e bg done" in text  # the actual output rides inline now
+    assert text.startswith("<task-notification>")
+    assert f"<task-id>{job['job_id']}</task-id>" in text
+    assert "e2e bg done" in text  # the actual output rides inline
+    assert fold(event_log, content_store, task_id).governance.pending_injections == {}

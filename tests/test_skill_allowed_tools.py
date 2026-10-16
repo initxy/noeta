@@ -133,6 +133,7 @@ def test_recognition_set_covers_the_mountable_surface() -> None:
         "Bash",
         "BashOutput",
         "KillShell",
+        "Monitor",
         "WebFetch",
         "WebSearch",
         "TodoWrite",

@@ -22,6 +22,7 @@ from noeta.builtins.fs.impl.edit import (
 )
 from noeta.builtins.fs.impl.read import GlobTool, GrepTool, ReadFileTool
 from noeta.builtins.fs.impl.shell import (
+    MonitorTool,
     ShellKillTool,
     ShellPollTool,
     ShellRunTool,
@@ -43,6 +44,7 @@ __all__ = [
     "FsToolPack",
     "GlobTool",
     "GrepTool",
+    "MonitorTool",
     "ReadFileTool",
     "ReplaceTextTool",
     "ShellKillTool",
@@ -113,23 +115,21 @@ def build_fs_tools(
         ),
     ]
     if shell_mode is not ShellMode.OFF:
-        tools.append(
-            ShellRunTool(
-                workspace=workspace,
-                mode=shell_mode,
-                rules=build_allowlist(
-                    shell_allowlist, base_rules=DEFAULT_SHELL_RULES
-                ),
-                exec_env=env,
-                shell_env=shell_env,
-                inherit_env=tuple(shell_env_inherit),
-                background_ends_with_turn=background_ends_with_turn,
-            )
+        shell = ShellRunTool(
+            workspace=workspace,
+            mode=shell_mode,
+            rules=build_allowlist(shell_allowlist, base_rules=DEFAULT_SHELL_RULES),
+            exec_env=env,
+            shell_env=shell_env,
+            inherit_env=tuple(shell_env_inherit),
+            background_ends_with_turn=background_ends_with_turn,
         )
-        # Both act only on background jobs ``shell_run`` started, so they ride
-        # with it instead of shipping independently.
+        tools.append(shell)
+        # All three act on background jobs, which only ``Bash``'s gate starts,
+        # so they ride with it instead of shipping independently.
         tools.append(ShellPollTool())
         tools.append(ShellKillTool())
+        tools.append(MonitorTool(shell=shell))
     return {t.name: t for t in tools}
 
 
