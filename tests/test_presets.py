@@ -225,7 +225,7 @@ def test_explore_and_plan_whitelist_is_all_but_write_family() -> None:
     # That is glob/grep/read + the shell triplet + the two read-only web
     # lookups (``WebSearch`` only mounts where a search backend is configured).
     expected = {
-        "Glob", "Grep", "Read", "Bash", "BashOutput", "KillShell",
+        "Glob", "Grep", "Read", "Bash", "BashOutput", "KillShell", "Monitor",
         "WebSearch", "WebFetch",
     }
     specs = official_specs()

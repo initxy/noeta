@@ -157,6 +157,7 @@ def test_default_agent_exposes_full_fs_pack() -> None:
         "Bash",
         "BashOutput",
         "KillShell",
+        "Monitor",
         "WebFetch",
         "WebSearch",
     }

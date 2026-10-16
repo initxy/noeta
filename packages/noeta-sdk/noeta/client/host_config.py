@@ -327,13 +327,12 @@ class HostConfig:
     recorded; a ``shell_env`` variable of the same name wins. Empty (default)
     inherits nothing more.
 
-    ``background_ends_with_turn`` tells ``Bash`` that this host ends a
-    session's background commands when the turn that started them ends —
-    the turn's end hands the work back, as a delegated worker's does — so no
-    completion notice can follow. The launch result then tells the model to
-    wait for the command before its final response (``BashOutput`` with
-    ``block: true``) instead of promising a later notification. False
-    (default) keeps the interactive wording.
+    ``background_ends_with_turn`` tells ``Bash`` and ``Monitor`` that this
+    host ends a session's background commands when the turn that started them
+    ends — the turn's end hands the work back, as a delegated worker's does —
+    so a notice reaches the model only while it is still working. The launch
+    result then says so in Claude Code's words (terminated at the final
+    response). False (default) keeps the interactive wording.
 
     Loop and tool-output bounds
     ---------------------------

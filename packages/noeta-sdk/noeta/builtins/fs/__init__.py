@@ -25,6 +25,7 @@ MANIFEST = PluginManifest(
         c("tool", "Bash", "noeta.builtins.fs.impl.shell:ShellRunTool"),
         c("tool", "BashOutput", "noeta.builtins.fs.impl.shell:ShellPollTool"),
         c("tool", "KillShell", "noeta.builtins.fs.impl.shell:ShellKillTool"),
+        c("tool", "Monitor", "noeta.builtins.fs.impl.shell:MonitorTool"),
         # Band 100 sorts first, so this base pack is constructed before any
         # capability pack that appends to it.
         c(
