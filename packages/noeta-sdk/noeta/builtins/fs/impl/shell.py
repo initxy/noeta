@@ -1,4 +1,5 @@
-"""``Bash`` plus the two tools that manage the background jobs it starts.
+"""``Bash``, the two tools that manage the background jobs it starts, and
+``Monitor``, which starts one whose stdout lines are events.
 
 The tier is fixed at construction: ``ALLOWLIST`` rejects shell metacharacters
 before tokenisation and runs the structurally matched argv directly with no
@@ -37,6 +38,7 @@ from noeta.runtime.shell_policy import (
     matching_rule,
 )
 from noeta.runtime.subproc import RunOutcome, runner_with_spawn_hook
+from noeta.runtime.task_notification import format_duration
 from noeta.runtime.workspace import WorkspaceRoot, path_within
 from noeta.tools.invocation import require_str
 from noeta.protocols.resources import load_markdown
@@ -49,6 +51,7 @@ from noeta.tools.limits import (
 
 
 __all__ = [
+    "MonitorTool",
     "ShellKillTool",
     "ShellPollTool",
     "ShellRunTool",
@@ -200,38 +203,32 @@ def long_leading_sleep(command: str) -> Optional[str]:
 
 
 def _blocked_sleep(described: str) -> str:
-    """Claude Code's refusal of a long leading ``sleep``, its Monitor advice
-    replaced by what waits here: an until-loop, and ``BashOutput`` with
-    ``block: true`` for a background command."""
+    """Claude Code's refusal of a long leading ``sleep``."""
     return (
-        f"Blocked: {described}. To wait for a condition, use an until-loop "
-        "(e.g. `until <check>; do sleep 2; done`). To wait for a command you "
-        "started, use run_in_background: true, then BashOutput with block: "
-        "true. Do not chain shorter sleeps to work around this block."
+        f"Blocked: {described}. To wait for a condition, use Monitor with an "
+        "until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a "
+        "command you started, use run_in_background: true. Do not chain "
+        "shorter sleeps to work around this block."
     )
 
 
 def _background_started(job_id: str, *, ends_with_turn: bool) -> str:
-    """The launch result: Claude Code's background-command wording for an
-    agent whose turn end is (``ends_with_turn``) or is not its final response.
-    Noeta delivers a completion only once the turn has ended, never between
-    tool calls, so the waiting half points at ``BashOutput``."""
+    """The launch result: Claude Code's background-command wording, its output
+    file replaced by ``BashOutput`` on the ID. ``ends_with_turn`` is Claude
+    Code's wording for a command reaped at the final response."""
     if ends_with_turn:
         return (
-            f"Command running in background with ID: {job_id}. It is "
-            "terminated when you give your final response and no "
-            "notification can follow that — so do not end your turn to wait "
-            "for it; if you need its result, wait for it before giving your "
-            "final response: call BashOutput with block: true, rather than "
-            "checking on it repeatedly."
+            f"Command running in background with ID: {job_id}. If it exits "
+            "while you are still working you will be notified, but it is "
+            "terminated when you give your final response and no notification "
+            "can follow that — so do not end your turn to wait for it; if you "
+            "need its result, wait for it before giving your final response. "
+            "To check interim output, use BashOutput on that ID."
         )
     return (
-        f"Command running in background with ID: {job_id}. When it finishes, "
-        "its result is delivered to you automatically — by starting a new "
-        "turn once you have replied — so there is no need to check whether "
-        "it is done or to sleep; if that result is all you are waiting for, "
-        "end your turn. If you need it before you reply, call BashOutput "
-        "with block: true."
+        f"Command running in background with ID: {job_id}. You will be "
+        "notified when it completes. To check interim output, use BashOutput "
+        "on that ID."
     )
 
 
@@ -359,50 +356,10 @@ class ShellRunTool:
             described = long_leading_sleep(command)
             if described is not None:
                 return _err(self.name, _blocked_sleep(described))
-        track = False
-        if self.mode is ShellMode.ALLOWLIST:
-            if _has_shell_meta(command):
-                return _err(
-                    self.name,
-                    "shell metacharacters ('; & | < > $ ` ( ) \\n') are not allowed",
-                )
-            argv = _parse_argv(command)
-            if argv is None or not argv:
-                return _err(
-                    self.name, "could not parse 'command' (unbalanced quotes?)"
-                )
-            rule = next((r for r in self.rules if r.matches(argv)), None)
-            if rule is None:
-                return _err(
-                    self.name,
-                    f"{argv[0]!r} is not in this host's allowlist and was not "
-                    "run; nothing you can pass to Bash changes that. Read / "
-                    "Grep / Glob cover inspection — otherwise tell the user "
-                    "which command is needed and why.",
-                )
-            exec_argv = rule.harden(argv) if rule.harden is not None else argv
-        else:  # ShellMode.ARBITRARY — full bash
-            exec_argv = ["bash", "-c", command]
-            # A command matching a hardening rule runs as that rule's rewritten
-            # argv instead (below) and is not tracked.
-            track = ctx.recorded is not None
-            # A command matching a hardening rule runs as that rule's rewritten
-            # argv instead: ``matching_rule`` admits it only when the ``shlex``
-            # argv is exactly what bash would run, so nothing but the injected
-            # flags changes.
-            rule = matching_rule(command, self.rules)
-            if rule is not None and rule.harden is not None:
-                argv = _parse_argv(command)
-                assert argv  # ``matching_rule`` parsed it already
-                exec_argv = rule.harden(argv)
-                track = False
-        # The allowlist tier runs argv with no shell, so nothing there can
-        # change directory: it always starts at the root.
-        cwd, moved_back = (
-            self._start_cwd(ctx)
-            if self.mode is ShellMode.ARBITRARY
-            else (self.workspace.root, False)
-        )
+        prepared = self._prepare(command, ctx)
+        if isinstance(prepared, ToolResult):
+            return prepared
+        exec_argv, cwd, moved_back, track = prepared
         timeout_s = _resolve_timeout(arguments.get("timeout"), self.timeout_s)
         # The tier gate above still applies; the sync timeout does NOT — a
         # backgrounded process outlives this call.
@@ -417,8 +374,10 @@ class ShellRunTool:
                     "run_in_background is not supported in sandbox mode (v1); "
                     "run the command in the foreground instead",
                 )
+            description = arguments.get("description")
             return self._spawn_background(
-                exec_argv, command, ctx, cwd=cwd, tracked=track
+                exec_argv, command, ctx, cwd=cwd, tracked=track,
+                description=description if isinstance(description, str) else "",
             )
         if track:
             exec_argv = ["bash", "-c", _track_cwd(command)]
@@ -463,6 +422,58 @@ class ShellRunTool:
                 {"type": SHELL_CWD_EFFECT, "cwd": str(final)},
             ],
         )
+
+    def _prepare(
+        self, command: str, ctx: ToolContext
+    ) -> "ToolResult | tuple[list[str], Path, bool, bool]":
+        """The tier gate for ``command``: the argv to run, the directory it
+        starts in, whether the recorded directory had to be given up, and
+        whether the run reports its final directory — or the refusal."""
+        track = False
+        if self.mode is ShellMode.ALLOWLIST:
+            if _has_shell_meta(command):
+                return _err(
+                    self.name,
+                    "shell metacharacters ('; & | < > $ ` ( ) \\n') are not allowed",
+                )
+            argv = _parse_argv(command)
+            if argv is None or not argv:
+                return _err(
+                    self.name, "could not parse 'command' (unbalanced quotes?)"
+                )
+            rule = next((r for r in self.rules if r.matches(argv)), None)
+            if rule is None:
+                return _err(
+                    self.name,
+                    f"{argv[0]!r} is not in this host's allowlist and was not "
+                    "run; nothing you can pass to Bash changes that. Read / "
+                    "Grep / Glob cover inspection — otherwise tell the user "
+                    "which command is needed and why.",
+                )
+            exec_argv = rule.harden(argv) if rule.harden is not None else argv
+        else:  # ShellMode.ARBITRARY — full bash
+            exec_argv = ["bash", "-c", command]
+            # A command matching a hardening rule runs as that rule's rewritten
+            # argv instead (below) and is not tracked.
+            track = ctx.recorded is not None
+            # A command matching a hardening rule runs as that rule's rewritten
+            # argv instead: ``matching_rule`` admits it only when the ``shlex``
+            # argv is exactly what bash would run, so nothing but the injected
+            # flags changes.
+            rule = matching_rule(command, self.rules)
+            if rule is not None and rule.harden is not None:
+                argv = _parse_argv(command)
+                assert argv  # ``matching_rule`` parsed it already
+                exec_argv = rule.harden(argv)
+                track = False
+        # The allowlist tier runs argv with no shell, so nothing there can
+        # change directory: it always starts at the root.
+        cwd, moved_back = (
+            self._start_cwd(ctx)
+            if self.mode is ShellMode.ARBITRARY
+            else (self.workspace.root, False)
+        )
+        return exec_argv, cwd, moved_back, track
 
     def _start_cwd(self, ctx: ToolContext) -> tuple[Path, bool]:
         """Where this task's next command starts, and whether the recorded
@@ -563,6 +574,7 @@ class ShellRunTool:
         *,
         cwd: Optional[Path] = None,
         tracked: bool = False,
+        description: str = "",
     ) -> ToolResult:
         """Hand the validated argv to the host's background runner.
 
@@ -583,6 +595,8 @@ class ShellRunTool:
             command=command,
             spawned_by_task_id=spawned_by_task_id,
             trace_id=trace_id,
+            description=description,
+            tool_use_id=str(ctx.metadata.get("tool_use_id", "")),
         )
         # A rejected spawn (per-session concurrency cap) is NOT queued, so the
         # reason must reach the model as a clean tool failure it can act on
@@ -830,4 +844,135 @@ class ShellKillTool:
             success=True,
             output=f"Shell {job_id} is being terminated ({result['status']})",
             summary=f"{self.name} {job_id} → {result['status']}",
+        )
+
+
+#: Claude Code's ``Monitor`` deadline bounds: 5 minutes by default, capped at
+#: 30 minutes (the schema admits 1 s to 60 minutes before the cap applies).
+DEFAULT_MONITOR_TIMEOUT_MS = 300_000
+MIN_MONITOR_TIMEOUT_MS = 1_000
+MAX_MONITOR_TIMEOUT_MS = 3_600_000
+MONITOR_TIMEOUT_CAP_MS = 1_800_000
+
+
+def _monitor_timeout_ms(raw: Any) -> float:
+    """``timeout_ms`` defaulted, bounded and capped as Claude Code does."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return DEFAULT_MONITOR_TIMEOUT_MS
+    bounded = min(max(float(raw), MIN_MONITOR_TIMEOUT_MS), MAX_MONITOR_TIMEOUT_MS)
+    return min(bounded, MONITOR_TIMEOUT_CAP_MS)
+
+
+@dataclass
+class MonitorTool:
+    """Stream a script's stdout lines to the model as notifications (tool name
+    ``Monitor``), Claude Code's tool of the same name.
+
+    The script runs as a background job of the host's runner, gated exactly
+    like ``Bash`` (same tier, directory and environment), so ``BashOutput``
+    reads it and ``KillShell`` stops it; the runner turns each stdout line into
+    an event and ends the job at ``timeout_ms``.
+    """
+
+    #: The ``Bash`` whose gate, directory and environment the script runs with.
+    shell: ShellRunTool
+    name: str = "Monitor"
+    #: Claude Code's ``maxResultSizeChars`` for this tool.
+    max_result_size_chars: float = 10_000
+    description: str = field(default=load_markdown(__package__, "monitor"))
+    # High risk, so PermissionGuard gates it exactly like ``Bash``.
+    risk_level: str = "high"
+    input_schema: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "Shell command or script. Each stdout line is an "
+                        "event; exit ends the watch."
+                    ),
+                },
+                "description": {
+                    "type": "string",
+                    "description": (
+                        "Short human-readable description of what you are "
+                        "monitoring (shown in notifications)."
+                    ),
+                },
+                "timeout_ms": {
+                    "type": "number",
+                    "default": DEFAULT_MONITOR_TIMEOUT_MS,
+                    "minimum": MIN_MONITOR_TIMEOUT_MS,
+                    "maximum": MAX_MONITOR_TIMEOUT_MS,
+                    "description": (
+                        "Kill the monitor after this deadline. Default "
+                        "300000ms. Deadlines above 1800000ms are capped to "
+                        "1800000ms. You are notified at expiry and can re-arm."
+                    ),
+                },
+            },
+            "required": ["description", "timeout_ms"],
+            "additionalProperties": False,
+        }
+    )
+
+    def invoke(self, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        shell = self.shell
+        if shell.mode is ShellMode.OFF:
+            return _err(self.name, "Bash is disabled")
+        command = arguments.get("command")
+        if not isinstance(command, str) or not command.strip():
+            return _err(self.name, "requires non-empty 'command'")
+        description = arguments.get("description")
+        if not isinstance(description, str) or not description.strip():
+            return _err(self.name, "requires non-empty 'description'")
+        if not getattr(shell.exec_env, "supports_background", True):
+            return _err(
+                self.name,
+                "Monitor is not supported in sandbox mode (v1); run the "
+                "command with Bash in the foreground instead",
+            )
+        runner = ctx.background_runner
+        if runner is None:
+            return _err(self.name, "background execution is not available on this host")
+        prepared = shell._prepare(command, ctx)
+        if isinstance(prepared, ToolResult):
+            return dataclasses.replace(
+                prepared, summary=prepared.summary.replace(shell.name, self.name, 1)
+            )
+        exec_argv, cwd, _moved_back, _track = prepared
+        timeout_ms = _monitor_timeout_ms(arguments.get("timeout_ms"))
+        spawned = runner.spawn(
+            argv=exec_argv,
+            cwd=cwd,
+            env={**scrub_env(), **shell._command_env(ctx)},
+            command=command,
+            spawned_by_task_id=str(ctx.metadata.get("task_id", "")),
+            trace_id=str(ctx.metadata.get("trace_id", "")),
+            description=description,
+            tool_use_id=str(ctx.metadata.get("tool_use_id", "")),
+            monitor_timeout_s=timeout_ms / 1000,
+        )
+        if spawned.get("rejected"):
+            return _err(self.name, str(spawned["reason"]))
+        job_id = spawned["job_id"]
+        output = (
+            f"Monitor started (task {job_id}, expires in "
+            f"{format_duration(timeout_ms)} unless the source ends first; you "
+            "get one notice at expiry — re-arm if you still need the watch). "
+            "You will be notified on each event. Keep working — do not poll or "
+            "sleep. Events may arrive while you are waiting for the user — an "
+            "event is not their reply."
+        )
+        if shell.background_ends_with_turn:
+            output += (
+                " Its events reach you only while you are still working: it is "
+                "terminated when you give your final response, and nothing can "
+                "follow that."
+            )
+        return ToolResult(
+            success=True,
+            output=output,
+            summary=f"{self.name} {truncate_bytes(description, SUMMARY_EMBED_MAX_BYTES)} → {job_id}",
         )

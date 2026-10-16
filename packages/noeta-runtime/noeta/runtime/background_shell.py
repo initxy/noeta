@@ -13,6 +13,7 @@ every job buffer are lock-guarded.
 
 from __future__ import annotations
 
+import codecs
 import enum
 import io
 import os
@@ -39,13 +40,22 @@ from noeta.protocols.events import (
 )
 from noeta.protocols.values import ContentRef
 from noeta.runtime._proc_group import send_group_signal
+from noeta.runtime.task_notification import (
+    MonitorStream,
+    event_body,
+    monitor_end_summary,
+    monitor_event,
+    monitor_expired_note,
+    shell_end_summary,
+    task_notification,
+)
 
 
-#: The host completion-push callback: called once, AFTER the durable
-#: ``BackgroundShellExited``, with ``(root_task_id, job_id, summary,
-#: final_ref)``. It MUST NOT block — the host's contract is to hand the drive
-#: off to its own thread, since it runs on the job's watcher thread.
-BackgroundExitCallback = Callable[[str, str, str, ContentRef], None]
+#: The host's notification hand-off: ``(root_task_id, job_id, notice)``, the
+#: notice a ``<task-notification>`` the model is to read — once per job end,
+#: AFTER its durable terminal event, and once per monitor event. Called on the
+#: job's own threads, so it must return promptly.
+BackgroundNoticeCallback = Callable[[str, str, str], None]
 
 
 class ProbeResult(enum.Enum):
@@ -82,7 +92,7 @@ __all__ = [
     "DEFAULT_BACKGROUND_OUTPUT_CAP",
     "DEFAULT_KILL_GRACE_S",
     "DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK",
-    "BackgroundExitCallback",
+    "BackgroundNoticeCallback",
     "IdentityProbe",
     "PidKiller",
     "ProbeResult",
@@ -108,6 +118,12 @@ DEFAULT_KILL_GRACE_S = 5.0
 #: The watcher reads pipes in this many bytes per chunk. Small enough that a
 #: mid-run poll catches a partial prefix promptly.
 _READ_CHUNK = 4096
+
+#: Characters of a finished background command's output its notice carries.
+_NOTICE_TAIL_CHARS = 30_000
+
+#: Characters of a monitor's stderr its end notice carries.
+_STDERR_TAIL_CHARS = 2_000
 
 #: How often a blocking :meth:`ProcessRegistry.wait` re-checks for a human stop
 #: while the job runs on.
@@ -174,6 +190,19 @@ class _JobHandle:
     #: Set once the terminal event is durable and ``status`` has flipped —
     #: what :meth:`ProcessRegistry.wait` blocks on.
     done: threading.Event = field(default_factory=threading.Event)
+    #: What the notices call the job: the launch's ``description``, else the
+    #: command.
+    description: str = ""
+    #: The tool call that started the job, named in its end notice.
+    tool_use_id: str = ""
+    #: A ``Monitor`` job's event stream; ``None`` for a background ``Bash``.
+    monitor: Optional[MonitorStream] = None
+    #: A monitor's stderr (tail-capped), shown in its end notice.
+    stderr_tail: str = ""
+    #: The monitor already sent its last notice (expiry, flood stop), so its
+    #: end sends none.
+    quiet_end: bool = False
+    expiry: Optional[threading.Timer] = None
 
 
 @dataclass(eq=False)
@@ -234,7 +263,7 @@ class ProcessRegistry:
         output_cap: int = DEFAULT_BACKGROUND_OUTPUT_CAP,
         max_jobs_per_root_task: int = DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK,
         dispatcher: Optional[Dispatcher] = None,
-        on_background_exit: Optional[BackgroundExitCallback] = None,
+        on_notice: Optional[BackgroundNoticeCallback] = None,
         identity_probe: Optional[IdentityProbe] = None,
         kill_pid: Optional[PidKiller] = None,
     ) -> None:
@@ -249,7 +278,7 @@ class ProcessRegistry:
         # Both default to ``None`` ⇒ no completion push at all, which is the
         # correct shape on a log-folding resume: neither is wired there.
         self._dispatcher = dispatcher
-        self._on_background_exit = on_background_exit
+        self._on_notice = on_notice
         self._lock = threading.Lock()
         # Keyed by the ROOT TASK, not the spawning task: a subtask-spawned job
         # is owned by the session, so it must survive the subtask's terminal
@@ -271,8 +300,16 @@ class ProcessRegistry:
         command: str,
         spawned_by_task_id: str,
         trace_id: str,
+        description: str = "",
+        tool_use_id: str = "",
+        monitor_timeout_s: Optional[float] = None,
     ) -> dict[str, Any]:
         """Launch ``argv`` detached, start its watcher, record ``Started``.
+
+        ``monitor_timeout_s`` makes the job a ``Monitor``: each stdout line is
+        an event handed to the notice callback (batched and paced by
+        :class:`MonitorStream`), stderr only reaches the end notice, and the
+        job is killed with one expiry notice once the timeout passes.
 
         Returns ``{job_id, ref}`` immediately — the engine main loop is never
         blocked on the process. ``argv`` is a list, never ``shell=True``, and
@@ -299,7 +336,12 @@ class ProcessRegistry:
             # immediate, deterministic EOF instead.
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,  # merge so one buffer = the model's view
+            # Merged so one buffer is the model's view — except a monitor's,
+            # whose stdout alone is the event stream.
+            stderr=(
+                subprocess.PIPE if monitor_timeout_s is not None
+                else subprocess.STDOUT
+            ),
             # The job leads its own process group so a kill reaps backgrounded
             # grandchildren too (see ``_terminate``'s group signal).
             start_new_session=True,
@@ -312,7 +354,19 @@ class ProcessRegistry:
             spawned_by_task_id=spawned_by_task_id,
             trace_id=trace_id,
             output_cap=self._output_cap,
+            description=_label(description or command),
+            tool_use_id=tool_use_id,
         )
+        if monitor_timeout_s is not None:
+            handle.monitor = MonitorStream(
+                sink=lambda text, _note: self._notify(
+                    handle,
+                    monitor_event(
+                        task_id=job_id, description=handle.description, text=text
+                    ),
+                ),
+                stop=lambda: self._end_quietly(handle),
+            )
         with self._lock:
             running = sum(
                 1
@@ -366,7 +420,73 @@ class ProcessRegistry:
         )
         handle.watcher = watcher
         watcher.start()
+        if monitor_timeout_s is not None:
+            handle.expiry = threading.Timer(
+                monitor_timeout_s, self._expire, args=(handle, monitor_timeout_s)
+            )
+            handle.expiry.daemon = True
+            handle.expiry.start()
         return {"job_id": job_id, "ref": _ref_json(ref)}
+
+    # -- notices -------------------------------------------------------------
+
+    def _notify(self, handle: _JobHandle, notice: str) -> None:
+        if self._on_notice is not None:
+            self._on_notice(handle.root_task_id, handle.job_id, notice)
+
+    def _end_quietly(self, handle: _JobHandle) -> None:
+        """End a monitor that already sent its last notice."""
+        with handle.lock:
+            handle.quiet_end = True
+        self.kill(handle.job_id)
+
+    def _expire(self, handle: _JobHandle, timeout_s: float) -> None:
+        """A monitor's ``timeout_ms`` ran out: flush, say so once, kill."""
+        stream = handle.monitor
+        if stream is None or handle.done.is_set():
+            return
+        stream.flush()
+        stream.note(monitor_expired_note(timeout_s * 1000, stream.delivered))
+        stream.close()
+        self._end_quietly(handle)
+
+    def _end_notice(
+        self, handle: _JobHandle, exit_code: int, *, killed: bool
+    ) -> Optional[str]:
+        """The notice a job's end sends, or ``None`` when it sends none."""
+        status = "killed" if killed else ("completed" if exit_code == 0 else "failed")
+        code = None if killed else exit_code
+        stream = handle.monitor
+        if stream is None:
+            with handle.lock:
+                tail = bytes(handle.buffer).decode("utf-8", errors="replace")
+            tail = tail.rstrip()
+            if len(tail) > _NOTICE_TAIL_CHARS:
+                tail = "[… earlier output omitted]\n" + tail[-_NOTICE_TAIL_CHARS:]
+            return task_notification(
+                task_id=handle.job_id,
+                tool_use_id=handle.tool_use_id,
+                status=status,
+                summary=shell_end_summary(handle.description, status, code),
+                trailing=f"\nLast output:\n{tail}" if tail else "",
+            )
+        rest = stream.drain()
+        with handle.lock:
+            if handle.quiet_end:
+                return None
+            stderr = handle.stderr_tail.rstrip()
+        parts = [rest] if rest else []
+        if stderr:
+            parts.append(f"stderr:\n{stderr}")
+        return task_notification(
+            task_id=handle.job_id,
+            tool_use_id=handle.tool_use_id,
+            status=status,
+            summary=monitor_end_summary(
+                handle.description, status, code, produced_output=stream.saw_output
+            ),
+            body=event_body("\n".join(parts)) if parts else "",
+        )
 
     # -- poll --------------------------------------------------------------
 
@@ -767,8 +887,43 @@ class ProcessRegistry:
 
     # -- watcher (daemon thread) -------------------------------------------
 
+    def _append(self, handle: _JobHandle, chunk: bytes) -> None:
+        with handle.lock:
+            handle.buffer.extend(chunk)
+            handle.total_written += len(chunk)
+            if len(handle.buffer) > handle.output_cap:
+                # Tail-truncate (keep the most recent output), mirroring the
+                # sync path's ``cap_stream``, and latch the ``truncated`` flag
+                # so poll / Exited tell the model the snapshot is the tail.
+                del handle.buffer[: len(handle.buffer) - handle.output_cap]
+                handle.truncated = True
+
+    def _drain_stderr(self, handle: _JobHandle) -> None:
+        """A monitor's stderr: into the buffer and the end notice's tail."""
+        stderr = cast(Optional[io.BufferedReader], handle.popen.stderr)
+        if stderr is None:
+            return
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        while chunk := stderr.read1(_READ_CHUNK):
+            self._append(handle, chunk)
+            with handle.lock:
+                tail = handle.stderr_tail + decoder.decode(chunk)
+                handle.stderr_tail = tail[-_STDERR_TAIL_CHARS:]
+        stderr.close()
+
     def _watch(self, handle: _JobHandle) -> None:
-        """Drain the merged pipe into the buffer, then reap + record exit."""
+        """Drain the pipe(s) into the buffer, then reap + record exit."""
+        stream = handle.monitor
+        stderr_reader: Optional[threading.Thread] = None
+        if stream is not None:
+            stderr_reader = threading.Thread(
+                target=self._drain_stderr,
+                args=(handle,),
+                name=f"bg-stderr-{handle.job_id}",
+                daemon=True,
+            )
+            stderr_reader.start()
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         # Popen with the default ``bufsize=-1`` hands back a BufferedReader;
         # ``IO[bytes]`` in the stubs hides its ``read1``.
         stdout = cast(Optional[io.BufferedReader], handle.popen.stdout)
@@ -781,19 +936,17 @@ class ProcessRegistry:
                 chunk = stdout.read1(_READ_CHUNK)
                 if not chunk:
                     break
-                with handle.lock:
-                    handle.buffer.extend(chunk)
-                    handle.total_written += len(chunk)
-                    if len(handle.buffer) > handle.output_cap:
-                        # Tail-truncate (keep the most recent output), mirroring
-                        # Tail-truncate (keep the most recent output), mirroring
-                        # the sync path's ``cap_stream``, and latch the
-                        # ``truncated`` flag so poll / Exited tell the model the
-                        # snapshot is the tail (oldest output dropped).
-                        del handle.buffer[: len(handle.buffer) - handle.output_cap]
-                        handle.truncated = True
+                self._append(handle, chunk)
+                if stream is not None:
+                    stream.feed(decoder.decode(chunk))
             stdout.close()
+        if stream is not None:
+            stream.feed(decoder.decode(b"", final=True))
+        if stderr_reader is not None:
+            stderr_reader.join()
         exit_code = handle.popen.wait()
+        if handle.expiry is not None:
+            handle.expiry.cancel()
         with handle.lock:
             handle.exit_code = exit_code
             # A killed job reaches terminal too — but it records
@@ -813,7 +966,17 @@ class ProcessRegistry:
             kill_signal = handle.kill_signal
             truncated = handle.truncated  # surfaced on Exited
         final_ref = self._snapshot(handle)
-        summary = _exit_summary(handle.command, exit_code, final_ref.size, killed=killed)
+        status = "killed" if killed else ("completed" if exit_code == 0 else "failed")
+        summary = (
+            monitor_end_summary(
+                handle.description, status, None if killed else exit_code,
+                produced_output=handle.monitor.saw_output,
+            )
+            if handle.monitor is not None
+            else shell_end_summary(
+                handle.description, status, None if killed else exit_code
+            )
+        )
         if killed:
             # One terminal event per job: a killed job records Killed, never
             # also Exited. Emitted on the ROOT-TASK stream (lifetime owner).
@@ -853,18 +1016,12 @@ class ProcessRegistry:
         with handle.lock:
             handle.status = "killed" if killed else "exited"
         handle.done.set()
-        # After the durable Exited, hand the completion to the host so it
-        # drives a wake-and-notify turn. The ``notified`` dedup above guards
-        # exactly-once (a kill and a natural exit cannot both push). The
-        # callback MUST NOT block the watcher — the host contract is to enqueue
-        # the drive onto its own background-drive thread. The first arg is the
-        # ROOT-TASK (the stream the host suspends on / drives
-        # ``notify_background_exit`` against), so a subtask-spawned job wakes the
-        # ROOT session, never a dead subtask.
-        if self._on_background_exit is not None:
-            self._on_background_exit(
-                handle.root_task_id, handle.job_id, summary, final_ref
-            )
+        # After the durable terminal, hand the end notice on — exactly once,
+        # by the ``notified`` dedup above. It goes to the ROOT task, so a
+        # subtask-spawned job reaches the session, never a dead subtask.
+        notice = self._end_notice(handle, exit_code, killed=killed)
+        if notice is not None:
+            self._notify(handle, notice)
 
     # -- helpers -----------------------------------------------------------
 
@@ -929,6 +1086,18 @@ def _ref_json(ref: ContentRef) -> dict[str, Any]:
 _STARTED_COMMAND_MAX_BYTES = 2048
 
 
+#: Characters of a job's description (or, lacking one, its command) its
+#: notices and terminal event carry.
+_LABEL_MAX_CHARS = 200
+
+
+def _label(text: str) -> str:
+    text = " ".join(text.split())
+    if len(text) <= _LABEL_MAX_CHARS:
+        return text
+    return text[: _LABEL_MAX_CHARS - 3] + "..."
+
+
 def _recorded_command(command: str) -> str:
     """``command`` as the Started event records it: whole when it fits
     :data:`_STARTED_COMMAND_MAX_BYTES`, otherwise its start plus ``...``. The
@@ -940,19 +1109,6 @@ def _recorded_command(command: str) -> str:
     while keep and len(to_canonical_bytes(keep + "...")) > _STARTED_COMMAND_MAX_BYTES:
         keep = keep[: len(keep) * 3 // 4]
     return keep + "..."
-
-
-def _exit_summary(
-    command: str, exit_code: int, size: int, *, killed: bool = False
-) -> str:
-    if killed:
-        status = "killed"
-    elif exit_code == 0:
-        status = "OK"
-    else:
-        status = f"exit={exit_code}"
-    cmd = command if len(command) <= 80 else command[:77] + "..."
-    return f"background {cmd} → {status} ({size}B output)"
 
 
 #: Slack on the elapsed-time identity check. A process whose live start time is

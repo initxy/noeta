@@ -237,9 +237,9 @@ def test_builtin_tool_ref_inventory_complete() -> None:
         "Read", "Glob", "Grep",
         # fs edit
         "Edit", "Write",
-        # fs shell — the background triplet is catalogued together so
-        # ``tools=None`` can whitelist all three at once.
-        "Bash", "BashOutput", "KillShell",
+        # fs shell — the background tools are catalogued together so
+        # ``tools=None`` can whitelist them all at once.
+        "Bash", "BashOutput", "KillShell", "Monitor",
         # web — not an fs tool, but catalogued so ``tools=None`` includes it.
         "WebFetch",
         # web_search is only built when NOETA_WEB_SEARCH_API_KEY is set; the
@@ -422,6 +422,7 @@ def test_builtin_tool_whitelist_is_pinned() -> None:
         "Grep",
         "Read",
         "KillShell",
+        "Monitor",
         "BashOutput",
         "Bash",
         "WebSearch",
@@ -430,7 +431,7 @@ def test_builtin_tool_whitelist_is_pinned() -> None:
     }
     # Everything else — memory, browser, open_app, run_skill_script — is
     # capability- or host-injection-gated, never part of this whitelist.
-    assert len(builtin_tool_classes()) == 10
+    assert len(builtin_tool_classes()) == 11
 
 
 def test_allowed_tools_explicit_list() -> None:

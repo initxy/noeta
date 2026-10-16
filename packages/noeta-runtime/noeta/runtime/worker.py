@@ -312,7 +312,7 @@ class AppendMessagePrelude:
     ``origin`` is the optional ``Message.origin`` tag the
     append seam stamps. ``None`` keeps ``send_goal`` byte-identical (a human
     turn carries no origin); the background completion-push
-    (``InteractionDriver.notify_background_exit``) passes ``"system"`` so the
+    (``InteractionDriver.notify_background_subagent_exit``) passes ``"system"`` so the
     model sees a source-tagged "background event" notice, not a user message.
 
     ``attachment_texts`` are the unified ``@`` mention snapshots

@@ -34,7 +34,6 @@ from noeta.protocols.decisions import ToolCall
 from noeta.protocols.hooks import GuardContext, ProposedToolCall, Verdict
 from noeta.protocols.messages import LLMResponse, TextBlock, Usage
 from noeta.protocols.tool import ToolContext
-from noeta.protocols.values import ContentRef
 from noeta.runtime.background_shell import ProcessRegistry
 from noeta.storage.memory import (
     InMemoryContentStore,
@@ -57,13 +56,11 @@ def _py(code: str) -> list[str]:
 
 
 def _registry(
-    on_background_exit: Any = None,
+    on_notice: Any = None,
 ) -> tuple[ProcessRegistry, InMemoryEventLog, InMemoryContentStore]:
     log = InMemoryEventLog()
     store = InMemoryContentStore()
-    reg = ProcessRegistry(
-        event_log=log, content_store=store, on_background_exit=on_background_exit
-    )
+    reg = ProcessRegistry(event_log=log, content_store=store, on_notice=on_notice)
     return reg, log, store
 
 
@@ -221,11 +218,11 @@ def test_kill_vs_natural_exit_race_one_terminal_one_push(tmp_path: Path) -> None
     Killed and an Exited (or a double push)."""
     pushes: list[str] = []
 
-    def _on_exit(root_task_id: str, job_id: str, summary: str, ref: ContentRef) -> None:
+    def _on_exit(root_task_id: str, job_id: str, notice: str) -> None:
         pushes.append(job_id)
 
     for i in range(20):
-        reg, log, _ = _registry(on_background_exit=_on_exit)
+        reg, log, _ = _registry(on_notice=_on_exit)
         before = len(pushes)
         out = reg.spawn(
             # Exits on its own almost immediately — kill races the natural reap.

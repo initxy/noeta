@@ -56,6 +56,11 @@
           "version": "1"
         },
         {
+          "name": "Monitor",
+          "risk_level": "high",
+          "version": "1"
+        },
+        {
           "name": "Read",
           "risk_level": "low",
           "version": "1"
@@ -134,6 +139,11 @@
           "version": "1"
         },
         {
+          "name": "Monitor",
+          "risk_level": "high",
+          "version": "1"
+        },
+        {
           "name": "Read",
           "risk_level": "low",
           "version": "1"
@@ -207,6 +217,11 @@
         },
         {
           "name": "KillShell",
+          "risk_level": "high",
+          "version": "1"
+        },
+        {
+          "name": "Monitor",
           "risk_level": "high",
           "version": "1"
         },
@@ -294,6 +309,11 @@
       },
       {
         "name": "KillShell",
+        "risk_level": "high",
+        "version": "1"
+      },
+      {
+        "name": "Monitor",
         "risk_level": "high",
         "version": "1"
       },

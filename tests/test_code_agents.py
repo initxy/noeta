@@ -268,7 +268,7 @@ def test_plan_whitelist_and_capabilities() -> None:
     assert plan_tools == frozenset(
         {
             "Read", "Grep", "Glob", "Bash", "BashOutput", "KillShell",
-            "WebSearch", "WebFetch",
+            "Monitor", "WebSearch", "WebFetch",
         }
     )
     assert agent_activates(PLAN_SPEC, "todo_write") is False

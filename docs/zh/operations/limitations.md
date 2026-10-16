@@ -79,7 +79,7 @@
 
 ### 后台 shell 只能在宿主机用
 
-- **限制：** `Bash(run_in_background=true)`（以及 `BashOutput` / `KillShell`）依赖宿主机的后台执行器，在 sandbox 里会直接报错。
+- **限制：** `Bash(run_in_background=true)` 和 `Monitor`（以及 `BashOutput` / `KillShell`）依赖宿主机的后台执行器，在 sandbox 里会直接报错。
 - **办法：** 改成前台运行并给足 `timeout`，或者不在 sandbox 里跑。
 
 ### Sandbox 浏览器只看文字
