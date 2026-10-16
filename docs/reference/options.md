@@ -38,7 +38,7 @@ A frozen dataclass. Fields are either **identity** (compiled into the recorded `
 | `policy` | `(llm) -> Policy` with `.ref` | `None` | replaces the built-in ReAct loop |
 | `mcp_servers` | `tuple[SdkMcpServer, ...]` | `()` | in-process MCP servers; their tools join the tool list |
 
-The 10 built-in tools are `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`, `BashOutput`, `KillShell`, `WebFetch`, `WebSearch` (`WebSearch` only appears when `NOETA_WEB_SEARCH_API_KEY` is set). See [Tools](tools.md).
+The 11 built-in tools are `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`, `BashOutput`, `KillShell`, `Monitor`, `WebFetch`, `WebSearch` (`WebSearch` only appears when `NOETA_WEB_SEARCH_API_KEY` is set). See [Tools](tools.md).
 
 ### Wiring fields
 

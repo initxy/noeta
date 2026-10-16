@@ -38,7 +38,7 @@ with Client(options, provider=AnthropicProvider(), model="claude-sonnet-5", host
 | `policy` | 带 `.ref` 的 `(llm) -> Policy` | `None` | 替换内置的 ReAct 循环 |
 | `mcp_servers` | `tuple[SdkMcpServer, ...]` | `()` | 进程内 MCP server，工具会并入工具列表 |
 
-10 个内置工具是 `Read`、`Write`、`Edit`、`Glob`、`Grep`、`Bash`、`BashOutput`、`KillShell`、`WebFetch`、`WebSearch`（`WebSearch` 只在设了 `NOETA_WEB_SEARCH_API_KEY` 时出现）。见[工具](tools.md)。
+11 个内置工具是 `Read`、`Write`、`Edit`、`Glob`、`Grep`、`Bash`、`BashOutput`、`KillShell`、`Monitor`、`WebFetch`、`WebSearch`（`WebSearch` 只在设了 `NOETA_WEB_SEARCH_API_KEY` 时出现）。见[工具](tools.md)。
 
 ### 接线字段
 

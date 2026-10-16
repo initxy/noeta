@@ -22,8 +22,8 @@ print(result.answer())
 | Agent | 角色 | 工具 | 启用项 |
 | --- | --- | --- | --- |
 | `main` | 默认主 agent，可把活派给下面三个。 | 全部内置工具（不设 `allowed_tools`）加记忆工具 | `fs`、`web`、`todo_write`、`ask_user_question`、`skill_invocation`、`memory`、`mcp`；`delegation` 由子 agent 名单自动推出 |
-| `general-purpose` | 独立干活：搜索、修改、运行、交结果。不再往下派。 | `Edit`、`Glob`、`Grep`、`Read`、`Bash`、`BashOutput`、`KillShell`、`WebSearch`、`WebFetch`、`Write` | `skill_invocation`、`mcp` |
-| `explore` | 只读侦察，汇报事实。 | `Glob`、`Grep`、`Read`、`Bash`、`BashOutput`、`KillShell`、`WebSearch`、`WebFetch` | `skill_invocation` |
+| `general-purpose` | 独立干活：搜索、修改、运行、交结果。不再往下派。 | `Edit`、`Glob`、`Grep`、`Read`、`Bash`、`BashOutput`、`KillShell`、`Monitor`、`WebSearch`、`WebFetch`、`Write` | `skill_invocation`、`mcp` |
+| `explore` | 只读侦察，汇报事实。 | `Glob`、`Grep`、`Read`、`Bash`、`BashOutput`、`KillShell`、`Monitor`、`WebSearch`、`WebFetch` | `skill_invocation` |
 | `plan` | 只读架构师，交回一份按顺序排好的实施计划。 | 同 `explore` | `ask_user_question` |
 
 `explore` 和 `plan` 有 `Bash`，但提示词限定只跑只读命令，shell 审批兜底。`WebSearch` 只在配了搜索 key 的地方挂上。

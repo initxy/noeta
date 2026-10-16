@@ -22,8 +22,8 @@ print(result.answer())
 | Agent | Role | Tools | Activations |
 | --- | --- | --- | --- |
 | `main` | Default root agent; delegates to the three below. | full built-in set (`allowed_tools` unset) plus the memory tools | `fs`, `web`, `todo_write`, `ask_user_question`, `skill_invocation`, `memory`, `mcp`; `delegation` derived from its roster |
-| `general-purpose` | Self-contained worker: search, edit, run, return. Never delegates. | `Edit`, `Glob`, `Grep`, `Read`, `Bash`, `BashOutput`, `KillShell`, `WebSearch`, `WebFetch`, `Write` | `skill_invocation`, `mcp` |
-| `explore` | Read-only scout that reports facts. | `Glob`, `Grep`, `Read`, `Bash`, `BashOutput`, `KillShell`, `WebSearch`, `WebFetch` | `skill_invocation` |
+| `general-purpose` | Self-contained worker: search, edit, run, return. Never delegates. | `Edit`, `Glob`, `Grep`, `Read`, `Bash`, `BashOutput`, `KillShell`, `Monitor`, `WebSearch`, `WebFetch`, `Write` | `skill_invocation`, `mcp` |
+| `explore` | Read-only scout that reports facts. | `Glob`, `Grep`, `Read`, `Bash`, `BashOutput`, `KillShell`, `Monitor`, `WebSearch`, `WebFetch` | `skill_invocation` |
 | `plan` | Read-only architect; returns an ordered implementation plan. | same as `explore` | `ask_user_question` |
 
 `explore` and `plan` have `Bash` but their prompts restrict it to read-only commands; shell approval is the backstop. `WebSearch` mounts only where a search key is configured.

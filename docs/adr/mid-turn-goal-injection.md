@@ -126,6 +126,10 @@ re-drive delivers each injection exactly once.
   the Engine takes an optional `injection_inbox` (duck-typed) at construction.
 - `noeta.runtime.injection.InjectionInbox` is the per-host accelerator, wired onto
   the host beside `CancellationRegistry` and freed on `cancel` / `close`.
+- Background notices (a background command's end, a `Monitor` event) ride the
+  same seam: `InteractionDriver.inject_notice` records one whatever the task's
+  status, and `deliver_injections` drives a parked session a turn whose first
+  drain takes it in ([shell-permission-and-background](shell-permission-and-background.md)).
 - `InteractionDriver.inject_goal` / `Client.inject_goal` are the verb; a running
   inject returns immediately without a lease, so — unlike `send_goal` — it does
   not drain further approvals.

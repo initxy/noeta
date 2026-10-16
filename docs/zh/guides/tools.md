@@ -66,7 +66,7 @@ options = Options(
 
 | `allowed_tools` | agent 拿到的工具 |
 | --- | --- |
-| `None`（默认） | 10 个内置工具：`Read`、`Glob`、`Grep`、`Edit`、`Write`、`Bash`、`BashOutput`、`KillShell`、`WebFetch`、`WebSearch` |
+| `None`（默认） | 11 个内置工具：`Read`、`Glob`、`Grep`、`Edit`、`Write`、`Bash`、`BashOutput`、`KillShell`、`Monitor`、`WebFetch`、`WebSearch` |
 | 一个元组 | 正好是元组里这些 |
 | `()` | 没有工具 |
 

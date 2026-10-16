@@ -154,7 +154,7 @@ faults, see [troubleshooting](troubleshooting.md).
 
 ### Background shell is host-only
 
-- **Boundary:** `Bash(run_in_background=true)` (with `BashOutput` / `KillShell`) needs
+- **Boundary:** `Bash(run_in_background=true)` and `Monitor` (with `BashOutput` / `KillShell`) need
   the host's background runner. A sandbox returns an error instead.
 - **Workaround:** run in the foreground with a generous `timeout`, or run outside the
   sandbox.

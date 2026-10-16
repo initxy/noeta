@@ -8,7 +8,7 @@ agent 开箱就能调用的全部工具：每个做什么、风险等级多高�
 from noeta.sdk import Options
 options = Options(system_prompt="…")          # allowed_tools defaults to None
 # the agent sees: Read, Glob, Grep, Edit, Write,
-#                 Bash, BashOutput, KillShell, WebFetch, WebSearch
+#                 Bash, BashOutput, KillShell, Monitor, WebFetch, WebSearch
 ```
 
 `WebSearch` 还要设置 `NOETA_WEB_SEARCH_API_KEY`。其余工具各有开关：
@@ -38,6 +38,7 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 | `Bash` | high | `command`、`timeout?`（毫秒，最多 600000）、`description?`、`run_in_background?` | 在工作区根目录执行命令。后台模式返回一个作业 id。 |
 | `BashOutput` | low | `bash_id`、`filter?` | 查后台作业的状态（`running` / `exited`）、退出码和新输出。 |
 | `KillShell` | high | `shell_id` | 停掉后台作业（先 SIGTERM，宽限期后 SIGKILL）。 |
+| `Monitor` | high | `command`、`description`、`timeout_ms`（默认 300000，最多 1800000） | 在后台跑一个脚本，标准输出每一行（200 毫秒内的合成一条、有限速）作为 `<task-notification>` 事件发给模型。和 `Bash` 走同一道审批。 |
 
 - **默认不真写盘。** `HostConfig.write_mode="dry_run"`（默认）只记录一份拟改的 diff；`"apply"` 才真正写入。
 - **写有边界，读没有。** `Write` / `Edit` 只能写工作区根目录以内；`HostConfig.write_roots` 可以按任务放开更多目录；`bypassPermissions` 模式下哪里都能写（和 Claude Code 一样）。`Read` / `Glob` / `Grep` 只把*相对*路径锚到工作区，绝对路径指到哪就读哪，所以真正的读取边界是进程自己的文件权限。
