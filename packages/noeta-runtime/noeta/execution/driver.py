@@ -72,7 +72,6 @@ from noeta.protocols.messages import (
 )
 from noeta.protocols.policy import Policy
 from noeta.protocols.task import Task
-from noeta.tools.limits import SHELL_INLINE_MAX_CHARS, elide_middle
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.values import LOCAL_PRINCIPAL, ContentRef, Principal
 from noeta.protocols.hooks import approval_wake_handle
@@ -390,23 +389,6 @@ def _undriven_goal(
             continue
         return False
     return False
-
-
-def _background_exit_notice(summary: str, output_tail: str, job_id: str) -> str:
-    """Render the background-completion notice body.
-
-    One line of human summary + the job's ACTUAL output tail inline, wrapped in
-    a ``<background-job>`` provenance tag carrying the ``job_id``. The model
-    has no ref-deref tool, so an opaque hash here would be dead weight — the
-    same reasoning :func:`_background_subagent_notice` already applies; the
-    ContentRef stays on the durable ``BackgroundShellExited`` event for audit.
-    """
-    if not output_tail.strip():
-        return f'{summary}\n<background-job id="{job_id}">(no output)</background-job>'
-    return (
-        f"{summary}\n"
-        f'<background-job id="{job_id}">\n{output_tail}\n</background-job>'
-    )
 
 
 def _background_subagent_notice(
@@ -1226,13 +1208,24 @@ class InteractionDriver:
         content-addressed ref. ``injection_id`` is the exactly-once key fold
         keys the pending marker on.
         """
+        self._request_injection(
+            task_id,
+            Message(
+                role="user",
+                content=[TextBlock(text=goal), *images],
+                origin=goal_origin,
+            ),
+        )
+        return self._outcome(task_id)
+
+    def _request_injection(self, task_id: str, message: Message) -> str:
+        """Record ``message`` as a pending injection, lease-free; return its id.
+
+        The body spills to the ContentStore behind ``messages_ref``, so the
+        envelope stays under the payload cap and the consuming
+        ``MessagesAppended`` reuses the identical ref."""
         host = self._host
         injection_id = f"inj-{uuid.uuid4().hex}"
-        message = Message(
-            role="user",
-            content=[TextBlock(text=goal), *images],
-            origin=goal_origin,
-        )
         payload = put_messages(host.content_store, [message])
         host.event_log.system_emit(
             task_id=task_id,
@@ -1256,7 +1249,7 @@ class InteractionDriver:
                 "messages_ref": payload.messages_ref,
                 "count": payload.count,
             })
-        return self._outcome(task_id)
+        return injection_id
 
     def seed_send_goal(
         self,
@@ -1467,79 +1460,36 @@ class InteractionDriver:
             refresh_content=True,
         )
 
-    def notify_background_exit(
-        self,
-        task_id: str,
-        *,
-        summary: str,
-        ref: ContentRef,
-        job_id: str,
-    ) -> DriveOutcome:
-        """Push a background-command completion notice and
-        drive a turn (Mechanism C).
+    def inject_notice(self, task_id: str, *, notice: str) -> str:
+        """Queue a background notice for the model, whatever the task is doing.
 
-        The host's background-drive thread calls this when a
-        ``shell_run(background=true)`` job exits while the session is idle. It
-        **reuses the next-goal wake handle** (no new wake primitive — AC) to
-        wake the session and inject an ``origin="system"`` notice that mirrors
-        ``send_goal``'s append-message prelude. The session is driven a new turn
-        with NO human input, so the agent can react to the completion on its own.
-
-        The notice carries the one-line ``summary`` plus the job's ACTUAL
-        output tail inline (dereferenced from ``ref`` at delivery time, capped
-        by the Bash inline rule) and the ``job_id`` so the model can
-        ``BashOutput`` / ``KillShell`` it. ``origin="system"`` lets the model
-        tell a background event from a user message (source label).
-
-        Requires the conversation to be suspended on the next-goal handle (a
-        normally-finishing interactive turn); a task that is mid-turn or terminal
-        raises :class:`RuntimeError` from :meth:`_require_human_suspend` so the
-        host's three-state handler can re-arm (mid-turn) or drop (terminal) —
-        the durable ``BackgroundShellExited`` already records the fact regardless.
-        """
-        return self.drive_seeded(
-            self.seed_notify_background_exit(
-                task_id, summary=summary, ref=ref, job_id=job_id
-            )
-        )
-
-    def seed_notify_background_exit(
-        self,
-        task_id: str,
-        *,
-        summary: str,
-        ref: ContentRef,
-        job_id: str,
-    ) -> SeededTurn:
-        """Validate + seed a background-completion notice turn (the seed half).
-
-        Mirrors :meth:`seed_send_goal`: refuse a non-next-goal-suspended task
-        (so a mid-turn / terminal session raises here, before any
-        :class:`SeededTurn`), then wake + lease with an
-        :class:`AppendMessagePrelude` carrying the source-tagged notice. Unlike
-        ``send_goal`` there is no selector / reopen to authorize — a background
-        notice never switches the model and never reopens a closed conversation
-        (it is not a human turn).
-        """
-        self._require_human_suspend(task_id, NEXT_GOAL_WAKE_HANDLE)
-        # A background notice opens a turn like a goal does: the parked turn's
-        # Engine (if the worker left one) must not serve it.
-        self._forget_turn_engine(task_id)
-        # Deref the final output BEFORE seeding, mirroring the sub-agent path:
-        # a content fault raised here retries idempotently, and the model sees
-        # the real tail inline instead of a hash it cannot read. The elision
-        # rule matches Bash's inline cap.
-        body = self._host.content_store.get(ref).decode("utf-8", errors="replace")
-        notice = _background_exit_notice(
-            summary, elide_middle(body, SHELL_INLINE_MAX_CHARS), job_id
-        )
-        return self._seed_woken(
+        The notice — a background command's end or a monitor's event, as a
+        ``<task-notification>`` — becomes a pending injection
+        (``InjectionRequested``, lease-free), so a running turn takes it in at
+        its next top-of-loop drain: between tool calls, after the results, on
+        the very next model request. A turn that ends before that leaves it
+        pending, and so does a parked task; :meth:`deliver_injections` then
+        drives a turn that takes it in. Returns the injection id.
+        ``origin="system"`` keeps it out of the human voice."""
+        return self._request_injection(
             task_id,
-            handle=NEXT_GOAL_WAKE_HANDLE,
-            prelude=AppendMessagePrelude(
-                content=[TextBlock(text=notice)], origin="system"
-            ),
+            Message(role="user", content=[TextBlock(text=notice)], origin="system"),
         )
+
+    def deliver_injections(self, task_id: str) -> DriveOutcome:
+        """Wake a parked conversation for its pending injections and drive
+        the turn (seed + drive of :meth:`seed_deliver_injections`)."""
+        return self.drive_seeded(self.seed_deliver_injections(task_id))
+
+    def seed_deliver_injections(self, task_id: str) -> SeededTurn:
+        """Wake + lease a conversation parked on the next-goal handle, with no
+        message of its own: the turn's first drain appends what is pending.
+
+        Refuses (raises) a task not parked on the next-goal handle, so a
+        caller retries once the running turn settles."""
+        self._require_human_suspend(task_id, NEXT_GOAL_WAKE_HANDLE)
+        self._forget_turn_engine(task_id)
+        return self._seed_woken(task_id, handle=NEXT_GOAL_WAKE_HANDLE, prelude=None)
 
     def notify_background_subagent_exit(
         self,
@@ -1555,8 +1505,7 @@ class InteractionDriver:
         docs/adr/background-subagent.md. The background-subagent driver calls
         this (off a daemon thread) when a sub-agent launched with
         ``spawn_subagent(background=True)`` reaches terminal while the parent
-        session is idle. It is the exact analogue of
-        :meth:`notify_background_exit`: it **reuses the next-goal wake handle**
+        session is idle. It **reuses the next-goal wake handle**
         (no new wake primitive) to wake the session and inject an
         ``origin="system"`` notice carrying a one-line ``summary`` + the
         sub-agent's inlined result text (dereferenced from the result
@@ -1592,8 +1541,7 @@ class InteractionDriver:
     ) -> SeededTurn:
         """Validate, deref the result, write the delivery anchor, seed the notice.
 
-        Mirrors :meth:`seed_notify_background_exit`: refuse a
-        non-next-goal-suspended task (so a mid-turn / terminal session raises
+        Refuse a non-next-goal-suspended task (so a mid-turn / terminal session raises
         here, before any anchor / SeededTurn), THEN deref + render the result body
         (which can also fault — kept before the anchor so a content fault retries
         idempotently instead of stranding a duplicate anchor), THEN emit the

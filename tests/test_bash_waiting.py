@@ -3,8 +3,8 @@
 A long leading ``sleep`` is refused with Claude Code's ``Blocked:`` message
 (threshold 25 s), ``BashOutput`` can block until a background command ends
 (``block`` + ``timeout``, interruptible by a human stop), and the launch result
-tells the model how it will learn of the end — a later notice, or, on a host
-whose turn end hands the work back, nothing after its final response.
+tells the model how it will learn of the end — a notice, which on a host whose
+turn end hands the work back cannot follow its final response.
 """
 
 from __future__ import annotations
@@ -70,10 +70,10 @@ def test_a_long_leading_sleep_is_blocked_before_it_runs(tmp_path: Path) -> None:
     assert not result.success
     assert result.summary == (
         f"Bash: Blocked: sleep 110 followed by: touch {marker}. To wait for a "
-        "condition, use an until-loop (e.g. `until <check>; do sleep 2; done`). "
-        "To wait for a command you started, use run_in_background: true, then "
-        "BashOutput with block: true. Do not chain shorter sleeps to work "
-        "around this block."
+        "condition, use Monitor with an until-loop (e.g. `until <check>; do "
+        "sleep 2; done`). To wait for a command you started, use "
+        "run_in_background: true. Do not chain shorter sleeps to work around "
+        "this block."
     )
     assert not marker.exists()
 
@@ -104,20 +104,21 @@ def _launch(tmp_path: Path, **kwargs: Any) -> tuple[str, ProcessRegistry]:
     return str(started.output), registry
 
 
-def test_launch_promises_a_notice_after_the_turn_by_default(tmp_path: Path) -> None:
+def test_launch_promises_a_notice_by_default(tmp_path: Path) -> None:
     output, _ = _launch(tmp_path)
-    assert re.match(r"Command running in background with ID: bg-[0-9a-f]+\. ", output)
-    assert "delivered to you automatically" in output
-    assert "end your turn" in output
-    assert "BashOutput with block: true" in output
+    assert re.match(
+        r"Command running in background with ID: bg-[0-9a-f]+\. You will be "
+        r"notified when it completes\. To check interim output, use BashOutput "
+        r"on that ID\.$",
+        output,
+    )
 
 
 def test_launch_on_a_host_that_ends_jobs_with_the_turn(tmp_path: Path) -> None:
     output, _ = _launch(tmp_path, background_ends_with_turn=True)
+    assert "If it exits while you are still working you will be notified" in output
     assert "terminated when you give your final response" in output
     assert "do not end your turn to wait for it" in output
-    assert "BashOutput with block: true" in output
-    assert "delivered to you automatically" not in output
 
 
 def test_host_config_background_ends_with_turn_reaches_the_host(tmp_path: Path) -> None:

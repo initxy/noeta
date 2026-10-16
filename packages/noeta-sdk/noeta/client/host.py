@@ -170,6 +170,11 @@ class UntrustedProjectShellAllowlistWarning(UserWarning):
         )
 
 
+#: The tools whose ``command`` the shell allowlist gates: ``Bash`` and
+#: ``Monitor``, which runs its script through the same gate.
+_SHELL_GATED_TOOLS = frozenset({"Bash", "Monitor"})
+
+
 def _make_shell_approval_predicate(
     rules: tuple[Any, ...],
 ) -> Callable[[str, Mapping[str, Any]], bool]:
@@ -181,7 +186,7 @@ def _make_shell_approval_predicate(
     """
 
     def _needs_approval(tool_name: str, arguments: Mapping[str, Any]) -> bool:
-        if tool_name != "Bash":
+        if tool_name not in _SHELL_GATED_TOOLS:
             return False
         command = arguments.get("command")
         if not isinstance(command, str) or not command.strip():
@@ -1103,18 +1108,17 @@ class SdkHost(GenericEngineResolver):
         )
         # Build the background-shell registry on the host's shared L0 triple
         # (lazily here, not a default_factory, because it needs event_log +
-        # content_store). The dispatcher is the wake seam; the host's own
-        # ``_on_background_exit`` hook pushes a job that exits while the session is
-        # idle back as a next-goal notice. The hook hands off to a daemon drive
-        # thread; it is inert until the product wires a notifier via
-        # :meth:`set_background_notifier`.
+        # content_store). Every notice a job sends — its end, a monitor's
+        # events — goes to ``_on_background_notice``, which queues it for the
+        # model mid-turn or drives a turn for it; inert until the product wires
+        # a notifier via :meth:`set_background_notifier`.
         self._process_registry = ProcessRegistry(
             event_log=self.event_log,
             content_store=self.content_store,
             # Per-session concurrency cap. Reject (not queue) over the cap.
             max_jobs_per_root_task=self.max_background_jobs_per_root_task,
             dispatcher=self.dispatcher,
-            on_background_exit=self._on_background_exit,
+            on_notice=self._on_background_notice,
         )
         # Background sub-agent registry (docs/adr/background-subagent.md). Mirrors
         # the process registry: built here on the shared L0 triple. The
@@ -1321,30 +1325,23 @@ class SdkHost(GenericEngineResolver):
         :class:`~noeta.execution.background_delivery.BackgroundDelivery`."""
         self._delivery.set_notifier(notifier)
 
-    def _on_background_exit(
-        self, root_task_id: str, job_id: str, summary: str, ref: ContentRef
+    def _on_background_notice(
+        self, root_task_id: str, job_id: str, notice: str
     ) -> None:
-        """ProcessRegistry watcher hook — project a shell exit, hand it to delivery.
+        """ProcessRegistry hook — hand a job's notice to delivery.
 
-        Runs on the watcher's daemon thread, so it MUST NOT block:
-        :meth:`BackgroundDelivery.on_exit` spawns the drive thread and returns at
-        once. The shell notice rides a pointer (``summary`` + the final
-        :class:`ContentRef` + the ``job_id`` the model can ``shell_poll``); no
-        stream read is needed, so the projection just closes over them."""
-
-        def _plan() -> DeliverFn:
-            def _deliver(notifier: Any) -> None:
-                notifier.notify_background_exit(
-                    root_task_id, summary=summary, ref=ref, job_id=job_id
-                )
-
-            return _deliver
-
-        self._delivery.on_exit(
-            task_id=root_task_id,
-            plan=_plan,
-            thread_name=f"noeta-bg-notify-{job_id}",
-        )
+        Runs on the job's own thread; :meth:`BackgroundDelivery.post_notice`
+        records it at once (so a job's notices keep their order) and leaves
+        any waiting to its own thread."""
+        try:
+            self._delivery.post_notice(task_id=root_task_id, notice=notice)
+        except Exception:  # noqa: BLE001 — a notice never kills its job's thread
+            _log.warning(
+                "background notice for %s (%s) was not delivered",
+                root_task_id,
+                job_id,
+                exc_info=True,
+            )
 
     # -- background sub-agent (docs/adr/background-subagent.md) -------------
 
@@ -2062,7 +2059,8 @@ class SdkHost(GenericEngineResolver):
                 # The predicate owns Bash's gate; drop it from the static set
                 # so an allowlisted command is NOT also force-gated.
                 require_approval_tools = tuple(
-                    n for n in require_approval_tools if n != "Bash"
+                    n for n in require_approval_tools
+                    if n not in _SHELL_GATED_TOOLS
                 )
         # Browser tools are flag-gated (never in ``spec.tools``), so
         # ``_approval_set_for`` never sees them. Force-gate the whole high-risk

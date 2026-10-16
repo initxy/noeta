@@ -344,6 +344,7 @@ class ToolRuntime:
                 "task_id": started.task_id,
                 "root_task_id": self._root_task_id(started.task_id),
                 "trace_id": started.trace_id,
+                "tool_use_id": call.call_id,
             },
             background_runner=self._background_runner,
             file_read_registry=reads,

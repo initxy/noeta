@@ -108,6 +108,7 @@ _SCOUT_TOOLS = (
     "Bash",
     "BashOutput",
     "KillShell",
+    "Monitor",
     "WebSearch",
     "WebFetch",
 )
@@ -126,6 +127,7 @@ _GENERAL_PURPOSE_TOOLS = (
     "Bash",
     "BashOutput",
     "KillShell",
+    "Monitor",
     "WebSearch",
     "WebFetch",
     "Write",
@@ -148,6 +150,7 @@ _WEB_TOOLS = (
     "Bash",
     "BashOutput",
     "KillShell",
+    "Monitor",
     "WebSearch",
     "WebFetch",
     "Write",

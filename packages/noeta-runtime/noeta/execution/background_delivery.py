@@ -1,13 +1,14 @@
-"""The shared background-delivery seam: surface a finished background activity —
-a backgrounded shell command or a background sub-agent — in its session at a
-turn boundary, proactively, without the user asking again and the model polling.
+"""The shared background-delivery seam: surface background activity in its
+session proactively, without the user asking again and the model polling.
 
-The two tenants differ only in how they project a finished activity into a
-completion notice, and that projection is the :data:`PlanFn` the caller
-supplies. Everything else lives here once: the non-blocking hop off the watcher
-/ executor callback, the terminal-parent drop, and the bounded mid-turn retry.
-Retrying is determinism-safe because it changes only WHEN the notice turn is
-injected, never the recorded bytes.
+Two shapes. A background command's or a monitor's notice
+(:meth:`BackgroundDelivery.post_notice`) is queued as a pending injection at
+once — a running turn takes it in between tool calls — and a turn is driven
+for it only when none is running to take it. A finished background sub-agent
+(:meth:`BackgroundDelivery.on_exit`) is pushed at a turn boundary, its
+projection being the :data:`PlanFn` the caller supplies. Both hop off the
+watcher / executor callback, drop a terminal or closed session, and wait out a
+busy one; waiting changes only WHEN a turn runs, never the recorded bytes.
 """
 
 from __future__ import annotations
@@ -83,6 +84,10 @@ class BackgroundDelivery:
         # Set by :meth:`close`: nothing new is handed off and a waiting drive
         # stops instead of driving a turn on a shut-down host.
         self._closed = False
+        # Sessions with a settle thread running, and those posted to since
+        # that thread last looked (so it looks again before it stops).
+        self._settling: set[str] = set()
+        self._dirty: set[str] = set()
 
     def set_notifier(self, notifier: Any) -> None:
         """Wire the completion notifier (the ``InteractionDriver``). Idempotent."""
@@ -96,6 +101,92 @@ class BackgroundDelivery:
         durable exit event stands; a background sub-agent's result stays
         undelivered for the next Client's recovery scan. Idempotent."""
         self._closed = True
+
+    def post_notice(
+        self,
+        *,
+        task_id: str,
+        notice: str,
+        retry_timeout_s: float = DEFAULT_DELIVER_TIMEOUT_S,
+        poll_s: float = DEFAULT_DELIVER_POLL_S,
+    ) -> None:
+        """Queue ``notice`` for the model of ``task_id`` and see it delivered.
+
+        Synchronous part (on the caller's thread, so notices keep their order):
+        a terminal or closed session drops it; otherwise the notifier records
+        it as a pending injection, which a running turn drains at its next
+        top-of-loop. Then a per-session settle thread watches: once nothing is
+        pending it stops; if the session parks on its next-goal handle with
+        injections still pending — the notice landed as the turn ended, or
+        while it was parked — it drives a turn that takes them in. No-op until
+        a notifier is wired, and after :meth:`close`."""
+        notifier = self._notifier
+        if notifier is None or self._closed:
+            return
+        task = fold(self._event_log, self._content_store, task_id)
+        if task.status == "terminal" or getattr(task.governance, "closed", False):
+            return
+        notifier.inject_notice(task_id, notice=notice)
+        with self._lock:
+            self._dirty.add(task_id)
+            if task_id in self._settling:
+                return
+            self._settling.add(task_id)
+        try:
+            threading.Thread(
+                target=self._settle,
+                args=(notifier, task_id, retry_timeout_s, poll_s),
+                name=f"noeta-bg-notice-{task_id}",
+                daemon=True,
+            ).start()
+        except BaseException:
+            with self._lock:
+                self._settling.discard(task_id)
+            raise
+
+    def _settle(
+        self, notifier: Any, task_id: str, retry_timeout_s: float, poll_s: float
+    ) -> None:
+        """Drive a turn for ``task_id``'s pending injections if no running
+        turn will take them; stop once none is pending (see
+        :meth:`post_notice`)."""
+        deadline = time.monotonic() + retry_timeout_s
+        wait = poll_s
+        try:
+            while not self._closed:
+                with self._lock:
+                    self._dirty.discard(task_id)
+                task = fold(self._event_log, self._content_store, task_id)
+                done = (
+                    not task.governance.pending_injections
+                    or task.status == "terminal"
+                    or getattr(task.governance, "closed", False)
+                )
+                if done:
+                    with self._lock:
+                        if task_id not in self._dirty:
+                            self._settling.discard(task_id)
+                            return
+                    continue
+                try:
+                    notifier.deliver_injections(task_id)
+                    wait = poll_s
+                    continue
+                except Exception:  # noqa: BLE001 — not parked: a running turn takes them
+                    pass
+                if time.monotonic() >= deadline:
+                    _log.warning(
+                        "background notices for session %s still pending after "
+                        "%.1fs; the session's next turn takes them in",
+                        task_id,
+                        retry_timeout_s,
+                    )
+                    break
+                time.sleep(wait)
+                wait = min(wait * 2, DEFAULT_DELIVER_MAX_POLL_S)
+        finally:
+            with self._lock:
+                self._settling.discard(task_id)
 
     def is_pending(self, key: str) -> bool:
         """True while a delivery handed off under ``key`` is still running."""
