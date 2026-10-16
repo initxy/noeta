@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
+## [0.6.40] - 2026-10-15
+
+`noeta-runtime` and `noeta-sdk`, lockstep (`noeta-sdk` requires
+`noeta-runtime>=0.6.40`).
+
+### Added
+
+- **`Monitor` tool**, as in Claude Code: a background script whose stdout lines
+  each arrive as a notification while the model keeps working (`command`,
+  `description`, `timeout_ms` default 300000, max 1800000; lines coalesced over
+  200 ms, rate-limited). Stopped with `KillShell`.
+
+### Changed
+
+- **Background notifications arrive mid-turn.** A finished background command or
+  a Monitor event is recorded as an injection and reaches the model on its next
+  request as Claude Code's `<task-notification>`, after the tool results;
+  a suspended conversation is still woken, a closed one drops it.
+- The long-`sleep` refusal and the Bash description point at `Monitor`, in
+  Claude Code's words.
+- `ProcessRegistry`'s callback is `on_notice` (was `on_background_exit`);
+  `notify_background_exit` is replaced by `InteractionDriver.inject_notice`.
+
 ## [0.6.39] - 2026-10-15
 
 `noeta-runtime` and `noeta-sdk`, lockstep (`noeta-sdk` requires
@@ -3488,6 +3511,7 @@ Initial preview release.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
 [Unreleased]: https://github.com/initxy/noeta/compare/v0.6.36...HEAD
+[0.6.40]: https://github.com/initxy/noeta/compare/v0.6.39...v0.6.40
 [0.6.39]: https://github.com/initxy/noeta/compare/v0.6.38...v0.6.39
 [0.6.38]: https://github.com/initxy/noeta/compare/v0.6.37...v0.6.38
 [0.6.37]: https://github.com/initxy/noeta/compare/v0.6.36...v0.6.37
