@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
+## [0.6.41] - 2026-10-18
+
+`noeta-sdk` only (`noeta-runtime` stays at 0.6.40).
+
+### Fixed
+
+- **The default skill-usage rank no longer blocks a turn build.**
+  `SkillUsageRanker` folded the store (every stream listed, the 200 latest
+  read whole) on the thread that asked, every 10 minutes — 2–5 s on a
+  multi-gigabyte store, on the host's main loop, before the first model call
+  of a new conversation. It now folds on a background thread, started when the
+  host builds; a build reads the last snapshot (unranked until the first fold
+  lands). The fold also reads only the two event types it counts, through the
+  sqlite and postgres adapters' new `read_event_types` (not a Protocol member;
+  other event logs are still read whole): on a 16 GB store one fold went from
+  about 2.9 s to 0.65 s, most of it now the stream listing. Over sqlite the
+  fold reads on a read-only connection of its own (`SqliteEventLog.open_reader`,
+  also probed, not a Protocol member), so it no longer holds the lock the
+  adapter's writers share: under WAL a write during a fold waited at most
+  3 ms in a local test, against 151 ms before.
+
 ## [0.6.40] - 2026-10-15
 
 `noeta-runtime` and `noeta-sdk`, lockstep (`noeta-sdk` requires
@@ -3510,7 +3531,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.36...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.41...HEAD
+[0.6.41]: https://github.com/initxy/noeta/compare/v0.6.40...v0.6.41
 [0.6.40]: https://github.com/initxy/noeta/compare/v0.6.39...v0.6.40
 [0.6.39]: https://github.com/initxy/noeta/compare/v0.6.38...v0.6.39
 [0.6.38]: https://github.com/initxy/noeta/compare/v0.6.37...v0.6.38
