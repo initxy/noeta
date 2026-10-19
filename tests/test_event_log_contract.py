@@ -959,3 +959,52 @@ def test_list_task_streams_summary_matches_stream_tail(make_log: Any) -> None:
     assert summary.task_id == "t1"
     assert summary.last_seq == 1  # second event (seq starts at 0 per task)
     assert summary.last_event_time == 7.0
+
+
+def test_read_event_types_narrows_one_stream_in_seq_order(make_log: Any) -> None:
+    """The durable adapters' optional narrowed read: only the asked types of
+    the asked stream, in ``seq`` order."""
+    log = make_log()
+    if not hasattr(log, "read_event_types"):
+        pytest.skip("optional; the in-memory reference adapter reads whole")
+    for task_id in ("t1", "t2"):
+        log.emit(
+            task_id=task_id,
+            type="TaskCreated",
+            payload=TaskCreatedPayload(goal=task_id, policy_name="p"),
+        )
+    log.emit(
+        task_id="t1",
+        type="TaskCreated",
+        payload=TaskCreatedPayload(goal="again", policy_name="p"),
+    )
+    narrowed = log.read_event_types("t1", ["TaskCreated", "TaskCompleted"])
+    assert [(e.task_id, e.seq) for e in narrowed] == [("t1", 0), ("t1", 1)]
+    assert log.read_event_types("t1", ["TaskCompleted"]) == []
+    assert log.read_event_types("t1", []) == []
+
+
+def test_sqlite_open_reader_is_a_separate_read_only_connection(tmp_path: Any) -> None:
+    from noeta.builtins.storage.impl.sqlite.eventlog import SqliteEventLog
+
+    log = SqliteEventLog(tmp_path / "store.sqlite")
+    log.emit(
+        task_id="t1",
+        type="TaskCreated",
+        payload=TaskCreatedPayload(goal="g", policy_name="p"),
+    )
+    reader = log.open_reader()
+    assert reader is not None
+    try:
+        assert [s.task_id for s in reader.list_task_streams()] == ["t1"]
+        assert [e.seq for e in reader.read_event_types("t1", ["TaskCreated"])] == [0]
+        # The writer is not blocked while the reader holds a connection.
+        log.emit(
+            task_id="t1",
+            type="TaskCreated",
+            payload=TaskCreatedPayload(goal="again", policy_name="p"),
+        )
+        assert len(reader.read("t1")) == 2
+    finally:
+        reader.close()
+    assert SqliteEventLog(":memory:").open_reader() is None

@@ -18,7 +18,7 @@ import time
 import uuid
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Collection, Optional, Union
 
 from noeta.protocols.canonical import from_canonical_bytes, to_canonical_bytes
 from noeta.protocols.dispatcher import LeaseRegistry
@@ -39,6 +39,9 @@ from noeta.storage.spi import enforce_payload_cap, restore_payload
 
 from noeta.builtins.storage.impl.sqlite._connection import _open_connection
 from noeta.builtins.storage.impl.sqlite.migrations import apply_migrations
+
+if TYPE_CHECKING:
+    from noeta.builtins.storage.impl.sqlite.readonly import SqliteReadOnlyStore
 
 # The ``find_latest_snapshot`` predicate, rendered once from the protocol
 # constant so the query cannot drift from the contract set. The
@@ -92,6 +95,7 @@ class SqliteEventLog:
     ) -> None:
         self._conn = _open_connection(path)
         apply_migrations(self._conn)
+        self._path = str(path)
         self._lease_validator = lease_validator
         self._clock = clock or time.time
         self._id_factory = id_factory or _default_id_factory
@@ -309,6 +313,45 @@ class SqliteEventLog:
                     "ORDER BY seq",
                     (task_id, int(after_seq)),
                 ).fetchall()
+            return [_row_to_envelope(row) for row in rows]
+
+    def open_reader(self) -> Optional["SqliteReadOnlyStore"]:
+        """A read-only connection of its own to the same file, or ``None``
+        for an in-memory database.
+
+        Not a Protocol member, probed with ``getattr`` like
+        :meth:`read_event_types`: a long background read (the skill-usage
+        fold) runs on it instead of this adapter's connection, so it holds
+        no lock a writer waits on — under WAL, sqlite reads and writes the
+        file concurrently. The caller closes it.
+        """
+        if self._path == ":memory:" or self._path.startswith("file::memory:"):
+            return None
+        from noeta.builtins.storage.impl.sqlite.readonly import (
+            SqliteReadOnlyStore,
+        )
+
+        return SqliteReadOnlyStore(self._path)
+
+    def read_event_types(
+        self, task_id: str, event_types: Collection[str]
+    ) -> list[EventEnvelope]:
+        """``read`` narrowed to ``event_types``, in ``seq`` order.
+
+        Not a Protocol member: a reader after a few types of a long stream
+        (the skill-usage fold) probes for it with ``getattr`` and falls back
+        to :meth:`read`, and skips decoding every other event's payload.
+        """
+        types = sorted(set(event_types))
+        if not types:
+            return []
+        marks = ", ".join("?" for _ in types)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM events WHERE task_id = ? AND type IN ({marks}) "
+                "ORDER BY seq",
+                (task_id, *types),
+            ).fetchall()
             return [_row_to_envelope(row) for row in rows]
 
     def find_latest_snapshot(self, task_id: str) -> Optional[EventEnvelope]:

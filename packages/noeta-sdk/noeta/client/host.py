@@ -2960,7 +2960,11 @@ class SdkHost(GenericEngineResolver):
                 "tenant's skill menu by its own usage"
             )
             return None
-        return SkillUsageRanker(self.event_log)
+        ranker = SkillUsageRanker(self.event_log)
+        # Start the first fold now, so the first task's roster is ranked
+        # unless it builds within the seconds that fold takes.
+        ranker.rank()
+        return ranker
 
     def _skill_menu_rank_override(
         self, task_id: Optional[str]

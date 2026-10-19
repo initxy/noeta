@@ -269,6 +269,8 @@ def test_bare_host_ranks_the_roster_by_usage_in_the_ledger(tmp_path: Path) -> No
         tmp_path, sqlite_path=db, plugin_config_overrides=budget
     )
     assert isinstance(second._skill_usage_ranker, SkillUsageRanker)
+    # The host started the first fold in the background when it built.
+    assert second._skill_usage_ranker.wait_idle(5)
     seeded = second_driver.seed_start(goal="g", agent="main")
     # The seed build already recorded the listing with the usage rank.
     assert _recorded(second, seeded.task_id) == {**_SHORT, "ccc": "c" * 400}

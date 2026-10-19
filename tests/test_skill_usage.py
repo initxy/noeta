@@ -8,6 +8,9 @@ task's loop started count, so host preloads never rank themselves first.
 
 from __future__ import annotations
 
+import time
+from typing import Any, Callable
+
 import pytest
 
 from noeta.client.skill_usage import SkillUsageRanker
@@ -144,6 +147,10 @@ class _Store:
         return None
 
 
+def _inline(fold: Callable[[], None]) -> None:
+    fold()
+
+
 def _used(task_id: str, name: str, *, at: float) -> list[EventEnvelope]:
     return [
         _event(task_id, "ContextPlanComposed", at=at),
@@ -160,7 +167,9 @@ def test_ranker_folds_only_the_most_recent_streams_once_per_ttl() -> None:
             "oldest": _used("oldest", "archivist", at=1 * DAY),
         }
     )
-    ranker = SkillUsageRanker(store, clock=lambda: now["t"], max_streams=2, ttl_s=600)
+    ranker = SkillUsageRanker(
+        store, clock=lambda: now["t"], max_streams=2, ttl_s=600, spawn=_inline
+    )
 
     rank = ranker.rank()
     assert set(rank) == {"coder", "reviewer"}
@@ -185,7 +194,7 @@ def test_ranker_keeps_the_previous_snapshot_when_the_store_fails(
 ) -> None:
     now = {"t": 10 * DAY}
     store = _Store({"a": _used("a", "coder", at=9 * DAY)})
-    ranker = SkillUsageRanker(store, clock=lambda: now["t"], ttl_s=600)
+    ranker = SkillUsageRanker(store, clock=lambda: now["t"], ttl_s=600, spawn=_inline)
     rank = ranker.rank()
     assert set(rank) == {"coder"}
 
@@ -198,3 +207,99 @@ def test_ranker_keeps_the_previous_snapshot_when_the_store_fails(
     assert ranker.rank() == rank
     assert caplog.text.count("skill usage fold failed") == 1
 
+
+
+def test_ranker_never_folds_on_the_asking_thread() -> None:
+    """An ask answers from the snapshot at once; a due fold runs elsewhere and
+    the asks after it see its result."""
+    now = {"t": 10 * DAY}
+    store = _Store({"a": _used("a", "coder", at=9 * DAY)})
+    started: list[Callable[[], None]] = []
+    ranker = SkillUsageRanker(
+        store, clock=lambda: now["t"], ttl_s=600, spawn=started.append
+    )
+
+    assert ranker.rank() == {}
+    assert store.reads == []
+    # A fold already running is not started twice, even past the TTL.
+    now["t"] += 601
+    assert ranker.rank() == {}
+    assert len(started) == 1
+
+    started[0]()
+    assert ranker.wait_idle(0)
+    # The fold landed; this ask is past the TTL too, so it queues the next.
+    assert set(ranker.rank()) == {"coder"}
+    assert len(started) == 2
+
+
+def test_ranker_default_spawn_folds_in_the_background() -> None:
+    store = _Store({"a": _used("a", "coder", at=time.time())})
+    ranker = SkillUsageRanker(store)
+    ranker.rank()
+    assert ranker.wait_idle(5)
+    assert set(ranker.rank()) == {"coder"}
+
+
+def test_ranker_reads_only_the_fold_event_types_when_the_log_can_narrow() -> None:
+    events = [
+        _event("a", "TaskCreated", at=9 * DAY),
+        *_used("a", "coder", at=9 * DAY),
+    ]
+
+    class _Narrowing(_Store):
+        asked: list[tuple[str, ...]] = []
+
+        def read_event_types(self, task_id, event_types):
+            self.asked.append(tuple(event_types))
+            return [e for e in self.streams[task_id] if e.type in event_types]
+
+    store = _Narrowing({"a": events})
+    ranker = SkillUsageRanker(store, clock=lambda: 10 * DAY, spawn=_inline)
+    assert set(ranker.rank()) == {"coder"}
+    assert store.reads == []
+    assert store.asked == [("ContextPlanComposed", "TaskStatePatched")]
+
+
+def test_ranker_folds_on_a_reader_of_its_own_and_closes_it(tmp_path) -> None:
+    """Over a sqlite file the fold reads through a separate read-only
+    connection, never the adapter's shared one, and closes it after."""
+    from noeta.builtins.storage.impl.sqlite.eventlog import SqliteEventLog
+
+    log = SqliteEventLog(tmp_path / "store.sqlite")
+    from noeta.protocols.events import ContextPlanComposedPayload
+
+    log.emit(
+        task_id="a", type="ContextPlanComposed", payload=ContextPlanComposedPayload()
+    )
+    log.emit(
+        task_id="a",
+        type="TaskStatePatched",
+        payload=TaskStatePatchedPayload(patch={"activate_skills": ["coder"]}),
+    )
+    opened: list[Any] = []
+    real_open = log.open_reader
+
+    def open_reader() -> Any:
+        reader = real_open()
+        opened.append(reader)
+        return reader
+
+    log.open_reader = open_reader  # type: ignore[method-assign]
+    log.read = log.read_event_types = None  # type: ignore[assignment,method-assign]
+    ranker = SkillUsageRanker(log, spawn=_inline)
+    assert set(ranker.rank()) == {"coder"}
+    assert len(opened) == 1
+    with pytest.raises(Exception):
+        opened[0].read("a")  # closed after the fold
+
+
+def test_ranker_reads_through_the_log_when_its_reader_fails_to_open() -> None:
+    class _NoReader(_Store):
+        def open_reader(self):
+            raise OSError("cannot open")
+
+    store = _NoReader({"a": _used("a", "coder", at=9 * DAY)})
+    ranker = SkillUsageRanker(store, clock=lambda: 10 * DAY, spawn=_inline)
+    assert set(ranker.rank()) == {"coder"}
+    assert store.reads == ["a"]

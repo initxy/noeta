@@ -13,7 +13,7 @@ import threading
 import time
 import uuid
 from types import TracebackType
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Collection, Mapping, Optional
 
 from noeta.protocols.canonical import from_canonical_bytes, to_canonical_bytes
 from noeta.protocols.dispatcher import LeaseRegistry
@@ -410,6 +410,22 @@ class PostgresEventLog:
             if row is None:
                 return None
             return _row_to_envelope(row)
+
+    def read_event_types(
+        self, task_id: str, event_types: Collection[str]
+    ) -> list[EventEnvelope]:
+        """``read`` narrowed to ``event_types``; see the sqlite adapter's
+        twin."""
+        types = sorted(set(event_types))
+        if not types:
+            return []
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM events WHERE task_id = %s AND type = ANY(%s) "
+                "ORDER BY seq",
+                (task_id, types),
+            ).fetchall()
+            return [_row_to_envelope(row) for row in rows]
 
     def task_ids_with_event_type(self, event_type: str) -> set[str]:
         """Every task whose stream holds at least one ``event_type`` event;
