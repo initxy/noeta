@@ -502,6 +502,9 @@ def test_restart_composes_identical_messages_and_announces_only_the_absent(
     second, second_driver, provider = _host(
         ws, [_end("t1")], sqlite_path=db, plugin_config_overrides=budget
     )
+    # The host folds usage in the background; let its first fold land.
+    assert second._skill_usage_ranker is not None
+    assert second._skill_usage_ranker.wait_idle(5)
     after, task = _compose(second, tid)
     # The fresh host's own fit now ranks ``ccc`` first...
     slot = second._task_locals.peek(tid, ROSTER_SLOT)
