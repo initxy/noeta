@@ -54,6 +54,8 @@ __all__ = [
 _LOOP_STARTED_EVENT = "ContextPlanComposed"
 _STATE_PATCHED_EVENT = "TaskStatePatched"
 _SECONDS_PER_DAY = 86_400.0
+#: The only event types the fold reads.
+_FOLD_EVENT_TYPES = (_LOOP_STARTED_EVENT, _STATE_PATCHED_EVENT)
 
 #: How many of the most recently updated task streams
 #: :class:`SkillUsageRanker` folds. Bounds the read; the 7-day half-life
@@ -165,17 +167,22 @@ class SkillUsageRanker:
     folded from the most recently updated task streams of the whole store.
 
     Store-wide, so only a single-tenant host uses it — ``SdkHost`` skips it
-    when a tenancy resolver is bound. Bounded: an ask within ``ttl_s`` of the
-    last fold answers from that snapshot, so the store sees at most
-    ``max_streams`` stream reads per ``ttl_s`` however many tasks build;
-    concurrent asks wait for one fold instead of each running their own. The
-    snapshot is process-local, so another process may fold a different one —
-    the host's per-task memo keeps a running task's roster fixed, and a task
-    resumed elsewhere composes a different roster at most once.
+    when a tenancy resolver is bound. Never folds on the asking thread: an
+    ask answers from the current snapshot at once, and an ask past ``ttl_s``
+    since the last fold started also starts one fold in the background
+    (``spawn``, a daemon thread by default). The fold reads every stream of
+    the store to rank them, so on a large store it costs seconds that a turn
+    build must not wait for; a rank minutes old orders a menu just as well.
+    Until the first fold lands the snapshot is ``{}`` — the menu keeps tier +
+    ``priority`` order — so the host starts one when it builds the ranker.
+    The store sees at most ``max_streams`` stream reads per ``ttl_s`` however
+    many tasks build. The snapshot is process-local, so another process may
+    fold a different one — the host's per-task memo keeps a running task's
+    roster fixed, and a task resumed elsewhere composes a different roster at
+    most once.
 
-    A failing read never fails the turn build that asked: it is logged, the
-    previous snapshot keeps answering, and the next fold is due after
-    ``ttl_s``.
+    A failing read never fails anything: it is logged, the previous snapshot
+    keeps answering, and the next fold is due after ``ttl_s``.
     """
 
     def __init__(
@@ -185,36 +192,100 @@ class SkillUsageRanker:
         clock: Callable[[], float] = time.time,
         max_streams: int = DEFAULT_USAGE_SCAN_STREAMS,
         ttl_s: float = DEFAULT_USAGE_SNAPSHOT_TTL_S,
+        spawn: Optional[Callable[[Callable[[], None]], None]] = None,
     ) -> None:
         self._event_log = event_log
         self._clock = clock
         self._max_streams = max_streams
         self._ttl_s = ttl_s
+        self._spawn = spawn if spawn is not None else _spawn_daemon
         self._lock = threading.Lock()
         self._rank: dict[str, float] = {}
         self._folded_at: Optional[float] = None
+        self._idle = threading.Event()
+        self._idle.set()
 
     def rank(self) -> dict[str, float]:
         """``skill → decayed usage score`` for the current snapshot (``{}``
-        when nothing in the scanned streams activated a skill)."""
+        before the first fold lands, or when nothing in the scanned streams
+        activated a skill). Starts a background fold when one is due."""
         with self._lock:
             now = self._clock()
-            if self._folded_at is not None and now - self._folded_at < self._ttl_s:
-                return self._rank
-            self._folded_at = now
+            due = self._idle.is_set() and (
+                self._folded_at is None or now - self._folded_at >= self._ttl_s
+            )
+            if due:
+                self._folded_at = now
+                self._idle.clear()
+        if due:
             try:
-                streams = self._event_log.list_task_streams()[: self._max_streams]
+                self._spawn(lambda: self._fold(now))
+            except Exception:
+                _log.warning("skill usage fold could not start", exc_info=True)
+                self._idle.set()
+        with self._lock:
+            return self._rank
+
+    def wait_idle(self, timeout: Optional[float] = None) -> bool:
+        """Block until no fold is running (``False`` on timeout)."""
+        return self._idle.wait(timeout)
+
+    def _fold(self, now: float) -> None:
+        try:
+            source, close = self._fold_source()
+            try:
+                streams = source.list_task_streams()[: self._max_streams]
                 usage = skill_usage_from_events(
                     event
                     for summary in streams
-                    for event in self._event_log.read(summary.task_id)
+                    for event in _read_fold_events(source, summary.task_id)
                 )
+            finally:
+                close()
+            rank = rank_skills_by_usage(usage, now=now)
+        except Exception:
+            _log.warning(
+                "skill usage fold failed; the skill menu keeps its previous "
+                "keep order until the next fold",
+                exc_info=True,
+            )
+        else:
+            with self._lock:
+                self._rank = rank
+        finally:
+            self._idle.set()
+
+
+    def _fold_source(self) -> tuple[_UsageSource, Callable[[], None]]:
+        """What one fold reads, and how to let it go: a connection of its
+        own when the event log opens one (the sqlite adapter), so the fold
+        takes no lock the writers share; else the event log itself."""
+        opener = getattr(self._event_log, "open_reader", None)
+        if callable(opener):
+            try:
+                reader = opener()
             except Exception:
                 _log.warning(
-                    "skill usage fold failed; the skill menu keeps its previous "
-                    "keep order until the next fold",
+                    "skill usage fold could not open its own reader; reading "
+                    "through the event log",
                     exc_info=True,
                 )
-                return self._rank
-            self._rank = rank_skills_by_usage(usage, now=now)
-            return self._rank
+            else:
+                if reader is not None:
+                    return reader, reader.close
+        return self._event_log, lambda: None
+
+
+def _read_fold_events(source: _UsageSource, task_id: str) -> list[EventEnvelope]:
+    # The durable adapters can skip the rest of a stream — on a store of
+    # gigabytes nearly all of the fold's cost was decoding events it ignores;
+    # any other event log is read whole.
+    narrowed = getattr(source, "read_event_types", None)
+    if callable(narrowed):
+        events: list[EventEnvelope] = narrowed(task_id, _FOLD_EVENT_TYPES)
+        return events
+    return source.read(task_id)
+
+
+def _spawn_daemon(fold: Callable[[], None]) -> None:
+    threading.Thread(target=fold, name="noeta-skill-usage-fold", daemon=True).start()

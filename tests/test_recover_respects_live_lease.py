@@ -225,6 +225,10 @@ def test_recover_reads_snapshots_not_whole_streams(tmp_path: Path) -> None:
     ) as client:
         registry = client._host._background_subagents  # noqa: SLF001
         log = client._host.event_log  # noqa: SLF001
+        # The skill-usage rank's first fold reads whole streams on its own
+        # thread; let it land before counting.
+        ranker = client._host._skill_usage_ranker  # noqa: SLF001
+        assert ranker is None or ranker.wait_idle(5)
         full_reads: list[str] = []
         real_read = log.read
 

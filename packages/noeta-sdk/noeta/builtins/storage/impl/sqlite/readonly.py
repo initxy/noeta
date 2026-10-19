@@ -17,7 +17,7 @@ read shape cannot drift from it.
 from __future__ import annotations
 
 import sqlite3
-from typing import Optional
+from typing import Collection, Optional
 from urllib.parse import quote
 
 from noeta.protocols.errors import ContentNotFound, NoetaError
@@ -109,6 +109,21 @@ class SqliteReadOnlyStore:
                 "ORDER BY seq",
                 (task_id, after_seq),
             ).fetchall()
+        return [_row_to_envelope(row) for row in rows]
+
+    def read_event_types(
+        self, task_id: str, event_types: Collection[str]
+    ) -> list[EventEnvelope]:
+        """``read`` narrowed to ``event_types``; see the live adapter's twin."""
+        types = sorted(set(event_types))
+        if not types:
+            return []
+        marks = ", ".join("?" for _ in types)
+        rows = self._conn.execute(
+            f"SELECT * FROM events WHERE task_id = ? AND type IN ({marks}) "
+            "ORDER BY seq",
+            (task_id, *types),
+        ).fetchall()
         return [_row_to_envelope(row) for row in rows]
 
     def find_latest_snapshot(self, task_id: str) -> Optional[EventEnvelope]:

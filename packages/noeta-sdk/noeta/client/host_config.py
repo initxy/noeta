@@ -575,8 +575,9 @@ class HostConfig:
     ] = None
     #: The default keep order when neither a resolver nor a static
     #: ``menu_rank`` is set: the host folds skill usage from the most recently
-    #: updated task streams of the whole store (at most 200, refolded at most
-    #: every 10 minutes), and each task keeps the first rank it composed with.
+    #: updated task streams of the whole store (at most 200, refolded in the
+    #: background at most every 10 minutes, so a turn build never waits on
+    #: it), and each task keeps the first rank it composed with.
     #: Store-wide, so it is a single-tenant default: it stays off when
     #: ``memory_root_resolver`` or ``mcp_scope_resolver`` is bound (logged
     #: once) — that host passes ``skill_menu_rank_resolver`` instead. Best

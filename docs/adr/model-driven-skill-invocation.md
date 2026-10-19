@@ -190,6 +190,11 @@ cost four times an English one.
   `SdkHost` folds skill usage from the most recently updated task streams of
   the whole store (at most 200, refolded at most every 10 minutes) with the
   shipped fold and decay score, under the same once-per-task memo. The fold
+  runs on a background thread and a build reads the last snapshot: on a
+  store of many gigabytes one fold took 2–5 s on the host's main loop, and a
+  rank minutes old orders a menu as well as a fresh one. The fold reads only
+  the two event types it counts, and over sqlite on a read-only connection
+  of its own, so it never holds the lock the adapter's writers share. The fold
   is store-wide, which is the single-tenant stance a host without tenancy
   seams already takes for memory and MCP; it stays off when
   `memory_root_resolver` or `mcp_scope_resolver` is bound, so "the host picks
