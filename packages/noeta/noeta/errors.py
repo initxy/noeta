@@ -42,5 +42,6 @@ class Fatal(ModelError):
     """Retrying the same request cannot help (auth, bad request, refusal)."""
 
 
-class MalformedToolArguments(Fatal):
-    pass
+class MalformedToolArguments(Transient):
+    """Tool-call arguments that are not a JSON object. Almost always a stream
+    cut mid-call, so the call is retried like any transient failure."""

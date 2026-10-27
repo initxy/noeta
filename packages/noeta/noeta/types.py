@@ -126,6 +126,10 @@ class ModelRequest(Struct):
     #: breakpoint (the composer decides; adapters that cannot cache ignore it).
     cache_after: list[int] = msgspec.field(default_factory=list)
     headers: dict[str, str] = msgspec.field(default_factory=dict)
+    #: ``"auto"`` / ``"none"`` / ``"any"``; ``None`` sends nothing (the vendor
+    #: default). The summarize call sets ``"none"`` so a summarizer cannot
+    #: answer with a tool call.
+    tool_choice: str | None = None
 
 
 class Usage(Struct):
