@@ -1,0 +1,367 @@
+"""``Edit``: exact unique match, read-first, CRLF, snippet, write fence."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any
+
+import pytest
+from noeta.tools import EditTool, ReadTool
+from noeta.tools.base import ToolContext
+
+from .conftest import Harness, text_of
+
+
+async def _read(h: Harness, path: str) -> None:
+    out = await h.call(ReadTool(), file_path=path)
+    assert not out.is_error, text_of(out)
+
+
+def test_edit_metadata() -> None:
+    tool = EditTool()
+    assert tool.name == "Edit"
+    assert tool.read_only is False
+    assert tool.clearable is True
+    assert tool.input_schema == {
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string"},
+            "old_string": {"type": "string"},
+            "new_string": {"type": "string"},
+            "replace_all": {"type": "boolean"},
+        },
+        "required": ["file_path", "old_string", "new_string"],
+        "additionalProperties": False,
+    }
+
+
+async def test_edit_writes_on_unique_match(h: Harness, ws: Path) -> None:
+    target = ws / "a.py"
+    target.write_text("def foo():\n    return 1\n")
+    await _read(h, "a.py")
+    out = await h.call(EditTool(), file_path="a.py", old_string="return 1", new_string="return 2")
+    assert not out.is_error
+    text = text_of(out)
+    assert "The file a.py has been updated" in text
+    assert "\t    return 2" in text
+    assert target.read_text() == "def foo():\n    return 2\n"
+    diff = out.meta["diff"]
+    assert "-    return 1" in diff
+    assert "+    return 2" in diff
+    assert diff.startswith("--- a/a.py")
+    assert (out.meta["added"], out.meta["removed"]) == (1, 1)
+    assert out.display is not None and out.display.kind == "diff"
+    assert out.display.data["diff"] == diff
+
+
+async def test_edit_output_is_exact(h: Harness, ws: Path) -> None:
+    (ws / "a.txt").write_text("a\nb\nc\n")
+    await _read(h, "a.txt")
+    out = await h.call(EditTool(), file_path="a.txt", old_string="b", new_string="B")
+    assert text_of(out) == (
+        "The file a.txt has been updated. Here's the result of running `cat -n` "
+        "on a snippet of the edited file:\n     1\ta\n     2\tB\n     3\tc"
+    )
+
+
+async def test_consecutive_edits_chain_without_a_reread(h: Harness, ws: Path) -> None:
+    (ws / "a.py").write_text("one\ntwo\n")
+    await _read(h, "a.py")
+    first = await h.call(EditTool(), file_path="a.py", old_string="one", new_string="ONE")
+    assert not first.is_error
+    second = await h.call(EditTool(), file_path="a.py", old_string="two", new_string="TWO")
+    assert not second.is_error, text_of(second)
+    assert (ws / "a.py").read_text() == "ONE\nTWO\n"
+
+
+async def test_edit_without_read_first_rejected(h: Harness, ws: Path) -> None:
+    target = ws / "a.py"
+    target.write_text("hello\n")
+    out = await h.call(EditTool(), file_path="a.py", old_string="hello", new_string="world")
+    assert out.is_error
+    assert text_of(out) == (
+        "Edit: File has not been read yet. Read it first before editing it."
+    )
+    assert target.read_text() == "hello\n"
+
+
+async def test_edit_stale_read_rejected(h: Harness, ws: Path) -> None:
+    target = ws / "a.py"
+    target.write_text("v1\n")
+    await _read(h, "a.py")
+    target.write_text("v2-changed-on-disk\n")
+    out = await h.call(EditTool(), file_path="a.py", old_string="v2", new_string="v3")
+    assert out.is_error
+    assert text_of(out) == (
+        "Edit: File has been modified since it was read. Read it again before editing it."
+    )
+    assert target.read_text() == "v2-changed-on-disk\n"
+
+
+async def test_edit_zero_match_fails_no_write(h: Harness, ws: Path) -> None:
+    target = ws / "a.py"
+    target.write_text("foo\n")
+    await _read(h, "a.py")
+    out = await h.call(EditTool(), file_path="a.py", old_string="missing", new_string="x")
+    assert out.is_error
+    assert text_of(out) == "Edit: String to replace not found in file."
+    assert target.read_text() == "foo\n"
+
+
+async def test_edit_multi_match_fails_no_write(h: Harness, ws: Path) -> None:
+    target = ws / "a.py"
+    target.write_text("foo\nfoo\nfoo\n")
+    await _read(h, "a.py")
+    out = await h.call(EditTool(), file_path="a.py", old_string="foo", new_string="bar")
+    assert out.is_error
+    assert text_of(out) == (
+        "Edit: Found 3 matches of the string to replace, but replace_all is false. "
+        "To replace all occurrences, set replace_all to true. To replace only one, "
+        "provide more surrounding context to uniquely identify the instance."
+    )
+    assert target.read_text() == "foo\nfoo\nfoo\n"
+
+
+async def test_edit_replace_all_false_still_rejects_multi_match(h: Harness, ws: Path) -> None:
+    (ws / "a.py").write_text("foo\nfoo\n")
+    await _read(h, "a.py")
+    out = await h.call(
+        EditTool(), file_path="a.py", old_string="foo", new_string="bar", replace_all=False
+    )
+    assert out.is_error
+    assert "Found 2 matches" in text_of(out)
+    assert (ws / "a.py").read_text() == "foo\nfoo\n"
+
+
+async def test_edit_same_old_and_new_rejected(h: Harness, ws: Path) -> None:
+    (ws / "a.py").write_text("foo\n")
+    await _read(h, "a.py")
+    out = await h.call(EditTool(), file_path="a.py", old_string="foo", new_string="foo")
+    assert out.is_error
+    assert text_of(out) == "Edit: old_string and new_string must be different"
+
+
+async def test_edit_replace_all_replaces_every_match(h: Harness, ws: Path) -> None:
+    target = ws / "a.py"
+    target.write_text("foo\nfoo\nfoo\n")
+    await _read(h, "a.py")
+    out = await h.call(
+        EditTool(), file_path="a.py", old_string="foo", new_string="bar", replace_all=True
+    )
+    assert not out.is_error
+    assert "The file a.py has been updated" in text_of(out)
+    assert target.read_text() == "bar\nbar\nbar\n"
+    assert out.meta["diff"].count("+bar") == 3
+    assert out.meta["diff"].count("-foo") == 3
+    assert out.meta["replacements"] == 3
+
+
+async def test_edit_replace_all_single_match_still_works(h: Harness, ws: Path) -> None:
+    (ws / "a.py").write_text("def foo():\n    return 1\n")
+    await _read(h, "a.py")
+    out = await h.call(
+        EditTool(),
+        file_path="a.py",
+        old_string="return 1",
+        new_string="return 2",
+        replace_all=True,
+    )
+    assert not out.is_error
+    assert (ws / "a.py").read_text() == "def foo():\n    return 2\n"
+
+
+async def test_edit_replace_all_zero_match_still_fails(h: Harness, ws: Path) -> None:
+    (ws / "a.py").write_text("foo\n")
+    await _read(h, "a.py")
+    out = await h.call(
+        EditTool(), file_path="a.py", old_string="missing", new_string="x", replace_all=True
+    )
+    assert out.is_error
+    assert "String to replace not found in file." in text_of(out)
+
+
+async def test_edit_deletes_with_empty_new_string(h: Harness, ws: Path) -> None:
+    (ws / "a.txt").write_text("keep\ndrop\nkeep2\n")
+    await _read(h, "a.txt")
+    out = await h.call(EditTool(), file_path="a.txt", old_string="drop\n", new_string="")
+    assert not out.is_error
+    assert (ws / "a.txt").read_text() == "keep\nkeep2\n"
+
+
+async def test_edit_escape_rejected(h: Harness, ws: Path) -> None:
+    out = await h.call(EditTool(), file_path="/etc/passwd", old_string="x", new_string="y")
+    assert out.is_error
+    assert text_of(out) == (
+        f"Edit: path '/etc/passwd' resolves outside workspace {str(ws)!r}"
+    )
+
+
+async def test_edit_dotdot_escape_rejected(h: Harness, ws: Path) -> None:
+    (ws.parent / "outside.txt").write_text("x\n")
+    out = await h.call(EditTool(), file_path="../outside.txt", old_string="x", new_string="y")
+    assert out.is_error
+    assert "outside workspace" in text_of(out)
+    assert (ws.parent / "outside.txt").read_text() == "x\n"
+
+
+async def test_edit_symlink_out_of_the_workspace_rejected(h: Harness, ws: Path) -> None:
+    other = ws.parent / "other.txt"
+    other.write_text("x\n")
+    os.symlink(other, ws / "link.txt")
+    out = await h.call(EditTool(), file_path="link.txt", old_string="x", new_string="y")
+    assert out.is_error
+    assert "outside workspace" in text_of(out)
+
+
+async def test_edit_through_a_symlink_inside_edits_the_target(h: Harness, ws: Path) -> None:
+    (ws / "real.txt").write_text("x\n")
+    os.symlink(ws / "real.txt", ws / "link.txt")
+    await _read(h, "link.txt")
+    out = await h.call(EditTool(), file_path="link.txt", old_string="x", new_string="y")
+    assert not out.is_error, text_of(out)
+    assert (ws / "real.txt").read_text() == "y\n"
+    assert (ws / "link.txt").is_symlink()
+
+
+async def test_edit_not_a_file(h: Harness, ws: Path) -> None:
+    (ws / "sub").mkdir()
+    out = await h.call(EditTool(), file_path="sub", old_string="x", new_string="y")
+    assert out.is_error
+    assert text_of(out) == "Edit: not a file: 'sub'"
+
+
+async def test_edit_missing_file(h: Harness) -> None:
+    out = await h.call(EditTool(), file_path="nope.txt", old_string="x", new_string="y")
+    assert out.is_error
+    assert text_of(out) == "Edit: not a file: 'nope.txt'"
+
+
+async def test_edit_binary_rejected(h: Harness, ws: Path) -> None:
+    (ws / "bin").write_bytes(b"\x00\xffbinary")
+    out = await h.call(EditTool(), file_path="bin", old_string="x", new_string="y")
+    assert out.is_error
+    assert text_of(out) == "Edit: 'bin' is not utf-8 text"
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        ({"old_string": "x", "new_string": "y"}, "requires non-empty 'file_path'"),
+        ({"file_path": "", "old_string": "x", "new_string": "y"}, "requires non-empty 'file_path'"),
+        ({"file_path": "a.py", "old_string": "", "new_string": "y"}, "requires non-empty 'old_string'"),
+        ({"file_path": "a.py", "old_string": "x", "new_string": 5}, "requires string 'new_string'"),
+        ({"file_path": 1, "old_string": "x", "new_string": "y"}, "requires non-empty 'file_path'"),
+    ],
+)
+async def test_edit_arg_validation(
+    h: Harness, ws: Path, args: dict[str, Any], message: str
+) -> None:
+    (ws / "a.py").write_text("x\n")
+    out = await EditTool().run(args, h.ctx())
+    assert out.is_error
+    assert text_of(out) == f"Edit: {message}"
+
+
+# -- CRLF ---------------------------------------------------------------------
+
+
+async def test_crlf_multi_line_edit_matches_and_keeps_crlf(h: Harness, ws: Path) -> None:
+    target = ws / "crlf.txt"
+    target.write_bytes(b"alpha\r\nbeta\r\ngamma\r\n")
+    await _read(h, "crlf.txt")
+    out = await h.call(
+        EditTool(), file_path="crlf.txt", old_string="alpha\nbeta", new_string="A\nB"
+    )
+    assert not out.is_error, text_of(out)
+    assert target.read_bytes() == b"A\r\nB\r\ngamma\r\n"
+
+
+async def test_crlf_single_line_edit_writes_crlf_breaks(h: Harness, ws: Path) -> None:
+    target = ws / "crlf.txt"
+    target.write_bytes(b"alpha\r\ngamma\r\n")
+    await _read(h, "crlf.txt")
+    out = await h.call(EditTool(), file_path="crlf.txt", old_string="gamma", new_string="G\nH")
+    assert not out.is_error
+    assert target.read_bytes() == b"alpha\r\nG\r\nH\r\n"
+
+
+async def test_lf_file_edit_is_unchanged(h: Harness, ws: Path) -> None:
+    target = ws / "lf.txt"
+    target.write_bytes(b"a\nb\n")
+    await _read(h, "lf.txt")
+    out = await h.call(EditTool(), file_path="lf.txt", old_string="a\nb", new_string="x\ny")
+    assert not out.is_error
+    assert target.read_bytes() == b"x\ny\n"
+
+
+async def test_edit_snippet_numbers_match_read(h: Harness, ws: Path) -> None:
+    (ws / "f.txt").write_text("a\x0cb\nc\nd\n")
+    await _read(h, "f.txt")
+    out = await h.call(EditTool(), file_path="f.txt", old_string="d", new_string="D")
+    assert "     3\tD" in text_of(out)
+
+
+async def test_edit_snippet_shows_only_the_region(h: Harness, ws: Path) -> None:
+    (ws / "long.txt").write_text("".join(f"line{i}\n" for i in range(1, 31)))
+    await _read(h, "long.txt")
+    out = await h.call(EditTool(), file_path="long.txt", old_string="line15\n", new_string="X\n")
+    lines = text_of(out).split("\n")[1:]
+    assert lines[0] == "    11\tline11"
+    assert "    15\tX" in lines
+    assert lines[-1] == "    19\tline19"
+
+
+async def test_edit_keeps_file_permissions(h: Harness, ws: Path) -> None:
+    target = ws / "run.sh"
+    target.write_text("echo a\n")
+    target.chmod(0o755)
+    await _read(h, "run.sh")
+    out = await h.call(EditTool(), file_path="run.sh", old_string="a", new_string="b")
+    assert not out.is_error
+    assert target.stat().st_mode & 0o777 == 0o755
+
+
+# -- out-of-workspace writes (write_roots) ------------------------------------
+
+
+def _neighbour(ws: Path) -> Path:
+    other = ws.parent / "neighbour"
+    other.mkdir()
+    return other
+
+
+async def test_edit_outside_the_workspace_respects_authorization(
+    h: Harness, ws: Path
+) -> None:
+    other = _neighbour(ws)
+    target = other / "a.txt"
+    target.write_text("hello world", encoding="utf-8")
+    await _read(h, str(target))
+    refused = await h.call(
+        EditTool(), file_path=str(target), old_string="world", new_string="there"
+    )
+    assert refused.is_error
+    assert "outside workspace" in text_of(refused)
+    assert target.read_text() == "hello world"
+
+    tool = EditTool(write_roots=lambda ctx: [str(other)])
+    out = await h.call(tool, file_path=str(target), old_string="world", new_string="there")
+    assert not out.is_error, text_of(out)
+    assert target.read_text() == "hello there"
+    # No relative form outside the workspace: the absolute path is shown.
+    assert str(target) in text_of(out)
+
+
+async def test_edit_authorization_failure_denies(h: Harness, ws: Path) -> None:
+    other = _neighbour(ws)
+    target = other / "a.txt"
+    target.write_text("x")
+    await _read(h, str(target))
+
+    def boom(ctx: ToolContext) -> list[str]:
+        raise RuntimeError("grant store is down")
+
+    out = await h.call(EditTool(write_roots=boom), file_path=str(target), old_string="x", new_string="y")
+    assert out.is_error
+    assert target.read_text() == "x"

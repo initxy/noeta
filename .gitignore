@@ -57,3 +57,6 @@ Thumbs.db
 
 # prompt-regression eval run outputs
 evals/results/
+bench/jobs/
+bench/datasets/
+bench/logs/

@@ -129,6 +129,13 @@ EXEMPT_FILE_NAMES: frozenset[str] = frozenset(
         # to satisfy the current vocabulary would falsify that record. A name
         # change is a new breaking-change entry instead.
         "CHANGELOG.md",
+        # The Agent Client Protocol names its own methods and fields
+        # (new_session, session_update, session_id): the adapter and its test
+        # must use them as the protocol spells them.
+        "acp.py",
+        "test_acp.py",
+        "test_acp_live.py",
+        "test_acp_review.py",
     }
 )
 EXEMPT_DIR_PARTS: frozenset[str] = frozenset(
