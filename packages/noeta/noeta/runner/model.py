@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import msgspec
 
-from noeta.errors import ContextOverflow, ModelError
+from noeta.errors import ContextOverflow, ModelError, TurnFailed
 from noeta.events import ExtensionRecorded, ModelCalled, ModelReplied
 from noeta.loop.request import build_request, request_hash
 from noeta.loop.state import CORE
@@ -64,8 +64,12 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         return await run.fail_turn(texts.LLM_ERROR, "the model call kept being interrupted")
     view = run.view()
     request = _request(run, final=final)
-    for ext in run.exts:
-        request = await ext.before_model(view, request)
+    try:
+        for ext in run.exts:
+            request = await ext.before_model(view, request)
+    except TurnFailed as exc:
+        await run.flush(view)
+        return await run.fail_turn(exc.reason, exc.detail)
     await run.flush(view)
     await run.append([ModelCalled(model=request.model, request_hash=request_hash(request),
                                   attempt=run.state.model_attempts + 1)])
@@ -90,10 +94,14 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     except ContextOverflow as exc:
         await asyncio.gather(*pending, return_exceptions=True)
         overflow_view = run.view()
-        for ext in run.exts:
-            if await ext.on_context_overflow(overflow_view):
-                await run.flush(overflow_view)
-                return True  # room was made; the next boundary calls again
+        try:
+            for ext in run.exts:
+                if await ext.on_context_overflow(overflow_view):
+                    await run.flush(overflow_view)
+                    return True  # room was made; the next boundary calls again
+        except TurnFailed as failed:
+            await run.flush(overflow_view)
+            return await run.fail_turn(failed.reason, failed.detail)
         return await run.fail_turn(texts.CONTEXT_OVERFLOW, _detail(exc))
     except ModelError as exc:
         await asyncio.gather(*pending, return_exceptions=True)

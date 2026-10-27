@@ -57,6 +57,13 @@ class TaskState:
     messages: list[Message] = field(default_factory=list)
     #: Log seq that produced each entry of ``messages`` (0 for a summary).
     message_seqs: list[int] = field(default_factory=list)
+    #: Every message ever added, in order, never compacted (and its log seq):
+    #: what a compaction collapsed stays readable here (``RecallHistory``).
+    history: list[Message] = field(default_factory=list)
+    history_seqs: list[int] = field(default_factory=list)
+    #: Usage of the newest model reply; ``None`` before the first one and
+    #: after a compaction (no recorded count describes the collapsed history).
+    last_usage: Usage | None = None
 
     #: Calls of the latest reply that are not all answered yet, in order.
     calls: list[Call] = field(default_factory=list)
@@ -117,6 +124,8 @@ class TaskState:
     def _add(self, message: Message, seq: int) -> None:
         self.messages.append(message)
         self.message_seqs.append(seq)
+        self.history.append(message)
+        self.history_seqs.append(seq)
 
 
 def new_state(initial_ext: Mapping[str, Any] | None = None) -> TaskState:
@@ -142,6 +151,7 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         resp = ev.response
         state.model_attempts = 0
         state.usage = state.usage + resp.usage
+        state.last_usage = resp.usage
         state.last_stop = resp.stop_reason
         state._add(resp.message, rec.seq)
         if state.continuing:
@@ -272,3 +282,4 @@ def _compact(state: TaskState, ev: Compacted) -> None:
     state.messages = [summary, *ev.kept, *tail]
     state.message_seqs = [0] * (1 + len(ev.kept)) + tail_seqs
     state.compaction = ev
+    state.last_usage = None
