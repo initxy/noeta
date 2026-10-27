@@ -1325,10 +1325,18 @@ class ReActPolicy:
                     retryable=False,
                     assistant_message=None,
                 )
-            answer = "\n".join(
-                block.text
-                for block in response.content
-                if isinstance(block, TextBlock)
+            # A response that ends a run of output-limit continuations is
+            # only the last piece of the answer: the earlier pieces are the
+            # recorded assistant turns between the resume nudges.
+            answer = "".join(
+                (
+                    *_continued_texts(view.rolling_history),
+                    "\n".join(
+                        block.text
+                        for block in response.content
+                        if isinstance(block, TextBlock)
+                    ),
+                )
             )
             # Structured output: when the caller declared a JSON Schema
             # via ``output_schema`` we try to parse the concatenated text
@@ -1491,6 +1499,43 @@ def _output_limit_recoveries(history: Sequence[Message]) -> int:
             continue
         break
     return count
+
+
+def _continued_texts(history: Sequence[Message]) -> list[str]:
+    """The texts of the cut responses an answer continues, oldest first.
+
+    Walks back over the run :func:`_output_limit_recoveries` counts — each
+    resume nudge, and the text-only assistant turn it follows when the cut
+    response had text — and returns those turns' texts. Empty when the
+    history does not end on a nudge. Pure over the recorded history.
+    """
+    texts: list[str] = []
+    i = len(history) - 1
+    while i >= 0 and _is_output_limit_nudge(history[i]):
+        i -= 1
+        previous = history[i] if i >= 0 else None
+        if (
+            previous is not None
+            and previous.role == "assistant"
+            and not any(isinstance(b, ToolUseBlock) for b in previous.content)
+        ):
+            texts.append(
+                "\n".join(
+                    b.text for b in previous.content if isinstance(b, TextBlock)
+                )
+            )
+            i -= 1
+    texts.reverse()
+    return texts
+
+
+def _is_output_limit_nudge(message: Message) -> bool:
+    return (
+        message.role == "user"
+        and len(message.content) == 1
+        and isinstance(message.content[0], TextBlock)
+        and message.content[0].text in _OUTPUT_LIMIT_NUDGES
+    )
 
 
 def _provider_error_detail(response: LLMResponse) -> Optional[str]:

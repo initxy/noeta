@@ -19,6 +19,7 @@ from noeta.builtins.react.impl.react import (
 )
 from noeta.protocols.decisions import (
     FailDecision,
+    FinishDecision,
     StatePatchDecision,
     ToolCallsDecision,
 )
@@ -40,7 +41,12 @@ from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.tools.fake import FakeTool
 
 
-def _decide(response: LLMResponse, history: list[Message] | None = None):
+def _decide(
+    response: LLMResponse,
+    history: list[Message] | None = None,
+    *,
+    output_schema: dict[str, object] | None = None,
+):
     client = RuntimeLLMClient(
         provider=FakeLLMProvider(responses=[response]),
         event_log=InMemoryEventLog(),
@@ -51,6 +57,7 @@ def _decide(response: LLMResponse, history: list[Message] | None = None):
         tools={"echo": FakeTool(name="echo", script={("hi",): "ok"})},
         system_prompt="you are helpful",
         model="gpt-4o",
+        output_schema=output_schema,
     )
     ctx = StepContext(task_id="task-1", lease_id="lease-1", trace_id="trace-1")
     return policy.decide(ctx, fake_view(history or []))
@@ -164,8 +171,65 @@ def test_a_cut_answer_continues_to_completion(tmp_path: Path) -> None:
         provider=provider,
         workspace_dir=tmp_path,
     )
-    assert result.answer() == "second half"
+    assert result.answer() == "first halfsecond half"
     follow_up = provider.received_requests[1].messages
     assert follow_up[-2] == _assistant("first half")
     assert follow_up[-1].role == "user"
     assert follow_up[-1].content == [TextBlock(text=OUTPUT_LIMIT_RESUME_NUDGE)]
+
+
+def _done(text: str) -> LLMResponse:
+    return LLMResponse(
+        stop_reason="end_turn",
+        content=[TextBlock(text=text)],
+        usage=Usage(uncached=1, output=1),
+    )
+
+
+def test_the_answer_joins_every_continued_piece() -> None:
+    """The final answer is the whole continued text, not its last piece; a
+    thinking-only cut in the run contributes nothing and breaks nothing."""
+    history = [
+        _user("write it"),
+        _assistant("PART-A "),
+        _user(OUTPUT_LIMIT_RESUME_NUDGE),
+        _user(OUTPUT_LIMIT_THINKING_NUDGE),
+        _assistant("PART-B "),
+        _user(OUTPUT_LIMIT_RESUME_NUDGE),
+    ]
+    decision = _decide(_done("PART-C"), history)
+    assert isinstance(decision, FinishDecision)
+    assert decision.answer == "PART-A PART-B PART-C"
+    assert decision.assistant_message == _assistant("PART-C")
+
+
+def test_the_output_schema_parses_the_joined_text() -> None:
+    history = [
+        _user("json please"),
+        _assistant('{"a": 1, '),
+        _user(OUTPUT_LIMIT_RESUME_NUDGE),
+    ]
+    decision = _decide(
+        _done('"b": 2}'), history, output_schema={"type": "object"}
+    )
+    assert isinstance(decision, FinishDecision)
+    assert decision.answer == {"a": 1, "b": 2}
+
+
+def test_an_answer_after_a_tool_round_joins_nothing() -> None:
+    history = [
+        _user("go"),
+        _assistant("earlier answer"),
+        _user(OUTPUT_LIMIT_RESUME_NUDGE),
+        Message(
+            role="assistant",
+            content=[ToolUseBlock(call_id="t1", tool_name="echo", arguments={})],
+        ),
+        Message(
+            role="tool",
+            content=[ToolResultBlock(call_id="t1", output="ok", success=True)],
+        ),
+    ]
+    decision = _decide(_done("final"), history)
+    assert isinstance(decision, FinishDecision)
+    assert decision.answer == "final"
