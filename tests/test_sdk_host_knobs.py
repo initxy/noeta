@@ -420,8 +420,6 @@ def test_auto_compact_window_reaches_the_composer_not_the_roster_budget(
     valves against a window derived from N, while the skill-roster budget —
     1 % of the MODEL's window, as Claude Code sizes its skill listing — is
     the same as without the cap."""
-    from noeta.builtins.providers.impl.catalog import _COMPACTION_BUFFER_TOKENS
-
     main_spec = _simple_main_spec()
     registry = AgentRegistry()
     registry.add(main_spec)
@@ -442,7 +440,7 @@ def test_auto_compact_window_reaches_the_composer_not_the_roster_budget(
     )
     composer = engine._composer
     assert composer._available_window == (
-        cap - uncapped.max_output_tokens - _COMPACTION_BUFFER_TOKENS
+        cap - min(uncapped.max_output_tokens, 20_000) - 13_000
     )
     assert composer._tail_token_budget == composer._available_window // 3
 
