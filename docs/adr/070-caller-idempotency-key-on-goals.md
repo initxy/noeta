@@ -20,3 +20,7 @@ Refines [ADR-040](040-mid-turn-goal-injection.md). `send_goal` and `inject_goal`
 ## Consequences
 
 - A storage-protocol addition (`system_emit(idempotency_key=...)`) implemented by every EventLog backend, and one new event type. A repeat of a call that failed returns that failure, except a seed that recorded the goal before any step ran, which the repeat drives as an unkeyed retry would.
+
+## Refined by
+
+- [ADR-072](072-dead-idempotency-claim-is-claimed-again.md) — A keyed send_goal whose goal never landed is claimed again by its retry
