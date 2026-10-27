@@ -4,7 +4,6 @@ version = "1.0.0.dev0"
 description = "Durable AI agents for Python: one writer per task, crash-safe tool calls, approvals that cost nothing while waiting, from one process to many machines."
 license = "Apache-2.0"
 authors = [{ name = "The Noeta Authors" }]
-readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28.1",

@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from noeta.ext.mcp.config import McpError, McpServer
-from noeta.ext.mcp.http_client import SESSION_HEADER, HttpClient
+from noeta.ext.mcp.http_client import CONNECTION_ID_HEADER, HttpClient
 from noeta.ext.mcp.pool import McpPool
 from noeta.ext.mcp.stdio import MAX_LIST_PAGES, StdioClient, collect_pages
 
@@ -143,7 +143,7 @@ class FakeHttp:
         self.expired = False
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
-        sid = request.headers.get(SESSION_HEADER)
+        sid = request.headers.get(CONNECTION_ID_HEADER)
         if request.method == "DELETE":
             self.seen.append(("DELETE", None, sid))
             return httpx.Response(200)
@@ -163,7 +163,7 @@ class FakeHttp:
         elif method == "tools/call":
             result = {"content": [{"type": "text", "text": "ok"}]}
         reply = {"jsonrpc": "2.0", "id": str(body["id"]), "result": result}
-        headers = {SESSION_HEADER: self.session} if self.session and method == "initialize" \
+        headers = {CONNECTION_ID_HEADER: self.session} if self.session and method == "initialize" \
             else {}
         if not self.sse:
             return httpx.Response(200, json=reply, headers=headers)
@@ -184,7 +184,7 @@ def http_client(server: FakeHttp, **kw: Any) -> HttpClient:
                       http=httpx.AsyncClient(transport=httpx.MockTransport(server)), **kw)
 
 
-async def test_http_session_is_joined_echoed_and_deleted() -> None:
+async def test_http_connection_id_is_joined_echoed_and_deleted() -> None:
     server = FakeHttp()
     client = http_client(server)
     await client.start()
@@ -216,7 +216,7 @@ async def test_http_sse_reply_returns_at_the_matching_id() -> None:
     await client.close()
 
 
-async def test_http_pagination_and_expired_session() -> None:
+async def test_http_pagination_and_expired_connection() -> None:
     server = FakeHttp(pages=3)
     client = http_client(server)
     await client.start()
@@ -225,7 +225,7 @@ async def test_http_pagination_and_expired_session() -> None:
     server.session = "s-2"
     with pytest.raises(McpError, match="404"):
         await client.call_tool("t", {})
-    assert client.session_id is None
+    assert client.connection_id is None
     await client.close()
 
 

@@ -31,9 +31,9 @@ import httpx
 from noeta.ext.mcp.config import DEFAULT_TIMEOUT_S, McpError
 from noeta.ext.mcp.stdio import LINE_CAP, TOTAL_CAP, McpClient, initialize_params
 
-__all__ = ["SESSION_HEADER", "HttpClient"]
+__all__ = ["CONNECTION_ID_HEADER", "HttpClient"]
 
-SESSION_HEADER = "Mcp-Session-Id"
+CONNECTION_ID_HEADER = "Mcp-Session-Id"
 #: Teardown is bounded: a server that stopped answering must not hold up a
 #: retire or a shutdown.
 _DELETE_TIMEOUT_S = 5.0
@@ -77,7 +77,7 @@ class HttpClient(McpClient):
         self.total_cap = total_cap
         self._http = http
         self._owns_http = http is None
-        self.session_id: str | None = None
+        self.connection_id: str | None = None
         self.broken: str | None = None
         self._next_id = 0
         self._started = False
@@ -93,7 +93,7 @@ class HttpClient(McpClient):
             raise McpError("client already started")
         self._started = True
         await self.request("initialize", initialize_params())
-        if self.session_id is not None:
+        if self.connection_id is not None:
             await self._post({"jsonrpc": "2.0", "method": "notifications/initialized",
                               "params": {}}, self.timeout)
 
@@ -115,11 +115,11 @@ class HttpClient(McpClient):
 
     async def _post(self, body: dict[str, Any], timeout: float) -> dict[str, Any] | None:
         method = body.get("method")
-        held = self.session_id
+        held = self.connection_id
         headers = {"Content-Type": "application/json",
                    "Accept": "application/json, text/event-stream", **self.headers}
         if held is not None:
-            headers[SESSION_HEADER] = held
+            headers[CONNECTION_ID_HEADER] = held
         data = json.dumps(body, separators=(",", ":")).encode("utf-8")
         try:
             async with asyncio.timeout(timeout):
@@ -127,13 +127,13 @@ class HttpClient(McpClient):
                                                  headers=headers) as resp:
                     if resp.status_code >= 400:
                         if resp.status_code == 404 and held is not None \
-                                and self.session_id == held:
-                            self.session_id = None
+                                and self.connection_id == held:
+                            self.connection_id = None
                         raise McpError(f"{method} http error: {resp.status_code} "
                                        f"{resp.reason_phrase}".rstrip())
-                    assigned = resp.headers.get(SESSION_HEADER)
-                    if assigned and assigned.strip() and self.session_id is None:
-                        self.session_id = assigned.strip()
+                    assigned = resp.headers.get(CONNECTION_ID_HEADER)
+                    if assigned and assigned.strip() and self.connection_id is None:
+                        self.connection_id = assigned.strip()
                     if "id" not in body:
                         return None  # a notification: 202 and no body
                     return await self._read_reply(resp, method, body["id"])
@@ -185,12 +185,12 @@ class HttpClient(McpClient):
         if self._closed:
             return
         self._closed = True
-        held, self.session_id = self.session_id, None
+        held, self.connection_id = self.connection_id, None
         if held is not None and self._http is not None:
             with contextlib.suppress(Exception):
                 async with asyncio.timeout(min(self.timeout, _DELETE_TIMEOUT_S)):
                     await self._http.request(
-                        "DELETE", self.url, headers={**self.headers, SESSION_HEADER: held})
+                        "DELETE", self.url, headers={**self.headers, CONNECTION_ID_HEADER: held})
         if self._owns_http and self._http is not None:
             with contextlib.suppress(Exception):
                 await self._http.aclose()

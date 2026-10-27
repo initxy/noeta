@@ -17,7 +17,7 @@
 PY ?= uv run python
 
 .DEFAULT_GOAL := help
-.PHONY: help install check test lint e2e eval eval-baseline build docs
+.PHONY: help install check check-next test lint e2e eval eval-baseline build docs
 
 help:
 	@echo "noeta — library repo (packages/noeta-runtime + packages/noeta-sdk)"
@@ -65,6 +65,10 @@ build:
 	uv build --package noeta-runtime --sdist
 	uv build --package noeta-sdk --sdist
 
+## the 1.0 package (its own uv project until cutover)
+check-next:
+	cd packages/noeta && uv sync -q --all-extras && uv run ruff check noeta tests && uv run mypy && uv run pytest -n auto -q -p no:cacheprovider
+
 ## the docs site, live-reloading (npm ci first)
 docs:
 	npm run docs:dev
@@ -73,8 +77,8 @@ docs:
 ## the Postgres params of the storage contract tests (skipped unless
 ## NOETA_TEST_POSTGRES_DSN points at a live server), the Python 3.11-3.13
 ## matrix, and the fresh-venv install smoke.
-check:
-	uv run ruff check packages tests scripts evals
+check: check-next
+	uv run ruff check packages/noeta-runtime packages/noeta-sdk tests scripts evals
 	uv run pytest -n auto --cov=noeta --cov-report=term --cov-fail-under=85
 	uv run mypy
 	uv run python scripts/lint-naming.py

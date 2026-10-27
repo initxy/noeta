@@ -101,7 +101,7 @@ def prompt_message(blocks: Iterable[Any]) -> Message:
     return Message(role="user", content=content or [Text(text="")], origin="human")
 
 
-class SessionServers:
+class EditorServers:
     """MCP servers an editor named for each session. Kept in memory only:
     their env and headers are credentials and never enter the task log. Pass
     it to ``Mcp(servers=...)``."""
@@ -132,7 +132,7 @@ class NoetaAcpAgent:
     """The ACP agent side. ``agent`` names the noeta agent each session runs."""
 
     def __init__(self, app: LocalApp, *, agent: str = "main", model: str = "",
-                 servers: SessionServers | None = None) -> None:
+                 servers: EditorServers | None = None) -> None:
         self.app = app
         self.servers = servers
         self.agent = agent
@@ -288,7 +288,7 @@ class NoetaAcpAgent:
 
 
 async def serve_stdio(app: LocalApp, *, agent: str = "main", model: str = "",
-                      servers: SessionServers | None = None) -> None:
+                      servers: EditorServers | None = None) -> None:
     await acp.run_agent(NoetaAcpAgent(app, agent=agent, model=model,  # type: ignore[arg-type]
                                       servers=servers))
 

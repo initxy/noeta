@@ -62,8 +62,10 @@ def _bg(command: str) -> tuple[str, dict[str, Any]]:
 
 
 async def test_an_end_notice_wakes_the_idle_task(store: SqliteStore, tmp_path: Path) -> None:
-    provider = ScriptedProvider([reply("", _bg("echo done-here")), reply("started it"),
-                                 reply("it finished")])
+    # The job outlives the turn, so its notice wakes an idle task (an instant
+    # job could finish mid-turn and ride in the same turn instead).
+    provider = ScriptedProvider([reply("", _bg("sleep 0.3; echo done-here")),
+                                 reply("started it"), reply("it finished")])
     rt, ext = _setup(store, provider, tmp_path)
     client = Client(store)
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
@@ -77,7 +79,7 @@ async def test_an_end_notice_wakes_the_idle_task(store: SqliteStore, tmp_path: P
     assert notice.text.endswith("completed (exit code 0)</summary>\n</task-notification>"
                                 "\nLast output:\ndone-here")
     [job] = (await _jobs(client, tid, ext)).values()
-    assert job["status"] == "completed" and job["command"] == "echo done-here"
+    assert job["status"] == "completed" and job["command"] == "sleep 0.3; echo done-here"
     assert (await client.get(tid)).waiting_on == "input"
 
 

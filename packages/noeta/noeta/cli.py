@@ -152,11 +152,11 @@ def main(argv: list[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     cwd = os.path.abspath(args.cwd or os.getcwd())
     if args.command == "acp":
-        from noeta.acp import SessionServers, serve_stdio
+        from noeta.acp import EditorServers, serve_stdio
         from noeta.ext.mcp import Mcp
 
         s = _settings(args)
-        servers = SessionServers()
+        servers = EditorServers()
         asyncio.run(serve_stdio(_app(s, agents_kw={"mcp": Mcp(servers)}), model=s.model,
                                 servers=servers))
         return

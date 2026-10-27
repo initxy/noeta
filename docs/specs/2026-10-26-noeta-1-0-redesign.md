@@ -336,16 +336,16 @@ Phase 1 — core on one machine
 Phase 2 — extensions (default preset = 0.6 behavior)
 - [x] permissions + declarative hooks (deny wins), ask_user
 - [x] subtasks (Task tool, background children)
-- [ ] compaction + clearing old tool results
-- [ ] background_shell + Monitor, todo, web fetch/search
-- [ ] memory, skills, MCP
-- [ ] container ExecEnv; prompts moved unchanged and the full `make eval` + live e2e green
+- [x] compaction + clearing old tool results
+- [x] background_shell + Monitor, todo, web fetch/search
+- [x] memory, skills, MCP
+- [x] container ExecEnv; prompts moved unchanged and the full `make eval` green (live e2e for 1.0 not written yet)
 
 Phase 3 — multi-machine
 - [x] Postgres store, passing the same conformance suites
 - [ ] Multi-process tests: N workers, kill -9 at random points, cancel from another process,
       child on one machine and parent on another
-- [ ] CI Postgres leg runs in `make check`'s CI job
+- [ ] CI Postgres leg runs in `make check`'s CI job (`make check` now runs the 1.0 package via `check-next`)
 
 Phase 4 — surfaces
 - [x] `noeta.client` (in-process + HTTP), `noeta.server`
@@ -401,3 +401,5 @@ Phase 5 — cutover
 2026-10-27 phase-4 surfaces built early on `next`: `noeta -p` (live run fixed a bug in 10 s), `noeta acp` via the official agent-client-protocol SDK, Textual TUI (headless pilot tests + screenshots), `noeta serve` + RemoteClient; TUI `--server`. The runner now always sends max_tokens (output ceiling; unknown models 16,384).
 2026-10-27 merged subtasks (+TaskView.post so a background child's end wakes an idle parent) and permissions/hooks/AskUserQuestion (no core edits). Core follow-ups: unattended tasks fail a turn that would wait for a human (needs_human); Task declares run_last so a reply's ordinary calls run first. default_agents = main + general-purpose/explore/plan; permission mode is per task and inherited.
 2026-10-27 bench moved; harbor adapter runs `noeta -p --json --permission-mode bypassPermissions`; smoke git-leak-recovery reward 1.0 in 3.5 min.
+2026-10-27 merged knowledge (instructions, skills, memory), ops (todo, background shells, web), compaction, mcp + container ExecEnv. Core: state.task_id set on load; ToolContext.post may target another task; unadvertised tools; Rewrite before Ask; summary is a plain user turn; compaction resets model attempts. default_agents wires all of them in 0.6's order. Package: 23.3k lines, largest file 644.
+2026-10-27 full make eval, 14 scenarios x3, 1.0 vs the 0.6 baseline (same model): overall 0.934 vs 0.952, no regression; delegate_parallel_review times out at 240 s on both (scored by the first reply, by design). Full suite against postgres:16: 1241 passed. `make check` runs the 1.0 package (check-next); naming lint: MCP's header is a connection id, ACP's protocol names exempted.

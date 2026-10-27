@@ -76,17 +76,33 @@ async def _drive(cfg: EvalConfig, agents: list[Agent], goal: str, ws: Path, root
     client = Client(store)
     tid = await client.create(agent.name, goal, config={
         "cwd": str(ws), "model": cfg.model, "permission_mode": "bypassPermissions"})
-    error: Optional[str] = None
+    error: str | None = None
+    # Serve like a worker does (sub-agents run concurrently) until the main
+    # task waits or ends.
+    stop = asyncio.Event()
+    serving = asyncio.create_task(rt.serve(stop))
     try:
-        await asyncio.wait_for(rt.run_until_idle(), timeout_s)
+        await asyncio.wait_for(_settled(client, tid), timeout_s)
     except asyncio.TimeoutError:
         error = f"timeout after {timeout_s:.0f}s"
+    finally:
+        stop.set()
+        await serving
     events = [r.event for r in await client.events(tid)]
     row = await client.get(tid)
     await store.close()
     status = {"waiting": "completed", "ended": row.end_status or "ended"}.get(row.status,
                                                                             row.status)
     return events, error, status
+
+
+async def _settled(client: Client, tid: str) -> None:
+    """Until the main task ends or waits on a person (not on its children)."""
+    while True:
+        row = await client.get(tid)
+        if row.status == "ended" or (row.status == "waiting" and row.waiting_on != "children"):
+            return
+        await asyncio.sleep(0.2)
 
 
 def run_trial(

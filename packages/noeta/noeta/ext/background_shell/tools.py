@@ -115,7 +115,7 @@ class BackgroundBash(BashTool):
         text = background_started(job.job_id, ends_with_turn=self.ends_with_turn)
         if tracked and _CD_WORD.search(command):
             # Claude Code's note for a backgrounded ``cd``.
-            text += (f"\nSession cwd remains {cwd}; directory changes made by "
+            text += ("\n" + f"Session cwd remains {cwd}; directory changes made by "
                      "the backgrounded command do not apply to subsequent commands.")
         return text_output(text, job_id=job.job_id)
 
