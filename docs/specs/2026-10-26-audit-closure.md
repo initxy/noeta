@@ -45,8 +45,8 @@ Line numbers are as of `adc2d1c`.
   current view has cleared with the same marker. On a context-overflow error the summarize call
   retries up to 3 times, each time dropping the oldest ~20% of whole turns behind a leading
   `[earlier conversation truncated for compaction retry]` line (Claude Code's behavior).
-- **Clearing old tool results is batched.** Once the clearing valve opens it clears down to the
-  newest 5 clearable results in one go, then holds the view byte-identical until at least 20,000
+- **Clearing old tool results is batched.** Once the clearing valve opens it clears every complete
+  20,000-token batch of clearable results (keeping at least the newest 5), then holds the view byte-identical until at least 20,000
   newly clearable tokens accumulate. Only tools declaring themselves clearable count and get
   cleared (Read, Bash, Grep, Glob, WebFetch, WebSearch, Edit, Write, BashOutput) — not Task
   reports, AskUserQuestion answers, MCP results.
@@ -90,7 +90,7 @@ Line numbers are as of `adc2d1c`.
 - [x] D3 Task mixed with ordinary tools executes
 - [x] D4 provider quirks (overflow markers, null args, stop+tool_calls, thinking provenance)
 - [x] D5 Bash head+tail without spill dir
-- [ ] Integrate, `make check`, relevant `make e2e`, CHANGELOG, CONTEXT/ADR updates
+- [x] Integrate, `make check`, relevant `make e2e`, CHANGELOG, CONTEXT/ADR updates
 - [ ] Benchmark rerun on the integrated build
 
 ## Acceptance criteria
@@ -110,5 +110,6 @@ Line numbers are as of `adc2d1c`.
 2026-10-26 A/B/C/D merged from four worktrees; ADR-065 (recovery), 066 (clearing/margin), 067 (head+tail), 068 (deny wins), 069 (attempt heartbeat cap), 070 (idempotency key).
 2026-10-26 integration friction: the attempt-cap test assumed a seal; with ADR-065 the capped batch is kept — test now asserts the call is not re-run. make check green 4909 passed.
 2026-10-26 known limits: a foreground child step in another process under a cancelled root is not stopped (only the root lease is revoked); the relief valve's gate still reads the uncleared estimate; shell_run.md still says output past 30000 is saved to a file even without a spill dir (prompt text, left unchanged).
-2026-10-27 live e2e (anthropic/compat/responses, compaction, context supply, delegation, tools, interactive): 28 passed. make eval on the integrated tree: no regression.
-2026-10-27 benchmark: `model_hub/es1_orange_o48` now 403s on the gateway, so the rerun uses `auto_model/alwaysday1_max` xhigh, comparable to the 2026-09-19 run on that model (27/40 first pass).
+2026-10-26 live e2e (anthropic/compat/responses, compaction, context supply, delegation, tools, interactive): 28 passed. make eval on the integrated tree: no regression.
+2026-10-26 benchmark: `model_hub/es1_orange_o48` now 403s on the gateway, so the rerun uses `auto_model/alwaysday1_max` xhigh, comparable to the 2026-09-19 run on that model (27/40 first pass).
+2026-10-26 review (fresh context): 3 P1 at the seams — deferred Task spawned after a stop, idempotency key burned by a claim without a goal, recovery taking an approval batch's partial result message as complete — plus subtask cap not recovered in-request; fix in progress.
