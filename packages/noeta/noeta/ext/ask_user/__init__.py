@@ -41,7 +41,9 @@ __all__ = [
     "AskUser",
     "AskUserQuestionTool",
     "answer_question",
+    "next_question",
     "normalize_answer",
+    "typed_answer",
     "validate_answer",
     "validate_questions",
 ]
@@ -258,11 +260,74 @@ def normalize_answer(raw: Any, questions: Sequence[dict[str, Any]]) -> dict[str,
 
 def validate_answer(call_input: dict[str, Any], data: Any) -> dict[str, dict[str, Any]]:
     """Validate ``data`` against an AskUserQuestion call's input (as
-    ``Pending.input`` carries it). Raises :class:`AnswerValidationError`."""
+    ``Pending.input`` carries it). Raises :class:`AnswerValidationError`.
+
+    A plain string answers a single-question call as its ``other`` text (a
+    host that sends what the person typed still works)."""
     questions = validate_questions(call_input)
     if isinstance(questions, str):
         raise AnswerValidationError(questions)
+    if isinstance(data, str) and len(questions) == 1:
+        data = {questions[0]["id"]: {"other": data}}
     return normalize_answer(data, questions)
+
+
+# ---------------------------------------------------------------- typed answers
+
+
+def _questions(detail: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    qs = detail.get("questions") or []
+    return [(str(q.get("id", i)), q) for i, q in enumerate(qs) if isinstance(q, dict)]
+
+
+def next_question(detail: dict[str, Any],
+                  answers: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """The first question of a pending question's ``detail`` (``{"questions":
+    [...]}``) that ``answers`` does not answer yet, or ``None``."""
+    done = answers or {}
+    return next((q for qid, q in _questions(detail) if qid not in done), None)
+
+
+def _typed_one(question: dict[str, Any], text: str) -> dict[str, Any]:
+    labels = {str(o.get("label", "")).strip().lower(): str(o.get("label", ""))
+              for o in question.get("options") or [] if isinstance(o, dict)}
+    typed = text.strip()
+    if typed.lower() in labels:
+        return {"selected": [labels[typed.lower()]]}
+    if question.get("multiSelect"):
+        parts = [p.strip().lower() for p in typed.split(",") if p.strip()]
+        if parts and all(p in labels for p in parts):
+            return {"selected": list(dict.fromkeys(labels[p] for p in parts))}
+    return {"other": text}
+
+
+def typed_answer(detail: dict[str, Any], text: str,
+                 answers: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    """Turn one line a person typed into answers for a pending question
+    (``detail`` as ``Pending.detail`` or a ``Waiting`` entry carries it).
+
+    The line answers the first unanswered question: an option's label
+    (case and surrounding space ignored) selects it, comma-separated labels
+    select several where the question allows it, anything else is the
+    ``other`` text. A JSON object answers several at once (the
+    ``{"answers": {...}}`` body or the bare map). Returns ``answers`` with
+    the new ones added; post ``{"answers": ...}`` once :func:`next_question`
+    is ``None``."""
+    out = dict(answers or {})
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        try:
+            parsed = json.loads(stripped)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            body = parsed.get("answers")
+            return {**out, **(body if isinstance(body, dict) else parsed)}
+    for qid, question in _questions(detail):
+        if qid not in out:
+            out[qid] = _typed_one(question, text)
+            break
+    return out
 
 
 async def answer_question(client: Client, task_id: str, request_id: str, data: Any) -> None:

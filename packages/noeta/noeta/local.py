@@ -16,12 +16,17 @@ from typing import Any
 
 from noeta.agent import Agent
 from noeta.client import Client, Input
+from noeta.errors import NoetaError
 from noeta.providers.base import Provider
 from noeta.runner import Runtime
 from noeta.store.base import Store
 from noeta.types import Delta
 
 DeltaSink = Callable[[str, Delta], None]
+
+
+class UnknownAgent(NoetaError):
+    """A resumed task runs an agent this front end does not have."""
 
 
 class LocalClient(Client):
@@ -67,8 +72,17 @@ class LocalApp:
         return lambda: self._sinks.remove(sink) if sink in self._sinks else None
 
     async def adopt(self, task_id: str) -> None:
-        """Serve the tree of an existing task (one being resumed)."""
+        """Serve the tree of an existing task (one being resumed). Raises
+        :class:`UnknownAgent` when the task's agent is not one this app runs:
+        its worker would end the task failed, so the task is left alone (a
+        front end can still show its history)."""
         row = await self.store.get(task_id)
+        root = await self.store.get(row.root_id) if row is not None else None
+        for r in (row, root):
+            if r is not None and r.agent not in self.runtime.agents:
+                raise UnknownAgent(
+                    f"task {r.task_id} runs agent {r.agent!r}, which this front end does not "
+                    f"have (it has: {', '.join(sorted(self.runtime.agents)) or 'none'})")
         self.runtime.serve_root(row.root_id if row is not None else task_id)
 
     async def start(self) -> None:

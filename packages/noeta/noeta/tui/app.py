@@ -30,7 +30,9 @@ from noeta.events import (
     ToolStarted,
     Waiting,
 )
-from noeta.local import LocalApp
+from noeta.ext.ask_user import next_question, typed_answer
+from noeta.ext.permissions.pending import Pending, follow_tree
+from noeta.local import LocalApp, UnknownAgent
 from noeta.tui.widgets import (
     ApprovalCard,
     AssistantMessage,
@@ -93,7 +95,16 @@ class NoetaApp(App[None]):
         self.busy = False
         self.usage = Usage()
         self.context_tokens = 0
+        #: The question the next input line answers: its call id, the task
+        #: asking (the root or a sub-agent), its detail, and answers so far.
         self.waiting_question = ""
+        self.question_task = ""
+        self.question_detail: dict[str, Any] = {}
+        self.question_answers: dict[str, Any] = {}
+        #: Sub-agent requests already shown, by (task id, request id).
+        self.shown_requests: set[tuple[str, str]] = set()
+        #: The task's agent is not one this app has: history only, no input.
+        self.read_only = False
         self.waiting_for = ""
         self._deltas: asyncio.Queue[Delta] = asyncio.Queue()
         self._follower: Any = None
@@ -129,6 +140,7 @@ class NoetaApp(App[None]):
     # ------------------------------------------------------------ tasks
 
     async def new_task(self) -> None:
+        self.read_only = False
         config: dict[str, Any] = {"cwd": self.cwd, "model": self.model}
         if self.permission_mode:
             config["permission_mode"] = self.permission_mode
@@ -138,10 +150,16 @@ class NoetaApp(App[None]):
     async def open_task(self, task_id: str) -> None:
         if self._follower is not None:
             self._follower.cancel()
-        await self.local.adopt(task_id)
+        refused = ""
+        try:
+            await self.local.adopt(task_id)
+        except UnknownAgent as exc:
+            refused = str(exc)
+        self.read_only = bool(refused)
         self.task_id = task_id
         self.calls.clear()
-        self.waiting_question = ""
+        self._set_question("", "", {})
+        self.shown_requests.clear()
         self.waiting_for = ""
         self.busy = False
         await self._end_stream()
@@ -151,6 +169,9 @@ class NoetaApp(App[None]):
         transcript = self.query_one("#transcript")
         await transcript.remove_children()
         await transcript.mount(Notice(f"noeta · task {task_id[:8]} · /help for commands"))
+        if refused:
+            await transcript.mount(Notice(f"read-only: {refused}. Its history is shown; "
+                                          "/new starts a task here.", classes="-error"))
         self._follower = self.follow(task_id)
         self.update_status()
 
@@ -172,10 +193,11 @@ class NoetaApp(App[None]):
             return
         if not self.task_id:
             return
+        if self.read_only:
+            await self.say_notice("this task is read-only here (its agent is not available)")
+            return
         if self.waiting_question:
-            await self.local.client.answer(self.task_id, self.waiting_question, data=text)
-            self.waiting_question = ""
-            await self.query_one("#transcript").mount(UserMessage(text))
+            await self.answer_question(text)
             return
         await self.local.client.send(self.task_id, text, when="next_turn")
         self.busy = True
@@ -205,11 +227,61 @@ class NoetaApp(App[None]):
         side = self.query_one("#side")
         side.display = not side.display
 
-    async def decide(self, call_id: str, decision: str, always: bool) -> None:
+    async def decide(self, call_id: str, decision: str, always: bool, *,
+                     task_id: str = "") -> None:
         self.waiting_for = ""
-        await self.local.client.answer(self.task_id, call_id, decision,  # type: ignore[arg-type]
-                                       always=always)
+        await self.local.client.answer(task_id or self.task_id, call_id,
+                                       decision, always=always)  # type: ignore[arg-type]
         self.query_one(PromptInput).focus()
+
+    def _set_question(self, call_id: str, task_id: str, detail: dict[str, Any]) -> None:
+        self.waiting_question = call_id
+        self.question_task = task_id
+        self.question_detail = detail
+        self.question_answers = {}
+
+    async def answer_question(self, text: str) -> None:
+        """The typed line answers the pending question (one line per part of
+        a question with several); the answer is sent once all are in."""
+        transcript = self.query_one("#transcript")
+        await transcript.mount(UserMessage(text))
+        answers = typed_answer(self.question_detail, text, self.question_answers)
+        nxt = next_question(self.question_detail, answers)
+        if nxt is not None:
+            self.question_answers = answers
+            await self.say_notice(f"next: {nxt.get('question', '')}")
+            return
+        task_id, call_id = self.question_task or self.task_id, self.waiting_question
+        self._set_question("", "", {})
+        await self.local.client.answer(task_id, call_id, data={"answers": answers})
+
+    async def show_requests(self, found: list[Pending]) -> None:
+        """Sub-agents' approvals and questions, shown with the sub-agent's
+        name and answered on its task."""
+        transcript = self.query_one("#transcript")
+        for p in found:
+            key = (p.task_id, p.request_id)
+            if key in self.shown_requests:
+                continue
+            if p.kind == "question" and self.waiting_question:
+                continue  # one question at a time
+            self.shown_requests.add(key)
+            who = p.agent or "sub-agent"
+            if p.kind == "approval":
+                self.waiting_for = f"{who} waits for your approval (y/a/n)"
+
+                async def decide(call_id: str, decision: str, always: bool,
+                                 task_id: str = p.task_id) -> None:
+                    await self.decide(call_id, decision, always, task_id=task_id)
+
+                await transcript.mount(ApprovalCard(
+                    p.request_id, f"[{who}] {p.tool}", p.prompt, decide))
+            else:
+                self.waiting_for = f"{who} waits for your answer"
+                self._set_question(p.request_id, p.task_id, p.detail)
+                await transcript.mount(QuestionCard(p.detail, who=who))
+        transcript.scroll_end(animate=False)
+        self.update_status()
 
     # ------------------------------------------------------------ rendering
 
@@ -266,13 +338,16 @@ class NoetaApp(App[None]):
     @work(exclusive=True, group="follow", exit_on_error=False)
     async def follow(self, task_id: str) -> None:
         try:
-            async for rec in self.local.client.watch(task_id):
+            async for rec in follow_tree(self.local.client, task_id):
                 if task_id != self.task_id:
                     return
                 try:
-                    await self.render_event(rec)
+                    if isinstance(rec, list):
+                        await self.show_requests(rec)
+                    else:
+                        await self.render_event(rec)
                 except Exception:
-                    log.exception("rendering %s failed", type(rec.event).__name__)
+                    log.exception("rendering %s failed", type(getattr(rec, "event", rec)).__name__)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -293,8 +368,9 @@ class NoetaApp(App[None]):
                     await transcript.mount(UserMessage(item.body.message.text))
                     self.busy = True
                 elif isinstance(item.body, Answer) and \
-                        item.body.request_id == self.waiting_question:
-                    self.waiting_question = ""
+                        item.body.request_id == self.waiting_question and \
+                        self.question_task in ("", self.task_id):
+                    self._set_question("", "", {})
         elif isinstance(ev, ModelCalled):
             self.called = rec.seq
         elif isinstance(ev, ModelReplied):
@@ -329,7 +405,7 @@ class NoetaApp(App[None]):
                                               f"{str(data.get('error', ''))[:120]}"))
             elif ev.kind == "turn_stopped":
                 await self._end_stream()
-                self.waiting_question = ""
+                self._set_question("", "", {})
                 await transcript.mount(Notice("stopped"))
             elif ev.kind == "turn_failed":
                 reason = ": ".join(str(x) for x in (data.get("reason"), data.get("detail")) if x)
@@ -350,12 +426,12 @@ class NoetaApp(App[None]):
             elif ev.on == "question":
                 questions = [k for k, v in ev.detail.items()
                              if isinstance(v, dict) and v.get("on") == "question"]
-                self.waiting_question = questions[0] if questions else ""
                 for call_id in questions[:1]:  # one at a time: the next line answers it
+                    self._set_question(call_id, self.task_id, ev.detail[call_id])
                     await transcript.mount(QuestionCard(ev.detail[call_id]))
             elif ev.on == "input":
                 self.busy = False
-                self.waiting_question = ""
+                self._set_question("", "", {})
         elif isinstance(ev, TaskEnded):
             self.busy = False
             await transcript.mount(Notice(f"task {ev.status}" + (f": {ev.error}" if ev.error

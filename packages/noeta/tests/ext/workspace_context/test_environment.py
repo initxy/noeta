@@ -54,6 +54,26 @@ async def test_a_repository_fsmonitor_hook_never_runs(tmp_path: Path) -> None:
     assert " - Shell: " in text and " - OS Version: " in text
 
 
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_a_repository_clean_filter_never_runs(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    pwned = tmp_path / "PWNED"
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(["git", "init", "-q", "-b", "trunk", str(repo)], check=True)
+    (repo / "a.txt").write_text("a\n")
+    subprocess.run([*git, "add", "a.txt"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "init"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "filter.x.clean",
+                    f"touch {pwned}; cat"], check=True)
+    (repo / ".gitattributes").write_text("*.txt filter=x\n")
+    (repo / "a.txt").touch()
+    text = await _block(Environment(), _view(str(repo), LocalExecEnv(str(repo))))
+    assert not pwned.exists()
+    assert "Git branch: trunk" in text
+    assert "Git status:" not in text
+
+
 class FakeContainer:
     """An ExecEnv that is not the local one; records what it runs."""
 
@@ -65,6 +85,8 @@ class FakeContainer:
                   env: Mapping[str, str] | None = None, stdin: bytes | None = None,
                   timeout: float | None = None, output_cap: int | None = None) -> RunResult:
         self.argv.append(list(argv))
+        if "config" in argv:
+            return RunResult(exit_code=1, stdout=b"")  # no filter driver configured
         out = b"main\n" if "rev-parse" in argv else b" M src/x.py\n"
         return RunResult(exit_code=0, stdout=out)
 

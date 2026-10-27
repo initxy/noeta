@@ -29,7 +29,9 @@ from noeta.events import (
     ToolStarted,
     Waiting,
 )
-from noeta.local import LocalApp
+from noeta.ext.ask_user import next_question, typed_answer
+from noeta.ext.permissions.pending import Pending, follow_tree, pending_tree
+from noeta.local import LocalApp, UnknownAgent
 from noeta.loop.state import CORE
 from noeta.types import Delta, Image, Message, Text, ToolUse
 
@@ -111,10 +113,11 @@ def question_ids(waiting: Waiting) -> list[str]:
             if isinstance(v, dict) and v.get("on") == "question"]
 
 
-def question_text(detail: dict[str, Any]) -> str:
-    """A parked question as plain text: each question and its options."""
+def question_text(detail: dict[str, Any], only: dict[str, Any] | None = None) -> str:
+    """A parked question as plain text: each question (or ``only`` that
+    one) and its options."""
     lines: list[str] = []
-    for q in detail.get("questions") or []:
+    for q in [only] if only is not None else detail.get("questions") or []:
         lines.append(str(q.get("question") or ""))
         for opt in q.get("options") or []:
             desc = opt.get("description")
@@ -236,6 +239,11 @@ class NoetaAcpAgent:
         self.model = model
         self.conn: Any = None
         self._locks: dict[str, asyncio.Lock] = {}
+        #: Answers typed so far to a question with several parts, by
+        #: (task id, request id).
+        self._partial: dict[tuple[str, str], dict[str, Any]] = {}
+        #: Sub-agent approvals already put to the editor.
+        self._asked: set[tuple[str, str]] = set()
 
     def on_connect(self, conn: Any) -> None:
         self.conn = conn
@@ -261,8 +269,14 @@ class NoetaAcpAgent:
         await self.app.client.wait(task_id, timeout=30)
         return schema.NewSessionResponse(session_id=task_id)
 
+    async def _adopt(self, task_id: str) -> None:
+        try:
+            await self.app.adopt(task_id)
+        except UnknownAgent as exc:
+            raise acp.RequestError(-32602, str(exc)) from exc
+
     async def load_session(self, cwd: str, session_id: str, **kw: Any) -> None:
-        await self.app.adopt(session_id)
+        await self._adopt(session_id)
         for rec in await self.app.client.events(session_id):
             for update in self._replay(rec):
                 await self.conn.session_update(session_id=session_id, update=update)
@@ -290,17 +304,28 @@ class NoetaAcpAgent:
 
     async def _prompt(self, session_id: str, message: Message) -> schema.PromptResponse:
         client = self.app.client
-        await self.app.adopt(session_id)
+        await self._adopt(session_id)
         row = await client.get(session_id)
         after = row.last_seq
-        events = await client.events(session_id, max(0, after - 1))
-        waiting = events[-1].event if events else None
-        asked = question_ids(waiting) if isinstance(waiting, Waiting) else []
+        asked = [p for p in await pending_tree(client, session_id) if p.kind == "question"]
         turn = _Turn(session_id)
         unsubscribe = self.app.deltas(turn.on_delta)
         try:
             if asked:
-                turn.seq = await client.answer(session_id, asked[0], data=message.text)
+                q = asked[0]
+                key = (q.task_id, q.request_id)
+                answers = typed_answer(q.detail, message.text, self._partial.pop(key, None))
+                nxt = next_question(q.detail, answers)
+                if nxt is not None:  # one line per question: ask the next one
+                    self._partial[key] = answers
+                    await self.conn.session_update(
+                        session_id=session_id, update=acp.update_agent_message_text(
+                            f"{question_text(q.detail, nxt)}\n\n(reply with your answer)"))
+                    return schema.PromptResponse(stop_reason="end_turn")
+                turn.seq = await client.answer(q.task_id, q.request_id,
+                                               data={"answers": answers})
+                if q.task_id != session_id:
+                    turn.start(after)  # a sub-agent took it; follow the root from here
             else:
                 turn.seq = await client.send(session_id, message)
             pumping = asyncio.create_task(self._pump(session_id, turn.out))
@@ -332,7 +357,11 @@ class NoetaAcpAgent:
         prompt's message (the inbox seq ``send`` returned); everything
         before it (the previous turn's tail, unrelated input) is skipped."""
         out = turn.out
-        async for rec in self.app.client.watch(session_id, after):
+        async for rec in follow_tree(self.app.client, session_id, after):
+            if isinstance(rec, list):  # what sub-agents wait on the user for
+                if await self._child_requests(session_id, rec, out):
+                    return "end_turn"
+                continue
             ev = rec.event
             if turn.input_seq is None:
                 if isinstance(ev, InputTaken) and any(i.seq == turn.seq for i in ev.items):
@@ -367,8 +396,10 @@ class NoetaAcpAgent:
                 elif ev.on == "input":
                     return "end_turn"
                 elif ev.on == "question":
-                    text = "\n\n".join(question_text(ev.detail.get(i) or {})
-                                        for i in question_ids(ev))
+                    first = question_ids(ev)[:1]
+                    detail = (ev.detail.get(first[0]) or {}) if first else {}
+                    nxt = next_question(detail)
+                    text = question_text(detail, nxt) if nxt is not None else ""
                     out.put_nowait(acp.update_agent_message_text(
                         f"\n\n{text or 'The agent is asking a question.'}"
                         "\n\n(reply with your answer)"))
@@ -379,25 +410,47 @@ class NoetaAcpAgent:
                 return "cancelled" if ev.status == "cancelled" else "end_turn"
         return "end_turn"
 
+    async def _child_requests(self, session_id: str, found: list[Pending],
+                              out: asyncio.Queue[Any]) -> bool:
+        """Put sub-agents' approvals to the editor; a sub-agent's question
+        ends the prompt (the next one answers it). ``True`` when it did."""
+        for p in found:
+            if p.kind == "question":
+                nxt = next_question(p.detail, self._partial.get((p.task_id, p.request_id)))
+                text = question_text(p.detail, nxt) if nxt is not None else ""
+                out.put_nowait(acp.update_agent_message_text(
+                    f"\n\n[{p.agent or 'sub-agent'}] {text or 'A sub-agent asks a question.'}"
+                    "\n\n(reply with your answer)"))
+                return True
+        for p in found:
+            if (p.task_id, p.request_id) in self._asked:
+                continue
+            self._asked.add((p.task_id, p.request_id))
+            await out.join()
+            await self._ask_one(session_id, p.task_id, p.request_id,
+                                f"[{p.agent or 'sub-agent'}] {p.prompt or p.tool or p.request_id}")
+        return False
+
     async def _ask_permissions(self, session_id: str, waiting: Waiting) -> None:
+        for call_id in waiting.ids:
+            detail = waiting.detail.get(call_id) or {}
+            await self._ask_one(session_id, session_id, call_id,
+                                str(detail.get("prompt") or call_id))
+
+    async def _ask_one(self, session_id: str, task_id: str, call_id: str, title: str) -> None:
         options = [
             schema.PermissionOption(option_id="allow", name="Allow", kind="allow_once"),
             schema.PermissionOption(option_id="always", name="Always allow", kind="allow_always"),
             schema.PermissionOption(option_id="deny", name="Deny", kind="reject_once"),
         ]
-        for call_id in waiting.ids:
-            detail = waiting.detail.get(call_id) or {}
-            resp = await self.conn.request_permission(
-                session_id=session_id, options=options,
-                tool_call=schema.ToolCallUpdate(tool_call_id=call_id,
-                                                title=str(detail.get("prompt") or call_id)))
-            outcome = resp.outcome
-            chosen = getattr(outcome, "option_id", None)
-            if chosen in ("allow", "always"):
-                await self.app.client.answer(session_id, call_id, "allow",
-                                             always=chosen == "always")
-            else:
-                await self.app.client.answer(session_id, call_id, "deny")
+        resp = await self.conn.request_permission(
+            session_id=session_id, options=options,
+            tool_call=schema.ToolCallUpdate(tool_call_id=call_id, title=title))
+        chosen = getattr(resp.outcome, "option_id", None)
+        if chosen in ("allow", "always"):
+            await self.app.client.answer(task_id, call_id, "allow", always=chosen == "always")
+        else:
+            await self.app.client.answer(task_id, call_id, "deny")
 
 
 async def serve_stdio(app: LocalApp, *, agent: str = "main", model: str = "",

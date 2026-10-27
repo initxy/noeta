@@ -3,7 +3,9 @@ a host answers with."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -14,6 +16,7 @@ from noeta.events import (
     ModelCalled,
     ModelReplied,
     Recorded,
+    TaskCreated,
     TaskEnded,
     ToolFinished,
     Waiting,
@@ -44,6 +47,8 @@ class Pending:
     input: dict[str, Any] = field(default_factory=dict)
     prompt: str = ""
     detail: dict[str, Any] = field(default_factory=dict)
+    #: The agent of the task that asks (a sub-agent's name, for showing).
+    agent: str = ""
 
 
 def pending(events: Sequence[Recorded], task_id: str = "") -> list[Pending]:
@@ -54,9 +59,12 @@ def pending(events: Sequence[Recorded], task_id: str = "") -> list[Pending]:
     parked: dict[str, dict[str, Any]] = {}
     waiting: Waiting | None = None
     done: set[str] = set()
+    agent = ""
     for rec in events:
         ev = rec.event
-        if isinstance(ev, ModelReplied):
+        if isinstance(ev, TaskCreated):
+            agent = ev.agent
+        elif isinstance(ev, ModelReplied):
             uses = {u.id: u for u in ev.response.message.tool_uses}
             parked = {}
         elif isinstance(ev, ExtensionRecorded) and ev.extension == CORE and ev.kind == "parked":
@@ -82,10 +90,11 @@ def pending(events: Sequence[Recorded], task_id: str = "") -> list[Pending]:
         if waiting.on == "approval":
             d = dict(waiting.detail.get(rid) or {})
             out.append(Pending(task_id=task_id, request_id=rid, kind="approval", tool=tool,
-                               input=args, prompt=str(d.get("prompt") or ""), detail=d))
+                               input=args, prompt=str(d.get("prompt") or ""), detail=d,
+                               agent=agent))
         else:
             out.append(Pending(task_id=task_id, request_id=rid, kind="question", tool=tool,
-                               input=args, detail=parked.get(rid, {})))
+                               input=args, detail=parked.get(rid, {}), agent=agent))
     return out
 
 
@@ -97,3 +106,39 @@ async def pending_tree(client: Client, task_id: str) -> list[Pending]:
     for child in await client.tasks(parent_id=task_id, status="waiting"):
         out.extend(await pending_tree(client, child.task_id))
     return out
+
+
+async def follow_tree(client: Client, task_id: str, after: int = 0, *,
+                      poll: float = 1.0) -> AsyncIterator[Recorded | list[Pending]]:
+    """``client.watch(task_id, after)``, plus what its sub-agents wait on a
+    human for: while the task waits on its children, the tree is checked
+    every ``poll`` seconds and, when a descendant waits on an approval or a
+    question, that list is yielded (again on every check until answered —
+    a front end remembers what it has shown)."""
+    row = await client.get(task_id)
+    on_children = row.status == "waiting" and row.waiting_on == "children"
+    records = client.watch(task_id, after).__aiter__()
+    nxt: asyncio.Future[Recorded] = asyncio.ensure_future(records.__anext__())
+    try:
+        while True:
+            done, _ = await asyncio.wait({nxt}, timeout=poll if on_children else None)
+            if not done:
+                found = [p for p in await pending_tree(client, task_id) if p.task_id != task_id]
+                if found:
+                    yield found
+                continue
+            try:
+                rec = nxt.result()
+            except StopAsyncIteration:
+                return
+            on_children = isinstance(rec.event, Waiting) and rec.event.on == "children"
+            nxt = asyncio.ensure_future(records.__anext__())
+            yield rec
+    finally:
+        nxt.cancel()
+        with contextlib.suppress(BaseException):
+            await nxt
+        aclose = getattr(records, "aclose", None)
+        if aclose is not None:
+            with contextlib.suppress(Exception):
+                await aclose()
