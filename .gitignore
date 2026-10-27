@@ -54,3 +54,6 @@ Thumbs.db
 # Local host config that may hold an api_key — ignored so a local copy can
 # never be committed.
 /noeta.config.json
+
+# prompt-regression eval run outputs
+evals/results/
