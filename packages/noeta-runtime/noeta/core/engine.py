@@ -104,6 +104,7 @@ from noeta.protocols.messages import (
     MessageOrigin,
     TextBlock,
     ToolResultBlock,
+    ToolUseBlock,
 )
 from noeta.protocols.policy import Policy
 from noeta.protocols.step_context import StepContext
@@ -914,6 +915,11 @@ class Engine:
         pops the marker in one reduction — exactly-once by construction.
         ``apply_event`` folds it onto the live task so the next ``compose`` sees
         it and a fresh fold matches. Nothing pending ⇒ no emit ⇒ byte-identical.
+
+        While the latest assistant turn still has a call with no result (the
+        ``Task`` calls a mixed response spawns after its ordinary calls), the
+        drain waits: a user message there would split that call from its
+        result.
         """
         inbox = self._injection_inbox
         live = inbox.snapshot(task.task_id) if inbox is not None else {}
@@ -921,7 +927,7 @@ class Engine:
         # entries not yet folded onto this in-memory task. dict union keeps
         # first-seen order and dedups on ``injection_id``.
         pending = {**task.governance.pending_injections, **live}
-        if not pending:
+        if not pending or _latest_turn_has_unanswered_call(task.runtime.messages):
             return task
         for injection_id, descriptor in pending.items():
             env = self._emit(
@@ -1349,6 +1355,22 @@ class Engine:
     def _latest_trace_id(self, task_id: str) -> str:
         events = self._event_log.read(task_id)
         return events[0].trace_id if events else "trace-unknown"
+
+
+def _latest_turn_has_unanswered_call(messages: list[Message]) -> bool:
+    """Does the latest assistant turn carry a tool call with no result yet?"""
+    answered: set[str] = set()
+    for message in reversed(messages):
+        if message.role != "assistant":
+            answered.update(
+                b.call_id for b in message.content if isinstance(b, ToolResultBlock)
+            )
+            continue
+        return any(
+            isinstance(b, ToolUseBlock) and b.call_id not in answered
+            for b in message.content
+        )
+    return False
 
 
 def _raise_if_cancelled(
