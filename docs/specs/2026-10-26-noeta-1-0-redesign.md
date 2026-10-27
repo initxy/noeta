@@ -252,7 +252,8 @@ recorded; the recorded reply is the truth.
 - 0.6 → 1.0 mapping for hosts:
   - `send_goal` → `send(when="next_turn")`
   - `inject_goal` → `send(when="now")`
-  - `task_answer` → `answer`
+  - `task_answer` (the last turn's answer) → `Waiting.detail["answer"]` / `TaskEnded.answer`
+    (`answer` is the reply to an approval or question, 0.6's `approve` / `deny` / `answer`)
   - `subscribe` → `watch`
   - `create_task` → `create`
 - `connect("http://…")` gives the same API through `noeta.server`. The TUI uses this API either
@@ -414,3 +415,4 @@ Phase 5 — cutover
 2026-10-27 released 0.6.42 (merged PR #75 with owner's go-ahead; both wheels verified from PyPI).
 2026-10-27 fresh-context reviews: core/front ends (4 P1, 8 P2) and extensions (4 P1, 5 P2), all with repros; two fix branches in flight. Spec drift fixed here: no blob table (payloads inline), deltas are a separate channel, `tasks()` filters by parent/status, sync facade moved to phase 5.
 2026-10-27 review fixes merged: core (store roots filter and error mapping, unique call ids, answers re-gated, parked-call Waiting.detail, turn close rules, release on shutdown, front ends serve only their own trees, ACP turn gating by inbox seq, SSE/remote reconnect, Delta call_seq/attempt) and extensions (hardened env capture through the ExecEnv, `Extension.resident` + `TaskView.residents()` so residents return right after a summary, background job ownership, `.noeta/` writes ask, todo reminder after compaction, 0.6 sub-agent sets, inherited always-rules, private log dir). 1285 passed (sqlite), 1309 (postgres:16); make check green.
+2026-10-27 host-app migration assessed (read-only): overall L, about 3-5 weeks in host-app plus about 2 weeks of Noeta additions (sync facade, per-turn config overlay on Say, error class on turn_failed, store prune, tasks(updated_after) + store-wide observer, opt-in request capture, provider_for(task), rewind or drop take_back, public estimate_tokens). One-branch cutover (0.6 and 1.0 cannot be installed together). Owner to decide scope. Fixed the task_answer mapping above.
