@@ -533,6 +533,34 @@ def test_idempotency_isolated_per_lease(make_log) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_keyed_system_emit_appends_once(make_log) -> None:
+    log, _disp = _wire_log_to_dispatcher(make_log)
+    log.system_emit(
+        task_id="t1", type="TaskCreated",
+        payload=TaskCreatedPayload(goal="g", policy_name="p"),
+        actor="test", origin="system",
+    )
+    first = log.system_emit(
+        task_id="t1", type="TaskStarted", payload=TaskStartedPayload(lease_id="A"),
+        actor="test", origin="system", idempotency_key="k",
+    )
+    second = log.system_emit(
+        task_id="t1", type="TaskStarted", payload=TaskStartedPayload(lease_id="B"),
+        actor="test", origin="system", idempotency_key="k",
+    )
+    assert second.id == first.id and second.payload.lease_id == "A"
+    # Unkeyed writes never dedup, and a different key is a different write.
+    log.system_emit(
+        task_id="t1", type="TaskStarted", payload=TaskStartedPayload(lease_id="C"),
+        actor="test", origin="system",
+    )
+    log.system_emit(
+        task_id="t1", type="TaskStarted", payload=TaskStartedPayload(lease_id="D"),
+        actor="test", origin="system", idempotency_key="other",
+    )
+    assert [e.payload.lease_id for e in log.read("t1")[1:]] == ["A", "C", "D"]
+
+
 def test_system_emit_writes_without_lease_validation(make_log) -> None:
     log, disp = _wire_log_to_dispatcher(make_log)
     disp.enqueue("t-parent")

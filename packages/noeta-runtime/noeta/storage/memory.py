@@ -37,6 +37,7 @@ from noeta.protocols.errors import (
 )
 from noeta.protocols.event_log import (
     SNAPSHOT_BASELINE_EVENT_TYPES,
+    SYSTEM_IDEMPOTENCY_SCOPE,
     EventLogFull,
     Subscriber,
     TaskStreamSummary,
@@ -242,6 +243,7 @@ class InMemoryEventLog:
         origin: EventOrigin,
         trace_id: str | None = None,
         causation_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> EventEnvelope:
         """Append one cross-stream system event, unchecked.
 
@@ -264,9 +266,11 @@ class InMemoryEventLog:
         )
         return self._append_impl(
             envelope,
-            lease_id=None,
+            lease_id=(
+                SYSTEM_IDEMPOTENCY_SCOPE if idempotency_key is not None else None
+            ),
             expected_seq=None,
-            idempotency_key=None,
+            idempotency_key=idempotency_key,
             require_lease=False,
         )
 
