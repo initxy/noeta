@@ -14,6 +14,9 @@ class RunResult(Struct):
     stdout: bytes
     stderr: bytes = b""
     timed_out: bool = False
+    #: ``run(output_cap=N)`` kept only the last ``N`` bytes of the stream.
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
 
 
 class FileStat(Struct):
@@ -35,12 +38,33 @@ class ExecEnv(Protocol):
         env: Mapping[str, str] | None = None,
         stdin: bytes | None = None,
         timeout: float | None = None,
+        output_cap: int | None = None,
     ) -> RunResult:
         """Run a program and wait. On timeout or cancellation the whole process
-        group is killed."""
+        group is killed.
+
+        ``env`` is laid over the backend's own (scrubbed) environment, never
+        a replacement for it. ``output_cap`` bounds each captured stream while
+        it is read: only its last ``output_cap`` bytes are kept and the
+        ``*_truncated`` flag says the head was dropped. A timed-out run
+        returns ``timed_out=True`` with ``exit_code=-1`` and whatever output
+        it produced. A missing program raises ``FileNotFoundError`` (or exits
+        127 where a shell stands in between)."""
         ...
 
     async def read_bytes(self, path: str) -> bytes: ...
+
+    async def read_range(self, path: str, offset: int, length: int) -> bytes:
+        """Up to ``length`` bytes of ``path`` from byte ``offset``; fewer only
+        at end of file (empty past it). Lets a large file be read in bounded
+        chunks."""
+        ...
+
+    async def realpath(self, path: str) -> str:
+        """``path`` made absolute (relative to ``cwd``) with symlinks and
+        ``..`` resolved, as the env sees it. A missing tail is kept as named,
+        like ``os.path.realpath``."""
+        ...
 
     async def write_bytes(self, path: str, data: bytes) -> None:
         """Write atomically, creating parent directories."""

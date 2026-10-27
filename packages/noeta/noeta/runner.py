@@ -84,7 +84,7 @@ OnDelta = Callable[[str, Delta], None]
 
 
 def _default_env(state: TaskState) -> ExecEnv:
-    from noeta.execenv.local import LocalExecEnv  # type: ignore[import-not-found]
+    from noeta.execenv.local import LocalExecEnv
 
     env: ExecEnv = LocalExecEnv(str(state.config.get("cwd") or os.getcwd()))
     return env

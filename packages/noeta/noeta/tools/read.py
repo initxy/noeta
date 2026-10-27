@@ -1,0 +1,381 @@
+"""``Read``: a file's lines in ``cat -n`` form, or an image, PDF or notebook.
+
+A read is observation, not mutation, so paths are not fenced: a relative path
+is anchored on the workspace, an absolute one is read where it points. Every
+failure is an error result, never an exception. Each text or notebook read is
+recorded (``fs`` / ``read``: canonical path, sha256 of the whole file, mtime)
+for ``Edit`` / ``Write``'s read-first check.
+"""
+
+from __future__ import annotations
+
+import codecs
+import hashlib
+import posixpath
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass, field
+from typing import Any
+
+from noeta.execenv.base import ExecEnv
+from noeta.tools._common import (
+    Workspace,
+    format_size,
+    load_description,
+    require_str,
+    tool_error,
+)
+from noeta.tools._read_formats import (
+    MAX_READ_TOKENS,
+    estimate_tokens,
+    read_notebook,
+    read_pdf,
+    too_many_tokens,
+)
+from noeta.tools.base import ToolContext, ToolOutput, text_output
+from noeta.tools.fs_state import FS, KIND_READ
+from noeta.types import Image, Text
+
+__all__ = ["IMAGE_MAX_BYTES", "ReadTool"]
+
+
+_DEFAULT_READ_LIMIT = 2000  # lines
+#: Per-line visible-char cap: a minified file can be one multi-MB line.
+_MAX_LINE_CHARS = 2000
+_LINE_TRUNC_MARKER = " … [line truncated]"
+
+#: Claude Code's whole-file ceiling for a read without ``limit`` (256 KB).
+_READ_MAX_FILE_BYTES = 262_144
+#: Bound on the text one scan keeps — four times the token ceiling's
+#: characters, so a window the scan stops is always one the token check
+#: refuses, and memory stays flat however long the requested range.
+_READ_MAX_SERVED_BYTES = MAX_READ_TOKENS * 4 * 4
+_READ_CHUNK_BYTES = 1024 * 1024
+_SNIFF_BYTES = 16
+#: Bytes of one line kept while streaming: enough for ``_MAX_LINE_CHARS``
+#: characters of up to four UTF-8 bytes each, plus a trailing ``\r``.
+_LINE_KEEP_BYTES = _MAX_LINE_CHARS * 4 + 1
+
+#: Single-image inline ceiling. There is no image library to downscale with,
+#: so a larger image fails asking the model to crop or resize it.
+IMAGE_MAX_BYTES = 5 * 1024 * 1024
+
+#: Leading magic bytes -> (human label, media type). Detection is by content,
+#: not extension, so a mis-named image is still caught. WebP (a RIFF
+#: container with a ``WEBP`` fourcc at offset 8) is checked separately.
+_IMAGE_MAGIC: tuple[tuple[bytes, str, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "PNG image", "image/png"),
+    (b"\xff\xd8\xff", "JPEG image", "image/jpeg"),
+    (b"GIF87a", "GIF image", "image/gif"),
+    (b"GIF89a", "GIF image", "image/gif"),
+)
+
+
+def detect_image(raw: bytes) -> tuple[str, str] | None:
+    """``(label, media type)`` when ``raw`` starts like a png / jpeg / gif /
+    webp image, else ``None``."""
+    for prefix, label, media_type in _IMAGE_MAGIC:
+        if raw.startswith(prefix):
+            return label, media_type
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "WebP image", "image/webp"
+    return None
+
+
+def _note(text: str) -> str:
+    """A tool's own inline note, parenthesised. Deliberately not a
+    ``<system-reminder>``: that tag belongs to the host."""
+    return f"({text})"
+
+
+def _decode_line(raw: bytes, clipped: bool) -> tuple[str, bool]:
+    """One line's display text (a trailing ``\\r`` dropped, a long line
+    clipped) and whether invalid UTF-8 was replaced. A clipped line may end
+    mid-character; the incremental decoder holds that partial back."""
+    if raw.endswith(b"\r"):
+        raw = raw[:-1]
+    try:
+        text = codecs.getincrementaldecoder("utf-8")("strict").decode(
+            raw, final=not clipped
+        )
+        replaced = False
+    except UnicodeDecodeError:
+        text = codecs.getincrementaldecoder("utf-8")("replace").decode(
+            raw, final=not clipped
+        )
+        replaced = True
+    if clipped or len(text) > _MAX_LINE_CHARS:
+        return text[:_MAX_LINE_CHARS] + _LINE_TRUNC_MARKER, replaced
+    return text, replaced
+
+
+@dataclass
+class _Scan:
+    """One streaming pass over a file: hash every byte, count lines, keep only
+    the lines ``[start, start + limit)`` that fit the served-bytes bound.
+
+    Lines split on ``\\n`` only — the boundary ``rg`` and ``Grep`` use — so a
+    form feed or U+2028 inside a line never shifts the numbering. A trailing
+    segment without ``\\n`` is the last line. A NUL byte stops the scan (the
+    file is binary)."""
+
+    start: int
+    limit: int
+    hasher: Any = field(default_factory=hashlib.sha256)
+    window: list[str] = field(default_factory=list)
+    served: int = 0
+    capped: bool = False
+    bytes_replaced: bool = False
+    has_nul: bool = False
+    total_lines: int = 0  # completed lines so far; final after ``finish``
+    _cur: bytearray = field(default_factory=bytearray)
+    _cur_len: int = 0
+
+    @property
+    def digest(self) -> str:
+        return str(self.hasher.hexdigest())
+
+    def window_text(self) -> str:
+        return "\n".join(self.window)
+
+    def _take(self, line_no: int) -> bool:
+        return self.start <= line_no < self.start + self.limit and not self.capped
+
+    def _finish_line(self, raw: bytes, clipped: bool) -> None:
+        text, replaced = _decode_line(raw, clipped)
+        cost = len(text.encode("utf-8")) + 8  # number column + tab + newline
+        if self.window and self.served + cost > _READ_MAX_SERVED_BYTES:
+            self.capped = True
+            return
+        self.window.append(text)
+        self.served += cost
+        self.bytes_replaced = self.bytes_replaced or replaced
+
+    def feed(self, chunk: bytes) -> bool:
+        """Take one chunk; ``False`` once the file proved binary."""
+        if b"\x00" in chunk:
+            self.has_nul = True
+            return False
+        self.hasher.update(chunk)
+        pos, n = 0, len(chunk)
+        while pos < n:
+            nl = chunk.find(b"\n", pos)
+            stop = n if nl < 0 else nl
+            if self._take(self.total_lines) and len(self._cur) < _LINE_KEEP_BYTES:
+                self._cur += chunk[pos : min(stop, pos + _LINE_KEEP_BYTES - len(self._cur))]
+            self._cur_len += stop - pos
+            if nl < 0:
+                break
+            if self._take(self.total_lines):
+                self._finish_line(bytes(self._cur), self._cur_len > _LINE_KEEP_BYTES)
+            self.total_lines += 1
+            self._cur.clear()
+            self._cur_len = 0
+            pos = nl + 1
+        return True
+
+    def finish(self) -> None:
+        if self._cur_len:
+            if self._take(self.total_lines):
+                self._finish_line(bytes(self._cur), self._cur_len > _LINE_KEEP_BYTES)
+            self.total_lines += 1
+            self._cur.clear()
+            self._cur_len = 0
+
+
+def _chunks(env: ExecEnv, path: str) -> Callable[[], AsyncIterator[bytes]]:
+    """A factory of bounded-chunk iterators over ``path``, so memory stays
+    flat however large the file is."""
+
+    async def _iter() -> AsyncIterator[bytes]:
+        offset = 0
+        while True:
+            chunk = await env.read_range(path, offset, _READ_CHUNK_BYTES)
+            if chunk:
+                yield chunk
+            if len(chunk) < _READ_CHUNK_BYTES:
+                return
+            offset += len(chunk)
+
+    return _iter
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _input_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string"},
+            "offset": {"type": "integer", "minimum": 1},
+            "limit": {"type": "integer", "minimum": 1},
+            "pages": {"type": "string"},
+        },
+        "required": ["file_path"],
+        "additionalProperties": False,
+    }
+
+
+class ReadTool:
+    """``Read``. ``offset`` is 1-based."""
+
+    name = "Read"
+    description = load_description("read")
+    read_only = True
+    clearable = True
+    input_schema: dict[str, Any]
+
+    def __init__(self) -> None:
+        self.input_schema = _input_schema()
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        path = require_str(input, "file_path")
+        if path is None:
+            return tool_error(self.name, "requires non-empty 'file_path'")
+        env = ctx.env
+        ws = await Workspace.of(env)
+        resolved = await ws.canonical(path)
+        st = await env.stat(resolved)
+        if st is None or st.is_dir:
+            return tool_error(self.name, f"not a file: {path!r}")
+        display = ws.relative(resolved)
+        offset = _positive_int(input.get("offset")) or 1
+        explicit_limit = _positive_int(input.get("limit"))
+        limit = explicit_limit or _DEFAULT_READ_LIMIT
+        size = st.size
+        chunks = _chunks(env, resolved)
+
+        try:
+            head = await env.read_range(resolved, 0, _SNIFF_BYTES)
+        except OSError as exc:
+            return tool_error(self.name, f"read failed: {exc}")
+
+        if head.startswith(b"%PDF-"):
+            return await read_pdf(self.name, env, resolved, display, size, input.get("pages"))
+
+        if posixpath.splitext(resolved)[1] == ".ipynb":
+            try:
+                raw_nb = b"".join([c async for c in chunks()])
+            except OSError as exc:
+                return tool_error(self.name, f"read failed: {exc}")
+            _record_read(ctx, resolved, hashlib.sha256(raw_nb).hexdigest(), st.mtime)
+            return read_notebook(self.name, raw_nb, display)
+
+        image = detect_image(head)
+        if image is not None:
+            return await self._read_image(path, resolved, display, size, image, chunks)
+
+        # Claude Code's whole-file ceiling: a read with no ``limit`` of a file
+        # over 256 KB is refused before anything is served.
+        if explicit_limit is None and size > _READ_MAX_FILE_BYTES:
+            return tool_error(
+                self.name,
+                f"File content ({format_size(size)}) exceeds maximum allowed "
+                f"size ({format_size(_READ_MAX_FILE_BYTES)}). Use offset and "
+                "limit parameters to read specific portions of the file, or "
+                "search for specific content instead of reading the whole "
+                "file.",
+            )
+
+        start = offset - 1
+        scan = _Scan(start=start, limit=limit)
+        try:
+            async for chunk in chunks():
+                if not scan.feed(chunk):
+                    break
+        except OSError as exc:
+            return tool_error(self.name, f"read failed: {exc}")
+        # A NUL byte marks real binary regardless of decodability.
+        if scan.has_nul:
+            return tool_error(self.name, f"{path!r} is not utf-8 text")
+        scan.finish()
+        # Claude Code's token ceiling on what one read returns. A window the
+        # scan had to stop is past it by construction.
+        tokens = estimate_tokens(
+            scan.window_text(), posixpath.splitext(resolved)[1].lstrip(".").lower()
+        )
+        if scan.capped or tokens > MAX_READ_TOKENS:
+            return tool_error(self.name, too_many_tokens(tokens))
+
+        # Keyed by the canonical path and digesting the raw bytes of the whole
+        # file, so a later mutation check compares like with like.
+        _record_read(ctx, resolved, scan.digest, st.mtime)
+
+        total = scan.total_lines
+        meta: dict[str, Any] = {"path": display, "total_lines": total}
+        if scan.bytes_replaced:
+            meta["bytes_replaced"] = True
+        if total == 0:
+            return text_output(_note("The file exists but has empty contents."), **meta)
+        if start >= total:
+            return text_output(
+                _note(
+                    f"The file has only {total} lines, fewer than the "
+                    f"requested offset {offset}. Nothing was read."
+                ),
+                **meta,
+            )
+
+        rendered = "\n".join(
+            f"{start + i + 1:>6}\t{line}" for i, line in enumerate(scan.window)
+        )
+        shown_end = start + len(scan.window)
+        notes: list[str] = []
+        if scan.bytes_replaced:
+            notes.append(_note("Non-utf8 bytes were replaced with U+FFFD."))
+        if shown_end < total or start > 0:
+            notes.append(
+                _note(
+                    f"Showing lines {start + 1}-{shown_end} of {total} "
+                    f"total lines. Use offset={shown_end + 1} to continue "
+                    "reading."
+                )
+            )
+        output = rendered
+        if notes:
+            output = output + "\n\n" + "\n".join(notes)
+        return text_output(output, lines=[start + 1, shown_end], **meta)
+
+    async def _read_image(
+        self,
+        path: str,
+        resolved: str,
+        display: str,
+        size: int,
+        image: tuple[str, str],
+        chunks: Callable[[], AsyncIterator[bytes]],
+    ) -> ToolOutput:
+        label, media_type = image
+        too_big = (
+            f"over the {IMAGE_MAX_BYTES // 1024 // 1024}MB inline limit — "
+            "crop/resize it smaller before reading"
+        )
+        if size > IMAGE_MAX_BYTES:
+            return tool_error(self.name, f"{path!r} is a {label} of {size} bytes, {too_big}")
+        buf = bytearray()
+        try:
+            async for chunk in chunks():
+                buf += chunk
+                if len(buf) > IMAGE_MAX_BYTES:  # grew while being read
+                    return tool_error(
+                        self.name,
+                        f"{path!r} is a {label} of more than "
+                        f"{IMAGE_MAX_BYTES} bytes, {too_big}",
+                    )
+        except OSError as exc:
+            return tool_error(self.name, f"read failed: {exc}")
+        raw = bytes(buf)
+        return ToolOutput(
+            content=[
+                Text(text=f"Read image {display} ({media_type}, {len(raw)} bytes)"),
+                Image(media_type=media_type, data=raw),
+            ],
+            meta={"path": display, "media_type": media_type, "bytes": len(raw)},
+        )
+
+
+def _record_read(ctx: ToolContext, path: str, digest: str, mtime: float) -> None:
+    ctx.record(FS, KIND_READ, {"path": path, "digest": digest, "mtime": mtime})
