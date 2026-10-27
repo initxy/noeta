@@ -60,11 +60,13 @@ def _settings(args: argparse.Namespace) -> Settings:
     return s
 
 
-def _app(s: Settings, **runtime_kw: Any) -> Any:
+def _app(s: Settings, *, agents_kw: dict[str, Any] | None = None, **runtime_kw: Any) -> Any:
+    from noeta.config import HOME
     from noeta.local import LocalApp
     from noeta.presets import default_agents
 
-    return LocalApp(open_store(s.store_url), default_agents(s.model), s.make_provider(),
+    kw: dict[str, Any] = {"memory_root": str(HOME / "memory"), **(agents_kw or {})}
+    return LocalApp(open_store(s.store_url), default_agents(s.model, **kw), s.make_provider(),
                     **runtime_kw)
 
 
@@ -150,10 +152,13 @@ def main(argv: list[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     cwd = os.path.abspath(args.cwd or os.getcwd())
     if args.command == "acp":
-        from noeta.acp import serve_stdio
+        from noeta.acp import SessionServers, serve_stdio
+        from noeta.ext.mcp import Mcp
 
         s = _settings(args)
-        asyncio.run(serve_stdio(_app(s), model=s.model))
+        servers = SessionServers()
+        asyncio.run(serve_stdio(_app(s, agents_kw={"mcp": Mcp(servers)}), model=s.model,
+                                servers=servers))
         return
     if args.command == "worker":
         asyncio.run(_worker(_settings(args), args.queue or ["default"], args.concurrency))

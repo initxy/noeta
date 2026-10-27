@@ -67,7 +67,9 @@ def _agent(name: str, model: str, prompt: str, fs: FileTools,
         name=kw.pop("name", name),
         model=model,
         system_prompt=kw.pop("system_prompt", prompt),
-        extensions=(fs, Environment(), Subtasks(), *extensions),
+        # The host's extensions go first: a background shell's own Bash must
+        # shadow the plain one, and compaction must see the request first.
+        extensions=(*extensions, fs, Environment(), Subtasks()),
         one_shot=kw.pop("one_shot", True),
         **kw,
     )

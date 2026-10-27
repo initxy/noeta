@@ -101,11 +101,40 @@ def prompt_message(blocks: Iterable[Any]) -> Message:
     return Message(role="user", content=content or [Text(text="")], origin="human")
 
 
+class SessionServers:
+    """MCP servers an editor named for each session. Kept in memory only:
+    their env and headers are credentials and never enter the task log. Pass
+    it to ``Mcp(servers=...)``."""
+
+    def __init__(self) -> None:
+        self.by_task: dict[str, list[Any]] = {}
+
+    def __call__(self, view: Any) -> list[Any]:
+        return self.by_task.get(view.state.root_id or view.task_id, [])
+
+    def add(self, task_id: str, servers: Iterable[Any]) -> None:
+        from noeta.ext.mcp import McpServer
+
+        converted = []
+        for s in servers:
+            alias = "".join(c if c.isalnum() or c in "_-" else "_" for c in s.name.lower())[:32]
+            given = getattr(s, "env", None) or getattr(s, "headers", None) or []
+            pairs = {p.name: p.value for p in given}
+            if getattr(s, "command", None):
+                converted.append(McpServer(alias=alias, command=[s.command, *(s.args or [])],
+                                           env=pairs))
+            elif getattr(s, "url", None):
+                converted.append(McpServer(alias=alias, url=s.url, headers=pairs))
+        self.by_task[task_id] = converted
+
+
 class NoetaAcpAgent:
     """The ACP agent side. ``agent`` names the noeta agent each session runs."""
 
-    def __init__(self, app: LocalApp, *, agent: str = "main", model: str = "") -> None:
+    def __init__(self, app: LocalApp, *, agent: str = "main", model: str = "",
+                 servers: SessionServers | None = None) -> None:
         self.app = app
+        self.servers = servers
         self.agent = agent
         self.model = model
         self.conn: Any = None
@@ -128,9 +157,9 @@ class NoetaAcpAgent:
         config: dict[str, Any] = {"cwd": cwd}
         if self.model:
             config["model"] = self.model
-        if mcp_servers:
-            config["mcp_servers"] = [s.model_dump(mode="json") for s in mcp_servers]
         task_id = await self.app.client.create(self.agent, None, config=config)
+        if mcp_servers and self.servers is not None:
+            self.servers.add(task_id, mcp_servers)
         await self.app.client.wait(task_id, timeout=30)
         return schema.NewSessionResponse(session_id=task_id)
 
@@ -258,6 +287,8 @@ class NoetaAcpAgent:
                 await self.app.client.answer(session_id, call_id, "deny")
 
 
-async def serve_stdio(app: LocalApp, *, agent: str = "main", model: str = "") -> None:
-    await acp.run_agent(NoetaAcpAgent(app, agent=agent, model=model))  # type: ignore[arg-type]
+async def serve_stdio(app: LocalApp, *, agent: str = "main", model: str = "",
+                      servers: SessionServers | None = None) -> None:
+    await acp.run_agent(NoetaAcpAgent(app, agent=agent, model=model,  # type: ignore[arg-type]
+                                      servers=servers))
 

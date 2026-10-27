@@ -27,6 +27,8 @@ from evals.core import TRIAL_TIMEOUT_S, EvalConfig, Trace
 from tests import _live_env
 
 _MAX_STEPS_PER_TURN = 60
+#: Usable history window for the compaction scenario (as in the 0.6 engine).
+_SMALL_USABLE_WINDOW = 24_000
 
 
 def _provider(name: str) -> Provider:
@@ -102,7 +104,15 @@ def run_trial(
     kw: dict[str, Any] = {"one_shot": True, "max_steps_per_turn": _MAX_STEPS_PER_TURN}
     if cfg.system_prompt is not None:
         kw["system_prompt"] = cfg.system_prompt
-    agents = default_agents(cfg.model, **kw)
+    if small_window:
+        from noeta.ext.compaction import Compaction
+        from noeta.models import model_limits
+
+        _, out = model_limits(cfg.model)
+        # The usable window (window - min(out, 20k) - 13k) is _SMALL_USABLE_WINDOW.
+        kw["compaction"] = Compaction(
+            auto_compact_window=_SMALL_USABLE_WINDOW + min(out, 20_000) + 13_000)
+    agents = default_agents(cfg.model, memory_root=str(root / "memory"), **kw)
     events, error, status = _run(_drive(cfg, agents, goal, ws, root, timeout_s))
 
     batches: list[list[Any]] = []
@@ -129,7 +139,9 @@ def run_trial(
             error = f"TaskEnded({ev.status}): {ev.error}"
     trace = Trace(
         workspace=ws, status=status, items=events, batches=batches, results=results,
-        final_text=texts[-1] if texts else "", spawned=0,
+        final_text=texts[-1] if texts else "",
+        spawned=sum(len(e.data.get("children", [])) for e in events
+                    if type(e).__name__ == "ExtensionRecorded" and e.kind == "spawned"),
         compactions=sum(type(e).__name__ == "Compacted" for e in events), error=error,
     )
     return trace, usage, root

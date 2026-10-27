@@ -24,7 +24,10 @@ def run_tui(settings: Settings, *, cwd: str, resume: str | None = None,
 
         backend = RemoteApp(server, token=os.environ.get("NOETA_SERVER_TOKEN"))
     else:
-        backend = LocalApp(open_store(settings.store_url), default_agents(settings.model),
+        from noeta.config import HOME
+
+        backend = LocalApp(open_store(settings.store_url),
+                           default_agents(settings.model, memory_root=str(HOME / "memory")),
                            settings.make_provider())
     NoetaApp(backend, agent=agent, model=settings.model, cwd=cwd, resume=resume,
              permission_mode=permission_mode).run()
