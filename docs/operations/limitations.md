@@ -46,16 +46,20 @@ faults, see [troubleshooting](troubleshooting.md).
 
 ### Crash recovery cannot undo side effects
 
-- **Boundary:** after a hard kill mid-step, the interrupted attempt is sealed with a
-  `StepAttemptAbandoned` marker. The step is re-driven only if everything it recorded
-  would have run without approval; otherwise — or after 3 seals in one turn — the task
-  is **parked**: suspended with an `origin="system"` notice listing each interrupted
-  call and whether it completed. A crash during a human-approved tool always parks on
-  the same approval. Recovery never re-runs a side-effectful call silently, but it
-  cannot undo what already ran.
-- **Workaround:** open the parked task, check whether the listed operations applied,
-  then type to continue (the turn restarts from the pre-attempt state) or re-approve.
-  Normal SIGTERM does not trigger this.
+- **Boundary:** after a hard kill in the middle of a tool batch, recovery keeps the
+  batch: a finished call keeps its recorded result and is not run again, the call the
+  crash cut short gets a failed result saying its outcome is unknown, and calls that
+  never started run through the normal permission checks. A call that started is never
+  run a second time, whatever the permission mode — but recovery cannot tell whether
+  the interrupted call applied, nor undo anything. A crash before any call started
+  seals the attempt with a `StepAttemptAbandoned` marker and asks the model again. An
+  attempt that spawned a subtask, a crash during a human-approved tool, or a 4th crash
+  in one turn **parks** the task: suspended with an `origin="system"` notice; a crash
+  during an approved tool parks on the same approval.
+- **Workaround:** when a tool result reports an unknown outcome, check its effect
+  before retrying (the model is told the same). For a parked task, check the listed
+  operations, then type to continue or re-approve. Normal SIGTERM does not trigger
+  this.
 
 ### Shutdown can leave a step running
 
@@ -78,7 +82,8 @@ faults, see [troubleshooting](troubleshooting.md).
 
 - **Boundary:** worker signals (`stale_requeued`, `suspended_without_wake`,
   `step_failed_retryable`, `heartbeat_invalid_lease`, `shutdown_abandoned`,
-  `timers_fired`, `attempt_abandoned`, `attempt_parked`, `cap_terminal_reconciled`,
+  `timers_fired`, `attempt_abandoned`, `attempt_parked`, `attempt_resumed`,
+  `cap_terminal_reconciled`,
   `dispatcher_unavailable`) go to a sink that defaults to structured logs. They are not
   event-log events and do not survive a restart.
 - **Workaround:** pass a `reliability_sink` that forwards them to your monitoring.

@@ -68,13 +68,14 @@ separate rights held by two separate components.
 1. Worker A is killed mid-step. Its heartbeat stops and its lease expires.
 2. The stale sweep puts the Task back on the ready queue.
 3. Worker B leases it and folds the log — which every step does anyway.
-4. B seals the interrupted attempt with a `StepAttemptAbandoned` event. If the
-   guards would allow every tool call in that attempt without approval, the step
-   is re-run automatically — and the re-run may repeat a call that had already
-   run. If any call would need approval or be denied, the attempt spawned a
-   subtask, or it names an unknown tool, the Task is parked for a human to
-   resume. Three seals in a row always park, so a crash loop cannot retry
-   forever.
+4. If the interrupted attempt had started its tool calls, B keeps them: a
+   finished call keeps its recorded result, the call the crash cut short gets a
+   result saying its outcome is unknown, calls that never started run now, and
+   the step continues. No call that started runs twice. Otherwise B seals the
+   attempt with a `StepAttemptAbandoned` event and re-runs the step — nothing
+   had run yet. An attempt that spawned a subtask is parked for a human to
+   resume, and a fourth crash in one turn always parks, so a crash loop cannot
+   retry forever.
 
 There is no recovery code path beyond this, because there was never anything to
 "save". The edges of the guarantee are in

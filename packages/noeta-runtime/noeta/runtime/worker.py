@@ -20,7 +20,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Iterator, Literal, Optional, Protocol, cast
 
-from noeta.core.engine import abandon_step_attempt, suspend_on_human_handle
+from noeta.core.engine import (
+    abandon_step_attempt,
+    complete_interrupted_tool_batch,
+    suspend_on_human_handle,
+)
 from noeta.core.fold import BoundedEventLog, apply_event, fold
 from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.dispatcher import DEFAULT_QUEUE
@@ -44,9 +48,12 @@ from noeta.runtime.attempt import (
     ABANDON_CAP,
     InterruptedAttempt,
     PendingPark,
+    RecordedBatch,
     classify_attempt,
+    plan_batch_completion,
     scan_interrupted_attempt,
     scan_pending_park,
+    scan_recorded_batch,
 )
 
 
@@ -98,6 +105,7 @@ ReliabilityKind = Literal[
     "timers_fired",
     "attempt_abandoned",
     "attempt_parked",
+    "attempt_resumed",
     "cap_terminal_reconciled",
     "dispatcher_unavailable",
 ]
@@ -1315,8 +1323,13 @@ def _recover_interrupted_attempt(
     outcome: WorkerOutcome,
     reliability_sink: Optional[ReliabilitySink],
 ) -> WorkerOutcome:
-    """Seal an interrupted attempt, then re-drive or park
-    (docs/adr/032-step-attempt-recovery.md).
+    """Recover an interrupted attempt: resume its tool batch, or seal it
+    and then re-drive or park (docs/adr/032-step-attempt-recovery.md,
+    docs/adr/065-crash-recovery-keeps-finished-tool-calls.md).
+
+    An attempt whose tool batch is on the stream keeps it
+    (:func:`_resume_recorded_batch`): no seal, nothing that started runs
+    again. Everything else follows the seal machine below.
 
     Classify (whatever could run without a human approval gate may be
     re-driven without a human) → seal (``StepAttemptAbandoned``
@@ -1329,9 +1342,24 @@ def _recover_interrupted_attempt(
     re-enters as a bare case-2′ re-drive (after an ``auto_redrive`` seal),
     as a park completion (after a park-reason seal — ``scan_pending_park``),
     or as a fresh case 5′ (before the seal) — recovery recurses naturally,
-    and :data:`~noeta.runtime.attempt.ABANDON_CAP` consecutive seals in one
-    window force a park.
+    and :data:`~noeta.runtime.attempt.ABANDON_CAP` recoveries in one window
+    (seals plus batches resumed across a lost call) force a park.
     """
+    capped = attempt.abandon_count + attempt.resumed_count >= ABANDON_CAP
+    if attempt.anchored_on_plan and not capped:
+        batch = scan_recorded_batch(attempt.tail, rt.content_store)
+        if batch is not None:
+            return _resume_recorded_batch(
+                rt,
+                lease,
+                engine,
+                attempt,
+                batch,
+                cancelled=cancelled,
+                consumed=consumed,
+                outcome=outcome,
+                reliability_sink=reliability_sink,
+            )
     # Baseline = the state as it stood just BEFORE the interrupted
     # attempt's ``ContextPlanComposed`` (completed attempts and the
     # turn's prelude events stay live history; only the interrupted
@@ -1367,7 +1395,6 @@ def _recover_interrupted_attempt(
         content_store=rt.content_store,
         event_log=bounded,
     )
-    capped = attempt.abandon_count >= ABANDON_CAP
     # A plan-less anchor is an interrupted approval execution: a human is
     # in that loop by definition, so recovery never re-drives it — the seal
     # restores the pending-approval state and the park below re-suspends on
@@ -1420,14 +1447,6 @@ def _recover_interrupted_attempt(
             attempt.attempt_start_seq,
             lease.task_id,
         )
-        notice = _redrive_notice(engine, attempt.tail)
-        if notice:
-            task = engine.append_user_message(
-                task,
-                content=[TextBlock(text=notice)],
-                lease_id=lease.lease_id,
-                origin="system",
-            )
         task = engine.run_one_step(task, lease_id=lease.lease_id, cancelled=cancelled)
         rt.dispatcher.release(
             lease.lease_id,
@@ -1463,6 +1482,81 @@ def _recover_interrupted_attempt(
         consumed_wake_event=consumed,
     )
     return "stopped"
+
+
+def _resume_recorded_batch(
+    rt: WorkerRuntime,
+    lease: Any,
+    engine: Any,
+    attempt: InterruptedAttempt,
+    batch: RecordedBatch,
+    *,
+    cancelled: Optional[Callable[[], bool]],
+    consumed: Any,
+    outcome: WorkerOutcome,
+    reliability_sink: Optional[ReliabilitySink],
+) -> WorkerOutcome:
+    """Keep an interrupted attempt's tool batch and continue the step.
+
+    The decision and every recorded result stay live history. Unless the
+    batch's result message already landed, each call gets its one result:
+    the recorded one re-rendered, an unknown-outcome error for a call that
+    started without one, the recorded reason for a denial, and a live run
+    (past the guard chain) for a call that never started. The step then
+    continues from its next decide. Nothing is sealed, so a crash during
+    this re-enters with more of the batch recorded; a call cut short is
+    never run twice.
+    """
+    task = fold(rt.event_log, rt.content_store, lease.task_id)
+    interrupted: list[str] = []
+    if not batch.results_present:
+        completion = plan_batch_completion(
+            batch, tool_named=engine.tool_named, content_store=rt.content_store
+        )
+        interrupted = [
+            use.tool_name
+            for use in batch.tool_uses
+            if use.call_id in batch.started and use.call_id not in batch.recorded
+        ]
+        task = complete_interrupted_tool_batch(
+            engine,
+            task,
+            recorded=completion.recorded,
+            answered=completion.answered,
+            pending=completion.pending,
+            lease_id=lease.lease_id,
+            cancelled=cancelled,
+        )
+    _log.warning(
+        "worker: resumed the tool batch of the interrupted attempt at seq %s "
+        "for task %s (crash recovery; interrupted calls: %s)",
+        attempt.attempt_start_seq,
+        lease.task_id,
+        ", ".join(interrupted) or "none",
+    )
+    if reliability_sink is not None:
+        reliability_sink(
+            ReliabilityEvent(
+                kind="attempt_resumed",
+                task_id=lease.task_id,
+                lease_id=lease.lease_id,
+                detail={
+                    "attempt_seq": attempt.attempt_start_seq,
+                    "interrupted_calls": interrupted,
+                },
+            )
+        )
+    if task.status == "running":
+        task = engine.run_one_step(
+            task, lease_id=lease.lease_id, cancelled=cancelled
+        )
+    rt.dispatcher.release(
+        lease.lease_id,
+        next_state=task.status,
+        wake_on=task.wake_on,
+        consumed_wake_event=consumed,
+    )
+    return outcome
 
 
 def _park_handle(events: list[Any], *, reason: str, consumed: Any) -> str:
@@ -1577,37 +1671,6 @@ def _sealed_tail_blockers(
         content_store=rt.content_store,
         event_log=bounded,
     ).blockers
-
-
-def _redrive_notice(engine: Any, tail: tuple[Any, ...]) -> str:
-    """What the re-driven step is told about the attempt it replaces, or "".
-
-    The sealed attempt is gone from the conversation, but a tool it started
-    may have changed the world (an ``Edit`` already on disk). Claude Code's
-    words for a call whose result was lost: a read-only one "changes nothing,
-    so it is safe to run again" — left unsaid here — and any other one "ran,
-    but its result could not be read. Check its effect before running it
-    again." Nothing to say when only read-only tools (``risk_level`` low)
-    started."""
-    names: list[str] = []
-    for env in tail:
-        if env.type != "ToolCallStarted":
-            continue
-        name = str(env.payload.tool_name)
-        tool = engine.tool_named(name) if hasattr(engine, "tool_named") else None
-        if getattr(tool, "risk_level", None) == "low" or name in names:
-            continue
-        names.append(name)
-    if not names:
-        return ""
-    return " ".join(
-        ["The previous attempt at this response was interrupted before it could complete."]
-        + [
-            f"{name} ran, but its result could not be read. Check its effect "
-            "before running it again."
-            for name in names
-        ]
-    )
 
 
 def _park_notice(reason: str, blockers: tuple[str, ...]) -> str:
