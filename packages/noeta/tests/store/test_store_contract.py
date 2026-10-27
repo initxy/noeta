@@ -191,3 +191,34 @@ async def test_queues_partition_claims(store: Store) -> None:
     assert await store.claim("w", ["default"], 30) is None
     claim = await store.claim("w", ["gpu", "default"], 30)
     assert claim is not None and claim.task_id == "a"
+
+
+async def test_claim_roots_serves_only_those_trees(store: Store) -> None:
+    await store.create(new("mine"))
+    await store.create(NewTask(task_id="mine.child",
+                               created=TaskCreated(agent="a", parent_id="mine", root_id="mine")))
+    await store.create(new("theirs"))
+    assert await store.claim("w", ["default"], 30, roots=[]) is None
+    got = set()
+    for _ in range(3):
+        claim = await store.claim("w", ["default"], 30, roots=["mine"])
+        if claim is not None:
+            got.add(claim.task_id)
+    assert got == {"mine", "mine.child"}
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None and claim.task_id == "theirs"
+
+
+async def test_append_skips_a_post_to_an_unknown_task(store: Store) -> None:
+    await store.create(new("parent"))
+    await store.create(new("other"))
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None and claim.task_id == "parent"
+    seq = await store.append(claim, [TaskEnded(status="cancelled")], expected_seq=1,
+                             patch=Patch(status="ended", end_status="cancelled"),
+                             posts=[Post(task_id="ghost", body=Cancel()),
+                                    Post(task_id="other", body=Cancel())])
+    assert seq == 2
+    row = await store.get("parent")
+    assert row is not None and row.status == "ended"
+    assert len(await store.inbox("other")) == 1
