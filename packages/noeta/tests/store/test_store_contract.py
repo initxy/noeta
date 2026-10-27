@@ -16,9 +16,13 @@ from noeta.store.sqlite import SqliteStore
 from noeta.types import user
 
 
-@pytest.fixture(params=["sqlite"])
+@pytest.fixture(params=["sqlite", "postgres"])
 async def store(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[Store]:
-    s = SqliteStore(str(tmp_path / "t.db"))
+    s: Store
+    if request.param == "postgres":
+        s = request.getfixturevalue("pg").store()
+    else:
+        s = SqliteStore(str(tmp_path / "t.db"))
     yield s
     await s.close()
 

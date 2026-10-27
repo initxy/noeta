@@ -1,4 +1,4 @@
-"""Several worker processes on one sqlite file, killed with SIGKILL at random
+"""Several worker processes on one sqlite file (or one Postgres schema), killed with SIGKILL at random
 moments and restarted: every task still finishes, no tool step runs twice,
 and every started call is answered."""
 
@@ -12,6 +12,7 @@ import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -25,18 +26,26 @@ TASKS = int(os.environ.get("NOETA_KILL9_TASKS", "60"))
 ROUNDS_SEED = int(os.environ.get("NOETA_KILL9_SEED", "0")) or None
 
 
-def _spawn(db: str, journal: str) -> subprocess.Popen[bytes]:
-    return subprocess.Popen([sys.executable, WORKER, db, journal],
+def _spawn(args: list[str]) -> subprocess.Popen[bytes]:
+    return subprocess.Popen([sys.executable, WORKER, *args],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-async def test_kill9_workers(tmp_path: Path) -> None:
+@pytest.mark.parametrize("backend", ["sqlite", "postgres"])
+async def test_kill9_workers(tmp_path: Path, backend: str,
+                             request: pytest.FixtureRequest) -> None:
     rng = random.Random(ROUNDS_SEED)
-    db, journal = str(tmp_path / "t.db"), str(tmp_path / "journal")
-    store = SqliteStore(db)
+    journal = str(tmp_path / "journal")
+    store: Any
+    if backend == "postgres":
+        pg = request.getfixturevalue("pg")
+        store, args = pg.store(), [pg.dsn, journal, pg.schema]
+    else:
+        db = str(tmp_path / "t.db")
+        store, args = SqliteStore(db), [db, journal]
     client = Client(store)
     ids = [await client.create("a", f"task {i}") for i in range(TASKS)]
-    procs = [_spawn(db, journal) for _ in range(3)]
+    procs = [_spawn(args) for _ in range(3)]
     kills = 0
     try:
         for _ in range(600):
@@ -48,7 +57,7 @@ async def test_kill9_workers(tmp_path: Path) -> None:
             procs[victim].send_signal(signal.SIGKILL)
             procs[victim].wait()
             kills += 1
-            procs[victim] = _spawn(db, journal)
+            procs[victim] = _spawn(args)
         else:
             pytest.fail("tasks did not all finish")
     finally:
@@ -71,5 +80,5 @@ async def test_kill9_workers(tmp_path: Path) -> None:
         assert row.inbox_read_seq == row.inbox_seq
     # The run must actually have exercised recovery, not just raced past it.
     assert interrupted > 0, f"no interrupted call in {kills} kills"
-    print(f"kills={kills} interrupted={interrupted} runs={sum(runs.values())}")
+    print(f"{backend}: kills={kills} interrupted={interrupted} runs={sum(runs.values())}")
     await store.close()

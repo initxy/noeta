@@ -13,6 +13,17 @@ class Conflict(NoetaError):
     caller's view of the log is stale. The caller stops writing."""
 
 
+class CommitUnknown(Conflict):
+    """The store's connection dropped while a write was committing, so it may
+    or may not have landed. It is never retried blindly: the caller stops as
+    if its claim were lost, and whoever runs the task next reads the log."""
+
+
+class StoreUnavailable(NoetaError):
+    """The store could not be reached, or its connection dropped before a
+    write committed. Nothing was written; the call may be made again."""
+
+
 class UnknownTask(NoetaError):
     pass
 

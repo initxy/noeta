@@ -145,10 +145,16 @@ class _nothing:
         return False
 
 
-async def test_racing_runtimes_never_double_run(tmp_path: Path) -> None:
-    path = str(tmp_path / "t.db")
+@pytest.mark.parametrize("backend", ["sqlite", "postgres"])
+async def test_racing_runtimes_never_double_run(tmp_path: Path, backend: str,
+                                                request: pytest.FixtureRequest) -> None:
     journal = Journal()
-    stores = [SqliteStore(path) for _ in range(4)]
+    if backend == "postgres":
+        pg = request.getfixturevalue("pg")
+        stores = [pg.store() for _ in range(4)]
+    else:
+        path = str(tmp_path / "t.db")
+        stores = [SqliteStore(path) for _ in range(4)]
     client = Client(stores[0])
     ids = [await client.create("a", f"task {i}") for i in range(12)]
     stop = asyncio.Event()
