@@ -44,5 +44,5 @@ say explicitly none were found.
   into `CONTEXT.md` (within its budget); shipped decisions costly to reverse into
   ADRs (a changed decision is a new ADR; mark the old one `superseded`).
 - Large feature → suggest a scoped gc over the changed area.
-- Behavior change to `packages/noeta-runtime` or `packages/noeta-sdk` → propose a
+- Behavior change to `noeta/` → propose a
   release per `docs/releasing.md` (an approval gate: the maintainer signs off).

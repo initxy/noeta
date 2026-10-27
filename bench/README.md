@@ -114,7 +114,7 @@ in order:
    export NOETA_MODELS_CONFIG="$(pwd)/models.json"
    ```
 
-4. **ripgrep in the task image.** noeta-sdk ≥0.6.9 shells `Grep`/`Glob` out to
+4. **ripgrep in the task image.** noeta shells `Grep`/`Glob` out to
    `rg`; without it those tools fail loud and the agent loses file search. Task
    images usually ship neither `rg` nor python3, so the adapter's `install`
    apt-get's `python3 python3-pip ripgrep` as root (best-effort — needs an

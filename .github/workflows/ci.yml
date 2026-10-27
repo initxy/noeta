@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   test:
-    name: Tests + lint (Python ${{ matrix.python-version }})
+    name: make check (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -25,10 +25,8 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     services:
-      # Live server for the Postgres storage adapters: the storage
-      # contract suites run their "postgres" param when
-      # NOETA_TEST_POSTGRES_DSN is set (skipped otherwise, e.g. locally
-      # without a server).
+      # The store contract tests run their Postgres parameter when
+      # NOETA_TEST_POSTGRES_DSN is set (skipped otherwise).
       postgres:
         image: postgres:16
         env:
@@ -49,45 +47,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
 
-      - name: Sync workspace (kernel + dev group)
-        run: uv sync --frozen
-
       - name: Install ripgrep
-        # Grep/Glob shell out to `rg` (0.6.9 made it a hard requirement, not a
-        # fallback), so a runner without the binary fails ~44 fs-tool tests on
-        # "ripgrep is required" rather than on anything the change did.
+        # Grep and Glob shell out to `rg`.
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
 
-      - name: Smoke import
-        run: uv run python -c "from noeta.core.engine import Engine; print('import OK')"
-
       - name: make check
-        # The same gate agents run locally: ruff, pytest with the 85% coverage
-        # floor, mypy strict, naming + import-topology lints, doc hygiene.
-        # NOETA_TEST_POSTGRES_DSN enables the Postgres parameter of the storage
-        # contract suites against the service above.
         env:
           NOETA_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
         run: make check
-
-  install-smoke:
-    # One Python version: the smoke checks what the wheels contain and that a
-    # fresh venv can import them; the version matrix above covers the code.
-    name: Fresh-venv install smoke (${{ matrix.os }})
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          python-version: "3.12"
-          enable-cache: true
-
-      - name: Run install_smoke pytest (fresh venv two-wheel install + wheel contents)
-        run: uv run pytest -v -m install_smoke tests/test_install_smoke.py

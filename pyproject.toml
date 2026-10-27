@@ -1,15 +1,24 @@
-[tool.uv.workspace]
-# Libraries live in packages/ (noeta-runtime / noeta-sdk); the test suite lives
-# at the repo root in tests/.
-members = ["packages/noeta-runtime", "packages/noeta-sdk"]
-# packages/noeta is the 1.0 rewrite: its own uv project and venv until cutover, because it
-# reuses import paths (noeta.client, noeta.tools) the 0.6 namespace packages also own.
-exclude = ["packages/noeta"]
+[project]
+name = "noeta"
+version = "1.0.0.dev0"
+description = "Durable AI agents for Python: one writer per task, crash-safe tool calls, approvals that cost nothing while waiting, from one process to many machines."
+license = "Apache-2.0"
+authors = [{ name = "The Noeta Authors" }]
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28.1",
+    "msgspec>=0.19",
+]
 
-# The workspace-root pyproject is pytest's rootdir when running from the repo
-# root, so it owns the test config: ``testpaths`` pins collection to ``tests/``
-# instead of letting a root ``pytest`` walk the whole tree. The dev toolchain
-# lives here at the workspace virtual root.
+[project.optional-dependencies]
+postgres = ["psycopg[binary,pool]>=3.2"]
+server = ["starlette>=0.40", "uvicorn>=0.30"]
+tui = ["textual>=8.0"]
+acp = ["agent-client-protocol>=0.12,<0.13"]
+
+[project.scripts]
+noeta = "noeta.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
@@ -17,46 +26,55 @@ dev = [
     "pytest-cov>=5.0",
     "pytest-xdist>=3.8",
     "mypy>=1.10",
-    "import-linter>=2.0",
     "respx>=0.23.1",
     "ruff>=0.6",
+    "import-linter>=2.0",
 ]
 
-[tool.ruff]
-respect-gitignore = false
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.ruff.lint.per-file-ignores]
-# PEP 562 lazy re-export modules: names in __all__ are served by a module
-# __getattr__ (the plugin loader's dynamic-import doorway — no static builtins
-# edge), which F822 cannot see.
-"packages/noeta-sdk/noeta/sdk/providers.py" = ["F822"]
-"packages/noeta-sdk/noeta/sdk/storage.py" = ["F822"]
-"packages/noeta-sdk/noeta/client/parts.py" = ["F822"]
+[tool.hatch.build.targets.wheel]
+packages = ["noeta"]
 
-# The type gate (`make check`, CI): `uv run mypy` checks both library
-# packages under --strict. The two distributions share the PEP 420 `noeta`
-# namespace, so each package root is a search path.
 [tool.mypy]
 strict = true
-namespace_packages = true
-explicit_package_bases = true
-mypy_path = [
-    "$MYPY_CONFIG_FILE_DIR/packages/noeta-runtime",
-    "$MYPY_CONFIG_FILE_DIR/packages/noeta-sdk",
-]
-files = ["packages/noeta-runtime/noeta", "packages/noeta-sdk/noeta"]
-exclude = ["packages/noeta/"]
+files = ["noeta"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -m 'not install_smoke and not live'"
-markers = [
-    "live: requires live LLM backend; never collected by default (a local .env would otherwise make it run) — opt in with `pytest -m live`",
-    "install_smoke: spawns a fresh venv + pip install; slow (~30-60 s), opt-in via -m install_smoke",
-]
+asyncio_mode = "auto"
+addopts = "-ra -m 'not live' --import-mode=importlib"
+markers = ["live: needs a real model backend; opt in with -m live"]
 
-# CI runs ``pytest --cov=noeta`` from the repo root, so the coverage config
-# lives here at the workspace virtual root alongside the test suite.
 [tool.coverage.run]
 source = ["noeta"]
 branch = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "RUF", "BLE"]
+# RUF012: msgspec Struct defaults are copied per instance.
+# UP007: module-level union aliases read better as Union[...] when long.
+ignore = ["RUF012", "UP007"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["noeta.store.base.Patch", "Patch"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B008", "E501"]
+# Dev tooling, not shipped: long table lines and prose are fine.
+"{evals,bench,scripts}/**" = ["E501", "RUF002", "RUF003", "B905"]
+
+[tool.importlinter]
+root_package = "noeta"
+
+[[tool.importlinter.contracts]]
+name = "the loop is pure: no storage, runner, providers or I/O-bound modules"
+type = "forbidden"
+source_modules = ["noeta.loop"]
+forbidden_modules = ["noeta.runner", "noeta.store", "noeta.providers"]

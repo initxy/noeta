@@ -84,7 +84,7 @@ JOBS_DIR="${NOETA_JOBS_DIR:-${REPO_ROOT}/bench/jobs}"
 
 # ── Sandbox plumbing the adapter reads (export so harbor's child sees them) ───
 # Wheel: newest dist/*.whl unless NOETA_WHEEL is set. The adapter uploads it and
-# pip-installs it in the sandbox (build it with `cd packages/noeta && uv build --wheel -o ../../dist`).
+# pip-installs it in the sandbox (build it with `uv build --wheel`).
 if [ -z "${NOETA_WHEEL:-}" ]; then
   _wheel="$(ls -t "${REPO_ROOT}"/dist/noeta-1*.whl 2>/dev/null | head -1 || true)"
   [ -n "${_wheel}" ] && export NOETA_WHEEL="${_wheel}"

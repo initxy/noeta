@@ -3,7 +3,7 @@
     make eval             run every scenario N times, print the table, diff the baseline
     make eval-baseline    same run, then rewrite evals/baseline.json from it
 
-Credentials: the repo-root ``.env`` read by ``tests/_live_env.py``
+Credentials: the repo-root ``.env`` read by ``evals/live_env.py``
 (``NOETA_LIVE_BASE_URL`` / ``NOETA_LIVE_API_KEY`` / ``NOETA_LIVE_MODEL``).
 Exit status 1 when a scenario (or the overall mean) falls below its baseline by
 more than the tolerance recorded in the baseline file.
@@ -18,15 +18,14 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-import importlib
-
+from evals import engine
+from evals import live_env as _live_env
 from evals.core import EvalConfig, time_trial
 from evals.scenarios import SCENARIOS
-from tests import _live_env
 
 _HERE = Path(__file__).resolve().parent
 BASELINE = _HERE / "baseline.json"
@@ -43,22 +42,20 @@ def _git_rev() -> str:
             ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=_HERE
         )
         dirty = subprocess.run(
-            ["git", "status", "--porcelain", "--", "packages"], capture_output=True, text=True, cwd=_HERE
+            ["git", "status", "--porcelain", "--", "noeta"], capture_output=True, text=True, cwd=_HERE
         )
         return out.stdout.strip() + ("+dirty" if dirty.stdout.strip() else "")
     except OSError:
         return "unknown"
 
 
-def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
+def _parse(argv: list[str] | None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="python -m evals", description=__doc__.split("\n")[0])
     ap.add_argument("--trials", type=int, default=3, help="runs per scenario (default 3; make eval-baseline uses 9)")
     ap.add_argument("--concurrency", type=int, default=14, help="trials in flight at once")
     ap.add_argument("--only", nargs="*", default=None, help="scenario names (default: all)")
     ap.add_argument("--provider", choices=("anthropic", "openai_compat", "responses"),
                     default="anthropic")
-    ap.add_argument("--engine", choices=("0.6", "next"), default="0.6",
-                    help="0.6 = the noeta-sdk packages; next = packages/noeta (run from its venv)")
     ap.add_argument("--model", default=None, help="default: NOETA_LIVE_MODEL")
     ap.add_argument("--baseline", type=Path, default=BASELINE)
     ap.add_argument("--write-baseline", action="store_true", help="rewrite the baseline from this run")
@@ -105,7 +102,7 @@ def _usage_totals(records: list[dict[str, Any]], judge: Any) -> dict[str, Any]:
 
 
 def _compare(
-    summary: dict[str, dict[str, Any]], overall: float, baseline: Optional[dict[str, Any]]
+    summary: dict[str, dict[str, Any]], overall: float, baseline: dict[str, Any] | None
 ) -> tuple[list[str], dict[str, str]]:
     """Regression lines plus a per-scenario verdict column."""
     verdict: dict[str, str] = {}
@@ -134,7 +131,7 @@ def _compare(
 
 
 def _table(summary: dict[str, dict[str, Any]], overall: float, verdict: dict[str, str],
-           baseline: Optional[dict[str, Any]]) -> str:
+           baseline: dict[str, Any] | None) -> str:
     base = (baseline or {}).get("scenarios", {})
     rows = [("scenario", "scores", "mean", "base", "vs base")]
     for name, s in summary.items():
@@ -153,7 +150,7 @@ def _table(summary: dict[str, dict[str, Any]], overall: float, verdict: dict[str
     return "\n".join("  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip() for r in rows)
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = _parse(argv)
     model = args.model or _live_env.live_model()
     if not (_live_env.have_live_env() and model):
@@ -170,8 +167,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     if baseline and baseline.get("model") != model:
         print(f"evals: warning — baseline was recorded on {baseline.get('model')!r}, running {model!r}")
 
-    engine = importlib.import_module("evals.harness" if args.engine == "0.6"
-                                     else "evals.engine_next")
     judge = engine.Judge(cfg)
     jobs = [(s, i) for i in range(args.trials) for s in chosen]
     started = time.monotonic()
@@ -192,11 +187,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     regressions, verdict = _compare(summary, overall, None if args.write_baseline else baseline)
     usage = _usage_totals(records, judge)
     result = {
-        "recorded": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "recorded": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "git": _git_rev(),
         "model": model,
         "provider": args.provider,
-        "engine": args.engine,
         "trials": args.trials,
         "system_prompt_override": str(args.system_prompt_file) if args.system_prompt_file else None,
         "wall_seconds": wall,

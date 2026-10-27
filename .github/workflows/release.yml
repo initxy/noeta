@@ -1,65 +1,34 @@
-# Publish the two noeta libraries (noeta-runtime / noeta-sdk) to PyPI when a
-# ``v*`` tag is pushed.
-#
-# Auth is PyPI Trusted Publishing (OIDC) — NO API token is stored anywhere.
-#
-# WHY TWO PUBLISH JOBS: PyPI refuses to register the same
-# repo+workflow+environment combo as a *pending* publisher for more than one
-# not-yet-created project. So each package gets its own GitHub Actions
-# ``environment``, which makes its trusted-publisher config unique. The build
-# runs once; the two jobs only upload their own files.
-#
-# One-time PyPI setup — pypi.org -> Publishing -> "Add a pending publisher",
-# once per package, all with Owner=initxy, Repository=noeta, Workflow=release.yml:
-#   Project noeta-runtime : Environment = (leave blank)
-#   Project noeta-sdk     : Environment = pypi-sdk
-# (The environment name here must match the ``environment:`` key below exactly.)
-#
-# Release procedure: docs/releasing.md (changelog, lockstep versions +
-# lower bounds, tag). The build job gates on a dated CHANGELOG section, and
-# neither publish job runs unless the test job passed on the tagged commit.
+# Publish `noeta` to PyPI when a `v*` tag is pushed. Procedure: docs/releasing.md.
+# Auth is PyPI Trusted Publishing (OIDC); no token is stored anywhere.
 
 name: Release
 
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch: {}   # manual re-run from the Actions tab
+  workflow_dispatch: {}
 
-# Nothing here needs write access except the OIDC token the publish jobs mint.
 permissions:
   contents: read
 
-# Never cancel a release half-way; a second run for the same ref queues.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  # The suite on the exact commit being published. CI already ran on the
-  # merge, but a tag can point anywhere; this is what stops a tag on an
-  # untested commit from reaching PyPI. (The Postgres contract suites skip
-  # here — CI covers them on main.)
+  # The suite on the exact commit being published: a tag can point anywhere.
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
-      - name: Sync workspace (kernel + dev group)
-        run: uv sync --frozen
       - name: Install ripgrep
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
-      - name: make check
-        # The same gate as ci.yml and local runs.
-        run: make check
-      - name: Wheel contents + fresh-venv install smoke
-        run: uv run pytest -m install_smoke tests/test_install_smoke.py
+      - run: make check
 
-  # Build once: wheels + sdists for both pure-Python libraries.
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -73,75 +42,32 @@ jobs:
             echo "::error::CHANGELOG.md has no dated '## [${VERSION}] - YYYY-MM-DD' section; see docs/releasing.md"
             exit 1
           fi
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
-      - name: Build distributions
+      - name: Build
         run: |
-          rm -f dist/*.whl dist/*.tar.gz
-          uv build --all-packages --wheel
-          uv build --package noeta-runtime --sdist
-          uv build --package noeta-sdk --sdist
+          uv build
           ls -l dist/
-      - name: Upload dist artifact
-        uses: actions/upload-artifact@v4
+      - name: The wheel's version is the tag's
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ls dist/noeta-"${VERSION}"-*.whl
+      - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
 
-  # Each publish job runs only when the build produced a wheel whose version
-  # equals the tag — so a partial release (e.g. a runtime-only cut while
-  # noeta-sdk stays behind) publishes exactly the bumped package and the
-  # unbumped one skips cleanly instead of failing on a duplicate upload. A
-  # full lockstep release bumps both, so both gates open. The
-  # ``dist/<name>-*`` upload globs still carry the wheel + sdist together.
-  publish-runtime:
+  publish:
     needs: [test, build]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # No environment: matches the pending publisher registered with a blank one.
     permissions:
-      id-token: write   # required: mint the short-lived PyPI OIDC token
+      id-token: write   # mint the short-lived PyPI OIDC token
     steps:
       - uses: actions/download-artifact@v4
         with: { name: dist, path: dist/ }
-      - name: Gate on the tag version
-        id: gate
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          if ls dist/noeta_runtime-"${VERSION}"-*.whl >/dev/null 2>&1; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::no noeta_runtime-${VERSION} wheel — not part of this release; skipping"
-          fi
       - uses: astral-sh/setup-uv@v6
-        if: steps.gate.outputs.publish == 'true'
-      - if: steps.gate.outputs.publish == 'true'
-        run: uv publish --trusted-publishing always dist/noeta_runtime-*
-
-  publish-sdk:
-    needs: [test, build]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment: pypi-sdk
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { name: dist, path: dist/ }
-      - name: Gate on the tag version
-        id: gate
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          if ls dist/noeta_sdk-"${VERSION}"-*.whl >/dev/null 2>&1; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::no noeta_sdk-${VERSION} wheel — not part of this release; skipping"
-          fi
-      - uses: astral-sh/setup-uv@v6
-        if: steps.gate.outputs.publish == 'true'
-      - if: steps.gate.outputs.publish == 'true'
-        run: uv publish --trusted-publishing always dist/noeta_sdk-*
+      - run: uv publish --trusted-publishing always dist/*

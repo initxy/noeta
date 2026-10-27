@@ -159,7 +159,7 @@ class Noeta(BaseInstalledAgent):
         `apt-get` python3 + pip + ripgrep as root (tolerating an image that
         already has them or has no apt), then install the package.
         `--no-cache-dir` keeps the layer small and avoids a stale wheel across
-        reruns. ripgrep is required because noeta-sdk >=0.6.9 shells Grep/Glob
+        reruns. ripgrep is required because noeta shells Grep/Glob
         out to `rg`.
 
         Package source: a local wheel (NOETA_WHEEL) uploaded into the sandbox
@@ -171,7 +171,7 @@ class Noeta(BaseInstalledAgent):
             environment,
             command=(
                 # python3 + pip for the install below, and ripgrep because
-                # noeta-sdk >=0.6.9 shells Grep/Glob out to `rg` — without it
+                # noeta shells Grep/Glob out to `rg` — without it
                 # those tools fail loud and the agent loses file search. Task
                 # images generally ship neither; apt-get best-effort covers the
                 # common Debian/Ubuntu base, tolerating an image that has them

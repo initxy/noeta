@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 # Word boundaries keep identifiers that merely share a prefix with a banned
 # name — ``class RuntimeState``, ``class PatternMatcher`` — out of the results.
@@ -81,13 +81,10 @@ _SESSION_ALLOWED_SUBSTRING = "session_pack"
 
 _SESSION_TOKEN = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 
-#: Where the ban applies: the shipped wheels and the reference host. ``tests/``
-#: is deliberately OUT — a test harness stands in for a host (``tests/_sdk_session``
-#: builds a client and drives turns), and a host is exactly the layer CONTEXT.md
-#: lets own the concept.
+#: Where the ban applies: the shipped package. ``tests/`` is deliberately out —
+#: a test harness stands in for a host, and a host may own the concept.
 SESSION_RULE_REL_DIRS: tuple[tuple[str, ...], ...] = (
-    ("packages",),
-    ("examples",),
+    ("noeta",),
 )
 
 
@@ -158,14 +155,8 @@ EXEMPT_DIR_PARTS: frozenset[str] = frozenset(
     }
 )
 EXEMPT_REL_DIRS: tuple[tuple[str, ...], ...] = (
-    # An ADR records what was rejected as well as what was chosen, and
-    # task-as-only-primitive keeps ``WorkflowRunner`` rejected by naming it.
+    # An ADR records what was rejected as well as what was chosen.
     ("docs", "adr"),
-    # An app-layer fixture: a mirror of a host product's read-model layer, which
-    # lives in its own repo. A host may own the session concept, so these names
-    # are correct where they live and editing them would only make the mirror
-    # diverge from what it mirrors.
-    ("tests", "_read_models"),
 )
 
 # Deliberately narrow, so binary artefacts and lock files never trip the grep.

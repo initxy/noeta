@@ -1,7 +1,6 @@
-"""The engine-neutral part of the eval harness: the config, what a trial
-records (``Trace``), scenarios, and the scored-trial wrapper. Each engine
-module (``evals.harness`` for 0.6, ``evals.engine_next`` for 1.0) supplies
-``PROVIDERS``, ``Judge`` and ``run_trial``.
+"""The eval harness core: the config, what a trial records (``Trace``),
+scenarios, and the scored-trial wrapper. ``evals.engine`` supplies ``Judge``
+and ``run_trial``.
 """
 
 from __future__ import annotations
@@ -9,16 +8,17 @@ from __future__ import annotations
 import re
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Protocol
 
 #: Hard cap per trial; a stuck run is interrupted and scored as it stands.
 TRIAL_TIMEOUT_S = 420.0
 
 
 class ToolUse(Protocol):
-    """What scoring reads from a tool call; both engines' call views fit."""
+    """What scoring reads from a tool call."""
 
     call_id: str
     tool_name: str
@@ -45,7 +45,7 @@ class EvalConfig:
     model: str
     provider: str = "anthropic"
     #: Replaces ``main``'s system prompt (the degraded-prompt check).
-    system_prompt: Optional[str] = None
+    system_prompt: str | None = None
 
 
 @dataclass
@@ -61,7 +61,7 @@ class Trace:
     final_text: str
     spawned: int
     compactions: int
-    error: Optional[str] = None
+    error: str | None = None
 
     @property
     def calls(self) -> list[ToolUse]:
@@ -77,7 +77,7 @@ class Trace:
         r = self.results.get(call.call_id)
         return r is not None and not r.success
 
-    def file(self, rel: str) -> Optional[str]:
+    def file(self, rel: str) -> str | None:
         p = self.workspace / rel
         return p.read_text(encoding="utf-8") if p.is_file() else None
 
@@ -125,7 +125,7 @@ def time_trial(
     """One scored trial as a JSON-ready record; never raises."""
     start = time.monotonic()
     record: dict[str, Any] = {"scenario": sc.name, "trial": trial}
-    root: Optional[Path] = None
+    root: Path | None = None
     try:
         trace, usage, root = run_trial(
             cfg, sc.goal, sc.setup, small_window=sc.small_window, timeout_s=sc.timeout_s

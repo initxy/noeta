@@ -7,7 +7,7 @@
 
 ## Language
 
-- All repository artifacts are written in English: docs (`CONTEXT.md`, `docs/adr/`, `docs/specs/`), code comments, and identifiers. The only exceptions are the Chinese mirrors — `README.zh-CN.md`, `docs/zh/**`, `docs/releasing.zh.md`.
+- All repository artifacts are written in English: docs (`CONTEXT.md`, `docs/adr/`, `docs/specs/`), code comments, and identifiers. There are no Chinese mirrors in the repo.
 - Keep technical terms in their canonical English form and spell them consistently throughout: code identifiers (function / class / file / variable names), API / library / tool / command names, file paths, and fixed architecture terms (module, interface, seam, adapter, deep module, etc.). Don't invent alternate names or switch between synonyms.
 - Write clear, idiomatic English prose — not word-for-word translation from another language.
 - Pick one spelling per term and use it everywhere; don't mix variants.
@@ -39,21 +39,20 @@
 
 ## Verbs
 
-- install: `make install` (uv sync; first time)
+- install: `make install` (uv sync with every extra; first time)
 - test: `make test`
 - lint: `make lint`
-- build: `make build` (both packages' wheels and sdists into `dist/`)
+- build: `make build` (wheel and sdist into `dist/`)
 - e2e: `make e2e` — `-m live` tests against a real LLM / sandbox container; needs credentials, never part of `check`
 - eval: `make eval` — prompt-regression scenarios against a real model, compared to `evals/baseline.json`; `make eval-baseline` re-records it; needs credentials, never part of `check`
-- docs: `make docs` (VitePress dev server; `npm ci` first)
-- check: `make check` — ruff, pytest with coverage ≥ 85, mypy --strict on both packages, `scripts/lint-naming.py`, `lint-imports`, `scripts/check-docs.sh`
+- check: `make check` — ruff, mypy --strict, `scripts/lint-naming.py`, `lint-imports` (layering), pytest with coverage ≥ 85, `scripts/check-docs.sh`
 - release: tag push per `docs/releasing.md` — approval gate
 
 ## Gates
 
-- Automated gates (required for done): `make check`. CI's test job runs the same target; CI-only on top: the Postgres parameters of the storage contract tests (`NOETA_TEST_POSTGRES_DSN`), the Python 3.11 / 3.12 / 3.13 matrix, and the fresh-venv install smoke (`pytest -m install_smoke`).
+- Automated gates (required for done): `make check`. CI's test job runs the same target; CI-only on top: the Postgres parameters of the store contract tests (`NOETA_TEST_POSTGRES_DSN`), and the Python 3.11 / 3.12 / 3.13 matrix.
 - `make check` can't judge model-facing prompt text or provider wire behavior. A change there also runs `make eval` (no scenario may regress; re-record the baseline when a scenario changes) and the relevant `make e2e` tests.
-- Approval gates (the maintainer signs off before running): release, data migration or deletion on a host's store. Merging a change under `docs/` publishes the docs site (`docs.yml` deploys on push to `main`).
+- Approval gates (the maintainer signs off before running): release, data migration or deletion on a host's store.
 
 ## Engineering constraints
 
@@ -61,14 +60,13 @@
 - Prefer existing patterns in the repo, keep changes focused, and avoid unrelated refactors.
 - Architecturally, prefer deep modules: a small interface hiding a substantial implementation.
 - The interface is the test surface; don't introduce a seam without a real need to substitute the implementation.
-- Respect the two structural rules the repo is built on: `noeta.sdk` is the sole public surface, and the kernel carries no capability implementation — nothing statically imports `noeta.builtins` (`CONTEXT.md`: Public surface, Microkernel rule).
+- Respect the layering (`CONTEXT.md`: Layers): the kernel carries no capability, and a plugin imports nothing but the kernel. `lint-imports` enforces it.
 - Name things for what they do, never a metaphor — in code, doc terms, and file slugs alike.
 - Run verification matched to the risk; if you can't verify, say why.
 
 ## Release
 
-- A merged behavior change to `packages/noeta-runtime` or `packages/noeta-sdk` should be followed by a release; the published packages must not lag `main`.
-- Scope the release per package: bump only the ones whose source changed. One tag publishes both, but each publish job is gated on the tag version, so an unbumped package skips cleanly.
+- A merged behavior change to `noeta/` should be followed by a release; the published package must not lag `main`.
 - Bumps are patch by default — minor/major is the maintainer's explicit call.
 - Follow `docs/releasing.md`. Human sign-off = pushing the `vX.Y.Z` tag.
 
