@@ -63,8 +63,9 @@ turn boundary.
 | Use for | permissions, budgets, breaking loops | audit, metrics, tracing, streaming to a UI |
 
 Guards see three kinds of action: `ProposedToolCall`, `ProposedSpawnSubtask`,
-`ProposedFinish`. They run in ascending `priority` and the **first non-allow
-verdict wins**, so a later guard can only tighten what an earlier one allowed.
+`ProposedFinish`. They run in ascending `priority`; **any `deny` wins**, otherwise
+the first `require_approval` does, so approving a call never overrides a later
+guard's denial and a later guard can only tighten what an earlier one allowed.
 The `governance` built-in installs:
 
 | Priority | Guard | Enforces |

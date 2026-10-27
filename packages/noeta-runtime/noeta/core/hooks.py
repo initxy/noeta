@@ -1,8 +1,11 @@
 """Run the registered Guards over a proposed action and merge their verdicts.
 
-Guards are consulted in ascending ``priority`` and the first non-allow verdict
-decides. A Guard whose ``check`` raises counts as that deciding ``deny``, so a
-buggy Guard can never quietly grant an action it was meant to block.
+Guards are consulted in ascending ``priority``. A ``deny`` from any Guard
+wins: a ``require_approval`` from an earlier Guard does not stop the scan, so
+approving a call can never override a later Guard's denial. Without a deny,
+the first ``require_approval`` decides. A Guard whose ``check`` raises counts
+as a ``deny``, so a buggy Guard can never quietly grant an action it was meant
+to block.
 """
 
 from __future__ import annotations
@@ -46,6 +49,7 @@ class HookManager:
     def check(
         self, action: ProposedAction, ctx: GuardContext
     ) -> VerdictResult:
+        pending: Optional[VerdictResult] = None
         for entry in self._guards:
             guard = entry.guard
             try:
@@ -58,6 +62,8 @@ class HookManager:
                 return VerdictResult.deny(
                     f"guard {name!r} raised {type(exc).__name__}: {exc}"
                 )
-            if not result.is_allow:
+            if result.verdict is Verdict.DENY:
                 return result
-        return VerdictResult.allow()
+            if pending is None and not result.is_allow:
+                pending = result
+        return pending if pending is not None else VerdictResult.allow()

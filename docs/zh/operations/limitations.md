@@ -31,16 +31,16 @@
 - **限制：** `stop()` 最多等 `shutdown_grace_s`，超时就放弃当前这一步。Python 杀不掉那个线程，它可能还在写事件日志。
 - **办法：** 放弃之后直接退出进程。租约过期后 `requeue_stale()` 会把 Task 捡回来。`shutdown_grace_s=None`（或 `<= 0`）表示无限等待，卡死的步骤就只能 `kill -KILL <pid>`。
 
-### 心跳续租有上限
+### 单次尝试的续租有上限
 
-- **限制：** 一步最多持有租约 `heartbeat_interval × heartbeat_max`（默认 360 次，实际是几个小时）。超过后租约被释放，下一次写入报 `InvalidLease`。
-- **办法：** 遇到了就去检查这个 Task，别当成会自动恢复。
+- **限制：** 一次尝试（一次模型调用加上它要的工具调用）最多持有租约 `heartbeat_interval × HostConfig.attempt_heartbeat_max`（默认 360 次，实际是几个小时）。每次模型调用都重新计数，所以长对话轮次整体不受限。超过后租约交回就绪队列、这一步停下，这次尝试按 worker 崩溃的方式恢复（`attempt_heartbeat_cap`）。
+- **办法：** 确实要阻塞这么久的工具调用应放到后台命令里跑；`attempt_heartbeat_max=None` 可以去掉上限。
 
 ## 可观测性
 
 ### 可靠性事件只在本进程内
 
-- **限制：** worker 的信号（`stale_requeued`、`suspended_without_wake`、`step_failed_retryable`、`heartbeat_invalid_lease`、`shutdown_abandoned`、`timers_fired`、`attempt_abandoned`、`attempt_parked`、`attempt_resumed`、`cap_terminal_reconciled`、`dispatcher_unavailable`）默认只写结构化日志，不进事件日志，进程重启就没了。
+- **限制：** worker 的信号（`stale_requeued`、`suspended_without_wake`、`step_failed_retryable`、`heartbeat_invalid_lease`、`shutdown_abandoned`、`timers_fired`、`attempt_abandoned`、`attempt_parked`、`attempt_resumed`、`cap_terminal_reconciled`、`dispatcher_unavailable`、`heartbeat_failed`、`attempt_heartbeat_cap`）默认只写结构化日志，不进事件日志，进程重启就没了。
 - **办法：** 传一个 `reliability_sink`，把它们转发到你的监控系统。
 
 ### Task 等人回复时没人收到通知

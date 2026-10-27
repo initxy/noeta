@@ -1,8 +1,9 @@
 """HookManager arbitration, exercised without an Engine.
 
 Two properties decide whether governance can be trusted: guards run in
-ascending priority and the first non-allow short-circuits the rest, and a guard
-whose ``check`` raises counts as that deciding deny — a buggy guard must never
+ascending priority and any deny wins (a deny short-circuits the rest; a
+require_approval does not, so a later deny still applies), and a guard
+whose ``check`` raises counts as a deny — a buggy guard must never
 be able to quietly grant what it was registered to block.
 """
 
@@ -89,7 +90,7 @@ def test_first_deny_short_circuits_remaining_guards() -> None:
     assert trace == ["low", "mid"]
 
 
-def test_first_require_approval_short_circuits_remaining_guards() -> None:
+def test_require_approval_does_not_short_circuit_later_guards() -> None:
     trace: list[str] = []
     mgr = HookManager()
     mgr.register(
@@ -103,7 +104,59 @@ def test_first_require_approval_short_circuits_remaining_guards() -> None:
 
     assert result.verdict is Verdict.REQUIRE_APPROVAL
     assert result.reason == "ask first"
-    assert trace == ["early"]
+    assert trace == ["early", "later"]
+
+
+def test_later_deny_beats_earlier_require_approval() -> None:
+    trace: list[str] = []
+    mgr = HookManager()
+    mgr.register(
+        _RecordingGuard(
+            "early", 1, VerdictResult.require_approval("ask first"), trace
+        )
+    )
+    mgr.register(_RecordingGuard("later", 5, VerdictResult.deny("never"), trace))
+
+    result = mgr.check(_proposed(), _ctx())
+
+    assert result.verdict is Verdict.DENY
+    assert result.reason == "never"
+
+
+def test_first_require_approval_wins_over_later_ones() -> None:
+    trace: list[str] = []
+    mgr = HookManager()
+    mgr.register(
+        _RecordingGuard("a", 1, VerdictResult.require_approval("first"), trace)
+    )
+    mgr.register(
+        _RecordingGuard("b", 5, VerdictResult.require_approval("second"), trace)
+    )
+
+    result = mgr.check(_proposed(), _ctx())
+
+    assert result.verdict is Verdict.REQUIRE_APPROVAL
+    assert result.reason == "first"
+
+
+def test_raising_guard_after_require_approval_denies() -> None:
+    class _Boom:
+        name = "boom"
+        priority = 50
+
+        def check(self, action: ProposedAction, ctx: GuardContext) -> VerdictResult:
+            raise RuntimeError("broken")
+
+    trace: list[str] = []
+    mgr = HookManager()
+    mgr.register(
+        _RecordingGuard("early", 1, VerdictResult.require_approval("ask"), trace)
+    )
+    mgr.register(_Boom())
+
+    result = mgr.check(_proposed(), _ctx())
+
+    assert result.verdict is Verdict.DENY
 
 
 def test_register_assigns_priority_when_caller_omits_attr() -> None:

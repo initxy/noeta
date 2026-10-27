@@ -58,6 +58,7 @@ from noeta.runtime.attempt import (
 
 
 __all__ = [
+    "DEFAULT_ATTEMPT_HEARTBEAT_MAX",
     "DEFAULT_LEASE_BACKOFF_MAX_S",
     "DEFAULT_SHUTDOWN_GRACE_S",
     "AppendMessagePrelude",
@@ -73,6 +74,7 @@ __all__ = [
     "WorkerRuntime",
     "install_stop_signals",
     "keep_lease_alive",
+    "lease_lost",
     "recover_cap_terminal",
     "reconcile_cap_terminal",
     "resolve_engine",
@@ -108,6 +110,8 @@ ReliabilityKind = Literal[
     "attempt_resumed",
     "cap_terminal_reconciled",
     "dispatcher_unavailable",
+    "heartbeat_failed",
+    "attempt_heartbeat_cap",
 ]
 
 
@@ -339,12 +343,16 @@ class AppendMessagePrelude:
     (goal-then-patch order, matching ``seed_start``), so the composer pins the
     skill bodies for THIS turn onward. The Engine's ``apply_state_patch`` records
     the per-skill content provenance itself (fold-guarded, first-only). Empty
-    (the default) keeps ``send_goal`` byte-identical to the no-skill path."""
+    (the default) keeps ``send_goal`` byte-identical to the no-skill path.
+
+    ``idempotency_key`` rides the goal message's ``MessagesAppended`` (see
+    ``InteractionDriver.send_goal``); ``None`` keeps the bytes unchanged."""
 
     content: list[Block]
     origin: Optional[MessageOrigin] = None
     attachment_texts: tuple[str, ...] = ()
     activate_skills: tuple[str, ...] = ()
+    idempotency_key: Optional[str] = None
 
     #: Pure appends — safe (and required) to run at seed time.
     durable_at_seed: ClassVar[bool] = True
@@ -357,9 +365,15 @@ class AppendMessagePrelude:
                 lease_id=lease_id,
                 origin="system",
             )
-        task = engine.append_user_message(
-            task, content=self.content, lease_id=lease_id, origin=self.origin
-        )
+        if self.idempotency_key is None:
+            task = engine.append_user_message(
+                task, content=self.content, lease_id=lease_id, origin=self.origin
+            )
+        else:
+            task = engine.append_user_message(
+                task, content=self.content, lease_id=lease_id, origin=self.origin,
+                idempotency_key=self.idempotency_key,
+            )
         if self.activate_skills:
             task = engine.apply_state_patch(
                 task,
@@ -762,7 +776,9 @@ def run_leased_task(
     # ``is_cancelled``; a bare WorkerRuntime double ⇒ ``None`` ⇒ no poll,
     # byte-identical to before. The predicate binds the TREE ROOT, which a
     # claimed child's ``lease.task_id`` is not — see ``_cancel_predicate``.
-    cancelled = _cancel_predicate(rt, lease.task_id, task=task)
+    cancelled = _cancel_predicate(
+        rt, lease.task_id, task=task, lease_id=lease.lease_id
+    )
     try:
         if lease.wake_event is not None:
             return _run_woken(
@@ -844,9 +860,45 @@ def run_leased_task(
         _settle_turn_engine(rt, task, next_goal_handle)
         return "drained"
     except TaskCancellationRequested:
+        if lease_lost(lease.lease_id):
+            if _settle_revoked_lease(rt, lease) is None:
+                raise InvalidLease(lease.lease_id) from None
+            return "cancelled"
         return _settle_stopped_turn(
             rt, lease, engine, next_goal_handle=next_goal_handle
         )
+    except InvalidLease:
+        if _settle_revoked_lease(rt, lease) is None:
+            raise
+        return "cancelled"
+
+
+def _settle_revoked_lease(
+    rt: WorkerRuntime, lease: Any
+) -> Optional[WorkerOutcome]:
+    """Land a step whose lease was revoked under it by a cancel.
+
+    A cancel — possibly from another process sharing the store — moves the
+    dispatcher row to terminal, which revokes the lease: the step's next write
+    is refused, or its heartbeat finds the lease gone. When the fold shows the
+    terminal, the turn is over and there is nothing to release. Any other loss
+    (a reclaim, a heartbeat cap) returns ``None`` so the caller re-raises
+    ``InvalidLease`` for its own recovery: the task is no longer this step's
+    to settle.
+    """
+    task = fold(rt.event_log, rt.content_store, lease.task_id)
+    if task.status != "terminal":
+        return None
+    _discard_cancellation(rt, lease.task_id)
+    forget = getattr(rt, "forget_turn_engine", None)
+    if callable(forget):
+        forget(lease.task_id)
+    # The canceller's process reaped its own background commands; the ones
+    # this drive started live here.
+    kill_bg = getattr(rt, "kill_background_shells", None)
+    if callable(kill_bg):
+        kill_bg(lease.task_id)
+    return "cancelled"
 
 
 def _settle_turn_engine(
@@ -874,7 +926,11 @@ def _settle_turn_engine(
 
 
 def _cancel_predicate(
-    rt: WorkerRuntime, task_id: str, *, task: Any = None
+    rt: WorkerRuntime,
+    task_id: str,
+    *,
+    task: Any = None,
+    lease_id: Optional[str] = None,
 ) -> Optional[Callable[[], bool]]:
     """Bind a cooperative-cancel poll off the host's cancel registry.
 
@@ -891,6 +947,11 @@ def _cancel_predicate(
     O(1) set lookup the Engine runs at every turn boundary and in the
     abandonable LLM wait.
 
+    The registry only sees stops issued in this process. The poll also trips
+    when this process's heartbeat found ``lease_id`` revoked — a cancel from
+    another process sharing the store, a reclaim, a heartbeat cap — so the
+    step stops at its next boundary rather than at its next refused write.
+
     Returns ``None`` when the host has no ``is_cancelled`` seam (a bare
     ``WorkerRuntime`` test double), so the Engine never polls and recordings
     stay byte-identical whether or not a cancel seam is wired. A root task
@@ -905,7 +966,7 @@ def _cancel_predicate(
         root_task_id_of = getattr(rt, "root_task_id_of", None)
         if callable(root_task_id_of):
             marked_id = str(root_task_id_of(task_id))
-    return lambda: bool(is_cancelled(marked_id))
+    return lambda: bool(is_cancelled(marked_id)) or lease_lost(lease_id)
 
 
 def _settle_stopped_turn(
@@ -944,11 +1005,17 @@ def _settle_stopped_turn(
     task = fold(rt.event_log, rt.content_store, lease.task_id)
     consumed = lease.wake_event
     if task.status == "terminal" or next_goal_handle is None:
-        rt.dispatcher.release(
-            lease.lease_id,
-            next_state="terminal",
-            consumed_wake_event=consumed,
-        )
+        try:
+            rt.dispatcher.release(
+                lease.lease_id,
+                next_state="terminal",
+                consumed_wake_event=consumed,
+            )
+        except InvalidLease:
+            # ``cancel`` already moved the row to terminal, revoking this
+            # lease; there is nothing left to release.
+            if task.status != "terminal":
+                raise
         _discard_cancellation(rt, lease.task_id)
         forget = getattr(rt, "forget_turn_engine", None)
         if callable(forget):
@@ -1702,6 +1769,47 @@ def _park_notice(reason: str, blockers: tuple[str, ...]) -> str:
     )
 
 
+#: Heartbeats one step attempt may take before the runner gives its lease back
+#: for recovery — at the default 30 s cadence about three hours of a single
+#: model call plus its tool calls. A healthy long turn starts a new attempt
+#: with every model call, so it is never capped as a whole.
+DEFAULT_ATTEMPT_HEARTBEAT_MAX = 360
+
+#: First retry delay after a heartbeat fails with anything but
+#: ``InvalidLease``; doubles up to the heartbeat interval.
+_HEARTBEAT_RETRY_INITIAL_S = 1.0
+
+
+class _LostLeases:
+    """Leases a heartbeat runner found revoked (or gave back at its cap),
+    so the step still running on one stops at its next boundary instead of
+    working on until a write is refused."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._ids: set[str] = set()
+
+    def add(self, lease_id: str) -> None:
+        with self._lock:
+            self._ids.add(lease_id)
+
+    def discard(self, lease_id: str) -> None:
+        with self._lock:
+            self._ids.discard(lease_id)
+
+    def __contains__(self, lease_id: object) -> bool:
+        with self._lock:
+            return lease_id in self._ids
+
+
+_LOST_LEASES = _LostLeases()
+
+
+def lease_lost(lease_id: Optional[str]) -> bool:
+    """Whether a heartbeat runner in this process found ``lease_id`` gone."""
+    return lease_id is not None and lease_id in _LOST_LEASES
+
+
 class _HeartbeatRunner:
     """Side-thread that extends a lease while a step runs.
 
@@ -1713,14 +1821,20 @@ class _HeartbeatRunner:
     a scripted ``wait`` to drive an exact number of heartbeats with no
     real timing.
 
-    If ``heartbeat`` raises ``InvalidLease`` (lease reclaimed, or the
-    Dispatcher's ``heartbeat_max`` cap hit) the runner logs + stops. It
-    makes NO claim about the task's resulting state — the in-flight
-    step's eventual EventLog write will raise ``InvalidLease`` too,
-    handled by the worker exception policy. ``heartbeat_interval *
-    heartbeat_max`` is the max keepalive window per step; past it is an
-    operational-failure path, not a recovery path (there is no cap-hit
-    recovery).
+    A heartbeat that fails with anything but ``InvalidLease`` (a locked
+    sqlite file, a dropped Postgres connection) is retried with backoff — the
+    lease has ``lease_seconds`` of slack, and giving up would let it expire
+    under a healthy step. ``InvalidLease`` means the lease is gone (cancelled,
+    reclaimed, or expired): the runner stops and marks the lease lost, so the
+    step on it stops at its next boundary.
+
+    ``attempt_heartbeat_max`` bounds one step attempt, not the turn: the count
+    restarts whenever the step composes a new model call
+    (``ContextPlanComposed`` for this task, seen through ``event_log``'s
+    subscription). Reaching it hands the lease back to the ready queue and
+    marks it lost, so the attempt is recovered exactly like one whose worker
+    died. ``None`` never caps; without an ``event_log`` the count runs for the
+    whole lease.
     """
 
     def __init__(
@@ -1732,6 +1846,8 @@ class _HeartbeatRunner:
         lease_seconds: float,
         wait: Optional[Callable[[float], bool]] = None,
         reliability_sink: Optional[ReliabilitySink] = None,
+        event_log: Any = None,
+        attempt_heartbeat_max: Optional[int] = DEFAULT_ATTEMPT_HEARTBEAT_MAX,
     ) -> None:
         self._dispatcher = dispatcher
         self._lease = lease
@@ -1741,9 +1857,41 @@ class _HeartbeatRunner:
         self._wait = wait if wait is not None else self._stop.wait
         self._thread: Optional[threading.Thread] = None
         self._sink = reliability_sink
+        self._event_log = event_log
+        self._attempt_heartbeat_max = attempt_heartbeat_max
+        self._attempt_started = threading.Event()
+        self._unsubscribe: Optional[Callable[[], None]] = None
+
+    def _on_event(self, env: Any) -> None:
+        if (
+            getattr(env, "type", None) == "ContextPlanComposed"
+            and getattr(env, "task_id", None) == self._lease.task_id
+        ):
+            self._attempt_started.set()
+
+    def _signal(self, kind: ReliabilityKind, **detail: Any) -> None:
+        if self._sink is not None:
+            self._sink(
+                ReliabilityEvent(
+                    kind=kind,
+                    task_id=getattr(self._lease, "task_id", None),
+                    lease_id=getattr(self._lease, "lease_id", None),
+                    detail=dict(detail),
+                )
+            )
 
     def _loop(self) -> None:
-        while not self._wait(self._interval):
+        beats = 0
+        delay = self._interval
+        retry = min(_HEARTBEAT_RETRY_INITIAL_S, self._interval)
+        while not self._wait(delay):
+            if self._attempt_started.is_set():
+                self._attempt_started.clear()
+                beats = 0
+            cap = self._attempt_heartbeat_max
+            if cap is not None and beats >= cap:
+                self._give_back(cap)
+                return
             try:
                 self._dispatcher.heartbeat(
                     self._lease.lease_id, lease_seconds=self._lease_seconds
@@ -1751,24 +1899,59 @@ class _HeartbeatRunner:
             except InvalidLease:
                 _log.warning(
                     "worker: heartbeat for lease %s (task %s) hit "
-                    "InvalidLease; stopping heartbeat (no claim about "
-                    "task state)",
+                    "InvalidLease; stopping heartbeat and the step on it",
                     self._lease.lease_id,
                     self._lease.task_id,
                 )
-                if self._sink is not None:
-                    # Symptom only — the cause (cap / expired / requeued /
-                    # already-released) is not knowable from InvalidLease.
-                    self._sink(
-                        ReliabilityEvent(
-                            kind="heartbeat_invalid_lease",
-                            task_id=getattr(self._lease, "task_id", None),
-                            lease_id=getattr(self._lease, "lease_id", None),
-                        )
-                    )
+                _LOST_LEASES.add(self._lease.lease_id)
+                # Symptom only — the cause (cancel / expired / requeued /
+                # already-released) is not knowable from InvalidLease.
+                self._signal("heartbeat_invalid_lease")
                 return
+            except Exception as exc:  # noqa: BLE001 - retried, never fatal
+                _log.warning(
+                    "worker: heartbeat for lease %s (task %s) failed (%s: %s); "
+                    "retrying in %.1fs",
+                    self._lease.lease_id,
+                    self._lease.task_id,
+                    type(exc).__name__,
+                    exc,
+                    retry,
+                )
+                self._signal("heartbeat_failed", error=str(exc)[:500])
+                delay = retry
+                retry = min(retry * 2, self._interval)
+                continue
+            beats += 1
+            delay = self._interval
+            retry = min(_HEARTBEAT_RETRY_INITIAL_S, self._interval)
+
+    def _give_back(self, cap: int) -> None:
+        """Hand a capped attempt's lease back to the ready queue and stop the
+        step on it; the next lease recovers the attempt like a crashed one."""
+        _log.warning(
+            "worker: step attempt on lease %s (task %s) reached %d heartbeats; "
+            "handing the lease back for recovery",
+            self._lease.lease_id,
+            self._lease.task_id,
+            cap,
+        )
+        _LOST_LEASES.add(self._lease.lease_id)
+        try:
+            self._dispatcher.release_yield(self._lease.lease_id)
+        except InvalidLease:
+            pass
+        except Exception:  # noqa: BLE001 - the lease then expires instead
+            _log.exception(
+                "worker: could not hand back lease %s; it will expire",
+                self._lease.lease_id,
+            )
+        self._signal("attempt_heartbeat_cap", heartbeats=cap)
 
     def start(self) -> None:
+        subscribe = getattr(self._event_log, "subscribe", None)
+        if callable(subscribe):
+            self._unsubscribe = subscribe(self._on_event)
         self._thread = threading.Thread(
             target=self._loop, name="noeta-worker-heartbeat", daemon=True
         )
@@ -1778,6 +1961,10 @@ class _HeartbeatRunner:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=5.0)
+        if self._unsubscribe is not None:
+            self._unsubscribe()
+            self._unsubscribe = None
+        _LOST_LEASES.discard(self._lease.lease_id)
 
 
 @contextmanager
@@ -1788,6 +1975,8 @@ def keep_lease_alive(
     interval: float = 30.0,
     lease_seconds: float = 600.0,
     reliability_sink: Optional[ReliabilitySink] = None,
+    event_log: Any = None,
+    attempt_heartbeat_max: Optional[int] = DEFAULT_ATTEMPT_HEARTBEAT_MAX,
 ) -> Iterator[None]:
     """Renew ``lease`` via a :class:`_HeartbeatRunner` for the duration of a
     synchronously-driven leased step.
@@ -1801,12 +1990,12 @@ def keep_lease_alive(
     ``is_lease_valid`` (``InvalidLease``) and the task hangs non-terminal.
     Wrapping the step keeps the lease renewed until it returns.
 
-    Past the dispatcher's ``heartbeat_max`` keepalive window the heartbeat
-    stops and a subsequent write raises ``InvalidLease`` — the same
-    operational-failure boundary the WorkerLoop path has; the caller's
-    InvalidLease handling owns it from there. ``interval <= 0`` disables the
-    heartbeat (a test seam / opt-out): with it disabled the Engine runs a
-    step without a lease-extending side thread.
+    ``event_log`` / ``attempt_heartbeat_max`` bound one step attempt (see
+    :class:`_HeartbeatRunner`); past the cap the lease goes back to the ready
+    queue and the step's next write raises ``InvalidLease``, which the caller
+    turns into recovery. ``interval <= 0`` disables the heartbeat (a test
+    seam / opt-out): with it disabled the Engine runs a step without a
+    lease-extending side thread.
     """
     if interval <= 0:
         yield
@@ -1817,6 +2006,8 @@ def keep_lease_alive(
         interval=interval,
         lease_seconds=lease_seconds,
         reliability_sink=reliability_sink,
+        event_log=event_log,
+        attempt_heartbeat_max=attempt_heartbeat_max,
     )
     runner.start()
     try:
@@ -2149,6 +2340,12 @@ class WorkerLoop:
                 lease_seconds=self._lease_seconds,
                 wait=self._heartbeat_wait,
                 reliability_sink=self._reliability_sink,
+                event_log=getattr(self._rt, "event_log", None),
+                attempt_heartbeat_max=getattr(
+                    self._rt,
+                    "attempt_heartbeat_max",
+                    DEFAULT_ATTEMPT_HEARTBEAT_MAX,
+                ),
             )
             heartbeat.start()
         done = threading.Event()

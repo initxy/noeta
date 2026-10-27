@@ -83,7 +83,7 @@ class SqliteDispatcher:
         # is fine because its state evaporates on restart, but a
         # persistent dispatcher must survive reboots.
         now: Optional[Callable[[], float]] = None,
-        heartbeat_max: int = 360,
+        heartbeat_max: Optional[int] = None,
         max_fail_attempts: int = 3,
         reclaim_max: int = 3,
     ) -> None:
@@ -352,40 +352,29 @@ class SqliteDispatcher:
                 if row is None or row["status"] != "leased":
                     self._conn.execute("ROLLBACK")
                     raise InvalidLease(lease_id)
-                if int(row["heartbeat_count"]) >= self._heartbeat_max:
-                    # Cap exceeded — force release in the same transaction.
-                    # There is no TaskWoken proof here, so a matched wake is
-                    # NOT consumed: it must be preserved and re-delivered
-                    # rather than stranded. With one in flight the task returns
-                    # to **ready** (re-deliverable, like a non-consuming
-                    # release); otherwise it suspends on its preserved wake_on.
-                    if row["matched_wake_event_canonical"] is not None:
-                        self._conn.execute(
-                            "UPDATE dispatcher_tasks SET "
-                            " status = 'ready',"
-                            " lease_id = NULL,"
-                            " lease_expires_at = NULL,"
-                            " heartbeat_count = 0,"
-                            " reclaim_count = 0,"
-                            " wake_on_canonical = NULL,"
-                            " suspend_reason = NULL,"
-                            " fire_at = NULL,"
-                            " ready_order = ? "
-                            "WHERE task_id = ?",
-                            (self._next_ready_order(), row["task_id"]),
-                        )
-                    else:
-                        self._conn.execute(
-                            "UPDATE dispatcher_tasks SET "
-                            " status = 'suspended',"
-                            " lease_id = NULL,"
-                            " lease_expires_at = NULL,"
-                            " heartbeat_count = 0,"
-                            " reclaim_count = 0,"
-                            " suspend_reason = 'lease_quota_exceeded' "
-                            "WHERE task_id = ?",
-                            (row["task_id"],),
-                        )
+                if (
+                    self._heartbeat_max is not None
+                    and int(row["heartbeat_count"]) >= self._heartbeat_max
+                ):
+                    # Cap exceeded — force release in the same transaction,
+                    # back to **ready** so the next lease recovers the
+                    # interrupted step like a reclaimed one. There is no
+                    # TaskWoken proof here, so a matched wake is NOT consumed:
+                    # it is preserved and re-delivered rather than stranded.
+                    self._conn.execute(
+                        "UPDATE dispatcher_tasks SET "
+                        " status = 'ready',"
+                        " lease_id = NULL,"
+                        " lease_expires_at = NULL,"
+                        " heartbeat_count = 0,"
+                        " reclaim_count = 0,"
+                        " wake_on_canonical = NULL,"
+                        " suspend_reason = NULL,"
+                        " fire_at = NULL,"
+                        " ready_order = ? "
+                        "WHERE task_id = ?",
+                        (self._next_ready_order(), row["task_id"]),
+                    )
                     self._conn.execute("COMMIT")
                     raise InvalidLease(lease_id)
                 expires_at = self._now() + lease_seconds

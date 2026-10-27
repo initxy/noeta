@@ -268,6 +268,8 @@ def _on_task_created(
 def _on_task_started(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
+    if task.status == "terminal":
+        return
     task.status = "running"
 
 
@@ -360,6 +362,11 @@ def _on_task_failed(
 def _on_task_suspended(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
+    # Terminal is irreversible: a lifecycle event a stale writer appended after
+    # the terminal (a cancel from another process landing mid-turn) must not
+    # bring the task back.
+    if task.status == "terminal":
+        return
     task.status = "suspended"
     task.wake_on = env.payload.wake_on
 
@@ -367,6 +374,8 @@ def _on_task_suspended(
 def _on_task_woken(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
+    if task.status == "terminal":
+        return
     task.status = "running"
     task.wake_on = None
 
@@ -973,6 +982,8 @@ _HANDLERS = {
     "MessagesAppended": _on_messages_appended,
     # Mid-turn goal injection request marker (written lease-free by the driver).
     "InjectionRequested": _on_injection_requested,
+    # A keyed send_goal's claim on its idempotency key; no task state.
+    "IdempotencyKeyClaimed": _on_noop,
     "TaskSnapshot": _on_task_snapshot,
     # Conversation rewind baseline (snapshot-shaped marker).
     "TaskRewound": _on_task_rewound,
