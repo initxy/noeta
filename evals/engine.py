@@ -12,15 +12,15 @@ from typing import Any
 
 from evals import live_env as _live_env
 from evals.core import TRIAL_TIMEOUT_S, EvalConfig, Trace
-from noeta.agent import Agent
-from noeta.client import Client
-from noeta.events import ModelReplied, TaskEnded, ToolFinished
-from noeta.execenv.local import LocalExecEnv
+from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.providers import provider_for
+from noeta.core.agent import Agent
+from noeta.core.client import Client
+from noeta.core.events import ModelReplied, TaskEnded, ToolFinished
+from noeta.core.provider import Provider
+from noeta.core.runner import Runtime
+from noeta.core.store.sqlite import SqliteStore
 from noeta.presets import default_agents
-from noeta.providers import provider_for
-from noeta.providers.base import Provider
-from noeta.runner import Runtime
-from noeta.store.sqlite import SqliteStore
 
 _MAX_STEPS_PER_TURN = 60
 #: Usable history window for the compaction scenario.
@@ -117,8 +117,8 @@ def run_trial(
     if cfg.system_prompt is not None:
         kw["system_prompt"] = cfg.system_prompt
     if small_window:
-        from noeta.ext.compaction import Compaction
-        from noeta.models import model_limits
+        from noeta.core.models import model_limits
+        from noeta.plugins.compaction import Compaction
 
         _, out = model_limits(cfg.model)
         # The usable window (window - min(out, 20k) - 13k) is _SMALL_USABLE_WINDOW.
@@ -174,7 +174,7 @@ class Judge:
         self.requests = 0
 
     def ask(self, question: str, text: str) -> bool:
-        from noeta.types import ModelRequest, SystemPart, user
+        from noeta.core.types import ModelRequest, SystemPart, user
 
         goal = f"Question: {question}\n\n<excerpt>\n{text}\n</excerpt>"
         request = ModelRequest(model=self._cfg.model, system=[SystemPart(text=self._SYSTEM)],

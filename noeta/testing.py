@@ -6,8 +6,8 @@ import itertools
 from collections.abc import Callable, Sequence
 from typing import Any, Union
 
-from noeta.providers.base import OnDelta
-from noeta.types import Delta, Message, ModelRequest, ModelResponse, Text, ToolUse, Usage
+from noeta.core.provider import OnDelta
+from noeta.core.types import Delta, Message, ModelRequest, ModelResponse, Text, ToolUse, Usage
 
 Step = Union[ModelResponse, Exception, Callable[[ModelRequest], ModelResponse]]
 

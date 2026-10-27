@@ -84,9 +84,9 @@ the `Extension` interface exists, but:
 - [x] Golden test of the default agents' request bytes (all three adapters)
 - [x] Delete 0.6 (packages, tests, docs, examples, eval engine, CI legs); move 1.0 to the root;
       one `make check`
-- [ ] `noeta.core`: move the interfaces down; `plugins/`, `backends/`, `apps/`; import-linter
+- [x] `noeta.core`: move the interfaces down; `plugins/`, `backends/`, `apps/`; import-linter
       contracts (core imports no plugin/backend/app; plugins and backends import only core)
-- [ ] Remove plugin-to-plugin imports
+- [x] Remove plugin-to-plugin imports
 - [ ] Entry point registry; `Runtime` and the CLI resolve plugins/backends by name
 - [ ] Prompt loader with layers; all twelve loaders go through it; prompts recorded at task start
 - [ ] Agent definition files; presets as data; `.noeta/agents/`; memory policy via `context()`
@@ -119,3 +119,4 @@ the `Extension` interface exists, but:
 ## Progress log
 2026-10-27 owner: drop 0.6 entirely, no compatibility; every capability a plugin; prompts and reminders extensible. Golden request test committed (a768a70).
 2026-10-27 0.6 deleted, 1.0 at the root; one make check (1300 passed). A root `.ignore` (listing tests/) had kept ruff off the 1.0 tests: removed, lint debt fixed. 0.6 byte-parity tests dropped (the golden covers the bytes).
+2026-10-27 Layered: core / plugins / backends / presets / apps, tests mirror it; four lint-imports contracts kept. Plugin links cut through the kernel: `TaskView.find_tool(name)` (compaction's file restore uses the task's `Read`), `Extension.inherit(state)` (permission rules reach children), `core.pending` (open approvals/questions), `core.execenv.is_local` / `scrub_env`, `core.registry` (entry points; the kernel's default exec env). Bash moved from `fs` to the `shell` plugin with its own state; sub-agents get a foreground `Shell` when the host passes none. Golden unchanged.

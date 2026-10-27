@@ -14,31 +14,25 @@ recorded before the first message is in 0.6's order.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from noeta.agent import Agent
-from noeta.ext.ask_user import AskUser
-from noeta.ext.background_shell import BackgroundShells
-from noeta.ext.base import Extension
-from noeta.ext.compaction import Compaction
-from noeta.ext.fs import FileTools
-from noeta.ext.instructions import Instructions
-from noeta.ext.mcp import Mcp
-from noeta.ext.memory import Memory, with_memory_policy
-from noeta.ext.permissions import Permissions
-from noeta.ext.skills import Skills
-from noeta.ext.subtasks import Subtasks
-from noeta.ext.subtasks.agents import OFFICIAL_ROSTER, official_subagents
-from noeta.ext.todo import Todo
-from noeta.ext.web import Web
-from noeta.ext.workspace import Environment
-
-
-def load_prompt(name: str) -> str:
-    return (resources.files("noeta.presets") / "prompts" / f"{name}.md").read_text("utf-8")
-
+from noeta.core.agent import Agent
+from noeta.core.extension import Extension
+from noeta.plugins.ask_user import AskUser
+from noeta.plugins.compaction import Compaction
+from noeta.plugins.environment import Environment
+from noeta.plugins.fs import FileTools
+from noeta.plugins.instructions import Instructions
+from noeta.plugins.mcp import Mcp
+from noeta.plugins.memory import Memory, with_memory_policy
+from noeta.plugins.permissions import Permissions
+from noeta.plugins.shell import Shell
+from noeta.plugins.skills import Skills
+from noeta.plugins.subtasks import Subtasks
+from noeta.plugins.todo import Todo
+from noeta.plugins.web import Web
+from noeta.presets.subagents import OFFICIAL_ROSTER, load_prompt, official_subagents
 
 MAIN_PROMPT = load_prompt("main")
 
@@ -61,7 +55,7 @@ def default_agents(
     """``main`` and the three official sub-agents. Without ``memory_root``
     the agent has no memory tools (and its prompt no memory policy)."""
     perms = permissions or Permissions()
-    shells = BackgroundShells()
+    shells = Shell()
     compaction = compaction or Compaction()
     web = web or Web()
     skills = skills or Skills()

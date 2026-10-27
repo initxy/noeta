@@ -17,7 +17,39 @@ tui = ["textual>=8.0"]
 acp = ["agent-client-protocol>=0.12,<0.13"]
 
 [project.scripts]
-noeta = "noeta.cli:main"
+noeta = "noeta.apps.cli:main"
+
+# Built-in plugins and backends register exactly as a third-party package
+# would (noeta/core/registry.py).
+[project.entry-points."noeta.plugins"]
+ask_user = "noeta.plugins.ask_user:AskUser"
+compaction = "noeta.plugins.compaction:Compaction"
+environment = "noeta.plugins.environment:Environment"
+fs = "noeta.plugins.fs:FileTools"
+instructions = "noeta.plugins.instructions:Instructions"
+mcp = "noeta.plugins.mcp:Mcp"
+memory = "noeta.plugins.memory:Memory"
+permissions = "noeta.plugins.permissions:Permissions"
+shell = "noeta.plugins.shell:Shell"
+skills = "noeta.plugins.skills:Skills"
+structured = "noeta.plugins.structured:StructuredOutput"
+subtasks = "noeta.plugins.subtasks:Subtasks"
+todo = "noeta.plugins.todo:Todo"
+web = "noeta.plugins.web:Web"
+
+[project.entry-points."noeta.providers"]
+anthropic = "noeta.backends.providers:anthropic"
+openai_compat = "noeta.backends.providers:openai_compat"
+openai_responses = "noeta.backends.providers:openai_responses"
+
+[project.entry-points."noeta.execenvs"]
+local = "noeta.backends.execenv.local:LocalExecEnv"
+container = "noeta.backends.execenv.container:open_env"
+
+[project.entry-points."noeta.stores"]
+sqlite = "noeta.core.store.sqlite:open_url"
+postgres = "noeta.backends.postgres:open_url"
+postgresql = "noeta.backends.postgres:open_url"
 
 [dependency-groups]
 dev = [
@@ -63,7 +95,7 @@ select = ["E", "F", "W", "I", "B", "UP", "RUF", "BLE"]
 ignore = ["RUF012", "UP007"]
 
 [tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = ["noeta.store.base.Patch", "Patch"]
+extend-immutable-calls = ["noeta.core.store.base.Patch", "Patch"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B008", "E501"]
@@ -73,8 +105,30 @@ extend-immutable-calls = ["noeta.store.base.Patch", "Patch"]
 [tool.importlinter]
 root_package = "noeta"
 
+# The layers, top to bottom; a module may import only from layers below it.
 [[tool.importlinter.contracts]]
-name = "the loop is pure: no storage, runner, providers or I/O-bound modules"
+name = "layers: apps > presets > plugins | backends > core"
+type = "layers"
+layers = [
+    "noeta.apps",
+    "noeta.presets",
+    "noeta.plugins | noeta.backends",
+    "noeta.core",
+]
+
+# A plugin is written against the kernel only, so any one can be removed.
+[[tool.importlinter.contracts]]
+name = "plugins do not import each other"
+type = "independence"
+modules = ["noeta.plugins.*"]
+
+[[tool.importlinter.contracts]]
+name = "backends do not import each other"
+type = "independence"
+modules = ["noeta.backends.*"]
+
+[[tool.importlinter.contracts]]
+name = "the loop is pure: no runner, store or provider"
 type = "forbidden"
-source_modules = ["noeta.loop"]
-forbidden_modules = ["noeta.runner", "noeta.store", "noeta.providers"]
+source_modules = ["noeta.core.loop"]
+forbidden_modules = ["noeta.core.runner", "noeta.core.store", "noeta.core.provider"]

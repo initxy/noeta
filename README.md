@@ -23,18 +23,18 @@ Settings come from `NOETA_*` variables or `~/.noeta/config.toml`; tasks live in
 
 ```python
 import asyncio
-from noeta.client import Client
-from noeta.events import ModelReplied
+from noeta.core.client import Client
+from noeta.core.events import ModelReplied
 from noeta.presets import default_agents
-from noeta.providers import provider_for
-from noeta.runner import Runtime
-from noeta.store.sqlite import SqliteStore
+from noeta.core.registry import provider
+from noeta.core.runner import Runtime
+from noeta.core.store.sqlite import SqliteStore
 
 async def main() -> None:
     store = SqliteStore("tasks.db")
     agents = {a.name: a for a in default_agents("claude-sonnet-4-6")}
-    provider = provider_for("anthropic", api_key="sk-ant-...")
-    runtime = Runtime(store=store, agents=agents, provider_for=lambda _model: provider)
+    model = provider("anthropic", api_key="sk-ant-...")
+    runtime = Runtime(store=store, agents=agents, provider_for=lambda _name: model)
     client = Client(store)
     task = await client.create("main", "What does this repository do?",
                                config={"cwd": "."})

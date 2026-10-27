@@ -11,7 +11,7 @@ with `parent_id` / `root_id`. There is no session, run or workflow entity.
 
 ## Event log
 
-Ten event types (`noeta/events.py`). Plugin state is never a new event type: a plugin records
+Ten event types (`noeta/core/events.py`). Plugin state is never a new event type: a plugin records
 `ExtensionRecorded(extension, kind, data, message?)` and folds it in its own `reduce`. The loop
 state is a pure fold of the log; the model request is a pure function of that state.
 
@@ -37,7 +37,7 @@ carries no capability and a plugin imports nothing but the kernel (`lint-imports
 
 ## Extension
 
-The one capability-plugin interface (`noeta/ext/base.py`): tools, context parts, commands,
+The one capability-plugin interface (`noeta/core/extension.py`): tools, context parts, commands,
 `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow), `after_tool`,
 `on_event`, `reduce`, `on_context_overflow`, `resident`. Every method is optional.
 

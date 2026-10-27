@@ -20,7 +20,7 @@ class Pg:
         self.schema = schema
 
     def store(self, **kw: Any) -> Any:
-        from noeta.store.postgres import PostgresStore
+        from noeta.backends.postgres import PostgresStore
 
         return PostgresStore(self.dsn, schema=self.schema, **kw)
 
