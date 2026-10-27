@@ -222,10 +222,10 @@ async def test_cancel_during_a_write_keeps_the_runner_in_step(store: SqliteStore
     await run._load()
     from noeta.events import ExtensionRecorded
 
-    task = asyncio.create_task(run._append([ExtensionRecorded(extension="x", kind="k")]))
+    task = asyncio.create_task(run.append([ExtensionRecorded(extension="x", kind="k")]))
     await asyncio.sleep(0)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
     assert run.state.last_seq == (await client.get(tid)).last_seq
-    await run._append([ExtensionRecorded(extension="x", kind="k2")])
+    await run.append([ExtensionRecorded(extension="x", kind="k2")])

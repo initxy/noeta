@@ -72,6 +72,8 @@ class TaskState:
     continuing: bool = False
 
     cancel_requested: str | None = None
+    #: Why the last turn failed (``reason: detail``); cleared by a new turn.
+    turn_error: str | None = None
     stop_turn_requested: str | None = None
     #: ``next_turn`` messages taken while a turn was open.
     queued: list[Message] = field(default_factory=list)
@@ -163,6 +165,12 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
             state.calls = []
             state.held = []
             _close_turn(state, rec.seq)
+        if ev.extension == CORE and ev.kind == "turn_failed":
+            data = ev.data if isinstance(ev.data, dict) else {}
+            reason, detail = data.get("reason", "failed"), data.get("detail", "")
+            state.turn_error = f"{reason}: {detail}" if detail else str(reason)
+            state.calls = []
+            _close_turn(state, rec.seq)
         reducer = reducers.get(ev.extension)
         if reducer is not None:
             state.ext[ev.extension] = reducer(state.ext.get(ev.extension), ev.kind, ev.data)
@@ -198,8 +206,10 @@ def _take(state: TaskState, ev: InputTaken, seq: int) -> None:
                 state.held.append(body.message)
             else:
                 state._add(body.message, seq)
+            if not state.turn_open:
+                state.steps_in_turn = 0
+                state.turn_error = None
             state.turn_open = True
-            state.steps_in_turn = 0 if body.when == "next_turn" else state.steps_in_turn
             state.waiting = None
         elif isinstance(body, Cancel):
             if body.turn_only:

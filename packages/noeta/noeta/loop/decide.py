@@ -27,12 +27,9 @@ class Interrupted(Struct, tag="interrupted"):
     call_ids: list[str]
 
 
-class CutOffCalls(Struct, tag="cut_off"):
-    """The reply was cut off at the output cap while writing tool calls: the
-    calls are answered with an error instead of run on possibly partial
-    input."""
-
-    call_ids: list[str]
+class FinalReport(Struct, tag="final_report"):
+    """The turn used up its step budget: one last tool-free call asks for a
+    report of where the work stands."""
 
 
 class StopTurn(Struct, tag="stop_turn"):
@@ -57,7 +54,7 @@ class Idle(Struct, tag="idle"):
 
 
 Action = Union[
-    CallModel, Continue, RunCalls, Interrupted, CutOffCalls, StopTurn, WaitInput, End, Idle
+    CallModel, Continue, RunCalls, Interrupted, FinalReport, StopTurn, WaitInput, End, Idle
 ]
 
 
@@ -70,15 +67,13 @@ def next_action(state: TaskState, *, one_shot: bool, max_steps: int) -> Action:
         return StopTurn(call_ids=[c.use.id for c in state.open_calls])
     if state.calls:
         open_calls: list[Call] = state.open_calls
-        if state.last_stop == "max_tokens":
-            return CutOffCalls(call_ids=[c.use.id for c in open_calls])
         started = [c.use.id for c in open_calls if c.started]
         if started:
             return Interrupted(call_ids=started)
         return RunCalls(call_ids=[c.use.id for c in open_calls])
     if state.turn_open:
         if state.steps_in_turn >= max_steps:
-            return End(status="failed", error=f"turn exceeded {max_steps} model calls")
+            return FinalReport()
         last = state.messages[-1] if state.messages else None
         if state.last_stop == "max_tokens" and last is not None and last.role == "assistant":
             return Continue()

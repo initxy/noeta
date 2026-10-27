@@ -326,10 +326,10 @@ Phase 1 — core on one machine
 - [x] `noeta.store` sqlite + conformance suite (conditional append, inbox dedupe, same-transaction
       `tasks` projection, claims)
 - [x] `noeta.runner`: claim, loop, cancel watch, crash recovery
-- [ ] Port providers and the six file/shell tools with their tests
+- [x] Port providers and the six file/shell tools with their tests
 - [x] Prototype gate, races and crashes: racing runners never double-write; a kill at every append
       boundary recovers without re-running a finished tool; multi-process kill -9 soak
-- [ ] Prototype gate, behavior: the `make eval` scenarios that need only the six tools (grep, read,
+- [x] Prototype gate, behavior: the `make eval` scenarios that need only the six tools (grep, read,
       edit, parallel reads, two injection, honest failure, concise, proceed-when-clear) match
       0.6 on the same model; the rest are phase 2's gate
 
@@ -342,7 +342,7 @@ Phase 2 — extensions (default preset = 0.6 behavior)
 - [ ] container ExecEnv; prompts moved unchanged and the full `make eval` + live e2e green
 
 Phase 3 — multi-machine
-- [ ] Postgres store and scheduler, passing the same conformance suites
+- [x] Postgres store, passing the same conformance suites
 - [ ] Multi-process tests: N workers, kill -9 at random points, cancel from another process,
       child on one machine and parent on another
 - [ ] CI Postgres leg runs in `make check`'s CI job
@@ -391,3 +391,7 @@ Phase 5 — cutover
 2026-10-27 owner: Textual full-screen TUI, ACP adapter first; start. Spec active on `next`. ADRs are distilled at cutover, not written up front (AGENTS.md). Core is asyncio with a sync client facade.
 2026-10-27 claims and change notifications folded into the store; no separate Scheduler interface (one deep module instead of two that share a table).
 2026-10-27 phase-1 core green: 48 tests incl. a crash at each of 13 write points (before and after commit), 4 runtimes racing 12 tasks, multi-process kill -9 (60 tasks x 3 tool steps, ~10 kills/run, no step ran twice). The eval gate is split: six-tool scenarios in phase 1, the rest need phase-2 extensions.
+2026-10-27 providers (517 offline tests, 6/6 live) and the six tools + LocalExecEnv (400 tests) ported by subagents and merged; MalformedToolArguments stays transient as in 0.6.
+2026-10-27 Postgres store merged early (phase 3): 73/73 against postgres:16 incl. kill -9 across 5 seeds, no duplicate step; LISTEN/NOTIFY feeds on_change; ambiguous commit raises CommitUnknown (a Conflict).
+2026-10-27 eval gate, 9 six-tool scenarios x3 on auto_model/alwaysday1_max: 1.0 0.982 vs 0.6 1.000 (one injection_in_file trial 0.5; within tolerance). 1.0 sent 373k input tokens vs 850k, but its tool set is smaller, so not yet a fair cost comparison.
+2026-10-27 core-loop items from the 0.6 behavior inventory: failed interactive turns park (turn_failed), empty replies never recorded, cut replies run their complete calls, step limit ends with a report round, read-only concurrency cap 10, retries recorded, store outages no longer end the worker. Runner split into noeta/runner/ (runtime, task, model, calls, texts). Package source 9.9k lines, largest file 644.
