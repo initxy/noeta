@@ -27,7 +27,7 @@ Rule of thumb: the wider the impact (spanning multiple modules), the more it bel
 [engine-per-turn](046-engine-per-turn.md) ·
 [worker-lease-model](029-worker-lease-model.md) ·
 [worker-queue-routing](041-worker-queue-routing.md) [+057](057-queue-recovery-reads-tails-for-waiting-parents.md) ·
-[step-attempt-recovery](032-step-attempt-recovery.md) ·
+[step-attempt-recovery](032-step-attempt-recovery.md) [+065](065-crash-recovery-keeps-finished-tool-calls.md) ·
 [mid-turn-goal-injection](040-mid-turn-goal-injection.md) ·
 [terminal-answer-on-a-parked-turn](045-terminal-answer-on-a-parked-turn.md) ·
 [interrupt-responsiveness](042-interrupt-responsiveness.md) [+058](058-sandbox-foreground-shell-interrupt.md) ·

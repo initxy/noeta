@@ -6,9 +6,10 @@ turn hangs and the lease stays held. ``force=True`` abandons the step outright
 with three existing primitives: ``dispatcher.enqueue`` force-clears the wedged
 lease (fencing the abandoned thread — its late writes raise ``InvalidLease``
 and land nowhere), a fresh targeted lease runs step-attempt recovery over the
-dirty window (``StepAttemptAbandoned`` seal), and the re-drive — under the
-still-armed mark — aborts on its first poll and settles the task at the
-interrupted next-goal suspend. The conversation resumes by simply typing.
+dirty window (the wedged call keeps its place in the batch with an
+unknown-outcome result), and the continued step — under the still-armed
+mark — aborts on its first poll and settles the task at the interrupted
+next-goal suspend. The conversation resumes by simply typing.
 
 The zombie's own ``InvalidLease`` unwinds the original ``send_goal`` thread;
 ``_force_terminal_on_lost_lease`` must NOT bulldoze the settled suspend into a
@@ -26,6 +27,7 @@ from noeta.core.fold import fold
 from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock, Usage
 from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.protocols.wake import NEXT_GOAL_WAKE_HANDLE
+from noeta.runtime.attempt import INTERRUPTED_CALL_ERROR
 from noeta.runtime.worker import STOP_INTERRUPTED_SUSPEND_REASON
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.tools.decorator import tool
@@ -95,9 +97,6 @@ def test_force_interrupt_abandons_a_wedged_tool_and_settles(
     options = Options(
         system_prompt=_PROMPT,
         allowed_tools=(wedge_tool,),
-        # Gate-free mode classifies the sealed attempt safe ⇒ recovery
-        # re-drives (and the armed mark aborts the re-drive) instead of
-        # parking — the deterministic force landing under test.
         permission_mode="bypassPermissions",
     )
     client = Client(
@@ -140,7 +139,17 @@ def test_force_interrupt_abandons_a_wedged_tool_and_settles(
         assert out.status == "suspended"
         assert out.wake_handle == NEXT_GOAL_WAKE_HANDLE
         types = _types(client, task_id)
-        assert "StepAttemptAbandoned" in types
+        assert "StepAttemptAbandoned" not in types
+        state = fold(host.event_log, host.content_store, task_id)
+        results = [
+            block
+            for message in state.runtime.messages
+            if message.role == "tool"
+            for block in message.content
+        ]
+        assert [(r.call_id, r.error) for r in results] == [
+            ("w-1", INTERRUPTED_CALL_ERROR)
+        ]
         suspends = [
             e
             for e in host.event_log.read(task_id)

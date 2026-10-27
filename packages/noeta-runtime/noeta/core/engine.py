@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any, Callable, Optional, TypeGuard
+from typing import Any, Callable, Optional, Sequence, TypeGuard
 
 import copy
 
@@ -40,6 +40,8 @@ from noeta.core._decision_handlers import (
     record_assistant_thinking,
     resume_approved_decision,
     strip_message_origin,
+    tool_output_spiller,
+    wrap_tool_result_block,
 )
 from noeta.core.fold import apply_event, apply_host_binding, fold
 from noeta.core.hooks import HookManager
@@ -108,7 +110,7 @@ from noeta.protocols.messages import (
 from noeta.protocols.policy import Policy
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.task import Task, TaskState
-from noeta.protocols.tool import Tool
+from noeta.protocols.tool import Tool, ToolResult
 from noeta.protocols.tool_args import resolve_tool_call_arguments
 
 
@@ -1812,3 +1814,52 @@ def guard_allows_tool_call(
         ).is_allow
     except Exception:  # noqa: BLE001 — classification must fail closed
         return False
+
+
+def complete_interrupted_tool_batch(
+    engine: Engine,
+    task: Task,
+    *,
+    recorded: Sequence[tuple[ToolCall, ToolResult]],
+    answered: Sequence[ToolResultBlock],
+    pending: Sequence[ToolCall],
+    lease_id: str,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> Task:
+    """Finish a tool batch a crash cut short, without re-running any call
+    that started (crash recovery).
+
+    ``recorded`` results are re-rendered exactly as the live batch renders
+    them (inline limit, spill, the tool's own size cap); ``answered`` blocks
+    go in as given; ``pending`` calls never started, so they run now through
+    ``handle_tool_calls`` — past the live guard chain, which may deny one or
+    suspend the task on an approval. Every call ends up with one result in
+    one batched message, so the step can continue at its next decide. A
+    stop already armed (``cancelled``) closes the pending calls unrun, as it
+    does in any batch.
+    """
+    ctx = engine._ctx
+    blocks = [
+        wrap_tool_result_block(
+            call,
+            result,
+            tool_output_inline_limit=ctx.tool_output_inline_limit,
+            spill=tool_output_spiller(ctx.tool_output_spill_dir, task.task_id),
+            max_result_size_chars=getattr(
+                engine.tool_named(call.tool_name), "max_result_size_chars", None
+            ),
+        )
+        for call, result in recorded
+    ]
+    suspended = handle_tool_calls(
+        ctx,
+        task,
+        ToolCallsDecision(
+            calls=list(pending),
+            preacked_results=(*blocks, *answered),
+        ),
+        lease_id=lease_id,
+        trace_id=engine._latest_trace_id(task.task_id),
+        cancelled=cancelled,
+    )
+    return suspended if suspended is not None else task

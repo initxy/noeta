@@ -11,7 +11,7 @@ it. The authoritative source is
 - **Anchored placement** — a resident renders where it was activated: in the semi-stable segment if before the first assistant message, otherwise inline in the history. → [Context](../how-it-works/context.md)
 - **App plugin** — a contribution to a host's own surface (routers, channels, schedules). Validated by the loader, handed to the host, never part of agent identity. → [Plugin surfaces](plugin-surfaces.md)
 - **Artifact** — a large object a tool returns alongside its inline output, listed as `ContentRef`s on `ToolResult.artifacts`. → [Types](types.md)
-- **Attempt** — one decide-then-act iteration inside a step; the unit of crash recovery. An interrupted attempt is sealed by `StepAttemptAbandoned`. → [Event log](../how-it-works/event-log.md)
+- **Attempt** — one decide-then-act iteration inside a step; the unit of crash recovery. An interrupted attempt keeps the tool calls it started, or, if none started, is sealed by `StepAttemptAbandoned`. → [Event log](../how-it-works/event-log.md)
 
 ## B
 
