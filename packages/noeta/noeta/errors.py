@@ -56,3 +56,15 @@ class Fatal(ModelError):
 class MalformedToolArguments(Transient):
     """Tool-call arguments that are not a JSON object. Almost always a stream
     cut mid-call, so the call is retried like any transient failure."""
+
+
+class TurnFailed(Exception):
+    """Raised by an extension hook (``before_model``, ``on_context_overflow``)
+    when the turn cannot go on, e.g. a compaction that cannot make progress.
+    The runner fails the turn with ``reason`` and ``detail``: an interactive
+    task parks, a one-shot task ends failed."""
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+        self.reason = reason
+        self.detail = detail
