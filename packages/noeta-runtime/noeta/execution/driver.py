@@ -83,6 +83,7 @@ from noeta.protocols.wake import (
     WakeCondition,
 )
 from noeta.runtime.worker import (
+    DEFAULT_ATTEMPT_HEARTBEAT_MAX,
     AppendMessagePrelude,
     AnswerUserQuestionPrelude,
     ResolveApprovalPrelude,
@@ -93,6 +94,11 @@ from noeta.runtime.worker import (
 )
 
 _log = logging.getLogger(__name__)
+
+#: Re-leases an in-request drive attempts after losing its lease before it
+#: gives up and fails the task. Recovery parks an attempt that keeps getting
+#: interrupted after three seals, so this is only a backstop.
+_LOST_LEASE_RECOVERIES = 4
 
 __all__ = [
     "InteractionDriver",
@@ -944,7 +950,7 @@ class InteractionDriver:
             # than the lease TTL (a slow LLM round-trip retried to its budget)
             # would otherwise lose its lease mid-flight and fail its own
             # terminal write (InvalidLease) — hanging the task non-terminal.
-            with keep_lease_alive(self._host.dispatcher, seeded.lease):
+            with self._keep_lease_alive(seeded.lease):
                 if seeded.prelude is None:
                     run_leased_task(
                         self._host, seeded.lease,
@@ -958,15 +964,18 @@ class InteractionDriver:
                         engine=seeded.engine,
                     )
         except InvalidLease as exc:
-            # The lease lapsed mid-step despite the heartbeat (cap hit, or an
-            # external reclaim), so the step's own terminal write was rejected.
-            # Unlike the WorkerLoop path there is NO resident worker to retry a
-            # requeued task here, so leaving it would hang the task non-terminal
-            # forever (the UI can neither resume nor delete it). Converge it to a
-            # durable terminal via the control plane, then re-raise so the
-            # transport still surfaces / logs the fault.
-            self._force_terminal_on_lost_lease(seeded.task_id, exc)
-            raise
+            # The lease lapsed mid-step (an attempt reached its heartbeat cap,
+            # or an external reclaim), so the step stopped or its write was
+            # rejected. Unlike the WorkerLoop path there is no resident worker
+            # here to pick the requeued task up, so recover it in place, the
+            # way a worker would. Only when that is impossible converge it to a
+            # durable terminal via the control plane — leaving it would hang
+            # the task non-terminal forever (the UI can neither resume nor
+            # delete it) — then re-raise so the transport still surfaces / logs
+            # the fault.
+            if not self._recover_lost_lease(seeded.task_id):
+                self._force_terminal_on_lost_lease(seeded.task_id, exc)
+                raise
         except Exception as exc:  # noqa: BLE001
             # The async transport drives this off the request thread, so unlike
             # the WorkerLoop path there is no outer ``_execute_step`` to fail
@@ -1005,6 +1014,57 @@ class InteractionDriver:
         # walk up and drive the woken ancestors.
         self._resume_woken_ancestors(seeded.task_id)
         return self._outcome(seeded.task_id)
+
+    def _keep_lease_alive(self, lease: Any) -> Any:
+        """Heartbeat ``lease`` while an in-request step runs on it, with the
+        host's per-attempt cap."""
+        host = self._host
+        return keep_lease_alive(
+            host.dispatcher,
+            lease,
+            event_log=host.event_log,
+            attempt_heartbeat_max=getattr(
+                host, "attempt_heartbeat_max", DEFAULT_ATTEMPT_HEARTBEAT_MAX
+            ),
+        )
+
+    def _recover_lost_lease(self, task_id: str) -> bool:
+        """Re-lease a task whose in-request step lost its lease, and run the
+        worker's recovery on it: the interrupted attempt is sealed and
+        re-driven, or parked for a human, exactly as after a crash.
+
+        Returns ``False`` when the task is not this drive's to recover — it is
+        not ``running`` (a cancel or a force interrupt already settled it), or
+        another worker holds it — so the caller keeps its lost-lease handling.
+        Bounded: an attempt that keeps losing its lease is parked by the
+        recovery's own abandon cap long before the retries here run out.
+        """
+        host = self._host
+        for _ in range(_LOST_LEASE_RECOVERIES):
+            task = fold(host.event_log, host.content_store, task_id)
+            if task.status != "running":
+                return False
+            lease = host.dispatcher.lease(
+                worker_id=self._worker_id,
+                lease_seconds=self._lease_seconds,
+                task_id=task_id,
+            )
+            if lease is None:
+                return False
+            try:
+                with self._keep_lease_alive(lease):
+                    run_leased_task(
+                        host, lease, next_goal_handle=NEXT_GOAL_WAKE_HANDLE
+                    )
+            except InvalidLease:
+                continue
+            except Exception as exc:  # noqa: BLE001 - same policy as drive_seeded
+                host.dispatcher.fail(
+                    lease.lease_id, retryable=True, reason=str(exc)
+                )
+                raise
+            return True
+        return False
 
     def _force_terminal_on_lost_lease(
         self, task_id: str, exc: Exception
@@ -1806,6 +1866,15 @@ class InteractionDriver:
         request = getattr(host, "request_cancellation", None)
         if callable(request):
             request(task_id)
+        # The registry above only reaches a turn this process drives. Moving
+        # the dispatcher row to terminal also revokes whatever lease another
+        # process holds on it, so that process's next write (the next plan,
+        # the next tool call) is refused and its drive stops there — and no
+        # worker ever leases the cancelled task again. ``getattr`` so a
+        # dispatcher without the maintenance seam keeps the old behavior.
+        restore = getattr(host.dispatcher, "restore_task", None)
+        if callable(restore):
+            restore(task_id, status="terminal", suspend_reason="cancelled")
         # Human emergency-stop: a cancel must also kill
         # the session's background shell jobs (a long-running ``npm run dev`` /
         # ``make build`` outlives the task that started it, so cancelling the
@@ -2061,7 +2130,7 @@ class InteractionDriver:
         )
         if lease is None:
             return None
-        with keep_lease_alive(host.dispatcher, lease):
+        with self._keep_lease_alive(lease):
             run_leased_task(
                 host, lease, next_goal_handle=NEXT_GOAL_WAKE_HANDLE
             )

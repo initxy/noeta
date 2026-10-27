@@ -152,6 +152,7 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 | `queue` | `str` | `"default"` | 共享存储时这个 client 的 worker 队列；它的 worker 只领这个队列的活 |
 | `record_llm_requests` | `bool` | `False` | 把每次模型调用的完整请求正文存到 `LLMRequestStarted.request_ref` 后面。关着时 ref 只带哈希：请求本来就能从状态推导出来，存下来会让存储按任务长度的平方增长。排查问题时才开；`Client.collect_garbage` 会把这些正文再删掉 |
 | `llm_max_retries` | `int \| None` | `None` | 模型调用临时失败（429、5xx、超时）时，这个客户端最多重试几次再判这一步失败，带退避；每次重试记一条 `LLMRetryScheduled`。`0` 只试一次；`None` 用运行时默认的 8 次 |
+| `attempt_heartbeat_max` | `int \| None` | `360` | 一次尝试（一次模型调用加上它要的工具调用）最多续租几次；超过后租约交回，这次尝试按崩溃的方式恢复。每次模型调用重新计数；`None` 不设上限 |
 
 `storage_path` 和三个对象同时给，或三个只给了一部分，都会抛 `ValueError`。`noeta.sdk.storage.open_storage_stack(path)` 用一个字符串建出这三个对象；同一模块还导出 `build_storage_stack`、`is_memory_path`、`is_postgres_url`、Sqlite / Postgres 适配器，以及 `collect_garbage`（见[限制 → 增长](../operations/limitations.md#内容只在你主动要求时回收)）。
 

@@ -66,7 +66,7 @@ loop.run_forever(install_signals=True)   # blocks until stop()
 | --- | --- |
 | `install_stop_signals(loop) -> restore` | 把 SIGTERM/SIGINT 接到 `loop.stop()`；不在主线程时警告并返回空操作 |
 | `run_leased_task(rt, lease, *, prelude=None, next_goal_handle=None, reliability_sink=None, engine=None) -> WorkerOutcome` | 把一个已租到的任务推进一步，含崩溃恢复；进程内执行器也用它 |
-| `keep_lease_alive(dispatcher, lease, *, interval=30.0, lease_seconds=600.0, reliability_sink=None)` | 心跳上下文管理器，给没有循环包着的单步执行用 |
+| `keep_lease_alive(dispatcher, lease, *, interval=30.0, lease_seconds=600.0, reliability_sink=None, event_log=None, attempt_heartbeat_max=360)` | 心跳上下文管理器，给没有循环包着的单步执行用 |
 | `resolve_engine(rt, task) -> Engine` | 按任务查引擎 |
 | `reconcile_cap_terminal(rt, task_id) -> bool` | 给一个被上限卡掉的任务补写终态事件（重复调用无副作用） |
 | `recover_cap_terminal(rt) -> list[str]` | 对所有任务做同样的事 |
@@ -97,7 +97,7 @@ loop.run_forever(install_signals=True)   # blocks until stop()
 | `"cancelled"` | 人工取消生效，任务已终止 |
 | `"stopped"` | 人工停止生效，或崩溃恢复把它挂起；任务还能继续 |
 
-`ReliabilityEvent(kind, task_id=None, lease_id=None, detail={})`——只在进程内，不写事件日志。取值：`stale_requeued`、`suspended_without_wake`、`step_failed_retryable`、`heartbeat_invalid_lease`、`shutdown_abandoned`、`timers_fired`、`attempt_abandoned`（中断的一步已封存并自动重跑）、`attempt_parked`（已封存并挂起等人处理）、`cap_terminal_reconciled`、`dispatcher_unavailable`。
+`ReliabilityEvent(kind, task_id=None, lease_id=None, detail={})`——只在进程内，不写事件日志。取值：`stale_requeued`、`suspended_without_wake`、`step_failed_retryable`、`heartbeat_invalid_lease`、`shutdown_abandoned`、`timers_fired`、`attempt_abandoned`（中断的一步已封存并自动重跑）、`attempt_parked`（已封存并挂起等人处理）、`cap_terminal_reconciled`、`dispatcher_unavailable`、`heartbeat_failed`（心跳碰到存储错误，会退避重试）、`attempt_heartbeat_cap`（一次尝试续租到上限，租约已交回等待恢复）。
 
 `WakeRecoveryError`——唤醒对不上折叠后的状态，worker 直接报错。执行中途崩溃不算错误：下次租到时会用 `StepAttemptAbandoned` 封存那一步，没有副作用就自动重跑，否则挂起等人处理。
 
@@ -105,7 +105,7 @@ loop.run_forever(install_signals=True)   # blocks until stop()
 
 `stop()` 后不再租新任务，最多等 `shutdown_grace_s` 让正在跑的一步结束。超时就停掉心跳、发 `shutdown_abandoned`、把 `abandoned` 置真并返回，不释放租约；此时必须退出进程，下次启动时 `requeue_stale` 会把任务收回来。
 
-心跳不能无限续租：dispatcher 限制最多续 `heartbeat_max` 次，超过后这一步的下一次写入会报 `InvalidLease`。
+心跳不能让一次尝试无限续租：没有新的模型调用、续租超过 `attempt_heartbeat_max` 次（从运行时读取，即 `HostConfig.attempt_heartbeat_max`）后，租约交回就绪队列，这次尝试按崩溃的方式恢复。心跳碰到存储错误会退避重试；碰到 `InvalidLease` 则让这个租约上的步骤在下一个边界停下。
 
 ## 下一步
 

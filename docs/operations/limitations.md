@@ -65,12 +65,16 @@ faults, see [troubleshooting](troubleshooting.md).
   `requeue_stale()` reclaims the task. `shutdown_grace_s=None` (or `<= 0`) waits
   forever; a stuck step then needs `kill -KILL <pid>`.
 
-### Heartbeat has a ceiling
+### One step attempt has a ceiling
 
-- **Boundary:** one step holds its lease for at most `heartbeat_interval ×
-  heartbeat_max` (360 by default — hours in practice). Past it the lease is released
-  and the next write fails with `InvalidLease`.
-- **Workaround:** treat a hit as a signal to inspect the task, not as recovery.
+- **Boundary:** a single step attempt — one model call and the tool calls it asks
+  for — holds its lease for at most `heartbeat_interval ×
+  HostConfig.attempt_heartbeat_max` (360 by default — hours in practice). The count
+  restarts with every model call, so a long turn is not capped as a whole. Past it the
+  lease goes back to the ready queue, the step stops, and the attempt is recovered as
+  if its worker had crashed (`attempt_heartbeat_cap`).
+- **Workaround:** a tool call that legitimately blocks longer belongs in a background
+  command; set `attempt_heartbeat_max=None` to remove the ceiling.
 
 ## Observability
 
@@ -79,7 +83,7 @@ faults, see [troubleshooting](troubleshooting.md).
 - **Boundary:** worker signals (`stale_requeued`, `suspended_without_wake`,
   `step_failed_retryable`, `heartbeat_invalid_lease`, `shutdown_abandoned`,
   `timers_fired`, `attempt_abandoned`, `attempt_parked`, `cap_terminal_reconciled`,
-  `dispatcher_unavailable`) go to a sink that defaults to structured logs. They are not
+  `dispatcher_unavailable`, `heartbeat_failed`, `attempt_heartbeat_cap`) go to a sink that defaults to structured logs. They are not
   event-log events and do not survive a restart.
 - **Workaround:** pass a `reliability_sink` that forwards them to your monitoring.
 
