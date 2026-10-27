@@ -42,3 +42,7 @@ Two failure modes bound the design. Silently terminating the task throws away wo
 - Runtime: the pure attempt scanner, the classifier, and the abandon cap live in `noeta.runtime.attempt`; the seal / re-drive / park machine, the case sentinel, and the drained-branch routing live in `noeta.runtime.worker`; the lease-checked seal append and the classifier's guard predicate live in `noeta.core.engine`. Seed-time prelude application lives in `noeta.execution.driver`. A trace exporter segments the task trace at the seal exactly as it does at a rewind.
 - Costs and limits: the seed lengthens a command's request path by a few bounded appends; recovery prevents silent *duplicate* execution but compensates nothing — inspecting what a crashed side-effectful call actually did stays the operator's job, and the park notice says exactly that; a model-switch turn re-driven after a crash runs on the newly bound model.
 - Recovery always runs under a lease and its seal is a lease-checked append, so whatever fences leases fences recovery too; nothing in this design assumes a single worker.
+
+## Refined by
+
+- [ADR-065](065-crash-recovery-keeps-finished-tool-calls.md) — Crash recovery keeps a recorded tool batch
