@@ -44,3 +44,7 @@ Under ADR-032 the unit of recovery is the whole interrupted attempt. A crash in 
 - A recorded result that carried images loses them on re-render: `ToolResultRecorded` does not record images.
 - Post-tool content discovery runs only for calls executed during recovery, not for results kept from before the crash.
 - Recovery still compensates nothing: a call cut short may have partly applied, and its result tells the model to check before retrying.
+
+## Refined by
+
+- [ADR-071](071-kept-batch-answers-what-its-result-message-left-out.md) — A kept tool batch is complete only when its result messages answer every call

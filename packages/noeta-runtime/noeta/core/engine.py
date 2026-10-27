@@ -1684,6 +1684,55 @@ def suspend_on_human_handle(
     )
 
 
+def close_unanswered_calls(
+    engine: Engine, task: Task, *, lease_id: str, reason: str
+) -> Task:
+    """Answer every call of the latest assistant turn that has no result yet
+    with a failed ``reason`` result, in one tool-role message.
+
+    A stopped or parked turn can leave calls the batch never reached — the
+    ``Task`` calls a mixed response defers until its ordinary calls finish.
+    Unanswered, the next request carries a dangling ``tool_use`` (a provider
+    400), and the deferred spawn would run after the human's next message.
+    A call awaiting an approval or a question answer is left alone: its own
+    verb answers it. No-op when nothing is unanswered.
+    """
+    answered: set[str] = set()
+    unanswered: list[str] = []
+    for message in reversed(task.runtime.messages):
+        if message.role != "assistant":
+            answered.update(
+                b.call_id for b in message.content if isinstance(b, ToolResultBlock)
+            )
+            continue
+        waiting = set(task.governance.pending_approvals) | {
+            q.get("call_id") for q in task.governance.pending_questions.values()
+        }
+        unanswered = [
+            b.call_id
+            for b in message.content
+            if isinstance(b, ToolUseBlock)
+            and b.call_id not in answered
+            and b.call_id not in waiting
+        ]
+        break
+    if not unanswered:
+        return task
+    held = engine._held_preacked_results(task, set(unanswered))
+    # ``output`` stays empty: the adapters render a failed result as ``error``
+    # followed by ``output``, so filling both repeats the sentence.
+    blocks = [
+        ToolResultBlock(call_id=call_id, output="", success=False, error=reason)
+        for call_id in unanswered
+    ]
+    return engine._append_message(
+        task,
+        Message(role="tool", content=[*held, *blocks]),
+        lease_id=lease_id,
+        trace_id=None,
+    )
+
+
 #: The only blocks a user turn may legitimately carry.
 #: Model-side (``ThinkingBlock``) and tool-side (``ToolUseBlock`` /
 #: ``ToolResultBlock``) blocks ride other seams and are rejected here.

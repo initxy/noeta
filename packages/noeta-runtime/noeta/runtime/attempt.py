@@ -301,8 +301,8 @@ class RecordedBatch:
 
     #: the assistant message's tool calls, in the order the model made them.
     tool_uses: tuple[ToolUseBlock, ...]
-    #: True ⇒ the batch's tool-result message already landed; the attempt
-    #: only lost what came after it, so nothing is left to answer.
+    #: True ⇒ result messages already landed for every call; the attempt
+    #: only lost what came after them, so nothing is left to answer.
     results_present: bool
     #: call ids with a ``ToolCallStarted`` after the decision.
     started: frozenset[str]
@@ -310,6 +310,10 @@ class RecordedBatch:
     recorded: Mapping[str, Any]
     #: call id → the reason its ``ToolCallDenied`` recorded.
     denied: Mapping[str, str]
+    #: call ids a landed result message already answers. A batch that
+    #: suspended on an approval writes the other calls' results before the
+    #: suspend, so a crash between the two leaves this a strict subset.
+    answered: frozenset[str] = frozenset()
 
 
 def scan_recorded_batch(
@@ -320,14 +324,14 @@ def scan_recorded_batch(
 
     A batch is kept when its assistant message (the ``tool_use`` blocks) is
     on the stream and the batch got far enough to matter: a call started,
-    or the result message landed. A decision with nothing started has run
+    or a result message landed. A decision with nothing started has run
     nothing, so re-deciding it is free of side effects and the attempt
     re-drives as before. A spawn anywhere in the tail also returns ``None``
     — a child is a side effect the classifier parks on.
     """
     tool_uses: tuple[ToolUseBlock, ...] = ()
     after = -1
-    results_present = False
+    answered: set[str] = set()
     for i, env in enumerate(tail):
         if env.type in _SPAWN_EVENTS:
             return None
@@ -338,11 +342,17 @@ def scan_recorded_batch(
                 b for b in message.content if isinstance(b, ToolUseBlock)
             )
             if message.role == "assistant" and uses:
-                tool_uses, after, results_present = uses, i, False
+                tool_uses, after = uses, i
+                answered = set()
             elif message.role == "tool" and tool_uses:
-                results_present = True
+                answered.update(
+                    b.call_id
+                    for b in message.content
+                    if isinstance(b, ToolResultBlock)
+                )
     if not tool_uses:
         return None
+    answered &= {use.call_id for use in tool_uses}
     started: set[str] = set()
     recorded: dict[str, Any] = {}
     denied: dict[str, str] = {}
@@ -353,14 +363,15 @@ def scan_recorded_batch(
             recorded[env.payload.call_id] = env.payload
         elif env.type == "ToolCallDenied":
             denied[env.payload.call_id] = env.payload.reason
-    if not results_present and not started:
+    if not answered and not started:
         return None
     return RecordedBatch(
         tool_uses=tool_uses,
-        results_present=results_present,
+        results_present=len(answered) == len(tool_uses),
         started=frozenset(started),
         recorded=recorded,
         denied=denied,
+        answered=frozenset(answered),
     )
 
 
@@ -390,12 +401,15 @@ def plan_batch_completion(
     started runs now when a plain tool answers to its name; a control or
     routing tool (``route_call``) was translated by the Policy, which this
     path does not re-enter, so such a call gets
-    :data:`NOT_STARTED_CALL_ERROR` instead.
+    :data:`NOT_STARTED_CALL_ERROR` instead. A call a landed result message
+    already answers is left out.
     """
     recorded: list[tuple[ToolCall, ToolResult]] = []
     answered: list[ToolResultBlock] = []
     pending: list[ToolCall] = []
     for use in batch.tool_uses:
+        if use.call_id in batch.answered:
+            continue
         call = ToolCall(
             tool_name=use.tool_name,
             arguments=dict(use.arguments),
