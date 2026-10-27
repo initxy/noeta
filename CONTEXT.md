@@ -30,16 +30,48 @@ unfinished call is answered "outcome unknown", never re-run.
 
 ## Layers
 
-`core` (log, inbox, loop, runner, store interface + sqlite, client, and every plugin interface),
-capability plugins, backends (providers, exec envs, Postgres), presets (agent definitions and
-prompts as data), apps (CLI, TUI, ACP, HTTP server). Imports go downward only; the kernel
-carries no capability and a plugin imports nothing but the kernel (`lint-imports`).
+`noeta/core` (log, inbox, loop, runner, sqlite store, client, and every interface a plugin
+implements or uses), `noeta/plugins/<name>` (capabilities), `noeta/backends` (providers, exec
+envs, Postgres), `noeta/presets` (the built-in agent files), `noeta/apps` (CLI, TUI, ACP, HTTP
+server). Imports go downward only, plugins never import each other, backends never import each
+other (`lint-imports`, contracts in `pyproject.toml`). One plugin reaches another only through
+the kernel: a tool by its model-visible name (`TaskView.find_tool`), config a child inherits
+(`Extension.inherit`), the agents a worker can run (`TaskView.agents`).
+
+## Registry
+
+Plugins and backends are found by name through entry points (`noeta/core/registry.py`): groups
+`noeta.plugins`, `noeta.providers`, `noeta.execenvs`, `noeta.stores`. The built-ins register in
+`pyproject.toml` exactly as a third-party package would. A plugin's registry name is its
+`Extension.name`.
 
 ## Extension
 
 The one capability-plugin interface (`noeta/core/extension.py`): tools, context parts, commands,
-`on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow), `after_tool`,
-`on_event`, `reduce`, `on_context_overflow`, `resident`. Every method is optional.
+reminders, `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow),
+`after_tool`, `on_event`, `reduce`, `inherit`, `on_context_overflow`, `resident`. Every method
+is optional.
+
+## Agent file
+
+An agent is a markdown file (`noeta/core/agent_files.py`): YAML frontmatter (`name`,
+`description`, `model`, `plugins` as names or `name: {arguments}`, optional `tools`,
+`one_shot`) and the system prompt as body. One plugin instance per name and arguments is shared
+by every agent naming it. The built-ins are `noeta/presets/agents/*.md`.
+
+## Prompt name
+
+Every model-facing text has a name: `system/<agent>`, `tool/<Tool>`, `<plugin>/<key>`,
+`reminder/<key>`. The owning code holds the default; overrides (host prompt dirs <
+`<cwd>/.noeta/prompts` < task config `prompts`) are recorded when the task first starts, so a
+resumed task sends the same bytes (`noeta/core/prompts.py`).
+
+## Reminder
+
+Text for the model that is not the user speaking. A plugin returns `Reminder`s from
+`reminders(view)`, called before every model call; the runner records them as `system`-origin
+messages and puts them in that request. Text fixed at task start (environment, instructions,
+skill listing) is recorded in `on_start`; what must wake a waiting task goes through the inbox.
 
 ## Park
 

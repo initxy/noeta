@@ -110,7 +110,7 @@ the `Extension` interface exists, but:
 - [x] `reminders()` in the kernel; port the todo reminder
 - [x] CLI `--system-prompt` / `--append-system-prompt`
 - [x] Feature: file-changed reminder; date-change reminder; `hooks` plugin with context and block
-- [ ] CI, release workflow, Makefile, naming lint; README / AGENTS.md / CONTEXT.md for 1.0
+- [x] CI, release workflow, Makefile, naming lint; README / AGENTS.md / CONTEXT.md for 1.0
 - [ ] `make check` green; `make eval` no regression
 
 ## Acceptance criteria
@@ -141,3 +141,4 @@ the `Extension` interface exists, but:
 2026-10-27 `Extension.reminders` landed; the todo reminder uses it (its before_model request patching and `simulated_state` use are gone). `cache_breakpoints` is public; `TaskView.allowed_tools` makes `find_tool` honor the agent allowlist. Golden unchanged (it contains a todo reminder).
 2026-10-27 Feature: file-changed reminder (fs plugin, turn start, last 20 read files, mtime then sha256, once per change, `reminder/file_changed`) and date-change reminder (environment plugin, turn start, `reminder/date_changed`). Context-plugin tests live in `tests/plugins/context`.
 2026-10-27 Feature: `hooks` plugin (Claude Code command hooks: UserPromptSubmit, PreToolUse, PostToolUse, Stop, Notification; exit 2 / JSON decisions; `~/.noeta/settings.json` via the CLI). It replaces the permissions plugin's side-effect-only `Hooks` (PostToolUse / Notification rules); declarative PreToolUse rules stay in `Permissions`. Hook commands run on the worker host, not in the task's exec env. Payload key is `task_id` (no session id).
+2026-10-27 `noeta` top-level names (lazy: Agent, Client, Runtime, Extension, Reminder, TaskView, Tool*, default_agents, provider, store, connect, agent-file helpers). README "Extend it" and CONTEXT entries (Layers, Registry, Agent file, Prompt name, Reminder). Checked: each plugin blocked in turn, every other plugin imports and constructs.

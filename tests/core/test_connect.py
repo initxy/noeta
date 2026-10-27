@@ -29,3 +29,17 @@ async def test_connect_http_url() -> None:
 def test_connect_unknown_scheme() -> None:
     with pytest.raises(ValueError):
         noeta.connect("ftp://x")
+
+
+def test_top_level_names_load_lazily() -> None:
+    import subprocess
+    import sys
+
+    import noeta
+
+    assert set(noeta.__all__) == {"connect", *noeta._EXPORTS}
+    for name in noeta._EXPORTS:
+        assert getattr(noeta, name) is not None
+    code = "import sys, noeta; print('noeta.core.runner' in sys.modules)"
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "False"
