@@ -334,8 +334,8 @@ Phase 1 — core on one machine
       0.6 on the same model; the rest are phase 2's gate
 
 Phase 2 — extensions (default preset = 0.6 behavior)
-- [ ] permissions + declarative hooks (deny wins), ask_user
-- [ ] subtasks (Task tool, background children)
+- [x] permissions + declarative hooks (deny wins), ask_user
+- [x] subtasks (Task tool, background children)
 - [ ] compaction + clearing old tool results
 - [ ] background_shell + Monitor, todo, web fetch/search
 - [ ] memory, skills, MCP
@@ -352,7 +352,8 @@ Phase 4 — surfaces
 - [ ] `noeta acp` adapter, checked against Zed and Toad (built and tested against a fake editor;
       not yet run in a real editor)
 - [x] `noeta.tui` + `noeta` command
-- [ ] Move `bench/` from noeta-agent; Terminal-Bench sample ×3 on 1.0 vs 0.6
+- [x] Move `bench/` from noeta-agent (1-task smoke: git-leak-recovery solved)
+- [ ] Terminal-Bench sample ×3 on 1.0 vs 0.6
 - [ ] Archive noeta-agent
 
 Phase 5 — cutover
@@ -398,3 +399,5 @@ Phase 5 — cutover
 2026-10-27 core-loop items from the 0.6 behavior inventory: failed interactive turns park (turn_failed), empty replies never recorded, cut replies run their complete calls, step limit ends with a report round, read-only concurrency cap 10, retries recorded, store outages no longer end the worker. Runner split into noeta/runner/ (runtime, task, model, calls, texts). Package source 9.9k lines, largest file 644.
 2026-10-27 core hooks for phase 2 (park/resume, spawn, post, cancel cascade, view.complete/env, on_context_overflow); six extension groups dispatched to subagents (permissions, subtasks, compaction, ops, knowledge, mcp+container).
 2026-10-27 phase-4 surfaces built early on `next`: `noeta -p` (live run fixed a bug in 10 s), `noeta acp` via the official agent-client-protocol SDK, Textual TUI (headless pilot tests + screenshots), `noeta serve` + RemoteClient; TUI `--server`. The runner now always sends max_tokens (output ceiling; unknown models 16,384).
+2026-10-27 merged subtasks (+TaskView.post so a background child's end wakes an idle parent) and permissions/hooks/AskUserQuestion (no core edits). Core follow-ups: unattended tasks fail a turn that would wait for a human (needs_human); Task declares run_last so a reply's ordinary calls run first. default_agents = main + general-purpose/explore/plan; permission mode is per task and inherited.
+2026-10-27 bench moved; harbor adapter runs `noeta -p --json --permission-mode bypassPermissions`; smoke git-leak-recovery reward 1.0 in 3.5 min.
