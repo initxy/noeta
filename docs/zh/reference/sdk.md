@@ -122,8 +122,8 @@ with Client(Options(system_prompt="You are a coding assistant."),
 | 方法 | 签名（`task_id` 之后都是关键字参数） | 说明 |
 | --- | --- | --- |
 | `start` | `(*, goal, agent=None, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), workspace_dir=None, effort=None, activations=(), attachment_texts=(), principal=None)` | 新建任务并跑第一轮 |
-| `send_goal` | `(task_id, *, goal, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), effort=None, activations=(), attachment_texts=(), principal=None)` | 追加一轮。如果上一次同样内容的 `send_goal` 已经把目标记下、却在开跑前失败了（任务停下时的原因是 `seed_failed`），重试会直接接着这条已记下的目标跑，不会再记一遍 |
-| `inject_goal` | `(task_id, *, goal, images=(), goal_origin=None, drive=True)` | 任务正在跑：先记下这条消息，下一轮边界时送进去，立刻返回；停在等下一句：等同 `send_goal`（`drive=False` 时抛 `NotResumableError`） |
+| `send_goal` | `(task_id, *, goal, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), effort=None, activations=(), attachment_texts=(), principal=None, idempotency_key=None)` | 追加一轮。如果上一次同样内容的 `send_goal` 已经把目标记下、却在开跑前失败了（任务停下时的原因是 `seed_failed`），重试会直接接着这条已记下的目标跑，不会再记一遍。带上 `idempotency_key` 后，同一任务上用同一个 key 重复调用——不管来自同一存储上的哪个 `Client`、也不管第一次是否还在跑——都不会再追加，直接返回任务当前的结果 |
+| `inject_goal` | `(task_id, *, goal, images=(), goal_origin=None, drive=True, idempotency_key=None)` | 任务正在跑：先记下这条消息，下一轮边界时送进去，立刻返回；停在等下一句：等同 `send_goal`（`drive=False` 时抛 `NotResumableError`）。`idempotency_key` 和 `send_goal` 的一样，两种情况通用 |
 | `deliver_event` | `(task_id, *, event_kind, payload=None)` | 唤醒在 `wait_external` 上等 `event_kind` 的任务；`payload` 记成一条系统消息 |
 
 | 每轮参数 | 说明 |

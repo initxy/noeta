@@ -335,12 +335,16 @@ class AppendMessagePrelude:
     (goal-then-patch order, matching ``seed_start``), so the composer pins the
     skill bodies for THIS turn onward. The Engine's ``apply_state_patch`` records
     the per-skill content provenance itself (fold-guarded, first-only). Empty
-    (the default) keeps ``send_goal`` byte-identical to the no-skill path."""
+    (the default) keeps ``send_goal`` byte-identical to the no-skill path.
+
+    ``idempotency_key`` rides the goal message's ``MessagesAppended`` (see
+    ``InteractionDriver.send_goal``); ``None`` keeps the bytes unchanged."""
 
     content: list[Block]
     origin: Optional[MessageOrigin] = None
     attachment_texts: tuple[str, ...] = ()
     activate_skills: tuple[str, ...] = ()
+    idempotency_key: Optional[str] = None
 
     #: Pure appends — safe (and required) to run at seed time.
     durable_at_seed: ClassVar[bool] = True
@@ -353,9 +357,15 @@ class AppendMessagePrelude:
                 lease_id=lease_id,
                 origin="system",
             )
-        task = engine.append_user_message(
-            task, content=self.content, lease_id=lease_id, origin=self.origin
-        )
+        if self.idempotency_key is None:
+            task = engine.append_user_message(
+                task, content=self.content, lease_id=lease_id, origin=self.origin
+            )
+        else:
+            task = engine.append_user_message(
+                task, content=self.content, lease_id=lease_id, origin=self.origin,
+                idempotency_key=self.idempotency_key,
+            )
         if self.activate_skills:
             task = engine.apply_state_patch(
                 task,

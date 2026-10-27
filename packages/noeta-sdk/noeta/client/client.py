@@ -1151,6 +1151,7 @@ class Client:
         activations: tuple[str, ...] = (),
         attachment_texts: tuple[str, ...] = (),
         principal: Optional[Principal] = None,
+        idempotency_key: Optional[str] = None,
     ) -> DriveOutcome:
         """Append a new user turn (driver ``send_goal``).
 
@@ -1175,6 +1176,12 @@ class Client:
         :meth:`start`.
 
         ``principal`` is who acts for this turn — see :meth:`start`.
+
+        ``idempotency_key`` makes a retry safe: a repeat with the same key on
+        the same task — from this or any Client sharing the store, even
+        concurrently — appends nothing and returns the task's outcome. The
+        first call's failure is not retried by a repeat (except a goal whose
+        seed failed before any step ran on it). ``None`` behaves as before.
         """
         self._check_turn_options(permission_mode, effort)
         outcome = self._driver.send_goal(
@@ -1188,6 +1195,7 @@ class Client:
             activations=activations,
             attachment_texts=attachment_texts,
             principal=principal,
+            idempotency_key=idempotency_key,
         )
         return self._drain_approvals(task_id, outcome)
 
@@ -1199,6 +1207,7 @@ class Client:
         images: Sequence[ImageBlock] = (),
         goal_origin: Optional[MessageOrigin] = None,
         drive: bool = True,
+        idempotency_key: Optional[str] = None,
     ) -> DriveOutcome:
         """Deliver a user message mid-turn, or as a follow-up (driver ``inject_goal``).
 
@@ -1218,9 +1227,13 @@ class Client:
 
         The caller never branches on task status — use this whenever the message
         should reach the task "now if it's running, else next turn".
+
+        ``idempotency_key`` works as on :meth:`send_goal`, across both
+        landings: a key already used on the task delivers nothing new.
         """
         return self._driver.inject_goal(
-            task_id=task_id, goal=goal, images=images, goal_origin=goal_origin, drive=drive
+            task_id=task_id, goal=goal, images=images, goal_origin=goal_origin,
+            drive=drive, idempotency_key=idempotency_key,
         )
 
     def approve(

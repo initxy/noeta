@@ -982,6 +982,8 @@ _HANDLERS = {
     "MessagesAppended": _on_messages_appended,
     # Mid-turn goal injection request marker (written lease-free by the driver).
     "InjectionRequested": _on_injection_requested,
+    # A keyed send_goal's claim on its idempotency key; no task state.
+    "IdempotencyKeyClaimed": _on_noop,
     "TaskSnapshot": _on_task_snapshot,
     # Conversation rewind baseline (snapshot-shaped marker).
     "TaskRewound": _on_task_rewound,

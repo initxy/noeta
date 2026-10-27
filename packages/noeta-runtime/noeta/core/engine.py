@@ -11,6 +11,7 @@ Observer — the parent/child handoff lives entirely in
 
 from __future__ import annotations
 
+import dataclasses
 import time
 import uuid
 from typing import Any, Callable, Optional, TypeGuard
@@ -426,6 +427,7 @@ class Engine:
         lease_id: str,
         trace_id: Optional[str] = None,
         origin: Optional[MessageOrigin] = None,
+        idempotency_key: Optional[str] = None,
     ) -> Task:
         """Seed a ``user`` turn into the conversation via the EventLog.
 
@@ -441,21 +443,36 @@ class Engine:
         ``origin`` is the **sole writer seam** for ``Message.origin``:
         Policy-supplied messages get origin stripped at the Decision seams, so
         a value in the ledger always means "the host said so at this seam".
+
+        ``idempotency_key`` is recorded on the ``MessagesAppended`` so a
+        repeated keyed ``send_goal`` can find the goal it already appended.
         """
         _validate_user_content(content)
         msg = Message(role="user", content=content, origin=origin)
-        return self._append_message(task, msg, lease_id=lease_id, trace_id=trace_id)
+        return self._append_message(
+            task, msg, lease_id=lease_id, trace_id=trace_id,
+            idempotency_key=idempotency_key,
+        )
 
     def _append_message(
-        self, task: Task, msg: Message, *, lease_id: str, trace_id: Optional[str]
+        self,
+        task: Task,
+        msg: Message,
+        *,
+        lease_id: str,
+        trace_id: Optional[str],
+        idempotency_key: Optional[str] = None,
     ) -> Task:
         """Emit one ``MessagesAppended`` and mirror it into
         ``task.runtime.messages`` — the shared tail of every message-append
         seam, which is what keeps Engine the single writer."""
+        payload = put_messages(self._content_store, [msg])
+        if idempotency_key is not None:
+            payload = dataclasses.replace(payload, idempotency_key=idempotency_key)
         self._emit(
             task_id=task.task_id,
             type_="MessagesAppended",
-            payload=put_messages(self._content_store, [msg]),
+            payload=payload,
             lease_id=lease_id,
             trace_id=trace_id or self._latest_trace_id(task.task_id),
         )
