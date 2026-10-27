@@ -26,6 +26,10 @@ class Settings:
     #: ``sqlite:///path`` or ``postgres://...``.
     store: str = ""
     extra_headers: dict[str, str] = field(default_factory=dict)
+    effort: str | None = None
+    #: A JSON file of extra models: ``{"models": [{"id", "context_window",
+    #: "max_output_tokens", "supports_vision"?, "family"?}]}``.
+    models_file: str | None = None
 
     def make_provider(self) -> Provider:
         kw: dict[str, Any] = {}
@@ -49,11 +53,40 @@ def load_settings(**overrides: Any) -> Settings:
         "base_url": os.environ.get("NOETA_BASE_URL"),
         "api_key": os.environ.get("NOETA_API_KEY"),
         "store": os.environ.get("NOETA_STORE"),
+        "effort": os.environ.get("NOETA_EFFORT"),
+        "models_file": os.environ.get("NOETA_MODELS_FILE"),
     }
     data.update({k: v for k, v in env.items() if v})
     data.update({k: v for k, v in overrides.items() if v is not None})
     known = {f for f in Settings.__dataclass_fields__}
-    return Settings(**{k: v for k, v in data.items() if k in known})
+    settings = Settings(**{k: v for k, v in data.items() if k in known})
+    if settings.models_file:
+        register_models_file(settings.models_file)
+    return settings
+
+
+def register_models_file(path: str) -> None:
+    """Register the models a JSON file describes (gateway models the shipped
+    catalog does not know), so they run at their real limits."""
+    import json
+
+    from noeta.models import ModelSpec, find_spec, register_models
+
+    rows = json.loads(Path(path).expanduser().read_text("utf-8"))
+    rows = rows.get("models", rows) if isinstance(rows, dict) else rows
+    specs = {}
+    for row in rows:
+        if not row.get("context_window") or not row.get("max_output_tokens"):
+            continue
+        if find_spec(row["id"]) is not None:
+            continue
+        specs[row["id"]] = ModelSpec(
+            real_model_id=row["id"], context_window=int(row["context_window"]),
+            max_output_tokens=int(row["max_output_tokens"]),
+            supports_vision=bool(row.get("supports_vision", False)),
+            is_reasoning=bool(row.get("efforts")), family=row.get("family"))
+    if specs:
+        register_models(specs)
 
 
 def open_store(url: str) -> Any:

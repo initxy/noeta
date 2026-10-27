@@ -29,6 +29,7 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("-p", "--print", dest="prompt", help="run one prompt and print the answer")
     ap.add_argument("--json", action="store_true", help="with -p: stream events as JSON lines")
     ap.add_argument("--model")
+    ap.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"))
     ap.add_argument("--provider", choices=("anthropic", "openai_compat", "openai_responses"))
     ap.add_argument("--base-url")
     ap.add_argument("--store", help="sqlite:///path or postgres://... (default ~/.noeta/tasks.db)")
@@ -50,7 +51,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _settings(args: argparse.Namespace) -> Settings:
     s = load_settings(model=args.model, provider=args.provider, base_url=args.base_url,
-                      store=args.store)
+                      store=args.store, effort=args.effort)
     if not s.model:
         sys.exit("noeta: no model configured (--model or NOETA_MODEL)")
     return s
@@ -67,10 +68,20 @@ def _app(s: Settings, **runtime_kw: Any) -> Any:
 async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool) -> int:
     import msgspec
 
-    from noeta.events import TaskEnded, Waiting
+    from noeta.events import ModelReplied, TaskEnded, Waiting
+    from noeta.types import Usage
 
     async with _app(s) as app:
-        tid = await app.client.create("main", prompt, config={"cwd": cwd, "model": s.model})
+        config: dict[str, Any] = {"cwd": cwd, "model": s.model}
+        if s.effort:
+            config["effort"] = s.effort
+        tid = await app.client.create("main", prompt, config=config)
+        usage = Usage()
+
+        def summary(answer: str) -> None:
+            if as_json:
+                print(json.dumps({"answer": answer, "task_id": tid, "model": s.model,
+                                  "usage": msgspec.to_builtins(usage)}), flush=True)
         if as_json:
             def on_delta(task_id: str, delta: Any) -> None:
                 if task_id == tid:
@@ -82,16 +93,21 @@ async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool) -> i
             if as_json:
                 sys.stdout.write(msgspec.json.encode(rec).decode() + "\n")
                 sys.stdout.flush()
+            if isinstance(ev, ModelReplied):
+                usage = usage + ev.response.usage
             if isinstance(ev, Waiting) and ev.on == "input":
                 failed = ev.detail.get("turn_failed")
+                answer = ev.detail.get("answer", "")
+                summary(answer)
                 if not as_json:
-                    print(ev.detail.get("answer", "") if not failed else f"error: {failed}")
+                    print(answer if not failed else f"error: {failed}")
                 return 1 if failed else 0
             if isinstance(ev, Waiting):
                 print(f"noeta: the agent is waiting for {ev.on}; use the TUI or an editor "
                       "for interactive work", file=sys.stderr)
                 return 2
             if isinstance(ev, TaskEnded):
+                summary(ev.answer)
                 if not as_json:
                     print(ev.answer or ev.error)
                 return 0 if ev.status == "done" else 1
