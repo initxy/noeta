@@ -57,13 +57,14 @@ def _resource(name: str) -> str:
     return (resources.files(__package__) / f"{name}.md").read_text("utf-8").rstrip("\n")
 
 
-_DIGEST_INSTRUCTIONS = _resource("webfetch_digest")
+DIGEST_INSTRUCTIONS = _resource("webfetch_digest")
 
 
-def render_digest_prompt(*, url: str, title: str, page_markdown: str, prompt: str) -> str:
+def render_digest_prompt(*, url: str, title: str, page_markdown: str, prompt: str,
+                         instructions: str = DIGEST_INSTRUCTIONS) -> str:
     """The one user message the digest model sees."""
     return "\n".join([
-        _DIGEST_INSTRUCTIONS.strip(), "", f"Request: {prompt}", "", f"Page title: {title}",
+        instructions.strip(), "", f"Request: {prompt}", "", f"Page title: {title}",
         f"Page URL: {url}", "", "Page content (Markdown):", page_markdown,
     ])
 

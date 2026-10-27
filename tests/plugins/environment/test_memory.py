@@ -18,7 +18,6 @@ from noeta.plugins.memory import (
     Memory,
     MemoryStore,
     consolidation_agent,
-    with_memory_policy,
 )
 from noeta.plugins.memory import store as store_mod
 from noeta.plugins.memory.index import RECALLED_BODY_FRAME, render_memory_index_text
@@ -103,7 +102,17 @@ def test_descriptions_are_0_6_bytes() -> None:
     assert not w.description.endswith("\n")
     assert MEMORY_POLICY_PROMPT.startswith("Memory: you have cross-session memory tools")
     assert MEMORY_POLICY_PROMPT.endswith("rather than leaving it stale.\n")
-    assert with_memory_policy("P\n") == "P\n\n" + MEMORY_POLICY_PROMPT
+
+
+def test_the_policy_continues_the_agents_prompt() -> None:
+    from noeta.core.extension import TaskView
+    from noeta.core.loop.request import build_request
+    from noeta.core.loop.state import TaskState
+
+    view = TaskView(state=TaskState())
+    request = build_request(TaskState(), model="m", system_prompt="P\n",
+                            parts=Memory(root="/tmp/x").context(view), tools=[])
+    assert [p.text for p in request.system] == ["P\n\n" + MEMORY_POLICY_PROMPT]
 
 
 # ---------------------------------------------------------------- in a task
@@ -235,7 +244,7 @@ def test_consolidation_agent() -> None:
     curator = consolidation_agent("m", root="/tmp/x")
     assert curator.name == CONSOLIDATION_AGENT_NAME and curator.one_shot
     assert curator.system_prompt.startswith("You are the memory-consolidation agent")
-    assert curator.system_prompt.endswith(MEMORY_POLICY_PROMPT)
+    assert MEMORY_POLICY_PROMPT not in curator.system_prompt  # the extension adds it
     [mem] = curator.extensions
     assert isinstance(mem, Memory) and not mem.recall
 

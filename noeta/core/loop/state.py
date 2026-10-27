@@ -26,6 +26,7 @@ from noeta.core.events import (
     ToolStarted,
     Waiting,
 )
+from noeta.core.prompts import resolve
 from noeta.core.types import Message, StopReason, Text, ToolResult, ToolUse, Usage
 
 Reducer = Callable[[Any, str, Any], Any]
@@ -108,11 +109,24 @@ class TaskState:
     waiting: Waiting | None = None
     ended: TaskEnded | None = None
     compaction: Compacted | None = None
+    #: Prompt override files found when the task first started (name ->
+    #: text, see ``noeta.core.prompts``); ``None`` until they were looked for.
+    prompt_files: dict[str, str] | None = None
 
     usage: Usage = field(default_factory=Usage)
     ext: dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------ queries
+
+    def prompt(self, name: str, default: str) -> str:
+        """The text of the prompt ``name`` for this task: ``default`` unless
+        an override file (recorded at start) or the config's ``prompts``
+        replaces or appends to it."""
+        overrides = dict(self.prompt_files or {})
+        configured = self.config.get("prompts")
+        if isinstance(configured, dict):
+            overrides.update({str(k): v for k, v in configured.items() if isinstance(v, str)})
+        return resolve(overrides, name, default) if overrides else default
 
     @property
     def open_calls(self) -> list[Call]:
@@ -217,6 +231,9 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         if ev.extension == CORE and ev.kind == "spawned":
             for child in ev.data["children"]:
                 state.spawned[child["id"]] = child
+        if ev.extension == CORE and ev.kind == "prompts":
+            data = ev.data if isinstance(ev.data, dict) else {}
+            state.prompt_files = {str(k): v for k, v in data.items() if isinstance(v, str)}
         if ev.extension == CORE and ev.kind == "turn_failed":
             data = ev.data if isinstance(ev.data, dict) else {}
             reason, detail = data.get("reason", "failed"), data.get("detail", "")

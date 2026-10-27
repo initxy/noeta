@@ -56,6 +56,7 @@ def summary_request(
     model: str,
     max_tokens: int | None,
     forbid_tools: bool = False,
+    instruction: str = SUMMARIZE_PROMPT,
 ) -> ModelRequest:
     """The main request's system prompt and tools, ``history``, and the
     instruction as the trailing user turn. No ``tool_choice`` on the first
@@ -64,7 +65,7 @@ def summary_request(
     return ModelRequest(
         model=model,
         system=list(main.system),
-        messages=[*history, user(SUMMARIZE_PROMPT)],
+        messages=[*history, user(instruction)],
         tools=list(main.tools),
         max_tokens=max_tokens,
         thinking=main.thinking,

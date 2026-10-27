@@ -30,6 +30,10 @@ class Settings:
     #: A JSON file of extra models: ``{"models": [{"id", "context_window",
     #: "max_output_tokens", "supports_vision"?, "family"?}]}``.
     models_file: str | None = None
+    #: Prompt overrides for every task this front end starts (name -> text,
+    #: see ``noeta.core.prompts``): ``--system-prompt`` sets ``system/main``,
+    #: ``--append-system-prompt`` ``system/main.append``.
+    prompts: dict[str, str] = field(default_factory=dict)
 
     def make_provider(self) -> Provider:
         kw: dict[str, Any] = {}

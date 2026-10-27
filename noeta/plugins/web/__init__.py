@@ -25,6 +25,7 @@ from noeta.core.extension import Extension, Gate, TaskView
 from noeta.core.tool import Tool, ToolContext
 from noeta.core.types import ModelRequest, ModelResponse, ToolUse, user
 from noeta.plugins.web.fetch import (
+    DIGEST_INSTRUCTIONS,
     Digest,
     FetchTransport,
     HttpFetchTransport,
@@ -144,7 +145,9 @@ class Web(Extension):
         complete: Complete = call
 
         async def digest(url: str, title: str, page: str, prompt: str) -> str:
-            text = render_digest_prompt(url=url, title=title, page_markdown=page, prompt=prompt)
+            text = render_digest_prompt(
+                url=url, title=title, page_markdown=page, prompt=prompt,
+                instructions=ctx.prompt("web/fetch_digest", DIGEST_INSTRUCTIONS))
             request = ModelRequest(model=model, messages=[user(text)],
                                    max_tokens=DIGEST_MAX_TOKENS, thinking=False,
                                    headers=headers)

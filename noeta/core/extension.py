@@ -52,8 +52,9 @@ Gate = Union[Allow, Deny, Ask, Rewrite]
 
 
 class ContextPart(Struct):
-    """System prompt text an extension contributes. ``cache`` marks the end
-    of a stable prefix. Text that must sit in the conversation instead is
+    """System prompt text an extension contributes: it continues the agent's
+    prompt, after a newline, in ``order``. ``cache`` ends a cached block
+    after this part. Text that must sit in the conversation instead is
     recorded as a message (``TaskView.record(..., message=...)``) so the
     request prefix stays byte-stable."""
 
@@ -98,6 +99,10 @@ class TaskView:
 
     def ext_state(self, name: str) -> Any:
         return self.state.ext.get(name)
+
+    def prompt(self, name: str, default: str) -> str:
+        """The prompt text ``name`` for this task (``noeta.core.prompts``)."""
+        return self.state.prompt(name, default)
 
     def record(
         self, extension: str, kind: str, data: Any = None, *, message: Message | None = None

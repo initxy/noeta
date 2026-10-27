@@ -366,8 +366,9 @@ class Compaction(Extension):
             text = ""
             for forbid in (False, True):
                 assert view.complete is not None
-                req = summary.summary_request(request, history, model=model,
-                                              max_tokens=max_tokens, forbid_tools=forbid)
+                req = summary.summary_request(
+                    request, history, model=model, max_tokens=max_tokens, forbid_tools=forbid,
+                    instruction=view.prompt("compaction/summarize", summary.SUMMARIZE_PROMPT))
                 try:
                     outcome = await view.complete(req)
                 except ModelError as exc:

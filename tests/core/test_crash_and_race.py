@@ -103,9 +103,10 @@ async def _expire(store: SqliteStore, task_id: str) -> None:
     await store._run(tx)
 
 
-#: Appends in a clean run: InputTaken, then (ModelCalled, ModelReplied,
-#: ToolStarted, ToolFinished) x2, ModelCalled, ModelReplied, Waiting.
-CLEAN_APPENDS = 12
+#: Appends in a clean run: the prompt overrides, InputTaken, then
+#: (ModelCalled, ModelReplied, ToolStarted, ToolFinished) x2, ModelCalled,
+#: ModelReplied, Waiting.
+CLEAN_APPENDS = 13
 
 
 @pytest.mark.parametrize("after_commit", [False, True])

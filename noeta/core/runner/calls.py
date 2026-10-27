@@ -158,7 +158,8 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
 
     return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
                        state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
-                       spawn=spawn, post=post, root_id=run.state.root_id or run.task_id)
+                       spawn=spawn, post=post, root_id=run.state.root_id or run.task_id,
+                       prompt=run.state.prompt)
 
 
 async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[Event],

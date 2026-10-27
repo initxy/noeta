@@ -67,7 +67,14 @@ the `Extension` interface exists, but:
 - **Prompts are fixed at task start.** The resolved texts a task uses are recorded in its log when
   it starts, so a resumed task sends the same bytes; edits apply to new tasks.
 - **The system prompt is assembled from parts.** Agent prompt, then each plugin's `context()`
-  parts in order. The memory policy becomes the memory plugin's `context()`.
+  parts in order, joined by a newline into one block (a part with `cache` ends a block). The
+  memory policy becomes the memory plugin's `context()`.
+- **Defaults stay with their owners.** Each plugin keeps its own default texts; only the lookup is
+  shared (`TaskState.prompt` / `TaskView.prompt` / `ToolContext.prompt`; tool descriptions in
+  `build_request`). Named so far: `system/<agent>`, `tool/<Tool>`, `compaction/summarize`,
+  `memory/policy`, `memory/policy-read-only`, `memory/recall_judge`, `web/fetch_digest`.
+- **The override record is always written** (`core` / `prompts`, possibly empty) on the first
+  start, so "fixed at start" holds even when no file existed then.
 - **Reminders are one kernel mechanism.** A plugin declares reminders (`reminders(view)`: name,
   text, when: every user turn / every N assistant turns / after an event / after compaction /
   once). The runner records them as `system`-origin messages at one place in the request, with
@@ -88,11 +95,12 @@ the `Extension` interface exists, but:
       contracts (core imports no plugin/backend/app; plugins and backends import only core)
 - [x] Remove plugin-to-plugin imports
 - [ ] Entry point registry; `Runtime` and the CLI resolve plugins/backends by name
-- [ ] Prompt loader with layers; all twelve loaders go through it; prompts recorded at task start
+- [x] Prompt overrides with layers, resolved at one point (`TaskState.prompt`), recorded at task
+      start
 - [ ] Agent definition files; presets as data; `.noeta/agents/`; memory policy via `context()`
 - [ ] `reminders()` in the kernel; port todo, skills, memory, instructions, environment,
       compaction-restore reminders
-- [ ] CLI `--system-prompt` / `--append-system-prompt`
+- [x] CLI `--system-prompt` / `--append-system-prompt`
 - [ ] Feature: file-changed reminder; date-change reminder; `hooks` plugin with context and block
 - [ ] CI, release workflow, Makefile, naming lint; README / AGENTS.md / CONTEXT.md for 1.0
 - [ ] `make check` green; `make eval` no regression
@@ -120,3 +128,4 @@ the `Extension` interface exists, but:
 2026-10-27 owner: drop 0.6 entirely, no compatibility; every capability a plugin; prompts and reminders extensible. Golden request test committed (a768a70).
 2026-10-27 0.6 deleted, 1.0 at the root; one make check (1300 passed). A root `.ignore` (listing tests/) had kept ruff off the 1.0 tests: removed, lint debt fixed. 0.6 byte-parity tests dropped (the golden covers the bytes).
 2026-10-27 Layered: core / plugins / backends / presets / apps, tests mirror it; four lint-imports contracts kept. Plugin links cut through the kernel: `TaskView.find_tool(name)` (compaction's file restore uses the task's `Read`), `Extension.inherit(state)` (permission rules reach children), `core.pending` (open approvals/questions), `core.execenv.is_local` / `scrub_env`, `core.registry` (entry points; the kernel's default exec env). Bash moved from `fs` to the `shell` plugin with its own state; sub-agents get a foreground `Shell` when the host passes none. Golden unchanged.
+2026-10-27 Prompt overrides landed: host dirs (`Runtime.prompt_dirs`, the CLI passes `~/.noeta/prompts`) < `<cwd>/.noeta/prompts` < config `prompts`; recorded once per task. `--system-prompt` / `--append-system-prompt` via `Settings.prompts` -> `LocalClient(task_config=...)`; CLI and TUI share `apps.local.from_settings`. Memory policy moved to `Memory.context()`; `with_memory_policy` removed. Golden unchanged.

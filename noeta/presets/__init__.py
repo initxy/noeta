@@ -25,7 +25,7 @@ from noeta.plugins.environment import Environment
 from noeta.plugins.fs import FileTools
 from noeta.plugins.instructions import Instructions
 from noeta.plugins.mcp import Mcp
-from noeta.plugins.memory import Memory, with_memory_policy
+from noeta.plugins.memory import Memory
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.shell import Shell
 from noeta.plugins.skills import Skills
@@ -66,9 +66,7 @@ def default_agents(
     main = Agent(
         name=main_kw.pop("name", "main"),
         model=model,
-        system_prompt=main_kw.pop(
-            "system_prompt",
-            with_memory_policy(MAIN_PROMPT) if memory else MAIN_PROMPT),
+        system_prompt=main_kw.pop("system_prompt", MAIN_PROMPT),
         extensions=(
             compaction, perms, shells, FileTools(), *knowledge, Environment(model=model),
             Subtasks(OFFICIAL_ROSTER, inherit_config=INHERITED_CONFIG),

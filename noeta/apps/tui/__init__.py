@@ -11,10 +11,7 @@ if TYPE_CHECKING:
 def run_tui(settings: Settings, *, cwd: str, resume: str | None = None,
             server: str | None = None, agent: str = "main",
             permission_mode: str | None = None) -> None:
-    from noeta.apps.config import open_store
-    from noeta.apps.local import LocalApp
     from noeta.apps.tui.app import NoetaApp
-    from noeta.presets import default_agents
 
     backend: Any
     if server:
@@ -24,10 +21,8 @@ def run_tui(settings: Settings, *, cwd: str, resume: str | None = None,
 
         backend = RemoteApp(server, token=os.environ.get("NOETA_SERVER_TOKEN"))
     else:
-        from noeta.apps.config import HOME
+        from noeta.apps.local import from_settings
 
-        backend = LocalApp(open_store(settings.store_url),
-                           default_agents(settings.model, memory_root=str(HOME / "memory")),
-                           settings.make_provider(), own_tasks_only=True)
+        backend = from_settings(settings, own_tasks_only=True)
     NoetaApp(backend, agent=agent, model=settings.model, cwd=cwd, resume=resume,
              permission_mode=permission_mode).run()

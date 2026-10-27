@@ -26,10 +26,14 @@ def build_request(
     output_schema: dict[str, Any] | None = None,
 ) -> ModelRequest:
     system: list[SystemPart] = []
-    if system_prompt:
-        system.append(SystemPart(text=system_prompt))
+    text = system_prompt
     for part in sorted(parts, key=lambda p: p.order):
-        system.append(SystemPart(text=part.text, cache=part.cache))
+        text = f"{text}\n{part.text}" if text else part.text
+        if part.cache:
+            system.append(SystemPart(text=text, cache=True))
+            text = ""
+    if text:
+        system.append(SystemPart(text=text))
     if system and not any(p.cache for p in system):
         system[-1] = SystemPart(text=system[-1].text, cache=True)
     messages = list(state.messages)
@@ -37,7 +41,8 @@ def build_request(
         model=model,
         system=system,
         messages=messages,
-        tools=[ToolSpec(name=t.name, description=t.description, input_schema=t.input_schema)
+        tools=[ToolSpec(name=t.name, description=state.prompt(f"tool/{t.name}", t.description),
+                        input_schema=t.input_schema)
                for t in tools if getattr(t, "advertised", True)],
         max_tokens=max_tokens,
         effort=effort,  # type: ignore[arg-type]

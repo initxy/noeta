@@ -35,6 +35,7 @@ from noeta.core.events import (
 from noeta.core.extension import Extension, TaskView
 from noeta.core.loop import decide
 from noeta.core.loop.state import CORE, TaskState, apply, fold
+from noeta.core.prompts import load_overrides
 from noeta.core.runner import texts
 from noeta.core.runner.runtime import Runtime
 from noeta.core.store.base import Claim, Patch, Post
@@ -103,6 +104,8 @@ class TaskRun:
         while True:
             try:
                 if not started:
+                    if self.state.prompt_files is None:
+                        await self._record_prompt_files()
                     view = self.view()
                     for ext in self.exts:
                         await ext.on_start(view)
@@ -123,6 +126,16 @@ class TaskRun:
                     return
                 if not await self.fail_turn(texts.INTERNAL_ERROR, repr(exc)):
                     return
+
+    async def _record_prompt_files(self) -> None:
+        """Read the prompt override files once, when the task first starts,
+        and record them so every later pickup sends the same bytes."""
+        env = self.env()
+        cwd = str(self.state.config.get("cwd") or getattr(env, "cwd", "") or "")
+        found = await load_overrides(self.rt.prompt_dirs, env, cwd)
+        view = self.view()
+        view.record(CORE, "prompts", found)
+        await self.flush(view)
 
     async def _load(self) -> None:
         records = await self.store.read(self.task_id)

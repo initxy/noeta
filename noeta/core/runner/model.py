@@ -29,7 +29,7 @@ def _request(run: TaskRun, *, final: bool) -> ModelRequest:
     request = build_request(
         run.state,
         model=str(config.get("model") or agent.model),
-        system_prompt=str(config.get("system_prompt") or agent.system_prompt),
+        system_prompt=run.state.prompt(f"system/{agent.name}", agent.system_prompt),
         parts=[p for ext in run.exts for p in ext.context(view)],
         tools=run.tools(view),
         effort=config.get("effort") or agent.effort,

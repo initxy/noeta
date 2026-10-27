@@ -62,6 +62,9 @@ class ToolContext:
     #: The root task's id (background jobs notify the spawner, then the root).
     root_id: str = ""
     extras: dict[str, Any] = field(default_factory=dict)
+    #: ``prompt(name, default)``: the task's text for a named prompt
+    #: (``noeta.core.prompts``).
+    prompt: Callable[[str, str], str] = field(default=lambda _name, default: default)
 
 
 class Tool(Protocol):

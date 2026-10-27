@@ -7,7 +7,6 @@ from noeta.plugins.memory.extension import (
     MEMORY_POLICY_READ_ONLY_PROMPT,
     Memory,
     consolidation_agent,
-    with_memory_policy,
 )
 from noeta.plugins.memory.store import DEFAULT_GLOBAL_MEMORY_DIR, MemoryStore
 
@@ -19,5 +18,4 @@ __all__ = [
     "Memory",
     "MemoryStore",
     "consolidation_agent",
-    "with_memory_policy",
 ]

@@ -21,7 +21,7 @@ import signal
 import sys
 from typing import Any
 
-from noeta.apps.config import Settings, load_settings, open_store
+from noeta.apps.config import Settings, load_settings
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -37,6 +37,9 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--base-url")
     ap.add_argument("--store", help="sqlite:///path or postgres://... (default ~/.noeta/tasks.db)")
     ap.add_argument("--cwd", default=None, help="working directory (default: current)")
+    ap.add_argument("--system-prompt", help="replace the main agent's system prompt")
+    ap.add_argument("--append-system-prompt",
+                    help="add text after the main agent's system prompt")
     ap.add_argument("--resume", nargs="?", const="", default=None,
                     help="TUI: resume a task (id, or pick from a list)")
     ap.add_argument("--server", help="TUI: attach to a noeta server URL")
@@ -57,22 +60,17 @@ def _settings(args: argparse.Namespace) -> Settings:
                       store=args.store, effort=args.effort)
     if not s.model:
         sys.exit("noeta: no model configured (--model or NOETA_MODEL)")
+    if args.system_prompt is not None:
+        s.prompts["system/main"] = args.system_prompt
+    if args.append_system_prompt is not None:
+        s.prompts["system/main.append"] = args.append_system_prompt
     return s
 
 
-def _app(s: Settings, *, agents_kw: dict[str, Any] | None = None,
-         own_tasks_only: bool = False, **runtime_kw: Any) -> Any:
-    """A store, the default agents and an in-process worker. Front ends
-    (``-p``, ``acp``, the TUI) pass ``own_tasks_only`` so their worker never
-    picks up another process's task from the shared store; ``worker`` and
-    ``serve`` serve every task."""
-    from noeta.apps.config import HOME
-    from noeta.apps.local import LocalApp
-    from noeta.presets import default_agents
+def _app(s: Settings, **kw: Any) -> Any:
+    from noeta.apps.local import from_settings
 
-    kw: dict[str, Any] = {"memory_root": str(HOME / "memory"), **(agents_kw or {})}
-    return LocalApp(open_store(s.store_url), default_agents(s.model, **kw), s.make_provider(),
-                    own_tasks_only=own_tasks_only, **runtime_kw)
+    return from_settings(s, **kw)
 
 
 def _describe(request: Any) -> str:

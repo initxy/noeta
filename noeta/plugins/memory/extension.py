@@ -14,7 +14,7 @@ from typing import Any
 
 from noeta.core.agent import Agent
 from noeta.core.events import Recorded
-from noeta.core.extension import Extension, TaskView
+from noeta.core.extension import ContextPart, Extension, TaskView
 from noeta.core.helpers import new_user_messages, resident_budget
 from noeta.core.tool import Tool
 from noeta.core.types import Message, ModelRequest, SystemPart, user
@@ -50,7 +50,6 @@ __all__ = [
     "MEMORY_POLICY_READ_ONLY_PROMPT",
     "Memory",
     "consolidation_agent",
-    "with_memory_policy",
 ]
 
 _log = logging.getLogger(__name__)
@@ -63,12 +62,6 @@ CONSOLIDATION_PROMPT = load_text("consolidation", strip=False)
 CONSOLIDATION_AGENT_NAME = "__consolidation__"
 _JUDGE_INSTRUCTIONS = load_text("recall_judge")
 _JUDGE_MAX_TOKENS = 200
-
-
-def with_memory_policy(prompt: str, *, read_only: bool = False) -> str:
-    """``prompt`` with the memory policy appended after one blank line (the
-    prompt files end with a newline), as 0.6's presets built it."""
-    return prompt + "\n" + (MEMORY_POLICY_READ_ONLY_PROMPT if read_only else MEMORY_POLICY_PROMPT)
 
 
 def _sha(text: str) -> str:
@@ -86,8 +79,7 @@ class Memory(Extension):
       ``global_memory_dir`` / ``memory_root_resolver``). Default
       ``~/.noeta/memories``.
     * ``read_only`` — offer only ``memory_read`` / ``memory_search``
-      (``memory_read_only``); pair with ``with_memory_policy(...,
-      read_only=True)``.
+      (``memory_read_only``) and the read-only policy.
     * ``max_bytes`` — page cap for ``memory_write`` (``memory_max_bytes``).
     * ``index_budget_tokens`` — index budget; ``None`` = 1 % of the task
       model's window, at most 4,096.
@@ -138,6 +130,11 @@ class Memory(Extension):
     @property
     def policy(self) -> str:
         return MEMORY_POLICY_READ_ONLY_PROMPT if self.read_only else MEMORY_POLICY_PROMPT
+
+    def context(self, view: TaskView) -> Sequence[ContextPart]:
+        """The memory policy, after the agent's own prompt."""
+        name = "memory/policy-read-only" if self.read_only else "memory/policy"
+        return (ContextPart(text=view.prompt(name, self.policy)),)
 
     # ------------------------------------------------------------ state
 
@@ -231,7 +228,9 @@ class Memory(Extension):
         async def judge(entries: MemoryEntries, text: str) -> tuple[str, ...]:
             if not entries:
                 return ()
-            system = render_judge_system(entries, _JUDGE_INSTRUCTIONS, budget_tokens=budget)
+            system = render_judge_system(
+                entries, view.prompt("memory/recall_judge", _JUDGE_INSTRUCTIONS),
+                budget_tokens=budget)
             request = ModelRequest(model=model, system=[SystemPart(text=system, cache=True)],
                                    messages=[user(text)], max_tokens=_JUDGE_MAX_TOKENS,
                                    thinking=False)
@@ -300,7 +299,7 @@ def consolidation_agent(model: str, *, root: Any = None, **memory: Any) -> Agent
     return Agent(
         name=CONSOLIDATION_AGENT_NAME,
         model=model,
-        system_prompt=with_memory_policy(CONSOLIDATION_PROMPT),
+        system_prompt=CONSOLIDATION_PROMPT,
         extensions=(Memory(root=root, recall=False, read_only=False, **memory),),
         one_shot=True,
     )

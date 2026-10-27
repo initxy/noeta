@@ -47,6 +47,10 @@ class Runtime:
     concurrency: int = 8
     #: Directory for tool outputs too large to return inline.
     spill_root: str | None = None
+    #: Host directories of prompt override files (``noeta.core.prompts``),
+    #: e.g. ``~/.noeta/prompts``; the task's ``<cwd>/.noeta/prompts`` is
+    #: always read too.
+    prompt_dirs: Sequence[str] = ()
     on_delta: OnDelta | None = None
     sleep: Callable[[float], Any] = asyncio.sleep
     #: Serve only the task trees whose root ids are in this set (a front end
