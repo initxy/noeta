@@ -13,6 +13,12 @@ When a job ends — or a monitor emits an event — the notice goes to the task
 that started it while that task is live, else to the root, as a
 system-origin message posted with ``when="now"``: it lands after the running
 batch's tool results, and wakes an idle task into a turn.
+
+Job logs live in a private directory per user inside the env: by default
+``$XDG_RUNTIME_DIR`` (local env) or the temp directory, under
+``noeta-background-<uid>``, created 0700; a directory that already exists
+must be a real directory owned by the user (else launches are refused). Log
+files are created 0600.
 """
 
 from __future__ import annotations
@@ -21,9 +27,13 @@ import asyncio
 import codecs
 import contextlib
 import logging
+import os
 import posixpath
 import shlex
+import socket
+import tempfile
 import uuid
+import weakref
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -53,8 +63,43 @@ NOTICE_TAIL_CHARS = 30_000
 STDERR_TAIL_CHARS = 2_000
 #: How often a monitor's log is read for new lines.
 MONITOR_POLL_S = 0.1
-#: Where job logs live inside the env.
-DEFAULT_LOG_DIR = "/tmp/noeta-background"
+#: Where job logs live inside the env: empty = the per-user private default
+#: (``<runtime or temp dir>/noeta-background-<uid>``).
+DEFAULT_LOG_DIR = ""
+#: Tasks remembered as ended (their notices go to the root) at most.
+ENDED_KEEP = 4096
+
+#: This worker process: recorded with each job so another process that picks
+#: the task up can tell a job running elsewhere from a lost one.
+WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
+
+#: Makes (or checks) the log directory: ``$1`` an explicit directory, else
+#: ``${2:-/tmp}/noeta-background-<uid>``. Prints the directory.
+_PREPARE_DIR = r"""
+d=$1
+[ -n "$d" ] || d="${2:-/tmp}/noeta-background-$(id -u)"
+if [ ! -e "$d" ] && [ ! -L "$d" ]; then mkdir -p -m 700 -- "$d" || exit 3; fi
+if [ -L "$d" ] || [ ! -d "$d" ] || [ ! -O "$d" ]; then
+  echo "refusing $d: not a directory owned by the current user" >&2; exit 4
+fi
+chmod 700 -- "$d" || exit 5
+printf '%s' "$d"
+"""
+
+
+def worker_alive(worker: str) -> bool:
+    """Whether the worker process ``host:pid`` may still be running: on
+    this host the pid is checked, another host's is assumed alive."""
+    host, _, pid = worker.rpartition(":")
+    if host != socket.gethostname() or not pid.isdigit():
+        return True
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
 
 #: ``(body, task_id)`` posts an inbox message to a task.
 Post = Callable[..., Awaitable[None]]
@@ -104,11 +149,46 @@ class Registry:
         self.max_jobs = max_jobs
         self.output_cap = output_cap
         self.log_dir = log_dir
+        self.worker = WORKER_ID
         self.jobs: dict[str, dict[str, Job]] = {}
-        #: Tasks known (in this process) to have ended: their notices go to
-        #: the root instead.
+        #: Tasks known (in this process) to have ended with jobs of their
+        #: tree still here: their notices go to the root instead.
         self.ended: set[str] = set()
         self._retiring: set[asyncio.Task[None]] = set()
+        self._dirs: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+
+    def mark_ended(self, task_id: str, root_id: str) -> None:
+        """``task_id`` ended: remembered only while its tree has jobs here
+        (and at most :data:`ENDED_KEEP` tasks)."""
+        if not self.jobs.get(root_id):
+            return
+        if len(self.ended) >= ENDED_KEEP:
+            self.ended.pop()
+        self.ended.add(task_id)
+
+    async def _log_dir(self, env: ExecEnv) -> str:
+        """The env's private log directory, made or checked once per env."""
+        try:
+            known = self._dirs.get(env)
+        except TypeError:
+            known = None
+        if known is not None:
+            return known
+        from noeta.execenv.local import LocalExecEnv
+
+        base = "/tmp"
+        if isinstance(env, LocalExecEnv):
+            runtime = os.environ.get("XDG_RUNTIME_DIR") or ""
+            base = runtime if runtime and os.path.isdir(runtime) else tempfile.gettempdir()
+        result = await env.run(["sh", "-c", _PREPARE_DIR, "sh", self.log_dir, base],
+                               timeout=10, output_cap=8192)
+        if result.exit_code != 0:
+            raise OSError(result.stderr.decode("utf-8", "replace").strip()
+                          or "could not prepare the background log directory")
+        path = result.stdout.decode("utf-8", "replace")
+        with contextlib.suppress(TypeError):
+            self._dirs[env] = path
+        return path
 
     # ------------------------------------------------------------ lookup
 
@@ -135,11 +215,17 @@ class Registry:
             return (f"too many background jobs ({running}/{self.max_jobs}); kill one with "
                     f"KillShell first")
         job_id = f"bg-{uuid.uuid4().hex[:12]}"
-        out = posixpath.join(self.log_dir, f"{job_id}.out")
-        err = posixpath.join(self.log_dir, f"{job_id}.err") if monitor_timeout_ms else None
-        await env.write_bytes(out, b"")
-        if err is not None:
-            await env.write_bytes(err, b"")
+        try:
+            log_dir = await self._log_dir(env)
+        except OSError as exc:
+            return f"background jobs are unavailable: {exc}"
+        out = posixpath.join(log_dir, f"{job_id}.out")
+        err = posixpath.join(log_dir, f"{job_id}.err") if monitor_timeout_ms else None
+        made = await env.run(
+            ["sh", "-c", 'umask 077 && for f; do : > "$f" || exit 1; done', "sh",
+             *[p for p in (out, err) if p]], timeout=10)
+        if made.exit_code != 0:
+            return "background jobs are unavailable: could not create the job's log file"
         job = Job(job_id=job_id, root_id=root_id, spawner_id=spawner_id, command=command,
                   description=_label(description or command), tool_use_id=tool_use_id,
                   env=env, out_path=out, err_path=err, post=post)

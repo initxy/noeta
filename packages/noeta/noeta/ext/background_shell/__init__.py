@@ -3,9 +3,21 @@
 
 Jobs belong to the worker process (a process-local table keyed by the task
 tree's root, see :mod:`.jobs`). What the log keeps is what a reader needs:
-a ``started`` record in the task that launched the job, an ``ended`` record
-when its end notice is taken, and ``lost`` for a job this process no longer
-knows (a crash or restart killed it; nothing is probed or killed by PID).
+a ``started`` record in the task that launched the job (with the worker that
+runs it), an ``ended`` record when its end notice is taken, and ``lost`` for
+a job whose worker is gone (a crash or restart killed it; nothing is probed
+or killed by PID).
+
+**Background jobs pin their task tree to one worker.** A task releases its
+claim whenever it waits (for input, an approval, children), and another
+worker may pick it up next. That worker cannot read, stop or clean up a job
+running in the first one: the model is told once that the job "is running in
+another worker process; it cannot be read or stopped from here", and the job
+is stopped only by its own worker (when the root ends, is cancelled or its
+turn is stopped there). Deployments with several workers that offer
+background shells should route every task of a tree to the same worker
+(e.g. by queue, ``ctx.spawn(..., queue=...)``); there is no cross-worker job
+control.
 
 A job's end — and each monitor event — reaches the model as Claude Code's
 ``<task-notification>``, a system-origin message posted to the task that
@@ -22,7 +34,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from noeta.events import ExtensionRecorded, InputTaken, Recorded, Say, TaskEnded, Waiting
-from noeta.ext.background_shell.jobs import DEFAULT_LOG_DIR, REGISTRY, Registry
+from noeta.ext.background_shell.jobs import DEFAULT_LOG_DIR, REGISTRY, Registry, worker_alive
 from noeta.ext.background_shell.tools import (
     EXTENSION,
     BackgroundBash,
@@ -33,8 +45,14 @@ from noeta.ext.background_shell.tools import (
 from noeta.ext.base import Extension, TaskView
 from noeta.loop.state import CORE
 from noeta.tools.base import Tool
+from noeta.types import user
 
-__all__ = ["BackgroundShells", "Registry"]
+__all__ = ["BackgroundShells", "Registry", "elsewhere_text"]
+
+
+def elsewhere_text(job_id: str) -> str:
+    return (f"Background job {job_id} is running in another worker process; it cannot be "
+            "read or stopped from here.")
 
 _NOTICE = re.compile(
     r"\A<task-notification>\n<task-id>(bg-[0-9a-f]+)</task-id>\n"
@@ -85,6 +103,8 @@ class BackgroundShells(Extension):
         jobs = dict(state or {})
         if kind == "started":
             jobs[data["job_id"]] = {**data, "status": "running"}
+        elif kind == "elsewhere" and data.get("job_id") in jobs:
+            jobs[data["job_id"]] = {**jobs[data["job_id"]], "noted": data.get("worker")}
         elif kind in ("ended", "lost") and data.get("job_id") in jobs:
             job = dict(jobs[data["job_id"]])
             job["status"] = data.get("status") or "lost"
@@ -100,12 +120,20 @@ class BackgroundShells(Extension):
 
     async def on_start(self, view: TaskView) -> None:
         """Settle jobs the log still shows running: ended ones get their
-        status, ones this process does not know are lost."""
+        status; one running in another live worker is noted to the model
+        (once per picking worker); one whose worker is gone is lost."""
         for job_id, job in (view.ext_state(self.name) or {}).items():
             if job.get("status") != "running":
                 continue
             live = self.registry.get(job_id)
-            if live is None:
+            owner = job.get("worker")
+            if live is None and owner and owner != self.registry.worker \
+                    and worker_alive(owner):
+                if job.get("noted") != self.registry.worker:
+                    view.record(self.name, "elsewhere",
+                                {"job_id": job_id, "worker": self.registry.worker},
+                                message=user(elsewhere_text(job_id), origin="system"))
+            elif live is None:
                 view.record(self.name, "lost", {"job_id": job_id})
             elif live.status != "running":
                 code = live.exit_code
@@ -129,7 +157,7 @@ class BackgroundShells(Extension):
                     view.record(self.name, "ended",
                                 {"job_id": match.group(1), "status": match.group(2)})
         elif isinstance(event, TaskEnded):
-            self.registry.ended.add(state.task_id)
+            self.registry.mark_ended(state.task_id, root)
             if state.parent_id is None:
                 self.registry.retire(root)
             elif self.ends_with_turn:

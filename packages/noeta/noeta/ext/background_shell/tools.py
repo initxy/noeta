@@ -42,6 +42,16 @@ def _description(name: str) -> str:
     return text.rstrip("\n")
 
 
+def _unknown(registry: Registry, ctx: ToolContext, job_id: str) -> str:
+    """Why a job id is not in this worker's table."""
+    job = (ctx.state.get(EXTENSION) or {}).get(job_id) or {}
+    owner = job.get("worker")
+    if job.get("status") == "running" and owner and owner != registry.worker:
+        return (f"background job {job_id!r} is running in another worker process; it cannot "
+                "be read or stopped from here")
+    return f"unknown background job {job_id!r}"
+
+
 def background_started(job_id: str, *, ends_with_turn: bool) -> str:
     """The launch result: Claude Code's background-command wording."""
     if ends_with_turn:
@@ -144,7 +154,8 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
         return tool_error(tool, job)
     ctx.record(EXTENSION, "started", {
         "job_id": job.job_id, "command": command, "description": job.description,
-        "tool_use_id": ctx.call_id, "monitor": monitor_timeout_ms is not None})
+        "tool_use_id": ctx.call_id, "monitor": monitor_timeout_ms is not None,
+        "worker": shell.registry.worker})
     return job, cwd, tracked
 
 
@@ -188,7 +199,7 @@ class BashOutputTool:
                 return tool_error(self.name, f"invalid 'filter' regex: {exc}")
         job = self.registry.find(_root(ctx), job_id)
         if job is None:
-            return tool_error(self.name, f"unknown background job {job_id!r}")
+            return tool_error(self.name, _unknown(self.registry, ctx, job_id))
         waited = ""
         if input.get("block"):
             try:
@@ -240,7 +251,7 @@ class KillShellTool:
             return tool_error(self.name, "requires a non-empty 'shell_id'")
         job = self.registry.find(_root(ctx), job_id)
         if job is None:
-            return tool_error(self.name, f"unknown background job {job_id!r}")
+            return tool_error(self.name, _unknown(self.registry, ctx, job_id))
         status = self.registry.kill(job)
         return text_output(f"Shell {job_id} is being terminated ({status})")
 

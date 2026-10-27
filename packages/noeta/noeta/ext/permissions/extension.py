@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import logging
 import os
+import posixpath
 import warnings
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -30,9 +31,18 @@ CanUseTool = Callable[[str, dict[str, Any]], "bool | Awaitable[bool]"]
 #: Text a call refused by ``can_use_tool`` returns (0.6's deny default).
 DENIED_BY_HUMAN = "denied by human"
 
-#: Auto-resolved decisions kept in the folded state (for recovery).
+#: Auto-resolved decisions / open asks kept in the folded state.
 _AUTO_KEEP = 64
-_CACHE_KEEP = 256
+#: Task config key a child reads its parent's remembered rules from.
+INHERITED_RULES_KEY = "permission_rules"
+#: The workspace directory whose files steer this extension (the project
+#: shell allowlist): writing there always asks, outside bypassPermissions.
+CONFIG_DIR = ".noeta"
+#: Edit / Write tools whose ``file_path`` is checked against it.
+WRITE_TOOLS = frozenset({"Write", "Edit"})
+CONFIG_WRITE_REQUIRES_APPROVAL = (
+    "tool {name!r} call requires human approval: it changes the workspace's "
+    ".noeta/ settings")
 
 
 class UntrustedProjectShellAllowlistWarning(UserWarning):
@@ -62,6 +72,21 @@ class PermState:
     cost_usd: float = 0.0
     #: ``call_id -> "allow" | "deny"`` decided by ``can_use_tool``.
     auto: dict[str, str] = field(default_factory=dict)
+    #: ``call_id -> rule`` an "always" answer to that open ask remembers.
+    asked: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: The project shell allowlist as read at the task's first pick-up
+    #: (``None`` before; trusted workspaces only).
+    project: tuple[dict[str, Any], ...] | None = None
+
+
+def inherited_rules(state: Any) -> list[dict[str, Any]]:
+    """A task's remembered rules, its own and those it inherited: what a
+    child it spawns starts with (``config["permission_rules"]``)."""
+    st = state.ext.get(NAME)
+    own = list(st.rules) if isinstance(st, PermState) else []
+    parent = state.config.get(INHERITED_RULES_KEY)
+    rules = [r for r in parent if isinstance(r, dict)] if isinstance(parent, list) else []
+    return [*rules, *(r for r in own if r not in rules)]
 
 
 class Permissions(Extension):
@@ -85,9 +110,13 @@ class Permissions(Extension):
     * ``shell_allowlist`` — extra ``{"program", "subcommand"?}`` specs that
       run without asking, on top of the curated rules.
     * ``trusted_workspace`` — honour the project's
-      ``.noeta/shell-allowlist.json`` and the curated rules that run
-      workspace code (test runners); "always" answers for shell commands are
-      appended to that file. Untrusted (the default): neither.
+      ``.noeta/shell-allowlist.json`` (read once, at the task's first
+      pick-up) and the curated rules that run workspace code (test runners);
+      "always" answers for shell commands are appended to that file.
+      Untrusted (the default): neither. In every mode but
+      ``bypassPermissions``, a ``Write`` / ``Edit`` into the workspace's
+      ``.noeta/`` and a shell command that names ``.noeta`` ask first, so the
+      model cannot widen its own approvals.
     * ``remember_to_project`` — write "always" shell rules to the project
       file when trusted (default on). They are recorded in the task either way.
     * ``webfetch_allowed_hosts`` — ``example.com`` / ``*.example.com``
@@ -103,6 +132,9 @@ class Permissions(Extension):
       answers this extension's approvals instead of a human; its decision is
       recorded with ``resolver="can_use_tool"``. Asks from other extensions
       still reach the host.
+
+    "Always" rules are per task; a child spawned by ``Subtasks`` starts with
+    its parent's (``config["permission_rules"]``, see :func:`inherited_rules`).
     """
 
     name = NAME
@@ -160,8 +192,7 @@ class Permissions(Extension):
         self.pre_rules = tuple(g.check_pre_rule(f"pre_tool_use[{i}]", r)
                                for i, r in enumerate(pre_tool_use))
         self.can_use_tool = can_use_tool
-        self._project: OrderedDict[str, tuple[dict[str, Any], ...]] = OrderedDict()
-        self._warned: set[str] = set()
+        self._warned: OrderedDict[str, None] = OrderedDict()
 
     # ------------------------------------------------------------ state
 
@@ -184,7 +215,22 @@ class Permissions(Extension):
             while len(auto) > _AUTO_KEEP:
                 auto.pop(next(iter(auto)))
             return replace(st, auto=auto)
+        if kind == "asked" and isinstance(data, dict):
+            asked = dict(st.asked)
+            asked[str(data["call_id"])] = dict(data["always"])
+            while len(asked) > _AUTO_KEEP:
+                asked.pop(next(iter(asked)))
+            return replace(st, asked=asked)
+        if kind == "project" and isinstance(data, dict):
+            return replace(st, project=tuple(dict(x) for x in data.get("specs") or ()))
         return st
+
+    def _rules(self, view: TaskView, st: PermState) -> list[dict[str, Any]]:
+        """Remembered rules: inherited from the parent, then this task's."""
+        inherited = view.state.config.get(INHERITED_RULES_KEY)
+        base = [r for r in inherited if isinstance(r, dict)] \
+            if isinstance(inherited, list) else []
+        return [*base, *st.rules]
 
     def _state(self, view: TaskView) -> PermState:
         st = view.ext_state(NAME)
@@ -197,7 +243,13 @@ class Permissions(Extension):
     # ------------------------------------------------------------ hooks
 
     async def on_start(self, view: TaskView) -> None:
-        self._project.pop(view.task_id, None)  # re-read the project file each pickup
+        """Read the project shell allowlist once per task (the first
+        pick-up), so a file written later in the task changes nothing."""
+        if not self.trusted or self._state(view).project is not None:
+            return
+        path = os.path.join(self._root(view), p.PROJECT_RULES_FILE)
+        specs = p.parse_project_rules(await self._read(view, path))
+        view.record(NAME, "project", {"specs": [dict(x) for x in specs]})
 
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
         if self.budget.max_iterations is not None:
@@ -249,6 +301,9 @@ class Permissions(Extension):
 
         denies: list[str] = []
         asks: list[str] = []
+        config_ask = await self._config_ask(view, call)
+        if config_ask is not None:
+            asks.append(config_ask)
         permission_ask = await self._permission_ask(view, st, call, risk)
         if permission_ask is not None:
             asks.append(permission_ask)
@@ -267,6 +322,8 @@ class Permissions(Extension):
         if self.can_use_tool is not None:
             return await self._auto(view, st, call)
         always = p.always_rule(name, call.input) if asks == [permission_ask] else None
+        if always is not None and st.asked.get(call.id) != always:
+            view.record(NAME, "asked", {"call_id": call.id, "always": always})
         return Ask(prompt=asks[0], detail={"by": NAME, "tool": name, "reason": asks[0],
                                            "always": always})
 
@@ -291,21 +348,55 @@ class Permissions(Extension):
         if mode == "bypassPermissions":
             return None
         name = call.name
+        rules = self._rules(view, st)
         if name in p.SHELL_GATED_TOOLS:
-            remembered = [r["spec"] for r in st.rules if r.get("kind") == "shell"]
-            rules = p.effective_shell_rules(self.shell_specs, await self._project_specs(view),
+            remembered = [r["spec"] for r in rules if r.get("kind") == "shell"]
+            shell = p.effective_shell_rules(self.shell_specs, await self._project_specs(view),
                                             remembered, trusted=self.trusted)
-            if p.shell_call_needs_approval(call.input, rules):
+            if p.shell_call_needs_approval(call.input, shell):
                 return p.CALL_REQUIRES_APPROVAL.format(name=name)
             return None
         if p.mode_requires_approval(mode, name, risk):
-            if any(r.get("kind") == "tool" and r.get("tool") == name for r in st.rules):
+            if any(r.get("kind") == "tool" and r.get("tool") == name for r in rules):
                 return None
             return p.REQUIRES_APPROVAL.format(name=name)
         if name == p.WEBFETCH_TOOL:
-            hosts = (*self.hosts, *(r["host"] for r in st.rules if r.get("kind") == "host"))
+            hosts = (*self.hosts, *(r["host"] for r in rules if r.get("kind") == "host"))
             if p.webfetch_needs_approval(call.input, hosts):
                 return p.CALL_REQUIRES_APPROVAL.format(name=name)
+        return None
+
+    async def _config_ask(self, view: TaskView, call: ToolUse) -> str | None:
+        """Outside ``bypassPermissions``: a write into the workspace's
+        ``.noeta/``, or a shell command naming it, asks (never remembered)."""
+        if self._mode(view) == "bypassPermissions":
+            return None
+        if call.name in p.SHELL_GATED_TOOLS:
+            command = call.input.get("command")
+            if isinstance(command, str) and CONFIG_DIR in command:
+                return CONFIG_WRITE_REQUIRES_APPROVAL.format(name=call.name)
+            return None
+        target = call.input.get("file_path")
+        if call.name not in WRITE_TOOLS or not isinstance(target, str) or not target:
+            return None
+        root = self._root(view)
+        config_dir = posixpath.join(root, CONFIG_DIR)
+        path = target if posixpath.isabs(target) else posixpath.join(root, target)
+        candidates = {posixpath.normpath(path)}
+        resolved_dir = config_dir
+        try:
+            if view.env is not None:
+                candidates.add(await view.env.realpath(path))
+                resolved_dir = await view.env.realpath(config_dir)
+            else:
+                candidates.add(await asyncio.to_thread(os.path.realpath, path))
+                resolved_dir = await asyncio.to_thread(os.path.realpath, config_dir)
+        except OSError:
+            pass
+        for candidate in candidates:
+            for d in {posixpath.normpath(config_dir), resolved_dir}:
+                if candidate == d or candidate.startswith(d.rstrip("/") + "/"):
+                    return CONFIG_WRITE_REQUIRES_APPROVAL.format(name=call.name)
         return None
 
     async def _auto(self, view: TaskView, st: PermState, call: ToolUse) -> Gate:
@@ -324,9 +415,14 @@ class Permissions(Extension):
         """An "always" allow for one of this extension's asks becomes a rule."""
         if not answer.always or answer.decision != "allow":
             return
+        # The rule offered with the ask, as this extension recorded it (the
+        # task's ``Waiting`` may already be cleared by a message taken in the
+        # same batch).
         waiting = view.state.waiting
-        detail = (waiting.detail.get(answer.request_id) if waiting is not None else None) or {}
-        rule = detail.get("always") if detail.get("by") == NAME else None
+        detail = waiting.detail.get(answer.request_id) if waiting is not None else None
+        if isinstance(detail, dict) and detail.get("by") != NAME:
+            return
+        rule = self._state(view).asked.get(answer.request_id)
         if not isinstance(rule, dict) or rule in self._state(view).rules:
             return
         view.record(NAME, "rule", rule)
@@ -357,21 +453,16 @@ class Permissions(Extension):
         root = self._root(view)
         if not self.trusted:
             if root not in self._warned:
-                self._warned.add(root)
+                self._warned[root] = None
+                while len(self._warned) > 256:
+                    self._warned.popitem(last=False)
                 path = os.path.join(root, p.PROJECT_RULES_FILE)
                 specs = p.parse_project_rules(await self._read(view, path))
                 if specs:
                     warnings.warn(UntrustedProjectShellAllowlistWarning(root, path, len(specs)),
                                   stacklevel=2)
             return ()
-        cached = self._project.get(view.task_id)
-        if cached is None:
-            path = os.path.join(root, p.PROJECT_RULES_FILE)
-            cached = p.parse_project_rules(await self._read(view, path))
-            self._project[view.task_id] = cached
-            while len(self._project) > _CACHE_KEEP:
-                self._project.popitem(last=False)
-        return cached
+        return self._state(view).project or ()
 
     async def _append_project(self, view: TaskView, spec: dict[str, Any]) -> None:
         path = os.path.join(self._root(view), p.PROJECT_RULES_FILE)
@@ -388,4 +479,3 @@ class Permissions(Extension):
                 Path(path).write_bytes(data)
 
             await asyncio.to_thread(write)
-        self._project.pop(view.task_id, None)
