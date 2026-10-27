@@ -38,7 +38,7 @@ def build_request(
         system=system,
         messages=messages,
         tools=[ToolSpec(name=t.name, description=t.description, input_schema=t.input_schema)
-               for t in tools],
+               for t in tools if getattr(t, "advertised", True)],
         max_tokens=max_tokens,
         effort=effort,  # type: ignore[arg-type]
         output_schema=output_schema,

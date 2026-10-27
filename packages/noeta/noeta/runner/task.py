@@ -106,6 +106,7 @@ class TaskRun:
             self.reducers = {e.name: e.reduce for e in self.exts}
         initial = {e.name: e.initial_state() for e in self.exts}
         self.state = fold(records, self.reducers, initial)
+        self.state.task_id = self.task_id  # the log never names its own task
 
     async def _keep_claim(self) -> None:
         interval = max(self.rt.lease_seconds / 3, 0.05)
