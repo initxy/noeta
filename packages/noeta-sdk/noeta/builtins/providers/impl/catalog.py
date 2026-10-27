@@ -510,11 +510,14 @@ def price(model_id: str, usage: Usage) -> float:
 # Compaction knobs derived from the catalog
 # ---------------------------------------------------------------------------
 
-#: Headroom reserved under the context window beyond the output cap, so the
-#: history window still leaves slack for the system prompt, the tool schemas
-#: and the next response. A constant, not a measurement: live and resume must
-#: derive the same number.
-_COMPACTION_BUFFER_TOKENS = 2_000
+#: Claude Code's compaction margin. The window compaction measures against is
+#: the context window less the response's room — the output ceiling, but never
+#: more than :data:`_COMPACTION_OUTPUT_RESERVE_MAX_TOKENS`, since a 64K or 128K
+#: ceiling is a cap a response rarely reaches, not a size it needs — and the
+#: summarize trigger sits :data:`_COMPACTION_TRIGGER_MARGIN_TOKENS` below that.
+#: Constants, not measurements: live and resume must derive the same numbers.
+_COMPACTION_OUTPUT_RESERVE_MAX_TOKENS = 20_000
+_COMPACTION_TRIGGER_MARGIN_TOKENS = 13_000
 
 #: Denominator for the verbatim recent tail (``tail = available // N``). A
 #: verbatim tail exists at all because compose cannot re-read disk (resume
@@ -566,9 +569,12 @@ def derive_compaction_config(
     stays the model's (it rides ``max_tokens`` on the wire). A cap at or
     above the window is a no-op and ``None`` keeps the model's window, so live
     and resume derive identical knobs from identical inputs. A positive int
-    or ``None``, and one that leaves a usable window under the model's output
-    ceiling plus the buffer; anything else raises here rather than running
-    uncapped or compacting on every step.
+    or ``None``, and one that leaves a usable window under the compaction
+    reserve; anything else raises here rather than running uncapped or
+    compacting on every step.
+
+    The usable window is Claude Code's auto-compact threshold, applied to the
+    window or the cap alike: ``window - min(output ceiling, 20_000) - 13_000``.
 
     ``clear_tool_outputs_at`` moves the microcompaction threshold off its
     default of half the available window to this request size in tokens, so a
@@ -608,6 +614,15 @@ def derive_compaction_config(
     else:
         context_window = spec.context_window
         max_output_tokens = spec.max_output_tokens
+    # Everything held back under the window: the response's room, capped,
+    # plus the trigger margin. The kernel subtracts ``max_output_tokens`` (the
+    # wire ceiling) and ``compaction_buffer`` from the window, so the buffer
+    # is whatever turns that into this reserve — negative when the output
+    # ceiling exceeds it.
+    reserve = (
+        min(max_output_tokens, _COMPACTION_OUTPUT_RESERVE_MAX_TOKENS)
+        + _COMPACTION_TRIGGER_MARGIN_TOKENS
+    )
     if auto_compact_window is not None:
         if (
             isinstance(auto_compact_window, bool)
@@ -618,22 +633,20 @@ def derive_compaction_config(
                 "auto_compact_window must be a positive int or None; "
                 f"got {auto_compact_window!r}"
             )
-        if auto_compact_window - max_output_tokens - _COMPACTION_BUFFER_TOKENS <= 0:
-            # A cap under the output ceiling plus the buffer would leave a
-            # zero window: compaction on every step, and a boundary that can
-            # never advance. The host's number is wrong for this model; say
-            # so here rather than thrash.
+        if auto_compact_window - reserve <= 0:
+            # A cap under the output reserve plus the trigger margin would
+            # leave a zero window: compaction on every step, and a boundary
+            # that can never advance. The host's number is wrong for this
+            # model; say so here rather than thrash.
             raise ValueError(
                 f"auto_compact_window {auto_compact_window} leaves no usable "
-                f"window under model {real!r}'s {max_output_tokens}-token "
-                f"output ceiling plus the {_COMPACTION_BUFFER_TOKENS}-token "
-                "compaction buffer"
+                f"window under model {real!r}'s {reserve}-token compaction "
+                f"reserve (min(output ceiling {max_output_tokens}, "
+                f"{_COMPACTION_OUTPUT_RESERVE_MAX_TOKENS}) plus the "
+                f"{_COMPACTION_TRIGGER_MARGIN_TOKENS}-token trigger margin)"
             )
         context_window = min(context_window, auto_compact_window)
-    available = max(
-        0,
-        context_window - max_output_tokens - _COMPACTION_BUFFER_TOKENS,
-    )
+    available = max(0, context_window - reserve)
     # Strictly smaller than the available window, so summarising always has a
     # non-empty prefix to collapse when the trigger fires.
     tail = available // _TAIL_FRACTION_DENOM
@@ -653,7 +666,7 @@ def derive_compaction_config(
     return CompactionConfig(
         context_window=context_window,
         max_output_tokens=max_output_tokens,
-        compaction_buffer=_COMPACTION_BUFFER_TOKENS,
+        compaction_buffer=reserve - max_output_tokens,
         tail_token_budget=tail,
         composer_version=COMPOSER_VERSION,
         microcompact_keep_recent=_MICROCOMPACT_KEEP_RECENT,
