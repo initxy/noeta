@@ -222,7 +222,7 @@ async def test_budget_caps_spawn_depth(store: SqliteStore) -> None:
     task = Fake("Task")
     provider = ScriptedProvider([reply("", ("Task", {})), reply("ok")])
     client, tid, _ = await start(store, provider, Permissions(), [task],
-                                 config={"depth": 3})
+                                 config={"subtask_depth": 3})
     assert results(await events(client, tid)) == [("max_subtask_depth=3 reached", True)]
 
 

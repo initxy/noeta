@@ -95,7 +95,7 @@ class Permissions(Extension):
     * ``budget`` (:class:`guards.Budget`) or ``max_turns`` (shorthand for
       ``budget.max_iterations``); ``spawn_tools`` names the tools that spawn
       subtasks (for the spawn and depth caps). Depth is
-      ``config["depth"]`` when the spawner sets it, else 1 for any child.
+      ``config["subtask_depth"]`` (set by the Subtasks extension), else 1 for any child.
     * ``repetition_threshold`` (0 = off), ``repetition_action``,
       ``repetition_window``.
     * ``pre_tool_use`` — :class:`guards.PreToolUseRule` s.
@@ -279,7 +279,7 @@ class Permissions(Extension):
                 break
             if c.result is None:
                 before += 1
-        depth = view.state.config.get("depth")
+        depth = view.state.config.get("subtask_depth")
         if not isinstance(depth, int):
             depth = 1 if view.state.parent_id else 0
         return g.Counters(iterations=st.steps, tool_calls=st.tool_calls + before,
