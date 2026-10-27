@@ -86,8 +86,8 @@ Root causes of the recurring bugs:
   task cancellation, not a polled `should_abort`. Parallel tool calls are `asyncio.gather`.
   Streaming and `watch` are async iterators. The TUI (Textual) and the server (ASGI) are asyncio
   too.
-- `noeta.client` also offers a sync facade (`noeta.connect_sync`) for hosts that are not async.
-  It runs a private event loop thread.
+- A sync facade for hosts that are not async (a private event-loop thread) is built during host
+  migration (phase 5), only if a host needs it.
 - Blocking work (sqlite calls, file reads, subprocess waits that have no async API) runs in
   `asyncio.to_thread`.
 
@@ -119,11 +119,10 @@ Four tables. Postgres uses the same schema with `jsonb` / `bytea`.
 | `events` | `task_id, seq, type, at, data` (JSON) | the task log; PK `(task_id, seq)` |
 | `inbox` | `task_id, seq, kind, at, data, dedupe_key` | messages to a task; unique `(task_id, dedupe_key)` |
 | `tasks` | `task_id, parent_id, root_id, status, waiting_for, ready_at, owner, owner_epoch, queue, last_seq, inbox_read_seq, created_at, updated_at` | queryable task state and scheduling |
-| `blobs` | `hash, media_type, size, body` | large binaries (images, file snapshots) only |
 
-- **Payloads are stored inline at any size.** Only binary bodies of 1 MiB or more go to
-  `blobs`, written in the same transaction as the event that references them. Full model request
-  bodies are not stored; a request hash and usage are.
+- **Payloads are stored inline at any size**, images included (decided during phase 1: no blob
+  table until a measured need). Full model request bodies are not stored; a request hash and
+  usage are.
 - **`tasks` is updated in the same transaction as every append.** There is one truth: the row is
   a projection of the log, written atomically with it, never by anyone else (except the
   scheduler columns, see below).
@@ -239,8 +238,15 @@ task = client.create(agent, input=…, dedupe_key=…)
 client.send(task, text, when="now" | "next_turn", dedupe_key=…)
 client.answer(task, request_id, answer)
 client.cancel(task)
-async for ev in client.watch(task, after_seq=…): …   # log events + live streaming deltas
-client.tasks(filter=…)                               # backed by the tasks table
+async for ev in client.watch(task, after=…): …       # recorded events, live
+client.tasks(parent_id=…, status=…, limit=…)          # backed by the tasks table
+```
+
+Live model output (deltas) is a separate, best-effort channel: `LocalApp.deltas(sink)` in process,
+`event: delta` on the server's SSE stream, `RemoteClient.on_delta` remotely. Deltas are never
+recorded; the recorded reply is the truth.
+
+```python
 ```
 
 - 0.6 → 1.0 mapping for hosts:
@@ -348,7 +354,8 @@ Phase 3 — multi-machine
 - [ ] CI Postgres leg runs in `make check`'s CI job (`make check` now runs the 1.0 package via `check-next`)
 
 Phase 4 — surfaces
-- [x] `noeta.client` (in-process + HTTP), `noeta.server`
+- [x] `noeta.client` (in-process + HTTP), `noeta.server` (`noeta.connect(url)` added with the
+      review fixes; sync facade deferred to phase 5)
 - [ ] `noeta acp` adapter, checked against Zed and Toad (built and tested against a fake editor;
       not yet run in a real editor)
 - [x] `noeta.tui` + `noeta` command
@@ -359,6 +366,7 @@ Phase 4 — surfaces
 Phase 5 — cutover
 - [ ] Distill the surviving Decisions into the 1.0 ADR set; mark replaced 0.6 ADRs `superseded`
 - [ ] Docs rewrite, migration guide for hosts
+- [ ] Sync client facade, if host-app needs one
 - [ ] Migrate host-app on a branch and run it against its own scenarios
 - [ ] Delete the 0.6 packages from `main`, release `noeta` 1.0.0 (owner tags)
 
@@ -403,3 +411,5 @@ Phase 5 — cutover
 2026-10-27 bench moved; harbor adapter runs `noeta -p --json --permission-mode bypassPermissions`; smoke git-leak-recovery reward 1.0 in 3.5 min.
 2026-10-27 merged knowledge (instructions, skills, memory), ops (todo, background shells, web), compaction, mcp + container ExecEnv. Core: state.task_id set on load; ToolContext.post may target another task; unadvertised tools; Rewrite before Ask; summary is a plain user turn; compaction resets model attempts. default_agents wires all of them in 0.6's order. Package: 23.3k lines, largest file 644.
 2026-10-27 full make eval, 14 scenarios x3, 1.0 vs the 0.6 baseline (same model): overall 0.934 vs 0.952, no regression; delegate_parallel_review times out at 240 s on both (scored by the first reply, by design). Full suite against postgres:16: 1241 passed. `make check` runs the 1.0 package (check-next); naming lint: MCP's header is a connection id, ACP's protocol names exempted.
+2026-10-27 released 0.6.42 (merged PR #75 with owner's go-ahead; both wheels verified from PyPI).
+2026-10-27 fresh-context reviews: core/front ends (4 P1, 8 P2) and extensions (4 P1, 5 P2), all with repros; two fix branches in flight. Spec drift fixed here: no blob table (payloads inline), deltas are a separate channel, `tasks()` filters by parent/status, sync facade moved to phase 5.
