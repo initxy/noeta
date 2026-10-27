@@ -97,9 +97,9 @@ Provider errors never reach this: they become error `LLMResponse`s the policy ha
 | `"cancelled"` | a human cancel landed; task is terminal |
 | `"stopped"` | a human stop landed, or crash recovery parked it; task is reopenable |
 
-`ReliabilityEvent(kind, task_id=None, lease_id=None, detail={})` — process-local, not event-log events. Kinds: `stale_requeued`, `suspended_without_wake`, `step_failed_retryable`, `heartbeat_invalid_lease`, `shutdown_abandoned`, `timers_fired`, `attempt_abandoned` (interrupted attempt sealed and re-driven), `attempt_parked` (sealed and parked for a human), `cap_terminal_reconciled`, `dispatcher_unavailable`.
+`ReliabilityEvent(kind, task_id=None, lease_id=None, detail={})` — process-local, not event-log events. Kinds: `stale_requeued`, `suspended_without_wake`, `step_failed_retryable`, `heartbeat_invalid_lease`, `shutdown_abandoned`, `timers_fired`, `attempt_abandoned` (interrupted attempt sealed and re-driven), `attempt_parked` (sealed and parked for a human), `attempt_resumed` (the interrupted tool batch kept and finished), `cap_terminal_reconciled`, `dispatcher_unavailable`.
 
-`WakeRecoveryError` — a wake can't be matched to folded state; the worker fails loudly. A crash mid-step is not an error: the next lease seals the attempt with `StepAttemptAbandoned` and re-drives it if side-effect-free, otherwise parks it.
+`WakeRecoveryError` — a wake can't be matched to folded state; the worker fails loudly. A crash mid-step is not an error: the next lease keeps a recorded tool batch and finishes it (no call that started runs again); an attempt with no call started is sealed with `StepAttemptAbandoned` and re-driven if side-effect-free, otherwise parked.
 
 ## Shutdown
 

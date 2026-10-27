@@ -23,8 +23,10 @@ an SPI change. See `packages/noeta-runtime/noeta/execution/session_pack.py`.
 
 A Step is one Engine pass `compose -> decide -> dispatch`; `tool_calls` loops in place, any other
 decision ends it. An Attempt is one decide/act iteration and the unit of crash recovery:
-`ContextPlanComposed` opens it, `StepAttemptAbandoned` seals an interrupted one as folded-over dead
-history. See `docs/adr/032-step-attempt-recovery.md`.
+`ContextPlanComposed` opens it. An interrupted one whose tool batch has started is kept and finished
+(no started call runs again); otherwise `StepAttemptAbandoned` seals it as folded-over dead
+history. See `docs/adr/032-step-attempt-recovery.md`, refined by
+`docs/adr/065-crash-recovery-keeps-finished-tool-calls.md`.
 
 ## Contract
 

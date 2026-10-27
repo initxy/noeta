@@ -10,7 +10,7 @@ Noeta 用到的术语，按字母排，每条一两句话，后面链到详细�
 - **Anchored placement（按启用位置摆放）**：常驻内容在哪启用就摆在哪：第一条 assistant 消息之前启用的放在半稳定段，之后启用的就地插进历史。→ [上下文](../how-it-works/context.md)
 - **App plugin**：挂在宿主自己扩展点上的贡献（路由、渠道、定时任务）。加载器照样校验，交给宿主处理，不算 agent 身份。→ [插件扩展点](plugin-surfaces.md)
 - **Artifact**：工具在正文输出之外返回的大对象，以 `ContentRef` 列在 `ToolResult.artifacts` 上。→ [类型](types.md)
-- **Attempt**：一个 step 里"决定再执行"的一轮，崩溃恢复就按它算。中断的那一轮用 `StepAttemptAbandoned` 封掉。→ [事件日志](../how-it-works/event-log.md)
+- **Attempt**：一个 step 里"决定再执行"的一轮，崩溃恢复就按它算。中断的那一轮保留已经开始的工具调用；一个都没开始的话，用 `StepAttemptAbandoned` 封掉。→ [事件日志](../how-it-works/event-log.md)
 
 ## B
 

@@ -97,9 +97,9 @@ loop.run_forever(install_signals=True)   # blocks until stop()
 | `"cancelled"` | 人工取消生效，任务已终止 |
 | `"stopped"` | 人工停止生效，或崩溃恢复把它挂起；任务还能继续 |
 
-`ReliabilityEvent(kind, task_id=None, lease_id=None, detail={})`——只在进程内，不写事件日志。取值：`stale_requeued`、`suspended_without_wake`、`step_failed_retryable`、`heartbeat_invalid_lease`、`shutdown_abandoned`、`timers_fired`、`attempt_abandoned`（中断的一步已封存并自动重跑）、`attempt_parked`（已封存并挂起等人处理）、`cap_terminal_reconciled`、`dispatcher_unavailable`。
+`ReliabilityEvent(kind, task_id=None, lease_id=None, detail={})`——只在进程内，不写事件日志。取值：`stale_requeued`、`suspended_without_wake`、`step_failed_retryable`、`heartbeat_invalid_lease`、`shutdown_abandoned`、`timers_fired`、`attempt_abandoned`（中断的一步已封存并自动重跑）、`attempt_parked`（已封存并挂起等人处理）、`attempt_resumed`（保留中断的那批工具调用，接着往下跑）、`cap_terminal_reconciled`、`dispatcher_unavailable`。
 
-`WakeRecoveryError`——唤醒对不上折叠后的状态，worker 直接报错。执行中途崩溃不算错误：下次租到时会用 `StepAttemptAbandoned` 封存那一步，没有副作用就自动重跑，否则挂起等人处理。
+`WakeRecoveryError`——唤醒对不上折叠后的状态，worker 直接报错。执行中途崩溃不算错误：下次租到时，已经记录下的那批工具调用会被保留并接着跑完（开始过的调用不再执行）；还没有调用开始的尝试用 `StepAttemptAbandoned` 封存，没有副作用就自动重跑，否则挂起等人处理。
 
 ## 退出
 

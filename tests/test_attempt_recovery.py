@@ -1,14 +1,17 @@
 """Recovery of a step attempt whose worker died half-way through it.
 
 Covers the scanner (attempt anchoring, seal-window reset, plan-less
-approval-execution windows), the classifier's guard-chain rule, and the
-worker's seal → re-drive-or-park machine end-to-end over both the SQLite
-and InMemory stacks. Each crash window is simulated by raising mid-step,
+approval-execution windows, the recorded tool batch), the classifier's
+guard-chain rule, and the worker's resume / seal → re-drive-or-park machine
+end-to-end over both the SQLite and InMemory stacks. Each crash window is simulated by raising mid-step,
 abandoning the in-flight lease, then ``requeue_stale`` + a fresh lease.
 The hazard these guard: a blind re-drive over a dirty window would
-re-execute a human-approved call or re-spawn a subtask, so anything the
-guard chain would not have run unattended must park for a human instead.
-See docs/adr/032-step-attempt-recovery.md.
+re-execute a call that already ran — a finished ``Bash`` under a gate-free
+permission mode, a human-approved call, a spawn — so a recorded tool batch
+is kept and finished, never re-decided, and anything else the guard chain
+would not have run unattended parks for a human.
+See docs/adr/032-step-attempt-recovery.md and
+docs/adr/065-crash-recovery-keeps-finished-tool-calls.md.
 """
 
 from __future__ import annotations
@@ -33,7 +36,12 @@ from noeta.protocols.decisions import (
     ToolCallsDecision,
     YieldForHumanDecision,
 )
-from noeta.protocols.messages import TextBlock
+from noeta.protocols.messages import (
+    Message,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.protocols.wake import (
     NEXT_GOAL_WAKE_HANDLE,
@@ -41,6 +49,8 @@ from noeta.protocols.wake import (
 )
 from noeta.runtime.attempt import (
     ABANDON_CAP,
+    INTERRUPTED_CALL_ERROR,
+    NOT_STARTED_CALL_ERROR,
     classify_attempt,
     scan_interrupted_attempt,
     scan_pending_park,
@@ -85,8 +95,8 @@ def test_scan_anchors_on_last_plan() -> None:
         _Env("MessagesAppended", 1),
         _Env("ContextPlanComposed", 2),   # completed attempt
         _Env("MessagesAppended", 3),
-        _Env("ToolCallStarted", 4),
-        _Env("ToolCallFinished", 5),
+        _Env("ToolCallStarted", 4, _StartedPayload("c1", "reader", {})),
+        _Env("ToolCallFinished", 5, _FinishedPayload("c1")),
         _Env("ContextPlanComposed", 6),   # interrupted attempt
         _Env("MessagesAppended", 7),
     ]
@@ -95,6 +105,24 @@ def test_scan_anchors_on_last_plan() -> None:
     assert attempt.anchored_on_plan is True
     assert attempt.attempt_start_seq == 6
     assert [e.seq for e in attempt.tail] == [6, 7]
+    assert attempt.abandon_count == 0
+    assert attempt.resumed_count == 0     # the earlier call finished
+
+
+def test_scan_counts_attempts_resumed_across_a_lost_call() -> None:
+    # an earlier live attempt kept its batch across a crash that cut c1
+    # short (started, no result): it feeds the cap like a seal does.
+    events = [
+        _Env("TaskWoken", 0),
+        _Env("ContextPlanComposed", 1),
+        _Env("ToolCallStarted", 2, _StartedPayload("c1", "reader", {})),
+        _Env("MessagesAppended", 3),      # the resumed batch's results
+        _Env("ContextPlanComposed", 4),   # interrupted attempt
+    ]
+    attempt = scan_interrupted_attempt(events)
+    assert attempt is not None
+    assert attempt.attempt_start_seq == 4
+    assert attempt.resumed_count == 1
     assert attempt.abandon_count == 0
 
 
@@ -304,6 +332,37 @@ class _KillOnceTool(FakeTool):
         return super().invoke(arguments, ctx)
 
 
+def _batch(*calls: ToolCall) -> ToolCallsDecision:
+    """A tool_calls decision carrying its assistant message, as a real
+    Policy records it — the ``tool_use`` blocks are the durable decision."""
+    return ToolCallsDecision(
+        calls=list(calls),
+        assistant_message=Message(
+            role="assistant",
+            content=[
+                ToolUseBlock(
+                    call_id=c.call_id,
+                    tool_name=c.tool_name,
+                    arguments=dict(c.arguments),
+                )
+                for c in calls
+            ],
+        ),
+    )
+
+
+def _tool_results(log: Any, cs: Any, tid: str) -> dict[str, ToolResultBlock]:
+    """Every tool result the folded conversation carries, by call id."""
+    task = fold(log, cs, tid)
+    return {
+        block.call_id: block
+        for message in task.runtime.messages
+        if message.role == "tool"
+        for block in message.content
+        if isinstance(block, ToolResultBlock)
+    }
+
+
 def _engine_on(stack: Any, policy: Any, *, tools: Any = None,
                hooks: Any = None) -> Any:
     event_log, content_store, dispatcher, _ = stack
@@ -400,32 +459,279 @@ def test_safe_crash_auto_redrives_without_reexecuting(stack: Any) -> None:
     assert sum(1 for e in events if e.type == "TaskWoken") == 1
 
 
-def test_unfinished_lowrisk_tool_still_redrives(stack: Any) -> None:
-    """A hard crash mid-tool (Started without Finished) on a guard-allowed
-    tool re-drives unattended — the same trust as running it unattended in
-    the first place. The re-driven decide re-issues the call and it
-    completes."""
+def test_started_unfinished_call_gets_the_unknown_outcome_result(
+    stack: Any,
+) -> None:
+    """A hard crash mid-tool (Started without a recorded result): recovery
+    keeps the decision, answers the call with the unknown-outcome error and
+    never runs it again; the step continues at its next decide."""
     log, cs, dispatcher, _ = stack
-    tool = _KillOnceTool(name="reader", script={("x",): "body"})
-    policy = _CrashOncePolicy([
+    tool = _KillOnceTool(name="editor", script={("x",): "ok"}, risk_level="high")
+    seen_views: list[Any] = []
+
+    class _Policy(_CrashOncePolicy):
+        def decide(self, ctx: Any, view: Any) -> Any:
+            seen_views.append(view)
+            return super().decide(ctx, view)
+
+    policy = _Policy([
         YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
-        ToolCallsDecision(calls=[
-            ToolCall(tool_name="reader", arguments={"p": "x"}, call_id="c1")
-        ]),
-        # after the re-drive the policy decides the same call again, then ends
-        ToolCallsDecision(calls=[
-            ToolCall(tool_name="reader", arguments={"p": "x"}, call_id="c2")
-        ]),
+        _batch(ToolCall(tool_name="editor", arguments={"p": "x"}, call_id="c1")),
         FinishDecision(answer="done"),
     ])
-    engine, tid = _suspended_session(stack, policy, tools={"reader": tool})
+    engine, tid = _suspended_session(stack, policy, tools={"editor": tool})
     _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
     lease = _reclaim(stack, tid)
-    outcome = run_leased_task(_RT(engine, log, cs, dispatcher), lease)
+    seen: list[ReliabilityEvent] = []
+    outcome = run_leased_task(
+        _RT(engine, log, cs, dispatcher), lease, reliability_sink=seen.append
+    )
     assert outcome == "woken"
-    seals = _seals(log, tid)
-    assert len(seals) == 1 and seals[0].payload.reason == "auto_redrive"
+    assert _seals(log, tid) == []            # nothing sealed, nothing re-decided
     assert any(e.type == "TaskCompleted" for e in log.read(tid))
+    result = _tool_results(log, cs, tid)["c1"]
+    assert result.success is False
+    assert result.error == INTERRUPTED_CALL_ERROR
+    # the killed body ran once and was never re-invoked by recovery.
+    starts = [e for e in log.read(tid) if e.type == "ToolCallStarted"]
+    assert [e.payload.call_id for e in starts] == ["c1"]
+    assert _system_texts(log, cs, tid) == []
+    assert [e.kind for e in seen] == ["attempt_resumed"]
+    assert seen[0].detail["interrupted_calls"] == ["editor"]
+
+
+def test_finished_bash_in_bypass_batch_is_not_rerun(stack: Any) -> None:
+    """The audit case: a gate-free permission mode (bypassPermissions gates
+    nothing) and a crash mid-batch after ``Bash`` finished. The finished
+    call keeps its recorded result and is not run again, the call the crash
+    cut short gets the unknown-outcome result, and a call that never
+    started runs once, past the live guard chain."""
+    log, cs, dispatcher, _ = stack
+    bash = _CountingTool(name="Bash", script={("git push",): "pushed"},
+                         risk_level="high")
+    killer = _KillOnceTool(name="Write", script={("f",): "written"},
+                           risk_level="high")
+    later = _CountingTool(name="Read", script={("g",): "read"})
+    tools = {"Bash": bash, "Write": killer, "Read": later}
+    hooks = HookManager()
+    hooks.register(PermissionGuard(PermissionPolicy(), tools))  # gates nothing
+    policy = _CrashOncePolicy([
+        YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
+        _batch(
+            ToolCall(tool_name="Bash", arguments={"command": "git push"},
+                     call_id="c1"),
+            ToolCall(tool_name="Write", arguments={"path": "f"}, call_id="c2"),
+            ToolCall(tool_name="Read", arguments={"path": "g"}, call_id="c3"),
+        ),
+        FinishDecision(answer="done"),
+    ])
+    engine, tid = _suspended_session(stack, policy, tools=tools, hooks=hooks)
+    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    assert (bash.calls, later.calls) == (1, 0)
+    lease = _reclaim(stack, tid)
+    assert run_leased_task(_RT(engine, log, cs, dispatcher), lease) == "woken"
+    assert bash.calls == 1                   # the finished push is not re-run
+    assert later.calls == 1                  # the never-started call ran once
+    assert _seals(log, tid) == []
+    results = _tool_results(log, cs, tid)
+    assert results["c1"].success is True and results["c1"].output == "pushed"
+    assert results["c2"].error == INTERRUPTED_CALL_ERROR
+    assert results["c3"].success is True and results["c3"].output == "read"
+    assert any(e.type == "TaskCompleted" for e in log.read(tid))
+
+
+def test_crash_after_the_batch_results_reruns_nothing(
+    stack: Any, monkeypatch: Any
+) -> None:
+    """A crash after the batch's result message landed but before the next
+    attempt's plan: every call has its result, so recovery only continues
+    the step — the old per-attempt seal would have re-run all of them."""
+    log, cs, dispatcher, _ = stack
+    bash = _CountingTool(name="Bash", script={("ls",): "a b"}, risk_level="high")
+    policy = _CrashOncePolicy([
+        YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
+        _batch(ToolCall(tool_name="Bash", arguments={"c": "ls"}, call_id="c1")),
+        FinishDecision(answer="done"),
+    ])
+    engine, tid = _suspended_session(stack, policy, tools={"Bash": bash})
+    composer = engine._composer  # noqa: SLF001
+    real_compose = composer.compose
+    composes = {"n": 0}
+
+    def compose_crashing_after_the_batch(task: Any) -> Any:
+        composes["n"] += 1
+        if composes["n"] == 2:               # the compose after the batch
+            raise RuntimeError("simulated crash before the next plan")
+        return real_compose(task)
+
+    monkeypatch.setattr(composer, "compose", compose_crashing_after_the_batch)
+    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    assert bash.calls == 1
+    lease = _reclaim(stack, tid)
+    assert run_leased_task(_RT(engine, log, cs, dispatcher), lease) == "woken"
+    assert bash.calls == 1
+    assert _seals(log, tid) == []
+    assert any(e.type == "TaskCompleted" for e in log.read(tid))
+    # exactly one result message for the batch — none was appended twice.
+    assert sum(
+        1 for m in fold(log, cs, tid).runtime.messages if m.role == "tool"
+    ) == 1
+
+
+def test_kept_batch_reuses_denials_and_answers_control_calls(
+    stack: Any,
+) -> None:
+    """A denial recorded before the crash keeps its reason; a never-started
+    call that no plain tool answers (a control or routing tool, an unknown
+    name) is not run — it is told to issue the call again."""
+    log, cs, dispatcher, _ = stack
+    killer = _KillOnceTool(name="editor", script={("x",): "ok"})
+    tools = {"editor": killer, "blocked": FakeTool(name="blocked")}
+    hooks = HookManager()
+    hooks.register(
+        PermissionGuard(PermissionPolicy(denied_tools=frozenset({"blocked"})),
+                        tools)
+    )
+    policy = _CrashOncePolicy([
+        YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
+        _batch(
+            ToolCall(tool_name="blocked", arguments={}, call_id="c1"),
+            ToolCall(tool_name="editor", arguments={"p": "x"}, call_id="c2"),
+            ToolCall(tool_name="TodoWrite", arguments={}, call_id="c3"),
+        ),
+        FinishDecision(answer="done"),
+    ])
+    engine, tid = _suspended_session(stack, policy, tools=tools, hooks=hooks)
+    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    denied = [e for e in log.read(tid) if e.type == "ToolCallDenied"]
+    assert [e.payload.call_id for e in denied] == ["c1"]
+    lease = _reclaim(stack, tid)
+    assert run_leased_task(_RT(engine, log, cs, dispatcher), lease) == "woken"
+    results = _tool_results(log, cs, tid)
+    assert results["c1"].error == denied[0].payload.reason
+    assert results["c2"].error == INTERRUPTED_CALL_ERROR
+    assert results["c3"].error == NOT_STARTED_CALL_ERROR
+    # the denial was not evaluated a second time.
+    assert len([e for e in log.read(tid) if e.type == "ToolCallDenied"]) == 1
+
+
+def test_never_started_call_still_meets_the_approval_gate(stack: Any) -> None:
+    """A never-started call runs through the live guard chain: one that now
+    needs approval suspends the task on its approval, with every other call
+    of the batch already answered."""
+    log, cs, dispatcher, _ = stack
+    killer = _KillOnceTool(name="editor", script={("x",): "ok"})
+    danger = _CountingTool(name="danger", script={(): "did it"})
+    tools = {"editor": killer, "danger": danger}
+    hooks = HookManager()
+    hooks.register(
+        PermissionGuard(
+            PermissionPolicy(require_approval_tools=frozenset({"danger"})),
+            tools,
+        )
+    )
+    policy = _CrashOncePolicy([
+        YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
+        _batch(
+            ToolCall(tool_name="editor", arguments={"p": "x"}, call_id="c1"),
+            ToolCall(tool_name="danger", arguments={}, call_id="c2"),
+        ),
+        FinishDecision(answer="done"),
+    ])
+    engine, tid = _suspended_session(stack, policy, tools=tools, hooks=hooks)
+    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    lease = _reclaim(stack, tid)
+    assert run_leased_task(_RT(engine, log, cs, dispatcher), lease) == "woken"
+    task = fold(log, cs, tid)
+    assert task.status == "suspended"
+    assert task.wake_on.handle == "approval-c2"
+    assert danger.calls == 0
+    assert _tool_results(log, cs, tid)["c1"].error == INTERRUPTED_CALL_ERROR
+    assert dispatcher.task_status(tid) == "suspended"
+
+
+def test_armed_stop_keeps_recovery_from_running_new_calls(stack: Any) -> None:
+    """A forced stop recovers the abandoned step with the stop still armed:
+    the batch is answered, but a call that never started is closed unrun —
+    recovery must not start work the human just stopped."""
+    log, cs, dispatcher, _ = stack
+    killer = _KillOnceTool(name="editor", script={("x",): "ok"})
+    later = _CountingTool(name="reader", script={("y",): "body"})
+    tools = {"editor": killer, "reader": later}
+    policy = _CrashOncePolicy([
+        YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
+        _batch(
+            ToolCall(tool_name="editor", arguments={"p": "x"}, call_id="c1"),
+            ToolCall(tool_name="reader", arguments={"p": "y"}, call_id="c2"),
+        ),
+    ])
+    engine, tid = _suspended_session(stack, policy, tools=tools)
+    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    lease = _reclaim(stack, tid)
+
+    class _Stopped(_RT):
+        def is_cancelled(self, task_id: str) -> bool:
+            return True
+
+    outcome = run_leased_task(_Stopped(engine, log, cs, dispatcher), lease)
+    assert outcome == "cancelled"
+    assert later.calls == 0
+    results = _tool_results(log, cs, tid)
+    assert results["c1"].error == INTERRUPTED_CALL_ERROR
+    assert results["c2"].success is False and "stop" in results["c2"].error
+
+
+def test_repeated_lost_calls_hit_the_cap_and_park(stack: Any) -> None:
+    """A model that keeps re-issuing a call that kills the worker: each
+    crash is resumed with no seal, but the resumed batches count toward the
+    cap, so the loop parks instead of burning model calls forever."""
+    log, cs, dispatcher, _ = stack
+
+    class _AlwaysKill(FakeTool):
+        def invoke(self, arguments: dict, ctx: ToolContext) -> ToolResult:
+            raise KeyboardInterrupt("simulated hard crash mid-tool")
+
+    tool = _AlwaysKill(name="editor")
+    script: list[Any] = [YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE)]
+    script += [
+        _batch(ToolCall(tool_name="editor", arguments={}, call_id=f"c{i}"))
+        for i in range(ABANDON_CAP + 2)
+    ]
+    policy = _CrashOncePolicy(script)
+    engine, tid = _suspended_session(stack, policy, tools={"editor": tool})
+    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    outcome: Any = None
+    for _ in range(ABANDON_CAP + 1):
+        lease = _reclaim(stack, tid)
+        dispatcher.heartbeat(lease.lease_id)
+        try:
+            outcome = run_leased_task(_RT(engine, log, cs, dispatcher), lease)
+        except KeyboardInterrupt:
+            continue                          # the continued step crashed again
+        break
+    assert outcome == "stopped"
+    seals = _seals(log, tid)
+    assert [s.payload.reason for s in seals] == ["abandon_cap"]
+    task = fold(log, cs, tid)
+    assert task.status == "suspended"
+    assert task.runtime.messages[-1].origin == "system"
+
+
+def test_resumed_batch_folds_bytes_equal_from_scratch(stack: Any) -> None:
+    log, cs, dispatcher, _ = stack
+    tool = _KillOnceTool(name="editor", script={("x",): "ok"})
+    policy = _CrashOncePolicy([
+        YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
+        _batch(ToolCall(tool_name="editor", arguments={"p": "x"}, call_id="c1")),
+        FinishDecision(answer="done"),
+    ])
+    engine, tid = _suspended_session(stack, policy, tools={"editor": tool})
+    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    lease = _reclaim(stack, tid)
+    run_leased_task(_RT(engine, log, cs, dispatcher), lease)
+    accelerated = fold(log, cs, tid)
+    scratch = fold(log, cs, tid, ignore_snapshots=True)
+    assert serialize_task_state(accelerated) == serialize_task_state(scratch)
 
 
 def test_spawn_in_window_parks_as_stopped_conversation(stack: Any) -> None:
@@ -897,24 +1203,20 @@ def test_crash_during_park_after_notice_does_not_duplicate_it(
 # ---------------------------------------------------------------------------
 
 
-def test_dirty_window_budget_does_not_mispark(stack: Any) -> None:
-    """The interrupted attempt's own ``ToolCallStarted`` must not consume
-    the budget it is judged by: with ``max_tool_calls=1`` and one dirty
-    started call, the re-drive would run the call fine (the seal reverts
-    the counter), so classification must say safe — not park."""
+def test_kept_batch_counts_the_lost_call_against_the_budget(
+    stack: Any,
+) -> None:
+    """The call a crash cut short may have run, so it stays counted: with
+    ``max_tool_calls=1`` the model's re-issued call is denied by the budget
+    rather than run a second time — and nothing parks."""
     log, cs, dispatcher, _ = stack
     tool = _KillOnceTool(name="reader", script={("x",): "body"})
     hooks = HookManager()
     hooks.register(BudgetGuard(Budget(max_tool_calls=1)))
     policy = _CrashOncePolicy([
         YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
-        ToolCallsDecision(calls=[
-            ToolCall(tool_name="reader", arguments={"p": "x"}, call_id="c1")
-        ]),
-        # the re-driven decide re-issues the call, then ends
-        ToolCallsDecision(calls=[
-            ToolCall(tool_name="reader", arguments={"p": "x"}, call_id="c2")
-        ]),
+        _batch(ToolCall(tool_name="reader", arguments={"p": "x"}, call_id="c1")),
+        _batch(ToolCall(tool_name="reader", arguments={"p": "x"}, call_id="c2")),
         FinishDecision(answer="done"),
     ])
     engine, tid = _suspended_session(
@@ -924,8 +1226,10 @@ def test_dirty_window_budget_does_not_mispark(stack: Any) -> None:
     lease = _reclaim(stack, tid)
     outcome = run_leased_task(_RT(engine, log, cs, dispatcher), lease)
     assert outcome == "woken"
-    seals = _seals(log, tid)
-    assert len(seals) == 1 and seals[0].payload.reason == "auto_redrive"
+    assert _seals(log, tid) == []
+    results = _tool_results(log, cs, tid)
+    assert results["c1"].error == INTERRUPTED_CALL_ERROR
+    assert results["c2"].success is False    # denied by the budget
     assert any(e.type == "TaskCompleted" for e in log.read(tid))
 
 
@@ -1137,47 +1441,41 @@ def _system_texts(log: Any, cs: Any, tid: str) -> list[str]:
     ]
 
 
-def test_redrive_tells_the_model_a_mutating_call_may_have_applied(stack: Any) -> None:
-    """A hard crash mid-call of a non-read-only tool (an ``Edit`` already on
-    disk, say): the re-drive runs on a conversation that no longer shows the
-    call, so it is told — in Claude Code's words for a call whose result was
-    lost — to check the call's effect before running it again."""
+def test_decision_without_started_calls_redrives(stack: Any) -> None:
+    """A decision recorded but nothing started yet ran nothing, so the
+    attempt is sealed and re-decided as before (no side effect to keep)."""
     log, cs, dispatcher, _ = stack
-    tool = _KillOnceTool(name="editor", script={("x",): "ok"}, risk_level="high")
-    policy = _CrashOncePolicy([
+    reader = _CountingTool(name="reader", script={("x",): "body"})
+
+    class _CrashBeforeTools(_CrashOncePolicy):
+        def decide(self, ctx: Any, view: Any) -> Any:
+            decision = super().decide(ctx, view)
+            if getattr(decision, "calls", None) and not self.__dict__.get("hit"):
+                self.__dict__["hit"] = True
+                # the assistant message lands, then the process dies.
+                engine._apply_decision_assistant_message(  # noqa: SLF001
+                    task_ref[0], decision,
+                    lease_id=ctx.lease_id, trace_id=ctx.trace_id,
+                )
+                raise RuntimeError("crash between the decision and its calls")
+            return decision
+
+    task_ref: list[Any] = []
+    policy = _CrashBeforeTools([
         YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
-        ToolCallsDecision(calls=[
-            ToolCall(tool_name="editor", arguments={"p": "x"}, call_id="c1")
-        ]),
+        _batch(ToolCall(tool_name="reader", arguments={"p": "x"}, call_id="c1")),
         FinishDecision(answer="done"),
     ])
-    engine, tid = _suspended_session(stack, policy, tools={"editor": tool})
+    engine, tid = _suspended_session(stack, policy, tools={"reader": reader})
+    task_ref.append(fold(log, cs, tid))
     _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    assert reader.calls == 0
     lease = _reclaim(stack, tid)
     assert run_leased_task(_RT(engine, log, cs, dispatcher), lease) == "woken"
-    assert _seals(log, tid)[0].payload.reason == "auto_redrive"
-    assert _system_texts(log, cs, tid) == [
-        "The previous attempt at this response was interrupted before it "
-        "could complete. editor ran, but its result could not be read. Check "
-        "its effect before running it again."
-    ]
-
-
-def test_redrive_after_a_read_only_call_says_nothing(stack: Any) -> None:
-    log, cs, dispatcher, _ = stack
-    tool = _KillOnceTool(name="reader", script={("x",): "body"})
-    policy = _CrashOncePolicy([
-        YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
-        ToolCallsDecision(calls=[
-            ToolCall(tool_name="reader", arguments={"p": "x"}, call_id="c1")
-        ]),
-        FinishDecision(answer="done"),
-    ])
-    engine, tid = _suspended_session(stack, policy, tools={"reader": tool})
-    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
-    lease = _reclaim(stack, tid)
-    assert run_leased_task(_RT(engine, log, cs, dispatcher), lease) == "woken"
-    assert _system_texts(log, cs, tid) == []
+    seals = _seals(log, tid)
+    assert len(seals) == 1 and seals[0].payload.reason == "auto_redrive"
+    assert any(e.type == "TaskCompleted" for e in log.read(tid))
+    assert reader.calls == 0
 
 
 def test_recovery_resets_what_the_tools_carry(stack: Any) -> None:
@@ -1200,3 +1498,84 @@ def test_recovery_resets_what_the_tools_carry(stack: Any) -> None:
 
     assert run_leased_task(_Host(engine, log, cs, dispatcher), lease) == "woken"
     assert reset == [tid]
+
+
+# ---------------------------------------------------------------------------
+# A real host: ReAct policy, real Bash, bypassPermissions
+# ---------------------------------------------------------------------------
+
+
+def test_host_bypass_crash_mid_batch_does_not_rerun_finished_bash(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    """End to end on an ``SdkHost``: the model asks for two ``Bash`` calls
+    in one response under ``bypassPermissions``, and the worker dies while
+    the second one runs. Recovery keeps the first call's result — its
+    command ran once, not twice — and answers the second with the
+    unknown-outcome error before the model is asked again."""
+    from noeta.protocols.messages import LLMResponse, Usage
+    from noeta.runtime import tool as tool_mod
+    from noeta.runtime.shell_policy import ShellMode
+    from noeta.runtime.workspace import FsWriteMode
+    from noeta.testing.fake_llm import FakeLLMProvider
+    from tests._sdk_session import (
+        make_driver,
+        make_host,
+        make_registry,
+        runner_main_spec,
+    )
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    batch = LLMResponse(
+        stop_reason="tool_use",
+        content=[
+            ToolUseBlock(call_id="b1", tool_name="Bash",
+                         arguments={"command": "echo ran >> pushes.txt"}),
+            ToolUseBlock(call_id="b2", tool_name="Bash",
+                         arguments={"command": "echo second >> other.txt"}),
+        ],
+        usage=Usage(uncached=1, output=1),
+        raw={"id": "batch"},
+    )
+    provider = FakeLLMProvider(responses=[batch, _end_turn("done")])
+    host = make_host(
+        make_registry(runner_main_spec("main")),
+        workspace_dir=ws,
+        provider=provider,
+        model="gpt-test",
+        multi_turn=True,
+        write_mode=FsWriteMode.APPLY,
+        shell_mode=ShellMode.ARBITRARY,
+        permission_mode="bypassPermissions",
+    )
+    clock = [1000.0]
+    host.dispatcher._now = lambda: clock[0]  # noqa: SLF001 — drive lease expiry
+    driver = make_driver(host)
+
+    real_run = tool_mod.ToolRuntime._run
+
+    def die_on_second_call(self: Any, started: Any) -> Any:
+        if started.call.call_id == "b2":
+            raise KeyboardInterrupt("simulated kill -9 mid-batch")
+        return real_run(self, started)
+
+    monkeypatch.setattr(tool_mod.ToolRuntime, "_run", die_on_second_call)
+    with pytest.raises(KeyboardInterrupt):
+        driver.start(goal="push it", agent="main")
+    monkeypatch.setattr(tool_mod.ToolRuntime, "_run", real_run)
+    assert (ws / "pushes.txt").read_text() == "ran\n"
+    (tid,) = host.event_log.task_ids_with_event_type("TaskCreated")
+    clock[0] += 100_000.0
+    assert tid in host.dispatcher.requeue_stale()
+    lease = host.dispatcher.lease(worker_id="w", task_id=tid)
+    assert lease is not None
+    run_leased_task(host, lease)
+    assert (ws / "pushes.txt").read_text() == "ran\n"   # not re-run
+    assert not (ws / "other.txt").exists()
+    results = _tool_results(host.event_log, host.content_store, tid)
+    assert results["b1"].success is True
+    assert results["b2"].error == INTERRUPTED_CALL_ERROR
+    assert _seals(host.event_log, tid) == []
+    assert fold(host.event_log, host.content_store, tid).status == "suspended"
+    assert len(provider.received_requests) == 2
