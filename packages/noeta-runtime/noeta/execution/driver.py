@@ -417,6 +417,29 @@ def _idempotent_state(events: list[EventEnvelope], key: str) -> str:
     return "new"
 
 
+def _stale_claim(events: list[EventEnvelope], key: str) -> Optional[str]:
+    """Whether the newest claim of ``key`` (whose goal never landed) still
+    holds the key: ``None`` when no claim exists, ``"live"`` while its
+    holder may still be seeding, else the dead claim's ``claim_id``.
+
+    A claim is dead once the task has suspended since it (its seed failed,
+    or its turn ran without the goal after a crash), or once it is older
+    than the window a waiting duplicate gives the holder to land its goal.
+    """
+    for i in range(len(events) - 1, -1, -1):
+        env = events[i]
+        if (
+            env.type != "IdempotencyKeyClaimed"
+            or getattr(env.payload, "idempotency_key", None) != key
+        ):
+            continue
+        settled = any(e.type == "TaskSuspended" for e in events[i + 1 :])
+        if settled or time.time() - env.occurred_at >= _IDEMPOTENT_WAIT_S:
+            return str(env.payload.claim_id)
+        return "live"
+    return None
+
+
 def _undriven_goal(
     task: Task, *, content: list[Any], origin: Optional[MessageOrigin]
 ) -> bool:
@@ -1211,42 +1234,42 @@ class InteractionDriver:
         Of concurrent calls with one key, exactly one seeds the turn — it
         claims the key first (``IdempotencyKeyClaimed``) — and the others wait
         briefly for its goal to land. The first call's failure is not retried
-        by a repeat, except a seed that recorded the goal and then failed
-        before any step ran, which the repeat drives as an unkeyed retry
-        would. ``None`` behaves exactly as before.
+        by a repeat, except where its goal never ran: a seed that recorded the
+        goal and then failed before any step ran is driven, and a claim whose
+        goal never landed (a crash, a failed seed) is claimed again and its
+        goal written once. ``None`` behaves exactly as before.
         """
         if idempotency_key is not None:
             if _idempotent_state(
                 self._host.event_log.read(task_id), idempotency_key
             ) == "done":
                 return self._outcome(task_id)
-            try:
-                seeded = self.seed_send_goal(
-                    task_id,
-                    goal=goal,
-                    model_selector=model_selector,
-                    provider_selector=provider_selector,
-                    images=images,
-                    permission_mode=permission_mode,
-                    enabled_mcp=enabled_mcp,
-                    effort=effort,
-                    goal_origin=goal_origin,
-                    attachment_texts=attachment_texts,
-                    activations=activations,
-                    principal=principal,
-                    idempotency_key=idempotency_key,
-                )
-            except _IdempotentRepeat as repeat:
-                if repeat.pending:
-                    self._await_keyed_effect(task_id, idempotency_key)
-                return self._outcome(task_id)
-            except NotResumableError:
-                # A concurrent call holding this key already woke the task.
-                if not self._key_claimed(task_id, idempotency_key):
-                    raise
-                self._await_keyed_effect(task_id, idempotency_key)
-                return self._outcome(task_id)
-            return self.drive_seeded(seeded)
+            # A second try only after the key's holder died without its goal.
+            for _ in range(2):
+                try:
+                    seeded = self.seed_send_goal(
+                        task_id,
+                        goal=goal,
+                        model_selector=model_selector,
+                        provider_selector=provider_selector,
+                        images=images,
+                        permission_mode=permission_mode,
+                        enabled_mcp=enabled_mcp,
+                        effort=effort,
+                        goal_origin=goal_origin,
+                        attachment_texts=attachment_texts,
+                        activations=activations,
+                        principal=principal,
+                        idempotency_key=idempotency_key,
+                    )
+                except _IdempotentRepeat as repeat:
+                    if repeat.pending and self._await_keyed_effect(
+                        task_id, idempotency_key
+                    ):
+                        continue
+                    return self._outcome(task_id)
+                return self.drive_seeded(seeded)
+            return self._outcome(task_id)
         return self.drive_seeded(
             self.seed_send_goal(
                 task_id,
@@ -1264,28 +1287,54 @@ class InteractionDriver:
             )
         )
 
-    def _await_keyed_effect(self, task_id: str, key: str) -> None:
-        """Wait (bounded) for the call that holds ``key`` to record its goal."""
+    def _await_keyed_effect(self, task_id: str, key: str) -> bool:
+        """Wait (bounded) for the call that holds ``key`` to record its goal.
+
+        ``True`` when that call died without it instead — the key's claim
+        went stale with no goal — so the caller may claim it again."""
         deadline = time.monotonic() + _IDEMPOTENT_WAIT_S
         while time.monotonic() < deadline:
-            if _idempotent_state(self._host.event_log.read(task_id), key) != "new":
-                return
+            events = self._host.event_log.read(task_id)
+            if _idempotent_state(events, key) != "new":
+                return False
+            if _stale_claim(events, key) not in (None, "live"):
+                return True
             time.sleep(_IDEMPOTENT_POLL_S)
+        events = self._host.event_log.read(task_id)
+        return _idempotent_state(events, key) == "new" and _stale_claim(
+            events, key
+        ) not in (None, "live")
 
-    def _key_claimed(self, task_id: str, key: str) -> bool:
-        """Whether a keyed call already claimed or used ``key`` on the task."""
-        return any(
-            getattr(env.payload, "idempotency_key", None) == key
-            for env in self._host.event_log.read(task_id)
-            if env.type == "IdempotencyKeyClaimed" or env.type in _KEYED_EFFECT_TYPES
-        )
+    def _key_claimed(
+        self, task_id: str, key: str, *, besides: Optional[str] = None
+    ) -> bool:
+        """Whether a keyed call other than the one holding claim ``besides``
+        already claimed or used ``key`` on the task."""
+        for env in self._host.event_log.read(task_id):
+            if getattr(env.payload, "idempotency_key", None) != key:
+                continue
+            if env.type in _KEYED_EFFECT_TYPES:
+                return True
+            if (
+                env.type == "IdempotencyKeyClaimed"
+                and env.payload.claim_id != besides
+            ):
+                return True
+        return False
 
-    def _claim_idempotency_key(self, task_id: str, key: str) -> bool:
-        """Claim ``key`` on ``task_id``; ``False`` when another call holds it.
+    def _claim_idempotency_key(
+        self, task_id: str, key: str, *, after: Optional[str] = None
+    ) -> Optional[str]:
+        """Claim ``key`` on ``task_id``: the new ``claim_id``, or ``None`` when
+        another call holds it.
 
         The keyed ``system_emit`` dedups atomically in the store, so of two
         racing calls exactly one appends its claim; the other gets that
-        claim back with a foreign ``claim_id`` (or the key's injection)."""
+        claim back with a foreign ``claim_id`` (or the key's injection).
+        ``after`` names a claim whose goal never landed: the store already
+        holds that claim under the key, so a new claim dedups on the key and
+        the dead claim's id — the retries that saw the same dead claim race
+        for one slot, and exactly one of them claims."""
         claim_id = f"claim-{uuid.uuid4().hex}"
         env = self._host.event_log.system_emit(
             task_id=task_id,
@@ -1296,9 +1345,9 @@ class InteractionDriver:
             actor="interaction-driver",
             origin="system",
             trace_id=self._trace_id(task_id),
-            idempotency_key=key,
+            idempotency_key=key if after is None else f"{key}#after:{after}",
         )
-        return getattr(env.payload, "claim_id", None) == claim_id
+        return claim_id if getattr(env.payload, "claim_id", None) == claim_id else None
 
     def inject_goal(
         self,
@@ -1528,7 +1577,15 @@ class InteractionDriver:
         is driven over the goal already on the stream.
         """
         acting = principal if principal is not None else self._principal
-        task = self._require_human_suspend(task_id, NEXT_GOAL_WAKE_HANDLE)
+        try:
+            task = self._require_human_suspend(task_id, NEXT_GOAL_WAKE_HANDLE)
+        except NotResumableError:
+            # A concurrent call holding this key already woke the task.
+            if idempotency_key is not None and self._key_claimed(
+                task_id, idempotency_key
+            ):
+                raise _IdempotentRepeat(pending=True) from None
+            raise
         # Human-stop hygiene: a prior ``close`` (or cancel attempt) pressed while
         # NO turn was in flight leaves its cancel-registry mark behind. An
         # explicit new goal means "go", so clear any stale mark FIRST — else this
@@ -1644,16 +1701,23 @@ class InteractionDriver:
         # nothing, and before the wake — the point where two racing seeds would
         # otherwise both open a turn. A goal a failed seed already recorded
         # under this key is driven without a new claim (the claim is its own).
+        # An earlier claim whose goal never landed is claimed again once it
+        # is stale, and its goal is ours to write.
+        own_claim: Optional[str] = None
         if idempotency_key is not None:
-            state = _idempotent_state(
-                self._host.event_log.read(task_id), idempotency_key
-            )
+            events = self._host.event_log.read(task_id)
+            state = _idempotent_state(events, idempotency_key)
             if state == "done":
                 raise _IdempotentRepeat(pending=False)
-            if state == "new" and not self._claim_idempotency_key(
-                task_id, idempotency_key
-            ):
-                raise _IdempotentRepeat(pending=True)
+            if state == "new":
+                stale = _stale_claim(events, idempotency_key)
+                if stale == "live":
+                    raise _IdempotentRepeat(pending=True)
+                own_claim = self._claim_idempotency_key(
+                    task_id, idempotency_key, after=stale
+                )
+                if own_claim is None:
+                    raise _IdempotentRepeat(pending=True)
         # Stash this turn's per-turn, NON-durable
         # permission_mode keyed by task_id — set AFTER selector authorization (a
         # rejected selector raises above, leaving the prior turn's mode intact) so
@@ -1701,12 +1765,26 @@ class InteractionDriver:
         # The common turn is therefore byte-identical, and a genuine refresh
         # moves the resident's bytes but never its placement (the activation
         # anchor is first-write-wins).
-        return self._seed_woken(
-            task_id,
-            handle=NEXT_GOAL_WAKE_HANDLE,
-            prelude=prelude,
-            refresh_content=True,
-        )
+        if idempotency_key is not None and _idempotent_state(
+            self._host.event_log.read(task_id), idempotency_key
+        ) == "done":
+            raise _IdempotentRepeat(pending=False)
+        try:
+            return self._seed_woken(
+                task_id,
+                handle=NEXT_GOAL_WAKE_HANDLE,
+                prelude=prelude,
+                refresh_content=True,
+            )
+        except NotResumableError:
+            # Another call woke the task between our claim and our wake. Only
+            # a call holding this key makes that a repeat; any other is the
+            # caller's to see.
+            if own_claim is not None and self._key_claimed(
+                task_id, idempotency_key or "", besides=own_claim
+            ):
+                raise _IdempotentRepeat(pending=True) from None
+            raise
 
     def inject_notice(self, task_id: str, *, notice: str) -> str:
         """Queue a background notice for the model, whatever the task is doing.

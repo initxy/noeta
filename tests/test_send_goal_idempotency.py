@@ -6,10 +6,16 @@ call is still in flight. Unkeyed calls are unchanged."""
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from noeta.core.engine import Engine
 from noeta.core.fold import fold
+from noeta.execution import driver as driver_mod
+from noeta.execution.driver import NotResumableError
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.messages import ToolUseBlock
 from noeta.sdk import Client, HostConfig, LLMResponse, Options, TextBlock, Usage
@@ -218,3 +224,120 @@ def test_unkeyed_calls_are_unchanged(tmp_path: Path) -> None:
                 assert b"idempotency_key" not in to_canonical_bytes(e.payload)
     finally:
         client.shutdown()
+
+
+def _claims(client: Client, task_id: str) -> int:
+    return sum(1 for e in client.events(task_id) if e.type == "IdempotencyKeyClaimed")
+
+
+def test_a_claim_whose_goal_never_landed_is_claimed_again(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The first call claimed its key and died before its goal landed: the
+    retry with the same key writes the goal, once, instead of reporting the
+    task as it is forever."""
+    monkeypatch.setattr(driver_mod, "_IDEMPOTENT_WAIT_S", 0.3)
+    calls, respond = _counting()
+    client = _client(tmp_path, respond)
+    try:
+        tid = client.start(goal="hi").task_id
+        assert client._driver._claim_idempotency_key(tid, "k1")  # noqa: SLF001
+        client.send_goal(tid, goal="once", idempotency_key="k1")
+        assert _goal_appends(client, tid, "once") == 1
+        seen = len(calls)
+        client.send_goal(tid, goal="once", idempotency_key="k1")
+        assert len(calls) == seen
+        assert _goal_appends(client, tid, "once") == 1
+        assert _claims(client, tid) == 2
+    finally:
+        client.shutdown()
+
+
+def test_a_seed_that_failed_before_its_goal_is_retried(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A seed that claimed the key and failed before recording the goal is
+    compensated back to the next-goal suspend; the retry writes the goal
+    straight away."""
+    calls, respond = _counting()
+    client = _client(tmp_path, respond)
+    try:
+        tid = client.start(goal="hi").task_id
+        real_append = Engine.append_user_message
+        state = {"raised": False}
+
+        def fail_once(self: Any, *args: Any, **kwargs: Any) -> Any:
+            if not state["raised"]:
+                state["raised"] = True
+                raise RuntimeError("simulated append failure")
+            return real_append(self, *args, **kwargs)
+
+        monkeypatch.setattr(Engine, "append_user_message", fail_once)
+        with pytest.raises(RuntimeError):
+            client.send_goal(tid, goal="once", idempotency_key="k1")
+        assert _goal_appends(client, tid, "once") == 0
+        started = time.monotonic()
+        out = client.send_goal(tid, goal="once", idempotency_key="k1")
+        assert time.monotonic() - started < 5.0
+        assert out.status == "suspended"
+        assert _goal_appends(client, tid, "once") == 1
+    finally:
+        client.shutdown()
+
+
+def test_a_keyed_call_beaten_by_an_unkeyed_one_is_refused(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A keyed call whose wake loses to an unkeyed ``send_goal`` gets the
+    refusal; its own claim does not make it look like a repeat."""
+    calls, respond = _counting()
+    client = _client(tmp_path, respond)
+    try:
+        tid = client.start(goal="hi").task_id
+        driver = client._driver  # noqa: SLF001
+        real_claim = driver._claim_idempotency_key  # noqa: SLF001
+
+        def claim_then_lose(*args: Any, **kwargs: Any) -> Any:
+            claim = real_claim(*args, **kwargs)
+            driver.seed_send_goal(tid, goal="other")
+            return claim
+
+        monkeypatch.setattr(driver, "_claim_idempotency_key", claim_then_lose)
+        with pytest.raises(NotResumableError):
+            client.send_goal(tid, goal="once", idempotency_key="k1")
+        assert _goal_appends(client, tid, "once") == 0
+    finally:
+        client.shutdown()
+
+
+def test_concurrent_retries_after_a_dead_claim_write_one_goal(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    monkeypatch.setattr(driver_mod, "_IDEMPOTENT_WAIT_S", 0.3)
+    calls, respond = _counting()
+    clients = [_client(tmp_path, respond, queue=f"q{i}") for i in range(4)]
+    try:
+        tid = clients[0].start(goal="hi").task_id
+        assert clients[0]._driver._claim_idempotency_key(tid, "k")  # noqa: SLF001
+        time.sleep(0.35)  # the claim's holder is gone
+        barrier = threading.Barrier(len(clients))
+        errors: list[BaseException] = []
+
+        def go(c: Client) -> None:
+            barrier.wait()
+            try:
+                c.send_goal(tid, goal="once", idempotency_key="k")
+            except BaseException as exc:  # noqa: BLE001 - surfaced below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=go, args=(c,)) for c in clients]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(30)
+        assert errors == []
+        assert _goal_appends(clients[0], tid, "once") == 1
+        assert _claims(clients[0], tid) == 2
+    finally:
+        for c in clients:
+            c.shutdown()
