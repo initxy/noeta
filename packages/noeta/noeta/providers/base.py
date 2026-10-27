@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Protocol
+from collections.abc import Callable
+from typing import Protocol
 
 from noeta.types import Delta, ModelRequest, ModelResponse
 
@@ -15,7 +16,7 @@ class Provider(Protocol):
     family: str
 
     async def complete(
-        self, request: ModelRequest, on_delta: Optional[OnDelta] = None
+        self, request: ModelRequest, on_delta: OnDelta | None = None
     ) -> ModelResponse:
         """Send ``request``; stream deltas to ``on_delta`` when given. Raises a
         ``noeta.errors.ModelError`` subclass on failure. Cancellation is plain
