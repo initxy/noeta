@@ -22,7 +22,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from evals.harness import PROVIDERS, EvalConfig, Judge, time_trial
+import importlib
+
+from evals.core import EvalConfig, time_trial
 from evals.scenarios import SCENARIOS
 from tests import _live_env
 
@@ -53,7 +55,10 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
     ap.add_argument("--trials", type=int, default=3, help="runs per scenario (default 3; make eval-baseline uses 9)")
     ap.add_argument("--concurrency", type=int, default=14, help="trials in flight at once")
     ap.add_argument("--only", nargs="*", default=None, help="scenario names (default: all)")
-    ap.add_argument("--provider", choices=sorted(PROVIDERS), default="anthropic")
+    ap.add_argument("--provider", choices=("anthropic", "openai_compat", "responses"),
+                    default="anthropic")
+    ap.add_argument("--engine", choices=("0.6", "next"), default="0.6",
+                    help="0.6 = the noeta-sdk packages; next = packages/noeta (run from its venv)")
     ap.add_argument("--model", default=None, help="default: NOETA_LIVE_MODEL")
     ap.add_argument("--baseline", type=Path, default=BASELINE)
     ap.add_argument("--write-baseline", action="store_true", help="rewrite the baseline from this run")
@@ -86,7 +91,7 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return out
 
 
-def _usage_totals(records: list[dict[str, Any]], judge: Judge) -> dict[str, Any]:
+def _usage_totals(records: list[dict[str, Any]], judge: Any) -> dict[str, Any]:
     tot: dict[str, Any] = {"requests": 0, "input_tokens": 0, "cache_read_tokens": 0,
                            "cache_write_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
     for r in records:
@@ -165,14 +170,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     if baseline and baseline.get("model") != model:
         print(f"evals: warning — baseline was recorded on {baseline.get('model')!r}, running {model!r}")
 
-    judge = Judge(cfg)
+    engine = importlib.import_module("evals.harness" if args.engine == "0.6"
+                                     else "evals.engine_next")
+    judge = engine.Judge(cfg)
     jobs = [(s, i) for i in range(args.trials) for s in chosen]
     started = time.monotonic()
     print(f"evals: {len(chosen)} scenarios x {args.trials} trials on {model} ({args.provider}), "
           f"concurrency {args.concurrency}", flush=True)
     records: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-        futures = [pool.submit(time_trial, cfg, s, judge, i) for s, i in jobs]
+        futures = [pool.submit(time_trial, cfg, s, judge, i, engine.run_trial) for s, i in jobs]
         for f in as_completed(futures):
             r = f.result()
             records.append(r)
@@ -189,6 +196,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "git": _git_rev(),
         "model": model,
         "provider": args.provider,
+        "engine": args.engine,
         "trials": args.trials,
         "system_prompt_override": str(args.system_prompt_file) if args.system_prompt_file else None,
         "wall_seconds": wall,

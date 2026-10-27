@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from evals import fixtures as fx
-from evals.harness import (
+from evals.core import (
     SHELL_READ_SEARCH,
     Judge,
     Scenario,
