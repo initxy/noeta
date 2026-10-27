@@ -231,7 +231,8 @@ class TaskRun:
         model = str(self.state.config.get("model") or (self.agent.model if self.agent else ""))
         return TaskView(state=self.state, complete=self.complete, env=self.env(),
                         post=self.post_self, extensions=self.exts, model=model,
-                        agents=self.rt.agents)
+                        agents=self.rt.agents,
+                        allowed_tools=self.agent.allowed_tools if self.agent else None)
 
     async def post_self(self, body: Any, dedupe_key: str | None = None) -> None:
         """Post to this task's own inbox (extensions: ``TaskView.post``)."""

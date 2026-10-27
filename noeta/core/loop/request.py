@@ -47,11 +47,11 @@ def build_request(
         max_tokens=max_tokens,
         effort=effort,  # type: ignore[arg-type]
         output_schema=output_schema,
-        cache_after=_breakpoints(state),
+        cache_after=cache_breakpoints(state),
     )
 
 
-def _breakpoints(state: TaskState) -> list[int]:
+def cache_breakpoints(state: TaskState) -> list[int]:
     """The newest message, plus the newest user message before it, so the
     next step reads everything up to its own previous request from cache."""
     n = len(state.messages)

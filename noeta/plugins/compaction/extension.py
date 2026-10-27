@@ -24,7 +24,7 @@ from noeta.core.errors import ContextOverflow, ModelError, TurnFailed
 from noeta.core.events import Compacted
 from noeta.core.extension import Extension, TaskView
 from noeta.core.helpers import simulated_state
-from noeta.core.loop.request import _breakpoints
+from noeta.core.loop.request import cache_breakpoints
 from noeta.core.loop.state import TaskState
 from noeta.core.models import model_limits
 from noeta.core.tool import Tool, ToolContext
@@ -194,7 +194,7 @@ class Compaction(Extension):
             state = await self._compact(view, state, request, composed, window, dens,
                                         reason="proactive", estimated=trigger)
             composed, ext = self._clear(view, state, request, list(state.messages), window)
-            cache_after = _breakpoints(state)
+            cache_after = cache_breakpoints(state)
         reminders = self._reminders(state, ext)
         return msgspec.structs.replace(request, messages=[*composed, *reminders, *extras],
                                        cache_after=cache_after)

@@ -64,6 +64,17 @@ class ContextPart(Struct):
     order: int = 100
 
 
+class Reminder(Struct):
+    """Text for the model that is not the user speaking (Claude Code's
+    ``<system-reminder>``): recorded as ``(extension, kind, data)`` with a
+    ``system``-origin message (``memory`` for recalled memory)."""
+
+    text: str
+    kind: str = "reminder"
+    data: Any = None
+    origin: Literal["system", "memory"] = "system"
+
+
 class Command(Struct):
     """A slash command front ends offer. Running it posts ``template`` (with
     ``{args}`` filled in) as a message, or calls the extension's ``command``
@@ -98,6 +109,8 @@ class TaskView:
     #: Every agent this worker can run, by name (a sub-agent roster reads
     #: their descriptions here).
     agents: Mapping[str, Agent] = field(default_factory=dict)
+    #: The agent's tool allowlist (``None`` = every tool offered).
+    allowed_tools: Sequence[str] | None = None
 
     @property
     def task_id(self) -> str:
@@ -124,6 +137,8 @@ class TaskView:
         offering it wins, as for the model), or ``None``. How one plugin uses
         another's tool without importing it: model-visible tool names are a
         stable contract."""
+        if self.allowed_tools is not None and name not in self.allowed_tools:
+            return None
         for ext in self.extensions:
             for tool in ext.tools(self):
                 if tool.name == name:
@@ -161,6 +176,13 @@ class Extension:
         return state
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
+        return ()
+
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        """Reminders to record now. Called before every model call, after
+        every ``before_model``, on the state those left (a compaction made
+        in this round included); the core records them and puts them in
+        this request, after the recorded messages."""
         return ()
 
     def inherit(self, state: TaskState) -> Mapping[str, Any]:

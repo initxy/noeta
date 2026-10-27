@@ -81,11 +81,14 @@ the `Extension` interface exists, but:
   `memory/policy`, `memory/policy-read-only`, `memory/recall_judge`, `web/fetch_digest`.
 - **The override record is always written** (`core` / `prompts`, possibly empty) on the first
   start, so "fixed at start" holds even when no file existed then.
-- **Reminders are one kernel mechanism.** A plugin declares reminders (`reminders(view)`: name,
-  text, when: every user turn / every N assistant turns / after an event / after compaction /
-  once). The runner records them as `system`-origin messages at one place in the request, with
-  repeat suppression. Their text is a named prompt. Events that must wake a waiting task
-  (background job finished) keep going through the inbox.
+- **Reminders are one kernel mechanism.** `Extension.reminders(view)` is called before every
+  model call, after every `before_model`, on the state those left; the plugin decides "when"
+  from that state and returns `Reminder(text, kind, data, origin)`s. The runner records them and
+  splices them into that request after the recorded messages, with the breakpoints a fresh fold
+  gives, so no plugin patches requests. A reminder's fixed text is a named prompt
+  (`reminder/<name>`) the plugin resolves. Text recorded once at task start (environment,
+  instructions, skill listing, memory index) stays in `on_start`; events that must wake a
+  waiting task (a background job finished) keep going through the inbox.
 - **New reminders** (feature commits, after the structural ones): file changed on disk since the
   model read it; date changed; a `hooks` plugin whose user-configured commands run on
   user-prompt-submit, before/after tool, and turn stop, and may add context or block.
@@ -104,8 +107,7 @@ the `Extension` interface exists, but:
 - [x] Prompt overrides with layers, resolved at one point (`TaskState.prompt`), recorded at task
       start
 - [x] Agent definition files; presets as data; `.noeta/agents/`; memory policy via `context()`
-- [ ] `reminders()` in the kernel; port todo, skills, memory, instructions, environment,
-      compaction-restore reminders
+- [x] `reminders()` in the kernel; port the todo reminder
 - [x] CLI `--system-prompt` / `--append-system-prompt`
 - [ ] Feature: file-changed reminder; date-change reminder; `hooks` plugin with context and block
 - [ ] CI, release workflow, Makefile, naming lint; README / AGENTS.md / CONTEXT.md for 1.0
@@ -136,3 +138,4 @@ the `Extension` interface exists, but:
 2026-10-27 Layered: core / plugins / backends / presets / apps, tests mirror it; four lint-imports contracts kept. Plugin links cut through the kernel: `TaskView.find_tool(name)` (compaction's file restore uses the task's `Read`), `Extension.inherit(state)` (permission rules reach children), `core.pending` (open approvals/questions), `core.execenv.is_local` / `scrub_env`, `core.registry` (entry points; the kernel's default exec env). Bash moved from `fs` to the `shell` plugin with its own state; sub-agents get a foreground `Shell` when the host passes none. Golden unchanged.
 2026-10-27 Prompt overrides landed: host dirs (`Runtime.prompt_dirs`, the CLI passes `~/.noeta/prompts`) < `<cwd>/.noeta/prompts` < config `prompts`; recorded once per task. `--system-prompt` / `--append-system-prompt` via `Settings.prompts` -> `LocalClient(task_config=...)`; CLI and TUI share `apps.local.from_settings`. Memory policy moved to `Memory.context()`; `with_memory_policy` removed. Golden unchanged.
 2026-10-27 Agent files landed: `noeta/presets/agents/{main,general-purpose,explore,plan}.md` (bodies byte-identical to the old prompts), `core.agent_files` (parse, read a directory, build), `Agent.description` / `allowed_tools`, `TaskView.model` / `agents`, `FileTools(tools=[names])`, extension names equal registry names (`environment`, `structured_output`). The CLI and TUI read `~/.noeta/agents` and `<cwd>/.noeta/agents`. Host extensions now go last on every agent (they were mid-list on sub-agents). Golden unchanged.
+2026-10-27 `Extension.reminders` landed; the todo reminder uses it (its before_model request patching and `simulated_state` use are gone). `cache_breakpoints` is public; `TaskView.allowed_tools` makes `find_tool` honor the agent allowlist. Golden unchanged (it contains a todo reminder).

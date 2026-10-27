@@ -13,12 +13,8 @@ The reminder is Claude Code's: before a model request, when ten assistant
 content blocks (thinking excluded) have passed both since the last
 ``TodoWrite`` call and since the last reminder, the reminder is recorded as a
 system-origin message carrying the list as it stands. Counting walks what the
-model still sees, so after a compaction it starts again at the boundary.
-
-Placement rule (shared with ``Compaction``): unrecorded trailing messages of
-a request (the compaction pointer, the step-limit prompt) always stay last;
-the reminder is inserted right after the recorded messages, where the log
-puts it.
+model still sees, so after a compaction it starts again at the boundary. Its
+fixed text is the prompt ``reminder/todo``.
 """
 
 from __future__ import annotations
@@ -27,13 +23,9 @@ from collections.abc import Mapping, Sequence
 from importlib import resources
 from typing import Any
 
-import msgspec
-
-from noeta.core.extension import Deny, Extension, Gate, TaskView
-from noeta.core.helpers import simulated_state
-from noeta.core.loop.request import _breakpoints
+from noeta.core.extension import Deny, Extension, Gate, Reminder, TaskView
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
-from noeta.core.types import Message, ModelRequest, Thinking, ToolUse, user
+from noeta.core.types import Message, Thinking, ToolUse
 
 __all__ = [
     "TODO_TURNS_BETWEEN_REMINDERS",
@@ -163,30 +155,31 @@ def validate_todos(arguments: Any) -> tuple[bool, list[dict[str, Any]] | str]:
     return True, normalized
 
 
-def todo_reminder_text(todos: Sequence[Mapping[str, object]]) -> str:
+def todo_reminder_text(todos: Sequence[Mapping[str, object]],
+                       head: str = _TODO_REMINDER_HEAD) -> str:
     """Claude Code's reminder for one todo list (empty -> no list part)."""
     listed = "\n".join(
         f"{i}. [{t.get('status', '')}] {t.get('content', '')}"
         for i, t in enumerate(todos, start=1)
     )
     if not listed:
-        return _TODO_REMINDER_HEAD
-    return f"{_TODO_REMINDER_HEAD}{_TODO_REMINDER_LIST_HEAD}[{listed}]"
+        return head
+    return f"{head}{_TODO_REMINDER_LIST_HEAD}[{listed}]"
 
 
-def _is_reminder(message: Message) -> bool:
+def _is_reminder(message: Message, head: str) -> bool:
     return (message.role == "user" and message.origin == "system"
-            and message.text.startswith(_TODO_REMINDER_HEAD))
+            and message.text.startswith(head))
 
 
-def reminder_due(messages: Sequence[Message]) -> bool:
+def reminder_due(messages: Sequence[Message], head: str = _TODO_REMINDER_HEAD) -> bool:
     """Whether ten assistant blocks have passed since the last ``TodoWrite``
     call and since the last reminder, counted over ``messages`` (what the
     model sees: after a compaction, from the boundary)."""
     since_write = since_reminder = 0
     for message in messages:
         if message.role != "assistant":
-            if _is_reminder(message):
+            if _is_reminder(message, head):
                 since_reminder = 0
             continue
         for block in message.content:
@@ -268,21 +261,10 @@ class Todo(Extension):
             return Deny(reason=_cannot_share(others[0].name))
         return None
 
-    async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
-        if not self.reminder or TODO_WRITE_TOOL not in {t.name for t in request.tools}:
-            return request
-        # Count over the recorded messages as the next fold sees them (a
-        # compaction made earlier in this round included). The request's
-        # messages past those are unrecorded (the compaction pointer, the
-        # step-limit prompt) and stay last: the reminder goes where the log
-        # puts it, right after the recorded messages.
-        state = simulated_state(view)
-        n = len(state.messages)
-        if len(request.messages) < n or not reminder_due(state.messages):
-            return request
-        message = user(todo_reminder_text(view.ext_state(self.name) or []), origin="system")
-        view.record(self.name, "reminder", message=message)
-        messages = [*request.messages[:n], message, *request.messages[n:]]
-        # The same breakpoints the next request (built from the log) gets.
-        return msgspec.structs.replace(request, messages=messages,
-                                       cache_after=_breakpoints(simulated_state(view)))
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        if not self.reminder or view.find_tool(TODO_WRITE_TOOL) is None:
+            return ()
+        head = view.prompt("reminder/todo", _TODO_REMINDER_HEAD)
+        if not reminder_due(view.state.messages, head):
+            return ()
+        return (Reminder(text=todo_reminder_text(view.ext_state(self.name) or [], head)),)

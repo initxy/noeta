@@ -10,7 +10,7 @@ import msgspec
 from noeta.core import models
 from noeta.core.errors import ContextOverflow, ModelError, TurnFailed
 from noeta.core.events import ExtensionRecorded, ModelCalled, ModelReplied
-from noeta.core.loop.request import build_request, request_hash
+from noeta.core.loop.request import build_request, cache_breakpoints, request_hash
 from noeta.core.loop.state import CORE
 from noeta.core.retry import complete_with_retries
 from noeta.core.runner import texts
@@ -46,6 +46,25 @@ def _request(run: TaskRun, *, final: bool) -> ModelRequest:
     return request
 
 
+async def _remind(run: TaskRun, request: ModelRequest) -> ModelRequest:
+    """Record the extensions' reminders and put them in ``request`` right
+    after its recorded messages (trailing unrecorded ones, such as the
+    step-limit prompt, stay last), with the breakpoints the next request,
+    built from the log, gets."""
+    view = run.view()
+    for ext in run.exts:
+        for r in await ext.reminders(view):
+            view.record(ext.name, r.kind, r.data, message=user(r.text, origin=r.origin))
+    if not view.pending:
+        return request
+    n = len(run.state.messages)
+    await run.flush(view)
+    added = run.state.messages[n:]
+    return msgspec.structs.replace(
+        request, messages=[*request.messages[:n], *added, *request.messages[n:]],
+        cache_after=cache_breakpoints(run.state))
+
+
 def _output_ceiling(model: str) -> int:
     """Always send max_tokens: the model's output ceiling (a gateway once
     defaulted to 1,000 when it was left out)."""
@@ -76,10 +95,11 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     try:
         for ext in run.exts:
             request = await ext.before_model(view, request)
+        await run.flush(view)
+        request = await _remind(run, request)
     except TurnFailed as exc:
         await run.flush(view)
         return await run.fail_turn(exc.reason, exc.detail)
-    await run.flush(view)
     await run.append([ModelCalled(model=request.model, request_hash=request_hash(request),
                                   attempt=run.state.model_attempts + 1)])
 
