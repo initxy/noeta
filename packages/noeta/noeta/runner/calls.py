@@ -122,8 +122,8 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
             {"id": child_id, "call_id": use.id, "background": background}]}))
         return child_id
 
-    async def post(body: InboxKind) -> None:
-        await run.store.post(Post(task_id=run.task_id, body=body))
+    async def post(body: InboxKind, task_id: str | None = None) -> None:
+        await run.store.post(Post(task_id=task_id or run.task_id, body=body))
 
     return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
                        state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
