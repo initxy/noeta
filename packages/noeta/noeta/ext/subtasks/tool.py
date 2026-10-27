@@ -135,6 +135,8 @@ class TaskTool:
     description = texts.load_description("spawn_subagent")
     read_only = False
     clearable = False
+    #: Spawns after the reply's ordinary calls have run (0.6's order).
+    run_last = True
 
     def __init__(self, ext: Subtasks, state: TaskState) -> None:
         self._ext = ext

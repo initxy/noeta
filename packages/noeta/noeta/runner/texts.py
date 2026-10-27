@@ -41,6 +41,13 @@ LLM_ERROR = "llm_error"
 LLM_EMPTY_RESPONSE = "llm_empty_response"
 LLM_TRUNCATED = "llm_truncated"
 CONTEXT_OVERFLOW = "context_overflow"
+#: An unattended task (``config["unattended"]``, e.g. a background sub-agent)
+#: reached an approval or a question nobody can answer.
+NEEDS_HUMAN = "needs_human"
+NEEDS_HUMAN_DETAIL = (
+    "the sub-agent stopped without completing (it needed an interaction "
+    "that is unavailable to a background agent)"
+)
 
 #: Error bodies quoted in a failure detail are cut to this many characters.
 ERROR_DETAIL_CHARS = 500

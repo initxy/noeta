@@ -91,7 +91,7 @@ async def test_background_child_that_needs_a_human_fails_with_the_reason(
     await rt.run_until_idle()
     [child] = await client.tasks(parent_id=tid)
     end = (await events(client, child.task_id))[-1]
-    assert isinstance(end, TaskEnded) and end.error == texts.BACKGROUND_NEEDED_HUMAN
+    assert isinstance(end, TaskEnded) and end.status == "failed" and end.error == f"needs_human: {texts.BACKGROUND_NEEDED_HUMAN}"
     assert p.requests[2].messages[-1].text == notice(
         "worker", texts.BACKGROUND_NEEDED_HUMAN, child.task_id, "failed", failed=True)
 

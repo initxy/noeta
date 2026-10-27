@@ -8,7 +8,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from noeta.events import Cancel, ChildEnded, InputTaken, Recorded, Say, Waiting
+from noeta.events import ChildEnded, InputTaken, Recorded, Say
 from noeta.ext.base import Deny, Extension, Gate, TaskView
 from noeta.ext.subtasks import texts
 from noeta.ext.subtasks.tool import (
@@ -164,9 +164,6 @@ class Subtasks(Extension):
         for child_id, ended in list(view.state.children.items()):
             if ended is not None and child_id not in noticed:
                 await self._notice(view, ended)
-        waiting = view.state.waiting
-        if waiting is not None and view.state.ended is None:
-            await self._unattended_wait(view, waiting)
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         ev = recorded.event
@@ -174,8 +171,6 @@ class Subtasks(Extension):
             for item in ev.items:
                 if isinstance(item.body, ChildEnded):
                     await self._notice(view, item.body)
-        elif isinstance(ev, Waiting):
-            await self._unattended_wait(view, ev)
 
     # ------------------------------------------------------------ background
 
@@ -212,10 +207,3 @@ class Subtasks(Extension):
                         dedupe_key=f"subtasks:notice:{ended.child_id}")
         view.record(self.name, "noticed", data)
 
-    async def _unattended_wait(self, view: TaskView, waiting: Waiting) -> None:
-        if waiting.on not in ("approval", "question"):
-            return
-        if not view.state.config.get(UNATTENDED_KEY) or view.post is None:
-            return
-        await view.post(Cancel(reason=texts.BACKGROUND_NEEDED_HUMAN),
-                        dedupe_key=f"subtasks:unattended:{view.task_id}")

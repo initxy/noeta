@@ -88,9 +88,15 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
             continue
         runnable.append((use, tool))
     await run.flush(view)
+    # A call whose tool declares ``run_last`` (delegation) runs after the
+    # reply's ordinary calls, as 0.6 spawned only once they had finished.
+    runnable.sort(key=lambda item: bool(getattr(item[1], "run_last", False)))
     for group in _groups(runnable):
         await run.append([ToolStarted(call=u) for u, _ in group])
         await asyncio.gather(*(_run_one(run, u, t) for u, t in group))
+    if asks and run.state.config.get("unattended"):
+        await run.fail_turn(texts.NEEDS_HUMAN, texts.NEEDS_HUMAN_DETAIL)
+        return False
     if asks:
         await run.append(
             [Waiting(on="approval", ids=list(asks),

@@ -260,6 +260,8 @@ class TaskRun:
             await self._stop_turn(action.call_ids)
             return True
         if isinstance(action, decide.WaitParked):
+            if action.on == "question" and self.state.config.get("unattended"):
+                return await self.fail_turn(texts.NEEDS_HUMAN, texts.NEEDS_HUMAN_DETAIL)
             await self.append([Waiting(on=action.on, ids=action.ids)],  # type: ignore[arg-type]
                               patch=Patch(status="waiting", waiting_on=action.on,
                                           inbox_read_seq=self.state.inbox_read))
