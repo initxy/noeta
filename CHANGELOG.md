@@ -20,7 +20,7 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 - **Crash recovery no longer re-runs finished tool calls.** A crash mid tool
   batch keeps the batch: finished calls keep their results, a call cut short
   gets an "outcome unknown — check before running it again" result, and calls
-  that never started run through the live guard chain (ADR-065). Previously a
+  that never started run through the live guard chain (ADR-065, ADR-071). Previously a
   `bypassPermissions` re-drive could re-run a finished `Bash` or `git push`.
 - **Compaction no longer re-sends what the view cleared.** The summarize input
   carries the same cleared markers as the main loop's request, and an
@@ -59,7 +59,8 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 - `send_goal` / `inject_goal` take `idempotency_key`; a repeat appends nothing
   and returns the first call's outcome, settled across processes through
   `system_emit(idempotency_key=...)` and a new `IdempotencyKeyClaimed` event
-  (ADR-070).
+  (ADR-070). A claim whose goal never landed (crash, failed seed) is claimed
+  again by a retry, so the goal is written exactly once (ADR-072).
 
 ## [0.6.41] - 2026-10-18
 

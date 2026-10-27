@@ -564,12 +564,17 @@ class ReActPolicy:
         model call — the request would carry tool_uses with no result. The
         assistant turn is already recorded, so the Decision carries none. A
         turn of only ``Task`` calls never lands here: it spawned directly.
+        Only tool results may follow that turn: once any other message landed
+        after it (a new goal after a stop), the spawn is no longer this
+        turn's to run.
         """
         history = view.rolling_history
         answered: set[str] = set()
         for index in range(len(history) - 1, -1, -1):
             message = history[index]
-            if message.role != "assistant":
+            if message.role not in ("assistant", "tool"):
+                return None
+            if message.role == "tool":
                 answered.update(
                     b.call_id
                     for b in message.content

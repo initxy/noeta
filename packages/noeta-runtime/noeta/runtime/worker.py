@@ -22,6 +22,7 @@ from typing import Any, Callable, ClassVar, Iterator, Literal, Optional, Protoco
 
 from noeta.core.engine import (
     abandon_step_attempt,
+    close_unanswered_calls,
     complete_interrupted_tool_batch,
     suspend_on_human_handle,
 )
@@ -1021,6 +1022,9 @@ def _settle_stopped_turn(
         if callable(forget):
             forget(lease.task_id)
         return "cancelled"
+    task = close_unanswered_calls(
+        engine, task, lease_id=lease.lease_id, reason=_STOPPED_CALL_REASON
+    )
     task = suspend_on_human_handle(
         engine,
         task,
@@ -1038,6 +1042,12 @@ def _settle_stopped_turn(
     _settle_turn_engine(rt, task, next_goal_handle)
     return "stopped"
 
+
+#: The result a call gets when its turn stopped or parked before it ran.
+_STOPPED_CALL_REASON = "interrupted: a human stop landed before this call ran"
+_PARKED_CALL_REASON = (
+    "interrupted: a worker crash stopped the turn before this call ran"
+)
 
 #: ``TaskSuspended.reason`` for a rest reached by an explicit ``interrupt``.
 #: Bound to the protocol's constant rather than re-spelled, so the producer and
@@ -1530,6 +1540,10 @@ def _recover_interrupted_attempt(
         reason,
         ", ".join(classification.blockers) or "n/a",
     )
+    if reason != "interrupted_approval":
+        task = close_unanswered_calls(
+            engine, task, lease_id=lease.lease_id, reason=_PARKED_CALL_REASON
+        )
     task = engine.append_user_message(
         task,
         content=[TextBlock(text=_park_notice(reason, classification.blockers))],
@@ -1565,8 +1579,8 @@ def _resume_recorded_batch(
 ) -> WorkerOutcome:
     """Keep an interrupted attempt's tool batch and continue the step.
 
-    The decision and every recorded result stay live history. Unless the
-    batch's result message already landed, each call gets its one result:
+    The decision and every recorded result stay live history. Each call a
+    landed result message does not already answer gets its one result:
     the recorded one re-rendered, an unknown-outcome error for a call that
     started without one, the recorded reason for a denial, and a live run
     (past the guard chain) for a call that never started. The step then
@@ -1583,7 +1597,9 @@ def _resume_recorded_batch(
         interrupted = [
             use.tool_name
             for use in batch.tool_uses
-            if use.call_id in batch.started and use.call_id not in batch.recorded
+            if use.call_id in batch.started
+            and use.call_id not in batch.recorded
+            and use.call_id not in batch.answered
         ]
         task = complete_interrupted_tool_batch(
             engine,
@@ -1675,6 +1691,10 @@ def _complete_pending_park(
     task = fold(rt.event_log, rt.content_store, lease.task_id)
     blockers: tuple[str, ...] = ()
     if not pending.notice_appended:
+        if reason != "interrupted_approval":
+            task = close_unanswered_calls(
+                engine, task, lease_id=lease.lease_id, reason=_PARKED_CALL_REASON
+            )
         if reason == "unsafe_tool_activity":
             blockers = _sealed_tail_blockers(rt, engine, events, pending.seal, task)
         task = engine.append_user_message(

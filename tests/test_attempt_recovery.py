@@ -650,6 +650,62 @@ def test_never_started_call_still_meets_the_approval_gate(stack: Any) -> None:
     assert dispatcher.task_status(tid) == "suspended"
 
 
+def test_crash_before_the_approval_suspend_suspends_on_it(
+    stack: Any, monkeypatch: Any
+) -> None:
+    """A batch that met an approval writes the other calls' results, then
+    suspends. A crash between the two leaves a result message that does not
+    answer the gated call: recovery suspends on that approval instead of
+    continuing the step with the call unanswered."""
+    from noeta.core import _decision_handlers
+
+    log, cs, dispatcher, _ = stack
+    editor = _CountingTool(name="editor", script={("x",): "ok"})
+    danger = _CountingTool(name="danger", script={(): "did it"})
+    reader = _CountingTool(name="reader", script={("y",): "body"})
+    tools = {"editor": editor, "danger": danger, "reader": reader}
+    hooks = HookManager()
+    hooks.register(
+        PermissionGuard(
+            PermissionPolicy(require_approval_tools=frozenset({"danger"})),
+            tools,
+        )
+    )
+    policy = _CrashOncePolicy([
+        YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
+        _batch(
+            ToolCall(tool_name="editor", arguments={"p": "x"}, call_id="c1"),
+            ToolCall(tool_name="danger", arguments={}, call_id="c2"),
+            ToolCall(tool_name="reader", arguments={"p": "y"}, call_id="c3"),
+        ),
+        FinishDecision(answer="must not finish past the approval"),
+    ])
+    engine, tid = _suspended_session(stack, policy, tools=tools, hooks=hooks)
+    real_yield = _decision_handlers._yield_for_approval
+
+    def crash_before_suspend(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("simulated crash before the approval suspend")
+
+    monkeypatch.setattr(
+        _decision_handlers, "_yield_for_approval", crash_before_suspend
+    )
+    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    monkeypatch.setattr(_decision_handlers, "_yield_for_approval", real_yield)
+    assert set(_tool_results(log, cs, tid)) == {"c1", "c3"}
+    lease = _reclaim(stack, tid)
+    run_leased_task(_RT(engine, log, cs, dispatcher), lease)
+    task = fold(log, cs, tid)
+    assert task.status == "suspended"
+    assert task.wake_on.handle == "approval-c2"
+    assert "c2" in task.governance.pending_approvals
+    assert dispatcher.task_status(tid) == "suspended"
+    assert not any(e.type == "TaskCompleted" for e in log.read(tid))
+    assert (editor.calls, danger.calls, reader.calls) == (1, 0, 0)
+    # one result message for the batch, the gated call still unanswered.
+    assert sum(1 for m in task.runtime.messages if m.role == "tool") == 1
+    assert set(_tool_results(log, cs, tid)) == {"c1", "c3"}
+
+
 def test_armed_stop_keeps_recovery_from_running_new_calls(stack: Any) -> None:
     """A forced stop recovers the abandoned step with the stop still armed:
     the batch is answered, but a call that never started is closed unrun —
@@ -847,6 +903,52 @@ def test_crash_loop_hits_abandon_cap_and_parks(stack: Any) -> None:
     task = fold(log, cs, tid)
     assert task.status == "suspended"        # parked, NOT silently terminal
     assert task.runtime.messages[-1].origin == "system"
+
+
+def test_park_answers_a_call_the_turn_left_for_later(stack: Any) -> None:
+    """A Task call deferred behind the ordinary calls of its turn is still
+    unanswered when a crash loop parks the task: the park answers it as not
+    run before its notice, so the next goal never follows a dangling call."""
+    log, cs, dispatcher, _ = stack
+    reader = _CountingTool(name="reader", script={("x",): "body"})
+    read = ToolCall(tool_name="reader", arguments={"p": "x"}, call_id="c1")
+    deferred = ToolUseBlock(
+        call_id="t1", tool_name="Task", arguments={"agent": "a", "goal": "g"}
+    )
+    batch = dataclasses.replace(
+        _batch(read),
+        assistant_message=Message(
+            role="assistant",
+            content=[
+                deferred,
+                ToolUseBlock(call_id="c1", tool_name="reader", arguments={"p": "x"}),
+            ],
+        ),
+    )
+    script: list[Any] = [YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE), batch]
+    script += [RuntimeError(f"crash {i}") for i in range(ABANDON_CAP + 2)]
+    engine, tid = _suspended_session(
+        stack, _CrashOncePolicy(script), tools={"reader": reader}
+    )
+    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    outcome: Any = None
+    for _ in range(ABANDON_CAP + 1):
+        lease = _reclaim(stack, tid)
+        dispatcher.heartbeat(lease.lease_id)
+        try:
+            outcome = run_leased_task(_RT(engine, log, cs, dispatcher), lease)
+        except RuntimeError:
+            continue
+        break
+    assert outcome == "stopped"
+    assert _seals(log, tid)[-1].payload.reason == "abandon_cap"
+    task = fold(log, cs, tid)
+    assert task.runtime.messages[-1].origin == "system"
+    closing = task.runtime.messages[-2]
+    assert closing.role == "tool"
+    assert [b.call_id for b in closing.content] == ["t1"]
+    assert closing.content[0].success is False
+    assert reader.calls == 1
 
 
 def test_interrupted_approval_execution_parks_and_reapproves(stack: Any) -> None:
