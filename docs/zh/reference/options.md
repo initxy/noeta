@@ -32,7 +32,7 @@ with Client(options, provider=AnthropicProvider(), model="claude-sonnet-5", host
 | `plugins` | `tuple[str, ...]` | `DEFAULT_PLUGINS` = `("fs", "web")` | 这个 agent 启用的插件（见[下文](#启用插件)） |
 | `agents` | `Mapping[str, AgentDefinition]` | `{}` | 子 agent，一层平铺的 dict |
 | `allowed_tools` | `tuple[str \| tool, ...] \| None` | `None` | 整体替换工具列表；`None` 是 10 个内置工具，`()` 是一个都没有 |
-| `disallowed_tools` | `tuple[str, ...]` | `()` | 从当前工具列表里去掉；不存在的名字直接忽略 |
+| `disallowed_tools` | `tuple[str, ...]` | `()` | 从当前工具列表里去掉；不存在的名字直接忽略；去掉 `"Bash"` 会连带去掉 `Monitor`、`BashOutput`、`KillShell` |
 | `permission_mode` | `str` | `"default"` | `default` / `acceptEdits` / `bypassPermissions` |
 | `max_turns` | `int \| None` | `None` | `budget.max_iterations` 的简写；两个都设会抛 `ValueError` |
 | `policy` | 带 `.ref` 的 `(llm) -> Policy` | `None` | 替换内置的 ReAct 循环 |
@@ -152,6 +152,7 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 | `queue` | `str` | `"default"` | 共享存储时这个 client 的 worker 队列；它的 worker 只领这个队列的活 |
 | `record_llm_requests` | `bool` | `False` | 把每次模型调用的完整请求正文存到 `LLMRequestStarted.request_ref` 后面。关着时 ref 只带哈希：请求本来就能从状态推导出来，存下来会让存储按任务长度的平方增长。排查问题时才开；`Client.collect_garbage` 会把这些正文再删掉 |
 | `llm_max_retries` | `int \| None` | `None` | 模型调用临时失败（429、5xx、超时）时，这个客户端最多重试几次再判这一步失败，带退避；每次重试记一条 `LLMRetryScheduled`。`0` 只试一次；`None` 用运行时默认的 8 次 |
+| `attempt_heartbeat_max` | `int \| None` | `360` | 一次尝试（一次模型调用加上它要的工具调用）最多续租几次；超过后租约交回，这次尝试按崩溃的方式恢复。每次模型调用重新计数；`None` 不设上限 |
 
 `storage_path` 和三个对象同时给，或三个只给了一部分，都会抛 `ValueError`。`noeta.sdk.storage.open_storage_stack(path)` 用一个字符串建出这三个对象；同一模块还导出 `build_storage_stack`、`is_memory_path`、`is_postgres_url`、Sqlite / Postgres 适配器，以及 `collect_garbage`（见[限制 → 增长](../operations/limitations.md#内容只在你主动要求时回收)）。
 
@@ -214,8 +215,8 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 | `max_steps_per_turn` | `int \| None` | `None` | 每一轮（一次性任务就是整个任务）的步数预算：走到这么多步时，再调一次模型、禁止调工具，让它交代做到哪了，这一轮就以这份交代收尾，开头写「Stopped at the N-step limit before finishing.」，而不是直接失败；子代理也用同一个预算；必须是正数 |
 | `tool_output_inline_limit` | `int \| None` | `50000` | 工具结果超过这么多字符就整份存成文件，模型拿到的是 Claude Code 的 `<persisted-output>` 块（文件路径 + 前 2 KB 预览）；没配存放目录时只留开头一段。`Read` 不受这条管。完整内容仍有记录；`None` 表示从不；必须是正数；恢复任务时要保持同一个值 |
 | `tool_output_spill_dir` | `Path \| None` | `None` | 超长结果整份写到 `<dir>/<task_id>/<call_id>.txt`，模型用 `Read` 分页看；必须是这个会话的 `Read` 读得到的路径；文件由宿主负责清理 |
-| `auto_compact_window` | `int \| None` | `None` | 把压缩当作上下文窗口只有这么多 token 来算（Claude Code 的 `autoCompactWindow`）：摘要的触发点、保留原文的尾巴、清理旧工具输出的阈值都按 `min(模型窗口, 这个值)` 推导；输出上限和技能、记忆索引的 1% 预算仍按真实窗口；必须是正数；恢复任务时要保持同一个值 |
-| `clear_tool_outputs_at` | `int \| None` | `None` | 请求长到这么多 token 时，开始把最新五条以外的旧工具输出换成占位标记；`None` 时是可用窗口的一半。和 `auto_compact_window` 配合：早清理、晚摘要；必须是正数；恢复任务时要保持同一个值 |
+| `auto_compact_window` | `int \| None` | `None` | 把压缩当作上下文窗口只有这么多 token 来算（Claude Code 的 `autoCompactWindow`）：摘要的触发点（`min(模型窗口, 这个值) − min(输出上限, 20,000) − 13,000`，和 Claude Code 一样）、保留原文的尾巴、清理旧工具输出的阈值都按 `min(模型窗口, 这个值)` 推导；输出上限和技能、记忆索引的 1% 预算仍按真实窗口；必须是正数；恢复任务时要保持同一个值 |
+| `clear_tool_outputs_at` | `int \| None` | `None` | 请求长到这么多 token 时，开始把最新五条以外、可以重新取到的旧工具输出（`Read`、`Bash`、`Grep`、`Glob`、`Edit`、`Write`、`WebFetch` 等）换成占位标记，每攒够约 20,000 token 清一批；`None` 时是可用窗口的一半。和 `auto_compact_window` 配合：早清理、晚摘要；必须是正数；恢复任务时要保持同一个值 |
 | `hooks` | `HooksConfig \| None` | `None` | 用户自定义钩子：工具调用前先过一遍规则，调用结束后、或者等审批时跑一条命令；见[钩子](#钩子) |
 | `webfetch_allowed_hosts` | `Sequence[str]` | `()` | `WebFetch` 不用审批就能访问的站点：`"example.com"` 精确匹配，`"*.example.com"` 只匹配子域名；写错会报错 |
 | `workflow_allowed` | `bool` | `False` | 提供 `run_workflow`（还需要能派子 agent） |
@@ -245,7 +246,7 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 
 | 规则 | 字段 |
 | --- | --- |
-| `PreToolUseRule` | `match_tool`（按工具名做 `fnmatch` 匹配，比如 `"mcp__*"`）、`action`（`"allow"` / `"deny"` / `"require_approval"`）、`match_arg=None`、`reason=None`（模型或审批人看到的理由） |
+| `PreToolUseRule` | `match_tool`（按工具名做 `fnmatch` 匹配，比如 `"mcp__*"`；匹配 `Bash` 的规则同样管 `Monitor`）、`action`（`"allow"` / `"deny"` / `"require_approval"`）、`match_arg=None`、`reason=None`（模型或审批人看到的理由） |
 | `MatchArg` | `path`（参数键组成的元组，比如 `("opts", "force")`）、`op`（`"equals"` / `"contains"` / `"regex"`）、`value`、`pattern`；`regex` 如果用字符串写在 `value` 里，构造配置时会编译好 |
 | `PostToolUseRule` | `match_tool`、`command=None`（argv 元组，不经过 shell）、`log=False`（记一行日志，可以代替命令，也可以和命令一起用） |
 | `NotificationRule` | `on`（目前只有 `"approval"`）、`command=None`、`log=False` |

@@ -300,12 +300,12 @@ def test_text_and_tool_call_both_appear_in_content() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Inconsistent state: finish_reason=stop with tool_calls
+# finish_reason=stop with tool_calls (Gemini's endpoint, older Ollama)
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
-def test_inconsistent_stop_with_tool_calls_raises_value_error() -> None:
+def test_stop_with_tool_calls_is_a_tool_use_stop() -> None:
     payload = _chat_response(
         content=None,
         tool_calls=[
@@ -319,8 +319,36 @@ def test_inconsistent_stop_with_tool_calls_raises_value_error() -> None:
     )
     respx.post(CHAT_ENDPOINT).mock(return_value=httpx.Response(200, json=payload))
 
-    with pytest.raises(ValueError, match="inconsistent OpenAI response"):
-        _make_provider().complete(_basic_request())
+    response = _make_provider().complete(_basic_request())
+    assert response.stop_reason == "tool_use"
+    assert response.content == [
+        ToolUseBlock(call_id="call_1", tool_name="echo", arguments={})
+    ]
+
+
+@pytest.mark.parametrize("raw", ["null", "", "  "])
+@respx.mock
+def test_null_or_empty_tool_arguments_decode_as_no_arguments(raw: str) -> None:
+    payload = _chat_response(
+        content=None,
+        tool_calls=[
+            {"id": "c", "type": "function", "function": {"name": "echo", "arguments": raw}}
+        ],
+        finish_reason="tool_calls",
+    )
+    respx.post(CHAT_ENDPOINT).mock(return_value=httpx.Response(200, json=payload))
+
+    response = _make_provider().complete(_basic_request())
+    assert response.content == [ToolUseBlock(call_id="c", tool_name="echo", arguments={})]
+
+
+@pytest.mark.parametrize("raw", ["[1, 2]", "\"text\"", "3"])
+def test_non_object_tool_arguments_are_malformed(raw: str) -> None:
+    from noeta.builtins.providers.impl.codecs import decode_tool_arguments
+    from noeta.protocols.errors import MalformedToolArgumentsError
+
+    with pytest.raises(MalformedToolArgumentsError, match="must be a JSON object"):
+        decode_tool_arguments(raw, error_label="tool_call arguments")
 
 
 # ---------------------------------------------------------------------------
@@ -559,7 +587,7 @@ def test_reasoning_content_becomes_thinking_block_before_text() -> None:
     response = _make_provider().complete(_basic_request())
 
     assert response.content == [
-        ThinkingBlock(text="let me think first...", signature=None),
+        ThinkingBlock(text="let me think first...", signature=None, provider="openai_compat"),
         TextBlock(text="here is the answer"),
     ]
 
@@ -589,7 +617,7 @@ def test_reasoning_with_encrypted_signature_populates_thinking_block() -> None:
     response = _make_provider().complete(_basic_request())
 
     assert response.content == [
-        ThinkingBlock(text="thinking out loud", signature="abc=="),
+        ThinkingBlock(text="thinking out loud", signature="abc==", provider="openai_compat"),
         ToolUseBlock(call_id="call_z", tool_name="echo", arguments={}),
     ]
 
@@ -991,7 +1019,7 @@ def test_encrypted_reasoning_only_yields_signature_thinking_block() -> None:
     response = _make_provider().complete(_basic_request())
 
     assert response.content == [
-        ThinkingBlock(text="", signature="opaque-token=="),
+        ThinkingBlock(text="", signature="opaque-token==", provider="openai_compat"),
         TextBlock(text="answer"),
     ]
 

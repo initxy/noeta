@@ -85,7 +85,7 @@ class PostgresDispatcher:
         # ``lease_expires_at`` is persisted, and comparing it across a
         # process restart only makes sense against a wall clock.
         now: Optional[Callable[[], float]] = None,
-        heartbeat_max: int = 360,
+        heartbeat_max: Optional[int] = None,
         max_fail_attempts: int = 3,
         reclaim_max: int = 3,
         row_lock_timeout_ms: int = 5_000,
@@ -426,42 +426,30 @@ class PostgresDispatcher:
                 if row is None or row["status"] != "leased":
                     self._conn.execute("ROLLBACK")
                     raise InvalidLease(lease_id)
-                if int(row["heartbeat_count"]) >= self._heartbeat_max:
-                    # Force release in the same transaction. The matched wake
-                    # is NOT consumed here (there is no TaskWoken proof), so
-                    # it must be preserved and re-delivered rather than
-                    # stranded: a task with one in flight goes back to
-                    # **ready**, otherwise it suspends on its preserved
-                    # wake_on.
-                    if row["matched_wake_event_canonical"] is not None:
-                        self._conn.execute(
-                            "UPDATE dispatcher_tasks SET "
-                            " status = 'ready',"
-                            " lease_id = NULL,"
-                            " worker_id = NULL,"
-                            " lease_expires_at = NULL,"
-                            " heartbeat_count = 0,"
-                            " reclaim_count = 0,"
-                            " wake_on_canonical = NULL,"
-                            " suspend_reason = NULL,"
-                            " fire_at = NULL,"
-                            " ready_order = %s "
-                            "WHERE task_id = %s",
-                            (self._next_ready_order(), row["task_id"]),
-                        )
-                    else:
-                        self._conn.execute(
-                            "UPDATE dispatcher_tasks SET "
-                            " status = 'suspended',"
-                            " lease_id = NULL,"
-                            " worker_id = NULL,"
-                            " lease_expires_at = NULL,"
-                            " heartbeat_count = 0,"
-                            " reclaim_count = 0,"
-                            " suspend_reason = 'lease_quota_exceeded' "
-                            "WHERE task_id = %s",
-                            (row["task_id"],),
-                        )
+                if (
+                    self._heartbeat_max is not None
+                    and int(row["heartbeat_count"]) >= self._heartbeat_max
+                ):
+                    # Force release in the same transaction, back to
+                    # **ready** so the next lease recovers the interrupted
+                    # step like a reclaimed one. The matched wake is NOT
+                    # consumed here (there is no TaskWoken proof), so it is
+                    # preserved and re-delivered rather than stranded.
+                    self._conn.execute(
+                        "UPDATE dispatcher_tasks SET "
+                        " status = 'ready',"
+                        " lease_id = NULL,"
+                        " worker_id = NULL,"
+                        " lease_expires_at = NULL,"
+                        " heartbeat_count = 0,"
+                        " reclaim_count = 0,"
+                        " wake_on_canonical = NULL,"
+                        " suspend_reason = NULL,"
+                        " fire_at = NULL,"
+                        " ready_order = %s "
+                        "WHERE task_id = %s",
+                        (self._next_ready_order(), row["task_id"]),
+                    )
                     self._conn.execute("COMMIT")
                     raise InvalidLease(lease_id)
                 expiry_sql, expiry_param = self._expiry_sql_and_param(

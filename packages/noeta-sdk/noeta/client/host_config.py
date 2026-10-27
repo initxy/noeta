@@ -53,7 +53,7 @@ from noeta.runtime.governance import (
     PreToolUseRule,
 )
 from noeta.runtime.mcp import HttpPostFn, McpAnyServerSpec
-from noeta.runtime.worker import ReliabilitySink
+from noeta.runtime.worker import DEFAULT_ATTEMPT_HEARTBEAT_MAX, ReliabilitySink
 from noeta.tools.limits import DEFAULT_TOOL_OUTPUT_INLINE_LIMIT
 
 #: The preview gateway as SDK core sees it: an OPAQUE object. Its real shape is
@@ -383,6 +383,13 @@ class HostConfig:
     #: call is tried once; ``None`` ⇒ the runtime default (8, about two
     #: minutes of backoff).
     llm_max_retries: Optional[int] = None
+    #: Lease renewals (one per heartbeat, 30 s apart by default) a single step
+    #: attempt — one model call and the tool calls it asks for — may take
+    #: before its lease is handed back and the attempt is recovered as if its
+    #: worker had died. The count restarts with every model call, so a long
+    #: turn is never capped as a whole; only one attempt that runs past it
+    #: (a tool call blocked for hours) is. ``None`` ⇒ never.
+    attempt_heartbeat_max: Optional[int] = DEFAULT_ATTEMPT_HEARTBEAT_MAX
     #: This client's worker queue over the (possibly shared) store: root tasks
     #: it seeds are born on this queue, children inherit it, and its resident
     #: worker pool claims ONLY it — so differently-configured clients sharing
@@ -656,7 +663,7 @@ class HostConfig:
     #: reach; under a remote sandbox that means a path the host's own side
     #: serves. Nothing removes the files: the host owns the directory's
     #: lifetime. ``None`` (the default) writes nothing: an over-size output is
-    #: then cut to its start with a note that the rest was dropped.
+    #: then cut to its start and end with a note that the middle was dropped.
     tool_output_spill_dir: Optional[Path] = None
     #: Compact as if the model's context window were this many tokens —
     #: Claude Code's ``autoCompactWindow``. Every number compaction derives
@@ -794,6 +801,7 @@ class HostConfig:
             ("auto_compact_window", self.auto_compact_window),
             ("clear_tool_outputs_at", self.clear_tool_outputs_at),
             ("max_steps_per_turn", self.max_steps_per_turn),
+            ("attempt_heartbeat_max", self.attempt_heartbeat_max),
             (
                 "max_background_jobs_per_root_task",
                 self.max_background_jobs_per_root_task,

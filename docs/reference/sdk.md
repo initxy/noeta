@@ -122,8 +122,8 @@ There is no async API: every verb blocks until the turn ends. From asyncio code,
 | Method | Signature (keyword-only after `task_id`) | Meaning |
 | --- | --- | --- |
 | `start` | `(*, goal, agent=None, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), workspace_dir=None, effort=None, activations=(), attachment_texts=(), principal=None)` | create a task and run its first turn |
-| `send_goal` | `(task_id, *, goal, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), effort=None, activations=(), attachment_texts=(), principal=None)` | add a follow-up turn. If an earlier `send_goal` of the same goal failed after recording it (its task rests with suspend reason `seed_failed`), the retry runs the turn on the recorded goal instead of adding it twice |
-| `inject_goal` | `(task_id, *, goal, images=(), goal_origin=None, drive=True)` | running task: record the message, deliver it at the next turn boundary, return at once; parked on next-goal: acts like `send_goal` (or raises `NotResumableError` if `drive=False`) |
+| `send_goal` | `(task_id, *, goal, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), effort=None, activations=(), attachment_texts=(), principal=None, idempotency_key=None)` | add a follow-up turn. If an earlier `send_goal` of the same goal failed after recording it (its task rests with suspend reason `seed_failed`), the retry runs the turn on the recorded goal instead of adding it twice. With `idempotency_key`, a repeat with the same key on the same task — from any `Client` on the store, even while the first is still running — appends nothing and returns the task's outcome |
+| `inject_goal` | `(task_id, *, goal, images=(), goal_origin=None, drive=True, idempotency_key=None)` | running task: record the message, deliver it at the next turn boundary, return at once; parked on next-goal: acts like `send_goal` (or raises `NotResumableError` if `drive=False`). `idempotency_key` works as on `send_goal`, across both landings |
 | `deliver_event` | `(task_id, *, event_kind, payload=None)` | wake a task waiting in `wait_external` on exactly `event_kind`; `payload` is recorded as a system message |
 
 | Per-turn argument | Meaning |
@@ -187,7 +187,7 @@ For an HTTP handler that must not block for a whole turn: `seed_*` does every du
 | Method | Signature | Meaning |
 | --- | --- | --- |
 | `interrupt` | `(task_id, *, reason=None, interrupted_by="user", force=False)` | stop the running turn at its next boundary; the task parks on next-goal so `send_goal` continues. Thread-safe. `force=True` clears a step stuck past every checkpoint — call plain `interrupt` first |
-| `cancel` | `(task_id, *, reason="cancelled", cascade=False)` | end the conversation (terminal); also kills its background shells |
+| `cancel` | `(task_id, *, reason="cancelled", cascade=False)` | end the conversation (terminal, for good); also kills its background shells. A turn another `Client` on the same store is driving stops at its next model call or tool call |
 | `close` | `(task_id, *, closed_by="user", reason=None)` | mark it archived; status stays `suspended`, and `send_goal` reopens it |
 | `reopen` | `(task_id, *, reopened_by="user", reason=None)` | clear the closed mark |
 | `rewind` | `(task_id, *, message_seq)` | undo the user message at `message_seq` and everything after; files it edited are restored; the log stays append-only |

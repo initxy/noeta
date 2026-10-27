@@ -23,24 +23,24 @@
 
 ### 崩溃恢复撤销不了副作用
 
-- **限制：** 一步跑到一半被硬杀后，这次尝试会被标记为 `StepAttemptAbandoned`。只有当它记录下的所有操作本来都不需要审批时，才会自动重跑这一步；否则（或同一轮已经连续标记 3 次）Task 会被**搁置**：挂起，并附一条 `origin="system"` 的通知，逐条列出被打断的调用以及它是否完成。经人工批准的工具执行期间崩溃，一律搁置，重新挂回同一次审批。恢复不会悄悄重跑有副作用的调用，但已经做了的也撤销不了。
-- **办法：** 打开被搁置的 Task，确认列出的操作到底执行了没有，然后发消息继续（这一轮从尝试开始前的状态重来），或重新批准。正常的 SIGTERM 不会触发这种情况。
+- **限制：** 一批工具调用跑到一半被硬杀后，恢复会保留这批调用：已经跑完的保留记录下的结果，不再执行；被崩溃打断的那个调用拿到一条失败结果，说明它的结果未知；还没开始的照常经过权限检查后执行。不管什么权限模式，开始过的调用都不会被执行第二次——但被打断的调用到底生效没有，恢复判断不了，也撤销不了。如果崩溃时还没有任何调用开始，这次尝试会被标记为 `StepAttemptAbandoned`，重新问一次模型。派出过子任务的尝试、经人工批准的工具执行期间崩溃、或同一轮第 4 次崩溃，Task 会被**搁置**：挂起，并附一条 `origin="system"` 的通知；批准过的工具执行期间崩溃，会重新挂回同一次审批。
+- **办法：** 工具结果说结果未知时，先确认它的效果再重试（模型也会被这样提醒）。被搁置的 Task，先确认列出的操作，再发消息继续或重新批准。正常的 SIGTERM 不会触发这种情况。
 
 ### 关闭时可能留下一个还在跑的步骤
 
 - **限制：** `stop()` 最多等 `shutdown_grace_s`，超时就放弃当前这一步。Python 杀不掉那个线程，它可能还在写事件日志。
 - **办法：** 放弃之后直接退出进程。租约过期后 `requeue_stale()` 会把 Task 捡回来。`shutdown_grace_s=None`（或 `<= 0`）表示无限等待，卡死的步骤就只能 `kill -KILL <pid>`。
 
-### 心跳续租有上限
+### 单次尝试的续租有上限
 
-- **限制：** 一步最多持有租约 `heartbeat_interval × heartbeat_max`（默认 360 次，实际是几个小时）。超过后租约被释放，下一次写入报 `InvalidLease`。
-- **办法：** 遇到了就去检查这个 Task，别当成会自动恢复。
+- **限制：** 一次尝试（一次模型调用加上它要的工具调用）最多持有租约 `heartbeat_interval × HostConfig.attempt_heartbeat_max`（默认 360 次，实际是几个小时）。每次模型调用都重新计数，所以长对话轮次整体不受限。超过后租约交回就绪队列、这一步停下，这次尝试按 worker 崩溃的方式恢复（`attempt_heartbeat_cap`）。
+- **办法：** 确实要阻塞这么久的工具调用应放到后台命令里跑；`attempt_heartbeat_max=None` 可以去掉上限。
 
 ## 可观测性
 
 ### 可靠性事件只在本进程内
 
-- **限制：** worker 的信号（`stale_requeued`、`suspended_without_wake`、`step_failed_retryable`、`heartbeat_invalid_lease`、`shutdown_abandoned`、`timers_fired`、`attempt_abandoned`、`attempt_parked`、`cap_terminal_reconciled`、`dispatcher_unavailable`）默认只写结构化日志，不进事件日志，进程重启就没了。
+- **限制：** worker 的信号（`stale_requeued`、`suspended_without_wake`、`step_failed_retryable`、`heartbeat_invalid_lease`、`shutdown_abandoned`、`timers_fired`、`attempt_abandoned`、`attempt_parked`、`attempt_resumed`、`cap_terminal_reconciled`、`dispatcher_unavailable`、`heartbeat_failed`、`attempt_heartbeat_cap`）默认只写结构化日志，不进事件日志，进程重启就没了。
 - **办法：** 传一个 `reliability_sink`，把它们转发到你的监控系统。
 
 ### Task 等人回复时没人收到通知

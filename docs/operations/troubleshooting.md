@@ -123,15 +123,18 @@ hit a boundary of the design rather than a fault, see
   the task on the next start. To avoid it, raise `shutdown_grace_s`, or set `None` to
   wait forever (a stuck step then needs `kill -KILL <pid>`).
 
-### A long step fails with `InvalidLease`
+### A long step is sealed and re-driven
 
-- **Symptom:** a long-running step fails on its next event-log write; the worker
-  emitted `heartbeat_invalid_lease`.
-- **Cause:** heartbeat extensions are capped at the dispatcher's `heartbeat_max` (360),
-  so one step holds a lease for at most `heartbeat_interval × heartbeat_max`.
-- **Fix:** treat it as a signal to inspect the task, not a recovery path. If the step
-  is legitimately that slow, raise `heartbeat_interval` or `heartbeat_max`; otherwise
-  find what hangs.
+- **Symptom:** a step that ran for hours ends in `StepAttemptAbandoned`; the worker
+  emitted `attempt_heartbeat_cap`.
+- **Cause:** one step attempt may renew its lease at most
+  `HostConfig.attempt_heartbeat_max` times (360). Past it the lease is handed back and
+  the attempt is recovered like a crashed one.
+- **Fix:** if a single tool call is legitimately that slow, run it as a background
+  command, or raise (or set `None` on) `attempt_heartbeat_max`; otherwise find what
+  hangs. `heartbeat_invalid_lease` alone means the lease was revoked under the step —
+  by a cancel, or a reclaim after the heartbeat could not reach storage for
+  `lease_seconds`.
 
 ## Next
 

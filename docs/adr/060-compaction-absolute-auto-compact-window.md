@@ -13,3 +13,7 @@ Refines [ADR-003](003-context-compaction.md) (Context compaction: a token-only t
 - **Why.** On a 1M-token model the water mark sits near 966K and the second valve at 483K; a worker's whole job ends at 100–300K, so neither layer ever opened and every request re-sent every tool output the task had ever read. Claude Code answers this with an absolute `autoCompactWindow`, a token count capped at the model's window — a fraction of a 1M window would still be hundreds of thousands of tokens.
 - **Where it lives.** Wiring, not identity: it changes the composed bytes the way `tool_output_inline_limit` does, so a resumed task must be given the same value, and it is not part of `AgentSpec`.
 - **The note gate** of [ADR-003](003-context-compaction.md) also counts localised section headings — a markdown heading or a bold run opening with a section number — so a summarizer that translates the nine titles is not refused; a plain numbered line still counts for nothing, since that is also the shape of a narration's plan. The prompt now asks for the titles verbatim in English.
+
+## Refined by
+
+- [ADR-066](066-compaction-batched-clearing-and-claude-code-margin.md) — Batched clearing of re-fetchable results, a summarize input that matches the view, and Claude Code's margin

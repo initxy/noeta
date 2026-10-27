@@ -40,7 +40,7 @@ def make_dispatcher(request):
     def _make_in_memory(
         *,
         now: Callable[[], float] | None = None,
-        heartbeat_max: int = 360,
+        heartbeat_max: int | None = None,
         max_fail_attempts: int = 3,
     ) -> Any:
         return InMemoryDispatcher(
@@ -50,7 +50,7 @@ def make_dispatcher(request):
     def _make_sqlite(
         *,
         now: Callable[[], float] | None = None,
-        heartbeat_max: int = 360,
+        heartbeat_max: int | None = None,
         max_fail_attempts: int = 3,
     ) -> Any:
         return SqliteDispatcher(
@@ -63,7 +63,7 @@ def make_dispatcher(request):
     def _make_postgres(
         *,
         now: Callable[[], float] | None = None,
-        heartbeat_max: int = 360,
+        heartbeat_max: int | None = None,
         max_fail_attempts: int = 3,
     ) -> Any:
         from noeta.sdk.storage import PostgresDispatcher
@@ -352,7 +352,7 @@ def test_heartbeat_unknown_lease_raises(make_dispatcher) -> None:
         disp.heartbeat("lease-bogus")
 
 
-def test_heartbeat_over_cap_force_releases_to_suspended(make_dispatcher) -> None:
+def test_heartbeat_over_cap_returns_task_to_ready(make_dispatcher) -> None:
     disp = make_dispatcher(heartbeat_max=3)
     disp.enqueue("t1")
     lease = disp.lease(worker_id="w")
@@ -360,9 +360,21 @@ def test_heartbeat_over_cap_force_releases_to_suspended(make_dispatcher) -> None
         disp.heartbeat(lease.lease_id)
     with pytest.raises(InvalidLease):
         disp.heartbeat(lease.lease_id)
-    # After the force-release the task is suspended (no wake_on set),
-    # so it is not leaseable.
-    assert disp.lease(worker_id="w") is None
+    # Past the cap the old lease is dead and the task is leaseable again, so
+    # the next holder recovers the interrupted step instead of the task being
+    # stranded suspended with nothing to wake it.
+    assert disp.is_lease_valid("t1", lease.lease_id) is False
+    again = disp.lease(worker_id="w2")
+    assert again is not None and again.task_id == "t1"
+
+
+def test_heartbeat_is_uncapped_by_default(make_dispatcher) -> None:
+    disp = make_dispatcher(heartbeat_max=None)
+    disp.enqueue("t1")
+    lease = disp.lease(worker_id="w")
+    for _ in range(400):
+        disp.heartbeat(lease.lease_id)
+    assert disp.is_lease_valid("t1", lease.lease_id) is True
 
 
 # ---------------------------------------------------------------------------

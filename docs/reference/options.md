@@ -32,7 +32,7 @@ A frozen dataclass. Fields are either **identity** (compiled into the recorded `
 | `plugins` | `tuple[str, ...]` | `DEFAULT_PLUGINS` = `("fs", "web")` | plugins this agent activates ([below](#plugin-activation)) |
 | `agents` | `Mapping[str, AgentDefinition]` | `{}` | subagents, a flat dict |
 | `allowed_tools` | `tuple[str \| tool, ...] \| None` | `None` | replaces the tool list; `None` = the 10 built-ins, `()` = none |
-| `disallowed_tools` | `tuple[str, ...]` | `()` | removed from whichever list applies; unknown names ignored |
+| `disallowed_tools` | `tuple[str, ...]` | `()` | removed from whichever list applies; unknown names ignored; `"Bash"` also removes `Monitor`, `BashOutput`, `KillShell` |
 | `permission_mode` | `str` | `"default"` | `default` / `acceptEdits` / `bypassPermissions` |
 | `max_turns` | `int \| None` | `None` | shorthand for `budget.max_iterations`; setting both raises `ValueError` |
 | `policy` | `(llm) -> Policy` with `.ref` | `None` | replaces the built-in ReAct loop |
@@ -152,6 +152,7 @@ A frozen dataclass passed as `Client(..., host_config=...)`. Never part of agent
 | `queue` | `str` | `"default"` | this client's worker queue on a shared store; its workers claim only this queue |
 | `record_llm_requests` | `bool` | `False` | store each model call's full request body behind `LLMRequestStarted.request_ref`. Off, the ref carries the hash alone: the request is derivable and would grow the store by the square of a task's length. A debugging aid; `Client.collect_garbage` drops the bodies again |
 | `llm_max_retries` | `int \| None` | `None` | how many times this client retries a model call that failed transiently (429, 5xx, timeout) before the step fails, with backoff; each retry records `LLMRetryScheduled`. `0` tries once; `None` keeps the runtime default (8) |
+| `attempt_heartbeat_max` | `int \| None` | `360` | lease renewals one step attempt (a model call plus its tool calls) may take before its lease is handed back and the attempt is recovered like a crashed one; restarts with every model call. `None` never caps |
 
 Passing `storage_path` and the explicit trio together, or only part of the trio, raises `ValueError`. `noeta.sdk.storage.open_storage_stack(path)` builds the trio from one string; the module also exports `build_storage_stack`, `is_memory_path`, `is_postgres_url`, the Sqlite / Postgres adapters, and `collect_garbage` (see [Limitations → growth](../operations/limitations.md#content-is-reclaimed-only-when-you-ask)).
 
@@ -214,8 +215,8 @@ The skill listing takes 1% of the context window, at most 4,096 tokens (the same
 | `max_steps_per_turn` | `int \| None` | `None` | a working step budget per turn (a one-shot task's whole run): at this many steps one more model call, tools forbidden, asks for a report of where the work got to, and the turn finishes with it under "Stopped at the N-step limit before finishing." instead of failing; sub-agents get the same budget; must be positive |
 | `tool_output_inline_limit` | `int \| None` | `50000` | past this many characters a tool result is persisted and the model gets Claude Code's `<persisted-output>` block (file path + 2 KB preview) instead; without a spill dir it is cut to its start. `Read` is exempt. Full bytes stay recorded; `None` = never; must be positive; keep it stable across resumes |
 | `tool_output_spill_dir` | `Path \| None` | `None` | where an over-size result is written whole, as `<dir>/<task_id>/<call_id>.txt`, for the model to page through with `Read`; must be a path the session's `Read` reaches; the host owns cleanup |
-| `auto_compact_window` | `int \| None` | `None` | compact as if the context window were this many tokens (Claude Code's `autoCompactWindow`): the summarize trigger, the protected tail and the tool-output valves all derive from `min(model window, this)`; the output ceiling and the 1% skill / memory budgets keep the real window; must be positive; keep it stable across resumes |
-| `clear_tool_outputs_at` | `int \| None` | `None` | the request size, in tokens, at which tool outputs older than the newest five start clearing to a marker; `None` is half the usable window. Set with `auto_compact_window` to clear early and summarize late; must be positive; keep it stable across resumes |
+| `auto_compact_window` | `int \| None` | `None` | compact as if the context window were this many tokens (Claude Code's `autoCompactWindow`): the summarize trigger (`min(model window, this) − min(output ceiling, 20,000) − 13,000`, Claude Code's margin), the protected tail and the tool-output valves all derive from `min(model window, this)`; the output ceiling and the 1% skill / memory budgets keep the real window; must be positive; keep it stable across resumes |
+| `clear_tool_outputs_at` | `int \| None` | `None` | the request size, in tokens, at which re-fetchable tool outputs (`Read`, `Bash`, `Grep`, `Glob`, `Edit`, `Write`, `WebFetch`, …) older than the newest five start clearing to a marker, in batches of about 20,000 tokens; `None` is half the usable window. Set with `auto_compact_window` to clear early and summarize late; must be positive; keep it stable across resumes |
 | `hooks` | `HooksConfig \| None` | `None` | user hooks — rules checked before a tool call, and commands run after one or when a call waits for approval; see [Hooks](#hooks) |
 | `webfetch_allowed_hosts` | `Sequence[str]` | `()` | hosts `WebFetch` reaches without approval: `"example.com"` exact, `"*.example.com"` subdomains only; bad entries raise |
 | `workflow_allowed` | `bool` | `False` | expose `run_workflow` (also needs delegation) |
@@ -245,7 +246,7 @@ The skill listing takes 1% of the context window, at most 4,096 tokens (the same
 
 | Rule | Fields |
 | --- | --- |
-| `PreToolUseRule` | `match_tool` (`fnmatch` pattern over the tool name, e.g. `"mcp__*"`), `action` (`"allow"` / `"deny"` / `"require_approval"`), `match_arg=None`, `reason=None` (what the model or approver sees) |
+| `PreToolUseRule` | `match_tool` (`fnmatch` pattern over the tool name, e.g. `"mcp__*"`; a rule matching `Bash` also matches `Monitor`), `action` (`"allow"` / `"deny"` / `"require_approval"`), `match_arg=None`, `reason=None` (what the model or approver sees) |
 | `MatchArg` | `path` (tuple of argument keys, e.g. `("opts", "force")`), `op` (`"equals"` / `"contains"` / `"regex"`), `value`, `pattern`; a `regex` given as a string `value` is compiled when the config is built |
 | `PostToolUseRule` | `match_tool`, `command=None` (an argv tuple, never run through a shell), `log=False` (log one line instead of, or as well as, running a command) |
 | `NotificationRule` | `on` (`"approval"` is the only value), `command=None`, `log=False` |

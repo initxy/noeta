@@ -10,13 +10,14 @@
 #   make test       run the test suite with coverage
 #   make lint       static checks only (ruff + naming + import topology)
 #   make e2e        live tests: real LLM / real container (needs credentials)
+#   make eval       prompt-regression eval vs evals/baseline.json (needs credentials)
 #   make build      wheels + sdists for both packages into dist/
 #   make docs       the VitePress site, live-reloading
 
 PY ?= uv run python
 
 .DEFAULT_GOAL := help
-.PHONY: help install check test lint e2e build docs
+.PHONY: help install check test lint e2e eval eval-baseline build docs
 
 help:
 	@echo "noeta — library repo (packages/noeta-runtime + packages/noeta-sdk)"
@@ -26,6 +27,8 @@ help:
 	@echo "  make test       run the test suite with coverage"
 	@echo "  make lint       static checks only: ruff + naming + import topology"
 	@echo "  make e2e        live tests: real LLM / real container (needs credentials)"
+	@echo "  make eval       prompt-regression eval vs evals/baseline.json (needs credentials)"
+	@echo "  make eval-baseline  9-trial run, then rewrite evals/baseline.json"
 	@echo "  make build      wheels + sdists for both packages into dist/"
 	@echo "  make docs       the VitePress site, live-reloading"
 
@@ -39,13 +42,22 @@ test:
 
 ## static checks only (fast; no tests)
 lint:
-	uv run ruff check packages tests scripts
+	uv run ruff check packages tests scripts evals
 	uv run python scripts/lint-naming.py
 	uv run lint-imports --config .importlinter
 
 ## live tests against a real LLM backend / sandbox container (opt-in, never in check)
 e2e:
 	uv run pytest -m live
+
+## prompt-regression eval against a real model (opt-in, never in check);
+## exits 1 when a scenario falls below evals/baseline.json by more than its tolerance
+eval:
+	uv run python -m evals
+
+## rewrite evals/baseline.json from a 9-trial run (a steadier mean than eval's 3)
+eval-baseline:
+	uv run python -m evals --trials 9 --write-baseline
 
 ## build both distributions the way release.yml does
 build:
@@ -62,7 +74,7 @@ docs:
 ## NOETA_TEST_POSTGRES_DSN points at a live server), the Python 3.11-3.13
 ## matrix, and the fresh-venv install smoke.
 check:
-	uv run ruff check packages tests scripts
+	uv run ruff check packages tests scripts evals
 	uv run pytest -n auto --cov=noeta --cov-report=term --cov-fail-under=85
 	uv run mypy
 	uv run python scripts/lint-naming.py

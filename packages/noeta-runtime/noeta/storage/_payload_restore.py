@@ -40,6 +40,7 @@ from noeta.protocols.events import (
     McpServerSkippedPayload,
     MessageSelection,
     MessagesAppendedPayload,
+    IdempotencyKeyClaimedPayload,
     InjectionRequestedPayload,
     ModelBoundPayload,
     ContextContentRecordedPayload,
@@ -165,6 +166,9 @@ _PAYLOAD_RESTORERS: dict[str, Callable[[Any], Any]] = {
     "TaskStatePatched":    lambda d: TaskStatePatchedPayload(**d),
     "MessagesAppended":    lambda d: MessagesAppendedPayload(**d),
     "InjectionRequested":  lambda d: restore_dataclass(InjectionRequestedPayload, d),
+    "IdempotencyKeyClaimed": lambda d: restore_dataclass(
+        IdempotencyKeyClaimedPayload, d
+    ),
     "TaskSnapshot":        lambda d: TaskSnapshotPayload(**d),
     "TaskRewound":         lambda d: TaskRewoundPayload(**d),
     "StepAttemptAbandoned": lambda d: StepAttemptAbandonedPayload(**d),

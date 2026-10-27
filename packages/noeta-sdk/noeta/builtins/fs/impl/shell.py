@@ -327,6 +327,7 @@ class ShellRunTool:
     description: str = field(default=load_markdown(__package__, "shell_run"))
     # High risk so PermissionGuard treats this as privileged.
     risk_level: str = "high"
+    clearable: bool = True
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
@@ -699,6 +700,7 @@ class ShellPollTool:
     max_result_size_chars: float = 100_000
     description: str = field(default=load_markdown(__package__, "shell_poll"))
     risk_level: str = "low"
+    clearable: bool = True
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",

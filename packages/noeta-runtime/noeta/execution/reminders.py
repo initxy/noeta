@@ -270,6 +270,7 @@ def record_intake_reminders(
     trace_id: Optional[str] = None,
     origin: Optional[MessageOrigin] = None,
     workspace_path: Optional[Path] = None,
+    idempotency_key: Optional[str] = None,
 ) -> Any:
     """Record an incoming user turn plus every provider's items, in order.
 
@@ -286,9 +287,16 @@ def record_intake_reminders(
     """
     view = build_recall_view(task, content, workspace_path=workspace_path)
     items = run_reminder_providers(view, providers)
-    task = engine.append_user_message(
-        task, content=content, lease_id=lease_id, trace_id=trace_id, origin=origin
-    )
+    if idempotency_key is None:
+        task = engine.append_user_message(
+            task, content=content, lease_id=lease_id, trace_id=trace_id,
+            origin=origin,
+        )
+    else:
+        task = engine.append_user_message(
+            task, content=content, lease_id=lease_id, trace_id=trace_id,
+            origin=origin, idempotency_key=idempotency_key,
+        )
     for item in items:
         if isinstance(item, ResidentActivation):
             task = engine.record_content(
@@ -342,6 +350,8 @@ class IntakeGoalPrelude:
     origin: Optional[MessageOrigin] = None
     attachment_texts: tuple[str, ...] = ()
     activate_skills: tuple[str, ...] = ()
+    #: The caller's ``send_goal`` key, recorded on the goal's append.
+    idempotency_key: Optional[str] = None
 
     #: Providers read live state then append, which is safe at seed time.
     durable_at_seed: ClassVar[bool] = True
@@ -356,6 +366,7 @@ class IntakeGoalPrelude:
             engine, task, content=self.content, lease_id=lease_id,
             providers=self.providers,
             origin=self.origin,
+            idempotency_key=self.idempotency_key,
         )
         if self.activate_skills:
             task = engine.apply_state_patch(

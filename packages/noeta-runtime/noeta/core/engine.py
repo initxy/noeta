@@ -11,9 +11,10 @@ Observer — the parent/child handoff lives entirely in
 
 from __future__ import annotations
 
+import dataclasses
 import time
 import uuid
-from typing import Any, Callable, Optional, TypeGuard
+from typing import Any, Callable, Optional, Sequence, TypeGuard
 
 import copy
 
@@ -40,6 +41,8 @@ from noeta.core._decision_handlers import (
     record_assistant_thinking,
     resume_approved_decision,
     strip_message_origin,
+    tool_output_spiller,
+    wrap_tool_result_block,
 )
 from noeta.core.fold import apply_event, apply_host_binding, fold
 from noeta.core.hooks import HookManager
@@ -104,11 +107,12 @@ from noeta.protocols.messages import (
     MessageOrigin,
     TextBlock,
     ToolResultBlock,
+    ToolUseBlock,
 )
 from noeta.protocols.policy import Policy
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.task import Task, TaskState
-from noeta.protocols.tool import Tool
+from noeta.protocols.tool import Tool, ToolResult
 from noeta.protocols.tool_args import resolve_tool_call_arguments
 
 
@@ -426,6 +430,7 @@ class Engine:
         lease_id: str,
         trace_id: Optional[str] = None,
         origin: Optional[MessageOrigin] = None,
+        idempotency_key: Optional[str] = None,
     ) -> Task:
         """Seed a ``user`` turn into the conversation via the EventLog.
 
@@ -441,21 +446,36 @@ class Engine:
         ``origin`` is the **sole writer seam** for ``Message.origin``:
         Policy-supplied messages get origin stripped at the Decision seams, so
         a value in the ledger always means "the host said so at this seam".
+
+        ``idempotency_key`` is recorded on the ``MessagesAppended`` so a
+        repeated keyed ``send_goal`` can find the goal it already appended.
         """
         _validate_user_content(content)
         msg = Message(role="user", content=content, origin=origin)
-        return self._append_message(task, msg, lease_id=lease_id, trace_id=trace_id)
+        return self._append_message(
+            task, msg, lease_id=lease_id, trace_id=trace_id,
+            idempotency_key=idempotency_key,
+        )
 
     def _append_message(
-        self, task: Task, msg: Message, *, lease_id: str, trace_id: Optional[str]
+        self,
+        task: Task,
+        msg: Message,
+        *,
+        lease_id: str,
+        trace_id: Optional[str],
+        idempotency_key: Optional[str] = None,
     ) -> Task:
         """Emit one ``MessagesAppended`` and mirror it into
         ``task.runtime.messages`` — the shared tail of every message-append
         seam, which is what keeps Engine the single writer."""
+        payload = put_messages(self._content_store, [msg])
+        if idempotency_key is not None:
+            payload = dataclasses.replace(payload, idempotency_key=idempotency_key)
         self._emit(
             task_id=task.task_id,
             type_="MessagesAppended",
-            payload=put_messages(self._content_store, [msg]),
+            payload=payload,
             lease_id=lease_id,
             trace_id=trace_id or self._latest_trace_id(task.task_id),
         )
@@ -914,6 +934,11 @@ class Engine:
         pops the marker in one reduction — exactly-once by construction.
         ``apply_event`` folds it onto the live task so the next ``compose`` sees
         it and a fresh fold matches. Nothing pending ⇒ no emit ⇒ byte-identical.
+
+        While the latest assistant turn still has a call with no result (the
+        ``Task`` calls a mixed response spawns after its ordinary calls), the
+        drain waits: a user message there would split that call from its
+        result.
         """
         inbox = self._injection_inbox
         live = inbox.snapshot(task.task_id) if inbox is not None else {}
@@ -921,7 +946,7 @@ class Engine:
         # entries not yet folded onto this in-memory task. dict union keeps
         # first-seen order and dedups on ``injection_id``.
         pending = {**task.governance.pending_injections, **live}
-        if not pending:
+        if not pending or _latest_turn_has_unanswered_call(task.runtime.messages):
             return task
         for injection_id, descriptor in pending.items():
             env = self._emit(
@@ -1351,6 +1376,22 @@ class Engine:
         return events[0].trace_id if events else "trace-unknown"
 
 
+def _latest_turn_has_unanswered_call(messages: list[Message]) -> bool:
+    """Does the latest assistant turn carry a tool call with no result yet?"""
+    answered: set[str] = set()
+    for message in reversed(messages):
+        if message.role != "assistant":
+            answered.update(
+                b.call_id for b in message.content if isinstance(b, ToolResultBlock)
+            )
+            continue
+        return any(
+            isinstance(b, ToolUseBlock) and b.call_id not in answered
+            for b in message.content
+        )
+    return False
+
+
 def _raise_if_cancelled(
     cancelled: Optional[Callable[[], bool]], task_id: str
 ) -> None:
@@ -1643,6 +1684,55 @@ def suspend_on_human_handle(
     )
 
 
+def close_unanswered_calls(
+    engine: Engine, task: Task, *, lease_id: str, reason: str
+) -> Task:
+    """Answer every call of the latest assistant turn that has no result yet
+    with a failed ``reason`` result, in one tool-role message.
+
+    A stopped or parked turn can leave calls the batch never reached — the
+    ``Task`` calls a mixed response defers until its ordinary calls finish.
+    Unanswered, the next request carries a dangling ``tool_use`` (a provider
+    400), and the deferred spawn would run after the human's next message.
+    A call awaiting an approval or a question answer is left alone: its own
+    verb answers it. No-op when nothing is unanswered.
+    """
+    answered: set[str] = set()
+    unanswered: list[str] = []
+    for message in reversed(task.runtime.messages):
+        if message.role != "assistant":
+            answered.update(
+                b.call_id for b in message.content if isinstance(b, ToolResultBlock)
+            )
+            continue
+        waiting = set(task.governance.pending_approvals) | {
+            q.get("call_id") for q in task.governance.pending_questions.values()
+        }
+        unanswered = [
+            b.call_id
+            for b in message.content
+            if isinstance(b, ToolUseBlock)
+            and b.call_id not in answered
+            and b.call_id not in waiting
+        ]
+        break
+    if not unanswered:
+        return task
+    held = engine._held_preacked_results(task, set(unanswered))
+    # ``output`` stays empty: the adapters render a failed result as ``error``
+    # followed by ``output``, so filling both repeats the sentence.
+    blocks = [
+        ToolResultBlock(call_id=call_id, output="", success=False, error=reason)
+        for call_id in unanswered
+    ]
+    return engine._append_message(
+        task,
+        Message(role="tool", content=[*held, *blocks]),
+        lease_id=lease_id,
+        trace_id=None,
+    )
+
+
 #: The only blocks a user turn may legitimately carry.
 #: Model-side (``ThinkingBlock``) and tool-side (``ToolUseBlock`` /
 #: ``ToolResultBlock``) blocks ride other seams and are rejected here.
@@ -1812,3 +1902,52 @@ def guard_allows_tool_call(
         ).is_allow
     except Exception:  # noqa: BLE001 — classification must fail closed
         return False
+
+
+def complete_interrupted_tool_batch(
+    engine: Engine,
+    task: Task,
+    *,
+    recorded: Sequence[tuple[ToolCall, ToolResult]],
+    answered: Sequence[ToolResultBlock],
+    pending: Sequence[ToolCall],
+    lease_id: str,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> Task:
+    """Finish a tool batch a crash cut short, without re-running any call
+    that started (crash recovery).
+
+    ``recorded`` results are re-rendered exactly as the live batch renders
+    them (inline limit, spill, the tool's own size cap); ``answered`` blocks
+    go in as given; ``pending`` calls never started, so they run now through
+    ``handle_tool_calls`` — past the live guard chain, which may deny one or
+    suspend the task on an approval. Every call ends up with one result in
+    one batched message, so the step can continue at its next decide. A
+    stop already armed (``cancelled``) closes the pending calls unrun, as it
+    does in any batch.
+    """
+    ctx = engine._ctx
+    blocks = [
+        wrap_tool_result_block(
+            call,
+            result,
+            tool_output_inline_limit=ctx.tool_output_inline_limit,
+            spill=tool_output_spiller(ctx.tool_output_spill_dir, task.task_id),
+            max_result_size_chars=getattr(
+                engine.tool_named(call.tool_name), "max_result_size_chars", None
+            ),
+        )
+        for call, result in recorded
+    ]
+    suspended = handle_tool_calls(
+        ctx,
+        task,
+        ToolCallsDecision(
+            calls=list(pending),
+            preacked_results=(*blocks, *answered),
+        ),
+        lease_id=lease_id,
+        trace_id=engine._latest_trace_id(task.task_id),
+        cancelled=cancelled,
+    )
+    return suspended if suspended is not None else task

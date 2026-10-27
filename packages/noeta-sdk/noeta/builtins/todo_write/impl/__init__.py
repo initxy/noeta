@@ -240,6 +240,14 @@ def _maybe_todo_write_decision(
                     state_patch=patch,
                     preacked_results=(ack, *rest.preacked_results),
                 )
+            if isinstance(rest, ToolCallsDecision) and rest.state_patch is None:
+                # Task alongside ordinary calls: those run now (the Task
+                # calls spawn after them), and the checklist rides with them.
+                return replace(
+                    rest,
+                    state_patch=patch,
+                    preacked_results=(ack, *rest.preacked_results),
+                )
             refusal = _refusal_text(rest)
             if refusal is not None:
                 # The Task calls were refused, so nothing runs: the checklist

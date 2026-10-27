@@ -19,6 +19,8 @@ import time
 from typing import Any, Callable, Optional
 
 from noeta.core.fold import fold
+from noeta.protocols.canonical import from_canonical_bytes
+from noeta.protocols.messages import TextBlock
 
 
 __all__ = [
@@ -49,6 +51,9 @@ DEFAULT_DELIVER_TIMEOUT_S = 3600.0
 #: costs a fold a second rather than twenty.
 DEFAULT_DELIVER_POLL_S = 0.05
 DEFAULT_DELIVER_MAX_POLL_S = 1.0
+
+#: Bound on the parent-chain walk from a subtask to its session root.
+_MAX_CHAIN_DEPTH = 64
 
 #: Push the completion notice and drive the turn, given the wired notifier. MUST
 #: raise when the session is not idle-suspended on its next-goal handle, since
@@ -88,6 +93,9 @@ class BackgroundDelivery:
         # that thread last looked (so it looks again before it stops).
         self._settling: set[str] = set()
         self._dirty: set[str] = set()
+        # Injections of an ended subtask already re-posted to its root, so a
+        # second look at the same subtask never re-posts one.
+        self._forwarded: set[str] = set()
 
     def set_notifier(self, notifier: Any) -> None:
         """Wire the completion notifier (the ``InteractionDriver``). Idempotent."""
@@ -113,17 +121,27 @@ class BackgroundDelivery:
         """Queue ``notice`` for the model of ``task_id`` and see it delivered.
 
         Synchronous part (on the caller's thread, so notices keep their order):
-        a terminal or closed session drops it; otherwise the notifier records
-        it as a pending injection, which a running turn drains at its next
+        an ended subtask hands it to its session root instead; a terminal or
+        closed session drops it; otherwise the notifier records it as a
+        pending injection, which a running turn drains at its next
         top-of-loop. Then a per-session settle thread watches: once nothing is
         pending it stops; if the session parks on its next-goal handle with
         injections still pending — the notice landed as the turn ended, or
-        while it was parked — it drives a turn that takes them in. No-op until
-        a notifier is wired, and after :meth:`close`."""
+        while it was parked — it drives a turn that takes them in. A subtask
+        that ends with notices still pending hands them to its root. No-op
+        until a notifier is wired, and after :meth:`close`."""
         notifier = self._notifier
         if notifier is None or self._closed:
             return
         task = fold(self._event_log, self._content_store, task_id)
+        if task.status == "terminal" and task.parent_task_id is not None:
+            self.post_notice(
+                task_id=self._root_of(task_id),
+                notice=notice,
+                retry_timeout_s=retry_timeout_s,
+                poll_s=poll_s,
+            )
+            return
         if task.status == "terminal" or getattr(task.governance, "closed", False):
             return
         notifier.inject_notice(task_id, notice=notice)
@@ -157,6 +175,8 @@ class BackgroundDelivery:
                 with self._lock:
                     self._dirty.discard(task_id)
                 task = fold(self._event_log, self._content_store, task_id)
+                if task.status == "terminal" and task.parent_task_id is not None:
+                    self._forward_to_root(task, retry_timeout_s, poll_s)
                 done = (
                     not task.governance.pending_injections
                     or task.status == "terminal"
@@ -187,6 +207,41 @@ class BackgroundDelivery:
         finally:
             with self._lock:
                 self._settling.discard(task_id)
+
+    def _root_of(self, task_id: str) -> str:
+        """The session root above ``task_id`` (``task_id`` itself for a root)."""
+        current = task_id
+        for _ in range(_MAX_CHAIN_DEPTH):
+            parent = fold(self._event_log, self._content_store, current).parent_task_id
+            if parent is None:
+                return current
+            current = parent
+        return current
+
+    def _forward_to_root(self, task: Any, retry_timeout_s: float, poll_s: float) -> None:
+        """Re-post the notices an ended subtask never took in to its root."""
+        root = self._root_of(task.task_id)
+        for injection_id, descriptor in task.governance.pending_injections.items():
+            with self._lock:
+                if injection_id in self._forwarded:
+                    continue
+                self._forwarded.add(injection_id)
+            messages = from_canonical_bytes(
+                self._content_store.get(descriptor["messages_ref"])
+            )
+            text = "\n".join(
+                b.text
+                for m in messages
+                for b in m.content
+                if isinstance(b, TextBlock)
+            )
+            if text:
+                self.post_notice(
+                    task_id=root,
+                    notice=text,
+                    retry_timeout_s=retry_timeout_s,
+                    poll_s=poll_s,
+                )
 
     def is_pending(self, key: str) -> bool:
         """True while a delivery handed off under ``key`` is still running."""
