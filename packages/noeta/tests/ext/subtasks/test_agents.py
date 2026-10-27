@@ -53,3 +53,18 @@ def test_main_roster_schema() -> None:
         "read, write, edit, run shell commands, then return the result.; "
         "plan — Architect: reads the code and returns a concrete ordered implementation plan "
         "(read-only — never writes any file).")
+
+
+def test_default_sub_agents_carry_0_6_extension_sets() -> None:
+    from noeta.ext.mcp import Mcp
+    from noeta.presets import default_agents
+
+    agents = {a.name: {e.name for e in a.all_extensions()}
+              for a in default_agents("m", mcp=Mcp())}
+    common = {"compaction", "permissions", "background_shell", "web", "instructions",
+              "workspace"}
+    assert common | {"skills", "mcp"} <= agents["general-purpose"]
+    assert common | {"skills"} <= agents["explore"]
+    assert "mcp" not in agents["explore"]
+    assert common | {"ask_user"} <= agents["plan"]
+    assert not {"mcp", "skills"} & agents["plan"]
