@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from noeta.agent import Agent
-from noeta.errors import NoetaError
 from noeta.execenv.base import ExecEnv
 from noeta.providers.base import Provider
 from noeta.store.base import Claim, Store
@@ -51,17 +50,51 @@ class Runtime:
     spill_root: str | None = None
     on_delta: OnDelta | None = None
     sleep: Callable[[float], Any] = asyncio.sleep
+    #: Serve only the task trees whose root ids are in this set (a front end
+    #: adds each task it creates or resumes); ``None`` serves every task.
+    roots: set[str] | None = None
+    _wake: asyncio.Event | None = field(default=None, init=False, repr=False)
+
+    async def _claim_once(self) -> Claim | None:
+        roots = sorted(self.roots) if self.roots is not None else None
+        return await self.store.claim(self.worker, self.queues, self.lease_seconds,
+                                      roots=roots)
+
+    async def run_claim(self, claim: Claim) -> None:
+        """Run one claim until the task waits or ends. Cancelled (a
+        shutdown), it hands the task back at once instead of leaving it
+        ``running`` until the lease runs out."""
+        from noeta.runner.task import TaskRun
+
+        run = TaskRun(self, claim)
+        try:
+            await run.run()
+        except asyncio.CancelledError:
+            await self._release(run.claim)
+            raise
+
+    async def _release(self, claim: Claim) -> None:
+        try:
+            await self.store.release(claim)
+        except Exception as exc:  # noqa: BLE001 — the lease covers it
+            log.warning("task %s: release failed: %s", claim.task_id, exc)
 
     async def run_once(self) -> bool:
         """Claim one task and run it until it waits or ends. ``False`` when
         nothing was claimable."""
-        from noeta.runner.task import TaskRun
-
-        claim = await self.store.claim(self.worker, self.queues, self.lease_seconds)
+        claim = await self._claim_once()
         if claim is None:
             return False
-        await TaskRun(self, claim).run()
+        await self.run_claim(claim)
         return True
+
+    def serve_root(self, root_id: str) -> None:
+        """Add a task tree to ``roots`` (when this runtime is scoped) and
+        look for claimable work at once."""
+        if self.roots is not None:
+            self.roots.add(root_id)
+        if self._wake is not None:
+            self._wake.set()
 
     async def run_until_idle(self) -> None:
         while await self.run_once():
@@ -69,22 +102,21 @@ class Runtime:
 
     async def _claim(self) -> Claim | None:
         try:
-            return await self.store.claim(self.worker, self.queues, self.lease_seconds)
-        except (NoetaError, OSError) as exc:
-            # A store outage must not end the worker; try again next tick.
+            return await self._claim_once()
+        except Exception as exc:  # noqa: BLE001 — a store outage must not end the worker
             log.warning("claim failed: %s", exc)
             return None
 
     async def serve(self, stop: asyncio.Event) -> None:
-        """Run tasks as they become claimable until ``stop`` is set."""
-        from noeta.runner.task import TaskRun
-
+        """Run tasks as they become claimable until ``stop`` is set. On the
+        way out, running tasks are cancelled and handed back."""
         loop = asyncio.get_running_loop()
         wake = asyncio.Event()
 
         def nudge(_task: str, _kind: str) -> None:
             loop.call_soon_threadsafe(wake.set)
 
+        self._wake = wake
         unsubscribe = self.store.on_change(nudge)
         running: set[asyncio.Task[None]] = set()
         try:
@@ -93,7 +125,7 @@ class Runtime:
                     claim = await self._claim()
                     if claim is None:
                         break
-                    t = asyncio.create_task(TaskRun(self, claim).run())
+                    t = asyncio.create_task(self.run_claim(claim))
                     running.add(t)
                     t.add_done_callback(running.discard)
                     t.add_done_callback(lambda _d: wake.set())
@@ -104,6 +136,7 @@ class Runtime:
                 for w in waiters:
                     w.cancel()
         finally:
+            self._wake = None
             unsubscribe()
             for t in running:
                 t.cancel()

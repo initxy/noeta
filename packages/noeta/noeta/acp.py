@@ -19,6 +19,8 @@ from acp import schema
 
 from noeta.events import (
     ExtensionRecorded,
+    InputTaken,
+    ModelCalled,
     ModelReplied,
     Recorded,
     Say,
@@ -28,6 +30,7 @@ from noeta.events import (
     Waiting,
 )
 from noeta.local import LocalApp
+from noeta.loop.state import CORE
 from noeta.types import Delta, Image, Message, Text, ToolUse
 
 log = logging.getLogger("noeta.acp")
@@ -101,6 +104,100 @@ def prompt_message(blocks: Iterable[Any]) -> Message:
     return Message(role="user", content=content or [Text(text="")], origin="human")
 
 
+def question_ids(waiting: Waiting) -> list[str]:
+    """The calls a ``Waiting`` asks the user about (its detail is keyed by
+    call id, each entry with the parked call's ``on``)."""
+    return [k for k, v in waiting.detail.items()
+            if isinstance(v, dict) and v.get("on") == "question"]
+
+
+def question_text(detail: dict[str, Any]) -> str:
+    """A parked question as plain text: each question and its options."""
+    lines: list[str] = []
+    for q in detail.get("questions") or []:
+        lines.append(str(q.get("question") or ""))
+        for opt in q.get("options") or []:
+            desc = opt.get("description")
+            lines.append(f"  - {opt.get('label', '')}" + (f": {desc}" if desc else ""))
+    return "\n".join(lines) or str(detail.get("prompt") or "")
+
+
+class _Turn:
+    """One prompt's view of the task: which inbox item started it, and the
+    live output that belongs to it."""
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+        self.out: asyncio.Queue[Any] = asyncio.Queue()
+        #: The inbox seq of this prompt's message (or answer).
+        self.seq = -1
+        #: The log seq of the ``InputTaken`` that took it; ``None`` until seen.
+        self.input_seq: int | None = None
+        self.called = 0
+        self.done = False
+        self._early: list[Delta] = []
+        #: Per model call (its ``ModelCalled`` seq): the live attempt and the
+        #: text streamed for it.
+        self._attempt: dict[int, int] = {}
+        self._text: dict[int, str] = {}
+        #: Calls whose failed attempt already showed text (the retry's text
+        #: is set apart from it).
+        self._shown: set[int] = set()
+
+    def on_delta(self, task_id: str, delta: Delta) -> None:
+        if task_id != self.session_id or not delta.text or self.done:
+            return
+        if self.input_seq is None:
+            self._early.append(delta)  # sorted out once the turn's start is known
+            return
+        self._forward(delta)
+
+    def start(self, input_seq: int) -> None:
+        self.input_seq = input_seq
+        early, self._early = self._early, []
+        for d in early:
+            self._forward(d)
+
+    def _forward(self, delta: Delta) -> None:
+        assert self.input_seq is not None
+        if delta.call_seq and delta.call_seq <= self.input_seq:
+            return  # an earlier turn's call
+        key = delta.call_seq
+        live = self._attempt.get(key, 1)
+        if delta.attempt < live:
+            return  # a failed attempt's tail
+        if delta.attempt > live:
+            self.retried(delta.attempt - 1, key)
+        if delta.kind == "text":
+            if not self._text.get(key) and key in self._shown:
+                self._shown.discard(key)
+                self.out.put_nowait(acp.update_agent_message_text("\n\n"))
+            self._text[key] = self._text.get(key, "") + delta.text
+            self.out.put_nowait(acp.update_agent_message_text(delta.text))
+        else:
+            self.out.put_nowait(acp.update_agent_thought_text(delta.text))
+
+    def retried(self, failed_attempt: int, key: int | None = None) -> None:
+        """Attempt ``failed_attempt`` of a call failed: its fragments are
+        dropped and the next attempt's text is reconciled on its own."""
+        key = self.called if key is None else key
+        if failed_attempt + 1 <= self._attempt.get(key, 1):
+            return
+        self._attempt[key] = failed_attempt + 1
+        if self._text.get(key):
+            self._shown.add(key)
+        self._text[key] = ""
+
+    def unsent_text(self, full: str) -> str:
+        """What of a recorded reply's text the editor has not been sent."""
+        sent = self._text.pop(self.called, "")
+        if not full or sent == full:
+            return ""
+        if full.startswith(sent):
+            return full[len(sent):]
+        return f"\n\n{full}"
+
+
 class EditorServers:
     """MCP servers an editor named for each session. Kept in memory only:
     their env and headers are credentials and never enter the task log. Pass
@@ -138,6 +235,7 @@ class NoetaAcpAgent:
         self.agent = agent
         self.model = model
         self.conn: Any = None
+        self._locks: dict[str, asyncio.Lock] = {}
 
     def on_connect(self, conn: Any) -> None:
         self.conn = conn
@@ -164,6 +262,7 @@ class NoetaAcpAgent:
         return schema.NewSessionResponse(session_id=task_id)
 
     async def load_session(self, cwd: str, session_id: str, **kw: Any) -> None:
+        await self.app.adopt(session_id)
         for rec in await self.app.client.events(session_id):
             for update in self._replay(rec):
                 await self.conn.session_update(session_id=session_id, update=update)
@@ -183,88 +282,102 @@ class NoetaAcpAgent:
         await self.app.client.cancel(session_id, "stopped from the editor", turn_only=True)
 
     async def prompt(self, session_id: str, prompt: list[Any], **kw: Any) -> schema.PromptResponse:
+        # One prompt at a time per session: a prompt sent right after a
+        # cancel waits until the stopped turn has answered "cancelled".
+        lock = self._locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            return await self._prompt(session_id, prompt_message(prompt))
+
+    async def _prompt(self, session_id: str, message: Message) -> schema.PromptResponse:
         client = self.app.client
+        await self.app.adopt(session_id)
         row = await client.get(session_id)
-        message = prompt_message(prompt)
         after = row.last_seq
         events = await client.events(session_id, max(0, after - 1))
         waiting = events[-1].event if events else None
-        if isinstance(waiting, Waiting) and waiting.on == "question" and waiting.ids:
-            await client.answer(session_id, waiting.ids[0], data=message.text)
-        else:
-            await client.send(session_id, message)
-
-        out: asyncio.Queue[Any] = asyncio.Queue()
-        streamed = {"text": False}
-
-        def on_delta(task_id: str, delta: Delta) -> None:
-            if task_id != session_id or not delta.text:
-                return
-            if delta.kind == "text":
-                streamed["text"] = True
-                out.put_nowait(acp.update_agent_message_text(delta.text))
-            else:
-                out.put_nowait(acp.update_agent_thought_text(delta.text))
-
-        async def pump() -> None:
-            while True:
-                update = await out.get()
-                try:
-                    await self.conn.session_update(session_id=session_id, update=update)
-                finally:
-                    out.task_done()
-
-        unsubscribe = self.app.deltas(on_delta)
-        pumping = asyncio.create_task(pump())
-        stop: str = "end_turn"
-        taken = False
+        asked = question_ids(waiting) if isinstance(waiting, Waiting) else []
+        turn = _Turn(session_id)
+        unsubscribe = self.app.deltas(turn.on_delta)
         try:
-            async for rec in client.watch(session_id, after):
-                ev = rec.event
-                if hasattr(ev, "through") and hasattr(ev, "items"):
-                    taken = True
-                    continue
-                if not taken:
-                    continue  # still the previous turn's tail (or the session's first wait)
-                if isinstance(ev, ModelReplied):
-                    for u in start_updates(ev, streamed_text=streamed["text"]):
-                        out.put_nowait(u)
-                    streamed["text"] = False
-                elif isinstance(ev, ToolStarted):
-                    out.put_nowait(acp.update_tool_call(ev.call.id, status="in_progress"))
-                elif isinstance(ev, ToolFinished):
-                    out.put_nowait(finish_update(ev))
-                elif isinstance(ev, ExtensionRecorded) and ev.kind == "turn_stopped":
-                    stop = "cancelled"
-                elif isinstance(ev, Waiting):
-                    if ev.on == "approval":
-                        await out.join()
-                        await self._ask_permissions(session_id, ev)
-                        continue
-                    if ev.on == "input":
-                        failed = ev.detail.get("turn_failed")
-                        if failed:
-                            out.put_nowait(acp.update_agent_message_text(
-                                f"\n\n[turn failed: {failed}]"))
-                        break
-                    if ev.on == "question":
-                        q = ev.detail or {}
-                        out.put_nowait(acp.update_agent_message_text(
-                            f"\n\n{q.get('prompt') or 'The agent is asking a question.'}"
-                            " (reply with your answer)"))
-                        break
-                elif isinstance(ev, TaskEnded):
-                    stop = "cancelled" if ev.status == "cancelled" else "end_turn"
-                    if ev.error and ev.status == "failed":
-                        out.put_nowait(acp.update_agent_message_text(f"\n\n[failed: {ev.error}]"))
-                    break
-            await out.join()
+            if asked:
+                turn.seq = await client.answer(session_id, asked[0], data=message.text)
+            else:
+                turn.seq = await client.send(session_id, message)
+            pumping = asyncio.create_task(self._pump(session_id, turn.out))
+            try:
+                stop = await self._follow(session_id, after, turn)
+                await turn.out.join()
+            finally:
+                pumping.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await pumping
         finally:
+            turn.done = True
             unsubscribe()
-            pumping.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await pumping
         return schema.PromptResponse(stop_reason=stop)  # type: ignore[arg-type]
+
+    async def _pump(self, session_id: str, out: asyncio.Queue[Any]) -> None:
+        while True:
+            update = await out.get()
+            try:
+                await self.conn.session_update(session_id=session_id, update=update)
+            except Exception:
+                log.exception("session update failed")
+            finally:
+                out.task_done()
+
+    async def _follow(self, session_id: str, after: int, turn: _Turn) -> str:
+        """Translate this prompt's turn into session updates; returns the
+        stop reason. The turn starts at the ``InputTaken`` that took this
+        prompt's message (the inbox seq ``send`` returned); everything
+        before it (the previous turn's tail, unrelated input) is skipped."""
+        out = turn.out
+        async for rec in self.app.client.watch(session_id, after):
+            ev = rec.event
+            if turn.input_seq is None:
+                if isinstance(ev, InputTaken) and any(i.seq == turn.seq for i in ev.items):
+                    turn.start(rec.seq)
+                continue
+            if isinstance(ev, ModelCalled):
+                turn.called = rec.seq
+            elif isinstance(ev, ModelReplied):
+                rest = turn.unsent_text(ev.response.message.text)
+                if rest:
+                    out.put_nowait(acp.update_agent_message_text(rest))
+                for u in start_updates(ev, streamed_text=True):
+                    out.put_nowait(u)
+            elif isinstance(ev, ToolStarted):
+                out.put_nowait(acp.update_tool_call(ev.call.id, status="in_progress"))
+            elif isinstance(ev, ToolFinished):
+                out.put_nowait(finish_update(ev))
+            elif isinstance(ev, ExtensionRecorded) and ev.extension == CORE:
+                if ev.kind == "retry":
+                    turn.retried(int((ev.data or {}).get("attempt") or 1))
+                elif ev.kind == "turn_failed":
+                    data = ev.data if isinstance(ev.data, dict) else {}
+                    reason = ": ".join(str(x) for x in (data.get("reason"), data.get("detail"))
+                                       if x)
+                    out.put_nowait(acp.update_agent_message_text(f"\n\n[turn failed: {reason}]"))
+                elif ev.kind == "turn_stopped":
+                    return "cancelled"
+            elif isinstance(ev, Waiting):
+                if ev.on == "approval":
+                    await out.join()
+                    await self._ask_permissions(session_id, ev)
+                elif ev.on == "input":
+                    return "end_turn"
+                elif ev.on == "question":
+                    text = "\n\n".join(question_text(ev.detail.get(i) or {})
+                                        for i in question_ids(ev))
+                    out.put_nowait(acp.update_agent_message_text(
+                        f"\n\n{text or 'The agent is asking a question.'}"
+                        "\n\n(reply with your answer)"))
+                    return "end_turn"
+            elif isinstance(ev, TaskEnded):
+                if ev.error and ev.status == "failed":
+                    out.put_nowait(acp.update_agent_message_text(f"\n\n[failed: {ev.error}]"))
+                return "cancelled" if ev.status == "cancelled" else "end_turn"
+        return "end_turn"
 
     async def _ask_permissions(self, session_id: str, waiting: Waiting) -> None:
         options = [

@@ -74,8 +74,8 @@ def pending(events: Sequence[Recorded], task_id: str = "") -> list[Pending]:
         return []
     out: list[Pending] = []
     for rid in waiting.ids:
-        if rid in done:
-            continue
+        if rid in done or (waiting.on == "question" and rid not in parked):
+            continue  # a question wait also lists the children of other parked calls
         use = uses.get(rid)
         tool = use.name if use else ""
         args = dict(use.input) if use else {}

@@ -7,6 +7,8 @@ INTERRUPTED_CALL_ERROR = (
     "running it again."
 )
 STOPPED_CALL_ERROR = "interrupted: a human stop landed during this batch"
+#: Answers a call left open when its turn failed (followed by the reason).
+TURN_FAILED_CALL_ERROR = "not run: the turn failed: "
 DENIED_BY_HUMAN = "denied by human"
 UNKNOWN_TOOL = "No tool named {name!r} is available in this task; use one of the offered tools."
 
@@ -41,6 +43,8 @@ LLM_ERROR = "llm_error"
 LLM_EMPTY_RESPONSE = "llm_empty_response"
 LLM_TRUNCATED = "llm_truncated"
 CONTEXT_OVERFLOW = "context_overflow"
+#: A bug in the runner, an extension hook or a provider adapter.
+INTERNAL_ERROR = "internal_error"
 #: An unattended task (``config["unattended"]``, e.g. a background sub-agent)
 #: reached an approval or a question nobody can answer.
 NEEDS_HUMAN = "needs_human"

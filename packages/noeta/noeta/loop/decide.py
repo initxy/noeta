@@ -90,8 +90,9 @@ def next_action(state: TaskState, *, one_shot: bool, max_steps: int) -> Action:
         ready = [c.use.id for c in open_calls if state.parked_ready(c)]
         if ready:
             return ResumeCalls(call_ids=ready)
-        first = open_calls[0].parked or {}
-        on = str(first.get("on") or "question")
+        # A question nobody has answered surfaces even while children run.
+        kinds = [str((c.parked or {}).get("on") or "question") for c in open_calls]
+        on = "question" if "question" in kinds else kinds[0]
         ids = [k for c in open_calls for k in ((c.parked or {}).get("keys") or [c.use.id])]
         return WaitParked(on=on, ids=ids)
     if state.turn_open:

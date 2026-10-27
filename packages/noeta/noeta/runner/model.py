@@ -14,9 +14,10 @@ from noeta.loop.request import build_request, request_hash
 from noeta.loop.state import CORE
 from noeta.providers.retry import complete_with_retries
 from noeta.runner import texts
-from noeta.types import Message, ModelRequest, ModelResponse, Text, ToolUse, user
+from noeta.types import Delta, Message, ModelRequest, ModelResponse, Text, ToolUse, user
 
 if TYPE_CHECKING:
+    from noeta.loop.state import TaskState
     from noeta.runner.task import TaskRun
 
 
@@ -83,13 +84,18 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
                                   attempt=run.state.model_attempts + 1)])
 
     on_delta = None
+    current = {"attempt": 1}
     if run.rt.on_delta is not None:
-        sink, tid = run.rt.on_delta, run.task_id
-        on_delta = lambda d: sink(tid, d)  # noqa: E731
+        sink, tid, called = run.rt.on_delta, run.task_id, run.state.last_seq
+
+        def on_delta(d: Delta) -> None:
+            sink(tid, msgspec.structs.replace(d, call_seq=called, attempt=current["attempt"]))
+
     pending: list[asyncio.Task[None]] = []
 
     def on_retry(attempt: int, delay: float, error: Exception) -> None:
         # Hosts see "retrying" (and drop the failed attempt's deltas).
+        current["attempt"] = attempt + 1
         pending.append(asyncio.ensure_future(run.append([ExtensionRecorded(
             extension=CORE, kind="retry",
             data={"attempt": attempt, "delay": delay,
@@ -127,8 +133,34 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         return await run.fail_turn(texts.LLM_EMPTY_RESPONSE,
                                    f"the model returned no text and no tool call "
                                    f"(stop: {response.stop_reason})")
+    response = unique_call_ids(run.state, response, run.state.last_seq + 1)
     await run.append([ModelReplied(response=response)])
     return True
+
+
+def unique_call_ids(state: TaskState, response: ModelResponse, seq: int) -> ModelResponse:
+    """Give every tool call an id no earlier call of this task has. Answers,
+    approvals and child ids are keyed by call id, so a gateway that sends no
+    id (or reuses one) must not let one call inherit another's answer."""
+    used = set(state.call_ids)
+    content: list[Any] = []
+    changed = False
+    n = 0
+    for block in response.message.content:
+        if isinstance(block, ToolUse):
+            new_id = block.id
+            while not new_id or new_id in used:
+                new_id = f"call_{seq}_{n}"
+                n += 1
+            used.add(new_id)
+            if new_id != block.id:
+                block = msgspec.structs.replace(block, id=new_id)
+                changed = True
+        content.append(block)
+    if not changed:
+        return response
+    message = msgspec.structs.replace(response.message, content=content)
+    return msgspec.structs.replace(response, message=message)
 
 
 def _detail(exc: ModelError) -> str:

@@ -12,12 +12,14 @@ from typing import Any, Literal
 import httpx
 import msgspec
 
-from noeta.errors import UnknownTask
+from noeta.errors import NoetaError, UnknownTask
 from noeta.events import Recorded
 from noeta.store.base import Status, TaskRow
 from noeta.types import Delta, Message
 
 Input = str | Message
+#: Reconnects in a row (without an event in between) before ``watch`` gives up.
+WATCH_RETRIES = 5
 
 
 def _body(value: Any) -> Any:
@@ -55,9 +57,10 @@ class RemoteClient:
 
     async def answer(self, task_id: str, request_id: str,
                      decision: Literal["allow", "deny"] | None = None, *,
-                     always: bool = False, data: Any = None) -> None:
-        await self._call("POST", f"/tasks/{task_id}/answers", json={
+                     always: bool = False, data: Any = None) -> int:
+        got = await self._call("POST", f"/tasks/{task_id}/answers", json={
             "request_id": request_id, "decision": decision, "always": always, "data": data})
+        return int(got.get("inbox_seq", 0))
 
     async def cancel(self, task_id: str, reason: str = "", *, turn_only: bool = False) -> None:
         await self._call("POST", f"/tasks/{task_id}/cancel",
@@ -77,23 +80,46 @@ class RemoteClient:
         return msgspec.convert(data, list[Recorded])
 
     async def watch(self, task_id: str, after: int = 0) -> AsyncIterator[Recorded]:
-        async with self.http.stream("GET", f"/tasks/{task_id}/watch",
-                                    params={"after": after}) as resp:
-            if resp.status_code == 404:
-                raise UnknownTask(task_id)
-            resp.raise_for_status()
-            kind = ""
-            async for line in resp.aiter_lines():
-                if line.startswith("event: "):
-                    kind = line[7:]
-                elif line.startswith("data: "):
-                    data = line[6:]
-                    if kind == "event":
-                        yield msgspec.json.decode(data, type=Recorded)
-                    elif kind == "delta" and self.on_delta is not None:
-                        self.on_delta(task_id, msgspec.json.decode(data, type=Delta))
-                    elif kind == "end":
-                        return
+        """The task's events from ``after`` on until the server says the
+        stream has ended. A dropped connection is picked up again from the
+        last event seen (``WATCH_RETRIES`` times in a row at most)."""
+        failures = 0
+        while True:
+            try:
+                async with self.http.stream("GET", f"/tasks/{task_id}/watch",
+                                            params={"after": after}) as resp:
+                    if resp.status_code == 404:
+                        raise UnknownTask(task_id)
+                    resp.raise_for_status()
+                    kind = ""
+                    async for line in resp.aiter_lines():
+                        if line.startswith("event: "):
+                            kind = line[7:]
+                        elif line.startswith("data: "):
+                            data = line[6:]
+                            if kind == "event":
+                                rec = msgspec.json.decode(data, type=Recorded)
+                                after, failures = rec.seq, 0
+                                yield rec
+                            elif kind == "delta" and self.on_delta is not None:
+                                self.on_delta(task_id, msgspec.json.decode(data, type=Delta))
+                            elif kind == "end":
+                                error = (msgspec.json.decode(data) or {}).get("error")
+                                if error:
+                                    raise NoetaError(f"the server's watch failed: {error}")
+                                return
+            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                if isinstance(exc, httpx.HTTPStatusError) and \
+                        exc.response.status_code < 500:
+                    raise
+                failures += 1
+                if failures > WATCH_RETRIES:
+                    raise
+            else:
+                failures += 1  # closed without "end": reconnect
+                if failures > WATCH_RETRIES:
+                    raise NoetaError(f"the watch of {task_id} kept closing without an end")
+            await asyncio.sleep(min(0.2 * 2 ** (failures - 1), 5.0))
 
     async def wait(self, task_id: str, *, timeout: float | None = None) -> TaskRow:
         async def settled() -> TaskRow:
@@ -125,6 +151,10 @@ class RemoteApp:
     def deltas(self, sink: Callable[[str, Delta], None]) -> Callable[[], None]:
         self._sinks.append(sink)
         return lambda: self._sinks.remove(sink) if sink in self._sinks else None
+
+    async def adopt(self, task_id: str) -> None:
+        """Workers run on the server's side; nothing to do here."""
+        return None
 
     async def start(self) -> None:
         return None

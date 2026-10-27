@@ -60,14 +60,19 @@ def _settings(args: argparse.Namespace) -> Settings:
     return s
 
 
-def _app(s: Settings, *, agents_kw: dict[str, Any] | None = None, **runtime_kw: Any) -> Any:
+def _app(s: Settings, *, agents_kw: dict[str, Any] | None = None,
+         own_tasks_only: bool = False, **runtime_kw: Any) -> Any:
+    """A store, the default agents and an in-process worker. Front ends
+    (``-p``, ``acp``, the TUI) pass ``own_tasks_only`` so their worker never
+    picks up another process's task from the shared store; ``worker`` and
+    ``serve`` serve every task."""
     from noeta.config import HOME
     from noeta.local import LocalApp
     from noeta.presets import default_agents
 
     kw: dict[str, Any] = {"memory_root": str(HOME / "memory"), **(agents_kw or {})}
     return LocalApp(open_store(s.store_url), default_agents(s.model, **kw), s.make_provider(),
-                    **runtime_kw)
+                    own_tasks_only=own_tasks_only, **runtime_kw)
 
 
 async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool,
@@ -77,7 +82,7 @@ async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool,
     from noeta.events import ModelReplied, TaskEnded, Waiting
     from noeta.types import Usage
 
-    async with _app(s) as app:
+    async with _app(s, own_tasks_only=True) as app:
         config: dict[str, Any] = {"cwd": cwd, "model": s.model}
         if s.effort:
             config["effort"] = s.effort
@@ -110,10 +115,11 @@ async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool,
                 if not as_json:
                     print(answer if not failed else f"error: {failed}")
                 return 1 if failed else 0
-            if isinstance(ev, Waiting):
+            if isinstance(ev, Waiting) and ev.on in ("approval", "question"):
                 print(f"noeta: the agent is waiting for {ev.on}; use the TUI or an editor "
                       "for interactive work", file=sys.stderr)
                 return 2
+            # children, a timer, an external signal: the task goes on by itself.
             if isinstance(ev, TaskEnded):
                 summary(ev.answer)
                 if not as_json:
@@ -157,8 +163,8 @@ def main(argv: list[str] | None = None) -> None:
 
         s = _settings(args)
         servers = EditorServers()
-        asyncio.run(serve_stdio(_app(s, agents_kw={"mcp": Mcp(servers)}), model=s.model,
-                                servers=servers))
+        asyncio.run(serve_stdio(_app(s, agents_kw={"mcp": Mcp(servers)}, own_tasks_only=True),
+                                model=s.model, servers=servers))
         return
     if args.command == "worker":
         asyncio.run(_worker(_settings(args), args.queue or ["default"], args.concurrency))

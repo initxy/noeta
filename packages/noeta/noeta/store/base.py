@@ -103,7 +103,8 @@ class Store(Protocol):
         """Append ``events`` after ``expected_seq`` and apply ``patch``,
         ``posts`` and ``creates`` atomically. Returns the new last seq. Raises
         ``noeta.errors.Conflict`` when the claim's epoch or the expected seq
-        no longer holds, or the task is not running."""
+        no longer holds, or the task is not running. A post to a task that
+        does not exist is skipped (the rest still lands)."""
         ...
 
     async def read(self, task_id: str, after: int = 0) -> list[Recorded]: ...
@@ -127,10 +128,13 @@ class Store(Protocol):
     ) -> list[TaskRow]: ...
 
     async def claim(
-        self, worker: str, queues: Sequence[str], lease_seconds: float
+        self, worker: str, queues: Sequence[str], lease_seconds: float,
+        *, roots: Sequence[str] | None = None,
     ) -> Claim | None:
         """Take one claimable task: ``ready`` (and due), ``waiting`` with a due
-        ``ready_at``, or ``running`` with an expired lease. Bumps the epoch."""
+        ``ready_at``, or ``running`` with an expired lease. Bumps the epoch.
+        With ``roots``, only tasks whose ``root_id`` is one of them (a front
+        end serving its own task trees); ``None`` takes any task."""
         ...
 
     async def renew(self, claim: Claim, lease_seconds: float) -> Claim | None:

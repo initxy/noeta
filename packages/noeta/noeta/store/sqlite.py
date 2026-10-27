@@ -6,6 +6,7 @@ threads. Several processes may open the same file: every write is one
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sqlite3
 import threading
 import time
@@ -15,7 +16,7 @@ from typing import Any, TypeVar
 
 import msgspec
 
-from noeta.errors import Conflict, UnknownTask
+from noeta.errors import Conflict, StoreUnavailable, UnknownTask
 from noeta.events import Event, InboxItem, InboxKind, Recorded, event_type
 from noeta.store.base import (
     ChangeKind,
@@ -31,6 +32,15 @@ from noeta.store.base import (
 T = TypeVar("T")
 
 SCHEMA_VERSION = 1
+_BUSY_TIMEOUT_MS = 10000
+_OPEN_ATTEMPTS = 5
+#: sqlite failures that mean "the store is not usable right now", not a bug
+#: in the statement (``IntegrityError`` / ``ProgrammingError`` stay as they are).
+_UNAVAILABLE = (sqlite3.OperationalError,)
+
+
+def _unavailable(exc: BaseException) -> bool:
+    return isinstance(exc, _UNAVAILABLE) or type(exc) is sqlite3.DatabaseError
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS noeta_schema (version INTEGER NOT NULL);
@@ -110,29 +120,59 @@ class SqliteStore:
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
-            conn = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=10000")
-            conn.executescript(_SCHEMA)
-            if conn.execute("SELECT count(*) FROM noeta_schema").fetchone()[0] == 0:
-                conn.execute("INSERT INTO noeta_schema VALUES (?)", (SCHEMA_VERSION,))
-            self._conn = conn
+            # Two processes opening a new file at once race on switching it to
+            # WAL; the busy timeout comes first so that waits instead of
+            # failing, and a first open that still finds the file locked is
+            # tried again.
+            for attempt in range(_OPEN_ATTEMPTS):
+                conn = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
+                try:
+                    conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.executescript(_SCHEMA)
+                    if conn.execute("SELECT count(*) FROM noeta_schema").fetchone()[0] == 0:
+                        conn.execute("INSERT INTO noeta_schema VALUES (?)", (SCHEMA_VERSION,))
+                except sqlite3.OperationalError as exc:
+                    conn.close()
+                    if "locked" not in str(exc) or attempt + 1 >= _OPEN_ATTEMPTS:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
+                    continue
+                self._conn = conn
+                break
+        assert self._conn is not None
         return self._conn
 
     async def _run(self, fn: Callable[[sqlite3.Connection], T]) -> T:
         self._loop = asyncio.get_running_loop()
-        return await self._loop.run_in_executor(self._executor, lambda: fn(self._connect()))
+
+        def call() -> T:
+            try:
+                return fn(self._connect())
+            except sqlite3.DatabaseError as exc:
+                if not _unavailable(exc):
+                    raise
+                # A locked, full, unreadable or vanished database: nothing
+                # was written (the transaction rolled back), so the caller may
+                # try again later.
+                raise StoreUnavailable(f"sqlite store {self.path}: {exc}") from exc
+
+        return await self._loop.run_in_executor(self._executor, call)
 
     async def _write(self, fn: Callable[[sqlite3.Connection], T]) -> T:
         def tx(conn: sqlite3.Connection) -> T:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 result = fn(conn)
+                conn.execute("COMMIT")
             except BaseException:
-                conn.execute("ROLLBACK")
+                # sqlite may already have rolled back (a full disk); a
+                # transaction left open would break every later write.
+                if conn.in_transaction:
+                    with contextlib.suppress(sqlite3.Error):
+                        conn.execute("ROLLBACK")
                 raise
-            conn.execute("COMMIT")
             return result
 
         return await self._run(tx)
@@ -305,7 +345,10 @@ class SqliteStore:
                 if created:
                     changes.append((task_id, "created"))
             for post in posts:
-                _, created = self._insert_post(conn, post, now)
+                try:
+                    _, created = self._insert_post(conn, post, now)
+                except UnknownTask:
+                    continue  # a notice for a task that does not exist is dropped
                 if created:
                     changes.append((post.task_id, "posted"))
             return seq
@@ -374,21 +417,24 @@ class SqliteStore:
         return await self._run(q)
 
     async def claim(
-        self, worker: str, queues: Sequence[str], lease_seconds: float
+        self, worker: str, queues: Sequence[str], lease_seconds: float,
+        *, roots: Sequence[str] | None = None,
     ) -> Claim | None:
-        if not queues:
+        if not queues or (roots is not None and not roots):
             return None
         marks = ",".join("?" for _ in queues)
+        root_ids = list(roots) if roots is not None else []
+        in_roots = f" AND root_id IN ({','.join('?' for _ in root_ids)})" if root_ids else ""
 
         def tx(conn: sqlite3.Connection) -> Claim | None:
             now = time.time()
             row = conn.execute(
-                f"SELECT task_id, owner_epoch FROM tasks WHERE queue IN ({marks}) AND ("
+                f"SELECT task_id, owner_epoch FROM tasks WHERE queue IN ({marks}){in_roots} AND ("
                 " (status = 'ready' AND (ready_at IS NULL OR ready_at <= ?))"
                 " OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= ?)"
                 " OR (status = 'running' AND lease_until < ?))"
                 " ORDER BY updated_at LIMIT 1",
-                (*queues, now, now, now),
+                (*queues, *root_ids, now, now, now),
             ).fetchone()
             if row is None:
                 return None

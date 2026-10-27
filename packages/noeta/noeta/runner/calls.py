@@ -30,15 +30,18 @@ if TYPE_CHECKING:
 log = logging.getLogger("noeta.runner")
 
 
-async def gate(run: TaskRun, view: TaskView, call: ToolUse, *, routing: bool = False) -> Gate:
-    """A recorded answer decides; otherwise every extension is asked: any
-    deny wins, then the first ask, then the first rewrite. ``routing`` (the
-    first look at a call) puts a rewrite before an ask: the call is really
-    another call, which ``run_calls`` then gates again, so every guard sees
-    the call that will run."""
+#: Rewrites of one call before it is refused (an extension that keeps
+#: rewriting would otherwise loop).
+MAX_REWRITES = 3
+
+
+async def gate(run: TaskRun, view: TaskView, call: ToolUse) -> Gate:
+    """Every extension is asked about this exact call: any deny wins, then
+    the first rewrite, then the first ask. A human's recorded answer denies,
+    or satisfies an ask — never a deny, and never instead of a rewrite."""
     answer = run.state.answers.get(call.id)
-    if answer is not None and answer.decision is not None:
-        return Allow() if answer.decision == "allow" else Deny(reason=texts.DENIED_BY_HUMAN)
+    if answer is not None and answer.decision == "deny":
+        return Deny(reason=texts.DENIED_BY_HUMAN)
     verdicts: list[Gate] = []
     for ext in run.exts:
         try:
@@ -47,11 +50,27 @@ async def gate(run: TaskRun, view: TaskView, call: ToolUse, *, routing: bool = F
             v = Deny(reason=f"permission check failed: {exc}")
         if v is not None:
             verdicts.append(v)
-    for kind in (Deny, Rewrite, Ask) if routing else (Deny, Ask, Rewrite):
+    for kind in (Deny, Rewrite, Ask):
         for v in verdicts:
             if isinstance(v, kind):
+                if isinstance(v, Ask) and answer is not None and answer.decision == "allow":
+                    return Allow()
                 return v
     return Allow()
+
+
+async def resolve(run: TaskRun, view: TaskView, use: ToolUse) -> tuple[ToolUse, Gate]:
+    """The call that will run and its verdict: a rewritten call is gated
+    again, so every guard sees (and a human approves) the call that runs."""
+    for _ in range(MAX_REWRITES):
+        verdict = await gate(run, view, use)
+        if not isinstance(verdict, Rewrite):
+            return use, verdict
+        use = ToolUse(id=use.id, name=verdict.name or use.name, input=verdict.input)
+    verdict = await gate(run, view, use)
+    if isinstance(verdict, Rewrite):
+        verdict = Deny(reason=f"the call was rewritten more than {MAX_REWRITES} times")
+    return use, verdict
 
 
 def _groups(runnable: list[tuple[ToolUse, Tool]]) -> list[list[tuple[ToolUse, Tool]]]:
@@ -74,14 +93,7 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     runnable: list[tuple[ToolUse, Tool]] = []
     asks: dict[str, Ask] = {}
     for c in [c for c in run.state.calls if c.use.id in call_ids]:
-        use = c.use
-        verdict = await gate(run, view, use, routing=True)
-        if isinstance(verdict, Rewrite):
-            use = ToolUse(id=use.id, name=verdict.name or use.name, input=verdict.input)
-            verdict = await gate(run, view, use)
-            if isinstance(verdict, Rewrite):
-                use = ToolUse(id=use.id, name=verdict.name or use.name, input=verdict.input)
-                verdict = Allow()
+        use, verdict = await resolve(run, view, c.use)
         if isinstance(verdict, Deny):
             await run.append([run.error_result(use.id, verdict.reason or "denied")])
             continue
@@ -101,8 +113,9 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
         await run.append([ToolStarted(call=u) for u, _ in group])
         await asyncio.gather(*(_run_one(run, u, t) for u, t in group))
     if asks and run.state.config.get("unattended"):
-        await run.fail_turn(texts.NEEDS_HUMAN, texts.NEEDS_HUMAN_DETAIL)
-        return False
+        # One-shot: the task ends. Otherwise the turn closes and the loop
+        # goes on to wait for input (and gives the task back).
+        return await run.fail_turn(texts.NEEDS_HUMAN, texts.NEEDS_HUMAN_DETAIL)
     if asks:
         await run.append(
             [Waiting(on="approval", ids=list(asks),
@@ -162,6 +175,14 @@ async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[
     await run.append([*records, *view.pending, finished], creates=creates)
 
 
+def _drop_staged(records: list[Event], creates: list[NewTask]) -> None:
+    """A failed call stages nothing: no child it spawned, and no record of
+    one (a record naming a child that was never created would leave the
+    task waiting on, or cancelling, a task that does not exist)."""
+    records.clear()
+    creates.clear()
+
+
 async def _run_one(run: TaskRun, use: ToolUse, tool: Tool) -> None:
     records: list[Event] = []
     creates: list[NewTask] = []
@@ -173,7 +194,7 @@ async def _run_one(run: TaskRun, use: ToolUse, tool: Tool) -> None:
     except Exception as exc:  # a tool bug becomes an error result, not a dead task
         log.exception("tool %s failed", use.name)
         output = ToolOutput(content=[Text(text=f"{type(exc).__name__}: {exc}")], is_error=True)
-        creates.clear()
+        _drop_staged(records, creates)
     await _finish(run, use, output, records, creates)
 
 
@@ -190,18 +211,21 @@ async def resume_calls(run: TaskRun, call_ids: Sequence[str], *, withdrawn: bool
     for c in [c for c in run.state.calls if c.use.id in call_ids and c.parked]:
         records: list[Event] = []
         creates: list[NewTask] = []
-        tool = tools.get(c.use.name)
-        outcome = None if withdrawn else _outcome(run, c.parked or {}, c.use.id)
+        use = c.ran or c.use  # the call as it ran (after any rewrite)
+        tool = tools.get(use.name)
+        outcome = None if withdrawn else _outcome(run, c.parked or {}, use.id)
         resume = getattr(tool, "resume", None)
         if resume is None:
             output = ToolOutput(content=[Text(text=texts.STOPPED_CALL_ERROR)], is_error=True)
         else:
             try:
-                output = await resume(c.use.input, _context(run, c.use, records, creates), outcome)
+                output = await resume(use.input, _context(run, use, records, creates), outcome)
             except Exception as exc:
-                log.exception("tool %s resume failed", c.use.name)
+                log.exception("tool %s resume failed", use.name)
                 output = ToolOutput(content=[Text(text=f"{type(exc).__name__}: {exc}")],
                                     is_error=True)
+                _drop_staged(records, creates)
         if output.park is not None:  # a resume may not park again
             output = ToolOutput(content=[Text(text="the call could not finish")], is_error=True)
-        await _finish(run, c.use, output, records, creates)
+            _drop_staged(records, creates)
+        await _finish(run, use, output, records, creates)

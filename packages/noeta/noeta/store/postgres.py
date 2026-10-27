@@ -286,7 +286,9 @@ class PostgresStore:
                     deadlocks += 1
                     await asyncio.sleep(0.005 * deadlocks)
                     continue
-                raise
+                # Any other operational failure (a cancelled statement, a full
+                # disk): nothing committed; the caller may try again later.
+                raise StoreUnavailable(f"postgres: {e}") from e
 
     async def _notify(self, conn: Conn, changes: Sequence[tuple[str, ChangeKind]]) -> None:
         """Queue the notifications in the current transaction."""
@@ -411,6 +413,11 @@ class PostgresStore:
                  [_kind(b) for b in task.inbox], [_encode(b) for b in task.inbox]))
         return task.task_id, True
 
+    async def _exists(self, conn: Conn, task_id: str) -> bool:
+        cur = await conn.execute(self._q("SELECT 1 FROM {s}.tasks WHERE task_id = %s"),
+                                 (task_id,))
+        return await cur.fetchone() is not None
+
     async def _insert_post(self, conn: Conn, post: Post) -> tuple[int, bool]:
         cur = await conn.execute(
             self._q("SELECT inbox_seq FROM {s}.tasks WHERE task_id = %s FOR UPDATE"),
@@ -505,6 +512,8 @@ class PostgresStore:
                 if created:
                     changes.append((task_id, "created"))
             for post in posts:
+                if not await self._exists(conn, post.task_id):
+                    continue  # a notice for a task that does not exist is dropped
                 _, created = await self._insert_post(conn, post)
                 if created:
                     changes.append((post.task_id, "posted"))
@@ -584,14 +593,17 @@ class PostgresStore:
         return await self._tx(q, write=False)
 
     async def claim(
-        self, worker: str, queues: Sequence[str], lease_seconds: float
+        self, worker: str, queues: Sequence[str], lease_seconds: float,
+        *, roots: Sequence[str] | None = None,
     ) -> Claim | None:
-        if not queues:
+        if not queues or (roots is not None and not roots):
             return None
+        in_roots = " AND root_id = ANY(%(r)s)" if roots is not None else ""
 
         async def tx(conn: Conn) -> Claim | None:
             cur = await conn.execute(self._q(
-                "WITH c AS (SELECT task_id FROM {s}.tasks WHERE queue = ANY(%(q)s) AND ("
+                "WITH c AS (SELECT task_id FROM {s}.tasks WHERE queue = ANY(%(q)s)"
+                + in_roots + " AND ("
                 f" (status = 'ready' AND (ready_at IS NULL OR ready_at <= {_NOW}))"
                 f" OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= {_NOW})"
                 f" OR (status = 'running' AND lease_until < {_NOW}))"
@@ -601,7 +613,8 @@ class PostgresStore:
                 f" ready_at = NULL, updated_at = {_NOW}"
                 " FROM c WHERE t.task_id = c.task_id"
                 " RETURNING t.task_id, t.owner_epoch, t.lease_until"),
-                {"q": list(queues), "w": worker, "ls": lease_seconds})
+                {"q": list(queues), "w": worker, "ls": lease_seconds,
+                 "r": list(roots or [])})
             row = await cur.fetchone()
             if row is None:
                 return None

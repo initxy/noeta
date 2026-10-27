@@ -41,6 +41,8 @@ class Call:
     result: ToolResult | None = None
     #: Set while the call waits (``{"on", "keys", "detail"}``).
     parked: dict[str, Any] | None = None
+    #: The call as it ran, when an extension rewrote it (``ToolStarted``).
+    ran: ToolUse | None = None
 
 
 @dataclass
@@ -78,7 +80,14 @@ class TaskState:
     #: Texts of the replies that make up the current answer: one reply, or a
     #: reply plus its continuations after hitting the output cap.
     answer_parts: list[str] = field(default_factory=list)
+    #: The newest reply was text cut at the output cap, so the next reply
+    #: continues it (its text joins ``answer_parts``).
     continuing: bool = False
+    #: Every tool-call id this task has recorded: ids are unique per task.
+    call_ids: set[str] = field(default_factory=set)
+    #: A turn-only stop arrived with ``now`` messages: the turn reopens once
+    #: the stop has landed, so those messages are answered.
+    reopen_after_stop: bool = False
 
     cancel_requested: str | None = None
     #: Why the last turn failed (``reason: detail``); cleared by a new turn.
@@ -86,6 +95,7 @@ class TaskState:
     stop_turn_requested: str | None = None
     #: ``next_turn`` messages taken while a turn was open.
     queued: list[Message] = field(default_factory=list)
+    #: Answers to the open batch's approvals and questions, by call id.
     answers: dict[str, Answer] = field(default_factory=dict)
     #: Children this task spawned: id -> {"call_id", "background"}.
     spawned: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -158,14 +168,20 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
             state.answer_parts.append(resp.message.text)
         else:
             state.answer_parts = [resp.message.text]
-        state.continuing = False
-        state.calls = [Call(use=u) for u in resp.message.tool_uses]
+        uses = resp.message.tool_uses
+        state.continuing = resp.stop_reason == "max_tokens" and not uses
+        state.calls = [Call(use=u) for u in uses]
+        state.call_ids.update(u.id for u in uses)
+        # An answer is for a call of the batch it was asked in, never a later one.
+        state.answers = {}
         if not state.calls and resp.stop_reason != "max_tokens":
             _close_turn(state, rec.seq)
     elif isinstance(ev, ToolStarted):
         for c in state.calls:
             if c.use.id == ev.call.id:
                 c.started = True
+                if ev.call != c.use:
+                    c.ran = ev.call
     elif isinstance(ev, ToolFinished):
         for c in state.calls:
             if c.use.id == ev.result.call_id:
@@ -185,13 +201,9 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         state.ended = ev
         state.waiting = None
     elif isinstance(ev, ExtensionRecorded):
-        if ev.extension == CORE and ev.kind == "continue":
-            state.continuing = True
         if ev.extension == CORE and ev.kind == "turn_stopped":
             state.stop_turn_requested = None
-            state.calls = []
-            state.held = []
-            _close_turn(state, rec.seq)
+            _end_turn(state, rec.seq)
         if ev.extension == CORE and ev.kind == "parked":
             for c in state.calls:
                 if c.use.id == ev.data["call_id"]:
@@ -203,8 +215,7 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
             data = ev.data if isinstance(ev.data, dict) else {}
             reason, detail = data.get("reason", "failed"), data.get("detail", "")
             state.turn_error = f"{reason}: {detail}" if detail else str(reason)
-            state.calls = []
-            _close_turn(state, rec.seq)
+            _end_turn(state, rec.seq)
         reducer = reducers.get(ev.extension)
         if reducer is not None:
             state.ext[ev.extension] = reducer(state.ext.get(ev.extension), ev.kind, ev.data)
@@ -230,12 +241,14 @@ def fold(
 
 def _take(state: TaskState, ev: InputTaken, seq: int) -> None:
     state.inbox_read = max(state.inbox_read, ev.through)
+    said_now = False
     for item in ev.items:
         body = item.body
         if isinstance(body, Say):
             if body.when == "next_turn" and state.turn_open:
                 state.queued.append(body.message)
                 continue
+            said_now = state.turn_open or said_now
             if state.calls:
                 state.held.append(body.message)
             else:
@@ -257,11 +270,30 @@ def _take(state: TaskState, ev: InputTaken, seq: int) -> None:
             state.children[body.child_id] = body
         else:
             state.signals.append(body)
+    if said_now and state.stop_turn_requested is not None:
+        state.reopen_after_stop = True
+
+
+def _end_turn(state: TaskState, seq: int) -> None:
+    """A turn stopped or failed. Messages taken during it that the model has
+    not answered (held behind its calls, or sent with the stop) join the
+    conversation and open the next turn, as queued messages do."""
+    state.calls = []
+    reopen = bool(state.held) or state.reopen_after_stop
+    for m in state.held:
+        state._add(m, seq)
+    state.held = []
+    state.reopen_after_stop = False
+    _close_turn(state, seq)
+    if reopen and not state.turn_open:
+        state.turn_open = True
+        state.steps_in_turn = 0
 
 
 def _close_turn(state: TaskState, seq: int) -> None:
     state.turn_open = False
     state.model_attempts = 0
+    state.continuing = False
     if state.queued:
         for m in state.queued:
             state._add(m, seq)

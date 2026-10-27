@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from noeta.agent import Agent
-from noeta.errors import Conflict, NoetaError
+from noeta.errors import Conflict, StoreUnavailable
 from noeta.events import (
     Cancel,
     ChildEnded,
@@ -73,29 +73,56 @@ class TaskRun:
             if self.agent is None:
                 # Releasing would hand it straight back to this worker; a task
                 # whose agent only some workers have must be routed by queue.
-                await self.append(
-                    [TaskEnded(status="failed",
-                               error=f"no agent named {self.state.agent!r} is registered in "
-                                     f"the worker that claimed this task")],
-                    patch=Patch(status="ended", end_status="failed"))
+                # Ending it the ordinary way tells a parent that waits on it.
+                await self.end("failed", error=f"no agent named {self.state.agent!r} is "
+                                               f"registered in the worker that claimed this task")
                 return
-            view = self.view()
-            for ext in self.exts:
-                await ext.on_start(view)
-            await self.flush(view)
-            while await self._step_once():
-                pass
+            await self._steps()
         except (Conflict, LostClaim):
             log.info("task %s: claim lost; stopping without further writes", self.task_id)
-        except (NoetaError, OSError) as exc:
+        except StoreUnavailable as exc:
             # The store is unreachable: stop; the lease runs out and the task
             # is claimed again once the store is back.
             log.warning("task %s: store error, stopping: %s", self.task_id, exc)
+        except Exception:
+            # The log could not even be read and folded (nothing was written).
+            log.exception("task %s: could not run", self.task_id)
         finally:
             unsubscribe()
             keeper.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await keeper
+
+    async def _steps(self) -> None:
+        """Step until the task waits or ends. A bug (an extension hook, a
+        provider, the runner itself) fails the turn instead of leaving the
+        task ``running`` to be claimed and fail again on every lease; a
+        second one in a row ends the task."""
+        started = False
+        failures = 0
+        while True:
+            try:
+                if not started:
+                    view = self.view()
+                    for ext in self.exts:
+                        await ext.on_start(view)
+                    await self.flush(view)
+                    started = True
+                if not await self._step_once():
+                    return
+                failures = 0
+            except (Conflict, LostClaim, StoreUnavailable, asyncio.CancelledError):
+                raise
+            except Exception as exc:
+                log.exception("task %s: internal error", self.task_id)
+                failures += 1
+                started = True
+                if failures > 1:
+                    await self.end("failed", self.state.last_answer,
+                                   f"{texts.INTERNAL_ERROR}: {exc!r}")
+                    return
+                if not await self.fail_turn(texts.INTERNAL_ERROR, repr(exc)):
+                    return
 
     async def _load(self) -> None:
         records = await self.store.read(self.task_id)
@@ -114,10 +141,12 @@ class TaskRun:
             await asyncio.sleep(interval)
             try:
                 renewed = await self.store.renew(self.claim, self.rt.lease_seconds)
-            except (NoetaError, OSError) as exc:
-                if time.time() < self.claim.lease_until:
+            except Exception as exc:  # noqa: BLE001 — the keeper must never die silently
+                if time.time() + interval < self.claim.lease_until:
                     log.warning("task %s: renew failed, retrying: %s", self.task_id, exc)
                     continue
+                log.warning("task %s: renew kept failing; giving the task up: %s",
+                            self.task_id, exc)
                 renewed = None
             if renewed is None:
                 self._lost = True
@@ -142,7 +171,7 @@ class TaskRun:
         """Polling fallback for posts made by other processes."""
         while True:
             await asyncio.sleep(self.rt.poll_interval)
-            with contextlib.suppress(NoetaError, OSError):
+            with contextlib.suppress(Exception):
                 await self._check_stop()
 
     # ------------------------------------------------------------ writing
@@ -263,7 +292,13 @@ class TaskRun:
         if isinstance(action, decide.WaitParked):
             if action.on == "question" and self.state.config.get("unattended"):
                 return await self.fail_turn(texts.NEEDS_HUMAN, texts.NEEDS_HUMAN_DETAIL)
-            await self.append([Waiting(on=action.on, ids=action.ids)],  # type: ignore[arg-type]
+            # Each parked call's detail (a question's text and options), keyed
+            # by call id like an approval's, so front ends can show it.
+            parked = {c.use.id: {**((c.parked or {}).get("detail") or {}),
+                                 "on": (c.parked or {}).get("on")}
+                      for c in self.state.open_calls if c.parked}
+            await self.append([Waiting(on=action.on, ids=action.ids,  # type: ignore[arg-type]
+                                       detail=parked)],
                               patch=Patch(status="waiting", waiting_on=action.on,
                                           inbox_read_seq=self.state.inbox_read))
             return False
@@ -303,6 +338,16 @@ class TaskRun:
             await self.append([InputTaken(items=items, through=items[-1].seq)])
 
     async def _stop_turn(self, call_ids: Sequence[str]) -> None:
+        await self._close_calls(call_ids, texts.STOPPED_CALL_ERROR,
+                                ExtensionRecorded(extension=CORE, kind="turn_stopped"),
+                                "the parent's turn was stopped")
+
+    async def _close_calls(self, call_ids: Sequence[str], error: str, closing: Event,
+                           cancel_reason: str, *, started_error: str | None = None) -> None:
+        """Answer the open calls (parked ones are withdrawn), cancel the
+        children they wait on, and append ``closing`` with the last results,
+        so the conversation never keeps a call without a result. A call that
+        started gets ``started_error`` when given (its outcome is unknown)."""
         from noeta.runner.calls import resume_calls
 
         parked = [c for c in self.state.calls if c.use.id in call_ids and c.parked]
@@ -310,11 +355,14 @@ class TaskRun:
                     for k in (c.parked or {}).get("keys") or []]
         if parked:
             await resume_calls(self, [c.use.id for c in parked], withdrawn=True)
-        rest = [i for i in call_ids if i not in {c.use.id for c in parked}]
-        events: list[Event] = [self.error_result(i, texts.STOPPED_CALL_ERROR) for i in rest]
-        events.append(ExtensionRecorded(extension=CORE, kind="turn_stopped"))
+        rest = [c for c in self.state.calls if c.use.id in call_ids and not c.parked
+                and c.result is None]
+        events: list[Event] = [
+            self.error_result(c.use.id, started_error if c.started and started_error else error)
+            for c in rest]
+        events.append(closing)
         await self.append(events, posts=[
-            Post(task_id=k, body=Cancel(reason="the parent's turn was stopped"))
+            Post(task_id=k, body=Cancel(reason=cancel_reason))
             for k in children if self.state.children.get(k) is None])
 
     async def end(self, status: str, answer: str = "", error: str = "") -> None:
@@ -342,8 +390,11 @@ class TaskRun:
             error = f"{reason}: {detail}" if detail else reason
             await self.end("failed", self.state.last_answer, error)
             return False
-        await self.append([ExtensionRecorded(extension=CORE, kind="turn_failed",
-                                             data={"reason": reason, "detail": detail})])
+        await self._close_calls(
+            [c.use.id for c in self.state.open_calls], f"{texts.TURN_FAILED_CALL_ERROR}{reason}",
+            ExtensionRecorded(extension=CORE, kind="turn_failed",
+                              data={"reason": reason, "detail": detail}),
+            "the parent's turn failed", started_error=texts.INTERRUPTED_CALL_ERROR)
         return True
 
     async def continue_after_cap(self, *, thinking_only: bool = False) -> bool:
