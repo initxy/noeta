@@ -1,5 +1,6 @@
 """A worker process for the kill -9 test: serves tasks from a sqlite file
-until killed. Every tool run is appended to a journal file first, so the test
+(``worker.py PATH JOURNAL``) or a Postgres schema (``worker.py DSN JOURNAL
+SCHEMA``) until killed. Every tool run is appended to a journal file first, so the test
 can count runs across processes that died mid-call."""
 
 from __future__ import annotations
@@ -56,8 +57,14 @@ class ByProgress:
                              stop_reason="end_turn", usage=Usage(output=1))
 
 
-async def main(db: str, journal: str) -> None:
-    store = SqliteStore(db)
+async def main(db: str, journal: str, schema: str | None) -> None:
+    store: Any
+    if schema is None:
+        store = SqliteStore(db)
+    else:
+        from noeta.store.postgres import PostgresStore
+
+        store = PostgresStore(db, schema=schema)
     agent = Agent(name="a", model="m", tools=[Effect(journal)])
     rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: ByProgress(),
                  env_for=lambda _s: None, lease_seconds=0.5, poll_interval=0.05)  # type: ignore[arg-type,return-value]
@@ -65,4 +72,4 @@ async def main(db: str, journal: str) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main(sys.argv[1], sys.argv[2]))
+    asyncio.run(main(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None))
