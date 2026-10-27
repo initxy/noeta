@@ -109,7 +109,7 @@ the `Extension` interface exists, but:
 - [x] Agent definition files; presets as data; `.noeta/agents/`; memory policy via `context()`
 - [x] `reminders()` in the kernel; port the todo reminder
 - [x] CLI `--system-prompt` / `--append-system-prompt`
-- [ ] Feature: file-changed reminder; date-change reminder; `hooks` plugin with context and block
+- [x] Feature: file-changed reminder; date-change reminder; `hooks` plugin with context and block
 - [ ] CI, release workflow, Makefile, naming lint; README / AGENTS.md / CONTEXT.md for 1.0
 - [ ] `make check` green; `make eval` no regression
 
@@ -140,3 +140,4 @@ the `Extension` interface exists, but:
 2026-10-27 Agent files landed: `noeta/presets/agents/{main,general-purpose,explore,plan}.md` (bodies byte-identical to the old prompts), `core.agent_files` (parse, read a directory, build), `Agent.description` / `allowed_tools`, `TaskView.model` / `agents`, `FileTools(tools=[names])`, extension names equal registry names (`environment`, `structured_output`). The CLI and TUI read `~/.noeta/agents` and `<cwd>/.noeta/agents`. Host extensions now go last on every agent (they were mid-list on sub-agents). Golden unchanged.
 2026-10-27 `Extension.reminders` landed; the todo reminder uses it (its before_model request patching and `simulated_state` use are gone). `cache_breakpoints` is public; `TaskView.allowed_tools` makes `find_tool` honor the agent allowlist. Golden unchanged (it contains a todo reminder).
 2026-10-27 Feature: file-changed reminder (fs plugin, turn start, last 20 read files, mtime then sha256, once per change, `reminder/file_changed`) and date-change reminder (environment plugin, turn start, `reminder/date_changed`). Context-plugin tests live in `tests/plugins/context`.
+2026-10-27 Feature: `hooks` plugin (Claude Code command hooks: UserPromptSubmit, PreToolUse, PostToolUse, Stop, Notification; exit 2 / JSON decisions; `~/.noeta/settings.json` via the CLI). It replaces the permissions plugin's side-effect-only `Hooks` (PostToolUse / Notification rules); declarative PreToolUse rules stay in `Permissions`. Hook commands run on the worker host, not in the task's exec env. Payload key is `task_id` (no session id).

@@ -26,7 +26,8 @@ __all__ = ["DEFAULT_PLUGINS", "builtin_agent_files", "default_agents", "main_age
 #: The extensions of an agent file that names none (a Claude Code agent
 #: file): the general-purpose sub-agent's.
 DEFAULT_PLUGINS: tuple[PluginEntry, ...] = (
-    ("compaction", {}), ("permissions", {}), ("shell", {}), ("web", {}), ("mcp", {}),
+    ("compaction", {}), ("permissions", {}), ("hooks", {}), ("shell", {}), ("web", {}),
+    ("mcp", {}),
     ("fs", {}), ("skills", {}), ("instructions", {}), ("environment", {}), ("subtasks", {}),
 )
 

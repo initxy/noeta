@@ -52,9 +52,13 @@ async def _remind(run: TaskRun, request: ModelRequest) -> ModelRequest:
     step-limit prompt, stay last), with the breakpoints the next request,
     built from the log, gets."""
     view = run.view()
-    for ext in run.exts:
-        for r in await ext.reminders(view):
-            view.record(ext.name, r.kind, r.data, message=user(r.text, origin=r.origin))
+    try:
+        for ext in run.exts:
+            for r in await ext.reminders(view):
+                view.record(ext.name, r.kind, r.data, message=user(r.text, origin=r.origin))
+    except TurnFailed:
+        await run.flush(view)  # what was recorded before the failure stands
+        raise
     if not view.pending:
         return request
     n = len(run.state.messages)

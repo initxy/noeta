@@ -4,6 +4,7 @@ model: inherit
 plugins:
   - compaction
   - permissions
+  - hooks
   - shell
   - fs
   - skills

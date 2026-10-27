@@ -6,6 +6,7 @@ one_shot: true
 plugins:
   - compaction
   - permissions
+  - hooks
   - shell
   - ask_user
   - web
