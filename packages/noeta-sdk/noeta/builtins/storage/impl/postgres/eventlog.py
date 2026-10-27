@@ -295,9 +295,9 @@ class PostgresEventLog:
                     and lease_id is not None
                     and self._lease_validator is not None
                 ):
-                    # In-transaction fence (see ADR
-                    # multi-host-lease-fencing.md): selecting the dispatcher
-                    # row FOR SHARE makes a concurrent reclaim / release /
+                    # In-transaction fence (see
+                    # docs/adr/034-multi-host-lease-fencing.md): selecting
+                    # the dispatcher row FOR SHARE makes a concurrent reclaim / release /
                     # heartbeat-cap UPDATE block until this emit commits or
                     # rolls back, so no zombie write can land after a new
                     # lease generation started. A returned row proves the

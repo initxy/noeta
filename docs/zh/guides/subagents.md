@@ -88,4 +88,4 @@ Result(answer='...', status='completed')
 
 - [任务与唤醒](../how-it-works/tasks-and-waking.md)：子任务做完怎么唤醒父任务
 - [按租户隔离记忆](multi-tenant-memory.md)：子 agent 用自己的任务 id 查找记忆目录
-- [ADR：后台子 agent](https://github.com/initxy/noeta/blob/main/docs/adr/background-subagent.md)
+- [ADR：后台子 agent](https://github.com/initxy/noeta/blob/main/docs/adr/002-background-subagent.md)

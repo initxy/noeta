@@ -224,7 +224,7 @@ WEB_SUBAGENT: AgentDefinition = AgentDefinition(
 
 
 #: The internal memory-consolidation curator (architecture:
-#: ``docs/adr/memory-consolidation.md``). An ordinary agent driven as an
+#: ``docs/adr/035-memory-consolidation.md``). An ordinary agent driven as an
 #: ordinary root task by the host's session-stop trigger
 #: (``noeta.client.consolidation.run_consolidation``), with a goal carrying a
 #: host-built digest of recent session activity. ``tools=()`` empties the

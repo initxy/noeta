@@ -87,4 +87,4 @@ def consolidate_tenant(tenant: str) -> bool:
 
 - [上生产](deploy.md)：整理任务跑在 worker 池上
 - [接入 MCP](mcp.md)：`mcp_scope_resolver` 分的就是这些连接
-- [ADR：memory consolidation](https://github.com/initxy/noeta/blob/main/docs/adr/memory-consolidation.md)
+- [ADR：memory consolidation](https://github.com/initxy/noeta/blob/main/docs/adr/035-memory-consolidation.md)

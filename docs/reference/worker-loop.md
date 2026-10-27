@@ -24,7 +24,7 @@ The loop drives any object with four read-only properties: `engine`, `event_log`
 | `settle_subtasks_after_step(task_id)` | drives a subtask tree the just-stepped task is waiting on |
 | `take_pending_prelude(task_id)` | hands over a one-shot wake prelude the host stashed |
 
-Each loop claims only from its own `queue`, so pools with different configurations can share one store; every task in a queue must be drivable by that queue's loops ([ADR](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md)). Cross-process work needs a real SQLite file or Postgres; `:memory:` is for tests.
+Each loop claims only from its own `queue`, so pools with different configurations can share one store; every task in a queue must be drivable by that queue's loops ([ADR](https://github.com/initxy/noeta/blob/main/docs/adr/041-worker-queue-routing.md)). Cross-process work needs a real SQLite file or Postgres; `:memory:` is for tests.
 
 ## Constructor
 

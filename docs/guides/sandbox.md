@@ -160,4 +160,4 @@ options = presets.sandbox_browser_options()   # main + the web subagent
 
 - [Deploy](deploy.md) — workers, Postgres and Docker
 - [Limitations](../operations/limitations.md) — sandbox boundaries in detail
-- [ADR: execution environment](https://github.com/initxy/noeta/blob/main/docs/adr/execution-environment-seam.md)
+- [ADR: execution environment](https://github.com/initxy/noeta/blob/main/docs/adr/033-execution-environment-seam.md)

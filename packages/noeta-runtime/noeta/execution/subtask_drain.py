@@ -904,7 +904,7 @@ def seed_child_task(
     # Seed ONLY the child goal (isolated context — never the parent's
     # messages or system prompt), and only when the child has no messages yet:
     # a background-sub-agent crash-recovery re-drive
-    # (docs/adr/background-subagent.md) descends into an already-seeded child
+    # (docs/adr/002-background-subagent.md) descends into an already-seeded child
     # to continue it from its own EventLog — re-seeding the goal there would
     # duplicate it.
     if not child_task.runtime.messages:

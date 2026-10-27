@@ -126,7 +126,7 @@ class TaskCreatedPayload:
     #: parent chain, so audit, fold, snapshot and resume all read it directly.
     subtask_depth: int = 0
     #: ``True`` marks a child spawned by ``spawn_subagent(background=True)``
-    #: (see docs/adr/background-subagent.md). ``ChildLifecycleObserver`` reads
+    #: (see docs/adr/002-background-subagent.md). ``ChildLifecycleObserver`` reads
     #: it to SKIP this child's lineage / enqueue / auto-wake, because the parent
     #: never suspended on it and the background-subagent driver owns its
     #: lifecycle. ``None`` is the ordinary foreground child.
@@ -1461,7 +1461,7 @@ class BackgroundShellLostPayload:
     job_id: str
 
 
-# -- background sub-agent lifecycle (docs/adr/background-subagent.md) ---------
+# -- background sub-agent lifecycle (docs/adr/002-background-subagent.md) ---------
 # A sub-agent launched with ``spawn_subagent(background=True)``: unlike a
 # foreground spawn (``SubtaskSpawned`` + ``TaskSuspended`` on a barrier) the
 # parent does NOT suspend, so these two events ARE the durable record. Both ride

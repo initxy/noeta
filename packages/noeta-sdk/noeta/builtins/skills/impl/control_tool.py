@@ -352,8 +352,8 @@ def _maybe_skill_decision(
         assistant_thinking,
         patch=TaskStatePatch(activate_skills=[name]),
         # "next step", not "next turn": the instructions are composed into the
-        # very next request of this same turn (CONTEXT.md — one turn is wake →
-        # many steps → park).
+        # very next request of this same turn, which runs many steps before the
+        # task parks for the next goal (CONTEXT.md "Task").
         text=f"Skill '{name}' loaded; its instructions will appear in your "
         f"context from your next step.",
         valid=True,

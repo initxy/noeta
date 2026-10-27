@@ -6,8 +6,8 @@ entry, so the first attempt leaves it out and relies on the prompt's closing
 no-tools instruction. Only when the model answers with a tool call anyway does
 the policy retry with the wire-level opt-out. The retry is an ordinary
 recorded round-trip, and whatever it returns goes through the existing
-empty-summary / note-shape guards. See ``docs/adr/context-compaction.md``
-(Amended 2026-09-25 — summarize without ``tool_choice``).
+empty-summary / note-shape guards. See
+``docs/adr/049-compaction-summarize-without-tool-choice.md``.
 """
 
 from __future__ import annotations

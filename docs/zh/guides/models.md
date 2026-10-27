@@ -134,4 +134,4 @@ if report.unpriced_models:
 
 - [离线测试](testing.md)：测试里换成脚本化的模型
 - [Options 参考](../reference/options.md)
-- [为什么要厂商中立](https://github.com/initxy/noeta/blob/main/docs/adr/provider-neutral.md)（ADR）
+- [为什么要厂商中立](https://github.com/initxy/noeta/blob/main/docs/adr/016-provider-neutral.md)（ADR）

@@ -1,7 +1,6 @@
 """SDK audit closure WP-E — built-in tools, ExecEnv, shell policy.
 
-One regression per reproduced defect (E1-E12 of
-``docs/implementation-specs/sdk-audit-closure-2026-09-25.md``). Nothing here
+One regression per reproduced defect (E1-E12 of the SDK audit). Nothing here
 touches the network: HTTP runs through ``httpx.MockTransport``, the sandbox
 backend through a scripted transport, and the only real processes are local
 ``bash`` / ``git`` in ``tmp_path``.

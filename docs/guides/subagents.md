@@ -111,4 +111,4 @@ example.
 
 - [Tasks and waking](../how-it-works/tasks-and-waking.md) — how a finished child wakes its parent
 - [Per-tenant memory](multi-tenant-memory.md) — children resolve memory with their own task ids
-- [ADR: background subagents](https://github.com/initxy/noeta/blob/main/docs/adr/background-subagent.md)
+- [ADR: background subagents](https://github.com/initxy/noeta/blob/main/docs/adr/002-background-subagent.md)

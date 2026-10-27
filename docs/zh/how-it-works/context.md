@@ -54,9 +54,9 @@ provider 只有在 prompt 开头逐字节不变时才能复用缓存，开头改
 - 想加自己的常驻内容或提醒，就在插件里注册 `content_kind` 或 `reminder`；组装器本身不能替换。
 
 设计记录：
-[unified context supply](https://github.com/initxy/noeta/blob/main/docs/adr/unified-context-supply.md) ·
-[anchored content placement](https://github.com/initxy/noeta/blob/main/docs/adr/anchored-content-placement.md) ·
-[context compaction](https://github.com/initxy/noeta/blob/main/docs/adr/context-compaction.md)
+[unified context supply](https://github.com/initxy/noeta/blob/main/docs/adr/028-unified-context-supply.md) ·
+[anchored content placement](https://github.com/initxy/noeta/blob/main/docs/adr/036-anchored-content-placement.md) ·
+[context compaction](https://github.com/initxy/noeta/blob/main/docs/adr/003-context-compaction.md)
 
 ## 下一步
 

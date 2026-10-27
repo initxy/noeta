@@ -153,7 +153,7 @@ def test_real_repo_is_clean() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Session-as-identity ban (CONTEXT.md `Flagged ambiguities` -> "Session").
+# Session-as-identity ban (CONTEXT.md "Naming: Session is a scope, never an identity").
 # Identity is banned, construction scope is not; see the CONTEXT.md entry.
 
 

@@ -272,7 +272,7 @@ def resolve_engine(rt: WorkerRuntime, task: Any) -> Any:
 # worker-loop's plain woken branch). The prelude is the ONLY per-command
 # variation; every surface shares this one machine.
 #
-# ``durable_at_seed`` (see docs/adr/step-attempt-recovery.md) marks the
+# ``durable_at_seed`` (see docs/adr/032-step-attempt-recovery.md) marks the
 # preludes that only APPEND durable events (message / answer / ModelBound):
 # the driver's seed applies these synchronously on the request thread —
 # ``note_woken`` + prelude land BEFORE the command is acked, so an acked
@@ -1175,7 +1175,7 @@ def _run_woken(
     sentinel (a ``ContextPlanComposed`` in the live window — see
     ``noeta.runtime.attempt``): none ⇒ bare re-drive (case 2′), present ⇒
     the partial-step orphan goes through seal + re-drive-or-park
-    recovery (case 5′, docs/adr/step-attempt-recovery.md). Case 6 = fail
+    recovery (case 5′, docs/adr/032-step-attempt-recovery.md). Case 6 = fail
     loud.
     """
     events = rt.event_log.read(lease.task_id)
@@ -1270,7 +1270,7 @@ def _run_woken(
             # approved tool, so it cannot ride the request thread): a crash
             # before it lands re-suspends on the same approval and the
             # operator simply approves again — benign, documented in
-            # docs/adr/step-attempt-recovery.md.
+            # docs/adr/032-step-attempt-recovery.md.
             task = _render_subtask_wake(
                 engine, task, lease.wake_event, lease_id=lease.lease_id
             )
@@ -1316,7 +1316,7 @@ def _recover_interrupted_attempt(
     reliability_sink: Optional[ReliabilitySink],
 ) -> WorkerOutcome:
     """Seal an interrupted attempt, then re-drive or park
-    (docs/adr/step-attempt-recovery.md).
+    (docs/adr/032-step-attempt-recovery.md).
 
     Classify (whatever could run without a human approval gate may be
     re-driven without a human) → seal (``StepAttemptAbandoned``

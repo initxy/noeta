@@ -12,12 +12,12 @@
 ### 多机部署需要 Postgres
 
 - **限制：** 多个 worker **进程**共用一个数据库，只有 Postgres 是安全的（写事件和校验租约在同一个事务里，租约过期按数据库时钟算）。SQLite 和内存存储只能单机用，两个进程指向同一个 SQLite 文件是不安全的。
-- **办法：** 跨机器就用 Postgres。单机上跑 worker 池没问题；同一进程里多个 client 也可以共用存储，每个 client 用自己的 `HostConfig.queue`，子任务沿用父任务的队列，worker 不会跨队列取活。本版修复：以前在同一个存储上再开一个 `Client`，它启动时的恢复会把另一个 `Client` 的后台子 agent 重跑一遍；现在恢复会跳过别的 client 还在跑的子 agent。参见 ADR：[多机租约隔离](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md)、[worker 队列路由](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md)。
+- **办法：** 跨机器就用 Postgres。单机上跑 worker 池没问题；同一进程里多个 client 也可以共用存储，每个 client 用自己的 `HostConfig.queue`，子任务沿用父任务的队列，worker 不会跨队列取活。本版修复：以前在同一个存储上再开一个 `Client`，它启动时的恢复会把另一个 `Client` 的后台子 agent 重跑一遍；现在恢复会跳过别的 client 还在跑的子 agent。参见 ADR：[多机租约隔离](https://github.com/initxy/noeta/blob/main/docs/adr/034-multi-host-lease-fencing.md)、[worker 队列路由](https://github.com/initxy/noeta/blob/main/docs/adr/041-worker-queue-routing.md)。
 
 ### Postgres：每个存储适配器一条连接，没有连接池
 
 - **限制：** 事件日志、调度器、内容存储这几个 Postgres 适配器各自只用一条连接，外面套一把锁，所以同一个适配器上的调用是排队执行的。连接断了（数据库重启、空闲被踢、网络中断）会自动重连：单条语句重发一次；事务在发出 `COMMIT` 之前断开，就从头重跑整个事务。如果恰好断在 `COMMIT` 过程中，写入到底成没成功说不准，这时直接报错，不重试——带幂等键的事件写入除外，它重试是安全的。数据库一直起不来的话，调用照样失败。
-- **办法：** 想要更高的数据库吞吐，就多开几个 worker 进程（每个进程有自己的连接）。参见 ADR：[多机租约隔离](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md)。
+- **办法：** 想要更高的数据库吞吐，就多开几个 worker 进程（每个进程有自己的连接）。参见 ADR：[多机租约隔离](https://github.com/initxy/noeta/blob/main/docs/adr/034-multi-host-lease-fencing.md)。
 
 ## 持久性
 

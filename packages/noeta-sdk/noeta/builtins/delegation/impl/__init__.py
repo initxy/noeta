@@ -97,7 +97,7 @@ def spawn_subagent_tool_schema(
                     # A single Task with background=true does NOT block this
                     # turn: the parent gets a "started" receipt and keeps going,
                     # and the sub-agent's result arrives as a notice when it
-                    # finishes (docs/adr/background-subagent.md).
+                    # finishes (docs/adr/002-background-subagent.md).
                     "background": {
                         "type": "boolean",
                         "description": _SPAWN_SUBAGENT_BACKGROUND_DESCRIPTION,

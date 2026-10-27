@@ -107,9 +107,9 @@ suspended six months ago foldable under today's code.
   in an observer — see [The engine](engine.md).
 
 Design records:
-[event-sourced truth](https://github.com/initxy/noeta/blob/main/docs/adr/event-sourced-truth.md) ·
-[single-writer invariant](https://github.com/initxy/noeta/blob/main/docs/adr/single-writer-invariant.md) ·
-[step-attempt recovery](https://github.com/initxy/noeta/blob/main/docs/adr/step-attempt-recovery.md)
+[event-sourced truth](https://github.com/initxy/noeta/blob/main/docs/adr/009-event-sourced-truth.md) ·
+[single-writer invariant](https://github.com/initxy/noeta/blob/main/docs/adr/019-single-writer-invariant.md) ·
+[step-attempt recovery](https://github.com/initxy/noeta/blob/main/docs/adr/032-step-attempt-recovery.md)
 
 ## Next
 

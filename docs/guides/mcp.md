@@ -167,4 +167,4 @@ don't collide with a built-in tool. `examples/mcp_server.py` is a runnable versi
 
 - [Custom tools](tools.md) — write the `@tool` functions you bundle
 - [Sandbox](sandbox.md) — MCP stays on the host even when tools run in a container
-- [ADR: MCP connectors](https://github.com/initxy/noeta/blob/main/docs/adr/mcp-connectors.md)
+- [ADR: MCP connectors](https://github.com/initxy/noeta/blob/main/docs/adr/012-mcp-connectors.md)

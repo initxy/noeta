@@ -89,9 +89,9 @@ manifest's refs point at. Eighteen ship with `noeta-sdk`.
   you want to ship tools, prompts and guards together as one bundle.
 
 Design records:
-[library SDK architecture](https://github.com/initxy/noeta/blob/main/docs/adr/library-sdk-architecture.md) ·
-[plugin contribution bundles](https://github.com/initxy/noeta/blob/main/docs/adr/plugin-contribution-bundles.md) ·
-[package layout](https://github.com/initxy/noeta/blob/main/docs/adr/package-layout.md)
+[library SDK architecture](https://github.com/initxy/noeta/blob/main/docs/adr/011-library-sdk-architecture.md) ·
+[plugin contribution bundles](https://github.com/initxy/noeta/blob/main/docs/adr/038-plugin-contribution-bundles.md) ·
+[package layout](https://github.com/initxy/noeta/blob/main/docs/adr/014-package-layout.md)
 
 ## Next
 

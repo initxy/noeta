@@ -1049,7 +1049,7 @@ class GenericEngineResolver:
         """Build the :class:`DrainHost` for a parent's delegation tree.
 
         The background-subagent driver
-        (docs/adr/background-subagent.md) builds the SAME host — same
+        (docs/adr/002-background-subagent.md) builds the SAME host — same
         child-engine builder, inherited workspace / provider / permission / MCP,
         cancel predicate, and child-session-content activation — to drive a
         single background child on the shared executor. The only difference at

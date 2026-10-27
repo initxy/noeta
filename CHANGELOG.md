@@ -126,7 +126,7 @@ moving with the skill set.
   recorded listings, so a restart or another replica announces the same; the
   listing re-hangs after a compaction summary. Replaces the process-local
   "new skills" reminder (`roster_note` is gone). Claude Code's shape, kept on
-  the content channel (`docs/adr/model-driven-skill-invocation.md`,
+  the content channel (`docs/adr/013-model-driven-skill-invocation.md`,
   2026-10-10 amendment).
   - Measured on an 80-skill roster (`~/.claude/skills`): the `skill`
     parameter shrinks from 8,911 to 107 bytes at the 2,000-token budget
@@ -1000,7 +1000,7 @@ Prompt text shrinks overall; `main.md` is untouched.
 ### Changed (`noeta-sdk`)
 
 - **`OpenAICompatProvider` defaults to a 300 s timeout** (was 60 s), the value
-  `docs/adr/provider-adapters-and-multimodal.md` documents. On the non-streamed
+  `docs/adr/015-provider-adapters-and-multimodal.md` documents. On the non-streamed
   path the read timeout is the whole generation's wall clock, so a long answer
   timed out and burned its retries. An explicit `timeout_seconds` is untouched.
 - **The workspace's `.noeta/shell-allowlist.json` needs a trusted workspace.**
@@ -1182,7 +1182,7 @@ resolver and the host's half in `noeta-sdk`, and the two ship together
   schemas; the build is deterministic, so the prompt-cache prefix moves only
   when an input actually changed. New resolver verb `forget_turn_engine`
   (the driver calls it when a turn opens, the worker when one settles). See
-  `docs/adr/engine-per-turn.md`.
+  `docs/adr/046-engine-per-turn.md`.
 - **What a task needs across turns lives in one task-local registry**
   (`noeta.runtime.task_local.TaskLocalRegistry`, host-owned, keyed by task
   id, one lock, one LRU, forgotten at `cancel` / `close`): the edit tools'
@@ -1972,7 +1972,7 @@ Covers both packages (lockstep). Patch bump: additive API
   interrupted results, parks the root at the interrupted next-goal suspend,
   and drops the mark.
 
-See the new ADR `docs/adr/interrupt-responsiveness.md` for the design
+See the new ADR `docs/adr/042-interrupt-responsiveness.md` for the design
 (abandonment-over-cancellation, force-as-enqueue) and rejected alternatives.
 
 ## [0.6.2] - 2026-08-05
@@ -2739,7 +2739,7 @@ Additive throughout, except the one ordering fix noted below.
   its point of discovery — so a mid-task activation appends instead of
   rewriting the stable prompt head. `Client.seed_start` and the anchored
   content-placement seams are forwarded through the SDK. Decision record:
-  `docs/adr/anchored-content-placement.md`.
+  `docs/adr/036-anchored-content-placement.md`.
 - **Per-session sandbox opt-out** (`HostConfig.sandbox_session_policy`). A
   policy returning `False` keeps a session on the `local` execution tier — no
   container, the host `WorkspaceRoot` fence — even while a sandbox provider is
@@ -3070,7 +3070,7 @@ Additive throughout, except the one ordering fix noted below.
     (`NOETA_AGENT_MEMORY_CONSOLIDATION=0` disables;
     `NOETA_AGENT_MEMORY_CONSOLIDATION_DEBOUNCE_HOURS` tunes); SDK hosts
     orchestrate their own runs via `noeta.sdk.run_consolidation`. See
-    `docs/adr/memory-consolidation.md`.
+    `docs/adr/035-memory-consolidation.md`.
 
 ## [0.2.2] - 2026-07-10
 

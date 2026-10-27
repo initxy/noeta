@@ -42,7 +42,7 @@ _NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 DEFAULT_SKILL_PRIORITY = 100
 
 #: Claude Code's argument placeholder. Noeta's ``skill`` control tool takes a
-#: name and nothing else (docs/adr/model-driven-skill-invocation.md), so there
+#: name and nothing else (docs/adr/013-model-driven-skill-invocation.md), so there
 #: is no argument channel to substitute and the literal would otherwise reach
 #: the model verbatim. Lines carrying it are dropped at render.
 ARGUMENTS_PLACEHOLDER = "$ARGUMENTS"

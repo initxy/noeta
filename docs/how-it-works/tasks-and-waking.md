@@ -98,9 +98,9 @@ sandbox container.
 - Use Postgres as soon as more than one host process shares the work.
 
 Design records:
-[task as the only primitive](https://github.com/initxy/noeta/blob/main/docs/adr/task-as-only-primitive.md) ·
-[durable wake](https://github.com/initxy/noeta/blob/main/docs/adr/subtask-fanout-and-durable-wake.md) ·
-[multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md)
+[task as the only primitive](https://github.com/initxy/noeta/blob/main/docs/adr/024-task-as-only-primitive.md) ·
+[durable wake](https://github.com/initxy/noeta/blob/main/docs/adr/022-subtask-fanout-and-durable-wake.md) ·
+[multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/034-multi-host-lease-fencing.md)
 
 ## Next
 

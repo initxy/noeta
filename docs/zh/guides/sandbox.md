@@ -141,4 +141,4 @@ options = presets.sandbox_browser_options()   # main + the web subagent
 
 - [上生产](deploy.md)：worker、Postgres 和 Docker
 - [已知限制](../operations/limitations.md)：沙箱边界的细节
-- [ADR：execution environment](https://github.com/initxy/noeta/blob/main/docs/adr/execution-environment-seam.md)
+- [ADR：execution environment](https://github.com/initxy/noeta/blob/main/docs/adr/033-execution-environment-seam.md)

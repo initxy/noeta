@@ -58,30 +58,17 @@ jobs:
         # "ripgrep is required" rather than on anything the change did.
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
 
-      - name: Ruff
-        run: uv run ruff check packages tests scripts
-
       - name: Smoke import
         run: uv run python -c "from noeta.core.engine import Engine; print('import OK')"
 
-      - name: Run pytest with coverage
-        # Repo-wide coverage gate: the run fails under 85% so a broad
-        # regression cannot sneak in. NOETA_TEST_POSTGRES_DSN enables the
-        # Postgres parameter of the storage contract suites against the
-        # service above.
+      - name: make check
+        # The same gate agents run locally: ruff, pytest with the 85% coverage
+        # floor, mypy strict, naming + import-topology lints, doc hygiene.
+        # NOETA_TEST_POSTGRES_DSN enables the Postgres parameter of the storage
+        # contract suites against the service above.
         env:
           NOETA_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
-        run: uv run pytest -n auto --cov=noeta --cov-report=term --cov-fail-under=85
-
-      - name: mypy strict on both packages
-        # Settings and targets live in [tool.mypy] in the root pyproject.toml.
-        run: uv run mypy
-
-      - name: Forbidden naming lint
-        run: uv run python scripts/lint-naming.py
-
-      - name: Import topology lint (L0..L3)
-        run: uv run lint-imports --config .importlinter
+        run: make check
 
   install-smoke:
     # One Python version: the smoke checks what the wheels contain and that a

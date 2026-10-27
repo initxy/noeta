@@ -5,7 +5,7 @@ Task is the only entity type the engine has, so ``Run`` / ``Workflow`` /
 ``Session`` / ``Mutator`` / ``Pattern`` and compounds like ``WorkflowRunner``
 or ``SessionStore`` each duplicate something the domain already names, and
 admitting one forks the vocabulary between the code and the prose about it.
-CONTEXT.md (`Flagged ambiguities`) pins that vocabulary; this script enforces
+CONTEXT.md (the `Naming:` entries) pins that vocabulary; this script enforces
 it, down to the narrower session-as-identity rule below. Files that catalogue
 the bans as bans are exempt, so the negative examples survive their own rule.
 
@@ -51,7 +51,7 @@ BANNED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 )
 
 # ---------------------------------------------------------------------------
-# Session as identity (CONTEXT.md `Flagged ambiguities` -> "Session").
+# Session as identity (CONTEXT.md "Naming: Session is a scope, never an identity").
 #
 # The bare word is fine in prose: "per-session workspace" reads well and means
 # "for the lifetime of one root-task tree". Naming an *identity* after it is
@@ -120,7 +120,7 @@ EXEMPT_FILE_NAMES: frozenset[str] = frozenset(
     {
         "CONTEXT.md",
         # The working agreement states the ban and the glossary mirrors
-        # CONTEXT.md's flagged-ambiguities list; both must spell the names out.
+        # CONTEXT.md's `Naming:` entries; both must spell the names out.
         "AGENTS.md",
         "glossary.md",
         "lint-naming.py",

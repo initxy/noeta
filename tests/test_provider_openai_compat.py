@@ -504,7 +504,7 @@ def test_default_timeout_is_300_seconds() -> None:
     # it. At 60s a long answer on a large ``max_tokens`` cap timed out and then
     # burned the runtime's retry budget re-running the same doomed call — the
     # failure the Anthropic adapter was rewritten to remove. 300s is the ADR
-    # default (docs/adr/provider-adapters-and-multimodal.md) the Responses
+    # default (docs/adr/015-provider-adapters-and-multimodal.md) the Responses
     # adapter already honors.
     provider = _make_provider()
     assert provider._client.timeout.read == 300.0

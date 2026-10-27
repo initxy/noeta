@@ -640,7 +640,7 @@ class HostConfig:
     max_steps_per_turn: Optional[int] = None
     #: The size, in characters, past which a tool result is persisted instead
     #: of inlined — Claude Code's large-output rule
-    #: (``docs/adr/unified-context-supply.md``): the whole output is written to
+    #: (``docs/adr/028-unified-context-supply.md``): the whole output is written to
     #: ``tool_output_spill_dir`` and the model gets a ``<persisted-output>``
     #: block naming the file plus a 2 KB preview, to page through with
     #: ``Read``; the full bytes also stay in ``ToolResultRecorded.output_ref``
@@ -718,7 +718,7 @@ class HostConfig:
     max_background_jobs_per_root_task: int = DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK
     #: Per-session background SUB-AGENT concurrency cap, forwarded to
     #: ``SdkHost.max_background_subagents_per_root_task``
-    #: (docs/adr/background-subagent.md). Over the cap a
+    #: (docs/adr/002-background-subagent.md). Over the cap a
     #: ``spawn_subagent(background=True)`` is rejected before any durable write.
     #: Default 8.
     max_background_subagents_per_root_task: int = (
@@ -742,7 +742,7 @@ class HostConfig:
     #: ``instructions_enabled``; ``None`` (default) keeps the search.
     instructions_file: Optional[Path] = None
     #: ``read``-triggered discovery of subdirectory ``NOETA.md`` / ``AGENTS.md``
-    #: files (docs/adr/anchored-content-placement.md). Forwarded verbatim to
+    #: files (docs/adr/036-anchored-content-placement.md). Forwarded verbatim to
     #: ``SdkHost.instructions_discovery``. When on, a successful ``read`` inside
     #: the session workspace activates every not-yet-active instruction file
     #: between the read file's directory and the workspace root; each renders

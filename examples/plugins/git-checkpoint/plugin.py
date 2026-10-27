@@ -12,7 +12,7 @@ user's own branch, ``HEAD``, staging area, or ``git log``. Chaining each
 checkpoint onto the previous one gives the ref an ordered history without a
 branch.
 
-Per ``docs/adr/guard-observer-hooks.md`` an observer failure must never reach the
+Per ``docs/adr/010-guard-observer-hooks.md`` an observer failure must never reach the
 writer, so the observer path swallows everything: a missing or broken repo
 degrades to "no checkpoint recorded", never a failed turn.
 :func:`restore_checkpoint` is an explicit operator call and does raise.

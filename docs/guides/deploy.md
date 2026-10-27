@@ -74,7 +74,7 @@ several processes or machines on one SQLite file are not.
 `HostConfig(queue="…")`. Root tasks are created on their client's queue,
 children inherit it, and a pool only claims its own queue — so two differently
 configured clients never run each other's tasks. See
-[ADR: worker queue routing](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md).
+[ADR: worker queue routing](https://github.com/initxy/noeta/blob/main/docs/adr/041-worker-queue-routing.md).
 
 ## Package it with Docker
 

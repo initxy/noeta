@@ -118,7 +118,7 @@ class ContextState:
     # by fold's activation handlers, first-write-wins. The Composer reads it to
     # place a resident: an anchor at or before the first assistant message keeps
     # it in ``semi_stable``; a later anchor renders it inside the dynamic suffix
-    # at that point. See docs/adr/anchored-content-placement.md.
+    # at that point. See docs/adr/036-anchored-content-placement.md.
     content_anchors: dict[str, int] = field(default_factory=dict)
 
 
@@ -244,7 +244,7 @@ class GovernanceState:
     # ``BackgroundSubagentDelivered`` flips it to the child's terminal status.
     # That second event doubles as the exactly-once delivery anchor — fold reads
     # it so a resume never re-injects the turn-boundary notice.
-    # See docs/adr/background-subagent.md.
+    # See docs/adr/002-background-subagent.md.
     background_subagents: list[dict[str, Any]] = field(default_factory=list)
 
 

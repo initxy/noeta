@@ -1,4 +1,4 @@
-"""Multi-host Postgres lease fencing (docs/adr/multi-host-lease-fencing.md).
+"""Multi-host Postgres lease fencing (docs/adr/034-multi-host-lease-fencing.md).
 
 Every test opens TWO PostgresDispatcher + PostgresEventLog instances
 against the same isolated schema — two hosts sharing one database. The

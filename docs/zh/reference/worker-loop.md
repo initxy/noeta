@@ -24,7 +24,7 @@ loop.run_forever(install_signals=True)   # blocks until stop()
 | `settle_subtasks_after_step(task_id)` | 推进刚走完一步的任务正在等的子任务 |
 | `take_pending_prelude(task_id)` | 取走宿主暂存的一次性唤醒前置步骤 |
 
-每个循环只从自己的 `queue` 里取任务，所以配置不同的几组 worker 可以共用一个存储；同一个队列里的任务必须都是这组 worker 能跑的（[ADR](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md)）。跨进程要用真实的 SQLite 文件或 Postgres，`:memory:` 只适合测试。
+每个循环只从自己的 `queue` 里取任务，所以配置不同的几组 worker 可以共用一个存储；同一个队列里的任务必须都是这组 worker 能跑的（[ADR](https://github.com/initxy/noeta/blob/main/docs/adr/041-worker-queue-routing.md)）。跨进程要用真实的 SQLite 文件或 Postgres，`:memory:` 只适合测试。
 
 ## 构造参数
 

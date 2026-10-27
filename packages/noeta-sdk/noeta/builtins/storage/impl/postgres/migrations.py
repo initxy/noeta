@@ -173,9 +173,9 @@ _MIGRATION_2_BASELINE_INDEX = (
 
 
 # Migration 3: nullable audit column recording which worker holds the lease
-# (see ADR multi-host-lease-fencing.md). Populated by ``lease()``, cleared by
-# every transition that clears ``lease_id``. Observability only — NOT a
-# fencing token; no index, no CHECK.
+# (see docs/adr/034-multi-host-lease-fencing.md). Populated by ``lease()``,
+# cleared by every transition that clears ``lease_id``. Observability only —
+# NOT a fencing token; no index, no CHECK.
 _MIGRATION_3_WORKER_ID = (
     "ALTER TABLE dispatcher_tasks ADD COLUMN worker_id TEXT NULL"
 )

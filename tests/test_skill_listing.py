@@ -1,7 +1,6 @@
 """The skill listing: the roster out of the ``skill`` schema, into residents.
 
-``docs/implementation-specs/skill-listing-as-resident.md``, acceptance
-criteria 1–7, driven through the production ``SdkHost`` / ``InteractionDriver``
+Driven through the production ``SdkHost`` / ``InteractionDriver``
 assembly, plus the unit surface of ``skills.impl.listing``:
 
 1. the ``skill`` schema is the same bytes for every task and every turn;

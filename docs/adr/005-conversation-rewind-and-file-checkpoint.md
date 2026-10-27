@@ -1,0 +1,51 @@
+# ADR-005: Rewind and fork re-base a conversation onto a stored baseline marker; file undo rides per-turn pre-edit baselines captured at the tool boundary
+
+- Status: accepted
+- Date: 2026-07-01
+
+## Context
+
+Undoing a user message has to undo three things together: the message, the model output it produced, and every workspace file that turn changed — including files a subtask changed, because a subtask runs in the parent's workspace and its edits land on the same disk. Branching a conversation ("try again from here, keep both paths") needs the same anchor and the same point-in-time state, so it is settled here too.
+
+Two invariants bound the whole design: the event log is append-only and immutable (see [ADR-009](009-event-sourced-truth.md)), and fold rebuilds a Task purely from its event stream and never touches disk.
+
+## Decision
+
+- **One anchor, two operations.** `Client.rewind` and `Client.fork` both take the seq of a user-goal `MessagesAppended` — the message the user is undoing or branching from. Both walk back to the turn opener (`TaskWoken` / `TaskStarted`) that consumed that goal, take the seq immediately before it as the boundary, and fold the stream through that boundary via a read-only bounded view that serves only from the events already read, so the computation stays a pure projection. Rewind means "undo this and everything after"; fork means "keep both".
+- **Rewind appends a marker; it never truncates.** The state folded at the boundary is serialized into the ContentStore and a `TaskRewound{target_seq, state_ref}` is appended to the same stream through the control-plane emit path — no lease, no state patch, so it never races the single `RuntimeState` writer. Everything past `target_seq` stays on the stream as dead history: still stored, still auditable, simply no longer part of the folded state.
+- **Fold's baseline is the highest-seq baseline event.** `TaskSnapshot`, `TaskRewound`, `TaskForked`, and the crash-recovery attempt seal all carry a `state_ref` and all count as a fold baseline. The accelerated path rehydrates whichever has the highest seq and resumes the tail after it; the from-scratch path re-bases in place when it walks over one. Both paths land on identical state, which is what a resume relies on.
+- **Fork writes only to the new stream.** It mints a new task, re-stamps the folded baseline with the new task id (the serialized body is identity-bearing, so an unstamped copy would fold back as the task it came from), stores it, and appends `TaskForked{source_task_id, source_seq, state_ref}` to the child's stream. The source stream is never written to: branching a conversation cannot perturb the conversation it branched from. A fork is refused for a non-root task, for an anchor that is not a user message on that stream, and for an anchor whose boundary falls on genesis — an empty, never-started baseline is not a resting point a branch can be driven from.
+- **A fork inherits state, not a workspace.** It carries the message history, the TaskState, the context plan, and governance including accumulated cost (the branch really did consume that context, so a budget guard counting it is right), plus the source's agent, policy, and host binding. Both branches keep the source's workspace and act on the same disk, so a fork performs no file restore.
+- **File coverage is exactly what the model edited through a tool.** Capture happens at the single `ToolRuntime.invoke` choke point, off the `file_changes` the write-side fs tools surface. Shell commands, external processes, and the user's own edits are outside coverage — no directory scan, no ignore-file filtering, no dependency tree ever enters a checkpoint.
+- **The pre-edit content rides on the event, so file state stays a projection of the log.** The first time a turn touches a path, its pre-edit bytes go into the ContentStore and the ref lands in `ToolResultRecorded.file_baselines`. A file the model created records a baseline with no ref, which restore reads as "delete". The write to disk itself is a live-only side effect that fold skips, exactly like the edit.
+- **One baseline per path per turn, shared across a whole delegation tree.** The per-turn gate is a thread-safe test-and-set keyed by the root task id and cleared at every turn boundary. Keying on the root stops a subtask from stashing a second, mid-turn, dirty baseline for a file its parent already edited in the same turn. The gate is a live accelerator only, never written to the log; the recorded `file_baselines` are the authoritative record.
+- **Restore takes the earliest baseline in the rewound span, across the whole tree.** It walks the parent stream past the boundary and recurses into every `SubtaskSpawned` child's stream, keeping the first baseline seen per path. Each is written back into the workspace — or through the session's execution environment into the container when the session is sandboxed; a baseline with no content ref deletes the file. This is live-only: a resume reads recorded results and never calls it, so the "resume never touches disk" invariant holds.
+- **Two exclusions cap the stored volume.** A pre-edit body over 1 MiB, or one containing a NUL byte, is not stashed; the path is still marked so a later edit in the same turn does not re-evaluate it. Rewind cannot restore those files, which is accepted. Baseline bytes are stored under the same media type the `Read` tool uses to offload file bodies, so a file the model read before editing dedups to a single blob.
+- **Rewind composes with interrupt.** Interrupt stops an in-flight turn and leaves its events on the stream as real history — the model said what it said and the tools ran what they ran. Un-saying it is rewind's job.
+
+## Rationale
+
+- **A marker keeps the log append-only while still giving "go back and change direction".** The dead segment is never rewritten, so audit holds, external refs stay resolvable, and the history remains foldable. Fold honours it with one rule: take the highest-seq baseline.
+- **Content addressing buys whole-tree fidelity at the price of the changed files only.** Identical content is stored once, so a checkpoint costs what actually changed — the blob model a version-control system uses internally, without putting a second version-control system inside the user's tree.
+- **Recording the pre-edit ref on the event, rather than in a side table, is what makes a checkpoint reproducible from the log alone.** A side store would leave fold unable to reconstruct what a rewind would restore.
+- **The landing point is always a turn boundary, so a per-turn baseline is exactly enough.** The first touch pins the turn's starting state; every later edit in that turn adds nothing a rewind could use.
+- **Restoring across the delegation tree reuses the durable parent/child graph.** Enumerating descendants from `SubtaskSpawned` plus the recorded parent link is the traversal that reaches already-terminal children, which is what a rewind targets.
+
+## Alternatives considered
+
+1. **Truncate the event log — physically delete everything after the boundary.** Rejected: it destroys append-only. Audit breaks, external refs dangle, and the history can no longer be folded.
+2. **Model a branch as a tree of flows inside one logical task.** Rejected: append-only survives, but every read model and every surface then has to understand "one conversation = a graph". A fork that mints an ordinary task with an ordinary stream needs no new shape anywhere; only the baseline's provenance differs.
+3. **Give the fork its own copy of the workspace.** Rejected: two live branches cannot each own one working tree without copying it wholesale — the whole-tree-copy cost below, plus an ongoing divergence problem. Fork branches the conversation; the workspace stays shared.
+4. **A shadow version-control repository for file snapshots.** Rejected: a second VCS inside a directory the user already versions, plus an external dependency, for a blob model the ContentStore already provides.
+5. **A whole-tree copy or a whole-tree scan, so shell and external changes are covered too.** Rejected: copying a large project blows up disk, and scanning needs ignore-file filtering plus size limits before it is even usable. Capturing direct tool edits gives most of the value with none of that machinery; the cost is that files produced by a script the model ran cannot be restored.
+6. **Keep file baselines in an out-of-log side store.** Rejected: fold could no longer reproduce the checkpoint, so the file half of a rewind would stop being derivable from the event stream.
+7. **Store a baseline per edit instead of per turn.** Rejected: doubles the stored data and buys nothing, because a rewind can only land on a turn boundary.
+8. **Offer the user a choice of "files only / conversation only / both".** Rejected: an undo that leaves the two halves disagreeing is a worse state than either. One action rewinds both.
+9. **Centralize subtask baselines onto the root task's stream.** Rejected: it puts a cross-stream write on the edit hot path. Each stream records its own baselines and restore merges them at read time instead.
+
+## Consequences
+
+- The per-turn gate lives in `noeta.runtime.file_checkpoint`; capture at the tool boundary in `noeta.runtime.tool`; rewind, fork, and the restore traversal in `noeta.execution.driver`, surfaced on the client. The baseline rule lives in `noeta.core.fold`, the baseline event-type set in `noeta.protocols.event_log`, and `TaskRewound` / `TaskForked` / the per-result baselines in `noeta.protocols.events`.
+- The gate takes a lock rather than relying on turns being serial: the driver runs turns on background threads, so two threads can race the same file's first edit.
+- Shell activity, external processes, and edits the user makes by hand are outside rewind coverage; a file skipped for size or for being binary is likewise not restorable.
+- Dead history and the blobs it references are retained. Nothing reclaims them, so a stream that is rewound repeatedly grows monotonically.

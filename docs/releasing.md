@@ -12,8 +12,8 @@ distributions once — a wheel and an sdist for each of the two packages, four
 files in total — and two publish jobs then run, one per package. **Each publish
 job is gated on the tag version**: it uploads only if the build produced a wheel
 whose version equals `X.Y.Z`, and otherwise skips with a notice. Both publish
-jobs also wait for a `test` job that runs ruff, the test suite (coverage gate
-included) and the wheel-contents / install smoke on the tagged commit itself;
+jobs also wait for a `test` job that runs `make check` (the same gate as CI)
+and the wheel-contents / install smoke on the tagged commit itself;
 if it fails, nothing is published.
 
 The practical consequence: bump only the packages you are actually releasing.
@@ -40,8 +40,9 @@ carrying the behavior it depends on.
    (see "What a tag publishes"). A package whose source did not change stays at
    its current version.
 2. Update `CHANGELOG.md`: add a `## [X.Y.Z] - <date>` section with curated,
-   user-visible changes only — not commit subjects — completed from
-   `git log vPREV..HEAD`. Note which packages the release covers when it is a
+   user-visible changes only — not commit subjects. The specs archived in
+   `docs/specs/archive/` since the last release are the raw material;
+   complete it from `git log vPREV..HEAD`. Note which packages the release covers when it is a
    partial one, and add the `[X.Y.Z]` link definition at the bottom.
    `release.yml` refuses to publish a tag whose version has no dated changelog
    section (the exact pattern it greps for is
