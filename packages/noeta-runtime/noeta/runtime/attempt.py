@@ -207,8 +207,9 @@ def scan_pending_park(events: list[Any]) -> Optional[PendingPark]:
     worker must finish the park — never run the bare step over it.
 
     ``notice_appended`` keys on a ``MessagesAppended`` after the seal: the
-    park itself is the only writer in that window, so any message there is
-    its notice.
+    park itself is the only writer in that window, so a message there is
+    its closing tool results or its notice — the worker tells them apart on
+    the folded transcript.
     """
     boundary = -1
     for i, env in enumerate(events):

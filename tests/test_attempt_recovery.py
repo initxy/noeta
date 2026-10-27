@@ -951,6 +951,62 @@ def test_park_answers_a_call_the_turn_left_for_later(stack: Any) -> None:
     assert reader.calls == 1
 
 
+def test_crash_between_park_closing_results_and_notice_still_writes_notice(
+    stack: Any, monkeypatch: Any
+) -> None:
+    """The park writes its closing tool results, then its notice. A crash
+    between the two leaves a message after the seal that is not the notice;
+    the completed park still appends the notice."""
+    log, cs, dispatcher, _ = stack
+    reader = _CountingTool(name="reader", script={("x",): "body"})
+    read = ToolCall(tool_name="reader", arguments={"p": "x"}, call_id="c1")
+    deferred = ToolUseBlock(
+        call_id="t1", tool_name="Task", arguments={"agent": "a", "goal": "g"}
+    )
+    batch = dataclasses.replace(
+        _batch(read),
+        assistant_message=Message(
+            role="assistant",
+            content=[
+                deferred,
+                ToolUseBlock(call_id="c1", tool_name="reader", arguments={"p": "x"}),
+            ],
+        ),
+    )
+    script: list[Any] = [YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE), batch]
+    script += [RuntimeError(f"crash {i}") for i in range(ABANDON_CAP + 2)]
+    engine, tid = _suspended_session(
+        stack, _CrashOncePolicy(script), tools={"reader": reader}
+    )
+    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    real_append = Engine.append_user_message
+    state = {"raised": False}
+
+    def kill_once(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if not state["raised"]:
+            state["raised"] = True
+            raise KeyboardInterrupt("simulated crash before the park notice")
+        return real_append(self, *args, **kwargs)
+
+    monkeypatch.setattr(Engine, "append_user_message", kill_once)
+    outcome: Any = None
+    for _ in range(ABANDON_CAP + 3):
+        lease = _reclaim(stack, tid)
+        dispatcher.heartbeat(lease.lease_id)
+        try:
+            outcome = run_leased_task(_RT(engine, log, cs, dispatcher), lease)
+        except (RuntimeError, KeyboardInterrupt):
+            continue
+        break
+    assert state["raised"] is True
+    assert outcome == "stopped"
+    task = fold(log, cs, tid)
+    assert task.status == "suspended"
+    assert task.runtime.messages[-1].origin == "system"
+    notices = [m for m in task.runtime.messages if m.origin == "system"]
+    assert len(notices) == 1
+
+
 def test_interrupted_approval_execution_parks_and_reapproves(stack: Any) -> None:
     """A crash while executing a human-approved tool call: the plan-less
     window parks on the approval's own handle, the seal restores the
