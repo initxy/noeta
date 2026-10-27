@@ -76,6 +76,8 @@ from noeta.protocols.decisions import (
     Decision,
     FailDecision,
     FinishDecision,
+    SpawnSubtaskDecision,
+    SpawnSubtasksDecision,
     StatePatchDecision,
     ToolCall,
     ToolCallsDecision,
@@ -586,15 +588,15 @@ class ReActPolicy:
                 content_store=self._content_store,
                 view=view,
             )
-            if decision is None:
-                return None
             if isinstance(decision, StatePatchDecision):
                 return dc_replace(
                     decision, messages_before=(), assistant_thinking=()
                 )
-            return dc_replace(
-                decision, assistant_message=None, assistant_thinking=()
-            )
+            if isinstance(decision, (SpawnSubtaskDecision, SpawnSubtasksDecision)):
+                return dc_replace(
+                    decision, assistant_message=None, assistant_thinking=()
+                )
+            return None
         return None
 
     def _step_limit_decision(self, ctx: StepContext, view: View) -> Decision:

@@ -70,7 +70,7 @@ class HookGuard:
         if not isinstance(action, ProposedToolCall):
             return VerdictResult.allow()
         call = action.call
-        names = (call.tool_name,)
+        names: tuple[str, ...] = (call.tool_name,)
         if call.tool_name in _RUNS_BASH_COMMAND:
             names = (call.tool_name, "Bash")
         for rule in self._rules:
