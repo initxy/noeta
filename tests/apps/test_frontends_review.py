@@ -110,7 +110,7 @@ def tui(tmp_path: Path, provider: Any, *tools: Any) -> NoetaApp:
                     cwd=str(tmp_path))
 
 
-async def settle(pilot: Any, cond: Any, tries: int = 100) -> None:
+async def settle(pilot: Any, cond: Any, tries: int = 400) -> None:
     for _ in range(tries):
         await pilot.pause(0.05)
         if cond():

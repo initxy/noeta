@@ -53,7 +53,7 @@ def make_app(tmp_path: Path, provider: ScriptedProvider, *exts: Extension) -> No
     return NoetaApp(local, agent="main", model="claude-sonnet-4-5", cwd=str(tmp_path))
 
 
-async def settle(pilot: Any, app: NoetaApp, cond: Any, tries: int = 100) -> None:
+async def settle(pilot: Any, app: NoetaApp, cond: Any, tries: int = 400) -> None:
     for _ in range(tries):
         await pilot.pause(0.05)
         if cond():

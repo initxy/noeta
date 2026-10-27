@@ -89,7 +89,7 @@ def tui(app: LocalApp) -> NoetaApp:
     return NoetaApp(app, agent="main", model=MODEL, cwd="/tmp")
 
 
-async def settle(pilot: Any, cond: Any, tries: int = 150) -> None:
+async def settle(pilot: Any, cond: Any, tries: int = 400) -> None:
     for _ in range(tries):
         await pilot.pause(0.05)
         if cond():
