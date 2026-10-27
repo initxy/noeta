@@ -76,6 +76,8 @@ class NoetaApp(App[None]):
         self.calls: dict[str, ToolCall] = {}
         self.stream: MarkdownStream | None = None
         self.streamed_text = False
+        #: A delta is taken off the queue but not yet written.
+        self._pumping = False
         self.busy = False
         self.usage = Usage()
         self.context_tokens = 0
@@ -199,13 +201,17 @@ class NoetaApp(App[None]):
     async def _pump_deltas(self) -> None:
         while True:
             delta = await self._deltas.get()
-            if self.stream is None:
-                widget = AssistantMessage("")
-                await self.query_one("#transcript").mount(widget)
-                self.query_one("#transcript").anchor()
-                self.stream = Markdown.get_stream(widget)
-            self.streamed_text = True
-            await self.stream.write(delta.text)
+            self._pumping = True
+            try:
+                if self.stream is None:
+                    widget = AssistantMessage("")
+                    await self.query_one("#transcript").mount(widget)
+                    self.query_one("#transcript").anchor()
+                    self.stream = Markdown.get_stream(widget)
+                self.streamed_text = True
+                await self.stream.write(delta.text)
+            finally:
+                self._pumping = False
 
     async def _end_stream(self) -> None:
         if self.stream is not None:
@@ -233,7 +239,9 @@ class NoetaApp(App[None]):
                     await transcript.mount(UserMessage(item.body.message.text))
                     self.busy = True
         elif isinstance(ev, ModelReplied):
-            while not self._deltas.empty():
+            # Every delta written first (one taken off the queue may still be
+            # mounting its widget), or the reply would be shown twice.
+            while not self._deltas.empty() or self._pumping:
                 await asyncio.sleep(0.01)
             await self._end_stream()
             msg = ev.response.message

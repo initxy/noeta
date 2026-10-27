@@ -300,17 +300,22 @@ class Skills(Extension):
         if not messages:
             return
         state = view.ext_state(self.name) or {}
-        if not state.get("listings") and not any(m.text.lstrip().startswith("/")
-                                                 for m in messages):
-            return
         env = task_env(view.env, view.state.config)
         registry = await self.registry(env)
+        # Skills installed since the last listing are announced with the
+        # person's next message (the first listing, and with it the
+        # ``skill`` tool, when the task started with none).
         if state.get("listings"):
             announced = self.announced(state)
             lines = listing_lines(registry, budget_tokens=self._budget(view))
             added = [(n, line) for n, line in lines if n not in announced]
             if added:
                 self._record_listing(view, added, first=False)
+        else:
+            lines = listing_lines(registry, budget_tokens=self._budget(view),
+                                  rank=await self._rank(view))
+            if lines:
+                self._record_listing(view, lines, first=True)
         for message in messages:
             m = re.match(r"/([a-z0-9][a-z0-9-]*)(?:\s|$)", message.text.lstrip())
             desc = registry.get(m.group(1)) if m else None

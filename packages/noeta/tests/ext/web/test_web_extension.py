@@ -277,3 +277,44 @@ async def test_webfetch_model_names_the_digest_model(store: SqliteStore,
     await client.create("a", "go", config={"cwd": str(tmp_path)})
     await rt.run_until_idle()
     assert len(provider.requests) == 3
+
+
+async def test_another_digest_model_gets_none_of_the_main_headers(
+        store: SqliteStore, tmp_path: Path) -> None:
+    seen: list[dict[str, str]] = []
+
+    def digest_reply(request: ModelRequest) -> ModelResponse:
+        seen.append(dict(request.headers))
+        return reply("ok")
+
+    provider = ScriptedProvider([reply("", ("WebFetch", {"url": "https://e.com",
+                                                         "prompt": "p"})),
+                                 digest_reply, reply("done")])
+
+    class Headers(Extension):
+        name = "headers"
+
+        async def before_model(self, view: Any, request: ModelRequest) -> ModelRequest:
+            import msgspec
+
+            return msgspec.structs.replace(request, headers={"authorization": "Bearer gw"})
+
+    agent = Agent(name="a", model="m", extensions=[
+        Headers(), Web(fetch_transport=FakeFetch(), webfetch_model="other-vendor")])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 sleep=_no_sleep)
+    await Client(store).create("a", "go", config={"cwd": str(tmp_path)})
+    await rt.run_until_idle()
+    assert seen == [{}]
+
+
+def test_per_task_bindings_are_bounded() -> None:
+    from noeta.ext.web import TASKS_KEPT
+    from noeta.tools.base import ToolContext
+
+    web = Web(fetch_transport=FakeFetch())
+    for i in range(TASKS_KEPT + 10):
+        ctx = ToolContext(task_id=f"t{i}", call_id="c", env=None,  # type: ignore[arg-type]
+                          state={}, record=lambda *_: None)
+        web._cache_for(ctx)
+    assert len(web._caches) == TASKS_KEPT and "t0" not in web._caches
