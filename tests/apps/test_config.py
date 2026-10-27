@@ -70,4 +70,6 @@ def test_from_settings_applies_the_tables(home: Path) -> None:
     [memory] = [e for e in agents["main"].extensions if e.name == "memory"]
     # The front end's root, with config.toml's arguments laid over it.
     assert memory.root == str(home / "memory") and memory.read_only  # type: ignore[attr-defined]
-    assert "mcp" not in names["main"]  # nothing configured, no MCP
+    # MCP is on: its servers come from settings.json and consented .mcp.json.
+    [mcp] = [e for e in agents["main"].extensions if e.name == "mcp"]
+    assert mcp._settings_files == (str(home / "settings.json"),)  # type: ignore[attr-defined]

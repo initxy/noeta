@@ -124,7 +124,8 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
                   own_tasks_only: bool = False, **runtime_kw: Any) -> LocalApp:
     """The default agents on the configured store, model and provider, with
     the user's memory (``~/.noeta/memory``), prompt overrides
-    (``~/.noeta/prompts``), hooks (``~/.noeta/settings.json``), agent files
+    (``~/.noeta/prompts``), hooks and MCP servers (``~/.noeta/settings.json``,
+    and the ``.mcp.json`` servers it consents to), agent files
     (``~/.noeta/agents``, then ``<cwd>/.noeta/agents``) and the plugin
     settings of ``config.toml``; ``plugins`` (the front end's own) goes over
     those. Front ends (``-p``, ``acp``, the TUI) pass ``own_tasks_only`` so
@@ -141,7 +142,8 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
     table = merge_plugin_settings(
         {"memory": {"root": str(HOME / "memory")},
-         "hooks": {"settings_files": [str(HOME / "settings.json")]}},
+         "hooks": {"settings_files": [str(HOME / "settings.json")]},
+         "mcp": {"settings_files": [str(HOME / "settings.json")], "project": True}},
         settings.plugins, plugins or {})
     agents = default_agents(settings.model, plugins=table, add=settings.add_plugins,
                             extra_files=files)

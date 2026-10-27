@@ -179,11 +179,9 @@ def main(argv: list[str] | None = None) -> None:
     cwd = os.path.abspath(args.cwd or os.getcwd())
     if args.command == "acp":
         from noeta.apps.acp import EditorServers, serve_stdio
-        from noeta.plugins.mcp import Mcp
-
         s = _settings(args)
         servers = EditorServers()
-        asyncio.run(serve_stdio(_app(s, cwd=cwd, plugins={"mcp": Mcp(servers)},
+        asyncio.run(serve_stdio(_app(s, cwd=cwd, plugins={"mcp": {"servers": servers}},
                                      own_tasks_only=True),
                                 model=s.model, servers=servers))
         return

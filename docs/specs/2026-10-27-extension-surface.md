@@ -49,7 +49,7 @@ nothing; the third-party path is tested only with a monkeypatched entry point.
 
 - [x] One plugin table in `build_agents` / `default_agents`; `config.toml` `[plugins.<name>]`
       and `[agents.<name>] add_plugins`; `from_settings` merges front end, config and caller
-- [ ] MCP servers from `~/.noeta/settings.json` and consented `.mcp.json` for the CLI and TUI
+- [x] MCP servers from `~/.noeta/settings.json` and consented `.mcp.json` for the CLI and TUI
 - [ ] Plugin slash commands reachable from the TUI and ACP (or the interface removed)
 - [ ] An example plugin package under `examples/`, installed and run in CI
 - [ ] README / CONTEXT updated
@@ -71,3 +71,6 @@ nothing; the third-party path is tested only with a monkeypatched entry point.
 
 - 2026-10-27: step 1 done; `make check` 1342 passed. Provider entry-point shadowing fixed on the
   way (`tests/core/test_registry.py`).
+- 2026-10-27: step 2 done; `make check` 1345 passed. One run failed
+  `test_tui_drops_a_failed_attempts_output` under load (44 s run); 6 full runs and 24 concurrent
+  single runs did not reproduce it. Left as is.

@@ -204,7 +204,7 @@ class _Turn:
 class EditorServers:
     """MCP servers an editor named for each session. Kept in memory only:
     their env and headers are credentials and never enter the task log. Pass
-    it to ``Mcp(servers=...)``."""
+    it as the ``mcp`` plugin's ``servers``."""
 
     def __init__(self) -> None:
         self.by_task: dict[str, list[Any]] = {}
@@ -214,10 +214,11 @@ class EditorServers:
 
     def add(self, task_id: str, servers: Iterable[Any]) -> None:
         from noeta.plugins.mcp import McpServer
+        from noeta.plugins.mcp.settings import alias_for
 
         converted = []
         for s in servers:
-            alias = "".join(c if c.isalnum() or c in "_-" else "_" for c in s.name.lower())[:32]
+            alias = alias_for(s.name)
             given = getattr(s, "env", None) or getattr(s, "headers", None) or []
             pairs = {p.name: p.value for p in given}
             if getattr(s, "command", None):

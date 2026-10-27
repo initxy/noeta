@@ -44,6 +44,7 @@ from noeta.plugins.mcp.config import (
 )
 from noeta.plugins.mcp.pool import McpPool, default_pool
 from noeta.plugins.mcp.results import render_result
+from noeta.plugins.mcp.settings import read_servers
 from noeta.plugins.mcp.tools import MCP_CALL_TOOL, McpCallTool, McpTool, ToolSearchTool, route_call
 
 __all__ = ["Mcp", "ServersFn"]
@@ -72,13 +73,21 @@ class Mcp(Extension):
 
     ``pool``: the connection pool (default: one per worker process and event
     loop, idle connections closed after 30 minutes).
+
+    ``settings_files``: settings files whose ``mcpServers`` are added, in
+    Claude Code's format (:mod:`noeta.plugins.mcp.settings`), read on the
+    worker each pick-up; with ``project`` also the task's ``<cwd>/.mcp.json``
+    servers those settings consent to. ``servers`` wins over both on an alias.
     """
 
     name = "mcp"
 
     def __init__(self, servers: Servers | ServersFn = (), *,
-                 scope: str | ScopeFn | None = None, pool: McpPool | None = None) -> None:
+                 scope: str | ScopeFn | None = None, pool: McpPool | None = None,
+                 settings_files: Sequence[str] = (), project: bool = False) -> None:
         self._servers = servers
+        self._settings_files = tuple(settings_files)
+        self._project = project
         self._scope = scope
         self._pool = pool
         #: task id -> {alias: server}, resolved at pick-up (memory only).
@@ -197,6 +206,7 @@ class Mcp(Extension):
                 servers = await got if inspect.isawaitable(got) else got
             scope = self._scope
             self._scopes[view.task_id] = scope(view) if callable(scope) else scope
+            servers = [*servers, *await self._from_files(view)]
         except Exception:
             # Keep the recorded tool set; its calls fail until a pick-up
             # resolves the servers again.
@@ -207,6 +217,13 @@ class Mcp(Extension):
             known.setdefault(s.alias, s)  # a duplicate alias is ignored
         self._known[view.task_id] = known
         return True
+
+    async def _from_files(self, view: TaskView) -> list[McpServer]:
+        if not self._settings_files and not self._project:
+            return []
+        cwd = view.state.config.get("cwd")
+        dirs = [str(cwd)] if self._project and cwd else []
+        return await asyncio.to_thread(read_servers, self._settings_files, dirs)
 
     async def refresh(self, view: TaskView) -> None:
         """List every server now and record the tool set if it changed."""
