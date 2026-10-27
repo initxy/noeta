@@ -280,7 +280,7 @@ class Noeta(BaseInstalledAgent):
         effort_arg = f"--effort {shlex.quote(_EFFORT)} " if _EFFORT else ""
         command = (
             f'NOETA_BIN=$(cat {shlex.quote(_REMOTE_BIN_MARKER)} 2>/dev/null || echo noeta); '
-            f'"$NOETA_BIN" -p {shlex.quote(instruction)} --json '
+            f'"$NOETA_BIN" -p {shlex.quote(instruction)} --json --permission-mode bypassPermissions '
             f"--cwd {cwd_arg} "
             f"--model {shlex.quote(model)} "
             f"{effort_arg}"

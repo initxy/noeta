@@ -30,6 +30,9 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--json", action="store_true", help="with -p: stream events as JSON lines")
     ap.add_argument("--model")
     ap.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"))
+    ap.add_argument("--permission-mode", default=None,
+                    choices=("default", "acceptEdits", "bypassPermissions"),
+                    help="ask before risky tools (default), let edits through, or never ask")
     ap.add_argument("--provider", choices=("anthropic", "openai_compat", "openai_responses"))
     ap.add_argument("--base-url")
     ap.add_argument("--store", help="sqlite:///path or postgres://... (default ~/.noeta/tasks.db)")
@@ -59,13 +62,14 @@ def _settings(args: argparse.Namespace) -> Settings:
 
 def _app(s: Settings, **runtime_kw: Any) -> Any:
     from noeta.local import LocalApp
-    from noeta.presets import main_agent
+    from noeta.presets import default_agents
 
-    return LocalApp(open_store(s.store_url), [main_agent(s.model)], s.make_provider(),
+    return LocalApp(open_store(s.store_url), default_agents(s.model), s.make_provider(),
                     **runtime_kw)
 
 
-async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool) -> int:
+async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool,
+                      permission_mode: str | None) -> int:
     import msgspec
 
     from noeta.events import ModelReplied, TaskEnded, Waiting
@@ -75,6 +79,8 @@ async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool) -> i
         config: dict[str, Any] = {"cwd": cwd, "model": s.model}
         if s.effort:
             config["effort"] = s.effort
+        if permission_mode:
+            config["permission_mode"] = permission_mode
         tid = await app.client.create("main", prompt, config=config)
         usage = Usage()
 
@@ -159,12 +165,14 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.prompt is not None:
         sys.exit(asyncio.run(_print_mode(_settings(args), args.prompt, cwd=cwd,
-                                         as_json=args.json)))
+                                         as_json=args.json,
+                                         permission_mode=args.permission_mode)))
     try:
         from noeta.tui import run_tui
     except ImportError:
         sys.exit("noeta: the terminal UI needs the tui extra: pip install 'noeta[tui]'")
-    run_tui(_settings(args), cwd=cwd, resume=args.resume, server=args.server)
+    run_tui(_settings(args), cwd=cwd, resume=args.resume, server=args.server,
+            permission_mode=args.permission_mode)
 
 
 if __name__ == "__main__":

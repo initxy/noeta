@@ -76,8 +76,8 @@ MODELS = parse_args(sys.argv[1:])
 cols = {tag: merged_verdicts(tag, reruns) for tag, _, reruns in MODELS}
 
 labels = [lbl for _, lbl, _ in MODELS]
-w = max(len(l) for l in labels)
-print(f"{'task':32s} " + " ".join(f"{l:>{w}}" for l in labels))
+w = max(len(lbl) for lbl in labels)
+print(f"{'task':32s} " + " ".join(f"{lbl:>{w}}" for lbl in labels))
 print("-" * (34 + (w + 1) * len(labels)))
 for t in TASKS:
     cells = [cols[tag].get(t, "—") for tag, _, _ in MODELS]

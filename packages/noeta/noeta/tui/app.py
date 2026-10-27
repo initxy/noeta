@@ -64,13 +64,14 @@ class NoetaApp(App[None]):
     ]
 
     def __init__(self, local: LocalApp | Any, *, agent: str, model: str, cwd: str,
-                 resume: str | None = None) -> None:
+                 resume: str | None = None, permission_mode: str | None = None) -> None:
         super().__init__()
         self.local = local
         self.agent = agent
         self.model = model
         self.cwd = cwd
         self.resume = resume
+        self.permission_mode = permission_mode
         self.task_id = ""
         self.calls: dict[str, ToolCall] = {}
         self.stream: MarkdownStream | None = None
@@ -114,8 +115,10 @@ class NoetaApp(App[None]):
     # ------------------------------------------------------------ tasks
 
     async def new_task(self) -> None:
-        tid = await self.local.client.create(self.agent, None,
-                                             config={"cwd": self.cwd, "model": self.model})
+        config: dict[str, Any] = {"cwd": self.cwd, "model": self.model}
+        if self.permission_mode:
+            config["permission_mode"] = self.permission_mode
+        tid = await self.local.client.create(self.agent, None, config=config)
         await self.open_task(tid)
 
     async def open_task(self, task_id: str) -> None:

@@ -20,7 +20,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 
 
 def _instance(task_key: str) -> str:

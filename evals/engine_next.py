@@ -17,7 +17,7 @@ from noeta.agent import Agent
 from noeta.client import Client
 from noeta.events import ModelReplied, TaskEnded, ToolFinished
 from noeta.execenv.local import LocalExecEnv
-from noeta.presets import main_agent
+from noeta.presets import default_agents
 from noeta.providers import provider_for
 from noeta.providers.base import Provider
 from noeta.runner import Runtime
@@ -64,14 +64,16 @@ def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
-async def _drive(cfg: EvalConfig, agent: Agent, goal: str, ws: Path, root: Path,
+async def _drive(cfg: EvalConfig, agents: list[Agent], goal: str, ws: Path, root: Path,
                  timeout_s: float) -> tuple[list[Any], Optional[str], str]:
     store = SqliteStore(str(root / "tasks.db"))
     provider = _provider(cfg.provider)
-    rt = Runtime(store=store, agents={agent.name: agent}, provider_for=lambda _m: provider,
+    agent = agents[0]
+    rt = Runtime(store=store, agents={a.name: a for a in agents}, provider_for=lambda _m: provider,
                  env_for=lambda _s: LocalExecEnv(str(ws)), spill_root=str(root / "spill"))
     client = Client(store)
-    tid = await client.create(agent.name, goal, config={"cwd": str(ws), "model": cfg.model})
+    tid = await client.create(agent.name, goal, config={
+        "cwd": str(ws), "model": cfg.model, "permission_mode": "bypassPermissions"})
     error: Optional[str] = None
     try:
         await asyncio.wait_for(rt.run_until_idle(), timeout_s)
@@ -100,8 +102,8 @@ def run_trial(
     kw: dict[str, Any] = {"one_shot": True, "max_steps_per_turn": _MAX_STEPS_PER_TURN}
     if cfg.system_prompt is not None:
         kw["system_prompt"] = cfg.system_prompt
-    agent = main_agent(cfg.model, **kw)
-    events, error, status = _run(_drive(cfg, agent, goal, ws, root, timeout_s))
+    agents = default_agents(cfg.model, **kw)
+    events, error, status = _run(_drive(cfg, agents, goal, ws, root, timeout_s))
 
     batches: list[list[Any]] = []
     results: dict[str, Any] = {}
