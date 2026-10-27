@@ -7,12 +7,22 @@ import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
-from noeta.events import Event, ExtensionRecorded, ToolFinished, ToolStarted, Waiting
+from noeta.events import (
+    Event,
+    ExtensionRecorded,
+    InboxKind,
+    Say,
+    TaskCreated,
+    ToolFinished,
+    ToolStarted,
+    Waiting,
+)
 from noeta.ext.base import Allow, Ask, Deny, Gate, Rewrite, TaskView
+from noeta.loop.state import CORE
 from noeta.runner import texts
-from noeta.store.base import Patch
+from noeta.store.base import NewTask, Patch, Post
 from noeta.tools.base import Tool, ToolContext, ToolOutput
-from noeta.types import Text, ToolResult, ToolUse
+from noeta.types import Message, Text, ToolResult, ToolUse, user
 
 if TYPE_CHECKING:
     from noeta.runner.task import TaskRun
@@ -92,22 +102,44 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     return True
 
 
-async def _run_one(run: TaskRun, use: ToolUse, tool: Tool) -> None:
-    records: list[Event] = []
-
+def _context(run: TaskRun, use: ToolUse, records: list[Event],
+             creates: list[NewTask]) -> ToolContext:
     def record(extension: str, kind: str, data: Any) -> None:
         records.append(ExtensionRecorded(extension=extension, kind=kind, data=data))
 
-    ctx = ToolContext(task_id=run.task_id, call_id=use.id, env=run.rt.env_for(run.state),
-                      state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root)
-    try:
-        output = await tool.run(use.input, ctx)
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:  # a tool bug becomes an error result, not a dead task
-        log.exception("tool %s failed", use.name)
-        output = ToolOutput(content=[Text(text=f"{type(exc).__name__}: {exc}")], is_error=True)
+    def spawn(agent: str, prompt: str | Message, *, config: dict[str, Any] | None = None,
+              background: bool = False, queue: str = "default") -> str:
+        child_id = f"{run.task_id}.{use.id}.{len(creates) + 1}"
+        message = user(prompt) if isinstance(prompt, str) else prompt
+        creates.append(NewTask(
+            task_id=child_id,
+            created=TaskCreated(agent=agent, config=dict(config or {}), parent_id=run.task_id,
+                                root_id=run.state.root_id or run.task_id),
+            queue=queue,
+            inbox=[Say(message=message)],
+        ))
+        records.append(ExtensionRecorded(extension=CORE, kind="spawned", data={"children": [
+            {"id": child_id, "call_id": use.id, "background": background}]}))
+        return child_id
+
+    async def post(body: InboxKind) -> None:
+        await run.store.post(Post(task_id=run.task_id, body=body))
+
+    return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
+                       state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
+                       spawn=spawn, post=post, root_id=run.state.root_id or run.task_id)
+
+
+async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[Event],
+                  creates: list[NewTask]) -> None:
     view = run.view()
+    if output.park is not None:
+        park = output.park
+        keys = park.keys or [use.id]
+        records.append(ExtensionRecorded(extension=CORE, kind="parked", data={
+            "call_id": use.id, "on": park.on, "keys": keys, "detail": park.detail}))
+        await run.append(records, creates=creates)
+        return
     for ext in run.exts:
         output = await ext.after_tool(view, use, output)
     meta = dict(output.meta)
@@ -115,4 +147,49 @@ async def _run_one(run: TaskRun, use: ToolUse, tool: Tool) -> None:
         meta["display"] = output.display
     finished = ToolFinished(result=ToolResult(call_id=use.id, content=output.content,
                                               is_error=output.is_error), meta=meta)
-    await run.append([*records, *view.pending, finished])
+    await run.append([*records, *view.pending, finished], creates=creates)
+
+
+async def _run_one(run: TaskRun, use: ToolUse, tool: Tool) -> None:
+    records: list[Event] = []
+    creates: list[NewTask] = []
+    ctx = _context(run, use, records, creates)
+    try:
+        output = await tool.run(use.input, ctx)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # a tool bug becomes an error result, not a dead task
+        log.exception("tool %s failed", use.name)
+        output = ToolOutput(content=[Text(text=f"{type(exc).__name__}: {exc}")], is_error=True)
+        creates.clear()
+    await _finish(run, use, output, records, creates)
+
+
+def _outcome(run: TaskRun, parked: dict[str, Any], call_id: str) -> Any:
+    if parked.get("on") == "question":
+        return run.state.answers.get(call_id)
+    return {k: run.state.children.get(k) for k in parked.get("keys") or []}
+
+
+async def resume_calls(run: TaskRun, call_ids: Sequence[str], *, withdrawn: bool = False) -> None:
+    """Finish parked calls with what arrived (or, ``withdrawn``, with nothing:
+    the turn was stopped)."""
+    tools = {t.name: t for t in run.tools(run.view())}
+    for c in [c for c in run.state.calls if c.use.id in call_ids and c.parked]:
+        records: list[Event] = []
+        creates: list[NewTask] = []
+        tool = tools.get(c.use.name)
+        outcome = None if withdrawn else _outcome(run, c.parked or {}, c.use.id)
+        resume = getattr(tool, "resume", None)
+        if resume is None:
+            output = ToolOutput(content=[Text(text=texts.STOPPED_CALL_ERROR)], is_error=True)
+        else:
+            try:
+                output = await resume(c.use.input, _context(run, c.use, records, creates), outcome)
+            except Exception as exc:
+                log.exception("tool %s resume failed", c.use.name)
+                output = ToolOutput(content=[Text(text=f"{type(exc).__name__}: {exc}")],
+                                    is_error=True)
+        if output.park is not None:  # a resume may not park again
+            output = ToolOutput(content=[Text(text="the call could not finish")], is_error=True)
+        await _finish(run, c.use, output, records, creates)

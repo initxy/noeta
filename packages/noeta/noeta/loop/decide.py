@@ -39,6 +39,19 @@ class StopTurn(Struct, tag="stop_turn"):
     call_ids: list[str]
 
 
+class ResumeCalls(Struct, tag="resume_calls"):
+    """Parked calls whose answer or children have arrived."""
+
+    call_ids: list[str]
+
+
+class WaitParked(Struct, tag="wait_parked"):
+    """Every open call is parked and nothing it waits for has arrived."""
+
+    on: str
+    ids: list[str]
+
+
 class WaitInput(Struct, tag="wait_input"):
     pass
 
@@ -54,7 +67,8 @@ class Idle(Struct, tag="idle"):
 
 
 Action = Union[
-    CallModel, Continue, RunCalls, Interrupted, FinalReport, StopTurn, WaitInput, End, Idle
+    CallModel, Continue, RunCalls, ResumeCalls, Interrupted, FinalReport, StopTurn,
+    WaitParked, WaitInput, End, Idle,
 ]
 
 
@@ -67,10 +81,19 @@ def next_action(state: TaskState, *, one_shot: bool, max_steps: int) -> Action:
         return StopTurn(call_ids=[c.use.id for c in state.open_calls])
     if state.calls:
         open_calls: list[Call] = state.open_calls
-        started = [c.use.id for c in open_calls if c.started]
+        started = [c.use.id for c in open_calls if c.started and not c.parked]
         if started:
             return Interrupted(call_ids=started)
-        return RunCalls(call_ids=[c.use.id for c in open_calls])
+        unstarted = [c.use.id for c in open_calls if not c.started]
+        if unstarted:
+            return RunCalls(call_ids=unstarted)
+        ready = [c.use.id for c in open_calls if state.parked_ready(c)]
+        if ready:
+            return ResumeCalls(call_ids=ready)
+        first = open_calls[0].parked or {}
+        on = str(first.get("on") or "question")
+        ids = [k for c in open_calls for k in ((c.parked or {}).get("keys") or [c.use.id])]
+        return WaitParked(on=on, ids=ids)
     if state.turn_open:
         if state.steps_in_turn >= max_steps:
             return FinalReport()

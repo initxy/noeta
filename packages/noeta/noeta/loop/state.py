@@ -39,6 +39,8 @@ class Call:
     use: ToolUse
     started: bool = False
     result: ToolResult | None = None
+    #: Set while the call waits (``{"on", "keys", "detail"}``).
+    parked: dict[str, Any] | None = None
 
 
 @dataclass
@@ -78,6 +80,8 @@ class TaskState:
     #: ``next_turn`` messages taken while a turn was open.
     queued: list[Message] = field(default_factory=list)
     answers: dict[str, Answer] = field(default_factory=dict)
+    #: Children this task spawned: id -> {"call_id", "background"}.
+    spawned: dict[str, dict[str, Any]] = field(default_factory=dict)
     children: dict[str, ChildEnded | None] = field(default_factory=dict)
     signals: list[TimerFired | External] = field(default_factory=list)
     waiting: Waiting | None = None
@@ -92,6 +96,19 @@ class TaskState:
     @property
     def open_calls(self) -> list[Call]:
         return [c for c in self.calls if c.result is None]
+
+    def parked_ready(self, call: Call) -> bool:
+        """Whether what a parked call waits for has arrived."""
+        p = call.parked or {}
+        if p.get("on") == "question":
+            return call.use.id in self.answers
+        if p.get("on") == "children":
+            return all(self.children.get(k) is not None for k in p.get("keys") or [])
+        return False
+
+    def live_children(self) -> list[str]:
+        """Spawned children that have not reported their end."""
+        return [c for c in self.spawned if self.children.get(c) is None]
 
     @property
     def last_answer(self) -> str:
@@ -165,6 +182,13 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
             state.calls = []
             state.held = []
             _close_turn(state, rec.seq)
+        if ev.extension == CORE and ev.kind == "parked":
+            for c in state.calls:
+                if c.use.id == ev.data["call_id"]:
+                    c.parked = {k: ev.data.get(k) for k in ("on", "keys", "detail")}
+        if ev.extension == CORE and ev.kind == "spawned":
+            for child in ev.data["children"]:
+                state.spawned[child["id"]] = child
         if ev.extension == CORE and ev.kind == "turn_failed":
             data = ev.data if isinstance(ev.data, dict) else {}
             reason, detail = data.get("reason", "failed"), data.get("detail", "")

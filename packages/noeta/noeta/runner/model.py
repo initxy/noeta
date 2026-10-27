@@ -89,6 +89,11 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
                                                on_delta, sleep=run.rt.sleep, on_retry=on_retry)
     except ContextOverflow as exc:
         await asyncio.gather(*pending, return_exceptions=True)
+        overflow_view = run.view()
+        for ext in run.exts:
+            if await ext.on_context_overflow(overflow_view):
+                await run.flush(overflow_view)
+                return True  # room was made; the next boundary calls again
         return await run.fail_turn(texts.CONTEXT_OVERFLOW, _detail(exc))
     except ModelError as exc:
         await asyncio.gather(*pending, return_exceptions=True)

@@ -61,6 +61,7 @@ class TaskRun:
         self._step: asyncio.Task[Any] | None = None
         self._lost = False
         self._write_lock = asyncio.Lock()
+        self._env: Any = None
 
     # ------------------------------------------------------------ lifecycle
 
@@ -181,9 +182,25 @@ class TaskRun:
                     await ext.on_event(view, rec)
                 except Exception:
                     log.exception("extension %s on_event failed", ext.name)
+        await self.flush(view)
 
     def view(self) -> TaskView:
-        return TaskView(state=self.state)
+        return TaskView(state=self.state, complete=self.complete, env=self.env())
+
+    def env(self) -> Any:
+        """The task's ExecEnv, made once per run (after the log is folded, so
+        the task's config — its cwd — is known)."""
+        if self._env is None and self.agent is not None:
+            self._env = self.rt.env_for(self.state)
+        return self._env
+
+    async def complete(self, request: Any) -> Any:
+        """A model call for an extension (a summary, a judge): retried like
+        the main call, not recorded as a step."""
+        from noeta.providers.retry import complete_with_retries
+
+        return await complete_with_retries(self.rt.provider_for(request.model), request,
+                                           sleep=self.rt.sleep)
 
     async def flush(self, view: TaskView) -> None:
         if view.pending:
@@ -235,10 +252,17 @@ class TaskRun:
                                for i in action.call_ids])
             return True
         if isinstance(action, decide.StopTurn):
-            events: list[Event] = [self.error_result(i, texts.STOPPED_CALL_ERROR)
-                                   for i in action.call_ids]
-            events.append(ExtensionRecorded(extension=CORE, kind="turn_stopped"))
-            await self.append(events)
+            await self._stop_turn(action.call_ids)
+            return True
+        if isinstance(action, decide.WaitParked):
+            await self.append([Waiting(on=action.on, ids=action.ids)],  # type: ignore[arg-type]
+                              patch=Patch(status="waiting", waiting_on=action.on,
+                                          inbox_read_seq=self.state.inbox_read))
+            return False
+        if isinstance(action, decide.ResumeCalls):
+            from noeta.runner.calls import resume_calls
+
+            await self._guarded(resume_calls(self, action.call_ids))
             return True
         if isinstance(action, decide.Continue):
             return await self.continue_after_cap()
@@ -270,8 +294,25 @@ class TaskRun:
         if items:
             await self.append([InputTaken(items=items, through=items[-1].seq)])
 
+    async def _stop_turn(self, call_ids: Sequence[str]) -> None:
+        from noeta.runner.calls import resume_calls
+
+        parked = [c for c in self.state.calls if c.use.id in call_ids and c.parked]
+        children = [k for c in parked if (c.parked or {}).get("on") == "children"
+                    for k in (c.parked or {}).get("keys") or []]
+        if parked:
+            await resume_calls(self, [c.use.id for c in parked], withdrawn=True)
+        rest = [i for i in call_ids if i not in {c.use.id for c in parked}]
+        events: list[Event] = [self.error_result(i, texts.STOPPED_CALL_ERROR) for i in rest]
+        events.append(ExtensionRecorded(extension=CORE, kind="turn_stopped"))
+        await self.append(events, posts=[
+            Post(task_id=k, body=Cancel(reason="the parent's turn was stopped"))
+            for k in children if self.state.children.get(k) is None])
+
     async def end(self, status: str, answer: str = "", error: str = "") -> None:
-        posts: list[Post] = []
+        # Children die with their parent.
+        posts: list[Post] = [Post(task_id=c, body=Cancel(reason=f"parent task {status}"))
+                             for c in self.state.live_children()]
         if self.state.parent_id:
             posts.append(Post(
                 task_id=self.state.parent_id,

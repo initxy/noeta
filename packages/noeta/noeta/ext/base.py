@@ -9,13 +9,14 @@ optional. An extension keeps durable state by recording
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Union
 
 from noeta.events import Compacted, Event, ExtensionRecorded, Recorded
+from noeta.execenv.base import ExecEnv
 from noeta.tools.base import Tool, ToolOutput
-from noeta.types import Message, ModelRequest, Struct, ToolUse
+from noeta.types import Message, ModelRequest, ModelResponse, Struct, ToolUse
 
 if TYPE_CHECKING:
     from noeta.loop.state import TaskState
@@ -75,6 +76,11 @@ class TaskView:
     runner right after the hook returns."""
 
     state: TaskState
+    #: Call the model outside the step (retried, not recorded as a step).
+    complete: Callable[[ModelRequest], Awaitable[ModelResponse]] | None = None
+    #: The task's execution environment (files, commands), when the runner
+    #: has one.
+    env: ExecEnv | None = None
     pending: list[Event] = field(default_factory=list)
 
     @property
@@ -135,7 +141,14 @@ class Extension:
         return output
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
-        """Observe each appended event (metrics, audit, UI bridges)."""
+        """Observe each appended event (metrics, audit, UI bridges). Records
+        made here are appended right after."""
+
+    async def on_context_overflow(self, view: TaskView) -> bool:
+        """The model refused the request as too long. Return ``True`` after
+        making room (recording a compaction); the call is then retried.
+        When no extension does, the turn fails with ``context_overflow``."""
+        return False
 
 
 class ToolSet(Extension):

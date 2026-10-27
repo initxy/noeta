@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import msgspec
 
@@ -12,13 +12,27 @@ from noeta.execenv.base import ExecEnv
 from noeta.types import Display, Image, Struct, Text
 
 
+class Park(Struct):
+    """Returned by a tool that must wait before it has a result: for the
+    user's answer to a question (``on="question"``, keyed by the call id) or
+    for child tasks it spawned (``on="children"``, keyed by their ids). The
+    task waits; when the condition is met the runner calls the tool's
+    ``resume`` with what arrived."""
+
+    on: Literal["question", "children"]
+    keys: list[str] = msgspec.field(default_factory=list)
+    detail: dict[str, Any] = msgspec.field(default_factory=dict)
+
+
 class ToolOutput(Struct):
-    content: list[Text | Image]
+    content: list[Text | Image] = msgspec.field(default_factory=list)
     is_error: bool = False
     #: Recorded with the result for front ends and extensions; never sent to
     #: the model.
     meta: dict[str, Any] = msgspec.field(default_factory=dict)
     display: Display | None = None
+    #: Set instead of a result when the call must wait (see ``Park``).
+    park: Park | None = None
 
 
 def text_output(text: str, *, is_error: bool = False, **meta: Any) -> ToolOutput:
@@ -37,6 +51,15 @@ class ToolContext:
     record: Callable[[str, str, Any], None]
     #: Directory for full outputs too large to return inline, or ``None``.
     spill_dir: str | None = None
+    #: Stage a child task: ``spawn(agent, prompt, config=..., background=...)``
+    #: returns its id. The child is created atomically with this call's
+    #: record, so a retried call never makes a second child.
+    spawn: Callable[..., str] | None = None
+    #: Post to this task's own inbox from outside a step (a background job
+    #: finishing). Wakes the task if it is waiting.
+    post: Callable[[Any], Awaitable[None]] | None = None
+    #: The root task's id (background jobs notify the spawner, then the root).
+    root_id: str = ""
     extras: dict[str, Any] = field(default_factory=dict)
 
 
@@ -54,3 +77,13 @@ class Tool(Protocol):
     clearable: bool
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput: ...
+
+
+class Resumable(Protocol):
+    """A tool that parks implements ``resume``. ``outcome`` is the
+    ``Answer`` for a question, or ``{child_id: ChildEnded}`` for children;
+    ``None`` means the wait was withdrawn (the turn was stopped)."""
+
+    async def resume(
+        self, input: dict[str, Any], ctx: ToolContext, outcome: Any
+    ) -> ToolOutput: ...
