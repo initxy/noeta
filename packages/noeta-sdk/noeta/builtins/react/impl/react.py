@@ -487,6 +487,9 @@ class ReActPolicy:
             return FailDecision(
                 reason="react_max_steps_exceeded", retryable=False
             )
+        deferred_spawn = self._deferred_spawn_decision(view)
+        if deferred_spawn is not None:
+            return deferred_spawn
         if self._step_limit is not None and ctx.steps_in_turn >= self._step_limit:
             return self._step_limit_decision(ctx, view)
         state = self._baseline_state(ctx.task_id)
@@ -541,6 +544,58 @@ class ReActPolicy:
                 ctx, view, state, reason="overflow", estimated=estimated
             )
         return self._response_to_decision(response, view)
+
+    def _deferred_spawn_decision(self, view: View) -> Optional[Decision]:
+        """Spawn the ``Task`` calls a mixed response left for after its
+        ordinary calls, or ``None``.
+
+        A response carrying ``Task`` plus ordinary tool calls runs the ordinary
+        calls first (the delegation translate returns them alone); once all of
+        them are answered, the still-unanswered ``Task`` calls of that same
+        assistant turn are translated here into the spawn Decision, without a
+        model call — the request would carry tool_uses with no result. The
+        assistant turn is already recorded, so the Decision carries none. A
+        turn of only ``Task`` calls never lands here: it spawned directly.
+        """
+        history = view.rolling_history
+        answered: set[str] = set()
+        for index in range(len(history) - 1, -1, -1):
+            message = history[index]
+            if message.role != "assistant":
+                answered.update(
+                    b.call_id
+                    for b in message.content
+                    if isinstance(b, ToolResultBlock)
+                )
+                continue
+            tool_uses = [b for b in message.content if isinstance(b, ToolUseBlock)]
+            spawns = [
+                b
+                for b in tool_uses
+                if b.tool_name == SPAWN_SUBAGENT_TOOL and b.call_id not in answered
+            ]
+            others = [b for b in tool_uses if b.tool_name != SPAWN_SUBAGENT_TOOL]
+            if not spawns or not others:
+                return None
+            if any(b.call_id not in answered for b in others):
+                return None
+            decision = translate_control_tool(
+                LLMResponse(stop_reason="tool_use", content=list(spawns)),
+                Message(role="assistant", content=list(spawns)),
+                specs=self._control_translate_specs,
+                content_store=self._content_store,
+                view=view,
+            )
+            if decision is None:
+                return None
+            if isinstance(decision, StatePatchDecision):
+                return dc_replace(
+                    decision, messages_before=(), assistant_thinking=()
+                )
+            return dc_replace(
+                decision, assistant_message=None, assistant_thinking=()
+            )
+        return None
 
     def _step_limit_decision(self, ctx: StepContext, view: View) -> Decision:
         """Wind the turn up at ``step_limit``: the normal request plus a

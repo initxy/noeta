@@ -25,6 +25,7 @@ from noeta.protocols.decisions import (
     SpawnSubtaskDecision,
     SpawnSubtasksDecision,
     StatePatchDecision,
+    ToolCallsDecision,
 )
 from noeta.protocols.hooks import GuardContext, ProposedSpawnSubtask
 from noeta.protocols.messages import (
@@ -220,7 +221,7 @@ def test_two_spawns_sequential_when_escape_valve_set(monkeypatch) -> None:
     assert d.concurrent is False
 
 
-def test_spawn_mixed_with_nonspawn_returns_recoverable_ack() -> None:
+def test_spawn_mixed_with_nonspawn_runs_the_ordinary_calls_first() -> None:
     resp = LLMResponse(
         stop_reason="tool_use",
         content=[
@@ -231,23 +232,11 @@ def test_spawn_mixed_with_nonspawn_returns_recoverable_ack() -> None:
         usage=Usage(uncached=1, output=1), raw={"id": "m"},
     )
     d = _decide(resp)
-    # Recoverable ack: task keeps running, model may retry.
-    assert isinstance(d, StatePatchDecision)
-    assert d.patch is None
-    assert len(d.messages_after) == 1
-    ack = d.messages_after[0]
-    assert len(ack.content) == 2
-    call_ids = sorted(b.call_id for b in ack.content)
-    assert call_ids == ["a", "b"]
-    for b in ack.content:
-        assert isinstance(b, ToolResultBlock)
-        assert b.success is False
-        # A failed ack carries its text once, on ``error`` (the renderer puts
-        # ``error`` ahead of ``output``, so filling both repeats it).
-        assert b.output == ""
-        assert "a response carrying Task may carry only Task calls" in (
-            b.error or ""
-        )
+    # The ordinary call runs now; the Task call spawns on the next step.
+    assert isinstance(d, ToolCallsDecision)
+    assert [c.call_id for c in d.calls] == ["b"]
+    assert d.assistant_message is not None
+    assert [b.call_id for b in d.assistant_message.content] == ["a", "b"]
 
 
 # ---------------------------------------------------------------------------
