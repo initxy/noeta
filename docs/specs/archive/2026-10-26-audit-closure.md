@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 created: 2026-10-26
 branch: fix/audit-closure-2026-10-26
 ---
@@ -18,6 +18,8 @@ blow the window it is meant to save, and a crash never re-runs a tool call that 
 - Goal auto-continue, a timer tool, a Stop hook, deadline / per-turn budgets (owner: next round).
 - The `make eval` harness — tracked in `2026-10-26-prompt-regression-eval.md`, done alongside.
 - Audit items not listed under Plan (P2s, MCP transport findings, memory/skill append-not-rewrite).
+- The Terminal-Bench rerun (owner stopped it after 5 of 40 tasks; the 1.0 rewrite benchmarks 1.0
+  against this build instead).
 
 ## Context
 
@@ -91,7 +93,6 @@ Line numbers are as of `adc2d1c`.
 - [x] D4 provider quirks (overflow markers, null args, stop+tool_calls, thinking provenance)
 - [x] D5 Bash head+tail without spill dir
 - [x] Integrate, `make check`, relevant `make e2e`, CHANGELOG, CONTEXT/ADR updates
-- [ ] Benchmark rerun on the integrated build
 
 ## Acceptance criteria
 
@@ -115,3 +116,4 @@ Line numbers are as of `adc2d1c`.
 2026-10-26 review (fresh context): 3 P1 at the seams — deferred Task spawned after a stop, idempotency key burned by a claim without a goal, recovery taking an approval batch's partial result message as complete — plus subtask cap not recovered in-request; fix in progress.
 2026-10-26 review fixes: a stopped/parked turn answers its deferred Task call and the deferred spawn never fires past a new message; a dead idempotency claim is claimed again (ADR-072); a kept batch is complete only when every call is answered (ADR-071). Not done: a delegated child that hits the attempt heartbeat cap still fails the root — the drain's state machine holds and releases each node's lease itself, so the worker recovery cannot be dropped in.
 2026-10-26 re-review: a dead claim no longer counts as a same-key holder (a retry losing to an unrelated turn is refused); a crash between a park's closing results and its notice still writes the notice. Left: theoretical double goal when a winner's seed fails into retry inside a dead-claim window (needs >10 s or clock skew).
+2026-10-27 benchmark rerun stopped by the owner after 5 of 40 tasks and moved out of scope; spec done, released as 0.6.42.
