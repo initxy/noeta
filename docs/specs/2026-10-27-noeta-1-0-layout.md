@@ -1,7 +1,7 @@
 ---
 status: active
 created: 2026-10-27
-branch: v1-layout
+branch: main
 ---
 
 # Noeta 1.0 layout: kernel, plugins, prompts, reminders
