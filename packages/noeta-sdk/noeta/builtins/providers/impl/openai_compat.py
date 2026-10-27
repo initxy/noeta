@@ -6,9 +6,10 @@ OpenRouter, LiteLLM, most middle-proxy gateways. Every loss of fidelity caused
 by that wire shape is contained to this file, so Engine and Policy only ever
 see Noeta-shape types. The provider pins no model: ``LLMRequest.model`` is
 forwarded per call, which is what lets one instance serve many models. Wire
-inconsistencies (a ``finish_reason`` that contradicts the ``tool_calls``
-array) raise rather than being papered over — ``RuntimeLLMClient`` is what
-turns an exception into ``stop_reason="error"``.
+inconsistencies (``finish_reason="tool_calls"`` with no ``tool_calls``) raise
+rather than being papered over; ``RuntimeLLMClient`` is what turns an exception
+into ``stop_reason="error"``. ``"stop"`` alongside tool calls is not one: several
+compatible servers send it, and it reads as a tool-use stop.
 """
 
 from __future__ import annotations
@@ -50,12 +51,16 @@ from noeta.builtins.providers.impl.codecs import (
     decode_tool_arguments,
     describe_http_error,
     encode_tool_arguments,
+    http_error_is_context_overflow,
     parse_retry_after,
     render_tool_result_body,
 )
 
 
 _API_KEY_ENV = "OPENAI_API_KEY"
+
+#: ``ThinkingBlock.provider`` for blocks this adapter produces.
+_PROVIDER = "openai_compat"
 
 _FINISH_REASON_MAP: dict[str, Literal["tool_use", "end_turn", "max_tokens", "error"]] = {
     "stop": "end_turn",
@@ -261,7 +266,7 @@ class OpenAICompatProvider:
             ) as http_response:
                 if http_response.status_code >= 400:
                     # Read the (small) error body while the stream is open, so
-                    # ``_is_context_overflow`` can still see the JSON.
+                    # ``http_error_is_context_overflow`` can still see the JSON.
                     http_response.read()
                     try:
                         http_response.raise_for_status()
@@ -371,10 +376,10 @@ class OpenAICompatProvider:
         tool_calls = message.get("tool_calls") or []
 
         if finish_reason == "stop" and tool_calls:
-            raise ValueError(
-                "inconsistent OpenAI response: finish_reason='stop' but "
-                f"tool_calls has {len(tool_calls)} entries"
-            )
+            # Some compatible servers (Gemini's OpenAI endpoint, older Ollama)
+            # report "stop" on a response that does call tools; the calls are
+            # what the model asked for, so it is a tool-use stop.
+            finish_reason = "tool_calls"
         if finish_reason == "tool_calls" and not tool_calls:
             raise ValueError(
                 "inconsistent OpenAI response: finish_reason='tool_calls' but "
@@ -394,12 +399,10 @@ class OpenAICompatProvider:
             content.append(TextBlock(text=text_value))
         for call in tool_calls:
             function = call.get("function") or {}
-            # Reading an empty arguments string as ``{}`` is this adapter's own
-            # convention (the shared codec only defaults ``None``), and
             # ``tool_call arguments`` is this adapter's own error vocabulary.
             try:
                 arguments = decode_tool_arguments(
-                    function.get("arguments") or "{}",
+                    function.get("arguments"),
                     error_label="tool_call arguments",
                 )
             except MalformedToolArgumentsError:
@@ -600,7 +603,7 @@ class _ChatStreamAccumulator:
 def _translate_http_error(exc: httpx.HTTPStatusError) -> Exception:
     """Map an OpenAI-shape HTTP status error into the neutral taxonomy.
 
-    429 and 5xx are retryable; every other 4xx is fatal. A 400 gets its body
+    429 and 5xx are retryable; every other 4xx is fatal. A 4xx gets its body
     sniffed first, because context overflow arrives as an ordinary bad request
     yet needs its own bucket — it is not retryable and the recovery a Policy
     drives is compaction.
@@ -615,27 +618,9 @@ def _translate_http_error(exc: httpx.HTTPStatusError) -> Exception:
         )
     if status >= 500:
         return TransientError(message)
-    if status == 400 and _is_context_overflow(response):
+    if http_error_is_context_overflow(response):
         return ContextOverflowError(message)
     return FatalError(message)
-
-
-def _is_context_overflow(response: httpx.Response) -> bool:
-    try:
-        body = response.json()
-    except (json.JSONDecodeError, ValueError):
-        return False
-    error = body.get("error") if isinstance(body, dict) else None
-    if not isinstance(error, dict):
-        return False
-    code = str(error.get("code") or "")
-    err_type = str(error.get("type") or "")
-    message = str(error.get("message") or "").lower()
-    return (
-        code == "context_length_exceeded"
-        or err_type == "context_length_exceeded"
-        or "maximum context length" in message
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -805,6 +790,10 @@ def _assistant_message_to_openai(
         if isinstance(block, TextBlock):
             text_parts.append(block.text)
         elif isinstance(block, ThinkingBlock):
+            # Reasoning another provider produced is never echoed back here;
+            # unknown provenance (recorded before ``provider`` existed) is.
+            if block.provider not in (None, _PROVIDER):
+                continue
             thinking_parts.append(block.text)
             if block.signature is not None:
                 signature = block.signature
@@ -868,11 +857,12 @@ def _extract_thinking(message: dict[str, Any]) -> Optional[ThinkingBlock]:
     signature_value = message.get("encrypted_reasoning")
     if not isinstance(text_value, str) or not text_value:
         if isinstance(signature_value, str) and signature_value:
-            return ThinkingBlock(text="", signature=signature_value)
+            return ThinkingBlock(text="", signature=signature_value, provider=_PROVIDER)
         return None
     return ThinkingBlock(
         text=text_value,
         signature=signature_value if isinstance(signature_value, str) else None,
+        provider=_PROVIDER,
     )
 
 
