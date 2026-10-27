@@ -2,6 +2,9 @@
 # Libraries live in packages/ (noeta-runtime / noeta-sdk); the test suite lives
 # at the repo root in tests/.
 members = ["packages/noeta-runtime", "packages/noeta-sdk"]
+# packages/noeta is the 1.0 rewrite: its own uv project and venv until cutover, because it
+# reuses import paths (noeta.client, noeta.tools) the 0.6 namespace packages also own.
+exclude = ["packages/noeta"]
 
 # The workspace-root pyproject is pytest's rootdir when running from the repo
 # root, so it owns the test config: ``testpaths`` pins collection to ``tests/``
@@ -42,6 +45,7 @@ mypy_path = [
     "$MYPY_CONFIG_FILE_DIR/packages/noeta-sdk",
 ]
 files = ["packages/noeta-runtime/noeta", "packages/noeta-sdk/noeta"]
+exclude = ["packages/noeta/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
