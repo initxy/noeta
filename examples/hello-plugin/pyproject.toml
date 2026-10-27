@@ -1,0 +1,18 @@
+[project]
+name = "noeta-hello"
+version = "0.1.0"
+description = "An example noeta plugin: one tool, one reminder, one slash command."
+requires-python = ">=3.11"
+dependencies = ["noeta"]
+
+# The one line that makes it a plugin: agent files and config.toml name it "hello".
+[project.entry-points."noeta.plugins"]
+hello = "noeta_hello:Hello"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Inside this repository: build against the checkout, not a published noeta.
+[tool.uv.sources]
+noeta = { path = "../..", editable = true }

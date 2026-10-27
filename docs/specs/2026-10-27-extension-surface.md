@@ -56,7 +56,7 @@ nothing; the third-party path is tested only with a monkeypatched entry point.
       and `[agents.<name>] add_plugins`; `from_settings` merges front end, config and caller
 - [x] MCP servers from `~/.noeta/settings.json` and consented `.mcp.json` for the CLI and TUI
 - [x] Plugin slash commands reachable from the TUI and ACP (or the interface removed)
-- [ ] An example plugin package under `examples/`, installed and run in CI
+- [x] An example plugin package under `examples/`, installed and run in CI
 - [ ] README / CONTEXT updated
 
 ## Acceptance criteria
