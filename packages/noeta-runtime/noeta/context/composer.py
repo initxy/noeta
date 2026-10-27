@@ -29,8 +29,11 @@ from noeta.protocols.messages import (
     ToolUseBlock,
 )
 from noeta.protocols.task import Task
-from noeta.protocols.token_estimate import estimate_messages_tokens
-from noeta.protocols.tool import Tool
+from noeta.protocols.token_estimate import (
+    estimate_blocks_tokens,
+    estimate_messages_tokens,
+)
+from noeta.protocols.tool import Tool, is_clearable
 from noeta.protocols.values import ContentRef
 from noeta.protocols.view import View, ViewSegment
 
@@ -246,6 +249,7 @@ class ThreeSegmentComposer:
         available_window: Optional[int] = None,
         microcompact_keep_recent: Optional[int] = None,
         microcompact_fraction: float = 0.5,
+        microcompact_batch_tokens: int = 20_000,
     ) -> None:
         if microcompact_keep_recent is not None and microcompact_keep_recent < 1:
             raise ValueError(
@@ -254,6 +258,8 @@ class ThreeSegmentComposer:
             )
         if not 0.0 < microcompact_fraction <= 1.0:
             raise ValueError("microcompact_fraction must be in (0, 1]")
+        if microcompact_batch_tokens < 1:
+            raise ValueError("microcompact_batch_tokens must be >= 1")
         self._system_prompt = system_prompt
         self._tools = dict(tools)
         self._content_store = content_store
@@ -300,12 +306,14 @@ class ThreeSegmentComposer:
         self._available_window = available_window
         # The count-based second valve (microcompaction). Once the request
         # reaches ``microcompact_fraction`` of ``available_window`` — read in
-        # the same unit as the relief-valve gate — every tool output older
-        # than the newest ``microcompact_keep_recent`` tool-result blocks is
-        # cleared, well before the water mark. ``None`` disables it; it also
-        # needs ``available_window`` (no window, no fraction of one).
+        # the same unit as the relief-valve gate — clearable tool outputs
+        # older than the newest ``microcompact_keep_recent`` clearable results
+        # are cleared in batches of at least ``microcompact_batch_tokens``
+        # estimated tokens, well before the water mark. ``None`` disables it;
+        # it also needs ``available_window`` (no window, no fraction of one).
         self._microcompact_keep_recent = microcompact_keep_recent
         self._microcompact_fraction = microcompact_fraction
+        self._microcompact_batch_tokens = microcompact_batch_tokens
         # Provider-visible **control** action schemas that are NOT executable
         # workspace tools (e.g. ``spawn_subagent``, which the policy translates
         # into a Decision and the ToolRuntime never invokes). They are appended
@@ -895,10 +903,12 @@ class ThreeSegmentComposer:
 
         A second, count-based valve (``microcompact_keep_recent``) opens at
         ``microcompact_fraction`` of the same window, read the same way: it
-        clears every tool output older than the newest N tool-result blocks,
-        with the same size floor, marker and cleared-output refs. The relief
-        valve still clears by token budget once the water mark is reached; a
-        block either valve selects is cleared.
+        clears the clearable outputs older than the newest N clearable results
+        in batches (``_microcompact_batch``), with the same size floor, marker
+        and cleared-output refs. The relief valve still clears by token budget
+        once the water mark is reached; a block either valve selects is
+        cleared. Either valve touches only results of tools that declare
+        themselves clearable (``_clearable_results``).
         """
         micro_armed = (
             self._microcompact_keep_recent is not None
@@ -944,9 +954,9 @@ class ThreeSegmentComposer:
         # against a FRACTION of the same window. Measured on a production
         # session, tool outputs were 72 % of the message bytes and the relief
         # valve only opened at 87 % of a 1M window — so the bulk rode every
-        # request for most of the session. Past the fraction only the newest
-        # ``keep_recent`` tool results stay verbatim; an older one the model
-        # needs again is a ``RecallHistory`` page-back, not a re-run.
+        # request for most of the session. Past the fraction older clearable
+        # results go in batches (``_microcompact_batch``); one the model needs
+        # again is a ``RecallHistory`` page-back or a re-run.
         micro_open = (
             micro_armed
             and self._available_window is not None
@@ -954,23 +964,12 @@ class ThreeSegmentComposer:
         )
         if not relief_open and not micro_open:
             return messages, [], [], []
-        # Block positions (message index, block index) of the newest
-        # ``keep_recent`` tool results — counted in blocks, not messages, so a
-        # parallel batch does not shelter every result it carries. Pure: a
-        # positional walk over the composed messages.
-        protected: Optional[set[tuple[int, int]]] = None
-        if micro_open:
-            assert self._microcompact_keep_recent is not None
-            protected = set()
-            for i in range(len(messages) - 1, -1, -1):
-                blocks = messages[i].content
-                for j in range(len(blocks) - 1, -1, -1):
-                    if len(protected) >= self._microcompact_keep_recent:
-                        break
-                    if isinstance(blocks[j], ToolResultBlock):
-                        protected.add((i, j))
-                if len(protected) >= self._microcompact_keep_recent:
-                    break
+        clearable = self._clearable_results(messages)
+        # Block positions (message index, block index) the micro valve clears:
+        # see ``_microcompact_batch``. ``None`` while that valve is shut.
+        micro: Optional[set[tuple[int, int]]] = (
+            self._microcompact_batch(clearable) if micro_open else None
+        )
         # Messages at index >= cutoff are outside the relief valve's reach
         # (its protected tail, or everything while it is shut).
         cutoff = (
@@ -983,21 +982,16 @@ class ThreeSegmentComposer:
         dropped: list[ContentRef] = []
         cleared_outputs: list[ContentRef] = []
         for i, msg in enumerate(messages):
-            if i >= cutoff:
-                spare: Optional[frozenset[int]] = None
-                if protected is not None:
-                    spare = frozenset(
-                        j
-                        for j, b in enumerate(msg.content)
-                        if not isinstance(b, ToolResultBlock)
-                        or (i, j) in protected
-                    )
-                if spare is None or len(spare) == len(msg.content):
-                    out.append(msg)
-                    selected.append(self._msg_ref(msg))
-                    continue
-            else:
-                spare = None
+            spare = frozenset(
+                j
+                for j in range(len(msg.content))
+                if (i, j) not in clearable
+                or (i >= cutoff and (micro is None or (i, j) not in micro))
+            )
+            if len(spare) == len(msg.content):
+                out.append(msg)
+                selected.append(self._msg_ref(msg))
+                continue
             pruned_msg, cleared_refs = _clear_tool_outputs(
                 msg,
                 self._cleared_output_ref,
@@ -1014,6 +1008,70 @@ class ThreeSegmentComposer:
                 # kept verbatim; record it as selected provenance.
                 selected.append(self._msg_ref(pruned_msg))
         return out, selected, dropped, cleared_outputs
+
+    def _clearable_results(
+        self, messages: list[Message]
+    ) -> dict[tuple[int, int], ToolResultBlock]:
+        """Every tool result a valve may clear, by block position, oldest first.
+
+        A result is clearable when the tool that produced it — named by the
+        ``tool_use`` it answers — is registered here and declares itself
+        clearable (:func:`noeta.protocols.tool.is_clearable`): output the
+        model can fetch again. A subagent's report, a user's answer, a remote
+        server's reply or a control tool's output is never cleared, and never
+        takes one of the keep-recent places either.
+        """
+        tool_of_call: dict[str, str] = {}
+        for msg in messages:
+            for b in msg.content:
+                if isinstance(b, ToolUseBlock):
+                    tool_of_call[b.call_id] = b.tool_name
+        found: dict[tuple[int, int], ToolResultBlock] = {}
+        for i, msg in enumerate(messages):
+            for j, b in enumerate(msg.content):
+                if not isinstance(b, ToolResultBlock):
+                    continue
+                tool = self._tools.get(tool_of_call.get(b.call_id, ""))
+                if tool is not None and is_clearable(tool):
+                    found[(i, j)] = b
+        return found
+
+    def _microcompact_batch(
+        self, clearable: dict[tuple[int, int], ToolResultBlock]
+    ) -> set[tuple[int, int]]:
+        """The clearable results the open micro valve clears.
+
+        The newest ``microcompact_keep_recent`` clearable results — counted
+        in blocks, not messages, so a parallel batch does not shelter every
+        result it carries — stay verbatim. The older ones are walked oldest
+        first and cut into batches of at least ``microcompact_batch_tokens``
+        estimated tokens; every complete batch is cleared and the incomplete
+        last one is not. A result that ages out of the keep-recent places
+        therefore joins the incomplete batch, and the view stays byte for
+        byte the same until that batch fills — at which point it clears all
+        at once — instead of rewriting the cached prefix on every step.
+
+        Pure: positions and sizes come from the composed messages alone, and a
+        batch's extent depends only on the results before it, so the cuts do
+        not move as the history grows (a resumed run cuts the same ones). The
+        unit is the estimate itself, not real tokens: converting by the
+        observed density would let a cut slide from one round-trip to the
+        next and undo the point of batching.
+        """
+        assert self._microcompact_keep_recent is not None
+        positions = list(clearable)
+        older = positions[: max(0, len(positions) - self._microcompact_keep_recent)]
+        cleared: set[tuple[int, int]] = set()
+        batch: list[tuple[int, int]] = []
+        size = 0
+        for pos in older:
+            batch.append(pos)
+            size += estimate_blocks_tokens([clearable[pos]])
+            if size >= self._microcompact_batch_tokens:
+                cleared.update(batch)
+                batch = []
+                size = 0
+        return cleared
 
     def _relief_cutoff(
         self, messages: list[Message], real_baseline: int, estimated: int

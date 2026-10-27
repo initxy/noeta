@@ -286,6 +286,7 @@ class ReadFileTool:
     #: result size): the read itself refuses past :data:`MAX_READ_TOKENS`.
     max_result_size_chars: float = math.inf
     concurrency_safe: bool = True
+    clearable: bool = True
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
@@ -726,6 +727,7 @@ class GlobTool:
     description: str = field(default=load_markdown(__package__, "glob"))
     risk_level: str = "low"
     concurrency_safe: bool = True
+    clearable: bool = True
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
@@ -869,6 +871,7 @@ class GrepTool:
     description: str = field(default=load_markdown(__package__, "grep"))
     risk_level: str = "low"
     concurrency_safe: bool = True
+    clearable: bool = True
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",

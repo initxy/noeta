@@ -448,6 +448,7 @@ class WebFetchTool:
     description: str = field(default=load_markdown(__package__, "webfetch"))
     risk_level: str = "low"
     concurrency_safe: bool = True
+    clearable: bool = True
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",

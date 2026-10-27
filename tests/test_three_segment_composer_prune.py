@@ -39,6 +39,8 @@ from noeta.storage.memory import InMemoryContentStore
 
 
 class _FakeTool:
+    clearable = True
+
     def __init__(self, name: str) -> None:
         self.name = name
         self.risk_level = "low"

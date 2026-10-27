@@ -176,6 +176,7 @@ class ReplaceTextTool:
     # High risk so PermissionGuard treats this as privileged: a policy that
     # permits medium-risk tools must not accidentally allow file mutation.
     risk_level: str = "high"
+    clearable: bool = True
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
@@ -345,6 +346,7 @@ class WriteFileTool:
     # High risk so PermissionGuard treats this as privileged: a policy that
     # permits medium-risk tools must not accidentally allow file creation.
     risk_level: str = "high"
+    clearable: bool = True
     #: Workspace-relative glob whitelist; empty ⇒ unrestricted. Normalised to a
     #: sorted tuple so two equal whitelists compare equal.
     allowed_path_globs: tuple[str, ...] = ()
