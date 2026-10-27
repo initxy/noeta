@@ -684,6 +684,20 @@ def _preview(text: str, limit: int) -> tuple[str, bool]:
     return text[:end], True
 
 
+def _tail(text: str, limit: int) -> str:
+    """The last ``limit`` characters of ``text``, started after the first
+    newline when that keeps more than half."""
+    if len(text) <= limit:
+        return text
+    if limit <= 0:
+        return ""
+    start = len(text) - limit
+    newline = text.find("\n", start)
+    if newline != -1 and len(text) - (newline + 1) > limit * 0.5:
+        return text[newline + 1 :]
+    return text[start:]
+
+
 def large_tool_output_message(
     output: str, limit: int, *, saved_to: Optional[str] = None
 ) -> str:
@@ -693,7 +707,8 @@ def large_tool_output_message(
     With ``saved_to`` (the file holding the whole output) it is the
     ``<persisted-output>`` block: the size, the path and a 2 KB preview, so the
     model pages the rest with ``Read``. Without one, a ``<truncated-output>``
-    block keeps as much of the start as fits ``limit`` and says the rest was
+    block keeps as much of the start and the end as fits ``limit`` (a failing
+    command's error is usually its last lines) and says the middle was
     dropped.
     """
     if limit <= 0:
@@ -711,20 +726,33 @@ def large_tool_output_message(
             + "</persisted-output>"
         )
 
-    def truncated(shown: str, body: str) -> str:
+    def truncated(first: str, last: str, body: str) -> str:
         return (
             "<truncated-output>\n"
             f"Output too large ({size}). It could not be saved, so only the "
-            f"first {shown} are shown; the rest was dropped. If the tool can "
-            "page or filter its results, call it again for the part you "
-            f"need.\n{body}\n</truncated-output>"
+            f"first {first} and the last {last} are shown; the middle was "
+            "dropped. If the tool can page or filter its results, call it "
+            f"again for the part you need.\n{body}\n</truncated-output>"
         )
 
-    # Sized against the longest label the shown part could get, so the whole
-    # block stays within ``limit``.
-    room = max(0, limit - len(truncated("1023 bytes", "")))
-    head, _ = _preview(output, room)
-    return truncated(_format_size(len(head)), head)
+    def elision(dropped: int) -> str:
+        return f"\n... [{dropped} characters dropped] ...\n"
+
+    # Sized against the longest labels the shown parts could get, so the
+    # whole block stays within ``limit``.
+    widest = "1023 bytes"
+    room = max(
+        0,
+        limit - len(truncated(widest, widest, "")) - len(elision(len(output))),
+    )
+    head, _ = _preview(output, room // 2)
+    tail = _tail(output[len(head) :], room - len(head))
+    dropped = len(output) - len(head) - len(tail)
+    return truncated(
+        _format_size(len(head)),
+        _format_size(len(tail)),
+        head + elision(dropped) + tail,
+    )
 
 
 _SPILL_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9_.-]")
