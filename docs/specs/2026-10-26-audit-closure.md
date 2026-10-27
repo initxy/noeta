@@ -110,3 +110,5 @@ Line numbers are as of `adc2d1c`.
 2026-10-26 A/B/C/D merged from four worktrees; ADR-065 (recovery), 066 (clearing/margin), 067 (head+tail), 068 (deny wins), 069 (attempt heartbeat cap), 070 (idempotency key).
 2026-10-26 integration friction: the attempt-cap test assumed a seal; with ADR-065 the capped batch is kept — test now asserts the call is not re-run. make check green 4909 passed.
 2026-10-26 known limits: a foreground child step in another process under a cancelled root is not stopped (only the root lease is revoked); the relief valve's gate still reads the uncleared estimate; shell_run.md still says output past 30000 is saved to a file even without a spill dir (prompt text, left unchanged).
+2026-10-27 live e2e (anthropic/compat/responses, compaction, context supply, delegation, tools, interactive): 28 passed. make eval on the integrated tree: no regression.
+2026-10-27 benchmark: `model_hub/es1_orange_o48` now 403s on the gateway, so the rerun uses `auto_model/alwaysday1_max` xhigh, comparable to the 2026-09-19 run on that model (27/40 first pass).
