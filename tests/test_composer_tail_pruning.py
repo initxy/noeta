@@ -16,7 +16,7 @@ from noeta.context.composer import (
     _clear_tool_outputs,
     _is_cleared_marker,
 )
-from noeta.protocols.messages import Message, ToolResultBlock
+from noeta.protocols.messages import Message, ToolResultBlock, ToolUseBlock
 from noeta.storage.memory import InMemoryContentStore
 
 
@@ -119,10 +119,28 @@ def test_clear_size_floor_measures_structured_output_as_json() -> None:
 # ---------------------------------------------------------------------------
 
 
+class _ReadTool:
+    name = "read"
+    description = "read"
+    risk_level = "low"
+    input_schema: dict[str, object] = {"type": "object"}
+    clearable = True
+
+    def invoke(self, arguments: object, ctx: object) -> object:  # pragma: no cover
+        raise NotImplementedError
+
+
+def _call_msg(call_id: str) -> Message:
+    return Message(
+        role="assistant",
+        content=[ToolUseBlock(call_id=call_id, tool_name="read", arguments={})],
+    )
+
+
 def _composer(budget: int) -> ThreeSegmentComposer:
     return ThreeSegmentComposer(
         system_prompt="sys",
-        tools={},
+        tools={"read": _ReadTool()},  # type: ignore[dict-item]
         content_store=InMemoryContentStore(),
         tail_token_budget=budget,
     )
@@ -144,11 +162,16 @@ def test_newest_tool_result_survives_oversized_tail_budget() -> None:
 def test_older_results_still_cleared_but_newest_kept() -> None:
     big = "x" * 4000
     older = _result_msg(big)
-    newest = _result_msg(big)
+    newest = Message(
+        role="tool",
+        content=[ToolResultBlock(call_id="c2", output=big, success=True)],
+    )
     composer = _composer(budget=10)
-    out, _selected, _dropped, _cleared = composer._prune_tail([older, newest])
-    older_block = out[0].content[0]
-    newest_block = out[1].content[0]
+    out, _selected, _dropped, _cleared = composer._prune_tail(
+        [_call_msg("c1"), older, _call_msg("c2"), newest]
+    )
+    older_block = out[1].content[0]
+    newest_block = out[3].content[0]
     assert isinstance(older_block, ToolResultBlock)
     assert isinstance(newest_block, ToolResultBlock)
     # Older message is pruned to a marker; newest stays verbatim.

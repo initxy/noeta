@@ -21,6 +21,7 @@ from noeta.storage.memory import InMemoryContentStore
 
 class _Tool:
     risk_level = "low"
+    clearable = True
     input_schema: dict[str, Any] = {"type": "object", "additionalProperties": True}
 
     def __init__(self, name: str) -> None:
@@ -76,6 +77,7 @@ def _compose(messages: list[Message], *, keep: int = 2) -> View:
         content_store=InMemoryContentStore(),
         available_window=10,  # tiny: the microcompaction valve is open
         microcompact_keep_recent=keep,
+        microcompact_batch_tokens=1,  # every aged-out result is its own batch
     )
     return composer.compose(task)
 
