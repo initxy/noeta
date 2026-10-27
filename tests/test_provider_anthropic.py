@@ -690,7 +690,7 @@ def test_thinking_block_inbound_translation() -> None:
     provider = _make_provider()
     response = provider.complete(_basic_request())
     assert response.content == [
-        ThinkingBlock(text="deliberation...", signature="opaque-sig-1"),
+        ThinkingBlock(text="deliberation...", signature="opaque-sig-1", provider="anthropic"),
         TextBlock(text="answer"),
     ]
 
@@ -712,7 +712,7 @@ def test_redacted_thinking_block_inbound_translation() -> None:
     provider = _make_provider()
     response = provider.complete(_basic_request())
     assert response.content == [
-        ThinkingBlock(text="", signature=None, data="ENCRYPTED=="),
+        ThinkingBlock(text="", signature=None, data="ENCRYPTED==", provider="anthropic"),
         TextBlock(text="answer"),
     ]
 

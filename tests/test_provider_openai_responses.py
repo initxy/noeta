@@ -1448,7 +1448,7 @@ def test_inbound_reasoning_maps_to_thinking_block() -> None:
     response = _make_provider().complete(_basic_request())
 
     assert response.content == [
-        ThinkingBlock(text="reasoning step one\nreasoning step two", signature=enc),
+        ThinkingBlock(text="reasoning step one\nreasoning step two", signature=enc, provider="openai_responses"),
         TextBlock(text="final answer"),
     ]
 
@@ -1486,7 +1486,7 @@ def test_inbound_reasoning_empty_summary_yields_empty_text() -> None:
     respx.post(ENDPOINT).mock(return_value=httpx.Response(200, json=payload))
     response = _make_provider().complete(_basic_request())
 
-    assert response.content == [ThinkingBlock(text="", signature=enc)]
+    assert response.content == [ThinkingBlock(text="", signature=enc, provider="openai_responses")]
 
 
 # --- Outbound: ThinkingBlock → reasoning item (on by default), signature stuffed back as-is ---

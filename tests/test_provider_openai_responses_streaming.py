@@ -405,7 +405,7 @@ def test_reasoning_summary_deltas_are_thinking_and_final_block_keeps_signature()
         ("text", "answer", 1),
     ]
     assert response.content == [
-        ThinkingBlock(text="step one\nstep two", signature=enc),
+        ThinkingBlock(text="step one\nstep two", signature=enc, provider="openai_responses"),
         TextBlock(text="final answer"),
     ]
 
