@@ -8,6 +8,8 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.42] - 2026-10-27
+
 ### Fixed
 
 - **A host deny rule always denies.** In `default` mode the permission Guard's
@@ -3587,7 +3589,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.41...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.42...HEAD
+[0.6.42]: https://github.com/initxy/noeta/compare/v0.6.41...v0.6.42
 [0.6.41]: https://github.com/initxy/noeta/compare/v0.6.40...v0.6.41
 [0.6.40]: https://github.com/initxy/noeta/compare/v0.6.39...v0.6.40
 [0.6.39]: https://github.com/initxy/noeta/compare/v0.6.38...v0.6.39
