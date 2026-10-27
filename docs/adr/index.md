@@ -42,7 +42,7 @@ Rule of thumb: the wider the impact (spanning multiple modules), the more it bel
 
 **Context & memory**:
 [unified-context-supply](028-unified-context-supply.md) [+054](054-memory-index-frozen-per-task.md) ·
-[context-compaction](003-context-compaction.md) [+049](049-compaction-summarize-without-tool-choice.md) [+050](050-compaction-count-based-second-valve.md) [+060](060-compaction-absolute-auto-compact-window.md) [+061](061-compaction-clear-point-on-its-own-number.md) [+063](063-compaction-arguments-stay-as-sent.md) [+064](064-compaction-restores-recent-files.md) ·
+[context-compaction](003-context-compaction.md) [+049](049-compaction-summarize-without-tool-choice.md) [+050](050-compaction-count-based-second-valve.md) [+060](060-compaction-absolute-auto-compact-window.md) [+061](061-compaction-clear-point-on-its-own-number.md) [+063](063-compaction-arguments-stay-as-sent.md) [+064](064-compaction-restores-recent-files.md) [+066](066-compaction-batched-clearing-and-claude-code-margin.md) ·
 [anchored-content-placement](036-anchored-content-placement.md) ·
 [memory-consolidation](035-memory-consolidation.md) ·
 [skill-resource-on-demand](020-skill-resource-on-demand.md) ·
