@@ -57,7 +57,7 @@ nothing; the third-party path is tested only with a monkeypatched entry point.
 - [x] MCP servers from `~/.noeta/settings.json` and consented `.mcp.json` for the CLI and TUI
 - [x] Plugin slash commands reachable from the TUI and ACP (or the interface removed)
 - [x] An example plugin package under `examples/`, installed and run in CI
-- [ ] README / CONTEXT updated
+- [x] README / CONTEXT updated
 
 ## Acceptance criteria
 
@@ -83,3 +83,4 @@ nothing; the third-party path is tested only with a monkeypatched entry point.
   them (`available_commands_update`) and expands them; MCP prompts are commands. One full run
   stalled after 58 tests while the example package was being built alongside; 5 clean runs after
   (~23 s each).
+- 2026-10-27: step 4 and docs done; `make check` green (1351 passed + the example's 3).

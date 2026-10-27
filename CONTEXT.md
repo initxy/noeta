@@ -42,15 +42,25 @@ the kernel: a tool by its model-visible name (`TaskView.find_tool`), config a ch
 
 Plugins and backends are found by name through entry points (`noeta/core/registry.py`): groups
 `noeta.plugins`, `noeta.providers`, `noeta.execenvs`, `noeta.stores`. The built-ins register in
-`pyproject.toml` exactly as a third-party package would. A plugin's registry name is its
-`Extension.name`.
+`pyproject.toml` exactly as a third-party package would (`examples/hello-plugin` is one,
+installed and tested by `make check`). A plugin's registry name is its `Extension.name`.
+
+## Plugin setting
+
+What a host says about one plugin, by name: its arguments (`enabled: false` among them switches
+it off), a ready `Extension`, or on/off. One table at every level (`build_agents`,
+`default_agents`, `from_settings`, `config.toml` `[plugins.<name>]`); argument tables of one
+plugin merge key by key. `add` (`[agents.<name>] add_plugins`, `"*"` for all) appends plugins
+to an agent without copying its file. The built-in agents keep memory and MCP off until set.
 
 ## Extension
 
 The one capability-plugin interface (`noeta/core/extension.py`): tools, context parts, commands,
 reminders, `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow),
 `after_tool`, `on_event`, `reduce`, `inherit`, `on_context_overflow`, `resident`. Every method
-is optional.
+is optional. Commands (`commands(ctx)` / `run_command`) are slash commands front ends list and
+expand through `noeta/core/commands.py`: a template filled with `{args}`, or text the plugin
+returns.
 
 ## Agent file
 
