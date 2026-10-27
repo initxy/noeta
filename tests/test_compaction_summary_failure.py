@@ -68,10 +68,11 @@ def _drive(summarize_response: LLMResponse):
     """Compose a proactive-compaction-tripping view and drive one decide().
 
     Returns ``(decision, provider)`` — ``provider.received_requests`` proves the
-    summarize round-trip actually happened. The response is scripted twice: a
-    text-less first answer is retried once with ``tool_choice: none``
-    (``test_summarize_tool_choice_retry.py``), and the retry gets the same
-    answer, so the guard sees it unchanged."""
+    summarize round-trip actually happened. The response is scripted four
+    times: a text-less first answer is retried once with ``tool_choice: none``
+    (``test_summarize_tool_choice_retry.py``) and an overflow up to three times
+    on a shorter input (``test_summarize_input_matches_view.py``), and every
+    retry gets the same answer, so the guard sees it unchanged."""
     store = InMemoryContentStore()
     log = InMemoryEventLog()
     composer = ThreeSegmentComposer(
@@ -86,7 +87,7 @@ def _drive(summarize_response: LLMResponse):
     view = composer.compose(task)
 
     provider = FakeLLMProvider(
-        responses=[summarize_response, summarize_response]
+        responses=[summarize_response] * 4
     )
     client = RuntimeLLMClient(
         provider=provider, event_log=log, content_store=store
