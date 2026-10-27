@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import msgspec
 
+from noeta import models
 from noeta.errors import ContextOverflow, ModelError
 from noeta.events import ExtensionRecorded, ModelCalled, ModelReplied
 from noeta.loop.request import build_request, request_hash
@@ -31,7 +32,7 @@ def _request(run: TaskRun, *, final: bool) -> ModelRequest:
         parts=[p for ext in run.exts for p in ext.context(view)],
         tools=run.tools(view),
         effort=config.get("effort") or agent.effort,
-        max_tokens=agent.max_tokens,
+        max_tokens=agent.max_tokens or _output_ceiling(str(config.get("model") or agent.model)),
         output_schema=agent.output_schema,
     )
     if final:
@@ -42,6 +43,13 @@ def _request(run: TaskRun, *, final: bool) -> ModelRequest:
             request, messages=[*request.messages, user(prompt, origin="system")],
             tool_choice="none")
     return request
+
+
+def _output_ceiling(model: str) -> int:
+    """Always send max_tokens: the model's output ceiling (a gateway once
+    defaulted to 1,000 when it was left out)."""
+    spec = models.find_spec(model)
+    return spec.max_output_tokens if spec is not None else models.UNKNOWN_MODEL_MAX_OUTPUT_TOKENS
 
 
 def _empty(message: Message) -> bool:

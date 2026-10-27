@@ -1,0 +1,21 @@
+Screen { layout: vertical; }
+#body { height: 1fr; }
+#transcript { width: 1fr; padding: 0 2; }
+#side { width: 36; border-left: solid $panel; padding: 0 1; }
+#prompt { height: auto; max-height: 10; min-height: 3; border: round $accent; }
+#status { height: 1; color: $text-muted; background: $panel; padding: 0 1; }
+.user-message { margin: 1 0 0 0; padding: 0 1; border-left: thick $accent; }
+.assistant-message { margin: 1 0 0 0; }
+.notice { color: $text-muted; margin: 1 0 0 0; }
+.notice.-error { color: $error; }
+.tool-call { margin: 0; padding: 0; border: none; background: transparent; }
+.tool-call CollapsibleTitle { background: transparent; padding: 0; }
+.tool-call.-error CollapsibleTitle { color: $error; }
+.tool-call.-done CollapsibleTitle { color: $text-muted; }
+.tool-body { padding: 0 2; color: $text-muted; }
+.approval { border: round $warning; padding: 0 1; margin: 1 0; height: auto; }
+.approval-buttons { height: auto; margin: 1 0 0 0; }
+.approval-buttons Button { margin: 0 2 0 0; }
+.approval-result { color: $text-muted; }
+.question { border: round $accent; padding: 0 1; margin: 1 0; height: auto; }
+.question-option { color: $text-muted; }

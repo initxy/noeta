@@ -1,0 +1,129 @@
+"""The ``noeta`` command.
+
+    noeta                      the terminal UI (needs the ``tui`` extra)
+    noeta -p "fix the test"    run one prompt in the current directory and print the answer
+    noeta acp                  serve the Agent Client Protocol on stdio (editors)
+    noeta worker               run tasks from the store until stopped (multi-machine)
+
+Model and provider come from ``--model`` / ``--provider`` or the environment
+(``NOETA_MODEL``, ``NOETA_PROVIDER``, ``NOETA_BASE_URL``, ``NOETA_API_KEY``)
+or ``~/.noeta/config.toml``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import signal
+import sys
+from typing import Any
+
+from noeta.config import Settings, load_settings, open_store
+
+
+def _parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(prog="noeta", description="Durable AI agents.")
+    ap.add_argument("-p", "--print", dest="prompt", help="run one prompt and print the answer")
+    ap.add_argument("--json", action="store_true", help="with -p: stream events as JSON lines")
+    ap.add_argument("--model")
+    ap.add_argument("--provider", choices=("anthropic", "openai_compat", "openai_responses"))
+    ap.add_argument("--base-url")
+    ap.add_argument("--store", help="sqlite:///path or postgres://... (default ~/.noeta/tasks.db)")
+    ap.add_argument("--cwd", default=None, help="working directory (default: current)")
+    ap.add_argument("--resume", nargs="?", const="", default=None,
+                    help="TUI: resume a task (id, or pick from a list)")
+    ap.add_argument("--server", help="TUI: attach to a noeta server URL")
+    sub = ap.add_subparsers(dest="command")
+    sub.add_parser("acp", help="serve the Agent Client Protocol on stdio")
+    w = sub.add_parser("worker", help="run tasks from the store until stopped")
+    w.add_argument("--queue", action="append", default=None)
+    w.add_argument("--concurrency", type=int, default=8)
+    return ap
+
+
+def _settings(args: argparse.Namespace) -> Settings:
+    s = load_settings(model=args.model, provider=args.provider, base_url=args.base_url,
+                      store=args.store)
+    if not s.model:
+        sys.exit("noeta: no model configured (--model or NOETA_MODEL)")
+    return s
+
+
+def _app(s: Settings, **runtime_kw: Any) -> Any:
+    from noeta.local import LocalApp
+    from noeta.presets import main_agent
+
+    return LocalApp(open_store(s.store_url), [main_agent(s.model)], s.make_provider(),
+                    **runtime_kw)
+
+
+async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool) -> int:
+    import msgspec
+
+    from noeta.events import TaskEnded, Waiting
+
+    async with _app(s) as app:
+        tid = await app.client.create("main", prompt, config={"cwd": cwd, "model": s.model})
+        if as_json:
+            def on_delta(task_id: str, delta: Any) -> None:
+                if task_id == tid:
+                    print(json.dumps({"delta": delta.kind, "text": delta.text}), flush=True)
+
+            app.deltas(on_delta)
+        async for rec in app.client.watch(tid):
+            ev = rec.event
+            if as_json:
+                sys.stdout.write(msgspec.json.encode(rec).decode() + "\n")
+                sys.stdout.flush()
+            if isinstance(ev, Waiting) and ev.on == "input":
+                failed = ev.detail.get("turn_failed")
+                if not as_json:
+                    print(ev.detail.get("answer", "") if not failed else f"error: {failed}")
+                return 1 if failed else 0
+            if isinstance(ev, Waiting):
+                print(f"noeta: the agent is waiting for {ev.on}; use the TUI or an editor "
+                      "for interactive work", file=sys.stderr)
+                return 2
+            if isinstance(ev, TaskEnded):
+                if not as_json:
+                    print(ev.answer or ev.error)
+                return 0 if ev.status == "done" else 1
+    return 1
+
+
+async def _worker(s: Settings, queues: list[str], concurrency: int) -> None:
+    app = _app(s, queues=tuple(queues), concurrency=concurrency)
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop.set)
+    await app.runtime.serve(stop)
+    await app.store.close()
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parser().parse_args(argv)
+    cwd = os.path.abspath(args.cwd or os.getcwd())
+    if args.command == "acp":
+        from noeta.acp import serve_stdio
+
+        s = _settings(args)
+        asyncio.run(serve_stdio(_app(s), model=s.model))
+        return
+    if args.command == "worker":
+        asyncio.run(_worker(_settings(args), args.queue or ["default"], args.concurrency))
+        return
+    if args.prompt is not None:
+        sys.exit(asyncio.run(_print_mode(_settings(args), args.prompt, cwd=cwd,
+                                         as_json=args.json)))
+    try:
+        from noeta.tui import run_tui
+    except ImportError:
+        sys.exit("noeta: the terminal UI needs the tui extra: pip install 'noeta[tui]'")
+    run_tui(_settings(args), cwd=cwd, resume=args.resume, server=args.server)
+
+
+if __name__ == "__main__":
+    main()
