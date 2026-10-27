@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hmac
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -35,6 +36,7 @@ from noeta.errors import UnknownTask
 from noeta.types import Delta, Message
 
 _enc = msgspec.json.Encoder()
+log = logging.getLogger("noeta.server")
 
 
 def _json(value: Any, status: int = 200) -> Response:
@@ -99,10 +101,10 @@ def create_app(client: Client, *, token: str | None = None,
 
     async def answer(request: Request) -> Response:
         body = await request.json()
-        await client.answer(request.path_params["task_id"], body["request_id"],
-                            body.get("decision"), always=bool(body.get("always")),
-                            data=body.get("data"))
-        return _json({"ok": True})
+        seq = await client.answer(request.path_params["task_id"], body["request_id"],
+                                  body.get("decision"), always=bool(body.get("always")),
+                                  data=body.get("data"))
+        return _json({"ok": True, "inbox_seq": seq})
 
     async def cancel(request: Request) -> Response:
         body = await request.json() if await request.body() else {}
@@ -121,9 +123,16 @@ def create_app(client: Client, *, token: str | None = None,
                 queue.put_nowait(b"event: delta\ndata: " + _enc.encode(delta) + b"\n\n")
 
         async def follow() -> None:
-            async for rec in client.watch(task_id, after):
-                queue.put_nowait(b"event: event\ndata: " + _enc.encode(rec) + b"\n\n")
-            queue.put_nowait(b"event: end\ndata: {}\n\n")
+            end: dict[str, Any] = {}
+            try:
+                async for rec in client.watch(task_id, after):
+                    queue.put_nowait(b"event: event\ndata: " + _enc.encode(rec) + b"\n\n")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — the stream must end, not hang
+                log.warning("watch %s failed: %s", task_id, exc)
+                end = {"error": f"{type(exc).__name__}: {exc}"}
+            queue.put_nowait(b"event: end\ndata: " + _enc.encode(end) + b"\n\n")
 
         async def stream() -> AsyncIterator[bytes]:
             unsubscribe = deltas(on_delta) if deltas is not None else None

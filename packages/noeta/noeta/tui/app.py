@@ -4,7 +4,7 @@ resumes a task, sends what you type, and renders what the task records."""
 from __future__ import annotations
 
 import asyncio
-import contextlib
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +18,10 @@ from textual.widgets.markdown import MarkdownStream
 
 from noeta import models
 from noeta.events import (
+    Answer,
     ExtensionRecorded,
     InputTaken,
+    ModelCalled,
     ModelReplied,
     Recorded,
     Say,
@@ -40,6 +42,8 @@ from noeta.tui.widgets import (
     tool_title,
 )
 from noeta.types import Delta, Usage
+
+log = logging.getLogger("noeta.tui")
 
 HELP = """\
 **Commands**  `/new` new task · `/resume` pick a task · `/stop` stop the turn · `/exit` quit
@@ -75,7 +79,15 @@ class NoetaApp(App[None]):
         self.task_id = ""
         self.calls: dict[str, ToolCall] = {}
         self.stream: MarkdownStream | None = None
-        self.streamed_text = False
+        self.stream_widget: AssistantMessage | None = None
+        #: The model call (its ``ModelCalled`` seq) and attempt being streamed.
+        self.stream_key = (0, 1)
+        #: Model calls whose text was streamed (their reply is not shown again).
+        self.streamed: set[int] = set()
+        #: Per model call, the attempt still live (earlier ones failed).
+        self.attempts: dict[int, int] = {}
+        #: The newest model call seen in the log.
+        self.called = 0
         self.busy = False
         self.usage = Usage()
         self.context_tokens = 0
@@ -124,8 +136,16 @@ class NoetaApp(App[None]):
     async def open_task(self, task_id: str) -> None:
         if self._follower is not None:
             self._follower.cancel()
+        await self.local.adopt(task_id)
         self.task_id = task_id
         self.calls.clear()
+        self.waiting_question = ""
+        self.waiting_for = ""
+        self.busy = False
+        await self._end_stream()
+        self.streamed.clear()
+        self.attempts.clear()
+        self.called = 0
         transcript = self.query_one("#transcript")
         await transcript.remove_children()
         await transcript.mount(Notice(f"noeta · task {task_id[:8]} · /help for commands"))
@@ -195,30 +215,65 @@ class NoetaApp(App[None]):
         if task_id == self.task_id and delta.kind == "text" and delta.text:
             self._deltas.put_nowait(delta)
 
-    @work(exclusive=False, group="deltas")
+    @work(exclusive=False, group="deltas", exit_on_error=False)
     async def _pump_deltas(self) -> None:
         while True:
             delta = await self._deltas.get()
-            if self.stream is None:
-                widget = AssistantMessage("")
-                await self.query_one("#transcript").mount(widget)
-                self.query_one("#transcript").anchor()
-                self.stream = Markdown.get_stream(widget)
-            self.streamed_text = True
-            await self.stream.write(delta.text)
+            try:
+                await self._show_delta(delta)
+            except Exception:
+                log.exception("showing live output failed")
 
-    async def _end_stream(self) -> None:
+    async def _show_delta(self, delta: Delta) -> None:
+        key = (delta.call_seq, delta.attempt)
+        if delta.attempt < self.attempts.get(delta.call_seq, 1):
+            return  # the tail of an attempt that failed
+        if self.stream is not None and key != self.stream_key:
+            same_call = delta.call_seq == self.stream_key[0]
+            await self._end_stream(drop=same_call)  # a retry replaces its failed attempt
+        if self.stream is None:
+            widget = AssistantMessage("")
+            await self.query_one("#transcript").mount(widget)
+            self.query_one("#transcript").anchor()
+            self.stream, self.stream_widget, self.stream_key = \
+                Markdown.get_stream(widget), widget, key
+        self.attempts[delta.call_seq] = delta.attempt
+        self.streamed.add(delta.call_seq)
+        await self.stream.write(delta.text)
+
+    async def _end_stream(self, *, drop: bool = False) -> None:
         if self.stream is not None:
             await self.stream.stop()
             self.stream = None
+        if drop and self.stream_widget is not None:
+            await self.stream_widget.remove()
+            self.streamed.discard(self.stream_key[0])
+        self.stream_widget = None
 
-    @work(exclusive=True, group="follow")
+    async def _retried(self, failed_attempt: int) -> None:
+        """A model call's attempt failed: what it streamed is dropped."""
+        call = self.called
+        self.attempts[call] = max(self.attempts.get(call, 1), failed_attempt + 1)
+        if self.stream_widget is not None and self.stream_key[0] == call \
+                and self.stream_key[1] <= failed_attempt:
+            await self._end_stream(drop=True)
+
+    @work(exclusive=True, group="follow", exit_on_error=False)
     async def follow(self, task_id: str) -> None:
-        async for rec in self.local.client.watch(task_id):
-            if task_id != self.task_id:
-                return
-            with contextlib.suppress(Exception):
-                await self.render_event(rec)
+        try:
+            async for rec in self.local.client.watch(task_id):
+                if task_id != self.task_id:
+                    return
+                try:
+                    await self.render_event(rec)
+                except Exception:
+                    log.exception("rendering %s failed", type(rec.event).__name__)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.exception("following task %s failed", task_id)
+            await self.say_notice(f"lost the task's event stream: {exc} — /resume {task_id}")
+            return
         await self.say_notice("the task has ended")
 
     async def say_notice(self, text: str) -> None:
@@ -232,14 +287,19 @@ class NoetaApp(App[None]):
                 if isinstance(item.body, Say) and item.body.message.origin in (None, "human"):
                     await transcript.mount(UserMessage(item.body.message.text))
                     self.busy = True
+                elif isinstance(item.body, Answer) and \
+                        item.body.request_id == self.waiting_question:
+                    self.waiting_question = ""
+        elif isinstance(ev, ModelCalled):
+            self.called = rec.seq
         elif isinstance(ev, ModelReplied):
             while not self._deltas.empty():
                 await asyncio.sleep(0.01)
             await self._end_stream()
             msg = ev.response.message
-            if msg.text.strip() and not self.streamed_text:
+            if msg.text.strip() and self.called not in self.streamed:
                 await transcript.mount(AssistantMessage(msg.text))
-            self.streamed_text = False
+            self.streamed.discard(self.called)
             for call in msg.tool_uses:
                 block = ToolCall(call)
                 self.calls[call.id] = block
@@ -255,12 +315,18 @@ class NoetaApp(App[None]):
                 diff = ev.meta.get("diff") if isinstance(ev.meta.get("diff"), str) else None
                 finished.set_result(ev.result.text, is_error=ev.result.is_error, diff=diff)
         elif isinstance(ev, ExtensionRecorded):
+            data = ev.data if isinstance(ev.data, dict) else {}
             if ev.kind == "retry":
-                await transcript.mount(Notice(f"retrying (attempt {ev.data.get('attempt')}): "
-                                              f"{ev.data.get('error', '')[:120]}"))
+                await self._retried(int(data.get("attempt") or 1))
+                await transcript.mount(Notice(f"retrying (attempt {data.get('attempt')}): "
+                                              f"{str(data.get('error', ''))[:120]}"))
             elif ev.kind == "turn_stopped":
                 await self._end_stream()
+                self.waiting_question = ""
                 await transcript.mount(Notice("stopped"))
+            elif ev.kind == "turn_failed":
+                reason = ": ".join(str(x) for x in (data.get("reason"), data.get("detail")) if x)
+                await transcript.mount(Notice(f"turn failed: {reason}", classes="-error"))
         elif isinstance(ev, Waiting):
             await self._end_stream()
             self.waiting_for = {"approval": "waiting for your approval (y/a/n)",
@@ -275,13 +341,14 @@ class NoetaApp(App[None]):
                     prompt = str((ev.detail.get(call_id) or {}).get("prompt") or "")
                     await transcript.mount(ApprovalCard(call_id, title, prompt, self.decide))
             elif ev.on == "question":
-                self.waiting_question = ev.ids[0] if ev.ids else ""
-                await transcript.mount(QuestionCard(ev.detail))
-            else:
+                questions = [k for k, v in ev.detail.items()
+                             if isinstance(v, dict) and v.get("on") == "question"]
+                self.waiting_question = questions[0] if questions else ""
+                for call_id in questions[:1]:  # one at a time: the next line answers it
+                    await transcript.mount(QuestionCard(ev.detail[call_id]))
+            elif ev.on == "input":
                 self.busy = False
-                failed = ev.detail.get("turn_failed")
-                if failed:
-                    await transcript.mount(Notice(f"turn failed: {failed}", classes="-error"))
+                self.waiting_question = ""
         elif isinstance(ev, TaskEnded):
             self.busy = False
             await transcript.mount(Notice(f"task {ev.status}" + (f": {ev.error}" if ev.error
@@ -305,14 +372,18 @@ class NoetaApp(App[None]):
         self.query_one("#status", Static).update(RichText(
             f"{state} · {self.model} · context {used}{cost} · {_short_path(self.cwd, width)}"))
 
-    @work(exclusive=True, group="side")
+    @work(exclusive=True, group="side", exit_on_error=False)
     async def _refresh_side(self) -> None:
         while True:
             await asyncio.sleep(2)
             side = self.query_one("#side")
             if not side.display or not self.task_id:
                 continue
-            rows = await self.local.client.tasks(parent_id=self.task_id, limit=50)
+            try:
+                rows = await self.local.client.tasks(parent_id=self.task_id, limit=50)
+            except Exception:
+                log.exception("listing subtasks failed")
+                continue
             body = "\n".join(f"{r.status:8} {r.agent} {r.task_id[-12:]}" for r in rows) \
                 or "(none)"
             self.query_one("#side-body", Static).update(RichText(body))
