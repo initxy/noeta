@@ -20,12 +20,12 @@ import os
 import platform
 import posixpath
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any
 
 from noeta.core.execenv import ExecEnv, is_local
-from noeta.core.extension import Extension, TaskView
+from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.helpers import task_env
 from noeta.core.shell import _harden_git
 from noeta.core.types import Message, user
@@ -95,7 +95,8 @@ def _shell() -> str:
     return "zsh" if "zsh" in shell else "bash" if "bash" in shell else shell
 
 
-async def capture_environment(env: ExecEnv, cwd: str, model: str) -> str:
+async def capture_environment(env: ExecEnv, cwd: str, model: str,
+                              today: str | None = None) -> str:
     """The block for ``cwd`` as ``env`` sees it."""
     try:
         is_git = await env.stat(posixpath.join(cwd, ".git")) is not None
@@ -105,11 +106,15 @@ async def capture_environment(env: ExecEnv, cwd: str, model: str) -> str:
         if is_git else ""
     status = await _git_status(env, cwd) if is_git else ""
     return render_environment(cwd, model, is_git=is_git, branch=branch, status=status,
-                              local=is_local(env))
+                              local=is_local(env), today=today)
+
+
+def _today() -> str:
+    return datetime.now().astimezone().date().isoformat()
 
 
 def render_environment(cwd: str, model: str, *, is_git: bool, branch: str = "",
-                       status: str = "", local: bool = True) -> str:
+                       status: str = "", local: bool = True, today: str | None = None) -> str:
     lines = [
         "<workspace-environment>",
         "# Environment",
@@ -123,7 +128,7 @@ def render_environment(cwd: str, model: str, *, is_git: bool, branch: str = "",
         lines.append(f" - OS Version: {platform.system()} {platform.release()}".rstrip())
     if model:
         lines.append(f"You are powered by the model {model}.")
-    lines.append(f"Today's date is {datetime.now().astimezone().date().isoformat()}.")
+    lines.append(f"Today's date is {today or _today()}.")
     lines.append(
         "File paths for read, edit, glob, and grep resolve relative to the "
         "primary working directory."
@@ -142,23 +147,41 @@ def render_environment(cwd: str, model: str, *, is_git: bool, branch: str = "",
     return "\n".join(lines)
 
 
+#: Claude Code's ``date_change`` note.
+DATE_CHANGED_REMINDER = (
+    "The date has changed. Today's date is now {date}. DO NOT mention this to the user "
+    "explicitly because they are already aware."
+)
+
+
 class Environment(Extension):
     """Constructor arguments:
 
     * ``model`` — the agent's model, named when the task's config sets none.
     * ``model_name`` — include the "You are powered by" line.
+    * ``date_change`` — tell the model, at the start of a turn, when the date
+      is no longer the one it was given (the prompt
+      ``reminder/date_changed``; ``{date}`` is today).
+    * ``today`` — today's date as ``YYYY-MM-DD`` (default: this machine's).
     """
 
     name = "environment"
 
-    def __init__(self, *, model: str | None = None, model_name: bool = True) -> None:
+    def __init__(self, *, model: str | None = None, model_name: bool = True,
+                 date_change: bool = True, today: Callable[[], str] = _today) -> None:
         self.model = model
         self.model_name = model_name
+        self.date_change = date_change
+        self.today = today
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
-        if kind != "environment":
+        if not isinstance(data, dict):
             return state
-        return data["text"] if isinstance(data, dict) and "text" in data else True
+        if kind == "environment" and "text" in data:
+            return {"text": data["text"], "date": data.get("date")}
+        if kind == "date" and isinstance(state, dict):
+            return {**state, "date": data.get("date")}
+        return state
 
     async def on_start(self, view: TaskView) -> None:
         if view.ext_state(self.name):
@@ -168,10 +191,24 @@ class Environment(Extension):
         cwd = str(config.get("cwd") or env.cwd)
         model = str(config.get("model") or self.model or view.model or "") \
             if self.model_name else ""
-        text = await capture_environment(env, cwd, model)
-        view.record(self.name, "environment", {"text": text},
+        today = self.today()
+        text = await capture_environment(env, cwd, model, today)
+        view.record(self.name, "environment", {"text": text, "date": today},
                     message=user(text, origin="system"))
 
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        """Claude Code's note when the date moved past the one the block
+        (or the last note) gave, at the start of a turn."""
+        st = view.ext_state(self.name)
+        if not self.date_change or view.state.steps_in_turn or not isinstance(st, dict):
+            return ()
+        today = self.today()
+        if not st.get("date") or st["date"] == today:
+            return ()
+        text = view.prompt("reminder/date_changed", DATE_CHANGED_REMINDER)
+        return (Reminder(text=text.replace("{date}", today), kind="date", data={"date": today}),)
+
     async def resident(self, view: TaskView) -> Sequence[Message]:
-        text = view.ext_state(self.name)
+        st = view.ext_state(self.name)
+        text = st.get("text") if isinstance(st, dict) else None
         return (user(text, origin="system"),) if isinstance(text, str) else ()

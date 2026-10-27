@@ -15,7 +15,7 @@ from noeta.plugins.instructions import Instructions
 from noeta.plugins.memory import Memory
 from noeta.plugins.skills import Skills
 from noeta.testing import reply
-from tests.plugins.environment.conftest import Harness
+from tests.plugins.context.conftest import Harness
 
 
 def agent(**kw: object) -> Agent:

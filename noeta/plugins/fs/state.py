@@ -13,6 +13,10 @@ Kinds:
   refuse to change a file without an entry whose digest still matches the
   bytes on disk. A successful write records the new digest, so consecutive
   edits chain without a re-read.
+- ``changed`` — ``{"path", "digest"}``: the model was told that ``path``
+  changed on disk since it read it (to those bytes); it is told once per
+  change.
+
 An unknown kind or malformed data leaves the state unchanged.
 """
 
@@ -27,6 +31,7 @@ from noeta.core.types import Struct
 
 __all__ = [
     "FS",
+    "KIND_CHANGED",
     "KIND_READ",
     "FileRead",
     "FsState",
@@ -37,6 +42,7 @@ __all__ = [
 #: The extension name the file tools record under.
 FS = "fs"
 KIND_READ = "read"
+KIND_CHANGED = "changed"
 
 
 class FileRead(Struct):
@@ -45,8 +51,11 @@ class FileRead(Struct):
 
 
 class FsState(Struct):
-    #: Canonical absolute path -> what was read (or last written) there.
+    #: Canonical absolute path -> what was read (or last written) there,
+    #: the most recent last.
     reads: dict[str, FileRead] = msgspec.field(default_factory=dict)
+    #: Path -> the digest the model was last told the file changed to.
+    noticed: dict[str, str] = msgspec.field(default_factory=dict)
 
     def digest(self, path: str) -> str | None:
         entry = self.reads.get(path)
@@ -66,8 +75,14 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
         if isinstance(mtime, bool) or not isinstance(mtime, (int, float)):
             mtime = 0.0
         reads = dict(base.reads)
+        reads.pop(path, None)
         reads[path] = FileRead(digest=digest, mtime=float(mtime))
         return msgspec.structs.replace(base, reads=reads)
+    if kind == KIND_CHANGED:
+        path, digest = data.get("path"), data.get("digest")
+        if not isinstance(path, str) or not isinstance(digest, str):
+            return base
+        return msgspec.structs.replace(base, noticed={**base.noticed, path: digest})
     return base
 
 

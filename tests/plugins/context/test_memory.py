@@ -28,7 +28,7 @@ from noeta.plugins.memory.tools import (
     MemoryWriteTool,
 )
 from noeta.testing import reply
-from tests.plugins.environment.conftest import Harness
+from tests.plugins.context.conftest import Harness
 
 
 def ctx(root: Path, task_id: str = "t1") -> ToolContext:

@@ -22,7 +22,7 @@ from noeta.plugins.skills.listing import (
 )
 from noeta.plugins.skills.registry import SkillDescription, SkillRegistry
 from noeta.testing import reply
-from tests.plugins.environment.conftest import Harness
+from tests.plugins.context.conftest import Harness
 
 
 def write_skill(root: Path, name: str, description: str, body: str = "Do the thing.\n",

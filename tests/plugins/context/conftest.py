@@ -1,5 +1,6 @@
-"""A small harness: a sqlite store, a scripted model, a workspace directory
-and the local ExecEnv on it."""
+"""The context plugins (instructions, memory, skills, environment): a small
+harness — a sqlite store, a scripted model, a workspace directory and the
+local ExecEnv on it."""
 
 from __future__ import annotations
 
