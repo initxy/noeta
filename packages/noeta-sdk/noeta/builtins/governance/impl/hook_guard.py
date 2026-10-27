@@ -26,6 +26,11 @@ from noeta.runtime.governance import MATCH_STRING_CAP, MatchArg, PreToolUseRule
 __all__ = ["HookGuard"]
 
 
+#: Tools that run a shell ``command`` the way ``Bash`` does; a rule written
+#: for ``Bash`` also matches them, so the same command cannot slip past it.
+_RUNS_BASH_COMMAND = frozenset({"Monitor"})
+
+
 def _resolve_path(args: dict[str, Any], path: tuple[str, ...]) -> tuple[bool, Any]:
     """Walk dotted argument keys; a missing key or non-dict intermediate is no match."""
     cur: Any = args
@@ -65,8 +70,11 @@ class HookGuard:
         if not isinstance(action, ProposedToolCall):
             return VerdictResult.allow()
         call = action.call
+        names: tuple[str, ...] = (call.tool_name,)
+        if call.tool_name in _RUNS_BASH_COMMAND:
+            names = (call.tool_name, "Bash")
         for rule in self._rules:
-            if not fnmatchcase(call.tool_name, rule.match_tool):
+            if not any(fnmatchcase(n, rule.match_tool) for n in names):
                 continue
             if rule.match_arg is not None and not _arg_matches(
                 rule.match_arg, dict(call.arguments)

@@ -54,6 +54,8 @@ from noeta.builtins.providers.impl import catalog
 from noeta.builtins.providers.impl._sse import iter_sse_events
 from noeta.builtins.providers.impl.codecs import (
     describe_http_error,
+    http_error_is_context_overflow,
+    indicates_context_overflow,
     neutralize_reserved_tags,
     parse_retry_after,
     render_tool_result_body,
@@ -468,28 +470,14 @@ class AnthropicProvider:
 # Error translation
 # ---------------------------------------------------------------------------
 
-#: Substrings in an ``invalid_request_error`` message that mean the prompt
-#: exceeded the context window. Every marker must be a phrase that *only* an
-#: input-context overflow emits: the over-broad ``"max tokens"`` /
-#: ``"too many tokens"`` are excluded because they also appear in 400s
-#: compaction cannot fix (an output-cap validation message), and they add
-#: nothing — the real overflow body reads ``"prompt is too long: N tokens > M
-#: maximum"``, which the tight phrasings already catch.
-_OVERFLOW_MESSAGE_MARKERS: tuple[str, ...] = (
-    "prompt is too long",
-    "prompt too long",
-    "context window",
-    "maximum context",
-)
-
 
 def _translate_http_error(exc: httpx.HTTPStatusError) -> Exception:
     """Map an Anthropic-shape HTTP status error into the neutral taxonomy.
 
     429, 529 (overloaded) and 5xx are retryable; every other 4xx is fatal. A
-    400 gets its body sniffed first, because context overflow arrives as an
-    ordinary ``invalid_request_error`` yet needs its own bucket — it is not
-    retryable and the recovery a Policy drives is compaction.
+    4xx gets its body sniffed first, because context overflow arrives as an
+    ordinary ``invalid_request_error`` (or a 413) yet needs its own bucket —
+    it is not retryable and the recovery a Policy drives is compaction.
     """
     response = exc.response
     status = response.status_code
@@ -501,23 +489,9 @@ def _translate_http_error(exc: httpx.HTTPStatusError) -> Exception:
         )
     if status == 529 or status >= 500:
         return TransientError(message)
-    if status == 400 and _is_context_overflow(response):
+    if http_error_is_context_overflow(response):
         return ContextOverflowError(message)
     return FatalError(message)
-
-
-def _is_context_overflow(response: httpx.Response) -> bool:
-    try:
-        body = response.json()
-    except (json.JSONDecodeError, ValueError):
-        return False
-    error = body.get("error") if isinstance(body, dict) else None
-    if not isinstance(error, dict):
-        return False
-    if str(error.get("type") or "") != "invalid_request_error":
-        return False
-    message = str(error.get("message") or "").lower()
-    return any(marker in message for marker in _OVERFLOW_MESSAGE_MARKERS)
 
 
 #: In-band SSE ``error`` event types that bucket as :class:`TransientError` —
@@ -545,9 +519,10 @@ def _translate_stream_error_event(payload: dict[str, Any]) -> Exception:
     described = f"Anthropic stream error event: {error_type}: {message}"
     if error_type in _TRANSIENT_STREAM_ERROR_TYPES:
         return TransientError(described)
-    if error_type == "invalid_request_error" and any(
-        marker in message.lower() for marker in _OVERFLOW_MESSAGE_MARKERS
-    ):
+    if error_type in (
+        "invalid_request_error",
+        "request_too_large",
+    ) and indicates_context_overflow(message):
         return ContextOverflowError(described)
     return FatalError(described)
 
@@ -725,6 +700,21 @@ def _user_message_to_anthropic(
     return {"role": "user", "content": blocks}
 
 
+#: ``ThinkingBlock.provider`` for blocks this adapter produces.
+_PROVIDER = "anthropic"
+
+
+def _replayable_thinking(block: ThinkingBlock) -> bool:
+    """May this thinking block go back on the Anthropic wire?
+
+    A block another provider produced never does: its signature (if any) is
+    not one Anthropic issued, and Anthropic rejects foreign or unsigned
+    thinking. A block of unknown provenance (recorded before ``provider``
+    existed) still goes, as it always did.
+    """
+    return block.provider in (None, _PROVIDER)
+
+
 def _assistant_message_to_anthropic(
     message: Message, image_resolver: Optional[ImageResolver]
 ) -> dict[str, Any]:
@@ -740,7 +730,8 @@ def _assistant_message_to_anthropic(
     tool_use_blocks: list[ToolUseBlock] = []
     for block in message.content:
         if isinstance(block, ThinkingBlock):
-            thinking_blocks.append(block)
+            if _replayable_thinking(block):
+                thinking_blocks.append(block)
         elif isinstance(block, TextBlock):
             text_blocks.append(block)
         elif isinstance(block, ImageBlock):
@@ -991,6 +982,7 @@ def _parse_response_content(content_raw: list[Any]) -> list[Block]:
                 ThinkingBlock(
                     text=text if isinstance(text, str) else "",
                     signature=signature if isinstance(signature, str) else None,
+                    provider=_PROVIDER,
                 )
             )
         elif entry_type == "redacted_thinking":
@@ -1004,7 +996,9 @@ def _parse_response_content(content_raw: list[Any]) -> list[Block]:
             # as an empty ``thinking`` block (the API rejects it), so drop it.
             data = entry.get("data")
             if isinstance(data, str):
-                blocks.append(ThinkingBlock(text="", signature=None, data=data))
+                blocks.append(
+                    ThinkingBlock(text="", signature=None, data=data, provider=_PROVIDER)
+                )
         elif entry_type == "tool_use":
             call_id = entry.get("id", "")
             tool_name = entry.get("name", "")

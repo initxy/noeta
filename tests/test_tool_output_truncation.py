@@ -80,18 +80,29 @@ def test_persisted_output_without_more_has_no_ellipsis() -> None:
     )
 
 
-def test_unsaved_output_keeps_the_start_within_the_limit() -> None:
-    body = "x" * 10_000
+def test_unsaved_output_keeps_the_start_and_end_within_the_limit() -> None:
+    body = "x" * 5_000 + "y" * 5_000
     out = large_tool_output_message(body, 1_000)
     assert out.startswith(
         "<truncated-output>\nOutput too large (9.8KB). It could not be saved, "
         "so only the first "
     )
-    assert "If the tool can page or filter its results, call it again for the "
-    "part you need." in out
-    assert out.endswith("\n</truncated-output>")
+    assert "the middle was dropped. If the tool can page or filter its results, "
+    "call it again for the part you need." in out
+    assert out.endswith("y\n</truncated-output>")
     assert len(out) <= 1_000
-    assert "x" * 500 in out
+    assert "x" * 300 in out and "y" * 300 in out
+    assert " characters dropped] ...\n" in out
+
+
+def test_unsaved_output_keeps_the_trailing_error() -> None:
+    """A failing test run prints its verdict last; cutting to the start
+    would show only passing lines."""
+    lines = [f"line {i} ok" for i in range(4000)] + ["FAILED test_x: AssertionError"]
+    out = large_tool_output_message("\n".join(lines), 30_000)
+    assert len(out) <= 30_000
+    assert "line 0 ok\n" in out
+    assert out.endswith("\nFAILED test_x: AssertionError\n</truncated-output>")
 
 
 def test_size_labels_follow_claude_code() -> None:

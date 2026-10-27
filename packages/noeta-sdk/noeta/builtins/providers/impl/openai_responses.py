@@ -61,6 +61,9 @@ from noeta.builtins.providers.impl.codecs import (
 #: ``"responses"``.
 ReasoningContinuation = Literal["off", "chat", "responses"]
 
+#: ``ThinkingBlock.provider`` for blocks this adapter produces.
+_PROVIDER = "openai_responses"
+
 
 class OpenAIResponsesProvider:
     """Adapter for an OpenAI Responses-API endpoint.
@@ -981,7 +984,13 @@ def _assistant_message_to_responses(
             # None): an item without encrypted_content cannot restore any
             # reasoning tokens, and echoing the empty shell breaks the gateway's
             # prompt-cache prefix at this position.
-            if echo_reasoning and block.signature is not None:
+            # Reasoning another provider produced carries no ciphertext this
+            # API issued, so it is dropped too.
+            if (
+                echo_reasoning
+                and block.signature is not None
+                and block.provider in (None, _PROVIDER)
+            ):
                 reasoning_items.append(_thinking_block_to_reasoning(block))
         elif isinstance(block, ToolUseBlock):
             tool_calls.append(
@@ -1177,7 +1186,7 @@ def _reasoning_item_to_block(item: dict[str, Any]) -> ThinkingBlock:
                     parts.append(text)
     encrypted = item.get("encrypted_content")
     signature = encrypted if isinstance(encrypted, str) else None
-    return ThinkingBlock(text="\n".join(parts), signature=signature)
+    return ThinkingBlock(text="\n".join(parts), signature=signature, provider=_PROVIDER)
 
 
 def _message_item_to_blocks(item: dict[str, Any]) -> list[Block]:

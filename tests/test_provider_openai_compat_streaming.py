@@ -323,7 +323,7 @@ def test_reasoning_content_fragments_emit_thinking_deltas() -> None:
     ]
     assert response.stop_reason == "end_turn"
     assert response.content == [
-        ThinkingBlock(text="let me think...", signature=None),
+        ThinkingBlock(text="let me think...", signature=None, provider="openai_compat"),
         TextBlock(text="the answer"),
     ]
 
@@ -347,7 +347,7 @@ def test_reasoning_field_variant_is_recognised() -> None:
         StreamDelta(kind="text", text="ok", index=1),
     ]
     assert response.content == [
-        ThinkingBlock(text="hmm", signature=None),
+        ThinkingBlock(text="hmm", signature=None, provider="openai_compat"),
         TextBlock(text="ok"),
     ]
 
@@ -368,7 +368,7 @@ def test_encrypted_reasoning_accumulates_silently_into_signature() -> None:
     # The signature is an opaque continuation token, never a delta.
     assert [d.text for d in deltas] == ["step", "done"]
     assert response.content == [
-        ThinkingBlock(text="step", signature="opaque-token=="),
+        ThinkingBlock(text="step", signature="opaque-token==", provider="openai_compat"),
         TextBlock(text="done"),
     ]
 
@@ -636,9 +636,9 @@ def test_stream_ending_without_done_and_without_content_is_transient() -> None:
 
 
 @respx.mock
-def test_inconsistent_streamed_finish_reason_raises_like_batch() -> None:
-    """The rebuilt payload goes through the same ``_parse_response``
-    consistency checks as batch: finish_reason=stop with tool_calls raises."""
+def test_streamed_stop_with_tool_calls_is_tool_use_like_batch() -> None:
+    """The rebuilt payload goes through the same ``_parse_response`` as
+    batch: finish_reason=stop with tool_calls is a tool-use stop."""
     respx.post(CHAT_ENDPOINT).mock(
         return_value=_stream_response(
             _chunk(
@@ -657,5 +657,5 @@ def test_inconsistent_streamed_finish_reason_raises_like_batch() -> None:
         )
     )
 
-    with pytest.raises(ValueError, match="inconsistent OpenAI response"):
-        _make_provider().complete_streaming(_basic_request(), lambda _d: None)
+    response = _make_provider().complete_streaming(_basic_request(), lambda _d: None)
+    assert response.stop_reason == "tool_use"

@@ -28,6 +28,8 @@ from noeta.protocols.decisions import (
     SpawnSubtaskDecision,
     SpawnSubtaskSpec,
     SpawnSubtasksDecision,
+    ToolCall,
+    ToolCallsDecision,
 )
 from noeta.protocols.messages import (
     LLMResponse,
@@ -158,15 +160,21 @@ def _maybe_spawn_decision(
     assistant_message: Message,
     *,
     assistant_thinking: tuple[ThinkingBlock, ...] = (),
+    control_tool_names: frozenset[str] = frozenset(),
 ) -> Decision | None:
-    """Translate ``spawn_subagent`` tool_use(s) into a spawn decision, or fail
-    closed on a mixed batch.
+    """Translate ``spawn_subagent`` tool_use(s) into a spawn decision.
 
     Routing turns on the flattened member total across the turn's Task calls:
 
-    * mixed with any non-Task tool call, or a malformed argument shape →
-      a recoverable error ack (``patch=None``, one failed ``ToolResultBlock``
-      per call_id). The task is NOT terminated; the model can retry.
+    * a malformed argument shape, or another CONTROL tool alongside (which
+      the ToolRuntime could never answer) → a recoverable error ack
+      (``patch=None``, one failed ``ToolResultBlock`` per call_id). The task
+      is NOT terminated; the model can retry.
+    * mixed with ordinary tool calls → a :class:`ToolCallsDecision` running
+      only the ordinary calls. The Task calls stay unanswered in the recorded
+      assistant turn, and the policy spawns them on its next step, before any
+      model call, so the ordinary results are recorded first and the Task
+      barrier follows.
     * exactly one member → :class:`SpawnSubtaskDecision`.
     * two or more members → :class:`SpawnSubtasksDecision`, with member order
       = call order then entry order within a call, and members of one call
@@ -183,7 +191,9 @@ def _maybe_spawn_decision(
     ]
     if not spawn_blocks:
         return None
-    if len(spawn_blocks) != len(tool_uses):
+    others = [b for b in tool_uses if b.tool_name != SPAWN_SUBAGENT_TOOL]
+    control_others = [b for b in others if b.tool_name in control_tool_names]
+    if control_others:
         return ack_patch_decision(
             tool_uses,
             assistant_message,
@@ -192,9 +202,9 @@ def _maybe_spawn_decision(
             # Stamped on every tool_use of the response, so it must read
             # correctly on a neighbour that never ran too.
             text=(
-                "Nothing in this response ran: a response carrying Task may "
-                "carry only Task calls. Re-issue the other calls in a "
-                "separate response."
+                "Nothing in this response ran: Task cannot share a response "
+                f"with {control_others[0].tool_name}. Re-issue the other "
+                "calls in a separate response."
             ),
             valid=False,
         )
@@ -225,6 +235,19 @@ def _maybe_spawn_decision(
                 valid=False,
             )
         members_per_call.append((block, members))
+    if others:
+        return ToolCallsDecision(
+            calls=[
+                ToolCall(
+                    tool_name=b.tool_name,
+                    arguments=dict(b.arguments),
+                    call_id=b.call_id,
+                )
+                for b in others
+            ],
+            assistant_message=assistant_message,
+            assistant_thinking=assistant_thinking,
+        )
     if sum(len(m) for _, m in members_per_call) == 1:
         block, members = members_per_call[0]
         agent_name, goal = members[0]
@@ -269,6 +292,7 @@ def translate_spawn_subagent(ctx: ControlTranslateContext) -> Optional[Decision]
         ctx.response,
         ctx.assistant_message,
         assistant_thinking=ctx.assistant_thinking,
+        control_tool_names=ctx.control_tool_names,
     )
 
 

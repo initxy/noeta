@@ -116,7 +116,7 @@ def test_streamed_empty_text_block_before_a_tool_call_is_dropped() -> None:
     response = provider.complete_streaming(_REQ, _discard)
     assert response.stop_reason == "tool_use"
     assert response.content == [
-        ThinkingBlock(text="hmm", signature="sig"),
+        ThinkingBlock(text="hmm", signature="sig", provider="anthropic"),
         ToolUseBlock(call_id="t1", tool_name="Read", arguments={"file_path": "/a"}),
     ]
 
