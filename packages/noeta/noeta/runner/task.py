@@ -185,7 +185,12 @@ class TaskRun:
         await self.flush(view)
 
     def view(self) -> TaskView:
-        return TaskView(state=self.state, complete=self.complete, env=self.env())
+        return TaskView(state=self.state, complete=self.complete, env=self.env(),
+                        post=self.post_self)
+
+    async def post_self(self, body: Any, dedupe_key: str | None = None) -> None:
+        """Post to this task's own inbox (extensions: ``TaskView.post``)."""
+        await self.store.post(Post(task_id=self.task_id, body=body, dedupe_key=dedupe_key))
 
     def env(self) -> Any:
         """The task's ExecEnv, made once per run (after the log is folded, so

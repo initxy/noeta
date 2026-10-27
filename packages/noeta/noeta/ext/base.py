@@ -81,6 +81,10 @@ class TaskView:
     #: The task's execution environment (files, commands), when the runner
     #: has one.
     env: ExecEnv | None = None
+    #: Post to this task's own inbox: ``await post(body, dedupe_key=None)``.
+    #: For input that must arrive as inbox items (a notice that opens a
+    #: turn, a cancel); idempotent with a ``dedupe_key``.
+    post: Callable[..., Awaitable[None]] | None = None
     pending: list[Event] = field(default_factory=list)
 
     @property
