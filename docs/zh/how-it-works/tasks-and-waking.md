@@ -69,9 +69,9 @@ Task 存下的条件和最终满足它的事件是同一个 dataclass。是否�
 - 只要有不止一个宿主进程分担工作，就用 Postgres。
 
 设计记录：
-[task as the only primitive](https://github.com/initxy/noeta/blob/main/docs/adr/task-as-only-primitive.md) ·
-[durable wake](https://github.com/initxy/noeta/blob/main/docs/adr/subtask-fanout-and-durable-wake.md) ·
-[multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md)
+[task as the only primitive](https://github.com/initxy/noeta/blob/main/docs/adr/024-task-as-only-primitive.md) ·
+[durable wake](https://github.com/initxy/noeta/blob/main/docs/adr/022-subtask-fanout-and-durable-wake.md) ·
+[multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/034-multi-host-lease-fencing.md)
 
 ## 下一步
 

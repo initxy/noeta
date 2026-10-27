@@ -37,7 +37,7 @@ forget. Observers are wiring, never identity — enabling one leaves the compile
 
 ## Failure is not the agent's problem
 
-Per [`docs/adr/guard-observer-hooks.md`](../../../docs/adr/guard-observer-hooks.md)
+Per [`docs/adr/010-guard-observer-hooks.md`](../../../docs/adr/010-guard-observer-hooks.md)
 an observer failure must never flow back to the writer, so the observer swallows
 every exception and logs at `warning`. A missing or broken git repo degrades to
 "no checkpoint recorded" rather than a failed turn: losing an undo point is

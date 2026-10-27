@@ -487,7 +487,7 @@ def test_engine_skill_invocation_full_chain(tmp_path: Path) -> None:
 
     Anchoring matters: a mid-task activation must leave the head segments
     byte-identical so the provider's prompt cache survives the turn
-    (docs/adr/anchored-content-placement.md).
+    (docs/adr/036-anchored-content-placement.md).
     """
     ws = _make_ws_with_skill(tmp_path)
     engine, disp, cs, log = _build_engine_for_tests(
@@ -808,7 +808,7 @@ def test_e2e_presets_flag_full_chain(
     assert "Skill 'bravo' loaded" in block.output
 
     # A mid-task activation anchors into the dynamic suffix and leaves
-    # semi_stable untouched (docs/adr/anchored-content-placement.md).
+    # semi_stable untouched (docs/adr/036-anchored-content-placement.md).
     view = engine._composer.compose(folded)
     semi = next(s for s in view.segments if s.name == "semi_stable")
     assert semi.content == []
@@ -918,7 +918,7 @@ def test_e2e_preloop_skill_coexists_with_midloop_skill(
         e for e in log.read(tid) if e.type == "SkillContentRecorded"
     ]
 
-    # Placement splits by anchor (docs/adr/anchored-content-placement.md):
+    # Placement splits by anchor (docs/adr/036-anchored-content-placement.md):
     # "alpha" was there before the first turn so it keeps its semi_stable
     # seat; "bravo" arrived mid-task so it anchors in the dynamic suffix.
     view = engine._composer.compose(folded)

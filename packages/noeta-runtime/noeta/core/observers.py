@@ -232,7 +232,7 @@ class ChildLifecycleObserver:
         if parent_id is None:
             return
         # A child spawned with ``spawn_subagent(background=True)`` is INVISIBLE
-        # to this observer (docs/adr/background-subagent.md). The parent never
+        # to this observer (docs/adr/002-background-subagent.md). The parent never
         # suspended on it, so the auto-handoff — ``SubtaskCompleted`` on the
         # parent stream + a ``wake`` — would be a phantom completion and a
         # non-matching wake; the background-subagent driver owns that child's

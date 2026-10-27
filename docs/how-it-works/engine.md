@@ -92,8 +92,8 @@ stream; no stream ever gets a second writer.
 - The Engine's main loop itself is not extensible; everything around it is.
 
 Design records:
-[guard and observer hooks](https://github.com/initxy/noeta/blob/main/docs/adr/guard-observer-hooks.md) ·
-[engine per turn](https://github.com/initxy/noeta/blob/main/docs/adr/engine-per-turn.md)
+[guard and observer hooks](https://github.com/initxy/noeta/blob/main/docs/adr/010-guard-observer-hooks.md) ·
+[engine per turn](https://github.com/initxy/noeta/blob/main/docs/adr/046-engine-per-turn.md)
 
 ## Next
 

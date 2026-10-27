@@ -22,7 +22,7 @@ process memory, so a restart or another replica announces exactly what this
 process would. A removed skill and an edited summary are not announced: the
 listing keeps its bytes, and calling a removed skill gets the translate's
 "unknown skill" answer. Residents re-hang after a compaction summary
-(``docs/adr/anchored-content-placement.md``).
+(``docs/adr/036-anchored-content-placement.md``).
 
 The fitted roster of the current build reaches the provider through the task's
 local slot (:data:`ROSTER_SLOT`, ``noeta.runtime.task_local``): the pack writes

@@ -124,4 +124,4 @@ options = Options(system_prompt="…", name="my-agent", mcp_servers=(my_mcp,))
 
 - [自定义工具](tools.md)：写要打包的 `@tool` 函数
 - [沙箱](sandbox.md)：工具跑在容器里时，MCP 仍然留在 host 上
-- [ADR：MCP connectors](https://github.com/initxy/noeta/blob/main/docs/adr/mcp-connectors.md)
+- [ADR：MCP connectors](https://github.com/initxy/noeta/blob/main/docs/adr/012-mcp-connectors.md)

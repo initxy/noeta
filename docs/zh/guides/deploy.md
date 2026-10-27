@@ -60,7 +60,7 @@ host_config = HostConfig(storage_path="postgresql://noeta:noeta@postgres:5432/no
 SQLite 没有跨机器的租约检查。同一个进程里跑多个 worker 没问题；多个进程或多台机器共用一个 SQLite 文件不行。
 :::
 
-**同一个数据库，跑不同的 agent。** 给每个 client 设各自的 `HostConfig(queue="…")`。根任务建在创建它的 client 的队列上，子任务跟着父任务走，worker 池只认自己的队列，所以配置不同的两个 client 不会跑到对方的任务。见 [ADR：worker queue routing](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md)。
+**同一个数据库，跑不同的 agent。** 给每个 client 设各自的 `HostConfig(queue="…")`。根任务建在创建它的 client 的队列上，子任务跟着父任务走，worker 池只认自己的队列，所以配置不同的两个 client 不会跑到对方的任务。见 [ADR：worker queue routing](https://github.com/initxy/noeta/blob/main/docs/adr/041-worker-queue-routing.md)。
 
 ## 用 Docker 打包
 

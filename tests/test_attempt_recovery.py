@@ -8,7 +8,7 @@ abandoning the in-flight lease, then ``requeue_stale`` + a fresh lease.
 The hazard these guard: a blind re-drive over a dirty window would
 re-execute a human-approved call or re-spawn a subtask, so anything the
 guard chain would not have run unattended must park for a human instead.
-See docs/adr/step-attempt-recovery.md.
+See docs/adr/032-step-attempt-recovery.md.
 """
 
 from __future__ import annotations

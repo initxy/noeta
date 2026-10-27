@@ -1,301 +1,297 @@
 # Noeta
 
-A runtime for long-horizon, task-oriented agents. It hosts, records, schedules, and replays agent execution, without prescribing how an agent is written.
+A runtime for long-horizon, task-oriented agents: it hosts, records, schedules, and replays agent
+execution without prescribing how an agent is written. Package-local rules live in
+`packages/noeta-runtime/AGENTS.md` and `packages/noeta-sdk/AGENTS.md`.
 
-## Distribution boundary: two layers — pure engine / thin client
+## Two libraries
 
-Distribution is **two libraries**, split along the **outward wheel boundary plus public surface**. The model is **in-process**, like LangChain or the Claude Agent SDK: both wheels are pure libraries and neither speaks HTTP.
+- **noeta-runtime** is the pure kernel: protocols, Engine / fold, worker and lease machinery, the
+  composer, the injection-only session builder, the InMemory storage reference. Stdlib only;
+  `tests/test_install_smoke.py` pins that closure.
+- **noeta-sdk** is the thin client users import (`noeta.sdk`). It ships `noeta.presets` and
+  `noeta.builtins` (every official capability) and owns the `httpx` / `psycopg` dependencies.
+- Both are in-process libraries: no HTTP/SSE server, no UI, no session model, and no operator CLI
+  or console script. A host builds those on top (`examples/reference-host` is the smallest one).
+- PyPI dist names are `noeta-runtime` / `noeta-sdk` (bare `noeta` is an unrelated package).
 
-- **noeta-runtime** — the **pure kernel**: everything needed to *host* one agent in-process, with **no capability implementation of its own**. `protocols` (the only typed boundary; it imports nothing else in-project) + `core` (Engine / fold / snapshot) + kernel services (`runtime` — `WorkerLoop` / `ToolRuntime` / `RuntimeLLMClient` / compaction, plus the kernel vocabulary sinks `runtime.{workspace,shell_policy,exec_env,governance,mcp}`; `storage` — the InMemory reference backend plus `noeta.storage.spi`, the public SPI carrying the domain rules every backend must obey; `observers`; `read_models`) + the materials band (`context` — the locked `ThreeSegmentComposer` and the generic content-kind / reminder registries, which name no kind themselves; `policies` — the neutral control mechanism, i.e. `control_semantics` (the control-tool spec / mount types, `ControlTranslateContext`, the `translate_control_tool` dispatcher, and the reserved recorded-wire constants `SPAWN_SUBAGENT_TOOL` / `RUN_WORKFLOW_TOOL` / `WORKFLOW_AGENT_NAME` / `concurrent_fanout_enabled`) plus the `stub` test doubles; `tools` — authoring machinery only, the `@tool` decorator and `FakeTool`) + the `execution` machine (an **injection-only** session builder: packs, control tools, guards, reminders and provider facts all arrive as injections that fail loudly when absent) + the `agent` identity layer (`AgentSpec` / `AgentRegistry`). Its dependency list is empty — stdlib only, no `httpx`, no HTTP/SSE server. Installed alone it runs an agent only with host-injected `Tool` / `LLMProvider` / hook objects; the protocols are its contract (`tests/test_install_smoke.py` pins this closure).
-- **noeta-sdk** — the **thin client** on top of runtime, and the only thing users import. It exposes the public surface `noeta.sdk`: the client verbs (`query` / `Client`), the recipe (`Options` / `AgentDefinition` / `SystemPromptPreset` / `compile_options`), the message projection (`as_messages` plus the message and content types), host wiring (`HostConfig`), the authoring API (`tool`, `create_sdk_mcp_server`), the extension interfaces re-exported from the kernel (`Tool` / `LLMProvider` / `Policy` / `Guard` / `Observer` / `ContentKindSpec`, plus the advanced `View` / `Decision`), and the plugin mechanism (`SurfaceSpec` / `SurfaceRegistry` / `standard_registry` / `PluginManifest` / `PluginSet` / `load_plugins` / `DEFAULT_PLUGINS`). `noeta.presets` carries the four official agents — `main` plus the subagents `general-purpose` / `explore` / `plan` — alongside the sandbox-gated `WEB_SUBAGENT` and the internal `__consolidation__` memory curator. `noeta.builtins` is the built-in plugin catalogue holding every official capability implementation: one directory per built-in (`fs`, `web`, `memory`, `browser`, `app`, `mcp`, `skills`, `react`, `reminders`, `governance`, `providers`, `sandbox`, `presets`, `workspace`, `storage`, `todo_write`, `ask_user_question`, `delegation`), each a zero-execution `MANIFEST` in `__init__.py` over code under `impl/`. It **contains no engine**; it forwards into runtime (an in-process, legitimate dependency, tracked minor-for-minor — the live pin is the `noeta-runtime` requirement in `packages/noeta-sdk/pyproject.toml`) and owns the `httpx` dependency its HTTP-speaking impls need plus the `psycopg[binary]` dependency of the Postgres storage backend. `noeta.presets` and `noeta.builtins` ship in **this** wheel, not runtime's.
+## Public surface
 
-The `noeta.agent` **identity layer** (`AgentSpec` / `AgentRegistry`) is published by noeta-runtime and stays a runtime-internal module — an agent is a "class" of task, not a network surface. It is not to be confused with any server or host built on top of these libraries.
+`noeta.sdk` is the only module users import; `noeta.core`, `noeta.runtime`, `noeta.execution`,
+`noeta.client`, `noeta.builtins` and the rest are internal. Wiring-only escape hatches on the
+public surface: `noeta.storage` (backend SPI + InMemory reference), `noeta.read_models`, and the
+lazy doorways `noeta.sdk.providers` / `noeta.sdk.storage`, so only callers that need `httpx` /
+`psycopg` pull them in. Concrete sandbox adapters stay off the surface; only the protocols and
+factory types are exported. See `docs/adr/011-library-sdk-architecture.md`.
 
-Repository shape: `packages/{noeta-runtime,noeta-sdk}` (two libraries) + a runnable `examples/` tree (including `examples/reference-host`, a reference host assembled from the public surface) + a repo-root `tests/`. Distribution mapping: `noeta-sdk` ↔ claude-agent-sdk.
+## Microkernel rule
 
-**The only public surface is `noeta.sdk`.** Users install noeta-sdk and import only `noeta.sdk`; noeta-runtime is a transitive dependency they never touch. The internals a user never imports directly are `noeta.core` / `noeta.protocols` / `noeta.runtime` / `noeta.policies` / `noeta.tools` (the whole package — the `tool` / `create_sdk_mcp_server` authoring API lives in `noeta.sdk`) / `noeta.context` / `noeta.execution` / `noeta.client` (the SDK core) / the `noeta.agent` identity layer / **`noeta.builtins`** (the capability impls — reached only through the plugin loader; the supported adapter import path is `noeta.sdk.providers`). A host that embeds these libraries reaches everything it needs through `noeta.sdk`, with two wiring-only escape hatches also on the public surface: `noeta.storage` (the backend SPI plus the InMemory reference backend — wiring only, never a second writer; the durable sqlite / postgres backends are wired via `noeta.sdk.storage`, a lazy doorway like `noeta.sdk.providers`) and `noeta.read_models` (the peripheral file-tree / preview projection). The concrete AIO Sandbox adapters (`noeta.builtins.sandbox.impl.{exec_env,browser}`) are kept **off** the `noeta.sdk` public surface, which exposes only the `ExecEnv` / `BrowserBackend` protocols plus the `BackendFactory` / `BrowserBackendFactory` / `BoundPreamble` factory types (see the execution-environment-seam ADR). The "import only `noeta.sdk`" guarantee is enforced by wheel packaging; noeta-sdk itself may import runtime (legitimate in-process). Internally, import-linter enforces the topology — most importantly the **universal microkernel contract**: *nothing* statically imports `noeta.builtins`, and the loader's dynamic `ref` resolution is the only doorway. That one rule is also what keeps the kernel provider-neutral, since every adapter lives in a built-in plugin. Because PEP 420 keeps every `noeta.<module>` path stable independently of which wheel ships it, re-layering moves the **distribution, not the import path**, and the contracts rerun as-is.
+Nothing statically imports `noeta.builtins`; the plugin loader's dynamic `ref` resolution is the
+only way in (`.importlinter` enforces it). This also keeps the kernel provider-neutral, since
+every adapter lives in a built-in plugin — one directory per capability under
+`packages/noeta-sdk/noeta/builtins/`, riding the same loader path as external plugins. The kernel
+builder is injection-only and fails loudly when a part is missing; bare-`Options()` defaults come
+from resolving built-in manifests via `noeta.client.parts`, never from a static default table.
 
-**Locked vs. open.** The **open** extension surfaces are described by a **surface registry** (see Surface / SurfaceSpec) — sixteen standard surfaces across three planes: **identity** (`tool` / `agent` / `content_kind` / `prompt_fragment` / `policy` / `control_tool`), **wiring** (`guard` / `observer` / `provider` / `reminder_provider` / `reminder` / `tool_result_transform` / `session_pack`), and **host** (`mcp_server` / `skills` / `sandbox_provider`). Each can be hand-wired through an `Options` field (or `HostConfig`), or populated by a **Plugin** (the packaging + discovery unit) and selected per agent by **activation**. **Noeta's own capabilities ride the same path**: the bare-`Options()` defaults — the 10 fs/web tools, the default guards, the three compose-time reminders, the provider and model-catalog facts (`provider_family` / `resolve_model_alias` / `catalog_price` / `register_catalog_models`) — are obtained by resolving the built-in plugin manifests at client build, with the `noeta.client.parts` accessors as the sanctioned doorway and no static default table anywhere (the shipped catalog itself is operator-extensible: `HostConfig.extra_models` / `noeta.sdk.providers.register_models` merge rows into every lookup, collisions refusing loudly); `DEFAULT_PLUGINS = ("fs", "web")` keeps a bare `Options()` byte-identical. The kernel builder is injection-only and fails loudly when a required part is missing. Storage backends (EventLog / ContentStore / Dispatcher) — and the host's other non-identity runtime injections — are configured through **host config** (`noeta.sdk.HostConfig`, passed as `Client(..., host_config=...)`), not through Options and **never a plugin surface**; `HostConfig` never enters `AgentSpec` identity. **Locked**: the Engine main loop and the Dispatcher / Worker / lease protocol (`HostConfig` supplies the storage triple and tunes background concurrency caps, nothing more), and `ContextComposer` — replacing the composer wholesale is **not** open on the user surface, because stable-prefix KV-cache reproducibility is a hard constraint (the internal composer is Protocol-injected, the Engine imports only the protocol, and the builder wires `ThreeSegmentComposer`). The composer's open hooks are **registry-only and append-only**: registering a `ContentKindSpec` or a compose-time `reminder`, both of which touch only the volatile dynamic suffix and semi-stable segment, never the stable prefix.
+## Locked vs. open
 
-**There is no operator CLI.** `run / inspect / resume` are the library core of the runtime's capabilities — inspect and state reconstruction go through `noeta.core.fold`; drain and resume go through `noeta.runtime.worker` — with no argparse wrapper and no `noeta` console script. The resident drain loop ships as the library primitive `noeta.runtime.worker.WorkerLoop`; nothing launches it for you, an embedding host constructs and runs it. HTTP/SSE, a UI, and any session model are **not** part of these libraries: a host that wants them builds them on top of `noeta.sdk` (`examples/reference-host` is the smallest such host — durable storage, token streaming, and plugins wired from the public surface alone).
+Open: the plugin Surfaces. Locked: the Engine main loop, the Dispatcher / Worker / lease protocol,
+and the `ContextComposer` — replacing it is not allowed because stable-prefix cache
+reproducibility is a hard constraint. The composer's only open hooks are append-only
+registrations (a `ContentKindSpec`, a compose-time `reminder`), which never touch the stable
+prefix. Storage backends go through `HostConfig`, never `Options` or a plugin surface, and
+`HostConfig` never enters `AgentSpec` identity.
 
-Installation: **`uv pip install noeta-sdk`**, then `import noeta.sdk` (noeta-runtime comes along as an untouchable transitive dependency). On PyPI the project is published under the dist names `noeta-runtime` / `noeta-sdk`; the bare `noeta` name belongs to an unrelated package, so the two-wheel split doubles as the naming workaround.
+## Surface
 
-## Vocabulary
+One named extension point; a `SurfaceSpec` gives its plane (identity / wiring / host), activation
+scope, validator, collision key and ordering (`packages/noeta-sdk/noeta/client/surfaces.py`). The
+loader is surface-agnostic: adding a surface, including a host's own on a copy of
+`standard_registry()`, is registering a spec, not editing the loader. The wiring plane has only
+two process-wide channels (`guard`, `observer`); any other process-scoped surface is refused.
+Host-plane contributions are validated the same way but never enter `AgentSpec` identity.
 
-### Core abstractions
+## Plugin and PluginSet
 
-**Task**:
-One execution instance of an agent; it can spawn subtasks, suspend on a wake condition, and resume. The only first-class citizen in the system. The `Task` object itself is small (`task_id`, `status`, four state slices); its history, audit trail, and snapshots live in the EventLog and the ContentStore.
-_Avoid_: Run, Workflow Instance
+A Plugin is a manifest-declared contribution package. The manifest is inert data read without
+importing plugin code — `ref`s are strings resolved only at client build — so contributions are
+listable and collision-checked before any code runs; a collision names both sides, no override.
+`load_plugins(...)` returns the host-level `PluginSet`; `.resolve()` is its single import
+boundary, called at client build and never on a turn. Workspace plugin dirs are trust-gated.
+See `docs/adr/038-plugin-contribution-bundles.md`.
 
-**Subtask**:
-A task spawned from a parent task by a `spawn_subtask` decision. Structurally identical to a parent task, related only through `parent_task_id` (plus `subtask_depth`, the delegation depth the recursion budget caps).
+## Activation
 
-**Agent**:
-A named, spawnable configuration — an `AgentSpec` carrying instructions, the policy and composer refs, tools, skills, budget, activated plugins, and the names it may spawn. **Not a runtime entity** — just the "class" of a task. It is identity only (no callables), normalized to sorted tuples at construction, so two specs differing only in author ordering compare equal. A child agent's `description` is required and non-blank: it is rendered into the `Task` control-tool schema as an enum of allowed names plus the human-readable roster, so the model knows who to hand work to.
+Per-agent selection of loaded plugins (`Options.plugins`, `AgentDefinition.plugins`). Activation
+is identity: names fold into `AgentSpec.plugins` and gating checks membership via
+`agent_activates`; an unknown name fails compilation. Identity surfaces follow activation;
+guards and observers do not — once loaded they apply process-wide, because governance is operator
+authority. `DEFAULT_PLUGINS = ("fs", "web")` is identity-inert, so a bare `Options()` compiles
+byte-identically.
 
-**Options**:
-The declarative agent configuration (public surface `noeta.sdk.Options`; internal `noeta.client.options.Options`), compiled by `compile_options` into an `AgentSpec` plus a flat tuple of descendant specs that the `Client` registers; **the sole way to express both the official agent set (`noeta.presets`) and custom agents** (its surface aligns with the Claude Agent SDK parameter table). Compilation is pure and additive — equal recipes compile to equal specs, and it fills in defaults rather than overriding intent. Core fields:
+## Session pack
 
-| Field | Shape | Notes |
-|---|---|---|
-| `system_prompt` | `str \| SystemPromptPreset(preset="main", append=...)` | Required. A verbatim string, or a named preset resolved at compile time with an optional appended section |
-| `name` | `str` | Agent name, default `"main"`; a name that collides with an `agents` key raises `ValueError` |
-| `agents` | `Mapping[str, AgentDefinition]` | A **flat dict**, not nested; `AgentDefinition` fields: `description` (required, non-blank), `prompt`, `tools`, `model`, `plugins` (its own activation list), `metadata`. The keys fill the parent's `spawnable`; a `__`-prefixed name compiles into the registry but stays out of that union |
-| `allowed_tools` | `tuple[str \| ToolLike, ...] \| None` | A **replacement** allowlist: a tuple means *only* those tools. `None` = the full built-in set (loader-resolved from the `fs` / `web` manifests via `builtin_tool_classes()`: the 10 tools Read/Glob/Grep/Edit/Write/Bash/BashOutput/KillShell/Monitor/WebFetch, plus WebSearch only when `NOETA_WEB_SEARCH_API_KEY` is set; `RecallHistory` also mounts, from `react`, whenever compaction is wired); `()` = no tools. Control tools are not in this set — they mount on **activation** |
-| `disallowed_tools` | `tuple[str, ...]` | A subtractive denylist applied to whichever base list applies; names that are absent are ignored |
-| `permission_mode` | `default \| acceptEdits \| bypassPermissions` | Three approval modes, validated against `PERMISSION_MODES` |
-| `can_use_tool` | `Callable[[str, dict], bool] \| None` | A programmatic approval callback (tool name + arguments, `True` = allow); its ruling **is recorded as an ordinary approval event** (`ToolCallApprovalResolved` with `resolver="can_use_tool"`) |
-| `max_turns` | `int \| None` | Sugar for `budget.max_iterations`; supplying both raises `ValueError` |
-| `cwd` | `str \| Path \| None` | Working-directory hint; a **wiring** field, excluded from identity and from equality (like `provider`) |
-| `provider` | `LLMProvider \| None` | The LLM adapter — the basis of provider neutrality; wiring, and `Client` kwargs take precedence |
-| `skills` | `tuple[str, ...]` | Declaratively activated skills, each wrapped as `ComponentRef(name, version="1")` |
-| `plugins` | `tuple[str, ...]` | **Activation** (see the term): the loaded plugins this agent uses, folded into the `AgentSpec.plugins` identity tuple. Defaults to `DEFAULT_PLUGINS` (`fs` / `web` — identity-inert, so a bare `Options()` compiles byte-identically). An unrecognised name fails compilation loudly |
-| `budget` | `BudgetSpec \| None` | `None` ⇒ `BudgetSpec(max_subtask_depth=3)`, the runaway-recursion guard |
+The session-construction half of a capability: a factory `(SessionBuildContext) ->
+PackContribution` the kernel builder runs in one priority-ordered loop
+(`packages/noeta-runtime/noeta/execution/session_pack.py`). The builder names no capability; a
+pack self-gates (missing entry in the `backends` bag, flag off, no config) and returns the empty
+contribution — never a kernel `if`. Pack priorities are locked by byte-equality goldens because
+tool order feeds the stable-prefix hash. Its `init` hook gets a scoped `SessionRecorder`, the only
+write verb a plugin has.
 
-**Step**:
-The slice by which a task advances within one Engine main-loop pass: `compose → decide → dispatch`. A `tool_calls` decision keeps the loop turning in place (append results, recompose, ask again); any other decision ends the step at a suspend or a terminal.
+## Control tool mount
 
-**Attempt**:
-One decide→act iteration within a Step. Its first durable record is `ContextPlanComposed` (the implicit attempt-start record), and it is the unit of crash recovery: a `StepAttemptAbandoned` marker seals an interrupted attempt as folded-over dead history.
+The control-tool half of a capability: a factory returning a `ControlToolMount` (or `None` = not
+applicable), run after tool assembly because the schema depends on session state
+(`packages/noeta-runtime/noeta/execution/control_tool.py`). The mount carries its own `translate`
+closure so the runtime translate context stays feature-free. Schema and routing priorities are
+locked by goldens. See `docs/adr/039-control-tool-contributions-and-activation-identity.md`.
 
-**Decision**:
-The return value of `Policy.decide`, and the input to Engine dispatch. A set of **neutral mechanism variants** (open-ended in number): 7 canonical ones — `tool_calls` / `spawn_subtask` / `yield_for_human` / `wait_timer` / `wait_external` / `finish` / `fail` — plus three that generalize them without adding product meaning: `spawn_subtasks` (fan out N subagents in one turn, an N-way join), `state_patch` (a durable state write that continues the loop: caller-authored messages plus an optional `TaskStatePatch`, emitted in a fixed order — the Engine assigns zero meaning to the payload), and `compaction_requested` (the loop-continuing compaction step). Product control tools get no kernel variant of their own: `todo_write`, `skill` and `recall_history` (the compaction escape hatch, answered at translate time off the composed View) are expressed as `state_patch`, `ask_user_question` as `yield_for_human`, by the contributing built-in's translate body — the kernel retains only neutral HITL auditing.
+## Task
 
-**Policy**:
-The function that decides the next step given the current View (`decide(ctx, view) -> Decision`). It can be a pure LLM (`ReActPolicy`), a pure FSM, or a hybrid. It is an open extension surface: `Options.policy` — or a plugin's single `policy` contribution — supplies an `(llm) -> Policy` factory whose `.ref` enters agent identity, so a swapped brain is a distinct agent; the default is `ComponentRef("react", "1")`.
+One execution instance of an agent; the only first-class runtime entity. States: `pending` /
+`running` / `suspended` / `terminal`. Every wait — subtask, approval, timer, external event, next
+user goal — is the same `suspended` state and the same resume path. A conversation is one Task
+receiving goals repeatedly. A **turn** opens with a user goal (or background notice) and runs
+through every approval, answer and subtask return that resumes it, until the Task parks for the
+next goal or ends. A **Subtask** is a Task spawned by a parent, linked only by
+`parent_task_id` (always delegation) and `subtask_depth`. **`root_task_id`** names a delegation
+tree and owns its tree-scoped resources: background shells, background subagents, the sandbox.
+_Avoid_: Run, Workflow Instance, Session
+
+## Agent
+
+A named, spawnable configuration (`AgentSpec`, `packages/noeta-runtime/noeta/agent/spec.py`): the
+"class" of a Task, not a runtime entity. Identity only, no callables, normalized so author
+ordering does not change equality; a different policy, plugin set or tool set is a different
+agent. Compiled from `Options` (`noeta.sdk.Options`), the only way to express both the official
+agents in `noeta.presets` and custom ones. A child's `description` is required: it is rendered
+into the `Task` tool schema so the model knows whom to delegate to.
+
+## Decision and Policy
+
+A Policy decides the next step: `decide(ctx, view) -> Decision` (LLM, FSM, or hybrid), supplied
+as an `(llm) -> Policy` factory whose `.ref` enters identity; the default `("react", "1")` is why
+the `react` built-in cannot be disabled. Decisions are neutral mechanism variants
+(`packages/noeta-runtime/noeta/protocols/decisions.py`). Product control tools never get a kernel
+variant — they translate to `state_patch` or `yield_for_human` inside their built-in, and the
+Engine assigns no meaning to a `state_patch` payload.
+See `docs/adr/004-control-tools-neutral-mechanism.md`.
 _Avoid_: Pattern
 
-**Tool**:
-An external action the agent can invoke. The structured-contract trio `name` / `input_schema` / `description` is **deliberately hand-written and LLM-facing** (not taken from the docstring — the docstring is developer documentation and would leak internal code names); `input_schema` is JSON-Schema-shaped metadata the model reads, not a runtime validator. `description` is the **single source of truth** for the model-visible tool semantics, rendered by the ContextComposer into the provider tool schema and then serialized by each adapter, and **never repeated in the system_prompt** (the prompt holds only role and cross-tool workflow policy). A Tool also carries `risk_level`, which gates approval. Tool is an **open** extension surface (an `Options` field); the `@tool` authoring decorator is the only tools component shipped on the `noeta.sdk` surface, while the built-in tool implementations live in their built-in plugins (`noeta.builtins.<name>.impl`) and are resolved through the plugin loader at client build. Three attributes are optional and read with `getattr`: `advertised=False` keeps a tool out of the provider-visible list while it stays registered, guarded and invocable (the `mcp` built-in sets it for a server declared `deferred=True`, advertising `ToolSearch` / `McpCall` in place of N schemas), `route_call` lets the react policy rewrite a call on such a tool into a call on the real tool name with the same `call_id` before the Guard sees it (the kernel knows nothing about MCP), and `concurrency_safe=True` (Claude Code's `isConcurrencySafe`; set on `Read` / `Glob` / `Grep` / `WebFetch` / `WebSearch` / `memory_read` / `memory_search`) lets consecutive such calls of one response run together — each is guarded and its `ToolCallStarted` recorded in call order, then the bodies run on up to 10 threads (`MAX_TOOL_USE_CONCURRENCY`) and results are recorded and returned in call order.
-
-**Provider**:
-A Noeta-shape adapter for an external service: each kind of service (LLM, storage, …) implements the corresponding internal Protocol, such as `LLMProvider`. The `providers` built-in plugin (`noeta.builtins.providers.impl` — adapters + codecs + model catalog) is the LLM adapter layer; the supported import path is `noeta.sdk.providers`, a lazy re-export so only a caller that builds a network provider pulls in `httpx`. The extension surface differs by service kind: `LLMProvider` is open via `Options.provider` and re-exported through `noeta.sdk`; storage backends are configured through **host config**, not through Options — the first-party durable backends live in the `storage` built-in (declaration-only, reached via `noeta.sdk.storage`), and a third-party backend implements the `noeta.protocols` storage Protocols plus `noeta.storage.spi`, with no plugin machinery. **Not a context content source** — content enters context only by being recorded as an event and rendered at assembly.
-
-**Skill**:
-A local, static LLM-workflow template at `.noeta/skills/<name>/SKILL.md`, optionally with resource files (reference docs, scripts). Tiered merge, low to high: built-in/plugin/`extra_skill_dirs` (borrowed ecosystems such as `~/.claude/skills`, operator opt-in) < global `~/.agents/skills` (host opt-in) < global `~/.noeta/skills` (host opt-in) < workspace `.agents/skills` < workspace `.noeta/skills` — wider scope below narrower, and at equal scope the vendor-neutral `.agents` directory below the vendor-specific one, so `.noeta/skills` keeps sovereignty. The two workspace tiers (repo content) can be gated on the plugin trust store (`workspace_skills_trust: "trust-store"`, default `"open"`; the gate keys on the HOST-side `trust_subject`, never a container path); an operator `skills_dir` override is host config, stays outside the gate, and pins the workspace-scoped set — the `.agents/skills` tier does not mount beneath it. Skill identity is the frontmatter `name`, never the directory name. Two-stage on-demand loading: the **listing** (name + one-line summary per skill) is recorded as `kind="skill_listing"` residents — `roster` once per task, pre-loop, activate-once, then `added-<k>` naming only skills that joined later — while the `skill` control-tool schema stays fixed (no `enum`, no roster); once the model selects one, its body is rendered into the semi-stable segment, which is composed apart from the message history compaction summarizes, so the body survives. The listing has a total budget in estimated tokens (`plugin_config["skills"]["menu_budget_tokens"]`, derived by the host as 1 % of the model's catalog context window, CJK-aware estimate) and a per-summary cap of 384 estimated tokens. Past the budget every skill first gets its **short summary** (its first sentence, at most 24 tokens); only once all of them fit does the leftover restore full summaries in keep order, and when even the short summaries overflow the bottom of the keep order keeps its name only. The keep order is host `menu_rank` (per task via `HostConfig.skill_menu_rank_resolver`; with no resolver, no static rank and no tenancy resolver bound, the host's own `SkillUsageRanker` folds usage from the store's most recently updated streams — `HostConfig.skill_usage_ranking`) > merge tier (`SkillRegistry.tier_of`) > frontmatter `priority` > name; every name stays listed, and the build logs a warning. Rank and budget shape a task's listing bytes once. The tiers are indexed at every turn's Engine build, so a skill installed while the process runs is announced on every task's **next turn** by an `added-<k>` resident from a `turn_intake` provider, which reads what was already announced from the recorded listings (so a restart announces the same); removals and edited summaries are not announced — the translate refuses a removed name. The residents re-hang after a compaction summary. Activation is a content-channel tenancy of `kind="skill"`: it records a generic `ContextContentRecorded` with drift policy `pinned`, and `TaskStatePatch.activate_skills` is the skill-specific sugar that mirrors into the generic `active_content` map. A pre-loop preload and the model's own selection feed the same activation state through the same render pipeline, with state merge deduplicating. **Bundled resources use the third tier of progressive disclosure**: the renderer reads no files and inlines no content, only prepending the skill's absolute base directory before the body (`Base directory for this skill: <source_path.parent>`, rendered verbatim with no resolution, so re-indexing the same tree reproduces the same bytes); the model combines that line with the body's relative links into absolute paths and reads them on demand through the generic `Read` tool. **Not the same thing as a Tool.**
-
-**Plugin**:
-A **manifest-declared contribution package** — a pip package (or a single local `.py` file) carrying a **static manifest** that declares a name, a `requires-noeta` range, an optional config schema, and a list of contributions to the **Surfaces**. Two manifest forms: `[tool.noeta]` in `pyproject.toml`, mirrored into the wheel as `noeta-plugin.toml` package data; or, for a single file, a `PluginBuilder` with decorator sugar. The manifest is inert data read **without importing plugin code** — a contribution's `ref` is a string resolved only at the client-build boundary — so a plugin's contributions are listable and collision-checkable before any of it runs. Contributions merge deterministically, ordered `(plugin, name)` or by an integer `priority` where the surface declares one; a collision names both sides and there is no override. noeta is its own first plugin author (see Built-in plugin). See the plugin-contribution-bundles ADR.
-
-**PluginSet**:
-The **loaded, host-level** set of Plugins — which plugin code is in the process — returned by `load_plugins(...)` (exported from `noeta.sdk`) out of five gated sources: built-ins, `noeta.plugins` entry points, explicit modules / files, `~/.noeta/plugins`, and workspace `.noeta/plugins` (trust-gated: an untrusted directory is skipped with an `UntrustedPluginDirWarning`; every other fault raises `PluginError`). **Listable and auditable without executing plugin code**: `.contributions()` / `.merged()` read only the static manifests, while `.resolve()` is the single import boundary, called at the client build and never on a turn. Passed as `Client(options, plugins=<PluginSet>)`.
-
-**Activation**:
-The **per-agent selection** of which loaded plugins an agent uses — `Options.plugins` and `AgentDefinition.plugins` (tuples of names). Enters `AgentSpec` identity. A name is either a recognised built-in activation name (`BUILTIN_ACTIVATIONS`: the feature bundles `memory` / `browser` / `skill_invocation` / `mcp` / `todo_write` / `ask_user_question` / `delegation`, plus the identity-inert built-in names) or the name of a plugin in the loaded PluginSet; an unknown name **fails compilation loudly**. Activation *is* identity: every recognised name folds into the single `AgentSpec.plugins` tuple, and gating reads that tuple through `agent_activates(agent, plugin)` — membership is the flag. `delegation` is the one activation that overlaps a *structural* capability: it is derived from an inline child roster, and activating it only turns it on, which is how a flat child agent is granted the right to spawn; `spawnable` stays derived and is not activatable. `DEFAULT_PLUGINS = ("fs", "web")` is the default activation, identity-inert in compilation. Effect scope differs by surface: identity surfaces follow activation; **guards / observers do not** — once loaded they are in force process-wide, because governance is operator authority.
-
-**Surface / SurfaceSpec**:
-A **Surface** is one named extension point (`tool`, `agent`, `content_kind`, `prompt_fragment`, `policy`, `guard`, `observer`, `provider`, `reminder_provider`, `reminder`, `tool_result_transform`, `mcp_server`, `skills`, `sandbox_provider`, `session_pack`, `control_tool` — sixteen standard). A **SurfaceSpec** fully describes one: its `plane` (identity / wiring / host), `activation_scope` (per-agent / process / host-wired), `validator`, `collision_key`, `ordering`, and — for identity-plane surfaces only — `activation_binding` (which `PluginActivation` channel the contribution feeds: `tool` / `agent` / `content_kind` / `prompt_fragment` / `policy`, or `elsewhere` when a per-agent projection carries it). The loader is **surface-agnostic**: it consults one `SurfaceRegistry` (name → SurfaceSpec), so adding a surface — including a host's own, registered on a `copy()` of `standard_registry()` before load — is registering one SurfaceSpec, not editing the loader; `activation_binding` is what keeps the identity projection table-driven, and every enum field is validated at construction. The **wiring plane has two process-wide channels only** (`guard`, `observer`): a process-scoped surface beyond those is refused, not silently filed under one of them.
-
-**Built-in plugin**:
-One of noeta's own capabilities expressed as a Plugin, living in the top-of-stack `noeta.builtins/` band beside `noeta.presets` — **one directory per built-in, holding the manifest AND the implementation** (`noeta/builtins/<name>/__init__.py` is the zero-execution `MANIFEST`; `noeta/builtins/<name>/impl/` is the code, with manifest `ref`s pointing at the sibling impl modules), so adding a first-party capability is adding a directory there. It rides the identical loader / validation / merge path as any external plugin, and the band is reached only by **dynamic import** — no static edge, enforced by `.importlinter`'s universal `sdk-core-not-builtins` contract — so importing `noeta.builtins` imports zero impl modules. The set (18): `fs`, `web`, `memory`, `browser`, `app`, `mcp`, `skills`, `react`, `reminders`, `governance`, `providers`, `sandbox`, `presets`, `workspace`, `storage` (declaration-only: zero contributions; its durable sqlite / postgres backends are reached through `noeta.sdk.storage`), `todo_write`, `ask_user_question`, `delegation` (the last three are the control-tool built-ins). A built-in whose capability is host-wired rather than per-agent-contributed cannot express its own removal through a manifest, so `disabled_builtins` is **recorded on the `PluginSet`** and the host reads it (`SdkHost.skills_enabled`); absence from a set is never a disable, since `builtins=False` scopes the loaded set, not the SDK's capabilities. `react` **refuses** to be disabled: it supplies the default decision policy, whose identity every compiled `AgentSpec` pins as `POLICY_REF ("react", "1")` — the default brain is *replaceable* through the `policy` surface, not removable.
-
-**App Plugin**:
-A contribution on a host's own **host-plane** Surface, registered into the surface registry by the host before load; validated and collision-checked by the same pipeline but handed to the host, **never part of `AgentSpec` identity**. Defined by each host in its own repository.
-
-**Session pack**:
-The **session-construction half** of a capability — a plugin's `session_pack` contribution (Surface, plane wiring, per-agent, collision key `name`, ordering `priority`). A factory `(SessionBuildContext) -> PackContribution` the kernel builder (`noeta.execution.session_pack` / `noeta.execution.builder`) runs in **one** priority-ordered loop; the builder enumerates no capability by name. Built-in bands are `fs`=100, `web`=200, `memory`=300, `instructions`=400, `environment`=500, `skills`=600, `browser`=700, `app`=1000, with the two kernel-owned injections `mcp`=800 / `custom`=900 riding the same loop as fixed-priority entries; the bands are **locked by byte-equality goldens**, because tool dict insertion order feeds the stable-prefix hash. A pack **self-gates** on its `SessionBuildContext` (backend absent, flag off, no config) and returns the empty `PackContribution` when inapplicable — never a kernel `if`.
-
-**SessionBuildContext**:
-The generic **frozen** context every session pack reads — the kernel-built containment `workspace` (`WorkspaceRoot`), `workspace_dir`, `content_store`, `exec_env`, `model`, `provider_family`, `allowed_tools`, the **backend bag**, `capability_flags`, and `plugin_config`. Built before the pack loop, so a pack can never perturb a later pack's inputs; a pack self-gates on it through `ctx.flag(name)` / `ctx.config(plugin)`, and the kernel never gates for a pack. It carries only generic slots — no feature-named field. A knob with a single consumer lives in `plugin_config` under its plugin's name (the write / shell safety inputs are the `"fs"` entry) and is promoted to a typed slot only once a second, unrelated plugin reads it.
-
-**PackContribution**:
-What a session pack hands back. `tools` is a `name → Tool` mapping merged in loop order, **later-wins**, preserving the custom-shadows contract. `content_kinds` are `ContentKindContribution`s, each with its **own** registration priority (`skill`=100, `memory`=200, `instructions`=300, `environment`=400), because the semi-stable layout order differs from the tool order. `init` is a pre-loop hook `(SessionRecorder) -> None` run once per build at seed time; the recorder is the one write verb a plugin gets, so a pack cannot corrupt lifecycle events, message origin, or slice ownership. The remaining fields are **typed side-state**, each read by one kernel seam: `control_tools`, `guard_facts` (opaque to the builder), `content_discovery`, `content_preloader` — each single-writer across the pack loop, and adding one is an SPI change. All fields optional; the empty contribution is the universal "not applicable" answer.
-
-**Backend bag**:
-The host-populated `backends` mapping on `SessionBuildContext` — live backing objects keyed by the **contributing plugins' own names** (`"browser"` from the sandbox provider, `"app_preview"` from the product gateway), never the kernel's vocabulary. It is a plain per-session mapping, not a merge-checked catalogue. An absent name means the capability has no live backing, so the pack returns the empty contribution.
-
-**Control tool mount**:
-The **control-tool-construction half** of a capability — a plugin's `control_tool` contribution (Surface, plane identity, per-agent, collision key `name`, ordering `priority`, `activation_binding="elsewhere"`: its own per-agent projection resolves it). A factory `(ControlToolBuildContext) -> ControlToolMount | None` the kernel builder (`noeta.execution.control_tool` / `noeta.execution.builder`) runs in one priority-ordered loop **after tool assembly**, because a control-tool schema is a function of the session state the packs produce. A `ControlToolMount` carries `name`, `schema` (the materialized provider-facing dict), `translate` (a closure over its **own** build inputs, so the runtime `ControlTranslateContext` stays feature-free), and **two** priorities: `schema_priority` (render order — `spawn_subagent`=100, `todo_write`=200, `ask_user_question`=300, `skill`=400, `run_workflow`=500, `recall_history`=550, `structured_output`=600) and `routing_priority` (translate dispatch order — `ask_user_question`=100, `todo_write`=200, `spawn_subagent`=300, `skill`=400, `run_workflow`=500, `recall_history`=550), both **locked by byte-equality goldens**. A mount **self-gates** on its `ControlToolBuildContext` (returns `None` when inapplicable) — mounting *is* enablement, and the kernel never gates for it; that context carries the **same generic `capability_flags` bag session packs read** (`ctx.flag("<activation name>")`), the spawn directory, and the structured-output schema. `structured_output` carries `translate=None` (schema only; react's `StructuredOutputPolicy` intercepts the call) and so contributes no routing spec. The typed `answer_codec`, filled by the `ask_user_question` mount alone, is how the kernel driver's answer path decodes a reply without importing the built-in. A session pack contributes mounts of its own through `PackContribution.control_tools` (the `skill` mount carries its menu in its closure); those and the host-supplied entries run through the same loop, and a name collision between them is loud. See the control-tool-contributions-and-activation-identity ADR.
-
-### State and events
-
-**EventLog**:
-An append-only event stream, one stream per task. **The source of truth for causality and decisions.** Inline payloads are capped at 4 KB (`EVENT_PAYLOAD_MAX_BYTES`); larger bodies live in the ContentStore.
-
-**Event** / **EventEnvelope**:
-One record on an EventLog stream. The envelope holds `seq / type / actor / origin / trace_id / causation_id` (`seq` assigned by the log on append); the payload is a typed dataclass selected by `type`.
-
-**ContentStore**:
-Content-addressed, immutable large-object storage. **The source of truth for large objects.** Reads come in two shapes: `get` (one ref, raises `ContentNotFound`) and `get_many` (a batch, missing hashes omitted so one reclaimed body cannot abort the rest). Both are required Protocol members — every traversal that walks an event stream knows its refs from the payloads before it reads any body, and only the backend can express that batch as one query. Because content is immutable, a read cache needs no invalidation rule: `CachedContentStore` wraps the durable backends at stack build. **Retention** is a host's call, never automatic: `Client.collect_garbage` (`noeta.storage.gc`, also `noeta.sdk.storage.collect_garbage` over a bare stack) marks every hash some event references — walking payloads for `ContentRef`s and bare hashes, then closing over the bodies textually, because a tool output's shape is plugin-defined — and asks the store to `sweep` the rest, a maintenance method duck-typed like the event log's `purge_task` rather than a Protocol member. Two references are deliberately not roots: an `LLMRequestStarted.request_ref` (the request is the whole View, different every step, derivable from folded state, read back by nothing — so `RuntimeLLMClient` mints the ref with `content_ref_for` and stores no body unless `HostConfig.record_llm_requests`) and any `TaskSnapshot.state_ref` but a task's latest. A sweep is safe while turns run because every `put` — a fresh body or a dedup hit — stamps the row's `touched_at`, only rows older than the grace are candidates, and the delete re-checks the age under the adapter's write lock.
-
-**ContentRef**:
-A reference into the ContentStore: `hash + size + media_type`. Lookup is by `hash` alone.
-
-**Artifact**:
-A large object a Tool produces alongside its inline output, listed as `ContentRef`s on `ToolResult.artifacts`.
-
-**Snapshot**:
-A `TaskSnapshot` event whose body — the full four-slice task state — lives in the ContentStore behind `state_ref`. Written before each suspend and each terminal event. An acceleration point for fold; a snapshot-free fold rebuilds the same state, and fold falls back to it when a snapshot body is gone — only a task's latest one survives a content sweep, so a bounded fold (rewind, fork, step recovery) may land on a reclaimed one. The re-base bodies behind `TaskRewound` / `StepAttemptAbandoned` / `TaskForked` are never reclaimed.
-
-**Task State** (state slices):
-Four typed slices, **each with exactly one writer**:
-- `RuntimeState` — messages / usage (writer: Engine)
-- `TaskState` — goal / phase / todos / decisions / active_content (writer: the Policy's `state_patch`; `active_content` is merged by fold from `ContextContentRecorded` — shape `kind → {name → content_hash}`, hash last-write-wins, see Content Channel)
-- `ContextState` — plan ref / compaction summary / per-turn thinking / content anchors (writer: fold)
-- `GovernanceState` — cost / token counters / denied / subtask results (writer: fold)
-
-**TaskState** (narrow sense):
-The slice that holds "long-horizon task memory" maintained by the Policy. The core difference between a long-horizon agent and a short-task agent.
-
-### Execution model
-
-**Engine**:
-Advances a single Task by one step, where a step is a turn boundary: `run_one_step` loops internally over `tool_calls` decisions — append the results, recompose the View, ask the Policy again — and returns at the next suspend or terminal. It depends on neither the Worker nor the Dispatcher; a child's completion reaches its parent through `ChildLifecycleObserver`, never through the Engine. Hosts reach it through `EngineProtocol` (`noeta.protocols.engine`), a strict subset of the concrete class bounded by what execution hosts actually call, so a fake or a resume adapter slots into the same plumbing without subclassing. The main loop is **locked**: it is not an extension point. **An Engine is a per-turn value, never a cached resource.** A turn opens with a user goal and runs, through every approval, answer and sub-agent return that resumes it, until the task parks on the next-goal handle or ends. `resolve_engine` builds the turn's Engine once, from the task's folded bindings and whatever the build reads (skill tiers, the shell allowlist, the trust decision, an MCP server's tool list), keeps it for the turn's resumes in the host's `TaskLocalRegistry`, and lets it go when the turn settles — so a change to any input is visible on every task's next turn, and the turn's tool set never changes under it; the build is deterministic, so the stable prefix moves only when an input changed. Nothing outlives the turn on the Engine. **What a task needs across turns lives in its task-local state** (`noeta.runtime.task_local.TaskLocalRegistry`, host-owned, keyed by task id, one lock, one LRU, forgotten at cancel / close): the files it has read (the edit tools' read-first precondition, threaded into each turn's `ToolRuntime`), and the slots the built-ins keep through the `task_slot` the host binds into their `plugin_config` (the ReAct compaction baselines, WebFetch's page cache, the skill roster the task last saw, the last MCP provenance). The one expensive external resource, a live MCP connection, is pooled by the host across builds, keyed by server identity plus the host's per-task scope (`McpConnectionPool`: shared across tasks in one scope, released when the turn settles, idle-expired on `HostConfig.mcp_idle_ttl`, partitioned by `HostConfig.mcp_scope_resolver`, retired by `Client.reconnect_mcp()`, closed by `Client.shutdown()`). See the engine-per-turn ADR. (`noeta-runtime` names the wheel that ships the kernel, not this class.)
-
-**Worker**:
-The process that leases a Task from the Dispatcher and calls the Engine to advance it. **One lease runs until the next suspend or terminal state, then releases.** `run_leased_task` is the single resume machine every surface shares, with three outcomes: `woken` (the lease carried a wake event → `note_woken` → optional prelude → `run_one_step`), `drained` (pending or running → `run_one_step`), and `skipped` (still suspended with no wake — re-released preserving its `wake_on`). `WorkerLoop` wraps that in the drain loop, a per-step heartbeat side-thread, the periodic stale and timer sweeps, and a bounded graceful shutdown: on SIGTERM/SIGINT it stops leasing and waits `shutdown_grace_s` for the in-flight step, then abandons it and lets the lease expire. A daemon must never crash on one poisoned task.
-
-**Lease**:
-A Worker's short-term exclusive hold on a Task — `lease_id / task_id / expires_at`, extended by `heartbeat` and reclaimed by `requeue_stale` once expired. The Worker presents `lease_id` on every EventLog emit, which is how the single-writer invariant is enforced; the EventLog backend needs only `LeaseRegistry.is_lease_valid`, deliberately narrower than the full Dispatcher surface and side-effect-free so it can be called from inside a write lock. A lease also carries the matched `wake_event`, which is **not** consumed at lease time: it survives the lease and is cleared only by a consuming `release`, after the durable `TaskWoken` is written. A crash before that re-delivers it — at-least-once delivery plus idempotent consumption is exactly-once.
-
-**Dispatcher**:
-The scheduling component: Task enqueue, Lease granting, wake delivery, and stale reclamation — `enqueue` / `lease` / `heartbeat` / `release` / `release_yield` / `fail` / `wake` / `requeue_stale` / `fire_due_timers`. An untargeted `lease(task_id=None)` polls the ready queue in FIFO order **within one Queue**; a targeted `lease(task_id=<id>)` claims one specific Task and returns `None` rather than raising when it is absent or not ready. `enqueue(reserved=True)` and `wake(reserved=True)` mark a Task targeted-lease-only — a one-shot guard cleared by the first successful lease — so a resident worker pool cannot claim a Task before the driver that owns it has seeded its opening message. Task state itself is never read back off the Dispatcher: production code folds the EventLog, the single source of truth.
-
-**Queue**:
-The routing name on a dispatcher row (`DEFAULT_QUEUE = "default"`): which worker pool's untargeted poll may claim the Task. Assigned once at row birth — explicit, inherited from the parent row, or the default — and immutable afterwards; roots are born on their seeding client's queue (`HostConfig.queue`), children inherit it, and there is no wildcard claim, so differently-configured clients sharing one store can never drive each other's work. Routing state, **not** Task identity: it lives only in the dispatcher row, and a dispatcher rebuilt from the log alone re-homes rows to the default queue. Targeted leases and the maintenance sweeps ignore it. See the worker-queue-routing ADR.
-
-**Suspended**:
-One of a Task's four states (`pending` / `running` / `suspended` / `terminal`): parked on a wake condition. A **unified expression** of waiting on a subtask, an approval, a timer, or an external event — one state and one resume path whatever the reason.
-
-**WakeCondition** / **WakeEvent**:
-Describes what a Task is waiting on: `SubtaskCompleted` / `SubtaskGroupCompleted` / `HumanResponseReceived` / `TimerFired` / `ExternalEvent`. Condition and event share one dataclass per variant — stored in `task.wake_on` it declares the shape being waited for, delivered through `Dispatcher.wake` it carries the answer. Matching is by **identity-field projection** through `matches_wake` (`subtask_id`, `group_id`, `handle`, `event_kind`; `TimerFired` matches on the temporal threshold `event.fire_at >= condition.fire_at`), and every Dispatcher implementation must route through that helper so no adapter can diverge privately. Payload fields such as `SubtaskResult` ride along informationally and never affect matching.
-
-**Mid-turn injection**:
-Delivering a user message to a task **while its turn is running**, rather than to a next-goal-suspended one. The verb is `inject_goal` (driver / `Client`), status-dispatched: **running** → a durable `InjectionRequested{injection_id, messages_ref, count}` written lease-free via `system_emit` (no lease taken, no drive) plus a poke to the process-local `InjectionInbox`; **suspended on the next-goal handle** → falls through to `send_goal`; **anything else** → `NotResumableError`. The running Engine drains at the top of its `run_one_step` loop (beside the cancel poll), delivering each pending injection as a real `MessagesAppended` carrying `consumes_injection=injection_id` — fold appends the message and pops the `GovernanceState.pending_injections` marker in one reduction, so delivery is exactly-once and crash-safe, and an injected message can never split a `tool_use`/`tool_result` pair. The inbox is a per-host **accelerator** (mirror of `CancellationRegistry`); the durable `InjectionRequested` is the record a resume's drain reads. See the mid-turn-goal-injection ADR.
-
-**ExecEnv**:
-The pluggable **execution backend** the fs/shell tools act through: a deep seam between a tool and its real IO (file read/write/create/unlink/mkdir/stat/glob plus `run_argv`). It is IO-only and takes **already-resolved absolute paths** — containment stays with `WorkspaceRoot`, so no backend can widen the fence. `LocalExecEnv` (the default) is the host filesystem plus subprocess; `AioSandboxExecEnv` (`noeta.builtins.sandbox.impl.exec_env`) routes every side effect to an AIO Sandbox **container** over HTTP, so an untrusted agent's tools land in the container, not on the host. `tree_snapshot` is the one batch primitive: a per-file walk costs O(N) round-trips on a remote backend, this costs one. The backend is injected as a per-tool construction field and is **never** part of a tool's schema, so the stable prefix is identical whichever one is bound. In sandbox mode the seam reaches past fs/shell — the skill indexer, `run_skill_script`, the workspace loaders, and web fetch/search egress all route through the session's ExecEnv; memory and MCP stay on the host. A session's container is welded durably (`TaskHostBound.exec_env_ref` = `"{base_url}#{sandbox_id}"`) so a resumed or reclaimed session reconnects to the same one, and the credential rides only on the wire, never into the record. `HostConfig.sandbox_exec_preamble` prepends a per-session shell preamble minted fresh on each exec, for credentials that expire mid-session; `HostConfig.sandbox_backend_factory` / `sandbox_browser_factory` (typed `BackendFactory` / `BrowserBackendFactory`, exported from `noeta.sdk`) let a host substitute its own adapters. Sandbox names one *backend* of this seam, not the seam. See the execution-environment-seam ADR.
-
-**SandboxProvider**:
-The seam that **provisions and reaps** a per-session sandbox container — the "who runs `docker` or a K8s API" layer, distinct from `ExecEnv`, which talks to an already-running one. Defined in `noeta.client.sandbox_provider` and exported from `noeta.sdk`; a host implements it. `allocate(root_task_id, spec)` builds a fresh container and returns a `SandboxHandle` — durable-safe addressing (`base_url` / `sandbox_id` / `workdir`) plus a live `SandboxAuth` strategy that is never serialized, so a reconnecting host rebuilds the credential from its own config and the secret never enters the durable record. `release(root_task_id)` tears the container down at the root-task terminal and is idempotent; `attach(exec_env_ref)` reconnects to an already-provisioned one on resume or reclaim. `SandboxSpec` / `MountSpec` are the `allocate` input — image, resource caps, env, and the mount list, whose `kind` abstracts the storage backend so a local bind mount and a NAS or PVC mount are the same shape at the same `target`. The SDK's `SandboxExecEnvManager` drives the provider and turns handles into live `ExecEnv` and `BrowserBackend` backends, cached per `exec_env_ref` under a lock. Provisioning and lifecycle belong to the **host**, the mechanism (`ExecEnv`) to the **runtime**, the binding (durable `exec_env_ref`, reconnect) to the **SDK** — config carries addressing, never a secret. See the execution-environment-seam ADR.
-
-**Browser tool pack**:
-The **noeta-owned** browser tools (`browser_navigate` / `browser_click` / `browser_type` / `browser_extract` / `browser_screenshot`) a sandbox session's agent drives the container's headless browser with. It enters a session as the `browser` built-in's `session_pack` contribution (band 700), gated on **both** a live `"browser"` entry in the session's backend bag **and** the agent activating `browser`; missing either, the factory returns the empty contribution and the tool set is unchanged. It is a per-session tool pack, **not** an MCP connector — it never enters `mcp_registry` and takes no alias. Name and schema are noeta's, so a browser session's stable prefix depends on the activation flag alone and never on the container image; the implementation delegates through the narrow `BrowserBackend` Protocol the same plugin owns, whose production impl `AioBrowserBackend` (in the `sandbox` built-in) pins the container's `/mcp` browser wire in a single adapter and reuses `McpHttpClient` purely as an internal transport. Elements are addressed by the numeric `index` a prior extract handed the model, never by pixel coordinates, and `browser_screenshot` stores the PNG as a workspace artifact and returns its ref rather than feeding the model vision. The **`web` subagent** (an `AgentDefinition` with `plugins=("browser", "skill_invocation")`) is the identity the main agent delegates page work to: main carries no browser tools, so browsing token churn stays isolated in a child context, and `sandbox_browser_options()` is the explicit opt-in that puts `web` on main's roster. See the execution-environment-seam ADR.
-
-### Context
-
-**View**:
-The LLM input the ContextComposer assembles for the Policy. A View is a *projection* of the Task, never the Task itself.
-
-**ContextComposer**:
-The component that assembles a Task into a View — `noeta.protocols.composer.ContextComposer`, one method, `compose(task) -> View`. **It calls no LLM.** A composer is a pure function of folded state plus the ContentStore: no clock, no randomness, no network. Its only side effect is putting the ContextPlan body into the injected `ContentStore` so the Engine has a `ContentRef` to attach to the next `ContextPlanComposed` envelope — `ContextState.plan_ref` is fold-derived from that event, so the composer never writes `task.context` directly. The Engine imports the Protocol alone and takes its composer by injection; `noeta.core.composer.PassthroughComposer` is the in-kernel zero-opinion fallback that composes every Task to the empty `View()`. `noeta.context.composer.ThreeSegmentComposer` is the single real implementation and a **closed** extension point: swapping the composer wholesale is not open, because stable-prefix cache reproducibility is a protocol-level constraint. The open hooks are registrations into its two tables — a `ContentKindSpec` (Content Channel) and a `ReminderSpec` (reminder track B).
-
-**ContextPlan**:
-The View metadata for one LLM call: `composer_version`, the three `segment_hashes`, `selected_skills`, `selected_messages`, `dropped_messages`, `cleared_outputs`, `retrieved_resources`. The body is written to the ContentStore and its ref folds into `ContextState.plan_ref`; it exists for audit and debug.
-
-**Stable Prefix / Semi-stable / Dynamic Suffix**:
-The three segment names of the View's assembly. `stable_prefix` carries the system-prompt message and the provider tool schemas; `semi_stable` carries the content-channel residents; `dynamic_suffix` carries the rolling history (compaction summary swapped in, tool outputs outside the protected tail window cleared to a marker once the window fills) with the compose-time reminders at its tail. Cache-friendliness of the `stable_prefix` is an **independent, protocol-level hard constraint**: perturbing it between steps blows up the provider KV cache and sends cost soaring, so it must serialize reproducibly across steps. Its hash is `sha256(to_canonical_bytes((stable_content, provider_tool_schemas)))` — sorted keys, compact separators — and a tool description enters the schema only when non-empty, so an undocumented tool never churns it.
-
-**Content Channel**:
-The generic mechanism by which **resident** content — the semi-stable segment's tenants, such as the skill catalogue and the memory index — enters context. Two load-bearing halves. **Recording**: a `ContextContentRecorded` event carries `kind / name / version / content_hash / policy`; fold sets `active_content[kind][name] = content_hash` (hash last-write-wins — a re-record with a new hash is a *refresh*, an identical hash a no-op, an empty `content_hash` ignored) and stamps the activation anchor first-write-wins, so a refresh moves bytes but never placement. **Rendering**: the runtime's `ContentChannelRegistry` holds one `ContentKindSpec` per kind (`kind` + `renderer` + optional `hashes` + `policy`), and registration order IS the semi-stable layout. A renderer receives `resolve(kind, name) -> bytes`, which derefs the resident's *active* hash through the `ContentStore`, so the composed bytes are a pure function of `(folded state, content store)`: a refresh yields new bytes, a mutated file on disk changes nothing until a re-record. Skills are the one exception — they are `pinned` and their renderer composes from the preloaded `SkillRegistry`, accepting `resolve` and ignoring it. The write seam is a pack's `PackContribution.init` hook, run through the scoped `SessionRecorder` at seed time: it `put()`s its rendered bytes and records the ref, it reruns at every seed — task seed, subtask seeding, and each new goal seeded onto a resumed task — and the recorder's no-op-on-unchanged-hash rule makes that idempotent for deterministic sources; a resident whose source is re-*captured* per process rather than re-read (the environment's clock + git snapshot) records activate-once (`record_content(refresh=False)`), so its first hash wins for the task's whole life and a rebuilt engine's fresh capture appends nothing — the semi-stable bytes stay prompt-cache-stable across resumes. `policy` (`pinned` / `evolving`) rides each recording as descriptive provenance. Tenants and their registration bands: `skill` (pinned, 100), `memory` (evolving, 200), `instructions` (evolving, 300), `environment` (evolving, 400); host and third-party kinds register after every built-in. Adding a kind = contributing one `ContentKindSpec` on the `content_kind` surface (the type is re-exported from `noeta.sdk`); the registry and renderer code need no change. The red line: content may only be fetched on the **write** side — resolving recorded bytes from the content-addressed `ContentStore` is not an external callback, but reaching out to a live external source at compose time is forbidden.
-
-**Reminder tracks (A / B / C)**:
-The three distinct ways authored context text reaches the View, each a plugin Surface, distinguished by *when* it runs and *whether it is recorded*:
-- **Track A — `reminder_provider` (recorded, impure).** A provider at a named intake seam (`turn_intake`, `task_seed`) that, given the narrow read-only `RecallView` (the incoming message, the folded task state, the workspace path, and `visible_history` — the rolling history past the compaction boundary, what the model still sees verbatim), returns zero or more `Reminder(text, origin ∈ {system, memory})`. It may query a vector DB or an external system **because its output is recorded** through the Engine's sole origin-writer verb (`append_user_message`); resume and replay fold the reminder back from the ledger and **never re-invoke the provider**. Providers run before the incoming message enters the ledger but their reminders are recorded after it, so the transcript reads *message then reminder(s)*; multiple providers on one seam run in `(plugin, name)` order; a raise **fails the turn loudly** — no silent skip. Memory auto-recall is the first tenant, and this is the seam RAG-backed memory plugins use.
-- **Track B — `reminder` (compose-time, pure).** A `(name, priority, render)` spec whose `render` is a **pure** function of the narrow folded-state projection `ReminderView`, returning `str | None`, rendered at the **tail of the dynamic suffix** as one `Message(role="user", origin="system")` each. Never recorded and re-derived on every compose, so the stable prefix is untouched by construction. Ordered by integer `priority` ascending, ties broken by name. A **placed** reminder has `place` instead of `render`: a pure function returning every `(raw history index, text)` it stands at (`ReminderView.history` is the raw rolling history), inserted before that message through the anchored-placement mapping — so a reminder that once appeared at the tail keeps its position and bytes on every later compose and caches like a recorded turn (built-in only: the manifest marks it `placed=True`). The two built-ins are `todo-reminder` (100, placed — Claude Code's "TodoWrite hasn't been used recently" reminder with the todo list, every ten assistant blocks without a `TodoWrite`, counted past the compaction boundary) and `read-suggestion` (300); band 200 is vacant since the `delegation-nudge` reminder was removed (2026-09-19 — it repeated the main prompt and the `Task` description on every step of tasks that never delegate).
-- **Track C — the resident Content Channel** (above): a **pure** renderer for resident content in the semi-stable segment, its activation recorded as a `ContextContentRecorded` event.
-
-Determinism of a third-party `render` (tracks B and C) is a documented contract, not enforced.
-
-**Anchored Placement**:
-Where a content-channel resident renders, decided by its **activation anchor** — the rolling-history length fold records (`ContextState.content_anchors`, first-write-wins) at the moment the activation folds (`docs/adr/anchored-content-placement.md`). One rule, no per-kind flag: an anchor at or before the first assistant message ⇒ the resident renders in the semi-stable segment; a later anchor ⇒ it renders **inside the dynamic suffix at that anchor**, one message at the point of activation, so a mid-task skill or instructions activation appends instead of rewriting the head (no KV-cache re-prime). The insertion index slides forward past `role="tool"` messages so rendered content can never split an assistant `tool_use` from its results; an anchor inside a compaction summary's covered prefix clamps to the slot right after the summary message — automatic, because resident content is state-rendered and never stored in history. Companion feature: **instructions discovery** (`instructions_discovery`, default off) — after a successful `Read` whose path resolves inside the workspace, the runtime activates the not-yet-active `NOETA.md` / `AGENTS.md` / `CLAUDE.md` of each directory strictly below the workspace root on the path to that file, shallowest first, with the resident name being the workspace-relative path. Scope is deliberately fenced to the workspace: write authorization is not instruction authority.
-
-**origin**:
-An optional author marker on a `Message`, one of `human / system / memory`, defaulting to `None` = the role's natural author (omitted from canonical serialization). It is orthogonal to `role`: the role says which channel the turn rides, the origin says who authored it. **Single-writer guard**: only the Engine's recording path (`Engine.append_user_message`) may write it, Policy-supplied messages have it stripped at the Decision seams, and a marker forged in model or tool output is just text. Vendor tag syntax never enters the ledger: the Anthropic adapter wraps host injections (user messages with origin `system` / `memory`) in `<system-reminder>` and merges them into the adjacent user turn — keeping its prompt-cache breakpoint on the last *recorded* block, ahead of any trailing injection, because a compose-time reminder is re-derived per compose and a breakpoint on it would key the cache entry to bytes the next step never resends — while the OpenAI adapters render them as mid-history system-role messages led by the self-describing `HOST_INJECTED_PREAMBLE` — Claude is trained to treat the tag as ambient context, but for an arbitrary model the role alone does not carry "this is not the user speaking", so the preamble states it in-band.
-
-**Memory**:
-Cross-task long-term memory: file-based, model-managed, and deliberately **not** a skill (their drift policies are opposite). Mutation is the ordinary tools `memory_write` (one markdown file per memory, named with letters and digits of any script plus `.` `_` `-`; optional frontmatter `description` / `type` / `keywords` / `related`; a body over `HostConfig.memory_max_bytes` is refused before the write; under `HostConfig.memory_read_only` the two mutating tools are absent from the pack — the store is someone else's to write — while the index and recall stay; a rewrite merges per-field over the fence already on disk, so fields it does not mention survive and a key named with an empty value is dropped — the body is a field under the same rule: text that is only a fence keeps it, and `description` / `type` / `keywords` / `related` read absent-keeps, empty-removes as parameters) and `memory_archive` (moves the file into `archive/` — retire, never delete). On-demand reading is `memory_read` (full text by name) and `memory_search` (case-insensitive substring over names and bodies, excerpt-only output). The **resident index** is the content channel's `memory` kind (`memory_content_kind`, policy `evolving`), rendering `(name, type, summary)` entries into the semi-stable segment so compaction never flushes it, under a token budget (1 % of the model window by default, `HostConfig.memory_index_budget_tokens`): over budget, entries degrade whole — full line, then name only, then a closing count that points at `memory_search` — keeping the most recently written pages, always rendered name-sorted so only a write moves the bytes. The index is frozen per task (recorded first-write-wins, so a mid-task write never moves the cached prefix); pages created, re-described or removed since the task's snapshot are named by a one-line `turn_intake` note (`memory_index_delta_provider`) recorded after the next goal. **Auto-recall** is a `reminder_provider` (`memory_reminder_provider`) on the `turn_intake` seam: it reads the store at call time (impure — legal because the output is recorded) and matches the leading 2 000 characters of the message in two tiers. Tier 1 is the message **naming** the page: it carries at least two of the name's tokens and at least half of them — sizing the name by every token it carries, including the ones the length floor or the stopword list make unmatchable, so `ci-cd-flow` is not named by `flow` alone while a page genuinely named by one token still is — and at least one of those is real evidence, not counting a token carried by more than `max(3, len(entries) // 10)` of the store's names (counted over the whole store, so what is in context never moves it). Tier 2 is a lead: one shared name token, two shared summary tokens, or a `keywords` phrase. Within a tier the strongest evidence sorts first (keyword hits lead tier 2), and at most five items ride per goal whatever their source. A tier-1 hit also brings the pages its fence lists under `related` (one line, `related: a, b`) as pointers — one hop, from tier 1 only. `HostConfig.recall_exclude` names pages silent in every tier, as neighbours and as judge candidates; the recall judge (`Options.recall_model`) runs only when tier 1 is empty and the pointers leave room under the cap. A tier-1 hit rides track C: its full body (within the recall byte budget — an oversized body degrades to its index line) is recorded as a `memory`-kind resident (`ResidentActivation` → `Engine.record_content`, activate-once per task — once resident, the name is silent on every later goal of that task, until the page itself is rewritten: a resident whose file no longer hashes to the pinned value is eligible again and refreshes in place), rendered as one `origin="memory"` message placed by the anchor rule (semi-stable on the opening goal, right after a later goal, re-hung after a compaction summary), so a body enters a task exactly once and survives compaction. A tier-2 hit rides only its index line, in one `origin="memory"` follow-up turn per goal, so the model pays for a body it merely guessed at only by calling `memory_read`; a pointer for a name already resident is dropped. A page the model loaded itself with `memory_read` is silent in both tiers too, for as long as that read is in the history the model still sees: recall pairs the `memory_read` calls in `RecallView.visible_history` (the rolling history past the compaction boundary) with their successful results and leaves those names out before matching, so a goal naming a page the model just read neither injects the body a second time nor points at it; once a compaction summary swallows the read, the page is recallable again. **Policy** is `MEMORY_POLICY_PROMPT`, the `memory` plugin's `memory-policy` contribution on the `prompt_fragment` surface (what to save, what not, update before create), appended after the prompt because an empty store renders zero resident bytes. Activated by `plugins=("memory", …)`, part of behavior-affecting agent identity; among the four official agents only `main` opens it, because only a top-level conversational agent receives user messages. The store root resolves through ONE chain for every consumer (session build, recall, `memory_root()`): the per-task `HostConfig.memory_root_resolver` (`task_id -> Path | None`, the multi-tenant seam — every turn's Engine is built with the root its task resolves to, so one tenant's store can never serve another) when it resolves, else `memory_dir` > `global_memory_dir` > `~/.noeta/memories`.
-
-**Memory consolidation**:
-The asynchronous curation pass over the memory store: a reserved-name agent (`__consolidation__`, `plugins=("memory",)` and no other tools) runs as an ordinary root task on the resident worker pool, fed a digest of recent session activity, and merges duplicates, archives superseded memories, and fills clear gaps. `run_consolidation` is the host-callable entry — it debounces on a marker file (`.consolidation-state.json` in the memory root, written at enqueue time so an in-flight run debounces its own turn boundaries), builds the digest, and seeds the task. There is no scheduler: the debounce marker over the host's own stop seams is the whole mechanism, and activation is host wiring (`with_consolidation_agent` registers the agent), never agent identity. The pass never injects into a live session and can only archive, never delete. A multi-tenant host runs one pass per tenant: `include_task` scopes the digest to that tenant's root sessions, the per-root marker debounces tenants independently, and `on_seeded` hands the curation task id over before any worker can claim it. See `docs/adr/memory-consolidation.md`.
-
-### Governance
-
-**Principal**:
-Who is acting, and which models that identity may bind (`noeta.protocols.values.Principal`): an `identity` string plus the `allowed_models` set, with `allows_any=True` modelling the unbounded ⊤ set. `permits(selector)` is the *principal* half of model selection — the driver validates `selector ∈ principal.allowed_models ∩ deployment allowlist` before any `ModelBound` is emitted. The Principal itself never enters an event payload; only the `principal_identity` string rides `ModelBound`, as the durable audit link from a binding back to who sanctioned it. `LOCAL_PRINCIPAL` (`identity="local"`, `allows_any=True`) is the ⊤ principal for an embedding with no trust boundary (the user's own machine, the user's own credentials); a multi-user host builds one per authenticated session. A host sets it through `Client(principal=...)` (default `LOCAL_PRINCIPAL`) and overrides it per turn with `principal=` on `start` / `send_goal` and their `seed_` twins.
-
-**Contract**:
-A Task's immutable header, frozen into the genesis `TaskCreated` event and never rewritten: `goal`, `policy_name`, `agent_name`, `inputs`, `parent_task_id`, `subtask_depth`. Every `fold` bootstraps empty state from it. A goal too large for the `EVENT_PAYLOAD_MAX_BYTES` cap spills to the ContentStore (`goal` holds `""`, the text is reachable through `goal_ref`) — the genesis event has no other escape. A delegated subtask's expected-output schema travels as `inputs["output_schema"]`.
-
-**Budget**:
-A Task's resource ceilings (`noeta.runtime.governance.Budget`): `max_iterations`, `max_tool_calls`, `max_cost_usd`, `max_spawned_subtasks`, `max_subtask_depth`. All optional — `None` means no cap on that dimension. Pure frozen configuration with zero behaviour; the `governance` built-in's `BudgetGuard` enforces it against the `GovernanceState` counters the Engine folds from the EventLog, so a live run and a resumed run see identical numbers. Which caps apply depends on the action: a tool call checks every cap, a spawn skips `tool_calls` (spawning consumes no tool slot), and a finish checks only the historical accumulators `iterations` / `cost_usd` — a task that merely exhausted its tool budget may still answer.
-
-**Guard**:
-A synchronous policy check at one of three action points — `before_tool_call` / `before_spawn_subtask` / `before_finish` — returning one of three verdicts: `allow` / `deny` / `require_approval`. `require_approval` is carried by `yield_for_human`; there is deliberately no separate approval event type. Whichever action point raised it, the suspend records one `ToolCallApprovalRequested` anchor and `approve` / `deny` resolve it by `call_id` — the model's own for a tool call, the reserved `finish-{task_id}` / `spawn-{task_id}` for the two decision points, which is also what the `approval-…` handle is built from. Approving proceeds with the anchored action without re-consulting the Guard; denying returns the refusal to the model and the turn continues. `HookManager` (`noeta.core.hooks`) runs the registered Guards in ascending `priority` and returns the first non-allow verdict; a Guard whose `check` raises is converted into that deciding `deny`, so a buggy Guard can never quietly grant an action it was meant to block. A Guard reads a `ProposedAction` and a read-only `GuardContext` and must mutate neither — the context carries a deepcopy of `GovernanceState`, so a Guard cannot perturb engine state. The `governance` built-in contributes the default stack: `PermissionGuard`, `BudgetGuard`, `RepetitionGuard`, `HookGuard`.
-
-**Write fence** (`WorkspaceRoot`):
-The path-containment seam the **write** fs tools (`Edit` / `Write`) resolve through: a target is canonicalised (`realpath`, or `normpath` under a lexical container root whose path does not exist on the host) and must land under the session workspace **or** under one of the `extra_roots` the host has authorized. Containment is **component-wise** (`path_within`, published on `noeta.sdk`), never string-prefix — `/srv/app-old` is not inside `/srv/app`. **Reads are not fenced**: `Read` / `Grep` / `Glob` anchor a *relative* path to the workspace and take an absolute one wherever it points (a neighbouring checkout, a skill pack's bundled reference). The widening is a **resolver**, not a fixed tuple — `HostConfig.write_roots` is `task_id -> extra writable directories`, consulted per call through `authorized_workspace`, so an authorization granted while a task sits paused takes effect on the resumed call without rebuilding the tool set (which would move the stable prefix). That resolution fails **closed** in every degenerate case (no resolver, no task id on the context, a resolver that raises, a non-absolute entry): it returns the unwidened workspace, so a broken authorization path can only refuse a write, never permit one. `None` keeps the single-root wall; a `bypassPermissions` session gets the filesystem root instead. Not process confinement: `Bash` spawns an unsandboxed subprocess that can write anywhere on the host — the container is the isolation boundary, this is the *deliberate-mutation* boundary. See `docs/adr/workspace-write-authorization.md`.
-
-**Web egress gate** (`noeta.client.webfetch_policy`):
-The per-call approval gate over the other argument a model fully controls: a `WebFetch` URL. `HostConfig.webfetch_allowed_hosts` (`example.com` exactly, `*.example.com` for subdomains but not the apex; a malformed entry raises at construction) names the hosts a fetch reaches without asking a human; under a gating permission mode every other host routes through per-call approval, riding the same `PermissionPolicy.conditional_approval` slot as `Bash`'s allowlist (the SDK host ORs the two, each answering only for its own tool), so `WebFetch` keeps `risk_level="low"` and its recorded descriptor is untouched. Judged on the URL's **real** host — lowercased, percent-decoded, IDNA-normalised, trailing root dot dropped, userinfo discarded, so `https://allowed.com@evil.test/` is judged as `evil.test` — and matched whole, never as a substring. It gates by host, **never by address**: `WebFetch` refuses no target, because an agent holding `Bash` reaches the same one with a `curl`, so an address fence here would protect nothing; a deployment that needs a real egress boundary puts it in the network or the sandbox container, where it also covers the shell. The one outright refusal is a scheme the tool does not fetch (`file:` / `gopher:` / …), which refuses no host. The module sits beside the host rather than in the `web` built-in because `noeta.client` cannot statically import `noeta.builtins`. Every successful result opens with a line naming it external web content. See the tool-and-agent-catalog ADR.
-
-**Observer**:
-An asynchronous hook subscribed to the EventLog through `EventLogSubscriber.subscribe`; its failure does not affect the Task. Callbacks fire synchronously in the writer's emit path but **post-commit** and **outside** the adapter writer lock, so several writer threads may enter one Observer concurrently: each guards its own state with a `threading.Lock` and swallows its own exceptions rather than breaking the writer. In-tree Observers are `AuditObserver`, `MetricsObserver`, `EventFanout` (transport-neutral, knowing only `EventEnvelope`) and `ChildLifecycleObserver`, the one `wire_default_observers` installs so the parent/child handoff exists in every profile. The `governance` built-in adds `HookObserver` for user-facing post-tool / notification hooks: live-only, never part of fold or resume, and it does no work on the callback thread — matching plus a non-blocking enqueue onto a bounded queue, with a background worker running the commands and a full queue dropping rather than blocking emit. A host turns it on through `HostConfig.hooks` (`HooksConfig`), which also feeds the `HookGuard` its pre-tool-use rules; the Client builds one `HookObserver` at construction and stops it in `shutdown()`.
-
-**Mutator**:
-Not a role in Noeta. A hook may not modify `ctx` or payload (single-writer invariant); to change what happens, change the Policy or the ContextComposer. `class Mutator` is one of the names `scripts/lint-naming.py` rejects in project sources.
-
-### Operations
-
-**Inspect**:
-Reading a Task's history back. `Client.events` / `Client.events_after` return the raw envelope stream, `Client.messages` folds that stream into the human-readable View, dereferencing large bodies through the ContentStore. Pure reads of the EventLog + ContentStore: no external IO, no effect on the Task.
-
-**Resume**:
-Continuing a suspended Task — fold its stream back into state, drive it forward under a lease (`run_leased_task`, the one resume machine every hosting surface shares), append what happens. The trigger is a wake event matching the Task's `wake_on` (`matches_wake`, routed by the Dispatcher); the human-side entries are the driver verbs `send_goal`, `approve` / `deny`, `answer`, `deliver_event`. State comes only from the fold, so a resumed turn never re-invokes what the ledger already records.
-
-**Rewind / Fork**:
-The two branch verbs, sharing one **anchor** — the seq of a user-goal `MessagesAppended` — and one fold-through boundary, the turn boundary just *before* that message. They differ only in where the resulting baseline lands. **Rewind** appends a `TaskRewound{target_seq, state_ref}` to the same stream, so the anchored turn and everything after it become folded-over dead history (nothing is deleted — append-only holds; the marker names a new fold baseline) and the workspace files that span edited are restored from their recorded baselines. **Fork** appends a `TaskForked{source_task_id, source_seq, state_ref}` to a **new** task's stream and writes nothing to the source, so both branches survive: "undo this" vs "try this instead, keeping the original". A fork is a **sibling, not a Subtask** — `parent_task_id` means delegation, so it stays `None` and lineage lives in `TaskForked.source_task_id`; only a root Task can be forked (`NotForkableError` otherwise). A fork branches the *conversation*, not the workspace: both branches keep the source's `workspace_dir` and act on the same disk, which is why fork has no file-restore half.
-
-**Interrupt**:
-The third **human stop**. `cancel` writes `TaskCancelled` and the conversation is terminal; `close` writes `ConversationClosed` and archives it; `interrupt` writes `TurnInterrupted` and stops only the in-flight *turn*, leaving the Task resting at its next-goal suspend, reopenable by simply typing again. It rides the cooperative-cancel poll the Engine runs at turn boundaries, so semantically it **lands at** the turn boundary — but the boundary is reached promptly, because the cooperative seams reach into the blocking waits themselves: the LLM round-trip is an **abandonable wait** (the provider call runs on an I/O thread the step thread stops waiting for — safe because providers are contractually pure — with the streaming adapters closing the connection off the same predicate), the retry backoff is sliced around the poll, a tool batch polls between calls (not-yet-run calls get paired `success=False` interrupted results), and a foreground shell is reaped like a background one. What interrupt still cannot do is abort a single non-shell tool call already executing — that is `interrupt(force=True)`, the double-Esc escalation: the wedged step's lease is force-cleared (fencing the abandoned thread), step-attempt recovery seals the dirty window, and the still-armed mark lands the re-drive at the interrupted suspend. The interrupted turn's events stay on the stream as real history (the model said what it said, the tools ran what they ran); discarding them is rewind's job, and the two verbs compose — interrupt to stop, rewind to un-say. The resulting `TaskSuspended.reason` is `"interrupted"`.
-
-## Relationships
-
-- **Task → Subtask**: one-to-many; a subtask has its own EventLog stream, related through `TaskCreated.parent_task_id`.
-- **Agent → Task**: class to instance; one Agent can be instantiated by many Tasks, each genesis event recording its `agent_name`.
-- **EventLog ↔ ContentStore**: paired; the EventLog holds decisions and refs, the ContentStore holds large-object bodies.
-- **Engine ↔ Worker**: one-to-many; the same Engine code drives every leased Task, the Worker wrapping it in the lease / wake loop.
-- **Policy ↔ Tool**: the Policy **declares** a call via `ToolCallsDecision.calls` and the Engine **executes** it; the Policy never calls the Tool directly.
-- **Content Channel ↔ Skill / Memory**: mechanism to tenant; a skill registers as `kind="skill"` (drift policy `pinned`), the memory index as `kind="memory"` (`evolving`), and adding a tenant only requires registering a `ContentKindSpec`.
-
-## Flagged ambiguities
-
-**"Workflow"**:
-Not a first-class concept in the engine. Express a fixed procedure as a deterministic Policy plus `spawn_subtask` decisions. An orchestration script the model improvises ("spawn a few assistants first, look at the results, then spawn the next batch") is not a new primitive either: it lands as **one Task + a Policy that interprets that script**, and the assistants it spawns are real Subtasks. Multi-node sequencing — one root Task per node, advanced by handoffs — is something a host builds on top of the libraries.
-
-**"Session"**:
-**Not an identity in these libraries.** The engine knows only Tasks, and multi-turn conversation is one Task receiving user input repeatedly — each question is one **turn** (a cycle of one wake → several Steps → suspend, the Task resting at `suspended` with `wake_on = HumanResponseReceived(handle=…)` between turns); each delegation is one **Subtask**. A host that groups turns into a user-visible "session" owns that concept itself.
-
-The line runs between **identity** and **scope**, and only one side is banned:
-
-- **Identity — banned.** Never name a thing after a session: no `session_id`, no sessions list / catalog, no session-keyed cap, no session field in a recorded event schema. The concept always already has a name — `task_id` for a task, **`root_task_id`** for the root of a delegation tree (the lifetime owner of background shells, background subagents, and a sandbox container). A parameter typed "the id of a task" and named `session_id` is the exact defect this rule exists to prevent.
-- **Scope — allowed.** "For the lifetime of one root-task tree" is a legitimate thing to say, in prose ("the per-session workspace") and in the session-pack construction vocabulary: `session_pack` / `SessionBuildContext` / `SessionPackEntry` / `SessionPackFactory` / `SessionRecorder` / `SessionInputs` / `build_session_inputs`. A session pack builds one task's tool set — a scope, not an identity.
-
-**"Run"**:
-Not a first-class concept. Always use Task.
-
-**Model-visible tool names**:
-The provider-visible tool `name` strings follow the Claude Code surface —
-`Read`, `Glob`, `Grep`, `Edit`, `Write`, `Bash`, `BashOutput`, `KillShell`,
-`Monitor`, `WebFetch`, `WebSearch`, `TodoWrite`, `AskUserQuestion`, `Task` — because
-models carry their strongest trained prior on those exact names and schemas.
-Everything that is NOT model-visible keeps its snake_case identifier: plugin
-and contribution names, capability flags (`todo_write`, `ask_user_question`,
-`delegation`), event vocabulary, and the `.md` description resource basenames.
-The `Task` tool name coexists with the core Task primitive; prose says "the
-Task tool" when it means the delegation control tool.
-
-**Enforcement**:
-`scripts/lint-naming.py` (part of `make check`) scans `.py` / `.md` / `.toml` / `.yaml` / `.yml` / `.cfg` / `.ini` and fails on `class Run`, `class Workflow`, `class Session`, `class Mutator`, `class Pattern`, and on the identifiers `WorkflowRunner` / `WorkflowPolicy` / `WorkflowSpec` / `SessionStore` / `ConversationManager` wherever they appear. Inside `packages/` and `examples/` it additionally fails any **compound** identifier containing "session" unless the token is on the scope allow-list above (plus `start_new_session`, `subprocess.Popen`'s own keyword) or contains `session_pack`; the bare prose word is fine. `tests/` is out of scope — a test harness stands in for a host, which is the layer that may own the concept. Files that catalogue the bans (`CONTEXT.md`, `docs/adr/`, `CHANGELOG.md`, the lint script and its test) are exempt.
-
-## Sample dialogue
-
-> User: This task has been waiting on a subtask for a long time — can I cancel it?
->
-> Answer: Yes. The root Task is `suspended` with `wake_on = SubtaskCompleted(subtask_id="t-child-7")`. `Client.cancel` writes `TaskCancelled` (terminal) and marks the cancellation registry, so the in-flight subtask abandons its result at its next turn boundary and the tree's background shells are killed. If you only want to stop the current turn and keep the conversation live, use `Client.interrupt` instead.
->
-> User: How did that turn decide what to put in front of the model?
->
-> Answer: Read the most recent `ContextPlanComposed` event; its `plan_ref` points at the `ContextPlan` body in the ContentStore, whose `selected_skills` / `selected_messages` / `dropped_messages` / `retrieved_resources` entries carry the provenance, so you can trace each piece back to its source.
+## Tool
+
+An external action the model can invoke (`packages/noeta-runtime/noeta/protocols/tool.py`).
+`name` / `input_schema` / `description` are hand-written and LLM-facing, never taken from
+docstrings (which would leak internal names). `description` is the single source of model-visible
+tool semantics and is never repeated in the system prompt. `risk_level` gates approval. Optional
+`getattr` attributes: `advertised`, `route_call` (deferred MCP), `concurrency_safe` (consecutive
+safe calls run in parallel, recorded in call order). See `docs/adr/026-tool-description-canonical.md`.
+
+## Provider
+
+An adapter implementing an internal Protocol (`LLMProvider`, storage protocols). LLM adapters are
+the `providers` built-in, imported via `noeta.sdk.providers`. Storage is host config: first-party
+durable backends via `noeta.sdk.storage`; a third-party backend implements the storage Protocols
+plus `noeta.storage.spi`, no plugin needed. A provider is never a context source: content enters
+context only by being recorded as an event.
+
+## EventLog
+
+Append-only, one stream per task: the source of truth for causality and decisions. State is always
+derived by folding it, never read back from the Dispatcher. Inline payloads are capped
+(`EVENT_PAYLOAD_MAX_BYTES`); larger bodies go to the ContentStore. Appends require a valid lease
+(single-writer invariant) except the explicit lease-free `system_emit` records.
+See `docs/adr/009-event-sourced-truth.md` and `docs/adr/019-single-writer-invariant.md`.
+
+## ContentStore
+
+Content-addressed, immutable large-object storage; lookup by hash. Retention is host-driven only:
+`Client.collect_garbage` (`packages/noeta-runtime/noeta/storage/gc.py`) marks referenced hashes and
+sweeps the rest. LLM request bodies are not stored unless `HostConfig.record_llm_requests`.
+Third-party backends: see `docs/adr/059-content-retention-outside-the-protocol.md`.
+
+## Single-writer state slices
+
+Four slices, each with exactly one writer (`packages/noeta-runtime/noeta/protocols/task.py`):
+`RuntimeState` (Engine), `TaskState` (the Policy's `state_patch`; the long-horizon task memory),
+`ContextState` (fold), `GovernanceState` (fold). Hooks, guards and observers may not mutate state
+or payloads; to change behavior, change the Policy or the composer.
+
+## Engine
+
+Advances one Task to its next suspend or terminal (`run_one_step`); depends on neither Worker nor
+Dispatcher, and hosts reach it through `EngineProtocol`. **An Engine is a per-turn value, never a
+cached resource**; state that must cross turns lives in the host's `TaskLocalRegistry`. Details in
+`packages/noeta-runtime/AGENTS.md` (Engine per turn).
+
+## Worker, Lease, Dispatcher
+
+A Worker leases a Task, drives it to the next suspend or terminal, and releases.
+`run_leased_task` (`packages/noeta-runtime/noeta/runtime/worker.py`) is the one resume machine
+every surface shares. `reserved=True` makes a Task targeted-lease-only so a worker pool cannot
+claim it before its driver seeds the opening message. A row's **Queue** decides which pool may
+claim it: fixed at birth, inherited by children, no wildcard — routing state, not identity.
+A worker daemon must never crash on one poisoned task. See `docs/adr/029-worker-lease-model.md` and
+`docs/adr/041-worker-queue-routing.md`.
+
+## ExecEnv
+
+The backend fs/shell tools do IO through (`packages/noeta-runtime/noeta/runtime/exec_env.py`), on
+already-resolved absolute paths — containment stays with `WorkspaceRoot`, so no backend can widen
+the fence. It is a construction field, never part of a tool schema, so the stable prefix does not
+depend on it; credentials never enter the record. Sandbox wiring: `packages/noeta-sdk/AGENTS.md`.
+See `docs/adr/033-execution-environment-seam.md`.
+
+## View and stable prefix
+
+The composer turns a Task into a View; it calls no LLM and is a pure function of folded state plus
+the ContentStore (no clock, randomness, or network). The View has three segments:
+`stable_prefix` (system prompt + tool schemas), `semi_stable` (residents), `dynamic_suffix`
+(history, compose-time reminders at the tail). The stable prefix must serialize byte-identically
+across steps or the provider KV cache breaks and cost multiplies. Anything per-step belongs in the
+suffix or a recorded event. See `docs/adr/028-unified-context-supply.md`.
+
+## Content Channel
+
+The mechanism for resident context (skills, memory index, instructions, environment). A
+`ContextContentRecorded` event sets `active_content[kind][name] = hash`; one `ContentKindSpec`
+per kind renders it, and registration order is the semi-stable layout
+(`packages/noeta-runtime/noeta/context/content_channel.py`). Bytes come only from the ContentStore
+by recorded hash. Red line: never reach a live external source at compose time — fetch on the
+write side and record it. Per-process captures (clock, git) record activate-once.
+
+## Reminder tracks
+
+- **A, `reminder_provider`**: runs at an intake seam (`turn_intake`, `task_seed`); may be impure
+  because its output is recorded, and replay never re-invokes it. A raise fails the turn.
+- **B, `reminder`**: a pure render of folded state at the suffix tail, never recorded. A *placed*
+  reminder keeps its position and bytes once it appears, so it caches like history.
+- **C**: Content Channel residents.
+Determinism of third-party renders (B, C) is a documented contract, not enforced.
+
+## origin
+
+An optional author marker on a `Message` (`human` / `system` / `memory`), orthogonal to `role`.
+Only `Engine.append_user_message` may set it; Policy-supplied markers are stripped and forged
+markers in model or tool output are just text. Vendor syntax (`<system-reminder>`, an in-band
+preamble) is added by provider adapters at serialization and never enters the ledger.
+See `docs/adr/008-event-origin-marker.md`.
+
+## Budget and Guard
+
+`Budget` (`packages/noeta-runtime/noeta/runtime/governance.py`) is pure config; the `governance`
+built-in enforces it against folded `GovernanceState`, so live and resumed runs agree. A Guard
+checks before a tool call, spawn or finish and returns `allow` / `deny` / `require_approval`.
+Approval reuses `yield_for_human`; there is no separate approval decision. `HookManager`
+(`packages/noeta-runtime/noeta/core/hooks.py`) takes the first non-allow verdict, and a Guard that
+raises counts as `deny`, so a buggy guard never grants.
+
+## Write fence
+
+`WorkspaceRoot` (`packages/noeta-runtime/noeta/runtime/workspace.py`) contains the write tools
+(`Edit` / `Write`): the canonical target must lie under the workspace or a host-authorized extra
+root, compared component-wise (`path_within`), never by string prefix. Reads are not fenced.
+`HostConfig.write_roots` is a per-call resolver (no tool rebuild, no prefix change) and fails
+closed. Not process confinement: `Bash` can write anywhere; the container is the isolation
+boundary. See `docs/adr/037-workspace-write-authorization.md`.
+
+## Observer
+
+An EventLog subscriber whose failure never affects the Task. Callbacks run post-commit, outside
+the writer lock, but synchronously before the emit returns — never block in one — and possibly
+from several writer threads at once: each observer guards its own state and swallows its own
+exceptions (contract: `EventLogSubscriber` in `packages/noeta-runtime/noeta/protocols/event_log.py`). Observers are live-only, never part of fold or resume.
+`ChildLifecycleObserver` carries the parent/child handoff and is always installed.
+
+## Human stops and branches
+
+`cancel` → `TaskCancelled` (terminal); `close` → `ConversationClosed`; `interrupt` →
+`TurnInterrupted`, stopping only the in-flight turn so the Task parks for the next goal.
+Interrupted events stay as history. **Rewind**
+appends `TaskRewound` to the same stream (nothing deleted) and restores edited files. **Fork**
+writes `TaskForked` into a new root task and leaves the source untouched; it is a sibling, not a
+subtask, and shares the source's workspace on disk. Both anchor on a user-goal message seq.
+See `docs/adr/005-conversation-rewind-and-file-checkpoint.md`.
+
+## Naming: Workflow
+
+Not a first-class concept. A fixed procedure is a deterministic Policy plus spawn decisions; a
+model-improvised orchestration script is one Task plus a Policy interpreting it, whose spawned
+assistants are real Subtasks. Multi-node sequencing is something a host builds on top.
+_Avoid_: `Workflow`, `WorkflowRunner`, `WorkflowPolicy`, `WorkflowSpec`
+
+## Naming: Session is a scope, never an identity
+
+No session identity in these libraries: no `session_id`, no session list or catalog, no
+session-keyed cap, no session field in a recorded event. Use `task_id`, or `root_task_id` for a
+delegation tree; a task id named `session_id` is the exact defect this rule prevents. Scope wording
+is allowed — "per-session workspace", and the construction vocabulary `session_pack` /
+`SessionBuildContext` / `SessionPackEntry` / `SessionPackFactory` / `SessionRecorder` /
+`SessionInputs` / `build_session_inputs`. A host may own a session concept.
+_Avoid_: `SessionStore`, `ConversationManager`, `class Session`
+
+## Naming: Run, Mutator, Pattern
+
+"Run" is not a concept — say Task. "Mutator" is not a role: hooks may not modify context or
+payloads (single-writer invariant). "Pattern" is not a name for a Policy.
+_Avoid_: `class Run`, `class Mutator`, `class Pattern`
+
+## Naming: model-visible tool names
+
+Provider-visible tool names follow Claude Code (`Read`, `Glob`, `Grep`, `Edit`, `Write`, `Bash`,
+`BashOutput`, `KillShell`, `Monitor`, `WebFetch`, `WebSearch`, `TodoWrite`, `AskUserQuestion`,
+`Task`), because models carry their strongest prior on those names and schemas. Everything not
+model-visible stays snake_case: plugin and contribution names, capability flags (`todo_write`,
+`ask_user_question`, `delegation`), event vocabulary, description resource basenames. Prose says
+"the Task tool" when it means the delegation control tool, not the Task primitive.
+
+## Naming: enforcement
+
+`scripts/lint-naming.py` (in `make check`) scans `.py` / `.md` / `.toml` / `.yaml` / `.yml` /
+`.cfg` / `.ini` and rejects `class Run` / `Workflow` / `Session` / `Mutator` / `Pattern` and the
+identifiers `WorkflowRunner` / `WorkflowPolicy` / `WorkflowSpec` / `SessionStore` /
+`ConversationManager`. Inside `packages/` and `examples/` it also rejects compound identifiers
+containing "session" outside the scope allow-list (plus `start_new_session`) or `session_pack`.
+`tests/` is out of scope. Files that catalogue the bans (`CONTEXT.md`, `AGENTS.md`, `docs/adr/`,
+`CHANGELOG.md`, the script and its test) are exempt.

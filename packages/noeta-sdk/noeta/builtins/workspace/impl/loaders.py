@@ -9,7 +9,7 @@ subprocess table, or the wall clock:
   an override path; missing/empty ⇒ ``None``, zero footprint).
 * :func:`discover_instructions` + :func:`build_instructions_discovery` — the
   ``read``-triggered subdirectory walk
-  (docs/adr/anchored-content-placement.md) and its Engine hook.
+  (docs/adr/036-anchored-content-placement.md) and its Engine hook.
 * :func:`build_instructions_preloader` — the resume re-read for discovered
   files.
 * :func:`load_environment` — the session-static workspace facts (path, git
@@ -228,7 +228,7 @@ def discover_instructions(
 ) -> list[InstructionsSnapshot]:
     """Instruction files between ``resolved_file``'s directory and the root.
 
-    The `read`-triggered discovery walk (docs/adr/anchored-content-placement.md):
+    The `read`-triggered discovery walk (docs/adr/036-anchored-content-placement.md):
     for every directory strictly BELOW ``workspace_root`` on the path to
     ``resolved_file`` — shallowest first, so a parent package's conventions
     render before a child's — the first existing, non-empty candidate of

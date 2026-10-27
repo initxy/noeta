@@ -396,7 +396,7 @@ def _background_subagent_notice(
 ) -> str:
     """Render the background-sub-agent completion notice body.
 
-    docs/adr/background-subagent.md. Mirrors :func:`_background_exit_notice`: one
+    docs/adr/002-background-subagent.md. Mirrors :func:`_background_exit_notice`: one
     line of human summary + the sub-agent's ACTUAL result text (dereferenced from
     the ContentRef at delivery time so the model sees the real answer inline, not
     an opaque hash pointer it cannot read). The ``<background-subagent>`` tag
@@ -1502,7 +1502,7 @@ class InteractionDriver:
     ) -> DriveOutcome:
         """Push a background SUB-AGENT completion notice and drive a turn (C).
 
-        docs/adr/background-subagent.md. The background-subagent driver calls
+        docs/adr/002-background-subagent.md. The background-subagent driver calls
         this (off a daemon thread) when a sub-agent launched with
         ``spawn_subagent(background=True)`` reaches terminal while the parent
         session is idle. It **reuses the next-goal wake handle**
@@ -1816,7 +1816,7 @@ class InteractionDriver:
         kill_bg = getattr(host, "kill_background_shells", None)
         if callable(kill_bg):
             kill_bg(task_id)
-        # background sub-agent cascade (docs/adr/background-subagent.md): the
+        # background sub-agent cascade (docs/adr/002-background-subagent.md): the
         # ``request_cancellation`` mark above makes each in-flight
         # background child abandon its drive at the next step boundary (the
         # ``DrainHost.cancel_check`` polls it); this just frees the registry's

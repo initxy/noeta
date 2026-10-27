@@ -60,8 +60,8 @@ observer 在每次追加提交后被调用，不在写锁里，可能同时被�
 - Engine 的主循环本身不开放扩展，它周围的一切都可以换。
 
 设计记录：
-[guard and observer hooks](https://github.com/initxy/noeta/blob/main/docs/adr/guard-observer-hooks.md) ·
-[engine per turn](https://github.com/initxy/noeta/blob/main/docs/adr/engine-per-turn.md)
+[guard and observer hooks](https://github.com/initxy/noeta/blob/main/docs/adr/010-guard-observer-hooks.md) ·
+[engine per turn](https://github.com/initxy/noeta/blob/main/docs/adr/046-engine-per-turn.md)
 
 ## 下一步
 

@@ -51,7 +51,7 @@ _RUNNABLE_MD_FILES = (
 # Subtrees the user-doc gates skip: an ADR argues its rejected alternatives on
 # purpose, and the rest are internal working notes — none of them are pages a
 # user reads.
-_NON_USER_DOC_SUBTREES = ("adr", "implementation-specs", "_research")
+_NON_USER_DOC_SUBTREES = ("adr", "specs", "_research")
 
 
 def _user_facing_doc_pages() -> list[Path]:

@@ -53,10 +53,9 @@ jobs:
         run: uv sync --frozen
       - name: Install ripgrep
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
-      - name: Ruff
-        run: uv run ruff check packages tests scripts
-      - name: Run pytest with coverage
-        run: uv run pytest -n auto --cov=noeta --cov-report=term --cov-fail-under=85
+      - name: make check
+        # The same gate as ci.yml and local runs.
+        run: make check
       - name: Wheel contents + fresh-venv install smoke
         run: uv run pytest -m install_smoke tests/test_install_smoke.py
 

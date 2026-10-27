@@ -180,8 +180,8 @@ export default defineConfig({
   },
 
   // Dead-link checking is ON (VitePress default): a broken internal link
-  // fails the build. Pages excluded from the site (see srcExclude — ADRs and
-  // implementation specs) are referenced only via absolute GitHub source URLs,
+  // fails the build. Pages excluded from the site (see srcExclude — ADRs,
+  // specs and the maintainer runbooks) are referenced only via absolute GitHub source URLs,
   // so nothing internal points at a non-published page.
   ignoreDeadLinks: false,
 
@@ -189,10 +189,12 @@ export default defineConfig({
   // contributors but are not published to the public site.
   srcExclude: [
     '**/adr/**',
-    '**/implementation-specs/**',
+    'specs/**',
     '**/reference/api/**',
     'releasing.md',
     'releasing.zh.md',
+    'reviewing.md',
+    'gc.md',
   ],
 
   themeConfig: {

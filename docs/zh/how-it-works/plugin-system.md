@@ -58,9 +58,9 @@ Noeta 里能扩展的东西，全都走同一套机制：插件往某个具名�
 - 先在 `Options.allowed_tools` 里放一个 `@tool` 函数；想把工具、提示词和 guard 打成一个包一起发布时，再写插件。
 
 设计记录：
-[library SDK architecture](https://github.com/initxy/noeta/blob/main/docs/adr/library-sdk-architecture.md) ·
-[plugin contribution bundles](https://github.com/initxy/noeta/blob/main/docs/adr/plugin-contribution-bundles.md) ·
-[package layout](https://github.com/initxy/noeta/blob/main/docs/adr/package-layout.md)
+[library SDK architecture](https://github.com/initxy/noeta/blob/main/docs/adr/011-library-sdk-architecture.md) ·
+[plugin contribution bundles](https://github.com/initxy/noeta/blob/main/docs/adr/038-plugin-contribution-bundles.md) ·
+[package layout](https://github.com/initxy/noeta/blob/main/docs/adr/014-package-layout.md)
 
 ## 下一步
 

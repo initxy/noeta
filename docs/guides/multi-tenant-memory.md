@@ -113,4 +113,4 @@ while the consolidation agent keeps all four memory tools.
 
 - [Deploy](deploy.md) — the worker pool consolidation runs on
 - [MCP](mcp.md) — the per-turn connections `mcp_scope_resolver` partitions
-- [ADR: memory consolidation](https://github.com/initxy/noeta/blob/main/docs/adr/memory-consolidation.md)
+- [ADR: memory consolidation](https://github.com/initxy/noeta/blob/main/docs/adr/035-memory-consolidation.md)

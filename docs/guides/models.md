@@ -162,4 +162,4 @@ is treated as a transient fault and retried, like a timeout.
 
 - [Test offline](testing.md): swap in a scripted model for tests
 - [Options reference](../reference/options.md)
-- [Why provider neutrality](https://github.com/initxy/noeta/blob/main/docs/adr/provider-neutral.md) (ADR)
+- [Why provider neutrality](https://github.com/initxy/noeta/blob/main/docs/adr/016-provider-neutral.md) (ADR)

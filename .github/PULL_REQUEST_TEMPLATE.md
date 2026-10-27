@@ -10,14 +10,14 @@ What this change does and why. Lead with the conclusion.
 
 ## Related ADR
 
-If this changes a long-term decision, update the matching `docs/adr/` file and
-`CONTEXT.md` in lockstep (see [CONTRIBUTING.md](../CONTRIBUTING.md)). Link the
+If this changes a long-term decision, add a new ADR that refines or supersedes
+the old one and update `CONTEXT.md` in lockstep (see [CONTRIBUTING.md](../CONTRIBUTING.md)). Link the
 ADR touched, or write "none — no decision changed".
 
 ## How verified
 
 ```bash
-make check   # pytest + coverage, mypy --strict on both packages, naming + import lints — mirrors CI
+make check   # ruff, pytest + coverage, mypy --strict, naming + import lints, doc hygiene — CI runs the same target
 ```
 
 Note anything that couldn't be verified and why. The Postgres storage contract
@@ -28,5 +28,6 @@ tests and the fresh-venv install smoke run in CI only (see
 
 - [ ] `make check` passes.
 - [ ] If the SDK public surface changed, the `examples/` still run (their smoke tests pass).
-- [ ] If a decision changed, `docs/adr/` and `CONTEXT.md` were updated in lockstep.
+- [ ] If a decision changed, a new ADR in `docs/adr/` and `CONTEXT.md` were updated in lockstep.
+- [ ] If this implements a spec in `docs/specs/`: status, Plan checkboxes, and Progress log are up to date.
 - [ ] A human owner has read this change and can answer review questions about it.

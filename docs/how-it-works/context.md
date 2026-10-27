@@ -86,9 +86,9 @@ forward fails the Task instead of looping.
   `reminder` in a plugin — the composer itself cannot be replaced.
 
 Design records:
-[unified context supply](https://github.com/initxy/noeta/blob/main/docs/adr/unified-context-supply.md) ·
-[anchored content placement](https://github.com/initxy/noeta/blob/main/docs/adr/anchored-content-placement.md) ·
-[context compaction](https://github.com/initxy/noeta/blob/main/docs/adr/context-compaction.md)
+[unified context supply](https://github.com/initxy/noeta/blob/main/docs/adr/028-unified-context-supply.md) ·
+[anchored content placement](https://github.com/initxy/noeta/blob/main/docs/adr/036-anchored-content-placement.md) ·
+[context compaction](https://github.com/initxy/noeta/blob/main/docs/adr/003-context-compaction.md)
 
 ## Next
 

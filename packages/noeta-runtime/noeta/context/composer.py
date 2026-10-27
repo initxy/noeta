@@ -229,7 +229,7 @@ class ThreeSegmentComposer:
     stateless across calls, so the same Task state always composes the same
     View. Beyond that, ``stable_prefix`` and ``semi_stable`` must serialize
     reproducibly across steps: churning them busts the provider's prompt / KV
-    cache and spikes cost (see CONTEXT.md "Stable Prefix").
+    cache and spikes cost (see CONTEXT.md "View and stable prefix").
     """
 
     def __init__(
@@ -939,8 +939,8 @@ class ThreeSegmentComposer:
         relief_open = self._tail_token_budget is not None and (
             self._available_window is None or size >= self._available_window
         )
-        # The count-based second valve (amended 2026-09-25, see
-        # docs/adr/context-compaction.md): the same size reading, compared
+        # The count-based second valve (see
+        # docs/adr/050-compaction-count-based-second-valve.md): the same size reading, compared
         # against a FRACTION of the same window. Measured on a production
         # session, tool outputs were 72 % of the message bytes and the relief
         # valve only opened at 87 % of a 1M window — so the bulk rode every

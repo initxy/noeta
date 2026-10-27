@@ -527,7 +527,7 @@ class SdkHost(GenericEngineResolver):
     # the process registry built in ``__post_init__`` below.
     max_background_jobs_per_root_task: int = DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK
     # Per-session background SUB-AGENT concurrency cap
-    # (docs/adr/background-subagent.md). Over the cap, a
+    # (docs/adr/002-background-subagent.md). Over the cap, a
     # ``spawn_subagent(background=True)`` is rejected (not queued) before any
     # durable write.
     max_background_subagents_per_root_task: int = (
@@ -634,7 +634,7 @@ class SdkHost(GenericEngineResolver):
     instructions_enabled: bool = False
     instructions_file: Optional[Path] = None
     #: `read`-triggered discovery of subdirectory ``NOETA.md``/``AGENTS.md`` files
-    #: (docs/adr/anchored-content-placement.md). Like ``instructions_enabled`` this
+    #: (docs/adr/036-anchored-content-placement.md). Like ``instructions_enabled`` this
     #: is workspace environment material, not agent identity. When True, a
     #: successful ``read`` inside the workspace activates the instruction files
     #: between the read file's directory and the workspace root; they render
@@ -964,7 +964,7 @@ class SdkHost(GenericEngineResolver):
     _process_registry: Optional[ProcessRegistry] = field(
         default=None, init=False, repr=False, compare=False
     )
-    # Background SUB-AGENT registry (docs/adr/background-subagent.md): a per-host
+    # Background SUB-AGENT registry (docs/adr/002-background-subagent.md): a per-host
     # runtime accelerator (mirrors ``_process_registry``) holding the live drive
     # futures + per-session cap for ``spawn_subagent(background=True)``. Constructed
     # in ``__post_init__`` (it needs the host's L0 triple + the resolver's
@@ -996,7 +996,7 @@ class SdkHost(GenericEngineResolver):
     _sandbox: Optional[SandboxExecEnvManager] = field(
         default=None, init=False, repr=False, compare=False
     )
-    # The shared background-delivery glue (docs/adr/background-subagent.md): the
+    # The shared background-delivery glue (docs/adr/002-background-subagent.md): the
     # daemon-thread hop + parent-fold terminal check + mid-turn-deferral retry loop
     # that BOTH the background-shell and background-sub-agent exit paths funnel
     # through. Built in ``__post_init__`` on the host's shared L0 read seams; the
@@ -1120,7 +1120,7 @@ class SdkHost(GenericEngineResolver):
             dispatcher=self.dispatcher,
             on_notice=self._on_background_notice,
         )
-        # Background sub-agent registry (docs/adr/background-subagent.md). Mirrors
+        # Background sub-agent registry (docs/adr/002-background-subagent.md). Mirrors
         # the process registry: built here on the shared L0 triple. The
         # ``build_host`` callback hands it the resolver's ``_build_drain_host`` so
         # it drives one background child on the same delegation host the foreground
@@ -1343,7 +1343,7 @@ class SdkHost(GenericEngineResolver):
                 exc_info=True,
             )
 
-    # -- background sub-agent (docs/adr/background-subagent.md) -------------
+    # -- background sub-agent (docs/adr/002-background-subagent.md) -------------
 
     def _drain_host_for_id(self, parent_task_id: str) -> Any:
         """Build the delegation :class:`DrainHost` for a parent id (registry seam).
@@ -2343,11 +2343,11 @@ class SdkHost(GenericEngineResolver):
             # present only there). A child engine / oneshot host gets ``None`` so
             # ``spawn_subagent(background=True)`` degrades to the foreground barrier
             # spawn — the wanted "no nested background" behaviour
-            # (docs/adr/background-subagent.md).
+            # (docs/adr/002-background-subagent.md).
             background_subagent_launcher=(
                 self._background_subagents if policy_wrapper is not None else None
             ),
-            # Anchored-content seams (docs/adr/anchored-content-placement.md):
+            # Anchored-content seams (docs/adr/036-anchored-content-placement.md):
             # ``None`` unless the host armed ``instructions_discovery``.
             content_discovery=inputs.content_discovery,
             content_preloader=inputs.content_preloader,

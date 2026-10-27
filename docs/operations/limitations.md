@@ -26,8 +26,8 @@ faults, see [troubleshooting](troubleshooting.md).
   this release: a second `Client` opened on the same store used to re-run another
   `Client`'s background sub-agents when it recovered at start-up; recovery now skips a
   sub-agent another client is still running. See ADRs
-  [multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md)
-  and [worker queue routing](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md).
+  [multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/034-multi-host-lease-fencing.md)
+  and [worker queue routing](https://github.com/initxy/noeta/blob/main/docs/adr/041-worker-queue-routing.md).
 
 ### Postgres: one connection per adapter, no pool
 
@@ -40,7 +40,7 @@ faults, see [troubleshooting](troubleshooting.md).
   retried safely. A server that stays down still fails the call.
 - **Workaround:** for more database throughput, run more worker processes (each opens
   its own connections). See ADR
-  [multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md).
+  [multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/034-multi-host-lease-fencing.md).
 
 ## Durability
 

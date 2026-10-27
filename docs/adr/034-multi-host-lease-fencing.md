@@ -1,0 +1,68 @@
+# ADR-034: Multi-host Postgres deployments fence lease-checked writes with an in-transaction row-share check on the dispatcher row, not an epoch column
+
+- Status: accepted
+- Date: 2026-07-07
+
+## Context
+
+Several host processes, each running workers, share one Postgres database. The sqlite and in-memory adapters are single-host by definition — nothing is shared across processes there — so this decision is scoped to the Postgres adapter.
+
+The lease model (`[ADR-029](029-worker-lease-model.md)) and the durable-wake invariants (`[ADR-022](022-subtask-fanout-and-durable-wake.md)) give at-least-once delivery with idempotent consumption. Two correctness gaps are specific to many hosts on one database:
+
+- **Zombie append.** The EventLog validates a write's `lease_id` through the `LeaseRegistry` seam, which the Postgres dispatcher answers on a separate read-only connection, outside the emit transaction's locks. Between that "valid" answer and the subsequent insert and commit, another host's stale sweep can reclaim the lease and hand it to a fresh worker; the zombie's write then lands on the stream *after* the next generation has started, breaking single-writer-per-lease and the ordering crash recovery depends on. The window is unbounded — a GC pause, a `SIGSTOP`, scheduler preemption — and has nothing to do with clocks.
+- **Clock skew.** Lease deadlines computed and compared against per-host wall clocks let host A believe a lease is live while host B's sweep believes it expired, so the two hosts hold divergent views of which lease is current.
+
+## Decision
+
+Postgres only, no epoch column, three points.
+
+**An in-transaction lease fence on EventLog appends.** When a write carries a `lease_id` and a lease validator is bound, the Postgres EventLog probes `dispatcher_tasks` inside the same transaction that holds the per-stream advisory lock and performs the insert, selecting the row *for share* and requiring lease-id equality, `leased` status, and non-expiry against the database clock. The probe sits exactly where the registry call sits, after the idempotency dedup and the expected-sequence check, so an idempotent replay is answered from the dedup table before any lease question is asked and error precedence is identical across backends. A returned row proves the lease current in this database, and the row-share lock blocks any concurrent update of that dispatcher row — which is what lease, release, requeue, fail, and the heartbeat cap all do when they change the lease — until the emit commits or rolls back. Zero rows falls back to the bound registry, so a mixed wiring (an in-memory dispatcher validating a Postgres log, which the contract suite exercises) keeps registry semantics exactly; a mixed wiring gets no atomic fence, because the resource and the lock are then not in one database, and it is not a production shape. The `LeaseRegistry` Protocol seam serves the other backends and external tooling.
+
+**The database clock decides expiry.** With no injected clock — the production default — the Postgres dispatcher computes and compares lease deadlines using the server's `clock_timestamp()`, the always-advancing one rather than the statement-start timestamp, so every host answers "is this lease live?" against a single clock. The timer sweep's due-check does the same. An injected clock keeps every comparison client-side, preserving the deterministic test seam. Timer deadlines themselves are client-computed wall-clock values, because they are recorded payload bytes.
+
+**`worker_id` on the dispatcher row.** `lease()` takes a `worker_id` on the Protocol; the Postgres adapter records it in a nullable column and clears it on every transition that drops the lease id. It is audit and observability — which host held which lease when it went stale — and deliberately not a fencing token, so an observability field never carries correctness semantics. The sqlite adapter discards it.
+
+### Why no epoch
+
+Every lease-protected write either goes through the Postgres EventLog (fenced above), is a dispatcher lifecycle mutation serialised by the global dispatcher advisory lock, or goes to the ContentStore, which is content-addressed and immutable — put is an idempotent first-write-wins on the content hash, so a zombie writing the same bytes as the incoming worker is a no-op. No write to a resource outside the shared database depends on lease currency for correctness. A fencing token is required precisely when the protected resource cannot join the lock holder's transaction — a blob store with no row predicates, an external API. Here the events table lives in the same database as the dispatcher row, so a row-share lock is strictly stronger: it holds the conflicting writer off until commit, where a token comparison only detects a stale writer at the point it reaches commit.
+
+### What the fence buys
+
+Define a lease **generation** as the interval between a `lease()` that assigns a lease id and the next transition that clears it — release, yield, fail, heartbeat cap, stale reclaim, a force-enqueue, or operator maintenance. The invariant is that every event emitted by one generation has a lower sequence number than every event emitted by the next generation on that stream.
+
+Generation boundaries are dispatcher transactions under the global advisory lock, so they are totally ordered in commit order. An emit under the outgoing generation either commits before the boundary transaction, or is open holding the row-share lock — in which case the boundary's update waits for it, and the emit commits first regardless. An emit under the incoming generation starts only after its `lease()` committed. Per-stream sequence numbers are assigned inside the per-stream advisory lock in commit order, so commit order is sequence order. That is the property crash recovery rests on: recovery runs under a lease and seals with a lease-checked append, which therefore cannot interleave with writes from the prior generation.
+
+Every lifecycle transaction sets a bounded lock timeout *after* taking the global advisory lock, which bounds row-lock waits only. Without it, a wedged emit holding the row-share lock would block, say, a stale sweep's update while that sweep holds the global dispatcher lock, stalling every lifecycle operation fleet-wide for an unbounded time. On timeout the transaction aborts, the sweep retries on its next poll, and other tasks' lifecycle operations proceed: a wedged emitter costs one bounded wait per sweep instead of a fleet stall.
+
+### Timer sweeps race; they are not elected
+
+Every host polls the due-timer sweep on its own interval. The select-and-flip runs in one transaction under the global dispatcher lock, so two hosts serialise: the first to commit moves the due rows to ready and clears their deadline, and the second sees nothing due. The delivered wake is the stored deadline bytes, so delivery is byte-identical whichever host swept. Nothing can be missed either — there is no host assignment of timers, so the first host whose poll lands after the deadline wins, and the read-only probe that skips the write transaction on an empty poll races benignly: a timer that becomes due in the probe's gap is caught by the next poll, bounded by the poll interval.
+
+## Rationale
+
+- **An in-transaction row-share lock is strictly stronger than an out-of-transaction token check** for same-database resources, because it blocks the conflicting writer instead of detecting the conflict after the fact.
+- **A database-side clock eliminates skew on the lease-liveness question** without asking operators to run clock sync with tight bounds. The only residual skew is between an Engine-computed timer deadline and the database clock, which is a bounded delivery-jitter question — a timer fires up to the skew early or late — not a correctness question.
+- **Keeping the `LeaseRegistry` seam** leaves the backend-agnostic shape intact: every other adapter satisfies it directly, and the Postgres in-transaction check is an adapter-internal strengthening that does not leak into the Protocol.
+
+## Alternatives considered
+
+1. **A monotonic epoch or fencing-token column** — bumped on every lease grant, compared on every lease-protected write. Rejected: the row-share check on lease-id equality gives that property with no schema churn, and a lease id is a never-reused random value, so equality on it is a strictly stronger fence than equality on a counter. An out-of-transaction epoch comparison would leave the same zombie window, so an epoch design would need the in-transaction lock to be correct anyway. Worth revisiting only if a lease-protected write ever lands outside the shared database — an external blob store or API that cannot join the transaction — at which point a token becomes load-bearing.
+2. **Route every EventLog write through the global dispatcher lock.** Rejected: it serialises every append for every task in the system behind one lock, destroying write concurrency on the hottest path (a step emits dozens of events). The per-stream advisory lock gives correct per-task serialisation.
+3. **Select for update instead of for share.** Rejected: a write lock is stronger than needed and would conflict with itself, whereas the share lock blocks the dispatcher's updates while letting concurrent readers — introspection tooling, other streams' probes — through. Share also states the intent precisely: the emitter is asserting the row, not mutating it.
+4. **Compare against the statement timestamp instead of the transaction clock.** Rejected: the statement timestamp is frozen at transaction start, so a long-running emit would see a stale expiry cutoff. The question being asked is "is this lease live right now, as I commit this write?", which only an advancing clock answers.
+5. **Elect one host to sweep due timers.** Rejected: leader election is a new distributed-systems primitive and an availability hazard — if the leader dies, timers stall until the election completes. Every host sweeping under the global advisory lock gives the same exactly-once semantics with no extra machinery and fails open. The cost is one extra lock acquisition per poll per host, and empty polls skip the write transaction entirely.
+6. **Reject or no-op `enqueue()` on a currently-leased task.** Rejected: the documented contract is that enqueue on any non-ready status transitions the task to ready, and quietly changing that would break an external consumer without any in-tree test noticing. The fencing design does not need the tightening: the force-clear is a dispatcher transaction under the global lock whose update blocks share-lock holders exactly as release and stale reclaim do, so writes from the stripped generation are fenced anyway.
+
+## Consequences
+
+- **Schema**: the Postgres dispatcher table carries a nullable `worker_id`; no changes to the events, content, idempotency, or pending-wake tables, and no change to any partial-index predicate.
+- **Postgres EventLog**: an append with a lease issues the in-transaction share probe and consults the bound registry only when the probe finds no row. A system emit that requires no lease issues no check at all.
+- **Postgres Dispatcher**: `lease()` records `worker_id`, and every transition that clears the lease id clears it too. Expiry math runs on the database clock unless a clock is injected. Every lifecycle transaction bounds its row-lock waits. `is_lease_valid` is available for external callers, where its result is a point-in-time read rather than a guarantee — which is all those callers need.
+- **Sqlite and in-memory adapters** keep client-side clocks and the registry seam; multi-host guarantees do not apply to them.
+- **Worker**: a fenced zombie does exactly what it should. The heartbeat thread stops on `InvalidLease` without further writes; a mid-step `InvalidLease` propagates to the loop's own handler, which logs and relinquishes without calling release or fail, so the stale sweep picks up the pieces. No path takes a worker from a fenced write to a failure report.
+- **Residual risks**: a database wall-clock step backwards briefly extends leases (safe) and forwards can expire them early, bounded by the next heartbeat re-extending against the shifted clock. Skew between a host's wall clock and the database clock shifts timer firing by up to the skew but can neither double-fire nor lose a fire. Operators running multiple hosts run clock sync on the database server as they would for any multi-host system.
+- **Out of scope**: multi-host for the sqlite and in-memory backends; membership, service discovery, and cluster management (any host that can open a connection to the shared DSN participates — a deployment question, not a runtime one); and leader election for any subsystem, since every poll is an all-hosts race serialised by the advisory lock.
+
+## Refined by
+
+- [ADR-056](056-lease-fencing-dropped-connections.md) — Dropped connections

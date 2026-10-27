@@ -867,7 +867,7 @@ class Client:
         # for the seam with ``getattr`` only made a typo'd method name look
         # like a disabled feature.
         self._host.set_background_notifier(self._driver)
-        # Crash recovery (docs/adr/background-subagent.md): now that the notifier
+        # Crash recovery (docs/adr/002-background-subagent.md): now that the notifier
         # is wired, re-activate background sub-agents orphaned by a prior host
         # crash — re-drive any ``spawn_subagent(background=True)`` child with a
         # ``BackgroundSubagentStarted`` but no ``BackgroundSubagentDelivered``

@@ -293,7 +293,7 @@ def instructions_content_kind_from(
 
     ``snapshots`` maps resident name → preloaded snapshot: the root file
     under its basename, plus (discovery mode,
-    docs/adr/anchored-content-placement.md) every discovered subdirectory
+    docs/adr/036-anchored-content-placement.md) every discovered subdirectory
     file under its workspace-relative path. The mapping feeds the
     ``content_hash`` seam (:func:`_hashes`) and the discovery hook. The
     renderer **resolves each active name's bytes from

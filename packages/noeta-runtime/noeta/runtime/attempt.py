@@ -6,7 +6,7 @@ mid-step crash is recognisable as the last attempt's partial tail with no
 reachable suspend or terminal. Only the two pure decisions live here — locate
 that tail, and judge whether re-driving it needs a human; the seal / re-drive
 / park state machine that consumes them lives in ``noeta.runtime.worker``,
-which owns the lease discipline (``docs/adr/step-attempt-recovery.md``).
+which owns the lease discipline (``docs/adr/032-step-attempt-recovery.md``).
 """
 
 from __future__ import annotations

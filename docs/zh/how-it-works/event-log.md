@@ -77,9 +77,9 @@ policy 决定要改什么，但由 Engine 记成 `TaskStatePatched` 事件，再
 - 想*改变*行为的钩子应该放在 policy 或 guard 里，不能放在 observer 里，见 [Engine](engine.md)。
 
 设计记录：
-[event-sourced truth](https://github.com/initxy/noeta/blob/main/docs/adr/event-sourced-truth.md) ·
-[single-writer invariant](https://github.com/initxy/noeta/blob/main/docs/adr/single-writer-invariant.md) ·
-[step-attempt recovery](https://github.com/initxy/noeta/blob/main/docs/adr/step-attempt-recovery.md)
+[event-sourced truth](https://github.com/initxy/noeta/blob/main/docs/adr/009-event-sourced-truth.md) ·
+[single-writer invariant](https://github.com/initxy/noeta/blob/main/docs/adr/019-single-writer-invariant.md) ·
+[step-attempt recovery](https://github.com/initxy/noeta/blob/main/docs/adr/032-step-attempt-recovery.md)
 
 ## 下一步
 

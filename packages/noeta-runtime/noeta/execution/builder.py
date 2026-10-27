@@ -921,7 +921,7 @@ def build_session_inputs(
 
     hooks = _build_guards(spec, tools, guard_facts)
 
-    # Anchored-content seams (docs/adr/anchored-content-placement.md):
+    # Anchored-content seams (docs/adr/036-anchored-content-placement.md):
     # ``content_discovery`` / ``content_preloader`` are the workspace plugin's
     # instructions-pack contributions (claimed in the pack loop above when
     # discovery is armed); both close over the SAME snapshot mapping the
