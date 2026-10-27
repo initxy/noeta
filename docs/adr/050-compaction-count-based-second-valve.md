@@ -21,3 +21,4 @@ This reverses [ADR-003](003-context-compaction.md)'s "relief valve, not an alway
 
 - [ADR-060](060-compaction-absolute-auto-compact-window.md) — An absolute auto-compact window
 - [ADR-061](061-compaction-clear-point-on-its-own-number.md) — The clear point on its own number
+- [ADR-066](066-compaction-batched-clearing-and-claude-code-margin.md) — Batched clearing of re-fetchable results, a summarize input that matches the view, and Claude Code's margin

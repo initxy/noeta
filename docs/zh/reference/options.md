@@ -214,8 +214,8 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 | `max_steps_per_turn` | `int \| None` | `None` | 每一轮（一次性任务就是整个任务）的步数预算：走到这么多步时，再调一次模型、禁止调工具，让它交代做到哪了，这一轮就以这份交代收尾，开头写「Stopped at the N-step limit before finishing.」，而不是直接失败；子代理也用同一个预算；必须是正数 |
 | `tool_output_inline_limit` | `int \| None` | `50000` | 工具结果超过这么多字符就整份存成文件，模型拿到的是 Claude Code 的 `<persisted-output>` 块（文件路径 + 前 2 KB 预览）；没配存放目录时只留开头一段。`Read` 不受这条管。完整内容仍有记录；`None` 表示从不；必须是正数；恢复任务时要保持同一个值 |
 | `tool_output_spill_dir` | `Path \| None` | `None` | 超长结果整份写到 `<dir>/<task_id>/<call_id>.txt`，模型用 `Read` 分页看；必须是这个会话的 `Read` 读得到的路径；文件由宿主负责清理 |
-| `auto_compact_window` | `int \| None` | `None` | 把压缩当作上下文窗口只有这么多 token 来算（Claude Code 的 `autoCompactWindow`）：摘要的触发点、保留原文的尾巴、清理旧工具输出的阈值都按 `min(模型窗口, 这个值)` 推导；输出上限和技能、记忆索引的 1% 预算仍按真实窗口；必须是正数；恢复任务时要保持同一个值 |
-| `clear_tool_outputs_at` | `int \| None` | `None` | 请求长到这么多 token 时，开始把最新五条以外的旧工具输出换成占位标记；`None` 时是可用窗口的一半。和 `auto_compact_window` 配合：早清理、晚摘要；必须是正数；恢复任务时要保持同一个值 |
+| `auto_compact_window` | `int \| None` | `None` | 把压缩当作上下文窗口只有这么多 token 来算（Claude Code 的 `autoCompactWindow`）：摘要的触发点（`min(模型窗口, 这个值) − min(输出上限, 20,000) − 13,000`，和 Claude Code 一样）、保留原文的尾巴、清理旧工具输出的阈值都按 `min(模型窗口, 这个值)` 推导；输出上限和技能、记忆索引的 1% 预算仍按真实窗口；必须是正数；恢复任务时要保持同一个值 |
+| `clear_tool_outputs_at` | `int \| None` | `None` | 请求长到这么多 token 时，开始把最新五条以外、可以重新取到的旧工具输出（`Read`、`Bash`、`Grep`、`Glob`、`Edit`、`Write`、`WebFetch` 等）换成占位标记，每攒够约 20,000 token 清一批；`None` 时是可用窗口的一半。和 `auto_compact_window` 配合：早清理、晚摘要；必须是正数；恢复任务时要保持同一个值 |
 | `hooks` | `HooksConfig \| None` | `None` | 用户自定义钩子：工具调用前先过一遍规则，调用结束后、或者等审批时跑一条命令；见[钩子](#钩子) |
 | `webfetch_allowed_hosts` | `Sequence[str]` | `()` | `WebFetch` 不用审批就能访问的站点：`"example.com"` 精确匹配，`"*.example.com"` 只匹配子域名；写错会报错 |
 | `workflow_allowed` | `bool` | `False` | 提供 `run_workflow`（还需要能派子 agent） |

@@ -65,3 +65,4 @@ A long session outgrows the provider's context window. Three invariants constrai
 - [ADR-061](061-compaction-clear-point-on-its-own-number.md) — The clear point on its own number
 - [ADR-063](063-compaction-arguments-stay-as-sent.md) — Arguments stay as sent
 - [ADR-064](064-compaction-restores-recent-files.md) — Recently used files come back after a compaction
+- [ADR-066](066-compaction-batched-clearing-and-claude-code-margin.md) — Batched clearing of re-fetchable results, a summarize input that matches the view, and Claude Code's margin
