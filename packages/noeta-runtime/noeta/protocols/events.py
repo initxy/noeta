@@ -217,13 +217,18 @@ class MessagesAppendedPayload:
     prefix therefore sees the injection already consumed and never re-drains it.
     ``None`` (every ordinary append) is kept out of the byte stream by
     ``__canonical_omit_none__``, so no existing recording's bytes move.
+
+    ``idempotency_key`` is the caller's key on a ``send_goal`` goal: a repeat
+    with the same key finds it here and appends nothing. ``None`` (every
+    unkeyed append) is omitted the same way.
     """
 
     messages_ref: ContentRef
     count: int
     consumes_injection: Optional[str] = None
+    idempotency_key: Optional[str] = None
 
-    __canonical_omit_none__ = frozenset({"consumes_injection"})
+    __canonical_omit_none__ = frozenset({"consumes_injection", "idempotency_key"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,11 +250,35 @@ class InjectionRequestedPayload:
     never duplicates the message. The message bodies ride ``messages_ref`` into
     the ContentStore (content-addressed, so the consuming ``MessagesAppended``
     reuses the identical ref), keeping this envelope under the 4 KB cap.
+
+    ``idempotency_key`` is the caller's key on an ``inject_goal``: the request
+    is appended through a keyed ``system_emit``, so a repeat (even a
+    concurrent one) with the same key returns this request instead of adding
+    another. ``None`` is omitted from the bytes, so unkeyed requests are
+    unchanged.
     """
 
     injection_id: str
     messages_ref: ContentRef
     count: int
+    idempotency_key: Optional[str] = None
+
+    __canonical_omit_none__ = frozenset({"idempotency_key"})
+
+
+@dataclass(frozen=True, slots=True)
+class IdempotencyKeyClaimedPayload:
+    """A keyed ``send_goal`` took its caller's idempotency key on this task.
+
+    Appended through a keyed ``system_emit`` before the turn is woken, so of
+    two calls racing with one key exactly one appends this claim and goes on
+    to seed the turn; the other gets this envelope back, sees another
+    ``claim_id``, and waits for the winner's goal instead of seeding a second
+    turn. A fold no-op: it changes no task state.
+    """
+
+    idempotency_key: str
+    claim_id: str
 
 
 @dataclass(frozen=True, slots=True)

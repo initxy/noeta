@@ -26,6 +26,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -53,6 +54,7 @@ from noeta.protocols.errors import CodedError, InvalidLease
 from noeta.protocols.events import (
     BackgroundSubagentDeliveredPayload,
     EventEnvelope,
+    IdempotencyKeyClaimedPayload,
     InjectionRequestedPayload,
     SUSPEND_REASON_INTERRUPTED,
     TaskCancelledPayload,
@@ -83,6 +85,7 @@ from noeta.protocols.wake import (
     WakeCondition,
 )
 from noeta.runtime.worker import (
+    DEFAULT_ATTEMPT_HEARTBEAT_MAX,
     AppendMessagePrelude,
     AnswerUserQuestionPrelude,
     ResolveApprovalPrelude,
@@ -93,6 +96,11 @@ from noeta.runtime.worker import (
 )
 
 _log = logging.getLogger(__name__)
+
+#: Re-leases an in-request drive attempts after losing its lease before it
+#: gives up and fails the task. Recovery parks an attempt that keeps getting
+#: interrupted after three seals, so this is only a backstop.
+_LOST_LEASE_RECOVERIES = 4
 
 __all__ = [
     "InteractionDriver",
@@ -364,6 +372,49 @@ def _intake_providers_for(
 #: input may already be on the stream, but no turn ran on it. A ``send_goal``
 #: retry reads it to reuse a goal the failed seed recorded.
 SEED_FAILED_SUSPEND_REASON = "seed_failed"
+
+
+#: How long a keyed ``send_goal`` that lost the key's claim to a concurrent
+#: call waits for that call's goal to land before reporting the task as it is.
+_IDEMPOTENT_WAIT_S = 10.0
+_IDEMPOTENT_POLL_S = 0.05
+
+#: Event types whose payload carries the caller's idempotency key once the
+#: keyed call has taken effect.
+_KEYED_EFFECT_TYPES = ("MessagesAppended", "InjectionRequested")
+
+
+class _IdempotentRepeat(Exception):
+    """Internal: a keyed ``send_goal`` found its key already used on the task.
+
+    ``pending`` — the key is claimed by a call whose goal has not landed yet
+    (a concurrent duplicate), so the caller waits for it before answering."""
+
+    def __init__(self, *, pending: bool) -> None:
+        super().__init__("idempotency key already used")
+        self.pending = pending
+
+
+def _idempotent_state(events: list[EventEnvelope], key: str) -> str:
+    """Where a keyed call stands on this stream: ``"new"`` (never took
+    effect), ``"done"`` (its goal or injection is recorded), or ``"retry"``
+    (its goal is recorded but a failed seed parked the task before any step
+    ran on it — the one repeat that must still drive the turn)."""
+    for i, env in enumerate(events):
+        if env.type not in _KEYED_EFFECT_TYPES:
+            continue
+        if getattr(env.payload, "idempotency_key", None) != key:
+            continue
+        if env.type != "MessagesAppended":
+            return "done"
+        later = events[i + 1 :]
+        if any(e.type == "ContextPlanComposed" for e in later):
+            return "done"
+        suspends = [e for e in later if e.type == "TaskSuspended"]
+        if suspends and suspends[-1].payload.reason == SEED_FAILED_SUSPEND_REASON:
+            return "retry"
+        return "done"
+    return "new"
 
 
 def _undriven_goal(
@@ -944,7 +995,7 @@ class InteractionDriver:
             # than the lease TTL (a slow LLM round-trip retried to its budget)
             # would otherwise lose its lease mid-flight and fail its own
             # terminal write (InvalidLease) — hanging the task non-terminal.
-            with keep_lease_alive(self._host.dispatcher, seeded.lease):
+            with self._keep_lease_alive(seeded.lease):
                 if seeded.prelude is None:
                     run_leased_task(
                         self._host, seeded.lease,
@@ -958,15 +1009,18 @@ class InteractionDriver:
                         engine=seeded.engine,
                     )
         except InvalidLease as exc:
-            # The lease lapsed mid-step despite the heartbeat (cap hit, or an
-            # external reclaim), so the step's own terminal write was rejected.
-            # Unlike the WorkerLoop path there is NO resident worker to retry a
-            # requeued task here, so leaving it would hang the task non-terminal
-            # forever (the UI can neither resume nor delete it). Converge it to a
-            # durable terminal via the control plane, then re-raise so the
-            # transport still surfaces / logs the fault.
-            self._force_terminal_on_lost_lease(seeded.task_id, exc)
-            raise
+            # The lease lapsed mid-step (an attempt reached its heartbeat cap,
+            # or an external reclaim), so the step stopped or its write was
+            # rejected. Unlike the WorkerLoop path there is no resident worker
+            # here to pick the requeued task up, so recover it in place, the
+            # way a worker would. Only when that is impossible converge it to a
+            # durable terminal via the control plane — leaving it would hang
+            # the task non-terminal forever (the UI can neither resume nor
+            # delete it) — then re-raise so the transport still surfaces / logs
+            # the fault.
+            if not self._recover_lost_lease(seeded.task_id):
+                self._force_terminal_on_lost_lease(seeded.task_id, exc)
+                raise
         except Exception as exc:  # noqa: BLE001
             # The async transport drives this off the request thread, so unlike
             # the WorkerLoop path there is no outer ``_execute_step`` to fail
@@ -1005,6 +1059,57 @@ class InteractionDriver:
         # walk up and drive the woken ancestors.
         self._resume_woken_ancestors(seeded.task_id)
         return self._outcome(seeded.task_id)
+
+    def _keep_lease_alive(self, lease: Any) -> Any:
+        """Heartbeat ``lease`` while an in-request step runs on it, with the
+        host's per-attempt cap."""
+        host = self._host
+        return keep_lease_alive(
+            host.dispatcher,
+            lease,
+            event_log=host.event_log,
+            attempt_heartbeat_max=getattr(
+                host, "attempt_heartbeat_max", DEFAULT_ATTEMPT_HEARTBEAT_MAX
+            ),
+        )
+
+    def _recover_lost_lease(self, task_id: str) -> bool:
+        """Re-lease a task whose in-request step lost its lease, and run the
+        worker's recovery on it: the interrupted attempt is sealed and
+        re-driven, or parked for a human, exactly as after a crash.
+
+        Returns ``False`` when the task is not this drive's to recover — it is
+        not ``running`` (a cancel or a force interrupt already settled it), or
+        another worker holds it — so the caller keeps its lost-lease handling.
+        Bounded: an attempt that keeps losing its lease is parked by the
+        recovery's own abandon cap long before the retries here run out.
+        """
+        host = self._host
+        for _ in range(_LOST_LEASE_RECOVERIES):
+            task = fold(host.event_log, host.content_store, task_id)
+            if task.status != "running":
+                return False
+            lease = host.dispatcher.lease(
+                worker_id=self._worker_id,
+                lease_seconds=self._lease_seconds,
+                task_id=task_id,
+            )
+            if lease is None:
+                return False
+            try:
+                with self._keep_lease_alive(lease):
+                    run_leased_task(
+                        host, lease, next_goal_handle=NEXT_GOAL_WAKE_HANDLE
+                    )
+            except InvalidLease:
+                continue
+            except Exception as exc:  # noqa: BLE001 - same policy as drive_seeded
+                host.dispatcher.fail(
+                    lease.lease_id, retryable=True, reason=str(exc)
+                )
+                raise
+            return True
+        return False
 
     def _force_terminal_on_lost_lease(
         self, task_id: str, exc: Exception
@@ -1068,6 +1173,7 @@ class InteractionDriver:
         attachment_texts: tuple[str, ...] = (),
         activations: tuple[str, ...] = (),
         principal: Optional[Principal] = None,
+        idempotency_key: Optional[str] = None,
     ) -> DriveOutcome:
         """Append a new user turn and drive it.
 
@@ -1097,7 +1203,50 @@ class InteractionDriver:
         provider unchanged, and vice-versa). A bad ``(provider, model)`` pair raises
         :class:`ProviderSelectorError` before any durable write — see
         :meth:`seed_send_goal`.
+
+        ``idempotency_key`` makes a retried call safe: a repeat with the same
+        key on the same task (from any process sharing the store, and also
+        after an ``inject_goal`` with that key) appends nothing and returns
+        the task's outcome. The key rides the goal's ``MessagesAppended``.
+        Of concurrent calls with one key, exactly one seeds the turn — it
+        claims the key first (``IdempotencyKeyClaimed``) — and the others wait
+        briefly for its goal to land. The first call's failure is not retried
+        by a repeat, except a seed that recorded the goal and then failed
+        before any step ran, which the repeat drives as an unkeyed retry
+        would. ``None`` behaves exactly as before.
         """
+        if idempotency_key is not None:
+            if _idempotent_state(
+                self._host.event_log.read(task_id), idempotency_key
+            ) == "done":
+                return self._outcome(task_id)
+            try:
+                seeded = self.seed_send_goal(
+                    task_id,
+                    goal=goal,
+                    model_selector=model_selector,
+                    provider_selector=provider_selector,
+                    images=images,
+                    permission_mode=permission_mode,
+                    enabled_mcp=enabled_mcp,
+                    effort=effort,
+                    goal_origin=goal_origin,
+                    attachment_texts=attachment_texts,
+                    activations=activations,
+                    principal=principal,
+                    idempotency_key=idempotency_key,
+                )
+            except _IdempotentRepeat as repeat:
+                if repeat.pending:
+                    self._await_keyed_effect(task_id, idempotency_key)
+                return self._outcome(task_id)
+            except NotResumableError:
+                # A concurrent call holding this key already woke the task.
+                if not self._key_claimed(task_id, idempotency_key):
+                    raise
+                self._await_keyed_effect(task_id, idempotency_key)
+                return self._outcome(task_id)
+            return self.drive_seeded(seeded)
         return self.drive_seeded(
             self.seed_send_goal(
                 task_id,
@@ -1115,6 +1264,42 @@ class InteractionDriver:
             )
         )
 
+    def _await_keyed_effect(self, task_id: str, key: str) -> None:
+        """Wait (bounded) for the call that holds ``key`` to record its goal."""
+        deadline = time.monotonic() + _IDEMPOTENT_WAIT_S
+        while time.monotonic() < deadline:
+            if _idempotent_state(self._host.event_log.read(task_id), key) != "new":
+                return
+            time.sleep(_IDEMPOTENT_POLL_S)
+
+    def _key_claimed(self, task_id: str, key: str) -> bool:
+        """Whether a keyed call already claimed or used ``key`` on the task."""
+        return any(
+            getattr(env.payload, "idempotency_key", None) == key
+            for env in self._host.event_log.read(task_id)
+            if env.type == "IdempotencyKeyClaimed" or env.type in _KEYED_EFFECT_TYPES
+        )
+
+    def _claim_idempotency_key(self, task_id: str, key: str) -> bool:
+        """Claim ``key`` on ``task_id``; ``False`` when another call holds it.
+
+        The keyed ``system_emit`` dedups atomically in the store, so of two
+        racing calls exactly one appends its claim; the other gets that
+        claim back with a foreign ``claim_id`` (or the key's injection)."""
+        claim_id = f"claim-{uuid.uuid4().hex}"
+        env = self._host.event_log.system_emit(
+            task_id=task_id,
+            type="IdempotencyKeyClaimed",
+            payload=IdempotencyKeyClaimedPayload(
+                idempotency_key=key, claim_id=claim_id
+            ),
+            actor="interaction-driver",
+            origin="system",
+            trace_id=self._trace_id(task_id),
+            idempotency_key=key,
+        )
+        return getattr(env.payload, "claim_id", None) == claim_id
+
     def inject_goal(
         self,
         task_id: str,
@@ -1123,6 +1308,7 @@ class InteractionDriver:
         images: Sequence[ImageBlock] = (),
         goal_origin: Optional[MessageOrigin] = None,
         drive: bool = True,
+        idempotency_key: Optional[str] = None,
     ) -> DriveOutcome:
         """Deliver a user message to a task **mid-turn** — one verb, two landings.
 
@@ -1156,12 +1342,25 @@ class InteractionDriver:
         ``goal_origin`` tags the message's author source (``None`` ⇒ a human
         follow-up; ``"system"`` ⇒ host-injected content the transcript
         attributes and a recorded-message resume reads back).
+
+        ``idempotency_key`` makes a retried call safe, across processes and
+        across the two landings: a key already recorded on this task (by an
+        injection or a ``send_goal``) appends nothing and returns the task's
+        outcome. On the running landing the key rides the
+        ``InjectionRequested``, written through a keyed ``system_emit`` so
+        concurrent duplicates record one request; the next-goal landing
+        passes it to :meth:`send_goal`. ``None`` behaves exactly as before.
         """
         host = self._host
+        if idempotency_key is not None and _idempotent_state(
+            host.event_log.read(task_id), idempotency_key
+        ) == "done":
+            return self._outcome(task_id)
         task = fold(host.event_log, host.content_store, task_id)
         if task.status == "running":
             return self._inject_running(
-                task_id, goal=goal, images=images, goal_origin=goal_origin
+                task_id, goal=goal, images=images, goal_origin=goal_origin,
+                idempotency_key=idempotency_key,
             )
         wake_on = getattr(task, "wake_on", None)
         parked = (
@@ -1170,6 +1369,10 @@ class InteractionDriver:
             and wake_on.handle == NEXT_GOAL_WAKE_HANDLE
         )
         if parked and drive:
+            if idempotency_key is not None:
+                return self.send_goal(task_id, goal=goal, images=images,
+                                      goal_origin=goal_origin,
+                                      idempotency_key=idempotency_key)
             return self.send_goal(task_id, goal=goal, images=images,
                                   goal_origin=goal_origin)
         # Terminal, or suspended on some other handle (approval / question) —
@@ -1198,6 +1401,7 @@ class InteractionDriver:
         goal: str,
         images: Sequence[ImageBlock],
         goal_origin: Optional[MessageOrigin],
+        idempotency_key: Optional[str] = None,
     ) -> DriveOutcome:
         """Write the durable ``InjectionRequested`` + poke the inbox, no lease.
 
@@ -1215,30 +1419,57 @@ class InteractionDriver:
                 content=[TextBlock(text=goal), *images],
                 origin=goal_origin,
             ),
+            idempotency_key=idempotency_key,
         )
         return self._outcome(task_id)
 
-    def _request_injection(self, task_id: str, message: Message) -> str:
+    def _request_injection(
+        self,
+        task_id: str,
+        message: Message,
+        *,
+        idempotency_key: Optional[str] = None,
+    ) -> str:
         """Record ``message`` as a pending injection, lease-free; return its id.
 
         The body spills to the ContentStore behind ``messages_ref``, so the
         envelope stays under the payload cap and the consuming
-        ``MessagesAppended`` reuses the identical ref."""
+        ``MessagesAppended`` reuses the identical ref. With an
+        ``idempotency_key`` the write dedups in the store: a repeat gets the
+        first request back, and only the call that appended pokes the inbox."""
         host = self._host
         injection_id = f"inj-{uuid.uuid4().hex}"
         payload = put_messages(host.content_store, [message])
-        host.event_log.system_emit(
-            task_id=task_id,
-            type="InjectionRequested",
-            payload=InjectionRequestedPayload(
-                injection_id=injection_id,
-                messages_ref=payload.messages_ref,
-                count=payload.count,
-            ),
-            actor="interaction-driver",
-            origin="system",
-            trace_id=self._trace_id(task_id),
-        )
+        if idempotency_key is None:
+            host.event_log.system_emit(
+                task_id=task_id,
+                type="InjectionRequested",
+                payload=InjectionRequestedPayload(
+                    injection_id=injection_id,
+                    messages_ref=payload.messages_ref,
+                    count=payload.count,
+                ),
+                actor="interaction-driver",
+                origin="system",
+                trace_id=self._trace_id(task_id),
+            )
+        else:
+            env = host.event_log.system_emit(
+                task_id=task_id,
+                type="InjectionRequested",
+                payload=InjectionRequestedPayload(
+                    injection_id=injection_id,
+                    messages_ref=payload.messages_ref,
+                    count=payload.count,
+                    idempotency_key=idempotency_key,
+                ),
+                actor="interaction-driver",
+                origin="system",
+                trace_id=self._trace_id(task_id),
+                idempotency_key=idempotency_key,
+            )
+            if getattr(env.payload, "injection_id", None) != injection_id:
+                return str(getattr(env.payload, "injection_id", ""))
         # Poke the process-local inbox AFTER the durable write, so a running loop
         # that reads the inbox always has the log entry behind it. A host without
         # the seam (test double) is a no-op: the durable event still drives a
@@ -1266,6 +1497,7 @@ class InteractionDriver:
         attachment_texts: tuple[str, ...] = (),
         activations: tuple[str, ...] = (),
         principal: Optional[Principal] = None,
+        idempotency_key: Optional[str] = None,
     ) -> SeededTurn:
         """Validate + seed an appended-goal turn without driving it.
 
@@ -1336,6 +1568,7 @@ class InteractionDriver:
             origin=goal_origin,
             attachment_texts=tuple(attachment_texts),
             activate_skills=tuple(activations),
+            idempotency_key=idempotency_key,
         )
         turn_agent = agent_name_of(self._host.event_log, task_id)
         providers = _intake_providers_for(
@@ -1348,6 +1581,7 @@ class InteractionDriver:
                 origin=goal_origin,
                 attachment_texts=tuple(attachment_texts),
                 activate_skills=tuple(activations),
+                idempotency_key=idempotency_key,
             )
         # A goal a failed seed already recorded (and compensated back to this
         # suspend) is not appended twice: the retry drives the turn over it.
@@ -1406,6 +1640,20 @@ class InteractionDriver:
                     inner=inner,
                     provider=bound_provider,
                 )
+        # A keyed goal claims its key only now, after every refusal that writes
+        # nothing, and before the wake — the point where two racing seeds would
+        # otherwise both open a turn. A goal a failed seed already recorded
+        # under this key is driven without a new claim (the claim is its own).
+        if idempotency_key is not None:
+            state = _idempotent_state(
+                self._host.event_log.read(task_id), idempotency_key
+            )
+            if state == "done":
+                raise _IdempotentRepeat(pending=False)
+            if state == "new" and not self._claim_idempotency_key(
+                task_id, idempotency_key
+            ):
+                raise _IdempotentRepeat(pending=True)
         # Stash this turn's per-turn, NON-durable
         # permission_mode keyed by task_id — set AFTER selector authorization (a
         # rejected selector raises above, leaving the prior turn's mode intact) so
@@ -1806,6 +2054,15 @@ class InteractionDriver:
         request = getattr(host, "request_cancellation", None)
         if callable(request):
             request(task_id)
+        # The registry above only reaches a turn this process drives. Moving
+        # the dispatcher row to terminal also revokes whatever lease another
+        # process holds on it, so that process's next write (the next plan,
+        # the next tool call) is refused and its drive stops there — and no
+        # worker ever leases the cancelled task again. ``getattr`` so a
+        # dispatcher without the maintenance seam keeps the old behavior.
+        restore = getattr(host.dispatcher, "restore_task", None)
+        if callable(restore):
+            restore(task_id, status="terminal", suspend_reason="cancelled")
         # Human emergency-stop: a cancel must also kill
         # the session's background shell jobs (a long-running ``npm run dev`` /
         # ``make build`` outlives the task that started it, so cancelling the
@@ -2061,7 +2318,7 @@ class InteractionDriver:
         )
         if lease is None:
             return None
-        with keep_lease_alive(host.dispatcher, lease):
+        with self._keep_lease_alive(lease):
             run_leased_task(
                 host, lease, next_goal_handle=NEXT_GOAL_WAKE_HANDLE
             )

@@ -2,8 +2,8 @@
 
 * ``is_lease_valid(task_id, lease_id)`` reports lease liveness so the EventLog
   can refuse writes from expired / released leases.
-* ``heartbeat`` honours a per-lease hard cap and force-releases the task to
-  ``suspended`` with ``lease_quota_exceeded`` when exceeded.
+* ``heartbeat`` honours an optional per-lease hard cap and returns the task to
+  ``ready`` for recovery when exceeded.
 * ``release`` rejects unknown / already-released leases.
 * ``fail`` retryable is bounded by ``max_attempts`` (default 3).
 * Two workers racing for the same task: only one wins the lease.
@@ -93,24 +93,22 @@ def test_heartbeat_within_cap_keeps_extending() -> None:
     assert disp.is_lease_valid("t1", lease.lease_id) is True
 
 
-def test_heartbeat_over_cap_force_releases_to_suspended() -> None:
+def test_heartbeat_over_cap_returns_task_to_ready() -> None:
     now = [0.0]
     disp = InMemoryDispatcher(now=lambda: now[0], heartbeat_max=2)
     disp.enqueue("t1")
     lease = disp.lease(worker_id="w1", lease_seconds=5.0)
     assert lease is not None
 
-    # Two heartbeats are fine; the third must trip the cap and force a
-    # release with reason ``lease_quota_exceeded``.
+    # Two heartbeats are fine; the third trips the cap.
     disp.heartbeat(lease.lease_id, lease_seconds=5.0)
     disp.heartbeat(lease.lease_id, lease_seconds=5.0)
     with pytest.raises(InvalidLease):
         disp.heartbeat(lease.lease_id, lease_seconds=5.0)
 
-    # The lease is gone, the task suspended with the documented reason.
+    # The lease is gone and the task is ready for the next holder to recover.
     assert disp.is_lease_valid("t1", lease.lease_id) is False
-    assert disp.task_status("t1") == "suspended"
-    assert disp.suspend_reason("t1") == "lease_quota_exceeded"
+    assert disp.task_status("t1") == "ready"
 
 
 # ---------------------------------------------------------------------------

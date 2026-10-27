@@ -152,6 +152,7 @@ A frozen dataclass passed as `Client(..., host_config=...)`. Never part of agent
 | `queue` | `str` | `"default"` | this client's worker queue on a shared store; its workers claim only this queue |
 | `record_llm_requests` | `bool` | `False` | store each model call's full request body behind `LLMRequestStarted.request_ref`. Off, the ref carries the hash alone: the request is derivable and would grow the store by the square of a task's length. A debugging aid; `Client.collect_garbage` drops the bodies again |
 | `llm_max_retries` | `int \| None` | `None` | how many times this client retries a model call that failed transiently (429, 5xx, timeout) before the step fails, with backoff; each retry records `LLMRetryScheduled`. `0` tries once; `None` keeps the runtime default (8) |
+| `attempt_heartbeat_max` | `int \| None` | `360` | lease renewals one step attempt (a model call plus its tool calls) may take before its lease is handed back and the attempt is recovered like a crashed one; restarts with every model call. `None` never caps |
 
 Passing `storage_path` and the explicit trio together, or only part of the trio, raises `ValueError`. `noeta.sdk.storage.open_storage_stack(path)` builds the trio from one string; the module also exports `build_storage_stack`, `is_memory_path`, `is_postgres_url`, the Sqlite / Postgres adapters, and `collect_garbage` (see [Limitations → growth](../operations/limitations.md#content-is-reclaimed-only-when-you-ask)).
 

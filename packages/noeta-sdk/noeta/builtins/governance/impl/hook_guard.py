@@ -3,10 +3,10 @@
 A verdict is a pure function of ``(rules, ProposedToolCall, GuardContext)``
 with no I/O, clock, or shell, so a guard rebuilt from the same rules
 re-derives the same guard-origin events across hosts. Priority 100 sits behind
-``BudgetGuard`` (10) and ``PermissionGuard`` (20) and ``HookManager.check``
-stops at the first non-allow, so a user rule can only *tighten* a call the
-built-ins already allowed — it can neither loosen a built-in denial nor
-rewrite a built-in approval.
+``BudgetGuard`` (10) and ``PermissionGuard`` (20); ``HookManager.check`` lets
+any deny win, so a user rule can only *tighten*: it can neither loosen a
+built-in denial nor rewrite a built-in approval, but its deny still applies
+to a call a built-in only gated behind approval.
 """
 
 from __future__ import annotations

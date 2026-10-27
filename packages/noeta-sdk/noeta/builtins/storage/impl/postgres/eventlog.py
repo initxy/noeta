@@ -23,6 +23,7 @@ from noeta.protocols.errors import (
 )
 from noeta.protocols.event_log import (
     SNAPSHOT_BASELINE_EVENT_TYPES,
+    SYSTEM_IDEMPOTENCY_SCOPE,
     Subscriber,
     TaskStreamSummary,
     Unsubscribe,
@@ -157,6 +158,7 @@ class PostgresEventLog:
         origin: EventOrigin,
         trace_id: Optional[str] = None,
         causation_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> EventEnvelope:
         envelope = EventEnvelope.build(
             task_id=task_id,
@@ -172,9 +174,11 @@ class PostgresEventLog:
         )
         return self._append(
             envelope,
-            lease_id=None,
+            lease_id=(
+                SYSTEM_IDEMPOTENCY_SCOPE if idempotency_key is not None else None
+            ),
             expected_seq=None,
-            idempotency_key=None,
+            idempotency_key=idempotency_key,
             require_lease=False,
         )
 
