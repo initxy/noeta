@@ -9,6 +9,7 @@ a paired `role="tool"` message.
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,7 @@ from noeta.policies.control_semantics import SPAWN_SUBAGENT_TOOL
 from noeta.policies.control_semantics import ControlToolSpec
 from noeta.protocols.decisions import (
     SpawnSubtaskDecision,
-    StatePatchDecision,
+    ToolCallsDecision,
 )
 from noeta.protocols.messages import (
     LLMRequest,
@@ -147,6 +148,53 @@ def test_delegation_runs_child_and_folds_result(tmp_path: Path) -> None:
         if isinstance(b, ToolResultBlock) and b.call_id == SPAWN_CALL_ID
     ]
     assert paired and paired[0].output == "looks good"
+
+
+def test_task_mixed_with_an_ordinary_call_runs_both(tmp_path: Path) -> None:
+    """A response with Task plus an ordinary call runs the ordinary call,
+    records its result, then spawns the child; both results reach the next
+    model request."""
+    ws = _make_ws(tmp_path)
+    mixed = LLMResponse(
+        stop_reason="tool_use",
+        content=[
+            ToolUseBlock(
+                call_id=SPAWN_CALL_ID,
+                tool_name=SPAWN_SUBAGENT_TOOL,
+                arguments={"agent": "explore", "goal": CHILD_GOAL},
+            ),
+            ToolUseBlock(
+                call_id="r1", tool_name="Read", arguments={"file_path": str(ws / "x.py")}
+            ),
+        ],
+        usage=Usage(uncached=1, output=1),
+        raw={"id": "mixed"},
+    )
+    host, driver, provider = _session(ws, [mixed, _end("reviewed"), _end("done")])
+    out = driver.start(goal=PARENT_GOAL, agent="main")
+    assert out.status == "terminal"
+    parent = fold(host.event_log, host.content_store, out.task_id)
+    results = [
+        b
+        for m in parent.runtime.messages
+        if m.role == "tool"
+        for b in m.content
+        if isinstance(b, ToolResultBlock)
+    ]
+    assert [b.call_id for b in results] == ["r1", SPAWN_CALL_ID]
+    assert all(b.success for b in results)
+    assert "foo" in str(results[0].output)
+    assert results[1].output == "reviewed"
+    # The parent asked the model three times in all: the mixed turn, the
+    # child's turn, and the parent's continuation carrying both results.
+    assert len(provider.received_requests) == 3
+    last_ids = {
+        b.call_id
+        for m in provider.received_requests[2].messages
+        for b in m.content
+        if isinstance(b, ToolResultBlock)
+    }
+    assert last_ids == {"r1", SPAWN_CALL_ID}
 
 
 def test_result_message_lands_between_woken_and_next_compose(tmp_path: Path) -> None:
@@ -311,7 +359,7 @@ def test_single_spawn_translates_to_spawn_decision() -> None:
     assert decision.goal == CHILD_GOAL
 
 
-def test_mixed_spawn_batch_returns_recoverable_ack() -> None:
+def test_mixed_spawn_batch_runs_ordinary_calls_then_spawns() -> None:
     mixed = LLMResponse(
         stop_reason="tool_use",
         content=[
@@ -327,23 +375,42 @@ def test_mixed_spawn_batch_returns_recoverable_ack() -> None:
             ControlToolSpec(SPAWN_SUBAGENT_TOOL, translate_spawn_subagent),
         ),
     )
-    decision = policy.decide(StepContext(task_id="t", lease_id="l", trace_id="tr"), _view())
-    # Recoverable error ack — task continues, model may retry.
-    assert isinstance(decision, StatePatchDecision)
-    assert decision.patch is None
-    assert len(decision.messages_after) == 1
-    ack = decision.messages_after[0]
-    assert ack.role == "tool"
-    assert len(ack.content) == 2
-    call_ids = sorted(b.call_id for b in ack.content)
-    assert call_ids == ["a", "b"]
-    for b in ack.content:
-        assert isinstance(b, ToolResultBlock)
-        assert b.success is False
-        assert b.output == ""
-        assert "a response carrying Task may carry only Task calls" in (
-            b.error or ""
+    ctx = StepContext(task_id="t", lease_id="l", trace_id="tr")
+    decision = policy.decide(ctx, _view())
+    # Step 1: only the ordinary call runs; the Task call stays unanswered.
+    assert isinstance(decision, ToolCallsDecision)
+    assert [c.call_id for c in decision.calls] == ["b"]
+    assert decision.assistant_message is not None
+
+    # Step 2: with "b" answered, the policy spawns "a" without a model call
+    # (the one-shot LLM would raise on a second call) and appends no second
+    # copy of the assistant turn.
+    history = [
+        Message(role="user", content=[TextBlock(text="go")]),
+        decision.assistant_message,
+        Message(
+            role="tool",
+            content=[ToolResultBlock(call_id="b", output="x", success=True)],
+        ),
+    ]
+    view = dataclasses.replace(_view(), rolling_history=history)
+    spawn = policy.decide(ctx, view)
+    assert isinstance(spawn, SpawnSubtaskDecision)
+    assert (spawn.agent_name, spawn.goal) == ("explore", "g")
+    assert spawn.assistant_message is None
+
+    # Once the Task call is answered too, the turn goes back to the model
+    # (the one-shot LLM hands back the same mixed response, re-translated).
+    history.append(
+        Message(
+            role="tool",
+            content=[ToolResultBlock(call_id="a", output="done", success=True)],
         )
+    )
+    view = dataclasses.replace(_view(), rolling_history=history)
+    again = policy.decide(ctx, view)
+    assert isinstance(again, ToolCallsDecision)
+    assert again.assistant_message is not None
 
 
 def test_delegation_disabled_treats_spawn_as_normal_tool() -> None:

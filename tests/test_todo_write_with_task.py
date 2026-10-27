@@ -585,3 +585,58 @@ def test_todo_write_with_malformed_task_refuses_everything(tmp_path: Path) -> No
         assert "'prompt' is empty" in (block.error or "")
     _assert_each_call_answered_once(parent.runtime.messages)
 
+
+# ---------------------------------------------------------------------------
+# TodoWrite + Task + an ordinary call: the ordinary call runs first
+# ---------------------------------------------------------------------------
+
+
+def test_todo_write_task_and_ordinary_call_all_run(tmp_path: Path) -> None:
+    glob = ToolUseBlock(call_id="g1", tool_name="Glob", arguments={"pattern": "*"})
+    provider = FakeLLMProvider(
+        responses=[
+            _response(_todo(), _task("fg", "research omega"), glob),
+            _end("child report"),
+            _end("all done"),
+        ]
+    )
+    host, driver = _host(tmp_path, provider)
+
+    out = driver.start(goal="plan and delegate", agent="main")
+    parent = fold(host.event_log, host.content_store, out.task_id)
+    types = _types(host, out.task_id)
+
+    assert out.status == "terminal"
+    assert parent.state.todos == _TODOS
+    assert types.count("SubtaskSpawned") == 1
+    # The ordinary call and the checklist ack are answered before the spawn.
+    tool_msgs = _tool_messages_after_first_assistant(parent.runtime.messages)
+    assert [[b.call_id for b in m.content] for m in tool_msgs] == [
+        ["tw", "g1"],
+        ["fg"],
+    ]
+    assert tool_msgs[1].content[0].output == "child report"
+    _assert_each_call_answered_once(parent.runtime.messages)
+
+
+def test_background_task_and_ordinary_call_both_run(tmp_path: Path) -> None:
+    glob = ToolUseBlock(call_id="g1", tool_name="Glob", arguments={"pattern": "*"})
+    provider = FakeLLMProvider(
+        responses=[
+            _response(_task("bg", "research omega", background=True), glob),
+            _end("started and tracking"),
+        ]
+    )
+    host, driver = _host(tmp_path, provider, multi_turn=True)
+    stub = _RecordingLauncher()
+    object.__setattr__(host, "_background_subagents", stub)
+
+    out = driver.start(goal="delegate", agent="main")
+    parent = fold(host.event_log, host.content_store, out.task_id)
+
+    assert len(stub.launched) == 1
+    tool_msgs = _tool_messages_after_first_assistant(parent.runtime.messages)
+    assert [[b.call_id for b in m.content] for m in tool_msgs] == [["g1"], ["bg"]]
+    assert _STARTED_MARKER in tool_msgs[1].content[0].output
+    _assert_each_call_answered_once(parent.runtime.messages)
+
