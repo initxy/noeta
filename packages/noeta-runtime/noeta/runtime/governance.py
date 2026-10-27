@@ -211,7 +211,8 @@ class PreToolUseRule:
     """One user PreToolUse rule, evaluated by the ``HookGuard``.
 
     ``match_tool`` is an ``fnmatch`` pattern over the tool name
-    (``"mcp__*"``); ``match_arg`` optionally narrows it to calls whose
+    (``"mcp__*"``; a rule matching ``Bash`` also matches ``Monitor``, which
+    runs a shell ``command`` too); ``match_arg`` optionally narrows it to calls whose
     argument matches. The first matching rule decides: ``"allow"`` stops the
     scan, ``"deny"`` refuses the call, ``"require_approval"`` routes it
     through human approval — ``reason`` is the text the model / approver

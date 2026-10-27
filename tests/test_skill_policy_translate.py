@@ -366,9 +366,7 @@ def test_translate_spawn_mixed_with_skill_recoverable_with_both_toggles() -> Non
         assert isinstance(b, ToolResultBlock)
         assert b.success is False
         assert b.output == ""
-        assert "a response carrying Task may carry only Task calls" in (
-            b.error or ""
-        )
+        assert "Task cannot share a response with skill" in (b.error or "")
 
 
 # ---------------------------------------------------------------------------

@@ -27,6 +27,8 @@ __all__ = [
     "encode_tool_arguments",
     "decode_tool_arguments",
     "describe_http_error",
+    "http_error_is_context_overflow",
+    "indicates_context_overflow",
     "neutralize_reserved_tags",
     "parse_retry_after",
     "render_tool_result_body",
@@ -108,29 +110,36 @@ def encode_tool_arguments(arguments: Any) -> str:
 
 
 def decode_tool_arguments(raw: Optional[str], *, error_label: str) -> dict[str, Any]:
-    """Wire arguments string → Noeta-shape ``dict``; ``None`` normalizes to ``{}``.
+    """Wire arguments string → Noeta-shape ``dict``.
 
-    A decode failure raises :class:`MalformedToolArgumentsError`, which
-    subclasses both :class:`ValueError` and :class:`TransientError`: a
-    non-decodable arguments string is in practice a truncated or garbled
-    stream, so ``RuntimeLLMClient`` retries it on its transient budget instead
-    of failing the whole task on one flaky response (once that budget is spent
-    it becomes ``stop_reason="error"``).
+    ``None``, a blank string and JSON ``null`` all mean "no arguments" and
+    normalize to ``{}`` — compatible servers send each of them for a
+    parameterless tool. Anything else must decode to a JSON object.
 
-    The default applies to ``None`` only — an empty string still reaches
-    ``json.loads`` and fails there — so an adapter that wants ``""`` treated as
-    absent must normalize before calling. ``error_label`` prefixes the message
-    so each adapter keeps its own wire vocabulary.
+    A decode failure, or a value that is not an object, raises
+    :class:`MalformedToolArgumentsError`, which subclasses both
+    :class:`ValueError` and :class:`TransientError`: a non-decodable arguments
+    string is in practice a truncated or garbled stream, so
+    ``RuntimeLLMClient`` retries it on its transient budget instead of failing
+    the whole task on one flaky response (once that budget is spent it becomes
+    ``stop_reason="error"``). ``error_label`` prefixes the message so each
+    adapter keeps its own wire vocabulary.
     """
-    if raw is None:
-        raw = "{}"
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return {}
     try:
-        parsed: dict[str, Any] = json.loads(raw)
-        return parsed
+        parsed = json.loads(raw)
     except (json.JSONDecodeError, TypeError) as exc:
         raise MalformedToolArgumentsError(
             f"{error_label} not JSON-decodable: {exc}"
         ) from exc
+    if parsed is None:
+        return {}
+    if not isinstance(parsed, dict):
+        raise MalformedToolArgumentsError(
+            f"{error_label} must be a JSON object, got {type(parsed).__name__}"
+        )
+    return parsed
 
 
 def parse_retry_after(
@@ -199,3 +208,83 @@ def describe_http_error(exc: httpx.HTTPStatusError) -> str:
     if not detail:
         return text
     return f"{text}: {detail[:_ERROR_BODY_LIMIT]}"
+
+
+#: Phrases only an input-context overflow produces, across the providers and
+#: gateways these adapters reach (Anthropic, OpenAI, OpenRouter, vLLM,
+#: llama.cpp, LM Studio, Gemini, Groq, xAI, Kimi, MiniMax, Bedrock).
+_OVERFLOW_PHRASES = re.compile(
+    r"prompt is too long"
+    r"|prompt too long"
+    r"|input is too long"
+    r"|context window"
+    r"|maximum context"
+    r"|context[ _]length[ _]exceeded"
+    r"|exceeds? (?:the )?context limit"
+    r"|exceeds the available context size"
+    r"|greater than the context length"
+    r"|maximum prompt length"
+    r"|reduce the length of the messages"
+    r"|input token count.*exceeds the maximum"
+    r"|exceeded model token limit",
+    re.IGNORECASE,
+)
+
+#: Broader phrases that also mean overflow, but only when the message is not
+#: about a rate limit / quota or the output cap (which compaction cannot fix).
+_BROAD_OVERFLOW_PHRASES = re.compile(
+    r"too many tokens|token limit exceeded|exceeds the limit of \d+",
+    re.IGNORECASE,
+)
+_NOT_OVERFLOW_PHRASES = re.compile(
+    r"rate.?limit|per (?:second|minute|min|hour|day)\b|\btpm\b|quota"
+    r"|output tokens|completion tokens",
+    re.IGNORECASE,
+)
+
+
+def indicates_context_overflow(message: str) -> bool:
+    """Does a provider error message say the prompt exceeded the context window?
+
+    Context overflow needs its own bucket — the recovery is compaction, not a
+    retry and not a failure — yet every server words it differently.
+    """
+    if _OVERFLOW_PHRASES.search(message):
+        return True
+    return bool(
+        _BROAD_OVERFLOW_PHRASES.search(message)
+        and not _NOT_OVERFLOW_PHRASES.search(message)
+    )
+
+
+def http_error_is_context_overflow(response: httpx.Response) -> bool:
+    """Is this 4xx response a context overflow?
+
+    413 (request too large) always is: what shrinks the request is
+    compaction. Otherwise the error ``code`` / ``type`` (OpenAI's
+    ``context_length_exceeded``) or the message decides; a body that is not
+    JSON is matched as text. 429 is a rate limit and never counts.
+    """
+    status = response.status_code
+    if status == 413:
+        return True
+    if not 400 <= status < 500 or status == 429:
+        return False
+    try:
+        body = response.json()
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+        try:
+            return indicates_context_overflow(response.text)
+        except (httpx.ResponseNotRead, UnicodeDecodeError):
+            return False
+    error = body.get("error") if isinstance(body, dict) else None
+    if isinstance(error, str):
+        return indicates_context_overflow(error)
+    if not isinstance(error, dict):
+        return False
+    if "context_length_exceeded" in (
+        str(error.get("code") or ""),
+        str(error.get("type") or ""),
+    ):
+        return True
+    return indicates_context_overflow(str(error.get("message") or ""))

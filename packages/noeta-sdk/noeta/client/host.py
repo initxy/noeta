@@ -1326,19 +1326,20 @@ class SdkHost(GenericEngineResolver):
         self._delivery.set_notifier(notifier)
 
     def _on_background_notice(
-        self, root_task_id: str, job_id: str, notice: str
+        self, task_id: str, job_id: str, notice: str
     ) -> None:
         """ProcessRegistry hook — hand a job's notice to delivery.
 
-        Runs on the job's own thread; :meth:`BackgroundDelivery.post_notice`
-        records it at once (so a job's notices keep their order) and leaves
-        any waiting to its own thread."""
+        ``task_id`` is the task that started the job; delivery routes to the
+        session root once that task has ended. Runs on the job's own thread;
+        :meth:`BackgroundDelivery.post_notice` records it at once (so a job's
+        notices keep their order) and leaves any waiting to its own thread."""
         try:
-            self._delivery.post_notice(task_id=root_task_id, notice=notice)
+            self._delivery.post_notice(task_id=task_id, notice=notice)
         except Exception:  # noqa: BLE001 — a notice never kills its job's thread
             _log.warning(
                 "background notice for %s (%s) was not delivered",
-                root_task_id,
+                task_id,
                 job_id,
                 exc_info=True,
             )

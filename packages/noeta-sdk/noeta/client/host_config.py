@@ -656,7 +656,7 @@ class HostConfig:
     #: reach; under a remote sandbox that means a path the host's own side
     #: serves. Nothing removes the files: the host owns the directory's
     #: lifetime. ``None`` (the default) writes nothing: an over-size output is
-    #: then cut to its start with a note that the rest was dropped.
+    #: then cut to its start and end with a note that the middle was dropped.
     tool_output_spill_dir: Optional[Path] = None
     #: Compact as if the model's context window were this many tokens —
     #: Claude Code's ``autoCompactWindow``. Every number compaction derives

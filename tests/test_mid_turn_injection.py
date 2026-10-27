@@ -32,7 +32,7 @@ from noeta.protocols.decisions import (
     YieldForHumanDecision,
 )
 from noeta.protocols.events import InjectionRequestedPayload
-from noeta.protocols.messages import Message, TextBlock
+from noeta.protocols.messages import Message, TextBlock, ToolUseBlock
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.view import View
 from noeta.protocols.wake import HumanResponseReceived, NEXT_GOAL_WAKE_HANDLE
@@ -186,6 +186,63 @@ def test_injection_seen_within_same_turn() -> None:
     ]
     assert len(consume) == 1
     assert inbox.snapshot(task.task_id) == {}
+
+
+class _DeferredCallPolicy:
+    """Round 0: the assistant turn carries two calls but only ``c1`` runs now
+    (as with Task beside an ordinary call); an injection arrives. Round 1:
+    answer ``t1``. Round 2: finish."""
+
+    def __init__(self, inbox: InjectionInbox) -> None:
+        self._inbox = inbox
+        self._i = 0
+        self.descriptor: dict[str, Any] | None = None
+        self.user_texts_before_t1: list[str] = []
+
+    def decide(self, ctx: StepContext, view: View) -> Decision:
+        self._i += 1
+        if self._i == 1:
+            assert self.descriptor is not None
+            self._inbox.submit(ctx.task_id, "inj-1", self.descriptor)
+            assistant = Message(
+                role="assistant",
+                content=[
+                    ToolUseBlock(call_id="t1", tool_name="noop", arguments={}),
+                    ToolUseBlock(call_id="c1", tool_name="noop", arguments={}),
+                ],
+            )
+            return ToolCallsDecision(
+                calls=[ToolCall(tool_name="noop", arguments={}, call_id="c1")],
+                assistant_message=assistant,
+            )
+        if self._i == 2:
+            self.user_texts_before_t1 = _user_texts(view.rolling_history)
+            return ToolCallsDecision(
+                calls=[ToolCall(tool_name="noop", arguments={}, call_id="t1")]
+            )
+        return FinishDecision(answer="done")
+
+
+def test_injection_waits_while_the_latest_turn_has_an_unanswered_call() -> None:
+    inbox = InjectionInbox()
+    policy = _DeferredCallPolicy(inbox)
+    engine, log, cs, lease_id, task = _build(policy, inbox=inbox)
+    policy.descriptor = _put_injection(cs, "notice")
+
+    finished = engine.run_one_step(task, lease_id=lease_id)
+    assert finished.status == "terminal"
+    assert "notice" not in policy.user_texts_before_t1
+    roles = [
+        (m.role, [getattr(b, "call_id", None) for b in m.content])
+        for m in finished.runtime.messages
+    ]
+    # The notice lands only after both calls are answered.
+    assert roles[:4] == [
+        ("assistant", ["t1", "c1"]),
+        ("tool", ["c1"]),
+        ("tool", ["t1"]),
+        ("user", [None]),
+    ]
 
 
 # ---------------------------------------------------------------------------

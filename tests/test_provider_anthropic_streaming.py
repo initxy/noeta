@@ -423,7 +423,7 @@ def test_thinking_stream_emits_thinking_deltas_and_silent_signature() -> None:
         StreamDelta(kind="text", text="answer", index=1),
     ]
     assert response.content == [
-        ThinkingBlock(text="step 1 step 2", signature="sig-abc"),
+        ThinkingBlock(text="step 1 step 2", signature="sig-abc", provider="anthropic"),
         TextBlock(text="answer"),
     ]
 
@@ -448,7 +448,7 @@ def test_redacted_thinking_block_rides_content_block_start_whole() -> None:
     # The opaque blob never surfaces as a delta but round-trips on the block.
     assert sink.deltas == [StreamDelta(kind="text", text="done", index=1)]
     assert response.content == [
-        ThinkingBlock(text="", signature=None, data="opaque-blob"),
+        ThinkingBlock(text="", signature=None, data="opaque-blob", provider="anthropic"),
         TextBlock(text="done"),
     ]
 

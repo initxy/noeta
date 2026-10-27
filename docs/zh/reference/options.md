@@ -32,7 +32,7 @@ with Client(options, provider=AnthropicProvider(), model="claude-sonnet-5", host
 | `plugins` | `tuple[str, ...]` | `DEFAULT_PLUGINS` = `("fs", "web")` | 这个 agent 启用的插件（见[下文](#启用插件)） |
 | `agents` | `Mapping[str, AgentDefinition]` | `{}` | 子 agent，一层平铺的 dict |
 | `allowed_tools` | `tuple[str \| tool, ...] \| None` | `None` | 整体替换工具列表；`None` 是 10 个内置工具，`()` 是一个都没有 |
-| `disallowed_tools` | `tuple[str, ...]` | `()` | 从当前工具列表里去掉；不存在的名字直接忽略 |
+| `disallowed_tools` | `tuple[str, ...]` | `()` | 从当前工具列表里去掉；不存在的名字直接忽略；去掉 `"Bash"` 会连带去掉 `Monitor`、`BashOutput`、`KillShell` |
 | `permission_mode` | `str` | `"default"` | `default` / `acceptEdits` / `bypassPermissions` |
 | `max_turns` | `int \| None` | `None` | `budget.max_iterations` 的简写；两个都设会抛 `ValueError` |
 | `policy` | 带 `.ref` 的 `(llm) -> Policy` | `None` | 替换内置的 ReAct 循环 |
@@ -245,7 +245,7 @@ Options(system_prompt="...", plugins=DEFAULT_PLUGINS + ("memory", "todo_write"))
 
 | 规则 | 字段 |
 | --- | --- |
-| `PreToolUseRule` | `match_tool`（按工具名做 `fnmatch` 匹配，比如 `"mcp__*"`）、`action`（`"allow"` / `"deny"` / `"require_approval"`）、`match_arg=None`、`reason=None`（模型或审批人看到的理由） |
+| `PreToolUseRule` | `match_tool`（按工具名做 `fnmatch` 匹配，比如 `"mcp__*"`；匹配 `Bash` 的规则同样管 `Monitor`）、`action`（`"allow"` / `"deny"` / `"require_approval"`）、`match_arg=None`、`reason=None`（模型或审批人看到的理由） |
 | `MatchArg` | `path`（参数键组成的元组，比如 `("opts", "force")`）、`op`（`"equals"` / `"contains"` / `"regex"`）、`value`、`pattern`；`regex` 如果用字符串写在 `value` 里，构造配置时会编译好 |
 | `PostToolUseRule` | `match_tool`、`command=None`（argv 元组，不经过 shell）、`log=False`（记一行日志，可以代替命令，也可以和命令一起用） |
 | `NotificationRule` | `on`（目前只有 `"approval"`）、`command=None`、`log=False` |
