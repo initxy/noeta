@@ -228,8 +228,10 @@ class TaskRun:
         await self.flush(view)
 
     def view(self) -> TaskView:
+        model = str(self.state.config.get("model") or (self.agent.model if self.agent else ""))
         return TaskView(state=self.state, complete=self.complete, env=self.env(),
-                        post=self.post_self, extensions=self.exts)
+                        post=self.post_self, extensions=self.exts, model=model,
+                        agents=self.rt.agents)
 
     async def post_self(self, body: Any, dedupe_key: str | None = None) -> None:
         """Post to this task's own inbox (extensions: ``TaskView.post``)."""
@@ -256,10 +258,13 @@ class TaskRun:
             await self.append(events)
 
     def tools(self, view: TaskView) -> list[Tool]:
+        allowed = self.agent.allowed_tools if self.agent is not None else None
         tools: list[Tool] = []
         seen: set[str] = set()
         for ext in self.exts:
             for t in ext.tools(view):
+                if allowed is not None and t.name not in allowed:
+                    continue
                 if t.name not in seen:
                     seen.add(t.name)
                     tools.append(t)

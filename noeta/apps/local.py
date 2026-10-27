@@ -118,17 +118,26 @@ class LocalApp:
         await self.stop()
 
 
-def from_settings(settings: Settings, *, agents_kw: dict[str, Any] | None = None,
+def from_settings(settings: Settings, *, cwd: str | None = None,
+                  agents_kw: dict[str, Any] | None = None,
                   own_tasks_only: bool = False, **runtime_kw: Any) -> LocalApp:
     """The default agents on the configured store, model and provider, with
-    the user's memory (``~/.noeta/memory``) and prompt overrides
-    (``~/.noeta/prompts``). Front ends (``-p``, ``acp``, the TUI) pass
+    the user's memory (``~/.noeta/memory``), prompt overrides
+    (``~/.noeta/prompts``) and agent files (``~/.noeta/agents``, then
+    ``<cwd>/.noeta/agents``). Front ends (``-p``, ``acp``, the TUI) pass
     ``own_tasks_only`` so their worker never picks up another process's task
     from the shared store; ``worker`` and ``serve`` serve every task."""
+    from pathlib import Path
+
     from noeta.apps.config import HOME, open_store
+    from noeta.core.agent_files import read_agent_dir
     from noeta.presets import default_agents
 
-    kw: dict[str, Any] = {"memory_root": str(HOME / "memory"), **(agents_kw or {})}
+    files = read_agent_dir(HOME / "agents")
+    if cwd:
+        files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
+    kw: dict[str, Any] = {"memory_root": str(HOME / "memory"), "extra_files": files,
+                          **(agents_kw or {})}
     runtime_kw.setdefault("prompt_dirs", [str(HOME / "prompts")])
     return LocalApp(open_store(settings.store_url), default_agents(settings.model, **kw),
                     settings.make_provider(), own_tasks_only=own_tasks_only,

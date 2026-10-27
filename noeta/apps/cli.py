@@ -70,6 +70,7 @@ def _settings(args: argparse.Namespace) -> Settings:
 def _app(s: Settings, **kw: Any) -> Any:
     from noeta.apps.local import from_settings
 
+    kw.setdefault("cwd", os.getcwd())
     return from_settings(s, **kw)
 
 
@@ -91,7 +92,7 @@ async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool,
     from noeta.core.pending import follow_tree
     from noeta.core.types import Usage
 
-    async with _app(s, own_tasks_only=True) as app:
+    async with _app(s, cwd=cwd, own_tasks_only=True) as app:
         config: dict[str, Any] = {"cwd": cwd, "model": s.model}
         if s.effort:
             config["effort"] = s.effort
@@ -182,7 +183,8 @@ def main(argv: list[str] | None = None) -> None:
 
         s = _settings(args)
         servers = EditorServers()
-        asyncio.run(serve_stdio(_app(s, agents_kw={"mcp": Mcp(servers)}, own_tasks_only=True),
+        asyncio.run(serve_stdio(_app(s, cwd=cwd, agents_kw={"mcp": Mcp(servers)},
+                                     own_tasks_only=True),
                                 model=s.model, servers=servers))
         return
     if args.command == "worker":

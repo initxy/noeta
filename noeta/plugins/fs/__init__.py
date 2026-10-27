@@ -18,13 +18,24 @@ from noeta.plugins.fs.write import WriteTool
 __all__ = ["EditTool", "FileTools", "GlobTool", "GrepTool", "ReadTool", "WriteTool"]
 
 
+_BY_NAME: dict[str, type[Tool]] = {
+    "Read": ReadTool, "Write": WriteTool, "Edit": EditTool, "Grep": GrepTool, "Glob": GlobTool,
+}
+
+
 class FileTools(Extension):
+    """``tools``: which file tools to offer, by name or as tool objects
+    (default: all five, in the order Read, Write, Edit, Grep, Glob)."""
+
     name = FS
 
-    def __init__(self, tools: Sequence[Tool] | None = None) -> None:
-        self._tools: list[Tool] = list(tools) if tools is not None else [
-            ReadTool(), WriteTool(), EditTool(), GrepTool(), GlobTool(),
-        ]
+    def __init__(self, tools: Sequence[str | Tool] | None = None) -> None:
+        if tools is None:
+            tools = list(_BY_NAME)
+        unknown = [t for t in tools if isinstance(t, str) and t not in _BY_NAME]
+        if unknown:
+            raise ValueError(f"FileTools: unknown tools {unknown}; known: {list(_BY_NAME)}")
+        self._tools: list[Tool] = [_BY_NAME[t]() if isinstance(t, str) else t for t in tools]
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         return reduce_fs(state, kind, data)

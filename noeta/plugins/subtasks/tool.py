@@ -82,7 +82,8 @@ def argument_refusal(args: Mapping[str, Any]) -> str | None:
 
 
 def batch_refusal(
-    ext: Subtasks, state: TaskState, calls: Sequence[ToolUse]
+    ext: Subtasks, state: TaskState, calls: Sequence[ToolUse],
+    roster: Mapping[str, SubagentSpec],
 ) -> tuple[str, bool] | None:
     """Why this reply's Task calls may not run: ``(text, every_call)``. With
     ``every_call`` the text answers every call of the reply (nothing ran);
@@ -109,8 +110,8 @@ def batch_refusal(
         member = call_member(u.input)
         assert member is not None
         name = member[0]
-        if name not in ext.roster:
-            available = ", ".join(sorted(ext.roster))
+        if name not in roster:
+            available = ", ".join(sorted(roster))
             reason = texts.UNKNOWN_AGENT.format(name=name, available=available or "none")
             return texts.SPAWN_DENIED.format(reason=reason), False
         if ext.max_depth is not None and depth >= ext.max_depth:
@@ -138,22 +139,24 @@ class TaskTool:
     #: Spawns after the reply's ordinary calls have run (0.6's order).
     run_last = True
 
-    def __init__(self, ext: Subtasks, state: TaskState) -> None:
+    def __init__(self, ext: Subtasks, state: TaskState,
+                 roster: Mapping[str, SubagentSpec]) -> None:
         self._ext = ext
         #: The live task state (the reply's other calls, depth, children).
         self._state = state
-        self.input_schema = task_schema(ext.roster)
+        self._roster = roster
+        self.input_schema = task_schema(roster)
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         ext, state = self._ext, self._state
         refusal = batch_refusal(ext, state, [c.use for c in state.calls] or [
-            _use(ctx.call_id, input)])
+            _use(ctx.call_id, input)], self._roster)
         if refusal is not None:  # normally denied at the gate already
             return text_output(refusal[0], is_error=True)
         member = call_member(input)
         assert member is not None and ctx.spawn is not None
         name, prompt = member
-        spec = ext.roster[name]
+        spec = self._roster[name]
         tasks = [c for c in state.calls if c.use.name == texts.TASK_TOOL]
         background = input.get("background") is True and len(tasks) <= 1
         if background:

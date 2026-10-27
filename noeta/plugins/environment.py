@@ -149,7 +149,7 @@ class Environment(Extension):
     * ``model_name`` — include the "You are powered by" line.
     """
 
-    name = "workspace"
+    name = "environment"
 
     def __init__(self, *, model: str | None = None, model_name: bool = True) -> None:
         self.model = model
@@ -166,7 +166,8 @@ class Environment(Extension):
         config = view.state.config
         env = task_env(view.env, config)
         cwd = str(config.get("cwd") or env.cwd)
-        model = str(config.get("model") or self.model or "") if self.model_name else ""
+        model = str(config.get("model") or self.model or view.model or "") \
+            if self.model_name else ""
         text = await capture_environment(env, cwd, model)
         view.record(self.name, "environment", {"text": text},
                     message=user(text, origin="system"))

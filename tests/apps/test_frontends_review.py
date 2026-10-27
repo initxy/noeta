@@ -94,7 +94,7 @@ async def test_print_mode_waits_for_a_foreground_sub_agent(
     provider = ScriptedProvider([reply("", ("Task", {})), reply("child done"), reply("final")])
     agents = [Agent(name="main", model="m", tools=[Delegate()]),
               Agent(name="worker", model="m", one_shot=True)]
-    monkeypatch.setattr(cli, "_app", lambda s, **kw: local(tmp_path, provider, *agents, **kw))
+    monkeypatch.setattr(cli, "_app", lambda s, cwd=None, **kw: local(tmp_path, provider, *agents, **kw))
     code = await cli._print_mode(cli.Settings(model="m"), "go", cwd=str(tmp_path),
                                  as_json=False, permission_mode=None)
     assert code == 0

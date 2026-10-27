@@ -20,6 +20,7 @@ from noeta.core.tool import Tool, ToolOutput
 from noeta.core.types import Message, ModelRequest, ModelResponse, Struct, ToolUse
 
 if TYPE_CHECKING:
+    from noeta.core.agent import Agent
     from noeta.core.loop.state import TaskState
 
 log = logging.getLogger("noeta.plugins")
@@ -92,6 +93,11 @@ class TaskView:
     pending: list[Event] = field(default_factory=list)
     #: The task's extensions, in the agent's order (``residents``).
     extensions: Sequence[Extension] = ()
+    #: The model the task runs on (its config's, else its agent's).
+    model: str = ""
+    #: Every agent this worker can run, by name (a sub-agent roster reads
+    #: their descriptions here).
+    agents: Mapping[str, Agent] = field(default_factory=dict)
 
     @property
     def task_id(self) -> str:

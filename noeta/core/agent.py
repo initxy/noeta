@@ -1,6 +1,7 @@
-"""An agent definition: model, prompt, and the extensions that give it tools
-and behavior. Agents are code; a task names its agent, and every process that
-may run the task registers the same agent under that name."""
+"""An agent: model, prompt, and the extensions that give it tools and
+behavior. Usually built from an agent file (``noeta.core.agent_files``); a
+task names its agent, and every process that may run the task registers the
+same agent under that name."""
 
 from __future__ import annotations
 
@@ -18,6 +19,8 @@ class Agent:
     name: str
     model: str
     system_prompt: str = ""
+    #: What the agent is for: its line in another agent's sub-agent roster.
+    description: str = ""
     extensions: Sequence[Extension] = ()
     tools: Sequence[Tool] = ()
     effort: Effort | None = None
@@ -29,6 +32,9 @@ class Agent:
     #: Model calls allowed in one turn before the turn fails.
     max_steps_per_turn: int = 1_000
     extra: dict[str, Any] = field(default_factory=dict)
+    #: Only these tool names are offered (Claude Code's agent ``tools``);
+    #: ``None`` = every tool the extensions offer.
+    allowed_tools: Sequence[str] | None = None
 
     def all_extensions(self) -> list[Extension]:
         exts = list(self.extensions)

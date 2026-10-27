@@ -55,6 +55,12 @@ the `Extension` interface exists, but:
 - **No plugin-to-plugin imports.** What one needs from another goes through `core`: the shared
   piece moves down (for example the approval gate types), or it is read from task config or the
   agent definition (for example a sub-agent's plugin list).
+- **Agent files use YAML frontmatter** (PyYAML is now a dependency), so plugin arguments can be
+  nested: `- fs: {tools: [Read, Grep, Glob]}`. One plugin instance per (name, arguments) per
+  build, shared by every agent naming it; host arguments (`config`) lie under the file's; host
+  instances are used where a file gives no arguments. A file without `plugins` gets the
+  general-purpose set. Sub-agent rosters name agents (`subtasks: {agents: [...]}`) and read
+  their descriptions from `TaskView.agents`.
 - **Agents are definitions, not code.** An agent is a markdown file: frontmatter (`name`,
   `description`, `model`, `plugins`, `tools`, …) and the system prompt as body. Built-in agents
   (`main`, `general-purpose`, `explore`, `plan`) are such files in `presets`; `.noeta/agents/` and
@@ -94,10 +100,10 @@ the `Extension` interface exists, but:
 - [x] `noeta.core`: move the interfaces down; `plugins/`, `backends/`, `apps/`; import-linter
       contracts (core imports no plugin/backend/app; plugins and backends import only core)
 - [x] Remove plugin-to-plugin imports
-- [ ] Entry point registry; `Runtime` and the CLI resolve plugins/backends by name
+- [x] Entry point registry; `Runtime` and the CLI resolve plugins/backends by name
 - [x] Prompt overrides with layers, resolved at one point (`TaskState.prompt`), recorded at task
       start
-- [ ] Agent definition files; presets as data; `.noeta/agents/`; memory policy via `context()`
+- [x] Agent definition files; presets as data; `.noeta/agents/`; memory policy via `context()`
 - [ ] `reminders()` in the kernel; port todo, skills, memory, instructions, environment,
       compaction-restore reminders
 - [x] CLI `--system-prompt` / `--append-system-prompt`
@@ -129,3 +135,4 @@ the `Extension` interface exists, but:
 2026-10-27 0.6 deleted, 1.0 at the root; one make check (1300 passed). A root `.ignore` (listing tests/) had kept ruff off the 1.0 tests: removed, lint debt fixed. 0.6 byte-parity tests dropped (the golden covers the bytes).
 2026-10-27 Layered: core / plugins / backends / presets / apps, tests mirror it; four lint-imports contracts kept. Plugin links cut through the kernel: `TaskView.find_tool(name)` (compaction's file restore uses the task's `Read`), `Extension.inherit(state)` (permission rules reach children), `core.pending` (open approvals/questions), `core.execenv.is_local` / `scrub_env`, `core.registry` (entry points; the kernel's default exec env). Bash moved from `fs` to the `shell` plugin with its own state; sub-agents get a foreground `Shell` when the host passes none. Golden unchanged.
 2026-10-27 Prompt overrides landed: host dirs (`Runtime.prompt_dirs`, the CLI passes `~/.noeta/prompts`) < `<cwd>/.noeta/prompts` < config `prompts`; recorded once per task. `--system-prompt` / `--append-system-prompt` via `Settings.prompts` -> `LocalClient(task_config=...)`; CLI and TUI share `apps.local.from_settings`. Memory policy moved to `Memory.context()`; `with_memory_policy` removed. Golden unchanged.
+2026-10-27 Agent files landed: `noeta/presets/agents/{main,general-purpose,explore,plan}.md` (bodies byte-identical to the old prompts), `core.agent_files` (parse, read a directory, build), `Agent.description` / `allowed_tools`, `TaskView.model` / `agents`, `FileTools(tools=[names])`, extension names equal registry names (`environment`, `structured_output`). The CLI and TUI read `~/.noeta/agents` and `<cwd>/.noeta/agents`. Host extensions now go last on every agent (they were mid-list on sub-agents). Golden unchanged.

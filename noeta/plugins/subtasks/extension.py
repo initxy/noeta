@@ -63,7 +63,10 @@ class Subtasks(Extension):
     ``Options.agents`` roster, ``max_subtask_depth`` and the background cap):
 
     - ``roster``: the sub-agents the model may start, as ``SubagentSpec``s
-      (a mapping or a sequence). Empty: no ``Task`` tool is offered — the
+      (a mapping or a sequence).
+    - ``agents``: sub-agents named by agent: each runs that agent, and its
+      roster line is that agent's ``description`` (from the worker's agents,
+      ``TaskView.agents``). With neither, no ``Task`` tool is offered — the
       form every sub-agent without delegation carries, so the child-side
       rules below still apply to it.
     - ``max_depth``: a task at this depth may not delegate (root = 0; 0.6's
@@ -93,6 +96,7 @@ class Subtasks(Extension):
         self,
         roster: Mapping[str, SubagentSpec] | Sequence[SubagentSpec] = (),
         *,
+        agents: Sequence[str] = (),
         max_depth: int | None = 3,
         max_background: int = texts.MAX_BACKGROUND,
         max_fanout: int = texts.MAX_FANOUT,
@@ -101,6 +105,8 @@ class Subtasks(Extension):
         queue: str = "default",
     ) -> None:
         self.roster = _roster(roster)
+        self.agents = tuple(agents)
+        self._resolved: dict[tuple[tuple[str, str], ...], dict[str, SubagentSpec]] = {}
         self.max_depth = max_depth
         self.max_background = max_background
         self.max_fanout = max_fanout
@@ -142,16 +148,31 @@ class Subtasks(Extension):
     # ------------------------------------------------------------ hooks
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
-        return [TaskTool(self, view.state)] if self.roster else ()
+        roster = self.roster_for(view)
+        return [TaskTool(self, view.state, roster)] if roster else ()
+
+    def roster_for(self, view: TaskView) -> dict[str, SubagentSpec]:
+        """The roster: the given specs, plus each named agent the worker has
+        (a name it lacks is left out)."""
+        if not self.agents:
+            return self.roster
+        named = tuple((n, view.agents[n].description) for n in self.agents if n in view.agents)
+        roster = self._resolved.get(named)
+        if roster is None:
+            roster = _roster([*self.roster.values(),
+                              *(SubagentSpec(name=n, description=d) for n, d in named)])
+            self._resolved[named] = roster
+        return roster
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
         """Checks that look at the whole reply, so that a bad batch is
         refused before any of it runs (0.6: one refusal stamped on every
         call)."""
-        if not self.roster:
+        roster = self.roster_for(view)
+        if not roster:
             return None
         calls = [c.use for c in view.state.calls] or [call]
-        refusal = batch_refusal(self, view.state, calls)
+        refusal = batch_refusal(self, view.state, calls, roster)
         if refusal is None:
             return None
         text, every_call = refusal

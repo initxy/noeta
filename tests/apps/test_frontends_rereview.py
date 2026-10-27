@@ -129,7 +129,7 @@ async def test_print_mode_exits_when_a_sub_agent_waits_for_approval(
 ) -> None:
     provider = ScriptedProvider([reply("", ("Task", {})), reply("", ("Echo", {}))])
     agents = main_and_worker(AskEcho())
-    monkeypatch.setattr(cli, "_app", lambda s, **kw: local(tmp_path, provider, *agents, **kw))
+    monkeypatch.setattr(cli, "_app", lambda s, cwd=None, **kw: local(tmp_path, provider, *agents, **kw))
     code = await asyncio.wait_for(cli._print_mode(
         cli.Settings(model="m"), "go", cwd=str(tmp_path), as_json=False,
         permission_mode=None), 10)
@@ -224,7 +224,7 @@ async def test_print_json_tags_fragments_with_their_attempt(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     agents = [Agent(name="main", model=MODEL)]
-    monkeypatch.setattr(cli, "_app", lambda s, **kw: local(tmp_path, RetryOnce(), *agents, **kw))
+    monkeypatch.setattr(cli, "_app", lambda s, cwd=None, **kw: local(tmp_path, RetryOnce(), *agents, **kw))
     code = await cli._print_mode(cli.Settings(model="m"), "go", cwd=str(tmp_path),
                                  as_json=True, permission_mode=None)
     assert code == 0

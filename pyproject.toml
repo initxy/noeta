@@ -8,6 +8,7 @@ requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28.1",
     "msgspec>=0.19",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -32,7 +33,7 @@ memory = "noeta.plugins.memory:Memory"
 permissions = "noeta.plugins.permissions:Permissions"
 shell = "noeta.plugins.shell:Shell"
 skills = "noeta.plugins.skills:Skills"
-structured = "noeta.plugins.structured:StructuredOutput"
+structured_output = "noeta.plugins.structured:StructuredOutput"
 subtasks = "noeta.plugins.subtasks:Subtasks"
 todo = "noeta.plugins.todo:Todo"
 web = "noeta.plugins.web:Web"
@@ -61,6 +62,7 @@ dev = [
     "respx>=0.23.1",
     "ruff>=0.6",
     "import-linter>=2.0",
+    "types-pyyaml>=6.0",
 ]
 
 [build-system]
