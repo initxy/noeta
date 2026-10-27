@@ -21,7 +21,8 @@ from typing import Any
 import msgspec
 
 from noeta.errors import ContextOverflow, ModelError, TurnFailed
-from noeta.events import Compacted, Recorded
+from noeta.events import Compacted
+from noeta.ext._support import simulated_state
 from noeta.ext.base import Extension, TaskView
 from noeta.ext.compaction import clearing, summary
 from noeta.ext.compaction.estimate import messages_tokens, prefix_tokens
@@ -34,7 +35,7 @@ from noeta.ext.compaction.recall import (
 from noeta.ext.compaction.restore import recent_files, restore_files
 from noeta.ext.compaction.window import Window, check_positive, derive_window
 from noeta.loop.request import _breakpoints
-from noeta.loop.state import TaskState, apply
+from noeta.loop.state import TaskState
 from noeta.models import model_limits
 from noeta.tools.base import Tool, ToolContext
 from noeta.types import Message, ModelRequest, ModelResponse, ToolResult, Usage, user
@@ -263,6 +264,10 @@ class Compaction(Extension):
         return max(now, usage.input + delta), clearing.density(usage.input, then)
 
     def _reminders(self, state: TaskState, ext: CompactionState) -> list[Message]:
+        """Unrecorded per-request reminders, appended after the recorded
+        messages. Rule shared with ``Todo``: an extension that records a
+        message in ``before_model`` inserts it before these (right after the
+        recorded messages, where the log puts it); these stay last."""
         texts: list[str] = []
         if ext.thrashing:
             texts.append(READ_SUGGESTION)
@@ -314,12 +319,16 @@ class Compaction(Extension):
                                             keep_first=state.compaction is not None)
         note = summary.enforce_verbatim_constraints(
             note, summary.extract_safety_constraints(to_summarize))
-        kept: list[Message] = []
+        # Residents (listings, instructions, the environment block) first,
+        # then the restored files: both are in ``kept``, so the request
+        # sent now is the one rebuilt from the log.
+        kept: list[Message] = list(await view.residents())
         if self.read_tool is not None and view.env is not None:
             raw_cut = sum(1 for s in state.history_seqs if s <= through)
-            kept, records = await restore_files(
+            restored, records = await restore_files(
                 recent_files(state.history, raw_cut), self.read_tool,
                 self._restore_context(view, state), tail_budget=window.tail_budget)
+            kept.extend(restored)
             for ext_name, kind, data in records:
                 view.record(ext_name, kind, data)
         view.compacted(Compacted(summary=summary.framed(note), through=through, kept=kept,
@@ -341,16 +350,7 @@ class Compaction(Extension):
         """The task state with every record pending on ``view`` folded in, on
         a copy: what the next fold will see, so the request sent now is the
         one a restarted runner rebuilds from the log."""
-        state = view.state
-        sim = dataclasses.replace(
-            state, ext=dict(state.ext), messages=list(state.messages),
-            message_seqs=list(state.message_seqs), history=list(state.history),
-            history_seqs=list(state.history_seqs), held=list(state.held),
-            queued=list(state.queued))
-        reducers = {self.name: self.reduce}
-        for i, event in enumerate(view.pending, 1):
-            apply(sim, Recorded(seq=state.last_seq + i, at=0.0, event=event), reducers)
-        return sim
+        return simulated_state(view, {self.name: self.reduce})
 
     async def _summarize(self, view: TaskView, request: ModelRequest,
                          to_summarize: list[Message], *, keep_first: bool

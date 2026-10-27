@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from noeta.execenv.base import ExecEnv
 from noeta.types import Message, ToolResult
 
 if TYPE_CHECKING:
+    from noeta.ext.base import TaskView
     from noeta.loop.state import TaskState
 
 #: The 1 % of a model's window a resident listing (skills, memory index) may
@@ -89,3 +90,28 @@ async def read_text(env: ExecEnv, path: str) -> str | None:
         return (await env.read_bytes(path)).decode("utf-8")
     except (OSError, UnicodeDecodeError, ValueError):
         return None
+
+
+def simulated_state(view: TaskView,
+                    reducers: Mapping[str, Callable[[Any, str, Any], Any]] | None = None
+                    ) -> TaskState:
+    """The task state with every record pending on ``view`` folded in, on a
+    copy: what the next fold will see (a compaction made earlier in the same
+    ``before_model`` round included). ``reducers`` folds those extensions'
+    own records too."""
+    import dataclasses
+
+    from noeta.events import Recorded
+    from noeta.loop.state import apply
+
+    state = view.state
+    if not view.pending:
+        return state
+    sim = dataclasses.replace(
+        state, ext=dict(state.ext), messages=list(state.messages),
+        message_seqs=list(state.message_seqs), history=list(state.history),
+        history_seqs=list(state.history_seqs), held=list(state.held),
+        queued=list(state.queued))
+    for i, event in enumerate(view.pending, 1):
+        apply(sim, Recorded(seq=state.last_seq + i, at=0.0, event=event), dict(reducers or {}))
+    return sim

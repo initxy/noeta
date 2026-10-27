@@ -51,7 +51,7 @@ from collections.abc import Mapping, Sequence
 import msgspec
 
 from noeta.execenv.base import FileStat, RunResult
-from noeta.execenv.local import KILL_GRACE_S, LocalExecEnv
+from noeta.execenv.local import ENV_ALLOWLIST, KILL_GRACE_S, LocalExecEnv
 
 __all__ = [
     "DOCKER_ENV",
@@ -67,6 +67,9 @@ __all__ = [
 #: config). They reach the CLI only, never a command in the container.
 DOCKER_ENV = ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_CERT_PATH",
               "DOCKER_TLS_VERIFY")
+#: Variables the ``docker`` client's own environment carries; a command's
+#: value for one of these is passed as ``-e KEY=VALUE`` instead.
+_CLIENT_ENV = frozenset({*ENV_ALLOWLIST, *DOCKER_ENV})
 
 #: Budget for one file operation (a ``docker exec`` of ``cat``, ``stat``…).
 FILE_OP_TIMEOUT_S = 120.0
@@ -152,16 +155,29 @@ class ContainerExecEnv:
         return path if posixpath.isabs(path) else posixpath.join(self.cwd, path)
 
     def _exec(self, argv: Sequence[str], *, cwd: str | None = None,
-              env: Mapping[str, str] | None = None, stdin: bool = False) -> list[str]:
+              env: Mapping[str, str] | None = None, stdin: bool = False
+              ) -> tuple[list[str], dict[str, str]]:
+        """The ``docker exec`` argv and the variables the ``docker`` client
+        must carry: each variable is named with ``-e KEY`` and its value
+        travels in the client's environment, never on its command line
+        (where ``ps`` shows it to every user)."""
         cmd = [self.docker, "exec"]
         if stdin:
             cmd.append("-i")
         if self.user:
             cmd += ["-u", self.user]
         cmd += ["-w", self._abs(cwd) if cwd is not None else self.cwd]
+        values: dict[str, str] = {}
         for key, value in {**self.env, **(env or {})}.items():
-            cmd += ["-e", f"{key}={value}"]
-        return [*cmd, self.container, *argv]
+            if key in _CLIENT_ENV:
+                # The client itself reads these (PATH finds ``docker``,
+                # DOCKER_HOST picks the daemon): set them in the container
+                # only. Not secrets.
+                cmd += ["-e", f"{key}={value}"]
+            else:
+                cmd += ["-e", key]
+                values[key] = value
+        return [*cmd, self.container, *argv], values
 
     # -- processes ---------------------------------------------------------
 
@@ -178,9 +194,10 @@ class ContainerExecEnv:
         if not argv:
             raise ValueError("argv must not be empty")
         pidfile = f"/tmp/.noeta-run-{uuid.uuid4().hex}.pid"
-        cmd = self._exec(["setsid", "-w", "sh", "-c", _WRAP, "sh", pidfile, *argv],
-                         cwd=cwd, env=env, stdin=stdin is not None)
-        task = asyncio.ensure_future(self._host.run(cmd, stdin=stdin, output_cap=output_cap))
+        cmd, values = self._exec(["setsid", "-w", "sh", "-c", _WRAP, "sh", pidfile, *argv],
+                                 cwd=cwd, env=env, stdin=stdin is not None)
+        task = asyncio.ensure_future(self._host.run(cmd, env=values, stdin=stdin,
+                                                    output_cap=output_cap))
         try:
             result = await asyncio.wait_for(asyncio.shield(task), timeout)
         except TimeoutError:
@@ -208,8 +225,8 @@ class ContainerExecEnv:
 
     async def _signal(self, pidfile: str, sig: str) -> None:
         with contextlib.suppress(OSError):
-            await self._host.run(self._exec(["sh", "-c", _KILL, "sh", pidfile, sig]),
-                                 timeout=FILE_OP_TIMEOUT_S)
+            cmd, values = self._exec(["sh", "-c", _KILL, "sh", pidfile, sig])
+            await self._host.run(cmd, env=values, timeout=FILE_OP_TIMEOUT_S)
 
     async def _settle(self, task: asyncio.Future[RunResult]) -> RunResult:
         try:
@@ -239,9 +256,8 @@ class ContainerExecEnv:
     # -- files -------------------------------------------------------------
 
     async def _sh(self, script: str, *args: str, stdin: bytes | None = None) -> RunResult:
-        result = await self._host.run(
-            self._exec(["sh", "-c", script, "sh", *args], stdin=stdin is not None),
-            stdin=stdin, timeout=FILE_OP_TIMEOUT_S)
+        cmd, values = self._exec(["sh", "-c", script, "sh", *args], stdin=stdin is not None)
+        result = await self._host.run(cmd, env=values, stdin=stdin, timeout=FILE_OP_TIMEOUT_S)
         if result.timed_out:
             raise ContainerError(f"docker exec timed out after {FILE_OP_TIMEOUT_S:.0f}s")
         self._raise_docker_failure(result)
@@ -312,10 +328,11 @@ class ContainerExecEnv:
 # ---------------------------------------------------------------------------
 
 
-async def _docker(docker: str, *args: str, timeout: float = FILE_OP_TIMEOUT_S) -> RunResult:
+async def _docker(docker: str, *args: str, timeout: float = FILE_OP_TIMEOUT_S,
+                  env: Mapping[str, str] | None = None) -> RunResult:
     host = LocalExecEnv(tempfile.gettempdir(), inherit_env=DOCKER_ENV)
     try:
-        return await host.run([docker, *args], timeout=timeout)
+        return await host.run([docker, *args], timeout=timeout, env=env)
     except FileNotFoundError as exc:
         raise ContainerError(f"{docker!r} not found: {exc}") from exc
 
@@ -343,10 +360,15 @@ async def start_container(
         src, dst = os.path.abspath(mount[0]), mount[1]
         read_only = len(mount) > 2 and bool(mount[2])
         argv += ["-v", f"{src}:{dst}{':ro' if read_only else ''}"]
+    values: dict[str, str] = {}
     for key, value in (env or {}).items():
-        argv += ["-e", f"{key}={value}"]
+        if key in _CLIENT_ENV:
+            argv += ["-e", f"{key}={value}"]
+        else:  # the value travels in the client's environment, not argv
+            argv += ["-e", key]
+            values[key] = value
     argv += [*args, image, *command]
-    result = await _docker(docker, *argv)
+    result = await _docker(docker, *argv, env=values)
     if result.exit_code != 0:
         await _docker(docker, "rm", "-f", name)
         raise ContainerError(f"docker run failed for {name!r}: "

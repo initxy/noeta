@@ -1,36 +1,55 @@
 """The workspace environment block (Claude Code's environment section, line
 for line), recorded once at the start of a task as a system-origin message so
 it never changes under the prompt cache. Later runs keep the first capture;
-the block says so, and the model runs git itself for live state."""
+the block says so, and the model runs git itself for live state.
+
+Everything is captured through the task's ExecEnv (``view.env``), never by a
+host subprocess: on a container the facts describe the container's checkout,
+and the shell / OS version lines (facts of this machine) are left out, as 0.6
+did for sandboxes. git runs with the same hardening the Bash tool's
+``git status`` rule applies (``-c core.fsmonitor=``), so a repository's own
+config cannot make the capture run a program.
+"""
 
 from __future__ import annotations
 
-import asyncio
 import os
 import platform
-import subprocess
+import posixpath
 import sys
+from collections.abc import Sequence
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
+from noeta.execenv.base import ExecEnv
+from noeta.ext._support import task_env
 from noeta.ext.base import Extension, TaskView
-from noeta.types import user
+from noeta.tools.shell_rules import _harden_git
+from noeta.types import Message, user
 
 #: Git status beyond this is cut at a line boundary and marked.
 GIT_STATUS_MAX_BYTES = 2048
+#: Global flags every capture git runs with: no fsmonitor hook, no index
+#: refresh written back.
+_GIT_FLAGS = ("-c", "core.fsmonitor=", "--no-optional-locks")
 
 
-def _git(cwd: str, *args: str) -> str:
+async def _git(env: ExecEnv, cwd: str, *args: str) -> str:
+    argv = ["git", *args]
+    if args and args[0] == "status":
+        argv = _harden_git(argv)
+    argv = [argv[0], *_GIT_FLAGS, *argv[1:]]
     try:
-        out = subprocess.run(["git", *args], cwd=cwd, capture_output=True, timeout=5, check=False)
+        out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20)
     except Exception:  # noqa: BLE001 — capture is best-effort
         return ""
-    return out.stdout.decode("utf-8", errors="replace") if out.returncode == 0 else ""
+    if out.exit_code != 0 or out.timed_out:
+        return ""
+    return out.stdout.decode("utf-8", errors="replace")
 
 
-def _git_status(cwd: str) -> str:
-    status = _git(cwd, "status", "--short").rstrip("\n")
+async def _git_status(env: ExecEnv, cwd: str) -> str:
+    status = (await _git(env, cwd, "status", "--short")).rstrip("\n")
     encoded = status.encode("utf-8")
     if len(encoded) <= GIT_STATUS_MAX_BYTES:
         return status
@@ -49,10 +68,27 @@ def _shell() -> str:
     return "zsh" if "zsh" in shell else "bash" if "bash" in shell else shell
 
 
-def render_environment(cwd: str, model: str, *, local: bool = True) -> str:
-    is_git = (Path(cwd) / ".git").exists()
-    branch = _git(cwd, "rev-parse", "--abbrev-ref", "HEAD").strip() if is_git else ""
-    status = _git_status(cwd) if is_git else ""
+def _is_local(env: ExecEnv) -> bool:
+    from noeta.execenv.local import LocalExecEnv
+
+    return isinstance(env, LocalExecEnv)
+
+
+async def capture_environment(env: ExecEnv, cwd: str, model: str) -> str:
+    """The block for ``cwd`` as ``env`` sees it."""
+    try:
+        is_git = await env.stat(posixpath.join(cwd, ".git")) is not None
+    except Exception:  # noqa: BLE001 — capture is best-effort
+        is_git = False
+    branch = (await _git(env, cwd, "rev-parse", "--abbrev-ref", "HEAD")).strip() \
+        if is_git else ""
+    status = await _git_status(env, cwd) if is_git else ""
+    return render_environment(cwd, model, is_git=is_git, branch=branch, status=status,
+                              local=_is_local(env))
+
+
+def render_environment(cwd: str, model: str, *, is_git: bool, branch: str = "",
+                       status: str = "", local: bool = True) -> str:
     lines = [
         "<workspace-environment>",
         "# Environment",
@@ -86,19 +122,34 @@ def render_environment(cwd: str, model: str, *, local: bool = True) -> str:
 
 
 class Environment(Extension):
+    """Constructor arguments:
+
+    * ``model`` — the agent's model, named when the task's config sets none.
+    * ``model_name`` — include the "You are powered by" line.
+    """
+
     name = "workspace"
 
-    def __init__(self, *, model_name: bool = True) -> None:
+    def __init__(self, *, model: str | None = None, model_name: bool = True) -> None:
+        self.model = model
         self.model_name = model_name
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
-        return True if kind == "environment" else state
+        if kind != "environment":
+            return state
+        return data["text"] if isinstance(data, dict) and "text" in data else True
 
     async def on_start(self, view: TaskView) -> None:
         if view.ext_state(self.name):
             return
         config = view.state.config
-        cwd = str(config.get("cwd") or os.getcwd())
-        model = str(config.get("model") or "") if self.model_name else ""
-        text = await asyncio.to_thread(render_environment, cwd, model)
-        view.record(self.name, "environment", message=user(text, origin="system"))
+        env = task_env(view.env, config)
+        cwd = str(config.get("cwd") or env.cwd)
+        model = str(config.get("model") or self.model or "") if self.model_name else ""
+        text = await capture_environment(env, cwd, model)
+        view.record(self.name, "environment", {"text": text},
+                    message=user(text, origin="system"))
+
+    async def resident(self, view: TaskView) -> Sequence[Message]:
+        text = view.ext_state(self.name)
+        return (user(text, origin="system"),) if isinstance(text, str) else ()

@@ -6,15 +6,20 @@ tool sets follow 0.6:
 
 - general-purpose: the full file/shell set (Read, Write, Edit, Bash, Grep,
   Glob); in 0.6 also BashOutput/KillShell/Monitor, WebSearch/WebFetch, skills
-  and MCP — pass those groups' extensions in ``extensions``.
-- explore / plan: read-only — Read, Bash, Grep, Glob, no Write/Edit ("no
-  writes" is held by the prompt, with shell approval as the backstop); in
-  0.6 also BashOutput/KillShell/Monitor and WebSearch/WebFetch; plan also had
-  AskUserQuestion. Pass those in ``extensions`` (read-only ones only).
+  and MCP.
+- explore: read-only — Read, Bash, Grep, Glob, no Write/Edit ("no writes" is
+  held by the prompt, with shell approval as the backstop); in 0.6 also
+  BashOutput/KillShell/Monitor, WebSearch/WebFetch and skills (no MCP).
+- plan: explore's file set; in 0.6 also BashOutput/KillShell/Monitor,
+  WebSearch/WebFetch and AskUserQuestion (no skills, no MCP).
 
-None of them delegates: each carries ``Subtasks()`` with an empty roster,
-which offers no ``Task`` tool but applies the child-side rules (a background
-child that needs a human ends with an explanation).
+The host passes those groups' extensions per agent (``extensions`` go before
+the file tools, ``context`` after them and before the environment block).
+0.6 recorded the workspace instructions and the environment block for every
+session, so each sub-agent carries both. None of them delegates: each carries
+``Subtasks()`` with an empty roster, which offers no ``Task`` tool but applies
+the child-side rules (a background child that needs a human ends with an
+explanation).
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ from typing import Any
 from noeta.agent import Agent
 from noeta.ext.base import Extension
 from noeta.ext.fs import FileTools
+from noeta.ext.instructions import Instructions
 from noeta.ext.subtasks.extension import SubagentSpec, Subtasks
 from noeta.ext.subtasks.texts import load_prompt
 from noeta.ext.workspace import Environment
@@ -62,35 +68,44 @@ OFFICIAL_ROSTER: dict[str, SubagentSpec] = {s.name: s for s in (GENERAL_PURPOSE,
 
 
 def _agent(name: str, model: str, prompt: str, fs: FileTools,
-           extensions: Sequence[Extension], kw: dict[str, Any]) -> Agent:
+           extensions: Sequence[Extension], context: Sequence[Extension] | None,
+           kw: dict[str, Any]) -> Agent:
+    ctx = (Instructions(),) if context is None else tuple(context)
     return Agent(
         name=kw.pop("name", name),
         model=model,
         system_prompt=kw.pop("system_prompt", prompt),
         # The host's extensions go first: a background shell's own Bash must
         # shadow the plain one, and compaction must see the request first.
-        extensions=(*extensions, fs, Environment(), Subtasks()),
+        # Skills / instructions come before the environment block (0.6's
+        # order of the content recorded before the first message).
+        extensions=(*extensions, fs, *ctx, Environment(model=model), Subtasks()),
         one_shot=kw.pop("one_shot", True),
         **kw,
     )
 
 
 def general_purpose_agent(model: str, *, extensions: Sequence[Extension] = (),
-                          **kw: Any) -> Agent:
+                          context: Sequence[Extension] | None = None, **kw: Any) -> Agent:
+    """``context``: the extensions recorded before the first message
+    (default: ``Instructions()``)."""
     fs = FileTools([ReadTool(), WriteTool(), EditTool(), BashTool(), GrepTool(), GlobTool()])
-    return _agent(GENERAL_PURPOSE.name, model, GENERAL_PURPOSE_PROMPT, fs, extensions, kw)
+    return _agent(GENERAL_PURPOSE.name, model, GENERAL_PURPOSE_PROMPT, fs, extensions, context,
+                  kw)
 
 
 def _read_only_fs() -> FileTools:
     return FileTools([ReadTool(), BashTool(), GrepTool(), GlobTool()])
 
 
-def explore_agent(model: str, *, extensions: Sequence[Extension] = (), **kw: Any) -> Agent:
-    return _agent(EXPLORE.name, model, EXPLORE_PROMPT, _read_only_fs(), extensions, kw)
+def explore_agent(model: str, *, extensions: Sequence[Extension] = (),
+                  context: Sequence[Extension] | None = None, **kw: Any) -> Agent:
+    return _agent(EXPLORE.name, model, EXPLORE_PROMPT, _read_only_fs(), extensions, context, kw)
 
 
-def plan_agent(model: str, *, extensions: Sequence[Extension] = (), **kw: Any) -> Agent:
-    return _agent(PLAN.name, model, PLAN_PROMPT, _read_only_fs(), extensions, kw)
+def plan_agent(model: str, *, extensions: Sequence[Extension] = (),
+               context: Sequence[Extension] | None = None, **kw: Any) -> Agent:
+    return _agent(PLAN.name, model, PLAN_PROMPT, _read_only_fs(), extensions, context, kw)
 
 
 def official_subagents(
@@ -98,13 +113,19 @@ def official_subagents(
     *,
     extensions: Sequence[Extension] = (),
     read_only_extensions: Sequence[Extension] | None = None,
+    plan_extensions: Sequence[Extension] | None = None,
+    context: Sequence[Extension] | None = None,
+    read_only_context: Sequence[Extension] | None = None,
+    plan_context: Sequence[Extension] | None = None,
 ) -> list[Agent]:
-    """The three agents to register next to ``main``. ``extensions`` go to
-    general-purpose; ``read_only_extensions`` (default: the same) to explore
-    and plan."""
+    """The three agents to register next to ``main``. ``extensions`` /
+    ``context`` go to general-purpose; ``read_only_*`` (default: the same)
+    to explore; ``plan_*`` (default: explore's) to plan."""
     ro = extensions if read_only_extensions is None else read_only_extensions
+    ro_ctx = context if read_only_context is None else read_only_context
     return [
-        general_purpose_agent(model, extensions=extensions),
-        explore_agent(model, extensions=ro),
-        plan_agent(model, extensions=ro),
+        general_purpose_agent(model, extensions=extensions, context=context),
+        explore_agent(model, extensions=ro, context=ro_ctx),
+        plan_agent(model, extensions=ro if plan_extensions is None else plan_extensions,
+                   context=ro_ctx if plan_context is None else plan_context),
     ]

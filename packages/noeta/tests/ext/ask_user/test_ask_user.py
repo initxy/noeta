@@ -103,7 +103,9 @@ async def test_a_question_parks_and_the_answer_becomes_the_result(store: SqliteS
     assert not result.is_error
     assert json.loads(result.text) == {"question_id": item.request_id, "answers": {
         "0": {"selected": ["API key"], "other": None}}}
-    assert result.text.startswith('{"question_id": ')
+    # 0.6's key order: sorted, nested maps too.
+    assert result.text == ('{"answers": {"0": {"other": null, "selected": ["API key"]}}, '
+                           f'"question_id": "{item.request_id}"}}')
     assert (await client.get(tid)).waiting_on == "input"
 
 

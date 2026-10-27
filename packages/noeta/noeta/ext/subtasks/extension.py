@@ -10,6 +10,7 @@ from typing import Any
 
 from noeta.events import ChildEnded, InputTaken, Recorded, Say
 from noeta.ext.base import Deny, Extension, Gate, TaskView
+from noeta.ext.permissions.extension import INHERITED_RULES_KEY, inherited_rules
 from noeta.ext.subtasks import texts
 from noeta.ext.subtasks.tool import (
     DEPTH_KEY,
@@ -76,7 +77,8 @@ class Subtasks(Extension):
       ordinary tools, so the default is none).
     - ``inherit_config``: parent ``TaskCreated.config`` keys a child copies
       (its workspace, and a host's per-task model/effort override, as 0.6
-      children inherited them).
+      children inherited them). A child also starts with the parent's
+      remembered "always" permission rules (``config["permission_rules"]``).
     - ``queue``: the queue children are created on.
 
     Child side (every task whose agent carries this extension): a task
@@ -134,6 +136,9 @@ class Subtasks(Extension):
         config.update(spec.config)
         config[DEPTH_KEY] = int(state.config.get(DEPTH_KEY) or 0) + 1
         config[TYPE_KEY] = spec.name
+        rules = inherited_rules(state)
+        if rules:
+            config[INHERITED_RULES_KEY] = rules
         if background or state.config.get(UNATTENDED_KEY):
             config[UNATTENDED_KEY] = True
         return config

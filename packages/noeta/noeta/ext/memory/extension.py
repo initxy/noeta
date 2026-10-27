@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from noeta.agent import Agent
-from noeta.events import Compacted, Recorded
+from noeta.events import Recorded
 from noeta.ext._support import new_user_messages, resident_budget
 from noeta.ext.base import Extension, TaskView
 from noeta.ext.memory.index import (
@@ -42,7 +42,7 @@ from noeta.ext.memory.tools import (
     load_text,
 )
 from noeta.tools.base import Tool
-from noeta.types import ModelRequest, SystemPart, user
+from noeta.types import Message, ModelRequest, SystemPart, user
 
 __all__ = [
     "CONSOLIDATION_AGENT_NAME",
@@ -96,8 +96,8 @@ class Memory(Extension):
     * ``recall_model`` — the judge model asked when a message named no
       memory (``Options.recall_model``); ``recall_timeout`` bounds it.
     * ``exclude`` — memory names recall never surfaces (``recall_exclude``).
-    * ``rehang`` — re-record the index and recalled bodies after a
-      compaction.
+    * ``rehang`` — put the index and recalled bodies right after a
+      compaction's summary (``resident``).
     """
 
     name = "memory"
@@ -180,10 +180,6 @@ class Memory(Extension):
                             message=user(text, origin="system"))
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
-        if isinstance(recorded.event, Compacted):
-            if self.rehang:
-                await self._rehang(view)
-            return
         if not self.recall:
             return
         messages = new_user_messages(view.state, recorded.seq)
@@ -276,19 +272,24 @@ class Memory(Extension):
             return self.index_budget_tokens
         return resident_budget(str(view.state.config.get("model") or ""))
 
-    async def _rehang(self, view: TaskView) -> None:
+    async def resident(self, view: TaskView) -> Sequence[Message]:
+        """After a compaction: the index, then every recalled body (read
+        again; its new hash is recorded so recall stays silent on it)."""
+        if not self.rehang:
+            return ()
         state = view.ext_state(self.name) or {}
+        out: list[Message] = []
         if state.get("index") is not None:
-            view.record(self.name, "rehang", {"what": "index"},
-                        message=user(state["index"], origin="system"))
+            out.append(user(state["index"], origin="system"))
         store = self.store(view)
         if store is None:
-            return
+            return out
         for name in state.get("bodies") or {}:
             text = await asyncio.to_thread(store.read, name)
             if text is not None:
-                view.record(self.name, "recalled", {"name": name, "hash": _sha(text)},
-                            message=user(format_recalled_body(name, text), origin="memory"))
+                view.record(self.name, "recalled", {"name": name, "hash": _sha(text)})
+                out.append(user(format_recalled_body(name, text), origin="memory"))
+        return out
 
 
 def consolidation_agent(model: str, *, root: Any = None, **memory: Any) -> Agent:

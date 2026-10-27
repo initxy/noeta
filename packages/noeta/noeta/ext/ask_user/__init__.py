@@ -282,7 +282,7 @@ async def answer_question(client: Client, task_id: str, request_id: str, data: A
 
 
 def _result(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=False)
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 class AskUserQuestionTool:

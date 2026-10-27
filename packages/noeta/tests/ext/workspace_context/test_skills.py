@@ -129,6 +129,33 @@ async def test_new_skills_are_announced_at_the_next_message(h: Harness) -> None:
     assert len(await h.records(tid, "skills", "listing")) == 2
 
 
+async def test_a_skill_installed_into_an_empty_task_is_announced(h: Harness) -> None:
+    """Installed mid-turn, announced with the person's next message, with no
+    pick-up in between (the runner keeps the task)."""
+    from noeta.tools.base import ToolContext, ToolOutput, text_output
+
+    class Install:
+        name = "Install"
+        description = "install"
+        input_schema: dict[str, Any] = {"type": "object"}
+        read_only = False
+        clearable = False
+
+        async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+            write_skill(skills_dir(h), "review", "Review code.")
+            await h.client.send(ctx.task_id, "next", when="now")
+            return text_output("installed")
+
+    a = Agent(name="a", model="m", tools=[Install()], extensions=[FileTools(), Skills()])
+    h.provider.add(reply("", ("Install", {})), reply("ok"))
+    await h.start(a)
+    first, second = h.provider.requests
+    assert "skill" not in [t.name for t in first.tools]
+    texts = [m.text for m in second.messages]
+    assert texts[-2:] == ["next", f"{ROSTER_HEADER}\n- review: Review code."]
+    assert [t.name for t in second.tools][-1] == "skill"
+
+
 async def test_slash_command_activates_even_a_user_only_skill(h: Harness) -> None:
     write_skill(skills_dir(h), "hidden", "User only.", body="Secret steps.\n",
                 **{"disable-model-invocation": "true"})

@@ -216,7 +216,7 @@ class TaskRun:
 
     def view(self) -> TaskView:
         return TaskView(state=self.state, complete=self.complete, env=self.env(),
-                        post=self.post_self)
+                        post=self.post_self, extensions=self.exts)
 
     async def post_self(self, body: Any, dedupe_key: str | None = None) -> None:
         """Post to this task's own inbox (extensions: ``TaskView.post``)."""

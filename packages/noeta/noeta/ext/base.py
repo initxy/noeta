@@ -9,6 +9,7 @@ optional. An extension keeps durable state by recording
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Union
@@ -20,6 +21,8 @@ from noeta.types import Message, ModelRequest, ModelResponse, Struct, ToolUse
 
 if TYPE_CHECKING:
     from noeta.loop.state import TaskState
+
+log = logging.getLogger("noeta.ext")
 
 
 class Allow(Struct, tag="allow", tag_field="gate"):
@@ -86,6 +89,8 @@ class TaskView:
     #: turn, a cancel); idempotent with a ``dedupe_key``.
     post: Callable[..., Awaitable[None]] | None = None
     pending: list[Event] = field(default_factory=list)
+    #: The task's extensions, in the agent's order (``residents``).
+    extensions: Sequence[Extension] = ()
 
     @property
     def task_id(self) -> str:
@@ -106,6 +111,18 @@ class TaskView:
     def compacted(self, event: Compacted) -> None:
         """Record a compaction (the compaction extension's one core event)."""
         self.pending.append(event)
+
+    async def residents(self) -> list[Message]:
+        """Every extension's ``resident`` messages, in extension order: what
+        a compaction puts right after its summary (``Compacted.kept``). An
+        extension that fails is logged and skipped."""
+        out: list[Message] = []
+        for ext in self.extensions:
+            try:
+                out.extend(await ext.resident(self))
+            except Exception:
+                log.exception("extension %s resident failed", ext.name)
+        return out
 
 
 GatePhase = Literal["model", "user"]
@@ -128,6 +145,16 @@ class Extension:
         return ()
 
     def commands(self) -> Sequence[Command]:
+        return ()
+
+    async def resident(self, view: TaskView) -> Sequence[Message]:
+        """Content that must sit right after a compaction's summary (a
+        listing, project instructions, an index, the environment block). The
+        compaction extension calls this (through ``TaskView.residents``) while
+        compacting and records the result in ``Compacted.kept``, so the
+        request sent right after the compaction is the one rebuilt from the
+        log. Records made here (without a message) are appended before the
+        ``Compacted``."""
         return ()
 
     async def on_start(self, view: TaskView) -> None:

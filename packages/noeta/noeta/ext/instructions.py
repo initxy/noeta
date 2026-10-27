@@ -16,12 +16,12 @@ import posixpath
 from collections.abc import Sequence
 from typing import Any, Literal
 
-from noeta.events import Compacted, Recorded, ToolFinished
+from noeta.events import Recorded, ToolFinished
 from noeta.execenv.base import ExecEnv
 from noeta.ext._support import read_text, task_env
 from noeta.ext.base import Extension, TaskView
 from noeta.tools._common import path_within
-from noeta.types import ToolUse, user
+from noeta.types import Message, ToolUse, user
 
 __all__ = ["DEFAULT_INSTRUCTIONS_FILENAMES", "Instructions", "render_instructions"]
 
@@ -50,7 +50,8 @@ class Instructions(Extension):
     * ``discovery`` — record nested files found after a ``Read``
       (``instructions_discovery``).
     * ``filenames`` — the search order.
-    * ``rehang`` — re-record the files after a compaction.
+    * ``rehang`` — put the files (read again) right after a compaction's
+      summary (``resident``).
     * ``origin`` — origin of the recorded messages (``"system"``).
     """
 
@@ -104,10 +105,6 @@ class Instructions(Extension):
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         event = recorded.event
-        if isinstance(event, Compacted):
-            if self.rehang:
-                await self._rehang(view)
-            return
         if not self.discovery or not isinstance(event, ToolFinished) or event.result.is_error:
             return
         call = _find_call(view, event.result.call_id)
@@ -141,14 +138,18 @@ class Instructions(Extension):
                     active.add(name)
                     break
 
-    async def _rehang(self, view: TaskView) -> None:
+    async def resident(self, view: TaskView) -> Sequence[Message]:
+        if not self.rehang:
+            return ()
         env = task_env(view.env, view.state.config)
+        out: list[Message] = []
         for name in (view.ext_state(self.name) or {}).get("names", []):
             source = self.file if "/" not in name and self.file is not None else name
             path = source if posixpath.isabs(source) else posixpath.join(env.cwd, source)
             text = await _read_one(env, path)
             if text is not None:
-                self._record(view, "rehang", name, text)
+                out.append(user(render_instructions(name, text), origin=self.origin))
+        return out
 
 
 def _find_call(view: TaskView, call_id: str) -> ToolUse | None:

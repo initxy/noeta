@@ -88,6 +88,8 @@ class NoetaApp(App[None]):
         self.attempts: dict[int, int] = {}
         #: The newest model call seen in the log.
         self.called = 0
+        #: A delta is taken off the queue but not yet written.
+        self._pumping = False
         self.busy = False
         self.usage = Usage()
         self.context_tokens = 0
@@ -219,10 +221,13 @@ class NoetaApp(App[None]):
     async def _pump_deltas(self) -> None:
         while True:
             delta = await self._deltas.get()
+            self._pumping = True
             try:
                 await self._show_delta(delta)
             except Exception:
                 log.exception("showing live output failed")
+            finally:
+                self._pumping = False
 
     async def _show_delta(self, delta: Delta) -> None:
         key = (delta.call_seq, delta.attempt)
@@ -293,7 +298,9 @@ class NoetaApp(App[None]):
         elif isinstance(ev, ModelCalled):
             self.called = rec.seq
         elif isinstance(ev, ModelReplied):
-            while not self._deltas.empty():
+            # Every delta written first (one taken off the queue may still be
+            # mounting its widget), or the reply would be shown twice.
+            while not self._deltas.empty() or self._pumping:
                 await asyncio.sleep(0.01)
             await self._end_stream()
             msg = ev.response.message
