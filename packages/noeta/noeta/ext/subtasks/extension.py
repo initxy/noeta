@@ -191,7 +191,8 @@ class Subtasks(Extension):
         elif ended.status == "failed" or ended.error == texts.BACKGROUND_NEEDED_HUMAN:
             notice = texts.BACKGROUND_NOTICE.format(
                 summary=texts.BACKGROUND_FAILED.format(agent=agent),
-                result=ended.error or texts.BACKGROUND_NEEDED_HUMAN,
+                # The model sees 0.6's bare reason, not the host-facing code.
+                result=ended.error.removeprefix("needs_human: ") or texts.BACKGROUND_NEEDED_HUMAN,
                 id=ended.child_id, status="failed")
         data = {"child_id": ended.child_id, "status": ended.status}
         if notice is None:
