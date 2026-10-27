@@ -134,6 +134,8 @@ EXEMPT_FILE_NAMES: frozenset[str] = frozenset(
         # must use them as the protocol spells them.
         "acp.py",
         "test_acp.py",
+        "test_acp_live.py",
+        "test_acp_review.py",
     }
 )
 EXEMPT_DIR_PARTS: frozenset[str] = frozenset(

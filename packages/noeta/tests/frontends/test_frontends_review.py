@@ -80,33 +80,9 @@ class Delegate:
         return text_output(ended.answer)
 
 
-class FakeEditor:
-    def __init__(self) -> None:
-        self.updates: list[Any] = []
-
-    async def session_update(self, session_id: str, update: Any, **kw: Any) -> None:
-        self.updates.append(update)
-
-    async def request_permission(self, **kw: Any) -> Any:
-        raise AssertionError("no approvals here")
-
-    def texts(self) -> list[str]:
-        return [u.content.text for u in self.updates
-                if u.session_update == "agent_message_chunk"]
-
-
 def local(tmp_path: Path, provider: Any, *agents: Agent, **kw: Any) -> LocalApp:
     return LocalApp(SqliteStore(str(tmp_path / "t.db")), list(agents), provider,
                     env_for=lambda _s: None, sleep=_no_sleep, **kw)
-
-
-async def acp_session(app: LocalApp, tmp_path: Path) -> tuple[NoetaAcpAgent, FakeEditor, str]:
-    agent = NoetaAcpAgent(app)
-    editor = FakeEditor()
-    agent.on_connect(editor)
-    await agent.initialize(protocol_version=1)
-    session = await agent.new_session(cwd=str(tmp_path))
-    return agent, editor, session.session_id
 
 
 def text_block(text: str) -> list[Any]:
@@ -127,104 +103,6 @@ async def test_print_mode_waits_for_a_foreground_sub_agent(
                                  as_json=False, permission_mode=None)
     assert code == 0
     assert capsys.readouterr().out.strip() == "final"
-
-
-# ------------------------------------------------------------ #3 ACP turn gating
-
-
-class SlowFirst:
-    family = "x"
-
-    def __init__(self) -> None:
-        self.n = 0
-
-    async def complete(self, request: ModelRequest, on_delta: Any = None) -> ModelResponse:
-        self.n += 1
-        if self.n == 1:
-            await asyncio.sleep(30)  # stopped from the editor
-        r = reply(f"answer {self.n}")
-        if on_delta is not None:
-            on_delta(Delta(kind="text", text=r.message.text))
-        return r
-
-
-async def test_acp_cancel_then_prompt_at_once(tmp_path: Path) -> None:
-    app = local(tmp_path, SlowFirst(), Agent(name="main", model="m"))
-    agent, editor, sid = await acp_session(app, tmp_path)
-    first = asyncio.create_task(agent.prompt(sid, text_block("first")))
-    await asyncio.sleep(0.3)
-    await agent.cancel(sid)
-    second = asyncio.create_task(agent.prompt(sid, text_block("second")))
-    r1, r2 = await asyncio.wait_for(asyncio.gather(first, second), 15)
-    assert (r1.stop_reason, r2.stop_reason) == ("cancelled", "end_turn")
-    assert editor.texts() == ["answer 2"]
-    await app.stop()
-
-
-async def test_acp_prompt_after_an_unrelated_inbox_item(tmp_path: Path) -> None:
-    provider = ScriptedProvider([reply("the real answer")])
-    app = local(tmp_path, provider, Agent(name="main", model="m"))
-    agent, editor, sid = await acp_session(app, tmp_path)
-    await app.store.post(Post(task_id=sid, body=ChildEnded(child_id="bg", status="done")))
-    real_send = app.client.send
-
-    async def send(*a: Any, **kw: Any) -> int:
-        # Let the runner take the unrelated item and go back to waiting first.
-        for _ in range(200):
-            evs = await app.client.events(sid)
-            if any(isinstance(r.event, InputTaken) for r in evs[2:]) and \
-                    isinstance(evs[-1].event, Waiting):
-                break
-            await asyncio.sleep(0.01)
-        return await real_send(*a, **kw)
-
-    app.client.send = send  # type: ignore[method-assign]
-    resp = await asyncio.wait_for(agent.prompt(sid, text_block("hi")), 10)
-    assert resp.stop_reason == "end_turn"
-    assert editor.texts() == ["the real answer"]
-    await app.stop()
-
-
-async def test_acp_shows_the_question_and_answers_it(tmp_path: Path) -> None:
-    provider = ScriptedProvider([reply("", ("Ask", {})), reply("using sqlite")])
-    app = local(tmp_path, provider, Agent(name="main", model="m", tools=[AskTool()]))
-    agent, editor, sid = await acp_session(app, tmp_path)
-    resp = await asyncio.wait_for(agent.prompt(sid, text_block("set it up")), 10)
-    assert resp.stop_reason == "end_turn"
-    assert "Which database?" in "".join(editor.texts())
-    await asyncio.wait_for(agent.prompt(sid, text_block("sqlite")), 10)
-    assert editor.texts()[-1] == "using sqlite"
-    answers = [i.body for i in await app.store.inbox(sid) if isinstance(i.body, Answer)]
-    assert [a.data for a in answers] == ["sqlite"]
-    await app.stop()
-
-
-class RetryOnce:
-    """The first attempt streams a fragment and fails; the retry succeeds."""
-
-    family = "x"
-
-    def __init__(self) -> None:
-        self.n = 0
-
-    async def complete(self, request: ModelRequest, on_delta: Any = None) -> ModelResponse:
-        self.n += 1
-        if self.n == 1:
-            if on_delta is not None:
-                on_delta(Delta(kind="text", text="broken par"))
-            raise Transient("stream cut")
-        if on_delta is not None:
-            on_delta(Delta(kind="text", text="good answer"))
-        return reply("good answer")
-
-
-async def test_acp_sets_a_retry_apart_from_the_failed_attempt(tmp_path: Path) -> None:
-    app = local(tmp_path, RetryOnce(), Agent(name="main", model="m"))
-    agent, editor, sid = await acp_session(app, tmp_path)
-    await asyncio.wait_for(agent.prompt(sid, text_block("go")), 10)
-    shown = "".join(editor.texts())
-    assert shown.endswith("\n\ngood answer") and shown.count("good answer") == 1
-    await app.stop()
 
 
 # ------------------------------------------------------------ #4 #19 the TUI
@@ -264,6 +142,26 @@ async def test_tui_question_card_and_stop_clear_the_pending_question(tmp_path: P
         await settle(pilot, lambda: len(app.query(QuestionCard)) == 1)
         await pilot.pause(0.3)
         assert app.waiting_question == ""
+
+
+
+class RetryOnce:
+    """The first attempt streams a fragment and fails; the retry succeeds."""
+
+    family = "x"
+
+    def __init__(self) -> None:
+        self.n = 0
+
+    async def complete(self, request: ModelRequest, on_delta: Any = None) -> ModelResponse:
+        self.n += 1
+        if self.n == 1:
+            if on_delta is not None:
+                on_delta(Delta(kind="text", text="broken par"))
+            raise Transient("stream cut")
+        if on_delta is not None:
+            on_delta(Delta(kind="text", text="good answer"))
+        return reply("good answer")
 
 
 async def test_tui_drops_a_failed_attempts_output(tmp_path: Path) -> None:
