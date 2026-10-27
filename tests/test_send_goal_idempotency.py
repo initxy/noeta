@@ -341,3 +341,61 @@ def test_concurrent_retries_after_a_dead_claim_write_one_goal(
     finally:
         for c in clients:
             c.shutdown()
+
+
+def test_a_retry_after_a_dead_claim_on_a_busy_task_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The dead claim is nobody's call any more: losing the wake to an
+    # unrelated turn must be refused, exactly as an unkeyed call is.
+    monkeypatch.setattr(driver_mod, "_IDEMPOTENT_WAIT_S", 0.3)
+    gate = threading.Event()
+    calls = {"n": 0}
+
+    def respond(_req: Any) -> LLMResponse:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            gate.wait(20)
+        return _text(calls["n"])
+
+    client = _client(tmp_path, respond)
+    try:
+        tid = client.start(goal="hi").task_id
+        assert client._driver._claim_idempotency_key(tid, "k")  # noqa: SLF001
+        time.sleep(0.35)
+        busy = threading.Thread(target=lambda: client.send_goal(tid, goal="other"))
+        busy.start()
+        time.sleep(0.5)
+        with pytest.raises(NotResumableError):
+            client.send_goal(tid, goal="once", idempotency_key="k")
+        gate.set()
+        busy.join(20)
+        assert _goal_appends(client, tid, "once") == 0
+    finally:
+        client.shutdown()
+
+
+def test_a_retry_beaten_by_an_unkeyed_call_after_a_dead_claim_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(driver_mod, "_IDEMPOTENT_WAIT_S", 0.3)
+    _, respond = _counting()
+    client = _client(tmp_path, respond)
+    try:
+        tid = client.start(goal="hi").task_id
+        driver = client._driver  # noqa: SLF001
+        assert driver._claim_idempotency_key(tid, "k")  # noqa: SLF001
+        time.sleep(0.35)
+        real_claim = driver._claim_idempotency_key  # noqa: SLF001
+
+        def claim_then_lose(*a: Any, **kw: Any) -> Any:
+            claim = real_claim(*a, **kw)
+            driver.seed_send_goal(tid, goal="other")
+            return claim
+
+        monkeypatch.setattr(driver, "_claim_idempotency_key", claim_then_lose)
+        with pytest.raises(NotResumableError):
+            client.send_goal(tid, goal="once", idempotency_key="k")
+        assert _goal_appends(client, tid, "once") == 0
+    finally:
+        client.shutdown()

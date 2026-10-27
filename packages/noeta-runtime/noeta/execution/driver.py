@@ -1309,18 +1309,25 @@ class InteractionDriver:
         self, task_id: str, key: str, *, besides: Optional[str] = None
     ) -> bool:
         """Whether a keyed call other than the one holding claim ``besides``
-        already claimed or used ``key`` on the task."""
-        for env in self._host.event_log.read(task_id):
+        already used ``key`` on the task, or holds a live claim on it.
+
+        A dead claim (its goal never landed) does not count: a retry that
+        loses a wake to an unrelated call must be refused, not reported as a
+        repeat of a call that no longer exists."""
+        events = self._host.event_log.read(task_id)
+        newest_claim: Optional[str] = None
+        for env in events:
             if getattr(env.payload, "idempotency_key", None) != key:
                 continue
             if env.type in _KEYED_EFFECT_TYPES:
                 return True
-            if (
-                env.type == "IdempotencyKeyClaimed"
-                and env.payload.claim_id != besides
-            ):
-                return True
-        return False
+            if env.type == "IdempotencyKeyClaimed":
+                newest_claim = str(env.payload.claim_id)
+        return (
+            newest_claim is not None
+            and newest_claim != besides
+            and _stale_claim(events, key) == "live"
+        )
 
     def _claim_idempotency_key(
         self, task_id: str, key: str, *, after: Optional[str] = None

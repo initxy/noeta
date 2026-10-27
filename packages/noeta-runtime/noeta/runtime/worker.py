@@ -1690,7 +1690,14 @@ def _complete_pending_park(
     reason = pending.seal.payload.reason
     task = fold(rt.event_log, rt.content_store, lease.task_id)
     blockers: tuple[str, ...] = ()
-    if not pending.notice_appended:
+    # The park writes the closing tool results before its notice, so a
+    # message after the seal is the notice only if it is the system turn.
+    notice_landed = (
+        pending.notice_appended
+        and bool(task.runtime.messages)
+        and task.runtime.messages[-1].origin == "system"
+    )
+    if not notice_landed:
         if reason != "interrupted_approval":
             task = close_unanswered_calls(
                 engine, task, lease_id=lease.lease_id, reason=_PARKED_CALL_REASON
