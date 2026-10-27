@@ -51,10 +51,12 @@ from noeta.runtime.task_notification import (
 )
 
 
-#: The host's notification hand-off: ``(root_task_id, job_id, notice)``, the
+#: The host's notification hand-off: ``(task_id, job_id, notice)``, the
 #: notice a ``<task-notification>`` the model is to read — once per job end,
-#: AFTER its durable terminal event, and once per monitor event. Called on the
-#: job's own threads, so it must return promptly.
+#: AFTER its durable terminal event, and once per monitor event. ``task_id`` is
+#: the task that started the job (a subtask's job notifies that subtask; the
+#: host falls back to the session root once it has ended). Called on the job's
+#: own threads, so it must return promptly.
 BackgroundNoticeCallback = Callable[[str, str, str], None]
 
 
@@ -432,7 +434,11 @@ class ProcessRegistry:
 
     def _notify(self, handle: _JobHandle, notice: str) -> None:
         if self._on_notice is not None:
-            self._on_notice(handle.root_task_id, handle.job_id, notice)
+            self._on_notice(
+                handle.spawned_by_task_id or handle.root_task_id,
+                handle.job_id,
+                notice,
+            )
 
     def _end_quietly(self, handle: _JobHandle) -> None:
         """End a monitor that already sent its last notice."""
@@ -1017,8 +1023,9 @@ class ProcessRegistry:
             handle.status = "killed" if killed else "exited"
         handle.done.set()
         # After the durable terminal, hand the end notice on — exactly once,
-        # by the ``notified`` dedup above. It goes to the ROOT task, so a
-        # subtask-spawned job reaches the session, never a dead subtask.
+        # by the ``notified`` dedup above. It goes to the task that started
+        # the job; delivery falls back to the root once that task has ended,
+        # so a subtask-spawned job never notifies a dead subtask.
         notice = self._end_notice(handle, exit_code, killed=killed)
         if notice is not None:
             self._notify(handle, notice)
