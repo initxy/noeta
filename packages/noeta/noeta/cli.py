@@ -4,6 +4,7 @@
     noeta -p "fix the test"    run one prompt in the current directory and print the answer
     noeta acp                  serve the Agent Client Protocol on stdio (editors)
     noeta worker               run tasks from the store until stopped (multi-machine)
+    noeta serve                the client API over HTTP (and workers, unless --no-worker)
 
 Model and provider come from ``--model`` / ``--provider`` or the environment
 (``NOETA_MODEL``, ``NOETA_PROVIDER``, ``NOETA_BASE_URL``, ``NOETA_API_KEY``)
@@ -40,6 +41,10 @@ def _parser() -> argparse.ArgumentParser:
     w = sub.add_parser("worker", help="run tasks from the store until stopped")
     w.add_argument("--queue", action="append", default=None)
     w.add_argument("--concurrency", type=int, default=8)
+    sv = sub.add_parser("serve", help="the client API over HTTP")
+    sv.add_argument("--host", default="127.0.0.1")
+    sv.add_argument("--port", type=int, default=8642)
+    sv.add_argument("--no-worker", action="store_true", help="API only; workers run elsewhere")
     return ap
 
 
@@ -93,6 +98,22 @@ async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool) -> i
     return 1
 
 
+async def _serve(s: Settings, host: str, port: int, with_worker: bool) -> None:
+    import uvicorn
+
+    from noeta.server import create_app
+
+    app = _app(s)
+    if with_worker:
+        await app.start()
+    api = create_app(app.client, token=os.environ.get("NOETA_SERVER_TOKEN") or None,
+                     deltas=app.deltas if with_worker else None)
+    try:
+        await uvicorn.Server(uvicorn.Config(api, host=host, port=port)).serve()
+    finally:
+        await app.stop()
+
+
 async def _worker(s: Settings, queues: list[str], concurrency: int) -> None:
     app = _app(s, queues=tuple(queues), concurrency=concurrency)
     stop = asyncio.Event()
@@ -114,6 +135,11 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "worker":
         asyncio.run(_worker(_settings(args), args.queue or ["default"], args.concurrency))
+        return
+    if args.command == "serve":
+        if args.host not in ("127.0.0.1", "localhost") and not os.environ.get("NOETA_SERVER_TOKEN"):
+            sys.exit("noeta: set NOETA_SERVER_TOKEN before serving on a non-local address")
+        asyncio.run(_serve(_settings(args), args.host, args.port, not args.no_worker))
         return
     if args.prompt is not None:
         sys.exit(asyncio.run(_print_mode(_settings(args), args.prompt, cwd=cwd,

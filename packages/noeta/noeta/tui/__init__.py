@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from noeta.config import Settings
@@ -15,8 +15,14 @@ def run_tui(settings: Settings, *, cwd: str, resume: str | None = None,
     from noeta.presets import main_agent
     from noeta.tui.app import NoetaApp
 
+    backend: Any
     if server:
-        raise SystemExit("noeta: --server needs the HTTP server, which is not built yet")
-    local = LocalApp(open_store(settings.store_url), [main_agent(settings.model)],
-                     settings.make_provider())
-    NoetaApp(local, agent=agent, model=settings.model, cwd=cwd, resume=resume).run()
+        import os
+
+        from noeta.remote import RemoteApp
+
+        backend = RemoteApp(server, token=os.environ.get("NOETA_SERVER_TOKEN"))
+    else:
+        backend = LocalApp(open_store(settings.store_url), [main_agent(settings.model)],
+                           settings.make_provider())
+    NoetaApp(backend, agent=agent, model=settings.model, cwd=cwd, resume=resume).run()

@@ -63,7 +63,7 @@ class NoetaApp(App[None]):
         Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
     ]
 
-    def __init__(self, local: LocalApp, *, agent: str, model: str, cwd: str,
+    def __init__(self, local: LocalApp | Any, *, agent: str, model: str, cwd: str,
                  resume: str | None = None) -> None:
         super().__init__()
         self.local = local
