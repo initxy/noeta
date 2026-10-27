@@ -32,7 +32,7 @@ A frozen dataclass. Fields are either **identity** (compiled into the recorded `
 | `plugins` | `tuple[str, ...]` | `DEFAULT_PLUGINS` = `("fs", "web")` | plugins this agent activates ([below](#plugin-activation)) |
 | `agents` | `Mapping[str, AgentDefinition]` | `{}` | subagents, a flat dict |
 | `allowed_tools` | `tuple[str \| tool, ...] \| None` | `None` | replaces the tool list; `None` = the 10 built-ins, `()` = none |
-| `disallowed_tools` | `tuple[str, ...]` | `()` | removed from whichever list applies; unknown names ignored |
+| `disallowed_tools` | `tuple[str, ...]` | `()` | removed from whichever list applies; unknown names ignored; `"Bash"` also removes `Monitor`, `BashOutput`, `KillShell` |
 | `permission_mode` | `str` | `"default"` | `default` / `acceptEdits` / `bypassPermissions` |
 | `max_turns` | `int \| None` | `None` | shorthand for `budget.max_iterations`; setting both raises `ValueError` |
 | `policy` | `(llm) -> Policy` with `.ref` | `None` | replaces the built-in ReAct loop |
@@ -245,7 +245,7 @@ The skill listing takes 1% of the context window, at most 4,096 tokens (the same
 
 | Rule | Fields |
 | --- | --- |
-| `PreToolUseRule` | `match_tool` (`fnmatch` pattern over the tool name, e.g. `"mcp__*"`), `action` (`"allow"` / `"deny"` / `"require_approval"`), `match_arg=None`, `reason=None` (what the model or approver sees) |
+| `PreToolUseRule` | `match_tool` (`fnmatch` pattern over the tool name, e.g. `"mcp__*"`; a rule matching `Bash` also matches `Monitor`), `action` (`"allow"` / `"deny"` / `"require_approval"`), `match_arg=None`, `reason=None` (what the model or approver sees) |
 | `MatchArg` | `path` (tuple of argument keys, e.g. `("opts", "force")`), `op` (`"equals"` / `"contains"` / `"regex"`), `value`, `pattern`; a `regex` given as a string `value` is compiled when the config is built |
 | `PostToolUseRule` | `match_tool`, `command=None` (an argv tuple, never run through a shell), `log=False` (log one line instead of, or as well as, running a command) |
 | `NotificationRule` | `on` (`"approval"` is the only value), `command=None`, `log=False` |
