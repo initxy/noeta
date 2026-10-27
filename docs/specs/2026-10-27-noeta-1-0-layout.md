@@ -111,7 +111,7 @@ the `Extension` interface exists, but:
 - [x] CLI `--system-prompt` / `--append-system-prompt`
 - [x] Feature: file-changed reminder; date-change reminder; `hooks` plugin with context and block
 - [x] CI, release workflow, Makefile, naming lint; README / AGENTS.md / CONTEXT.md for 1.0
-- [ ] `make check` green; `make eval` no regression
+- [x] `make check` green; `make eval` no regression
 
 ## Acceptance criteria
 
@@ -142,3 +142,4 @@ the `Extension` interface exists, but:
 2026-10-27 Feature: file-changed reminder (fs plugin, turn start, last 20 read files, mtime then sha256, once per change, `reminder/file_changed`) and date-change reminder (environment plugin, turn start, `reminder/date_changed`). Context-plugin tests live in `tests/plugins/context`.
 2026-10-27 Feature: `hooks` plugin (Claude Code command hooks: UserPromptSubmit, PreToolUse, PostToolUse, Stop, Notification; exit 2 / JSON decisions; `~/.noeta/settings.json` via the CLI). It replaces the permissions plugin's side-effect-only `Hooks` (PostToolUse / Notification rules); declarative PreToolUse rules stay in `Permissions`. Hook commands run on the worker host, not in the task's exec env. Payload key is `task_id` (no session id).
 2026-10-27 `noeta` top-level names (lazy: Agent, Client, Runtime, Extension, Reminder, TaskView, Tool*, default_agents, provider, store, connect, agent-file helpers). README "Extend it" and CONTEXT entries (Layers, Registry, Agent file, Prompt name, Reminder). Checked: each plugin blocked in turn, every other plugin imports and constructs.
+2026-10-27 make eval on v1-layout: 0.946 vs baseline 0.952, "no regression". todo_on_multistep fell from 3/3 (earlier today on `next`) to 1/3, then 1/6 on a rerun; the pre-restructure commit a768a70 scored 2/6 on the same model at the same time, and the request golden is byte-identical, so the drop is the model, not the restructure. delegate_parallel_review timed out at 240 s in all 3 trials (scored 1.00; it timed out 2/3 earlier too).
