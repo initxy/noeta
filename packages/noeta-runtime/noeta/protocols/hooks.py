@@ -35,8 +35,9 @@ class Verdict(Enum):
 class VerdictResult:
     """Verdict + an optional human-readable reason.
 
-    ``HookManager.check`` returns the first non-allow result it sees, or a
-    synthetic ALLOW with no reason when every guard allows.
+    ``HookManager.check`` returns the first DENY it sees, else the first
+    REQUIRE_APPROVAL, or a synthetic ALLOW with no reason when every guard
+    allows.
     """
 
     verdict: Verdict

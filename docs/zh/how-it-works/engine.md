@@ -40,7 +40,7 @@
 | 抛异常时 | 动作被拒绝 | 异常被吞掉 |
 | 适合做 | 权限、预算、打断死循环 | 审计、指标、链路追踪、推送给 UI |
 
-guard 检查三类动作：`ProposedToolCall`、`ProposedSpawnSubtask`、`ProposedFinish`。按 `priority` 从小到大依次运行，**第一个不放行的结论算数**，所以排在后面的 guard 只能在前面放行的基础上收紧。`governance` 内置插件默认装上：
+guard 检查三类动作：`ProposedToolCall`、`ProposedSpawnSubtask`、`ProposedFinish`。按 `priority` 从小到大依次运行，**只要有一个 `deny` 就拒绝**，没有的话第一个 `require_approval` 算数；所以审批通过也推翻不了后面 guard 的拒绝，排在后面的 guard 只能在前面放行的基础上收紧。`governance` 内置插件默认装上：
 
 | 优先级 | guard | 管什么 |
 | --- | --- | --- |
