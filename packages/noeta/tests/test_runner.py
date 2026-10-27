@@ -194,3 +194,38 @@ async def test_cancel_ends_and_next_turn_message_is_queued(store: SqliteStore) -
     await rt.run_until_idle()
     end = (await client.events(tid))[-1].event
     assert isinstance(end, TaskEnded) and end.status == "cancelled" and provider.requests == []
+
+
+async def test_unknown_agent_fails_instead_of_spinning(store: SqliteStore) -> None:
+    rt = runtime(store, ScriptedProvider(), Agent(name="a", model="m"))
+    client = Client(store)
+    tid = await client.create("nobody", "hi")
+    await rt.run_until_idle()
+    row = await client.get(tid)
+    assert row.status == "ended" and row.end_status == "failed"
+
+
+async def test_cancel_during_a_write_keeps_the_runner_in_step(store: SqliteStore) -> None:
+    """Cancelling the step while its append is in flight: the write commits
+    and the runner's view follows it, so the next boundary does not conflict."""
+    import asyncio
+
+    provider = ScriptedProvider([reply("one"), reply("two")])
+    rt = runtime(store, provider, Agent(name="a", model="m"))
+    client = Client(store)
+    tid = await client.create("a", "x")
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None
+    from noeta.runner import TaskRun
+
+    run = TaskRun(rt, claim)
+    await run._load()
+    from noeta.events import ExtensionRecorded
+
+    task = asyncio.create_task(run._append([ExtensionRecorded(extension="x", kind="k")]))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert run.state.last_seq == (await client.get(tid)).last_seq
+    await run._append([ExtensionRecorded(extension="x", kind="k2")])

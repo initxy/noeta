@@ -104,7 +104,6 @@ noeta.providers   anthropic, openai_compat, openai_responses (ported, with 0.6 q
 noeta.runner      claims a task, runs the loop, writes the log
 noeta.loop        pure core: state + event -> state; state -> next action; build_request
 noeta.store       Store interface + sqlite (+ postgres)
-noeta.schedule    Scheduler interface + local (+ postgres)
 noeta.execenv     ExecEnv interface + local (+ container)
 noeta.types       messages, events, inbox messages, ids
 ```
@@ -150,27 +149,22 @@ Four tables. Postgres uses the same schema with `jsonb` / `bytea`.
   - an interrupted model call is simply made again.
 
   This is ADR-065's rule, with nothing else needed.
-- Leases and heartbeats live only in the scheduler and only answer one question: "is this
+- Leases live only in the claim columns of `tasks` and only answer one question: "is this
   owner still alive, or should the task go to another runner?" A wrong answer costs a wasted
   retry, never a double write.
 
-### Scheduler
+### Claims and wake-ups (part of the store)
 
-```python
-class Scheduler(Protocol):
-    def claim(self, worker: str, queues: Sequence[str], wait: float) -> Optional[Claim]: ...
-    def renew(self, claim: Claim) -> bool: ...
-    def release(self, claim: Claim) -> None: ...   # task row already says ready/waiting/ended
-    def wake(self, task_id: str) -> None: ...       # called by post(); makes a waiting task ready
-    def watch(self, task_id: str) -> AsyncIterator[None]:  # nudges for cancel / new inbox items
-```
-
-- Claiming bumps `owner_epoch`.
-- **Local:** in-process, backed by the same sqlite `tasks` table, with thread wake-ups.
-- **Postgres:** `SELECT … FOR UPDATE SKIP LOCKED` on `tasks`, renewal by `ready_at` deadline,
-  and `LISTEN/NOTIFY` for wake and watch.
-- Multi-machine = Postgres store + Postgres scheduler + N processes running `noeta worker`.
-  Nothing above `noeta.store` / `noeta.schedule` knows the difference.
+- Claims live in the store, not a separate scheduler interface:
+  - `claim(worker, queues, lease_seconds)` takes one claimable task and bumps `owner_epoch`;
+  - `renew` extends the lease;
+  - `release` hands the task back.
+- `Store.on_change(callback)` reports committed changes. A worker's serve loop and the
+  runner's cancel watch wait on it, with polling as the fallback for other processes.
+- **Postgres:** `SELECT … FOR UPDATE SKIP LOCKED` on `tasks`, with `LISTEN/NOTIFY` feeding
+  `on_change`.
+- Multi-machine = the Postgres store + N processes running `noeta worker`. Nothing above
+  `noeta.store` knows the difference.
 
 ### Events (complete list for the core)
 
@@ -328,15 +322,16 @@ Phase 0 — shape
       the fixes during the rewrite
 
 Phase 1 — core on one machine
-- [ ] `noeta.types`, `noeta.loop` (pure) with recorded-response tests
-- [ ] `noeta.store` sqlite + conformance suite (conditional append, inbox dedupe, same-transaction
-      `tasks` projection)
-- [ ] `noeta.schedule` local + conformance suite
-- [ ] `noeta.runner`: claim, loop, cancel watch, crash recovery
+- [x] `noeta.types`, `noeta.loop` (pure) with recorded-response tests
+- [x] `noeta.store` sqlite + conformance suite (conditional append, inbox dedupe, same-transaction
+      `tasks` projection, claims)
+- [x] `noeta.runner`: claim, loop, cancel watch, crash recovery
 - [ ] Port providers and the six file/shell tools with their tests
-- [ ] Prototype gate: two runners racing one task never double-write; a kill at every append
-      boundary recovers without re-running a finished tool; `make eval` matches 0.6 on the same
-      model
+- [x] Prototype gate, races and crashes: racing runners never double-write; a kill at every append
+      boundary recovers without re-running a finished tool; multi-process kill -9 soak
+- [ ] Prototype gate, behavior: the `make eval` scenarios that need only the six tools (grep, read,
+      edit, parallel reads, two injection, honest failure, concise, proceed-when-clear) match
+      0.6 on the same model; the rest are phase 2's gate
 
 Phase 2 — extensions (default preset = 0.6 behavior)
 - [ ] permissions + declarative hooks (deny wins), ask_user
@@ -344,7 +339,7 @@ Phase 2 — extensions (default preset = 0.6 behavior)
 - [ ] compaction + clearing old tool results
 - [ ] background_shell + Monitor, todo, web fetch/search
 - [ ] memory, skills, MCP
-- [ ] container ExecEnv; prompts moved unchanged and `make eval` + live e2e green
+- [ ] container ExecEnv; prompts moved unchanged and the full `make eval` + live e2e green
 
 Phase 3 — multi-machine
 - [ ] Postgres store and scheduler, passing the same conformance suites
@@ -394,3 +389,5 @@ Phase 5 — cutover
 2026-10-26 owner: one package `noeta`; web workbench not in 1.0; 0.6 stores not migrated; TUI asked for a fuller design and technology comparison.
 
 2026-10-27 owner: Textual full-screen TUI, ACP adapter first; start. Spec active on `next`. ADRs are distilled at cutover, not written up front (AGENTS.md). Core is asyncio with a sync client facade.
+2026-10-27 claims and change notifications folded into the store; no separate Scheduler interface (one deep module instead of two that share a table).
+2026-10-27 phase-1 core green: 48 tests incl. a crash at each of 13 write points (before and after commit), 4 runtimes racing 12 tasks, multi-process kill -9 (60 tasks x 3 tool steps, ~10 kills/run, no step ran twice). The eval gate is split: six-tool scenarios in phase 1, the rest need phase-2 extensions.

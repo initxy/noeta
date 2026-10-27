@@ -178,9 +178,13 @@ class TaskRun:
         try:
             await self._load()
             if self.agent is None:
-                log.warning("task %s: agent %r is not registered here", self.task_id,
-                            self.state.agent)
-                await self.store.release(self.claim)
+                # Releasing would hand it straight back to this worker; a task
+                # whose agent only some workers have must be routed by queue.
+                await self._append(
+                    [TaskEnded(status="failed",
+                               error=f"no agent named {self.state.agent!r} is registered in "
+                                     f"the worker that claimed this task")],
+                    patch=Patch(status="ended", end_status="failed"))
                 return
             view = self._view()
             for ext in self.exts:
@@ -253,12 +257,23 @@ class TaskRun:
             raise _LostClaim()
         async with self._write_lock:
             base = self.state.last_seq
-            await self.store.append(self.claim, events, expected_seq=base, patch=patch,
-                                    posts=posts, creates=creates)
+            write = asyncio.ensure_future(self.store.append(
+                self.claim, events, expected_seq=base, patch=patch, posts=posts, creates=creates))
+            cancelled = False
+            # A cancel must not separate a committed write from this runner's
+            # view of the log, or its next write would conflict with itself.
+            while not write.done():
+                try:
+                    await asyncio.shield(write)
+                except asyncio.CancelledError:
+                    cancelled = True
+            write.result()
             now = time.time()
             recs = [Recorded(seq=base + i, at=now, event=e) for i, e in enumerate(events, 1)]
             for rec in recs:
                 apply(self.state, rec, self.reducers)
+            if cancelled:
+                raise asyncio.CancelledError()
         view = self._view()
         for rec in recs:
             for ext in self.exts:
