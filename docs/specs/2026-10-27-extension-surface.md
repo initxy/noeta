@@ -37,6 +37,11 @@ nothing; the third-party path is tested only with a monkeypatched entry point.
   after an agent file's own; a plugin the agent already has is not added twice.
 - The built-in agents keep memory and MCP off until the table has a setting for them
   (`OFF_UNLESS_SET`): memory writes under a directory, MCP starts processes.
+- Plugin commands: `Extension.commands(ctx)` is async and takes a `CommandContext` (cwd, task
+  id), since MCP prompts are listed over the network and skills depend on the workspace. A
+  command either has a `template` (filled with `{args}`) or the extension's `run_command`
+  returns the message text. `noeta.core.commands` lists and expands them for every front end;
+  the front end's own commands win on a name, then the first extension offering it.
 - The `noeta.providers` entry points are `<family>_provider`: importing the submodule
   `anthropic` rebinds the package attribute `anthropic`, so a second `registry.provider` call
   loaded a module (found while testing `from_settings`).
@@ -50,7 +55,7 @@ nothing; the third-party path is tested only with a monkeypatched entry point.
 - [x] One plugin table in `build_agents` / `default_agents`; `config.toml` `[plugins.<name>]`
       and `[agents.<name>] add_plugins`; `from_settings` merges front end, config and caller
 - [x] MCP servers from `~/.noeta/settings.json` and consented `.mcp.json` for the CLI and TUI
-- [ ] Plugin slash commands reachable from the TUI and ACP (or the interface removed)
+- [x] Plugin slash commands reachable from the TUI and ACP (or the interface removed)
 - [ ] An example plugin package under `examples/`, installed and run in CI
 - [ ] README / CONTEXT updated
 
@@ -74,3 +79,7 @@ nothing; the third-party path is tested only with a monkeypatched entry point.
 - 2026-10-27: step 2 done; `make check` 1345 passed. One run failed
   `test_tui_drops_a_failed_attempts_output` under load (44 s run); 6 full runs and 24 concurrent
   single runs did not reproduce it. Left as is.
+- 2026-10-27: step 3 done: TUI `/help` and unknown `/x` go to plugin commands; ACP announces
+  them (`available_commands_update`) and expands them; MCP prompts are commands. One full run
+  stalled after 58 tests while the example package was being built alongside; 5 clean runs after
+  (~23 s each).

@@ -32,7 +32,15 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Union
 
 from noeta.core.events import Recorded, TaskEnded, Waiting
-from noeta.core.extension import Deny, Extension, Gate, Rewrite, TaskView
+from noeta.core.extension import (
+    Command,
+    CommandContext,
+    Deny,
+    Extension,
+    Gate,
+    Rewrite,
+    TaskView,
+)
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import ToolUse
 from noeta.plugins.mcp.config import (
@@ -43,6 +51,7 @@ from noeta.plugins.mcp.config import (
     map_server_names,
 )
 from noeta.plugins.mcp.pool import McpPool, default_pool
+from noeta.plugins.mcp.prompts import McpPrompt, expand_prompt, list_prompts
 from noeta.plugins.mcp.results import render_result
 from noeta.plugins.mcp.settings import read_servers
 from noeta.plugins.mcp.tools import MCP_CALL_TOOL, McpCallTool, McpTool, ToolSearchTool, route_call
@@ -95,6 +104,8 @@ class Mcp(Extension):
         self._scopes: dict[str, str | None] = {}
         self._tools: dict[str, tuple[Any, list[Tool]]] = {}
         self._marks: dict[str, int] = {}
+        #: Command name -> (server, scope, prompt), as last listed.
+        self._prompts: dict[str, tuple[McpServer, str | None, McpPrompt]] = {}
 
     # ------------------------------------------------------------ state
 
@@ -224,6 +235,54 @@ class Mcp(Extension):
         cwd = view.state.config.get("cwd")
         dirs = [str(cwd)] if self._project and cwd else []
         return await asyncio.to_thread(read_servers, self._settings_files, dirs)
+
+    # ------------------------------------------------------------ commands
+
+    async def _command_servers(self, ctx: CommandContext) -> list[McpServer]:
+        """The task's servers once a runner resolved them; before that the
+        fixed ones and the settings files'."""
+        if ctx.task_id and ctx.task_id in self._known:
+            return list(self._known[ctx.task_id].values())
+        given = [] if callable(self._servers) else list(self._servers)
+        files: list[McpServer] = []
+        if self._settings_files or self._project:
+            files = await asyncio.to_thread(read_servers, self._settings_files,
+                                            [ctx.cwd] if self._project else [])
+        known: dict[str, McpServer] = {}
+        for server in [*given, *files]:
+            known.setdefault(server.alias, server)
+        return list(known.values())
+
+    async def commands(self, ctx: CommandContext) -> Sequence[Command]:
+        """Each server prompt as ``/mcp__<alias>__<prompt>``; arguments are
+        typed after it, separated by spaces (the last takes the rest)."""
+        scope = self._scopes.get(ctx.task_id or "") if ctx.task_id else (
+            self._scope if isinstance(self._scope, str) else None)
+        out: list[Command] = []
+        for server in await self._command_servers(ctx):
+            try:
+                prompts = await list_prompts([server], scope=scope, pool=self.pool())
+            except Exception as exc:  # noqa: BLE001 — one server down hides only its prompts
+                log.warning("mcp: listing the prompts of %s failed: %s", server.alias, exc)
+                continue
+            for p in prompts:
+                self._prompts[p.command_name] = (server, scope, p)
+                hint = " ".join(f"<{a['name']}>" if a["required"] else f"[{a['name']}]"
+                                for a in p.arguments)
+                out.append(Command(name=p.command_name, description=p.description,
+                                   argument_hint=hint))
+        return out
+
+    async def run_command(self, ctx: CommandContext, name: str, args: str) -> str:
+        if name not in self._prompts:
+            await self.commands(ctx)
+        if name not in self._prompts:
+            raise McpError(f"no MCP prompt {name!r}")
+        server, scope, prompt = self._prompts[name]
+        names = [a["name"] for a in prompt.arguments]
+        values = args.split(None, max(len(names) - 1, 0)) if names and args else []
+        return await expand_prompt(server, prompt.name, dict(zip(names, values, strict=False)),
+                                   scope=scope, pool=self.pool())
 
     async def refresh(self, view: TaskView) -> None:
         """List every server now and record the tool set if it changed."""

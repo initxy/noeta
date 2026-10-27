@@ -11,6 +11,7 @@ import asyncio
 import base64
 import contextlib
 import logging
+import os
 from collections.abc import Iterable
 from typing import Any
 
@@ -18,6 +19,7 @@ import acp
 from acp import schema
 
 from noeta.apps.local import LocalApp, UnknownAgent
+from noeta.core.commands import expand_command, list_commands, parse_command
 from noeta.core.events import (
     ExtensionRecorded,
     InputTaken,
@@ -30,6 +32,7 @@ from noeta.core.events import (
     ToolStarted,
     Waiting,
 )
+from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CORE
 from noeta.core.pending import Pending, follow_tree, pending_tree
 from noeta.core.types import Delta, Image, Message, Text, ToolUse
@@ -245,6 +248,9 @@ class NoetaAcpAgent:
         self._partial: dict[tuple[str, str], dict[str, Any]] = {}
         #: Sub-agent approvals already put to the editor.
         self._asked: set[tuple[str, str]] = set()
+        #: Each session's working directory, for plugin commands.
+        self._cwd: dict[str, str] = {}
+        self._background: set[asyncio.Task[None]] = set()
 
     def on_connect(self, conn: Any) -> None:
         self.conn = conn
@@ -268,7 +274,37 @@ class NoetaAcpAgent:
         if mcp_servers and self.servers is not None:
             self.servers.add(task_id, mcp_servers)
         await self.app.client.wait(task_id, timeout=30)
+        self._cwd[task_id] = cwd
+        # After the response, so the editor knows the session it names.
+        announce = asyncio.create_task(self._announce_commands(task_id))
+        self._background.add(announce)
+        announce.add_done_callback(self._background.discard)
         return schema.NewSessionResponse(session_id=task_id)
+
+    def _command_context(self, session_id: str) -> CommandContext:
+        return CommandContext(cwd=self._cwd.get(session_id) or os.getcwd(), task_id=session_id)
+
+    async def _announce_commands(self, session_id: str) -> None:
+        """The agent's plugin commands, as the editor's slash commands."""
+        agent = self.app.runtime.agents.get(self.agent)
+        if agent is None or self.conn is None:
+            return
+        try:
+            commands = await list_commands(agent, self._command_context(session_id))
+            if not commands:
+                return
+            await self.conn.session_update(
+                session_id=session_id, update=schema.AvailableCommandsUpdate(
+                    session_update="available_commands_update",
+                    available_commands=[
+                        schema.AvailableCommand(
+                            name=c.name, description=c.description or c.name,
+                            input=schema.AvailableCommandInput(
+                                root=schema.UnstructuredCommandInput(hint=c.argument_hint))
+                            if c.argument_hint else None)
+                        for c in commands]))
+        except Exception:
+            log.exception("acp: announcing the commands of %s failed", session_id)
 
     async def _adopt(self, task_id: str) -> None:
         try:
@@ -278,9 +314,11 @@ class NoetaAcpAgent:
 
     async def load_session(self, cwd: str, session_id: str, **kw: Any) -> None:
         await self._adopt(session_id)
+        self._cwd[session_id] = cwd
         for rec in await self.app.client.events(session_id):
             for update in self._replay(rec):
                 await self.conn.session_update(session_id=session_id, update=update)
+        await self._announce_commands(session_id)
 
     def _replay(self, rec: Recorded) -> list[Any]:
         ev = rec.event
@@ -328,6 +366,20 @@ class NoetaAcpAgent:
                 if q.task_id != session_id:
                     turn.start(after)  # a sub-agent took it; follow the root from here
             else:
+                text = message.text if len(message.content) == 1 else ""
+                agent = self.app.runtime.agents.get(self.agent)
+                if agent is not None and parse_command(text) is not None:
+                    try:
+                        expanded = await expand_command(
+                            agent, self._command_context(session_id), text)
+                    except Exception as exc:  # noqa: BLE001 — shown to the user
+                        failed = f"{text.split()[0]} failed: {exc}"
+                        await self.conn.session_update(
+                            session_id=session_id, update=acp.update_agent_message_text(failed))
+                        return schema.PromptResponse(stop_reason="end_turn")
+                    if expanded is not None:
+                        message = Message(role="user", content=[Text(text=expanded)],
+                                          origin="human")
                 turn.seq = await client.send(session_id, message)
             pumping = asyncio.create_task(self._pump(session_id, turn.out))
             try:
