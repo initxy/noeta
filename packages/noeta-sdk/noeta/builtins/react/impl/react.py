@@ -183,6 +183,12 @@ _INSTRUCTION_FILE_NAMES = frozenset({"NOETA.md", "AGENTS.md", "CLAUDE.md"})
 #: the host, or the model on a later turn — knows the work was cut off.
 _STEP_LIMIT_HEAD = "Stopped at the {n}-step limit before finishing."
 
+#: Claude Code's answer to a summarize request that is itself too long: up
+#: to this many retries, each dropping about a fifth of the oldest rounds
+#: behind :data:`_SUMMARY_TRUNCATION_MARKER`.
+MAX_SUMMARY_OVERFLOW_RETRIES = 3
+_SUMMARY_TRUNCATION_MARKER = "[earlier conversation truncated for compaction retry]"
+
 #: The stable head of every summarize-failure reason. A host branches on the
 #: prefix (``reason.startswith(SUMMARY_FAILED_REASON)``); the free text after
 #: ``": "`` carries the response facts for a human — see
@@ -857,9 +863,17 @@ class ReActPolicy:
         nothing that the previous note preserved. The input is still a pure
         function of the composed View, so a resumed run rebuilds it identically;
         when no previous summary is reachable the whole raw prefix is sent, as
-        before. (One residual gap, deliberately not closed here: the delta is
-        RAW, so a turn whose tool output the Composer cleared to a marker still
-        contributes its full body to the summarize input.)
+        before.
+
+        **The summarizer sees what the main loop sees.** Every tool result the
+        composed View has cleared goes into the summarize input cleared too
+        (``_as_composed``). The raw history keeps every body, and by the time
+        the trigger fires the clearing valves have long been at work, so a raw
+        input would bring back everything they cleared — a request far past
+        the window that the main loop never sent. Should the request still
+        overflow, it is retried up to :data:`MAX_SUMMARY_OVERFLOW_RETRIES`
+        times, each dropping the oldest fifth of the rounds
+        (``_drop_oldest_rounds``) — Claude Code's behavior.
 
         The boundary is computed deterministically from ``tail_token_budget``
         (the same budget the Composer prunes against), so a resumed run derives
@@ -899,10 +913,11 @@ class ReActPolicy:
                 reason="compaction_no_progress", retryable=False
             )
         previous_summary = self._previous_summary_message(view)
+        to_summarize: list[Message]
         if previous_summary is None:
             # First compaction (or a View whose head is not the Composer's
             # summary message): the whole raw prefix is the input.
-            to_summarize = history[:boundary]
+            to_summarize = list(history[:boundary])
         else:
             # Summary-of-summary: the note already covering
             # ``[:view.summary_boundary]`` plus only the messages appended
@@ -913,42 +928,25 @@ class ReActPolicy:
                 previous_summary,
                 *history[view.summary_boundary : boundary],
             ]
-        system = view.segments[0].content[0] if view.segments else None
-        context = view.segments[1].content if len(view.segments) > 1 else ()
-        # The summarize round-trip is not user-facing output: opt out of
-        # token streaming so a live UI never previews compaction internals.
-        # The first attempt carries no ``tool_choice`` so Anthropic serves the
-        # message tier from the main loop's cache entry too.
-        summary_resp = self._llm.complete(
-            self._summary_prompt_request(
-                to_summarize,
-                view.provider_tool_schemas,
-                system=system,
-                context=context,
-            ),
-            ctx,
-            allow_stream=False,
-        )
-        summary = _joined_text(summary_resp)
-        if _summary_needs_tool_free_retry(summary_resp, summary):
-            # The model answered with a tool call (or no text at all): retry
-            # exactly once with ``tool_choice: none``. The retry is an ordinary
-            # recorded round-trip (Started / Recorded / Finished), and whether
-            # it happens is a pure function of the recorded first response, so
-            # a resumed run takes the same branch. Whatever the retry returns
-            # goes through the guards below unchanged.
-            summary_resp = self._llm.complete(
-                self._summary_prompt_request(
-                    to_summarize,
-                    view.provider_tool_schemas,
-                    system=system,
-                    context=context,
-                    forbid_tools=True,
-                ),
-                ctx,
-                allow_stream=False,
+        to_summarize = _as_composed(to_summarize, view)
+        summary_resp, summary = self._summarize(ctx, view, to_summarize)
+        attempt = to_summarize
+        for _ in range(MAX_SUMMARY_OVERFLOW_RETRIES):
+            if not _is_overflow(summary_resp):
+                break
+            # The summarize request itself is over the window: drop the
+            # oldest rounds and try again. Each retry is a recorded
+            # round-trip and whether it happens is a pure function of the
+            # recorded response before it, so a resume takes the same path.
+            # The previous note is kept — it is small and covers everything
+            # before the delta.
+            shorter = _drop_oldest_rounds(
+                attempt, keep_first=previous_summary is not None
             )
-            summary = _joined_text(summary_resp)
+            if shorter is None:
+                break
+            attempt = shorter
+            summary_resp, summary = self._summarize(ctx, view, attempt)
         # The summarize round-trip can come back failed — an ``error``
         # stop_reason (the LLM client's transient retries already exhausted, or
         # a fatal/overflow error) — empty (a model that emitted only a
@@ -1002,6 +1000,49 @@ class ReActPolicy:
             composer_version=self._composer_version,
             reattached=self._recent_files_to_reattach(history, boundary),
         )
+
+    def _summarize(
+        self, ctx: StepContext, view: View, to_summarize: list[Message]
+    ) -> tuple[LLMResponse, str]:
+        """One summarize round-trip over ``to_summarize``, with its one
+        tool-free retry; returns the response and its joined text."""
+        system = view.segments[0].content[0] if view.segments else None
+        context = view.segments[1].content if len(view.segments) > 1 else ()
+        # The summarize round-trip is not user-facing output: opt out of
+        # token streaming so a live UI never previews compaction internals.
+        # The first attempt carries no ``tool_choice`` so Anthropic serves the
+        # message tier from the main loop's cache entry too.
+        summary_resp = self._llm.complete(
+            self._summary_prompt_request(
+                to_summarize,
+                view.provider_tool_schemas,
+                system=system,
+                context=context,
+            ),
+            ctx,
+            allow_stream=False,
+        )
+        summary = _joined_text(summary_resp)
+        if _summary_needs_tool_free_retry(summary_resp, summary):
+            # The model answered with a tool call (or no text at all): retry
+            # exactly once with ``tool_choice: none``. The retry is an ordinary
+            # recorded round-trip (Started / Recorded / Finished), and whether
+            # it happens is a pure function of the recorded first response, so
+            # a resumed run takes the same branch. Whatever the retry returns
+            # goes through the guards in ``_compaction_decision`` unchanged.
+            summary_resp = self._llm.complete(
+                self._summary_prompt_request(
+                    to_summarize,
+                    view.provider_tool_schemas,
+                    system=system,
+                    context=context,
+                    forbid_tools=True,
+                ),
+                ctx,
+                allow_stream=False,
+            )
+            summary = _joined_text(summary_resp)
+        return summary_resp, summary
 
     def _recent_files_to_reattach(
         self, history: Sequence[Message], boundary: int
@@ -1325,10 +1366,18 @@ class ReActPolicy:
                     retryable=False,
                     assistant_message=None,
                 )
-            answer = "\n".join(
-                block.text
-                for block in response.content
-                if isinstance(block, TextBlock)
+            # A response that ends a run of output-limit continuations is
+            # only the last piece of the answer: the earlier pieces are the
+            # recorded assistant turns between the resume nudges.
+            answer = "".join(
+                (
+                    *_continued_texts(view.rolling_history),
+                    "\n".join(
+                        block.text
+                        for block in response.content
+                        if isinstance(block, TextBlock)
+                    ),
+                )
             )
             # Structured output: when the caller declared a JSON Schema
             # via ``output_schema`` we try to parse the concatenated text
@@ -1491,6 +1540,43 @@ def _output_limit_recoveries(history: Sequence[Message]) -> int:
             continue
         break
     return count
+
+
+def _continued_texts(history: Sequence[Message]) -> list[str]:
+    """The texts of the cut responses an answer continues, oldest first.
+
+    Walks back over the run :func:`_output_limit_recoveries` counts — each
+    resume nudge, and the text-only assistant turn it follows when the cut
+    response had text — and returns those turns' texts. Empty when the
+    history does not end on a nudge. Pure over the recorded history.
+    """
+    texts: list[str] = []
+    i = len(history) - 1
+    while i >= 0 and _is_output_limit_nudge(history[i]):
+        i -= 1
+        previous = history[i] if i >= 0 else None
+        if (
+            previous is not None
+            and previous.role == "assistant"
+            and not any(isinstance(b, ToolUseBlock) for b in previous.content)
+        ):
+            texts.append(
+                "\n".join(
+                    b.text for b in previous.content if isinstance(b, TextBlock)
+                )
+            )
+            i -= 1
+    texts.reverse()
+    return texts
+
+
+def _is_output_limit_nudge(message: Message) -> bool:
+    return (
+        message.role == "user"
+        and len(message.content) == 1
+        and isinstance(message.content[0], TextBlock)
+        and message.content[0].text in _OUTPUT_LIMIT_NUDGES
+    )
 
 
 def _provider_error_detail(response: LLMResponse) -> Optional[str]:
@@ -1767,6 +1853,79 @@ def _joined_text(response: LLMResponse) -> str:
     """The response's text blocks joined by newlines (the summary candidate)."""
     return "\n".join(
         b.text for b in response.content if isinstance(b, TextBlock)
+    )
+
+
+def _as_composed(messages: list[Message], view: View) -> list[Message]:
+    """``messages`` with every tool result the composed View shows cleared
+    replaced by the View's block, so the summarizer reads what the main loop
+    sent. Pure over the two."""
+    composed = {
+        block.call_id: block
+        for message in (view.segments[2].content if len(view.segments) > 2 else ())
+        for block in message.content
+        if isinstance(block, ToolResultBlock)
+    }
+    out: list[Message] = []
+    for message in messages:
+        blocks = [
+            composed[b.call_id]
+            if isinstance(b, ToolResultBlock)
+            and b.call_id in composed
+            and composed[b.call_id].output != b.output
+            else b
+            for b in message.content
+        ]
+        if all(new is old for new, old in zip(blocks, message.content)):
+            out.append(message)
+        else:
+            out.append(
+                Message(role=message.role, content=blocks, origin=message.origin)
+            )
+    return out
+
+
+def _is_overflow(response: LLMResponse) -> bool:
+    return (
+        response.stop_reason == "error"
+        and (response.raw or {}).get("category") == CATEGORY_OVERFLOW
+    )
+
+
+def _drop_oldest_rounds(
+    messages: list[Message], *, keep_first: bool
+) -> Optional[list[Message]]:
+    """``messages`` less the oldest fifth (at least one) of its rounds, behind
+    the truncation marker; ``None`` when there is no round left to drop.
+
+    A round opens at every message that is not a tool result, so a dropped
+    round takes its tool results with it and none is left without its call.
+    ``keep_first`` holds the first message (the previous note) in place. A
+    marker from an earlier retry is replaced, not stacked.
+    """
+    head = messages[:1] if keep_first else []
+    body = messages[1:] if keep_first else list(messages)
+    if body and _is_truncation_marker(body[0]):
+        body = body[1:]
+    rounds: list[list[Message]] = []
+    for message in body:
+        if message.role == "tool" and rounds:
+            rounds[-1].append(message)
+        else:
+            rounds.append([message])
+    if len(rounds) < 2:
+        return None
+    kept = rounds[max(1, len(rounds) // 5) :]
+    marker = Message(role="user", content=[TextBlock(text=_SUMMARY_TRUNCATION_MARKER)])
+    return [*head, marker, *(m for r in kept for m in r)]
+
+
+def _is_truncation_marker(message: Message) -> bool:
+    return (
+        message.role == "user"
+        and len(message.content) == 1
+        and isinstance(message.content[0], TextBlock)
+        and message.content[0].text == _SUMMARY_TRUNCATION_MARKER
     )
 
 

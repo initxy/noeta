@@ -54,6 +54,7 @@ _MARKER = "[Old tool result content cleared]"
 
 class _BulkTool:
     risk_level = "low"
+    clearable = True
     input_schema: dict[str, Any] = {"type": "object", "additionalProperties": True}
 
     def __init__(self, name: str = "read") -> None:
@@ -100,6 +101,7 @@ def _composer(
     fraction: float = 0.5,
     tail: int | None = None,
     reminders: ReminderRegistry | None = None,
+    batch: int = 1,
 ) -> ThreeSegmentComposer:
     return ThreeSegmentComposer(
         system_prompt="sys",
@@ -109,6 +111,7 @@ def _composer(
         available_window=window,
         microcompact_keep_recent=keep,
         microcompact_fraction=fraction,
+        microcompact_batch_tokens=batch,
         reminders=reminders,
     )
 
@@ -305,7 +308,17 @@ def test_resume_from_the_log_clears_the_same_blocks() -> None:
                             arguments={"tag": f"t{i}"},
                             call_id=f"c{i}",
                         )
-                    ]
+                    ],
+                    assistant_message=Message(
+                        role="assistant",
+                        content=[
+                            ToolUseBlock(
+                                call_id=f"c{i}",
+                                tool_name="read",
+                                arguments={"tag": f"t{i}"},
+                            )
+                        ],
+                    ),
                 )
                 for i in range(steps)
             ]
@@ -410,3 +423,153 @@ def test_composer_feeds_the_reminder_its_cleared_boundary() -> None:
         InMemoryContentStore(), window=10**9, reminders=registry
     ).compose(_task(msgs))
     assert all(m.origin != "system" for m in quiet.segments[2].content)
+
+
+# ---------------------------------------------------------------------------
+# Batches: the open valve rewrites the view only when a batch fills
+# ---------------------------------------------------------------------------
+
+
+def _cleared(view: View) -> list[str]:
+    return [k for k, v in _outputs(view).items() if v == _MARKER]
+
+
+def test_clears_in_batches_and_holds_the_view_between_them() -> None:
+    """Each result estimates 150 tokens, so a 450-token batch is three
+    results. As the history grows one result per step, the cleared set only
+    moves when a batch of results older than the newest five fills — and
+    between those steps the composed history is a byte-identical prefix of
+    the next step's, which is what keeps the provider's cached prefix."""
+    previous: list[Message] | None = None
+    for n in range(6, 21):
+        view = _composer(InMemoryContentStore(), window=10, batch=450).compose(
+            _task(_history(n))
+        )
+        batched = 3 * ((n - 5) // 3)
+        assert _cleared(view) == [f"c{i}" for i in range(batched)]
+        composed = list(view.segments[2].content)
+        if previous is not None and (n - 5) % 3 != 0:
+            assert composed[: len(previous)] == previous
+        previous = composed
+
+
+def test_default_batch_is_twenty_thousand_estimated_tokens() -> None:
+    """With the default batch, 25 aged-out results of 2,000 tokens each make
+    two full batches of ten; the last five wait for the third."""
+    msgs: list[Message] = []
+    for i in range(30):
+        msgs += _tool_turn(f"c{i}", "x" * 8_000)
+    composer = ThreeSegmentComposer(
+        system_prompt="sys",
+        tools={"read": _BulkTool()},
+        content_store=InMemoryContentStore(),
+        available_window=10,
+        microcompact_keep_recent=5,
+    )
+    view = composer.compose(_task(msgs))
+    assert _cleared(view) == [f"c{i}" for i in range(20)]
+
+
+class _ReportTool(_BulkTool):
+    clearable = False
+
+
+def test_only_clearable_tools_are_cleared_or_counted() -> None:
+    """A subagent's report, a user's answer (a control tool, not registered
+    as a tool here) and an undeclared tool's output stay verbatim however old
+    they are, and do not take the places of the newest clearable results."""
+    msgs: list[Message] = []
+    for i in range(4):
+        msgs += _tool_turn(f"c{i}", "r" * 600)
+    msgs += _tool_turn("task", "report " * 200)
+    msgs[-2] = Message(
+        role="assistant",
+        content=[ToolUseBlock(call_id="task", tool_name="Task", arguments={})],
+    )
+    msgs += [
+        Message(
+            role="assistant",
+            content=[
+                ToolUseBlock(call_id="mcp", tool_name="mcp_query", arguments={}),
+                ToolUseBlock(call_id="ask", tool_name="AskUserQuestion", arguments={}),
+            ],
+        ),
+        Message(
+            role="tool",
+            content=[
+                ToolResultBlock(call_id="mcp", output="m" * 900, success=True),
+                ToolResultBlock(call_id="ask", output="a" * 900, success=True),
+            ],
+        ),
+    ]
+    composer = ThreeSegmentComposer(
+        system_prompt="sys",
+        tools={"read": _BulkTool(), "mcp_query": _ReportTool("mcp_query")},
+        content_store=InMemoryContentStore(),
+        available_window=10,
+        microcompact_keep_recent=2,
+        microcompact_batch_tokens=1,
+    )
+    out = _outputs(composer.compose(_task(msgs)))
+    assert [k for k, v in out.items() if v == _MARKER] == ["c0", "c1"]
+    assert out["c2"] == "r" * 600 and out["c3"] == "r" * 600
+    assert out["task"] == "report " * 200
+    assert out["mcp"] == "m" * 900 and out["ask"] == "a" * 900
+
+
+def test_the_relief_valve_clears_only_clearable_results_too() -> None:
+    msgs = _tool_turn("old", "o" * 4_000) + _tool_turn("new", "n" * 4_000)
+    msgs[0] = Message(
+        role="assistant",
+        content=[ToolUseBlock(call_id="old", tool_name="Task", arguments={})],
+    )
+    composer = ThreeSegmentComposer(
+        system_prompt="sys",
+        tools={"read": _BulkTool()},
+        content_store=InMemoryContentStore(),
+        tail_token_budget=10,
+    )
+    out = _outputs(composer.compose(_task(msgs)))
+    assert out["old"] == "o" * 4_000
+
+
+def test_the_builtin_refetchable_tools_declare_themselves_clearable() -> None:
+    from noeta.builtins.fs.impl.edit import ReplaceTextTool, WriteFileTool
+    from noeta.builtins.fs.impl.read import GlobTool, GrepTool, ReadFileTool
+    from noeta.builtins.fs.impl.shell import (
+        MonitorTool,
+        ShellKillTool,
+        ShellPollTool,
+        ShellRunTool,
+    )
+    from noeta.builtins.web.impl.fetch import WebFetchTool
+    from noeta.builtins.web.impl.search import WebSearchTool
+    from noeta.protocols.tool import is_clearable
+
+    clearable = [
+        ReadFileTool,
+        GlobTool,
+        GrepTool,
+        ShellRunTool,
+        ShellPollTool,
+        ReplaceTextTool,
+        WriteFileTool,
+        WebFetchTool,
+        WebSearchTool,
+    ]
+    assert sorted(cls.name for cls in clearable) == sorted(  # type: ignore[attr-defined]
+        ["Read", "Glob", "Grep", "Bash", "BashOutput", "Edit", "Write",
+         "WebFetch", "WebSearch"]
+    )
+    assert all(is_clearable(cls) for cls in clearable)
+    assert not is_clearable(MonitorTool) and not is_clearable(ShellKillTool)
+
+
+def test_a_batch_size_under_one_is_refused() -> None:
+    with pytest.raises(ValueError, match="microcompact_batch_tokens"):
+        ThreeSegmentComposer(
+            system_prompt="sys",
+            tools={},
+            content_store=InMemoryContentStore(),
+            microcompact_batch_tokens=0,
+        )

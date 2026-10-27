@@ -72,8 +72,13 @@ forward fails the Task instead of looping.
   large-window model trims and compacts earlier — old tool outputs are replaced
   by Claude Code's marker `[Old tool result content cleared]`; tool calls keep
   their arguments as sent, so the call still names what it fetched. `HostConfig.clear_tool_outputs_at`
-  starts this earlier than the summarize trigger. The call ids stay so
-  the conversation remains valid, and the originals remain in the content store.
+  starts this earlier than the summarize trigger; from then on old outputs are
+  cleared in batches of about 20,000 tokens, so the prompt cache survives between
+  batches. Only outputs the model can fetch again are cleared — those of `Read`,
+  `Bash`, `Grep`, `Glob`, `Edit`, `Write`, `WebFetch`, `WebSearch`, `BashOutput`, or
+  a tool that declares `clearable = True`; a subagent's report or a user's answer
+  stays. The call ids stay so the conversation remains valid, and the originals
+  remain in the content store. The summarize request sees the same cleared outputs.
 - **Reminders.** Short notes rendered at the very end of each prompt — unfinished
   todos, a pointer to compacted history. They are recomputed from state every
   turn and never written to the log.

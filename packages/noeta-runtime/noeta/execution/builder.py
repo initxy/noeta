@@ -69,7 +69,10 @@ class CompactionConfig:
     composer protects / the policy summarises against ``tail_token_budget``.
     ``context_window`` is the window compaction is measured against — the
     model's, or the smaller cap a host set (``HostConfig.auto_compact_window``);
-    ``max_output_tokens`` is always the model's own ceiling.
+    ``max_output_tokens`` is always the model's own ceiling (it also rides the
+    request's ``max_tokens``), so ``compaction_buffer`` is signed: whatever
+    turns the subtraction into the reserve the deriver wants, negative when
+    that reserve is smaller than the output ceiling.
     """
 
     context_window: Optional[int]
