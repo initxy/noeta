@@ -25,10 +25,10 @@ Rule of thumb: the wider the impact (spanning multiple modules), the more it bel
 **Engine & execution**:
 [engine-policy-dataflow](007-engine-policy-dataflow.md) ·
 [engine-per-turn](046-engine-per-turn.md) ·
-[worker-lease-model](029-worker-lease-model.md) ·
+[worker-lease-model](029-worker-lease-model.md) [+069](069-heartbeat-cap-per-attempt.md) ·
 [worker-queue-routing](041-worker-queue-routing.md) [+057](057-queue-recovery-reads-tails-for-waiting-parents.md) ·
 [step-attempt-recovery](032-step-attempt-recovery.md) [+065](065-crash-recovery-keeps-finished-tool-calls.md) ·
-[mid-turn-goal-injection](040-mid-turn-goal-injection.md) ·
+[mid-turn-goal-injection](040-mid-turn-goal-injection.md) [+070](070-caller-idempotency-key-on-goals.md) ·
 [terminal-answer-on-a-parked-turn](045-terminal-answer-on-a-parked-turn.md) ·
 [interrupt-responsiveness](042-interrupt-responsiveness.md) [+058](058-sandbox-foreground-shell-interrupt.md) ·
 [multi-host-lease-fencing](034-multi-host-lease-fencing.md) [+056](056-lease-fencing-dropped-connections.md) ·
@@ -57,7 +57,7 @@ Rule of thumb: the wider the impact (spanning multiple modules), the more it bel
 [agent-identity-and-provenance](001-agent-identity-and-provenance.md) ·
 [provider-adapters-and-multimodal](015-provider-adapters-and-multimodal.md) ·
 [model-catalog-extension](043-model-catalog-extension.md) ·
-[guard-observer-hooks](010-guard-observer-hooks.md) [+052](052-declarative-hooks-are-host-configuration.md) ·
+[guard-observer-hooks](010-guard-observer-hooks.md) [+052](052-declarative-hooks-are-host-configuration.md) [+068](068-guard-deny-wins-over-approval.md) ·
 [event-origin-marker](008-event-origin-marker.md) ·
 [mcp-connectors](012-mcp-connectors.md) [+053](053-mcp-deferred-schemas.md) ·
 [plugin-contribution-bundles](038-plugin-contribution-bundles.md)

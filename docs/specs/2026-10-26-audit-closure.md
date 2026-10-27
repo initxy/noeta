@@ -75,21 +75,21 @@ Line numbers are as of `adc2d1c`.
 
 ## Plan
 
-- [ ] A1 deny-wins guard chain (`noeta/core/hooks.py`)
-- [ ] A2 terminal-irreversible fold + durable cross-process cancel
-- [ ] A3 heartbeat retries transient errors; InvalidLease cancels the step
-- [ ] A4 per-attempt, configurable heartbeat cap; cap → recovery
-- [ ] A5 `idempotency_key` on `send_goal` / `inject_goal`
-- [ ] B1 tool-level crash recovery + ADR refining 032 + limitations doc
-- [ ] C1 summarize input mirrors cleared view; overflow retry ×3
-- [ ] C2 batched clearing with clearable-tool set
-- [ ] C3 compaction margin formula
-- [ ] C4 continuation answer join
-- [ ] D1 Bash disable covers Monitor/BashOutput/KillShell + hook rules
-- [ ] D2 background notices to the spawning subtask
-- [ ] D3 Task mixed with ordinary tools executes
-- [ ] D4 provider quirks (overflow markers, null args, stop+tool_calls, thinking provenance)
-- [ ] D5 Bash head+tail without spill dir
+- [x] A1 deny-wins guard chain (`noeta/core/hooks.py`)
+- [x] A2 terminal-irreversible fold + durable cross-process cancel
+- [x] A3 heartbeat retries transient errors; InvalidLease cancels the step
+- [x] A4 per-attempt, configurable heartbeat cap; cap → recovery
+- [x] A5 `idempotency_key` on `send_goal` / `inject_goal`
+- [x] B1 tool-level crash recovery + ADR refining 032 + limitations doc
+- [x] C1 summarize input mirrors cleared view; overflow retry ×3
+- [x] C2 batched clearing with clearable-tool set
+- [x] C3 compaction margin formula
+- [x] C4 continuation answer join
+- [x] D1 Bash disable covers Monitor/BashOutput/KillShell + hook rules
+- [x] D2 background notices to the spawning subtask
+- [x] D3 Task mixed with ordinary tools executes
+- [x] D4 provider quirks (overflow markers, null args, stop+tool_calls, thinking provenance)
+- [x] D5 Bash head+tail without spill dir
 - [ ] Integrate, `make check`, relevant `make e2e`, CHANGELOG, CONTEXT/ADR updates
 - [ ] Benchmark rerun on the integrated build
 
@@ -107,3 +107,6 @@ Line numbers are as of `adc2d1c`.
 
 ## Progress log
 2026-10-26 spec written from the 2026-10-16 audit; baseline make check green (4824 passed, 89%).
+2026-10-26 A/B/C/D merged from four worktrees; ADR-065 (recovery), 066 (clearing/margin), 067 (head+tail), 068 (deny wins), 069 (attempt heartbeat cap), 070 (idempotency key).
+2026-10-26 integration friction: the attempt-cap test assumed a seal; with ADR-065 the capped batch is kept — test now asserts the call is not re-run. make check green 4909 passed.
+2026-10-26 known limits: a foreground child step in another process under a cancelled root is not stopped (only the root lease is revoked); the relief valve's gate still reads the uncleared estimate; shell_run.md still says output past 30000 is saved to a file even without a spill dir (prompt text, left unchanged).

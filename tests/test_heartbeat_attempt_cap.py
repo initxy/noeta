@@ -210,7 +210,11 @@ def test_capped_attempt_is_recovered_not_failed(
         out = client.start(goal="go")
         types = [e.type for e in client.events(out.task_id)]
         assert "TaskFailed" not in types
-        assert "StepAttemptAbandoned" in types
+        # Recovery keeps the recorded batch: the capped call is not re-run.
+        started = [
+            e for e in client.events(out.task_id) if e.type == "ToolCallStarted"
+        ]
+        assert len(started) == 1
         assert out.status == "suspended"
         disp = client._host.dispatcher  # noqa: SLF001 - row vs fold is the point
         assert disp.task_status(out.task_id) == "suspended"

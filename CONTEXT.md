@@ -126,7 +126,8 @@ An external action the model can invoke (`packages/noeta-runtime/noeta/protocols
 docstrings (which would leak internal names). `description` is the single source of model-visible
 tool semantics and is never repeated in the system prompt. `risk_level` gates approval. Optional
 `getattr` attributes: `advertised`, `route_call` (deferred MCP), `concurrency_safe` (consecutive
-safe calls run in parallel, recorded in call order). See `docs/adr/026-tool-description-canonical.md`.
+safe calls run in parallel, recorded in call order), `clearable` (old results may be cleared from
+the view; only these count toward the kept tail). See `docs/adr/026-tool-description-canonical.md`.
 
 ## Provider
 

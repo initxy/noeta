@@ -123,3 +123,4 @@ one deliberate asymmetry in the plugin effect model.
 ## Refined by
 
 - [ADR-052](052-declarative-hooks-are-host-configuration.md) — Declarative hooks are host configuration
+- [ADR-068](068-guard-deny-wins-over-approval.md) — A deny from any Guard wins over an earlier require_approval
