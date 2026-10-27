@@ -72,12 +72,15 @@ class Client:
         *,
         always: bool = False,
         data: Any = None,
-    ) -> None:
-        await self.store.post(Post(
+    ) -> int:
+        """Answer an approval or a question; returns the answer's inbox seq
+        (the first one's, when the question was already answered)."""
+        seq, _ = await self.store.post(Post(
             task_id=task_id,
             body=Answer(request_id=request_id, decision=decision, always=always, data=data),
             dedupe_key=f"answer:{request_id}",
         ))
+        return seq
 
     async def cancel(self, task_id: str, reason: str = "", *, turn_only: bool = False) -> None:
         """End the task, or with ``turn_only`` stop only the current turn."""

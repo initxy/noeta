@@ -169,6 +169,11 @@ class Delta(Struct):
     kind: Literal["text", "thinking"]
     text: str
     index: int = 0
+    #: Set by the runner: the log seq of the ``ModelCalled`` this fragment
+    #: belongs to, and which attempt of that call (a retry starts over, so a
+    #: front end drops the fragments of an earlier attempt).
+    call_seq: int = 0
+    attempt: int = 1
 
 
 # --------------------------------------------------------------------------
