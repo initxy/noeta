@@ -109,7 +109,8 @@ class MakeRoom(Extension):
     name = "room"
 
     async def on_context_overflow(self, view: TaskView) -> bool:
-        view.compacted(Compacted(summary="(summary)", through=view.state.last_seq))
+        view.compacted(Compacted(summary="(summary)", through=view.state.last_seq,
+                                 kept=await view.residents()))
         return True
 
 

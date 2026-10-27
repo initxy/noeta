@@ -14,6 +14,11 @@ content blocks (thinking excluded) have passed both since the last
 ``TodoWrite`` call and since the last reminder, the reminder is recorded as a
 system-origin message carrying the list as it stands. Counting walks what the
 model still sees, so after a compaction it starts again at the boundary.
+
+Placement rule (shared with ``Compaction``): unrecorded trailing messages of
+a request (the compaction pointer, the step-limit prompt) always stay last;
+the reminder is inserted right after the recorded messages, where the log
+puts it.
 """
 
 from __future__ import annotations
@@ -24,7 +29,9 @@ from typing import Any
 
 import msgspec
 
+from noeta.ext._support import simulated_state
 from noeta.ext.base import Deny, Extension, Gate, TaskView
+from noeta.loop.request import _breakpoints
 from noeta.tools.base import Tool, ToolContext, ToolOutput, text_output
 from noeta.types import Message, ModelRequest, Thinking, ToolUse, user
 
@@ -262,21 +269,20 @@ class Todo(Extension):
         return None
 
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
-        state = view.state
-        if (not self.reminder
-                or TODO_WRITE_TOOL not in {t.name for t in request.tools}
-                # A request with an unrecorded tail (the step-limit round)
-                # is left alone: a reminder must sit where it is recorded.
-                or len(request.messages) != len(state.messages)
-                or not reminder_due(state.messages)):
+        if not self.reminder or TODO_WRITE_TOOL not in {t.name for t in request.tools}:
+            return request
+        # Count over the recorded messages as the next fold sees them (a
+        # compaction made earlier in this round included). The request's
+        # messages past those are unrecorded (the compaction pointer, the
+        # step-limit prompt) and stay last: the reminder goes where the log
+        # puts it, right after the recorded messages.
+        state = simulated_state(view)
+        n = len(state.messages)
+        if len(request.messages) < n or not reminder_due(state.messages):
             return request
         message = user(todo_reminder_text(view.ext_state(self.name) or []), origin="system")
         view.record(self.name, "reminder", message=message)
-        messages = [*request.messages, message]
+        messages = [*request.messages[:n], message, *request.messages[n:]]
         # The same breakpoints the next request (built from the log) gets.
-        points = [len(messages) - 1]
-        for i in range(len(messages) - 2, -1, -1):
-            if messages[i].role == "user":
-                points.insert(0, i)
-                break
-        return msgspec.structs.replace(request, messages=messages, cache_after=points)
+        return msgspec.structs.replace(request, messages=messages,
+                                       cache_after=_breakpoints(simulated_state(view)))

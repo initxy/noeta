@@ -76,16 +76,26 @@ def default_agents(
             "system_prompt",
             with_memory_policy(MAIN_PROMPT) if memory else MAIN_PROMPT),
         extensions=(
-            compaction, perms, shells, FileTools(), *knowledge, Environment(),
+            compaction, perms, shells, FileTools(), *knowledge, Environment(model=model),
             Subtasks(OFFICIAL_ROSTER, inherit_config=INHERITED_CONFIG),
             Todo(), AskUser(), web, *tail,
         ),
         **main_kw,
     )
-    # Sub-agents get the shell, web, MCP and compaction; read-only ones the
-    # same minus nothing that writes (their file tools are already read-only).
-    shared = (compaction, perms, shells, web, *tail)
-    return [main, *official_subagents(model, extensions=shared)]
+    # 0.6's sub-agent plugin sets: general-purpose has skills and MCP,
+    # explore skills (no MCP), plan AskUserQuestion (no skills, no MCP); all
+    # three the background shells, web, project instructions and the
+    # environment block. ``extensions`` (host extras) go to all three.
+    head = (compaction, perms, shells)
+    return [main, *official_subagents(
+        model,
+        extensions=(*head, web, *([mcp] if mcp else []), *extensions),
+        read_only_extensions=(*head, web, *extensions),
+        plan_extensions=(*head, AskUser(), web, *extensions),
+        context=(skills, Instructions()),
+        read_only_context=(skills, Instructions()),
+        plan_context=(Instructions(),),
+    )]
 
 
 def main_agent(model: str, **kw: Any) -> Agent:

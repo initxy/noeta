@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 import msgspec
 
-from noeta.events import Compacted, Recorded
+from noeta.events import Recorded
 from noeta.execenv.base import ExecEnv
 from noeta.ext._support import new_user_messages, resident_budget, task_env
 from noeta.ext.base import Ask, Command, Deny, Extension, Gate, TaskView
@@ -33,7 +33,7 @@ from noeta.ext.skills.script import (
     is_skill_script_resource,
 )
 from noeta.tools.base import Tool, ToolContext, ToolOutput, text_output
-from noeta.types import ToolUse, user
+from noeta.types import Message, ToolUse, user
 
 __all__ = [
     "CONTROL_TOOLS",
@@ -159,8 +159,8 @@ class Skills(Extension):
     * ``tool_enforcement`` — ``allowed-tools`` of active skills: ``off``,
       ``approval`` (ask) or ``deny`` (0.6 ``skill_tool_enforcement``).
     * ``control_tools`` — tool names ``skill`` may not share a response with.
-    * ``rehang`` — re-record the listing and active skills after a
-      compaction (ADR-036 re-hang).
+    * ``rehang`` — put the listing and active skills right after a
+      compaction's summary (``resident``; ADR-036 re-hang).
     * ``origin`` — origin of recorded listing / skill text (``"system"``).
     """
 
@@ -296,10 +296,6 @@ class Skills(Extension):
                 self._record_activation(view, _activation_data(desc, "preload"))
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
-        if isinstance(recorded.event, Compacted):
-            if self.rehang:
-                await self._rehang(view)
-            return
         messages = new_user_messages(view.state, recorded.seq)
         if not messages:
             return
@@ -396,21 +392,25 @@ class Skills(Extension):
         view.record(self.name, "activated", data,
                     message=user(data["text"], origin=self.origin))
 
-    async def _rehang(self, view: TaskView) -> None:
+    async def resident(self, view: TaskView) -> Sequence[Message]:
+        """After a compaction: the whole listing so far, then every active
+        skill's body."""
+        if not self.rehang:
+            return ()
         state = view.ext_state(self.name) or {}
+        out: list[Message] = []
         lines = [line for listing in state.get("listings", []) for line in listing["lines"]]
         if lines:
-            view.record(self.name, "rehang", {"what": "listing"},
-                        message=user(render_listing(True, lines), origin=self.origin))
+            out.append(user(render_listing(True, lines), origin=self.origin))
         active = state.get("active") or {}
         if not active:
-            return
+            return out
         registry = await self.registry(task_env(view.env, view.state.config))
         for name in active:
             desc = registry.get(name)
             if desc is not None:
-                view.record(self.name, "rehang", {"what": "skill", "name": name},
-                            message=user(render_activation(desc), origin=self.origin))
+                out.append(user(render_activation(desc), origin=self.origin))
+        return out
 
 
 def _script_gate(call: ToolUse, active: Mapping[str, Any]) -> Gate:

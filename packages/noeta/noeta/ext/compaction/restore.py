@@ -86,7 +86,8 @@ async def restore_files(
 ) -> tuple[list[Message], list[tuple[str, str, Any]]]:
     """The restore turns for ``paths`` (host-injected user messages), and
     what the reads of the restored files recorded (so ``Edit`` treats them
-    as read). A read that fails, or returns an image, is skipped."""
+    as read; not for a file too large to include). A read that fails, or
+    returns an image, is skipped."""
     budget = POST_COMPACT_TOKEN_BUDGET
     if tail_budget > 0:
         budget = min(budget, tail_budget)
@@ -105,7 +106,10 @@ async def restore_files(
                 isinstance(b, Image) for b in result.content):
             continue
         output = "".join(getattr(b, "text", "") for b in result.content)
-        if _estimate(output) > POST_COMPACT_MAX_TOKENS_PER_FILE:
+        too_large = _estimate(output) > POST_COMPACT_MAX_TOKENS_PER_FILE
+        if too_large:
+            # The model never sees these contents, so the read is not
+            # recorded: Edit / Write must Read the file again first.
             pair = [
                 f"Note: {path} was read before the last conversation was "
                 f"summarized, but the contents are too large to include. "
@@ -122,5 +126,6 @@ async def restore_files(
             continue
         used += size
         texts.extend(pair)
-        records.extend(recorded)
+        if not too_large:
+            records.extend(recorded)
     return [user(t, origin="system") for t in texts], records
