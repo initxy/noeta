@@ -30,9 +30,12 @@ if TYPE_CHECKING:
 log = logging.getLogger("noeta.runner")
 
 
-async def gate(run: TaskRun, view: TaskView, call: ToolUse) -> Gate:
+async def gate(run: TaskRun, view: TaskView, call: ToolUse, *, routing: bool = False) -> Gate:
     """A recorded answer decides; otherwise every extension is asked: any
-    deny wins, then the first ask, then the first rewrite."""
+    deny wins, then the first ask, then the first rewrite. ``routing`` (the
+    first look at a call) puts a rewrite before an ask: the call is really
+    another call, which ``run_calls`` then gates again, so every guard sees
+    the call that will run."""
     answer = run.state.answers.get(call.id)
     if answer is not None and answer.decision is not None:
         return Allow() if answer.decision == "allow" else Deny(reason=texts.DENIED_BY_HUMAN)
@@ -44,7 +47,7 @@ async def gate(run: TaskRun, view: TaskView, call: ToolUse) -> Gate:
             v = Deny(reason=f"permission check failed: {exc}")
         if v is not None:
             verdicts.append(v)
-    for kind in (Deny, Ask, Rewrite):
+    for kind in (Deny, Rewrite, Ask) if routing else (Deny, Ask, Rewrite):
         for v in verdicts:
             if isinstance(v, kind):
                 return v
@@ -72,10 +75,13 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     asks: dict[str, Ask] = {}
     for c in [c for c in run.state.calls if c.use.id in call_ids]:
         use = c.use
-        verdict = await gate(run, view, use)
+        verdict = await gate(run, view, use, routing=True)
         if isinstance(verdict, Rewrite):
             use = ToolUse(id=use.id, name=verdict.name or use.name, input=verdict.input)
-            verdict = Allow()
+            verdict = await gate(run, view, use)
+            if isinstance(verdict, Rewrite):
+                use = ToolUse(id=use.id, name=verdict.name or use.name, input=verdict.input)
+                verdict = Allow()
         if isinstance(verdict, Deny):
             await run.append([run.error_result(use.id, verdict.reason or "denied")])
             continue

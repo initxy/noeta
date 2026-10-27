@@ -1,0 +1,1 @@
+Find tools that are available but not in your tool list. Some MCP servers keep their tools out of the list to save space; they are still available through McpCall. Pass words describing what you need, or a tool's exact name, as `query` to get up to 5 matching tools with their full input schema. An empty `query` lists every such tool by name with a one-line description.

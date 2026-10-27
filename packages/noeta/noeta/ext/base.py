@@ -137,8 +137,9 @@ class Extension:
         return request
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
-        """``None`` = no opinion. Every extension is asked; any ``Deny`` wins,
-        then the first ``Ask``, then the first ``Rewrite``."""
+        """``None`` = no opinion. Every extension is asked; any ``Deny`` wins.
+        A ``Rewrite`` comes next (the rewritten call is then checked again, so
+        an approval is asked about the real call), then the first ``Ask``."""
         return None
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
