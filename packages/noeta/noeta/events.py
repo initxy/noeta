@@ -7,12 +7,11 @@ Extensions never add event types: they record ``ExtensionRecorded``.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Union
 
 import msgspec
 
 from noeta.types import Message, ModelResponse, Struct, ToolResult, ToolUse, Usage
-
 
 # --------------------------------------------------------------------------
 # Inbox
@@ -28,7 +27,11 @@ class Say(Struct, tag="message", tag_field="kind"):
 
 
 class Cancel(Struct, tag="cancel", tag_field="kind"):
+    """End the task, or with ``turn_only`` just stop the current turn (the
+    task then waits for the next message)."""
+
     reason: str = ""
+    turn_only: bool = False
 
 
 class Answer(Struct, tag="answer", tag_field="kind"):
@@ -36,7 +39,7 @@ class Answer(Struct, tag="answer", tag_field="kind"):
     ``deny``, optionally ``always``) or a question (``data``)."""
 
     request_id: str
-    decision: Optional[Literal["allow", "deny"]] = None
+    decision: Literal["allow", "deny"] | None = None
     always: bool = False
     data: Any = None
 
@@ -74,8 +77,8 @@ class InboxItem(Struct):
 class TaskCreated(Struct, tag="TaskCreated", tag_field="type"):
     agent: str
     config: dict[str, Any] = msgspec.field(default_factory=dict)
-    parent_id: Optional[str] = None
-    root_id: Optional[str] = None
+    parent_id: str | None = None
+    root_id: str | None = None
 
 
 class InputTaken(Struct, tag="InputTaken", tag_field="type"):
@@ -123,7 +126,7 @@ class Waiting(Struct, tag="Waiting", tag_field="type"):
     on: WaitOn
     #: approval / question: request ids; children: child task ids.
     ids: list[str] = msgspec.field(default_factory=list)
-    until: Optional[float] = None
+    until: float | None = None
     detail: dict[str, Any] = msgspec.field(default_factory=dict)
 
 
@@ -134,9 +137,14 @@ class TaskEnded(Struct, tag="TaskEnded", tag_field="type"):
 
 
 class ExtensionRecorded(Struct, tag="ExtensionRecorded", tag_field="type"):
+    """An extension's own durable entry, folded by that extension. With
+    ``message`` the core also appends the message to the conversation (a
+    reminder, a notice, a recalled memory)."""
+
     extension: str
     kind: str
     data: Any = None
+    message: Message | None = None
 
 
 Event = Union[

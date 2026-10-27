@@ -3,8 +3,6 @@ onto ``ModelError`` subclasses so the runner's retry rule is provider-neutral.""
 
 from __future__ import annotations
 
-from typing import Optional
-
 
 class NoetaError(Exception):
     pass
@@ -20,7 +18,7 @@ class UnknownTask(NoetaError):
 
 
 class ModelError(NoetaError):
-    def __init__(self, message: str, *, status: Optional[int] = None, body: str = "") -> None:
+    def __init__(self, message: str, *, status: int | None = None, body: str = "") -> None:
         super().__init__(message)
         self.status = status
         self.body = body
@@ -31,7 +29,7 @@ class Transient(ModelError):
 
 
 class RateLimited(Transient):
-    def __init__(self, message: str, *, retry_after: Optional[float] = None, **kw: object) -> None:
+    def __init__(self, message: str, *, retry_after: float | None = None, **kw: object) -> None:
         super().__init__(message, **kw)  # type: ignore[arg-type]
         self.retry_after = retry_after
 

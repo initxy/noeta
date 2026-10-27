@@ -1,0 +1,88 @@
+"""What the runner does next, decided from the folded state alone."""
+
+from __future__ import annotations
+
+from typing import Union
+
+from noeta.loop.state import Call, TaskState
+from noeta.types import Struct
+
+
+class CallModel(Struct, tag="call_model"):
+    pass
+
+
+class Continue(Struct, tag="continue"):
+    """The reply hit the output cap without a tool call: ask for the rest."""
+
+
+class RunCalls(Struct, tag="run_calls"):
+    call_ids: list[str]
+
+
+class Interrupted(Struct, tag="interrupted"):
+    """Calls that started but never finished (a crash or lost claim): they
+    get an "outcome unknown" result and are never run again."""
+
+    call_ids: list[str]
+
+
+class CutOffCalls(Struct, tag="cut_off"):
+    """The reply was cut off at the output cap while writing tool calls: the
+    calls are answered with an error instead of run on possibly partial
+    input."""
+
+    call_ids: list[str]
+
+
+class StopTurn(Struct, tag="stop_turn"):
+    """Someone stopped the turn: open calls get a "stopped" result and the
+    task waits for the next message."""
+
+    call_ids: list[str]
+
+
+class WaitInput(Struct, tag="wait_input"):
+    pass
+
+
+class End(Struct, tag="end"):
+    status: str
+    answer: str = ""
+    error: str = ""
+
+
+class Idle(Struct, tag="idle"):
+    """Nothing to do: the task already ended."""
+
+
+Action = Union[
+    CallModel, Continue, RunCalls, Interrupted, CutOffCalls, StopTurn, WaitInput, End, Idle
+]
+
+
+def next_action(state: TaskState, *, one_shot: bool, max_steps: int) -> Action:
+    if state.ended is not None:
+        return Idle()
+    if state.cancel_requested is not None:
+        return End(status="cancelled", error=state.cancel_requested)
+    if state.stop_turn_requested is not None:
+        return StopTurn(call_ids=[c.use.id for c in state.open_calls])
+    if state.calls:
+        open_calls: list[Call] = state.open_calls
+        if state.last_stop == "max_tokens":
+            return CutOffCalls(call_ids=[c.use.id for c in open_calls])
+        started = [c.use.id for c in open_calls if c.started]
+        if started:
+            return Interrupted(call_ids=started)
+        return RunCalls(call_ids=[c.use.id for c in open_calls])
+    if state.turn_open:
+        if state.steps_in_turn >= max_steps:
+            return End(status="failed", error=f"turn exceeded {max_steps} model calls")
+        last = state.messages[-1] if state.messages else None
+        if state.last_stop == "max_tokens" and last is not None and last.role == "assistant":
+            return Continue()
+        return CallModel()
+    if one_shot and state.messages:
+        return End(status="done", answer=state.last_answer)
+    return WaitInput()

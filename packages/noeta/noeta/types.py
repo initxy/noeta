@@ -7,14 +7,21 @@ store as JSON without a hand-written codec. Tagged unions carry their tag in a
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 import msgspec
 
+if TYPE_CHECKING:
+    # mypy's dataclass_transform would make every subclass repeat
+    # ``frozen=True``; freezing is enforced at runtime below.
+    class Struct(msgspec.Struct, kw_only=True, omit_defaults=True):
+        pass
+else:
 
-class Struct(msgspec.Struct, frozen=True, kw_only=True, omit_defaults=True):
-    """Base for every recorded value: frozen, keyword-only, defaults omitted on
-    the wire so adding an optional field never changes old records' bytes."""
+    class Struct(msgspec.Struct, frozen=True, kw_only=True, omit_defaults=True):
+        """Base for every recorded value: frozen, keyword-only, defaults omitted
+        on the wire so adding an optional field never changes old records'
+        bytes."""
 
 
 # --------------------------------------------------------------------------
@@ -32,9 +39,9 @@ class Thinking(Struct, tag="thinking", tag_field="type"):
     provider ``family`` that issued them."""
 
     text: str = ""
-    signature: Optional[str] = None
-    data: Optional[str] = None
-    family: Optional[str] = None
+    signature: str | None = None
+    data: str | None = None
+    family: str | None = None
 
 
 class Image(Struct, tag="image", tag_field="type"):
@@ -50,7 +57,7 @@ class ToolUse(Struct, tag="tool_use", tag_field="type"):
 
 class ToolResult(Struct, tag="tool_result", tag_field="type"):
     call_id: str
-    content: list[Union[Text, Image]]
+    content: list[Text | Image]
     is_error: bool = False
 
     @property
@@ -69,7 +76,7 @@ Origin = Literal["human", "system", "memory"]
 class Message(Struct):
     role: Literal["user", "assistant"]
     content: list[Block]
-    origin: Optional[Origin] = None
+    origin: Origin | None = None
 
     @property
     def text(self) -> str:
@@ -80,7 +87,7 @@ class Message(Struct):
         return [b for b in self.content if isinstance(b, ToolUse)]
 
 
-def user(text: str, origin: Optional[Origin] = None) -> Message:
+def user(text: str, origin: Origin | None = None) -> Message:
     return Message(role="user", content=[Text(text=text)], origin=origin)
 
 
@@ -111,10 +118,10 @@ class ModelRequest(Struct):
     system: list[SystemPart] = msgspec.field(default_factory=list)
     messages: list[Message] = msgspec.field(default_factory=list)
     tools: list[ToolSpec] = msgspec.field(default_factory=list)
-    max_tokens: Optional[int] = None
-    effort: Optional[Effort] = None
+    max_tokens: int | None = None
+    effort: Effort | None = None
     thinking: bool = True
-    output_schema: Optional[dict[str, Any]] = None
+    output_schema: dict[str, Any] | None = None
     #: Indices into ``messages`` after which the adapter places a cache
     #: breakpoint (the composer decides; adapters that cannot cache ignore it).
     cache_after: list[int] = msgspec.field(default_factory=list)

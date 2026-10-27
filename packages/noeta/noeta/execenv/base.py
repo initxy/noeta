@@ -3,7 +3,8 @@ machine; a container backend implements the same interface."""
 
 from __future__ import annotations
 
-from typing import Mapping, Optional, Protocol, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Protocol
 
 from noeta.types import Struct
 
@@ -30,10 +31,10 @@ class ExecEnv(Protocol):
         self,
         argv: Sequence[str],
         *,
-        cwd: Optional[str] = None,
-        env: Optional[Mapping[str, str]] = None,
-        stdin: Optional[bytes] = None,
-        timeout: Optional[float] = None,
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+        stdin: bytes | None = None,
+        timeout: float | None = None,
     ) -> RunResult:
         """Run a program and wait. On timeout or cancellation the whole process
         group is killed."""
@@ -45,6 +46,6 @@ class ExecEnv(Protocol):
         """Write atomically, creating parent directories."""
         ...
 
-    async def stat(self, path: str) -> Optional[FileStat]:
+    async def stat(self, path: str) -> FileStat | None:
         """``None`` when the path does not exist."""
         ...

@@ -44,9 +44,25 @@ files = ["noeta"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-ra -m 'not live'"
+addopts = "-ra -m 'not live' --import-mode=importlib"
 markers = ["live: needs a real model backend; opt in with -m live"]
 
 [tool.coverage.run]
 source = ["noeta"]
 branch = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "RUF", "BLE"]
+# RUF012: msgspec Struct defaults are copied per instance.
+# UP007: module-level union aliases read better as Union[...] when long.
+ignore = ["RUF012", "UP007"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["noeta.store.base.Patch", "Patch"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B008"]
