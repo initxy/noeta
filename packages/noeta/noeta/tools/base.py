@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Optional, Protocol, Union
+from typing import Any, Protocol
 
 import msgspec
 
@@ -11,13 +12,13 @@ from noeta.execenv.base import ExecEnv
 from noeta.types import Display, Image, Struct, Text
 
 
-class ToolOutput(Struct):
-    content: list[Union[Text, Image]]
+class ToolOutput(Struct, frozen=True):
+    content: list[Text | Image]
     is_error: bool = False
     #: Recorded with the result for front ends and extensions; never sent to
     #: the model.
     meta: dict[str, Any] = msgspec.field(default_factory=dict)
-    display: Optional[Display] = None
+    display: Display | None = None
 
 
 def text_output(text: str, *, is_error: bool = False, **meta: Any) -> ToolOutput:
@@ -35,7 +36,7 @@ class ToolContext:
     #: ``ExtensionRecorded`` just before the call's ``ToolFinished``.
     record: Callable[[str, str, Any], None]
     #: Directory for full outputs too large to return inline, or ``None``.
-    spill_dir: Optional[str] = None
+    spill_dir: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
 
