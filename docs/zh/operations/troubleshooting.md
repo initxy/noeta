@@ -78,11 +78,11 @@
 - **原因：** 正在跑的那一步超过了 `shutdown_grace_s`（`WorkerLoop` 默认 30 秒，`Client.start_workers` 默认 10 秒）。
 - **解决：** 直接退出进程。Python 停不掉被放弃的线程，在同一进程里继续用这个 loop 是不支持的。进程退出后租约会过期，下次启动时 `requeue_stale()` 会把 Task 捡回来。想避免这种情况就调大 `shutdown_grace_s`，或设为 `None` 无限等待（那样卡死的一步只能 `kill -KILL <pid>`）。
 
-### 跑得很久的一步报 `InvalidLease`
+### 跑得很久的一步被封存后重跑
 
-- **现象：** 一个跑了很久的步骤在下次写事件日志时失败，worker 发出了 `heartbeat_invalid_lease`。
-- **原因：** 心跳续租次数有上限，就是 dispatcher 的 `heartbeat_max`（360），所以一步最多持有租约 `heartbeat_interval × heartbeat_max` 这么久。
-- **解决：** 把它当成需要人去看的信号，不要指望它自动恢复。如果这一步确实就要跑这么久，调大 `heartbeat_interval` 或 `heartbeat_max`；否则去查是什么卡住了。
+- **现象：** 一个跑了几个小时的步骤以 `StepAttemptAbandoned` 结束，worker 发出了 `attempt_heartbeat_cap`。
+- **原因：** 一次尝试最多续租 `HostConfig.attempt_heartbeat_max` 次（360）。超过后租约被交回，这次尝试按崩溃的方式恢复。
+- **解决：** 如果单个工具调用确实就要跑这么久，改成后台命令，或者调大（或设为 `None`）`attempt_heartbeat_max`；否则去查是什么卡住了。只看到 `heartbeat_invalid_lease` 说明租约在这一步运行时被收回了——可能是取消，也可能是心跳在 `lease_seconds` 内一直连不上存储、被回收。
 
 ## 下一步
 

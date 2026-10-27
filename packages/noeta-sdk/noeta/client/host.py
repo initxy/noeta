@@ -69,6 +69,7 @@ from noeta.runtime.injection import InjectionInbox
 from noeta.runtime.file_checkpoint import FileCheckpointRegistry
 from noeta.runtime.task_local import TaskLocalRegistry, TaskSlot
 from noeta.runtime.tool import ToolRuntime
+from noeta.runtime.worker import DEFAULT_ATTEMPT_HEARTBEAT_MAX
 from noeta.client.parts import (
     browser_tool_names,
     catalog_price,
@@ -626,6 +627,9 @@ class SdkHost(GenericEngineResolver):
     #: Forwarded to ``RuntimeLLMClient(max_retries=...)`` when set; ``None``
     #: keeps the runtime's default. See ``HostConfig.llm_max_retries``.
     llm_max_retries: Optional[int] = None
+    #: Heartbeats one step attempt may take before its lease is handed back
+    #: for recovery. See ``HostConfig.attempt_heartbeat_max``.
+    attempt_heartbeat_max: Optional[int] = DEFAULT_ATTEMPT_HEARTBEAT_MAX
     #: Project-instructions-file switch. Like memory, this is workspace environment
     #: material (not agent identity), so the activation tuple carries no flag and
     #: SdkHost configures it directly. When True, looks for NOETA.md → AGENTS.md in

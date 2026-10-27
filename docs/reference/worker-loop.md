@@ -66,7 +66,7 @@ Module-level helpers:
 | --- | --- |
 | `install_stop_signals(loop) -> restore` | wire SIGTERM/SIGINT to `loop.stop()`; off the main thread warns and returns a no-op |
 | `run_leased_task(rt, lease, *, prelude=None, next_goal_handle=None, reliability_sink=None, engine=None) -> WorkerOutcome` | advance one leased task one step, including crash recovery; shared with the in-process runner |
-| `keep_lease_alive(dispatcher, lease, *, interval=30.0, lease_seconds=600.0, reliability_sink=None)` | heartbeat context manager for a step driven without a loop |
+| `keep_lease_alive(dispatcher, lease, *, interval=30.0, lease_seconds=600.0, reliability_sink=None, event_log=None, attempt_heartbeat_max=360)` | heartbeat context manager for a step driven without a loop |
 | `resolve_engine(rt, task) -> Engine` | the per-task engine lookup |
 | `reconcile_cap_terminal(rt, task_id) -> bool` | write the missing terminal event for one capped task (idempotent) |
 | `recover_cap_terminal(rt) -> list[str]` | the same over every task |
@@ -97,7 +97,7 @@ Provider errors never reach this: they become error `LLMResponse`s the policy ha
 | `"cancelled"` | a human cancel landed; task is terminal |
 | `"stopped"` | a human stop landed, or crash recovery parked it; task is reopenable |
 
-`ReliabilityEvent(kind, task_id=None, lease_id=None, detail={})` — process-local, not event-log events. Kinds: `stale_requeued`, `suspended_without_wake`, `step_failed_retryable`, `heartbeat_invalid_lease`, `shutdown_abandoned`, `timers_fired`, `attempt_abandoned` (interrupted attempt sealed and re-driven), `attempt_parked` (sealed and parked for a human), `cap_terminal_reconciled`, `dispatcher_unavailable`.
+`ReliabilityEvent(kind, task_id=None, lease_id=None, detail={})` — process-local, not event-log events. Kinds: `stale_requeued`, `suspended_without_wake`, `step_failed_retryable`, `heartbeat_invalid_lease`, `shutdown_abandoned`, `timers_fired`, `attempt_abandoned` (interrupted attempt sealed and re-driven), `attempt_parked` (sealed and parked for a human), `cap_terminal_reconciled`, `dispatcher_unavailable`, `heartbeat_failed` (a heartbeat hit a storage error and is retried), `attempt_heartbeat_cap` (an attempt reached its heartbeat cap and was handed back for recovery).
 
 `WakeRecoveryError` — a wake can't be matched to folded state; the worker fails loudly. A crash mid-step is not an error: the next lease seals the attempt with `StepAttemptAbandoned` and re-drives it if side-effect-free, otherwise parks it.
 
@@ -105,7 +105,7 @@ Provider errors never reach this: they become error `LLMResponse`s the policy ha
 
 `stop()` stops leasing and waits up to `shutdown_grace_s` for the in-flight step. On timeout the loop stops the heartbeat, emits `shutdown_abandoned`, sets `abandoned` and returns without releasing the lease; the process must exit, and `requeue_stale` reclaims the task on the next start.
 
-A heartbeat can't hold a lease forever: the dispatcher caps renewals at `heartbeat_max`, after which the step's next write fails with `InvalidLease`.
+A heartbeat can't hold one step attempt forever: past `attempt_heartbeat_max` renewals (read from the runtime, `HostConfig.attempt_heartbeat_max`) with no new model call, the lease goes back to the ready queue and the attempt is recovered like a crashed one. A storage error on a heartbeat is retried with backoff; `InvalidLease` stops the step on that lease at its next boundary.
 
 ## Next
 

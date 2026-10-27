@@ -187,7 +187,7 @@ HTTP 请求线程不能一直等一整轮跑完。`seed_*` 在请求线程上把
 | 方法 | 签名 | 说明 |
 | --- | --- | --- |
 | `interrupt` | `(task_id, *, reason=None, interrupted_by="user", force=False)` | 在下一个边界停掉正在跑的这一轮，任务回到等下一句，`send_goal` 可以直接接着聊。线程安全。`force=True` 用来清掉卡死的一步，先调一次普通 `interrupt` |
-| `cancel` | `(task_id, *, reason="cancelled", cascade=False)` | 结束对话（终态），顺带杀掉它的后台 shell |
+| `cancel` | `(task_id, *, reason="cancelled", cascade=False)` | 结束对话（终态，不可恢复），顺带杀掉它的后台 shell。如果同一存储上的另一个 `Client` 正在跑这一轮，它会在下一次模型调用或工具调用前停下 |
 | `close` | `(task_id, *, closed_by="user", reason=None)` | 标记归档；状态仍是 `suspended`，再 `send_goal` 会自动重新打开 |
 | `reopen` | `(task_id, *, reopened_by="user", reason=None)` | 去掉归档标记 |
 | `rewind` | `(task_id, *, message_seq)` | 撤销 `message_seq` 那条用户消息及之后的一切，改过的文件会恢复；日志本身只追加不删 |
