@@ -67,3 +67,4 @@ The kernel stays neutral to material while keeping composed bytes re-derivable f
 ## Refined by
 
 - [ADR-054](054-memory-index-frozen-per-task.md) — The memory index is frozen per task
+- [ADR-067](067-unsaved-oversize-output-keeps-head-and-tail.md) — An unsaved over-size tool result keeps its head and its tail

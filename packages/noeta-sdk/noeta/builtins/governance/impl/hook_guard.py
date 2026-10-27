@@ -3,10 +3,10 @@
 A verdict is a pure function of ``(rules, ProposedToolCall, GuardContext)``
 with no I/O, clock, or shell, so a guard rebuilt from the same rules
 re-derives the same guard-origin events across hosts. Priority 100 sits behind
-``BudgetGuard`` (10) and ``PermissionGuard`` (20) and ``HookManager.check``
-stops at the first non-allow, so a user rule can only *tighten* a call the
-built-ins already allowed — it can neither loosen a built-in denial nor
-rewrite a built-in approval.
+``BudgetGuard`` (10) and ``PermissionGuard`` (20); ``HookManager.check`` lets
+any deny win, so a user rule can only *tighten*: it can neither loosen a
+built-in denial nor rewrite a built-in approval, but its deny still applies
+to a call a built-in only gated behind approval.
 """
 
 from __future__ import annotations
@@ -24,6 +24,11 @@ from noeta.runtime.governance import MATCH_STRING_CAP, MatchArg, PreToolUseRule
 
 
 __all__ = ["HookGuard"]
+
+
+#: Tools that run a shell ``command`` the way ``Bash`` does; a rule written
+#: for ``Bash`` also matches them, so the same command cannot slip past it.
+_RUNS_BASH_COMMAND = frozenset({"Monitor"})
 
 
 def _resolve_path(args: dict[str, Any], path: tuple[str, ...]) -> tuple[bool, Any]:
@@ -65,8 +70,11 @@ class HookGuard:
         if not isinstance(action, ProposedToolCall):
             return VerdictResult.allow()
         call = action.call
+        names: tuple[str, ...] = (call.tool_name,)
+        if call.tool_name in _RUNS_BASH_COMMAND:
+            names = (call.tool_name, "Bash")
         for rule in self._rules:
-            if not fnmatchcase(call.tool_name, rule.match_tool):
+            if not any(fnmatchcase(n, rule.match_tool) for n in names):
                 continue
             if rule.match_arg is not None and not _arg_matches(
                 rule.match_arg, dict(call.arguments)

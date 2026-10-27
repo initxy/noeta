@@ -41,7 +41,7 @@ from noeta.protocols.wake import (
     SubtaskCompleted,
     SubtaskGroupCompleted,
 )
-from noeta.runtime.worker import keep_lease_alive
+from noeta.runtime.worker import DEFAULT_ATTEMPT_HEARTBEAT_MAX, keep_lease_alive
 
 
 __all__ = [
@@ -240,6 +240,9 @@ class DrainHost:
     #: conversation's next resumed turn. Bound by the resolver to the root id;
     #: ``None`` (no registry) ⇒ nothing to drop.
     discard_cancellation: Optional[Callable[[], None]] = None
+    #: Heartbeats one step attempt may take before its lease is handed back
+    #: for recovery (see :func:`noeta.runtime.worker.keep_lease_alive`).
+    attempt_heartbeat_max: Optional[int] = DEFAULT_ATTEMPT_HEARTBEAT_MAX
 
 
 # ---------------------------------------------------------------------------
@@ -981,7 +984,10 @@ def _descend_to_child(host: DrainHost, expected_child_id: str) -> tuple[Any, Any
         # Keep the child's lease alive while its step runs — no resident
         # WorkerLoop heartbeats this in-request drain, so a child step longer
         # than the lease TTL would otherwise lose its lease mid-flight.
-        with keep_lease_alive(host.dispatcher, child_lease):
+        with keep_lease_alive(
+            host.dispatcher, child_lease, event_log=host.event_log,
+            attempt_heartbeat_max=host.attempt_heartbeat_max,
+        ):
             child_task = child_engine.run_one_step(
                 child_task, lease_id=child_lease.lease_id,
                 cancelled=host.cancel_check,
@@ -1074,7 +1080,10 @@ def _resume_parent_leased(
         # calls the LLM to continue the turn; with no resident WorkerLoop to
         # heartbeat it, a slow round-trip here is exactly what burned the whole
         # lease window and stranded the task non-terminal.
-        with keep_lease_alive(host.dispatcher, parent_lease):
+        with keep_lease_alive(
+            host.dispatcher, parent_lease, event_log=host.event_log,
+            attempt_heartbeat_max=host.attempt_heartbeat_max,
+        ):
             parent = engine.run_one_step(
                 parent, lease_id=parent_lease.lease_id,
                 cancelled=host.cancel_check,

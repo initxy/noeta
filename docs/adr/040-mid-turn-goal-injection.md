@@ -140,3 +140,7 @@ re-drive delivers each injection exactly once.
   (`_SUMMARY_FIELDS_BY_EVENT` / `_TYPE_ONLY_EVENTS`); `InjectionRequested` is on
   the value allowlist (`injection_id`, `count`, `messages_ref` — the body stays
   behind the ref).
+
+## Refined by
+
+- [ADR-070](070-caller-idempotency-key-on-goals.md) — A caller idempotency key on send_goal and inject_goal

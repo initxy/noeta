@@ -44,6 +44,19 @@ def test_deny_and_require_approval_first_match() -> None:
     assert _verdict(rules, "shell_run", {}) is Verdict.DENY
 
 
+def test_bash_rule_also_covers_monitor_command() -> None:
+    rules = (
+        PreToolUseRule(
+            match_tool="Bash",
+            action="deny",
+            match_arg=MatchArg(path=("command",), op="contains", value="rm -rf"),
+        ),
+    )
+    assert _verdict(rules, "Monitor", {"command": "rm -rf /"}) is Verdict.DENY
+    assert _verdict(rules, "Monitor", {"command": "tail -f log"}) is Verdict.ALLOW
+    assert _verdict(rules, "Read", {"command": "rm -rf /"}) is Verdict.ALLOW
+
+
 def test_glob_match() -> None:
     rules = (PreToolUseRule(match_tool="mcp__*", action="require_approval"),)
     assert _verdict(rules, "mcp__git__commit", {}) is Verdict.REQUIRE_APPROVAL
@@ -113,7 +126,7 @@ def test_non_tool_action_allows() -> None:
     assert g.check(ProposedFinish(answer="x"), GuardContext(task_id="t")).verdict is Verdict.ALLOW
 
 
-# -- precedence: a built-in non-allow always wins over a user hook ----------
+# -- precedence: a deny always wins; a user hook cannot loosen a built-in ----------
 
 
 class _StubGuard:
@@ -146,19 +159,20 @@ def test_builtin_deny_beats_user_allow() -> None:
     assert v is Verdict.DENY
 
 
-def test_builtin_require_approval_beats_user_allow_and_deny() -> None:
+def test_builtin_require_approval_beats_user_allow_but_not_user_deny() -> None:
     # user 'allow' cannot turn a built-in require_approval into allow...
     v_allow = _manager_verdict(
         VerdictResult.require_approval("built-in approval"),
         (PreToolUseRule(match_tool="write", action="allow"),),
     )
     assert v_allow is Verdict.REQUIRE_APPROVAL
-    # ...nor can a user 'deny' rewrite it to deny (built-in runs first).
+    # ...but a user 'deny' still denies: approving the call must never
+    # execute what a deny rule forbids.
     v_deny = _manager_verdict(
         VerdictResult.require_approval("built-in approval"),
         (PreToolUseRule(match_tool="write", action="deny"),),
     )
-    assert v_deny is Verdict.REQUIRE_APPROVAL
+    assert v_deny is Verdict.DENY
 
 
 def test_hook_tightens_when_builtin_allows() -> None:

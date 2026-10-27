@@ -25,10 +25,10 @@ Rule of thumb: the wider the impact (spanning multiple modules), the more it bel
 **Engine & execution**:
 [engine-policy-dataflow](007-engine-policy-dataflow.md) ·
 [engine-per-turn](046-engine-per-turn.md) ·
-[worker-lease-model](029-worker-lease-model.md) ·
+[worker-lease-model](029-worker-lease-model.md) [+069](069-heartbeat-cap-per-attempt.md) ·
 [worker-queue-routing](041-worker-queue-routing.md) [+057](057-queue-recovery-reads-tails-for-waiting-parents.md) ·
-[step-attempt-recovery](032-step-attempt-recovery.md) ·
-[mid-turn-goal-injection](040-mid-turn-goal-injection.md) ·
+[step-attempt-recovery](032-step-attempt-recovery.md) [+065](065-crash-recovery-keeps-finished-tool-calls.md) [+071](071-kept-batch-answers-what-its-result-message-left-out.md) ·
+[mid-turn-goal-injection](040-mid-turn-goal-injection.md) [+070](070-caller-idempotency-key-on-goals.md) [+072](072-dead-idempotency-claim-is-claimed-again.md) ·
 [terminal-answer-on-a-parked-turn](045-terminal-answer-on-a-parked-turn.md) ·
 [interrupt-responsiveness](042-interrupt-responsiveness.md) [+058](058-sandbox-foreground-shell-interrupt.md) ·
 [multi-host-lease-fencing](034-multi-host-lease-fencing.md) [+056](056-lease-fencing-dropped-connections.md) ·
@@ -41,8 +41,8 @@ Rule of thumb: the wider the impact (spanning multiple modules), the more it bel
 [replay-verify-tolerance](017-replay-verify-tolerance.md)
 
 **Context & memory**:
-[unified-context-supply](028-unified-context-supply.md) [+054](054-memory-index-frozen-per-task.md) ·
-[context-compaction](003-context-compaction.md) [+049](049-compaction-summarize-without-tool-choice.md) [+050](050-compaction-count-based-second-valve.md) [+060](060-compaction-absolute-auto-compact-window.md) [+061](061-compaction-clear-point-on-its-own-number.md) [+063](063-compaction-arguments-stay-as-sent.md) [+064](064-compaction-restores-recent-files.md) ·
+[unified-context-supply](028-unified-context-supply.md) [+054](054-memory-index-frozen-per-task.md) [+067](067-unsaved-oversize-output-keeps-head-and-tail.md) ·
+[context-compaction](003-context-compaction.md) [+049](049-compaction-summarize-without-tool-choice.md) [+050](050-compaction-count-based-second-valve.md) [+060](060-compaction-absolute-auto-compact-window.md) [+061](061-compaction-clear-point-on-its-own-number.md) [+063](063-compaction-arguments-stay-as-sent.md) [+064](064-compaction-restores-recent-files.md) [+066](066-compaction-batched-clearing-and-claude-code-margin.md) ·
 [anchored-content-placement](036-anchored-content-placement.md) ·
 [memory-consolidation](035-memory-consolidation.md) ·
 [skill-resource-on-demand](020-skill-resource-on-demand.md) ·
@@ -57,7 +57,7 @@ Rule of thumb: the wider the impact (spanning multiple modules), the more it bel
 [agent-identity-and-provenance](001-agent-identity-and-provenance.md) ·
 [provider-adapters-and-multimodal](015-provider-adapters-and-multimodal.md) ·
 [model-catalog-extension](043-model-catalog-extension.md) ·
-[guard-observer-hooks](010-guard-observer-hooks.md) [+052](052-declarative-hooks-are-host-configuration.md) ·
+[guard-observer-hooks](010-guard-observer-hooks.md) [+052](052-declarative-hooks-are-host-configuration.md) [+068](068-guard-deny-wins-over-approval.md) ·
 [event-origin-marker](008-event-origin-marker.md) ·
 [mcp-connectors](012-mcp-connectors.md) [+053](053-mcp-deferred-schemas.md) ·
 [plugin-contribution-bundles](038-plugin-contribution-bundles.md)

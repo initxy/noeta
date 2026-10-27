@@ -6,6 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
+## [Unreleased]
+
+## [0.6.42] - 2026-10-27
+
+### Fixed
+
+- **A host deny rule always denies.** In `default` mode the permission Guard's
+  approval request used to shadow a `PreToolUse` deny rule, so approving the
+  call ran it. Every Guard is now evaluated; any deny wins (ADR-068).
+- **Cancel is final, across processes.** fold no longer lets `TaskSuspended` /
+  `TaskWoken` / `TaskStarted` move a terminal task, and `cancel` moves the
+  dispatcher row to terminal, revoking a lease another process holds so its
+  next write is refused before the tool runs.
+- **Crash recovery no longer re-runs finished tool calls.** A crash mid tool
+  batch keeps the batch: finished calls keep their results, a call cut short
+  gets an "outcome unknown — check before running it again" result, and calls
+  that never started run through the live guard chain (ADR-065, ADR-071). Previously a
+  `bypassPermissions` re-drive could re-run a finished `Bash` or `git push`.
+- **Compaction no longer re-sends what the view cleared.** The summarize input
+  carries the same cleared markers as the main loop's request, and an
+  overflowing summarize retries up to 3 times dropping the oldest fifth of
+  rounds (ADR-066).
+- **Old tool results are cleared in batches**, holding the view byte-identical
+  until 20,000 more clearable tokens accumulate, instead of one result per step;
+  only tools declaring `clearable` (Read, Glob, Grep, Bash, BashOutput, Edit,
+  Write, WebFetch, WebSearch) are cleared, so subagent reports, user answers and
+  MCP results stay (ADR-066).
+- **Compaction margin follows Claude Code:** window − min(max output, 20,000)
+  − 13,000, for the model window and `auto_compact_window` alike (ADR-066).
+- **An answer continued past the output cap keeps every piece**, and
+  `output_schema` parses the joined text.
+- **The heartbeat survives transient storage errors** and no longer caps a
+  healthy turn at ~3 h: the cap counts one step attempt
+  (`HostConfig.attempt_heartbeat_max`, default 360, `None` = off) and hitting it
+  goes through crash recovery (ADR-069).
+- **Disallowing `Bash` disables the shell**: Monitor, BashOutput and KillShell go
+  with it, and `PreToolUseRule(match_tool="Bash")` also matches Monitor's
+  `command`.
+- **Background shells and Monitors started by a subagent notify that subagent**
+  while it runs, then the root.
+- **`Task` mixed with ordinary tool calls in one response runs all of them**
+  instead of refusing the round.
+- **Provider quirks:** Anthropic's "input length and `max_tokens` exceed context
+  limit" and HTTP 413 count as context overflow (one shared detector);
+  OpenAI-compatible `null` / empty tool arguments decode as `{}`;
+  `finish_reason="stop"` with tool calls is a tool-use stop; `ThinkingBlock`
+  records its producing adapter and adapters drop another provider's thinking.
+- **An over-size tool result with no spill directory keeps its head and tail**
+  instead of its head only (ADR-067).
+
+### Added
+
+- `send_goal` / `inject_goal` take `idempotency_key`; a repeat appends nothing
+  and returns the first call's outcome, settled across processes through
+  `system_emit(idempotency_key=...)` and a new `IdempotencyKeyClaimed` event
+  (ADR-070). A claim whose goal never landed (crash, failed seed) is claimed
+  again by a retry, so the goal is written exactly once (ADR-072).
+
 ## [0.6.41] - 2026-10-18
 
 `noeta-sdk` only (`noeta-runtime` stays at 0.6.40).
@@ -3531,7 +3589,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.41...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.42...HEAD
+[0.6.42]: https://github.com/initxy/noeta/compare/v0.6.41...v0.6.42
 [0.6.41]: https://github.com/initxy/noeta/compare/v0.6.40...v0.6.41
 [0.6.40]: https://github.com/initxy/noeta/compare/v0.6.39...v0.6.40
 [0.6.39]: https://github.com/initxy/noeta/compare/v0.6.38...v0.6.39

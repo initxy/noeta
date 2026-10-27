@@ -50,6 +50,7 @@ from noeta.protocols.policy import Policy
 from noeta.protocols.wake import SubtaskCompleted, SubtaskGroupCompleted
 from noeta.runtime.cancellation import CancellationRegistry
 from noeta.runtime.injection import InjectionInbox
+from noeta.runtime.worker import DEFAULT_ATTEMPT_HEARTBEAT_MAX
 
 
 __all__ = [
@@ -390,6 +391,14 @@ class GenericEngineResolver:
         locals_ = getattr(self, "_task_locals", None)
         if locals_ is not None:
             locals_.forget(key)
+
+    def _attempt_heartbeat_max(self) -> Optional[int]:
+        """The host's per-attempt heartbeat cap; the runtime default when the
+        host does not carry one."""
+        cap: Optional[int] = getattr(
+            self, "attempt_heartbeat_max", DEFAULT_ATTEMPT_HEARTBEAT_MAX
+        )
+        return cap
 
     def request_cancellation(self, task_id: str) -> None:
         """cancel-cascade — mark ``task_id`` cancelled in the process-local
@@ -1206,6 +1215,7 @@ class GenericEngineResolver:
             child_provider=inherited_provider,
             cancel_check=cancel_check,
             discard_cancellation=lambda: self.discard_cancellation(root_id),
+            attempt_heartbeat_max=self._attempt_heartbeat_max(),
         )
         return host
 

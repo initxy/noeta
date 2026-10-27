@@ -18,6 +18,7 @@ from noeta.protocols.events import EventEnvelope, EventOrigin
 
 __all__ = [
     "SNAPSHOT_BASELINE_EVENT_TYPES",
+    "SYSTEM_IDEMPOTENCY_SCOPE",
     "EventLog",
     "EventLogFull",
     "EventLogReader",
@@ -127,6 +128,13 @@ class EventLogReader(Protocol):
         ...
 
 
+#: The ``lease_id`` slot keyed :meth:`EventLogWriter.system_emit` writes
+#: occupy in a backend's ``(lease_id, idempotency_key)`` dedup table. Never a
+#: real lease id (those are minted ``lease-<hex>``), so the two kinds of key
+#: cannot collide.
+SYSTEM_IDEMPOTENCY_SCOPE = "system"
+
+
 class EventLogWriter(Protocol):
     """Write side of a task's EventLog stream.
 
@@ -185,13 +193,22 @@ class EventLogWriter(Protocol):
         origin: EventOrigin,
         trace_id: Optional[str] = None,
         causation_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> EventEnvelope:
         """Append one cross-stream system event.
 
-        No lease check, no idempotency dedup, no ``expected_seq``. ``actor``
-        carries the system writer's identity (``child_observer``, ``llm``, …);
-        ``origin`` names the Noeta role (engine / llm / observer / tool /
-        system) that readers such as ``AuditObserver`` key on.
+        No lease check, no ``expected_seq``. ``actor`` carries the system
+        writer's identity (``child_observer``, ``llm``, …); ``origin`` names
+        the Noeta role (engine / llm / observer / tool / system) that readers
+        such as ``AuditObserver`` key on.
+
+        Idempotency: when ``idempotency_key`` is given and a system write with
+        the same key was already appended to this stream, returns that
+        envelope without writing a new one — atomically, so of two concurrent
+        writers with one key exactly one appends. The keys share the lease
+        writes' dedup table under :data:`SYSTEM_IDEMPOTENCY_SCOPE`. Callers
+        pass the argument only when they have a key, so a backend predating it
+        still serves every unkeyed write.
         """
         ...
 

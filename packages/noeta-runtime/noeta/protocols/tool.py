@@ -169,7 +169,7 @@ class Tool(Protocol):
     system prompt. Authored by hand, not derived from the docstring
     (docstrings carry developer-facing internal references).
 
-    Three optional attributes are read with ``getattr`` and are not members
+    Four optional attributes are read with ``getattr`` and are not members
     of this Protocol; an ordinary tool has none:
 
     * ``advertised: bool`` (absent ⇒ ``True``) — ``False`` keeps the tool
@@ -184,6 +184,7 @@ class Tool(Protocol):
       saw.
     * ``concurrency_safe: bool`` (absent ⇒ ``False``) — see
       :func:`is_concurrency_safe`.
+    * ``clearable: bool`` (absent ⇒ ``False``) — see :func:`is_clearable`.
     """
 
     name: str
@@ -201,3 +202,13 @@ def is_concurrency_safe(tool: object) -> bool:
     holds no shared mutable state, so it may run alongside other such calls
     of the same response. Undeclared means no."""
     return getattr(tool, "concurrency_safe", False) is True
+
+
+def is_clearable(tool: object) -> bool:
+    """Whether a tool declared ``clearable = True``: its result is something
+    the model can fetch again by calling it again (a file read, a search, a
+    shell command), so the ContextComposer may replace an old one with the
+    cleared marker. Undeclared means no — a subagent's report, a user's
+    answer or a remote server's reply stays verbatim until a summary covers
+    it."""
+    return getattr(tool, "clearable", False) is True

@@ -19,6 +19,7 @@ from typing import Any
 from tests._sdk_session import official_registry as official_agent_registry
 from noeta.client import SdkHost
 from noeta.core.fold import fold
+from noeta.core.wiring import wire_default_observers
 from noeta.execution.background_delivery import BackgroundDelivery
 from noeta.execution.driver import InteractionDriver, multi_turn_policy_wrapper
 from noeta.protocols.messages import (
@@ -309,4 +310,154 @@ def test_a_monitor_event_reaches_the_running_turn(tmp_path: Path) -> None:
     assert len(events) == 1
     assert '<summary>Monitor event: "server ready line"</summary>' in events[0]
     assert "<event>READY on 8080</event>" in events[0]
+    host.shutdown_background()
+
+
+def _host_with_subtasks(
+    workspace: Path, provider: FakeLLMProvider
+) -> tuple[SdkHost, InMemoryEventLog, InMemoryContentStore]:
+    host, event_log, content_store = _host(workspace, provider)
+    # Spawned subtasks are enqueued by the default lifecycle observers.
+    wire_default_observers(event_log, host.dispatcher)
+    return host, event_log, content_store
+
+
+def _delegate(goal: str) -> LLMResponse:
+    return _tool(
+        "t1",
+        "Task",
+        {"description": "child job", "prompt": goal, "subagent_type": "general-purpose"},
+    )
+
+
+def test_a_subtask_job_notifies_the_subtask_while_it_runs(tmp_path: Path) -> None:
+    """A background command a subtask started notifies that subtask, mid-turn,
+    not the root waiting on it."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    provider = FakeLLMProvider(
+        responses=[
+            _delegate("run it"),
+            _tool(
+                "k1",
+                "Bash",
+                {
+                    "command": "sleep 0.3; echo CHILD-OUT",
+                    "description": "child job",
+                    "run_in_background": True,
+                },
+            ),
+            _tool("k2", "Bash", {"command": "sleep 1.5"}),
+            _end_turn("child done"),
+            _end_turn("root done"),
+        ]
+    )
+    host, event_log, content_store = _host_with_subtasks(ws, provider)
+    driver = InteractionDriver(host)
+    host.set_background_notifier(driver)
+    root = driver.start(goal="go", agent="main")
+
+    child_last = list(provider.received_requests[3].messages)
+    notices = [_text(child_last[i]) for i in _notices(child_last)]
+    assert len(notices) == 1 and "CHILD-OUT" in notices[0]
+    root_last = list(provider.received_requests[4].messages)
+    assert _notices(root_last) == []
+    root_task = fold(event_log, content_store, root.task_id)
+    assert root_task.governance.pending_injections == {}
+    host.shutdown_background()
+
+
+def test_a_subtask_job_ending_after_the_subtask_notifies_the_root(
+    tmp_path: Path,
+) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    provider = FakeLLMProvider(
+        responses=[
+            _delegate("start it"),
+            _tool(
+                "k1",
+                "Bash",
+                {
+                    "command": "sleep 0.5; echo LATE-OUT",
+                    "description": "late job",
+                    "run_in_background": True,
+                },
+            ),
+            _end_turn("child done"),
+            _end_turn("root done"),
+            _end_turn("saw the late job"),
+        ]
+    )
+    host, event_log, content_store = _host_with_subtasks(ws, provider)
+    driver = InteractionDriver(host)
+    host.set_background_notifier(driver)
+    root = driver.start(goal="go", agent="main")
+    assert root.status == "suspended"
+
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and len(provider.received_requests) < 5:
+        time.sleep(0.02)
+    assert len(provider.received_requests) == 5
+    woke = list(provider.received_requests[4].messages)
+    notices = [_text(woke[i]) for i in _notices(woke)]
+    assert len(notices) == 1 and "LATE-OUT" in notices[0]
+    host.shutdown_background()
+
+
+def test_a_notice_the_subtask_never_took_in_moves_to_the_root(
+    tmp_path: Path,
+) -> None:
+    """The notice reaches the subtask during its last model call, so the
+    subtask ends with it still pending; it is handed to the root instead of
+    being lost."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    script = [
+        _delegate("start it"),
+        _tool(
+            "k1",
+            "Bash",
+            {
+                "command": "sleep 0.2; echo RACE-OUT",
+                "description": "racing job",
+                "run_in_background": True,
+            },
+        ),
+        _end_turn("child done"),
+    ]
+
+    def respond(request: LLMRequest) -> LLMResponse:
+        index = len(provider.received_requests) - 1
+        if index == 2:
+            time.sleep(1.0)  # the job ends while the subtask's last call runs
+        return script[index] if index < len(script) else _end_turn("root done")
+
+    provider = FakeLLMProvider(responder=respond)
+    host, event_log, content_store = _host_with_subtasks(ws, provider)
+    driver = InteractionDriver(host)
+    host.set_background_notifier(driver)
+    root = driver.start(goal="go", agent="main")
+
+    def root_notices() -> list[str]:
+        out: list[str] = []
+        for request in provider.received_requests[3:]:
+            messages = list(request.messages)
+            out.extend(_text(messages[i]) for i in _notices(messages))
+        return out
+
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not any(
+        "RACE-OUT" in n for n in root_notices()
+    ):
+        time.sleep(0.05)
+    assert any("RACE-OUT" in n for n in root_notices())
+    child_id = next(
+        e.payload.subtask_id
+        for e in event_log.read(root.task_id)
+        if e.type == "SubtaskSpawned"
+    )
+    child = fold(event_log, content_store, child_id)
+    assert child.status == "terminal"
+    assert child.governance.pending_injections  # never taken in by the subtask
     host.shutdown_background()

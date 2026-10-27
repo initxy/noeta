@@ -3,37 +3,69 @@
 One Engine step is a loop of decide→act attempts whose first durable emit is
 ``ContextPlanComposed``, so the stream is already an attempt journal and a
 mid-step crash is recognisable as the last attempt's partial tail with no
-reachable suspend or terminal. Only the two pure decisions live here — locate
-that tail, and judge whether re-driving it needs a human; the seal / re-drive
-/ park state machine that consumes them lives in ``noeta.runtime.worker``,
-which owns the lease discipline (``docs/adr/032-step-attempt-recovery.md``).
+reachable suspend or terminal. Only the pure decisions live here — locate that
+tail, read back the tool batch it recorded, and judge whether re-driving it
+needs a human; the resume / seal / re-drive / park state machine that
+consumes them lives in ``noeta.runtime.worker``, which owns the lease
+discipline (``docs/adr/032-step-attempt-recovery.md``,
+``docs/adr/065-crash-recovery-keeps-finished-tool-calls.md``).
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from noeta.core.engine import guard_allows_tool_call
+from noeta.core.fold import messages_from_appended
 from noeta.protocols.decisions import ToolCall
+from noeta.protocols.errors import ContentNotFound
+from noeta.protocols.messages import ToolResultBlock, ToolUseBlock
+from noeta.protocols.tool import ToolResult
 from noeta.protocols.tool_args import resolve_tool_call_arguments
 
 
 __all__ = [
     "ABANDON_CAP",
     "AttemptClassification",
+    "BatchCompletion",
+    "INTERRUPTED_CALL_ERROR",
     "InterruptedAttempt",
+    "NOT_STARTED_CALL_ERROR",
     "PendingPark",
+    "RecordedBatch",
     "classify_attempt",
+    "plan_batch_completion",
     "scan_interrupted_attempt",
     "scan_pending_park",
+    "scan_recorded_batch",
 ]
 
 
-#: Consecutive seals allowed within one wake window before recovery stops
-#: re-driving and parks regardless of classification — the crash-loop
-#: backstop.
+#: Crash recoveries allowed within one wake window — seals, plus resumed
+#: tool batches that lost a call to a crash — before recovery stops
+#: continuing on its own and parks regardless of classification: the
+#: crash-loop backstop.
 ABANDON_CAP = 3
+
+
+#: The result a call gets when it started but its result was never recorded
+#: (a worker crash, or a forced stop that abandoned the step): it may have
+#: run to completion, partly, or not at all.
+INTERRUPTED_CALL_ERROR = (
+    "Interrupted before its result was recorded, so its outcome is unknown — "
+    "it may have fully, partly, or not applied. Check its effect before "
+    "running it again."
+)
+
+#: The result a call gets when the batch was interrupted before it started
+#: and recovery cannot run it on its own (a control or routing tool, or a
+#: name no tool answers to).
+NOT_STARTED_CALL_ERROR = (
+    "Not run: the batch was interrupted before this call started. Issue it "
+    "again if it is still needed."
+)
 
 
 #: Event types that open a wake window / turn. The last one in the stream is
@@ -71,7 +103,7 @@ class InterruptedAttempt:
     attempt_start_seq: int
     #: events from the anchor onward — the tail the seal declares dead history.
     tail: tuple[Any, ...]
-    #: ``StepAttemptAbandoned`` count inside the live window — the input to the
+    #: ``StepAttemptAbandoned`` count inside the live window — an input to the
     #: :data:`ABANDON_CAP` crash-loop backstop.
     abandon_count: int
     #: True ⇒ anchored on ``ContextPlanComposed`` (the normal mid-step crash).
@@ -80,6 +112,11 @@ class InterruptedAttempt:
     #: wake handle so the ordinary approve verb re-runs the resolution against
     #: the restored pending-approval state.
     anchored_on_plan: bool = True
+    #: Earlier live attempts in the window that kept their tool batch across
+    #: a crash which cut a call short (a ``ToolCallStarted`` with no recorded
+    #: result) — the other input to the :data:`ABANDON_CAP` backstop, since
+    #: such a recovery leaves no seal behind.
+    resumed_count: int = 0
 
 
 def scan_interrupted_attempt(events: list[Any]) -> Optional[InterruptedAttempt]:
@@ -99,6 +136,7 @@ def scan_interrupted_attempt(events: list[Any]) -> Optional[InterruptedAttempt]:
     attempt_index: Optional[int] = None
     first_activity: Optional[int] = None
     abandon_count = 0
+    live_start = boundary + 1
     for i in range(boundary + 1, len(events)):
         env = events[i]
         if env.type == "ContextPlanComposed":
@@ -109,6 +147,7 @@ def scan_interrupted_attempt(events: list[Any]) -> Optional[InterruptedAttempt]:
             # belongs to sealed dead history, not the live tail.
             attempt_index = None
             first_activity = None
+            live_start = i + 1
         elif first_activity is None and env.type in _ACTIVITY_EVENTS:
             first_activity = i
     if attempt_index is None and first_activity is None:
@@ -122,7 +161,25 @@ def scan_interrupted_attempt(events: list[Any]) -> Optional[InterruptedAttempt]:
         tail=tuple(events[anchor:]),
         abandon_count=abandon_count,
         anchored_on_plan=on_plan,
+        resumed_count=_resumed_attempts(events[live_start:anchor]),
     )
+
+
+def _resumed_attempts(events: list[Any]) -> int:
+    """How many attempts in ``events`` (a live, unsealed stretch) hold a
+    ``ToolCallStarted`` with no recorded result — each one is a crash its
+    tool batch was resumed across."""
+    count = 0
+    open_calls: set[str] = set()
+    for env in events:
+        if env.type == "ContextPlanComposed":
+            count += bool(open_calls)
+            open_calls = set()
+        elif env.type == "ToolCallStarted":
+            open_calls.add(env.payload.call_id)
+        elif env.type in ("ToolResultRecorded", "ToolCallFinished"):
+            open_calls.discard(env.payload.call_id)
+    return count + bool(open_calls)
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,8 +207,9 @@ def scan_pending_park(events: list[Any]) -> Optional[PendingPark]:
     worker must finish the park — never run the bare step over it.
 
     ``notice_appended`` keys on a ``MessagesAppended`` after the seal: the
-    park itself is the only writer in that window, so any message there is
-    its notice.
+    park itself is the only writer in that window, so a message there is
+    its closing tool results or its notice — the worker tells them apart on
+    the folded transcript.
     """
     boundary = -1
     for i, env in enumerate(events):
@@ -234,4 +292,174 @@ def classify_attempt(
             blockers.append(f"{payload.tool_name} ({state})")
     return AttemptClassification(
         safe=not blockers, blockers=tuple(blockers)
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedBatch:
+    """The tool batch an interrupted attempt decided on, as the stream
+    recorded it."""
+
+    #: the assistant message's tool calls, in the order the model made them.
+    tool_uses: tuple[ToolUseBlock, ...]
+    #: True ⇒ result messages already landed for every call; the attempt
+    #: only lost what came after them, so nothing is left to answer.
+    results_present: bool
+    #: call ids with a ``ToolCallStarted`` after the decision.
+    started: frozenset[str]
+    #: call id → its ``ToolResultRecorded`` payload: the outcome is known.
+    recorded: Mapping[str, Any]
+    #: call id → the reason its ``ToolCallDenied`` recorded.
+    denied: Mapping[str, str]
+    #: call ids a landed result message already answers. A batch that
+    #: suspended on an approval writes the other calls' results before the
+    #: suspend, so a crash between the two leaves this a strict subset.
+    answered: frozenset[str] = frozenset()
+
+
+def scan_recorded_batch(
+    tail: tuple[Any, ...], content_store: Any
+) -> Optional[RecordedBatch]:
+    """Read back the tool batch an interrupted attempt recorded, or ``None``
+    when recovery should seal and re-drive it instead.
+
+    A batch is kept when its assistant message (the ``tool_use`` blocks) is
+    on the stream and the batch got far enough to matter: a call started,
+    or a result message landed. A decision with nothing started has run
+    nothing, so re-deciding it is free of side effects and the attempt
+    re-drives as before. A spawn anywhere in the tail also returns ``None``
+    — a child is a side effect the classifier parks on.
+    """
+    tool_uses: tuple[ToolUseBlock, ...] = ()
+    after = -1
+    answered: set[str] = set()
+    for i, env in enumerate(tail):
+        if env.type in _SPAWN_EVENTS:
+            return None
+        if env.type != "MessagesAppended":
+            continue
+        for message in messages_from_appended(env, content_store):
+            uses = tuple(
+                b for b in message.content if isinstance(b, ToolUseBlock)
+            )
+            if message.role == "assistant" and uses:
+                tool_uses, after = uses, i
+                answered = set()
+            elif message.role == "tool" and tool_uses:
+                answered.update(
+                    b.call_id
+                    for b in message.content
+                    if isinstance(b, ToolResultBlock)
+                )
+    if not tool_uses:
+        return None
+    answered &= {use.call_id for use in tool_uses}
+    started: set[str] = set()
+    recorded: dict[str, Any] = {}
+    denied: dict[str, str] = {}
+    for env in tail[after + 1:]:
+        if env.type == "ToolCallStarted":
+            started.add(env.payload.call_id)
+        elif env.type == "ToolResultRecorded":
+            recorded[env.payload.call_id] = env.payload
+        elif env.type == "ToolCallDenied":
+            denied[env.payload.call_id] = env.payload.reason
+    if not answered and not started:
+        return None
+    return RecordedBatch(
+        tool_uses=tool_uses,
+        results_present=len(answered) == len(tool_uses),
+        started=frozenset(started),
+        recorded=recorded,
+        denied=denied,
+        answered=frozenset(answered),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class BatchCompletion:
+    """How each call of a kept batch gets its result."""
+
+    #: calls whose result the stream recorded, rebuilt for re-rendering.
+    recorded: tuple[tuple[ToolCall, ToolResult], ...]
+    #: calls answered without running: interrupted, denied, or not runnable.
+    answered: tuple[ToolResultBlock, ...]
+    #: calls that never started and run now, past the live guard chain.
+    pending: tuple[ToolCall, ...]
+
+
+def plan_batch_completion(
+    batch: RecordedBatch,
+    *,
+    tool_named: Callable[[str], Any],
+    content_store: Any,
+) -> BatchCompletion:
+    """Sort a kept batch's calls by what the stream knows about each.
+
+    A recorded result is reused, never recomputed. A call that started
+    without a recorded result gets :data:`INTERRUPTED_CALL_ERROR` and never
+    runs again. A recorded denial keeps its reason. A call that never
+    started runs now when a plain tool answers to its name; a control or
+    routing tool (``route_call``) was translated by the Policy, which this
+    path does not re-enter, so such a call gets
+    :data:`NOT_STARTED_CALL_ERROR` instead. A call a landed result message
+    already answers is left out.
+    """
+    recorded: list[tuple[ToolCall, ToolResult]] = []
+    answered: list[ToolResultBlock] = []
+    pending: list[ToolCall] = []
+    for use in batch.tool_uses:
+        if use.call_id in batch.answered:
+            continue
+        call = ToolCall(
+            tool_name=use.tool_name,
+            arguments=dict(use.arguments),
+            call_id=use.call_id,
+        )
+        payload = batch.recorded.get(use.call_id)
+        if payload is not None:
+            recorded.append((call, _recorded_result(payload, content_store)))
+            continue
+        error: Optional[str]
+        if use.call_id in batch.started:
+            error = INTERRUPTED_CALL_ERROR
+        elif use.call_id in batch.denied:
+            error = batch.denied[use.call_id] or "denied"
+        else:
+            tool = tool_named(use.tool_name)
+            runnable = (
+                tool is not None and getattr(tool, "route_call", None) is None
+            )
+            error = None if runnable else NOT_STARTED_CALL_ERROR
+        if error is None:
+            pending.append(call)
+        else:
+            answered.append(
+                ToolResultBlock(
+                    call_id=use.call_id, output="", success=False, error=error
+                )
+            )
+    return BatchCompletion(
+        recorded=tuple(recorded),
+        answered=tuple(answered),
+        pending=tuple(pending),
+    )
+
+
+def _recorded_result(payload: Any, content_store: Any) -> ToolResult:
+    """The ``ToolResult`` a ``ToolResultRecorded`` describes. The output
+    body is the JSON the runtime encoded (raw bytes for a bytes output); a
+    body the store no longer holds leaves the summary to speak for it."""
+    output: Any = None
+    try:
+        body = content_store.get(payload.output_ref)
+    except ContentNotFound:
+        body = None
+    if body is not None:
+        try:
+            output = json.loads(body)
+        except ValueError:
+            output = body
+    return ToolResult(
+        success=bool(payload.success), output=output, summary=payload.summary
     )

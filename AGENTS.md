@@ -44,6 +44,7 @@
 - lint: `make lint`
 - build: `make build` (both packages' wheels and sdists into `dist/`)
 - e2e: `make e2e` — `-m live` tests against a real LLM / sandbox container; needs credentials, never part of `check`
+- eval: `make eval` — prompt-regression scenarios against a real model, compared to `evals/baseline.json`; `make eval-baseline` re-records it; needs credentials, never part of `check`
 - docs: `make docs` (VitePress dev server; `npm ci` first)
 - check: `make check` — ruff, pytest with coverage ≥ 85, mypy --strict on both packages, `scripts/lint-naming.py`, `lint-imports`, `scripts/check-docs.sh`
 - release: tag push per `docs/releasing.md` — approval gate
@@ -51,7 +52,7 @@
 ## Gates
 
 - Automated gates (required for done): `make check`. CI's test job runs the same target; CI-only on top: the Postgres parameters of the storage contract tests (`NOETA_TEST_POSTGRES_DSN`), the Python 3.11 / 3.12 / 3.13 matrix, and the fresh-venv install smoke (`pytest -m install_smoke`).
-- `make check` can't judge model-facing prompt text or provider wire behavior. A change there also runs the relevant `make e2e` tests, and states that the benchmark was not rerun.
+- `make check` can't judge model-facing prompt text or provider wire behavior. A change there also runs `make eval` (no scenario may regress; re-record the baseline when a scenario changes) and the relevant `make e2e` tests.
 - Approval gates (the maintainer signs off before running): release, data migration or deletion on a host's store. Merging a change under `docs/` publishes the docs site (`docs.yml` deploys on push to `main`).
 
 ## Engineering constraints

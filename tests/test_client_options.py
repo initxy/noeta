@@ -454,13 +454,22 @@ def test_disallowed_tools_subtracts_from_builtin_set() -> None:
     main, _ = compile_options(
         Options(
             system_prompt="hi",
-            disallowed_tools=("Bash", "Edit"),
+            disallowed_tools=("Write", "Edit"),
         )
     )
     names = {t.name for t in main.tools}
-    assert "Bash" not in names
+    assert "Write" not in names
     assert "Edit" not in names
     assert len(names) == len(builtin_tool_classes()) - 2
+
+
+def test_disallowing_bash_also_removes_the_other_shell_tools() -> None:
+    """Monitor runs ``bash -c``; BashOutput / KillShell manage shell jobs —
+    disallowing Bash must leave no way to reach the shell."""
+    main, _ = compile_options(Options(system_prompt="hi", disallowed_tools=("Bash",)))
+    names = {t.name for t in main.tools}
+    assert names.isdisjoint({"Bash", "Monitor", "BashOutput", "KillShell"})
+    assert "Read" in names
 
 
 def test_disallowed_tools_missing_names_are_silently_ignored() -> None:

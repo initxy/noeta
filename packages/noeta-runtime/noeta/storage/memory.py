@@ -37,6 +37,7 @@ from noeta.protocols.errors import (
 )
 from noeta.protocols.event_log import (
     SNAPSHOT_BASELINE_EVENT_TYPES,
+    SYSTEM_IDEMPOTENCY_SCOPE,
     EventLogFull,
     Subscriber,
     TaskStreamSummary,
@@ -242,6 +243,7 @@ class InMemoryEventLog:
         origin: EventOrigin,
         trace_id: str | None = None,
         causation_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> EventEnvelope:
         """Append one cross-stream system event, unchecked.
 
@@ -264,9 +266,11 @@ class InMemoryEventLog:
         )
         return self._append_impl(
             envelope,
-            lease_id=None,
+            lease_id=(
+                SYSTEM_IDEMPOTENCY_SCOPE if idempotency_key is not None else None
+            ),
             expected_seq=None,
-            idempotency_key=None,
+            idempotency_key=idempotency_key,
             require_lease=False,
         )
 
@@ -458,9 +462,9 @@ class InMemoryDispatcher:
     Three caps keep a task from cycling forever, and all three end in a state a
     human has to look at rather than a silent retry:
 
-    * ``heartbeat_max`` — a further heartbeat raises ``InvalidLease`` and
-      force-releases the task to ``suspended`` (``lease_quota_exceeded``). The
-      default bounds a lease to roughly an hour at a 10s heartbeat.
+    * ``heartbeat_max`` — off by default (the worker's heartbeat runner caps
+      each step attempt instead); when set, a further heartbeat raises
+      ``InvalidLease`` and returns the task to ``ready`` for recovery.
     * ``max_fail_attempts`` — retryable failures past this drop to ``terminal``.
     * ``reclaim_max`` — consecutive no-progress stale-lease reclaims past this
       drop to ``terminal`` (``stale_reclaim_exceeded``), so a poison task that
@@ -471,7 +475,7 @@ class InMemoryDispatcher:
         self,
         *,
         now: Callable[[], float] | None = None,
-        heartbeat_max: int = 360,
+        heartbeat_max: int | None = None,
         max_fail_attempts: int = 3,
         reclaim_max: int = 3,
     ) -> None:
@@ -716,23 +720,29 @@ class InMemoryDispatcher:
             )
 
     def heartbeat(self, lease_id: str, *, lease_seconds: float = 30.0) -> float:
-        """Extend a lease window. Enforces ``heartbeat_max`` cap.
+        """Extend a lease window. Enforces the optional ``heartbeat_max`` cap.
 
-        After the cap is reached, the task is force-released to
-        ``suspended`` with reason ``lease_quota_exceeded`` and the
-        caller's heartbeat raises ``InvalidLease`` (the lease is gone).
+        Past the cap the task goes back to ``ready`` (a matched wake is
+        preserved) and the caller's heartbeat raises ``InvalidLease`` (the
+        lease is gone): the next lease recovers the interrupted step like a
+        reclaimed one.
         """
         with self._lock:
             task = self._find_task_by_lease(lease_id)
             if task is None or task.status != "leased":
                 raise InvalidLease(lease_id)
-            if task.heartbeat_count >= self._heartbeat_max:
-                self._release_locked(
-                    task,
-                    next_state="suspended",
-                    wake_on=task.wake_on,
-                    suspend_reason="lease_quota_exceeded",
-                )
+            if (
+                self._heartbeat_max is not None
+                and task.heartbeat_count >= self._heartbeat_max
+            ):
+                task.lease_id = None
+                task.lease_expires_at = None
+                task.heartbeat_count = 0
+                task.reclaim_count = 0
+                task.wake_on = None
+                task.suspend_reason = None
+                task.status = "ready"
+                self._ready.append(task.task_id)
                 raise InvalidLease(lease_id)
             task.heartbeat_count += 1
             # A successful heartbeat is the leased-task progress signal:

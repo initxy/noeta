@@ -52,15 +52,23 @@ class ThinkingBlock:
     substituted for the visible text): when set, ``text`` is empty and the only
     legal round-trip is re-emitting the blob byte-for-byte.
 
+    ``provider`` names the provider adapter that produced the block
+    (``"anthropic"``, ``"openai_compat"``, ``"openai_responses"``). A
+    signature or blob is only meaningful to the provider that issued it, so
+    after a mid-task model switch each adapter drops blocks another provider
+    produced instead of replaying them. ``None`` — a block recorded before the
+    field existed — is unknown provenance and is still sent as before.
+
     Non-reasoning models never produce this block.
     """
 
     text: str
     signature: Optional[str] = None
     data: Optional[str] = None
+    provider: Optional[str] = None
 
     __canonical_tag__ = "thinking_block"
-    __canonical_omit_none__ = frozenset({"data"})
+    __canonical_omit_none__ = frozenset({"data", "provider"})
 
 
 @dataclass(frozen=True, slots=True)

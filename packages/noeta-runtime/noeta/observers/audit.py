@@ -129,6 +129,7 @@ _SUMMARY_FIELDS_BY_EVENT: dict[str, tuple[str, ...]] = {
     "ContextPlanComposed": ("plan_ref",),
     "MessagesAppended":    ("count", "messages_ref"),
     "InjectionRequested":  ("injection_id", "count", "messages_ref"),
+    "IdempotencyKeyClaimed": ("idempotency_key", "claim_id"),
     "TaskSnapshot":        ("state_ref",),
     "TaskRewound":         ("target_seq", "state_ref"),
     "StepAttemptAbandoned": ("abandoned_from_seq", "state_ref", "reason"),

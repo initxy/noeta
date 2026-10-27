@@ -51,6 +51,17 @@ def _renderer(kind_tag: str):
     return _render
 
 
+class _ClearableTool:
+    name = "t"
+    description = "t"
+    risk_level = "low"
+    input_schema: dict[str, object] = {"type": "object"}
+    clearable = True
+
+    def invoke(self, arguments: object, ctx: object) -> object:  # pragma: no cover
+        raise NotImplementedError
+
+
 def _composer(
     cs: InMemoryContentStore,
     registry: ContentChannelRegistry,
@@ -58,7 +69,7 @@ def _composer(
 ) -> ThreeSegmentComposer:
     return ThreeSegmentComposer(
         system_prompt="label test agent",
-        tools={},
+        tools={"t": _ClearableTool()},  # type: ignore[dict-item]
         content_store=cs,
         content_renderers=registry,
         **kwargs,
@@ -174,6 +185,10 @@ def test_origin_survives_tail_prune() -> None:
             origin="memory",
         ),
         Message(
+            role="assistant",
+            content=[ToolUseBlock(call_id="c1", tool_name="t", arguments={})],
+        ),
+        Message(
             role="tool",
             content=[
                 ToolResultBlock(call_id="c1", output="x" * 400, success=True)
@@ -187,6 +202,6 @@ def test_origin_survives_tail_prune() -> None:
     dyn = _segment(view, "dynamic_suffix")
     # Pruning took effect: the old tool output is replaced by the lean
     # placeholder marker, no longer an empty string.
-    assert dyn.content[1].content[0].output == "[Old tool result content cleared]"
+    assert dyn.content[2].content[0].output == "[Old tool result content cleared]"
     # origin pass-through is unaffected by pruning
     assert dyn.content[0].origin == "memory"

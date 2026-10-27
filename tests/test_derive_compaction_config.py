@@ -24,6 +24,11 @@ from noeta.client.parts import derive_compaction_config
 from noeta.builtins.providers.impl.catalog import resolve_alias, spec_for
 
 
+def _reserve(max_output_tokens: int) -> int:
+    """Claude Code's margin: the output room, capped at 20K, plus 13K."""
+    return min(max_output_tokens, 20_000) + 13_000
+
+
 def test_alias_opus_turns_compaction_on() -> None:
     cfg = derive_compaction_config("opus")
     assert cfg.context_window is not None
@@ -54,12 +59,8 @@ def test_tail_is_a_third_of_available_window() -> None:
     and the model re-reads with ``read`` — at the cost of less recent verbatim
     fidelity, so the ratio is a deliberate trade-off, not an arbitrary number.
     """
-    from noeta.builtins.providers.impl.catalog import _COMPACTION_BUFFER_TOKENS
-
     spec = spec_for(resolve_alias("opus"))
-    available = (
-        spec.context_window - spec.max_output_tokens - _COMPACTION_BUFFER_TOKENS
-    )
+    available = spec.context_window - _reserve(spec.max_output_tokens)
     cfg = derive_compaction_config("opus")
     assert cfg.tail_token_budget == available // 3
 
@@ -69,7 +70,6 @@ def test_unknown_model_still_compacts_with_conservative_window() -> None:
     defaults. Off would disable the tail prune too, letting the history grow
     until the provider rejects it — the failure this path exists to prevent."""
     from noeta.builtins.providers.impl.catalog import (
-        _COMPACTION_BUFFER_TOKENS,
         _UNKNOWN_MODEL_CONTEXT_WINDOW,
         _UNKNOWN_MODEL_MAX_OUTPUT_TOKENS,
     )
@@ -77,10 +77,8 @@ def test_unknown_model_still_compacts_with_conservative_window() -> None:
     cfg = derive_compaction_config("totally-made-up-model")
     assert cfg.context_window == _UNKNOWN_MODEL_CONTEXT_WINDOW
     assert cfg.max_output_tokens == _UNKNOWN_MODEL_MAX_OUTPUT_TOKENS
-    available = (
-        _UNKNOWN_MODEL_CONTEXT_WINDOW
-        - _UNKNOWN_MODEL_MAX_OUTPUT_TOKENS
-        - _COMPACTION_BUFFER_TOKENS
+    available = _UNKNOWN_MODEL_CONTEXT_WINDOW - _reserve(
+        _UNKNOWN_MODEL_MAX_OUTPUT_TOKENS
     )
     assert cfg.tail_token_budget == available // 3
     assert cfg.composer_version != ""
@@ -127,22 +125,49 @@ def test_auto_compact_window_caps_every_derived_number() -> None:
     the available window, the protected tail and (through the fraction) the
     microcompaction threshold all shrink in proportion; the output ceiling
     stays the model's, because it rides ``max_tokens`` on the wire."""
-    from noeta.builtins.providers.impl.catalog import _COMPACTION_BUFFER_TOKENS
-
     spec = spec_for(resolve_alias("opus"))
     cap = 300_000
-    assert spec.max_output_tokens + _COMPACTION_BUFFER_TOKENS < cap < spec.context_window
+    assert _reserve(spec.max_output_tokens) < cap < spec.context_window
     cfg = derive_compaction_config("opus", auto_compact_window=cap)
     uncapped = derive_compaction_config("opus")
     assert cfg.context_window == cap
     assert cfg.max_output_tokens == spec.max_output_tokens == uncapped.max_output_tokens
     assert cfg.tail_token_budget == (
-        (cap - spec.max_output_tokens - _COMPACTION_BUFFER_TOKENS) // 3
+        (cap - _reserve(spec.max_output_tokens)) // 3
     )
     assert cfg.tail_token_budget < (uncapped.tail_token_budget or 0)
     assert cfg.microcompact_keep_recent == uncapped.microcompact_keep_recent
     assert cfg.microcompact_fraction == uncapped.microcompact_fraction
     assert cfg.compaction_buffer == uncapped.compaction_buffer
+
+
+def test_compaction_margin_is_claude_codes_not_the_full_output_ceiling() -> None:
+    """The usable window is ``window - min(output ceiling, 20K) - 13K``, with
+    or without a cap: a 200K cap on a model with a 128K output ceiling leaves
+    167K, not the 70K that subtracting the whole ceiling would."""
+    cfg = derive_compaction_config(
+        "totally-made-up-model", auto_compact_window=100_000
+    )
+    available = (
+        (cfg.context_window or 0) - cfg.max_output_tokens - cfg.compaction_buffer
+    )
+    assert available == 100_000 - 16_384 - 13_000
+    base = spec_for(resolve_alias("opus"))
+    big = dataclasses.replace(base, context_window=1_000_000, max_output_tokens=128_000)
+    from noeta.builtins.providers.impl import catalog as catalog_mod
+
+    original = catalog_mod.find_spec
+    catalog_mod.find_spec = lambda model: big  # type: ignore[assignment]
+    try:
+        capped = derive_compaction_config("opus", auto_compact_window=200_000)
+        uncapped = derive_compaction_config("opus")
+    finally:
+        catalog_mod.find_spec = original  # type: ignore[assignment]
+    for c, window in ((capped, 200_000), (uncapped, 1_000_000)):
+        assert c.max_output_tokens == 128_000
+        assert (
+            (c.context_window or 0) - c.max_output_tokens - c.compaction_buffer
+        ) == window - 20_000 - 13_000
 
 
 def test_auto_compact_window_at_or_above_the_window_is_a_no_op() -> None:
@@ -179,13 +204,11 @@ def test_auto_compact_window_refuses_anything_but_a_positive_int(
 
 
 def test_auto_compact_window_under_the_output_ceiling_is_refused() -> None:
-    """A cap that leaves no window under the model's output ceiling plus the
-    buffer would compact on every step with a boundary that cannot advance;
-    the host's number is wrong for this model, and the error names both."""
-    from noeta.builtins.providers.impl.catalog import _COMPACTION_BUFFER_TOKENS
-
+    """A cap that leaves no window under the compaction reserve would compact
+    on every step with a boundary that cannot advance; the host's number is
+    wrong for this model, and the error names the reserve."""
     spec = spec_for(resolve_alias("opus"))
-    floor = spec.max_output_tokens + _COMPACTION_BUFFER_TOKENS
+    floor = _reserve(spec.max_output_tokens)
     with pytest.raises(ValueError, match="leaves no usable window"):
         derive_compaction_config("opus", auto_compact_window=floor)
     cfg = derive_compaction_config("opus", auto_compact_window=floor + 3)
