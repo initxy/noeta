@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -15,59 +16,37 @@ pytest.importorskip("acp")
 pytest.importorskip("textual")
 pytest.importorskip("starlette")
 
-import httpx  # noqa: E402
-from acp import schema  # noqa: E402
+import acp
+from acp import schema
 
-import noeta.cli as cli  # noqa: E402
-from noeta.acp import NoetaAcpAgent  # noqa: E402
-from noeta.agent import Agent  # noqa: E402
-from noeta.errors import NoetaError, Transient  # noqa: E402
-from noeta.events import (  # noqa: E402
+from noeta.acp import NoetaAcpAgent
+from noeta.agent import Agent
+from noeta.errors import Transient
+from noeta.events import (
     Answer,
     ChildEnded,
     InputTaken,
-    Recorded,
-    Say,
-    TaskCreated,
+    ToolFinished,
     Waiting,
 )
-from noeta.local import LocalApp  # noqa: E402
-from noeta.remote import RemoteClient  # noqa: E402
-from noeta.server import create_app  # noqa: E402
-from noeta.store.base import Post  # noqa: E402
-from noeta.store.sqlite import SqliteStore  # noqa: E402
-from noeta.testing import ScriptedProvider, reply  # noqa: E402
-from noeta.tools.base import Park, ToolContext, ToolOutput, text_output  # noqa: E402
-from noeta.tui.app import NoetaApp  # noqa: E402
-from noeta.tui.widgets import AssistantMessage, QuestionCard  # noqa: E402
-from noeta.types import Delta, ModelRequest, ModelResponse  # noqa: E402
+from noeta.ext.ask_user import AskUser
+from noeta.ext.base import Ask, Extension, TaskView
+from noeta.local import LocalApp
+from noeta.store.base import Post
+from noeta.store.sqlite import SqliteStore
+from noeta.testing import ScriptedProvider, reply
+from noeta.tools.base import Park, ToolContext, ToolOutput, text_output
+from noeta.types import Delta, ModelRequest, ModelResponse, ToolUse
 
 
 async def _no_sleep(_: float) -> None:
     return None
 
 
-class AskTool:
-    name = "Ask"
-    description = "Ask the user."
-    input_schema = {"type": "object"}  # noqa: RUF012
-    read_only = False
-    clearable = False
-
-    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
-        return ToolOutput(park=Park(on="question", detail={"questions": [
-            {"question": "Which database?", "options": [{"label": "sqlite"}]}]}))
-
-    async def resume(self, input: dict[str, Any], ctx: ToolContext, outcome: Any) -> ToolOutput:
-        if outcome is None:
-            return text_output("withdrawn", is_error=True)
-        return text_output(f"user said: {outcome.data}")
-
-
 class Delegate:
     name = "Task"
     description = "d"
-    input_schema = {"type": "object"}  # noqa: RUF012
+    input_schema = {"type": "object"}
     read_only = False
     clearable = False
 
@@ -169,9 +148,16 @@ async def test_acp_prompt_after_an_unrelated_inbox_item(tmp_path: Path) -> None:
     await app.stop()
 
 
+DB_QUESTION = {"questions": [{
+    "question": "Which database?", "header": "DB", "multiSelect": False,
+    "options": [{"label": "SQLite", "description": "a file"},
+                {"label": "Postgres", "description": "a server"}]}]}
+
+
 async def test_acp_shows_the_question_and_answers_it(tmp_path: Path) -> None:
-    provider = ScriptedProvider([reply("", ("Ask", {})), reply("using sqlite")])
-    app = local(tmp_path, provider, Agent(name="main", model="m", tools=[AskTool()]))
+    provider = ScriptedProvider([reply("", ("AskUserQuestion", DB_QUESTION)),
+                                 reply("using sqlite")])
+    app = local(tmp_path, provider, Agent(name="main", model="m", extensions=(AskUser(),)))
     agent, editor, sid = await acp_session(app, tmp_path)
     resp = await asyncio.wait_for(agent.prompt(sid, text_block("set it up")), 10)
     assert resp.stop_reason == "end_turn"
@@ -179,7 +165,110 @@ async def test_acp_shows_the_question_and_answers_it(tmp_path: Path) -> None:
     await asyncio.wait_for(agent.prompt(sid, text_block("sqlite")), 10)
     assert editor.texts()[-1] == "using sqlite"
     answers = [i.body for i in await app.store.inbox(sid) if isinstance(i.body, Answer)]
-    assert [a.data for a in answers] == ["sqlite"]
+    assert [a.data for a in answers] == [{"answers": {"0": {"selected": ["SQLite"]}}}]
+    [done] = [r.event for r in await app.client.events(sid) if isinstance(r.event, ToolFinished)]
+    assert not done.result.is_error
+    await app.stop()
+
+
+def two_questions() -> dict[str, Any]:
+    second = {**DB_QUESTION["questions"][0], "question": "Which cache?", "header": "Cache"}
+    return {"questions": [DB_QUESTION["questions"][0], second]}
+
+
+async def test_acp_asks_several_questions_one_prompt_each(tmp_path: Path) -> None:
+    provider = ScriptedProvider([reply("", ("AskUserQuestion", two_questions())),
+                                 reply("set up")])
+    app = local(tmp_path, provider, Agent(name="main", model="m", extensions=(AskUser(),)))
+    agent, editor, sid = await acp_session(app, tmp_path)
+    await asyncio.wait_for(agent.prompt(sid, text_block("set it up")), 10)
+    await asyncio.wait_for(agent.prompt(sid, text_block("postgres")), 10)
+    assert "Which cache?" in editor.texts()[-1]
+    await asyncio.wait_for(agent.prompt(sid, text_block("redis please")), 10)
+    assert editor.texts()[-1] == "set up"
+    [answer] = [i.body for i in await app.store.inbox(sid) if isinstance(i.body, Answer)]
+    assert answer.data == {"answers": {"0": {"selected": ["Postgres"]},
+                                       "1": {"other": "redis please"}}}
+    await app.stop()
+
+
+class Echo:
+    name = "Echo"
+    description = "e"
+    input_schema = {"type": "object"}
+    read_only = False
+    clearable = False
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        return text_output("echoed")
+
+
+class AskEcho(Extension):
+    name = "asker"
+
+    async def before_tool(self, view: TaskView, call: ToolUse) -> Any:
+        return Ask(prompt="may the worker echo?") if call.name == "Echo" else None
+
+
+class AllowingEditor(FakeEditor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.asked: list[str] = []
+
+    async def request_permission(self, **kw: Any) -> Any:
+        self.asked.append(kw["tool_call"].title)
+        return SimpleNamespace(outcome=SimpleNamespace(option_id="allow"))
+
+
+def with_worker(*worker_ext: Extension) -> list[Agent]:
+    return [Agent(name="main", model="m", tools=[Delegate()]),
+            Agent(name="worker", model="m", one_shot=True, tools=[Echo()],
+                  extensions=worker_ext)]
+
+
+async def test_acp_puts_a_sub_agents_approval_to_the_editor(tmp_path: Path) -> None:
+    provider = ScriptedProvider([reply("", ("Task", {})), reply("", ("Echo", {})),
+                                 reply("child done"), reply("final")])
+    app = local(tmp_path, provider, *with_worker(AskEcho()))
+    agent = NoetaAcpAgent(app)
+    editor = AllowingEditor()
+    agent.on_connect(editor)
+    await agent.initialize(protocol_version=1)
+    sid = (await agent.new_session(cwd=str(tmp_path))).session_id
+    resp = await asyncio.wait_for(agent.prompt(sid, text_block("go")), 15)
+    assert resp.stop_reason == "end_turn"
+    assert editor.asked == ["[worker] may the worker echo?"]
+    assert editor.texts()[-1] == "final"
+    await app.stop()
+
+
+async def test_acp_shows_and_answers_a_sub_agents_question(tmp_path: Path) -> None:
+    provider = ScriptedProvider([reply("", ("Task", {})),
+                                 reply("", ("AskUserQuestion", DB_QUESTION)),
+                                 reply("child done"), reply("final")])
+    app = local(tmp_path, provider, *with_worker(AskUser()))
+    agent, editor, sid = await acp_session(app, tmp_path)
+    await asyncio.wait_for(agent.prompt(sid, text_block("go")), 15)
+    assert "[worker]" in editor.texts()[-1] and "Which database?" in editor.texts()[-1]
+    resp = await asyncio.wait_for(agent.prompt(sid, text_block("Postgres")), 15)
+    assert resp.stop_reason == "end_turn" and editor.texts()[-1] == "final"
+    [child] = await app.client.tasks(parent_id=sid)
+    [answer] = [i.body for i in await app.store.inbox(child.task_id)
+                if isinstance(i.body, Answer)]
+    assert answer.data == {"answers": {"0": {"selected": ["Postgres"]}}}
+    await app.stop()
+
+
+async def test_acp_load_session_reports_a_missing_agent(tmp_path: Path) -> None:
+    app = local(tmp_path, ScriptedProvider([]), Agent(name="main", model="m"),
+                own_tasks_only=True)
+    from noeta.client import Client
+
+    theirs = await Client(app.store).create("host-agent", "made by a host")  # not served here
+    agent, _editor, _sid = await acp_session(app, tmp_path)
+    with pytest.raises(acp.RequestError, match="host-agent"):
+        await agent.load_session(cwd=str(tmp_path), session_id=theirs)
+    assert (await app.client.get(theirs)).status == "ready"
     await app.stop()
 
 

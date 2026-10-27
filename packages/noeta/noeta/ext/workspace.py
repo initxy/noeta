@@ -7,8 +7,11 @@ Everything is captured through the task's ExecEnv (``view.env``), never by a
 host subprocess: on a container the facts describe the container's checkout,
 and the shell / OS version lines (facts of this machine) are left out, as 0.6
 did for sandboxes. git runs with the same hardening the Bash tool's
-``git status`` rule applies (``-c core.fsmonitor=``), so a repository's own
-config cannot make the capture run a program.
+``git status`` rule applies (``-c core.fsmonitor=``, no hooks), so a
+repository's own config cannot make the capture run a program. A
+``filter.<driver>.clean`` program has no off switch, so when the
+repository's own config (local or worktree scope) defines any filter driver
+the status is skipped (the branch is still named).
 """
 
 from __future__ import annotations
@@ -31,7 +34,9 @@ from noeta.types import Message, user
 GIT_STATUS_MAX_BYTES = 2048
 #: Global flags every capture git runs with: no fsmonitor hook, no index
 #: refresh written back.
-_GIT_FLAGS = ("-c", "core.fsmonitor=", "--no-optional-locks")
+_GIT_FLAGS = ("-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null", "--no-optional-locks")
+#: Config scopes a person set up themselves (a filter there is trusted).
+_TRUSTED_SCOPES = ("system", "global")
 
 
 async def _git(env: ExecEnv, cwd: str, *args: str) -> str:
@@ -48,7 +53,29 @@ async def _git(env: ExecEnv, cwd: str, *args: str) -> str:
     return out.stdout.decode("utf-8", errors="replace")
 
 
+async def _repo_defines_filters(env: ExecEnv, cwd: str) -> bool:
+    """Whether the repository's own config defines a filter driver (whose
+    ``clean`` program ``git status`` would run). Unsure counts as yes."""
+    argv = ["git", *_GIT_FLAGS, "config", "--show-scope", "--get-regexp", r"^filter\."]
+    try:
+        out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20)
+    except Exception:  # noqa: BLE001 — capture is best-effort
+        return True
+    if out.timed_out:
+        return True
+    if out.exit_code == 1 and not out.stdout.strip():
+        return False  # no filter configured anywhere
+    if out.exit_code != 0:
+        return True
+    for line in out.stdout.decode("utf-8", errors="replace").splitlines():
+        if line.strip() and line.split("\t", 1)[0].strip() not in _TRUSTED_SCOPES:
+            return True
+    return False
+
+
 async def _git_status(env: ExecEnv, cwd: str) -> str:
+    if await _repo_defines_filters(env, cwd):
+        return ""
     status = (await _git(env, cwd, "status", "--short")).rstrip("\n")
     encoded = status.encode("utf-8")
     if len(encoded) <= GIT_STATUS_MAX_BYTES:

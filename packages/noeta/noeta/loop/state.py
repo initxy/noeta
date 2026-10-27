@@ -88,6 +88,10 @@ class TaskState:
     #: A turn-only stop arrived with ``now`` messages: the turn reopens once
     #: the stop has landed, so those messages are answered.
     reopen_after_stop: bool = False
+    #: The batch's results carried held messages into the conversation and
+    #: no model call has seen them yet: a stop or failure closing the turn
+    #: now reopens it, so they are answered.
+    held_unseen: bool = False
 
     cancel_requested: str | None = None
     #: Why the last turn failed (``reason: detail``); cleared by a new turn.
@@ -157,6 +161,7 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         state.model_attempts += 1
         state.steps_in_turn += 1
         state.waiting = None
+        state.held_unseen = False
     elif isinstance(ev, ModelReplied):
         resp = ev.response
         state.model_attempts = 0
@@ -190,6 +195,7 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
             results = [c.result for c in state.calls if c.result is not None]
             state._add(Message(role="user", content=list(results)), rec.seq)
             state.calls = []
+            state.held_unseen = state.held_unseen or bool(state.held)
             for m in state.held:
                 state._add(m, rec.seq)
             state.held = []
@@ -279,11 +285,12 @@ def _end_turn(state: TaskState, seq: int) -> None:
     not answered (held behind its calls, or sent with the stop) join the
     conversation and open the next turn, as queued messages do."""
     state.calls = []
-    reopen = bool(state.held) or state.reopen_after_stop
+    reopen = bool(state.held) or state.reopen_after_stop or state.held_unseen
     for m in state.held:
         state._add(m, seq)
     state.held = []
     state.reopen_after_stop = False
+    state.held_unseen = False
     _close_turn(state, seq)
     if reopen and not state.turn_open:
         state.turn_open = True

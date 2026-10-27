@@ -7,6 +7,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from rich.markup import escape
 from rich.syntax import Syntax
 from rich.text import Text as RichText
 from textual import on
@@ -95,7 +96,7 @@ class ApprovalCard(Vertical):
         self.done = False
 
     def compose(self) -> ComposeResult:
-        yield Static(f"[b]Allow?[/b] {self.title_text}")
+        yield Static(f"[b]Allow?[/b] {escape(self.title_text)}")
         if self.prompt and self.prompt != self.title_text:
             yield Static(self.prompt, classes="approval-prompt")
         with Horizontal(classes="approval-buttons"):
@@ -129,12 +130,15 @@ class QuestionCard(Vertical):
 
     DEFAULT_CLASSES = "question"
 
-    def __init__(self, detail: dict[str, Any]) -> None:
+    def __init__(self, detail: dict[str, Any], *, who: str = "") -> None:
         super().__init__()
         self.detail = detail
+        self.who = who
 
     def compose(self) -> ComposeResult:
-        yield Static("[b]The agent asks[/b] (type your answer below)")
+        asker = escape(f"[{self.who}]") if self.who else "The agent"
+        yield Static(f"[b]{asker} asks[/b] (type your answer below; an option's label "
+                     "picks it, one line per question)")
         questions = self.detail.get("questions") or []
         if questions:
             for q in questions:

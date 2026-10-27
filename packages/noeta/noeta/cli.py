@@ -75,11 +75,22 @@ def _app(s: Settings, *, agents_kw: dict[str, Any] | None = None,
                     own_tasks_only=own_tasks_only, **runtime_kw)
 
 
+def _describe(request: Any) -> str:
+    """What a waiting sub-agent waits for, in one line."""
+    who = f"sub-agent {request.agent or 'agent'!r} (task {request.task_id})"
+    if request.kind == "approval":
+        what = request.prompt or request.tool or request.request_id
+        return f"{who} is waiting for approval: {what}"
+    questions = [str(q.get("question") or "") for q in request.detail.get("questions") or []]
+    return f"{who} is waiting for an answer: {' / '.join(questions) or request.request_id}"
+
+
 async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool,
                       permission_mode: str | None) -> int:
     import msgspec
 
     from noeta.events import ModelReplied, TaskEnded, Waiting
+    from noeta.ext.permissions.pending import follow_tree
     from noeta.types import Usage
 
     async with _app(s, own_tasks_only=True) as app:
@@ -96,12 +107,22 @@ async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool,
                 print(json.dumps({"answer": answer, "task_id": tid, "model": s.model,
                                   "usage": msgspec.to_builtins(usage)}), flush=True)
         if as_json:
+            live: dict[int, int] = {}
+
             def on_delta(task_id: str, delta: Any) -> None:
-                if task_id == tid:
-                    print(json.dumps({"delta": delta.kind, "text": delta.text}), flush=True)
+                if task_id != tid or delta.attempt < live.get(delta.call_seq, 1):
+                    return  # the tail of an attempt that failed
+                live[delta.call_seq] = delta.attempt
+                print(json.dumps({"delta": delta.kind, "text": delta.text,
+                                  "call": delta.call_seq, "attempt": delta.attempt}),
+                      flush=True)
 
             app.deltas(on_delta)
-        async for rec in app.client.watch(tid):
+        async for rec in follow_tree(app.client, tid):
+            if isinstance(rec, list):  # a sub-agent waits on a person
+                print(f"noeta: {_describe(rec[0])}; use the TUI or an editor for "
+                      "interactive work", file=sys.stderr)
+                return 2
             ev = rec.event
             if as_json:
                 sys.stdout.write(msgspec.json.encode(rec).decode() + "\n")

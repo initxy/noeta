@@ -48,6 +48,9 @@ async def gate(run: TaskRun, view: TaskView, call: ToolUse) -> Gate:
             v = await ext.before_tool(view, call)
         except Exception as exc:  # noqa: BLE001 — a failing check denies
             v = Deny(reason=f"permission check failed: {exc}")
+        if isinstance(v, Rewrite) and (v.name or call.name) == call.name \
+                and v.input == call.input:
+            v = None  # a rewrite to the same call is no rewrite
         if v is not None:
             verdicts.append(v)
     for kind in (Deny, Rewrite, Ask):
@@ -166,7 +169,10 @@ async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[
         await run.append(records, creates=creates)
         return
     for ext in run.exts:
-        output = await ext.after_tool(view, use, output)
+        try:
+            output = await ext.after_tool(view, use, output)
+        except Exception:  # a failing hook keeps the output it was given
+            log.exception("extension %s after_tool failed", ext.name)
     meta = dict(output.meta)
     if output.display is not None:
         meta["display"] = output.display

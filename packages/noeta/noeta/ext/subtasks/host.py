@@ -46,6 +46,9 @@ async def pending_requests(client: Client, root_id: str) -> list[PendingRequest]
             continue
         for rid in waiting.ids:
             detail = waiting.detail.get(rid)
+            if waiting.on == "question" and not (
+                    isinstance(detail, dict) and detail.get("on") == "question"):
+                continue  # a question wait also lists the children of other parked calls
             found.append(PendingRequest(task_id=row.task_id, on=waiting.on, request_id=rid,
                                         detail=detail if isinstance(detail, dict) else {}))
     return found
