@@ -183,7 +183,7 @@ def main(argv: list[str] | None = None) -> None:
 
         s = _settings(args)
         servers = EditorServers()
-        asyncio.run(serve_stdio(_app(s, cwd=cwd, agents_kw={"mcp": Mcp(servers)},
+        asyncio.run(serve_stdio(_app(s, cwd=cwd, plugins={"mcp": Mcp(servers)},
                                      own_tasks_only=True),
                                 model=s.model, servers=servers))
         return

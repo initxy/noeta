@@ -105,7 +105,7 @@ async def test_default_agent_requests_match_golden(tmp_path: Path,
     ]
     router = Router(main, child)
     store = SqliteStore(str(tmp_path / "t.db"))
-    agents = default_agents(MODEL, memory_root=str(mem))
+    agents = default_agents(MODEL, plugins={"memory": {"root": str(mem)}})
     rt = Runtime(store=store, agents={a.name: a for a in agents},
                  provider_for=lambda _m: router,  # type: ignore[arg-type,return-value]
                  env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or work)),
