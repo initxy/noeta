@@ -476,6 +476,8 @@ class Options:
     disallowed_tools:
         Tool names (by :class:`ToolRef.name`) to subtract from the parsed
         allow-list. Names that are not present are silently ignored.
+        ``"Bash"`` also subtracts ``Monitor``, ``BashOutput`` and
+        ``KillShell``, so the shell is fully disabled.
     permission_mode:
         Permission-gating strategy. Must be one of ``"default"``,
         ``"acceptEdits"``, ``"bypassPermissions"``.
@@ -778,14 +780,25 @@ def _resolve_effective_policy(
     return sources[0][1] if sources else None
 
 
+#: Built-in tools that run or manage shell commands alongside ``Bash``
+#: (``Monitor`` runs ``bash -c``); disallowing ``Bash`` removes them too.
+_SHELL_COMPANION_TOOLS = frozenset({"Monitor", "BashOutput", "KillShell"})
+
+
 def _compile_tool_list(
     entries: tuple[Any, ...],
     disallowed: tuple[str, ...],
 ) -> tuple[ToolRef, ...]:
-    """Parse each entry, drop names in ``disallowed``, de-duplicate preserving order."""
+    """Parse each entry, drop names in ``disallowed``, de-duplicate preserving order.
+
+    Disallowing ``Bash`` also drops the tools that run or manage shell
+    commands (``_SHELL_COMPANION_TOOLS``), so it really disables the shell.
+    """
     seen_names: set[str] = set()
     out: list[ToolRef] = []
     disallowed_set = set(disallowed)
+    if "Bash" in disallowed_set:
+        disallowed_set |= _SHELL_COMPANION_TOOLS
     for entry in entries:
         ref = _compile_tool(entry)
         if ref.name in disallowed_set:

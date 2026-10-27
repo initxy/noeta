@@ -44,6 +44,19 @@ def test_deny_and_require_approval_first_match() -> None:
     assert _verdict(rules, "shell_run", {}) is Verdict.DENY
 
 
+def test_bash_rule_also_covers_monitor_command() -> None:
+    rules = (
+        PreToolUseRule(
+            match_tool="Bash",
+            action="deny",
+            match_arg=MatchArg(path=("command",), op="contains", value="rm -rf"),
+        ),
+    )
+    assert _verdict(rules, "Monitor", {"command": "rm -rf /"}) is Verdict.DENY
+    assert _verdict(rules, "Monitor", {"command": "tail -f log"}) is Verdict.ALLOW
+    assert _verdict(rules, "Read", {"command": "rm -rf /"}) is Verdict.ALLOW
+
+
 def test_glob_match() -> None:
     rules = (PreToolUseRule(match_tool="mcp__*", action="require_approval"),)
     assert _verdict(rules, "mcp__git__commit", {}) is Verdict.REQUIRE_APPROVAL
