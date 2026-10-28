@@ -51,7 +51,8 @@ APPROVED = ("The user approved the plan, so you can start coding now. If a todo 
 KEEP_PLANNING = ("The user did not approve the plan and wants you to keep planning; you are "
                  "still in plan mode.")
 KEEP_PLANNING_FEEDBACK = KEEP_PLANNING + " What they said about it:\n{feedback}"
-NOT_IN_PLAN_MODE = "Plan mode is not on, so there is no plan to approve."
+NOT_IN_PLAN_MODE = ("Plan mode is not on, so there is no plan to approve. To plan first, call "
+                    "EnterPlanMode; if your plan was already approved, go on implementing it.")
 NO_PLAN = "There is no plan at {path} yet. Write the plan there first, then call this tool."
 
 #: ``EnterPlanMode``'s result: what planning means until the plan is approved.
