@@ -163,7 +163,8 @@ def open_store(url: str) -> Any:
     return registry.store(url)
 
 
-#: The projects whose ``.noeta/plugins`` may load: ``{"projects": [path, ...]}``,
+#: The projects whose gated directories (``PROJECT_GATED_DIRS``) may load:
+#: ``{"projects": [path, ...]}``,
 #: written by ``noeta trust``.
 TRUST_FILE = "trusted.json"
 
@@ -193,23 +194,45 @@ def trust_project(directory: str) -> str:
     return resolved
 
 
+def project_trusted(directory: str) -> bool:
+    """Has the person trusted the project at ``directory`` (``noeta trust``)?"""
+    return str(Path(directory).expanduser().resolve()) in trusted_projects()
+
+
+#: A project's directories that load only once it is trusted, with what each
+#: holds: code, or what changes an agent's plugins, permissions and prompts.
+PROJECT_GATED_DIRS = {
+    ".noeta/plugins": "plugins",
+    ".noeta/agents": "agent files",
+    ".noeta/prompts": "prompt overrides",
+    ".noeta/skills": "skills",
+    ".agents/skills": "skills",
+}
+
+
+def _untrusted_notice(cwd: str | None, sub: str) -> str | None:
+    """The notice for ``<cwd>/<sub>`` left alone because the project is not
+    trusted; ``None`` when it is absent or the project is trusted."""
+    if not cwd:
+        return None
+    project = Path(cwd).expanduser().resolve()
+    local = project / sub
+    if not local.is_dir() or str(project) in trusted_projects():
+        return None
+    return (f"{local} was not loaded: this project is not trusted "
+            f"(run `noeta trust` in {project} to load its {PROJECT_GATED_DIRS[sub]})")
+
+
 def load_plugin_files(cwd: str | None) -> list[str]:
     """Load the plugin files of ``~/.noeta/plugins`` and, for a trusted
     project, ``<cwd>/.noeta/plugins``. Returns notices for the person: a
     project's plugin directory left alone because it is not trusted."""
     dirs = [HOME / "plugins"]
-    notices = []
-    if cwd:
-        project = Path(cwd).expanduser().resolve()
-        local = project / ".noeta" / "plugins"
-        if local.is_dir():
-            if str(project) in trusted_projects():
-                dirs.append(local)
-            else:
-                notices.append(f"{local} was not loaded: this project is not trusted "
-                               f"(run `noeta trust` in {project} to load its plugins)")
+    notice = _untrusted_notice(cwd, ".noeta/plugins")
+    if cwd and notice is None and (Path(cwd).expanduser() / ".noeta" / "plugins").is_dir():
+        dirs.append(Path(cwd).expanduser().resolve() / ".noeta" / "plugins")
     registry.load_plugin_files(dirs)
-    return notices
+    return [notice] if notice else []
 
 
 def from_settings(settings: Settings, *, cwd: str | None = None,
@@ -222,27 +245,33 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     and the ``.mcp.json`` servers it consents to), agent files
     (``~/.noeta/agents``, then ``<cwd>/.noeta/agents``) and the plugin
     settings of ``config.toml``; ``plugins`` (the front end's own) goes over
-    those. Front ends (``-p``, ``acp``, the TUI) pass ``own_tasks_only`` so
-    their worker never picks up another process's task from the shared
-    store; ``worker`` and ``serve`` serve every task."""
+    those. A project's :data:`PROJECT_GATED_DIRS` load only once it is
+    trusted; each one skipped is a notice in ``app.notices``. Front ends
+    (``-p``, ``acp``, the TUI) pass ``own_tasks_only`` so their worker never
+    picks up another process's task from the shared store; ``worker`` and
+    ``serve`` serve every task."""
     from noeta.agents import default_agents
     from noeta.agents.agent_files import read_agent_dir
     from noeta.host.local import LocalApp
 
     notices = load_plugin_files(cwd)
+    notices += [n for sub in PROJECT_GATED_DIRS if sub != ".noeta/plugins"
+                if (n := _untrusted_notice(cwd, sub)) is not None]
     for notice in notices:
         log.warning("%s", notice)
     files = read_agent_dir(HOME / "agents")
-    if cwd:
+    if cwd and project_trusted(cwd):
         files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
     table = merge_plugin_settings(
         {"memory": {"root": str(HOME / "memory")},
          "hooks": {"settings_files": [str(HOME / "settings.json")]},
-         "mcp": {"settings_files": [str(HOME / "settings.json")], "project": True}},
+         "mcp": {"settings_files": [str(HOME / "settings.json")], "project": True},
+         "skills": {"trusted": project_trusted}},
         settings.plugins, plugins or {})
     agents = default_agents(settings.model, plugins=table, add=settings.add_plugins,
                             extra_files=files)
     runtime_kw.setdefault("prompt_dirs", [str(HOME / "prompts")])
+    runtime_kw.setdefault("workspace_trusted", project_trusted)
     app = LocalApp(open_store(settings.store_url), agents,
                    settings.make_provider(), own_tasks_only=own_tasks_only,
                    task_config={"prompts": settings.prompts} if settings.prompts else None,

@@ -52,7 +52,7 @@ def _parser() -> argparse.ArgumentParser:
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8642)
     sv.add_argument("--no-worker", action="store_true", help="API only; workers run elsewhere")
-    sub.add_parser("trust", help="load this project's .noeta/plugins from now on")
+    sub.add_parser("trust", help="load this project's plugins, agents, prompts and skills")
     sub.add_parser("plugins", help="list the plugins and where each comes from")
     return ap
 
@@ -200,7 +200,8 @@ def main(argv: list[str] | None = None) -> None:
     cwd = os.path.abspath(args.cwd or os.getcwd())
     if args.command == "trust":
         from noeta.cli.config import trust_project
-        print(f"trusted {trust_project(cwd)}: its .noeta/plugins load from now on")
+        print(f"trusted {trust_project(cwd)}: its plugins, agent files, prompt overrides "
+              "and skills load from now on")
         return
     if args.command == "plugins":
         _plugins(cwd)

@@ -132,7 +132,9 @@ class TaskRun:
         and record them so every later pickup sends the same bytes."""
         env = self.env()
         cwd = str(self.state.config.get("cwd") or getattr(env, "cwd", "") or "")
-        found = await load_overrides(self.rt.prompt_dirs, env, cwd)
+        trusted = self.rt.workspace_trusted
+        found = await load_overrides(self.rt.prompt_dirs, env, cwd,
+                                     workspace=trusted is None or (bool(cwd) and trusted(cwd)))
         view = self.view()
         view.record(CORE, "prompts", found)
         await self.flush(view)

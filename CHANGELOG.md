@@ -16,6 +16,12 @@ All notable changes to Noeta are documented here. The format is based on
   command for wrappers, destructive file programs and interpreters. The approval card (TUI)
   and the ACP option name the rule (`Always allow Bash(git push *)`), and no "always" choice
   is offered when nothing would be remembered. Approval details carry `always_label`.
+- **An untrusted project no longer configures the agent.** `noeta` read `<cwd>/.noeta/agents`
+  unconditionally, so a cloned repository could replace `main` with one in
+  `bypassPermissions` running a command hook. A project's `.noeta/agents`, `.noeta/prompts`,
+  `.noeta/skills` and `.agents/skills` now load only after `noeta trust`, like its
+  `.noeta/plugins`; each one skipped is a notice. `Runtime.workspace_trusted` gates the
+  workspace's prompt overrides (`None`, the default, trusts every workspace).
 - `make example` ran a build uv had cached; it now installs the example plugin editable.
 - A second `registry.provider()` call for a family failed once that family's adapter module
   had been imported (the entry point named a package attribute the submodule rebound).

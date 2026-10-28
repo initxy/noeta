@@ -53,9 +53,9 @@ the built-in ones exactly like yours.
 - **Plugins** subclass `noeta.Extension`: tools, system-prompt parts, reminders, slash
   commands, gates on tool calls, hooks on events, state folded from the task's log. Register one
   under the `noeta.plugins` entry point group, or drop the file in `~/.noeta/plugins/` (a
-  project's `.noeta/plugins/` loads after `noeta trust`), and name it in an agent file or
-  `config.toml`. A tool can ask the person (`noeta.ask`) and tell them things (`notify`); the
-  terminal UI and editors show both. `examples/hello-plugin` is a complete one.
+  project's `.noeta/plugins/`, like its `.noeta/agents`, `prompts` and `skills`, loads after
+  `noeta trust`), and name it in an agent file or `config.toml`. A tool can ask the person
+  (`noeta.ask`) and tell them things (`notify`); the terminal UI and editors show both. `examples/hello-plugin` is a complete one.
 - **Plugin settings** live in `~/.noeta/config.toml`:
 
   ```toml
