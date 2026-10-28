@@ -24,14 +24,14 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import msgspec
 
 from noeta.core.errors import ContextOverflow, ModelError, TurnDone, TurnFailed
 from noeta.core.events import Compacted
 from noeta.core.execenv import is_local
-from noeta.core.extension import Command, CommandContext, Extension, TaskView
+from noeta.core.extension import Command, CommandContext, Deny, Extension, TaskView
 from noeta.core.loop.request import cache_breakpoints
 from noeta.core.loop.state import TaskState
 from noeta.core.models import model_limits
@@ -211,10 +211,12 @@ class Compaction(Extension):
             if view.complete is not None:
                 window = self._window(request.model)
                 cut = self._cut(state, request, at, window)
-                if self._through(state, cut) is not None:
+                extra = await self._instructions(view, "manual", args) \
+                    if self._through(state, cut) is not None else None
+                if extra is not None:
                     await self._compact(view, state, request, cut, reason="manual",
                                         estimated=self._tokens(state, request, at)[0],
-                                        extra=args)
+                                        extra=extra)
             raise TurnDone()
         if not self.auto or view.complete is None:
             return request
@@ -232,7 +234,11 @@ class Compaction(Extension):
                 < RAPID_REFILL_TURNS and ext.rapid >= RAPID_REFILL_LIMIT:
             raise TurnFailed(THRASHING_REASON, THRASHING_DETAIL.format(
                 turns=RAPID_REFILL_TURNS, limit=RAPID_REFILL_LIMIT))
-        new = await self._compact(view, state, request, cut, reason="auto", estimated=tokens)
+        extra = await self._instructions(view, "auto", "")
+        if extra is None:
+            return request
+        new = await self._compact(view, state, request, cut, reason="auto", estimated=tokens,
+                                  extra=extra)
         return msgspec.structs.replace(request, messages=[*new.messages, *extras],
                                        cache_after=cache_breakpoints(new))
 
@@ -244,8 +250,11 @@ class Compaction(Extension):
         n = len(state.messages)
         if self._through(state, n) is None:
             return False
+        extra = await self._instructions(view, "auto", "")
+        if extra is None:
+            return False
         await self._compact(view, state, request, n, reason="overflow",
-                            estimated=self._tokens(state, request, n)[0])
+                            estimated=self._tokens(state, request, n)[0], extra=extra)
         return True
 
     # ------------------------------------------------------------ measuring
@@ -303,6 +312,25 @@ class Compaction(Extension):
         return max(seqs) if seqs else None
 
     # ------------------------------------------------------------ compacting
+
+    async def _instructions(self, view: TaskView, trigger: Literal["manual", "auto"],
+                            instructions: str) -> str | None:
+        """The summary's extra instructions once every extension has had its
+        say (``Extension.before_compact``), or ``None`` when one refused this
+        compaction (the person is told why)."""
+        parts = [instructions.strip()] if instructions.strip() else []
+        for ext in view.extensions:
+            try:
+                verdict = await ext.before_compact(view, trigger, instructions)
+            except Exception:  # a failing extension does not hold compaction up
+                log.exception("extension %s before_compact failed", ext.name)
+                continue
+            if isinstance(verdict, Deny):
+                view.notify(f"Compaction skipped: {verdict.reason or ext.name}")
+                return None
+            if isinstance(verdict, str) and verdict.strip():
+                parts.append(verdict.strip())
+        return "\n\n".join(parts)
 
     async def _compact(self, view: TaskView, state: TaskState, request: ModelRequest,
                        cut: int, *, reason: str, estimated: int, extra: str = "") -> TaskState:

@@ -290,6 +290,15 @@ class Extension:
         """Observe each appended event (metrics, audit, UI bridges). Records
         made here are appended right after."""
 
+    async def before_compact(self, view: TaskView, trigger: Literal["manual", "auto"],
+                             instructions: str) -> str | Deny | None:
+        """A compaction is about to summarize the conversation (``manual``:
+        a ``/compact``; ``auto``: the context filled up). ``instructions``
+        is what the person asked the summary to focus on. Return text to add
+        to those instructions, a ``Deny`` to skip this compaction, or
+        ``None``. The compacting extension asks every extension in order."""
+        return None
+
     async def on_context_overflow(self, view: TaskView) -> bool:
         """The model refused the request as too long. Return ``True`` after
         making room (recording a compaction); the call is then retried.
