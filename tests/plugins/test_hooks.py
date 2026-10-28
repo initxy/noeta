@@ -99,7 +99,9 @@ async def test_pre_tool_use_json_can_ask(tmp_path: Path) -> None:
         if told.exists() and told.read_text():
             break
         await asyncio.sleep(0.02)
-    assert json.loads(told.read_text())["message"] == "Noeta needs your permission"
+    told_json = json.loads(told.read_text())
+    assert told_json["message"] == "Noeta needs your permission to use Read"
+    assert told_json["notification_type"] == "permission_prompt"
 
 
 async def test_post_tool_use_feedback_follows_the_result(tmp_path: Path) -> None:
