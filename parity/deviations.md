@@ -30,3 +30,10 @@ A row without an id is a difference the replay cannot see.
 | | The `!`-prefix rule (ask the user to run an interactive command as `! <command>`) is left out of the main prompt (`main.session.1`). | No noeta front end runs `!` commands yet; the rule returns with that front-end feature. |
 | | The environment section names noeta's own front ends instead of Claude Code's, and leaves out fast mode (`main.envp.2`, `main.envp.3`). | Product facts of Claude Code; noeta has no fast mode. |
 | | The attribution note's PR footer links to noeta, and is left out for a model the catalog gives no display name. | The footer names the tool that wrote the PR; the trailer needs the model's name. |
+
+## Instruction files
+
+| id | difference | reason |
+|---|---|---|
+| | A directory with no `CLAUDE.md` / `.claude/CLAUDE.md` shows its `NOETA.md`, else its `AGENTS.md` (`rem.instructions.5`). | noeta's own file and the cross-vendor convention keep working; a directory Claude Code reads is read the same. |
+| | An `@path` import from a repository file that leaves the repository directory and the working directory is skipped, not asked about (`rem.instructions.7`). | No noeta front end has Claude Code's approval dialog for external imports; skipping is the safe side of it. |
