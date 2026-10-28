@@ -35,14 +35,10 @@ from noeta.core.events import Recorded, TaskEnded, Waiting
 from noeta.core.extension import (
     Command,
     CommandContext,
-    Deny,
     Extension,
-    Gate,
-    Rewrite,
     TaskView,
 )
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
-from noeta.core.types import ToolUse
 from noeta.plugins.mcp.config import (
     McpConfigError,
     McpError,
@@ -55,7 +51,7 @@ from noeta.plugins.mcp.pool import McpPool, default_pool
 from noeta.plugins.mcp.prompts import McpPrompt, expand_prompt, list_prompts
 from noeta.plugins.mcp.results import render_result
 from noeta.plugins.mcp.settings import read_servers, servers_from
-from noeta.plugins.mcp.tools import MCP_CALL_TOOL, McpCallTool, McpTool, ToolSearchTool, route_call
+from noeta.plugins.mcp.tools import ListMcpResourcesTool, McpTool, ReadMcpResourceTool
 
 __all__ = ["Mcp", "ServersFn"]
 
@@ -120,12 +116,12 @@ class Mcp(Extension):
     # ------------------------------------------------------------ state
 
     def initial_state(self) -> Any:
-        return {"servers": None, "deferred": False, "down": {}}
+        return {"servers": None, "down": {}}
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         st = dict(state or self.initial_state())
         if kind == "listed":
-            st["servers"], st["deferred"] = data["servers"], data["deferred"]
+            st["servers"] = data["servers"]
         elif kind == "server_down":
             st["down"] = {**st["down"], data["alias"]: data["reason"]}
         elif kind == "server_up":
@@ -145,34 +141,25 @@ class Mcp(Extension):
         if cached is not None and cached[0] is st:
             return cached[1]
         tools: list[Tool] = []
-        deferred: dict[str, McpTool] = {}
         for server in st["servers"]:
             for t in server["tools"]:
-                tool = McpTool(name=t["name"], alias=server["alias"], remote=t["remote"],
-                               description=t["description"], input_schema=t["input_schema"],
-                               invoke=self._invoke, advertised=not server["deferred"])
-                tools.append(tool)
-                if server["deferred"]:
-                    deferred[tool.name] = tool
-        if st["deferred"]:
-            # Offered whenever a deferred server is configured, even while it
-            # is down: an outage must not move the stable prefix.
-            tools += [ToolSearchTool(deferred), McpCallTool(deferred)]
+                tools.append(McpTool(name=t["name"], alias=server["alias"], remote=t["remote"],
+                                     description=t["description"],
+                                     input_schema=t["input_schema"], invoke=self._invoke,
+                                     deferred=server.get("deferred", True)))
+        if st["servers"] or st.get("down"):
+            # Offered whenever a server is configured, even while it is down:
+            # an outage must not move the stable prefix.
+            tools += [ListMcpResourcesTool(self._servers_of, self._use),
+                      ReadMcpResourceTool(self._servers_of, self._use)]
         self._tools[view.task_id] = (st, tools)
         return tools
 
-    def _deferred(self, view: TaskView) -> dict[str, McpTool]:
-        return {t.name: t for t in self.tools(view)
-                if isinstance(t, McpTool) and not t.advertised}
+    def _servers_of(self, ctx: ToolContext) -> dict[str, McpServer]:
+        return dict(self._known.get(ctx.task_id, {}))
 
-    async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
-        if call.name != MCP_CALL_TOOL:
-            return None
-        try:
-            target, args = route_call(call.input, self._deferred(view))
-        except ValueError as exc:
-            return Deny(reason=str(exc))
-        return Rewrite(name=target, input=args)
+    async def _use(self, ctx: ToolContext, server: McpServer, request: Any) -> Any:
+        return await self.pool().use(server, self._scopes.get(ctx.task_id), request, retry=True)
 
     async def _invoke(self, tool: McpTool, args: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         server = self._known.get(ctx.task_id, {}).get(tool.alias)
@@ -318,9 +305,9 @@ class Mcp(Extension):
             for t in entry["tools"]:
                 owner[t["name"]] = server.alias
             entries.append(entry)
-        data = {"servers": entries, "deferred": any(s.deferred for s in servers)}
+        data = {"servers": entries}
         st = view.ext_state(self.name) or self.initial_state()
-        if st.get("servers") != entries or st.get("deferred") != data["deferred"]:
+        if st.get("servers") != entries:
             view.record(self.name, "listed", data)
         down = st.get("down") or {}
         for alias, reason in failures.items():
@@ -355,7 +342,7 @@ def _server_entry(server: McpServer, raw: list[dict[str, Any]]) -> dict[str, Any
         if not isinstance(schema, dict):
             schema = {"type": "object", "additionalProperties": True}
         tools[name] = {"name": name, "remote": remote,
-                       "description": describe_tool(server.alias, r.get("description")),
+                       "description": describe_tool(r.get("description")),
                        "input_schema": schema}
     return {"alias": server.alias, "deferred": server.deferred,
             "tools": [tools[n] for n in sorted(tools)]}

@@ -57,7 +57,6 @@ DEFAULT_RISK: Mapping[str, str] = {
     "open_app": "low",
     "run_skill_script": "high",
     "ToolSearch": "low",
-    "McpCall": "low",
     "Task": "low",
     "TodoWrite": "low",
     "AskUserQuestion": "low",

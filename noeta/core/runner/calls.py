@@ -7,6 +7,7 @@ import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from noeta.core.deferred import is_deferred
 from noeta.core.events import (
     Event,
     ExtensionRecorded,
@@ -96,6 +97,12 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     runnable: list[tuple[ToolUse, Tool]] = []
     asks: dict[str, Ask] = {}
     for c in [c for c in run.state.calls if c.use.id in call_ids]:
+        wanted = tools.get(c.use.name)
+        if wanted is not None and is_deferred(wanted) \
+                and c.use.name not in run.state.loaded_tools:
+            await run.append([run.error_result(
+                c.use.id, texts.DEFERRED_NOT_LOADED.format(name=c.use.name))])
+            continue
         use, verdict = await resolve(run, view, c.use)
         if isinstance(verdict, Deny):
             await run.append([run.error_result(use.id, verdict.reason or "denied")])

@@ -27,7 +27,7 @@ from noeta.core.errors import (
     RateLimited,
     Transient,
 )
-from noeta.core.types import Image, Message, ModelRequest, Text, ToolResult
+from noeta.core.types import Image, Message, ModelRequest, Text, ToolReference, ToolResult
 
 __all__ = [
     "HOST_INJECTED_PREAMBLE",
@@ -104,6 +104,9 @@ def tool_result_text(block: ToolResult) -> str:
     anything outside the host has into the prompt, and it must not be able to
     spell a host-turn boundary.
     """
+    refs = [b.tool_name for b in block.content if isinstance(b, ToolReference)]
+    if refs and not block.text:
+        return "Loaded: " + ", ".join(refs)
     return neutralize_reserved_tags(block.text)
 
 

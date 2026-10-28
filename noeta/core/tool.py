@@ -9,7 +9,7 @@ from typing import Any, Literal, Protocol
 import msgspec
 
 from noeta.core.execenv import ExecEnv
-from noeta.core.types import Display, Image, Struct, Text
+from noeta.core.types import Display, Image, Struct, Text, ToolReference
 
 
 class Park(Struct):
@@ -25,7 +25,7 @@ class Park(Struct):
 
 
 class ToolOutput(Struct):
-    content: list[Text | Image] = msgspec.field(default_factory=list)
+    content: list[Text | Image | ToolReference] = msgspec.field(default_factory=list)
     is_error: bool = False
     #: Recorded with the result for front ends and extensions; never sent to
     #: the model.

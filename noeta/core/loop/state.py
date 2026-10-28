@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from noeta.core.deferred import TOOL_LOADED_TEXT
 from noeta.core.events import (
     Answer,
     Cancel,
@@ -27,7 +28,7 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.prompts import resolve
-from noeta.core.types import Message, StopReason, Text, ToolResult, ToolUse, Usage
+from noeta.core.types import Message, StopReason, Text, ToolReference, ToolResult, ToolUse, Usage
 
 Reducer = Callable[[Any, str, Any], Any]
 
@@ -112,6 +113,10 @@ class TaskState:
     #: Prompt override files found when the task first started (name ->
     #: text, see ``noeta.core.prompts``); ``None`` until they were looked for.
     prompt_files: dict[str, str] | None = None
+
+    #: Deferred tools a ``ToolSearch`` result loaded, in load order; kept
+    #: across compaction (``noeta.core.deferred``).
+    loaded_tools: list[str] = field(default_factory=list)
 
     usage: Usage = field(default_factory=Usage)
     ext: dict[str, Any] = field(default_factory=dict)
@@ -205,9 +210,14 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         for c in state.calls:
             if c.use.id == ev.result.call_id:
                 c.result = ev.result
+        refs = [b.tool_name for b in ev.result.content if isinstance(b, ToolReference)]
+        state.loaded_tools += [n for n in dict.fromkeys(refs) if n not in state.loaded_tools]
         if state.calls and not state.open_calls:
             results = [c.result for c in state.calls if c.result is not None]
-            state._add(Message(role="user", content=list(results)), rec.seq)
+            content: list[Any] = list(results)
+            if any(isinstance(b, ToolReference) for r in results for b in r.content):
+                content.append(Text(text=TOOL_LOADED_TEXT))
+            state._add(Message(role="user", content=content), rec.seq)
             state.calls = []
             state.held_unseen = state.held_unseen or bool(state.held)
             for m in state.held:

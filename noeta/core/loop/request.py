@@ -8,10 +8,11 @@ import hashlib
 from collections.abc import Sequence
 from typing import Any
 
+from noeta.core.deferred import request_tools
 from noeta.core.extension import ContextPart
 from noeta.core.loop.state import TaskState
 from noeta.core.tool import Tool
-from noeta.core.types import ModelRequest, SystemPart, ToolSpec, dumps
+from noeta.core.types import ModelRequest, SystemPart, dumps
 
 
 def build_request(
@@ -41,9 +42,8 @@ def build_request(
         model=model,
         system=system,
         messages=messages,
-        tools=[ToolSpec(name=t.name, description=state.prompt(f"tool/{t.name}", t.description),
-                        input_schema=t.input_schema)
-               for t in tools if getattr(t, "advertised", True)],
+        tools=request_tools(tools, state.loaded_tools,
+                            lambda t: state.prompt(f"tool/{t.name}", t.description)),
         max_tokens=max_tokens,
         effort=effort,  # type: ignore[arg-type]
         output_schema=output_schema,

@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Union
 
+from noeta.core.deferred import deferred_names
 from noeta.core.events import Compacted, Event, ExtensionRecorded, Recorded
 from noeta.core.execenv import ExecEnv
 from noeta.core.tool import Tool, ToolOutput
@@ -161,6 +162,14 @@ class TaskView:
                 if tool.name == name:
                     return tool
         return None
+
+    def deferred_tool_names(self) -> list[str]:
+        """The names of the deferred tools this task offers, sorted (loaded
+        or not): the list a message announces so the model can load them
+        with ``ToolSearch`` (``noeta.core.deferred``)."""
+        allowed = self.allowed_tools
+        return deferred_names(t for ext in self.extensions for t in ext.tools(self)
+                              if allowed is None or t.name in allowed)
 
     def compacted(self, event: Compacted) -> None:
         """Record a compaction (the compaction extension's one core event)."""

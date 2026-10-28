@@ -85,6 +85,12 @@ expand through `noeta/core/commands.py`: a template filled with `{args}`, or tex
 returns. A tool asks the person by parking on `ask(...)` (`noeta/core/questions.py`) and tells
 them something with `notify`; neither reaches the model as the user.
 
+## Deferred tool
+
+A tool that sets `deferred = True` is named to the model (`TaskView.deferred_tool_names`) and
+sent only once the model loads it with `ToolSearch`, which the runner adds while any is offered
+(`noeta/core/deferred.py`). MCP tools are deferred by default.
+
 ## Agent file
 
 An agent is a markdown file (`noeta/agents/agent_files.py`): YAML frontmatter (`name`,
