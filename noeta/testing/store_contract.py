@@ -204,6 +204,22 @@ async def test_on_change_reports_commits(store: Store) -> None:
     assert seen == [("t1", "created"), ("t1", "posted")]
 
 
+async def test_a_release_is_reported_only_when_it_changed_a_row(store: Store) -> None:
+    await store.create(new())
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None
+    assert await store.hold("t1", "w", 30)
+    seen: list[tuple[str, str]] = []
+    unsubscribe = store.on_change(lambda t, k: seen.append((t, k)))
+    await store.unhold("t1", "w2")  # not w2's hold
+    await store.unhold("t1", "w")
+    await store.unhold("t1", "w")  # already gone
+    await store.release(claim)
+    await store.release(claim)  # already given back
+    unsubscribe()
+    assert seen == [("t1", "released"), ("t1", "released")]
+
+
 async def test_queues_partition_claims(store: Store) -> None:
     await store.create(new("a", queue="gpu"))
     assert await store.claim("w", ["default"], 30) is None

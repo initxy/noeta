@@ -116,7 +116,9 @@ class NewTask(Struct):
     inbox: list[InboxKind] = []
 
 
-ChangeKind = Literal["appended", "posted", "created"]
+#: ``released``: a claim or hold was given back, so the task (tree) may be
+#: claimable again.
+ChangeKind = Literal["appended", "posted", "created", "released"]
 OnChange = Callable[[str, ChangeKind], None]
 
 

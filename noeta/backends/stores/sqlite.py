@@ -478,18 +478,18 @@ class SqliteStore:
                                 (root_id, worker)).rowcount
 
         if await self._write(tx):
-            self._notify([(root_id, "posted")])
+            self._notify([(root_id, "released")])
 
     async def release(self, claim: Claim) -> None:
-        def tx(conn: sqlite3.Connection) -> None:
-            conn.execute(
+        def tx(conn: sqlite3.Connection) -> int:
+            return conn.execute(
                 "UPDATE tasks SET status = 'ready', owner = NULL, lease_until = NULL,"
                 " updated_at = ? WHERE task_id = ? AND owner_epoch = ? AND status = 'running'",
                 (time.time(), claim.task_id, claim.epoch),
-            )
+            ).rowcount
 
-        await self._write(tx)
-        self._notify([(claim.task_id, "posted")])
+        if await self._write(tx):
+            self._notify([(claim.task_id, "released")])
 
 
 def open_url(url: str) -> SqliteStore:

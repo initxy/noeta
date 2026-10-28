@@ -329,7 +329,7 @@ class PostgresStore:
         if own is not None and not own.closed:
             return  # already reported by this process
         task_id, _, kind = payload.rpartition(":")
-        if task_id and kind in ("appended", "posted", "created"):
+        if task_id and kind in ("appended", "posted", "created", "released"):
             self._deliver([(task_id, kind)])  # type: ignore[list-item]
 
     def _deliver(self, changes: Sequence[tuple[str, ChangeKind]]) -> None:
@@ -651,11 +651,11 @@ class PostgresStore:
             cur = await conn.execute(self._q(
                 "DELETE FROM {s}.holds WHERE root_id = %s AND worker = %s"), (root_id, worker))
             if cur.rowcount:
-                await self._notify(conn, [(root_id, "posted")])
+                await self._notify(conn, [(root_id, "released")])
             return cur.rowcount > 0
 
         if await self._tx(tx):
-            self._deliver([(root_id, "posted")])
+            self._deliver([(root_id, "released")])
 
     async def release(self, claim: Claim) -> None:
         async def tx(conn: Conn) -> bool:
@@ -664,11 +664,11 @@ class PostgresStore:
                 f" updated_at = {_NOW} WHERE task_id = %s AND owner_epoch = %s"
                 " AND status = 'running'"), (claim.task_id, claim.epoch))
             if cur.rowcount:
-                await self._notify(conn, [(claim.task_id, "posted")])
+                await self._notify(conn, [(claim.task_id, "released")])
             return cur.rowcount > 0
 
         if await self._tx(tx):
-            self._deliver([(claim.task_id, "posted")])
+            self._deliver([(claim.task_id, "released")])
 
 
 def open_url(url: str) -> PostgresStore:
