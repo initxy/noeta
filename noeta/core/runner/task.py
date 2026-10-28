@@ -48,6 +48,11 @@ from noeta.core.types import Text, ToolResult, user
 log = logging.getLogger("noeta.core.runner")
 
 
+#: Continued conversations followed back from a task (``history_from``)
+#: before the rest of the chain is ignored.
+MAX_HISTORY_DEPTH = 64
+
+
 class LostClaim(Exception):
     pass
 
@@ -150,14 +155,24 @@ class TaskRun:
             self.exts = self.agent.all_extensions()
             self.reducers = {e.name: e.reduce for e in self.exts}
         initial = {e.name: e.initial_state() for e in self.exts}
-        base = None
-        if isinstance(first, TaskCreated) and first.history_from:
-            source = await self.store.read(first.history_from)
-            through = first.history_through
-            base = continued(fold([r for r in source if through is None or r.seq <= through],
-                                  self.reducers, initial))
+        base = await self._history(first, initial)
         self.state = fold(records, self.reducers, initial, state=base)
         self.state.task_id = self.task_id  # the log never names its own task
+
+    async def _history(self, first: Any, initial: dict[str, Any],
+                       depth: int = 0) -> TaskState | None:
+        """The conversation a task created with ``history_from`` starts
+        from: its source's log up to ``history_through``, itself folded on
+        the conversation that source continued (a fork of a fork, a resumed
+        sub-agent resumed again)."""
+        if not isinstance(first, TaskCreated) or not first.history_from \
+                or depth > MAX_HISTORY_DEPTH:
+            return None
+        source = await self.store.read(first.history_from)
+        through = first.history_through
+        base = await self._history(source[0].event if source else None, initial, depth + 1)
+        return continued(fold([r for r in source if through is None or r.seq <= through],
+                              self.reducers, initial, state=base))
 
     async def _keep_claim(self) -> None:
         interval = max(self.rt.lease_seconds / 3, 0.05)

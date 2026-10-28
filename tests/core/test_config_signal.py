@@ -95,3 +95,17 @@ async def test_a_task_created_from_another_log_continues_its_conversation(
     sent = [m.text for m in provider.requests[-1].messages]
     assert sent == ["one", "first", "instead"]
     assert (await client.get(fork)).root_id == fork
+
+
+async def test_a_fork_of_a_fork_keeps_the_whole_conversation(store: SqliteStore) -> None:
+    provider = ScriptedProvider([reply("first"), reply("second"), reply("third")])
+    rt = runtime(store, provider)
+    client = Client(store)
+    tid = await client.create("a", "one", config={"model": "m"})
+    await rt.run_until_idle()
+    fork = await client.create("a", "two", config={"model": "m"}, history_from=tid)
+    await rt.run_until_idle()
+    await client.create("a", "three", config={"model": "m"}, history_from=fork)
+    await rt.run_until_idle()
+    sent = [m.text for m in provider.requests[-1].messages]
+    assert sent == ["one", "first", "two", "second", "three"]
