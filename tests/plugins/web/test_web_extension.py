@@ -183,6 +183,27 @@ async def test_http_transport_redirects_and_media() -> None:
     await client.aclose()
 
 
+def _mock_fetch(handler: Any) -> WebFetchTool:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return WebFetchTool(HttpFetchTransport(client=client))
+
+
+async def test_an_http_error_status_is_a_report_not_a_failure(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/busy":
+            return httpx.Response(503, headers={"retry-after": "30"}, content=b"down")
+        return httpx.Response(404, content=b"<p>missing</p>")
+
+    tool = _mock_fetch(handler)
+    out = await tool.run({"url": "https://site.com/gone", "prompt": "p"}, _ctx(tmp_path))
+    assert not out.is_error
+    assert text(out).startswith("The server answered HTTP 404 Not Found.\n")
+    assert "gh" in text(out) and "Retry-After" not in text(out)
+    busy = await tool.run({"url": "https://site.com/busy", "prompt": "p"}, _ctx(tmp_path))
+    assert not busy.is_error
+    assert "HTTP 503 Service Unavailable" in text(busy) and "Retry-After: 30" in text(busy)
+
+
 class FakeSearch:
     def __init__(self, results: list[SearchResult]) -> None:
         self.results = results

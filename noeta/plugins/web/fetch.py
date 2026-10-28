@@ -13,6 +13,7 @@ import asyncio
 import ipaddress
 import time
 from collections.abc import Awaitable, Callable
+from http import HTTPStatus
 from importlib import resources
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -144,9 +145,35 @@ class CrossHostRedirect(RuntimeError):
         self.location = location
 
 
+class HttpStatus(RuntimeError):
+    """The server answered with a status that is not success: reported to
+    the model as what the server said, not as a failed call."""
+
+    def __init__(self, status: int, retry_after: str | None = None) -> None:
+        super().__init__(f"HTTP {status}")
+        self.status = status
+        self.retry_after = retry_after
+
+
+def status_phrase(status: int) -> str:
+    try:
+        return HTTPStatus(status).phrase
+    except ValueError:
+        return "Unknown Status"
+
+
+def http_status_report(error: HttpStatus) -> str:
+    """What the model is told of an error status."""
+    retry = f"Retry-After: {error.retry_after}\n" if error.retry_after else ""
+    return (f"The server answered HTTP {error.status} {status_phrase(error.status)}.\n{retry}"
+            "Its body was not read. If the page needs a sign-in, fetch it with a tool that "
+            "is signed in instead (`gh` for GitHub, or an MCP server's fetch tool).")
+
+
 class FetchTransport(Protocol):
-    """url -> page. Raises on transport / HTTP failure, on a body that is not
-    text, and :class:`CrossHostRedirect` on a redirect leaving the origin."""
+    """url -> page. Raises on transport failure, :class:`HttpStatus` on an
+    error status, on a body that is not text, and :class:`CrossHostRedirect`
+    on a redirect leaving the origin."""
 
     async def fetch(self, url: str) -> str | FetchedPage: ...
 
@@ -187,7 +214,10 @@ class HttpFetchTransport:
                             raise CrossHostRedirect(current, target)
                         current = target
                         continue
-                    resp.raise_for_status()
+                    if not resp.is_success:
+                        retry = resp.headers.get("retry-after", "").strip()
+                        raise HttpStatus(resp.status_code, retry if retry.isdigit()
+                                         and len(retry) <= 6 else None)
                     content_type = resp.headers.get("content-type", "")
                     check_text_media(current, content_type)
                     chunks: list[bytes] = []
@@ -273,6 +303,9 @@ class WebFetchTool:
                     "The redirect was not followed and nothing was "
                     "fetched. Fetch that URL if it is what you need.",
                     redirect=location)
+            except HttpStatus as status:
+                return text_output(http_status_report(status), url=url,
+                                   status=status.status)
             except Exception as exc:  # noqa: BLE001 - degrade, don't crash the step
                 return text_output(f"WebFetch failed: {exc}", is_error=True)
             title, markdown = render(fetched)

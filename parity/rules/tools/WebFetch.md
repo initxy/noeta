@@ -48,6 +48,7 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | id | case | shape | noeta today |
 |---|---|---|---|
 | `tool.WebFetch.r.1` | success | only the small model's answer text (`Example Domain`), no header, no URL/title lines, no source warning | covered |
+| `tool.WebFetch.r.3` | error status (4xx/5xx) | not an error result: the status and its reason phrase, a `Retry-After` line when the server sent a numeric one, that the body was not read, and to use a signed-in tool (`gh`, an MCP fetch tool) for a page behind a sign-in (2.1.312 bundle) | covered |
 | `tool.WebFetch.r.2` | cache marker | in `s1` the result block carried `cache_control` with a 1-hour TTL (OAuth only, not baseline) | n/a (baseline uses no 1-hour TTL here) |
 
 ## Variants
