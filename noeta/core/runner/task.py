@@ -49,7 +49,7 @@ from noeta.core.runner import texts
 from noeta.core.runner.runtime import Runtime
 from noeta.core.store import Claim, NewTask, Post, Snapshot, patch_for, pin_history
 from noeta.core.tool import Tool
-from noeta.core.types import Text, ToolResult, user
+from noeta.core.types import Text, Thinking, ToolResult, user
 
 log = logging.getLogger("noeta.core.runner")
 
@@ -77,9 +77,10 @@ class TaskRun:
         self._lost = False
         self._write_lock = asyncio.Lock()
         self._env: Any = None
-        #: The text the model call in flight has streamed so far (what an
-        #: interrupted reply keeps).
+        #: The text the model call in flight has streamed so far, and the
+        #: reasoning blocks it finished (what an interrupted reply keeps).
         self.partial: list[str] = []
+        self.thinking: list[Thinking] = []
         #: An extension posted to this task's inbox with its records
         #: (``TaskView.enqueue``) since the input was last taken.
         self._enqueued = False
@@ -617,11 +618,13 @@ class TaskRun:
     async def _stop_turn(self, call_ids: Sequence[str]) -> None:
         stopped = core_records.TurnStopped()
         if not call_ids and self.state.model_attempts:
-            # Stopped while the reply streamed: the streamed text stays in
-            # the conversation and the marker opens the person's next turn.
-            stopped = core_records.TurnStopped(partial="".join(self.partial),
-                                          marker=texts.INTERRUPTED_MARKER)
-        self.partial = []
+            # Stopped while the reply streamed: the streamed text and the
+            # reasoning finished before it stay in the conversation, and the
+            # marker opens the person's next turn.
+            stopped = core_records.TurnStopped(
+                partial="".join(self.partial), marker=texts.INTERRUPTED_MARKER,
+                thinking=list(self.thinking) or None)
+        self.partial, self.thinking = [], []
         await self._close_calls(call_ids, texts.STOPPED_CALL_ERROR, core_records.event(stopped),
                                 "the parent's turn was stopped")
 

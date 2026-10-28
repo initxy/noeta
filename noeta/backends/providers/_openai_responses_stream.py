@@ -58,6 +58,8 @@ async def consume_stream(
 
     * ``response.output_text.delta`` → text deltas;
       ``response.reasoning_summary_text.delta`` → thinking deltas.
+    * ``response.output_item.done`` of a reasoning item carrying its
+      ciphertext → a ``block`` delta with the finished block.
     * ``response.function_call_arguments.delta`` → swallowed: the terminal
       object carries every call with its complete ``arguments``.
     * ``response.completed`` / ``response.incomplete`` / a ``response.failed``
@@ -88,6 +90,15 @@ async def consume_stream(
                         "text" if event_type == "response.output_text.delta" else "thinking"
                     )
                     on_delta(Delta(kind=kind, text=fragment, index=_output_index(payload)))
+            elif event_type == "response.output_item.done":
+                item = payload.get("item")
+                if (on_delta is not None and isinstance(item, dict)
+                        and item.get("type") == "reasoning"
+                        and isinstance(item.get("encrypted_content"), str)):
+                    # Only a reasoning item with its ciphertext can be sent
+                    # back; it goes to the runner whole for a stopped reply.
+                    on_delta(Delta(kind="block", index=_output_index(payload),
+                                   block=_reasoning_item_to_block(item)))
             elif event_type in (
                 "response.completed",
                 "response.failed",

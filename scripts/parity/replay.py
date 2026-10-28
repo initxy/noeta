@@ -304,14 +304,19 @@ class Endpoint:
                 self.wfile.flush()
 
             def _stall(self) -> None:
-                """A reply that starts and never finishes, for the interrupt step."""
-                head = list(wire.sse([{"type": "text", "text": "Writing"}], None, model=MODEL))
+                """A reply that starts and never finishes, for the interrupt step:
+                a finished thinking block (empty signature, as the recorded
+                gateway sent), then text that is still streaming."""
+                head = list(wire.sse([{"type": "thinking", "thinking": "Planning the answer."},
+                                      {"type": "text", "text": "Writing"}], None, model=MODEL))
                 try:
                     self.send_response(200)
                     self.send_header("content-type", "text/event-stream")
                     self.send_header("transfer-encoding", "chunked")
                     self.end_headers()
-                    for chunk in head[:3]:
+                    # message_start, the thinking block start to stop, the
+                    # text block's start and first delta.
+                    for chunk in head[:7]:
                         self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                     self.wfile.flush()
                     ep.replayer.stalls.set()

@@ -134,9 +134,13 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
 
     current = {"attempt": 1}
     sink, tid, called = run.rt.on_delta, run.task_id, run.state.last_seq
-    run.partial = []
+    run.partial, run.thinking = [], []
 
     def on_delta(d: Delta) -> None:
+        if d.kind == "block":
+            if d.block is not None and (d.block.text or d.block.signature or d.block.data):
+                run.thinking.append(d.block)
+            return
         if d.kind == "text":
             run.partial.append(d.text)
         if sink is not None:
@@ -147,7 +151,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     def on_retry(attempt: int, delay: float, error: Exception) -> None:
         # Hosts see "retrying" (and drop the failed attempt's deltas).
         current["attempt"] = attempt + 1
-        run.partial = []
+        run.partial, run.thinking = [], []
         pending.append(asyncio.ensure_future(run.append([records.event(records.Retry(
             attempt=attempt, delay=delay, error=str(error)[: texts.ERROR_DETAIL_CHARS]))])))
 
@@ -171,7 +175,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         await asyncio.gather(*pending, return_exceptions=True)
         return await run.fail_turn(texts.LLM_ERROR, _detail(exc))
     await asyncio.gather(*pending, return_exceptions=True)
-    run.partial = []
+    run.partial, run.thinking = [], []
 
     if final:
         response = _final_answer(run, response)

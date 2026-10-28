@@ -33,6 +33,7 @@ from noeta.core.events import (
 )
 from noeta.core.prompts import resolve
 from noeta.core.types import (
+    Block,
     Message,
     StopReason,
     Text,
@@ -306,11 +307,12 @@ def _on_core_record(state: TaskState, core: records.CoreRecord, seq: int) -> Non
     if isinstance(core, records.TurnStopped):
         state.stop_turn_requested = None
         if core.marker:
-            # A reply stopped mid-stream keeps what streamed; the marker
-            # (plain text) opens the person's next turn.
+            # A reply stopped mid-stream keeps what streamed, after the
+            # reasoning it finished; the marker (plain text) opens the
+            # person's next turn.
             if core.partial:
-                state._add(Message(role="assistant", content=[Text(text=str(core.partial))]),
-                           seq)
+                content: list[Block] = [*(core.thinking or []), Text(text=str(core.partial))]
+                state._add(Message(role="assistant", content=content), seq)
             state._add(Message(role="user", content=[Text(text=str(core.marker))],
                                origin="inline"), seq)
         _end_turn(state, seq)

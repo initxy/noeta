@@ -222,7 +222,8 @@ class StreamAccumulator:
     """Rebuilds the vendor-shaped ``message`` payload from Messages-API stream
     events, firing :class:`Delta` side effects along the way.
 
-    Only ``text_delta`` / ``thinking_delta`` fragments surface as deltas.
+    Only ``text_delta`` / ``thinking_delta`` fragments surface as deltas,
+    plus each finished reasoning block whole (``kind="block"``).
     ``input_json_delta`` (tool arguments) and ``signature_delta`` accumulate
     **silently** — argument JSON is undecodable while partial and the
     signature is an opaque continuation token. ``redacted_thinking`` blocks
@@ -265,6 +266,7 @@ class StreamAccumulator:
             index = payload.get("index")
             if isinstance(index, int):
                 self._finalize_block(index)
+                self._emit_finished_reasoning(index)
         elif event_name == "message_delta":
             self._apply_message_delta(payload)
         elif event_name == "error":
@@ -331,6 +333,17 @@ class StreamAccumulator:
             block["input"] = json.loads(joined)
         except json.JSONDecodeError as exc:
             self._undecodable[index] = str(exc)
+
+    def _emit_finished_reasoning(self, index: int) -> None:
+        """A reasoning block that just ended goes to the runner whole (a
+        ``block`` delta): a reply stopped later keeps it. One with nothing in
+        it is not sent; a reply that ends normally carries it anyway."""
+        block = self._blocks.get(index)
+        if block is None or block.get("type") not in ("thinking", "redacted_thinking"):
+            return
+        for parsed in _parse_content([block]):
+            if isinstance(parsed, Thinking) and (parsed.text or parsed.signature or parsed.data):
+                self._emit(Delta(kind="block", index=index, block=parsed))
 
     def _apply_message_delta(self, payload: dict[str, Any]) -> None:
         """``message_delta``: the terminal stop signal + output-side usage.

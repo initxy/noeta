@@ -13,8 +13,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar, Union
 
+import msgspec
+
 from noeta.core.events import Event, ExtensionRecorded
-from noeta.core.types import Message, Struct
+from noeta.core.types import Message, Struct, Thinking
 
 #: The extension name the core records its own entries under.
 CORE = "core"
@@ -79,22 +81,31 @@ class Continue(Struct):
 
 
 class TurnStopped(Struct):
-    """The turn was stopped. Stopped mid-reply, ``partial`` is what streamed
-    and ``marker`` opens the person's next turn."""
+    """The turn was stopped. Stopped mid-reply, ``partial`` is the text that
+    streamed, ``thinking`` the reasoning blocks finished before it, and
+    ``marker`` opens the person's next turn."""
 
     kind: ClassVar[str] = "turn_stopped"
     partial: Any = None
     marker: Any = None
+    thinking: list[Thinking] | None = None
 
     def data(self) -> dict[str, Any] | None:
         if self.partial is None and self.marker is None:
             return None
-        return {"partial": self.partial, "marker": self.marker}
+        out: dict[str, Any] = {"partial": self.partial, "marker": self.marker}
+        if self.thinking:
+            out["thinking"] = msgspec.to_builtins(self.thinking)
+        return out
 
     @classmethod
     def parse(cls, data: Any) -> TurnStopped:
         d = _fields(data)
-        return cls(partial=d.get("partial"), marker=d.get("marker"))
+        try:
+            thinking = msgspec.convert(d.get("thinking") or [], list[Thinking]) or None
+        except msgspec.ValidationError:
+            thinking = None
+        return cls(partial=d.get("partial"), marker=d.get("marker"), thinking=thinking)
 
 
 class TurnFailed(Struct):

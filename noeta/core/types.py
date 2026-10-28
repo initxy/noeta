@@ -213,11 +213,17 @@ class ModelResponse(Struct):
 
 
 class Delta(Struct):
-    """A streamed fragment. Never stored; the recorded reply is the truth."""
+    """A streamed fragment. Never stored; the recorded reply is the truth.
 
-    kind: Literal["text", "thinking"]
-    text: str
+    ``kind="block"`` is not a fragment: it hands the runner a reasoning block
+    the provider finished streaming (in ``block``, continuation token and
+    all), so a reply stopped before it ends can keep it. The runner does not
+    pass it on to front ends."""
+
+    kind: Literal["text", "thinking", "block"]
+    text: str = ""
     index: int = 0
+    block: Thinking | None = None
     #: Set by the runner: the log seq of the ``ModelCalled`` this fragment
     #: belongs to, and which attempt of that call (a retry starts over, so a
     #: front end drops the fragments of an earlier attempt).
