@@ -229,7 +229,8 @@ async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[
     if output.display is not None:
         meta["display"] = output.display
     finished = ToolFinished(result=ToolResult(call_id=use.id, content=output.content,
-                                              is_error=output.is_error), meta=meta,
+                                              is_error=output.is_error,
+                                              block_list=output.block_list), meta=meta,
                             end_turn=output.end_turn)
     await run.append([*records, *view.pending, finished],
                      creates=[*creates, *run.staged(view)])

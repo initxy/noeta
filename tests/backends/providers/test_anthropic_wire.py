@@ -279,6 +279,15 @@ async def test_tool_result_with_images_vision_model_emits_content_array() -> Non
 
 
 @respx.mock
+async def test_a_block_list_result_goes_as_a_list_even_as_plain_text() -> None:
+    plain = Message(role="user", content=[ToolResult(
+        call_id="c1", content=[Text(text="a"), Text(text="b")], block_list=True)])
+    body, _ = await _send(_req(model=_VISION_MODEL, messages=[user("q"), _call(), plain]))
+    assert body["messages"][2]["content"][0]["content"] == [
+        {"type": "text", "text": "a"}, {"type": "text", "text": "b"}]
+
+
+@respx.mock
 async def test_tool_result_with_images_non_vision_model_degrades_to_string() -> None:
     body, _ = await _send(
         _req(model=_TEXT_ONLY_MODEL, messages=[user("q"), _call(), _image_result()])

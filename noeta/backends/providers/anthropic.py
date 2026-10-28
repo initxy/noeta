@@ -521,6 +521,9 @@ def _tool_result_content(block: ToolResult, vision: bool) -> Any:
         return [{"type": "tool_reference", "tool_name": r.tool_name} for r in refs]
     text = tool_result_text(block)
     images = tool_result_images(block)
+    if block.block_list and (vision or not images):
+        return [{"type": "text", "text": b.text} if isinstance(b, Text) else _image_to_wire(b)
+                for b in block.content if isinstance(b, (Text, Image))]
     if not images:
         return text
     if not vision:

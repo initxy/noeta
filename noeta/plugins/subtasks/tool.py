@@ -215,7 +215,9 @@ class AgentTool:
             "description": description, "call_id": ctx.call_id, "config": config,
             "queue": queue, "at": time.time(), "worktree": worktree})
         text = texts.LAUNCHED.format(id=child) + (texts.LAUNCHED_FORK if fork else "")
-        return text_output(text, child_id=child)
+        # A one-block list, as Claude Code sends an Agent result.
+        return ToolOutput(content=text_output(text).content, meta={"child_id": child},
+                          block_list=True)
 
 
 class HandbackTool:
