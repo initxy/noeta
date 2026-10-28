@@ -38,6 +38,9 @@ class ToolOutput(Struct):
     #: End the turn once this reply's results land, with this text as the
     #: turn's answer: no further model call (a sub-agent's hand-back).
     end_turn: str | None = None
+    #: Send the result as a list of content blocks even when it is plain
+    #: text (``ToolResult.block_list``).
+    block_list: bool = False
 
 
 def text_output(text: str, *, is_error: bool = False, **meta: Any) -> ToolOutput:

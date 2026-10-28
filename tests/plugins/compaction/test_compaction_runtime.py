@@ -257,6 +257,10 @@ async def test_compact_command(store: SqliteStore) -> None:
     instruction = summ.messages[-1].text
     assert "keep the probe ids" in instruction and instruction.startswith(SUMMARIZE_PROMPT)
     assert "<command-name>" not in "".join(m.text for m in summ.messages)
+    # Claude Code's order: the kept reply, what is given again in the
+    # person's turn, then the command's own message.
+    assert compacted.kept[0].text == "done"
+    assert "<command-name>/compact</command-name>" in compacted.kept[-1].text
     last = (await events(client, tid))[-1]
     assert isinstance(last, Waiting) and last.on == "input"
     # The next message is answered after the summary and the command.

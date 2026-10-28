@@ -66,6 +66,10 @@ class ToolResult(Struct, tag="tool_result", tag_field="type"):
     call_id: str
     content: list[Text | Image | ToolReference]
     is_error: bool = False
+    #: Sent as a list of content blocks even when it is plain text, where an
+    #: adapter otherwise sends a string (Claude Code's shape for MCP and
+    #: Agent results).
+    block_list: bool = False
 
     @property
     def text(self) -> str:

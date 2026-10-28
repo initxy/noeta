@@ -18,6 +18,7 @@ from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, TaskEnded, ToolFinished, Waiting
 from noeta.core.extension import Ask, Deny, Extension, Gate, TaskView
 from noeta.core.runner import Runtime
+from noeta.core.tool import ToolOutput
 from noeta.core.types import Text, ToolResult, ToolUse
 from noeta.plugins.compaction import Compaction
 from noeta.plugins.compaction.extension import command_text
@@ -537,3 +538,145 @@ async def test_sub_agent_start_and_stop(tmp_path: Path) -> None:
     assert denied.content == [Text(text="Run the tests first.")]
     end = [r.event for r in await client.events(child.task_id)][-1]
     assert isinstance(end, TaskEnded) and end.answer == "1 2 3"
+
+
+async def test_agent_hook_looks_with_read_only_tools_then_answers(tmp_path: Path) -> None:
+    hooks = {"Stop": [{"hooks": [{"type": "agent", "prompt": "Was b.txt read?"}]}]}
+    verdicts = [
+        reply("done"),
+        reply("", ("Read", {"file_path": "b.txt"})),
+        reply("", ("StructuredOutput", {"ok": False, "reason": "b.txt says other"})),
+        reply("fixed"),
+        reply("", ("StructuredOutput", {"ok": True, "reason": "fine"})),
+    ]
+    s = await Setup(tmp_path, hooks, verdicts).start()
+    look = s.provider.requests[1]
+    assert {t.name for t in look.tools} == {"Read", "StructuredOutput"}  # no Write / Edit
+    assert "Was b.txt read?" in look.messages[-1].text
+    seen = s.provider.requests[2].messages[-1].content
+    assert isinstance(seen[0], ToolResult) and "other" in seen[0].text
+    assert s.provider.requests[3].messages[-1].text == "b.txt says other"
+    assert len(s.provider.requests) == 5
+
+
+async def test_agent_hook_that_never_answers_fails_open(tmp_path: Path) -> None:
+    hooks = {"Stop": [{"hooks": [{"type": "agent", "prompt": "check"}]}]}
+    s = await Setup(tmp_path, hooks, [reply("done"), reply("I think it is fine")]).start()
+    assert len(s.provider.requests) == 2
+    assert any("Stop hook failed" in n for n in await s.notices())
+
+
+class McpLike(Extension):
+    name = "fake-mcp"
+
+    def __init__(self, answer: str, is_error: bool = False) -> None:
+        self.calls: list[dict[str, Any]] = []
+        outer = self
+
+        class Verify:
+            name = "mcp__chk__verify"
+            description = "verify"
+            input_schema: dict[str, Any] = {"type": "object"}
+            read_only = False
+
+            async def run(self, input: dict[str, Any], ctx: Any) -> ToolOutput:
+                outer.calls.append(input)
+                return ToolOutput(content=[Text(text=answer)], is_error=is_error)
+
+        self._tool = Verify()
+
+    def tools(self, view: TaskView) -> list[Any]:
+        return [self._tool]
+
+
+async def test_mcp_tool_hook_calls_the_tool_with_filled_input(tmp_path: Path) -> None:
+    answer = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                "permissionDecision": "deny",
+                                                "permissionDecisionReason": "not that file"}})
+    mcp = McpLike(answer)
+    hooks = {"PreToolUse": [{"matcher": "Read", "hooks": [{
+        "type": "mcp_tool", "server": "chk", "tool": "verify",
+        "input": {"path": "${tool_input.file_path}", "missing": "${nope.x}", "n": 3}}]}]}
+    s = await Setup(tmp_path, hooks, [reply("", READ_A), reply("ok")],
+                    extensions=(mcp,)).start()
+    assert mcp.calls == [{"path": "a.txt", "missing": "", "n": 3}]
+    assert await s.results() == [("not that file", True)]
+
+
+async def test_mcp_tool_hook_error_or_missing_tool_is_a_failure(tmp_path: Path) -> None:
+    hooks: dict[str, Any] = {"PreToolUse": [{"hooks": [{"type": "mcp_tool", "server": "chk",
+                                                        "tool": "verify"}]}]}
+    s = await Setup(tmp_path, hooks, [reply("", READ_A), reply("ok")],
+                    extensions=(McpLike("boom", is_error=True),)).start()
+    assert (await s.results())[0][1] is False
+    assert any("returned an error: boom" in n for n in await s.notices())
+    hooks["PreToolUse"][0]["hooks"][0]["server"] = "other"
+    s = await Setup(tmp_path / "2", hooks, [reply("", READ_A), reply("ok")]).start()
+    assert any("offers no tool" in n for n in await s.notices())
+
+
+async def test_post_tool_batch_once_per_reply_with_every_result(tmp_path: Path) -> None:
+    answers = {"batch": specific("PostToolBatch", additionalContext="Both read.")}
+    s = Setup(tmp_path, {"PostToolBatch": hook("batch")},
+              [reply("", READ_A, ("Read", {"file_path": "b.txt"})), reply("ok")],
+              answers=answers)
+    await s.start()
+    [payload] = s.runner.payloads("batch")
+    calls = payload["tool_calls"]
+    assert [c["tool_input"]["file_path"] for c in calls] == ["a.txt", "b.txt"]
+    assert "hello" in calls[0]["tool_response"] and "other" in calls[1]["tool_response"]
+    assert "PostToolBatch hook: Both read." in s.system_texts(1)
+
+
+async def test_stop_failure_on_a_failed_model_call_only(tmp_path: Path) -> None:
+    from noeta.core.errors import Fatal
+
+    s = await Setup(tmp_path, {"StopFailure": hook("failed", "rate_limit|authentication_failed")},
+                    [Fatal("bad key", status=401, body="invalid x-api-key")]).start()
+    [payload] = s.runner.payloads("failed")
+    assert payload["error"] == "authentication_failed" and "bad key" in payload["error_details"]
+    s = await Setup(tmp_path / "2", {"StopFailure": hook("failed")},
+                    [reply("fine")]).start()
+    assert s.runner.payloads("failed") == []
+
+
+class MovesShell(Extension):
+    name = "mover"
+
+    def __init__(self) -> None:
+        class Cd:
+            name = "Cd"
+            description = "cd"
+            input_schema: dict[str, Any] = {"type": "object"}
+            read_only = False
+
+            async def run(self, input: dict[str, Any], ctx: Any) -> ToolOutput:
+                ctx.record("shell", "cwd", {"cwd": input["to"]})
+                return ToolOutput(content=[Text(text="moved")])
+
+        self._tool = Cd()
+
+    def tools(self, view: TaskView) -> list[Any]:
+        return [self._tool]
+
+
+async def test_cwd_changed_when_the_shell_moves(tmp_path: Path) -> None:
+    s = await Setup(tmp_path, {"CwdChanged": hook("cwd")},
+                    [reply("", ("Cd", {"to": "/elsewhere"})), reply("", ("Cd", {"to": ""})),
+                     reply("ok")], extensions=(MovesShell(),)).start()
+    first, second = s.runner.payloads("cwd")
+    assert (first["old_cwd"], first["new_cwd"]) == (str(s.work), "/elsewhere")
+    assert (second["old_cwd"], second["new_cwd"]) == ("/elsewhere", str(s.work))
+
+
+async def test_post_model_switch_adds_context_for_the_new_model(tmp_path: Path) -> None:
+    from noeta.core.loop.state import CONFIG_SIGNAL
+
+    answers = {"switch": specific("PostModelSwitch", additionalContext="Now on m2.")}
+    s = await Setup(tmp_path, {"PostModelSwitch": hook("switch", "m2")},
+                    [reply("one"), reply("two")], answers=answers).start()
+    await s.client.signal(s.tid, CONFIG_SIGNAL, {"model": "m2"})
+    await s.send("again")
+    [payload] = s.runner.payloads("switch")
+    assert (payload["from_model"], payload["to_model"]) == ("m", "m2")
+    assert any("Now on m2." in t for t in s.system_texts(1))

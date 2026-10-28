@@ -319,3 +319,29 @@ def test_proxy_rewrites_only_upstream_bodies(tmp_path: Path) -> None:
     assert json.loads((tmp_path / ".live").read_text()) == {str(idx): 10}
     rec.progress(idx, None)
     assert json.loads((tmp_path / ".live").read_text()) == {}
+
+
+def test_deferred_names_read_from_the_listing_part() -> None:
+    kinds = facts.Kinds(names={"noeta_kinds": {"^Deferred here": "deferred-tools"}})
+    messages = [{"role": "user", "content": "hi"},
+                {"role": "system", "content": [{"type": "text", "text":
+                    "Deferred here, load them:\nWebFetch\nmcp__echo__echo\n\nAgent list"}]}]
+    assert facts.deferred_names(messages, kinds) == ["WebFetch", "mcp__echo__echo"]
+    row = facts.request_facts({"messages": messages}, {}, kinds, {})
+    assert row["deferred"] == ["WebFetch", "mcp__echo__echo"]
+
+
+def test_message_shapes_and_deferred_lists_are_compared() -> None:
+    cc = contract_row("a", 1, ["user: text:prompt", "assistant: tool_use:Agent",
+                               "user: tool_result[text]*", "user: tool_result:error"],
+                      deferred=["A", "B"])
+    no = contract_row("a", 1, ["user: text:prompt", "assistant: tool_use:Agent",
+                               "user(str): tool_result", "user: tool_result"],
+                      deferred=["B", "C"])
+    out = compare.diff_layout(cc, no)
+    assert ("layout", "message shape: Claude Code user: tool_result[text], noeta "
+                      "user(str): tool_result") in out
+    assert ("tools", "deferred-tool list: names noeta does not list: A") in out
+    assert ("tools", "deferred-tool list: names only noeta lists: C") in out
+    # a failed call and a cache mark are not shape differences
+    assert len([d for d in out if "message shape" in d[1]]) == 1

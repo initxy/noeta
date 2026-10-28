@@ -16,9 +16,13 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 
-from noeta.plugins.skills.registry import SkillRegistry, strip_argument_placeholder
+from noeta.plugins.skills.registry import (
+    SkillDescription,
+    SkillRegistry,
+    strip_argument_placeholder,
+)
 from noeta.toolkit.tokens import estimate_tokens
 
 __all__ = [
@@ -28,6 +32,7 @@ __all__ = [
     "ROSTER_HEADER",
     "fit_menu_to_budget",
     "listing_lines",
+    "listing_summary",
     "menu_keep_order",
     "render_listing",
     "roster_line",
@@ -77,6 +82,14 @@ def short_summary(text: str) -> str:
 
 def roster_line(name: str, summary: str) -> str:
     return "- " + name + (": " + summary if summary else "")
+
+
+def listing_summary(desc: SkillDescription) -> str:
+    """What the listing says of a skill: its description, then its
+    ``when_to_use`` after a dash (Claude Code's listing line)."""
+    if desc.when_to_use:
+        return f"{desc.description} - {desc.when_to_use}"
+    return desc.description
 
 
 def _menu_description(text: str) -> str:
@@ -152,17 +165,20 @@ def fit_menu_to_budget(
 
 
 def listing_lines(
-    registry: SkillRegistry, *, budget_tokens: int, rank: Mapping[str, float] | None = None
+    registry: SkillRegistry, *, budget_tokens: int, rank: Mapping[str, float] | None = None,
+    unlocked: Collection[str] = (),
 ) -> tuple[tuple[str, str], ...]:
     """The roster as ``(name, line)`` pairs fitted to the budget, the
     narrowest scope first (the workspace's, then the user's, then the rest,
     as Claude Code lists them), by name within one. Skills with
-    ``disable-model-invocation`` are left out."""
+    ``disable-model-invocation`` are left out, and so are skills with
+    ``paths`` not in ``unlocked``."""
     entries: list[tuple[str, str]] = []
-    for name in sorted(registry.model_invocable(), key=lambda n: (-registry.tier_of(n), n)):
+    for name in sorted(registry.model_invocable(unlocked),
+                       key=lambda n: (-registry.tier_of(n), n)):
         desc = registry.get(name)
         if desc is not None:
-            entries.append((name, _menu_description(desc.description)))
+            entries.append((name, _menu_description(listing_summary(desc))))
     if not entries:
         return ()
     names = tuple(n for n, _ in entries)

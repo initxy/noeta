@@ -116,6 +116,12 @@ def handle(method: str, params: dict) -> dict:
         return {"resources": [{"uri": "file:///notes.md", "name": "notes"}]}
     if method == "resources/read":
         return {"contents": [{"uri": params["uri"], "text": "the notes"}]}
+    if method == "resources/directory/read" and params["uri"] == "file:///docs":
+        if params.get("cursor") != "2":
+            return {"resources": [{"uri": "file:///docs/a.md", "name": "a.md"}],
+                    "nextCursor": "2"}
+        return {"resources": [{"uri": "file:///docs/sub", "name": "sub",
+                               "mimeType": "inode/directory"}]}
     raise KeyError(method)
 
 

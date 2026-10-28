@@ -69,7 +69,8 @@ DEFAULT_RISK: Mapping[str, str] = {
 #: is still classified (an ``Agent`` spawn, a sub-agent's hand-back).
 AUTO_SAFE_TOOLS: frozenset[str] = frozenset({
     "Read", "Glob", "Grep", "LS", "NotebookRead", "ToolSearch", "Skill", "AskUserQuestion",
-    "ExitPlanMode", "ListMcpResourcesTool", "ReadMcpResourceTool", "ListAgents", "TaskStop",
+    "ExitPlanMode", "ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool",
+    "ListAgents", "TaskStop",
     "structured_output", "ReportFindings", "ScheduleWakeup",
 })
 

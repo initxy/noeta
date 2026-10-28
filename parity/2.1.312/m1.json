@@ -121,6 +121,26 @@
    "messages": [
     "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:prompt",
     "system: text:environment+model-identity+deferred-tools+agent-list+skill-list+auto-mode+<total_tokens>+date*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -314,6 +334,26 @@
     "assistant: thinking | text",
     "user(str): text:prompt",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -417,6 +457,26 @@
     "assistant: thinking | tool_use:Read",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -523,6 +583,26 @@
     "assistant: thinking | tool_use:Edit",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -632,6 +712,26 @@
     "assistant: thinking | tool_use:Bash",
     "user: tool_result:error",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -744,6 +844,26 @@
     "assistant: thinking | text | tool_use:Write",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -859,6 +979,26 @@
     "assistant: tool_use:Write",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -1053,6 +1193,26 @@
     "assistant: tool_use:Bash",
     "user: tool_result:error",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -1250,6 +1410,26 @@
     "assistant: tool_use:Bash",
     "user: tool_result:error",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -1450,6 +1630,26 @@
     "assistant: thinking | tool_use:Bash",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -1653,6 +1853,26 @@
     "assistant: thinking | text | tool_use:Bash",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -1859,6 +2079,26 @@
     "assistant: thinking | text | tool_use:Bash",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -1992,6 +2232,26 @@
     "assistant: thinking | text",
     "user(str): text:prompt",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -2128,6 +2388,26 @@
     "assistant: thinking | tool_use:Bash",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -2267,6 +2547,26 @@
     "assistant: thinking | text",
     "user(str): text:prompt",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -2409,6 +2709,26 @@
     "assistant: thinking | tool_use:Bash",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -2553,6 +2873,26 @@
     "system(str): text:<total_tokens>",
     "assistant: thinking | text",
     "user: text:reminder/background-event+<task-notification>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -2700,6 +3040,26 @@
     "assistant: thinking | text | tool_use:Read",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -2850,6 +3210,26 @@
     "assistant: thinking | text",
     "user(str): text:prompt",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -3003,6 +3383,26 @@
     "assistant: thinking | tool_use:ToolSearch",
     "user: tool_result[tool_reference,tool_reference,tool_reference] | text:tool-loaded",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -3235,6 +3635,26 @@
     "assistant: thinking | tool_use:mcp__echo__echo | tool_use:ReadMcpResourceTool",
     "user: tool_result[text] | tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -3394,6 +3814,26 @@
     "assistant: thinking | text",
     "user(str): text:prompt",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -3556,6 +3996,26 @@
     "assistant: thinking | tool_use:ToolSearch",
     "user: tool_result[tool_reference] | text:tool-loaded",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -3869,6 +4329,26 @@
     "assistant: tool_use:WebFetch",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -4037,6 +4517,26 @@
     "assistant: thinking | text",
     "user(str): text:prompt",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -4284,6 +4784,26 @@
     "assistant: thinking | tool_use:Agent",
     "user: tool_result[text]",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -4380,6 +4900,17 @@
    "messages": [
     "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:task | text:reminder/handback-how",
     "system: text:deferred-tools+environment+model-identity+skill-list+date*"
+   ],
+   "deferred": [
+    "EnterWorktree",
+    "ExitWorktree",
+    "Monitor",
+    "NotebookEdit",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -4479,6 +5010,17 @@
     "assistant: thinking | tool_use:Bash",
     "user: tool_result",
     "system: text:agent-list+auto-mode+<total_tokens>*"
+   ],
+   "deferred": [
+    "EnterWorktree",
+    "ExitWorktree",
+    "Monitor",
+    "NotebookEdit",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -4581,6 +5123,17 @@
     "assistant: thinking | tool_use:Bash",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "EnterWorktree",
+    "ExitWorktree",
+    "Monitor",
+    "NotebookEdit",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -4686,6 +5239,17 @@
     "assistant: thinking | tool_use:Bash",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "EnterWorktree",
+    "ExitWorktree",
+    "Monitor",
+    "NotebookEdit",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -4794,6 +5358,17 @@
     "assistant: thinking | text | tool_use:Bash",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "EnterWorktree",
+    "ExitWorktree",
+    "Monitor",
+    "NotebookEdit",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -4904,6 +5479,17 @@
     "system(str): text:<total_tokens>",
     "assistant: thinking | text*",
     "user(str): text:activity-summary-instruction"
+   ],
+   "deferred": [
+    "EnterWorktree",
+    "ExitWorktree",
+    "Monitor",
+    "NotebookEdit",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -5153,6 +5739,26 @@
     "system(str): text:<total_tokens>",
     "assistant: thinking | text",
     "user: text:agent-message*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -5328,6 +5934,26 @@
     "user(str): text:agent-message",
     "assistant: thinking | text",
     "user: text:<system-reminder>/<tools-used-before-summary> | text:reminder/background-event+<task-notification> | text:<command-message> | text:skill-body*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -5506,6 +6132,26 @@
     "assistant: thinking | tool_use:Bash",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -5687,6 +6333,26 @@
     "assistant: thinking | text",
     "user(str): text:prompt",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -5871,6 +6537,26 @@
     "assistant: thinking | text | tool_use:Edit",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -6058,6 +6744,26 @@
     "assistant: thinking | tool_use:Edit",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -6248,6 +6954,26 @@
     "assistant: tool_use:Edit",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -6441,6 +7167,26 @@
     "assistant: thinking | tool_use:Read",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -6713,6 +7459,26 @@
     "assistant: thinking | text | tool_use:Bash",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -6912,6 +7678,26 @@
     "assistant: text",
     "user(str): text:prompt",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -7114,6 +7900,26 @@
     "assistant: thinking | tool_use:AskUserQuestion",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -7319,6 +8125,26 @@
     "assistant: thinking | text | tool_use:Edit",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -7603,6 +8429,26 @@
     "assistant: thinking | tool_use:Bash",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -7814,6 +8660,26 @@
     "assistant: thinking | text",
     "user(str): text:prompt",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -8028,6 +8894,26 @@
     "assistant: thinking | text",
     "user: text:interrupted | text:prompt",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -8244,6 +9130,26 @@
     "system(str): text:<total_tokens>",
     "assistant: thinking | text",
     "user: text:<command-name> | text:<local-command-stdout>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -8463,6 +9369,26 @@
     "assistant: thinking | tool_use:ToolSearch",
     "user: tool_result[tool_reference] | text:tool-loaded",
     "system: text:plan-mode+<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -8685,6 +9611,26 @@
     "assistant: thinking | tool_use:AskUserQuestion",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -8910,6 +9856,26 @@
     "assistant: thinking | text | tool_use:Write",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -9231,6 +10197,26 @@
     "assistant: thinking | tool_use:ExitPlanMode",
     "user: tool_result",
     "system: text:plan-mode-exit+<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -9462,6 +10448,26 @@
     "assistant: thinking | tool_use:Edit",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -9696,6 +10702,26 @@
     "assistant: tool_use:Edit",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -9933,6 +10959,26 @@
     "assistant: tool_use:Edit",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -10173,6 +11219,26 @@
     "assistant: thinking | tool_use:Edit",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -10416,6 +11482,26 @@
     "assistant: tool_use:Edit",
     "user: tool_result",
     "system: text:silence-nudge+<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -10738,6 +11824,26 @@
     "assistant: tool_use:Bash",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -11063,6 +12169,26 @@
     "assistant: thinking | text | tool_use:Bash",
     "user: tool_result",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -11311,6 +12437,26 @@
     "assistant: thinking | text | tool_use:Bash*",
     "user: tool_result | text:compact-instruction",
     "system(str): text:<total_tokens>"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   },
   {
@@ -11410,6 +12556,26 @@
     "assistant: text",
     "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:<local-command-caveat> | text:<command-name> | text:<local-command-stdout> | text:prompt",
     "system: text:post-compact-file+post-compact-file+post-compact-file+post-compact-file+post-compact-skills+skill-body+deferred-tools+agent-list+skill-list+environment+model-identity+auto-mode+<total_tokens>+date*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   }
  ],

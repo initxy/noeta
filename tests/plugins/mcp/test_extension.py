@@ -173,10 +173,13 @@ async def test_deferred_server_tools_are_loaded_with_toolsearch_then_called_dire
     provider = ScriptedProvider([
         reply("", ("mcp__fake__echo", {"text": "early"})),
         reply("", ("ToolSearch", {"query": "select:mcp__fake__echo,ListMcpResourcesTool,"
-                                           "ReadMcpResourceTool", "max_results": 3})),
+                                           "ReadMcpResourceTool,ReadMcpResourceDirTool",
+                                  "max_results": 4})),
         reply("", ("mcp__fake__echo", {"text": "via"}),
               ("ReadMcpResourceTool", {"server": "fake", "uri": "file:///notes.md"}),
-              ("ListMcpResourcesTool", {})),
+              ("ListMcpResourcesTool", {}),
+              ("ReadMcpResourceDirTool", {"server": "fake", "uri": "file:///docs"}),
+              ("ReadMcpResourceDirTool", {"server": "fake", "uri": "file:///notes.md"})),
         reply("done"),
     ])
     agent = Agent(name="a", model="m", extensions=[Mcp([server(deferred=True)], pool=pool)])
@@ -187,13 +190,19 @@ async def test_deferred_server_tools_are_loaded_with_toolsearch_then_called_dire
     assert names == ["DeferredToolPlaceholder", "ToolSearch"]
     loaded = provider.requests[2].tools
     assert [(t.name, t.defer_loading) for t in loaded] == [
-        ("ListMcpResourcesTool", True), ("ReadMcpResourceTool", True), ("ToolSearch", False),
+        ("ListMcpResourcesTool", True), ("ReadMcpResourceDirTool", True),
+        ("ReadMcpResourceTool", True), ("ToolSearch", False),
         ("DeferredToolPlaceholder", True), ("mcp__fake__echo", True)]
-    early, search, echo, read, listing = (f.result for f in finished(await events(client, tid)))
+    early, search, echo, read, listing, folder, not_folder = (
+        f.result for f in finished(await events(client, tid)))
+    assert folder.text == ("2 entries in file:///docs:\na.md  file:///docs/a.md\n"
+                           "sub/  file:///docs/sub")
+    assert not_folder.is_error and "could not list" in not_folder.text
     assert early.is_error and early.text.startswith(
         "InputValidationError: mcp__fake__echo is a deferred tool")
     assert [b.tool_name for b in search.content] == [  # type: ignore[union-attr]
-        "mcp__fake__echo", "ListMcpResourcesTool", "ReadMcpResourceTool"]
+        "mcp__fake__echo", "ListMcpResourcesTool", "ReadMcpResourceTool",
+        "ReadMcpResourceDirTool"]
     after = provider.requests[2].messages[-1]
     assert after.text == "Tool loaded."
     assert texts(echo) == ["echo: via"]

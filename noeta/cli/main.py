@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from noeta.cli import mcp_command, plugin_command
+from noeta.cli import config, mcp_command, plugin_command
 from noeta.cli.config import Settings, load_settings
 from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
@@ -131,10 +131,10 @@ def _plugins(cwd: str) -> None:
         print(notice, file=sys.stderr)
 
 
-def _settings(args: argparse.Namespace) -> Settings:
+def _settings(args: argparse.Namespace, **layers: Any) -> Settings:
     s = load_settings(cwd=os.path.abspath(args.cwd or os.getcwd()),
                       model=args.model, provider=args.provider, base_url=args.base_url,
-                      store=args.store, effort=args.effort)
+                      store=args.store, effort=args.effort, **layers)
     if not s.model:
         sys.exit("noeta: no model configured (--model or NOETA_MODEL)")
     if args.system_prompt is not None:
@@ -244,14 +244,25 @@ def _front(argv: list[str]) -> None:
     if args.permission_mode in MODE_ALIASES:
         args.permission_mode = MODE_ALIASES[args.permission_mode]
     if headless.headless(args):
-        s = _settings(args)
+        try:
+            layers: dict[str, Any] = {
+                "sources": headless.setting_sources(args),
+                "flag": headless.settings_layer(args, config.HOME / "flag-settings")}
+            mcp = headless.mcp_arguments(args)
+            agent_files = headless.agent_files(args)
+        except headless.FlagError as exc:
+            sys.exit(f"noeta: {exc}")
+        s = _settings(args, **layers)
         if args.system_prompt_file:
             s.prompts["system/main"] = Path(args.system_prompt_file).read_text("utf-8")
         if args.append_system_prompt_file:
             s.prompts["system/main.append"] = Path(
                 args.append_system_prompt_file).read_text("utf-8")
         app = _app(s, cwd=cwd, own_tasks_only=True,
-                   permissions=headless.permission_arguments(args))
+                   permissions=headless.permission_arguments(args),
+                   plugins={"mcp": mcp} if mcp is not None else None,
+                   setting_sources=layers["sources"], flag_settings=layers["flag"],
+                   agent_files=agent_files)
         sys.exit(asyncio.run(headless.run(app, s, args, cwd=cwd)))
     try:
         from noeta.cli.tui import run_tui

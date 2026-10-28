@@ -61,14 +61,16 @@ Request = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 Elicit = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
-async def collect_pages(request: Request, method: str, key: str) -> list[dict[str, Any]]:
+async def collect_pages(request: Request, method: str, key: str,
+                        params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Run a paginated list call to its last page: follow ``nextCursor``
     until it stops, repeats, or :data:`MAX_LIST_PAGES` pages were read."""
     out: list[dict[str, Any]] = []
     cursor: str | None = None
     seen: set[str] = set()
     for _ in range(MAX_LIST_PAGES):
-        result = await request(method, {"cursor": cursor} if cursor else {})
+        result = await request(method, {**(params or {}), **({"cursor": cursor} if cursor
+                                                              else {})})
         entries = result.get(key)
         if not isinstance(entries, list):
             raise McpError(f"{method} result missing {key!r} array")
@@ -200,6 +202,12 @@ class McpClient:
 
     async def read_resource(self, uri: str) -> dict[str, Any]:
         return await self.request("resources/read", {"uri": uri})
+
+    async def read_directory(self, uri: str) -> list[dict[str, Any]]:
+        """The direct children of a directory resource
+        (``resources/directory/read``)."""
+        return await collect_pages(self.request, "resources/directory/read", "resources",
+                                   {"uri": uri})
 
 
 def reply_result(method: str, msg: dict[str, Any]) -> dict[str, Any]:

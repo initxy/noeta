@@ -220,7 +220,7 @@ class Compaction(Extension):
                 if extra is not None:
                     await self._compact(view, state, request, cut, reason="manual",
                                         estimated=self._tokens(state, request, at)[0],
-                                        extra=extra)
+                                        extra=extra, command_at=at)
             raise TurnDone()
         if not self.auto or view.complete is None:
             return request
@@ -335,10 +335,12 @@ class Compaction(Extension):
         return "\n\n".join(parts)
 
     async def _compact(self, view: TaskView, state: TaskState, request: ModelRequest,
-                       cut: int, *, reason: str, estimated: int, extra: str = "") -> TaskState:
+                       cut: int, *, reason: str, estimated: int, extra: str = "",
+                       command_at: int | None = None) -> TaskState:
         """Summarize the first ``cut`` messages, rebuild what follows the
         summary, record; returns the state as it is once the records are
-        folded."""
+        folded. ``command_at``: the index of the ``/compact`` message a
+        manual compaction answers."""
         through = self._through(state, cut)
         assert through is not None
         to_summarize = list(request.messages[:cut])
@@ -363,9 +365,18 @@ class Compaction(Extension):
             if restored:
                 view.record(self.name, "restored", {"texts": [m.text for m in restored]})
         after.extend(await view.residents(keeps_tail=tail))
-        if manual:
-            # Claude Code gives it all again with the next prompt, after the
-            # command: nothing goes ahead of the summary.
+        if manual and command_at is not None and state.message_seqs[command_at]:
+            # Claude Code's order: nothing ahead of the summary; the kept
+            # reply, then what is given again in the person's turn ahead of
+            # the command's own message, and the system turns after them.
+            again = [*lead, *after]
+            through = state.message_seqs[command_at]
+            lead_turn: list[Message] = []
+            after_summary = [*state.messages[cut:command_at],
+                             *(m for m in again if m.role != "system"),
+                             state.messages[command_at]]
+            after = [m for m in again if m.role == "system"]
+        elif manual:
             lead_turn, after_summary, after = [], [], [*lead, *after]
         else:
             # A system turn cannot sit inside the summary's user turn: it

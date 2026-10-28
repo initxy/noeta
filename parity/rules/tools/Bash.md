@@ -96,5 +96,5 @@ With `sandbox.enabled` and a sandbox that can start, the description gains a san
 | `tool.Bash.s.7` | With `allowUnsandboxedCommands: false` the parameter is said to be disabled, and a sandbox failure is reported to the user instead. | covered |
 | `tool.Bash.s.8` | Temporary files go under `$TMPDIR`. | covered |
 | `tool.Bash.s.9` | `autoAllowBashIfSandboxed` (default true): a command that runs sandboxed needs no approval. | covered (not in plan mode) |
-| `tool.Bash.s.10` | An `allowed_domains` parameter widens the network for one sandboxed command (auto mode). | missing |
-| `tool.Bash.s.11` | Platform notes (macOS `open`/`osascript`, Windows localhost and TLS, git repositories made in the sandbox, `pytest` cache). | missing |
+| `tool.Bash.s.10` | An `allowed_domains` parameter widens the network for one sandboxed command (auto mode). | n/a — sandbox-on only; the baseline runs unsandboxed (`parity/deviations.md`) |
+| `tool.Bash.s.11` | Platform notes (macOS `open`/`osascript`, Windows localhost and TLS, git repositories made in the sandbox, `pytest` cache). | n/a — sandbox-on only (`parity/deviations.md`) |

@@ -39,6 +39,7 @@ from noeta.plugins.shell.bash import SHELL, BashTool, ShellState, reduce_shell, 
 from noeta.plugins.shell.jobs import DEFAULT_LOG_DIR, JOB_ENDED, REGISTRY, Registry
 from noeta.plugins.shell.notices import lost_summary, task_notification
 from noeta.plugins.shell.tools import LOST_REASON, BackgroundBash, MonitorTool, TaskStopTool
+from noeta.plugins.shell.worktree import EnterWorktreeTool, ExitWorktreeTool
 from noeta.toolkit.notices import NOTICE_GUARD
 from noeta.toolkit.sandbox import sandbox_of
 
@@ -57,6 +58,10 @@ def lost_notice(job_id: str, job: Mapping[str, Any]) -> str:
 
 def _notice_key(job_id: str) -> str:
     return f"shell:notice:{job_id}"
+
+
+def _worktree_tools() -> list[Tool]:
+    return [EnterWorktreeTool(), ExitWorktreeTool()]
 
 
 class Shell(Extension):
@@ -90,11 +95,12 @@ class Shell(Extension):
         #: and working directory.
         self._sandboxed: dict[tuple[Any, str], list[Tool]] = {}
         if not background:
-            self._tools: list[Tool] = [BashTool(**(bash or {}))]
+            self._tools: list[Tool] = [BashTool(**(bash or {})), *_worktree_tools()]
             return
         self.bash = BackgroundBash(self.registry, ends_with_turn=background_ends_with_turn,
                                    **(bash or {}))
-        self._tools = [self.bash, MonitorTool(self.bash), TaskStopTool(self.registry)]
+        self._tools = [self.bash, MonitorTool(self.bash), TaskStopTool(self.registry),
+                       *_worktree_tools()]
 
     # ------------------------------------------------------------ state
 

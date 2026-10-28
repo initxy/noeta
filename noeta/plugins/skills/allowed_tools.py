@@ -21,6 +21,7 @@ import re
 
 __all__ = [
     "RECOGNIZED_TOOL_NAMES",
+    "allow_rule_texts",
     "filter_recognized_tools",
     "parse_allowed_tools",
     "resolve_skill_allowed_tools",
@@ -203,3 +204,49 @@ def resolve_skill_allowed_tools(
                 (skill_name, filter_recognized_tools(parsed, skill=skill_name))
             )
     return tuple(resolved)
+
+
+def _split_rule_entries(item: str) -> list[str]:
+    """Entries of one string, split on commas and spaces outside a rule's
+    parentheses (``Bash(git add:*) Read`` is two rules)."""
+    out: list[str] = []
+    current = ""
+    depth = False
+    for ch in item:
+        if ch == "(":
+            depth = True
+        elif ch == ")":
+            depth = False
+        elif ch in ", " and not depth:
+            if current.strip():
+                out.append(current.strip())
+            current = ""
+            continue
+        if current or ch.strip():
+            current += ch
+    if current.strip():
+        out.append(current.strip())
+    return out
+
+
+def allow_rule_texts(value: str) -> tuple[str, ...]:
+    """A skill's ``allowed-tools`` as permission rule texts, read as Claude
+    Code reads them: a YAML list or one string of entries separated by
+    commas or spaces (outside a rule's parentheses); ``*`` alone means every
+    tool."""
+    text = value.strip()
+    if text.startswith("[") and text.endswith("]"):
+        items = [text[1:-1]]
+    elif text.startswith("- "):
+        items = [line.strip()[2:] for line in text.splitlines()
+                 if line.strip().startswith("- ")]
+    else:
+        items = [text]
+    rules: list[str] = []
+    for item in items:
+        for entry in _split_rule_entries(item):
+            if len(entry) >= 2 and entry[0] == entry[-1] and entry[0] in "'\"":
+                entry = entry[1:-1].strip()
+            if entry:
+                rules.append(entry)
+    return ("*",) if "*" in rules else tuple(rules)

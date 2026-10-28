@@ -113,6 +113,53 @@ server/remote surfaces, which stay noeta's own.
     safety).
   - A tool started before a crash answers "result unknown" instead of re-running.
   - Waits (approval, sub-agent, timer) survive restarts and move between machines.
+- **Intended differences closing the parity leftovers (2026-10-28, branch `os-parity`).** Rows
+  with a mismatch id are in `parity/deviations.md`; the rest are differences the replay cannot
+  see.
+  - Not built: `LSP` (Claude Code offers it only with a language-server plugin, outside the
+    baseline tool set); `DesignSync` (claude.ai design projects, a cloud non-goal); `Bash`'s
+    `allowed_domains` and the sandbox platform notes (sandbox-on and auto-mode only; the
+    baseline is unsandboxed); scoped skill names (`tool.Skill.9`: noeta discovers no nested
+    per-directory skills to scope a name to).
+  - `EnterWorktree` moves the shell, not the task's root: the environment note, relative file
+    paths and the permission scope keep the launch directory, so the worktree must lie inside it
+    (a task's cwd is config fixed for its exec env and sandbox; changing it mid-task is a kernel
+    change with server confinement rules, left for later).
+  - `WebSearch` needs a search backend key (Claude Code uses Anthropic's server tool, only an
+    Anthropic key reaches it); the replay sets a placeholder key to list it.
+  - An interrupted reply keeps its text, not a thinking block it finished (the kernel records
+    the partial reply as text); one reply's results go back in call order (Claude Code answered
+    a `ToolSearch` before an earlier background `Bash`); no empty `output_config` system turn
+    after a compaction (noeta sends effort top-level every call).
+  - Skills: a `` !`cmd` `` the permission checks would ask about stops the skill from loading
+    in every mode (Claude Code in auto mode hands it to the model); allowed-tools rules count as
+    approval only when one rule covers the whole command; a typed `/<name>` of a `context: fork`
+    skill loads inline (only the Skill tool forks); `${CLAUDE_SESSION_ID}` / `${CLAUDE_EFFORT}`
+    are not substituted (no session identity; effort is per request).
+  - Agent files: `cacheTtl` and `observer*` are read, warned about, not applied (product
+    features noeta lacks); fields for a plugin the host switched off are not applied (a file
+    cannot start servers or write memory the host has not allowed); `initialPrompt` is applied
+    by `LocalClient.create` (in-process front ends and the server), a slash command in it is
+    sent as text.
+  - Hooks: an `agent` hook looks only with the task's read-only tools and gets the conversation
+    as messages (no transcript file; its calls are not logged, so it cannot route around the
+    permission layer). Not fired: PreModelSwitch (a config signal no plugin can refuse),
+    UserPromptExpansion (front ends expand commands before the task), Setup / TeammateIdle /
+    TaskCreated / TaskCompleted (no init flow or agent teams), Elicitation / ElicitationResult
+    (the MCP plugin answers them; one plugin cannot gate another's), ConfigChange / FileChanged /
+    DirectoryAdded / MessageDisplay (front-end and watcher events), WorktreeCreate /
+    WorktreeRemove (worktrees are git-only); configuring one warns. StopFailure fires for failed
+    model calls in top-level tasks, its `error` kind read from the error text.
+  - Headless: `--settings` as a JSON string is written to a 0600 file under
+    `~/.noeta/flag-settings/` (the hooks and MCP plugins read settings by path);
+    `--setting-sources` governs settings, agents and the project's `.noeta/mcp.json`, not
+    instruction files or skill directories; the settings flags apply to `noeta -p` and the
+    stream-json command line, not the TUI or the server's `/stream-json`; `--mcp-config` takes
+    several values, so a positional prompt right after it reads as a config (the SDK passes
+    one); `--permission-prompt-tool <mcp tool>` stays `stdio`-only.
+  - Left open (outside this pass, the items stay unticked): the per-tool behavior pass of
+    Phase 2, `SendMessage.notify_when_idle` and the transcript `output_file`, ACP diffs / plan
+    updates / `set_session_model`.
 
 ## Plan
 
@@ -157,10 +204,10 @@ Phase 2 — what the model sees
   post-compaction re-attachments and their caps, idle compaction, failure breaker.
 - [x] Prompt cache: breakpoint positions and TTL choices per contract (1-hour where the baseline
   uses it).
-- [ ] Loop edge cases: empty reply and tool-intent-without-call retried once, interrupt leaves
+- [x] Loop edge cases: empty reply and tool-intent-without-call retried once, interrupt leaves
   `[Request interrupted by user]` and keeps the partial reply, `Retry-After` capped, max_tokens
-  shrink on window overflow, mid-turn injection on by default in every front end.
-  Left: malformed tool calls are still retried by the transient policy, not once.
+  shrink on window overflow, mid-turn injection on by default in every front end; malformed
+  tool calls retried once.
 
 Phase 3 — behaviors around the model
 - [x] Permission modes (default, acceptEdits, plan, dontAsk, auto, bypassPermissions) and one
@@ -168,11 +215,11 @@ Phase 3 — behaviors around the model
 - [x] Auto mode classifier as Claude Code runs it for API-key users: a client-side two-stage
   call per tool use, the same classifier context, thresholds (consecutive/total denials fall
   back to asking); `auto` becomes the default mode.
-- [ ] Hooks: all baseline events, command/prompt/agent/http types, `allow`/`updatedInput`/
+- [x] Hooks: all baseline events, command/prompt/agent/http types, `allow`/`updatedInput`/
   `PermissionRequest`, timeouts and matchers.
-- [ ] Skills: every baseline frontmatter field (`allowed-tools` as pre-approval, `when_to_use`,
+- [x] Skills: every baseline frontmatter field (`allowed-tools` as pre-approval, `when_to_use`,
   `context: fork`, `` !`cmd` ``, `${CLAUDE_SKILL_DIR}`, `paths`), directory walk.
-- [ ] Agent files: every baseline frontmatter field; unknown fields warn.
+- [x] Agent files: every baseline frontmatter field; unknown fields warn.
 - [x] Memory: `NOETA.md` layers, `@import`, `.noeta/rules`, per-project auto memory.
 - [x] MCP: OAuth, headersHelper, SSE, streamable-http spelling, resources tools, elicitation via
   `noeta.core.questions`, deferred by default.
@@ -186,8 +233,8 @@ Phase 4 — missing tools
   default, `<task-notification>` delivery with usage, per-call denial instead of whole-task
   failure.
 - [x] `ScheduleWakeup`, `CronCreate/List/Delete`, `/loop` on the kernel's timers.
-- [ ] Worktree isolation (`EnterWorktree`/`ExitWorktree`, `isolation: worktree`).
-- [ ] Plan mode tools, `WebSearch`, `NotebookEdit`, `LSP`.
+- [x] Worktree isolation (`EnterWorktree`/`ExitWorktree`, `isolation: worktree`).
+- [x] Plan mode tools, `WebSearch`, `NotebookEdit`, `LSP` (`LSP`: not built, see Decisions).
 
 Phase 5 — front ends
 - [x] `noeta -p`: `stream-json` in/out, control requests, `--resume`, `--max-turns`, permission
@@ -539,4 +586,20 @@ Phase 5 — front ends
   beside a link out of the workspace asked nothing) and its follow-up (a quoted `[` names a
   file: the path is checked as written too). Fourth review: mergeable (round-3 items fixed,
   the quoted-bracket regression fixed before merge). Gates at merge: see the merge commit.
-
+- 2026-10-28: parity leftovers on `os-parity` (open-source phase 4). The comparator now counts
+  message shapes (block types and order, string vs block list, text parts per block; a failed
+  call and cache marks aside) and the deferred-tool names (distilled into the contract): 14 new
+  mismatches surfaced. Closed: `EnterPlanMode`; `EnterWorktree` / `ExitWorktree`; `WebSearch`'s
+  `allowed_domains` / `blocked_domains` / `mode`; `ReadMcpResourceDirTool`, MCP resource tools
+  main-agent only; MCP and Agent results as a block list (`ToolResult.block_list`); local
+  command tags one block each with the next prompt joined; `/compact`'s re-attachments ahead of
+  the command; malformed tool calls retried once; headless `updatedInput` for every tool and
+  `--settings` / `--setting-sources` / `--mcp-config` / `--strict-mcp-config` / `--agents`;
+  agent-file `skills` / `mcpServers` / `hooks` / `memory` / `autoCompactWindow` /
+  `initialPrompt`, unknown fields warn; hook types `agent` / `mcp_tool`, events PostToolBatch /
+  StopFailure / PostModelSwitch / CwdChanged, Stop as SubagentStop; skill `when_to_use`,
+  named arguments, `${NOETA_SKILL_DIR}`, allowed-tools pre-approval, `` !`cmd` ``, `paths`,
+  `context: fork`. `make parity` 0 (13 accepted deviations, reasons in Decisions and
+  `parity/deviations.md`); make check 1985 passed (87.74%); make eval 1.000 vs 0.987 baseline
+  (3 trials, two `delegate_parallel_review` trials hit the 240 s timeout but scored); make
+  e2e 7 passed.

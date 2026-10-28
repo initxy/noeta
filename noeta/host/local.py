@@ -16,6 +16,8 @@ import uuid
 from collections.abc import Callable, Sequence
 from typing import Any
 
+import msgspec
+
 from noeta.core.agent import Agent
 from noeta.core.channel import Channel
 from noeta.core.client import Client, Input
@@ -23,7 +25,7 @@ from noeta.core.errors import NoetaError
 from noeta.core.provider import Provider
 from noeta.core.runner import Runtime
 from noeta.core.store import Store
-from noeta.core.types import Delta
+from noeta.core.types import Delta, Text
 
 DeltaSink = Callable[[str, Delta], None]
 
@@ -59,11 +61,29 @@ class LocalClient(Client):
         prompts = {**self.task_config.get("prompts", {}), **(config or {}).get("prompts", {})}
         if prompts:
             merged["prompts"] = prompts
+        if not kw.get("history_from"):
+            input = self._initial_prompt(agent, input)
         self.runtime.serve_root(tid)  # before it exists, so the first claim sees it
         created = await super().create(agent, input, task_id=tid, config=merged, **kw)
         if created != tid:  # a dedupe key named an existing task
             self.runtime.serve_root(created)
         return created
+
+    def _initial_prompt(self, agent: str, input: Input | None) -> Input | None:
+        """An agent file's ``initialPrompt`` (Claude Code's): the first
+        message of a new top-level conversation with that agent, ahead of
+        what the person sent with it. Sub-agents never read it."""
+        found = self.runtime.agents.get(agent)
+        initial = found.extra.get("initialPrompt") if found is not None else None
+        if not isinstance(initial, str) or not initial.strip():
+            return input
+        if input is None:
+            return initial
+        if isinstance(input, str):
+            return f"{initial}\n\n{input}" if input else initial
+        if input.role == "user" and input.origin == "human":
+            return msgspec.structs.replace(input, content=[Text(text=initial), *input.content])
+        return input
 
 
 class LocalApp:

@@ -563,8 +563,13 @@ class StreamJson:
                 answers = typed_answer(p.detail, str(said or ""), answers)
             await self.client.answer(p.task_id, p.request_id, data={"answers": answers})
             return
+        # An approval may change the call (Claude Code's ``updatedInput``);
+        # the permissions plugin runs the call with that input.
+        updated = body.get("updatedInput")
+        data = {"updated_input": updated} \
+            if isinstance(updated, dict) and updated != p.input else None
         await self.client.answer(p.task_id, p.request_id, "allow",
-                                 always=bool(body.get("updatedPermissions")))
+                                 always=bool(body.get("updatedPermissions")), data=data)
 
     # ------------------------------------------------------------ following
 

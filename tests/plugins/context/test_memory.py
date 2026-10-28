@@ -6,6 +6,9 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from noeta.core.agent import Agent
 from noeta.plugins.memory import INDEX_FILE, Memory, load_index, memory_dir_for
@@ -131,3 +134,27 @@ async def test_without_a_recall_model_nothing_is_selected(h: Harness, tmp_path: 
     h.provider.add(reply("ok"))
     await h.start(agent(home))
     assert len(h.provider.requests) == 1
+
+
+async def test_an_agent_files_memory_scope_is_its_own_directory(
+        h: Harness, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    h.provider.add(reply("ok"))
+    await h.start(agent(home, agent_scope="project", agent_name="rev"))
+    directory = f"{h.work}/.noeta/agent-memory/rev/"
+    assert Path(directory).is_dir()
+    assert f"`{directory}`" in "".join(p.text for p in h.provider.requests[0].system)
+    with pytest.raises(ValueError, match="agent_scope"):
+        Memory(agent_scope="team", agent_name="rev")
+
+
+def test_agent_memory_scopes_name_noetas_places(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    view: Any = SimpleNamespace(cwd="/w", env=None, state=SimpleNamespace(config={}))
+    dirs = {scope: Memory(home=str(tmp_path), agent_scope=scope,
+                          agent_name="rev")._agent_dir(view)
+            for scope in ("user", "project", "local")}
+    assert dirs == {"user": f"{tmp_path}/agent-memory/rev/",
+                    "project": "/w/.noeta/agent-memory/rev/",
+                    "local": "/w/.noeta/agent-memory-local/rev/"}

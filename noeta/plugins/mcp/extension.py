@@ -77,6 +77,7 @@ from noeta.plugins.mcp.tools import (
     ListMcpResourcesTool,
     McpAuthTool,
     McpTool,
+    ReadMcpResourceDirTool,
     ReadMcpResourceTool,
     auth_stub_entries,
 )
@@ -160,6 +161,10 @@ class Mcp(Extension):
     host trusts every task's working directory) or a function of the
     directory saying whether it is trusted; an untrusted directory's servers
     never start. ``servers`` wins over both on an alias.
+
+    ``agent_servers``: an agent file's own ``mcpServers`` (Claude Code's
+    shape), for the tasks of that agent only; they win over every other
+    source on an alias.
     """
 
     name = "mcp"
@@ -169,8 +174,10 @@ class Mcp(Extension):
     def __init__(self, servers: Servers | ServersFn = (), *,
                  scope: str | ScopeFn | None = None, pool: McpPool | None = None,
                  settings_files: Sequence[str] = (),
-                 project: bool | Callable[[str], bool] = False) -> None:
+                 project: bool | Callable[[str], bool] = False,
+                 agent_servers: Mapping[str, Any] | None = None) -> None:
         self._servers = servers
+        self._agent_servers = _as_list(agent_servers) if agent_servers else []
         self._settings_files = tuple(settings_files)
         self._project = project
         self._scope = scope
@@ -230,11 +237,13 @@ class Mcp(Extension):
                                      description=t["description"],
                                      input_schema=t["input_schema"], invoke=self._invoke,
                                      deferred=deferred, resume=self._resume))
-        if st["servers"] or st.get("down"):
+        if (st["servers"] or st.get("down")) and view.state.parent_id is None:
             # Offered whenever a server is configured, even while it is down:
-            # an outage must not move the stable prefix.
+            # an outage must not move the stable prefix. Sub-agents get the
+            # servers' tools only, as in Claude Code.
             tools += [ListMcpResourcesTool(self._servers_of, self._use),
-                      ReadMcpResourceTool(self._servers_of, self._use)]
+                      ReadMcpResourceTool(self._servers_of, self._use),
+                      ReadMcpResourceDirTool(self._servers_of, self._use)]
         self._tools[view.task_id] = (st, tools)
         return tools
 
@@ -485,7 +494,7 @@ class Mcp(Extension):
             scope = self._scope
             self._scopes[view.task_id] = scope(view) if callable(scope) else scope
             self._roots[view.task_id] = [view.cwd] if view.cwd else []
-            servers = [*servers, *await self._from_files(view)]
+            servers = [*self._agent_servers, *servers, *await self._from_files(view)]
         except Exception:
             # Keep the recorded tool set; its calls fail until a pick-up
             # resolves the servers again.
@@ -528,7 +537,7 @@ class Mcp(Extension):
                                             [ctx.cwd] if ctx.cwd and self._trusts(ctx.cwd)
                                             else [])
         known: dict[str, McpServer] = {}
-        for server in [*given, *files]:
+        for server in [*self._agent_servers, *given, *files]:
             known.setdefault(server.alias, server)
         return list(known.values())
 

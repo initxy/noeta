@@ -152,7 +152,8 @@ def test_monitor_and_task_stop_are_deferred(h: Harness) -> None:
     assert getattr(h.tool("Monitor"), "deferred", False)
     assert getattr(h.tool("TaskStop"), "deferred", False)
     assert not getattr(h.tool("Bash"), "deferred", False)
-    assert [t.name for t in h.ext._tools] == ["Bash", "Monitor", "TaskStop"]
+    assert [t.name for t in h.ext._tools] == ["Bash", "Monitor", "TaskStop", "EnterWorktree",
+                                             "ExitWorktree"]
 
 
 async def test_the_job_cap_refuses_a_ninth_job(tmp_path: Path) -> None:

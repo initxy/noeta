@@ -163,7 +163,7 @@ async def render_result(result: dict[str, Any], ctx: ToolContext) -> ToolOutput:
                 cut.append(Text(text=b.text[:left]))
                 left -= len(b.text)
         blocks = cut
-    return ToolOutput(content=list(blocks), is_error=is_error,
+    return ToolOutput(content=list(blocks), is_error=is_error, block_list=True,
                       meta={"non_text_blocks": non_text,
                             "images": sum(isinstance(b, Image) for b in blocks),
                             "structured": structured is not None})
