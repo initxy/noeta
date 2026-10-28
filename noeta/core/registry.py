@@ -33,7 +33,7 @@ import logging
 import sys
 import types
 import weakref
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from functools import cache
 from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
@@ -196,11 +196,14 @@ def _import(path: Path) -> Any:
     return module
 
 
-def load_plugin_files(directories: Iterable[str | Path]) -> list[str]:
+def load_plugin_files(directories: Iterable[str | Path],
+                      admit: Callable[[str], bool] | None = None) -> list[str]:
     """Register the plugins (and channels) of the files in ``directories``
     (each loaded once per process); returns the names added. A file that
     fails to import is remembered and named when its plugin is asked for; a
-    name an installed plugin already has is skipped with a warning."""
+    name an installed plugin already has is skipped with a warning.
+    ``admit(name)``: whether a file (by its stem, a directory by its name)
+    may be imported at all."""
     from noeta.core.channel import Channel
     from noeta.core.extension import Extension
 
@@ -208,7 +211,8 @@ def load_plugin_files(directories: Iterable[str | Path]) -> list[str]:
     for directory in directories:
         for path in _plugin_paths(Path(directory).expanduser()):
             key = str(path.resolve())
-            if key in _loaded_paths:
+            stem = path.parent.name if path.name == "__init__.py" else path.stem
+            if key in _loaded_paths or (admit is not None and not admit(stem)):
                 continue
             _loaded_paths.add(key)
             shown = str(path.parent if path.name == "__init__.py" else path)

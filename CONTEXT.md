@@ -103,14 +103,14 @@ the plugin is made (`agent_files.resolve_secrets`).
 
 noeta reads only its own places: `~/.noeta/` (`NOETA_HOME`), a project's `.noeta/` (most of it
 only once trusted), `NOETA.md` and the cross-tool `AGENTS.md`, and the machine's managed
-directory (`/etc/noeta`). The mechanisms and formats inside are Claude Code's (instruction
-layering, settings, skills, agents, `.noeta/mcp.json`, plugin directories in noeta's plugin
-places: `noeta/cli/claude_plugins.py`); its own places (`~/.claude/`,
-`.claude/`, `CLAUDE.md`, `.mcp.json`, `CLAUDE_*` variables) are never read
-(`noeta/cli/settings_files.py`, `noeta/plugins/instructions/files.py`). Trusted projects are
-listed in `~/.noeta/trusted.json` (`noeta trust`); a trusted project's MCP servers start only
-with Claude Code's consent keys in its own settings, so a cloned repository never starts a
-process by itself.
+directory (`/etc/noeta`; its `config.toml` `[policy]` allows and blocks plugins by name over
+every other setting, `config.PluginPolicy`). The mechanisms and formats inside are Claude Code's
+(instruction layering, settings, skills, agents, `.noeta/mcp.json`, plugin directories:
+`noeta/cli/claude_plugins.py`); its own places (`~/.claude/`, `.claude/`, `CLAUDE.md`,
+`.mcp.json`, `CLAUDE_*` variables) are never read (`noeta/cli/settings_files.py`,
+`noeta/plugins/instructions/files.py`). Trusted projects are listed in `~/.noeta/trusted.json`
+(`noeta trust`); a trusted project's MCP servers start only with Claude Code's consent keys in
+its own settings, so a cloned repository never starts a process by itself.
 
 ## Extension
 

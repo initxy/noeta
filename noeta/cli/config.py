@@ -338,6 +338,38 @@ def _untrusted_notice(cwd: str | None, sub: str) -> str | None:
             f"(run `noeta trust` in {project} to load its {PROJECT_GATED_DIRS[sub]})")
 
 
+@dataclass(frozen=True)
+class PluginPolicy:
+    """The machine's say over plugins (``/etc/noeta/config.toml``
+    ``[policy]``): ``allowed_plugins`` (when set, only these plugins that
+    noeta does not ship load) and ``blocked_plugins`` (never load). It wins
+    over the user's and the project's settings; a plugin file is checked by
+    its file name before it is imported, every plugin, channel and Claude
+    Code plugin by its name."""
+
+    allowed: frozenset[str] | None = None
+    blocked: frozenset[str] = frozenset()
+
+    def admits(self, name: str, *, shipped: bool = False) -> bool:
+        if name in self.blocked:
+            return False
+        return shipped or self.allowed is None or name in self.allowed
+
+
+def plugin_policy() -> PluginPolicy:
+    path = managed_dir() / "config.toml"
+    if not path.is_file():
+        return PluginPolicy()
+    table = tomllib.loads(path.read_text("utf-8")).get("policy") or {}
+    allowed = table.get("allowed_plugins")
+    return PluginPolicy(allowed=None if allowed is None else frozenset(map(str, allowed)),
+                        blocked=frozenset(map(str, table.get("blocked_plugins") or ())))
+
+
+def _shipped(name: str) -> bool:
+    return registry.sources(registry.PLUGINS).get(name) == "package noeta"
+
+
 def load_plugin_files(cwd: str | None) -> list[str]:
     """Load the plugin files of ``~/.noeta/plugins`` and, for a trusted
     project, ``<cwd>/.noeta/plugins``. Returns notices for the person: a
@@ -346,7 +378,7 @@ def load_plugin_files(cwd: str | None) -> list[str]:
     notice = _untrusted_notice(cwd, ".noeta/plugins")
     if cwd and notice is None and (Path(cwd).expanduser() / ".noeta" / "plugins").is_dir():
         dirs.append(Path(cwd).expanduser().resolve() / ".noeta" / "plugins")
-    registry.load_plugin_files(dirs)
+    registry.load_plugin_files(dirs, admit=plugin_policy().admits)
     return [notice] if notice else []
 
 
@@ -422,6 +454,9 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         from_plugins, plugin_notices = plugin_settings(claude)
         notices.extend(n for n in plugin_notices if n not in notices)
         table = merge_plugin_settings(base, from_plugins, settings.plugins, plugins or {})
+        policy = plugin_policy()
+        table.update({name: False for name in registry.available(registry.PLUGINS)
+                      if not policy.admits(name, shipped=_shipped(name))})
         add = {agent: tuple(entries) for agent, entries in add_plugins.items()}
         for agent, names in registry.added_by_files().items():
             add[agent] = (*add.get(agent, ()), *((name, {}) for name in names))
@@ -470,9 +505,10 @@ def make_channels(tables: Mapping[str, Mapping[str, Any]]) -> list[Channel]:
     from noeta.agents.agent_files import resolve_secrets
 
     out: list[Channel] = []
+    policy = plugin_policy()
     for name, table in tables.items():
         args = dict(table)
-        if args.pop("enabled", True) is False:
+        if args.pop("enabled", True) is False or not policy.admits(name):
             continue
         cls = registry.load(registry.CHANNELS, name)
         out.append(cls(**resolve_secrets(args, f"channel {name!r}")))
@@ -490,7 +526,9 @@ def claude_plugins(cwd: str | None) -> tuple[list[ClaudePlugin], list[str]]:
     places = [(HOME / "plugins", False)]
     if cwd and project_trusted(cwd):
         places.append((Path(cwd).expanduser().resolve() / ".noeta" / "plugins", True))
-    found = find_claude_plugins(places, HOME / "plugin-data")
+    policy = plugin_policy()
+    found = [p for p in find_claude_plugins(places, HOME / "plugin-data")
+             if policy.admits(p.name)]
     notices = [f"plugin {p.name}: agent {a.name!r} is a built-in agent's name; not loaded"
                for p in found for a in p.agents if a.name in BUILTIN_AGENTS]
     return found, notices

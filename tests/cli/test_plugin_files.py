@@ -214,3 +214,19 @@ async def test_reload_plugins_runs_the_new_code_from_the_next_turn(home: Path,
             if isinstance(core := records.decode(r.event), records.Plugins)]
     assert len(pins) == 2 and pins[0] != pins[1]
     await app.store.close()
+
+
+async def test_the_machine_policy_allows_and_blocks_plugins(
+        home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    managed = tmp_path / "etc-noeta"
+    managed.mkdir()
+    monkeypatch.setattr(config, "managed_dir", lambda: managed)
+    (managed / "config.toml").write_text(
+        '[policy]\nallowed_plugins = ["waver"]\nblocked_plugins = ["web"]\n')
+    _write_joining(home / "plugins" / "waver.py", "waver", '("main",)')
+    (home / "plugins" / "other.py").write_text("raise SystemExit('never imported')\n")
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    names = [e.name for e in app.runtime.agents["main"].extensions]
+    assert "waver" in names and "web" not in names and "shell" in names
+    assert str(home / "plugins" / "other.py") not in registry.broken_plugin_files()
+    await app.store.close()
