@@ -279,3 +279,14 @@ async def test_cancellation_during_call_propagates() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
     assert sleep.slept == []
+
+
+async def test_a_malformed_tool_call_is_asked_for_again_once() -> None:
+    once = ScriptedProvider([MalformedToolArguments("bad"), _ok("fixed")])
+    assert (await complete_with_retries(once, REQUEST, sleep=SleepRecorder())).message.text \
+        == "fixed"
+    twice = ScriptedProvider([MalformedToolArguments("bad"), Transient("blip"),
+                              MalformedToolArguments("bad again"), _ok()])
+    with pytest.raises(MalformedToolArguments, match="bad again"):
+        await complete_with_retries(twice, REQUEST, sleep=SleepRecorder())
+    assert twice.calls == 3

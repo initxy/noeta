@@ -4,10 +4,11 @@ Adapters never retry: each raises one neutral :mod:`noeta.core.errors` failure.
 This helper is the one place that decides whether to try again:
 
 * :class:`~noeta.core.errors.Transient` (network failures, 5xx, overloaded, a
-  stream cut before its terminal event, and
-  :class:`~noeta.core.errors.MalformedToolArguments` — a tool call whose
-  arguments did not parse, which Claude Code also asks for again) and
+  stream cut before its terminal event) and
   :class:`~noeta.core.errors.RateLimited` are retried;
+* :class:`~noeta.core.errors.MalformedToolArguments` — a tool call whose
+  arguments did not parse — is asked for again once, as Claude Code falls
+  back to one more request when a streamed reply cannot be read;
 * :class:`~noeta.core.errors.ContextOverflow` and :class:`~noeta.core.errors.Fatal`
   surface at once — overflow's recovery is compaction, and re-sending a
   refused request cannot help.
@@ -22,7 +23,7 @@ import asyncio
 import random
 from collections.abc import Awaitable, Callable
 
-from noeta.core.errors import ModelError, RateLimited, Transient
+from noeta.core.errors import MalformedToolArguments, ModelError, RateLimited, Transient
 from noeta.core.provider import OnDelta, Provider
 from noeta.core.types import ModelRequest, ModelResponse
 
@@ -33,6 +34,9 @@ __all__ = ["DEFAULT_MAX_ATTEMPTS", "backoff_delay", "complete_with_retries"]
 #: backoff midpoint) without stalling a task indefinitely. A provider-supplied
 #: ``Retry-After`` overrides the backoff for that attempt.
 DEFAULT_MAX_ATTEMPTS = 9
+
+#: Retries of a reply whose tool-call arguments did not parse.
+MALFORMED_RETRIES = 1
 
 #: Exponential-backoff base (seconds) and ceiling.
 _BACKOFF_BASE_SECONDS = 1.0
@@ -90,11 +94,16 @@ async def complete_with_retries(
     if max_attempts < 1:
         raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
     attempt = 0
+    malformed = 0
     while True:
         try:
             return await provider.complete(request, on_delta)
         except ModelError as exc:
             delay = backoff_delay(exc, attempt=attempt, rng=rng)
+            if isinstance(exc, MalformedToolArguments):
+                malformed += 1
+                if malformed > MALFORMED_RETRIES:
+                    raise
             if delay is None or attempt + 1 >= max_attempts:
                 raise
             attempt += 1

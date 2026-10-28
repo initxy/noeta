@@ -55,7 +55,8 @@ class Fatal(ModelError):
 
 class MalformedToolArguments(Transient):
     """Tool-call arguments that are not a JSON object. Almost always a stream
-    cut mid-call, so the call is retried like any transient failure."""
+    cut mid-call, so the call is asked for again — once
+    (:data:`noeta.core.retry.MALFORMED_RETRIES`)."""
 
 
 class TurnFailed(Exception):
