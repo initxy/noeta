@@ -98,11 +98,12 @@ Phase 0 — measure
   resource, WebFetch, sub-agent, skill with arguments, task list, AskUserQuestion, interrupt,
   plan mode, `/compact`, default-mode approvals, auto-compaction (window 100K × 30 %),
   `--continue`. Stored in `~/cc-recordings/2.1.312/`.
-- [ ] Move the recording tools into `scripts/parity/` (proxy, tmux driver, scenario list).
-- [ ] Distill recordings into `parity/` (contract facts + per-scenario model scripts), never
+- [x] Move the recording tools into `scripts/parity/` (proxy, tmux driver, scenario list).
+- [x] Distill recordings into `parity/` (contract facts + per-scenario model scripts), never
   Claude Code's text.
-- [ ] Replay endpoint + runner + comparator; `make parity` prints every mismatch per scenario and
+- [x] Replay endpoint + runner + comparator; `make parity` prints every mismatch per scenario and
   step; record the first mismatch report in this spec.
+- [ ] Re-record the steps the 2.1.312 recording lost (see the 2026-10-28 Phase 0 log entry).
 - [ ] Rule checklists `parity/rules/*.md` (our words) for the main prompt, each tool description,
   each reminder, the compaction prompt and the auto-mode classifier.
 
@@ -196,3 +197,41 @@ Phase 5 — front ends
 - 2026-10-28: recorded 2.1.312 on the owner's Mac through the internal gateway (no quota);
   baseline narrowed to the API-key user. Owner: start. Phase 0 tooling and Phase 1 run in
   parallel.
+- 2026-10-28: Phase 0 tooling in `scripts/parity/` (README there): `record.py` (now also keeps
+  requests the client abandons), `drive.py` + `scenarios.json` (the one step list record,
+  distill and replay share), `project.py` (the scenario project as data — a checked-in
+  `CLAUDE.md`/`.claude/`/`.mcp.json` would be picked up by agents working on this repo),
+  `distill.py` → `parity/2.1.312/` (per-request facts, tool sets, text hashes, model scripts
+  with paths as `{PROJECT}`/`{HOME}`), `replay.py` + `compare.py` → `parity/report.md`.
+  Choices: the report and the raw capture (`parity/out/`) are gitignored — the report is
+  regenerated in ~20 s and its summary lives here; text kinds are named in
+  `scripts/parity/names.json` (Claude Code's by opening-words hash, noeta's by pattern);
+  replay registers Opus 5.5 through a models file (noeta's catalog lacks it, a Phase 1 item);
+  noeta runs in its default permission mode with every approval allowed; m3 gives noeta
+  `auto_compact_window=63000` because noeta has no percent override (same ~30K trigger).
+- 2026-10-28: first `make parity` report (deterministic across runs): 153 mismatches —
+  tools 46, context 52, layout 11, cache 7, params 4, system 3, headers 5, side requests 5,
+  compaction 1, run 19. The main ones: tools noeta lacks (`ToolSearch`, `Skill`,
+  `ScheduleWakeup`, `ListAgents`, `ReportFindings`, `Workflow`, deferred MCP resource tools,
+  `ExitPlanMode`, sub-agent `SubagentHandback`), tools only noeta offers (`RecallHistory`,
+  `BashOutput`, `KillShell`, `Grep`, `Glob`, `memory_*`, `TodoWrite`), `Agent` named `Task`
+  and missing `model`/`effort`/`isolation`, no tool is deferred, schemas lack `$schema`/
+  `additionalProperties: false`; no `thinking`, `context_management`, `output_config`,
+  `metadata` (nor `safeguards` in auto mode) and no beta headers; one system block instead
+  of Claude Code's three; no `role: system` messages, so the environment, agent list, skill
+  list, deferred-tool list, date and token budget never reach the model in Claude Code's
+  place (noeta puts the environment in the first user turn); different cache-mark positions;
+  side requests Claude Code makes and noeta does not (auto-mode classifier ×10, session
+  title, plan name, count_tokens, sub-agent activity summary); `/compact`, `/plan` and
+  `/release-notes` are not commands noeta offers (the project's `.claude/skills` skill is not
+  one), so the manual compaction never happens; noeta asks approval for every
+  Bash/Write/Edit/MCP call where auto mode classifies.
+- 2026-10-28: recording gaps in 2.1.312 (need a re-record): m1 `search` and m3 `r2` prompts
+  never reached the model (typed while Claude Code was still busy); m3 `after` arrived
+  mid-turn because `r4` was still running; m1 `interrupt` lost its interrupted request (the
+  old proxy dropped abandoned requests) and Escape before any output put the prompt back in
+  the input box, so `after-interrupt`'s text was appended to it and no interrupted turn
+  exists; Escape after m1 `plan` lost a request and left plan mode on into `after-compact`;
+  m2's approval prompts were not logged; every auto-mode classifier stage-1 call
+  (`max_tokens` 64) got a 400 from the gateway, so stage 1 is unobserved; the sessions shared
+  one project directory, so m2–m4 started from m1's end state.
