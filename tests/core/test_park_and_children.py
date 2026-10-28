@@ -10,13 +10,13 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.errors import ContextOverflow
 from noeta.core.events import Answer, ChildEnded, Compacted, TaskEnded, ToolFinished, Waiting
 from noeta.core.extension import Extension, TaskView
 from noeta.core.runner import Runtime
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.testing import ScriptedProvider, reply
 

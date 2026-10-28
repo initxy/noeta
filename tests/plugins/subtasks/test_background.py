@@ -5,12 +5,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.errors import Fatal
 from noeta.core.events import Recorded, TaskCreated, TaskEnded, ToolFinished
 from noeta.core.extension import Ask, Extension, Gate, TaskView
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.types import ToolUse, Usage
 from noeta.plugins.subtasks import SubagentSpec, Subtasks, texts
 from noeta.plugins.subtasks.host import pending_requests, tree_usage

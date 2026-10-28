@@ -7,11 +7,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.execenvs.local import LocalExecEnv
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.runner import Runtime
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.types import ModelRequest
 from noeta.plugins.fs import FileTools
 from noeta.testing import ScriptedProvider, reply

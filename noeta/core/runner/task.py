@@ -38,7 +38,7 @@ from noeta.core.loop.state import CORE, TaskState, apply, fold
 from noeta.core.prompts import load_overrides
 from noeta.core.runner import texts
 from noeta.core.runner.runtime import Runtime
-from noeta.core.store.base import Claim, Patch, Post
+from noeta.core.store import Claim, Patch, Post
 from noeta.core.tool import Tool
 from noeta.core.types import Text, ToolResult, user
 

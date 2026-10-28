@@ -19,10 +19,10 @@ import httpx  # noqa: E402
 from noeta.apps.local import LocalApp  # noqa: E402
 from noeta.apps.remote import RemoteClient  # noqa: E402
 from noeta.apps.server import create_app  # noqa: E402
+from noeta.backends.stores.sqlite import SqliteStore  # noqa: E402
 from noeta.core.agent import Agent  # noqa: E402
 from noeta.core.events import ModelReplied, ToolFinished, Waiting  # noqa: E402
 from noeta.core.extension import Ask, Extension, TaskView  # noqa: E402
-from noeta.core.store.sqlite import SqliteStore  # noqa: E402
 from noeta.core.tool import ToolContext, ToolOutput, text_output  # noqa: E402
 from noeta.core.types import Delta, ToolUse  # noqa: E402
 from noeta.testing import ScriptedProvider, reply  # noqa: E402

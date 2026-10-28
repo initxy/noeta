@@ -14,11 +14,11 @@ import pytest
 
 from noeta.apps.acp import EditorServers
 from noeta.apps.local import LocalApp
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.events import ToolFinished
 from noeta.core.extension import Extension, TaskView
 from noeta.core.questions import AnswerValidationError, answer_question, ask, read_answer
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.plugins.mcp import Mcp, McpPool
 from noeta.testing import ScriptedProvider, reply

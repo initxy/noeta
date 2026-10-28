@@ -20,13 +20,13 @@ from typing import Any
 import msgspec
 import pytest
 
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.providers.anthropic import AnthropicProvider
 from noeta.backends.providers.openai_compat import OpenAICompatProvider
 from noeta.backends.providers.openai_responses import OpenAIResponsesProvider
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
 from noeta.core.runner import Runtime
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolUse, Usage
 from noeta.presets import default_agents
 

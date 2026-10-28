@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.execenv import RunResult
 from noeta.plugins.fs.grep import GrepTool
 from tests.plugins.conftest import Harness, text_of

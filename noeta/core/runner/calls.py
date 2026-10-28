@@ -20,7 +20,7 @@ from noeta.core.events import (
 from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView
 from noeta.core.loop.state import CORE
 from noeta.core.runner import texts
-from noeta.core.store.base import NewTask, Patch, Post
+from noeta.core.store import NewTask, Patch, Post
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
 

@@ -6,13 +6,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.loop.request import cache_breakpoints
 from noeta.core.runner import Runtime
-from noeta.core.store.sqlite import SqliteStore
 from noeta.testing import ScriptedProvider, reply
 
 

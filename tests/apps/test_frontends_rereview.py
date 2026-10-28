@@ -19,11 +19,11 @@ import noeta.apps.cli as cli
 from noeta.apps.local import LocalApp, UnknownAgent
 from noeta.apps.tui.app import NoetaApp
 from noeta.apps.tui.widgets import ApprovalCard, QuestionCard, UserMessage
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.errors import Transient
 from noeta.core.events import Answer, ToolFinished
 from noeta.core.extension import Ask, Extension, TaskView
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.core.types import Delta, ModelRequest, ModelResponse, ToolUse
 from noeta.plugins.ask_user import AskUser

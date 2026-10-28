@@ -10,10 +10,10 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
 from noeta.core.events import ToolFinished
 from noeta.core.pending import pending
-from noeta.core.store.sqlite import SqliteStore
 from noeta.plugins.ask_user import (
     ALONE_ERROR,
     AnswerValidationError,

@@ -11,12 +11,12 @@ from typing import Any
 
 import pytest
 
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.execenvs.local import LocalExecEnv
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.errors import ContextOverflow
 from noeta.core.events import Compacted, ExtensionRecorded, ToolFinished, Waiting
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.types import Message, ModelResponse, ToolResult, ToolUse, Usage
 from noeta.plugins.compaction import Compaction
 from noeta.plugins.compaction.clearing import CLEARED_MARKER

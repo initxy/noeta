@@ -11,7 +11,7 @@ from typing import Any, Literal, Union
 
 from noeta.core.errors import UnknownTask
 from noeta.core.events import Answer, Cancel, Recorded, Say, TaskCreated
-from noeta.core.store.base import NewTask, Post, Status, Store, TaskRow
+from noeta.core.store import NewTask, Post, Status, Store, TaskRow
 from noeta.core.types import Message, user
 
 Input = Union[str, Message]

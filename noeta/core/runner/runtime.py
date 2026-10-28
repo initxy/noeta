@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from noeta.core.agent import Agent
 from noeta.core.execenv import ExecEnv
 from noeta.core.provider import Provider
-from noeta.core.store.base import Claim, Store
+from noeta.core.store import Claim, Store
 from noeta.core.types import Delta
 
 if TYPE_CHECKING:

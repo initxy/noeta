@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from noeta.core.events import ExtensionRecorded, Recorded
-from noeta.core.store.base import Store
+from noeta.core.store import Store
 
 __all__ = ["SkillUsage", "UsageRank", "decayed_usage_score", "skill_usage", "usage_rank"]
 

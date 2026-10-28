@@ -14,7 +14,7 @@ import pytest
 
 from noeta.core.errors import CommitUnknown
 from noeta.core.events import Cancel, TaskCreated, Waiting
-from noeta.core.store.base import NewTask, Post
+from noeta.core.store import NewTask, Post
 
 pytestmark = pytest.mark.usefixtures("pg")
 
@@ -48,8 +48,8 @@ async def test_on_change_sees_commits_from_another_process(pg: Any) -> None:
     script = textwrap.dedent(f"""
         import asyncio
         from noeta.core.events import Cancel
-        from noeta.core.store.base import Post
-        from noeta.backends.postgres import PostgresStore
+        from noeta.core.store import Post
+        from noeta.backends.stores.postgres import PostgresStore
 
         async def main():
             s = PostgresStore({pg.dsn!r}, schema={pg.schema!r})
@@ -162,7 +162,7 @@ async def test_drop_during_commit_raises_and_leaves_nothing(pg: Any, monkeypatch
 async def test_concurrent_schema_setup_from_many_processes(pg: Any) -> None:
     script = textwrap.dedent(f"""
         import asyncio
-        from noeta.backends.postgres import PostgresStore
+        from noeta.backends.stores.postgres import PostgresStore
 
         async def main():
             s = PostgresStore({pg.dsn!r}, schema={pg.schema!r})

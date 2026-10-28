@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.runner import Runtime
-from noeta.core.store.sqlite import SqliteStore
 from noeta.plugins.structured import StructuredOutput, render_answer, structured_answer
 from noeta.testing import ScriptedProvider, reply
 

@@ -12,12 +12,12 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, ToolFinished
 from noeta.core.loop.state import fold
 from noeta.core.runner import Runtime
-from noeta.core.store.sqlite import SqliteStore
 from noeta.plugins.fs import FileTools
 from noeta.plugins.shell import Registry, Shell
 from noeta.testing import ScriptedProvider, reply

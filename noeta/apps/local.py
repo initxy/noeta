@@ -20,7 +20,7 @@ from noeta.core.client import Client, Input
 from noeta.core.errors import NoetaError
 from noeta.core.provider import Provider
 from noeta.core.runner import Runtime
-from noeta.core.store.base import Store
+from noeta.core.store import Store
 from noeta.core.types import Delta
 
 if TYPE_CHECKING:

@@ -18,7 +18,7 @@ from noeta.core.commands import expand_command
 from noeta.core.events import ExtensionRecorded, ToolFinished
 from noeta.core.pending import pending
 from noeta.core.questions import answer_question
-from noeta.core.store.sqlite import SqliteStore
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.testing import ScriptedProvider, reply
 
 AGENT = """---

@@ -16,10 +16,10 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
 from noeta.core.events import ToolFinished, ToolStarted
 from noeta.core.runner import INTERRUPTED_CALL_ERROR
-from noeta.core.store.sqlite import SqliteStore
 
 WORKER = str(Path(__file__).parent / "procs" / "worker.py")
 TASKS = int(os.environ.get("NOETA_KILL9_TASKS", "60"))

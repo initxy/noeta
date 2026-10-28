@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.events import ExtensionRecorded
 from noeta.core.extension import TaskView
 from noeta.core.loop.state import TaskState

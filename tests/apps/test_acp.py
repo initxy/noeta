@@ -14,9 +14,9 @@ from acp import schema
 
 from noeta.apps.acp import NoetaAcpAgent
 from noeta.apps.local import LocalApp
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.extension import Ask, Extension, TaskView
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import ToolUse
 from noeta.testing import ScriptedProvider, reply

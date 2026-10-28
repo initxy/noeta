@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.extension import Extension
 from noeta.core.runner import Runtime
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.testing import ScriptedProvider
 

@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.tool import ToolContext
 from noeta.core.types import Image
 from noeta.plugins.mcp.results import INLINE_MAX_BYTES, render_result

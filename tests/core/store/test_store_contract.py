@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.errors import Conflict, UnknownTask
 from noeta.core.events import Cancel, Say, TaskCreated, TaskEnded, Waiting
-from noeta.core.store.base import NewTask, Patch, Post, Store
-from noeta.core.store.sqlite import SqliteStore
+from noeta.core.store import NewTask, Patch, Post, Store
 from noeta.core.types import user
 
 

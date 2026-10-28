@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.execenvs.local import LocalExecEnv
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.types import Message
 from noeta.plugins.compaction import Compaction
 from noeta.plugins.compaction.summary import SUMMARY_FRAME

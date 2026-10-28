@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.errors import StoreUnavailable
 from noeta.core.events import TaskCreated
-from noeta.core.store.base import NewTask
-from noeta.core.store.sqlite import SqliteStore
+from noeta.core.store import NewTask
 
 
 async def test_a_locked_database_is_store_unavailable(tmp_path: Path) -> None:
