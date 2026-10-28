@@ -88,8 +88,9 @@ directory (`/etc/noeta`). The mechanisms and formats inside are Claude Code's (i
 layering, settings, skills, agents, `.noeta/mcp.json`); its own places (`~/.claude/`,
 `.claude/`, `CLAUDE.md`, `.mcp.json`, `CLAUDE_*` variables) are never read
 (`noeta/cli/settings_files.py`, `noeta/plugins/instructions/files.py`). Trusted projects are
-listed in `~/.noeta/trusted.json` (`noeta trust`); a project's MCP servers start only with
-Claude Code's consent keys, so a cloned repository never starts a process by itself.
+listed in `~/.noeta/trusted.json` (`noeta trust`); a trusted project's MCP servers start only
+with Claude Code's consent keys in its own settings, so a cloned repository never starts a
+process by itself.
 
 ## Extension
 

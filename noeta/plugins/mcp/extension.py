@@ -156,7 +156,10 @@ class Mcp(Extension):
     ``settings_files``: settings files whose ``mcpServers`` are added, in
     Claude Code's format (:mod:`noeta.plugins.mcp.settings`), read on the
     worker each pick-up; with ``project`` also the task's ``<cwd>/.noeta/mcp.json``
-    servers those settings consent to. ``servers`` wins over both on an alias.
+    servers its own settings files consent to. ``project`` is ``True`` (the
+    host trusts every task's working directory) or a function of the
+    directory saying whether it is trusted; an untrusted directory's servers
+    never start. ``servers`` wins over both on an alias.
     """
 
     name = "mcp"
@@ -165,7 +168,8 @@ class Mcp(Extension):
 
     def __init__(self, servers: Servers | ServersFn = (), *,
                  scope: str | ScopeFn | None = None, pool: McpPool | None = None,
-                 settings_files: Sequence[str] = (), project: bool = False) -> None:
+                 settings_files: Sequence[str] = (),
+                 project: bool | Callable[[str], bool] = False) -> None:
         self._servers = servers
         self._settings_files = tuple(settings_files)
         self._project = project
@@ -498,8 +502,18 @@ class Mcp(Extension):
         if not self._settings_files and not self._project:
             return []
         cwd = view.state.config.get("cwd")
-        dirs = [str(cwd)] if self._project and cwd else []
+        dirs = [str(cwd)] if cwd and self._trusts(str(cwd)) else []
         return await asyncio.to_thread(read_servers, self._settings_files, dirs)
+
+    def _trusts(self, directory: str) -> bool:
+        project = self._project
+        if callable(project):
+            try:
+                return bool(project(directory))
+            except Exception:
+                log.warning("mcp: the trust check for %s failed", directory, exc_info=True)
+                return False
+        return bool(project)
 
     # ------------------------------------------------------------ commands
 
@@ -512,7 +526,8 @@ class Mcp(Extension):
         files: list[McpServer] = []
         if self._settings_files or self._project:
             files = await asyncio.to_thread(read_servers, self._settings_files,
-                                            [ctx.cwd] if self._project else [])
+                                            [ctx.cwd] if ctx.cwd and self._trusts(ctx.cwd)
+                                            else [])
         known: dict[str, McpServer] = {}
         for server in [*given, *files]:
             known.setdefault(server.alias, server)

@@ -147,12 +147,15 @@ def _transport(name: str, spec: dict[str, Any]) -> str:
 
 
 def _consented(name: str, cwd: str) -> bool:
+    """Consent counts per project: from the project's own settings files."""
     files = config.file_settings(cwd).files
     settings = [_read(f) for f in files if f.is_file()]
     if any(name in (s.get("disabledMcpjsonServers") or []) for s in settings):
         return False
+    project = Path(cwd).expanduser().resolve() / ".noeta"
+    own = [_read(f) for f in files if f.is_file() and f.resolve().parent == project]
     return any(s.get("enableAllProjectMcpServers") is True
-               or name in (s.get("enabledMcpjsonServers") or []) for s in settings)
+               or name in (s.get("enabledMcpjsonServers") or []) for s in own)
 
 
 # ---------------------------------------------------------------- commands
@@ -196,7 +199,7 @@ def _save(name: str, spec: dict[str, Any], scope: str, cwd: str, secret: str | N
     print(f"Added {transport} MCP server {name} to {scope} config ({path})")
     if scope == "project" and not _consented(name, cwd):
         print(f"It starts once you consent: add {name!r} to enabledMcpjsonServers in "
-              f"{scope_file('local', cwd)} or {scope_file('user', cwd)}")
+              f"{scope_file('local', cwd)}")
     if scope in ("project", "local") and not config.project_trusted(cwd):
         print("This project is not trusted yet; run `noeta trust` here to load its settings")
 
