@@ -6,14 +6,16 @@ built-ins exactly like a third-party package's (see ``pyproject.toml``):
 * ``noeta.plugins`` — a name -> an ``Extension`` class (or factory);
 * ``noeta.providers`` — a provider family -> ``factory(**kw) -> Provider``;
 * ``noeta.execenvs`` — a name -> ``factory(cwd, **kw) -> ExecEnv``;
-* ``noeta.stores`` — a URL scheme -> ``factory(url) -> Store``.
+* ``noeta.stores`` — a URL scheme -> ``factory(url) -> Store``;
+* ``noeta.channels`` — a name -> a ``Channel`` class (``noeta.core.channel``).
 
 The kernel imports no plugin or backend module statically; it loads one by
 name here when it needs a default (the local exec env).
 
 Plugins can also be plain files (:func:`load_plugin_files`): every
-``Extension`` subclass a ``*.py`` file (or a directory's ``__init__.py``)
-defines registers under its ``name``. An installed plugin wins a name clash.
+``Extension`` (or ``Channel``) subclass a ``*.py`` file (or a directory's
+``__init__.py``) defines registers under its ``name``. An installed plugin
+wins a name clash.
 
 :func:`pin` says which plugin an extension instance is (name, where its
 code comes from and which version, a hash of its arguments): what a task
@@ -43,6 +45,7 @@ if TYPE_CHECKING:
     from noeta.core.store import Store
 
 __all__ = [
+    "CHANNELS",
     "EXECENVS",
     "PLUGINS",
     "PROVIDERS",
@@ -68,6 +71,7 @@ PLUGINS = "noeta.plugins"
 PROVIDERS = "noeta.providers"
 EXECENVS = "noeta.execenvs"
 STORES = "noeta.stores"
+CHANNELS = "noeta.channels"
 
 
 class UnknownName(LookupError):
@@ -81,6 +85,8 @@ def _group(group: str) -> dict[str, EntryPoint]:
 
 #: Plugins from files: name -> (path, the Extension class).
 _files: dict[str, tuple[str, Any]] = {}
+#: Channels from files: name -> (path, the Channel class).
+_channel_files: dict[str, tuple[str, Any]] = {}
 #: Plugin files that could not be used: path -> why.
 _broken: dict[str, str] = {}
 _loaded_paths: set[str] = set()
@@ -91,12 +97,14 @@ _origins: weakref.WeakKeyDictionary[Any, tuple[str, str]] = weakref.WeakKeyDicti
 _arguments: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
 
 
+def _from_files(group: str) -> dict[str, tuple[str, Any]]:
+    """What plugin files registered in ``group``: name -> (path, class)."""
+    return {PLUGINS: _files, CHANNELS: _channel_files}.get(group, {})
+
+
 def available(group: str) -> list[str]:
     """The names registered in ``group``, sorted."""
-    names = set(_group(group))
-    if group == PLUGINS:
-        names |= set(_files)
-    return sorted(names)
+    return sorted(set(_group(group)) | set(_from_files(group)))
 
 
 def sources(group: str) -> dict[str, str]:
@@ -104,8 +112,7 @@ def sources(group: str) -> dict[str, str]:
     (``package <name>``) or the plugin file's path."""
     out = {name: f"package {ep.dist.name}" if ep.dist is not None else f"entry point {ep.value}"
            for name, ep in _group(group).items()}
-    if group == PLUGINS:
-        out.update({name: path for name, (path, _cls) in _files.items()})
+    out.update({name: path for name, (path, _cls) in _from_files(group).items()})
     return dict(sorted(out.items()))
 
 
@@ -133,11 +140,11 @@ def load(group: str, name: str) -> Any:
         if group == PLUGINS and isinstance(obj, type) and ep.dist is not None:
             _origins.setdefault(obj, (f"package {ep.dist.name}", ep.dist.version))
         return obj
-    if group == PLUGINS and name in _files:
-        return _files[name][1]
+    if name in _from_files(group):
+        return _from_files(group)[name][1]
     known = ", ".join(available(group)) or "none"
     msg = f"no {group} entry point named {name!r} (available: {known})"
-    if group == PLUGINS and _broken:
+    if group in (PLUGINS, CHANNELS) and _broken:
         msg += "; plugin files that failed: " + "; ".join(
             f"{path}: {why}" for path, why in _broken.items())
     raise UnknownName(msg)
@@ -190,10 +197,11 @@ def _import(path: Path) -> Any:
 
 
 def load_plugin_files(directories: Iterable[str | Path]) -> list[str]:
-    """Register the plugins of the files in ``directories`` (each loaded
-    once per process); returns the names added. A file that fails to import
-    is remembered and named when its plugin is asked for; a name an
-    installed plugin already has is skipped with a warning."""
+    """Register the plugins (and channels) of the files in ``directories``
+    (each loaded once per process); returns the names added. A file that
+    fails to import is remembered and named when its plugin is asked for; a
+    name an installed plugin already has is skipped with a warning."""
+    from noeta.core.channel import Channel
     from noeta.core.extension import Extension
 
     added: list[str] = []
@@ -211,20 +219,22 @@ def load_plugin_files(directories: Iterable[str | Path]) -> list[str]:
                 _broken[shown] = f"{type(exc).__name__}: {exc}"
                 log.warning("plugin file %s failed to import: %s", shown, exc)
                 continue
-            found = [cls for _n, cls in inspect.getmembers(module, inspect.isclass)
-                     if issubclass(cls, Extension) and cls is not Extension
+            found = [(PLUGINS if issubclass(cls, Extension) else CHANNELS, cls)
+                     for _n, cls in inspect.getmembers(module, inspect.isclass)
+                     if issubclass(cls, (Extension, Channel)) and cls not in (Extension, Channel)
                      and cls.__module__ == module.__name__ and getattr(cls, "name", None)]
             if not found:
-                _broken[shown] = "defines no Extension subclass with a name"
+                _broken[shown] = "defines no Extension or Channel subclass with a name"
                 continue
-            for cls in found:
-                name = str(cls.name)
-                if name in _group(PLUGINS) or name in _files:
-                    where = sources(PLUGINS).get(name, "")
+            for group, cls in found:
+                name, table = str(cls.name), _from_files(group)
+                if name in _group(group) or name in table:
+                    where = sources(group).get(name, "")
                     log.warning("plugin file %s: %r is already %s; skipped", shown, name, where)
-                    _broken[shown] = f"plugin {name!r} is already {where}"
+                    _broken[shown] = f"{'plugin' if group == PLUGINS else 'channel'} " \
+                        f"{name!r} is already {where}"
                     continue
-                _files[name] = (shown, cls)
+                table[name] = (shown, cls)
                 _origins[cls] = ("file", version)
                 added.append(name)
     return added
@@ -235,6 +245,7 @@ def forget_plugin_files() -> None:
     :func:`load_plugin_files` imports them afresh: a reload. Extensions
     already made from the old code keep running it."""
     _files.clear()
+    _channel_files.clear()
     _broken.clear()
     _loaded_paths.clear()
     for module in [m for m in sys.modules if m.startswith(f"{_FILES_PACKAGE}.")]:

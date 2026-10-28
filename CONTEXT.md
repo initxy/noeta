@@ -54,6 +54,9 @@ events. HTTP (`noeta/host/http.py`, `noeta serve`) is that API on the wire; ACP
 (`noeta/host/acp.py`) translates the protocol editors speak into it, and
 `noeta/host/stream_json.py` Claude Code's headless protocol (`noeta -p`, the server's
 `/stream-json`). A new outside protocol is another translation in `host`, never a second API.
+A long-running listener for an outside conversation (a chat) is a `Channel`
+(`noeta/core/channel.py`, group `noeta.channels`), run by `noeta worker` / `noeta serve`; its
+posts are idempotent (`deliver`), and replies go out from inside the task (a plugin).
 
 ## Where code goes
 
@@ -68,12 +71,13 @@ module the kernel never imports, unless listed there as kernel surface with a re
 ## Registry
 
 Plugins and backends are found by name through entry points (`noeta/core/registry.py`): groups
-`noeta.plugins`, `noeta.providers`, `noeta.execenvs`, `noeta.stores`. The built-ins register in
-`pyproject.toml` exactly as a third-party package would (`examples/hello-plugin` is one,
-installed and tested by `make check`). A plugin's registry name is its `Extension.name`. A
-plugin can also be a plain file in `~/.noeta/plugins` or a trusted project's `.noeta/plugins`
-(`registry.load_plugin_files`); an installed plugin wins a name clash. Such a file joins the
-agents its `Extension.add_to` names by itself (an installed package's `add_to` is ignored).
+`noeta.plugins`, `noeta.providers`, `noeta.execenvs`, `noeta.stores`, `noeta.channels`. The
+built-ins register in `pyproject.toml` exactly as a third-party package would
+(`examples/hello-plugin` is one, installed and tested by `make check`). A plugin's registry name
+is its `Extension.name`. A plugin (or channel) can also be a plain file in `~/.noeta/plugins` or
+a trusted project's `.noeta/plugins` (`registry.load_plugin_files`); an installed plugin wins a
+name clash. Such a file joins the agents its `Extension.add_to` names by itself (an installed
+package's `add_to` is ignored).
 
 ## Plugin pin
 

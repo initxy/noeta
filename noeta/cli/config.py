@@ -13,6 +13,9 @@ win. The plugin part of ``config.toml``::
     add_plugins = ["my_plugin", {hooks = {}}]  # after the agent file's own
     [agents."*"]               # every agent
     add_plugins = []
+
+    [channels.chat_bridge]     # a channel's arguments; run by `noeta worker` / `noeta serve`
+    token = "{env:CHAT_TOKEN}"
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ from noeta.toolkit.sandbox import SandboxSettings
 
 if TYPE_CHECKING:
     from noeta.core.agent import Agent
+    from noeta.core.channel import Channel
     from noeta.core.loop.state import TaskState
     from noeta.host.local import LocalApp
 
@@ -78,6 +82,8 @@ class Settings:
     plugins: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: Per agent name (``"*"``: every agent): more plugins, after its own.
     add_plugins: dict[str, tuple[PluginEntry, ...]] = field(default_factory=dict)
+    #: Per channel name: its arguments (``enabled = false`` turns it off).
+    channels: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def make_provider(self) -> Provider:
         kw: dict[str, Any] = {}
@@ -170,6 +176,7 @@ def load_settings(*, cwd: str | None = None, **overrides: Any) -> Settings:
     if not data.get("model") and found.model:
         data["model"] = found.model
     data["plugins"] = _plugin_tables(data.get("plugins", {}))
+    data["channels"] = _plugin_tables(data.get("channels", {}), "channels")
     data["add_plugins"] = _agent_tables(data.pop("agents", {}))
     known = {f for f in Settings.__dataclass_fields__}
     settings = Settings(**{k: v for k, v in data.items() if k in known})
@@ -178,9 +185,9 @@ def load_settings(*, cwd: str | None = None, **overrides: Any) -> Settings:
     return settings
 
 
-def _plugin_tables(value: Any) -> dict[str, dict[str, Any]]:
+def _plugin_tables(value: Any, table: str = "plugins") -> dict[str, dict[str, Any]]:
     if not isinstance(value, dict) or not all(isinstance(v, dict) for v in value.values()):
-        raise ValueError("config.toml: [plugins.<name>] tables hold a plugin's arguments")
+        raise ValueError(f"config.toml: [{table}.<name>] tables hold one's arguments")
     return {name: dict(args) for name, args in value.items()}
 
 
@@ -345,7 +352,8 @@ def load_plugin_files(cwd: str | None) -> list[str]:
 def from_settings(settings: Settings, *, cwd: str | None = None,
                   plugins: Mapping[str, PluginSetting] | None = None,
                   permissions: Mapping[str, Any] | None = None,
-                  own_tasks_only: bool = False, **runtime_kw: Any) -> LocalApp:
+                  own_tasks_only: bool = False, with_channels: bool = False,
+                  **runtime_kw: Any) -> LocalApp:
     """The default agents on the configured store, model and provider, with
     the user's plugin files (``~/.noeta/plugins``, and a trusted project's
     ``<cwd>/.noeta/plugins``), memory (``~/.noeta/projects/<workspace>/memory``), prompt
@@ -362,7 +370,8 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     trusted; each one skipped is a notice in ``app.notices``. Front ends
     (``-p``, ``acp``, the TUI) pass ``own_tasks_only`` so their worker never
     picks up another process's task from the shared store; ``worker`` and
-    ``serve`` serve every task."""
+    ``serve`` serve every task and pass ``with_channels`` to run the
+    channels ``config.toml`` enables."""
     from noeta.agents import default_agents
     from noeta.agents.agent_files import read_agent_dir
     from noeta.host.local import LocalApp
@@ -432,6 +441,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     app = LocalApp(open_store(settings.store_url), agents,
                    settings.make_provider(), own_tasks_only=own_tasks_only,
                    task_config={"prompts": settings.prompts} if settings.prompts else None,
+                   channels=make_channels(settings.channels) if with_channels else (),
                    **runtime_kw)
     app.notices = notices
 
@@ -443,6 +453,22 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
 
     app.reload_plugins = reload_plugins
     return app
+
+
+def make_channels(tables: Mapping[str, Mapping[str, Any]]) -> list[Channel]:
+    """The channels ``config.toml`` sets (``[channels.<name>]``, by name in
+    the ``noeta.channels`` group or a plugin file), made with their
+    arguments; ``enabled = false`` leaves one out."""
+    from noeta.agents.agent_files import resolve_secrets
+
+    out: list[Channel] = []
+    for name, table in tables.items():
+        args = dict(table)
+        if args.pop("enabled", True) is False:
+            continue
+        cls = registry.load(registry.CHANNELS, name)
+        out.append(cls(**resolve_secrets(args, f"channel {name!r}")))
+    return out
 
 
 def plugin_changes(before: Mapping[str, Agent], after: Mapping[str, Agent]) -> list[str]:

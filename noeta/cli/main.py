@@ -114,6 +114,8 @@ def _plugins(cwd: str) -> None:
     notices = load_plugin_files(cwd)
     for name, source in registry.sources(registry.PLUGINS).items():
         print(f"{name}\t{source}")
+    for name, source in registry.sources(registry.CHANNELS).items():
+        print(f"{name}\t{source}\t(channel)")
     for path, why in registry.broken_plugin_files().items():
         print(f"(failed) {path}: {why}", file=sys.stderr)
     for notice in notices:
@@ -150,9 +152,8 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     token = None if args.no_token else server_token(create=True)
     if token is not None and not os.environ.get("NOETA_SERVER_TOKEN"):
         print(f"noeta: bearer token in {HOME / 'server-token'}: {token}", file=sys.stderr)
-    app = _app(s, cwd=cwd)
-    if with_worker:
-        await app.start()
+    app = _app(s, cwd=cwd, with_channels=True)
+    await app.start(worker=with_worker)
     api = create_app(app.client, token=token,
                      deltas=app.deltas if with_worker else None, agents=app.runtime.agents,
                      app=app if with_worker else None,
@@ -168,12 +169,14 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
 
 
 async def _worker(s: Settings, queues: list[str], concurrency: int) -> None:
-    app = _app(s, queues=tuple(queues), concurrency=concurrency)
+    from noeta.host.channels import run_channels
+
+    app = _app(s, queues=tuple(queues), concurrency=concurrency, with_channels=True)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
-    await app.runtime.serve(stop)
+    await asyncio.gather(app.runtime.serve(stop), run_channels(app.channels, app.client, stop))
     await app.store.close()
 
 

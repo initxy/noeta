@@ -13,10 +13,11 @@ import asyncio
 import os
 import tempfile
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from noeta.core.agent import Agent
+from noeta.core.channel import Channel
 from noeta.core.client import Client, Input
 from noeta.core.errors import NoetaError
 from noeta.core.provider import Provider
@@ -69,7 +70,7 @@ class LocalApp:
     def __init__(self, store: Store, agents: list[Agent],
                  provider: Provider | Callable[[str], Provider], *,
                  own_tasks_only: bool = False, task_config: dict[str, Any] | None = None,
-                 **runtime_kw: Any) -> None:
+                 channels: Sequence[Channel] = (), **runtime_kw: Any) -> None:
         self.store = store
         provider_for = provider if callable(provider) and not hasattr(provider, "complete") \
             else (lambda _m: provider)
@@ -82,8 +83,12 @@ class LocalApp:
                                on_delta=self._fan_out, poll_interval=0.2, **runtime_kw)
         self.client = LocalClient(store, self.runtime, task_config=task_config,
                                   poll_interval=0.2)
+        #: Listeners letting outside conversations in (``noeta.core.channel``),
+        #: run while the app is started.
+        self.channels = list(channels)
         self._stop = asyncio.Event()
         self._serving: asyncio.Task[None] | None = None
+        self._listening: asyncio.Task[None] | None = None
         #: What the person should know about how this app was set up (a
         #: project's plugins left unloaded); front ends show them.
         self.notices: list[str] = []
@@ -122,15 +127,23 @@ class LocalApp:
                     f"have (it has: {', '.join(sorted(self.runtime.agents)) or 'none'})")
         self.runtime.serve_root(row.root_id if row is not None else task_id)
 
-    async def start(self) -> None:
-        if self._serving is None:
+    async def start(self, *, worker: bool = True) -> None:
+        """Run the worker (unless ``worker`` is false: tasks run elsewhere)
+        and the channels in the background until :meth:`stop`."""
+        from noeta.host.channels import run_channels
+
+        if worker and self._serving is None:
             self._serving = asyncio.create_task(self.runtime.serve(self._stop))
+        if self.channels and self._listening is None:
+            self._listening = asyncio.create_task(
+                run_channels(self.channels, self.client, self._stop))
 
     async def stop(self) -> None:
         self._stop.set()
-        if self._serving is not None:
-            await self._serving
-            self._serving = None
+        for running in (self._listening, self._serving):
+            if running is not None:
+                await running
+        self._serving = self._listening = None
         await self.store.close()
 
     async def __aenter__(self) -> LocalApp:
