@@ -60,3 +60,35 @@ async def test_a_reminder_is_recorded_and_sent_where_the_log_puts_it(tmp_path: P
     state = fold(records[: upto + 1], {}, {})
     assert second.cache_after == cache_breakpoints(state)
     await store.close()
+
+
+class Notes(Extension):
+    """Several reminders due at once, out of order, on the first call."""
+
+    def __init__(self, name: str, *reminders: Reminder) -> None:
+        self.name = name
+        self._reminders = reminders
+
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        return self._reminders if len(view.state.messages) == 1 else ()
+
+
+async def test_user_reminders_come_first_then_system_turns_by_order(tmp_path: Path) -> None:
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("ok")])
+    agent = Agent(name="a", model="m", extensions=[
+        Notes("late", Reminder(text="date", role="system", order=90)),
+        Notes("early", Reminder(text="env", role="system", order=0),
+              Reminder(text="in the user turn")),
+    ])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 sleep=_no_sleep)
+    await Client(store).create("a", "go")
+    await rt.run_until_idle()
+    [request] = provider.requests
+    assert [(m.role, m.text) for m in request.messages] == [
+        ("user", "go"), ("user", "in the user turn"), ("system", "env"), ("system", "date")]
+    assert request.messages[1].origin == "system"
+    # One breakpoint, on the newest message, as Claude Code places it.
+    assert request.cache_after == [3]
+    await store.close()

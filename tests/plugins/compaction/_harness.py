@@ -148,7 +148,7 @@ async def rebuilt(store: SqliteStore, agent: Agent, tid: str) -> list[tuple[str,
                 if t.name not in {x.name for x in tools}:
                     tools.append(t)
         request = build_request(
-            state, model=agent.model, system_prompt=agent.system_prompt,
+            state, model=agent.model, system_prompt=agent.system_prompt, identity=agent.identity,
             parts=[p for e in exts for p in e.context(view)], tools=tools,
             effort=agent.effort, max_tokens=agent.max_tokens or _output_ceiling(agent.model),
             output_schema=agent.output_schema)

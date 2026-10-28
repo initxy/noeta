@@ -19,6 +19,9 @@ class Agent:
     name: str
     model: str
     system_prompt: str = ""
+    #: A one-line identity sent as its own cached system block ahead of the
+    #: prompt (the prompt name ``identity/<agent>``); empty sends none.
+    identity: str = ""
     #: What the agent is for: its line in another agent's sub-agent roster.
     description: str = ""
     extensions: Sequence[Extension] = ()

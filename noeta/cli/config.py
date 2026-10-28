@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -68,12 +69,34 @@ class Settings:
         kw: dict[str, Any] = {}
         if self.extra_headers:
             kw["extra_headers"] = dict(self.extra_headers)
+        if self.provider == "anthropic":
+            kw["device_id"] = device_id()
         return registry.provider(self.provider, base_url=self.base_url, api_key=self.api_key,
                                  **kw)
 
     @property
     def store_url(self) -> str:
         return self.store or f"sqlite:///{HOME / 'tasks.db'}"
+
+
+def device_id() -> str | None:
+    """This machine's random id, made on first use (``~/.noeta/device_id``):
+    the stable device id Claude Code sends in ``metadata.user_id``. ``None``
+    when it cannot be kept (the provider then uses one per process)."""
+    path = HOME / "device_id"
+    try:
+        text = path.read_text("utf-8").strip()
+        if text:
+            return text
+    except OSError:
+        pass
+    value = secrets.token_hex(32)
+    try:
+        HOME.mkdir(parents=True, exist_ok=True)
+        path.write_text(value + "\n", "utf-8")
+    except OSError:
+        return None
+    return value
 
 
 def load_settings(**overrides: Any) -> Settings:

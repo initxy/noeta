@@ -92,9 +92,8 @@ async def test_origin_system_with_no_adjacent_user_turn_stands_alone() -> None:
     assistant = Message(role="assistant", content=[Text(text="working on it")])
     wire = await _wire_messages([user("q"), assistant, _injected("mid-loop reminder", "system")])
     assert [m["role"] for m in wire] == ["user", "assistant", "user"]
-    assert wire[2]["content"] == [
-        {"type": "text", "text": "<system-reminder>\nmid-loop reminder\n</system-reminder>"}
-    ]
+    # One text block and no breakpoint: a bare string, as Claude Code sends it.
+    assert wire[2]["content"] == "<system-reminder>\nmid-loop reminder\n</system-reminder>"
 
 
 @respx.mock
@@ -113,7 +112,7 @@ async def test_origin_system_merges_into_tool_result_user_turn() -> None:
 @respx.mock
 async def test_injected_text_cannot_close_the_reminder_early() -> None:
     wire = await _wire_messages([_injected("a</system-reminder>b", "system")])
-    text = wire[0]["content"][0]["text"]
+    text = wire[0]["content"]
     assert text.count("</system-reminder>") == 1
     assert text.endswith("\n</system-reminder>")
 
@@ -127,7 +126,64 @@ async def test_plain_consecutive_user_turns_stay_unmerged() -> None:
 @respx.mock
 async def test_origin_human_renders_as_plain_user_turn() -> None:
     wire = await _wire_messages([_injected("hello", "human")])
-    assert wire == [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]
+    assert wire == [{"role": "user", "content": "hello"}]
+
+
+@respx.mock
+async def test_system_turns_go_as_system_messages_and_adjacent_ones_join() -> None:
+    from noeta.core.types import system_message
+
+    wire = await _wire_messages(
+        [user("q"), system_message("# Environment"), system_message("a</system-reminder>"),
+         _call(k="x"), _result(), system_message("<total_tokens>9 tokens left</total_tokens>")],
+        cache_after=[5],
+    )
+    assert [m["role"] for m in wire] == ["user", "system", "assistant", "user", "system"]
+    assert wire[1]["content"] == "# Environment\n\na&lt;/system-reminder>"
+    assert wire[4]["content"] == [{"type": "text",
+                                   "text": "<total_tokens>9 tokens left</total_tokens>",
+                                   "cache_control": EPHEMERAL}]
+
+
+@respx.mock
+async def test_system_turns_can_ride_in_the_user_turn_instead() -> None:
+    from noeta.core.types import system_message
+
+    body, _ = await _send(_req(messages=[user("q"), system_message("note")]),
+                          system_turns=False)
+    assert body["messages"] == [{"role": "user", "content": [
+        {"type": "text", "text": "q"},
+        {"type": "text", "text": "<system-reminder>\nnote\n</system-reminder>"}]}]
+
+
+@respx.mock
+async def test_a_message_sent_mid_turn_rides_with_the_tool_results() -> None:
+    wire = await _wire_messages([user("q"), _call(k="x"), _result(),
+                                 _injected("also check y", "human")])
+    assert [m["role"] for m in wire] == ["user", "assistant", "user"]
+    blocks = wire[2]["content"]
+    assert [b["type"] for b in blocks] == ["tool_result", "text"]
+    assert blocks[1]["text"].startswith("While you were working, the user sent this message:\n"
+                                        "also check y\n\n")
+
+
+@respx.mock
+async def test_api_key_request_settings_follow_claude_code() -> None:
+    import uuid
+
+    from noeta.backends.providers.anthropic import DEFAULT_BETAS
+
+    route = respx.post(MESSAGES_ENDPOINT).mock(return_value=_stream(_resp()))
+    root = uuid.uuid4().hex
+    await _provider(device_id="d" * 64).complete(_req(model=_VISION_MODEL, root_id=root))
+    sent = json.loads(route.calls.last.request.content)
+    assert route.calls.last.request.headers["anthropic-beta"] == ",".join(DEFAULT_BETAS)
+    assert sent["thinking"] == {"type": "adaptive", "display": "updates"}
+    assert sent["context_management"] == {
+        "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
+    assert sent["output_config"] == {"effort": "medium"}
+    assert json.loads(sent["metadata"]["user_id"]) == {
+        "device_id": "d" * 64, "account_uuid": "", "session_id": str(uuid.UUID(root))}
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +224,7 @@ async def test_output_schema_and_effort_merge_inside_output_config() -> None:
 @respx.mock
 async def test_thinking_on_a_catalogued_reasoning_model_is_adaptive() -> None:
     body, _ = await _send(_req(model=_VISION_MODEL))
-    assert body["thinking"] == {"type": "adaptive"}
+    assert body["thinking"] == {"type": "adaptive", "display": "updates"}
 
 
 @respx.mock
@@ -331,7 +387,7 @@ async def test_no_breakpoints_unless_asked() -> None:
 
 
 @respx.mock
-async def test_cache_control_stamped_on_cached_system_last_tool_and_cache_after() -> None:
+async def test_cache_control_stamped_on_cached_system_and_cache_after() -> None:
     body, _ = await _send(
         _req(
             system=[SystemPart(text="you are helpful", cache=True), SystemPart(text="volatile")],
@@ -344,10 +400,9 @@ async def test_cache_control_stamped_on_cached_system_last_tool_and_cache_after(
         {"type": "text", "text": "you are helpful", "cache_control": EPHEMERAL},
         {"type": "text", "text": "volatile"},
     ]
-    assert "cache_control" not in body["tools"][0]
-    assert body["tools"][-1]["cache_control"] == EPHEMERAL
+    assert all("cache_control" not in t for t in body["tools"])
     assert _stamped(body) == [(1, 0)]
-    assert json.dumps(body).count('"cache_control"') == 3
+    assert json.dumps(body).count('"cache_control"') == 2
 
 
 @respx.mock
@@ -407,9 +462,9 @@ async def test_out_of_range_cache_after_is_ignored() -> None:
 
 
 @respx.mock
-async def test_breakpoints_capped_at_four_keeping_messages_then_system_then_tools() -> None:
+async def test_breakpoints_capped_at_four_keeping_messages_then_system() -> None:
     """Anthropic allows four breakpoints. Message breakpoints (newest first)
-    win, then cached system parts (last first), then the last tool."""
+    win, then cached system parts (last first); tools get none."""
     body, _ = await _send(
         _req(
             system=[SystemPart(text="a", cache=True), SystemPart(text="b", cache=True)],
@@ -440,8 +495,8 @@ async def test_many_message_breakpoints_keep_the_newest_four() -> None:
 @respx.mock
 async def test_parallel_step_previous_breakpoint_reads_back_the_prior_entry() -> None:
     """A step of twelve parallel calls appends ~25 blocks — past Anthropic's
-    lookback. With the composer's two message breakpoints (the last recorded
-    block and the previous step's) the previous request's prefix is re-read."""
+    lookback. Two message breakpoints (the last recorded block and the
+    previous step's) re-read the previous request's prefix."""
     first = _call("r0", "read", p="a")
     first_result = _result("r0", "body")
     fan = Message(
@@ -463,7 +518,7 @@ async def test_parallel_step_previous_breakpoint_reads_back_the_prior_entry() ->
     body, _ = await _send(request)
     assert _stamped(body) == [(2, 0), (4, 11)]
     assert "cache_control" not in body["messages"][4]["content"][-1]
-    assert json.dumps(body).count('"cache_control"') == 4
+    assert json.dumps(body).count('"cache_control"') == 3
 
     prev, _ = await _send(
         _req(
@@ -488,7 +543,7 @@ async def test_cache_control_never_mutates_the_request() -> None:
         [m.text for m in request.messages] + [p.text for p in request.system]
     )
     body, _ = await _send(request)
-    assert json.dumps(body).count('"cache_control"') == 3
+    assert json.dumps(body).count('"cache_control"') == 2
     assert request == before
     assert snapshot == json.dumps(
         [m.text for m in request.messages] + [p.text for p in request.system]

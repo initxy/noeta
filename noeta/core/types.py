@@ -74,7 +74,11 @@ Origin = Literal["human", "system", "memory"]
 
 
 class Message(Struct):
-    role: Literal["user", "assistant"]
+    """A turn of the conversation. ``system`` is a harness note between the
+    turns (Claude Code's mid-conversation system message: the environment,
+    the token budget, per-step notes); adapters join adjacent ones."""
+
+    role: Literal["user", "assistant", "system"]
     content: list[Block]
     origin: Origin | None = None
 
@@ -89,6 +93,10 @@ class Message(Struct):
 
 def user(text: str, origin: Origin | None = None) -> Message:
     return Message(role="user", content=[Text(text=text)], origin=origin)
+
+
+def system_message(text: str) -> Message:
+    return Message(role="system", content=[Text(text=text)], origin="system")
 
 
 # --------------------------------------------------------------------------
@@ -130,6 +138,9 @@ class ModelRequest(Struct):
     #: default). The summarize call sets ``"none"`` so a summarizer cannot
     #: answer with a tool call.
     tool_choice: str | None = None
+    #: The task tree the call serves (its root task's id); an adapter may
+    #: send it as the vendor's per-conversation id.
+    root_id: str | None = None
 
 
 class Usage(Struct):

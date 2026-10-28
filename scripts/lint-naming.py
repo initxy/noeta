@@ -130,6 +130,8 @@ EXEMPT_FILE_NAMES: frozenset[str] = frozenset(
         # (new_session, session_update, session_id): the adapter and its test
         # must use them as the protocol spells them.
         "acp.py",
+        # Anthropic's metadata.user_id spells its conversation field so.
+        "_anthropic_user_id.py",
         "test_acp.py",
         "test_acp_live.py",
         "test_acp_review.py",

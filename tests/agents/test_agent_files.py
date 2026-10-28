@@ -52,6 +52,22 @@ def test_claude_code_agent_file() -> None:
     assert f.tools == ("Read", "Bash") and f.model is None and f.plugins is None
 
 
+def test_identity_line_defaults_and_goes_first_as_its_own_cached_block() -> None:
+    from noeta.agents.agent_files import DEFAULT_IDENTITY
+    from noeta.core.loop.request import build_request
+    from noeta.core.loop.state import TaskState
+
+    own = parse_agent_file("---\nname: a\nidentity: You are A.\nplugins: []\n---\nBody.\n")
+    plain = parse_agent_file("---\nname: b\nplugins: []\n---\nBody.\n")
+    a, b = build_agents([own, plain], model="m")
+    assert own.identity == "You are A." and a.identity == "You are A."
+    assert b.identity == DEFAULT_IDENTITY
+    request = build_request(TaskState(), model="m", system_prompt=b.system_prompt,
+                            identity=b.identity, parts=[], tools=[])
+    assert [(p.text, p.cache) for p in request.system] == [
+        (DEFAULT_IDENTITY, True), ("Body.\n", True)]
+
+
 @pytest.mark.parametrize("text", [
     "no frontmatter\n",
     "---\nname: x\n",

@@ -53,10 +53,11 @@ __all__ = [
 
 
 def is_host_injected(message: Message) -> bool:
-    """A user-role message the host or an extension wrote (reminders, notices,
-    recalled memory) rather than the person. Adapters frame these so the model
-    does not mistake them for the user's words."""
-    return message.role == "user" and message.origin in ("system", "memory")
+    """A message the host or an extension wrote (reminders, notices, recalled
+    memory, harness notes in a system turn) rather than the person. Adapters
+    frame these so the model does not mistake them for the user's words."""
+    return message.role == "system" or (
+        message.role == "user" and message.origin in ("system", "memory"))
 
 
 #: The one tag that marks a host-authored turn on the Anthropic wire. Matched

@@ -21,21 +21,19 @@ def build_request(
     system_prompt: str,
     parts: Sequence[ContextPart],
     tools: Sequence[Tool],
+    identity: str = "",
     effort: str | None = None,
     max_tokens: int | None = None,
     output_schema: dict[str, Any] | None = None,
 ) -> ModelRequest:
-    system: list[SystemPart] = []
+    """The system prompt is two cached blocks, as Claude Code sends it: the
+    identity line, then the agent's prompt with the extensions' parts."""
+    system: list[SystemPart] = [SystemPart(text=identity, cache=True)] if identity else []
     text = system_prompt
     for part in sorted(parts, key=lambda p: p.order):
         text = f"{text}\n{part.text}" if text else part.text
-        if part.cache:
-            system.append(SystemPart(text=text, cache=True))
-            text = ""
     if text:
-        system.append(SystemPart(text=text))
-    if system and not any(p.cache for p in system):
-        system[-1] = SystemPart(text=system[-1].text, cache=True)
+        system.append(SystemPart(text=text, cache=True))
     messages = list(state.messages)
     return ModelRequest(
         model=model,
@@ -48,21 +46,14 @@ def build_request(
         effort=effort,  # type: ignore[arg-type]
         output_schema=output_schema,
         cache_after=cache_breakpoints(state),
+        root_id=state.root_id or state.task_id or None,
     )
 
 
 def cache_breakpoints(state: TaskState) -> list[int]:
-    """The newest message, plus the newest user message before it, so the
-    next step reads everything up to its own previous request from cache."""
-    n = len(state.messages)
-    if n == 0:
-        return []
-    points = [n - 1]
-    for i in range(n - 2, -1, -1):
-        if state.messages[i].role == "user":
-            points.insert(0, i)
-            break
-    return points
+    """One breakpoint, on the newest message, as Claude Code places it: the
+    next step reads everything up to it from cache."""
+    return [len(state.messages) - 1] if state.messages else []
 
 
 def request_hash(request: ModelRequest) -> str:

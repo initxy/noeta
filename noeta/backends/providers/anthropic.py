@@ -7,9 +7,13 @@ only ever sees :mod:`noeta.core.types`. The provider pins no model —
 invented: Anthropic requires it, and a guessed cap truncates answers
 invisibly, so it comes from the request, the constructor default, or the
 model's catalogued output ceiling, and failing all three the call is refused.
-Three wire concerns are stamped on the outbound body only: the ephemeral
-prompt-cache breakpoints, the ``<system-reminder>`` framing Anthropic needs
-because it has no mid-history system role, and the ``stream`` flag.
+The body is the one Claude Code sends an API-key user: its beta set,
+adaptive thinking with summarized updates, old thinking kept
+(``context_management``), effort ``medium`` unless the request sets one,
+``metadata.user_id``, harness notes as mid-conversation ``system`` turns,
+and three ephemeral cache breakpoints (the two system blocks and the last
+message). Host context in the user's turn is framed as
+``<system-reminder>``.
 
 **Every request is transported over SSE.** The non-streaming POST holds one
 socket idle for the whole generation and dies on the client timeout: a long
@@ -23,12 +27,14 @@ from __future__ import annotations
 
 import base64
 import os
+from collections.abc import Sequence
 from contextlib import aclosing
 from typing import Any
 
 import httpx
 
 from noeta.backends.providers._anthropic_stream import StreamAccumulator, parse_message
+from noeta.backends.providers._anthropic_user_id import user_id
 from noeta.backends.providers._common import (
     guard_vision,
     is_host_injected,
@@ -54,7 +60,7 @@ from noeta.core.types import (
     ToolUse,
 )
 
-__all__ = ["FAMILY", "AnthropicProvider"]
+__all__ = ["DEFAULT_BETAS", "FAMILY", "AnthropicProvider"]
 
 #: ``Provider.family`` and ``Thinking.family`` for this adapter.
 FAMILY = "anthropic"
@@ -65,6 +71,30 @@ _MESSAGES_ENDPOINT = "/v1/messages"
 
 #: Anthropic's per-request cap on ``cache_control`` breakpoints.
 _MAX_CACHE_BREAKPOINTS = 4
+
+#: The ``anthropic-beta`` set Claude Code 2.1.312 sends an API-key user in
+#: its default permission mode (mid-conversation system turns, adaptive
+#: thinking updates, effort and thinking clearing ride on these).
+DEFAULT_BETAS: tuple[str, ...] = (
+    "claude-code-20250219",
+    "interleaved-thinking-2025-05-14",
+    "context-management-2025-06-27",
+    "per-turn-control-2026-07-01",
+    "mid-conversation-tool-changes-2026-07-01",
+    "thinking-token-count-2026-05-13",
+    "advanced-tool-use-2025-11-20",
+    "effort-2025-11-24",
+    "thinking-display-updates-2026-08-18",
+)
+#: How a message the person sent during a running turn is shown, inside the
+#: user turn that carries the tool results.
+MID_TURN_MESSAGE = (
+    "While you were working, the user sent this message:\n{text}\n\n"
+    "This is how a message sent during a turn reaches you: inside the turn, usually "
+    "alongside the next tool result. Address it as you carry on."
+)
+#: Effort sent with adaptive thinking when the request names none.
+_DEFAULT_EFFORT = "medium"
 
 #: The single ephemeral cache breakpoint marker (default 5-minute TTL).
 _CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
@@ -94,12 +124,19 @@ class AnthropicProvider:
         timeout_seconds: float = 60.0,
         extra_headers: dict[str, str] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        betas: Sequence[str] = DEFAULT_BETAS,
+        device_id: str | None = None,
+        system_turns: bool = True,
     ) -> None:
         """``api_key`` defaults to the ``ANTHROPIC_API_KEY`` environment
         variable; an explicit argument still wins. Missing credentials raise
         here rather than yielding a client that fails its first call with an
         opaque 401. ``timeout_seconds`` bounds silence on the stream, not the
-        whole generation."""
+        whole generation. ``betas`` is the ``anthropic-beta`` header (an
+        ``extra_headers`` entry wins); ``device_id`` the stable id in
+        ``metadata.user_id`` (default: one per process). ``system_turns=False``
+        is for an endpoint without mid-conversation ``system`` turns: they go
+        as ``<system-reminder>`` text in the user's turn instead."""
         resolved_key = api_key if api_key is not None else os.environ.get(_API_KEY_ENV)
         if not resolved_key:
             raise ValueError(
@@ -107,11 +144,15 @@ class AnthropicProvider:
                 f"the {_API_KEY_ENV} environment variable"
             )
         self._default_max_tokens = default_max_tokens
+        self._device_id = device_id
+        self._system_turns = system_turns
         headers: dict[str, str] = {
             "x-api-key": resolved_key,
             "anthropic-version": anthropic_version,
             "content-type": "application/json",
         }
+        if betas:
+            headers["anthropic-beta"] = ",".join(betas)
         if extra_headers:
             headers.update(extra_headers)
         self._client = httpx.AsyncClient(
@@ -161,10 +202,11 @@ class AnthropicProvider:
         and diagnostics can see exactly what would be sent."""
         vision = model_admits_images(request.model)
 
-        # Anthropic has no mid-history system role, so a host-injected turn
-        # renders as <system-reminder>-wrapped text and merges into the
-        # adjacent user wire turn. Only pairs touching an injected turn merge;
-        # plain consecutive user turns keep their 1:1 rendering.
+        # Host context in the user channel renders as <system-reminder>-
+        # wrapped text and merges into the adjacent user wire turn. Only
+        # pairs touching an injected turn merge; plain consecutive user turns
+        # keep their 1:1 rendering. Adjacent system turns join into one,
+        # their texts a blank line apart.
         outbound: list[dict[str, Any]] = []
         #: The last wire block at or before each message index — what a
         #: ``cache_after`` index stamps. The dicts are shared by reference with
@@ -173,12 +215,32 @@ class AnthropicProvider:
         last_block: list[dict[str, Any] | None] = []
         prev_injected = False
         for message in request.messages:
+            if message.role == "system" and not self._system_turns:
+                message = Message(role="user", content=message.content, origin="system")
             wire = _message_to_wire(message, vision)
             injected = is_host_injected(message)
             previous = last_block[-1] if last_block else None
+            if (wire["role"] == "system" and wire["content"] and outbound
+                    and outbound[-1]["role"] == "system"):
+                joined = outbound[-1]["content"][-1]
+                joined["text"] += "\n\n" + "\n\n".join(b["text"] for b in wire["content"])
+                last_block.append(joined)
+                continue
             last_block.append(wire["content"][-1] if wire["content"] else previous)
+            mid_turn = (
+                message.role == "user" and message.origin == "human" and outbound
+                and outbound[-1]["role"] == "user"
+                and any(b.get("type") == "tool_result" for b in outbound[-1]["content"])
+                and not any(b.get("type") == "tool_result" for b in wire["content"])
+            )
+            if mid_turn:
+                # A message the person sent while the turn ran rides in the
+                # tool results' turn, framed as Claude Code frames it.
+                for block in wire["content"]:
+                    if block.get("type") == "text":
+                        block["text"] = MID_TURN_MESSAGE.format(text=block["text"])
             if (
-                (injected or prev_injected)
+                (injected or prev_injected or mid_turn)
                 and wire["role"] == "user"
                 and outbound
                 and outbound[-1]["role"] == "user"
@@ -214,17 +276,24 @@ class AnthropicProvider:
         if request.tool_choice is not None:
             body["tool_choice"] = {"type": request.tool_choice}
         _apply_cache_control(body, request, last_block)
+        _bare_strings(outbound)
+        body["metadata"] = {"user_id": user_id(self._device_id, request.root_id)}
         if request.output_schema is not None:
             body["output_config"] = {
                 "format": {"type": "json_schema", "schema": dict(request.output_schema)}
             }
-        # Effort rides inside output_config, alongside any format set above;
-        # every level (xhigh and max included) passes through verbatim.
-        if request.effort is not None:
-            body.setdefault("output_config", {})["effort"] = request.effort
         thinking = _thinking_param(request)
         if thinking is not None:
             body["thinking"] = thinking
+        adaptive = thinking is not None and thinking["type"] == "adaptive"
+        if adaptive:
+            body["context_management"] = {
+                "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
+        # Effort rides inside output_config, alongside any format set above;
+        # every level (xhigh and max included) passes through verbatim.
+        effort = request.effort or (_DEFAULT_EFFORT if adaptive else None)
+        if effort is not None:
+            body.setdefault("output_config", {})["effort"] = effort
         return body
 
     def _resolve_max_tokens(self, request: ModelRequest) -> int:
@@ -259,8 +328,18 @@ def _thinking_param(request: ModelRequest) -> dict[str, str] | None:
         return {"type": "disabled"}
     spec = models.find_spec(request.model)
     if spec is not None and spec.is_reasoning:
-        return {"type": "adaptive"}
+        return {"type": "adaptive", "display": "updates"}
     return None
+
+
+def _bare_strings(outbound: list[dict[str, Any]]) -> None:
+    """A user or system turn of one text block with no breakpoint goes as a
+    bare string, as Claude Code sends it."""
+    for wire in outbound:
+        content = wire["content"]
+        if (wire["role"] != "assistant" and len(content) == 1
+                and content[0].get("type") == "text" and "cache_control" not in content[0]):
+            wire["content"] = content[0]["text"]
 
 
 def _apply_cache_control(
@@ -274,16 +353,12 @@ def _apply_cache_control(
     breakpoint caches everything before it. Candidates, highest priority
     first, until the vendor cap of :data:`_MAX_CACHE_BREAKPOINTS`:
 
-    * each ``cache_after`` message index, newest first — the composer puts
-      these on the last recorded block (never a volatile reminder, which would
-      key the entry to bytes the next step drops) and on the previous step's
-      last block (Anthropic looks back only ~20 blocks for an entry an earlier
-      request wrote, so a step that appended more would otherwise miss it);
-    * each ``SystemPart`` with ``cache=True``, last first;
-    * the last tool — tools render first, so this one covers tools only and
-      matters when the system prompt changes.
+    * each ``cache_after`` message index, newest first (the composer names
+      the last message, as Claude Code does);
+    * each ``SystemPart`` with ``cache=True``, last first.
 
-    A block already stamped is not counted twice.
+    The tools get no mark of their own: the first system block's covers
+    them. A block already stamped is not counted twice.
     """
     targets: list[dict[str, Any]] = []
     for index in sorted(set(request.cache_after), reverse=True):
@@ -302,9 +377,6 @@ def _apply_cache_control(
             if part.cache:
                 cached_system.append(block)
         targets.extend(reversed(cached_system))
-    tools = body.get("tools")
-    if isinstance(tools, list) and tools:
-        targets.append(tools[-1])
 
     stamped: list[dict[str, Any]] = []
     for target in targets:
@@ -338,6 +410,10 @@ def _wrap_system_reminder(text: str) -> str:
 def _message_to_wire(message: Message, vision: bool) -> dict[str, Any]:
     if message.role == "assistant":
         return _assistant_to_wire(message)
+    if message.role == "system":
+        return {"role": "system", "content": [
+            {"type": "text", "text": neutralize_reserved_tags(b.text)}
+            for b in message.content if isinstance(b, Text) and b.text]}
     return _user_to_wire(message, vision)
 
 

@@ -10,11 +10,21 @@ import msgspec
 from noeta.core import models
 from noeta.core.errors import ContextOverflow, ModelError, TurnFailed
 from noeta.core.events import ExtensionRecorded, ModelCalled, ModelReplied
+from noeta.core.extension import Reminder, TaskView
 from noeta.core.loop.request import build_request, cache_breakpoints, request_hash
 from noeta.core.loop.state import CORE
 from noeta.core.retry import complete_with_retries
 from noeta.core.runner import texts
-from noeta.core.types import Delta, Message, ModelRequest, ModelResponse, Text, ToolUse, user
+from noeta.core.types import (
+    Delta,
+    Message,
+    ModelRequest,
+    ModelResponse,
+    Text,
+    ToolUse,
+    system_message,
+    user,
+)
 
 if TYPE_CHECKING:
     from noeta.core.loop.state import TaskState
@@ -30,6 +40,7 @@ def _request(run: TaskRun, *, final: bool) -> ModelRequest:
         run.state,
         model=str(config.get("model") or agent.model),
         system_prompt=run.state.prompt(f"system/{agent.name}", agent.system_prompt),
+        identity=run.state.prompt(f"identity/{agent.name}", agent.identity),
         parts=[p for ext in run.exts for p in ext.context(view)],
         tools=run.tools(view),
         effort=config.get("effort") or agent.effort,
@@ -52,13 +63,15 @@ async def _remind(run: TaskRun, request: ModelRequest) -> ModelRequest:
     step-limit prompt, stay last), with the breakpoints the next request,
     built from the log, gets."""
     view = run.view()
+    due: list[tuple[str, Reminder]] = []
     try:
         for ext in run.exts:
-            for r in await ext.reminders(view):
-                view.record(ext.name, r.kind, r.data, message=user(r.text, origin=r.origin))
+            due += [(ext.name, r) for r in await ext.reminders(view)]
     except TurnFailed:
+        _record_reminders(view, due)
         await run.flush(view)  # what was recorded before the failure stands
         raise
+    _record_reminders(view, due)
     if not view.pending:
         return request
     n = len(run.state.messages)
@@ -67,6 +80,13 @@ async def _remind(run: TaskRun, request: ModelRequest) -> ModelRequest:
     return msgspec.structs.replace(
         request, messages=[*request.messages[:n], *added, *request.messages[n:]],
         cache_after=cache_breakpoints(run.state))
+
+
+def _record_reminders(view: TaskView, due: list[tuple[str, Reminder]]) -> None:
+    due.sort(key=lambda item: (item[1].role == "system", item[1].order))
+    for name, r in due:
+        message = system_message(r.text) if r.role == "system" else user(r.text, origin=r.origin)
+        view.record(name, r.kind, r.data, message=message)
 
 
 def _output_ceiling(model: str) -> int:

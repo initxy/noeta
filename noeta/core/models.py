@@ -98,6 +98,11 @@ class ModelSpec:
     #: inference. This is the *vendor*, not the wire an adapter speaks
     #: (``Provider.family``).
     family: str | None = None
+    #: The name people call the model by (``Claude Opus 5.5``): the model
+    #: line of the environment message and the commit co-author trailer.
+    display_name: str | None = None
+    #: The month its training data ends (``June 2026``), when published.
+    knowledge_cutoff: str | None = None
 
     @property
     def is_priced(self) -> bool:
@@ -130,6 +135,8 @@ CATALOG: dict[str, ModelSpec] = {
     # thinking, and its pricing tiers (5-min cache write, cache read).
     "claude-opus-5-5": ModelSpec(
         real_model_id="claude-opus-5-5",
+        display_name="Claude Opus 5.5",
+        knowledge_cutoff="June 2026",
         context_window=1_000_000,
         max_output_tokens=128_000,
         input_price_per_mtok=4.00,
@@ -141,6 +148,7 @@ CATALOG: dict[str, ModelSpec] = {
     ),
     "claude-sonnet-5-5": ModelSpec(
         real_model_id="claude-sonnet-5-5",
+        display_name="Claude Sonnet 5.5",
         context_window=1_000_000,
         max_output_tokens=128_000,
         input_price_per_mtok=2.00,
@@ -152,6 +160,7 @@ CATALOG: dict[str, ModelSpec] = {
     ),
     "claude-haiku-5-5": ModelSpec(
         real_model_id="claude-haiku-5-5",
+        display_name="Claude Haiku 5.5",
         context_window=1_000_000,
         max_output_tokens=128_000,
         # The base tier; past 100K prompt tokens the rates are five times these.
@@ -164,6 +173,7 @@ CATALOG: dict[str, ModelSpec] = {
     ),
     "claude-fable-5-1": ModelSpec(
         real_model_id="claude-fable-5-1",
+        display_name="Claude Fable 5.1",
         context_window=1_000_000,
         max_output_tokens=64_000,
         input_price_per_mtok=10.00,
@@ -175,6 +185,7 @@ CATALOG: dict[str, ModelSpec] = {
     ),
     "claude-opus-5": ModelSpec(
         real_model_id="claude-opus-5",
+        display_name="Claude Opus 5",
         context_window=1_000_000,
         max_output_tokens=128_000,
         input_price_per_mtok=5.00,
@@ -186,6 +197,7 @@ CATALOG: dict[str, ModelSpec] = {
     ),
     "claude-sonnet-5": ModelSpec(
         real_model_id="claude-sonnet-5",
+        display_name="Claude Sonnet 5",
         context_window=1_000_000,
         max_output_tokens=128_000,
         # Standard rates. An introductory $2.00 / $10.00 ran to 2026-08-31;
@@ -201,6 +213,7 @@ CATALOG: dict[str, ModelSpec] = {
     ),
     "claude-opus-4-8": ModelSpec(
         real_model_id="claude-opus-4-8",
+        display_name="Claude Opus 4.8",
         context_window=1_000_000,
         max_output_tokens=128_000,
         input_price_per_mtok=5.00,
@@ -212,6 +225,7 @@ CATALOG: dict[str, ModelSpec] = {
     ),
     "claude-sonnet-4-6": ModelSpec(
         real_model_id="claude-sonnet-4-6",
+        display_name="Claude Sonnet 4.6",
         context_window=1_000_000,
         max_output_tokens=128_000,
         input_price_per_mtok=3.00,
@@ -223,6 +237,7 @@ CATALOG: dict[str, ModelSpec] = {
     ),
     "claude-haiku-4-5": ModelSpec(
         real_model_id="claude-haiku-4-5",
+        display_name="Claude Haiku 4.5",
         context_window=200_000,
         max_output_tokens=64_000,
         input_price_per_mtok=1.00,

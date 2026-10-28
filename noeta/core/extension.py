@@ -54,25 +54,31 @@ Gate = Union[Allow, Deny, Ask, Rewrite]
 
 class ContextPart(Struct):
     """System prompt text an extension contributes: it continues the agent's
-    prompt, after a newline, in ``order``. ``cache`` ends a cached block
-    after this part. Text that must sit in the conversation instead is
-    recorded as a message (``TaskView.record(..., message=...)``) so the
-    request prefix stays byte-stable."""
+    prompt, after a newline, in ``order``, inside the prompt's one cached
+    block. Text that must sit in the conversation instead is recorded as a
+    message (``TaskView.record(..., message=...)``) so the request prefix
+    stays byte-stable."""
 
     text: str
-    cache: bool = False
     order: int = 100
 
 
 class Reminder(Struct):
-    """Text for the model that is not the user speaking (Claude Code's
-    ``<system-reminder>``): recorded as ``(extension, kind, data)`` with a
-    ``system``-origin message (``memory`` for recalled memory)."""
+    """Text for the model that is not the user speaking, recorded as
+    ``(extension, kind, data)`` with its message. ``role`` ``user`` is
+    context that rides in the user's turn (Claude Code's
+    ``<system-reminder>``; ``origin`` ``memory`` for recalled memory);
+    ``system`` is a harness note in its own system turn after it. The
+    reminders of one round are recorded user ones first, then by ``order``
+    (adapters join adjacent system turns, so ``order`` places a note inside
+    the joined one)."""
 
     text: str
     kind: str = "reminder"
     data: Any = None
     origin: Literal["system", "memory"] = "system"
+    role: Literal["user", "system"] = "user"
+    order: int = 100
 
 
 class Command(Struct):

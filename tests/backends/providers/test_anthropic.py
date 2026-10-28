@@ -69,7 +69,7 @@ async def test_plain_text_response_maps_to_end_turn_text() -> None:
     assert response.usage == Usage(uncached=10, output=5)
     assert response.model == "claude-opus-4-7"
     assert body["model"] == _UNKNOWN_MODEL
-    assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    assert body["messages"] == [{"role": "user", "content": "hi"}]
 
 
 @respx.mock

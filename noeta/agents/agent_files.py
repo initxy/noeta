@@ -13,6 +13,7 @@ and whose body is its system prompt — Claude Code's agent file format, plus
     tools: Read, Grep, Glob       # optional: offer only these tools
     one_shot: true                # optional: end with the first turn's answer
     effort: high                  # optional
+    identity: You are ...         # optional: the one-line identity block
     ---
     You are a read-only scout...
 
@@ -36,6 +37,7 @@ from noeta.core.agent import Agent
 from noeta.core.extension import Extension
 
 __all__ = [
+    "DEFAULT_IDENTITY",
     "AgentFile",
     "AgentFileError",
     "PluginEntry",
@@ -47,6 +49,10 @@ __all__ = [
 ]
 
 log = logging.getLogger("noeta.agents")
+
+#: The identity line of an agent whose file sets none: the product, in one
+#: line, as the first (cached) system block.
+DEFAULT_IDENTITY = "You are noeta, an open-source coding agent."
 
 #: Model names that mean "the host's model".
 _INHERIT = frozenset({"", "inherit", "sonnet", "opus", "haiku"})
@@ -73,6 +79,8 @@ class AgentFile:
     tools: tuple[str, ...] | None = None
     one_shot: bool = False
     effort: str | None = None
+    #: The identity line; ``None`` for :data:`DEFAULT_IDENTITY`.
+    identity: str | None = None
     source: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -134,6 +142,9 @@ def parse_agent_file(text: str, *, source: str = "", default_name: str = "") -> 
     plugins = data.pop("plugins", None)
     tools = data.pop("tools", None)
     effort = data.pop("effort", None)
+    identity = data.pop("identity", None)
+    if identity is not None and not isinstance(identity, str):
+        raise AgentFileError(f"{source}: 'identity' must be a string")
     one_shot = data.pop("one_shot", False)
     description = data.pop("description", "")
     if not isinstance(description, str):
@@ -149,6 +160,7 @@ def parse_agent_file(text: str, *, source: str = "", default_name: str = "") -> 
         tools=None if tools is None else _names(tools, "tools", source),
         one_shot=one_shot,
         effort=str(effort) if effort is not None else None,
+        identity=identity.strip() if identity is not None else None,
         source=source,
         extra=data,
     )
@@ -244,6 +256,7 @@ def build_agents(
             name=f.name,
             model=f.model or model,
             system_prompt=f.prompt,
+            identity=f.identity if f.identity is not None else DEFAULT_IDENTITY,
             description=f.description,
             extensions=(*exts, *extensions),
             effort=f.effort,  # type: ignore[arg-type]
