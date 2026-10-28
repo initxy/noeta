@@ -97,13 +97,16 @@ class Command(Struct):
     """A slash command front ends offer (:mod:`noeta.core.commands`). Typing
     ``/<name> <args>`` sends ``template`` with ``{args}`` replaced as the
     message, or, when ``template`` is empty, the text the extension's
-    ``run_command`` returns."""
+    ``run_command`` returns. A ``local`` command's text is shown to the
+    person instead and never reaches the model (Claude Code's local
+    commands)."""
 
     name: str
     description: str
     template: str = ""
     #: What to type after the name (``<file> [line]``), shown next to it.
     argument_hint: str = ""
+    local: bool = False
 
 
 @dataclass(frozen=True)

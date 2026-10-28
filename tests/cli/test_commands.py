@@ -167,3 +167,22 @@ async def test_mcp_prompts_are_commands(tmp_path: Path) -> None:
         assert await dead.commands(CTX) == []
     finally:
         await pool.close()
+
+
+class Status(Extension):
+    name = "status"
+
+    async def commands(self, ctx: CommandContext) -> Sequence[Command]:
+        return [Command(name="where", description="Where am I", local=True)]
+
+    async def run_command(self, ctx: CommandContext, name: str, args: str) -> str:
+        return f"in {ctx.cwd}"
+
+
+async def test_a_local_command_runs_but_sends_nothing() -> None:
+    from noeta.core.commands import Typed, run_typed
+
+    agent = Agent(name="main", model="m", extensions=[Status(), Greeter()])
+    assert await run_typed(agent.all_extensions(), CTX, "/where") == Typed("in /w", local=True)
+    assert await run_typed(agent.all_extensions(), CTX, "/greet x") == Typed("Say hello to x.")
+    assert await expand_command(agent, CTX, "/where") == ""
