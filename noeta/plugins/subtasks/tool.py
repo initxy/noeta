@@ -20,11 +20,13 @@ from noeta.core.events import Say
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ToolUse, user
 from noeta.plugins.subtasks import texts
+from noeta.plugins.subtasks.worktree import add_worktree
 from noeta.toolkit.tools import SCHEMA_DIALECT
 
 if TYPE_CHECKING:
     from noeta.core.loop.state import TaskState
-    from noeta.plugins.subtasks.extension import SubagentSpec, Subtasks
+    from noeta.plugins.subtasks.extension import Subtasks
+    from noeta.plugins.subtasks.roster import SubagentSpec
 
 #: Child config keys this extension sets.
 DEPTH_KEY = "subtask_depth"
@@ -203,7 +205,7 @@ class AgentTool:
         config[HANDBACK_KEY] = self._handback
         worktree = None
         if isolation == "worktree":
-            worktree = await ext.add_worktree(ctx, config)
+            worktree = await add_worktree(ctx, config)
             if isinstance(worktree, str):
                 return text_output(worktree, is_error=True)
             config["cwd"] = worktree["path"]
