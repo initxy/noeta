@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -225,3 +226,16 @@ def test_format_duration() -> None:
     assert format_duration(90_000) == "1m 30s"
     assert format_duration(1000) == "1s"
     assert format_duration(3_600_000) == "1h"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+async def test_a_background_reading_git_is_hardened_too(tmp_path: Path) -> None:
+    from tests.plugins.shell.test_bash import _planted_clone
+
+    ws, markers = _planted_clone(tmp_path)
+    registry = Registry(log_dir=str(tmp_path / "logs"))
+    bg = Harness(ws, registry, Shell(registry=registry))
+    for command in ("git -C sub diff HEAD~ HEAD", "cd sub && git log -p"):
+        out = await bg.call("Bash", command=command, run_in_background=True)
+        await bg.settle(out.meta["job_id"])
+    assert [k for k, m in markers.items() if m.exists()] == []

@@ -16,6 +16,7 @@ from noeta.plugins.shell.bash import (
     SHELL,
     BashTool,
     confine,
+    git_prelude,
     sandbox_required,
     shell_state,
 )
@@ -170,9 +171,10 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
         return job, "", False
     workspace = await Workspace.of(ctx.env)
     cwd, _moved_back = await shell._start_cwd(workspace, ctx)
-    rule = matching_rule(command, shell.hardening_rules)
+    prelude = git_prelude(command) if shell.hardening_rules else ""
+    rule = None if prelude else matching_rule(command, shell.hardening_rules)
     argv = parse_argv(command) if rule is not None and rule.harden is not None else None
-    run_command, tracked = command, True
+    run_command, tracked = prelude + command, True
     if rule is not None and rule.harden is not None and argv:
         run_command, tracked = shlex.join(rule.harden(argv)), False
     confined = await confine(ctx.env, command, disable, ["bash", "-c", run_command], cwd)

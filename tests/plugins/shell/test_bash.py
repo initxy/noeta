@@ -17,7 +17,14 @@ import pytest
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.execenv import RunResult
 from noeta.core.tool import ToolContext
-from noeta.plugins.shell.bash import SHELL, BashTool, ShellState, reduce_shell, resolve_timeout
+from noeta.plugins.shell.bash import (
+    SHELL,
+    BashTool,
+    ShellState,
+    git_prelude,
+    reduce_shell,
+    resolve_timeout,
+)
 from tests.plugins.conftest import Harness, text_of
 
 
@@ -232,21 +239,24 @@ class _RecordingEnv(LocalExecEnv):
         return RunResult(exit_code=0, stdout=b"")
 
 
-async def test_allowlisted_git_runs_with_hardening_flags(ws: Path) -> None:
+async def test_reading_git_runs_under_the_hardening_function(ws: Path) -> None:
     rec = _RecordingEnv(str(ws))
     h = Harness(env=rec)
-    for command in ("git status --short", "git diff --stat -- a", "git log -p"):
+    commands = ("git status --short", "git -C sub log -p", "cd sub && git diff HEAD~ HEAD")
+    for command in commands:
         assert not (await bash(h, command)).is_error
-    wrapper = ["bash", "-c", 'exec 2>&1; exec "$@"', "bash"]
-    assert all(argv[:4] == wrapper for argv in rec.argvs)
-    assert [argv[4:] for argv in rec.argvs] == [
-        ["git", "-c", "core.fsmonitor=", "status", "--short"],
-        [
-            "git", "-c", "core.fsmonitor=", "diff", "--no-ext-diff",
-            "--no-textconv", "--stat", "--", "a",
-        ],
-        ["git", "log", "--no-ext-diff", "--no-textconv", "-p"],
-    ]
+    for argv, command in zip(rec.argvs, commands, strict=True):
+        assert argv[:2] == ["bash", "-c"]
+        assert argv[2].endswith(git_prelude(command) + command)
+        assert "git() {" in argv[2] and "-c safe.bareRepository=explicit" in argv[2]
+
+
+def test_only_a_command_that_reads_with_git_gets_the_function() -> None:
+    assert git_prelude("git log -p && git -C x --no-pager show")
+    assert not git_prelude("git commit -m x")
+    assert not git_prelude("git log && git push")
+    assert not git_prelude("ls -la")
+    assert not git_prelude("git log $(id)")
 
 
 async def test_non_git_and_unmatched_commands_run_through_bash(ws: Path) -> None:
@@ -303,6 +313,107 @@ async def test_repo_configured_git_helpers_do_not_run(tmp_path: Path) -> None:
     # Sanity: the same repo DOES run them through plain bash.
     _plain_git_diff(repo)
     assert marker_ext.exists()
+
+
+def _planted_clone(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
+    """A clone of a repository that carries a bare repository ``sub``
+    (``HEAD``, ``config``, ``objects``, ``refs`` committed as plain files)
+    whose config names a program for every helper ``git`` reads it for."""
+    genv = {"GIT_CONFIG_NOSYSTEM": "1", "HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
+
+    def git(cwd: Path, *args: str) -> None:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd,
+                       env=genv, check=True, capture_output=True)
+
+    markers = {k: tmp_path / f"{k}-ran" for k in ("ext", "fsmonitor", "textconv", "gpg",
+                                                     "filter")}
+    scripts = {}
+    for k, marker in markers.items():
+        script = tmp_path / f"{k}.sh"
+        script.write_text(f"#!/bin/sh\ntouch {marker}\ncat\n")
+        script.chmod(0o755)
+        scripts[k] = script
+    build = tmp_path / "build"
+    git(tmp_path, "init", "-q", "--bare", str(build / "sub"))
+    seed = tmp_path / "seed"
+    git(tmp_path, "init", "-q", str(seed))
+    for n in ("1", "2"):
+        (seed / "f.txt").write_text(f"{n}\n")
+        git(seed, "add", "f.txt")
+        git(seed, "commit", "-qm", n)
+    # A signature on the tip, so showing it runs the configured gpg program.
+    raw = subprocess.run(["git", "cat-file", "commit", "HEAD"], cwd=seed, env=genv, check=True,
+                         capture_output=True, text=True).stdout
+    head, _, message = raw.partition("\n\n")
+    signed = (f"{head}\ngpgsig -----BEGIN PGP SIGNATURE-----\n x\n -----END PGP SIGNATURE-----"
+              f"\n\n{message}")
+    tip = subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin"], cwd=seed,
+                         env=genv, input=signed, check=True, capture_output=True,
+                         text=True).stdout.strip()
+    git(seed, "push", "-q", str(build / "sub"), f"{tip}:refs/heads/master")
+    sub = build / "sub"
+    for key, value in (("diff.external", scripts["ext"]), ("core.fsmonitor", scripts["fsmonitor"]),
+                       ("diff.evil.textconv", scripts["textconv"]),
+                       ("log.showSignature", "true"), ("gpg.program", scripts["gpg"]),
+                       ("filter.evil.clean", scripts["filter"])):
+        git(sub, "config", key, str(value))
+    (sub / "info" / "attributes").write_text("* diff=evil filter=evil\n")
+    git(build, "init", "-q")
+    git(build, "add", "-f", "sub")
+    git(build, "commit", "-qm", "planted")
+    ws = tmp_path / "ws"
+    git(tmp_path, "clone", "-q", str(build), str(ws))
+    return ws, markers
+
+
+PLANTED = ["git -C sub diff HEAD~ HEAD", "cd sub && git diff HEAD~ HEAD", "git -C sub log -p",
+           "git -C sub show", "git -C sub log --format=%GG", "git -C sub blame f.txt HEAD",
+           "cd sub && git log -p", "git -C sub reflog -p", "git -C sub status"]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+@pytest.mark.parametrize("command", PLANTED)
+async def test_read_only_git_never_runs_an_embedded_repositorys_helpers(
+        tmp_path: Path, command: str) -> None:
+    from noeta.plugins.permissions.scope import Scope, read_only
+
+    ws, markers = _planted_clone(tmp_path)
+    if command != "git -C sub status":  # a bare repository has no status: it fails anyway
+        assert read_only(command, Scope(dirs=(str(ws),), home=str(tmp_path)))
+    h = Harness(env=LocalExecEnv(str(ws)))
+    await bash(h, command)
+    assert [k for k, m in markers.items() if m.exists()] == []
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+async def test_the_planted_repository_does_run_helpers_through_plain_git(tmp_path: Path) -> None:
+    ws, markers = _planted_clone(tmp_path)
+    subprocess.run(["git", "-C", "sub", "diff", "HEAD~", "HEAD"], cwd=ws, capture_output=True,
+                   check=False)
+    assert markers["ext"].exists()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+async def test_the_shells_directory_inside_an_embedded_repository_is_hardened_too(
+        tmp_path: Path) -> None:
+    ws, markers = _planted_clone(tmp_path)
+    h = Harness(env=LocalExecEnv(str(ws)))
+    assert not (await bash(h, "cd sub")).is_error
+    await bash(h, "git diff HEAD~ HEAD")
+    await bash(h, "git log -p")
+    assert [k for k, m in markers.items() if m.exists()] == []
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+async def test_hardened_git_still_reads_the_workspace_repository(tmp_path: Path) -> None:
+    ws, _markers = _planted_clone(tmp_path)
+    h = Harness(env=LocalExecEnv(str(ws)))
+    for command in ("git log --oneline", "git status --short", "git show --stat",
+                    "git diff HEAD", "git -C . log -p -1", "cd sub && cd .. && git log -1",
+                    "git stash list", "git reflog -1", "git blame sub/HEAD"):
+        out = await bash(h, command)
+        assert not out.is_error, (command, text_of(out))
+    assert "planted" in text_of(await bash(h, "git log --oneline"))
 
 
 # -- the capture cap -------------------------------------------------------------

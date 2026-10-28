@@ -42,6 +42,7 @@ from noeta.toolkit.shell import (
     matching_rule,
     parse_argv,
 )
+from noeta.toolkit.shell_syntax import parse
 from noeta.toolkit.tools import SCHEMA_DIALECT as SCHEMA_DIALECT
 from noeta.toolkit.tools import (
     Workspace,
@@ -62,6 +63,7 @@ __all__ = [
     "BashTool",
     "ShellEnv",
     "ShellState",
+    "git_prelude",
     "reduce_shell",
     "shell_state",
 ]
@@ -150,6 +152,85 @@ def _blocked_sleep(described: str) -> str:
         "command you started, use run_in_background: true. Do not chain "
         "shorter sleeps to work around this block."
     )
+
+
+#: ``git`` subcommands that only read (those the permissions plugin can let
+#: through without asking).
+_GIT_READ_SUBCOMMANDS = frozenset(
+    "log show diff whatchanged shortlog status ls-files ls-tree blame rev-parse cat-file "
+    "describe grep reflog merge-base name-rev count-objects branch tag remote config "
+    "stash".split())
+#: Global ``git`` options whose value is the next word.
+_GIT_GLOBAL_VALUED = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env",
+                      "--super-prefix")
+#: Settings a reading ``git`` runs with over any repository's own: no
+#: fsmonitor hook, hooks, pager, signature program or transport (a lazy
+#: fetch), and (git 2.38+) no repository found by walking into a bare one.
+_GIT_SAFE_CONFIG = ("core.fsmonitor=", "core.hooksPath=/dev/null", "core.pager=cat",
+                    "safe.bareRepository=explicit", "protocol.allow=never",
+                    "log.showSignature=false", "gpg.program=false",
+                    "gpg.openpgp.program=false", "gpg.x509.program=false",
+                    "gpg.ssh.program=false")
+#: A ``git`` function every reading command runs under: it refuses a
+#: repository whose directory is not a ``.git`` (a bare one planted in the
+#: workspace, whose config the workspace's author wrote), and runs ``git``
+#: with :data:`_GIT_SAFE_CONFIG` and without external diff programs or
+#: ``textconv`` filters.
+_GIT_FUNCTION = """git() {
+  local _noeta_pre=() _noeta_sub=() _noeta_dir
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      @VALUED@) [ "$#" -ge 2 ] || break; _noeta_pre+=("$1" "$2"); shift 2 ;;
+      -*) _noeta_pre+=("$1"); shift ;;
+      *) break ;;
+    esac
+  done
+  if _noeta_dir=$(command git "${_noeta_pre[@]+"${_noeta_pre[@]}"}" -c core.fsmonitor= \\
+      rev-parse --absolute-git-dir 2>/dev/null); then
+    case "$_noeta_dir" in
+      */.git|*/.git/*) ;;
+      *) printf 'git: refused the repository at %s: not a .git directory\\n' \\
+           "$_noeta_dir" >&2; return 128 ;;
+    esac
+  fi
+  case "${1-}" in
+    diff|log|show|whatchanged) _noeta_sub=("$1" --no-ext-diff --no-textconv); shift ;;
+    blame) _noeta_sub=(blame --no-textconv); shift ;;
+    stash) if [ "${2-}" = show ]; then
+        _noeta_sub=(stash show --no-ext-diff --no-textconv); shift 2; fi ;;
+    reflog) case "${2-}" in
+        expire|delete|drop|exists|list) ;;
+        show) _noeta_sub=(reflog show --no-ext-diff --no-textconv); shift 2 ;;
+        *) _noeta_sub=(reflog show --no-ext-diff --no-textconv); shift ;;
+      esac ;;
+  esac
+  command git "${_noeta_pre[@]+"${_noeta_pre[@]}"}" @CONFIG@ \\
+    "${_noeta_sub[@]+"${_noeta_sub[@]}"}" "$@"
+}
+""".replace("@VALUED@", "|".join(_GIT_GLOBAL_VALUED)).replace(
+    "@CONFIG@", " ".join(f"-c {c}" for c in _GIT_SAFE_CONFIG))
+
+
+def git_prelude(command: str) -> str:
+    """:data:`_GIT_FUNCTION` when ``command`` runs ``git`` only to read
+    (every ``git`` in it has a :data:`_GIT_READ_SUBCOMMANDS` subcommand),
+    so whatever directory it reads in, a repository's config runs nothing;
+    ``""`` otherwise (a ``git commit`` keeps its hooks)."""
+    parsed = parse(command)
+    if parsed.opaque:
+        return ""
+    found = False
+    for cmd in parsed.commands:
+        argv = cmd.argv
+        if not argv or argv[0] != "git":
+            continue
+        found = True
+        i = 1
+        while i < len(argv) and argv[i].startswith("-"):
+            i += 2 if argv[i] in _GIT_GLOBAL_VALUED else 1
+        if i >= len(argv) or argv[i] not in _GIT_READ_SUBCOMMANDS:
+            return ""
+    return _GIT_FUNCTION if found else ""
 
 
 def _track_cwd(command: str) -> str:
@@ -282,7 +363,9 @@ def _input_schema() -> dict[str, Any]:
 class BashTool:
     """``Bash`` (foreground). ``shell_env`` adds per-call variables;
     ``hardening_rules`` are the rules whose ``harden`` rewrite applies to a
-    matching command (the curated ``git`` flags by default)."""
+    matching command (the curated ``git`` flags by default); a command that
+    only reads with ``git`` runs under :func:`git_prelude` instead, unless
+    the rules are empty (hardening off)."""
 
     name = "Bash"
     description = load_description("noeta.plugins.shell", "shell_run")
@@ -323,13 +406,16 @@ class BashTool:
         # exactly what bash would run, so nothing but the injected flags
         # changes. Such a command cannot change directory, so it is not
         # tracked.
-        rule = matching_rule(command, self.hardening_rules)
+        # A command that only reads with git runs under the hardening git
+        # function instead, wherever it reads.
+        prelude = git_prelude(command) if self.hardening_rules else ""
+        rule = None if prelude else matching_rule(command, self.hardening_rules)
         argv = parse_argv(command) if rule is not None and rule.harden is not None else None
         track = argv is None
         if rule is not None and rule.harden is not None and argv:
             exec_argv = ["bash", "-c", 'exec 2>&1; exec "$@"', "bash", *rule.harden(argv)]
         else:
-            exec_argv = ["bash", "-c", _track_cwd(command)]
+            exec_argv = ["bash", "-c", _track_cwd(prelude + command)]
 
         confined = await confine(env, command, input.get("dangerouslyDisableSandbox"),
                                  exec_argv, cwd)
