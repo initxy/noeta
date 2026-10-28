@@ -116,6 +116,12 @@ LAUNCHED_FORK = (
     "\nA fork works on what it inherited; after launching it you know nothing about what it "
     "finds until its report arrives."
 )
+LAUNCHED_OUTPUT_FILE = (
+    "\noutput_file: {path}\n"
+    "Leave this file alone (no Read, cat or tail): it is the agent's entire conversation as "
+    "JSONL and would swamp your context. Asked how the agent is doing, say it is still "
+    "running; its completion notice will reach you."
+)
 
 # Child side.
 HANDBACK_REMINDER = (

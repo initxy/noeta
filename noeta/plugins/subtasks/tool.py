@@ -11,6 +11,8 @@ continued by a new child task that starts from its conversation
 
 from __future__ import annotations
 
+import posixpath
+import re
 import time
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
@@ -41,6 +43,10 @@ FORK_KEY = "fork"
 ISOLATION_KEY = "isolation"
 #: Set by hosts on a task no human watches: a call that needs one ends it.
 UNATTENDED_KEY = "unattended"
+#: The directory a background agent keeps its transcript in (the agent
+#: writes ``<dir>/<agent id>.output``; see ``transcript_file``).
+TRANSCRIPT_KEY = "transcript_dir"
+_UNSAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]")
 DELEGATION_TOOLS = (texts.AGENT_TOOL, texts.LEGACY_AGENT_TOOL)
 
 
@@ -67,6 +73,19 @@ def agent_schema() -> dict[str, Any]:
         "isolation": {"description": texts.ISOLATION_PROP, "type": "string",
                       "enum": list(texts.ISOLATIONS)},
     }, ["description", "prompt"])
+
+
+def transcript_dir(spill_dir: str | None, root_id: str) -> str | None:
+    """Where the agents of the task tree ``root_id`` keep their transcripts:
+    a ``tasks`` directory beside the tree's spilled tool outputs."""
+    if not spill_dir:
+        return None
+    return posixpath.join(spill_dir, _UNSAFE_NAME.sub("_", root_id) or "task", "tasks")
+
+
+def transcript_file(directory: str, agent_id: str) -> str:
+    """An agent's transcript: one JSON line per message of its conversation."""
+    return posixpath.join(directory, f"{_UNSAFE_NAME.sub('_', agent_id) or 'agent'}.output")
 
 
 def agent_type(args: Mapping[str, Any]) -> str:
@@ -203,6 +222,9 @@ class AgentTool:
         isolation = input.get("isolation") or spec_config.pop(ISOLATION_KEY, None)
         config = ext.child_config(state, ctx, agent, spec_config, kind, input, fork=fork)
         config[HANDBACK_KEY] = self._handback
+        transcripts = transcript_dir(ctx.spill_dir, ctx.root_id or state.task_id)
+        if transcripts:
+            config[TRANSCRIPT_KEY] = transcripts
         worktree = None
         if isolation == "worktree":
             worktree = await add_worktree(ctx, config)
@@ -212,11 +234,15 @@ class AgentTool:
         child = ctx.spawn(agent, prompt, config=config, background=True, queue=queue,
                           history_from=state.task_id if fork else None,
                           history_through=state.last_seq if fork else None)
+        output_file = transcript_file(transcripts, child) if transcripts else ""
         ctx.record(ext.name, "launched", {
             "task_id": child, "agent_id": child, "type": kind, "agent": agent,
             "description": description, "call_id": ctx.call_id, "config": config,
-            "queue": queue, "at": time.time(), "worktree": worktree})
+            "queue": queue, "at": time.time(), "worktree": worktree,
+            "output_file": output_file})
         text = texts.LAUNCHED.format(id=child) + (texts.LAUNCHED_FORK if fork else "")
+        if output_file:
+            text += texts.LAUNCHED_OUTPUT_FILE.format(path=output_file)
         # A one-block list, as Claude Code sends an Agent result.
         return ToolOutput(content=text_output(text).content, meta={"child_id": child},
                           block_list=True)

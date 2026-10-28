@@ -5,6 +5,7 @@ worktrees and the refusals."""
 
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -513,3 +514,31 @@ async def test_a_sub_agent_hears_of_agent_types_with_its_second_request(
 
     first, second = c.requests
     assert not listed(first) and listed(second)
+
+
+async def test_a_background_agent_keeps_its_transcript_file(store: SqliteStore,
+                                                            tmp_path: Path) -> None:
+    p = ScriptedProvider([reply("", agent("count to 3")), reply("launched"),
+                          reply("it says 1 2 3"), reply("ok")])
+    c = ScriptedProvider([reply("", ("Probe", {})), handback("1 2 3")])
+    spill = tmp_path / "spill"
+    rt = Runtime(store=store, agents={"main": parent(), "worker": worker()},
+                 provider_for=lambda m: {"p": p, "c": c}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(tmp_path)), spill_root=str(spill))
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    path = spill / tid / "tasks" / f"{child.task_id}.output"
+    [(ack, _)] = await results(client, tid)
+    assert ack.endswith(texts.LAUNCHED_OUTPUT_FILE.format(path=path))
+    lines = [json.loads(line) for line in path.read_text().splitlines()]
+    assert lines[0] == {"type": "user", "message": {
+        "role": "user", "content": [{"type": "text", "text": "count to 3"}]}}
+    called = [line["message"]["content"][0] for line in lines if line["type"] == "assistant"]
+    assert [b["name"] for b in called] == ["Probe", "SubagentHandback"]
+    await client.send(tid, "thanks")
+    await rt.run_until_idle()
+    notice = p.requests[3].messages[-2].text
+    assert (f"<tool-use-id>{p.requests[1].messages[-2].tool_uses[0].id}</tool-use-id>\n"
+            f"<output-file>{path}</output-file>\n<status>completed</status>") in notice

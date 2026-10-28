@@ -44,6 +44,7 @@ A row without an id is a difference the replay cannot see.
 | | No `LSP` tool. | Claude Code offers it only with a language-server plugin installed; it is not in the baseline's tool set. |
 | | `WebSearch` needs a search backend (a Tavily key, `NOETA_WEB_SEARCH_API_KEY`) and is not offered without one; the parity replay sets a placeholder key. | Claude Code searches through Anthropic's server-side tool, which only an Anthropic API key reaches; noeta runs on any provider. |
 | | `Bash` has no `allowed_domains` parameter and its sandbox section no platform notes. | Both exist in Claude Code only with the sandbox on (and the parameter only in auto mode); the baseline runs without a sandbox, and its `Bash` schema has neither. |
+| | A background agent's transcript (`output_file`) lies under the host's spill directory (`<spill root>/<root task id>/tasks/<agent id>.output`) and holds one `{"type", "message"}` line per message in noeta's message encoding, rewritten as the conversation changes; a host without a spill directory names no file. | The task log is the record; the file is a projection of it written by the agent, so a crash or a move to another worker loses nothing (Claude Code appends its own session-record lines under its per-project temp directory). |
 | | `Workflow`'s description carries a short script-API reference (`tool.Workflow.8`): there is no bundled `workflow-authoring` skill to load. | noeta ships no bundled skills yet; the reference returns to a skill when it does. |
 
 ## Request envelope
