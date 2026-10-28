@@ -48,9 +48,21 @@ tasks across machines; serve the client API over HTTP with `noeta serve`.
 Everything outside the small kernel is a plugin, found by name through Python entry points —
 the built-in ones exactly like yours.
 
-- **Plugins** subclass `noeta.Extension`: tools, system-prompt parts, reminders, gates on tool
-  calls, hooks on events, state folded from the task's log. Register one under the
-  `noeta.plugins` entry point group and name it in an agent file.
+- **Plugins** subclass `noeta.Extension`: tools, system-prompt parts, reminders, slash
+  commands, gates on tool calls, hooks on events, state folded from the task's log. Register one
+  under the `noeta.plugins` entry point group and name it in an agent file or `config.toml`.
+  `examples/hello-plugin` is a complete one, packaged on its own.
+- **Plugin settings** live in `~/.noeta/config.toml`:
+
+  ```toml
+  [plugins.shell]
+  background = true          # a plugin's arguments
+  [plugins.web]
+  enabled = false            # off for every agent
+  [agents.main]
+  add_plugins = ["hello"]    # add one without copying the agent file
+  ```
+
 - **Agents** are markdown files: YAML frontmatter (`name`, `description`, `model`, `plugins`,
   optional `tools`) and the system prompt as body. Drop one in `~/.noeta/agents/` or
   `.noeta/agents/`; Claude Code agent files work as they are.
@@ -58,9 +70,10 @@ the built-in ones exactly like yours.
   `.noeta/prompts/tool/Read.md` replaces that text, `tool/Read.append.md` adds to it; so do
   `~/.noeta/prompts/`, a task's `prompts` config, and `--system-prompt` /
   `--append-system-prompt`. A task keeps the texts it started with.
-- **Hooks** in Claude Code's format (`~/.noeta/settings.json`) run commands on
-  `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` and `Notification`, and can add
-  context or block.
+- **Hooks and MCP servers** in Claude Code's format (`~/.noeta/settings.json`): hooks run
+  commands on `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` and `Notification`, and
+  can add context or block; `mcpServers` are started for every task. A workspace's `.mcp.json`
+  servers start only once named in `enabledMcpjsonServers` (or `enableAllProjectMcpServers`).
 - **Backends** — model providers, execution environments, stores — register under
   `noeta.providers`, `noeta.execenvs` and `noeta.stores`.
 

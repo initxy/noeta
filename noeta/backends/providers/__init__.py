@@ -10,8 +10,8 @@ from typing import Any
 
 from noeta.core.provider import OnDelta, Provider
 
-__all__ = ["FAMILIES", "OnDelta", "Provider", "anthropic", "openai_compat", "openai_responses",
-           "provider_for"]
+__all__ = ["FAMILIES", "OnDelta", "Provider", "anthropic_provider", "openai_compat_provider",
+           "openai_responses_provider", "provider_for"]
 
 #: Wire families :func:`provider_for` knows.
 FAMILIES = ("anthropic", "openai_compat", "openai_responses")
@@ -56,16 +56,18 @@ def provider_for(
     raise ValueError(f"unknown provider family {family!r}; expected one of {FAMILIES}")
 
 
-# The ``noeta.providers`` entry points, one per family.
+# The ``noeta.providers`` entry points, one per family. Not named like the
+# family: importing the submodule ``anthropic`` rebinds the package's
+# ``anthropic`` attribute to that module.
 
 
-def anthropic(**kw: Any) -> Provider:
+def anthropic_provider(**kw: Any) -> Provider:
     return provider_for("anthropic", **kw)
 
 
-def openai_compat(**kw: Any) -> Provider:
+def openai_compat_provider(**kw: Any) -> Provider:
     return provider_for("openai_compat", **kw)
 
 
-def openai_responses(**kw: Any) -> Provider:
+def openai_responses_provider(**kw: Any) -> Provider:
     return provider_for("openai_responses", **kw)

@@ -76,13 +76,25 @@ class Reminder(Struct):
 
 
 class Command(Struct):
-    """A slash command front ends offer. Running it posts ``template`` (with
-    ``{args}`` filled in) as a message, or calls the extension's ``command``
-    method when ``template`` is empty."""
+    """A slash command front ends offer (:mod:`noeta.core.commands`). Typing
+    ``/<name> <args>`` sends ``template`` with ``{args}`` replaced as the
+    message, or, when ``template`` is empty, the text the extension's
+    ``run_command`` returns."""
 
     name: str
     description: str
     template: str = ""
+    #: What to type after the name (``<file> [line]``), shown next to it.
+    argument_hint: str = ""
+
+
+@dataclass(frozen=True)
+class CommandContext:
+    """Where a command is listed or run: the front end's task (``None``
+    before it has one) and working directory."""
+
+    cwd: str
+    task_id: str | None = None
 
 
 @dataclass
@@ -193,8 +205,14 @@ class Extension:
     def context(self, view: TaskView) -> Sequence[ContextPart]:
         return ()
 
-    def commands(self) -> Sequence[Command]:
+    async def commands(self, ctx: CommandContext) -> Sequence[Command]:
+        """The slash commands this extension offers to a front end."""
         return ()
+
+    async def run_command(self, ctx: CommandContext, name: str, args: str) -> str:
+        """The message text for one of this extension's commands whose
+        ``template`` is empty."""
+        raise NotImplementedError(f"{self.name} has no command {name!r}")
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
         """Content that must sit right after a compaction's summary (a

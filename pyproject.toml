@@ -40,9 +40,9 @@ todo = "noeta.plugins.todo:Todo"
 web = "noeta.plugins.web:Web"
 
 [project.entry-points."noeta.providers"]
-anthropic = "noeta.backends.providers:anthropic"
-openai_compat = "noeta.backends.providers:openai_compat"
-openai_responses = "noeta.backends.providers:openai_responses"
+anthropic = "noeta.backends.providers:anthropic_provider"
+openai_compat = "noeta.backends.providers:openai_compat_provider"
+openai_responses = "noeta.backends.providers:openai_responses_provider"
 
 [project.entry-points."noeta.execenvs"]
 local = "noeta.backends.execenv.local:LocalExecEnv"

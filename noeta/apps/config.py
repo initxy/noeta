@@ -1,16 +1,35 @@
 """Settings for the ``noeta`` command and other ready-made front ends: which
-model, which provider, where tasks are stored. Read from the environment, then
-``~/.noeta/config.toml``; explicit arguments win."""
+model, which provider, where tasks are stored, and how the plugins are set.
+Read from the environment, then ``~/.noeta/config.toml``; explicit arguments
+win. The plugin part of ``config.toml``::
+
+    [plugins.shell]            # arguments of a plugin, by its name
+    background = true
+    [plugins.web]
+    enabled = false            # off for every agent
+    [plugins.my_plugin]        # a third-party plugin's arguments
+
+    [agents.main]
+    add_plugins = ["my_plugin", {todo = {}}]   # after the agent file's own
+    [agents."*"]               # every agent
+    add_plugins = []
+"""
 
 from __future__ import annotations
 
 import os
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from noeta.core import registry
+from noeta.core.agent_files import (
+    PluginEntry,
+    PluginSetting,
+    parse_plugin_list,
+)
 from noeta.core.provider import Provider
 
 HOME = Path(os.environ.get("NOETA_HOME") or Path.home() / ".noeta")
@@ -34,6 +53,10 @@ class Settings:
     #: see ``noeta.core.prompts``): ``--system-prompt`` sets ``system/main``,
     #: ``--append-system-prompt`` ``system/main.append``.
     prompts: dict[str, str] = field(default_factory=dict)
+    #: Per plugin name: its arguments (``enabled = false`` turns it off).
+    plugins: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: Per agent name (``"*"``: every agent): more plugins, after its own.
+    add_plugins: dict[str, tuple[PluginEntry, ...]] = field(default_factory=dict)
 
     def make_provider(self) -> Provider:
         kw: dict[str, Any] = {}
@@ -63,11 +86,46 @@ def load_settings(**overrides: Any) -> Settings:
     }
     data.update({k: v for k, v in env.items() if v})
     data.update({k: v for k, v in overrides.items() if v is not None})
+    data["plugins"] = _plugin_tables(data.get("plugins", {}))
+    data["add_plugins"] = _agent_tables(data.pop("agents", {}))
     known = {f for f in Settings.__dataclass_fields__}
     settings = Settings(**{k: v for k, v in data.items() if k in known})
     if settings.models_file:
         register_models_file(settings.models_file)
     return settings
+
+
+def _plugin_tables(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict) or not all(isinstance(v, dict) for v in value.values()):
+        raise ValueError("config.toml: [plugins.<name>] tables hold a plugin's arguments")
+    return {name: dict(args) for name, args in value.items()}
+
+
+def _agent_tables(value: Any) -> dict[str, tuple[PluginEntry, ...]]:
+    if not isinstance(value, dict):
+        raise ValueError("config.toml: [agents.<name>] tables say what to add to an agent")
+    out: dict[str, tuple[PluginEntry, ...]] = {}
+    for name, table in value.items():
+        unknown = set(table) - {"add_plugins"} if isinstance(table, dict) else {"?"}
+        if unknown:
+            raise ValueError(f"config.toml: [agents.{name}] takes only add_plugins")
+        out[name] = parse_plugin_list(table.get("add_plugins", []),
+                                      f"config.toml [agents.{name}] add_plugins")
+    return out
+
+
+def merge_plugin_settings(*tables: Mapping[str, PluginSetting]) -> dict[str, PluginSetting]:
+    """Plugin settings laid over each other: two argument tables of one
+    plugin merge key by key; anything else (an instance, on/off) replaces."""
+    out: dict[str, PluginSetting] = {}
+    for table in tables:
+        for name, value in table.items():
+            prev = out.get(name)
+            if isinstance(prev, Mapping) and isinstance(value, Mapping):
+                out[name] = {**prev, **value}
+            else:
+                out[name] = value
+    return out
 
 
 def register_models_file(path: str) -> None:

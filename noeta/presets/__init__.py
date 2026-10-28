@@ -12,16 +12,27 @@ by sub-agents.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from importlib import resources
-from pathlib import Path
 from typing import Any
 
 from noeta.core.agent import Agent
-from noeta.core.agent_files import AgentFile, PluginEntry, build_agents, parse_agent_file
+from noeta.core.agent_files import (
+    AgentFile,
+    PluginEntry,
+    PluginSetting,
+    build_agents,
+    parse_agent_file,
+)
 from noeta.core.extension import Extension
 
-__all__ = ["DEFAULT_PLUGINS", "builtin_agent_files", "default_agents", "main_agent"]
+__all__ = [
+    "DEFAULT_PLUGINS",
+    "OFF_UNLESS_SET",
+    "builtin_agent_files",
+    "default_agents",
+    "main_agent",
+]
 
 #: The extensions of an agent file that names none (a Claude Code agent
 #: file): the general-purpose sub-agent's.
@@ -30,6 +41,11 @@ DEFAULT_PLUGINS: tuple[PluginEntry, ...] = (
     ("mcp", {}),
     ("fs", {}), ("skills", {}), ("instructions", {}), ("environment", {}), ("subtasks", {}),
 )
+
+
+#: Plugins the built-in agents name that need the host's say-so: memory
+#: writes under a directory, MCP starts the servers it is given.
+OFF_UNLESS_SET: frozenset[str] = frozenset({"memory", "mcp"})
 
 
 def builtin_agent_files() -> list[AgentFile]:
@@ -42,39 +58,24 @@ def builtin_agent_files() -> list[AgentFile]:
 def default_agents(
     model: str,
     *,
-    permissions: Extension | None = None,
-    memory_root: str | Path | Callable[..., Any] | None = None,
-    skills: Extension | None = None,
-    mcp: Extension | None = None,
-    compaction: Extension | None = None,
-    web: Extension | None = None,
+    plugins: Mapping[str, PluginSetting] | None = None,
+    add: Mapping[str, Sequence[PluginEntry]] | None = None,
     extensions: Sequence[Extension] = (),
     extra_files: Iterable[AgentFile] = (),
-    plugin_config: dict[str, dict[str, Any]] | None = None,
     **main_kw: Any,
 ) -> list[Agent]:
     """``main`` and the three sub-agents (and ``extra_files``' agents).
 
-    The keyword extensions are shared by every agent that lists them.
-    Without ``memory_root`` there is no memory (no tools, no policy); without
-    ``mcp`` no MCP. ``main_kw`` replaces fields of ``main`` (``name``,
-    ``system_prompt``, ...)."""
-    instances: dict[str, Extension] = {
-        name: ext for name, ext in (("permissions", permissions), ("skills", skills),
-                                    ("compaction", compaction), ("web", web), ("mcp", mcp))
-        if ext is not None
-    }
-    config = {k: dict(v) for k, v in (plugin_config or {}).items()}
-    disabled = set()
-    if memory_root is None:
-        disabled.add("memory")
-    else:
-        config.setdefault("memory", {})["root"] = memory_root
-    if mcp is None:
-        disabled.add("mcp")
-    agents = build_agents([*builtin_agent_files(), *extra_files], model=model, config=config,
-                          instances=instances, disabled=disabled,
-                          default_plugins=DEFAULT_PLUGINS, extensions=extensions)
+    ``plugins`` and ``add`` are :func:`~noeta.core.agent_files.build_agents`'s:
+    per plugin name its arguments, a ready instance, or ``False``. The
+    plugins in :data:`OFF_UNLESS_SET` (memory, MCP) stay off until
+    ``plugins`` has a setting for them. ``main_kw`` replaces fields of
+    ``main`` (``name``, ``system_prompt``, ...)."""
+    settings: dict[str, PluginSetting] = {name: False for name in OFF_UNLESS_SET}
+    settings.update(plugins or {})
+    agents = build_agents([*builtin_agent_files(), *extra_files], model=model,
+                          plugins=settings, default_plugins=DEFAULT_PLUGINS, add=add,
+                          extensions=extensions)
     if main_kw:
         agents = [dataclasses.replace(a, **main_kw) if a.name == "main" else a for a in agents]
     return agents

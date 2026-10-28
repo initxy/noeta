@@ -114,6 +114,7 @@ def run_trial(
     ws.mkdir()
     setup(ws)
     kw: dict[str, Any] = {"one_shot": True, "max_steps_per_turn": _MAX_STEPS_PER_TURN}
+    plugins: dict[str, Any] = {"memory": {"root": str(root / "memory")}}
     if cfg.system_prompt is not None:
         kw["system_prompt"] = cfg.system_prompt
     if small_window:
@@ -122,9 +123,9 @@ def run_trial(
 
         _, out = model_limits(cfg.model)
         # The usable window (window - min(out, 20k) - 13k) is _SMALL_USABLE_WINDOW.
-        kw["compaction"] = Compaction(
+        plugins["compaction"] = Compaction(
             auto_compact_window=_SMALL_USABLE_WINDOW + min(out, 20_000) + 13_000)
-    agents = default_agents(cfg.model, memory_root=str(root / "memory"), **kw)
+    agents = default_agents(cfg.model, plugins=plugins, **kw)
     events, error, status = _run(_drive(cfg, agents, goal, ws, root, timeout_s))
 
     batches: list[list[Any]] = []

@@ -93,7 +93,7 @@ def test_a_third_party_plugin_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
     files = [parse_agent_file("---\nname: a\nplugins: [{greeter: {greeting: hello}}]\n---\nP\n"),
              parse_agent_file("---\nname: b\nplugins: [{greeter: {greeting: hello}}]\n---\nP\n"),
              parse_agent_file("---\nname: c\nplugins: [greeter]\n---\nP\n")]
-    a, b, c = build_agents(files, model="m", config={"greeter": {"greeting": "hey"}})
+    a, b, c = build_agents(files, model="m", plugins={"greeter": {"greeting": "hey"}})
     assert a.extensions[0] is b.extensions[0]  # same arguments, one instance
     assert a.extensions[0].greeting == "hello"  # type: ignore[attr-defined]
     assert c.extensions[0].greeting == "hey"  # type: ignore[attr-defined]
@@ -101,11 +101,19 @@ def test_a_third_party_plugin_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
         build_agents([parse_agent_file("---\nname: d\nplugins: [nope]\n---\n")], model="m")
 
 
-def test_disabled_instances_defaults_and_models() -> None:
+def test_settings_defaults_additions_and_models() -> None:
     shared = Greeter()
     files = [parse_agent_file("---\nname: a\nplugins: [greeter, fs]\n---\nP\n"),
              parse_agent_file("---\nname: b\nmodel: other\n---\nQ\n")]
-    a, b = build_agents(files, model="m", instances={"greeter": shared}, disabled={"fs"},
+    a, b = build_agents(files, model="m", plugins={"greeter": shared, "fs": False},
                         default_plugins=[("greeter", {})])
     assert list(a.extensions) == [shared] and a.model == "m"
     assert list(b.extensions) == [shared] and b.model == "other"
+    a, b = build_agents(files, model="m", plugins={"fs": {"enabled": False}, "greeter": shared},
+                        add={"b": [("instructions", {})], "*": [("greeter", {})]})
+    assert [e.name for e in a.extensions] == ["greeter"]  # not added twice
+    assert [e.name for e in b.extensions] == ["instructions", "greeter"]
+    with pytest.raises(ValueError, match="enabled"):
+        build_agents(files, model="m", plugins={"fs": {"enabled": "no"}})
+    with pytest.raises(TypeError):
+        build_agents(files, model="m", plugins={"fs": 3})  # type: ignore[dict-item]

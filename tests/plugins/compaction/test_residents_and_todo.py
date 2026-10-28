@@ -44,8 +44,9 @@ async def test_default_agents_residents_follow_every_summary(
     # main's prompt and tools take ~10K tokens: a 45K cap leaves the same
     # few-thousand-token working window the other compaction tests use.
     [main, *_] = default_agents(
-        "m", tools=[Probe(size=2000)], permissions=Permissions(mode="bypassPermissions"),
-        compaction=Compaction(auto_compact_window=45_000, clearable_tools=()))
+        "m", tools=[Probe(size=2000)], plugins={
+            "permissions": Permissions(mode="bypassPermissions"),
+            "compaction": Compaction(auto_compact_window=45_000, clearable_tools=())})
     model = Model([*(call() for _ in range(40)), answer("done")])
     _client, tid = await run(store, main, model, env_for=lambda _s: LocalExecEnv(str(work)))
     assert len(model.summarize_requests) >= 3

@@ -28,6 +28,7 @@ from noeta.apps.tui.widgets import (
     tool_title,
 )
 from noeta.core import models
+from noeta.core.commands import expand_command, list_commands
 from noeta.core.events import (
     Answer,
     ExtensionRecorded,
@@ -41,6 +42,7 @@ from noeta.core.events import (
     ToolStarted,
     Waiting,
 )
+from noeta.core.extension import CommandContext
 from noeta.core.pending import Pending, follow_tree
 from noeta.core.types import Delta, Usage
 from noeta.plugins.ask_user import next_question, typed_answer
@@ -191,6 +193,9 @@ class NoetaApp(App[None]):
         if text.startswith("/"):
             await self.command(text)
             return
+        await self.send(text)
+
+    async def send(self, text: str) -> None:
         if not self.task_id:
             return
         if self.read_only:
@@ -214,9 +219,38 @@ class NoetaApp(App[None]):
         elif name == "stop":
             await self.action_stop_turn()
         elif name == "help":
-            await self.query_one("#transcript").mount(Markdown(HELP, classes="notice"))
+            await self.query_one("#transcript").mount(
+                Markdown(HELP + await self._plugin_help(), classes="notice"))
         else:
+            await self._plugin_command(text, name)
+
+    def _agent(self) -> Any:
+        """This front end's agent, when it runs one (not attached to a server)."""
+        return getattr(getattr(self.local, "runtime", None), "agents", {}).get(self.agent)
+
+    def _command_context(self) -> CommandContext:
+        return CommandContext(cwd=self.cwd, task_id=self.task_id or None)
+
+    async def _plugin_help(self) -> str:
+        agent = self._agent()
+        commands = await list_commands(agent, self._command_context()) if agent else []
+        lines = [f"`/{c.name}`" + (f" {c.argument_hint}" if c.argument_hint else "")
+                 + (f" — {c.description}" if c.description else "") for c in commands]
+        return "**From plugins**\n" + "\n".join(f"- {line}" for line in lines) \
+            if lines else ""
+
+    async def _plugin_command(self, text: str, name: str) -> None:
+        agent = self._agent()
+        try:
+            message = await expand_command(agent, self._command_context(), text) \
+                if agent else None
+        except Exception as exc:  # noqa: BLE001 — a plugin's failure is shown, not raised
+            await self.say_notice(f"/{name} failed: {exc}")
+            return
+        if message is None:
             await self.say_notice(f"unknown command /{name} — try /help")
+        elif message:
+            await self.send(message)
 
     async def action_stop_turn(self) -> None:
         if self.task_id and self.busy:

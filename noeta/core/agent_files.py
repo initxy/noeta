@@ -24,7 +24,7 @@ so a third-party plugin is used exactly like a built-in one. A file without
 from __future__ import annotations
 
 import logging
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -39,8 +39,10 @@ __all__ = [
     "AgentFile",
     "AgentFileError",
     "PluginEntry",
+    "PluginSetting",
     "build_agents",
     "parse_agent_file",
+    "parse_plugin_list",
     "read_agent_dir",
 ]
 
@@ -50,6 +52,8 @@ log = logging.getLogger("noeta.agents")
 _INHERIT = frozenset({"", "inherit", "sonnet", "opus", "haiku"})
 
 PluginEntry = tuple[str, Mapping[str, Any]]
+#: The host's setting of one plugin: its arguments, a ready instance, or on/off.
+PluginSetting = Mapping[str, Any] | Extension | bool
 
 
 class AgentFileError(ValueError):
@@ -81,7 +85,8 @@ def _names(value: Any, key: str, source: str) -> tuple[str, ...]:
     raise AgentFileError(f"{source}: '{key}' must be a list of names")
 
 
-def _plugins(value: Any, source: str) -> tuple[PluginEntry, ...]:
+def parse_plugin_list(value: Any, source: str = "") -> tuple[PluginEntry, ...]:
+    """A ``plugins`` list: each item a name or ``{name: {arguments}}``."""
     if not isinstance(value, list):
         raise AgentFileError(f"{source}: 'plugins' must be a list")
     out: list[PluginEntry] = []
@@ -140,7 +145,7 @@ def parse_agent_file(text: str, *, source: str = "", default_name: str = "") -> 
         prompt=body,
         description=description.strip(),
         model=None if model is None or model.strip() in _INHERIT else model.strip(),
-        plugins=None if plugins is None else _plugins(plugins, source),
+        plugins=None if plugins is None else parse_plugin_list(plugins, source),
         tools=None if tools is None else _names(tools, "tools", source),
         one_shot=one_shot,
         effort=str(effort) if effort is not None else None,
@@ -173,44 +178,68 @@ def _freeze(value: Any) -> Any:
     return value
 
 
+def _setting(name: str, value: PluginSetting) -> tuple[bool, Mapping[str, Any], Extension | None]:
+    """``value`` as (enabled, host arguments, ready instance)."""
+    if isinstance(value, bool):
+        return value, {}, None
+    if isinstance(value, Extension):
+        return True, {}, value
+    if isinstance(value, Mapping):
+        args = dict(value)
+        enabled = args.pop("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError(f"plugin {name!r}: 'enabled' must be true or false")
+        return enabled, args, None
+    raise TypeError(f"plugin {name!r}: a setting is arguments, an Extension, or true/false")
+
+
 def build_agents(
     files: Iterable[AgentFile],
     *,
     model: str,
-    config: Mapping[str, Mapping[str, Any]] | None = None,
-    instances: Mapping[str, Extension] | None = None,
-    disabled: Collection[str] = (),
+    plugins: Mapping[str, PluginSetting] | None = None,
     default_plugins: Sequence[PluginEntry] = (),
+    add: Mapping[str, Sequence[PluginEntry]] | None = None,
     extensions: Sequence[Extension] = (),
 ) -> list[Agent]:
     """The agents of ``files`` (a later file replaces an earlier one of the
     same name).
 
-    A plugin is made once per set of arguments and shared by every agent
-    that names it with those arguments: ``config`` holds the host's
-    arguments per plugin name (laid under the file's), ``instances`` ready
-    ones (used where a file gives no arguments). A ``disabled`` plugin is
-    left out. ``extensions`` are added after every agent's own."""
+    ``plugins`` is the host's setting per plugin name: its arguments (laid
+    under the file's; ``enabled: false`` among them turns it off), a ready
+    ``Extension`` (used where a file gives no arguments), or ``False`` to
+    leave it out of every agent. ``add`` names more plugins per agent
+    (``"*"``: every agent), after the file's own; a plugin an agent already
+    has is not added twice. A plugin is made once per set of arguments and
+    shared by every agent that names it with those arguments. ``extensions``
+    are added after every agent's own."""
     by_name: dict[str, AgentFile] = {}
     for f in files:
         by_name[f.name] = f
-    config = config or {}
-    instances = instances or {}
+    settings = {name: _setting(name, v) for name, v in (plugins or {}).items()}
+    add = add or {}
     made: dict[tuple[str, Any], Extension] = {}
 
     def plugin(name: str, args: Mapping[str, Any]) -> Extension:
-        if not args and name in instances:
-            return instances[name]
+        _on, host_args, instance = settings.get(name, (True, {}, None))
+        if not args and instance is not None:
+            return instance
         key = (name, _freeze(args))
         if key not in made:
             factory = registry.load(registry.PLUGINS, name)
-            made[key] = factory(**{**config.get(name, {}), **args})
+            made[key] = factory(**{**host_args, **args})
         return made[key]
 
     agents: list[Agent] = []
     for f in by_name.values():
-        entries = f.plugins if f.plugins is not None else tuple(default_plugins)
-        exts = [plugin(name, args) for name, args in entries if name not in disabled]
+        entries = list(f.plugins if f.plugins is not None else default_plugins)
+        names = {name for name, _ in entries}
+        for name, args in (*add.get(f.name, ()), *add.get("*", ())):
+            if name not in names:
+                names.add(name)
+                entries.append((name, args))
+        exts = [plugin(name, args) for name, args in entries
+                if settings.get(name, (True,))[0]]
         agents.append(Agent(
             name=f.name,
             model=f.model or model,

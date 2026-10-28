@@ -62,7 +62,7 @@ def test_main_roster_schema() -> None:
 
 
 def test_extension_sets_and_sharing() -> None:
-    agents = _agents(mcp=Mcp())
+    agents = _agents(plugins={"mcp": Mcp()})
     names = {n: {e.name for e in a.all_extensions()} for n, a in agents.items()}
     common = {"compaction", "permissions", "shell", "web", "instructions", "environment"}
     assert common | {"skills", "mcp"} <= names["general-purpose"]
@@ -70,7 +70,7 @@ def test_extension_sets_and_sharing() -> None:
     assert "mcp" not in names["explore"]
     assert common | {"ask_user"} <= names["plan"]
     assert not {"mcp", "skills"} & names["plan"]
-    assert "memory" not in names["main"]  # no memory_root, no memory
+    assert "memory" not in names["main"]  # memory is off until set
     # One instance per plugin and arguments, shared by every agent naming it.
     shells = {id(e) for a in agents.values() for e in a.extensions if e.name == "shell"}
     assert len(shells) == 1

@@ -3,6 +3,7 @@ activation, ``/<name>``, ``run_skill_script`` and ``allowed-tools``."""
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import os
@@ -16,7 +17,7 @@ import msgspec
 
 from noeta.core.events import Recorded
 from noeta.core.execenv import ExecEnv
-from noeta.core.extension import Ask, Command, Deny, Extension, Gate, TaskView
+from noeta.core.extension import Ask, Command, CommandContext, Deny, Extension, Gate, TaskView
 from noeta.core.helpers import new_user_messages, resident_budget, task_env
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ToolUse, user
@@ -259,11 +260,14 @@ class Skills(Extension):
             tools.append(self._script_tool)
         return tools
 
-    def commands(self) -> Sequence[Command]:
+    async def commands(self, ctx: CommandContext) -> Sequence[Command]:
         """``/<name>`` for every skill found locally (front ends run in the
         workspace); typing it activates the skill for that message."""
+        return await asyncio.to_thread(self._commands, ctx.cwd)
+
+    def _commands(self, cwd: str) -> list[Command]:
         found: dict[str, str] = {}
-        for root, _tier in self.tiers(os.getcwd()):
+        for root, _tier in self.tiers(cwd):
             for path in sorted(Path(root).rglob("SKILL.md")) if Path(root).is_dir() else []:
                 try:
                     fields, _body, _w = _frontmatter.parse(path.read_text(encoding="utf-8"))

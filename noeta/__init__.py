@@ -16,7 +16,14 @@ if TYPE_CHECKING:
     from noeta.core.agent import Agent
     from noeta.core.agent_files import parse_agent_file, read_agent_dir
     from noeta.core.client import Client
-    from noeta.core.extension import ContextPart, Extension, Reminder, TaskView
+    from noeta.core.extension import (
+        Command,
+        CommandContext,
+        ContextPart,
+        Extension,
+        Reminder,
+        TaskView,
+    )
     from noeta.core.registry import provider, store
     from noeta.core.runner import Runtime
     from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
@@ -26,6 +33,8 @@ if TYPE_CHECKING:
 _EXPORTS = {
     "Agent": "noeta.core.agent",
     "Client": "noeta.core.client",
+    "Command": "noeta.core.extension",
+    "CommandContext": "noeta.core.extension",
     "ContextPart": "noeta.core.extension",
     "Extension": "noeta.core.extension",
     "Reminder": "noeta.core.extension",
@@ -45,6 +54,8 @@ _EXPORTS = {
 __all__ = [
     "Agent",
     "Client",
+    "Command",
+    "CommandContext",
     "ContextPart",
     "Extension",
     "Reminder",
