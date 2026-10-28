@@ -8,9 +8,9 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from noeta.core.tool_helpers import large_output_message, limit_output, spill_path
 from noeta.plugins.fs import EditTool, GlobTool, GrepTool, ReadTool, WriteTool
 from noeta.plugins.shell import BashTool
+from noeta.toolkit.tools import large_output_message, limit_output, spill_path
 from tests.plugins.conftest import Harness, text_of
 
 # ---------------------------------------------------------------------------

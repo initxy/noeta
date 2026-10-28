@@ -10,9 +10,9 @@ from typing import Any, Protocol
 import httpx
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.core.tool_helpers import limit_output, truncate_bytes
 from noeta.plugins.web.fetch import WEB_SOURCE_LINE
 from noeta.plugins.web.render import collapse_whitespace
+from noeta.toolkit.tools import limit_output, truncate_bytes
 
 __all__ = ["HttpSearchTransport", "SearchResult", "SearchTransport", "WebSearchTool"]
 

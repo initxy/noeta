@@ -110,12 +110,13 @@ root_package = "noeta"
 
 # The layers, top to bottom; a module may import only from layers below it.
 [[tool.importlinter.contracts]]
-name = "layers: apps > presets > plugins | backends > core"
+name = "layers: apps > presets > plugins | backends > toolkit > core"
 type = "layers"
 layers = [
     "noeta.apps",
     "noeta.presets",
     "noeta.plugins | noeta.backends",
+    "noeta.toolkit",
     "noeta.core",
 ]
 

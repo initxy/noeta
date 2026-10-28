@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 
-from noeta.core.shell import (
+from noeta.toolkit.shell import (
     DEFAULT_SHELL_RULES,
     AllowRule,
     build_allowlist,

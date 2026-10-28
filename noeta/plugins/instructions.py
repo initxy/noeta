@@ -19,9 +19,9 @@ from typing import Any, Literal
 from noeta.core.events import Recorded, ToolFinished
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import Extension, TaskView
-from noeta.core.helpers import read_text, task_env
-from noeta.core.tool_helpers import path_within
 from noeta.core.types import Message, ToolUse, user
+from noeta.toolkit.context import read_text, task_env
+from noeta.toolkit.tools import path_within
 
 __all__ = ["DEFAULT_INSTRUCTIONS_FILENAMES", "Instructions", "render_instructions"]
 

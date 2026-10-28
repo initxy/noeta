@@ -18,8 +18,8 @@ import logging
 import re
 from collections.abc import Mapping, Sequence
 
-from noeta.core.helpers import estimate_tokens
 from noeta.plugins.skills.registry import SkillRegistry, strip_argument_placeholder
+from noeta.toolkit.context import estimate_tokens
 
 __all__ = [
     "ADDED_HEADER",

@@ -9,9 +9,9 @@ import posixpath
 from collections.abc import Callable, Sequence
 
 from noeta.core.tool import ToolContext, ToolOutput
-from noeta.core.tool_helpers import Workspace, tool_error
 from noeta.core.types import Display
 from noeta.plugins.fs.state import FS, KIND_READ, current_fs_state
+from noeta.toolkit.tools import Workspace, tool_error
 
 __all__ = [
     "WriteRoots",

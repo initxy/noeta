@@ -14,7 +14,6 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable, Collection, Iterable
 
-from noeta.core.helpers import estimate_tokens
 from noeta.core.types import Message, ToolResult, ToolUse
 from noeta.plugins.memory.index import (
     RECALL_BODY_MAX_BYTES,
@@ -27,6 +26,7 @@ from noeta.plugins.memory.matching import (
     match_memories_tiered,
 )
 from noeta.plugins.memory.store import MemoryStore
+from noeta.toolkit.context import estimate_tokens
 
 __all__ = [
     "Judge",
