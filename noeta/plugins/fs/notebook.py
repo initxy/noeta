@@ -89,7 +89,8 @@ def _input_error(input: dict[str, Any], path: str) -> str | None:
 
 def _apply(cells: list[Any], mode: str, index: int | None, cell_id: str | None,
            cell_type: str | None, source: str) -> str:
-    """Make the edit in ``cells``; what was done."""
+    """Make the edit in ``cells``; the result line (Claude Code's: the cell
+    and, for a replace or insert, the source now in it)."""
     if mode == "delete":
         assert index is not None
         cells.pop(index)
@@ -101,7 +102,7 @@ def _apply(cells: list[Any], mode: str, index: int | None, cell_id: str | None,
         if cell_type == "code":
             cell.update(execution_count=None, outputs=[])
         cells.insert(0 if index is None else index + 1, cell)
-        return f"Inserted cell {new_id}"
+        return f"Inserted cell {new_id} with {source}"
     assert index is not None
     cell = cells[index]
     cell["source"] = _source(source)
@@ -113,7 +114,7 @@ def _apply(cells: list[Any], mode: str, index: int | None, cell_id: str | None,
     if cell.get("cell_type") == "code":
         cell["execution_count"] = None
         cell["outputs"] = []
-    return f"Updated cell {cell_id}"
+    return f"Updated cell {cell_id} with {source}"
 
 
 class NotebookEditTool:
@@ -175,5 +176,4 @@ class NotebookEditTool:
         except OSError as exc:
             return tool_error(self.name, f"write failed: {exc}")
         await record_written(ctx, resolved, body)
-        return text_output(f"{done} in {resolved}.", path=ws.relative(resolved), mode=mode,
-                           old_source=old_source)
+        return text_output(done, path=ws.relative(resolved), mode=mode, old_source=old_source)
