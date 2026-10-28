@@ -10,11 +10,12 @@ framed on its wire.
 
 from __future__ import annotations
 
+import base64
 import email.utils
 import json
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -31,11 +32,13 @@ from noeta.core.types import Image, Message, ModelRequest, Text, ToolReference, 
 
 __all__ = [
     "HOST_INJECTED_PREAMBLE",
+    "ReasoningContinuation",
     "decode_tool_arguments",
     "describe_http_error",
     "encode_tool_arguments",
     "guard_vision",
     "http_error_is_context_overflow",
+    "image_data_url",
     "indicates_context_overflow",
     "is_host_injected",
     "model_admits_images",
@@ -119,6 +122,19 @@ def flatten_text(blocks: list[Any]) -> str:
     """Join a block list's text blocks with newlines (the system-prompt and
     plain-turn convention on the OpenAI-shaped wires)."""
     return "\n".join(b.text for b in blocks if isinstance(b, Text))
+
+
+def image_data_url(block: Image) -> str:
+    """An image as a ``data:`` URL (how the OpenAI-shaped wires carry one)."""
+    data = base64.b64encode(block.data).decode("ascii")
+    return f"data:{block.media_type};base64,{data}"
+
+
+#: Whether an OpenAI-shaped adapter writes an assistant's reasoning back onto
+#: the wire: ``"off"``, as Chat Completions ``reasoning_content``
+#: (``"chat"``), or as Responses ``reasoning`` items (``"responses"``); each
+#: adapter says what the values do on its wire.
+ReasoningContinuation = Literal["off", "chat", "responses"]
 
 
 # ---------------------------------------------------------------------------

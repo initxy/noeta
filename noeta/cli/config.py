@@ -388,6 +388,67 @@ def load_plugin_files(cwd: str | None) -> list[str]:
     return [notice] if notice else []
 
 
+def _permission_settings(found: FileSettings, cwd: str | None,
+                         permissions: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The permissions plugin's arguments: the settings files', with the
+    command line's (``permissions``) rule lists and directories added and
+    its other arguments laid over."""
+    permission_args = _permission_arguments(found)
+    for key, value in (permissions or {}).items():
+        if key in ("allow", "deny", "ask", "additional_directories"):
+            permission_args[key] = [*permission_args.get(key, ()), *value]
+        else:
+            permission_args[key] = value
+    if permission_args.get("disable_bypass_mode") and \
+            permission_args.get("mode") == "bypassPermissions":
+        log.warning("permission mode bypassPermissions is disabled here; ignored")
+        del permission_args["mode"]
+    if cwd and project_trusted(cwd):
+        permission_args["trusted_workspace"] = True
+    return permission_args
+
+
+def _base_plugin_settings(found: FileSettings, cwd: str | None,
+                          permissions: Mapping[str, Any] | None, *,
+                          project: bool) -> dict[str, PluginSetting]:
+    """The built-in plugins' settings from noeta's places and the settings
+    files; ``project``: the project's MCP servers may load."""
+    setting_files = [str(f) for f in found.files]
+    permission_args = _permission_settings(found, cwd, permissions)
+    # The file tools may write in the additional directories too.
+    write_roots = [str(Path(cwd or os.getcwd(), d))
+                   for d in permission_args.get("additional_directories") or ()]
+    return merge_plugin_settings(
+        {"memory": {"home": str(HOME)},
+         "hooks": {"settings_files": setting_files},
+         "mcp": {"settings_files": setting_files,
+                 "project": project_trusted if project else False},
+         "skills": {"trusted": project_trusted, "global_dir": str(HOME / "skills")},
+         "instructions": {"user_dir": str(HOME), "managed_dir": str(managed_dir())},
+         "permissions": permission_args, "fs": {"write_roots": write_roots}})
+
+
+def _apply_sandbox(found: FileSettings, cwd: str | None,
+                   runtime_kw: dict[str, Any]) -> list[str]:
+    """Run tasks' commands in the settings' sandbox (``runtime_kw``'s
+    ``env_for``) when it is enabled; a notice when it cannot start here."""
+    sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
+                                            base_dir=str(cwd or os.getcwd()))
+    if not sandbox.enabled:
+        return []
+    runtime_kw.setdefault("env_for", sandboxed_env_for(sandbox))
+    probe = registry.execenv("local", str(cwd or os.getcwd()), sandbox=sandbox)
+    reason = getattr(getattr(probe, "sandbox", None), "unavailable", lambda: None)()
+    if reason is None:
+        return []
+    notice = (f"sandbox.enabled is set but the sandbox cannot start: {reason}. "
+              + ("Commands that would run in it are refused (failIfUnavailable)."
+                 if sandbox.fail_if_unavailable else
+                 "Commands run without it."))
+    log.warning("%s", notice)
+    return [notice]
+
+
 def from_settings(settings: Settings, *, cwd: str | None = None,
                   plugins: Mapping[str, PluginSetting] | None = None,
                   permissions: Mapping[str, Any] | None = None,
@@ -438,30 +499,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     def source(name: str) -> bool:
         return setting_sources is None or name in setting_sources
 
-    setting_files = [str(f) for f in found.files]
-    permission_args = _permission_arguments(found)
-    for key, value in (permissions or {}).items():
-        if key in ("allow", "deny", "ask", "additional_directories"):
-            permission_args[key] = [*permission_args.get(key, ()), *value]
-        else:
-            permission_args[key] = value
-    if permission_args.get("disable_bypass_mode") and \
-            permission_args.get("mode") == "bypassPermissions":
-        log.warning("permission mode bypassPermissions is disabled here; ignored")
-        del permission_args["mode"]
-    if cwd and project_trusted(cwd):
-        permission_args["trusted_workspace"] = True
-    # The file tools may write in the additional directories too.
-    write_roots = [str(Path(cwd or os.getcwd(), d))
-                   for d in permission_args.get("additional_directories") or ()]
-    base = merge_plugin_settings(
-        {"memory": {"home": str(HOME)},
-         "hooks": {"settings_files": setting_files},
-         "mcp": {"settings_files": setting_files,
-                 "project": project_trusted if source("project") else False},
-         "skills": {"trusted": project_trusted, "global_dir": str(HOME / "skills")},
-         "instructions": {"user_dir": str(HOME), "managed_dir": str(managed_dir())},
-         "permissions": permission_args, "fs": {"write_roots": write_roots}})
+    base = _base_plugin_settings(found, cwd, permissions, project=source("project"))
     made: dict[Any, Any] = {}
     model, add_plugins = settings.model, settings.add_plugins
 
@@ -490,19 +528,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         return default_agents(model, plugins=table, add=add, extra_files=files, made=made)
 
     agents = make_agents()
-    sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
-                                            base_dir=str(cwd or os.getcwd()))
-    if sandbox.enabled:
-        runtime_kw.setdefault("env_for", sandboxed_env_for(sandbox))
-        probe = registry.execenv("local", str(cwd or os.getcwd()), sandbox=sandbox)
-        reason = getattr(getattr(probe, "sandbox", None), "unavailable", lambda: None)()
-        if reason is not None:
-            notice = (f"sandbox.enabled is set but the sandbox cannot start: {reason}. "
-                      + ("Commands that would run in it are refused (failIfUnavailable)."
-                         if sandbox.fail_if_unavailable else
-                         "Commands run without it."))
-            log.warning("%s", notice)
-            notices.append(notice)
+    notices += _apply_sandbox(found, cwd, runtime_kw)
     runtime_kw.setdefault("prompt_dirs", [str(HOME / "prompts")])
     runtime_kw.setdefault("workspace_trusted", project_trusted)
     runtime_kw.setdefault("spill_root", str(HOME / "tool-results"))
