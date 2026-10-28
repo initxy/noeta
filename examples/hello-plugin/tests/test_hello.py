@@ -16,8 +16,8 @@ from noeta.core import registry
 from noeta.core.client import Client
 from noeta.core.commands import expand_command
 from noeta.core.events import ExtensionRecorded, ToolFinished
-from noeta.core.pending import pending
-from noeta.core.questions import answer_question
+from noeta.host.pending import pending
+from noeta.host.questions import answer_question
 from noeta.testing import ScriptedProvider, reply
 
 AGENT = """---

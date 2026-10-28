@@ -11,13 +11,8 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ToolFinished, Waiting
 from noeta.core.runner import Runtime
-from noeta.plugins.ask_user import (
-    AskUser,
-    next_question,
-    normalize_answer,
-    typed_answer,
-    validate_questions,
-)
+from noeta.host.questions import next_question, typed_answer
+from noeta.plugins.ask_user import AskUser, normalize_answer, validate_questions
 from noeta.testing import ScriptedProvider, reply
 
 

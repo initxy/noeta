@@ -32,7 +32,7 @@ class Pending:
     """One open request. Answer it with
     ``client.answer(task_id, request_id, "allow" | "deny", always=...)``
     (an approval) or ``client.answer(task_id, request_id, data=...)`` (a
-    question; ``noeta.plugins.ask_user.answer_question`` validates first).
+    question; ``noeta.host.questions.answer_question`` validates first).
 
     ``detail``: for an approval, what the gate said (``prompt``, ``reason``,
     ``always`` — the rule an "always" answer would remember, or ``None`` —

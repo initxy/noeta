@@ -83,7 +83,7 @@ Decide = Callable[[str, str], Awaitable[None]]
 
 class ApprovalCard(Vertical):
     """Asks before a tool runs, with Claude Code's choices
-    (:func:`noeta.core.pending.choices`: Yes, don't ask again, switch mode,
+    (:func:`noeta.host.pending.choices`: Yes, don't ask again, switch mode,
     No), picked by number, or y / a / n for yes / always / no."""
 
     DEFAULT_CLASSES = "approval"

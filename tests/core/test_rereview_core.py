@@ -16,10 +16,10 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ToolFinished
 from noeta.core.extension import Ask, Extension, Rewrite, TaskView
-from noeta.core.pending import pending_tree
 from noeta.core.runner import Runtime
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.core.types import ToolUse, user
+from noeta.host.pending import pending_tree
 from noeta.plugins.ask_user import AskUser
 from noeta.testing import ScriptedProvider, reply
 

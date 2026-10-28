@@ -414,7 +414,7 @@ class SessionReplay:
         step's ``cards`` keys in order: ``Escape`` denies, ``2`` allows
         always, anything else allows), questions get their first option."""
         from noeta.core.events import InputTaken, Waiting
-        from noeta.core.pending import pending_tree
+        from noeta.host.pending import pending_tree
 
         deadline = time.monotonic() + STEP_TIMEOUT_S
         self.replayer.stalls.clear()
@@ -469,7 +469,7 @@ def _jobs_running(root_id: str) -> bool:
 async def _agents_done(app: Any, task_id: str) -> bool:
     """Every background agent below the task has ended, as Claude Code's
     driver waited for the session to go quiet before the next step."""
-    from noeta.core.pending import tree_busy
+    from noeta.host.pending import tree_busy
 
     return not await tree_busy(app.client, task_id)
 

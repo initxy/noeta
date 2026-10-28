@@ -10,7 +10,7 @@ structured answers.
 taken by the time the tool sees it, and ``client.answer`` deduplicates by
 request id — so a question gets exactly one answer, and a parked call cannot
 park again. The rule is therefore: validate before posting
-(``noeta.core.questions.answer_question``, or :func:`validate_answer` for
+(``noeta.host.questions.answer_question``, or :func:`validate_answer` for
 hosts that post themselves — the 0.6 behavior of rejecting before anything is written), and
 an invalid answer that is posted anyway ends the question with an error
 result naming what was wrong, so the model can ask again. A stale answer
@@ -26,13 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from noeta.core.events import Answer
 from noeta.core.extension import Extension, TaskView
-from noeta.core.questions import (
-    AnswerValidationError,
-    answer_question,
-    next_question,
-    normalize_answer,
-    typed_answer,
-)
+from noeta.core.questions import AnswerValidationError, normalize_answer
 from noeta.core.tool import Park, Tool, ToolContext, ToolOutput, text_output
 from noeta.toolkit.tools import SCHEMA_DIALECT
 
@@ -45,10 +39,7 @@ __all__ = [
     "AnswerValidationError",
     "AskUser",
     "AskUserQuestionTool",
-    "answer_question",
-    "next_question",
     "normalize_answer",
-    "typed_answer",
     "validate_answer",
     "validate_questions",
 ]

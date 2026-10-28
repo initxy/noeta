@@ -12,12 +12,12 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
 from noeta.core.events import ToolFinished
-from noeta.core.pending import pending
+from noeta.host.pending import pending
+from noeta.host.questions import answer_question
 from noeta.plugins.ask_user import (
     INPUT_SCHEMA,
     AnswerValidationError,
     AskUser,
-    answer_question,
     validate_questions,
 )
 from noeta.plugins.permissions import Permissions

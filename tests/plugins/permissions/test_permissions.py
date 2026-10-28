@@ -15,8 +15,8 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
-from noeta.core.pending import pending, pending_tree
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
+from noeta.host.pending import pending, pending_tree
 from noeta.plugins.permissions import (
     MODE_SIGNAL,
     Budget,

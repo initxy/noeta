@@ -19,9 +19,9 @@ from noeta.core.client import Client
 from noeta.core.errors import Fatal
 from noeta.core.events import Recorded, TaskCreated, TaskEnded, ToolFinished
 from noeta.core.extension import Ask, Extension, Gate, TaskView
-from noeta.core.pending import pending_tree
 from noeta.core.runner import Runtime
 from noeta.core.types import Message, ModelRequest, ToolUse, Usage
+from noeta.host.pending import pending_tree
 from noeta.host.usage import tree_usage
 from noeta.plugins.subtasks import SubagentSpec, Subtasks, texts
 from noeta.plugins.subtasks.tool import (

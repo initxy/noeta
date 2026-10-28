@@ -14,7 +14,7 @@ from noeta.core.client import Client
 from noeta.core.commands import expand_command
 from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
 from noeta.core.extension import CommandContext
-from noeta.core.pending import pending
+from noeta.host.pending import pending
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.permissions import plan as pl
 from noeta.testing import ScriptedProvider, reply

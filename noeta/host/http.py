@@ -70,8 +70,8 @@ from noeta.core.commands import list_commands, run_typed
 from noeta.core.errors import UnknownTask
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
-from noeta.core.pending import card_title, choices, pending_tree
 from noeta.core.types import Delta, Message
+from noeta.host.pending import card_title, choices, pending_tree
 from noeta.host.rewind import rewind, rewind_points
 from noeta.host.usage import context_breakdown, tree_usage
 from noeta.toolkit.permission_modes import MODE_SIGNAL
