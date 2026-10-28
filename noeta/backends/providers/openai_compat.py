@@ -221,6 +221,8 @@ class OpenAICompatProvider:
         # The neutral bare-string spelling is already the OpenAI wire shape.
         if request.tool_choice is not None:
             body["tool_choice"] = request.tool_choice
+        if request.stop_sequences:
+            body["stop"] = list(request.stop_sequences)
         if request.max_tokens is not None:
             body[_output_cap_key(self._max_tokens_param, request.model)] = (
                 request.max_tokens

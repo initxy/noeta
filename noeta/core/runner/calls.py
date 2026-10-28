@@ -38,11 +38,13 @@ MAX_REWRITES = 3
 
 async def gate(run: TaskRun, view: TaskView, call: ToolUse) -> Gate:
     """Every extension is asked about this exact call: any deny wins, then
-    the first rewrite, then the first ask. A human's recorded answer denies,
-    or satisfies an ask — never a deny, and never instead of a rewrite."""
+    the first rewrite, then the asks. A human's recorded answer denies, or
+    satisfies the asks — never a deny, and never instead of a rewrite. An
+    approving ``Allow`` satisfies asks that are not firm; otherwise each
+    extension may answer the asks (``resolve_ask``) before the call parks."""
     answer = run.state.answers.get(call.id)
     if answer is not None and answer.decision == "deny":
-        return Deny(reason=texts.DENIED_BY_HUMAN)
+        return Deny(reason=_denied_by_human(answer.data))
     verdicts: list[Gate] = []
     for ext in run.exts:
         try:
@@ -54,13 +56,33 @@ async def gate(run: TaskRun, view: TaskView, call: ToolUse) -> Gate:
             v = None  # a rewrite to the same call is no rewrite
         if v is not None:
             verdicts.append(v)
-    for kind in (Deny, Rewrite, Ask):
+    for kind in (Deny, Rewrite):
         for v in verdicts:
             if isinstance(v, kind):
-                if isinstance(v, Ask) and answer is not None and answer.decision == "allow":
-                    return Allow()
                 return v
-    return Allow()
+    asks = [v for v in verdicts if isinstance(v, Ask)]
+    if not asks or (answer is not None and answer.decision == "allow"):
+        return Allow()
+    if not any(a.firm for a in asks) and any(
+            isinstance(v, Allow) and v.approve for v in verdicts):
+        return Allow()
+    for ext in run.exts:
+        try:
+            resolved = await ext.resolve_ask(view, call, asks)
+        except Exception as exc:  # noqa: BLE001 — a failing resolver denies
+            return Deny(reason=f"permission check failed: {exc}")
+        if isinstance(resolved, (Allow, Deny, Rewrite)):
+            return resolved
+    return asks[0]
+
+
+def _denied_by_human(data: Any) -> str:
+    """A person's refusal, with what they said when they said something
+    (``Answer.data`` ``{"message": ...}`` or a plain string)."""
+    message = data.get("message") if isinstance(data, dict) else data
+    if isinstance(message, str) and message.strip():
+        return f"{texts.DENIED_BY_HUMAN}: {message.strip()}"
+    return texts.DENIED_BY_HUMAN
 
 
 async def resolve(run: TaskRun, view: TaskView, use: ToolUse) -> tuple[ToolUse, Gate]:

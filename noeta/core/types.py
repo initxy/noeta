@@ -140,11 +140,18 @@ class ModelRequest(Struct):
     tools: list[ToolSpec] = msgspec.field(default_factory=list)
     max_tokens: int | None = None
     effort: Effort | None = None
-    thinking: bool = True
+    #: ``True`` asks for the model's reasoning where it has some, ``False``
+    #: switches it off, ``None`` sends nothing (the vendor's default).
+    thinking: bool | None = True
     output_schema: dict[str, Any] | None = None
+    #: Text that ends the reply where the model writes it (not included).
+    stop_sequences: list[str] = msgspec.field(default_factory=list)
     #: Indices into ``messages`` after which the adapter places a cache
     #: breakpoint (the composer decides; adapters that cannot cache ignore it).
     cache_after: list[int] = msgspec.field(default_factory=list)
+    #: ``(message index, block index)`` pairs: a breakpoint after that one
+    #: content block of a message that has several.
+    cache_blocks: list[tuple[int, int]] = msgspec.field(default_factory=list)
     headers: dict[str, str] = msgspec.field(default_factory=dict)
     #: ``"auto"`` / ``"none"`` / ``"any"``; ``None`` sends nothing (the vendor
     #: default). The summarize call sets ``"none"`` so a summarizer cannot
@@ -153,6 +160,12 @@ class ModelRequest(Struct):
     #: The task tree the call serves (its root task's id); an adapter may
     #: send it as the vendor's per-conversation id.
     root_id: str | None = None
+    #: Vendor opt-ins an adapter adds to its own (Anthropic ``anthropic-beta``
+    #: flags); adapters of other vendors ignore them.
+    betas: list[str] = msgspec.field(default_factory=list)
+    #: Top-level body fields for the vendor (Anthropic ``safeguards``);
+    #: adapters of other vendors ignore them.
+    vendor_fields: dict[str, Any] = msgspec.field(default_factory=dict)
 
 
 class Usage(Struct):

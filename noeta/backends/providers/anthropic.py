@@ -156,6 +156,7 @@ class AnthropicProvider:
             headers["anthropic-beta"] = ",".join(betas)
         if extra_headers:
             headers.update(extra_headers)
+        self._betas = headers.get("anthropic-beta", "")
         self._client = httpx.AsyncClient(
             base_url=(base_url or "https://api.anthropic.com").rstrip("/"),
             headers=headers,
@@ -165,6 +166,16 @@ class AnthropicProvider:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    def request_headers(self, request: ModelRequest) -> dict[str, str]:
+        """The per-call headers: the request's own, and the beta header
+        widened by ``request.betas``."""
+        headers = dict(request.headers)
+        if request.betas:
+            have = [b for b in headers.get("anthropic-beta", self._betas).split(",") if b]
+            headers["anthropic-beta"] = ",".join(
+                [*have, *(b for b in request.betas if b not in have)])
+        return headers
 
     async def complete(
         self, request: ModelRequest, on_delta: OnDelta | None = None
@@ -178,7 +189,7 @@ class AnthropicProvider:
                 "POST",
                 _MESSAGES_ENDPOINT,
                 json=body,
-                headers=request.headers or None,
+                headers=self.request_headers(request) or None,
             ) as response:
                 if response.is_error:
                     # An unread streaming response cannot be sniffed for the
@@ -214,11 +225,14 @@ class AnthropicProvider:
         #: ``outbound`` (merging spreads the same dicts), so stamping later
         #: lands on the body.
         last_block: list[dict[str, Any] | None] = []
+        #: Each message's own wire blocks (``cache_blocks`` stamps one).
+        blocks_of: list[list[dict[str, Any]]] = []
         prev_injected = False
         for message in request.messages:
             if message.role == "system" and not self._system_turns:
                 message = Message(role="user", content=message.content, origin="system")
             wire = _message_to_wire(message, vision)
+            blocks_of.append(list(wire["content"]))
             injected = is_host_injected(message)
             previous = last_block[-1] if last_block else None
             if (wire["role"] == "system" and wire["content"] and outbound
@@ -277,8 +291,10 @@ class AnthropicProvider:
         # as ``{"type": ...}``.
         if request.tool_choice is not None:
             body["tool_choice"] = {"type": request.tool_choice}
-        _apply_cache_control(body, request, last_block)
+        _apply_cache_control(body, request, last_block, blocks_of)
         _bare_strings(outbound)
+        if request.stop_sequences:
+            body["stop_sequences"] = list(request.stop_sequences)
         body["metadata"] = {"user_id": user_id(self._device_id, request.root_id)}
         if request.output_schema is not None:
             body["output_config"] = {
@@ -296,6 +312,8 @@ class AnthropicProvider:
         effort = request.effort or (_DEFAULT_EFFORT if adaptive else None)
         if effort is not None:
             body.setdefault("output_config", {})["effort"] = effort
+        for key, value in request.vendor_fields.items():
+            body.setdefault(key, value)
         return body
 
     def _resolve_max_tokens(self, request: ModelRequest) -> int:
@@ -320,12 +338,15 @@ class AnthropicProvider:
 def _thinking_param(request: ModelRequest) -> dict[str, str] | None:
     """``thinking`` → the Messages ``thinking`` parameter.
 
-    ``False`` is an explicit ``{"type": "disabled"}``. ``True`` asks for
-    ``{"type": "adaptive"}`` only on a model catalogued as a reasoning model:
-    on an unknown or non-reasoning model (Haiku 4.5 takes only the older
-    budget form) the parameter is left out and the vendor default applies,
-    which is what every request carried before the field became a bool.
+    ``False`` is an explicit ``{"type": "disabled"}``, ``None`` leaves the
+    parameter out. ``True`` asks for ``{"type": "adaptive"}`` only on a model
+    catalogued as a reasoning model: on an unknown or non-reasoning model
+    (Haiku 4.5 takes only the older budget form) the parameter is left out
+    and the vendor default applies, which is what every request carried
+    before the field became a bool.
     """
+    if request.thinking is None:
+        return None
     if not request.thinking:
         return {"type": "disabled"}
     spec = models.find_spec(request.model)
@@ -348,6 +369,7 @@ def _apply_cache_control(
     body: dict[str, Any],
     request: ModelRequest,
     last_block: list[dict[str, Any] | None],
+    blocks_of: list[list[dict[str, Any]]] | None = None,
 ) -> None:
     """Stamp ephemeral prompt-cache breakpoints onto the wire body.
 
@@ -357,6 +379,7 @@ def _apply_cache_control(
 
     * each ``cache_after`` message index, newest first (the composer names
       the last message, as Claude Code does);
+    * each ``cache_blocks`` block, newest first;
     * each ``SystemPart`` with ``cache=True``, last first.
 
     The tools get no mark of their own: the first system block's covers
@@ -368,6 +391,10 @@ def _apply_cache_control(
             block = last_block[index]
             if block is not None:
                 targets.append(block)
+    for mi, bi in sorted(set(request.cache_blocks), reverse=True):
+        if blocks_of is not None and 0 <= mi < len(blocks_of) and \
+                0 <= bi < len(blocks_of[mi]):
+            targets.append(blocks_of[mi][bi])
     system = body.get("system")
     if isinstance(system, list):
         rendered = iter(system)

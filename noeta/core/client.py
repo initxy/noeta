@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 from typing import Any, Literal, Union
 
 from noeta.core.errors import UnknownTask
-from noeta.core.events import Answer, Cancel, Recorded, Say, TaskCreated
+from noeta.core.events import Answer, Cancel, External, Recorded, Say, TaskCreated
 from noeta.core.store import NewTask, Post, Status, Store, TaskRow
 from noeta.core.types import Message, user
 
@@ -80,6 +80,15 @@ class Client:
             body=Answer(request_id=request_id, decision=decision, always=always, data=data),
             dedupe_key=f"answer:{request_id}",
         ))
+        return seq
+
+    async def signal(self, task_id: str, name: str, data: Any = None, *,
+                     dedupe_key: str | None = None) -> int:
+        """Post a named signal (``External``) a plugin of the task reads, such
+        as the permissions plugin's ``permission_mode``; returns its inbox
+        seq. It opens no turn."""
+        seq, _ = await self.store.post(Post(task_id=task_id, body=External(name=name, data=data),
+                                            dedupe_key=dedupe_key))
         return seq
 
     async def cancel(self, task_id: str, reason: str = "", *, turn_only: bool = False) -> None:

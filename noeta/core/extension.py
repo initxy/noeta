@@ -28,7 +28,11 @@ log = logging.getLogger("noeta.plugins")
 
 
 class Allow(Struct, tag="allow", tag_field="gate"):
-    pass
+    """No objection. With ``approve`` the extension also vouches for the
+    call (a PreToolUse hook that allows it): other extensions' asks are
+    satisfied, except a ``firm`` one; a deny still wins."""
+
+    approve: bool = False
 
 
 class Deny(Struct, tag="deny", tag_field="gate"):
@@ -37,10 +41,13 @@ class Deny(Struct, tag="deny", tag_field="gate"):
 
 class Ask(Struct, tag="ask", tag_field="gate"):
     """Park the call until someone answers. ``prompt`` is what a front end
-    shows; ``options`` lets an extension offer more than yes/no."""
+    shows; ``detail`` rides along to it. A ``firm`` ask (an ask rule, a
+    hook asking) is not satisfied by another extension's approving
+    ``Allow``; it still reaches ``resolve_ask``, whose resolvers decide."""
 
     prompt: str = ""
     detail: dict[str, Any] = {}
+    firm: bool = False
 
 
 class Rewrite(Struct, tag="rewrite", tag_field="gate"):
@@ -263,6 +270,16 @@ class Extension:
         """``None`` = no opinion. Every extension is asked; any ``Deny`` wins.
         A ``Rewrite`` comes next (the rewritten call is then checked again, so
         an approval is asked about the real call), then the first ``Ask``."""
+        return None
+
+    async def resolve_ask(self, view: TaskView, call: ToolUse,
+                          asks: Sequence[Ask]) -> Gate | None:
+        """The call is about to park on ``asks`` (nobody denied it). Return
+        ``Allow`` or ``Deny`` to answer in a person's place (a classifier, a
+        PermissionRequest hook, an approval callback), a ``Rewrite`` to run
+        it with other input (gated again), or ``None``. Asked in extension
+        order; the first answer wins. A call can be gated again (after a
+        restart), so an answer that cost something is recorded and reused."""
         return None
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:

@@ -62,6 +62,12 @@ class RemoteClient:
             "request_id": request_id, "decision": decision, "always": always, "data": data})
         return int(got.get("inbox_seq", 0))
 
+    async def signal(self, task_id: str, name: str, data: Any = None, *,
+                     dedupe_key: str | None = None) -> int:
+        got = await self._call("POST", f"/tasks/{task_id}/signals", json={
+            "name": name, "data": data, "dedupe_key": dedupe_key})
+        return int(got.get("inbox_seq", 0))
+
     async def cancel(self, task_id: str, reason: str = "", *, turn_only: bool = False) -> None:
         await self._call("POST", f"/tasks/{task_id}/cancel",
                          json={"reason": reason, "turn_only": turn_only})

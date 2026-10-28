@@ -552,3 +552,26 @@ async def test_cache_control_never_mutates_the_request() -> None:
     provider = _provider()
     assert provider.build_body(request) == provider.build_body(request)
 
+
+@respx.mock
+async def test_side_request_knobs_reach_the_wire() -> None:
+    """Stop sequences, per-block breakpoints, extra betas and vendor fields
+    (what the auto-mode classifier and the first auto-mode request use);
+    ``thinking=None`` sends no thinking parameter."""
+    route = respx.post(MESSAGES_ENDPOINT).mock(return_value=_stream(_resp()))
+    request = _req(
+        messages=[user("ctx"), Message(role="user", content=[Text(text="a"), Text(text="b"),
+                                                             Text(text="c")])],
+        stop_sequences=["</block>"], cache_blocks=[(0, 0), (1, 1)], thinking=None,
+        betas=["afk-mode-2026-01-31"], vendor_fields={"safeguards": [{"type": "x"}]})
+    await _provider(betas=("one",)).complete(request)
+    sent = route.calls.last.request
+    body = json.loads(sent.content)
+    assert body["stop_sequences"] == ["</block>"]
+    assert "thinking" not in body
+    assert body["safeguards"] == [{"type": "x"}]
+    assert sent.headers["anthropic-beta"] == "one,afk-mode-2026-01-31"
+    assert body["messages"][0]["content"][0]["cache_control"] == EPHEMERAL
+    stamped = [b.get("cache_control") for b in body["messages"][1]["content"]]
+    assert stamped == [None, EPHEMERAL, None]
+

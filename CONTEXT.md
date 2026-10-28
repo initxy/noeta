@@ -80,9 +80,10 @@ to an agent without copying its file. The built-in agents keep memory and MCP of
 ## Extension
 
 The one capability-plugin interface (`noeta/core/extension.py`): tools, context parts, commands,
-reminders, `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow),
-`after_tool`, `on_event`, `reduce`, `inherit`, `on_context_overflow`, `resident`,
-`lead_resident`. Every method is optional. Commands (`commands(ctx)` / `run_command`) are slash
+reminders, `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow;
+an approving Allow satisfies asks that are not firm), `resolve_ask` (answers asks before the
+call parks), `after_tool`, `on_event`, `reduce`, `inherit`, `on_context_overflow`,
+`resident`, `lead_resident`. Every method is optional. Commands (`commands(ctx)` / `run_command`) are slash
 commands front ends list and expand through `noeta/core/commands.py`: a template filled with
 `{args}`, or text the plugin returns; a `before_model` that raises `TurnDone` ends the turn
 without a model call (`/compact`). A tool asks the person by parking on `ask(...)`

@@ -11,6 +11,8 @@ events; when this process also runs workers, live model output streams too.
     POST /tasks/{id}/messages         {input, when?, dedupe_key?} — a "/name args" text
                                       runs the task agent's slash command of that name
     POST /tasks/{id}/answers          {request_id, decision?, always?, data?}
+    POST /tasks/{id}/signals          {name, data?, dedupe_key?} — a signal a plugin reads
+                                      (``permission_mode`` {mode}: switch the permission mode)
     POST /tasks/{id}/cancel           {reason?, turn_only?}
 
 A bearer token is required when one is configured (``NOETA_SERVER_TOKEN``).
@@ -120,6 +122,15 @@ def create_app(client: Client, *, token: str | None = None,
                                   data=body.get("data"))
         return _json({"ok": True, "inbox_seq": seq})
 
+    async def signal(request: Request) -> Response:
+        body = await request.json()
+        name = body["name"]
+        if not isinstance(name, str) or not name:
+            raise ValueError("a signal needs a non-empty 'name'")
+        seq = await client.signal(request.path_params["task_id"], name, body.get("data"),
+                                  dedupe_key=body.get("dedupe_key"))
+        return _json({"ok": True, "inbox_seq": seq})
+
     async def cancel(request: Request) -> Response:
         body = await request.json() if await request.body() else {}
         await client.cancel(request.path_params["task_id"], body.get("reason", ""),
@@ -179,6 +190,7 @@ def create_app(client: Client, *, token: str | None = None,
         Route("/tasks/{task_id}/watch", guard(watch), methods=["GET"]),
         Route("/tasks/{task_id}/messages", guard(send), methods=["POST"]),
         Route("/tasks/{task_id}/answers", guard(answer), methods=["POST"]),
+        Route("/tasks/{task_id}/signals", guard(signal), methods=["POST"]),
         Route("/tasks/{task_id}/cancel", guard(cancel), methods=["POST"]),
     ])
 
