@@ -308,7 +308,7 @@ async def test_list_agents_shows_launched_agents(store: SqliteStore) -> None:
 async def test_refusals(store: SqliteStore) -> None:
     probe = Probe()
     p = ScriptedProvider([
-        reply("", agent("  ")),
+        reply("", agent("  "), ("Probe", {}), agent("fine", "scout")),
         reply("", agent("x", model="gpt")),
         reply("", agent("x", "nobody"), ("Probe", {})),
         reply("", agent("x", isolation="remote")),
@@ -319,15 +319,17 @@ async def test_refusals(store: SqliteStore) -> None:
     tid = await client.create("main", "go")
     await rt.run_until_idle()
     out = await results(client, tid)
-    assert out[0] == (texts.NOTHING_RAN.format(reason=texts.EMPTY_PROMPT), True)
-    assert out[1] == (texts.NOTHING_RAN.format(reason=texts.BAD_CHOICE.format(
-        field="model", choices="sonnet, opus, haiku, fable", value="gpt")), True)
+    # A bad Agent call is refused by itself: the reply's other calls run.
+    assert out[0] == (texts.EMPTY_PROMPT, True)
+    assert out[1] == ("seen", False) and out[2][0].startswith("The agent was launched")
+    assert out[3] == (texts.BAD_CHOICE.format(
+        field="model", choices="sonnet, opus, haiku, fable", value="gpt"), True)
     unknown = texts.SPAWN_DENIED.format(reason=texts.UNKNOWN_AGENT.format(
         name="nobody", available="fork, general-purpose, scout"))
-    assert out[2:4] == [(unknown, True), ("seen", False)]
-    assert out[4] == (texts.SPAWN_DENIED.format(reason=texts.NO_REMOTE), True)
-    assert out[5] == (texts.MISSING_FIELDS, True)
-    assert await client.tasks(parent_id=tid) == []
+    assert out[4:6] == [(unknown, True), ("seen", False)]
+    assert out[6] == (texts.SPAWN_DENIED.format(reason=texts.NO_REMOTE), True)
+    assert out[7] == (texts.MISSING_FIELDS, True)
+    assert len(await client.tasks(parent_id=tid)) == 1
 
 
 async def test_depth_cap_and_fan_out(store: SqliteStore) -> None:
@@ -340,7 +342,7 @@ async def test_depth_cap_and_fan_out(store: SqliteStore) -> None:
     tid = await client.create("main", "go", config={"subtask_depth": 3})
     await rt.run_until_idle()
     [(depth, _)] = await results(client, tid)
-    assert depth == texts.SPAWN_DENIED.format(reason=texts.DEPTH_REACHED.format(n=3))
+    assert depth == texts.SPAWN_DENIED.format(reason=texts.DEPTH_REACHED.format(depth=3, n=3))
     tid = await client.create("main", "go")
     await rt.run_until_idle()
     await client.send(tid, "more")

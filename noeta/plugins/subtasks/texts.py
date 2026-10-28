@@ -70,25 +70,24 @@ SEND_NOTIFY_PROP = (
 LIST_FILTER_PROP = "Not available here; leave it out."
 
 # Refusals.
-NOTHING_RAN = "Nothing in this response ran: {reason}"
 EMPTY_PROMPT = "'prompt' is empty. Re-issue the call with the task the agent should carry out."
 MISSING_FIELDS = (
-    "Nothing in this response ran: every Agent call needs string 'description' and 'prompt' "
-    "arguments. Re-issue them with both set."
+    "An Agent call needs string 'description' and 'prompt' arguments. Re-issue it with both "
+    "set."
 )
 BAD_CHOICE = "'{field}' must be one of {choices}, got {value!r}."
 EXCLUSIVE = (
     "Nothing in this response ran: Agent cannot share a response with {name}. Re-issue the "
     "other calls in a separate response."
 )
-SPAWN_DENIED = (
-    "No agent was started: {reason}. None of this response's Agent calls ran; use one of the "
-    "available agent types, or do the work yourself."
+SPAWN_DENIED = "No agent was started: {reason}"
+UNKNOWN_AGENT = "there is no agent type {name!r}. Available agent types: {available}."
+DEPTH_REACHED = (
+    "agents may nest only {n} levels deep, and this one is at depth {depth}. Do this task "
+    "yourself with your own tools instead of starting another agent."
 )
-UNKNOWN_AGENT = "there is no agent type {name!r} (available: {available})"
-DEPTH_REACHED = "agents may nest only {n} levels deep"
-FORK_IN_FORK = "a fork cannot start another fork"
-NO_REMOTE = "remote isolation is not available here; leave 'isolation' out or use \"worktree\""
+FORK_IN_FORK = "a fork cannot start another fork."
+NO_REMOTE = "remote isolation is not available here; leave 'isolation' out or use \"worktree\"."
 MAX_FANOUT = 16
 FANOUT_TOO_BIG = (
     "{n} Agent calls in one response is over the limit of {limit}. None were started; "

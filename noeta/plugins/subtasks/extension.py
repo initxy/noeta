@@ -41,6 +41,7 @@ from noeta.plugins.subtasks.tool import (
     ListAgentsTool,
     SendMessageTool,
     batch_refusal,
+    call_refusal,
     handback_sender,
     transcript_file,
 )
@@ -221,15 +222,19 @@ class Subtasks(Extension):
         return out
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
-        """``Task`` is the old name of ``Agent``; checks that look at the
-        whole reply refuse a bad batch before any of it runs."""
+        """``Task`` is the old name of ``Agent``; a bad Agent call is refused
+        by itself, and limits on the whole reply before any of it runs."""
         roster = self.roster_for(view)
         if not roster:
             return None
         if call.name == texts.LEGACY_AGENT_TOOL:
             return Rewrite(name=texts.AGENT_TOOL, input=call.input)
+        if call.name in DELEGATION_TOOLS:
+            refused = call_refusal(self, view.state, call, roster)
+            if refused is not None:
+                return Deny(reason=refused)
         calls = [c.use for c in view.state.calls] or [call]
-        refusal = batch_refusal(self, view.state, calls, roster)
+        refusal = batch_refusal(self, view.state, calls)
         if refusal is None:
             return None
         text, every_call = refusal

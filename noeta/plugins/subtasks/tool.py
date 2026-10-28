@@ -106,47 +106,49 @@ def argument_refusal(args: Mapping[str, Any]) -> str | None:
     return None
 
 
-def batch_refusal(
-    ext: Subtasks, state: TaskState, calls: Sequence[ToolUse],
-    roster: Mapping[str, SubagentSpec],
-) -> tuple[str, bool] | None:
-    """Why this reply's Agent calls may not run: ``(text, every_call)``. With
-    ``every_call`` the text answers every call of the reply (nothing ran);
-    otherwise only the Agent calls (the ordinary calls still run)."""
+def call_refusal(ext: Subtasks, state: TaskState, call: ToolUse,
+                 roster: Mapping[str, SubagentSpec]) -> str | None:
+    """Why this one Agent call may not start its agent; the reply's other
+    calls are not affected (Claude Code answers each call by itself)."""
+    args = call.input
+    if not isinstance(args.get("prompt"), str) or not isinstance(args.get("description", ""), str):
+        return texts.MISSING_FIELDS
+    refusal = argument_refusal(args)
+    if refusal is not None:
+        return refusal
+    name = agent_type(args)
+    reason = None
+    if name == texts.FORK_TYPE:
+        if state.config.get(FORK_KEY):
+            reason = texts.FORK_IN_FORK
+    elif name not in roster:
+        available = ", ".join(sorted([*roster, texts.FORK_TYPE]))
+        reason = texts.UNKNOWN_AGENT.format(name=name, available=available)
+    if reason is None and args.get("isolation") == "remote":
+        reason = texts.NO_REMOTE
+    depth = int(state.config.get(DEPTH_KEY) or 0)
+    if reason is None and ext.max_depth is not None and depth >= ext.max_depth:
+        reason = texts.DEPTH_REACHED.format(depth=depth, n=ext.max_depth)
+    return texts.SPAWN_DENIED.format(reason=reason) if reason is not None else None
+
+
+def batch_refusal(ext: Subtasks, state: TaskState, calls: Sequence[ToolUse]
+                  ) -> tuple[str, bool] | None:
+    """Limits on this reply's Agent calls taken together: ``(text,
+    every_call)``. With ``every_call`` the text answers every call of the
+    reply (nothing ran); otherwise only the Agent calls (the ordinary calls
+    still run)."""
     agents = [u for u in calls if u.name in DELEGATION_TOOLS]
     if not agents:
         return None
     for u in calls:
         if u.name in ext.exclusive_with:
             return texts.EXCLUSIVE.format(name=u.name), True
-    for u in agents:
-        if not isinstance(u.input.get("prompt"), str) \
-                or not isinstance(u.input.get("description", ""), str):
-            return texts.MISSING_FIELDS, True
-        refusal = argument_refusal(u.input)
-        if refusal is not None:
-            return texts.NOTHING_RAN.format(reason=refusal), True
     n = len(agents)
     if n > ext.max_fanout:
         return texts.FANOUT_TOO_BIG.format(n=n, limit=ext.max_fanout), False
     if len({u.id for u in agents}) != n:
         return texts.DUPLICATE_CALL_ID, False
-    depth = int(state.config.get(DEPTH_KEY) or 0)
-    for u in agents:
-        name = agent_type(u.input)
-        reason = None
-        if name == texts.FORK_TYPE:
-            if state.config.get(FORK_KEY):
-                reason = texts.FORK_IN_FORK
-        elif name not in roster:
-            available = ", ".join(sorted([*roster, texts.FORK_TYPE]))
-            reason = texts.UNKNOWN_AGENT.format(name=name, available=available)
-        if reason is None and u.input.get("isolation") == "remote":
-            reason = texts.NO_REMOTE
-        if reason is None and ext.max_depth is not None and depth >= ext.max_depth:
-            reason = texts.DEPTH_REACHED.format(n=ext.max_depth)
-        if reason is not None:
-            return texts.SPAWN_DENIED.format(reason=reason), False
     running = len(ext.running(state))
     if running + n > ext.max_background:
         return texts.TOO_MANY_BACKGROUND.format(limit=ext.max_background), False
@@ -203,11 +205,11 @@ class AgentTool:
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         ext, state = self._ext, self._state
-        refusal = batch_refusal(ext, state, [c.use for c in state.calls]
-                                or [ToolUse(id=ctx.call_id, name=self.name, input=input)],
-                                self._roster)
+        use = ToolUse(id=ctx.call_id, name=self.name, input=input)
+        batch = batch_refusal(ext, state, [c.use for c in state.calls] or [use])
+        refusal = call_refusal(ext, state, use, self._roster) or (batch[0] if batch else None)
         if refusal is not None:  # normally denied at the gate already
-            return text_output(refusal[0], is_error=True)
+            return text_output(refusal, is_error=True)
         assert ctx.spawn is not None
         kind = agent_type(input)
         prompt = str(input["prompt"])
