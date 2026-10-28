@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from noeta.plugins.skills.registry import substitute_arguments
+from noeta.plugins.skills.registry import argument_names, substitute_arguments
 
 
 @pytest.mark.parametrize(("body", "args", "out"), [
@@ -23,3 +23,24 @@ from noeta.plugins.skills.registry import substitute_arguments
 ])
 def test_substitute_arguments(body: str, args: str | None, out: str) -> None:
     assert substitute_arguments(body, args) == out
+
+
+@pytest.mark.parametrize(("body", "names", "args", "out"), [
+    ("Ship $env to $region.", ("env", "region"), "prod eu", "Ship prod to eu."),
+    ("Missing [$region].", ("env", "region"), "prod", "Missing []."),
+    ("$filename vs $file", ("file", "filename"), "a b", "b vs a"),
+    (r"Literal \$env, real $env.", ("env",), "x", "Literal $env, real x."),
+    ("Not a name: $envx $env[0]", ("env",), "x", "Not a name: $envx $env[0]\nARGUMENTS: x"),
+])
+def test_named_arguments(body: str, names: tuple[str, ...], args: str, out: str) -> None:
+    assert substitute_arguments(body, args, names) == out
+
+
+@pytest.mark.parametrize(("raw", "names"), [
+    ("[env, region]", ("env", "region")),
+    ("env region", ("env", "region")),
+    ("- env\n- '2'\n- region", ("env", "region")),
+    (None, ()),
+])
+def test_argument_names(raw: str | None, names: tuple[str, ...]) -> None:
+    assert argument_names(raw) == names

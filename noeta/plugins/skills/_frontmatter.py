@@ -40,6 +40,7 @@ KNOWN_KEYS: frozenset[str] = frozenset(
         "priority",
         "disable-model-invocation",
         "when_to_use",
+        "arguments",
     }
 )
 

@@ -353,3 +353,11 @@ async def test_when_to_use_follows_the_description_in_the_listing(h: Harness) ->
     await h.start(agent())
     assert h.provider.requests[0].messages[1].text == (
         f"{ROSTER_HEADER}\n\n- deploy: Ship the app. - Use when the user says ship it.")
+
+
+async def test_named_arguments_fill_a_typed_skill(h: Harness) -> None:
+    write_skill(skills_dir(h), "notes", "Release notes.", body="Notes for $tag.\n",
+                arguments="[tag]")
+    h.provider.add(reply("ok"))
+    await h.start(agent(), "/notes v0.3")
+    assert h.provider.requests[0].messages[-2].text.endswith("Notes for v0.3.\n")
