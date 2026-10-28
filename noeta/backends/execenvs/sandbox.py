@@ -25,7 +25,7 @@ namespaces — :meth:`LocalSandbox.unavailable` says why.
 
 from __future__ import annotations
 
-import contextlib
+import atexit
 import glob
 import os
 import shutil
@@ -292,8 +292,7 @@ class LocalSandbox:
 
     def _base_dir(self) -> str:
         if self._base is None or not os.path.isdir(self._base):
-            self._base = tempfile.mkdtemp(prefix="noeta-sandbox-")
-            os.makedirs(os.path.join(self._base, "tmp"), mode=0o700, exist_ok=True)
+            self._base = _process_base()
         return self._base
 
     def tmpdir(self) -> str:
@@ -352,8 +351,17 @@ class LocalSandbox:
         prepared.env.update(_proxy_env(f"http://127.0.0.1:{http_port}",
                                        f"socks5h://127.0.0.1:{socks_port}"))
 
-    def cleanup(self) -> None:
-        if self._base is not None:
-            with contextlib.suppress(OSError):
-                shutil.rmtree(self._base, ignore_errors=True)
-            self._base = None
+
+
+_BASE: str | None = None
+
+
+def _process_base() -> str:
+    """This process's sandbox directory (the shared ``$TMPDIR`` and the
+    per-command proxy sockets), removed when the process exits."""
+    global _BASE
+    if _BASE is None or not os.path.isdir(_BASE):
+        _BASE = tempfile.mkdtemp(prefix="noeta-sandbox-")
+        os.makedirs(os.path.join(_BASE, "tmp"), mode=0o700, exist_ok=True)
+        atexit.register(shutil.rmtree, _BASE, True)
+    return _BASE
