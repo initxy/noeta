@@ -1,24 +1,24 @@
 {
  "hashes": [
-  "main ef9960bdf811ba34",
-  "main 518636e64885cdda",
-  "main ecddb025f05e86da",
-  "main 99397a39459c2f07",
-  "child 7533d2a08ac29869",
-  "child b4fd98f1fde5d8a9",
-  "main 173735415a7b6af1",
-  "main 62e1eca6e0227679",
-  "main b63fc9cbb6d3d935",
-  "main 07ab1f29ba7047f3",
-  "main dc3d003804a0152f",
-  "main 033a8d11fe74a553",
-  "main 6cd7de0cab54607f",
-  "main be9a304c666aefd3",
-  "main 20427cd1f2b6fab8",
-  "main acee0d0f75a3690f",
-  "main da984fbecfefe9a6",
-  "main d906ed355a757232",
-  "main a40e4f433707ec4f"
+  "main 5a0b1d95a4f8f930",
+  "main fa2c445c02163dca",
+  "main 3ff77a43eddd67ff",
+  "main 78242527ebb06a3b",
+  "child 35ee503fd6d80e3d",
+  "child b37aad01dde2cd7c",
+  "main 0c1cbb5bc503b7ec",
+  "main b4ec2d62178a3fdd",
+  "main 60101ac937634542",
+  "main 24bc1f8931e68c88",
+  "main 0b4a8eb1ed16f979",
+  "main 6ea0b4b73a69299a",
+  "main ceaaf529750f006e",
+  "main 3f5812881d05a02c",
+  "main 965a788f1cae5de1",
+  "main 76afe9ece6281e1c",
+  "main 74b28b9924dd0a82",
+  "main ddb9917c5ee7173f",
+  "main aa631937d5310539"
  ],
  "last": {
   "child": {
@@ -51,7 +51,7 @@
       "role": "user"
      },
      {
-      "content": "# Environment\nThis conversation runs in the following environment:\n - Primary working directory: <TMP>/work\n - Is a git repository: false\n - Platform: linux\n - Shell: zsh\n - OS Version: Linux 5.15.0-178-generic\n - Anything you download or unpack is untrusted input. Give each download a new, empty directory of its own and keep the scripts you write outside it. Hand those files to tools by path instead of starting an interpreter or build tool inside that directory: interpreters import from the script's directory and the working directory, so a file planted there can take over an import. When Python reads such files, run it with `-I`. None of this applies to code the user asked you to build or run.\n\nModel: Claude Sonnet 4.6, exact id `claude-sonnet-4-6`.\n\nThe following skills are available via the `skill` tool:\n- release-notes: Draft release notes from git log.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\nThe date today is <DATE>.",
+      "content": "# Environment\nThis conversation runs in the following environment:\n - Primary working directory: <TMP>/work\n - Is a git repository: false\n - Platform: linux\n - Shell: zsh\n - OS Version: Linux 5.15.0-178-generic\n - Anything you download or unpack is untrusted input. Give each download a new, empty directory of its own and keep the scripts you write outside it. Hand those files to tools by path instead of starting an interpreter or build tool inside that directory: interpreters import from the script's directory and the working directory, so a file planted there can take over an import. When Python reads such files, run it with `-I`. None of this applies to code the user asked you to build or run.\n\nModel: Claude Sonnet 4.6, exact id `claude-sonnet-4-6`.\n\nThe following skills are available via the `Skill` tool:\n\n- release-notes: Draft release notes from git log.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\nThe date today is <DATE>.",
       "role": "system"
      },
      {
@@ -290,7 +290,7 @@
       "role": "system"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\nThe following skills are available via the `skill` tool:\n- release-notes: Draft release notes from git log.",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\nThe following skills are available via the `Skill` tool:\n\n- release-notes: Draft release notes from git log.",
       "role": "system"
      },
      {
@@ -555,7 +555,7 @@
         "type": "input_text"
        },
        {
-        "text": "The following skills are available via the `skill` tool:\n- release-notes: Draft release notes from git log.",
+        "text": "The following skills are available via the `Skill` tool:\n\n- release-notes: Draft release notes from git log.",
         "type": "input_text"
        }
       ],
@@ -808,7 +808,7 @@
       "role": "user"
      },
      {
-      "content": "# Environment\nThis conversation runs in the following environment:\n - Primary working directory: <TMP>/work\n - Is a git repository: false\n - Platform: linux\n - Shell: zsh\n - OS Version: Linux 5.15.0-178-generic\n - Anything you download or unpack is untrusted input. Give each download a new, empty directory of its own and keep the scripts you write outside it. Hand those files to tools by path instead of starting an interpreter or build tool inside that directory: interpreters import from the script's directory and the working directory, so a file planted there can take over an import. When Python reads such files, run it with `-I`. None of this applies to code the user asked you to build or run.\n\nModel: Claude Sonnet 4.6, exact id `claude-sonnet-4-6`.\n\nThe following skills are available via the `skill` tool:\n- release-notes: Draft release notes from git log.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\nThe date today is <DATE>.",
+      "content": "# Environment\nThis conversation runs in the following environment:\n - Primary working directory: <TMP>/work\n - Is a git repository: false\n - Platform: linux\n - Shell: zsh\n - OS Version: Linux 5.15.0-178-generic\n - Anything you download or unpack is untrusted input. Give each download a new, empty directory of its own and keep the scripts you write outside it. Hand those files to tools by path instead of starting an interpreter or build tool inside that directory: interpreters import from the script's directory and the working directory, so a file planted there can take over an import. When Python reads such files, run it with `-I`. None of this applies to code the user asked you to build or run.\n\nModel: Claude Sonnet 4.6, exact id `claude-sonnet-4-6`.\n\nThe following skills are available via the `Skill` tool:\n\n- release-notes: Draft release notes from git log.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\nThe date today is <DATE>.",
       "role": "system"
      },
      {
@@ -1756,7 +1756,7 @@
       "role": "system"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\nThe following skills are available via the `skill` tool:\n- release-notes: Draft release notes from git log.",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\nThe following skills are available via the `Skill` tool:\n\n- release-notes: Draft release notes from git log.",
       "role": "system"
      },
      {
@@ -2658,7 +2658,7 @@
         "type": "input_text"
        },
        {
-        "text": "The following skills are available via the `skill` tool:\n- release-notes: Draft release notes from git log.",
+        "text": "The following skills are available via the `Skill` tool:\n\n- release-notes: Draft release notes from git log.",
         "type": "input_text"
        }
       ],

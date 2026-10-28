@@ -49,8 +49,8 @@ _SHORT_MARKER = "…"
 #: after a full-width sentence mark (CJK prose puts no space after them).
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s|(?<=[。！？；])")  # noqa: RUF001
 
-ROSTER_HEADER = "The following skills are available via the `skill` tool:"
-ADDED_HEADER = "New skills are available via the `skill` tool:"
+ROSTER_HEADER = "The following skills are available via the `Skill` tool:"
+ADDED_HEADER = "New skills are available via the `Skill` tool:"
 
 
 def _clip_to_tokens(text: str, max_tokens: int, marker: str) -> str:
@@ -154,10 +154,12 @@ def fit_menu_to_budget(
 def listing_lines(
     registry: SkillRegistry, *, budget_tokens: int, rank: Mapping[str, float] | None = None
 ) -> tuple[tuple[str, str], ...]:
-    """The roster as name-sorted ``(name, line)`` pairs fitted to the
-    budget. Skills with ``disable-model-invocation`` are left out."""
+    """The roster as ``(name, line)`` pairs fitted to the budget, the
+    narrowest scope first (the workspace's, then the user's, then the rest,
+    as Claude Code lists them), by name within one. Skills with
+    ``disable-model-invocation`` are left out."""
     entries: list[tuple[str, str]] = []
-    for name in registry.model_invocable():
+    for name in sorted(registry.model_invocable(), key=lambda n: (-registry.tier_of(n), n)):
         desc = registry.get(name)
         if desc is not None:
             entries.append((name, _menu_description(desc.description)))
@@ -178,5 +180,6 @@ def listing_lines(
 
 
 def render_listing(first: bool, lines: Sequence[str]) -> str:
-    """The text of one recorded listing: a header, then one line per skill."""
-    return "\n".join((ROSTER_HEADER if first else ADDED_HEADER, *lines))
+    """The text of one recorded listing: a header, a blank line, then one
+    line per skill."""
+    return "\n".join((ROSTER_HEADER if first else ADDED_HEADER, "", *lines))
