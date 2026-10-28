@@ -41,7 +41,7 @@ from noeta.core.loop.state import CORE, TaskState, apply, continued, fold
 from noeta.core.prompts import load_overrides
 from noeta.core.runner import texts
 from noeta.core.runner.runtime import Runtime
-from noeta.core.store import Claim, Patch, Post
+from noeta.core.store import Claim, NewTask, Patch, Post
 from noeta.core.tool import Tool
 from noeta.core.types import Text, ToolResult, user
 
@@ -300,8 +300,10 @@ class TaskRun:
     async def flush(self, view: TaskView) -> None:
         if view.pending or view.creates:
             events, view.pending = list(view.pending), []
-            creates, view.creates = list(view.creates), []
-            await self.append(events, creates=creates)
+            staged, view.creates = list(view.creates), []
+            await self.append(events, creates=[
+                NewTask(task_id=c.task_id, created=c.created, queue=c.queue, inbox=[c.first])
+                for c in staged])
 
     def tools(self, view: TaskView) -> list[Tool]:
         allowed = self.agent.allowed_tools if self.agent is not None else None

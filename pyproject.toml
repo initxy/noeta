@@ -42,6 +42,7 @@ structured_output = "noeta.plugins.structured:StructuredOutput"
 title = "noeta.plugins.title:Title"
 subtasks = "noeta.plugins.subtasks:Subtasks"
 web = "noeta.plugins.web:Web"
+workflow = "noeta.plugins.workflow:Orchestration"
 
 [project.entry-points."noeta.providers"]
 anthropic = "noeta.backends.providers:anthropic_provider"

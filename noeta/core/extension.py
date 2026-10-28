@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 from noeta.core.deferred import deferred_names
 from noeta.core.events import Compacted, Event, ExtensionRecorded, Recorded, Say, TaskCreated
 from noeta.core.execenv import ExecEnv
-from noeta.core.store import NewTask
 from noeta.core.tool import Tool, ToolOutput, notice_data
 from noeta.core.types import Message, ModelRequest, ModelResponse, Struct, ToolUse, user
 
@@ -105,6 +104,15 @@ class CommandContext:
     task_id: str | None = None
 
 
+class StagedChild(Struct):
+    """A child task ``TaskView.spawn`` staged; the runner creates it."""
+
+    task_id: str
+    created: TaskCreated
+    queue: str
+    first: Say
+
+
 @dataclass
 class TaskView:
     """What an extension sees: the folded task state (read only) and a way to
@@ -123,7 +131,7 @@ class TaskView:
     post: Callable[..., Awaitable[None]] | None = None
     pending: list[Event] = field(default_factory=list)
     #: Child tasks staged by ``spawn``, created with ``pending``.
-    creates: list[NewTask] = field(default_factory=list)
+    creates: list[StagedChild] = field(default_factory=list)
     #: ``await count_tokens(text)``: the provider's exact token count of one
     #: user message holding ``text`` (``None`` when it cannot count).
     count_tokens: Callable[[str], Awaitable[int | None]] | None = None
@@ -186,11 +194,11 @@ class TaskView:
         child_config = dict(config or {})
         for ext in self.extensions:
             child_config.update(ext.inherit(self.state))
-        self.creates.append(NewTask(
+        self.creates.append(StagedChild(
             task_id=child_id,
             created=TaskCreated(agent=agent, config=child_config, parent_id=self.task_id,
                                 root_id=self.state.root_id or self.task_id),
-            queue=queue, inbox=[Say(message=message)]))
+            queue=queue, first=Say(message=message)))
         self.record("core", "spawned", {"children": [
             {"id": child_id, "call_id": "", "background": True}]})
         return child_id

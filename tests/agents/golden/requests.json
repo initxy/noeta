@@ -1,24 +1,24 @@
 {
  "hashes": [
   "main 15ed555a4b46c3f1",
-  "main 980258c798604500",
-  "main 8522929346601818",
-  "main b85ab3ebea07f1ac",
+  "main 63bf3e9b5c881322",
+  "main a9c069490512d95e",
+  "main 1d88ee32b960a8d5",
   "child 7533d2a08ac29869",
   "child b4fd98f1fde5d8a9",
-  "main 080eb7eef33c87fc",
-  "main 1de1edecfac9f281",
-  "main 8daee958b2ceee65",
-  "main c3bd2f55fbf73d4f",
-  "main a10283e9faa5406b",
-  "main 7634943d399446de",
-  "main 84ccdb53b030a65e",
-  "main 4243a56f3c65bd7d",
-  "main 9ff404ecb6b96f08",
-  "main 069ee1b38b89068d",
-  "main c67f8afebb74a7f6",
-  "main 93d3a4a71c1145bc",
-  "main 636d983bfe08c804"
+  "main c5233cb0df98a661",
+  "main a25fd963cb6ff60d",
+  "main 8647c02c40d3a713",
+  "main b354dd02bf539b15",
+  "main ae4bf6d38539cd76",
+  "main a68b448c6bef1678",
+  "main 013f0df4daafc9c0",
+  "main ac45be9a8c8acfd5",
+  "main 900894555b98d317",
+  "main d7011b7cad3f9fce",
+  "main 2bba6b0ccd8f4a27",
+  "main e46d99b26101c2a6",
+  "main fab379238b307162"
  ],
  "last": {
   "child": {
@@ -1743,6 +1743,46 @@
       "name": "ToolSearch"
      },
      {
+      "description": "Run a workflow script that drives many sub-agents in a fixed, scripted way. A workflow runs in the background: this tool returns a run id at once, and a <task-notification> arrives when the workflow finishes. Progress shows to the user as it runs.\n\nCall it ONLY after the user has opted into multi-agent orchestration explicitly: a workflow can start dozens of agents and spend a great many tokens, and the user has to ask for that scale, not have it inferred. Opting in is one of:\n- The user's prompt contains the word \"ultracode\" (a system reminder confirms it).\n- Ultracode is on for this session (a system reminder confirms it).\n- The user asked, in their own words, for a workflow or for orchestrated agents (\"use a workflow\", \"run a workflow\", \"fan out agents\", \"orchestrate this with subagents\"). A task that would merely benefit from one does not count.\n- A skill or slash command the user invoked tells you to call Workflow.\n- The user asked for a specific named or saved workflow.\n\nFor anything else, even clearly parallel work, do NOT call this tool: use the Agent tool for single sub-agents, or describe briefly what a workflow would do and roughly what it would cost, and ask whether to run it. Mention that they can say \"use a workflow\" next time to skip the question.\n\nSize: the setting is \"medium\", so keep a workflow under 10 agents. It is a guideline; the user's own request may ask for more.\n\nEvery script starts with `export const meta = {...}`, a PURE LITERAL (no variables, calls, spreads or interpolation) holding the workflow's `name`, a one-line `description` (shown when the user is asked to approve the run) and optionally `phases`: one `{ title, detail? }` per phase() call, with titles that match exactly. Pass the script inline in `script`; do not write it to a file first, and do not also set `name` (that picks a saved workflow). It is plain JavaScript, not TypeScript.\n\nScript API:\n- `agent(prompt, opts?)` starts a sub-agent and resolves to its final text, or, with `opts.schema` (a JSON Schema whose root is `{type: 'object', properties: {...}}`), to the parsed object. It resolves to null when the agent fails, so filter with `.filter(Boolean)`. `opts`: `label`, `phase` (its progress group), `model`, `effort` ('low' to 'max'), `agentType` (an agent type the Agent tool lists).\n- `pipeline(items, stage1, stage2, ...)` runs each item through all stages on its own, with no barrier between stages; each stage gets `(previousResult, item, index)`. A stage that throws turns that item into null. Use it by default for multi-stage work.\n- `parallel(thunks)` runs `() => Promise` functions together and waits for all of them (a barrier); a thunk that throws gives null. Use it only when a stage needs every earlier result at once (dedupe, an early exit on zero).\n- `phase(title)` starts a progress group; `log(message)` shows the user a progress line; `args` is the tool's `args` input as given.\n- At most 16 agents run at once (the rest queue) and 1000 in one run. `Date.now()`, `Math.random()` and `new Date()` without arguments throw (they would break resume); there is no file system or Node.js API. Sub-agents are told their final text is the return value.\n\nThe usual shape is a pipeline, where each item's next stage starts as soon as its own previous stage is done:\n\n  export const meta = {\n    name: 'review-changes',\n    description: 'Review the changed files along several dimensions and verify each finding',\n    phases: [{ title: 'Review' }, { title: 'Verify' }],\n  }\n  const DIMENSIONS = [{key: 'bugs', prompt: '...'}, {key: 'perf', prompt: '...'}]\n  const results = await pipeline(\n    DIMENSIONS,\n    d => agent(d.prompt, {label: `review:${d.key}`, phase: 'Review', schema: FINDINGS_SCHEMA}),\n    review => parallel(review.findings.map(f => () =>\n      agent(`Try to refute: ${f.title}`, {label: `verify:${f.file}`, phase: 'Verify', schema: VERDICT_SCHEMA})\n        .then(v => ({...f, verdict: v})))),\n  )\n  return { confirmed: results.flat().filter(Boolean).filter(f => f.verdict?.isReal) }\n\nHere the findings of 'bugs' are verified while 'perf' is still being reviewed.\n\nEach run saves its script to a file and the result gives the path: to change a workflow, edit that file and call Workflow with `scriptPath`. `resumeFromRunId` reruns with the finished results of an earlier run of this task: agent() calls whose prompt and options are unchanged return their earlier result, and only new or edited calls run.",
+      "input_schema": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "additionalProperties": false,
+       "properties": {
+        "args": {
+         "description": "Any value; the script reads it as the global `args`, unchanged. Pass lists and objects as JSON values (`args: [\"a.ts\", \"b.ts\"]`), never as a string of JSON: a string reaches the script as one string, so `args.map` fails. Use it to give a saved workflow its input, such as a question or a path."
+        },
+        "description": {
+         "description": "Ignored: the description lives in the script's `meta`.",
+         "type": "string"
+        },
+        "name": {
+         "description": "The name of a saved workflow (in .claude/workflows/ or .noeta/workflows/ as <name>.js), which supplies the script.",
+         "type": "string"
+        },
+        "resumeFromRunId": {
+         "description": "An earlier run of this task to resume: agent() calls whose prompt and options did not change return that run's results, and only edited or new calls run. The earlier run must have ended.",
+         "pattern": "^wf_[a-z0-9-]{6,}$",
+         "type": "string"
+        },
+        "script": {
+         "description": "The whole workflow script: it starts with `export const meta = { name, description, phases }` (a pure literal, nothing computed), then the body using agent() / parallel() / pipeline() / phase().",
+         "maxLength": 524288,
+         "type": "string"
+        },
+        "scriptPath": {
+         "description": "The path of a script file to run. Every run saves its script and returns the path; edit that file and pass it here instead of resending the script. Wins over `script` and `name`.",
+         "type": "string"
+        },
+        "title": {
+         "description": "Ignored: the title lives in the script's `meta`.",
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "name": "Workflow"
+     },
+     {
       "defer_loading": true,
       "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
       "input_schema": {
@@ -2651,6 +2691,49 @@
          "query",
          "max_results"
         ],
+        "type": "object"
+       }
+      },
+      "type": "function"
+     },
+     {
+      "function": {
+       "description": "Run a workflow script that drives many sub-agents in a fixed, scripted way. A workflow runs in the background: this tool returns a run id at once, and a <task-notification> arrives when the workflow finishes. Progress shows to the user as it runs.\n\nCall it ONLY after the user has opted into multi-agent orchestration explicitly: a workflow can start dozens of agents and spend a great many tokens, and the user has to ask for that scale, not have it inferred. Opting in is one of:\n- The user's prompt contains the word \"ultracode\" (a system reminder confirms it).\n- Ultracode is on for this session (a system reminder confirms it).\n- The user asked, in their own words, for a workflow or for orchestrated agents (\"use a workflow\", \"run a workflow\", \"fan out agents\", \"orchestrate this with subagents\"). A task that would merely benefit from one does not count.\n- A skill or slash command the user invoked tells you to call Workflow.\n- The user asked for a specific named or saved workflow.\n\nFor anything else, even clearly parallel work, do NOT call this tool: use the Agent tool for single sub-agents, or describe briefly what a workflow would do and roughly what it would cost, and ask whether to run it. Mention that they can say \"use a workflow\" next time to skip the question.\n\nSize: the setting is \"medium\", so keep a workflow under 10 agents. It is a guideline; the user's own request may ask for more.\n\nEvery script starts with `export const meta = {...}`, a PURE LITERAL (no variables, calls, spreads or interpolation) holding the workflow's `name`, a one-line `description` (shown when the user is asked to approve the run) and optionally `phases`: one `{ title, detail? }` per phase() call, with titles that match exactly. Pass the script inline in `script`; do not write it to a file first, and do not also set `name` (that picks a saved workflow). It is plain JavaScript, not TypeScript.\n\nScript API:\n- `agent(prompt, opts?)` starts a sub-agent and resolves to its final text, or, with `opts.schema` (a JSON Schema whose root is `{type: 'object', properties: {...}}`), to the parsed object. It resolves to null when the agent fails, so filter with `.filter(Boolean)`. `opts`: `label`, `phase` (its progress group), `model`, `effort` ('low' to 'max'), `agentType` (an agent type the Agent tool lists).\n- `pipeline(items, stage1, stage2, ...)` runs each item through all stages on its own, with no barrier between stages; each stage gets `(previousResult, item, index)`. A stage that throws turns that item into null. Use it by default for multi-stage work.\n- `parallel(thunks)` runs `() => Promise` functions together and waits for all of them (a barrier); a thunk that throws gives null. Use it only when a stage needs every earlier result at once (dedupe, an early exit on zero).\n- `phase(title)` starts a progress group; `log(message)` shows the user a progress line; `args` is the tool's `args` input as given.\n- At most 16 agents run at once (the rest queue) and 1000 in one run. `Date.now()`, `Math.random()` and `new Date()` without arguments throw (they would break resume); there is no file system or Node.js API. Sub-agents are told their final text is the return value.\n\nThe usual shape is a pipeline, where each item's next stage starts as soon as its own previous stage is done:\n\n  export const meta = {\n    name: 'review-changes',\n    description: 'Review the changed files along several dimensions and verify each finding',\n    phases: [{ title: 'Review' }, { title: 'Verify' }],\n  }\n  const DIMENSIONS = [{key: 'bugs', prompt: '...'}, {key: 'perf', prompt: '...'}]\n  const results = await pipeline(\n    DIMENSIONS,\n    d => agent(d.prompt, {label: `review:${d.key}`, phase: 'Review', schema: FINDINGS_SCHEMA}),\n    review => parallel(review.findings.map(f => () =>\n      agent(`Try to refute: ${f.title}`, {label: `verify:${f.file}`, phase: 'Verify', schema: VERDICT_SCHEMA})\n        .then(v => ({...f, verdict: v})))),\n  )\n  return { confirmed: results.flat().filter(Boolean).filter(f => f.verdict?.isReal) }\n\nHere the findings of 'bugs' are verified while 'perf' is still being reviewed.\n\nEach run saves its script to a file and the result gives the path: to change a workflow, edit that file and call Workflow with `scriptPath`. `resumeFromRunId` reruns with the finished results of an earlier run of this task: agent() calls whose prompt and options are unchanged return their earlier result, and only new or edited calls run.",
+       "name": "Workflow",
+       "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+         "args": {
+          "description": "Any value; the script reads it as the global `args`, unchanged. Pass lists and objects as JSON values (`args: [\"a.ts\", \"b.ts\"]`), never as a string of JSON: a string reaches the script as one string, so `args.map` fails. Use it to give a saved workflow its input, such as a question or a path."
+         },
+         "description": {
+          "description": "Ignored: the description lives in the script's `meta`.",
+          "type": "string"
+         },
+         "name": {
+          "description": "The name of a saved workflow (in .claude/workflows/ or .noeta/workflows/ as <name>.js), which supplies the script.",
+          "type": "string"
+         },
+         "resumeFromRunId": {
+          "description": "An earlier run of this task to resume: agent() calls whose prompt and options did not change return that run's results, and only edited or new calls run. The earlier run must have ended.",
+          "pattern": "^wf_[a-z0-9-]{6,}$",
+          "type": "string"
+         },
+         "script": {
+          "description": "The whole workflow script: it starts with `export const meta = { name, description, phases }` (a pure literal, nothing computed), then the body using agent() / parallel() / pipeline() / phase().",
+          "maxLength": 524288,
+          "type": "string"
+         },
+         "scriptPath": {
+          "description": "The path of a script file to run. Every run saves its script and returns the path; edit that file and pass it here instead of resending the script. Wins over `script` and `name`.",
+          "type": "string"
+         },
+         "title": {
+          "description": "Ignored: the title lives in the script's `meta`.",
+          "type": "string"
+         }
+        },
         "type": "object"
        }
       },
@@ -3726,6 +3809,47 @@
         "query",
         "max_results"
        ],
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Run a workflow script that drives many sub-agents in a fixed, scripted way. A workflow runs in the background: this tool returns a run id at once, and a <task-notification> arrives when the workflow finishes. Progress shows to the user as it runs.\n\nCall it ONLY after the user has opted into multi-agent orchestration explicitly: a workflow can start dozens of agents and spend a great many tokens, and the user has to ask for that scale, not have it inferred. Opting in is one of:\n- The user's prompt contains the word \"ultracode\" (a system reminder confirms it).\n- Ultracode is on for this session (a system reminder confirms it).\n- The user asked, in their own words, for a workflow or for orchestrated agents (\"use a workflow\", \"run a workflow\", \"fan out agents\", \"orchestrate this with subagents\"). A task that would merely benefit from one does not count.\n- A skill or slash command the user invoked tells you to call Workflow.\n- The user asked for a specific named or saved workflow.\n\nFor anything else, even clearly parallel work, do NOT call this tool: use the Agent tool for single sub-agents, or describe briefly what a workflow would do and roughly what it would cost, and ask whether to run it. Mention that they can say \"use a workflow\" next time to skip the question.\n\nSize: the setting is \"medium\", so keep a workflow under 10 agents. It is a guideline; the user's own request may ask for more.\n\nEvery script starts with `export const meta = {...}`, a PURE LITERAL (no variables, calls, spreads or interpolation) holding the workflow's `name`, a one-line `description` (shown when the user is asked to approve the run) and optionally `phases`: one `{ title, detail? }` per phase() call, with titles that match exactly. Pass the script inline in `script`; do not write it to a file first, and do not also set `name` (that picks a saved workflow). It is plain JavaScript, not TypeScript.\n\nScript API:\n- `agent(prompt, opts?)` starts a sub-agent and resolves to its final text, or, with `opts.schema` (a JSON Schema whose root is `{type: 'object', properties: {...}}`), to the parsed object. It resolves to null when the agent fails, so filter with `.filter(Boolean)`. `opts`: `label`, `phase` (its progress group), `model`, `effort` ('low' to 'max'), `agentType` (an agent type the Agent tool lists).\n- `pipeline(items, stage1, stage2, ...)` runs each item through all stages on its own, with no barrier between stages; each stage gets `(previousResult, item, index)`. A stage that throws turns that item into null. Use it by default for multi-stage work.\n- `parallel(thunks)` runs `() => Promise` functions together and waits for all of them (a barrier); a thunk that throws gives null. Use it only when a stage needs every earlier result at once (dedupe, an early exit on zero).\n- `phase(title)` starts a progress group; `log(message)` shows the user a progress line; `args` is the tool's `args` input as given.\n- At most 16 agents run at once (the rest queue) and 1000 in one run. `Date.now()`, `Math.random()` and `new Date()` without arguments throw (they would break resume); there is no file system or Node.js API. Sub-agents are told their final text is the return value.\n\nThe usual shape is a pipeline, where each item's next stage starts as soon as its own previous stage is done:\n\n  export const meta = {\n    name: 'review-changes',\n    description: 'Review the changed files along several dimensions and verify each finding',\n    phases: [{ title: 'Review' }, { title: 'Verify' }],\n  }\n  const DIMENSIONS = [{key: 'bugs', prompt: '...'}, {key: 'perf', prompt: '...'}]\n  const results = await pipeline(\n    DIMENSIONS,\n    d => agent(d.prompt, {label: `review:${d.key}`, phase: 'Review', schema: FINDINGS_SCHEMA}),\n    review => parallel(review.findings.map(f => () =>\n      agent(`Try to refute: ${f.title}`, {label: `verify:${f.file}`, phase: 'Verify', schema: VERDICT_SCHEMA})\n        .then(v => ({...f, verdict: v})))),\n  )\n  return { confirmed: results.flat().filter(Boolean).filter(f => f.verdict?.isReal) }\n\nHere the findings of 'bugs' are verified while 'perf' is still being reviewed.\n\nEach run saves its script to a file and the result gives the path: to change a workflow, edit that file and call Workflow with `scriptPath`. `resumeFromRunId` reruns with the finished results of an earlier run of this task: agent() calls whose prompt and options are unchanged return their earlier result, and only new or edited calls run.",
+      "name": "Workflow",
+      "parameters": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "additionalProperties": false,
+       "properties": {
+        "args": {
+         "description": "Any value; the script reads it as the global `args`, unchanged. Pass lists and objects as JSON values (`args: [\"a.ts\", \"b.ts\"]`), never as a string of JSON: a string reaches the script as one string, so `args.map` fails. Use it to give a saved workflow its input, such as a question or a path."
+        },
+        "description": {
+         "description": "Ignored: the description lives in the script's `meta`.",
+         "type": "string"
+        },
+        "name": {
+         "description": "The name of a saved workflow (in .claude/workflows/ or .noeta/workflows/ as <name>.js), which supplies the script.",
+         "type": "string"
+        },
+        "resumeFromRunId": {
+         "description": "An earlier run of this task to resume: agent() calls whose prompt and options did not change return that run's results, and only edited or new calls run. The earlier run must have ended.",
+         "pattern": "^wf_[a-z0-9-]{6,}$",
+         "type": "string"
+        },
+        "script": {
+         "description": "The whole workflow script: it starts with `export const meta = { name, description, phases }` (a pure literal, nothing computed), then the body using agent() / parallel() / pipeline() / phase().",
+         "maxLength": 524288,
+         "type": "string"
+        },
+        "scriptPath": {
+         "description": "The path of a script file to run. Every run saves its script and returns the path; edit that file and pass it here instead of resending the script. Wins over `script` and `name`.",
+         "type": "string"
+        },
+        "title": {
+         "description": "Ignored: the title lives in the script's `meta`.",
+         "type": "string"
+        }
+       },
        "type": "object"
       },
       "type": "function"

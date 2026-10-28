@@ -20,6 +20,7 @@ plugins:
   - schedule
   - findings
   - title
+  - workflow
   - mcp
 ---
 
