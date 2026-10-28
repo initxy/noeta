@@ -18,10 +18,10 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from noeta.core.errors import UnknownTask
-from noeta.core.events import Say
+from noeta.core.events import External, Say
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ToolUse, user
-from noeta.plugins.subtasks import texts
+from noeta.plugins.subtasks import idle, texts
 from noeta.plugins.subtasks.worktree import add_worktree
 from noeta.toolkit.tools import SCHEMA_DIALECT
 
@@ -291,7 +291,8 @@ class SendMessageTool:
         "message": {"description": texts.SEND_MESSAGE_PROP, "type": "string"},
         "summary": {"description": texts.SEND_SUMMARY_PROP, "type": "string",
                     "maxLength": 200},
-    }, ["to", "message"])
+        "notify_when_idle": {"description": texts.SEND_NOTIFY_PROP, "type": "boolean"},
+    }, ["to"])
 
     def __init__(self, ext: Subtasks, state: TaskState) -> None:
         self._ext = ext
@@ -300,11 +301,27 @@ class SendMessageTool:
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         ext, state = self._ext, self._state
         to = str(input.get("to") or "").strip()
-        body = input.get("message")
-        if not isinstance(body, str) or not body.strip():
+        notify = input.get("notify_when_idle") is True
+        body = input.get("message", "" if notify else None)
+        if not isinstance(body, str) or not (body.strip() or notify):
             return text_output(texts.EMPTY_MESSAGE, is_error=True)
         assert ctx.post is not None
         me = str(state.config.get(AGENT_ID_KEY) or state.task_id)
+        if notify:
+            refusal = await self._idle_refusal(to, me, ctx)
+            if refusal is not None:
+                return text_output(refusal + (texts.IDLE_NOT_SENT if body.strip() else ""),
+                                   is_error=True)
+            lines = []
+            if body.strip():
+                await ctx.post(Say(message=user(texts.OTHER_TASK_MESSAGE.format(
+                    sender=me, body=body), origin="agent"), when="next_turn"), task_id=to)
+                lines.append(texts.SENT.format(to=to))
+            self._subscribe(to, ctx)
+            await ctx.post(External(name=idle.SUBSCRIBE_SIGNAL,
+                                    data={"from": state.task_id, "id": self._sub_id(ctx)}),
+                           task_id=to, dedupe_key=f"subtasks:idle-sub:{self._sub_id(ctx)}")
+            return text_output("\n".join([*lines, texts.IDLE_SUBSCRIBED.format(to=to)]))
         if to == texts.MAIN_ADDRESS:
             if not state.parent_id:
                 return text_output(texts.NO_CALLER, is_error=True)
@@ -333,6 +350,43 @@ class SendMessageTool:
         except UnknownTask:
             return text_output(texts.UNKNOWN_RECIPIENT.format(to=to), is_error=True)
         return text_output(texts.SENT.format(to=to))
+
+    @staticmethod
+    def _sub_id(ctx: ToolContext) -> str:
+        return f"{ctx.task_id}:{ctx.call_id}"
+
+    async def _idle_refusal(self, to: str, me: str, ctx: ToolContext) -> str | None:
+        """Why ``notify_when_idle`` cannot subscribe to ``to``, or ``None``."""
+        state = self._state
+        if state.parent_id:
+            return texts.IDLE_MAIN_ONLY
+        if to == texts.MAIN_ADDRESS or to in self._ext.agents_of(state):
+            return texts.IDLE_ROOT_TASKS_ONLY
+        if to in (state.task_id, me, state.root_id):
+            return texts.IDLE_SELF.format(to=to)
+        rows = await ctx.tasks(limit=200) if ctx.tasks is not None else []
+        row = next((r for r in rows if r.task_id == to), None)
+        if row is None:
+            return texts.UNKNOWN_RECIPIENT.format(to=to)
+        if row.parent_id is not None:
+            return texts.IDLE_ROOT_TASKS_ONLY
+        if row.status == "ended":
+            return texts.IDLE_GONE.format(to=to)
+        waits = self._ext.idle_waits(state)
+        if to not in waits and len(waits) >= idle.MAX_SUBSCRIPTIONS:
+            return texts.IDLE_CAP.format(n=idle.MAX_SUBSCRIPTIONS)
+        return None
+
+    def _subscribe(self, to: str, ctx: ToolContext) -> None:
+        """Record the wait and its expiry; a new subscription to the same
+        session replaces the one before."""
+        earlier = self._ext.idle_waits(self._state).get(to)
+        if earlier is not None:
+            ctx.clear_timer(idle.timer_name(earlier["id"]))
+        sub_id = self._sub_id(ctx)
+        now = time.time()
+        ctx.record(self._ext.name, "idle_subscribed", {"target": to, "id": sub_id, "at": now})
+        ctx.set_timer(idle.timer_name(sub_id), now + idle.EXPIRY_SECONDS)
 
 
 class ListAgentsTool:
