@@ -83,8 +83,29 @@ def test_search_forms() -> None:
     assert search.search("select:NotebookEdit, webfetch,Nope") == ["NotebookEdit", "WebFetch"]
     assert search.search("jupyter notebook") == ["NotebookEdit"]
     assert search.search("+slack send") == ["mcp__slack__send"]
-    assert search.search("send", max_results=1) == ["mcp__mail__send"]
+    assert search.search("send", max_results=1) == ["mcp__slack__send"]  # ties: tool order
     assert search.search("nothing here") == []
+
+
+def test_keyword_ranking() -> None:
+    search = ToolSearchTool({t.name: t for t in [
+        Fake("WebFetch", description="Fetch a web page."),
+        Fake("WebSearch", description="Search the web; fetch nothing."),
+        Fake("NotebookEdit", description="Edit a Jupyter notebook cell."),
+        Fake("mcp__slack__send_message", description="Post to a channel."),
+        Fake("mcp__slack__list", description="List channels."),
+        Fake("mcp__mail__send", description="Send an email to a slack-like inbox."),
+    ]})
+    # A query that is a tool's name loads that tool alone.
+    assert search.search("webfetch") == ["WebFetch"]
+    # An mcp__ prefix loads that server's tools.
+    assert search.search("mcp__slack") == ["mcp__slack__send_message", "mcp__slack__list"]
+    # +word may match the description (as a whole word), not only the name.
+    assert search.search("+slack send") == [
+        "mcp__slack__send_message", "mcp__mail__send", "mcp__slack__list"]
+    # Name words outrank description words.
+    assert search.search("web fetch", max_results=2) == ["WebFetch", "WebSearch"]
+    assert search.search("jupyter", max_results=0) == []
     schema = search.input_schema
     assert schema["required"] == ["query", "max_results"]
     assert schema["additionalProperties"] is False

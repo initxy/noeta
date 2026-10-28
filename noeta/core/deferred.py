@@ -43,6 +43,8 @@ TOOL_LOADED_TEXT = "Tool loaded."
 DEFAULT_MAX_RESULTS = 5
 #: A ``select:`` query reads at most this many names.
 MAX_SELECT_NAMES = 64
+#: A keyword query reads at most this many words.
+MAX_KEYWORDS = 32
 
 SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 
@@ -68,8 +70,8 @@ Ways to query:
 - "fetch url page" searches names and descriptions and loads up to max_results best matches
 - "+mcp resource" keeps only tools whose name contains "mcp", ranked by the other words"""
 
-_WORD = re.compile(r"[a-z0-9]+")
-_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_CAMEL = re.compile(r"([a-z])([A-Z])")
+_MCP_SPLIT = re.compile(r"[\s_.]+")
 
 
 def is_deferred(tool: Tool) -> bool:
@@ -138,8 +140,16 @@ def _mcp_tool_part(name: str) -> str | None:
     return tool if sep and tool else None
 
 
-def _terms(text: str) -> set[str]:
-    return set(_WORD.findall(_CAMEL.sub(" ", text).lower()))
+def _name_parts(name: str) -> tuple[list[str], list[str], bool]:
+    """A tool name's words, its coarse parts (an MCP tool's server and tool
+    names, else the whole name) and whether it is an MCP tool."""
+    tool = _mcp_tool_part(name)
+    if tool is not None:
+        server = name[len("mcp__"):-len(tool) - 2]
+        coarse = [p.lower() for p in (server, tool) if p]
+        return [w for c in coarse for w in _MCP_SPLIT.split(c) if w], coarse, True
+    words = _CAMEL.sub(r"\1 \2", name).replace("_", " ").lower().split()
+    return words, [name.lower()], False
 
 
 class ToolSearchTool:
@@ -187,22 +197,53 @@ class ToolSearchTool:
                     t for t in self._tools if _mcp_tool_part(t) == n]
                 out.extend(h for h in hits if h not in out)
             return out
+        return self._keyword_search(q, max_results)
+
+    def _keyword_search(self, query: str, max_results: int) -> list[str]:
+        """A query that is a tool's name loads that tool alone; an
+        ``mcp__<server>`` prefix loads that server's tools; otherwise the
+        words are scored against each tool's name parts (most) and its
+        description (whole words), ``+word`` filtering first."""
+        limit = max(0, max_results)
+        q = " ".join(query.split()[:MAX_KEYWORDS]).lower()
+        exact = next((n for n in self._tools if n.lower() == q), None)
+        if exact is not None:
+            return [exact]
+        if q.startswith("mcp__") and len(q) > len("mcp__"):
+            prefixed = [n for n in self._tools if n.lower().startswith(q)]
+            if prefixed:
+                return prefixed[:limit]
         words = q.split()
-        required = [w[1:].lower() for w in words if w.startswith("+") and len(w) > 1]
-        ranking = _terms(" ".join(w for w in words if not w.startswith("+")))
+        required = [w[1:] for w in words if w.startswith("+") and len(w) > 1]
+        plain = [w for w in words if not (w.startswith("+") and len(w) > 1)]
+        terms = [*required, *plain] if required else words
+        whole = {t: re.compile(rf"\b{re.escape(t)}\b") for t in terms}
         scored: list[tuple[int, str]] = []
         for name, tool in self._tools.items():
-            if not all(r in name.lower() for r in required):
+            parts, coarse, mcp = _name_parts(name)
+            text = (getattr(tool, "description", "") or "").lower()
+            if not all(r in parts or any(r in p for p in parts) or r in coarse
+                       or any(r in c for c in coarse) or whole[r].search(text)
+                       for r in required):
                 continue
-            in_name = _terms(name)
-            in_text = _terms(getattr(tool, "description", "") or "")
-            score = sum(3 if w in in_name else 1 if w in in_text else 0 for w in ranking)
-            if q.lower() == name.lower():
-                score += 100
-            if score or (required and not ranking):
-                scored.append((-score, name))
-        scored.sort()
-        return [name for _, name in scored[:max(1, max_results)]]
+            score = 0
+            for t in terms:
+                if t in parts:
+                    score += 12 if mcp else 10
+                elif any(t in p for p in parts):
+                    score += 6 if mcp else 5
+                if t in coarse:
+                    score += 12 if mcp else 10
+                elif any(t in c for c in coarse):
+                    score += 4 if mcp else 3
+                if t in " ".join(parts) and score == 0:
+                    score += 3
+                if whole[t].search(text):
+                    score += 2
+            if score > 0:
+                scored.append((score, name))
+        scored.sort(key=lambda s: -s[0])  # stable: ties keep the tools' order
+        return [name for _, name in scored[:limit]]
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         query = input.get("query")
