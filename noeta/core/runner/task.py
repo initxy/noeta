@@ -374,7 +374,7 @@ class TaskRun:
         await self._take_input()
         assert self.agent is not None
         action = decide.next_action(self.state, one_shot=self.one_shot,
-                                    max_steps=self.agent.max_steps_per_turn)
+                                    max_steps=self.agent.step_budget)
         if isinstance(action, decide.Idle):
             return False
         if isinstance(action, decide.End):

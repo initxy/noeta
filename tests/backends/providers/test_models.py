@@ -59,7 +59,7 @@ def _gateway_spec(**overrides: Any) -> ModelSpec:
         "max_output_tokens": 128_000,
         "is_reasoning": True,
         "supports_vision": True,
-        "family": "anthropic",
+        "vendor": "anthropic",
     }
     base.update(overrides)
     return ModelSpec(**base)
@@ -396,7 +396,7 @@ def test_family_explicit_field_beats_prefix_inference() -> None:
 
 
 def test_extension_without_family_stays_unknown() -> None:
-    register_models({GATEWAY_ID: _gateway_spec(family=None)})
+    register_models({GATEWAY_ID: _gateway_spec(vendor=None)})
     assert model_family(GATEWAY_ID) is None
 
 
@@ -512,7 +512,7 @@ def test_alias_across_calls_targets_earlier_row() -> None:
 
 def test_unknown_family_refuses() -> None:
     with pytest.raises(ValueError, match="unknown family"):
-        register_models({GATEWAY_ID: _gateway_spec(family="antropic")})
+        register_models({GATEWAY_ID: _gateway_spec(vendor="antropic")})
 
 
 def test_empty_model_id_refuses() -> None:

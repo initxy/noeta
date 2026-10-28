@@ -29,7 +29,7 @@ from typing import Any
 
 from noeta.core.execenv import RunResult
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.plugins.shell.hardening import DEFAULT_SHELL_RULES, AllowRule, hardened_argv
+from noeta.plugins.shell.hardening import DEFAULT_SHELL_RULES, HardeningRule, hardened_argv
 from noeta.toolkit.sandbox import (
     CommandSandbox,
     PreparedCommand,
@@ -405,7 +405,7 @@ class BashTool:
         timeout_s: int = DEFAULT_SHELL_TIMEOUT_S,
         output_cap: int = DEFAULT_SHELL_OUTPUT_CAP,
         shell_env: ShellEnv | None = None,
-        hardening_rules: tuple[AllowRule, ...] = DEFAULT_SHELL_RULES,
+        hardening_rules: tuple[HardeningRule, ...] = DEFAULT_SHELL_RULES,
     ) -> None:
         self.input_schema = _input_schema()
         self.timeout_s = timeout_s

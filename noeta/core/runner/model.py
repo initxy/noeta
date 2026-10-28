@@ -49,7 +49,7 @@ def build_model_request(run: TaskRun, *, final: bool) -> ModelRequest:
     if final:
         # The step-limit round: tool schemas stay (the prefix stays cached),
         # tools are switched off, and the instruction is not recorded.
-        prompt = texts.STEP_LIMIT_PROMPT.format(n=agent.max_steps_per_turn)
+        prompt = texts.STEP_LIMIT_PROMPT.format(n=agent.step_budget)
         request = msgspec.structs.replace(
             request, messages=[*request.messages, user(prompt, origin="system")],
             tool_choice="none")
@@ -101,7 +101,7 @@ def _empty(message: Message) -> bool:
 
 def _final_answer(run: TaskRun, response: ModelResponse) -> ModelResponse:
     assert run.agent is not None
-    head = texts.STEP_LIMIT_HEAD.format(n=run.agent.max_steps_per_turn)
+    head = texts.STEP_LIMIT_HEAD.format(n=run.agent.step_budget)
     text = response.message.text.strip()
     blocks: list[Any] = [b for b in response.message.content if not isinstance(b, ToolUse)
                          and not isinstance(b, Text)]

@@ -149,7 +149,7 @@ def test_claude_code_fields_map_onto_the_agent(caplog: pytest.LogCaptureFixture)
     assert "isolation" not in logged
     [agent] = build_agents([f], model="host", default_plugins=[("instructions", {})])
     assert agent.model == "claude-haiku-5-5" and agent.denied_tools == ("Write",)
-    assert agent.max_steps_per_turn == 7 and agent.extensions == ()
+    assert agent.step_budget == 7 and agent.extensions == ()
     assert agent.extra["permission_mode"] == "acceptEdits" and agent.extra["model"] == "haiku"
 
 
@@ -157,7 +157,7 @@ def test_tools_star_and_inherit() -> None:
     f = parse_agent_file("---\nname: a\ntools: '*'\nmodel: inherit\n---\n")
     assert f.tools is None and f.model is None
     [agent] = build_agents([f], model="host")
-    assert agent.model == "host" and agent.max_steps_per_turn == 1_000
+    assert agent.model == "host" and agent.step_budget == 1_000
 
 
 @pytest.mark.parametrize("text", [

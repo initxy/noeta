@@ -557,7 +557,7 @@ def test_registered_reasoning_row_declared_openai_family() -> None:
                 context_window=200_000,
                 max_output_tokens=100_000,
                 is_reasoning=True,
-                family="openai",
+                vendor="openai",
             )
         }
     )

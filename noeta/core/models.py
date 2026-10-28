@@ -89,14 +89,14 @@ class ModelSpec:
     #: the image up front, while a model absent from the table is merely
     #: *unknown* and images are let through for the provider to judge.
     supports_vision: bool = False
-    #: Explicit vendor family (``"anthropic"`` / ``"openai"``) for a row whose
-    #: real id carries no recognisable prefix — a gateway routing name that IS
-    #: a Claude behind a relay declares it here. Consumed by
-    #: :func:`model_family` ahead of prefix inference and validated at
-    #: registration. ``None`` (every shipped row) falls back to real-id prefix
-    #: inference. This is the *vendor*, not the wire an adapter speaks
+    #: Explicit vendor (``"anthropic"`` / ``"openai"``) for a row whose real
+    #: id carries no recognisable prefix — a gateway routing name that IS a
+    #: Claude behind a relay declares it here (``family`` in a models file).
+    #: Consumed by :func:`model_family` ahead of prefix inference and
+    #: validated at registration. ``None`` (every shipped row) falls back to
+    #: real-id prefix inference. Not the wire an adapter speaks
     #: (``Provider.family``).
-    family: str | None = None
+    vendor: str | None = None
     #: The name people call the model by (``Claude Opus 5.5``): the model
     #: line of the environment message and the commit co-author trailer.
     display_name: str | None = None
@@ -365,9 +365,9 @@ def register_models(
                     f"extra model {name!r} collides with an existing catalog "
                     "row/alias; extensions never override existing data"
                 )
-            if spec.family is not None and spec.family not in _KNOWN_FAMILIES:
+            if spec.vendor is not None and spec.vendor not in _KNOWN_FAMILIES:
                 raise ValueError(
-                    f"extra model {name!r}: unknown family {spec.family!r}; "
+                    f"extra model {name!r}: unknown family {spec.vendor!r}; "
                     f"expected one of {sorted(_KNOWN_FAMILIES)}"
                 )
             existing = _EXTENSIONS.get(name)
@@ -449,7 +449,7 @@ def find_spec(model_id: str) -> ModelSpec | None:
 def model_family(model: str) -> str | None:
     """Classify a model selector as ``"anthropic"``, ``"openai"`` or ``None``.
 
-    The family comes from a **catalogued** model's declared ``family``, else
+    The family comes from a **catalogued** model's declared ``vendor``, else
     its real-id prefix, so only a known model classifies at all. ``None`` — an
     uncatalogued selector — means "unknown": callers must not narrow anything
     on it.
@@ -457,8 +457,8 @@ def model_family(model: str) -> str | None:
     spec = find_spec(model)
     if spec is None:
         return None
-    if spec.family is not None:
-        return spec.family
+    if spec.vendor is not None:
+        return spec.vendor
     if spec.real_model_id.startswith("claude"):
         return "anthropic"
     if spec.real_model_id.startswith("gpt"):

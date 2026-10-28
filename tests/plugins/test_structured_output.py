@@ -12,7 +12,7 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.runner import Runtime
-from noeta.plugins.structured import StructuredOutput, structured_answer
+from noeta.plugins.structured_output import StructuredOutput, structured_answer
 from noeta.testing import ScriptedProvider, reply
 
 SCHEMA = {"type": "object", "properties": {"a": {"type": "integer"}}}

@@ -25,9 +25,9 @@ from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Image, Text
 from noeta.plugins.fs._read_formats import (
     MAX_READ_TOKENS,
-    estimate_tokens,
     read_notebook,
     read_pdf,
+    read_size_tokens,
     too_many_tokens,
 )
 from noeta.plugins.fs.state import FS, KIND_READ, current_fs_state
@@ -336,7 +336,7 @@ class ReadTool:
         # Claude Code's token ceiling on what one read returns. A window the
         # scan had to stop is past it by construction.
         text = scan.window_text()
-        tokens = estimate_tokens(text, posixpath.splitext(resolved)[1].lstrip(".").lower())
+        tokens = read_size_tokens(text, posixpath.splitext(resolved)[1].lstrip(".").lower())
         if not scan.capped and tokens > max_tokens // 4 and ctx.count_tokens is not None:
             # Past a quarter of the ceiling the estimate is checked against
             # the provider's exact count, as Claude Code does.

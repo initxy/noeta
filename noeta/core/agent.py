@@ -32,8 +32,9 @@ class Agent:
     #: waiting for the next message. A sub-agent's task always ends so.
     one_shot: bool = False
     output_schema: dict[str, Any] | None = None
-    #: Model calls allowed in one turn before the turn fails.
-    max_steps_per_turn: int = 1_000
+    #: Model calls allowed in one turn; the next one asks for the turn's
+    #: final answer with tools switched off (the agent file's ``maxTurns``).
+    step_budget: int = 1_000
     extra: dict[str, Any] = field(default_factory=dict)
     #: Only these tool names are offered (Claude Code's agent ``tools``);
     #: ``None`` = every tool the extensions offer.

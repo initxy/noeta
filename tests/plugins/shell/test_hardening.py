@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import pytest
 
-from noeta.plugins.shell.hardening import DEFAULT_SHELL_RULES, AllowRule, matching_rule
+from noeta.plugins.shell.hardening import DEFAULT_SHELL_RULES, HardeningRule, matching_rule
 from noeta.toolkit.shell import parse_argv
 
 _RULES = DEFAULT_SHELL_RULES
 
 
-def command_in_allowlist(command: str, rules: tuple[AllowRule, ...]) -> bool:
+def command_in_allowlist(command: str, rules: tuple[HardeningRule, ...]) -> bool:
     return matching_rule(command, rules) is not None
 
 
@@ -152,7 +152,7 @@ def test_non_git_rules_do_not_harden() -> None:
 
 
 def test_rule_matches_program_and_subcommand_exactly() -> None:
-    rule = AllowRule("npm", "start", lambda tail: True, "npm_start")
+    rule = HardeningRule("npm", "start", lambda tail: True, "npm_start")
     assert rule.matches(["npm", "start", "--x"])
     assert not rule.matches(["npm"])
     assert not rule.matches(["npm", "test"])

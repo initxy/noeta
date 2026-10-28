@@ -26,9 +26,9 @@ __all__ = [
     "NOTEBOOK_MAX_BYTES",
     "PDF_MAX_PAGES_PER_READ",
     "PDF_MAX_PAGES_WHOLE",
-    "estimate_tokens",
     "read_notebook",
     "read_pdf",
+    "read_size_tokens",
     "too_many_tokens",
 ]
 
@@ -55,7 +55,7 @@ _PAGES_RE = re.compile(r"^\s*(\d+)\s*(?:-\s*(\d*)\s*)?$")
 _PAGE_FILE_RE = re.compile(r"^page-\d+\.jpg$")
 
 
-def estimate_tokens(text: str, suffix: str) -> int:
+def read_size_tokens(text: str, suffix: str) -> int:
     """Claude Code's token estimate for a read: characters / 4, or / 2 for
     JSON-shaped files."""
     per_token = 2 if suffix in ("json", "jsonl", "jsonc") else 4
@@ -352,7 +352,7 @@ def read_notebook(tool_name: str, raw: bytes, display: str) -> ToolOutput:
                     continue
                 images.append(Image(media_type=image[0], data=body))
     rendered = "\n".join(parts)
-    tokens = estimate_tokens(rendered, "ipynb")
+    tokens = read_size_tokens(rendered, "ipynb")
     if tokens > MAX_READ_TOKENS:
         return err(too_many_tokens(tokens))
     return ToolOutput(

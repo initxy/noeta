@@ -19,8 +19,8 @@ _ArgValidator = Callable[[list[str]], bool]
 
 
 @dataclass(frozen=True)
-class AllowRule:
-    """One structural allowlist entry. ``program`` matches ``argv[0]``
+class HardeningRule:
+    """One rule of which commands run hardened. ``program`` matches ``argv[0]``
     exactly, ``subcommand`` (if set) ``argv[1]``; ``validate`` then inspects
     the remaining args. Matching is on the parsed argv only, never the raw
     string."""
@@ -47,7 +47,7 @@ class AllowRule:
         return self.validate(tail)
 
 
-def matching_rule(command: str, rules: Sequence[AllowRule]) -> AllowRule | None:
+def matching_rule(command: str, rules: Sequence[HardeningRule]) -> HardeningRule | None:
     """The first rule ``command`` matches, or ``None``. A command with shell
     metacharacters, an unquoted expansion character or unbalanced quotes never
     matches: past those checks the ``shlex`` argv is exactly what ``bash -c``
@@ -63,7 +63,7 @@ def matching_rule(command: str, rules: Sequence[AllowRule]) -> AllowRule | None:
     return None
 
 
-def hardened_argv(command: str, rules: Sequence[AllowRule]) -> list[str] | None:
+def hardened_argv(command: str, rules: Sequence[HardeningRule]) -> list[str] | None:
     """``command``'s argv as the first matching rule rewrites it, or
     ``None`` when no rule with a rewrite matches (it runs as written)."""
     rule = matching_rule(command, rules)
@@ -156,20 +156,20 @@ def _find_validate(tail: list[str]) -> bool:
     return all(a not in forbidden for a in tail)
 
 
-DEFAULT_SHELL_RULES: tuple[AllowRule, ...] = (
-    AllowRule("git", "status", _git_status_validate, "git_status", harden=harden_git),
-    AllowRule("git", "diff", _git_diff_validate, "git_diff", harden=harden_git),
-    AllowRule("git", "log", _git_log_validate, "git_log", harden=harden_git),
+DEFAULT_SHELL_RULES: tuple[HardeningRule, ...] = (
+    HardeningRule("git", "status", _git_status_validate, "git_status", harden=harden_git),
+    HardeningRule("git", "diff", _git_diff_validate, "git_diff", harden=harden_git),
+    HardeningRule("git", "log", _git_log_validate, "git_log", harden=harden_git),
     # Test runners execute repository code by design.
-    AllowRule("pytest", None, _pytest_validate, "pytest", runs_workspace_code=True),
-    AllowRule(
+    HardeningRule("pytest", None, _pytest_validate, "pytest", runs_workspace_code=True),
+    HardeningRule(
         "uv", "run", _uv_run_pytest_validate, "uv_run_pytest", runs_workspace_code=True
     ),
-    AllowRule("npm", "test", _trivial_validate, "npm_test", runs_workspace_code=True),
-    AllowRule("pnpm", "test", _trivial_validate, "pnpm_test", runs_workspace_code=True),
+    HardeningRule("npm", "test", _trivial_validate, "npm_test", runs_workspace_code=True),
+    HardeningRule("pnpm", "test", _trivial_validate, "pnpm_test", runs_workspace_code=True),
     # Read-only search / listing.
-    AllowRule("grep", None, _trivial_validate, "grep"),
-    AllowRule("rg", None, _rg_validate, "rg"),
-    AllowRule("find", None, _find_validate, "find"),
-    AllowRule("ls", None, _trivial_validate, "ls"),
+    HardeningRule("grep", None, _trivial_validate, "grep"),
+    HardeningRule("rg", None, _rg_validate, "rg"),
+    HardeningRule("find", None, _find_validate, "find"),
+    HardeningRule("ls", None, _trivial_validate, "ls"),
 )

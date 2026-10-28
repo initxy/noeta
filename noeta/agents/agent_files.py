@@ -314,7 +314,7 @@ def build_agents(
             one_shot=f.one_shot,
             allowed_tools=f.tools,
             denied_tools=f.denied_tools,
-            max_steps_per_turn=f.max_turns or Agent.max_steps_per_turn,
+            step_budget=f.max_turns or Agent.step_budget,
             extra=extra,
         ))
     return agents
