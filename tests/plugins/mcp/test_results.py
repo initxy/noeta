@@ -103,3 +103,35 @@ async def test_the_budget_follows_max_mcp_output_tokens(tmp_path: Path,
     assert not (tmp_path / "spill").exists()
     monkeypatch.setenv("NOETA_MAX_MCP_OUTPUT_TOKENS", "nonsense")
     assert max_output_tokens() == 25_000
+
+
+async def test_a_binary_resource_is_saved_and_its_place_named(tmp_path: Path) -> None:
+    import json
+
+    from noeta.plugins.mcp.config import McpServer
+    from noeta.plugins.mcp.tools import ReadMcpResourceTool
+
+    blob = base64.b64encode(b"%PDF-1.4 hi").decode()
+    result = {"contents": [{"uri": "file:///a.pdf", "mimeType": "application/pdf", "blob": blob},
+                           {"uri": "file:///n.md", "text": "notes"}]}
+
+    class Client:
+        async def read_resource(self, uri: str) -> dict[str, Any]:
+            return result
+
+    async def use(_ctx: Any, _server: Any, request: Any) -> Any:
+        return await request(Client())
+
+    tool = ReadMcpResourceTool(lambda _c: {"docs": McpServer(alias="docs", command=("x",))},
+                               use)
+    out = await tool.run({"server": "docs", "uri": "file:///a.pdf"}, ctx(tmp_path))
+    first, second = json.loads(texts(out)[0])["contents"]
+    saved = first["blobSavedTo"]
+    assert Path(saved).read_bytes() == b"%PDF-1.4 hi" and saved.endswith(".pdf")
+    assert "blob" not in first and first["uri"] == "file:///a.pdf"
+    assert first["text"] == ("[Resource from docs at file:///a.pdf] Binary content "
+                             f"(application/pdf, 11 bytes) saved to {saved}")
+    assert second == {"uri": "file:///n.md", "text": "notes"}
+    out = await tool.run({"server": "docs", "uri": "file:///a.pdf"}, ctx(tmp_path, spill=False))
+    first = json.loads(texts(out)[0])["contents"][0]
+    assert "blob" not in first and "could not be saved" in first["text"]
