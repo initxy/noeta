@@ -8,7 +8,8 @@ events; when this process also runs workers, live model output streams too.
     GET  /tasks/{id}/events?after=N
     GET  /tasks/{id}/watch?after=N    text/event-stream: "event" (a recorded event) and
                                       "delta" (live output) messages
-    POST /tasks/{id}/messages         {input, when?, dedupe_key?}
+    POST /tasks/{id}/messages         {input, when?, dedupe_key?} — a "/name args" text
+                                      runs the task agent's slash command of that name
     POST /tasks/{id}/answers          {request_id, decision?, always?, data?}
     POST /tasks/{id}/cancel           {reason?, turn_only?}
 
@@ -22,7 +23,7 @@ import asyncio
 import contextlib
 import hmac
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 import msgspec
@@ -31,8 +32,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from noeta.core.agent import Agent
 from noeta.core.client import Client
+from noeta.core.commands import expand_command
 from noeta.core.errors import UnknownTask
+from noeta.core.extension import CommandContext
 from noeta.core.types import Delta, Message
 
 _enc = msgspec.json.Encoder()
@@ -50,8 +54,9 @@ def _input(value: Any) -> Any:
 
 
 def create_app(client: Client, *, token: str | None = None,
-               deltas: Any = None) -> Starlette:
-    """``deltas`` is ``LocalApp.deltas`` when workers run in this process."""
+               deltas: Any = None, agents: Mapping[str, Agent] | None = None) -> Starlette:
+    """``deltas`` is ``LocalApp.deltas`` when workers run in this process;
+    ``agents`` (by name) lets a message run its task agent's slash commands."""
 
     def authorized(request: Request) -> bool:
         if not token:
@@ -94,7 +99,16 @@ def create_app(client: Client, *, token: str | None = None,
 
     async def send(request: Request) -> Response:
         body = await request.json()
-        seq = await client.send(request.path_params["task_id"], _input(body["input"]),
+        task_id = request.path_params["task_id"]
+        value = _input(body["input"])
+        if isinstance(value, str) and value.startswith("/") and agents:
+            row = await client.get(task_id)
+            agent = agents.get(row.agent)
+            if agent is not None:
+                expanded = await expand_command(agent, CommandContext(cwd="", task_id=task_id),
+                                                value)
+                value = expanded if expanded is not None else value
+        seq = await client.send(task_id, value,
                                 when=body.get("when", "next_turn"),
                                 dedupe_key=body.get("dedupe_key"))
         return _json({"inbox_seq": seq})

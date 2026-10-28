@@ -181,7 +181,7 @@ async def _serve(s: Settings, host: str, port: int, with_worker: bool) -> None:
     if with_worker:
         await app.start()
     api = create_app(app.client, token=os.environ.get("NOETA_SERVER_TOKEN") or None,
-                     deltas=app.deltas if with_worker else None)
+                     deltas=app.deltas if with_worker else None, agents=app.runtime.agents)
     try:
         await uvicorn.Server(uvicorn.Config(api, host=host, port=port)).serve()
     finally:

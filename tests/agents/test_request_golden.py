@@ -29,6 +29,8 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
 from noeta.core.runner import Runtime
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolUse, Usage
+from noeta.plugins.memory import memory_dir_for
+from noeta.toolkit.context import project_slug
 
 GOLDEN = Path(__file__).parent / "golden" / "requests.json"
 MODEL = "claude-sonnet-4-6"
@@ -64,7 +66,7 @@ async def _no_sleep(_: float) -> None:
 
 
 def _normalize(text: str, tmp: str) -> str:
-    text = text.replace(tmp, "<TMP>")
+    text = text.replace(tmp, "<TMP>").replace(project_slug(tmp), "<TMP-SLUG>")
     text = re.sub(r"\d{4}-\d{2}-\d{2}", "<DATE>", text)
     text = re.sub(r"(?m)^ - (Platform|Shell|OS Version): .*$", r" - \1: <X>", text)
     text = re.sub(r"<duration_ms>\d+</duration_ms>", "<duration_ms>N</duration_ms>", text)
@@ -83,11 +85,13 @@ async def test_default_agent_requests_match_golden(tmp_path: Path,
         "---\nname: release-notes\ndescription: Draft release notes from git log.\n---\n"
         "Read git log and summarize.\n")
     (work / "notes.txt").write_text("the secret word is tangerine\n")
-    mem = tmp_path / "mem"
-    mem.mkdir()
+    noeta_home = tmp_path / "noeta-home"
+    mem = Path(memory_dir_for(str(work), noeta_home))
+    mem.mkdir(parents=True)
     (mem / "deploy-steps.md").write_text(
-        "---\nname: deploy-steps\ndescription: How we deploy.\nkeywords: [deploy]\n---\n"
-        "Tag, then wait for the release run.\n")
+        "---\nname: deploy-steps\ndescription: How we deploy.\nmetadata:\n  type: project\n"
+        "---\nTag, then wait for the release run.\n")
+    (mem / "MEMORY.md").write_text("- [Deploy steps](deploy-steps.md) — tag, then wait\n")
 
     todos = [{"content": "Read notes", "status": "in_progress", "activeForm": "Reading notes"}]
     main = [
@@ -109,7 +113,7 @@ async def test_default_agent_requests_match_golden(tmp_path: Path,
     ]
     router = Router(main, child)
     store = SqliteStore(str(tmp_path / "t.db"))
-    agents = default_agents(MODEL, plugins={"memory": {"root": str(mem)}})
+    agents = default_agents(MODEL, plugins={"memory": {"home": str(noeta_home)}})
     rt = Runtime(store=store, agents={a.name: a for a in agents},
                  provider_for=lambda _m: router,  # type: ignore[arg-type,return-value]
                  env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or work)),

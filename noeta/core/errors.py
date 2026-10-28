@@ -68,3 +68,9 @@ class TurnFailed(Exception):
         super().__init__(f"{reason}: {detail}" if detail else reason)
         self.reason = reason
         self.detail = detail
+
+
+class TurnDone(Exception):
+    """Raised by ``before_model`` when the turn is complete without a model
+    call (a local command such as ``/compact`` did its work). The runner
+    records what the hook recorded and closes the turn."""

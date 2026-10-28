@@ -125,12 +125,15 @@ class ToolFinished(Struct, tag="ToolFinished", tag_field="type"):
 
 class Compacted(Struct, tag="Compacted", tag_field="type"):
     """History up to and including event ``through`` is replaced by
-    ``summary`` (plus whatever ``kept`` re-attaches) when building requests."""
+    ``summary`` when building requests: the conversation becomes ``lead``,
+    the summary, ``kept``, the messages after ``through``, then ``after``."""
 
     summary: str
     through: int
     kept: list[Message] = msgspec.field(default_factory=list)
     usage: Usage = msgspec.field(default_factory=Usage)
+    lead: list[Message] = msgspec.field(default_factory=list)
+    after: list[Message] = msgspec.field(default_factory=list)
 
 
 WaitOn = Literal["input", "approval", "question", "children", "timer", "external"]

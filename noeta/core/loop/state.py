@@ -246,6 +246,8 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         if ev.extension == CORE and ev.kind == "prompts":
             data = ev.data if isinstance(ev.data, dict) else {}
             state.prompt_files = {str(k): v for k, v in data.items() if isinstance(v, str)}
+        if ev.extension == CORE and ev.kind == "turn_done":
+            _end_turn(state, rec.seq)
         if ev.extension == CORE and ev.kind == "turn_failed":
             data = ev.data if isinstance(ev.data, dict) else {}
             reason, detail = data.get("reason", "failed"), data.get("detail", "")
@@ -375,8 +377,9 @@ def _compact(state: TaskState, ev: Compacted) -> None:
     # A plain user turn, as 0.6 sent it: the summary carries its own framing
     # line, and must not read as a host reminder.
     summary = Message(role="user", content=[Text(text=ev.summary)])
-    state.messages = [summary, *ev.kept, *tail]
-    state.message_seqs = [0] * (1 + len(ev.kept)) + tail_seqs
+    state.messages = [*ev.lead, summary, *ev.kept, *tail, *ev.after]
+    state.message_seqs = [0] * (len(ev.lead) + 1 + len(ev.kept)) + tail_seqs \
+        + [0] * len(ev.after)
     state.compaction = ev
     state.last_usage = None
     # A compaction-and-retry is not a crash loop.

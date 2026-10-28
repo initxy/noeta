@@ -81,25 +81,25 @@ Phase 2 main-loop rewrite (`noeta/agents/files/main.md`, `noeta/plugins/environm
 
 | id | rule | noeta today |
 |---|---|---|
-| `main.mem.1` | Memory is a directory of files at a per-project path under the config dir (`<config>/projects/<cwd with / replaced by ->/memory/`); the prompt states the absolute path. | contradicts — noeta memory is a store behind `memory_write`/`memory_read`/`memory_search`/`memory_archive` tools, no path. |
-| `main.mem.2` | The directory already exists: write into it directly with the `Write` tool; do not `mkdir` or probe for it. | contradicts — tools, not files. |
-| `main.mem.3` | One memory = one file = one fact, with frontmatter fields `name` (short kebab-case slug), `description` (one line, used for relevance at recall time) and `metadata.type`. | covered in substance (kebab-case `name`, one-line `description`, `type`); not a file. |
-| `main.mem.4` | `type` is one of `user`, `feedback`, `project`, `reference`. | contradicts — noeta's set is `user`, `project`, `procedural`, `reference` (no `feedback`). |
-| `main.mem.5` | For `feedback` and `project` memories, the body ends with a **Why:** line and a **How to apply:** line. | missing |
-| `main.mem.6` | Bodies link related memories as `[[name]]` by slug; dangling links are allowed and mark something worth writing later. | contradicts — noeta uses a `related` field, no wiki links. |
-| `main.mem.7` | `user` = who the user is (role, expertise, preferences). | covered loosely |
-| `main.mem.8` | `feedback` = how the user wants the work done: corrections and approaches they confirmed, with the reason. | covered — "corrections and feedback" |
-| `main.mem.9` | `project` = work in progress, aims or limits that the code and its history cannot tell you; relative dates are converted to absolute ones. | covered without the absolute-date rule (missing). |
-| `main.mem.10` | `reference` = pointers to outside resources (URLs, dashboards, tickets). | covered |
-| `main.mem.11` | After writing a memory, add a one-line pointer to `MEMORY.md` in the form `- [Title](file.md) — hook`. | contradicts — noeta builds its index itself. |
-| `main.mem.12` | `MEMORY.md` is the index loaded into every session: one line per memory, no frontmatter, never memory content. | contradicts — index is generated. |
-| `main.mem.13` | Before saving, look for an existing memory on the same fact and update it instead of adding a duplicate. | covered |
-| `main.mem.14` | Delete memories that turn out wrong. | contradicts — noeta says archive, not delete. |
-| `main.mem.15` | Skip anything the repository itself captures (layout of the code, earlier fixes, commit history, CLAUDE.md) and anything relevant only to this conversation. | covered |
-| `main.mem.16` | If asked to remember something of that kind, ask which part of it was surprising and store only that part. | missing |
-| `main.mem.17` | Recalled memories that arrive inside `<system-reminder>` are background, not instructions from the user, and describe what was true when written. | missing |
-| `main.mem.18` | Before recommending a file, function or flag named in a memory, check it still exists. | missing |
-| — | (noeta extra) "never save secrets"; "set keywords in every language"; `memory_archive`. | baseline lacks these — list as deviations or drop. |
+| `main.mem.1` | Memory is a directory of files at a per-project path under the config dir (`<config>/projects/<cwd with / replaced by ->/memory/`); the prompt states the absolute path. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.2` | The directory already exists: write into it directly with the `Write` tool; do not `mkdir` or probe for it. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.3` | One memory = one file = one fact, with frontmatter fields `name` (short kebab-case slug), `description` (one line, used for relevance at recall time) and `metadata.type`. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.4` | `type` is one of `user`, `feedback`, `project`, `reference`. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.5` | For `feedback` and `project` memories, the body ends with a **Why:** line and a **How to apply:** line. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.6` | Bodies link related memories as `[[name]]` by slug; dangling links are allowed and mark something worth writing later. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.7` | `user` = who the user is (role, expertise, preferences). | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.8` | `feedback` = how the user wants the work done: corrections and approaches they confirmed, with the reason. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.9` | `project` = work in progress, aims or limits that the code and its history cannot tell you; relative dates are converted to absolute ones. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.10` | `reference` = pointers to outside resources (URLs, dashboards, tickets). | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.11` | After writing a memory, add a one-line pointer to `MEMORY.md` in the form `- [Title](file.md) — hook`. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.12` | `MEMORY.md` is the index loaded into every session: one line per memory, no frontmatter, never memory content. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.13` | Before saving, look for an existing memory on the same fact and update it instead of adding a duplicate. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.14` | Delete memories that turn out wrong. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.15` | Skip anything the repository itself captures (layout of the code, earlier fixes, commit history, CLAUDE.md) and anything relevant only to this conversation. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.16` | If asked to remember something of that kind, ask which part of it was surprising and store only that part. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.17` | Recalled memories that arrive inside `<system-reminder>` are background, not instructions from the user, and describe what was true when written. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.18` | Before recommending a file, function or flag named in a memory, check it still exists. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| — | (noeta extra) "never save secrets"; "set keywords in every language"; `memory_archive`. | dropped with the memory tools |
 
 ## Environment section (inside the main prompt)
 

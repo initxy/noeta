@@ -92,6 +92,8 @@ class Replayer:
             if m.get("role") != "user":
                 continue
             for t in _texts(m):
+                if self.kinds.name(t) == "compact-summary":
+                    continue  # a summary quotes earlier prompts
                 for si, s in enumerate(self.steps):
                     if si >= best_step and _shows(t, s["say"]):
                         best_step, at = si, mi
@@ -310,6 +312,10 @@ class SessionReplay:
         from noeta.core.commands import expand_command
         from noeta.core.extension import CommandContext
 
+        # The session's environment knobs (Claude Code's compaction window
+        # and percentage) reach noeta's plugins the same way.
+        for key, value in (self.spec.get("env") or {}).items():
+            os.environ[key] = str(value)
         settings = Settings(model=MODEL, provider="anthropic", base_url=endpoint.url,
                             api_key="replay", store=f"sqlite:///{self.scratch / 'tasks.db'}")
         app = from_settings(settings, cwd=str(self.proj), own_tasks_only=True,
@@ -438,9 +444,17 @@ def replay(version: str, sessions: list[str] | None, out: Path, keep: bool = Fal
             base_script = contract_dir / "script" / f"{base}.json"
             subs += json.loads(base_script.read_text("utf-8")).get("subagents", [])
         kinds.tasks = {run.replayer.fill(s["prompt"])[:120] for s in subs}
-        with Endpoint(run.replayer) as ep:
-            task_ids[name] = asyncio.run(run.drive(ep, task_ids.get(base) if base else None))
-            entries = list(ep.captured)
+        saved = {k: os.environ.get(k) for k in sess.get("env") or {}}
+        try:
+            with Endpoint(run.replayer) as ep:
+                task_ids[name] = asyncio.run(run.drive(ep, task_ids.get(base) if base else None))
+                entries = list(ep.captured)
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
         raw_dir = out / "raw" / name
         shutil.rmtree(raw_dir, ignore_errors=True)
         raw_dir.mkdir(parents=True)

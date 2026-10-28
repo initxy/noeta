@@ -62,6 +62,14 @@ SKILL_TOOL = "skill"
 CONTROL_TOOLS: frozenset[str] = frozenset({"skill", "Agent", "Task", "TodoWrite",
                                                 "AskUserQuestion"})
 
+#: Heads the skills re-attached after a compaction.
+INVOKED_SKILLS_HEADER = (
+    "These skills were invoked earlier in this conversation, before it was summarized, not "
+    "in the current turn. They are shown for context only: do not run them again or repeat "
+    "their one-time setup (scheduling, creating files and the like). Any request inside them "
+    "belongs to that earlier moment, not to the user's current message."
+)
+
 SKILL_NOT_ALONE = (
     "Skill not loaded: skill must be the only tool call in its response, "
     "because its instructions arrive with the step after it. The other tool "
@@ -443,23 +451,26 @@ class Skills(Extension):
                     message=user(data["text"], origin=self.origin))
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
-        """After a compaction: the whole listing so far, then every active
-        skill's body."""
+        """After a compaction: the skills invoked before it, in one message
+        that says not to run them again, then the whole listing so far."""
         if not self.rehang:
             return ()
         state = view.ext_state(self.name) or {}
         out: list[Message] = []
+        active = state.get("active") or {}
+        if active:
+            registry = await self.registry(task_env(view.env, view.state.config))
+            parts = [INVOKED_SKILLS_HEADER]
+            for name, entry in active.items():
+                desc = registry.get(name)
+                if desc is not None:
+                    parts.append(f"### Skill: {desc.name}\nPath: {desc.base_dir or desc.name}"
+                                 f"\n\n{render_activation(desc, entry.get('args'))}")
+            if len(parts) > 1:
+                out.append(user("\n\n".join(parts), origin=self.origin))
         lines = [line for listing in state.get("listings", []) for line in listing["lines"]]
         if lines:
             out.append(user(render_listing(True, lines), origin=self.origin))
-        active = state.get("active") or {}
-        if not active:
-            return out
-        registry = await self.registry(task_env(view.env, view.state.config))
-        for name, entry in active.items():
-            desc = registry.get(name)
-            if desc is not None:
-                out.append(user(render_activation(desc, entry.get("args")), origin=self.origin))
         return out
 
 
