@@ -34,6 +34,7 @@ from typing import Literal, Protocol
 from msgspec.structs import replace
 
 from noeta.core.events import (
+    DEFAULT_TENANT,
     Event,
     External,
     InboxItem,
@@ -66,6 +67,8 @@ class TaskRow(Struct):
     inbox_seq: int = 0
     inbox_read_seq: int = 0
     end_status: str | None = None
+    #: Whose task it is (``TaskCreated.tenant``).
+    tenant: str = DEFAULT_TENANT
 
 
 class Claim(Struct):
@@ -200,7 +203,10 @@ class Store(Protocol):
         parent_id: str | None = None,
         status: Status | None = None,
         limit: int = 100,
-    ) -> list[TaskRow]: ...
+        tenant: str | None = None,
+    ) -> list[TaskRow]:
+        """The newest rows first; ``tenant`` keeps only that tenant's."""
+        ...
 
     async def claim(
         self, worker: str, queues: Sequence[str], lease_seconds: float,

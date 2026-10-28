@@ -19,7 +19,7 @@ import asyncio
 import pytest
 
 from noeta.core.errors import Conflict, UnknownTask
-from noeta.core.events import Cancel, External, Say, TaskCreated, TaskEnded, Waiting
+from noeta.core.events import DEFAULT_TENANT, Cancel, External, Say, TaskCreated, TaskEnded, Waiting
 from noeta.core.store import HOLD_LOST, NewTask, Patch, Post, Store
 from noeta.core.types import user
 
@@ -41,6 +41,17 @@ async def test_create_writes_task_created_and_is_claimable(store: Store) -> None
     claim = await store.claim("w", ["default"], 30)
     assert claim is not None and claim.task_id == "t1" and claim.epoch == 1
     assert await store.claim("w2", ["default"], 30) is None
+
+
+async def test_a_task_row_carries_its_tenant_and_lists_filter_by_it(store: Store) -> None:
+    await store.create(new("plain"))
+    await store.create(NewTask(task_id="theirs", created=TaskCreated(agent="a", tenant="acme")))
+    plain, theirs = await store.get("plain"), await store.get("theirs")
+    assert plain is not None and plain.tenant == DEFAULT_TENANT
+    assert theirs is not None and theirs.tenant == "acme"
+    assert [r.task_id for r in await store.tasks(tenant="acme")] == ["theirs"]
+    assert [r.task_id for r in await store.tasks(tenant=DEFAULT_TENANT)] == ["plain"]
+    assert {r.task_id for r in await store.tasks()} == {"plain", "theirs"}
 
 
 async def test_create_dedupe_key_returns_first_task(store: Store) -> None:

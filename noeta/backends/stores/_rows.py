@@ -13,7 +13,8 @@ from noeta.core.store import TaskRow
 
 TASK_COLUMNS = (
     "task_id, root_id, agent, queue, status, last_seq, created_at, updated_at, parent_id, "
-    "waiting_on, ready_at, owner, owner_epoch, lease_until, inbox_seq, inbox_read_seq, end_status"
+    "waiting_on, ready_at, owner, owner_epoch, lease_until, inbox_seq, inbox_read_seq, "
+    "end_status, tenant"
 )
 _TASK_NAMES = [n.strip() for n in TASK_COLUMNS.split(",")]
 

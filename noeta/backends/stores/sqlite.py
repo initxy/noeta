@@ -104,6 +104,26 @@ CREATE TABLE IF NOT EXISTS tree_holds (
 CREATE INDEX IF NOT EXISTS tree_holds_until ON tree_holds (until);
 """
 
+#: Columns added after a table was first created: (table, column, definition).
+#: Existing rows take the definition's default; nothing is ever dropped.
+_ADDED_COLUMNS = (
+    ("tasks", "tenant", "TEXT NOT NULL DEFAULT 'default'"),
+)
+_ADDED_INDEXES = "CREATE INDEX IF NOT EXISTS tasks_tenant ON tasks (tenant, status);"
+
+
+def _add_columns(conn: sqlite3.Connection) -> None:
+    for table, column, definition in _ADDED_COLUMNS:
+        have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in have:
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc):  # another process was first
+                    raise
+    conn.executescript(_ADDED_INDEXES)
+
+
 class SqliteStore:
     def __init__(self, path: str, *, poll_interval: float = 0.5) -> None:
         self.path = path
@@ -129,6 +149,7 @@ class SqliteStore:
                     conn.execute("PRAGMA journal_mode=WAL")
                     conn.execute("PRAGMA synchronous=NORMAL")
                     conn.executescript(_SCHEMA)
+                    _add_columns(conn)
                     if conn.execute("SELECT count(*) FROM noeta_schema").fetchone()[0] == 0:
                         conn.execute("INSERT INTO noeta_schema VALUES (?)", (SCHEMA_VERSION,))
                 except sqlite3.OperationalError as exc:
@@ -217,8 +238,8 @@ class SqliteStore:
         created = task.created
         conn.execute(
             "INSERT INTO tasks (task_id, parent_id, root_id, agent, queue, status, last_seq,"
-            " inbox_seq, dedupe_key, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, 'ready', 1, ?, ?, ?, ?)",
+            " inbox_seq, dedupe_key, created_at, updated_at, tenant)"
+            " VALUES (?, ?, ?, ?, ?, 'ready', 1, ?, ?, ?, ?, ?)",
             (
                 task.task_id,
                 created.parent_id,
@@ -229,6 +250,7 @@ class SqliteStore:
                 task.dedupe_key,
                 now,
                 now,
+                created.tenant,
             ),
         )
         conn.execute(
@@ -393,11 +415,15 @@ class SqliteStore:
         parent_id: str | None = None,
         status: Status | None = None,
         limit: int = 100,
+        tenant: str | None = None,
     ) -> list[TaskRow]:
         where, args = [], []
         if parent_id is not None:
             where.append("parent_id = ?")
             args.append(parent_id)
+        if tenant is not None:
+            where.append("tenant = ?")
+            args.append(tenant)
         if status is not None:
             where.append("status = ?")
             args.append(status)

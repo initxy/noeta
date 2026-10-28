@@ -11,6 +11,7 @@ from typing import Any
 from noeta.core import records
 from noeta.core.deferred import TOOL_LOADED_TEXT
 from noeta.core.events import (
+    DEFAULT_TENANT,
     Answer,
     Cancel,
     ChildEnded,
@@ -71,6 +72,7 @@ class TaskState:
     config: dict[str, Any] = field(default_factory=dict)
     parent_id: str | None = None
     root_id: str | None = None
+    tenant: str = DEFAULT_TENANT
     last_seq: int = 0
     inbox_read: int = 0
 
@@ -205,6 +207,7 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         state.config = dict(ev.config)
         state.parent_id = ev.parent_id
         state.root_id = ev.root_id
+        state.tenant = ev.tenant
     elif isinstance(ev, InputTaken):
         _take(state, ev, rec.seq)
     elif isinstance(ev, ModelCalled):

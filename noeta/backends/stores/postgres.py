@@ -188,6 +188,14 @@ def _delta_payloads(deltas: Sequence[tuple[str, Delta]]) -> list[str]:
     return out
 
 
+#: Added after the tables were first created; existing rows take the
+#: default, nothing is ever dropped.
+_ADDED = """
+ALTER TABLE {s}.tasks ADD COLUMN IF NOT EXISTS tenant TEXT NOT NULL DEFAULT 'default';
+CREATE INDEX IF NOT EXISTS tasks_tenant ON {s}.tasks (tenant, status);
+"""
+
+
 def _lost(conn: Conn | None, exc: BaseException) -> bool:
     """Whether ``exc`` means the connection is gone (not a query error)."""
     if not isinstance(exc, psycopg.OperationalError | psycopg.InterfaceError):
@@ -282,6 +290,11 @@ class PostgresStore:
                                (_LOCK_CLASS, self.schema))
             await conn.execute(self._q('CREATE SCHEMA IF NOT EXISTS {s}'))
             await conn.execute(self._q(_SCHEMA))
+            cur = await conn.execute(
+                "SELECT 1 FROM information_schema.columns WHERE table_schema = %s"
+                " AND table_name = 'tasks' AND column_name = 'tenant'", (self.schema,))
+            if await cur.fetchone() is None:  # ALTER locks the table; only when needed
+                await conn.execute(self._q(_ADDED))
             cur = await conn.execute(self._q("SELECT max(version) FROM {s}.noeta_schema"))
             row = await cur.fetchone()
             version = row[0] if row else None
@@ -472,11 +485,11 @@ class PostgresStore:
         created = task.created
         cur = await conn.execute(self._q(
             "INSERT INTO {s}.tasks (task_id, parent_id, root_id, agent, queue, status, last_seq,"
-            " inbox_seq, dedupe_key, created_at, updated_at)"
-            f" VALUES (%s, %s, %s, %s, %s, 'ready', 1, %s, %s, {_NOW}, {_NOW})"
+            " inbox_seq, dedupe_key, created_at, updated_at, tenant)"
+            f" VALUES (%s, %s, %s, %s, %s, 'ready', 1, %s, %s, {_NOW}, {_NOW}, %s)"
             " ON CONFLICT DO NOTHING RETURNING task_id"),
             (task.task_id, created.parent_id, created.root_id or task.task_id, created.agent,
-             task.queue, len(task.inbox), task.dedupe_key))
+             task.queue, len(task.inbox), task.dedupe_key, created.tenant))
         if await cur.fetchone() is None:
             if task.dedupe_key is not None:
                 cur = await conn.execute(
@@ -657,12 +670,16 @@ class PostgresStore:
         parent_id: str | None = None,
         status: Status | None = None,
         limit: int = 100,
+        tenant: str | None = None,
     ) -> list[TaskRow]:
         where: list[str] = []
         args: list[Any] = []
         if parent_id is not None:
             where.append("parent_id = %s")
             args.append(parent_id)
+        if tenant is not None:
+            where.append("tenant = %s")
+            args.append(tenant)
         if status is not None:
             where.append("status = %s")
             args.append(status)

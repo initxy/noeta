@@ -9,7 +9,9 @@ The only unit of work. A task has an agent, a config, an event log, an inbox and
 `tasks` (a projection of the log written in the same transaction). Sub-agents are child tasks
 with `parent_id` / `root_id`; a task may start from another's conversation
 (`TaskCreated.history_from`: a resumed or forked sub-agent). There is no session, run or workflow
-entity.
+entity. A task belongs to one tenant (`TaskCreated.tenant`, `default` unless a scoped client
+made it; children inherit it): a client scoped to a tenant (`Client.scoped`) and a task's own
+posts and task lists (`ToolContext.post`, `tasks`) reach only that tenant's tasks.
 
 ## Event log
 
