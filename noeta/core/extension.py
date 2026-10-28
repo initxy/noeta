@@ -166,14 +166,15 @@ class TaskView:
         """Record a compaction (the compaction extension's one core event)."""
         self.pending.append(event)
 
-    async def residents(self) -> list[Message]:
-        """Every extension's ``resident`` messages, in extension order: what
-        a compaction puts right after its summary (``Compacted.kept``). An
-        extension that fails is logged and skipped."""
+    async def residents(self, *, lead: bool = False) -> list[Message]:
+        """Every extension's ``resident`` messages (``lead_resident`` with
+        ``lead``), in extension order: what a compaction rebuilds after the
+        kept messages (ahead of its summary). An extension that fails is
+        logged and skipped."""
         out: list[Message] = []
         for ext in self.extensions:
             try:
-                out.extend(await ext.resident(self))
+                out.extend(await (ext.lead_resident(self) if lead else ext.resident(self)))
             except Exception:
                 log.exception("extension %s resident failed", ext.name)
         return out
@@ -220,13 +221,18 @@ class Extension:
         raise NotImplementedError(f"{self.name} has no command {name!r}")
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
-        """Content that must sit right after a compaction's summary (a
-        listing, project instructions, an index, the environment block). The
-        compaction extension calls this (through ``TaskView.residents``) while
-        compacting and records the result in ``Compacted.kept``, so the
-        request sent right after the compaction is the one rebuilt from the
-        log. Records made here (without a message) are appended before the
-        ``Compacted``."""
+        """Content a compaction re-attaches after the messages it keeps (a
+        listing, the environment block). The compaction extension calls this
+        (through ``TaskView.residents``) while compacting and records the
+        result in ``Compacted.after``, so the request sent right after the
+        compaction is the one rebuilt from the log. Records made here
+        (without a message) are appended before the ``Compacted``."""
+        return ()
+
+    async def lead_resident(self, view: TaskView) -> Sequence[Message]:
+        """Content a compaction rebuilds ahead of its summary (project
+        instructions, the memory index), recorded in ``Compacted.lead``;
+        otherwise as ``resident``."""
         return ()
 
     async def on_start(self, view: TaskView) -> None:
