@@ -55,6 +55,9 @@ def _parser() -> argparse.ArgumentParser:
     w = sub.add_parser("worker", help="run tasks from the store until stopped")
     w.add_argument("--queue", action="append", default=None)
     w.add_argument("--concurrency", type=int, default=8)
+    w.add_argument("--lease", type=float, default=None, metavar="SECONDS",
+                   help="how long a claim lasts without renewal (default 30); a dead "
+                        "worker's tasks wait about this long before another takes them")
     sv = sub.add_parser("serve", help="the client API over HTTP")
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8642)
@@ -167,8 +170,10 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
         await app.stop()
 
 
-async def _worker(s: Settings, queues: list[str], concurrency: int) -> None:
-    app = _app(s, queues=tuple(queues), concurrency=concurrency)
+async def _worker(s: Settings, queues: list[str], concurrency: int,
+                  lease: float | None = None) -> None:
+    kw: dict[str, Any] = {"lease_seconds": lease} if lease else {}
+    app = _app(s, queues=tuple(queues), concurrency=concurrency, **kw)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -203,7 +208,8 @@ def main(argv: list[str] | None = None) -> None:
                                 model=s.model, servers=servers))
         return
     if args.command == "worker":
-        asyncio.run(_worker(_settings(args), args.queue or ["default"], args.concurrency))
+        asyncio.run(_worker(_settings(args), args.queue or ["default"], args.concurrency,
+                            args.lease))
         return
     if args.command == "serve":
         if args.no_token and args.host not in ("127.0.0.1", "localhost", "::1"):
