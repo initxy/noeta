@@ -58,6 +58,8 @@ STEP_LIMIT_HEAD = "Stopped at the {n}-step limit before finishing."
 #: Turn-failure reasons hosts branch on (``Waiting.detail["turn_failed"]``
 #: and ``TaskEnded.error`` start with one of these).
 LLM_ERROR = "llm_error"
+#: The task's tenant has spent its budget for the period (``noeta.core.tenants``).
+BUDGET_SPENT = "budget_spent"
 LLM_EMPTY_RESPONSE = "llm_empty_response"
 LLM_TRUNCATED = "llm_truncated"
 CONTEXT_OVERFLOW = "context_overflow"

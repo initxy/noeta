@@ -157,6 +157,13 @@ def _app(s: Settings, **kw: Any) -> Any:
     return from_settings(s, **kw)
 
 
+def _tenants(s: Settings) -> dict[str, tenants.TenantPlace]:
+    try:
+        return tenants.load_tenants(s)
+    except (ValueError, OSError) as exc:
+        sys.exit(f"noeta: {exc}")
+
+
 async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     import uvicorn
 
@@ -170,7 +177,9 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     # The plugin refuses bypassPermissions itself, whatever way it is asked.
     refuse = {} if args.allow_bypass_permissions else {
         "permissions": {"disable_bypass_mode": True}}
-    app = _app(s, cwd=cwd, with_channels=True, **refuse)
+    places = _tenants(s)
+    app = _app(s, cwd=cwd, with_channels=True,
+               tenants={name: p.allowed for name, p in places.items()}, **refuse)
     await app.start(worker=with_worker)
     api = create_app(app.client, token=token, auth=token is not None,
                      tokens=tenants.tenant_tokens(),
@@ -179,7 +188,9 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      allowed_hosts=LOOPBACK_HOSTS if host in LOOPBACK_HOSTS else None,
                      origins=args.allow_origin,
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
-                     roots=[os.path.abspath(r) for r in args.allow_root])
+                     roots=[os.path.abspath(r) for r in args.allow_root],
+                     workspaces={name: p.workspace for name, p in places.items()
+                                 if p.workspace})
     port = args.port
     try:
         await uvicorn.Server(uvicorn.Config(api, host=host, port=port)).serve()
@@ -192,6 +203,7 @@ async def _worker(s: Settings, queues: list[str], concurrency: int,
     from noeta.host.channels import run_channels
 
     kw: dict[str, Any] = {"lease_seconds": lease} if lease else {}
+    kw["tenants"] = {name: p.allowed for name, p in _tenants(s).items()}
     app = _app(s, queues=tuple(queues), concurrency=concurrency, with_channels=True, **kw)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

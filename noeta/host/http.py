@@ -142,12 +142,17 @@ class _GuardedClient:
     ``bypassPermissions`` (unless allowed) or with a ``cwd`` outside the
     server's directory and its other ``roots``. A relative ``cwd`` is taken
     from the server's directory (not the process's) and passed on
-    absolute, so every worker resolves it the same."""
+    absolute, so every worker resolves it the same. With a ``workspace``
+    (a tenant's) that directory is the only root, and a task created
+    without a ``cwd`` runs in it."""
 
     def __init__(self, client: ClientAPI, *, allow_bypass: bool, cwd: str | None,
-                 roots: Sequence[str] = ()) -> None:
+                 roots: Sequence[str] = (), workspace: str | None = None) -> None:
         self._client = client
         self._allow_bypass = allow_bypass
+        self._fill = workspace is not None
+        if workspace is not None:
+            cwd, roots = workspace, ()
         self._cwd = os.path.realpath(cwd) if cwd else None
         self._roots = [r for r in (self._cwd, *(os.path.realpath(r) for r in roots)) if r]
 
@@ -164,6 +169,8 @@ class _GuardedClient:
         real = os.path.realpath(os.path.join(self._cwd, str(cwd)))
         if not any(real == r or real.startswith(r.rstrip("/") + "/") for r in self._roots):
             where = ", ".join(self._roots)
+            if self._fill:
+                raise Refused(f"cwd {cwd!r} is outside this tenant's workspace ({where})")
             raise Refused(f"cwd {cwd!r} is outside this server's directories ({where}); "
                           "start it there or add the directory with --allow-root")
         return real
@@ -183,8 +190,11 @@ class _GuardedClient:
                      queue: str = "default", dedupe_key: str | None = None,
                      history_from: str | None = None,
                      history_through: int | None = None) -> str:
+        config = self.check_config(config)
+        if self._fill and not (config or {}).get("cwd"):
+            config = {**(config or {}), "cwd": self._cwd}
         return await self._client.create(
-            agent, input, task_id=task_id, config=self.check_config(config), queue=queue,
+            agent, input, task_id=task_id, config=config, queue=queue,
             dedupe_key=dedupe_key, history_from=history_from, history_through=history_through)
 
     async def send(self, task_id: str, input: Input, *,
@@ -285,7 +295,8 @@ def create_app(client: Client, *, token: str | None = None,
                auth: bool = True, deltas: Any = None, agents: Mapping[str, Agent] | None = None,
                app: Any = None, allowed_hosts: Sequence[str] | None = None,
                origins: Sequence[str] = (), allow_bypass: bool = False,
-               cwd: str | None = None, roots: Sequence[str] = ()) -> Starlette:
+               cwd: str | None = None, roots: Sequence[str] = (),
+               workspaces: Mapping[str, str] | None = None) -> Starlette:
     """``deltas`` is ``LocalApp.deltas`` when workers run in this process;
     ``agents`` (by name) lets a message run its task agent's slash commands;
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
@@ -302,7 +313,9 @@ def create_app(client: Client, *, token: str | None = None,
     ``origins``: web origins (``https://host:port``) allowed besides the
     server's own; ``allow_bypass``: requests may ask for
     ``bypassPermissions``; ``cwd``: tasks a request creates run in it or
-    below it, or below one of ``roots`` (anywhere when ``None``)."""
+    below it, or below one of ``roots`` (anywhere when ``None``);
+    ``workspaces``: per tenant, the directory its tasks run in or below
+    (instead of ``cwd`` and ``roots``), and by default."""
     if auth and not token and not tokens:
         raise ValueError("create_app needs a bearer token (token= or tokens=); pass "
                          "auth=False to serve every request without one")
@@ -319,7 +332,8 @@ def create_app(client: Client, *, token: str | None = None,
         found = scopes.get(tenant)
         if found is None:
             scoped = client.scoped(tenant) if hasattr(client, "scoped") else client
-            guarded = _GuardedClient(scoped, allow_bypass=allow_bypass, cwd=cwd, roots=roots)
+            guarded = _GuardedClient(scoped, allow_bypass=allow_bypass, cwd=cwd, roots=roots,
+                                     workspace=(workspaces or {}).get(tenant))
             found = scopes[tenant] = _Scope(scoped, guarded, _GuardedFront(serving, guarded))
         return found
 

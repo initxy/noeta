@@ -54,6 +54,44 @@ async def test_a_task_row_carries_its_tenant_and_lists_filter_by_it(store: Store
     assert {r.task_id for r in await store.tasks()} == {"plain", "theirs"}
 
 
+def _of(tenant: str, task_id: str) -> NewTask:
+    return NewTask(task_id=task_id, created=TaskCreated(agent="a", tenant=tenant))
+
+
+async def test_a_tenant_at_its_running_limit_waits_its_turn(store: Store) -> None:
+    for task in (_of("acme", "a1"), _of("acme", "a2"), _of("beta", "b1")):
+        await store.create(task)
+    limits = {"acme": 1}
+    first = await store.claim("w", ["default"], 30, tenant_limits=limits)
+    second = await store.claim("w", ["default"], 30, tenant_limits=limits)
+    assert first is not None and first.task_id == "a1"
+    assert second is not None and second.task_id == "b1"  # a2 waits
+    assert await store.claim("w", ["default"], 30, tenant_limits=limits) is None
+    await store.append(first, [TaskEnded(status="done")], expected_seq=1,
+                       patch=Patch(status="ended"))
+    third = await store.claim("w", ["default"], 30, tenant_limits=limits)
+    assert third is not None and third.task_id == "a2"
+
+
+async def test_workers_claiming_at_once_keep_a_tenant_under_its_limit(store: Store) -> None:
+    for i in range(6):
+        await store.create(_of("acme", f"a{i}"))
+    got = await asyncio.gather(*(store.claim(f"w{i}", ["default"], 30,
+                                             tenant_limits={"acme": 2}) for i in range(6)))
+    assert len([c for c in got if c is not None]) == 2
+    assert len(await store.tasks(tenant="acme", status="running")) == 2
+
+
+async def test_tenant_usage_adds_up_per_period(store: Store) -> None:
+    add = getattr(store, "add_tenant_usage", None)
+    if add is None:
+        pytest.skip("this store keeps no tenant usage")
+    await asyncio.gather(*(add("acme", "2026-10", 10, 0.5) for _ in range(4)))
+    await add("acme", "2026-11", 1, 0.0)
+    assert await store.tenant_usage("acme", "2026-10") == (40, 2.0)  # type: ignore[attr-defined]
+    assert await store.tenant_usage("beta", "2026-10") == (0, 0.0)  # type: ignore[attr-defined]
+
+
 async def test_create_dedupe_key_returns_first_task(store: Store) -> None:
     assert await store.create(new("a", dedupe_key="k")) == ("a", True)
     assert await store.create(new("b", dedupe_key="k")) == ("a", False)

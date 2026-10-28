@@ -18,7 +18,10 @@ children inherit it). A client scoped to a tenant (`Client.scoped`) and a task's
 task lists (`ToolContext.post`, `tasks`) reach only that tenant's tasks; host code with an
 unscoped client sees the whole store. On `noeta serve` a request's bearer token picks its
 tenant: the server token is `default`'s, more come from `noeta token add --tenant`
-(`~/.noeta/tokens.json`, digests only; `noeta/cli/tenants.py`).
+(`~/.noeta/tokens.json`, digests only). What a tenant may do is `~/.noeta/tenants/<name>/
+config.toml` (`noeta/cli/tenants.py`): a workspace bounding its tasks' `cwd` (the HTTP host),
+and `Runtime.tenants` (`noeta/core/tenants.py`): running limit (the claim), monthly budget
+(the model call), its own provider. No directory, no limits.
 
 ## Event log
 

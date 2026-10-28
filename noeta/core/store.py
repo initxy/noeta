@@ -19,7 +19,10 @@ time running out only makes it reapable; :meth:`Store.reap_holds` releases
 it and tells the tree's tasks (``hold_lost``) in one transaction, so no task
 of the tree is claimed by another worker before that notice is in its inbox.
 
-Optional members, for a store shared by processes on many machines:
+Optional members. Tenant budgets: ``async add_tenant_usage(tenant, period,
+tokens, cost_usd)`` adds to a tenant's count for a period (``YYYY-MM``) and
+``async tenant_usage(tenant, period) -> (tokens, cost_usd)`` reads it. For a
+store shared by processes on many machines:
 ``async publish_deltas(deltas)`` sends live model output (``(task_id,
 Delta)`` pairs) to the other processes, and ``on_delta(callback)`` hears it
 (returning the unsubscribe function). Best effort and never stored; a store
@@ -28,7 +31,7 @@ without them keeps live output in its process.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Literal, Protocol
 
 from msgspec.structs import replace
@@ -211,12 +214,16 @@ class Store(Protocol):
     async def claim(
         self, worker: str, queues: Sequence[str], lease_seconds: float,
         *, roots: Sequence[str] | None = None,
+        tenant_limits: Mapping[str, int] | None = None,
     ) -> Claim | None:
         """Take one claimable task: ``ready`` (and due), ``waiting`` with a due
         ``ready_at``, or ``running`` with an expired lease, of a tree no other
         worker holds (:meth:`hold`). Bumps the epoch.
         With ``roots``, only tasks whose ``root_id`` is one of them (a front
-        end serving its own task trees); ``None`` takes any task."""
+        end serving its own task trees); ``None`` takes any task.
+        ``tenant_limits`` (tenant -> most tasks running at once): a task of a
+        tenant that many tasks of already run stays where it is; the count
+        holds across workers claiming at the same time."""
         ...
 
     async def renew(self, claim: Claim, lease_seconds: float) -> Claim | None:

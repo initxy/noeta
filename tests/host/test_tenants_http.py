@@ -114,6 +114,34 @@ async def test_send_message_cannot_cross_tenants(
     await b.close()
 
 
+async def test_a_tenants_tasks_run_in_its_workspace(tmp_path: Path) -> None:
+    from noeta.core.client import Client
+
+    work, other = tmp_path / "acme", tmp_path / "elsewhere"
+    (work / "sub").mkdir(parents=True)
+    other.mkdir()
+    store = SqliteStore(str(tmp_path / "t.db"))
+    client = Client(store)
+    api = create_app(client, token="tok-default", tokens=TOKENS, cwd=str(tmp_path),
+                     workspaces={"a": str(work)})
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api),
+                                 base_url="http://x", headers=_headers("tok-a")) as a:
+        made = (await a.post("/tasks", json={"agent": "main"})).json()["task_id"]
+        sub = (await a.post("/tasks", json={"agent": "main",
+                                            "config": {"cwd": "sub"}})).json()["task_id"]
+        for outside in (str(other), str(tmp_path), "../elsewhere"):
+            got = await a.post("/tasks", json={"agent": "main", "config": {"cwd": outside}})
+            assert got.status_code == 403 and "workspace" in got.json()["error"]
+    for tid, where in ((made, work), (sub, work / "sub")):
+        created = (await store.read(tid))[0].event
+        assert created.config["cwd"] == str(where.resolve())  # type: ignore[attr-defined]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api),
+                                 base_url="http://x", headers=_headers("tok-b")) as b:
+        got = await b.post("/tasks", json={"agent": "main", "config": {"cwd": str(other)}})
+        assert got.status_code == 201  # a tenant without a workspace: the server's dirs
+    await store.close()
+
+
 def test_the_tokens_file_maps_tokens_to_tenants(tmp_path: Path,
                                                monkeypatch: pytest.MonkeyPatch) -> None:
     import stat

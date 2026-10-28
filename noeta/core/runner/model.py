@@ -126,6 +126,9 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     except RequestStale:
         await run.flush(view)
         return True  # the next boundary builds the request from the new state
+    refusal = await run.rt.budget_refusal(run.state.tenant)
+    if refusal is not None:
+        return await run.fail_turn(texts.BUDGET_SPENT, refusal)
     await run.append([ModelCalled(model=request.model, request_hash=request_hash(request),
                                   attempt=run.state.model_attempts + 1)])
 
@@ -149,8 +152,9 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
             attempt=attempt, delay=delay, error=str(error)[: texts.ERROR_DETAIL_CHARS]))])))
 
     try:
-        response = await complete_with_retries(run.rt.provider_for(request.model), request,
-                                               on_delta, sleep=run.rt.sleep, on_retry=on_retry)
+        provider = run.rt.provider(request.model, run.state.tenant)
+        response = await complete_with_retries(provider, request, on_delta, sleep=run.rt.sleep,
+                                               on_retry=on_retry)
     except ContextOverflow as exc:
         await asyncio.gather(*pending, return_exceptions=True)
         overflow_view = run.view()
@@ -182,6 +186,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
                                    f"(stop: {response.stop_reason})")
     response = unique_call_ids(run.state, response, run.state.last_seq + 1)
     await run.append([ModelReplied(response=response)])
+    await run.rt.charge(run.state.tenant, request.model, response.usage)
     return True
 
 

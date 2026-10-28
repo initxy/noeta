@@ -60,7 +60,7 @@ import logging
 import re
 import threading
 import weakref
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, TypeVar
 
 import msgspec
@@ -99,6 +99,7 @@ log = logging.getLogger("noeta.backends.stores.postgres")
 
 SCHEMA_VERSION = 1
 _LOCK_CLASS = 0x6E6F6574  # "noet": the advisory-lock namespace for schema setup
+_TENANT_LOCK_CLASS = 0x6E6F7465  # "note": one claim at a time per limited tenant
 _RETRY_SQLSTATES = frozenset({"40001", "40P01"})  # serialization failure, deadlock
 _LOST_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
 _DEADLOCK_RETRIES = 5
@@ -194,6 +195,21 @@ _ADDED = """
 ALTER TABLE {s}.tasks ADD COLUMN IF NOT EXISTS tenant TEXT NOT NULL DEFAULT 'default';
 CREATE INDEX IF NOT EXISTS tasks_tenant ON {s}.tasks (tenant, status);
 """
+
+
+_TABLES = """
+CREATE TABLE IF NOT EXISTS {s}.tenant_usage (
+    tenant   TEXT NOT NULL,
+    period   TEXT NOT NULL,
+    tokens   BIGINT NOT NULL DEFAULT 0,
+    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant, period)
+);
+"""
+
+
+class _TenantFull(Exception):
+    """A claim found its tenant at its running limit after all."""
 
 
 def _lost(conn: Conn | None, exc: BaseException) -> bool:
@@ -295,6 +311,7 @@ class PostgresStore:
                 " AND table_name = 'tasks' AND column_name = 'tenant'", (self.schema,))
             if await cur.fetchone() is None:  # ALTER locks the table; only when needed
                 await conn.execute(self._q(_ADDED))
+            await conn.execute(self._q(_TABLES))
             cur = await conn.execute(self._q("SELECT max(version) FROM {s}.noeta_schema"))
             row = await cur.fetchone()
             version = row[0] if row else None
@@ -697,15 +714,27 @@ class PostgresStore:
     async def claim(
         self, worker: str, queues: Sequence[str], lease_seconds: float,
         *, roots: Sequence[str] | None = None,
+        tenant_limits: Mapping[str, int] | None = None,
     ) -> Claim | None:
         if not queues or (roots is not None and not roots):
             return None
         in_roots = " AND root_id = ANY(%(r)s)" if roots is not None else ""
+        limits = dict(tenant_limits or {})
+
+        async def running(conn: Conn, tenant: str, besides: str = "") -> int:
+            cur = await conn.execute(self._q(
+                "SELECT count(*) FROM {s}.tasks WHERE tenant = %s AND status = 'running'"
+                " AND task_id <> %s"), (tenant, besides))
+            row = await cur.fetchone()
+            return int(row[0]) if row else 0
 
         async def tx(conn: Conn) -> Claim | None:
+            full = [t for t, most in limits.items() if await running(conn, t) >= most]
             cur = await conn.execute(self._q(
-                "WITH c AS (SELECT task_id FROM {s}.tasks k WHERE queue = ANY(%(q)s)"
-                + in_roots + " AND ("
+                "WITH c AS (SELECT task_id, status AS was FROM {s}.tasks k"
+                " WHERE queue = ANY(%(q)s)" + in_roots
+                + (" AND (status = 'running' OR tenant <> ALL(%(full)s))" if full else "")
+                + " AND ("
                 f" (status = 'ready' AND (ready_at IS NULL OR ready_at <= {_NOW}))"
                 f" OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= {_NOW})"
                 f" OR (status = 'running' AND lease_until < {_NOW}))"
@@ -716,16 +745,48 @@ class PostgresStore:
                 f" owner_epoch = t.owner_epoch + 1, lease_until = {_NOW} + %(ls)s,"
                 f" ready_at = NULL, waiting_on = NULL, updated_at = {_NOW}"
                 " FROM c WHERE t.task_id = c.task_id"
-                " RETURNING t.task_id, t.owner_epoch, t.lease_until"),
+                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.tenant, c.was"),
                 {"q": list(queues), "w": worker, "ls": lease_seconds,
-                 "r": list(roots or [])})
+                 "r": list(roots or []), "full": full})
             row = await cur.fetchone()
             if row is None:
                 return None
-            return Claim(task_id=str(row[0]), worker=worker, epoch=int(row[1]),
+            task_id, tenant = str(row[0]), str(row[3])
+            if tenant in limits and row[4] != "running":
+                # Workers claiming at once each counted before the others
+                # committed: one at a time per tenant, count again.
+                await conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
+                                   (_TENANT_LOCK_CLASS, f"{self.schema}:{tenant}"))
+                if await running(conn, tenant, besides=task_id) >= limits[tenant]:
+                    raise _TenantFull
+            return Claim(task_id=task_id, worker=worker, epoch=int(row[1]),
                          lease_until=float(row[2]))
 
-        return await self._tx(tx)
+        try:
+            return await self._tx(tx)
+        except _TenantFull:
+            return None  # rolled back: the task stays where it was
+
+    async def add_tenant_usage(self, tenant: str, period: str, tokens: int,
+                               cost_usd: float) -> None:
+        async def tx(conn: Conn) -> None:
+            await conn.execute(self._q(
+                "INSERT INTO {s}.tenant_usage AS u (tenant, period, tokens, cost_usd)"
+                " VALUES (%s, %s, %s, %s) ON CONFLICT (tenant, period) DO UPDATE SET"
+                " tokens = u.tokens + excluded.tokens,"
+                " cost_usd = u.cost_usd + excluded.cost_usd"), (tenant, period, tokens, cost_usd))
+
+        await self._tx(tx)
+
+    async def tenant_usage(self, tenant: str, period: str) -> tuple[int, float]:
+        async def q(conn: Conn) -> tuple[int, float]:
+            cur = await conn.execute(self._q(
+                "SELECT tokens, cost_usd FROM {s}.tenant_usage WHERE tenant = %s"
+                " AND period = %s"), (tenant, period))
+            row = await cur.fetchone()
+            return (int(row[0]), float(row[1])) if row else (0, 0.0)
+
+        return await self._tx(q, write=False)
 
     async def renew(self, claim: Claim, lease_seconds: float) -> Claim | None:
         async def tx(conn: Conn) -> Claim | None:

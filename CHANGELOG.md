@@ -151,6 +151,12 @@ All notable changes to Noeta are documented here. The format is based on
   read, list, watch, message, answer, signal and cancel to the caller's tenant; a task's
   `SendMessage` / `ToolContext.post` reaches only its own tenant's tasks. The server token
   stays the default tenant's.
+- **Per-tenant settings** in `~/.noeta/tenants/<name>/config.toml`: a `workspace` its tasks'
+  `cwd` must lie in (and default to), `max_running` (the claim leaves its other tasks
+  waiting; exact across workers), `budget_tokens` / `budget_usd` per UTC month (a model call
+  past it fails the turn with `budget_spent`; counted in a new `tenant_usage` table), and its
+  own `provider` / `base_url` / `api_key` (`{env:}` / `{keyring:}`). `Runtime(tenants=)`,
+  `Store.claim(tenant_limits=)`, `create_app(workspaces=)`.
 
 - **Claude Code's headless protocol** (`noeta.host.stream_json`): the stream-json messages
   (`system`/`init`, `assistant`, tool-result `user`, `stream_event`, `result` with usage, cost,
