@@ -4,6 +4,7 @@ search result shape."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -195,10 +196,12 @@ class FakeSearch:
 async def test_search_results_and_counts(tmp_path: Path) -> None:
     fake = FakeSearch([SearchResult("T", "https://u", "snip"), SearchResult("", "https://v", "")])
     tool = WebSearchTool(fake)
-    out = await tool.run({"query": "q", "count": 99}, _ctx(tmp_path))
+    out = await tool.run({"query": "q", "mode": "extended"}, _ctx(tmp_path))
     assert text(out) == "1. [T](https://u)\n   snip\n\n2. [https://v](https://v)"
-    await tool.run({"query": "q"}, _ctx(tmp_path))
-    assert [c for _, c in fake.calls] == [20, 5]
+    await tool.run({"query": "q", "mode": "standard"}, _ctx(tmp_path))
+    assert [c for _, c in fake.calls] == [10, 5]
+    assert tool.input_schema["required"] == ["query", "mode"]
+    assert "count" not in tool.input_schema["properties"]
     none = await WebSearchTool(FakeSearch([])).run({"query": "zz"}, _ctx(tmp_path))
     assert text(none) == "No results were found for 'zz'. Try different search terms."
     assert text(await tool.run({}, _ctx(tmp_path))) == "WebSearch requires a non-empty 'query'"
@@ -213,6 +216,31 @@ async def test_tavily_transport() -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     hits = await HttpSearchTransport("k", client=client).search("q", 3)
     assert hits == [SearchResult("A B", "https://a", "c")]
+    await client.aclose()
+
+
+async def test_domain_filters_and_mode_reach_tavily_and_the_hits(tmp_path: Path) -> None:
+    sent: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"results": [
+            {"title": "a", "url": "https://docs.a.com/x", "content": ""},
+            {"title": "b", "url": "https://b.com/y", "content": ""},
+            {"title": "c", "url": "https://evil.a.com/z", "content": ""}]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    tool = WebSearchTool(HttpSearchTransport("k", client=client))
+    out = await tool.run({"query": "q", "mode": "extended", "allowed_domains": ["a.com"],
+                          "blocked_domains": ["evil.a.com"]}, _ctx(tmp_path))
+    assert sent[0]["include_domains"] == ["a.com"] and sent[0]["search_depth"] == "advanced"
+    assert sent[0]["exclude_domains"] == ["evil.a.com"]
+    assert text(out) == "1. [a](https://docs.a.com/x)"
+    # A transport without the keywords still gets its hits filtered.
+    plain = WebSearchTool(FakeSearch([SearchResult("x", "https://b.com", "")]))
+    out = await plain.run({"query": "q", "mode": "standard", "blocked_domains": ["b.com"]},
+                          _ctx(tmp_path))
+    assert "No results" in text(out)
     await client.aclose()
 
 
