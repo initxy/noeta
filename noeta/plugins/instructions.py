@@ -50,8 +50,8 @@ class Instructions(Extension):
     * ``discovery`` — record nested files found after a ``Read``
       (``instructions_discovery``).
     * ``filenames`` — the search order.
-    * ``rehang`` — put the files (read again) right after a compaction's
-      summary (``resident``).
+    * ``rehang`` — put the files (read again) ahead of a compaction's
+      summary (``lead_resident``).
     * ``origin`` — origin of the recorded messages (``"system"``).
     """
 
@@ -138,7 +138,8 @@ class Instructions(Extension):
                     active.add(name)
                     break
 
-    async def resident(self, view: TaskView) -> Sequence[Message]:
+    async def lead_resident(self, view: TaskView) -> Sequence[Message]:
+        """After a compaction, ahead of the summary: the files read again."""
         if not self.rehang:
             return ()
         env = task_env(view.env, view.state.config)

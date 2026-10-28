@@ -74,14 +74,18 @@ PART_TAGS = ("<system-reminder>", "<task-notification>", "<total_tokens>", "<com
              "<command-message>", "<local-command-stdout>", "<local-command-caveat>")
 
 
-def split_parts(text: str, starts: set[str]) -> list[str]:
+def split_parts(text: str, starts: set[str],
+                patterns: Iterable[re.Pattern[str]] = ()) -> list[str]:
     """A text block cut into parts: a new part begins at a paragraph whose
-    raw kind is a known part start (``starts``) or one of :data:`PART_TAGS`."""
+    raw kind is a known part start (``starts``) or one of :data:`PART_TAGS`,
+    or that one of noeta's ``patterns`` names."""
     paras = text.split("\n\n")
+    pats = list(patterns)
     parts: list[str] = []
     for p in paras:
         k = raw_kind(p) if p.strip() else ""
-        if parts and not (k in starts or k.startswith(PART_TAGS)):
+        named = any(pat.match(p.strip()) for pat in pats)
+        if parts and not (named or k in starts or k.startswith(PART_TAGS)):
             parts[-1] += "\n\n" + p
         else:
             parts.append(p)
@@ -224,7 +228,8 @@ class Kinds:
         return self.names.get(raw, raw)
 
     def text_kind(self, text: str) -> str:
-        return "+".join(self.name(p) for p in split_parts(text, self.starts))
+        return "+".join(self.name(p) for p in split_parts(
+            text, self.starts, (pat for pat, _ in self.patterns)))
 
 
 def layout(messages: list[Mapping[str, Any]], kinds: Kinds) -> list[str]:

@@ -24,10 +24,13 @@ from noeta.plugins.compaction.estimate import messages_tokens, prefix_tokens
 from noeta.plugins.compaction.summary import SUMMARIZE_PROMPT
 
 NOTE = (
-    "## 1. Primary Request & Intent\nProbe things.\n\n"
-    "## 5. All user messages\n- go\n\n"
-    "## 8. Current Work\nProbing."
+    "<analysis>\nWalked the conversation.\n</analysis>\n\n<summary>\n"
+    "1. Primary Request and Intent:\n   Probe things.\n\n"
+    "8. Current Work:\n   Probing.\n</summary>"
 )
+#: ``NOTE`` as the summary message shows it.
+FORMATTED = ("Summary:\n1. Primary Request and Intent:\n   Probe things.\n"
+             "8. Current Work:\n   Probing.")
 
 _ids = itertools.count(1)
 
@@ -63,7 +66,8 @@ Step = ModelResponse | Exception | Callable[[ModelRequest], ModelResponse]
 
 
 def is_summarize(request: ModelRequest) -> bool:
-    return bool(request.messages) and request.messages[-1].text == SUMMARIZE_PROMPT
+    return any(isinstance(b, Text) and b.text.startswith(SUMMARIZE_PROMPT)
+               for m in request.messages[-1:] for b in m.content)
 
 
 class Model:
@@ -98,7 +102,7 @@ class Probe:
     description = "Look."
     input_schema = {"type": "object"}
     read_only = True
-    clearable = True
+    clearable = False
 
     def __init__(self, size: int = 2_000) -> None:
         self.size = size

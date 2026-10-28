@@ -33,8 +33,6 @@
     "m3": {
       "about": "auto-compaction on a small window (100K x 30%)",
       "env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "100000", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "30"},
-      "noeta_plugins_why": "noeta has no percent override: its window is set so that it triggers near the same ~30K tokens (window - 20K output reserve - 13K margin)",
-      "noeta_plugins": {"compaction": {"auto_compact_window": 63000}},
       "data": true,
       "steps": [
         {"name": "r1", "say": "Read data.txt lines 1-1000 with the Read tool and tell me how many rows contain the word gamma three or more times."},

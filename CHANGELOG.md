@@ -7,6 +7,26 @@ All notable changes to Noeta are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **Compaction works as Claude Code's.** It fires at Claude Code's threshold (the window, less
+  `min(output ceiling, 20K)`, less 13K; `auto_compact_window` / `auto_compact_percent` or
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW` / `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` lower it), checked
+  before every request. The summary is asked of the main request itself, with the
+  instruction (nine sections, `<analysis>` then `<summary>`) appended to its last user
+  message; a failed call is retried once with a 64K output ceiling. When the context was
+  under the threshold before the newest tool results, that reply and its results stay after
+  the summary verbatim. After it come the project instructions (ahead of the summary), the
+  summary with the tools used before it and the path of the full transcript
+  (`<home>/projects/<workspace>/<task>.jsonl`), the kept messages, then the recently read
+  files as Read calls, the invoked skills ("do not run again"), the listings and the
+  environment. Old tool results are no longer cleared, `RecallHistory` and the
+  compaction reminders are gone, and auto-compaction stops after four rapid refills in a
+  row. `Compacted` gains `lead` and `after`; `Extension.lead_resident` puts content ahead
+  of the summary.
+- **`/compact [instructions]`** summarizes the conversation on demand in the TUI, ACP and
+  HTTP (`POST /tasks/{id}/messages` with `/compact`), without a model turn after it.
+
 ### Fixed
 
 - **An "always" shell approval no longer widens to the program and its first argument.**

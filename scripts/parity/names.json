@@ -13,7 +13,6 @@
   "p:9a159a87": "title-instruction",
   "p:10951716": "webfetch-page",
   "p:b1f60ea5": "activity-summary-instruction",
-
   "<system-reminder>/p:1e6f9252": "reminder/instructions",
   "<system-reminder>/p:b2ee87d1": "reminder/context",
   "<system-reminder>/p:a7076a3a": "reminder/attribution",
@@ -42,19 +41,20 @@
   "p:ea35f4b1": "post-compact-file",
   "p:04722994": "post-compact-skills",
   "p:042fdf77": "mid-turn-message",
-
   "noeta_kinds": {
     "^You are the top-level coding assistant": "main-prompt",
     "^You are a read-only scout": "explore-prompt",
     "^You are a general-purpose worker": "general-purpose-prompt",
     "^You are a software architect and planning specialist": "plan-prompt",
-    "^Summarize the conversation so far into a durable": "compact-instruction",
-    "^This conversation is continued from earlier turns": "compact-summary",
     "^<system-reminder>\\s*<workspace-instructions": "reminder/instructions",
     "^<system-reminder>\\s*<workspace-environment>": "environment",
     "^You are answering a request about a web page": "webfetch-page",
     "^<system-reminder>\\s*The TodoWrite tool hasn't been used recently": "reminder/todo-nudge",
-    "^<system-reminder>\\s*The context window keeps getting refilled": "reminder/compaction-thrash",
-    "^<system-reminder>\\s*The note at the head of this conversation": "reminder/recall-boundary"
+    "^Answer this one in plain text and make no tool call": "compact-instruction",
+    "^This conversation picks up from an earlier one": "compact-summary",
+    "^The complete conversation from before this summary": "compact-transcript-note",
+    "^The messages after this summary are the newest ones": "compact-kept-note",
+    "^<system-reminder>\\s*The Read tool was called with this input": "post-compact-file",
+    "^<system-reminder>\\s*These skills were invoked earlier in this conversation": "post-compact-skills"
   }
 }

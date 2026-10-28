@@ -109,7 +109,8 @@ class MakeRoom(Extension):
 
     async def on_context_overflow(self, view: TaskView) -> bool:
         view.compacted(Compacted(summary="(summary)", through=view.state.last_seq,
-                                 kept=await view.residents()))
+                                 lead=await view.residents(lead=True),
+                                 after=await view.residents()))
         return True
 
 
@@ -128,9 +129,12 @@ async def test_residents_rehang_after_a_compaction(h: Harness, tmp_path: Path) -
     tid = await h.start(a)
     await h.say(a, tid, "next")
     texts = [m.text for m in h.last_messages()]
-    assert texts[0] == "(summary)"
-    assert texts[1].startswith("The following skills are available")
-    assert texts[2].startswith("Activated skill: deploy")
-    assert texts[3].startswith("Long-term memory index.")
-    assert texts[4].startswith('<workspace-instructions source="AGENTS.md">')
+    # Ahead of the summary: the project instructions; after it: the invoked
+    # skill, the listing, the memory index.
+    assert texts[0].startswith('<workspace-instructions source="AGENTS.md">')
+    assert texts[1] == "(summary)"
+    assert texts[2].startswith("These skills were invoked earlier")
+    assert "### Skill: deploy" in texts[2] and "Activated skill: deploy" in texts[2]
+    assert texts[3].startswith("The following skills are available")
+    assert texts[4].startswith("Long-term memory index.")
     assert len(texts) == 5

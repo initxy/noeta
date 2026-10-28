@@ -1,23 +1,23 @@
 {
  "hashes": [
-  "main 8ee5d94a3f740a1e",
-  "main 0baa12afc376e6c6",
-  "main f2a3212394dff64b",
-  "child 8103417ff108da23",
-  "child 1445ee3ab898ee08",
-  "main 0c7fcf31ff035eed",
-  "main 02f1b8f8662097d2",
-  "main d8e3e6172a212199",
-  "main 05878ab477453aa2",
-  "main 97b8c49753b3254c",
-  "main 17705aa709a83700",
-  "main c3ae16cc3cebb81e",
-  "main bd6b77d8d87345ba",
-  "main 0936ed0a4b19288d",
-  "main fdf1a5ddd1438c48",
-  "main 40f2d47180cad472",
-  "main 03fee77d9c327f3f",
-  "main c8963abb63fe0e0c"
+  "main c620269d25dd839d",
+  "main 52d35f09fc72342d",
+  "main b3587f49eea7821f",
+  "child 112d59520671f11e",
+  "child 86a6cfebea02f3a0",
+  "main 42892bc22e18da39",
+  "main 02f7ace45114bc4f",
+  "main 99b38709363d0940",
+  "main 776e418bf37f8403",
+  "main c7062c7c410726cf",
+  "main 50dd22ebb3e9b320",
+  "main ecaffa9201f53bcd",
+  "main 6bd189de56801a6b",
+  "main 6000ad0ff88779aa",
+  "main 5ce87f307fa61ff8",
+  "main b6afb6f7d5f50c93",
+  "main 48bc6b5bcc6bf26e",
+  "main c9e83db6a6d338e3"
  ],
  "last": {
   "child": {
@@ -90,26 +90,6 @@
      "type": "adaptive"
     },
     "tools": [
-     {
-      "description": "Recall original messages that compaction collapsed into the summary note at the head of the conversation.\n\nThe originals are retained in full — the note merely stands in for them in the prompt. Use this tool when the note lacks a detail you need: the exact text of an earlier error, code you produced or discussed before compaction, or the precise wording of an earlier exchange. The collapsed range is [0, boundary); the current boundary is reported in every result and in the collapsed-context reminder.\n\nResults are a read-only rendering of the original messages; long blocks are truncated with a marker. Page through a large range with repeated calls, advancing `offset`.",
-      "input_schema": {
-       "properties": {
-        "limit": {
-         "description": "How many messages to view (default 20, max 50).",
-         "type": "integer"
-        },
-        "offset": {
-         "description": "0-based index of the first collapsed message to view; the valid range is [0, boundary).",
-         "type": "integer"
-        }
-       },
-       "required": [
-        "offset"
-       ],
-       "type": "object"
-      },
-      "name": "RecallHistory"
-     },
      {
       "description": "Executes a shell command in the workspace and returns its output.\n\nThe working directory persists between commands, but shell state does not. The first command starts at the workspace root, and a command that leaves the workspace sends the next one back there.\n\n- Runs with a scrubbed (secret-free) environment. Output is stdout (plus a labeled stderr section when both streams have content), Output past 30000 characters is saved to a file and you receive a short preview plus the path; `Read` it with `offset`/`limit` for the rest.\n- `timeout` is in milliseconds: default 120000, max 600000. A non-zero exit or a timeout comes back as an error carrying the same output.\n- Provide a short `description` (5–10 words) of what the command does — it is shown to the user while the command runs.\n- You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes. You get a shell ID back at once; `BashOutput` reads its output and `KillShell` stops it. A background job's lifetime follows the session, not this task.\n- Avoid unnecessary `sleep` commands:\n  - Do not sleep between commands that can run immediately — just run them.\n  - Use the Monitor tool to stream events from a background process (each stdout line is a notification). For one-shot \"wait until done,\" use Bash with run_in_background instead.\n  - If your command is long running and you would like to be notified when it finishes — use `run_in_background`. No sleep needed.\n  - Do not retry failing commands in a sleep loop — diagnose the root cause.\n  - If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll.\n  - Long leading `sleep` commands are blocked. To poll until a condition is met, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`) — you get a notification when the loop exits. Do not chain shorter sleeps to work around the block.\n- Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.\n- The command runs through bash (pipes, redirection, chaining). The host decides which commands run freely, which need the user's approval, and which are refused — a refusal comes back as an error that says why.\n- To read a file, search content, list files, or edit text, prefer `Read` / `Grep` / `Glob` / `Edit` — they are cheaper and need no approval. Avoid `cat`/`head`/`tail`/`grep`/`find`/`sed` here for those jobs.",
       "input_schema": {
@@ -416,29 +396,6 @@
     ],
     "model": "claude-sonnet-4-6",
     "tools": [
-     {
-      "function": {
-       "description": "Recall original messages that compaction collapsed into the summary note at the head of the conversation.\n\nThe originals are retained in full — the note merely stands in for them in the prompt. Use this tool when the note lacks a detail you need: the exact text of an earlier error, code you produced or discussed before compaction, or the precise wording of an earlier exchange. The collapsed range is [0, boundary); the current boundary is reported in every result and in the collapsed-context reminder.\n\nResults are a read-only rendering of the original messages; long blocks are truncated with a marker. Page through a large range with repeated calls, advancing `offset`.",
-       "name": "RecallHistory",
-       "parameters": {
-        "properties": {
-         "limit": {
-          "description": "How many messages to view (default 20, max 50).",
-          "type": "integer"
-         },
-         "offset": {
-          "description": "0-based index of the first collapsed message to view; the valid range is [0, boundary).",
-          "type": "integer"
-         }
-        },
-        "required": [
-         "offset"
-        ],
-        "type": "object"
-       }
-      },
-      "type": "function"
-     },
      {
       "function": {
        "description": "Executes a shell command in the workspace and returns its output.\n\nThe working directory persists between commands, but shell state does not. The first command starts at the workspace root, and a command that leaves the workspace sends the next one back there.\n\n- Runs with a scrubbed (secret-free) environment. Output is stdout (plus a labeled stderr section when both streams have content), Output past 30000 characters is saved to a file and you receive a short preview plus the path; `Read` it with `offset`/`limit` for the rest.\n- `timeout` is in milliseconds: default 120000, max 600000. A non-zero exit or a timeout comes back as an error carrying the same output.\n- Provide a short `description` (5–10 words) of what the command does — it is shown to the user while the command runs.\n- You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes. You get a shell ID back at once; `BashOutput` reads its output and `KillShell` stops it. A background job's lifetime follows the session, not this task.\n- Avoid unnecessary `sleep` commands:\n  - Do not sleep between commands that can run immediately — just run them.\n  - Use the Monitor tool to stream events from a background process (each stdout line is a notification). For one-shot \"wait until done,\" use Bash with run_in_background instead.\n  - If your command is long running and you would like to be notified when it finishes — use `run_in_background`. No sleep needed.\n  - Do not retry failing commands in a sleep loop — diagnose the root cause.\n  - If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll.\n  - Long leading `sleep` commands are blocked. To poll until a condition is met, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`) — you get a notification when the loop exits. Do not chain shorter sleeps to work around the block.\n- Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.\n- The command runs through bash (pipes, redirection, chaining). The host decides which commands run freely, which need the user's approval, and which are refused — a refusal comes back as an error that says why.\n- To read a file, search content, list files, or edit text, prefer `Read` / `Grep` / `Glob` / `Edit` — they are cheaper and need no approval. Avoid `cat`/`head`/`tail`/`grep`/`find`/`sed` here for those jobs.",
@@ -798,27 +755,6 @@
     "model": "claude-sonnet-4-6",
     "store": false,
     "tools": [
-     {
-      "description": "Recall original messages that compaction collapsed into the summary note at the head of the conversation.\n\nThe originals are retained in full — the note merely stands in for them in the prompt. Use this tool when the note lacks a detail you need: the exact text of an earlier error, code you produced or discussed before compaction, or the precise wording of an earlier exchange. The collapsed range is [0, boundary); the current boundary is reported in every result and in the collapsed-context reminder.\n\nResults are a read-only rendering of the original messages; long blocks are truncated with a marker. Page through a large range with repeated calls, advancing `offset`.",
-      "name": "RecallHistory",
-      "parameters": {
-       "properties": {
-        "limit": {
-         "description": "How many messages to view (default 20, max 50).",
-         "type": "integer"
-        },
-        "offset": {
-         "description": "0-based index of the first collapsed message to view; the valid range is [0, boundary).",
-         "type": "integer"
-        }
-       },
-       "required": [
-        "offset"
-       ],
-       "type": "object"
-      },
-      "type": "function"
-     },
      {
       "description": "Executes a shell command in the workspace and returns its output.\n\nThe working directory persists between commands, but shell state does not. The first command starts at the workspace root, and a command that leaves the workspace sends the next one back there.\n\n- Runs with a scrubbed (secret-free) environment. Output is stdout (plus a labeled stderr section when both streams have content), Output past 30000 characters is saved to a file and you receive a short preview plus the path; `Read` it with `offset`/`limit` for the rest.\n- `timeout` is in milliseconds: default 120000, max 600000. A non-zero exit or a timeout comes back as an error carrying the same output.\n- Provide a short `description` (5–10 words) of what the command does — it is shown to the user while the command runs.\n- You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes. You get a shell ID back at once; `BashOutput` reads its output and `KillShell` stops it. A background job's lifetime follows the session, not this task.\n- Avoid unnecessary `sleep` commands:\n  - Do not sleep between commands that can run immediately — just run them.\n  - Use the Monitor tool to stream events from a background process (each stdout line is a notification). For one-shot \"wait until done,\" use Bash with run_in_background instead.\n  - If your command is long running and you would like to be notified when it finishes — use `run_in_background`. No sleep needed.\n  - Do not retry failing commands in a sleep loop — diagnose the root cause.\n  - If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll.\n  - Long leading `sleep` commands are blocked. To poll until a condition is met, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`) — you get a notification when the loop exits. Do not chain shorter sleeps to work around the block.\n- Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.\n- The command runs through bash (pipes, redirection, chaining). The host decides which commands run freely, which need the user's approval, and which are refused — a refusal comes back as an error that says why.\n- To read a file, search content, list files, or edit text, prefer `Read` / `Grep` / `Glob` / `Edit` — they are cheaper and need no approval. Avoid `cat`/`head`/`tail`/`grep`/`find`/`sed` here for those jobs.",
       "name": "Bash",
@@ -1536,26 +1472,6 @@
      "type": "adaptive"
     },
     "tools": [
-     {
-      "description": "Recall original messages that compaction collapsed into the summary note at the head of the conversation.\n\nThe originals are retained in full — the note merely stands in for them in the prompt. Use this tool when the note lacks a detail you need: the exact text of an earlier error, code you produced or discussed before compaction, or the precise wording of an earlier exchange. The collapsed range is [0, boundary); the current boundary is reported in every result and in the collapsed-context reminder.\n\nResults are a read-only rendering of the original messages; long blocks are truncated with a marker. Page through a large range with repeated calls, advancing `offset`.",
-      "input_schema": {
-       "properties": {
-        "limit": {
-         "description": "How many messages to view (default 20, max 50).",
-         "type": "integer"
-        },
-        "offset": {
-         "description": "0-based index of the first collapsed message to view; the valid range is [0, boundary).",
-         "type": "integer"
-        }
-       },
-       "required": [
-        "offset"
-       ],
-       "type": "object"
-      },
-      "name": "RecallHistory"
-     },
      {
       "description": "Executes a shell command in the workspace and returns its output.\n\nThe working directory persists between commands, but shell state does not. The first command starts at the workspace root, and a command that leaves the workspace sends the next one back there.\n\n- Runs with a scrubbed (secret-free) environment. Output is stdout (plus a labeled stderr section when both streams have content), Output past 30000 characters is saved to a file and you receive a short preview plus the path; `Read` it with `offset`/`limit` for the rest.\n- `timeout` is in milliseconds: default 120000, max 600000. A non-zero exit or a timeout comes back as an error carrying the same output.\n- Provide a short `description` (5–10 words) of what the command does — it is shown to the user while the command runs.\n- You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes. You get a shell ID back at once; `BashOutput` reads its output and `KillShell` stops it. A background job's lifetime follows the session, not this task.\n- Avoid unnecessary `sleep` commands:\n  - Do not sleep between commands that can run immediately — just run them.\n  - Use the Monitor tool to stream events from a background process (each stdout line is a notification). For one-shot \"wait until done,\" use Bash with run_in_background instead.\n  - If your command is long running and you would like to be notified when it finishes — use `run_in_background`. No sleep needed.\n  - Do not retry failing commands in a sleep loop — diagnose the root cause.\n  - If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll.\n  - Long leading `sleep` commands are blocked. To poll until a condition is met, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`) — you get a notification when the loop exits. Do not chain shorter sleeps to work around the block.\n- Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.\n- The command runs through bash (pipes, redirection, chaining). The host decides which commands run freely, which need the user's approval, and which are refused — a refusal comes back as an error that says why.\n- To read a file, search content, list files, or edit text, prefer `Read` / `Grep` / `Glob` / `Edit` — they are cheaper and need no approval. Avoid `cat`/`head`/`tail`/`grep`/`find`/`sed` here for those jobs.",
       "input_schema": {
@@ -2426,29 +2342,6 @@
     ],
     "model": "claude-sonnet-4-6",
     "tools": [
-     {
-      "function": {
-       "description": "Recall original messages that compaction collapsed into the summary note at the head of the conversation.\n\nThe originals are retained in full — the note merely stands in for them in the prompt. Use this tool when the note lacks a detail you need: the exact text of an earlier error, code you produced or discussed before compaction, or the precise wording of an earlier exchange. The collapsed range is [0, boundary); the current boundary is reported in every result and in the collapsed-context reminder.\n\nResults are a read-only rendering of the original messages; long blocks are truncated with a marker. Page through a large range with repeated calls, advancing `offset`.",
-       "name": "RecallHistory",
-       "parameters": {
-        "properties": {
-         "limit": {
-          "description": "How many messages to view (default 20, max 50).",
-          "type": "integer"
-         },
-         "offset": {
-          "description": "0-based index of the first collapsed message to view; the valid range is [0, boundary).",
-          "type": "integer"
-         }
-        },
-        "required": [
-         "offset"
-        ],
-        "type": "object"
-       }
-      },
-      "type": "function"
-     },
      {
       "function": {
        "description": "Executes a shell command in the workspace and returns its output.\n\nThe working directory persists between commands, but shell state does not. The first command starts at the workspace root, and a command that leaves the workspace sends the next one back there.\n\n- Runs with a scrubbed (secret-free) environment. Output is stdout (plus a labeled stderr section when both streams have content), Output past 30000 characters is saved to a file and you receive a short preview plus the path; `Read` it with `offset`/`limit` for the rest.\n- `timeout` is in milliseconds: default 120000, max 600000. A non-zero exit or a timeout comes back as an error carrying the same output.\n- Provide a short `description` (5–10 words) of what the command does — it is shown to the user while the command runs.\n- You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes. You get a shell ID back at once; `BashOutput` reads its output and `KillShell` stops it. A background job's lifetime follows the session, not this task.\n- Avoid unnecessary `sleep` commands:\n  - Do not sleep between commands that can run immediately — just run them.\n  - Use the Monitor tool to stream events from a background process (each stdout line is a notification). For one-shot \"wait until done,\" use Bash with run_in_background instead.\n  - If your command is long running and you would like to be notified when it finishes — use `run_in_background`. No sleep needed.\n  - Do not retry failing commands in a sleep loop — diagnose the root cause.\n  - If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll.\n  - Long leading `sleep` commands are blocked. To poll until a condition is met, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`) — you get a notification when the loop exits. Do not chain shorter sleeps to work around the block.\n- Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.\n- The command runs through bash (pipes, redirection, chaining). The host decides which commands run freely, which need the user's approval, and which are refused — a refusal comes back as an error that says why.\n- To read a file, search content, list files, or edit text, prefer `Read` / `Grep` / `Glob` / `Edit` — they are cheaper and need no approval. Avoid `cat`/`head`/`tail`/`grep`/`find`/`sed` here for those jobs.",
@@ -3345,27 +3238,6 @@
     "model": "claude-sonnet-4-6",
     "store": false,
     "tools": [
-     {
-      "description": "Recall original messages that compaction collapsed into the summary note at the head of the conversation.\n\nThe originals are retained in full — the note merely stands in for them in the prompt. Use this tool when the note lacks a detail you need: the exact text of an earlier error, code you produced or discussed before compaction, or the precise wording of an earlier exchange. The collapsed range is [0, boundary); the current boundary is reported in every result and in the collapsed-context reminder.\n\nResults are a read-only rendering of the original messages; long blocks are truncated with a marker. Page through a large range with repeated calls, advancing `offset`.",
-      "name": "RecallHistory",
-      "parameters": {
-       "properties": {
-        "limit": {
-         "description": "How many messages to view (default 20, max 50).",
-         "type": "integer"
-        },
-        "offset": {
-         "description": "0-based index of the first collapsed message to view; the valid range is [0, boundary).",
-         "type": "integer"
-        }
-       },
-       "required": [
-        "offset"
-       ],
-       "type": "object"
-      },
-      "type": "function"
-     },
      {
       "description": "Executes a shell command in the workspace and returns its output.\n\nThe working directory persists between commands, but shell state does not. The first command starts at the workspace root, and a command that leaves the workspace sends the next one back there.\n\n- Runs with a scrubbed (secret-free) environment. Output is stdout (plus a labeled stderr section when both streams have content), Output past 30000 characters is saved to a file and you receive a short preview plus the path; `Read` it with `offset`/`limit` for the rest.\n- `timeout` is in milliseconds: default 120000, max 600000. A non-zero exit or a timeout comes back as an error carrying the same output.\n- Provide a short `description` (5–10 words) of what the command does — it is shown to the user while the command runs.\n- You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes. You get a shell ID back at once; `BashOutput` reads its output and `KillShell` stops it. A background job's lifetime follows the session, not this task.\n- Avoid unnecessary `sleep` commands:\n  - Do not sleep between commands that can run immediately — just run them.\n  - Use the Monitor tool to stream events from a background process (each stdout line is a notification). For one-shot \"wait until done,\" use Bash with run_in_background instead.\n  - If your command is long running and you would like to be notified when it finishes — use `run_in_background`. No sleep needed.\n  - Do not retry failing commands in a sleep loop — diagnose the root cause.\n  - If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll.\n  - Long leading `sleep` commands are blocked. To poll until a condition is met, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`) — you get a notification when the loop exits. Do not chain shorter sleeps to work around the block.\n- Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.\n- The command runs through bash (pipes, redirection, chaining). The host decides which commands run freely, which need the user's approval, and which are refused — a refusal comes back as an error that says why.\n- To read a file, search content, list files, or edit text, prefer `Read` / `Grep` / `Glob` / `Edit` — they are cheaper and need no approval. Avoid `cat`/`head`/`tail`/`grep`/`find`/`sed` here for those jobs.",
       "name": "Bash",
