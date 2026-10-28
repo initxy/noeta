@@ -87,6 +87,18 @@ class LocalApp:
         #: What the person should know about how this app was set up (a
         #: project's plugins left unloaded); front ends show them.
         self.notices: list[str] = []
+        #: Finds the plugins again and replaces the agents with ones made
+        #: from them (``replace_agents``), returning notices for the person;
+        #: set by a host that loads plugins from files (the ``noeta``
+        #: command), ``None`` otherwise.
+        self.reload_plugins: Callable[[], list[str]] | None = None
+
+    def replace_agents(self, agents: list[Agent]) -> None:
+        """Run ``agents`` from now on: every task picked up after this (the
+        next turn of a waiting one) runs the new ones; a turn in progress
+        finishes with the agent it started with."""
+        self.runtime.agents.clear()
+        self.runtime.agents.update({a.name: a for a in agents})
 
     def _fan_out(self, task_id: str, delta: Delta) -> None:
         for sink in list(self._sinks):

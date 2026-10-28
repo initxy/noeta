@@ -434,4 +434,27 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
                    task_config={"prompts": settings.prompts} if settings.prompts else None,
                    **runtime_kw)
     app.notices = notices
+
+    def reload_plugins() -> list[str]:
+        registry.forget_plugin_files()
+        found = load_plugin_files(cwd)
+        app.replace_agents(make_agents())
+        return found
+
+    app.reload_plugins = reload_plugins
     return app
+
+
+def plugin_changes(before: Mapping[str, Agent], after: Mapping[str, Agent]) -> list[str]:
+    """What a reload changed, one line per plugin added, removed or changed
+    (its code or its arguments), over every agent."""
+    from noeta.core.registry import pin
+
+    def pins(agents: Mapping[str, Agent]) -> dict[str, dict[str, str]]:
+        return {e.name: pin(e) for a in agents.values() for e in a.extensions}
+
+    old, new = pins(before), pins(after)
+    lines = [f"added {n}" for n in sorted(new.keys() - old.keys())]
+    lines += [f"removed {n}" for n in sorted(old.keys() - new.keys())]
+    lines += [f"changed {n}" for n in sorted(old.keys() & new.keys()) if old[n] != new[n]]
+    return lines

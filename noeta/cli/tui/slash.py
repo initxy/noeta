@@ -32,12 +32,13 @@ COMMANDS = {
     "config": "`[edit user|project|local]` show the settings; edit a settings file",
     "rewind": "`[n] [both|conversation|code]` go back to before a prompt (also Esc Esc)",
     "clear": "start a new task (`/new`)",
+    "reload-plugins": "load the plugin and agent files again (from the next turn on)",
 }
 
 
 async def run(app: NoetaApp, name: str, arg: str) -> bool:
     """Run ``/name arg`` if it is one of :data:`COMMANDS`; ``False`` if not."""
-    handler = globals().get(f"_{name}")
+    handler = globals().get(f"_{name.replace('-', '_')}")
     if name not in COMMANDS or handler is None:
         return False
     await handler(app, arg.strip())
@@ -46,6 +47,23 @@ async def run(app: NoetaApp, name: str, arg: str) -> bool:
 
 async def _clear(app: NoetaApp, arg: str) -> None:
     await app.new_task()
+
+
+async def _reload_plugins(app: NoetaApp, arg: str) -> None:
+    from noeta.cli.config import plugin_changes
+    from noeta.core import registry
+
+    reload = getattr(app.local, "reload_plugins", None)
+    if reload is None:
+        await app.say_notice("attached to a server: its workers load plugins when they start, "
+                             "so restart them (one by one) to reload")
+        return
+    before = dict(app.local.runtime.agents)
+    notices = reload()
+    changes = plugin_changes(before, app.local.runtime.agents) or ["no plugin changed"]
+    failed = [f"failed: {p}: {why}" for p, why in registry.broken_plugin_files().items()]
+    await app.say_notice("plugins reloaded, in effect from the next turn: "
+                         + "; ".join([*changes, *failed, *notices]))
 
 
 async def _model(app: NoetaApp, arg: str) -> None:

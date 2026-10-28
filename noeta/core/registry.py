@@ -52,6 +52,7 @@ __all__ = [
     "available",
     "broken_plugin_files",
     "execenv",
+    "forget_plugin_files",
     "load",
     "load_plugin_files",
     "note_arguments",
@@ -85,7 +86,7 @@ _broken: dict[str, str] = {}
 _loaded_paths: set[str] = set()
 _FILES_PACKAGE = "noeta_plugin_files"
 #: Where a plugin class came from: class -> (source, version).
-_origins: dict[Any, tuple[str, str]] = {}
+_origins: weakref.WeakKeyDictionary[Any, tuple[str, str]] = weakref.WeakKeyDictionary()
 #: The hash of the arguments each plugin instance was made with.
 _arguments: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
 
@@ -172,11 +173,19 @@ def _import(path: Path) -> Any:
         sys.modules[_FILES_PACKAGE] = parent
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
+    # Compiled from source every time, never from a cached .pyc: a file
+    # edited within the same second at the same size would otherwise load
+    # its old code on a reload.
+    saved = sys.pycache_prefix, sys.dont_write_bytecode
+    sys.pycache_prefix = str(path.parent / "__noeta_no_cache__")
+    sys.dont_write_bytecode = True
     try:
         spec.loader.exec_module(module)
     except BaseException:
         sys.modules.pop(module_name, None)
         raise
+    finally:
+        sys.pycache_prefix, sys.dont_write_bytecode = saved
     return module
 
 
@@ -219,6 +228,17 @@ def load_plugin_files(directories: Iterable[str | Path]) -> list[str]:
                 _origins[cls] = ("file", version)
                 added.append(name)
     return added
+
+
+def forget_plugin_files() -> None:
+    """Forget every plugin file loaded (and its modules), so the next
+    :func:`load_plugin_files` imports them afresh: a reload. Extensions
+    already made from the old code keep running it."""
+    _files.clear()
+    _broken.clear()
+    _loaded_paths.clear()
+    for module in [m for m in sys.modules if m.startswith(f"{_FILES_PACKAGE}.")]:
+        del sys.modules[module]
 
 
 def _file_version(path: Path) -> str:

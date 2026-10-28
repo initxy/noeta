@@ -80,7 +80,9 @@ agents its `Extension.add_to` names by itself (an installed package's `add_to` i
 A task records the plugins it runs with (`records.Plugins`: each one's `registry.pin` — name,
 source, version or file hash, arguments hash) when it first starts and whenever a pickup finds
 them changed. A worker missing a recorded plugin ends the task failed with `plugin_missing`
-instead of running it without (`noeta/core/runner/task.py`).
+instead of running it without (`noeta/core/runner/task.py`). A reload (the TUI's
+`/reload-plugins`, `LocalApp.reload_plugins`; on servers a rolling restart) re-imports plugin
+files and remakes the agents: a task runs the new code from its next turn, recorded so.
 
 ## Plugin setting
 

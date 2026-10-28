@@ -153,3 +153,17 @@ def test_mentions_parse_quoted_paths_and_skip_addresses(tmp_path: Path) -> None:
     assert [p.name for p in found] == ["a b.txt", "c.txt"]
     message = mentions.attach("@.", str(tmp_path))
     assert "a b.txt" in message.content[1].text  # type: ignore[union-attr]
+
+
+async def test_reload_plugins_reports_what_changed(tmp_path: Path) -> None:
+    app = make_app(tmp_path, ScriptedProvider([]))
+    local = app.local
+    async with app.run_test(size=(110, 40)) as pilot:
+        await type_line(pilot, "/reload-plugins")
+        await settle(pilot, lambda: "restart them" in shown(app))
+        local.reload_plugins = lambda: (local.replace_agents(
+            [Agent(name="main", model=MODEL, extensions=[FileTools(), Checkpoints()])])
+            or ["a notice"])
+        await type_line(pilot, "/reload-plugins")
+        await settle(pilot, lambda: "plugins reloaded" in shown(app))
+        assert "removed where" in shown(app) and "a notice" in shown(app)

@@ -178,3 +178,39 @@ async def test_enabled_false_still_wins_over_add_to(home: Path, tmp_path: Path) 
     app = from_settings(load_settings(), cwd=str(tmp_path))
     assert all(e.name != "solo" for e in app.runtime.agents["main"].extensions)
     await app.store.close()
+
+
+async def test_reload_plugins_runs_the_new_code_from_the_next_turn(home: Path,
+                                                                    tmp_path: Path) -> None:
+    from noeta.cli.config import plugin_changes
+    from noeta.core import records
+    from noeta.core.events import ToolFinished
+    from noeta.testing import ScriptedProvider, reply
+
+    (home / "agents").mkdir()
+    (home / "agents" / "plain.md").write_text("---\nname: plain\nplugins: [fs]\n---\nhi\n")
+    path = home / "plugins" / "waver.py"
+    _write_joining(path, "waver", '("plain",)')
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    provider = ScriptedProvider([reply("", ("Wave", {})), reply("one"),
+                                 reply("", ("Wave", {})), reply("two")])
+    app.runtime.provider_for = lambda _m: provider
+    fs_before = next(e for e in app.runtime.agents["plain"].extensions if e.name == "fs")
+    tid = await app.client.create("plain", "wave")
+    await app.runtime.run_until_idle()
+
+    path.write_text(path.read_text().replace('text_output("wave")', 'text_output("WAVE")'))
+    before = dict(app.runtime.agents)
+    assert app.reload_plugins is not None and app.reload_plugins() == []
+    assert plugin_changes(before, app.runtime.agents) == ["changed waver"]
+    fs_after = next(e for e in app.runtime.agents["plain"].extensions if e.name == "fs")
+    assert fs_after is fs_before  # an unchanged plugin is the same instance
+    await app.client.send(tid, "again")
+    await app.runtime.run_until_idle()
+    events = await app.client.events(tid)
+    assert [r.event.result.text for r in events if isinstance(r.event, ToolFinished)] == [
+        "wave", "WAVE"]
+    pins = [core.pins for r in events
+            if isinstance(core := records.decode(r.event), records.Plugins)]
+    assert len(pins) == 2 and pins[0] != pins[1]
+    await app.store.close()
