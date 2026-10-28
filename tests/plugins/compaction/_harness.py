@@ -67,8 +67,15 @@ Step = ModelResponse | Exception | Callable[[ModelRequest], ModelResponse]
 
 
 def is_summarize(request: ModelRequest) -> bool:
+    """The instruction rides the last user message, before any trailing
+    system turn."""
+    tail = []
+    for m in reversed(request.messages):
+        if m.role == "assistant":
+            break
+        tail.append(m)
     return any(isinstance(b, Text) and b.text.startswith(SUMMARIZE_PROMPT)
-               for m in request.messages[-1:] for b in m.content)
+               for m in tail for b in m.content)
 
 
 class Model:
