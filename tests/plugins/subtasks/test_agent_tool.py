@@ -6,8 +6,11 @@ worktrees and the refusals."""
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
@@ -20,7 +23,12 @@ from noeta.core.runner import Runtime
 from noeta.core.types import Message, ModelRequest, ToolUse, Usage
 from noeta.plugins.subtasks import SubagentSpec, Subtasks, texts
 from noeta.plugins.subtasks.host import pending_requests, tree_usage
-from noeta.plugins.subtasks.tool import agent_message, agent_schema, handback_sender
+from noeta.plugins.subtasks.tool import (
+    SendMessageTool,
+    agent_message,
+    agent_schema,
+    handback_sender,
+)
 from noeta.testing import ScriptedProvider, reply
 from tests.plugins.subtasks.conftest import Probe, events, runtime
 
@@ -28,6 +36,15 @@ ROSTER = [
     SubagentSpec(name="general-purpose", description="Does work.", agent="worker"),
     SubagentSpec(name="scout", description="Looks around.", agent="worker"),
 ]
+
+
+@pytest.fixture(autouse=True)
+def _send_message_loaded() -> Iterator[None]:
+    """These tests are about SendMessage itself, so it is offered loaded;
+    ``test_send_message_is_deferred`` covers the deferral."""
+    SendMessageTool.deferred = False  # type: ignore[misc]
+    yield
+    SendMessageTool.deferred = True  # type: ignore[misc]
 
 
 def parent(*extra: Extension, **kw: Any) -> Agent:
@@ -447,3 +464,13 @@ async def test_worktree_isolation(store: SqliteStore, tmp_path: Path) -> None:
     cwd = (await events(client, child.task_id))[0].config["cwd"]
     assert cwd.startswith(str(repo / ".claude" / "worktrees" / "agent-"))
     assert not Path(cwd).exists()  # unchanged, so removed again
+
+
+async def test_send_message_is_deferred(store: SqliteStore) -> None:
+    SendMessageTool.deferred = True  # type: ignore[misc]
+    p = ScriptedProvider([reply("hi")])
+    rt = runtime(store, {"p": p}, parent())
+    await Client(store).create("main", "go")
+    await rt.run_until_idle()
+    assert [t.name for t in p.requests[0].tools] == [
+        "Agent", "ListAgents", "DeferredToolPlaceholder", "ToolSearch"]

@@ -233,7 +233,9 @@ async def test_layout_after_a_compaction(store: SqliteStore, tmp_path: Path) -> 
     texts = [m.text for m in after.messages]
     assert texts[0].startswith("Below are instructions from the codebase") and \
         texts[1].startswith(SUMMARY_PREAMBLE)
-    assert texts.index(compacted.after[0].text) > 2  # after the kept reply and results
+    # After the summary and whatever it kept (whether the last call is kept
+    # depends on the token estimate, which the temp path's length moves).
+    assert texts.index(compacted.after[0].text) > 1
     await assert_rebuilds(store, a, tid)
 
 

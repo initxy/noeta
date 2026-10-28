@@ -218,6 +218,8 @@ class HandbackTool:
     description = texts.load_description("subagent_handback")
     read_only = False
     clearable = False
+    #: Last in the sub-agent's tool list, after the deferred-tool placeholder.
+    listed_last = True
     input_schema = _schema({"message": {"description": texts.HANDBACK_MESSAGE_PROP,
                                         "type": "string"}}, ["message"])
 
