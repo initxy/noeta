@@ -1,8 +1,8 @@
 """What Claude Code's harness tells the model about where it runs, in the
 same places: a git snapshot and the commit-attribution note in the first
-user turn, the environment (with the model line, the token budget and
-today's date) as a system turn right after it, and a ``<total_tokens>``
-budget note after every prompt and tool result.
+user turn, the environment (with the model line, the deferred tools, the
+token budget and today's date) as a system turn right after it, and a
+``<total_tokens>`` budget note after every prompt and tool result.
 
 Everything is captured through the task's ExecEnv (``view.env``), never by a
 host subprocess: on a container the facts describe the container's checkout,
@@ -49,6 +49,7 @@ PROJECT_URL = "https://github.com/initxy/noeta"
 #: Places of this plugin's notes in the joined system turn (``Reminder.order``):
 #: the environment first, the budget and the date last.
 ORDER_ENVIRONMENT = 0
+ORDER_DEFERRED = 30
 ORDER_BUDGET = 80
 ORDER_DATE = 90
 
@@ -225,6 +226,17 @@ def render_attribution(model: str) -> str | None:
     ])
 
 
+DEFERRED_TOOLS_HEAD = (
+    "The tools below are deferred: only their names are known here and their schemas are "
+    "not loaded, so calling one directly fails with an input validation error. Load the ones "
+    "you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:")
+
+
+def deferred_list(names: Sequence[str]) -> str:
+    """The deferred tools, one name per line under the lead-in."""
+    return "\n".join([DEFERRED_TOOLS_HEAD, *names])
+
+
 def budget_note(left: int) -> str:
     return f"<total_tokens>{left} tokens left</total_tokens>"
 
@@ -294,6 +306,8 @@ class Environment(Extension):
             return {**state, kind: data.get("text")}
         if kind == "sent":
             return {**state, "held": False}
+        if kind == "deferred":
+            return {**state, "deferred": list(data.get("names") or [])}
         if kind == "date":
             return {**state, "date": data.get("date")}
         if kind == "budget":
@@ -332,6 +346,13 @@ class Environment(Extension):
             # The first request: the environment follows the first prompt.
             out.append(Reminder(text=st["text"], kind="sent", data={}, role="system",
                                 order=ORDER_ENVIRONMENT))
+            # The deferred tools the first request offers, named once; the
+            # list does not change for the rest of the conversation.
+            names = view.deferred_tool_names()
+            if names:
+                out.append(Reminder(text=deferred_list(names), kind="deferred",
+                                    data={"names": names}, role="system",
+                                    order=ORDER_DEFERRED))
             out.append(Reminder(text=date_line(st["date"]), kind="date",
                                 data={"date": st["date"]}, role="system", order=ORDER_DATE))
         elif self.date_change and not view.state.steps_in_turn and st.get("date"):
@@ -350,7 +371,8 @@ class Environment(Extension):
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
         """After a compaction: the git snapshot and attribution note taken at
-        the start, then the environment with the date it last gave."""
+        the start, then the environment with the deferred tools and the date
+        it last gave."""
         st = view.ext_state(self.name)
         if not isinstance(st, dict):
             return ()
@@ -358,6 +380,10 @@ class Environment(Extension):
                if isinstance(st.get(k), str)]
         text = st.get("text")
         if isinstance(text, str):
-            date = st.get("date")
-            out.append(system_message(f"{text}\n\n{date_line(date)}" if date else text))
+            parts = [text]
+            if st.get("deferred"):
+                parts.append(deferred_list(st["deferred"]))
+            if st.get("date"):
+                parts.append(date_line(st["date"]))
+            out.append(system_message("\n\n".join(parts)))
         return out
