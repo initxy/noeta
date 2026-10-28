@@ -6,8 +6,9 @@ kind="activated")`` entry; the model's ``skill`` calls and the user's
 ``/<name>`` count as use, a host preload does not. The score is Claude
 Code's: ``count * max(0.5 ^ (days since last use / 7), 0.1)``.
 
-The extension has no store, so this is opt-in host wiring:
-``Skills(rank=UsageRank(store))``. The ranker answers from its last
+The extension reads no other task, so this is opt-in host wiring through
+the host's client (what it may read is what the client shows):
+``Skills(rank=UsageRank(app.client))``. The ranker answers from its last
 snapshot at once and refreshes in the background when the snapshot is
 older than ``ttl``, so a task start never waits on the scan; until the first
 scan lands the ranking is empty (tier and priority order).
@@ -22,8 +23,8 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from noeta.core.client import ClientAPI
 from noeta.core.events import ExtensionRecorded, Recorded
-from noeta.core.store import Store
 
 __all__ = ["SkillUsage", "UsageRank", "decayed_usage_score", "skill_usage", "usage_rank"]
 
@@ -61,25 +62,25 @@ def decayed_usage_score(usage: SkillUsage, *, now: float, half_life_days: float 
     return usage.count * max(decay, floor)
 
 
-async def usage_rank(store: Store, *, max_tasks: int = 200, now: float | None = None,
+async def usage_rank(client: ClientAPI, *, max_tasks: int = 200, now: float | None = None,
                      extension: str = "skills") -> dict[str, float]:
-    """Scores over the ``max_tasks`` most recently updated tasks."""
+    """Scores over the ``max_tasks`` most recently updated tasks the
+    client shows."""
     records: list[Recorded] = []
-    for row in await store.tasks(limit=max_tasks):
-        records.extend(await store.read(row.task_id))
+    for row in await client.tasks(limit=max_tasks):
+        records.extend(await client.events(row.task_id))
     at = time.time() if now is None else now
     return {n: decayed_usage_score(u, now=at)
             for n, u in skill_usage(records, extension).items()}
 
 
 class UsageRank:
-    """A ``rank`` callable over a store-wide usage scan (single-tenant
-    hosts; a multi-tenant host folds its own tasks with
-    :func:`skill_usage`)."""
+    """A ``rank`` callable over a usage scan of the tasks ``client`` shows
+    (a host's client: a remote one works too)."""
 
-    def __init__(self, store: Store, *, ttl: float = 600.0, max_tasks: int = 200,
+    def __init__(self, client: ClientAPI, *, ttl: float = 600.0, max_tasks: int = 200,
                  clock: Callable[[], float] = time.time) -> None:
-        self.store = store
+        self.client = client
         self.ttl = ttl
         self.max_tasks = max_tasks
         self.clock = clock
@@ -102,6 +103,6 @@ class UsageRank:
 
     async def _scan(self, now: float) -> None:
         try:
-            self._rank = await usage_rank(self.store, max_tasks=self.max_tasks, now=now)
+            self._rank = await usage_rank(self.client, max_tasks=self.max_tasks, now=now)
         except Exception:  # noqa: BLE001 — keep the previous ranking
             _log.warning("skill usage scan failed; keeping the previous ranking", exc_info=True)
