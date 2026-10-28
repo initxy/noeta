@@ -600,4 +600,6 @@ Phase 5 — front ends
   StopFailure / PostModelSwitch / CwdChanged, Stop as SubagentStop; skill `when_to_use`,
   named arguments, `${NOETA_SKILL_DIR}`, allowed-tools pre-approval, `` !`cmd` ``, `paths`,
   `context: fork`. `make parity` 0 (13 accepted deviations, reasons in Decisions and
-  `parity/deviations.md`).
+  `parity/deviations.md`); make check 1985 passed (87.74%); make eval 1.000 vs 0.987 baseline
+  (3 trials, two `delegate_parallel_review` trials hit the 240 s timeout but scored); make
+  e2e 7 passed.
