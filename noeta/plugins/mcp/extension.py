@@ -77,6 +77,7 @@ from noeta.plugins.mcp.tools import (
     ListMcpResourcesTool,
     McpAuthTool,
     McpTool,
+    ReadMcpResourceDirTool,
     ReadMcpResourceTool,
     auth_stub_entries,
 )
@@ -230,11 +231,13 @@ class Mcp(Extension):
                                      description=t["description"],
                                      input_schema=t["input_schema"], invoke=self._invoke,
                                      deferred=deferred, resume=self._resume))
-        if st["servers"] or st.get("down"):
+        if (st["servers"] or st.get("down")) and view.state.parent_id is None:
             # Offered whenever a server is configured, even while it is down:
-            # an outage must not move the stable prefix.
+            # an outage must not move the stable prefix. Sub-agents get the
+            # servers' tools only, as in Claude Code.
             tools += [ListMcpResourcesTool(self._servers_of, self._use),
-                      ReadMcpResourceTool(self._servers_of, self._use)]
+                      ReadMcpResourceTool(self._servers_of, self._use),
+                      ReadMcpResourceDirTool(self._servers_of, self._use)]
         self._tools[view.task_id] = (st, tools)
         return tools
 

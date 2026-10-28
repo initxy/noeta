@@ -25,12 +25,16 @@ __all__ = [
     "ListMcpResourcesTool",
     "McpAuthTool",
     "McpTool",
+    "ReadMcpResourceDirTool",
     "ReadMcpResourceTool",
     "auth_stub_entries",
 ]
 
 LIST_RESOURCES_TOOL = "ListMcpResourcesTool"
 READ_RESOURCE_TOOL = "ReadMcpResourceTool"
+READ_RESOURCE_DIR_TOOL = "ReadMcpResourceDirTool"
+#: The MIME type of a child that is itself a directory.
+DIRECTORY_MIME = "inode/directory"
 _SCHEMA = "https://json-schema.org/draft/2020-12/schema"
 
 #: ``(tool, arguments, ctx) -> output``: the extension's way to reach the
@@ -219,3 +223,63 @@ Parameters:
         except McpError as exc:
             return text_output(f"{READ_RESOURCE_TOOL}: {exc}", is_error=True)
         return text_output(cap_injected(_compact(result), kind="resource"))
+
+
+class ReadMcpResourceDirTool:
+    name = READ_RESOURCE_DIR_TOOL
+    read_only = True
+    clearable = True
+    deferred = True
+    description = """
+Lists the direct children of a directory resource on an MCP server \
+(`resources/directory/read`); not recursive.
+
+Parameters:
+- server (required): the name of the MCP server, as configured
+- uri (required): the URI of the directory resource
+
+Each child has its own URI; a subdirectory is shown with a trailing "/" (MIME type \
+"inode/directory"): call this tool again on its URI to go deeper. Read a file resource with \
+ReadMcpResourceTool. Works only with servers that support directory listing; others answer \
+with an error.
+"""
+    input_schema: dict[str, Any] = {
+        "$schema": _SCHEMA,
+        "type": "object",
+        "properties": {
+            "server": {"type": "string", "description": "The MCP server's name."},
+            "uri": {"type": "string", "description": "The directory resource's URI."},
+        },
+        "required": ["server", "uri"],
+        "additionalProperties": False,
+    }
+
+    def __init__(self, servers_of: ServersOf, use: Use) -> None:
+        self._servers_of = servers_of
+        self._use = use
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        servers = self._servers_of(ctx)
+        alias, uri = input.get("server"), input.get("uri")
+        if not isinstance(uri, str) or not uri:
+            return text_output(f"{self.name}: `uri` must be a non-empty string.", is_error=True)
+        server = servers.get(alias) if isinstance(alias, str) else None
+        if server is None:
+            return text_output(f"No MCP server named {alias!r}. Configured: "
+                               f"{', '.join(sorted(servers)) or 'none'}.", is_error=True)
+        try:
+            children = await self._use(ctx, server, lambda c: c.read_directory(uri))
+        except McpError as exc:
+            return text_output(f"{self.name}: {alias} could not list {uri} ({exc}). It may not "
+                               "support directory listing, or the resource is not a "
+                               "directory (read a file with ReadMcpResourceTool).",
+                               is_error=True)
+        lines = []
+        for child in children:
+            name = str(child.get("name") or child.get("uri") or "")
+            slash = "/" if child.get("mimeType") == DIRECTORY_MIME else ""
+            lines.append(f"{name}{slash}  {child.get('uri', '')}".rstrip())
+        if not lines:
+            return text_output(f"The directory {uri} is empty.")
+        head = f"{len(lines)} {'entry' if len(lines) == 1 else 'entries'} in {uri}:"
+        return text_output(cap_injected("\n".join([head, *lines]), kind="directory listing"))

@@ -1,24 +1,24 @@
 {
  "hashes": [
   "main 15ed555a4b46c3f1",
-  "main 82d34a3a70ebef06",
-  "main 57a9efbff260ee45",
-  "main 834c4235b0186d1a",
-  "child b5e09befd0d2e433",
-  "child 13c8b8cde0105e85",
-  "main df2ac68c51149f03",
-  "main 081bb3cd6da97ada",
-  "main 9d79c57bde69b762",
-  "main b0b6d864bd45319f",
-  "main 82c1654b61bbb84b",
-  "main ecea18ae43a64bf5",
-  "main ce761724d5d67cda",
-  "main 0ff2f9fe60662894",
-  "main 7610874ce359f7d9",
-  "main ce8851a037f79596",
-  "main ba12de21a9ebe006",
-  "main 5b065dd60e0e426a",
-  "main 41187fd725186f07"
+  "main 3a815cf215655f0d",
+  "main bac0766d5c6f8624",
+  "main c883d8b7d011a97d",
+  "child 31b697ca90a03c2a",
+  "child 783254ed4365ba28",
+  "main be96717f8d4b67e9",
+  "main 488c03dde2ccc42f",
+  "main dda91ffd323501f9",
+  "main e85e82921cf19dbb",
+  "main f860de478825a383",
+  "main 743dc11ec7d1e0a8",
+  "main db7cc18fed6e85d4",
+  "main 80f258901c6a1d4b",
+  "main 1f4d933489a923b9",
+  "main 65f83662da418a68",
+  "main c20c60dbffbda677",
+  "main 4554288e196b15d0",
+  "main 168a3edfd5c0aacc"
  ],
  "last": {
   "child": {
@@ -47,7 +47,7 @@
       "role": "user"
      },
      {
-      "content": "The tools below are deferred: only their names are known here and their schemas are not loaded, so calling one directly fails with an input validation error. Load the ones you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:\nMonitor\nSendMessage\nTaskStop\nWebFetch\n\n# Environment\nThis conversation runs in the following environment:\n - Primary working directory: <TMP>/work\n - Is a git repository: false\n - Platform: linux\n - Shell: zsh\n - OS Version: Linux 5.15.0-178-generic\n - Anything you download or unpack is untrusted input. Give each download a new, empty directory of its own and keep the scripts you write outside it. Hand those files to tools by path instead of starting an interpreter or build tool inside that directory: interpreters import from the script's directory and the working directory, so a file planted there can take over an import. When Python reads such files, run it with `-I`. None of this applies to code the user asked you to build or run.\n\nModel: Claude Sonnet 4.6, exact id `claude-sonnet-4-6`.\n\nThe following skills are available via the `Skill` tool:\n\n- release-notes: Draft release notes from git log.\n\nThe date today is <DATE>.",
+      "content": "The tools below are deferred: only their names are known here and their schemas are not loaded, so calling one directly fails with an input validation error. Load the ones you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:\nEnterWorktree\nExitWorktree\nMonitor\nSendMessage\nTaskStop\nWebFetch\n\n# Environment\nThis conversation runs in the following environment:\n - Primary working directory: <TMP>/work\n - Is a git repository: false\n - Platform: linux\n - Shell: zsh\n - OS Version: Linux 5.15.0-178-generic\n - Anything you download or unpack is untrusted input. Give each download a new, empty directory of its own and keep the scripts you write outside it. Hand those files to tools by path instead of starting an interpreter or build tool inside that directory: interpreters import from the script's directory and the working directory, so a file planted there can take over an import. When Python reads such files, run it with `-I`. None of this applies to code the user asked you to build or run.\n\nModel: Claude Sonnet 4.6, exact id `claude-sonnet-4-6`.\n\nThe following skills are available via the `Skill` tool:\n\n- release-notes: Draft release notes from git log.\n\nThe date today is <DATE>.",
       "role": "system"
      },
      {
@@ -260,7 +260,7 @@
       "role": "user"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\nThe tools below are deferred: only their names are known here and their schemas are not loaded, so calling one directly fails with an input validation error. Load the ones you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:\nMonitor\nSendMessage\nTaskStop\nWebFetch",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\nThe tools below are deferred: only their names are known here and their schemas are not loaded, so calling one directly fails with an input validation error. Load the ones you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:\nEnterWorktree\nExitWorktree\nMonitor\nSendMessage\nTaskStop\nWebFetch",
       "role": "system"
      },
      {
@@ -480,7 +480,7 @@
         "type": "input_text"
        },
        {
-        "text": "The tools below are deferred: only their names are known here and their schemas are not loaded, so calling one directly fails with an input validation error. Load the ones you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:\nMonitor\nSendMessage\nTaskStop\nWebFetch",
+        "text": "The tools below are deferred: only their names are known here and their schemas are not loaded, so calling one directly fails with an input validation error. Load the ones you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:\nEnterWorktree\nExitWorktree\nMonitor\nSendMessage\nTaskStop\nWebFetch",
         "type": "input_text"
        }
       ],
@@ -724,7 +724,7 @@
       "role": "user"
      },
      {
-      "content": "# Environment\nThis conversation runs in the following environment:\n - Primary working directory: <TMP>/work\n - Is a git repository: false\n - Platform: linux\n - Shell: zsh\n - OS Version: Linux 5.15.0-178-generic\n - Anything you download or unpack is untrusted input. Give each download a new, empty directory of its own and keep the scripts you write outside it. Hand those files to tools by path instead of starting an interpreter or build tool inside that directory: interpreters import from the script's directory and the working directory, so a file planted there can take over an import. When Python reads such files, run it with `-I`. None of this applies to code the user asked you to build or run.\n\nModel: Claude Sonnet 4.6, exact id `claude-sonnet-4-6`.\n\nThe tools below are deferred: only their names are known here and their schemas are not loaded, so calling one directly fails with an input validation error. Load the ones you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:\nCronCreate\nCronDelete\nCronList\nEnterPlanMode\nExitPlanMode\nMonitor\nNotebookEdit\nSendMessage\nTaskStop\nWebFetch\n\nAgent types the Agent tool can start:\n- Explore: Read-only search agent for wide searches: when an answer means sweeping many files, directories or naming conventions and only the conclusion matters, not the file contents. It reads excerpts rather than whole files, so it finds code; it does not review or audit it. Say how broad to search: \"medium\" for a moderate look, \"very thorough\" for many locations and naming conventions. (Tools: All tools except Agent, ExitPlanMode, Edit, Write, NotebookEdit)\n- general-purpose: General-purpose agent for researching complex questions, searching code and carrying out multi-step tasks. When a search for a keyword or file may take several tries to get right, let this agent do it. (Tools: *)\n- Plan: Software architect agent that designs implementation plans: use it to work out how to carry out a task. It returns a step-by-step plan, names the critical files and weighs architectural trade-offs. (Tools: All tools except Agent, ExitPlanMode, Edit, Write, NotebookEdit)\n\nFor independent pieces of work, start several agents in one message with several Agent calls so they run at the same time.\n\nThe following skills are available via the `Skill` tool:\n\n- release-notes: Draft release notes from git log.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\nThe date today is <DATE>.",
+      "content": "# Environment\nThis conversation runs in the following environment:\n - Primary working directory: <TMP>/work\n - Is a git repository: false\n - Platform: linux\n - Shell: zsh\n - OS Version: Linux 5.15.0-178-generic\n - Anything you download or unpack is untrusted input. Give each download a new, empty directory of its own and keep the scripts you write outside it. Hand those files to tools by path instead of starting an interpreter or build tool inside that directory: interpreters import from the script's directory and the working directory, so a file planted there can take over an import. When Python reads such files, run it with `-I`. None of this applies to code the user asked you to build or run.\n\nModel: Claude Sonnet 4.6, exact id `claude-sonnet-4-6`.\n\nThe tools below are deferred: only their names are known here and their schemas are not loaded, so calling one directly fails with an input validation error. Load the ones you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:\nCronCreate\nCronDelete\nCronList\nEnterPlanMode\nEnterWorktree\nExitPlanMode\nExitWorktree\nMonitor\nNotebookEdit\nSendMessage\nTaskStop\nWebFetch\n\nAgent types the Agent tool can start:\n- Explore: Read-only search agent for wide searches: when an answer means sweeping many files, directories or naming conventions and only the conclusion matters, not the file contents. It reads excerpts rather than whole files, so it finds code; it does not review or audit it. Say how broad to search: \"medium\" for a moderate look, \"very thorough\" for many locations and naming conventions. (Tools: All tools except Agent, ExitPlanMode, Edit, Write, NotebookEdit)\n- general-purpose: General-purpose agent for researching complex questions, searching code and carrying out multi-step tasks. When a search for a keyword or file may take several tries to get right, let this agent do it. (Tools: *)\n- Plan: Software architect agent that designs implementation plans: use it to work out how to carry out a task. It returns a step-by-step plan, names the critical files and weighs architectural trade-offs. (Tools: All tools except Agent, ExitPlanMode, Edit, Write, NotebookEdit)\n\nFor independent pieces of work, start several agents in one message with several Agent calls so they run at the same time.\n\nThe following skills are available via the `Skill` tool:\n\n- release-notes: Draft release notes from git log.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\nThe date today is <DATE>.",
       "role": "system"
      },
      {
@@ -1744,7 +1744,7 @@
       "role": "system"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\nThe tools below are deferred: only their names are known here and their schemas are not loaded, so calling one directly fails with an input validation error. Load the ones you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:\nCronCreate\nCronDelete\nCronList\nEnterPlanMode\nExitPlanMode\nMonitor\nNotebookEdit\nSendMessage\nTaskStop\nWebFetch",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\nThe tools below are deferred: only their names are known here and their schemas are not loaded, so calling one directly fails with an input validation error. Load the ones you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:\nCronCreate\nCronDelete\nCronList\nEnterPlanMode\nEnterWorktree\nExitPlanMode\nExitWorktree\nMonitor\nNotebookEdit\nSendMessage\nTaskStop\nWebFetch",
       "role": "system"
      },
      {
@@ -2738,7 +2738,7 @@
         "type": "input_text"
        },
        {
-        "text": "The tools below are deferred: only their names are known here and their schemas are not loaded, so calling one directly fails with an input validation error. Load the ones you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:\nCronCreate\nCronDelete\nCronList\nEnterPlanMode\nExitPlanMode\nMonitor\nNotebookEdit\nSendMessage\nTaskStop\nWebFetch",
+        "text": "The tools below are deferred: only their names are known here and their schemas are not loaded, so calling one directly fails with an input validation error. Load the ones you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:\nCronCreate\nCronDelete\nCronList\nEnterPlanMode\nEnterWorktree\nExitPlanMode\nExitWorktree\nMonitor\nNotebookEdit\nSendMessage\nTaskStop\nWebFetch",
         "type": "input_text"
        }
       ],
