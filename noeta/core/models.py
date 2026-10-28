@@ -39,7 +39,6 @@ __all__ = [
     "price",
     "register_models",
     "resolve_alias",
-    "spec_for",
     "unknown_model_notice",
 ]
 
@@ -104,15 +103,6 @@ class ModelSpec:
     #: The month its training data ends (``June 2026``), when published.
     knowledge_cutoff: str | None = None
 
-    @property
-    def is_priced(self) -> bool:
-        """True when all four rates are known, i.e. :func:`price` can charge."""
-        return None not in (
-            self.input_price_per_mtok,
-            self.output_price_per_mtok,
-            self.cache_read_price_per_mtok,
-            self.cache_write_price_per_mtok,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -453,15 +443,6 @@ def find_spec(model_id: str) -> ModelSpec | None:
     spec = CATALOG.get(real)
     if spec is None:
         spec = _EXTENSIONS.get(real)
-    return spec
-
-
-def spec_for(model_id: str) -> ModelSpec:
-    """Look up a model's spec, by real id or alias. Raises :class:`KeyError`
-    for an unknown id so a mis-typed or unpriced model surfaces loudly."""
-    spec = find_spec(model_id)
-    if spec is None:
-        raise KeyError(resolve_alias(model_id))
     return spec
 
 

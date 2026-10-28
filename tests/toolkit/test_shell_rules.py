@@ -10,8 +10,6 @@ import pytest
 from noeta.toolkit.shell import (
     DEFAULT_SHELL_RULES,
     AllowRule,
-    build_allowlist,
-    command_in_allowlist,
     has_shell_meta,
     has_unquoted_expansion,
     long_leading_sleep,
@@ -23,7 +21,11 @@ from noeta.toolkit.shell import (
     subcommands,
 )
 
-_RULES = build_allowlist((), base_rules=DEFAULT_SHELL_RULES)
+_RULES = DEFAULT_SHELL_RULES
+
+
+def command_in_allowlist(command: str, rules: tuple[AllowRule, ...]) -> bool:
+    return matching_rule(command, rules) is not None
 
 
 # -- unquoted expansion is never allowlisted --------------------------------
@@ -189,11 +191,8 @@ def test_rule_from_spec_rejects_malformed(spec: dict[str, Any]) -> None:
         rule_from_spec(spec)
 
 
-def test_build_allowlist_keeps_base_rules_first() -> None:
-    rules = build_allowlist([{"program": "make"}], base_rules=DEFAULT_SHELL_RULES)
-    assert rules[: len(DEFAULT_SHELL_RULES)] == DEFAULT_SHELL_RULES
-    assert rules[-1].program == "make"
-    assert build_allowlist() == ()
+def test_a_program_rule_accepts_any_tail() -> None:
+    rules = (rule_from_spec({"program": "make"}),)
     assert command_in_allowlist("make all", rules)
     assert not command_in_allowlist("make all", DEFAULT_SHELL_RULES)
 
@@ -228,7 +227,7 @@ def test_a_remembered_approval_never_widens_past_its_rule() -> None:
     def allowed(approved: str, later: str) -> bool:
         spec = rule_spec_from_command(approved)
         assert spec is not None
-        return command_in_allowlist(later, build_allowlist([spec]))
+        return command_in_allowlist(later, (rule_from_spec(spec),))
 
     assert allowed("rm -rf build", "rm -rf build")
     assert not allowed("rm -rf build", "rm -rf /")

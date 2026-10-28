@@ -295,7 +295,7 @@ async def test_the_shells_directory_resolves_relative_paths(tmp_path: Path) -> N
     view: Any = SimpleNamespace(ext_state=lambda name: shell if name == "shell" else None)
     here = perms._shell_scope(view, scope)
     assert here.cwd == str(tmp_path / ".git")
-    [part] = sc.shell_parts("sed -i s/a/b/ config", here)
+    [part] = sc.parts("sed -i s/a/b/ config", here) or []
     assert part.writes == (str(tmp_path / ".git" / "config"),)
     shell.cwd = "/etc"  # outside: the working directory stands
     assert perms._shell_scope(view, scope).cwd == str(tmp_path)
@@ -339,7 +339,7 @@ def test_always_remembers_no_more_than_the_command_shows(command: str, rule: str
     from noeta.plugins.permissions.extension import _shell_always
 
     scope = sc.Scope(dirs=("/proj",), home="/home/u")
-    always, _label = _shell_always(sc.shell_parts(command, scope), scope)
+    always, _label = _shell_always(sc.parts(command, scope) or [], scope)
     assert always == (rule,)
 
 

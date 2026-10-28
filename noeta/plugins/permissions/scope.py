@@ -41,7 +41,6 @@ __all__ = [
     "file_command_paths",
     "is_protected",
     "read_only",
-    "shell_parts",
 ]
 
 #: File commands ``acceptEdits`` runs without asking when every path they
@@ -861,13 +860,6 @@ def parts(command: str, scope: Scope) -> list[Part] | None:
         if cwds is not None and not all(scope.contains(c) for c in cwds):
             cwds = None
     return out
-
-
-def shell_parts(command: str, scope: Scope) -> list[Part]:
-    """:func:`parts`, with an opaque command as one part that is neither
-    read-only nor a file command."""
-    found = parts(command, scope)
-    return found if found is not None else [Part(command.strip(), False)]
 
 
 def read_only(command: str, scope: Scope) -> bool:

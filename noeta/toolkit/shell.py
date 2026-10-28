@@ -5,7 +5,7 @@ Nothing here runs anything or reads a file. ``Bash`` uses the default rules'
 hardening rewrites (``git`` flags that switch off repo-configured helper
 programs) and :func:`long_leading_sleep`; deciding which commands may run
 without approval is the permissions extension's job, built on
-:func:`matching_rule` / :func:`command_in_allowlist`.
+:func:`matching_rule`.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ import re
 import shlex
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any
 
 __all__ = [
@@ -25,9 +24,6 @@ __all__ = [
     "SHELL_META_CHARS",
     "WRAPPER_PROGRAMS",
     "AllowRule",
-    "ShellMode",
-    "build_allowlist",
-    "command_in_allowlist",
     "has_shell_meta",
     "has_unquoted_expansion",
     "long_leading_sleep",
@@ -47,19 +43,6 @@ SHELL_META_CHARS = frozenset(";&|<>`$()\n\r")
 #: unquoted would be judged on an argv bash never runs
 #: (``find . {-exec,touch} x {} +`` hides ``-exec`` from the validator).
 SHELL_EXPANSION_CHARS = frozenset("{*?[~")
-
-
-class ShellMode(StrEnum):
-    """How much of the shell a host allows.
-
-    * ``OFF`` — no ``Bash`` at all.
-    * ``ALLOWLIST`` — only metachar-free commands matching the allowlist.
-    * ``ARBITRARY`` — anything ``bash -c`` runs (pipes, redirects, ...).
-    """
-
-    OFF = "off"
-    ALLOWLIST = "allowlist"
-    ARBITRARY = "arbitrary"
 
 
 _ArgValidator = Callable[[list[str]], bool]
@@ -161,10 +144,6 @@ def matching_rule(command: str, rules: Sequence[AllowRule]) -> AllowRule | None:
     return None
 
 
-def command_in_allowlist(command: str, rules: Sequence[AllowRule]) -> bool:
-    return matching_rule(command, rules) is not None
-
-
 def _trivial_validate(_: list[str]) -> bool:
     return True
 
@@ -209,15 +188,6 @@ def _rule_from_text(text: str) -> AllowRule:
         return tail[: len(rest)] == rest if prefix else tail == rest
 
     return AllowRule(words[0], None, validate, text)
-
-
-def build_allowlist(
-    extra_specs: Sequence[Mapping[str, Any]] = (),
-    *,
-    base_rules: Sequence[AllowRule] = (),
-) -> tuple[AllowRule, ...]:
-    """``base_rules`` kept verbatim, plus operator ``extra_specs``."""
-    return tuple(base_rules) + tuple(rule_from_spec(s) for s in extra_specs)
 
 
 #: Programs that run another command (Claude Code's list): a prefix rule on
