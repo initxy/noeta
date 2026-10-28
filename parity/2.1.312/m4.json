@@ -127,6 +127,26 @@
     "assistant: thinking | text",
     "user(str): text:prompt",
     "system: text:<total_tokens>*"
+   ],
+   "deferred": [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "ListMcpResourcesTool",
+    "Monitor",
+    "NotebookEdit",
+    "ReadMcpResourceDirTool",
+    "ReadMcpResourceTool",
+    "SendMessage",
+    "TaskStop",
+    "WebFetch",
+    "WebSearch",
+    "mcp__echo__echo"
    ]
   }
  ],

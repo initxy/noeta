@@ -274,6 +274,30 @@ def system_facts(system: Any, kinds: Kinds) -> list[dict[str, Any]]:
     return out
 
 
+#: A tool name on its own line (the deferred-tool list names one per line).
+_TOOL_NAME = re.compile(r"^[A-Za-z_][\w-]*$")
+
+
+def deferred_names(messages: Iterable[Mapping[str, Any]], kinds: Kinds) -> list[str]:
+    """The tool names the request's deferred-tool lists name (wire names,
+    not text), sorted; empty when no message carries one."""
+    names: set[str] = set()
+    for m in messages:
+        if m.get("role") == "assistant":
+            continue
+        _, blocks = _blocks(m.get("content"))
+        for b in blocks:
+            if b.get("type") != "text":
+                continue
+            for part in split_parts(b.get("text") or "", kinds.starts,
+                                    (pat for pat, _ in kinds.patterns)):
+                if kinds.name(part) != "deferred-tools":
+                    continue
+                lines = part.strip().split("\n")[1:]
+                names.update(x.strip() for x in lines if _TOOL_NAME.match(x.strip()))
+    return sorted(names)
+
+
 def request_facts(body: Mapping[str, Any], hdrs: Mapping[str, str], kinds: Kinds,
                   toolsets: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     """The facts of one request; its tool list goes into ``toolsets`` by id."""
@@ -281,13 +305,18 @@ def request_facts(body: Mapping[str, Any], hdrs: Mapping[str, str], kinds: Kinds
     tid = toolset_id(tools) if tools else None
     if tid:
         toolsets.setdefault(tid, tools)
-    return {
+    messages = list(body.get("messages") or [])
+    out = {
         "params": params(body),
         "headers": headers(hdrs),
         "system": system_facts(body.get("system"), kinds),
         "toolset": tid,
-        "messages": layout(list(body.get("messages") or []), kinds),
+        "messages": layout(messages, kinds),
     }
+    deferred = deferred_names(messages, kinds)
+    if deferred:
+        out["deferred"] = deferred
+    return out
 
 
 def text_catalog(body: Mapping[str, Any], kinds: Kinds, into: dict[str, dict[str, int | str]]
