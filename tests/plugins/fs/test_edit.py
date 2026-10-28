@@ -97,7 +97,27 @@ async def test_an_allowed_edit_needs_no_read_first(h: Harness, ws: Path) -> None
     assert target.read_text() == "world\n"
 
 
+async def test_an_allowed_edit_applies_over_changes_since_the_read(h: Harness, ws: Path) -> None:
+    target = ws / "a.py"
+    target.write_text("v1\nkeep\n")
+    await _read(h, "a.py")
+    target.write_text("v1\nkeep\nadded on disk\n")
+    out = await h.call(EditTool(), file_path="a.py", old_string="v1", new_string="v2")
+    assert not out.is_error, text_of(out)
+    assert target.read_text() == "v2\nkeep\nadded on disk\n"
+    assert text_of(out) == (
+        f"The file {target} has been updated successfully. (the file had changed on disk "
+        "since your last Read; the edit applied cleanly, but the file holds other changes you "
+        "have not seen, so Read it before an edit that depends on the text around it)")
+    # Where old_string no longer picks one place, the model must re-read.
+    target.write_text("v2\nv2\n")
+    out = await h.call(EditTool(), file_path="a.py", old_string="v2", new_string="v3")
+    assert text_of(out) == (
+        "Edit: File has been modified since it was read. Read it again before editing it.")
+
+
 async def test_edit_stale_read_rejected(h: Harness, ws: Path) -> None:
+    h.approved = True  # asked about: no recovery over a changed file
     target = ws / "a.py"
     target.write_text("v1\n")
     await _read(h, "a.py")

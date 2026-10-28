@@ -16,12 +16,14 @@ from noeta.toolkit.tools import Workspace, tool_error
 __all__ = [
     "WriteRoots",
     "authorized_roots",
+    "changed_since_read",
     "compute_diff",
     "diff_display",
     "diff_stat_counts",
     "mutation_result",
     "read_precondition_error",
     "record_written",
+    "stale_error",
 ]
 
 #: ``ctx -> directories this call may write outside the workspace``. Asked
@@ -51,7 +53,7 @@ async def authorized_roots(
 
 def read_precondition_error(
     ctx: ToolContext, resolved: str, raw: bytes, *, tool_name: str, verb: str,
-    unread_ok: bool = False, partial_ok: bool = False,
+    unread_ok: bool = False, partial_ok: bool = False, check_stale: bool = True,
 ) -> ToolOutput | None:
     """The file must have been read (an ``fs`` entry for the canonical path)
     and its bytes must still hash to what was read — otherwise the model
@@ -62,7 +64,8 @@ def read_precondition_error(
     (``not ctx.approved``), which the caller passes as ``unread_ok``.
     ``partial_ok`` extends that to a read cut to fit the token ceiling
     (``Edit``; a whole-file ``Write`` over a partial view is always
-    refused)."""
+    refused). ``check_stale=False`` leaves a change since the read to the
+    caller (``Edit``'s recovery, see :func:`changed_since_read`)."""
     entry = current_fs_state(ctx.state).reads.get(resolved)
     # A read cut to fit the token ceiling showed only part of the file.
     seen = entry is not None and not entry.partial
@@ -74,13 +77,22 @@ def read_precondition_error(
         if entry is None:
             return None
     assert entry is not None
-    if entry.digest != hashlib.sha256(raw).hexdigest():
-        return tool_error(
-            tool_name,
-            "File has been modified since it was read. Read it again before "
-            f"{verb} it.",
-        )
+    if check_stale and entry.digest != hashlib.sha256(raw).hexdigest():
+        return stale_error(tool_name, verb)
     return None
+
+
+def stale_error(tool_name: str, verb: str) -> ToolOutput:
+    return tool_error(
+        tool_name,
+        f"File has been modified since it was read. Read it again before {verb} it.",
+    )
+
+
+def changed_since_read(ctx: ToolContext, resolved: str, raw: bytes) -> bool:
+    """The file's bytes differ from what the model last read or wrote."""
+    entry = current_fs_state(ctx.state).reads.get(resolved)
+    return entry is not None and entry.digest != hashlib.sha256(raw).hexdigest()
 
 
 async def record_written(ctx: ToolContext, resolved: str, body: bytes) -> None:
@@ -103,14 +115,21 @@ async def record_written(ctx: ToolContext, resolved: str, body: bytes) -> None:
 
 #: Follows a successful write: the model already holds the file as written.
 FILE_STATE_NOTE = "(what you wrote is the file's current state; no need to Read it back)"
+#: Follows an edit applied over changes made on disk since the model's read.
+STALE_EDIT_NOTE = (
+    "(the file had changed on disk since your last Read; the edit applied cleanly, but the "
+    "file holds other changes you have not seen, so Read it before an edit that depends on "
+    "the text around it)")
 
 
-def mutation_result(path: str, *, created: bool) -> str:
+def mutation_result(path: str, *, created: bool, stale: bool = False) -> str:
     """The one-line result of a successful ``Edit`` or ``Write`` (absolute
     path). A ``NOETA.md`` gets no note: its text reaches the model as
     project instructions, not as the file it wrote."""
     head = (f"File created successfully at: {path}" if created
             else f"The file {path} has been updated successfully.")
+    if stale:
+        return f"{head} {STALE_EDIT_NOTE}"
     if posixpath.basename(path) == "NOETA.md":
         return head
     return f"{head} {FILE_STATE_NOTE}"

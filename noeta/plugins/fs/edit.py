@@ -16,12 +16,14 @@ from noeta.core.types import Text
 from noeta.plugins.fs._mutate import (
     WriteRoots,
     authorized_roots,
+    changed_since_read,
     compute_diff,
     diff_display,
     diff_stat_counts,
     mutation_result,
     read_precondition_error,
     record_written,
+    stale_error,
 )
 from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
@@ -114,10 +116,11 @@ class EditTool:
             return tool_error(self.name, f"{path!r} is not utf-8 text")
         refused = read_precondition_error(
             ctx, resolved, raw, tool_name=self.name, verb="editing",
-            unread_ok=not ctx.approved, partial_ok=True,
+            unread_ok=not ctx.approved, partial_ok=True, check_stale=False,
         )
         if refused is not None:
             return refused
+        stale = changed_since_read(ctx, resolved, raw)
 
         # ``Read`` shows lines without their ``\r``, so the model writes bare
         # ``\n``. In a CRLF file, match and write with the file's own ending —
@@ -127,6 +130,11 @@ class EditTool:
             if before.count(old_eol):
                 old, new = old_eol, new_eol
         count = before.count(old)
+        # Claude Code applies an edit over changes made since the read when
+        # its permissions allow the write outright and old_string still
+        # picks one place (or replace_all); otherwise the model must re-read.
+        if stale and (ctx.approved or count == 0 or (count > 1 and not replace_all)):
+            return stale_error(self.name, "editing")
         if count == 0:
             return tool_error(self.name, "String to replace not found in file.")
         if count > 1 and not replace_all:
@@ -149,7 +157,7 @@ class EditTool:
         await record_written(ctx, resolved, after_bytes)
 
         return ToolOutput(
-            content=[Text(text=mutation_result(resolved, created=False))],
+            content=[Text(text=mutation_result(resolved, created=False, stale=stale))],
             meta={
                 "path": rel,
                 "diff": diff,

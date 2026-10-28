@@ -120,6 +120,7 @@ async def test_an_edit_vouches_for_the_next_one_after_a_restart(h: Harness, ws: 
 
 
 async def test_a_change_since_the_recorded_read_needs_a_read(h: Harness, ws: Path) -> None:
+    h.approved = True
     _setup(ws)
     await h.call(ReadTool(), file_path="a.py")
     (ws / "a.py").write_text("x = 1\ny = 2\nz = 3\n")
