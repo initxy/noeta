@@ -7,6 +7,8 @@ from __future__ import annotations
 import asyncio
 import os
 import stat
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,7 @@ import pytest
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.events import ExtensionRecorded, External, InboxItem, InputTaken, Recorded, Say
 from noeta.core.extension import TaskView
+from noeta.core.holds import TreeHold
 from noeta.core.loop.state import TaskState
 from noeta.core.store import HOLD_LOST
 from noeta.core.tool import ToolContext
@@ -175,3 +178,63 @@ async def test_a_loose_existing_directory_is_tightened(tmp_path: Path) -> None:
     assert isinstance(job, Job)
     await asyncio.wait_for(job.done.wait(), 10)
     assert stat.S_IMODE(logs.stat().st_mode) == 0o700
+
+
+_WORKER = """
+import asyncio, sys
+from noeta.backends.execenvs.local import LocalExecEnv
+from noeta.plugins.shell import Registry
+
+async def main(work, marker):
+    async def post(*_a, **_k):
+        return None
+    job = await Registry(log_dir=work + "/logs").spawn(
+        env=LocalExecEnv(work), command=f"sleep 1.5; touch {marker}", cwd=work, env_vars={},
+        root_id="r", spawner_id="r", tool_use_id="c", description="", post=post)
+    print("started", flush=True)
+    await asyncio.sleep(60)
+
+asyncio.run(main(sys.argv[1], sys.argv[2]))
+"""
+
+
+async def test_a_job_dies_with_its_worker_process(tmp_path: Path) -> None:
+    marker = tmp_path / "late"
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", _WORKER, str(tmp_path), str(marker),
+        stdout=asyncio.subprocess.PIPE)
+    assert proc.stdout is not None
+    assert await asyncio.wait_for(proc.stdout.readline(), 30) == b"started\n"
+    proc.kill()
+    await proc.wait()
+    await asyncio.sleep(2.5)  # past the end of the command
+    assert not marker.exists()
+
+
+async def test_a_job_dies_once_its_hold_goes_stale(tmp_path: Path) -> None:
+    marker = tmp_path / "late"
+    tree = TreeHold(root_id="r", worker="w", epoch=1, seconds=1.0)
+    job = await Registry(log_dir=str(tmp_path / "logs")).spawn(
+        env=LocalExecEnv(str(tmp_path)), command=f"sleep 4; touch {marker}",
+        cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r", tool_use_id="c",
+        description="", post=_posted, tree=tree)
+    assert isinstance(job, Job)
+    tree.renewed -= 60  # the worker froze: nothing renewed its hold
+    await asyncio.wait_for(job.done.wait(), 3.5)
+    assert job.exit_code != 0
+    await asyncio.sleep(1.0)
+    assert not marker.exists()
+
+
+async def test_a_job_lives_while_its_hold_is_fresh(tmp_path: Path) -> None:
+    tree = TreeHold(root_id="r", worker="w", epoch=1, seconds=1.0)
+    job = await Registry(log_dir=str(tmp_path / "logs")).spawn(
+        env=LocalExecEnv(str(tmp_path)), command="sleep 2; wait; echo done",
+        cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r", tool_use_id="c",
+        description="", post=_posted, tree=tree)
+    assert isinstance(job, Job)
+    while not job.done.is_set():
+        tree.renewed = time.monotonic()
+        await asyncio.sleep(0.1)
+    assert job.exit_code == 0
+    assert Path(job.out_path).read_text() == "done\n\n[exited with code 0]\n"
