@@ -7,7 +7,9 @@ crashes, waits for a person at no cost, and runs on one process or many machines
 
 The only unit of work. A task has an agent, a config, an event log, an inbox and a row in
 `tasks` (a projection of the log written in the same transaction). Sub-agents are child tasks
-with `parent_id` / `root_id`. There is no session, run or workflow entity.
+with `parent_id` / `root_id`; a task may start from another's conversation
+(`TaskCreated.history_from`: a resumed or forked sub-agent). There is no session, run or workflow
+entity.
 
 ## Event log
 
@@ -87,9 +89,10 @@ them something with `notify`; neither reaches the model as the user.
 
 ## Agent file
 
-An agent is a markdown file (`noeta/agents/agent_files.py`): YAML frontmatter (`name`,
-`description`, `model`, `plugins` as names or `name: {arguments}`, optional `tools`,
-`one_shot`) and the system prompt as body. One plugin instance per name and arguments is shared
+An agent is a markdown file (`noeta/agents/agent_files.py`): YAML frontmatter (Claude Code's
+fields, plus `plugins` as names or `name: {arguments}` and `one_shot`) and the system prompt as
+body. A sub-agent runs in the background and ends its run with `SubagentHandback`, whose report
+reaches its caller as an `agent`-origin message (`noeta/plugins/subtasks`). One plugin instance per name and arguments is shared
 by every agent naming it. The built-ins are `noeta/agents/files/*.md`.
 
 ## Prompt name
@@ -115,8 +118,9 @@ A tool call that waits (a question, an approval, children) parks: the task ends 
 
 ## origin
 
-A message's `origin` says who speaks in the user channel: `user`, or `system` / `memory` for
-text the host or a plugin adds (reminders, notices, recalled memory). Providers render those as
+A message's `origin` says who speaks in the user channel: `user`, `system` / `memory` for
+text the host or a plugin adds (reminders, notices, recalled memory), or `agent` for another
+agent's framed message (a sub-agent's hand-back, sent as plain text). Providers render those as
 `<system-reminder>` blocks (Anthropic) or with a preamble saying it is not the user (OpenAI
 shapes); user text cannot forge the tag.
 
@@ -134,7 +138,7 @@ _Avoid_: `class Run`, `class Workflow`, `WorkflowRunner`, `class Mutator`, `clas
 ## Naming: model-visible tool names
 
 Tool names the model sees follow Claude Code (`Read`, `Glob`, `Grep`, `Edit`, `Write`, `Bash`,
-`TodoWrite`, `AskUserQuestion`, `Task`, `WebFetch`, `WebSearch`, …) because models carry their
+`TodoWrite`, `AskUserQuestion`, `Agent`, `WebFetch`, `WebSearch`, …) because models carry their
 strongest prior on those names. Everything else is snake_case.
 
 ## Naming: enforcement

@@ -117,20 +117,31 @@ async def pending_tree(client: Client, task_id: str) -> list[Pending]:
     sub-agent's approval or question surfaces at the root, carrying the
     sub-agent's ``task_id`` to answer it on."""
     out = pending(await client.events(task_id), task_id)
-    for child in await client.tasks(parent_id=task_id, status="waiting"):
-        out.extend(await pending_tree(client, child.task_id))
+    for child in await client.tasks(parent_id=task_id, limit=10_000):
+        if child.status != "ended":
+            out.extend(await pending_tree(client, child.task_id))
     return out
+
+
+async def tree_busy(client: Client, task_id: str) -> bool:
+    """Whether a task below ``task_id`` (a background sub-agent) has not ended."""
+    for child in await client.tasks(parent_id=task_id, limit=10_000):
+        if child.status != "ended" or await tree_busy(client, child.task_id):
+            return True
+    return False
 
 
 async def follow_tree(client: Client, task_id: str, after: int = 0, *,
                       poll: float = 1.0) -> AsyncIterator[Recorded | list[Pending]]:
     """``client.watch(task_id, after)``, plus what its sub-agents wait on a
-    human for: while the task waits on its children, the tree is checked
-    every ``poll`` seconds and, when a descendant waits on an approval or a
-    question, that list is yielded (again on every check until answered —
-    a front end remembers what it has shown)."""
+    human for: while the task waits and a sub-agent below it is still
+    running, the tree is checked every ``poll`` seconds and, when a
+    descendant waits on an approval or a question, that list is yielded
+    (again on every check until answered — a front end remembers what it
+    has shown)."""
     row = await client.get(task_id)
-    on_children = row.status == "waiting" and row.waiting_on == "children"
+    on_children = row.status == "waiting" and (row.waiting_on == "children"
+                                               or await tree_busy(client, task_id))
     records = client.watch(task_id, after).__aiter__()
     nxt: asyncio.Future[Recorded] = asyncio.ensure_future(records.__anext__())
     try:
@@ -140,12 +151,14 @@ async def follow_tree(client: Client, task_id: str, after: int = 0, *,
                 found = [p for p in await pending_tree(client, task_id) if p.task_id != task_id]
                 if found:
                     yield found
+                on_children = await tree_busy(client, task_id)
                 continue
             try:
                 rec = nxt.result()
             except StopAsyncIteration:
                 return
-            on_children = isinstance(rec.event, Waiting) and rec.event.on == "children"
+            on_children = isinstance(rec.event, Waiting) and (
+                rec.event.on == "children" or await tree_busy(client, task_id))
             nxt = asyncio.ensure_future(records.__anext__())
             yield rec
     finally:

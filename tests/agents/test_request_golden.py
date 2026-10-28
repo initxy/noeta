@@ -43,7 +43,7 @@ def _reply(text: str = "", *calls: tuple[str, str, dict[str, Any]]) -> ModelResp
 
 
 class Router:
-    """The main agent's script and the explore sub-agent's script, told
+    """The main agent's script and the Explore sub-agent's script, told
     apart by the system prompt; keeps every request in order."""
 
     def __init__(self, main: list[ModelResponse], child: list[ModelResponse]) -> None:
@@ -51,7 +51,8 @@ class Router:
         self.requests: list[tuple[str, ModelRequest]] = []
 
     async def complete(self, request: ModelRequest, on_delta: Any = None) -> ModelResponse:
-        who = "child" if request.system[-1].text.startswith("You are a read-only scout") else "main"
+        child = any(b.text.startswith("You are a file-search specialist") for b in request.system)
+        who = "child" if child else "main"
         self.requests.append((who, request))
         script = self.child if who == "child" else self.main
         assert script, f"{who} script ran out"
@@ -66,6 +67,7 @@ def _normalize(text: str, tmp: str) -> str:
     text = text.replace(tmp, "<TMP>")
     text = re.sub(r"\d{4}-\d{2}-\d{2}", "<DATE>", text)
     text = re.sub(r"(?m)^ - (Platform|Shell|OS Version): .*$", r" - \1: <X>", text)
+    text = re.sub(r"<duration_ms>\d+</duration_ms>", "<duration_ms>N</duration_ms>", text)
     return re.sub(r"\b[0-9a-f]{32}\b", "<ID>", text)
 
 
@@ -92,8 +94,9 @@ async def test_default_agent_requests_match_golden(tmp_path: Path,
         _reply("Planning.", ("t1", "TodoWrite", {"todos": todos})),
         _reply("", ("r1", "Read", {"file_path": str(work / "notes.txt")}),
                ("g1", "Glob", {"pattern": "*.txt"})),
-        _reply("", ("k1", "Task", {"description": "find notes", "prompt": "Find notes.txt.",
-                                   "subagent_type": "explore"})),
+        _reply("", ("k1", "Agent", {"description": "find notes", "prompt": "Find notes.txt.",
+                                    "subagent_type": "Explore"})),
+        _reply("Started an agent to look."),
         *[_reply("", (f"b{i}", "Bash", {"command": f"echo {i}", "description": "echo"}))
           for i in range(11)],
         _reply("The word is tangerine."),
@@ -101,7 +104,8 @@ async def test_default_agent_requests_match_golden(tmp_path: Path,
     ]
     child = [
         _reply("", ("c1", "Read", {"file_path": str(work / "notes.txt")})),
-        _reply("notes.txt is in the root."),
+        _reply("Found it.", ("c2", "SubagentHandback",
+                             {"message": "notes.txt is in the root."})),
     ]
     router = Router(main, child)
     store = SqliteStore(str(tmp_path / "t.db"))

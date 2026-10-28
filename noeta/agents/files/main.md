@@ -13,7 +13,7 @@ plugins:
   - environment
   - quiet_nudge
   - subtasks:
-      agents: [general-purpose, explore, plan]
+      agents: ["*"]
       inherit_config: [cwd, model, effort, permission_mode]
   - todo
   - ask_user

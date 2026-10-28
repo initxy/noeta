@@ -25,7 +25,7 @@ FORK_BY_INSTRUCTION = {
 MAIN_PROMPT = "main-prompt"
 #: Claude Code tool names that noeta offers under another name. Replay calls
 #: noeta's tool by it; the comparator reports each rename as a mismatch.
-TOOL_NAMES = {"Agent": "Task"}
+TOOL_NAMES: dict[str, str] = {}
 
 
 def parse_response(raw: str) -> dict[str, Any] | None:

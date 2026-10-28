@@ -136,7 +136,8 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
         records.append(ExtensionRecorded(extension=extension, kind=kind, data=data))
 
     def spawn(agent: str, prompt: str | Message, *, config: dict[str, Any] | None = None,
-              background: bool = False, queue: str = "default") -> str:
+              background: bool = False, queue: str = "default",
+              history_from: str | None = None, history_through: int | None = None) -> str:
         child_id = f"{run.task_id}.{use.id}.{len(creates) + 1}"
         message = user(prompt) if isinstance(prompt, str) else prompt
         child_config = dict(config or {})
@@ -145,7 +146,8 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
         creates.append(NewTask(
             task_id=child_id,
             created=TaskCreated(agent=agent, config=child_config, parent_id=run.task_id,
-                                root_id=run.state.root_id or run.task_id),
+                                root_id=run.state.root_id or run.task_id,
+                                history_from=history_from, history_through=history_through),
             queue=queue,
             inbox=[Say(message=message)],
         ))
@@ -160,6 +162,7 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
     return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
                        state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
                        spawn=spawn, post=post, root_id=root, prompt=run.state.prompt,
+                       tasks=run.store.tasks,
                        hold=lambda: run.rt.hold(root))
 
 
@@ -182,7 +185,8 @@ async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[
     if output.display is not None:
         meta["display"] = output.display
     finished = ToolFinished(result=ToolResult(call_id=use.id, content=output.content,
-                                              is_error=output.is_error), meta=meta)
+                                              is_error=output.is_error), meta=meta,
+                            end_turn=output.end_turn)
     await run.append([*records, *view.pending, finished], creates=creates)
 
 

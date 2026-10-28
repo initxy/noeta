@@ -1,21 +1,29 @@
 """Agents as files: markdown whose YAML frontmatter says what the agent is
 and whose body is its system prompt — Claude Code's agent file format, plus
-``plugins``::
+``plugins`` and ``one_shot``::
 
     ---
-    name: explore
-    description: Read-only scout that reports facts about the workspace.
-    model: inherit                # or a model id (Claude Code's sonnet/opus/haiku inherit)
+    name: Explore
+    description: Read-only search agent for wide searches.
+    model: inherit                # inherit, an alias (sonnet, opus, haiku, fable) or a model id
     plugins:                      # the extensions, in order: a name, or name: {arguments}
       - compaction
-      - fs: {tools: [Read, Grep, Glob]}
+      - fs
       - instructions
-    tools: Read, Grep, Glob       # optional: offer only these tools
+    tools: Read, Bash             # optional: offer only these tools ("*": all)
+    disallowedTools: Edit, Write  # optional: never offer these
+    permissionMode: plan          # optional: the permission mode it runs in
+    maxTurns: 50                  # optional: model calls per turn
+    omitClaudeMd: true            # optional: no project instructions
     one_shot: true                # optional: end with the first turn's answer
     effort: high                  # optional
     identity: You are ...         # optional: the one-line identity block
     ---
-    You are a read-only scout...
+    You are a search agent...
+
+Claude Code's other fields (``skills``, ``mcpServers``, ``hooks``, ``memory``,
+``isolation``, ``background``, ``initialPrompt``, ``color``, ...) are read
+and kept in ``extra``; a field neither knows is logged as a warning.
 
 A plugin name is an entry point of ``noeta.plugins`` (``noeta.core.registry``),
 so a third-party plugin is used exactly like a built-in one. A file without
@@ -32,7 +40,7 @@ from typing import Any
 
 import yaml
 
-from noeta.core import registry
+from noeta.core import models, registry
 from noeta.core.agent import Agent
 from noeta.core.extension import Extension
 
@@ -55,7 +63,13 @@ log = logging.getLogger("noeta.agents")
 DEFAULT_IDENTITY = "You are noeta, an open-source coding agent."
 
 #: Model names that mean "the host's model".
-_INHERIT = frozenset({"", "inherit", "sonnet", "opus", "haiku"})
+_INHERIT = frozenset({"", "inherit"})
+#: Claude Code fields kept in ``AgentFile.extra``, and whether noeta acts on
+#: them (one it does not act on yet is logged when a file sets it).
+_KEPT = {"isolation": True, "color": True, "background": False, "skills": False,
+         "mcpServers": False, "hooks": False, "memory": False, "initialPrompt": False,
+         "autoCompactWindow": False, "cacheTtl": False, "observer": False,
+         "observerMessage": False, "observeSubagents": False}
 
 PluginEntry = tuple[str, Mapping[str, Any]]
 #: The host's setting of one plugin: its arguments, a ready instance, or on/off.
@@ -83,14 +97,22 @@ class AgentFile:
     identity: str | None = None
     source: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
+    denied_tools: tuple[str, ...] = ()
+    permission_mode: str | None = None
+    max_turns: int | None = None
+    omit_instructions: bool = False
 
 
 def _names(value: Any, key: str, source: str) -> tuple[str, ...]:
+    """Tool names; a Claude Code permission spec (``Bash(npm:*)``,
+    ``Agent(Explore)``) counts as its tool's name."""
     if isinstance(value, str):
-        return tuple(n.strip() for n in value.split(",") if n.strip())
-    if isinstance(value, list) and all(isinstance(n, str) for n in value):
-        return tuple(value)
-    raise AgentFileError(f"{source}: '{key}' must be a list of names")
+        items = [n.strip() for n in value.split(",") if n.strip()]
+    elif isinstance(value, list) and all(isinstance(n, str) for n in value):
+        items = [n.strip() for n in value]
+    else:
+        raise AgentFileError(f"{source}: '{key}' must be a list of names")
+    return tuple(dict.fromkeys(n.split("(", 1)[0].strip() for n in items if n))
 
 
 def parse_plugin_list(value: Any, source: str = "") -> tuple[PluginEntry, ...]:
@@ -136,33 +158,56 @@ def parse_agent_file(text: str, *, source: str = "", default_name: str = "") -> 
     name = data.pop("name", default_name)
     if not isinstance(name, str) or not name.strip():
         raise AgentFileError(f"{source}: 'name' is required")
+    if ":" in name:
+        raise AgentFileError(f"{source}: 'name' may not contain ':'")
     model = data.pop("model", None)
     if model is not None and not isinstance(model, str):
         raise AgentFileError(f"{source}: 'model' must be a string")
     plugins = data.pop("plugins", None)
     tools = data.pop("tools", None)
+    denied = data.pop("disallowedTools", None)
     effort = data.pop("effort", None)
     identity = data.pop("identity", None)
     if identity is not None and not isinstance(identity, str):
         raise AgentFileError(f"{source}: 'identity' must be a string")
     one_shot = data.pop("one_shot", False)
     description = data.pop("description", "")
+    mode = data.pop("permissionMode", None)
+    max_turns = data.pop("maxTurns", None)
+    omit = data.pop("omitClaudeMd", False)
     if not isinstance(description, str):
         raise AgentFileError(f"{source}: 'description' must be a string")
     if not isinstance(one_shot, bool):
         raise AgentFileError(f"{source}: 'one_shot' must be true or false")
+    if not isinstance(omit, bool):
+        raise AgentFileError(f"{source}: 'omitClaudeMd' must be true or false")
+    if mode is not None and not isinstance(mode, str):
+        raise AgentFileError(f"{source}: 'permissionMode' must be a string")
+    if max_turns is not None and (isinstance(max_turns, bool) or not isinstance(max_turns, int)
+                                  or max_turns < 1):
+        raise AgentFileError(f"{source}: 'maxTurns' must be a positive whole number")
+    names = None if tools is None else _names(tools, "tools", source)
+    for key in data:
+        if key not in _KEPT:
+            log.warning("%s: unknown agent file field %r is ignored", source, key)
+        elif not _KEPT[key]:
+            log.warning("%s: agent file field %r is not applied by noeta yet", source, key)
     return AgentFile(
         name=name.strip(),
         prompt=body,
         description=description.strip(),
         model=None if model is None or model.strip() in _INHERIT else model.strip(),
         plugins=None if plugins is None else parse_plugin_list(plugins, source),
-        tools=None if tools is None else _names(tools, "tools", source),
+        tools=None if names is None or "*" in names else names,
         one_shot=one_shot,
         effort=str(effort) if effort is not None else None,
         identity=identity.strip() if identity is not None else None,
         source=source,
         extra=data,
+        denied_tools=() if denied is None else _names(denied, "disallowedTools", source),
+        permission_mode=mode,
+        max_turns=max_turns,
+        omit_instructions=omit,
     )
 
 
@@ -251,10 +296,16 @@ def build_agents(
                 names.add(name)
                 entries.append((name, args))
         exts = [plugin(name, args) for name, args in entries
-                if settings.get(name, (True,))[0]]
+                if settings.get(name, (True,))[0]
+                and not (f.omit_instructions and name == "instructions")]
+        extra: dict[str, Any] = dict(f.extra)
+        if f.model:
+            extra["model"] = f.model
+        if f.permission_mode:
+            extra["permission_mode"] = f.permission_mode
         agents.append(Agent(
             name=f.name,
-            model=f.model or model,
+            model=models.resolve_alias(f.model) if f.model else model,
             system_prompt=f.prompt,
             identity=f.identity if f.identity is not None else DEFAULT_IDENTITY,
             description=f.description,
@@ -262,5 +313,8 @@ def build_agents(
             effort=f.effort,  # type: ignore[arg-type]
             one_shot=f.one_shot,
             allowed_tools=f.tools,
+            denied_tools=f.denied_tools,
+            max_steps_per_turn=f.max_turns or Agent.max_steps_per_turn,
+            extra=extra,
         ))
     return agents

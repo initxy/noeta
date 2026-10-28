@@ -1,40 +1,57 @@
-"""Delegation as an extension: the ``Task`` tool, the whole-reply checks
-that refuse a bad batch before anything runs, and the background
-sub-agents' completion notices."""
+"""Delegation as an extension: the ``Agent`` tool and its companions, the
+whole-reply checks that refuse a bad batch before anything runs, the
+sub-agent's hand-back, and the completion notices."""
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from noeta.core.events import ChildEnded, InputTaken, Recorded, Say
-from noeta.core.extension import Deny, Extension, Gate, TaskView
+import msgspec
+
+from noeta.core import models
+from noeta.core.events import ChildEnded, External, InputTaken, ModelReplied, Recorded, Say
+from noeta.core.extension import Deny, Extension, Gate, Reminder, Rewrite, TaskView
 from noeta.core.loop.state import TaskState
-from noeta.core.tool import Tool
-from noeta.core.types import ToolUse, user
+from noeta.core.tool import Tool, ToolContext
+from noeta.core.types import Message, ModelRequest, ToolUse, user
 from noeta.plugins.subtasks import texts
 from noeta.plugins.subtasks.tool import (
+    DELEGATION_TOOLS,
     DEPTH_KEY,
     TYPE_KEY,
-    UNATTENDED_KEY,
-    TaskTool,
+    AgentTool,
+    HandbackTool,
+    ListAgentsTool,
+    SendMessageTool,
     batch_refusal,
+    handback_sender,
 )
+
+log = logging.getLogger("noeta.plugins.subtasks")
+
+#: ``agents=["*"]``: every agent of the worker that has a description.
+ALL_AGENTS = "*"
+#: The sub-agent's model call that also asks for a progress label (Claude
+#: Code's was alongside the third), and the inbox signal carrying it.
+PROGRESS_AT_CALL = 3
+PROGRESS_SIGNAL = "subtasks.progress"
 
 
 @dataclass(frozen=True)
 class SubagentSpec:
-    """One entry of the delegation roster (0.6's ``AgentDefinition`` as the
-    parent sees it).
+    """One agent type the model may start.
 
     ``name`` is what the model passes as ``subagent_type``; ``description``
-    is its roster line in the Task schema. ``agent`` names the registered
-    ``Agent`` the child runs (default: ``name``) — that agent's definition
-    decides the child's model, prompt, tools and extensions, so a child gets
-    ``Task`` only when its own agent carries a ``Subtasks`` with a roster.
-    ``config`` is merged into the child's ``TaskCreated.config``; ``queue``
-    routes the child (default: the extension's ``queue``).
+    its line in the agent list. ``agent`` names the registered ``Agent`` the
+    child runs (default: ``name``), whose definition decides the child's
+    model, prompt and tools. ``config`` is merged into the child's
+    ``TaskCreated.config``; ``queue`` routes the child (default: the
+    extension's ``queue``). ``tools`` is the agent list's tools column.
     """
 
     name: str
@@ -42,6 +59,7 @@ class SubagentSpec:
     agent: str = ""
     config: Mapping[str, Any] = field(default_factory=dict)
     queue: str | None = None
+    tools: str = "*"
 
 
 def _roster(roster: Mapping[str, SubagentSpec] | Sequence[SubagentSpec]) -> dict[str, SubagentSpec]:
@@ -56,38 +74,57 @@ def _roster(roster: Mapping[str, SubagentSpec] | Sequence[SubagentSpec]) -> dict
     return out
 
 
+def _tools_column(agent: Any) -> str:
+    allowed = getattr(agent, "allowed_tools", None)
+    denied = list(getattr(agent, "denied_tools", ()) or ())
+    if allowed is not None:
+        return ", ".join(allowed)
+    if denied:
+        return "All tools except " + ", ".join(denied)
+    return "*"
+
+
+def _escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def task_notification(*, agent_id: str, call_id: str, status: str, summary: str,
+                      result: str, ended: ChildEnded, duration_ms: int) -> str:
+    """A finished agent's ``<task-notification>``, behind the not-the-user guard."""
+    usage = ended.last_usage
+    tokens = usage.input + usage.output if usage is not None else 0
+    return (f"{texts.NOTICE_GUARD}\n\n<task-notification>\n<task-id>{agent_id}</task-id>\n"
+            f"<tool-use-id>{call_id}</tool-use-id>\n<status>{status}</status>\n"
+            f"<summary>{_escape(summary)}</summary>\n<note>{texts.NOTICE_NOTE}</note>\n"
+            f"<result>{_escape(result)}\n</result>\n"
+            f"<usage><subagent_tokens>{tokens}</subagent_tokens><tool_uses>{ended.tool_calls}"
+            f"</tool_uses><duration_ms>{duration_ms}</duration_ms></usage>\n"
+            "</task-notification>")
+
+
 class Subtasks(Extension):
-    """Sub-agents: the ``Task`` tool and background children.
+    """Sub-agents: ``Agent``, ``SendMessage``, ``ListAgents`` and, in a task
+    ``Agent`` started, ``SubagentHandback``.
 
-    Constructor arguments (what a host configures; they replace 0.6's
-    ``Options.agents`` roster, ``max_subtask_depth`` and the background cap):
+    Constructor arguments (what a host configures):
 
-    - ``roster``: the sub-agents the model may start, as ``SubagentSpec``s
-      (a mapping or a sequence).
-    - ``agents``: sub-agents named by agent: each runs that agent, and its
-      roster line is that agent's ``description`` (from the worker's agents,
-      ``TaskView.agents``). With neither, no ``Task`` tool is offered — the
-      form every sub-agent without delegation carries, so the child-side
-      rules below still apply to it.
-    - ``max_depth``: a task at this depth may not delegate (root = 0; 0.6's
-      default 3). ``None`` = unlimited.
-    - ``max_background``: background sub-agents one task may have running
-      at once (0.6: 8 per session).
-    - ``max_fanout``: Task calls one reply may carry (0.6: 16).
-    - ``exclusive_with``: tool names a Task call may not share a reply with
-      (0.6 refused Task beside its other control tools; in 1.0 they are
-      ordinary tools, so the default is none).
-    - ``inherit_config``: parent ``TaskCreated.config`` keys a child copies
-      (its workspace, and a host's per-task model/effort override, as 0.6
-      children inherited them). A child also starts with the parent's
-      remembered "always" permission rules (``config["permission_rules"]``).
+    - ``roster``: agent types the model may start, as ``SubagentSpec``s.
+    - ``agents``: agent types named by agent: each runs that agent, and its
+      line is that agent's ``description`` (``TaskView.agents``); ``"*"``
+      names every agent with a description except the task's own. With no
+      type at all, no ``Agent`` tool is offered — the form a sub-agent
+      without delegation carries, so the child-side tools still apply.
+    - ``max_depth``: a task at this depth may not delegate (root = 0).
+    - ``max_background``: agents one task may have running at once.
+    - ``max_fanout``: Agent calls one reply may carry.
+    - ``exclusive_with``: tool names an Agent call may not share a reply with.
+    - ``inherit_config``: parent ``TaskCreated.config`` keys a child copies.
+      ``model`` and ``effort`` are copied only when neither the call nor the
+      agent's definition sets them.
     - ``queue``: the queue children are created on.
-
-    Child side (every task whose agent carries this extension): a task
-    marked unattended (a background sub-agent and everything below it)
-    that comes to wait on an approval or a question cancels itself with
-    0.6's "needed an interaction that is unavailable to a background agent"
-    explanation, which its parent reports.
+    - ``progress_labels``: a sub-agent asks the model once, beside its third
+      call, for a 3-5 word label of what it is doing; front ends get it as a
+      notice, the model never sees it.
     """
 
     name = "subtasks"
@@ -103,10 +140,13 @@ class Subtasks(Extension):
         exclusive_with: Collection[str] = (),
         inherit_config: Sequence[str] = ("cwd", "model", "effort"),
         queue: str = "default",
+        progress_labels: bool = True,
     ) -> None:
         self.roster = _roster(roster)
+        self.progress_labels = progress_labels
+        self._labels: set[asyncio.Task[None]] = set()
         self.agents = tuple(agents)
-        self._resolved: dict[tuple[tuple[str, str], ...], dict[str, SubagentSpec]] = {}
+        self._resolved: dict[tuple[Any, ...], dict[str, SubagentSpec]] = {}
         self.max_depth = max_depth
         self.max_background = max_background
         self.max_fanout = max_fanout
@@ -117,116 +157,301 @@ class Subtasks(Extension):
     # ------------------------------------------------------------ state
 
     def initial_state(self) -> Any:
-        return {"background": {}, "noticed": []}
+        return {"agents": {}, "tasks": {}, "handbacks": {}, "pending": {}, "noticed": [],
+                "reminded": False, "listed": False}
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
-        st = state or self.initial_state()
-        if kind == "background":
-            return {**st, "background": {**st["background"], data["child_id"]: data["agent"]}}
+        st = {**self.initial_state(), **(state or {})}
+        if kind == "launched":
+            agent_id = data["agent_id"]
+            handbacks = {k: v for k, v in st["handbacks"].items() if k != agent_id}
+            return {**st, "agents": {**st["agents"], agent_id: data},
+                    "tasks": {**st["tasks"], data["task_id"]: agent_id}, "handbacks": handbacks}
+        if kind == "handback":
+            return {**st, "handbacks": {**st["handbacks"], data["agent_id"]: "taken"}}
+        if kind == "seen":
+            return {**st, "handbacks": {k: "seen" for k in st["handbacks"]}}
+        if kind == "pending":
+            return {**st, "pending": {**st["pending"], data["task_id"]: data}}
         if kind == "noticed":
-            return {**st, "noticed": [*st["noticed"], data["child_id"]]}
+            pending = {k: v for k, v in st["pending"].items() if k != data["task_id"]}
+            noticed = st["noticed"] if data["task_id"] in st["noticed"] \
+                else [*st["noticed"], data["task_id"]]
+            return {**st, "pending": pending, "noticed": noticed}
+        if kind == "handback_reminder":
+            return {**st, "reminded": True}
+        if kind == "agent_list":
+            return {**st, "listed": True}
         return st
 
     def _state(self, state: TaskState) -> dict[str, Any]:
         st = state.ext.get(self.name)
-        return st if isinstance(st, dict) else self.initial_state()
+        return {**self.initial_state(), **st} if isinstance(st, dict) else self.initial_state()
 
-    def running_background(self, state: TaskState) -> list[str]:
-        """This task's background children that have not ended."""
-        return [c for c in self._state(state)["background"] if state.children.get(c) is None]
+    def agents_of(self, state: TaskState) -> dict[str, dict[str, Any]]:
+        """The agents this task launched, by agent id (the newest task of each)."""
+        return dict(self._state(state)["agents"])
 
-    def child_config(self, state: TaskState, spec: SubagentSpec, *,
-                     background: bool) -> dict[str, Any]:
+    def running(self, state: TaskState) -> list[str]:
+        """Agent ids whose newest task has not ended."""
+        return [a for a, d in self._state(state)["agents"].items()
+                if state.children.get(d["task_id"]) is None]
+
+    def child_config(self, state: TaskState, ctx: ToolContext, agent: str,
+                     spec_config: Mapping[str, Any], kind: str, args: Mapping[str, Any],
+                     *, fork: bool) -> dict[str, Any]:
         config = {k: state.config[k] for k in self.inherit_config if k in state.config}
-        config.update(spec.config)
+        config.update(spec_config)
+        if not fork:
+            if isinstance(args.get("model"), str):
+                config["model"] = models.resolve_alias(args["model"])
+            if isinstance(args.get("effort"), str):
+                config["effort"] = args["effort"]
         config[DEPTH_KEY] = int(state.config.get(DEPTH_KEY) or 0) + 1
-        config[TYPE_KEY] = spec.name
-        if background or state.config.get(UNATTENDED_KEY):
-            config[UNATTENDED_KEY] = True
+        config[TYPE_KEY] = kind
         return config
 
-    # ------------------------------------------------------------ hooks
+    async def add_worktree(self, ctx: ToolContext, config: Mapping[str, Any]
+                           ) -> dict[str, str] | str:
+        """A fresh git worktree for an isolated agent, or why there is none."""
+        env = ctx.env
+        if env is None:
+            return texts.WORKTREE_FAILED.format(reason="this task has no execution environment")
+        cwd = str(config.get("cwd") or env.cwd)
+        top = await env.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd)
+        if top.exit_code != 0:
+            return texts.WORKTREE_FAILED.format(reason=f"{cwd} is not in a git repository")
+        root = top.stdout.decode().strip()
+        base = (await env.run(["git", "rev-parse", "HEAD"], cwd=root)).stdout.decode().strip()
+        name = "agent-" + re.sub(r"[^A-Za-z0-9_-]", "", ctx.call_id)[-16:]
+        path, branch = f"{root}/.claude/worktrees/{name}", f"worktree-{name}"
+        made = await env.run(["git", "worktree", "add", "-b", branch, path, "HEAD"], cwd=root)
+        if made.exit_code != 0:
+            reason = made.stderr.decode(errors="replace").strip() or "git worktree add failed"
+            return texts.WORKTREE_FAILED.format(reason=reason)
+        return {"path": path, "branch": branch, "base": base, "root": root}
 
-    def tools(self, view: TaskView) -> Sequence[Tool]:
-        roster = self.roster_for(view)
-        return [TaskTool(self, view.state, roster)] if roster else ()
+    async def _close_worktree(self, view: TaskView, tree: Mapping[str, str]) -> str:
+        """Remove an unchanged worktree; otherwise say where the work is."""
+        env = view.env
+        if env is None:
+            return ""
+        status = await env.run(["git", "status", "--porcelain"], cwd=tree["path"])
+        ahead = await env.run(["git", "rev-list", "--count", f"{tree['base']}..HEAD"],
+                              cwd=tree["path"])
+        if status.exit_code == 0 and not status.stdout.strip() \
+                and ahead.stdout.decode().strip() == "0":
+            await env.run(["git", "worktree", "remove", "--force", tree["path"]],
+                          cwd=tree["root"])
+            await env.run(["git", "branch", "-D", tree["branch"]], cwd=tree["root"])
+            return ""
+        return texts.WORKTREE_KEPT.format(path=tree["path"], branch=tree["branch"])
+
+    # ------------------------------------------------------------ tools
 
     def roster_for(self, view: TaskView) -> dict[str, SubagentSpec]:
-        """The roster: the given specs, plus each named agent the worker has
-        (a name it lacks is left out)."""
+        """The agent types: the given specs, plus each named agent the worker
+        has (a name it lacks is left out)."""
         if not self.agents:
             return self.roster
-        named = tuple((n, view.agents[n].description) for n in self.agents if n in view.agents)
+        names = [n for n in view.agents if n != view.state.agent] \
+            if ALL_AGENTS in self.agents else [n for n in self.agents if n in view.agents]
+        named = tuple((n, view.agents[n].description, _tools_column(view.agents[n]),
+                       _freeze(_definition_config(view.agents[n])))
+                      for n in names if view.agents[n].description.strip())
         roster = self._resolved.get(named)
         if roster is None:
             roster = _roster([*self.roster.values(),
-                              *(SubagentSpec(name=n, description=d) for n, d in named)])
+                              *(SubagentSpec(name=n, description=d, tools=t, config=dict(c))
+                                for n, d, t, c in named if n not in self.roster)])
             self._resolved[named] = roster
         return roster
 
+    def tools(self, view: TaskView) -> Sequence[Tool]:
+        state = view.state
+        roster = self.roster_for(view)
+        out: list[Tool] = []
+        if roster:
+            out.append(AgentTool(self, state, roster))
+            if not state.parent_id:
+                out.append(ListAgentsTool(self, state))
+        if roster or state.parent_id:
+            out.append(SendMessageTool(self, state))
+        if TYPE_KEY in state.config:
+            out.append(HandbackTool(state))
+        return out
+
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
-        """Checks that look at the whole reply, so that a bad batch is
-        refused before any of it runs (0.6: one refusal stamped on every
-        call)."""
+        """``Task`` is the old name of ``Agent``; checks that look at the
+        whole reply refuse a bad batch before any of it runs."""
         roster = self.roster_for(view)
         if not roster:
             return None
+        if call.name == texts.LEGACY_AGENT_TOOL:
+            return Rewrite(name=texts.AGENT_TOOL, input=call.input)
         calls = [c.use for c in view.state.calls] or [call]
         refusal = batch_refusal(self, view.state, calls, roster)
         if refusal is None:
             return None
         text, every_call = refusal
-        if every_call or call.name == texts.TASK_TOOL:
+        if every_call or call.name in DELEGATION_TOOLS:
             return Deny(reason=text)
         return None
 
+    async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
+        """Beside a sub-agent's third call, ask for its progress label: the
+        same request with one more user text, answered in the background."""
+        state = view.state
+        if (self.progress_labels and TYPE_KEY in state.config and view.complete is not None
+                and view.post is not None and state.steps_in_turn == PROGRESS_AT_CALL - 1):
+            ask = msgspec.structs.replace(
+                request, messages=[*request.messages, user(texts.PROGRESS_INSTRUCTION)])
+            job = asyncio.ensure_future(self._label(view, ask, state.last_seq))
+            self._labels.add(job)
+            job.add_done_callback(self._labels.discard)
+        return request
+
+    async def _label(self, view: TaskView, request: ModelRequest, at: int) -> None:
+        assert view.complete is not None and view.post is not None
+        try:
+            response = await view.complete(request)
+            label = response.message.text.strip().split("\n", 1)[0][:80]
+            if label:
+                await view.post(External(name=PROGRESS_SIGNAL, data={"label": label}),
+                                dedupe_key=f"{PROGRESS_SIGNAL}:{view.task_id}:{at}")
+        except Exception:  # a label is decoration; it never fails the run
+            log.debug("progress label for %s failed", view.task_id, exc_info=True)
+
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        st = self._state(view.state)
+        if TYPE_KEY in view.state.config and not st["reminded"]:
+            return [Reminder(text=texts.HANDBACK_REMINDER, kind="handback_reminder")]
+        return ()
+
+    # ------------------------------------------------------------ events
+
+    def agent_list(self, view: TaskView) -> str | None:
+        """The agent types this task can start, one line each with its tools."""
+        roster = self.roster_for(view)
+        if not roster:
+            return None
+        lines = [f"- {s.name}: {s.description} (Tools: {s.tools})"
+                 for s in sorted(roster.values(), key=lambda s: s.name.lower())]
+        return "\n".join([texts.AGENT_LIST_HEAD, *lines, "", texts.AGENT_LIST_TAIL])
+
+    async def resident(self, view: TaskView) -> Sequence[Message]:
+        text = self.agent_list(view)
+        return [user(text, origin="system")] if text else []
+
     async def on_start(self, view: TaskView) -> None:
-        # Ends taken before a crash whose notice was never posted.
-        noticed = set(self._state(view.state)["noticed"])
-        for child_id, ended in list(view.state.children.items()):
-            if ended is not None and child_id not in noticed:
-                await self._notice(view, ended)
+        st = self._state(view.state)
+        text = self.agent_list(view)
+        if text and not st["listed"]:
+            view.record(self.name, "agent_list", message=user(text, origin="system"))
+        # Ends taken before a crash whose notice was never recorded.
+        done = set(st["noticed"]) | set(st["pending"])
+        for task_id in st["tasks"]:
+            ended = view.state.children.get(task_id)
+            if ended is not None and task_id not in done:
+                await self._ended(view, ended, at=None, handbacks=dict(st["handbacks"]))
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         ev = recorded.event
-        if isinstance(ev, InputTaken):
-            for item in ev.items:
-                if isinstance(item.body, ChildEnded):
-                    await self._notice(view, item.body)
-
-    # ------------------------------------------------------------ background
-
-    async def _notice(self, view: TaskView, ended: ChildEnded) -> None:
-        """Turn a background child's end into 0.6's completion notice. It is
-        posted as a ``next_turn`` message, so it waits for an open turn to
-        finish and wakes an idle parent into a new turn; a cancelled child
-        (its parent's own teardown) leaves nothing to say."""
         st = self._state(view.state)
-        agent = st["background"].get(ended.child_id)
-        if agent is None or ended.child_id in st["noticed"]:
-            return
-        notice: str | None = None
+        if isinstance(ev, InputTaken):
+            handbacks = dict(st["handbacks"])
+            for item in ev.items:
+                body = item.body
+                if isinstance(body, External) and body.name == PROGRESS_SIGNAL:
+                    view.notify(str((body.data or {}).get("label") or ""))
+                elif isinstance(body, Say):
+                    sender = handback_sender(body.message)
+                    if sender is not None and sender in st["agents"]:
+                        handbacks[sender] = "taken"
+                        view.record(self.name, "handback", {"agent_id": sender})
+                elif isinstance(body, ChildEnded) and body.child_id in st["tasks"]:
+                    await self._ended(view, body, at=item.at, handbacks=handbacks)
+        elif isinstance(ev, ModelReplied):
+            if any(v == "taken" for v in st["handbacks"].values()):
+                view.record(self.name, "seen")
+            seen = {k for k, v in st["handbacks"].items() if v in ("taken", "seen")}
+            for task_id, data in st["pending"].items():
+                if st["tasks"].get(task_id) in seen:
+                    self._deliver(view, task_id, data["text"])
+
+    def _deliver(self, view: TaskView, task_id: str, text: str) -> None:
+        tools_used = texts.TOOLS_BEFORE_SUMMARY.format(tool=texts.HANDBACK_TOOL)
+        view.record(self.name, "tools_used", message=user(tools_used, origin="system"))
+        view.record(self.name, "noticed", {"task_id": task_id},
+                    message=user(text, origin="system"))
+
+    async def _ended(self, view: TaskView, ended: ChildEnded, *, at: float | None,
+                     handbacks: Mapping[str, str]) -> None:
+        """Turn an agent's end into its completion notice. After a hand-back
+        the notice waits until the model has answered the report and then
+        rides along with the next request; otherwise it wakes the task."""
+        st = self._state(view.state)
+        agent_id = st["tasks"][ended.child_id]
+        agent = st["agents"][agent_id]
+        description = agent.get("description") or agent.get("type") or agent_id
+        handed_back = ended.status == "done" and agent_id in handbacks
         if ended.status == "done":
-            notice = texts.BACKGROUND_NOTICE.format(
-                summary=texts.BACKGROUND_FINISHED.format(agent=agent), result=ended.answer,
-                id=ended.child_id, status="completed")
-        elif ended.status == "failed" or ended.error == texts.BACKGROUND_NEEDED_HUMAN:
-            notice = texts.BACKGROUND_NOTICE.format(
-                summary=texts.BACKGROUND_FAILED.format(agent=agent),
-                # The model sees 0.6's bare reason, not the host-facing code.
-                result=ended.error.removeprefix("needs_human: ") or texts.BACKGROUND_NEEDED_HUMAN,
-                id=ended.child_id, status="failed")
-        data = {"child_id": ended.child_id, "status": ended.status}
-        if notice is None:
-            view.record(self.name, "noticed", data)
+            status, summary = "completed", texts.SUMMARY_FINISHED.format(description=description)
+            result = texts.RESULT_POINTER.format(id=agent_id) if handed_back \
+                else texts.RESULT_NO_REPORT
+        elif ended.status == "failed":
+            error = ended.error or texts.SUBAGENT_FAILED
+            status = "failed"
+            summary = texts.SUMMARY_FAILED.format(description=description, error=error)
+            result = error
+        else:
+            status, summary = "killed", texts.SUMMARY_STOPPED.format(description=description)
+            result = ended.error or ""
+        tree = agent.get("worktree")
+        if tree and agent["task_id"] == ended.child_id:
+            try:
+                kept = await self._close_worktree(view, tree)
+            except Exception:
+                log.exception("closing worktree %s failed", tree.get("path"))
+                kept = texts.WORKTREE_KEPT.format(path=tree["path"], branch=tree["branch"])
+            if kept:
+                result = f"{result}\n{kept}"
+        launched = agent.get("at")
+        duration = int(max(0.0, (at - launched) * 1000)) if at and launched else 0
+        text = task_notification(agent_id=agent_id, call_id=agent.get("call_id", ""),
+                                 status=status, summary=summary, result=result, ended=ended,
+                                 duration_ms=duration)
+        if handed_back:
+            if handbacks.get(agent_id) == "seen":
+                self._deliver(view, ended.child_id, text)
+            else:
+                view.record(self.name, "pending", {"task_id": ended.child_id, "text": text})
             return
-        message = user(notice, origin="system")
+        data = {"task_id": ended.child_id}
+        message = user(text, origin="system")
         if view.post is None:
-            # No inbox access (an older core): the notice still lands in
-            # the conversation, but cannot wake an idle task.
             view.record(self.name, "noticed", data, message=message)
             return
-        await view.post(Say(message=message, when="next_turn"),
+        await view.post(Say(message=message, when="now"),
                         dedupe_key=f"subtasks:notice:{ended.child_id}")
         view.record(self.name, "noticed", data)
 
+
+def _definition_config(agent: Any) -> dict[str, Any]:
+    """Child config an agent's definition asks for: its own model and effort
+    (so the parent's are not inherited over them) and permission mode."""
+    extra = getattr(agent, "extra", None) or {}
+    out: dict[str, Any] = {}
+    if extra.get("model"):
+        out["model"] = models.resolve_alias(str(extra["model"]))
+    if getattr(agent, "effort", None):
+        out["effort"] = agent.effort
+    if extra.get("permission_mode"):
+        out["permission_mode"] = extra["permission_mode"]
+    if extra.get("isolation") == "worktree":
+        out["isolation"] = "worktree"
+    return out
+
+
+def _freeze(value: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
+    return tuple(sorted(value.items()))

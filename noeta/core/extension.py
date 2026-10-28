@@ -129,6 +129,8 @@ class TaskView:
     agents: Mapping[str, Agent] = field(default_factory=dict)
     #: The agent's tool allowlist (``None`` = every tool offered).
     allowed_tools: Sequence[str] | None = None
+    #: Tool names the agent never offers.
+    denied_tools: Sequence[str] = ()
 
     @property
     def task_id(self) -> str:
@@ -160,7 +162,8 @@ class TaskView:
         offering it wins, as for the model), or ``None``. How one plugin uses
         another's tool without importing it: model-visible tool names are a
         stable contract."""
-        if self.allowed_tools is not None and name not in self.allowed_tools:
+        if (self.allowed_tools is not None and name not in self.allowed_tools) \
+                or name in self.denied_tools:
             return None
         for ext in self.extensions:
             for tool in ext.tools(self):

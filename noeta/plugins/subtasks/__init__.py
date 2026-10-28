@@ -1,16 +1,26 @@
-"""Sub-agents: the ``Task`` tool, background children and their notices,
-and the official sub-agent definitions (``agents``)."""
+"""Sub-agents: ``Agent``, ``SubagentHandback``, ``SendMessage``,
+``ListAgents``, background children and their notices."""
 
 from noeta.plugins.subtasks.extension import SubagentSpec, Subtasks
-from noeta.plugins.subtasks.texts import TASK_TOOL
-from noeta.plugins.subtasks.tool import DEPTH_KEY, TYPE_KEY, UNATTENDED_KEY, TaskTool
+from noeta.plugins.subtasks.texts import AGENT_TOOL, HANDBACK_TOOL
+from noeta.plugins.subtasks.tool import (
+    AGENT_ID_KEY,
+    DEPTH_KEY,
+    TYPE_KEY,
+    UNATTENDED_KEY,
+    AgentTool,
+    HandbackTool,
+)
 
 __all__ = [
+    "AGENT_ID_KEY",
+    "AGENT_TOOL",
     "DEPTH_KEY",
-    "TASK_TOOL",
+    "HANDBACK_TOOL",
     "TYPE_KEY",
     "UNATTENDED_KEY",
+    "AgentTool",
+    "HandbackTool",
     "SubagentSpec",
     "Subtasks",
-    "TaskTool",
 ]

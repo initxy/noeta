@@ -45,8 +45,6 @@ TOOL_NAMES = wire.TOOL_NAMES
 #: Opus 5.5 as Claude Code sends it, for noeta's model catalog.
 MODEL_ROW = {"id": MODEL, "context_window": 1_000_000, "max_output_tokens": 128_000,
              "supports_vision": True, "family": "anthropic"}
-#: The sub-agent type Claude Code named, as noeta's agent name.
-AGENT_TYPES = {"Explore": "explore", "Plan": "plan", "general-purpose": "general-purpose"}
 
 
 def _texts(m: Mapping[str, Any]) -> list[str]:
@@ -131,6 +129,8 @@ class Replayer:
                 self.compactions_used.add(pick)
                 return {"kind": kind, "step": self._step_name(), "cc_n": comps[pick]["n"]}, \
                     comps[pick]
+            if kind.startswith("activity-summary"):
+                return {"kind": kind, "step": self._step_name()}, None
             sub = self._subagent(msgs)
             if sub is not None:
                 i, script = sub
@@ -169,9 +169,6 @@ class Replayer:
                 if name not in tools and TOOL_NAMES.get(name) in tools:
                     routing.setdefault("renamed", []).append(f"{name}->{TOOL_NAMES[name]}")
                     name = TOOL_NAMES[name]
-                    if name == "Task" and b["input"].get("subagent_type") in AGENT_TYPES:
-                        b["input"] = {**b["input"],
-                                      "subagent_type": AGENT_TYPES[b["input"]["subagent_type"]]}
                 elif name not in tools:
                     routing.setdefault("unoffered", []).append(name)
                 with self.lock:
@@ -376,11 +373,20 @@ class SessionReplay:
             events = [r.event for r in await app.client.events(task_id, after)]
             taken = [i for i, e in enumerate(events) if isinstance(e, InputTaken)]
             if taken and row.status == "waiting" and row.waiting_on == "input" and any(
-                    isinstance(e, Waiting) and e.on == "input" for e in events[taken[0]:]):
+                    isinstance(e, Waiting) and e.on == "input" for e in events[taken[0]:]) \
+                    and row.inbox_read_seq >= row.inbox_seq and await _agents_done(app, task_id):
                 return
         self.notes.append(f"step {step['name']}: no settle within {STEP_TIMEOUT_S:.0f}s; "
                           "turn cancelled")
         await app.client.cancel(task_id, "replay timeout", turn_only=True)
+
+
+async def _agents_done(app: Any, task_id: str) -> bool:
+    """Every background agent below the task has ended, as Claude Code's
+    driver waited for the session to go quiet before the next step."""
+    from noeta.plugins.subtasks.host import task_tree
+
+    return all(r.status == "ended" for r in (await task_tree(app.client, task_id))[1:])
 
 
 def write_models_file(path: Path) -> None:

@@ -205,10 +205,10 @@ def test_replay_routes_main_steps_and_subagents() -> None:
     r = replayer()
     routing, turn = r.route(body(user("one")))
     assert routing == {"kind": "main", "step": "a", "call": 1}
-    content, stop = r.materialize(turn, ["Task"], routing)
-    assert stop == "tool_use" and content[0]["name"] == "Task"
-    assert content[0]["input"] == {"prompt": "count /p", "subagent_type": "explore"}
-    assert routing["renamed"] == ["Agent->Task"]
+    content, stop = r.materialize(turn, ["Agent"], routing)
+    assert stop == "tool_use" and content[0]["name"] == "Agent"
+    assert content[0]["input"] == {"prompt": "count /p", "subagent_type": "Explore"}
+    assert "renamed" not in routing
     routing, turn = r.route(body(user("<env>", "count /p and report"), system="x"))
     assert routing["kind"] == "subagent:explore-prompt" and turn is not None
     routing, turn = r.route(body(user("one"), {"role": "assistant", "content": "x"}, user("two")))

@@ -59,7 +59,8 @@ SKILL_TOOL = "skill"
 
 #: Tools that, like ``skill``, decide the shape of the response they are in:
 #: ``skill`` beside one of them refuses the whole response.
-CONTROL_TOOLS: frozenset[str] = frozenset({"skill", "Task", "TodoWrite", "AskUserQuestion"})
+CONTROL_TOOLS: frozenset[str] = frozenset({"skill", "Agent", "Task", "TodoWrite",
+                                                "AskUserQuestion"})
 
 SKILL_NOT_ALONE = (
     "Skill not loaded: skill must be the only tool call in its response, "

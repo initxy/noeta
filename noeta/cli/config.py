@@ -40,6 +40,8 @@ if TYPE_CHECKING:
 log = logging.getLogger("noeta.cli")
 
 HOME = Path(os.environ.get("NOETA_HOME") or Path.home() / ".noeta")
+#: Claude Code's user directory, whose agent files noeta also reads.
+CLAUDE_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
 
 @dataclass
@@ -227,6 +229,7 @@ def project_trusted(directory: str) -> bool:
 PROJECT_GATED_DIRS = {
     ".noeta/plugins": "plugins",
     ".noeta/agents": "agent files",
+    ".claude/agents": "agent files",
     ".noeta/prompts": "prompt overrides",
     ".noeta/skills": "skills",
     ".agents/skills": "skills",
@@ -266,7 +269,8 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     ``<cwd>/.noeta/plugins``), memory (``~/.noeta/memory``), prompt overrides
     (``~/.noeta/prompts``), hooks and MCP servers (``~/.noeta/settings.json``,
     and the ``.mcp.json`` servers it consents to), agent files
-    (``~/.noeta/agents``, then ``<cwd>/.noeta/agents``) and the plugin
+    (``~/.claude/agents``, ``~/.noeta/agents``, then ``<cwd>/.claude/agents``
+    and ``<cwd>/.noeta/agents``; a later file wins a name) and the plugin
     settings of ``config.toml``; ``plugins`` (the front end's own) goes over
     those. A project's :data:`PROJECT_GATED_DIRS` load only once it is
     trusted; each one skipped is a notice in ``app.notices``. Front ends
@@ -284,8 +288,9 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         notices.append(unknown)
     for notice in notices:
         log.warning("%s", notice)
-    files = read_agent_dir(HOME / "agents")
+    files = [*read_agent_dir(CLAUDE_HOME / "agents"), *read_agent_dir(HOME / "agents")]
     if cwd and project_trusted(cwd):
+        files += read_agent_dir(Path(cwd) / ".claude" / "agents")
         files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
     table = merge_plugin_settings(
         {"memory": {"root": str(HOME / "memory")},

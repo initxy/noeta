@@ -69,8 +69,10 @@ Block = Union[Text, Thinking, Image, ToolUse, ToolResult]
 
 #: Who wrote a user-role message. ``human`` is the person; ``system`` is the
 #: host or an extension speaking in the user channel (reminders, notices);
-#: ``memory`` is recalled material. Adapters decide how each reaches the wire.
-Origin = Literal["human", "system", "memory"]
+#: ``memory`` is recalled material; ``agent`` is another agent's message (a
+#: sub-agent's hand-back), plain text that frames itself and carries no user
+#: authority. Adapters decide how each reaches the wire.
+Origin = Literal["human", "system", "memory", "agent"]
 
 
 class Message(Struct):

@@ -105,7 +105,7 @@ async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool,
 
     from noeta.core.events import ExtensionRecorded, ModelReplied, TaskEnded, Waiting
     from noeta.core.loop.state import CORE
-    from noeta.core.pending import follow_tree
+    from noeta.core.pending import follow_tree, tree_busy
     from noeta.core.types import Usage
 
     async with _app(s, cwd=cwd, own_tasks_only=True) as app:
@@ -149,6 +149,9 @@ async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool,
             if (isinstance(ev, ExtensionRecorded) and ev.extension == CORE
                     and ev.kind == "notice" and not as_json):
                 print(f"noeta: {(ev.data or {}).get('text', '')}", file=sys.stderr)
+            if isinstance(ev, Waiting) and ev.on == "input" and not ev.detail.get(
+                    "turn_failed") and await tree_busy(app.client, tid):
+                continue  # background agents still run; their reports open another turn
             if isinstance(ev, Waiting) and ev.on == "input":
                 failed = ev.detail.get("turn_failed")
                 answer = ev.detail.get("answer", "")
