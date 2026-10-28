@@ -1,6 +1,6 @@
 """The bytes the default agents send, locked: one scripted session through
 ``default_agents`` with every built-in context source (project instructions,
-skills, memory, environment, todo reminder, a sub-agent), rendered by each
+skills, memory, environment, a loaded deferred tool, a sub-agent), rendered by each
 provider adapter and compared with ``golden/requests.json`` (a hash per
 request, and the full body of each agent's last request).
 
@@ -87,11 +87,11 @@ async def test_default_agent_requests_match_golden(tmp_path: Path,
         "---\nname: deploy-steps\ndescription: How we deploy.\nkeywords: [deploy]\n---\n"
         "Tag, then wait for the release run.\n")
 
-    todos = [{"content": "Read notes", "status": "in_progress", "activeForm": "Reading notes"}]
     main = [
-        _reply("Planning.", ("t1", "TodoWrite", {"todos": todos})),
+        _reply("Planning.", ("t1", "ToolSearch", {"query": "select:WebFetch",
+                                                  "max_results": 1})),
         _reply("", ("r1", "Read", {"file_path": str(work / "notes.txt")}),
-               ("g1", "Glob", {"pattern": "*.txt"})),
+               ("g1", "Bash", {"command": "ls *.txt", "description": "List the text files"})),
         _reply("", ("k1", "Task", {"description": "find notes", "prompt": "Find notes.txt.",
                                    "subagent_type": "explore"})),
         *[_reply("", (f"b{i}", "Bash", {"command": f"echo {i}", "description": "echo"}))

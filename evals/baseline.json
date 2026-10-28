@@ -7,9 +7,7 @@
   "tolerance": {
     "scenario": 0.34,
     "overall": 0.05,
-    "per_scenario": {
-      "todo_on_multistep": 0.45
-    }
+    "per_scenario": {}
   },
   "overall": 0.9524,
   "scenarios": {
@@ -149,20 +147,6 @@
         1.0,
         1.0,
         1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "todo_on_multistep": {
-      "mean": 0.4444,
-      "scores": [
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
         1.0,
         1.0
       ]

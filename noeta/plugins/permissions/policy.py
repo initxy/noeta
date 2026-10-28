@@ -36,7 +36,7 @@ KNOWN_RISK_LEVELS: tuple[str, ...] = ("low", "medium", "high")
 
 #: 0.6's declared ``risk_level`` of every tool, by name. 1.0 tools carry no
 #: risk field, so the table is the source; a host extends or overrides it
-#: with ``Permissions(risk=...)``. Control tools (Task, TodoWrite,
+#: with ``Permissions(risk=...)``. Control tools (Agent,
 #: AskUserQuestion, skill, ...) were never gated in 0.6 and are ``low``.
 DEFAULT_RISK: Mapping[str, str] = {
     "Read": "low",
@@ -55,7 +55,6 @@ DEFAULT_RISK: Mapping[str, str] = {
     "run_skill_script": "high",
     "ToolSearch": "low",
     "Task": "low",
-    "TodoWrite": "low",
     "AskUserQuestion": "low",
     "Skill": "low",
     "RecallHistory": "low",

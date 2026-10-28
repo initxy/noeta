@@ -1,6 +1,6 @@
 """Review fixes: resident content comes back inside the compaction (right
 after the summary, so the request sent equals the one rebuilt from the log),
-and the todo reminder keeps working once a compaction pointer trails the
+and a plugin's reminder keeps working once a compaction pointer trails the
 request."""
 
 from __future__ import annotations
@@ -14,11 +14,11 @@ from noeta.agents import default_agents
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
+from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.types import Message
 from noeta.plugins.compaction import Compaction
 from noeta.plugins.compaction.summary import SUMMARY_FRAME
 from noeta.plugins.permissions import Permissions
-from noeta.plugins.todo import Todo
 
 from ._harness import Model, Probe, answer, call, rebuilt, run
 
@@ -65,20 +65,33 @@ class Small(Probe):
     name = "Small"
 
 
-async def test_todo_reminder_survives_the_compaction_pointer(store: SqliteStore) -> None:
+class Nudge(Extension):
+    """A reminder every tenth step of a turn."""
+
+    name = "nudge"
+
+    async def reminders(self, view: TaskView) -> list[Reminder]:
+        steps = view.state.steps_in_turn
+        return [Reminder(text=f"Nudge {steps}: keep going.")] if steps and steps % 10 == 0 \
+            else []
+
+
+async def test_a_reminder_survives_the_compaction_pointer(store: SqliteStore) -> None:
     a = Agent(name="a", model="m", tools=[Probe(size=2000), Small(size=10)],
-              extensions=(Compaction(auto_compact_window=SMALL, clearable_tools=()), Todo()))
+              extensions=(Compaction(auto_compact_window=SMALL - 3_000, clearable_tools=()), Nudge()))
     model = Model([*(call() for _ in range(8)), *(call("Small") for _ in range(14)),
                    answer("done")])
     _client, tid = await run(store, a, model)
     assert model.summarize_requests
     reminded = [r for r in model.requests
-                if any(m.origin == "system" and "TodoWrite" in m.text for m in r.messages)]
-    assert reminded, "no todo reminder after the compaction"
+                if model.summarize_requests and r is not model.requests[0]
+                and any(m.origin == "system" and "Nudge" in m.text for m in r.messages)
+                and r.messages[-1].text.startswith("The note at the head")]
+    assert reminded, "no reminder after the compaction"
     # The unrecorded pointer stays last, the reminder right before it.
     first = reminded[0].messages
     assert first[-1].text.startswith("The note at the head")
-    assert "TodoWrite" in first[-2].text
+    assert "Nudge" in first[-2].text
     pairs = await rebuilt(store, a, tid)
     assert pairs and all(live == again for live, again in pairs), pairs
 

@@ -70,7 +70,7 @@ the built-in ones exactly like yours.
 - **Agents** are markdown files: YAML frontmatter (`name`, `description`, `model`, `plugins`,
   optional `tools`) and the system prompt as body. Drop one in `~/.noeta/agents/` or
   `.noeta/agents/`; Claude Code agent files work as they are.
-- **Prompts** have names (`system/main`, `tool/Read`, `reminder/todo`, …). A file
+- **Prompts** have names (`system/main`, `tool/Read`, `reminder/file_changed`, …). A file
   `.noeta/prompts/tool/Read.md` replaces that text, `tool/Read.append.md` adds to it; so do
   `~/.noeta/prompts/`, a task's `prompts` config, and `--system-prompt` /
   `--append-system-prompt`. A task keeps the texts it started with.

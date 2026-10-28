@@ -1,23 +1,23 @@
 {
  "hashes": [
-  "main e88ca6d6a6bab4c9",
-  "main 0ecbacf8c7396652",
-  "main 0b2cc36c0208727d",
+  "main fd8aaf57594e20dc",
+  "main 66ecea45e1e8e6bc",
+  "main 1a56d60af9f2a0e7",
   "child 78cd54b11b1842b1",
   "child 5b2a1d8928adf21e",
-  "main 3f445c66170e1937",
-  "main d66e45a2709b7a47",
-  "main b21c35fe96ede120",
-  "main b443d0d28dda74e0",
-  "main ea7a9abcdeeb4929",
-  "main 5deaed2903f4af8c",
-  "main 371aeb86a46f77a6",
-  "main 900726d67e98365c",
-  "main b4c69ae9e3d52293",
-  "main d9058667de045ec0",
-  "main 63f8a9c7b3044b70",
-  "main d5828286e58e67cd",
-  "main 80fe7ed9e0341c04"
+  "main 304c0de3fe6f68a1",
+  "main 5d2b189fd3379834",
+  "main 0c7c7d41eefbec1c",
+  "main 97934491bef8fffb",
+  "main 18954f6eee27ed56",
+  "main 8c76460d96395032",
+  "main 3d237345f082506a",
+  "main d709a33eb39d9070",
+  "main 87f98f6b57ffabaf",
+  "main 650be488c65ce402",
+  "main cec323d1281ec7f8",
+  "main f765621991ac1d41",
+  "main 1a8077bb0ccc0c94"
  ],
  "last": {
   "child": {
@@ -720,15 +720,10 @@
        {
         "id": "t1",
         "input": {
-         "todos": [
-          {
-           "activeForm": "Reading notes",
-           "content": "Read notes",
-           "status": "in_progress"
-          }
-         ]
+         "max_results": 1,
+         "query": "select:WebFetch"
         },
-        "name": "TodoWrite",
+        "name": "ToolSearch",
         "type": "tool_use"
        }
       ],
@@ -737,10 +732,19 @@
      {
       "content": [
        {
-        "content": "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable",
+        "content": [
+         {
+          "tool_name": "WebFetch",
+          "type": "tool_reference"
+         }
+        ],
         "is_error": false,
         "tool_use_id": "t1",
         "type": "tool_result"
+       },
+       {
+        "text": "Tool loaded.",
+        "type": "text"
        }
       ],
       "role": "user"
@@ -758,9 +762,10 @@
        {
         "id": "g1",
         "input": {
-         "pattern": "*.txt"
+         "command": "ls *.txt",
+         "description": "List the text files"
         },
-        "name": "Glob",
+        "name": "Bash",
         "type": "tool_use"
        }
       ],
@@ -775,8 +780,8 @@
         "type": "tool_result"
        },
        {
-        "content": "No tool named 'Glob' is available in this task; use one of the offered tools.",
-        "is_error": true,
+        "content": "notes.txt",
+        "is_error": false,
         "tool_use_id": "g1",
         "type": "tool_result"
        }
@@ -980,10 +985,6 @@
         "is_error": false,
         "tool_use_id": "b6",
         "type": "tool_result"
-       },
-       {
-        "text": "<system-reminder>\nThe TodoWrite tool hasn't been used recently. If you're working on tasks that would benefit from tracking progress, consider using the TodoWrite tool to track progress. Also consider cleaning up the todo list if has become stale and no longer matches what you are working on. Only use it if it's relevant to the current work. This is just a gentle reminder - ignore if not applicable.\n\nHere are the existing contents of your todo list:\n[1. [in_progress] Read notes]\n</system-reminder>",
-        "type": "text"
        }
       ],
       "role": "user"
@@ -1429,48 +1430,6 @@
       "name": "Task"
      },
      {
-      "description": "Use this tool to create and manage a structured task list for the current session.\n\n## When to use\n\n- Complex multi-step work (roughly three or more distinct steps), or the user handed you several tasks at once.\n- Mark a todo `in_progress` BEFORE you start it and `completed` the moment it is fully done — keep exactly ONE item `in_progress` at a time.\n- Update the list in real time as work lands; you may batch a TodoWrite with file, search and shell calls, or with `Task` calls, in the same response — not with `AskUserQuestion` or `skill`, which go on their own.\n\n## When NOT to use\n\n- A single, straightforward step, or a purely conversational / informational request — the bookkeeping overhead is not worth it.\n\n## Shape\n\nA call replaces the entire list — always send the FULL list, never a delta; omitting an item deletes it. Each item is `{content, status, activeForm}`: `content` in imperative form (\"Run tests\"), `status` one of `pending` / `in_progress` / `completed`, `activeForm` in present-continuous form (\"Running tests\"), shown while the item is in progress.\n\nOnly mark `completed` when the item truly succeeded; if it is blocked, errored, or tests still fail, keep it `in_progress` and add a follow-up item.",
-      "input_schema": {
-       "properties": {
-        "todos": {
-         "description": "The full checklist (replace-all). Each item: {content, status, activeForm}.",
-         "items": {
-          "properties": {
-           "activeForm": {
-            "description": "Present-continuous form shown while in_progress, e.g. 'Running tests'.",
-            "type": "string"
-           },
-           "content": {
-            "description": "Imperative form of the task, e.g. 'Run tests'.",
-            "type": "string"
-           },
-           "status": {
-            "enum": [
-             "pending",
-             "in_progress",
-             "completed"
-            ],
-            "type": "string"
-           }
-          },
-          "required": [
-           "content",
-           "status",
-           "activeForm"
-          ],
-          "type": "object"
-         },
-         "type": "array"
-        }
-       },
-       "required": [
-        "todos"
-       ],
-       "type": "object"
-      },
-      "name": "TodoWrite"
-     },
-     {
       "description": "Fetch the full definition of deferred tools so you can call them.\n\nSome tools are deferred: only their names are listed, in a message in this conversation, and their parameter schemas are not loaded. Calling a deferred tool before loading it fails. Pass a query here; the tools it matches are loaded, and from then on you call each one directly by its own name, exactly like the tools defined at the start. A loaded tool stays available for the rest of the conversation.\n\nThe matched definitions come back in the same encoding as the tool list you started with: one <function>{\"description\": ..., \"name\": ..., \"parameters\": ...}</function> line per tool, inside a <functions> block.\n\nWays to query:\n- \"select:WebFetch,NotebookEdit\" loads exactly the named tools\n- \"fetch url page\" searches names and descriptions and loads up to max_results best matches\n- \"+mcp resource\" keeps only tools whose name contains \"mcp\", ranked by the other words",
       "input_schema": {
        "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1493,6 +1452,37 @@
        "type": "object"
       },
       "name": "ToolSearch"
+     },
+     {
+      "defer_loading": true,
+      "description": "Fetches a URL, turns the page into Markdown and answers `prompt` about it with a small, fast model: you get the answer, not the page.\n\n- Pages behind a login, or otherwise private, fail. For those use an MCP tool that has access, or `gh` for GitHub.\n- `localhost` and host names without a dot cannot be fetched; reach a local server with `curl` through Bash.\n- `http` URLs are fetched over `https`.\n- A redirect to a different host is not followed: the result names the new URL, and you call again with it.\n- Pages are cached per URL for 15 minutes, so asking again about the same page is cheap.\n- A page too long for one call is answered from the part that fits, and the result gives the `offset` to continue from.",
+      "input_schema": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "additionalProperties": false,
+       "properties": {
+        "offset": {
+         "description": "Character position in the page text to continue from, as given by the previous result, for a page too long for one call.",
+         "maximum": 9007199254740991,
+         "minimum": 0,
+         "type": "integer"
+        },
+        "prompt": {
+         "description": "What to find out from the fetched page.",
+         "type": "string"
+        },
+        "url": {
+         "description": "The URL to fetch.",
+         "format": "uri",
+         "type": "string"
+        }
+       },
+       "required": [
+        "url",
+        "prompt"
+       ],
+       "type": "object"
+      },
+      "name": "WebFetch"
      },
      {
       "description": "Writes a file, replacing it if it already exists.\n\n- Use it to create a file, or to replace one you have read in full.\n- Overwriting an existing file that you have not read in this conversation fails.\n- To change part of a file, use Edit.",
@@ -1569,18 +1559,6 @@
       "name": "memory_search"
      },
      {
-      "defer_loading": true,
-      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
-      "input_schema": {
-       "properties": {},
-       "type": "object"
-      },
-      "name": "DeferredToolPlaceholder"
-     },
-     {
-      "cache_control": {
-       "type": "ephemeral"
-      },
       "description": "Persist a named memory as a markdown file; reusing a name updates that memory, and 'created'/'updated' dates are stamped automatically. Names are slugs (letters, digits, '.', '_', '-'; max 128 chars). Every field follows one rule — omit it to keep what the memory has, pass it empty to remove it, pass a value to replace it — so a rewrite never drops what it does not mention. Frontmatter keys without a parameter of their own ride a leading `---` block in the text under the same rule, and text that is only such a block leaves the body as it is. If the result lists similar existing memories, update one of those instead of keeping a near-duplicate.",
       "input_schema": {
        "additionalProperties": false,
@@ -1627,6 +1605,18 @@
        "type": "object"
       },
       "name": "memory_write"
+     },
+     {
+      "cache_control": {
+       "type": "ephemeral"
+      },
+      "defer_loading": true,
+      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
+      "input_schema": {
+       "properties": {},
+       "type": "object"
+      },
+      "name": "DeferredToolPlaceholder"
      }
     ]
    },
@@ -1663,8 +1653,8 @@
       "tool_calls": [
        {
         "function": {
-         "arguments": "{\"todos\": [{\"content\": \"Read notes\", \"status\": \"in_progress\", \"activeForm\": \"Reading notes\"}]}",
-         "name": "TodoWrite"
+         "arguments": "{\"query\": \"select:WebFetch\", \"max_results\": 1}",
+         "name": "ToolSearch"
         },
         "id": "t1",
         "type": "function"
@@ -1672,9 +1662,13 @@
       ]
      },
      {
-      "content": "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable",
+      "content": "Loaded: WebFetch",
       "role": "tool",
       "tool_call_id": "t1"
+     },
+     {
+      "content": "Tool loaded.",
+      "role": "user"
      },
      {
       "content": null,
@@ -1690,8 +1684,8 @@
        },
        {
         "function": {
-         "arguments": "{\"pattern\": \"*.txt\"}",
-         "name": "Glob"
+         "arguments": "{\"command\": \"ls *.txt\", \"description\": \"List the text files\"}",
+         "name": "Bash"
         },
         "id": "g1",
         "type": "function"
@@ -1704,7 +1698,7 @@
       "tool_call_id": "r1"
      },
      {
-      "content": "No tool named 'Glob' is available in this task; use one of the offered tools.",
+      "content": "notes.txt",
       "role": "tool",
       "tool_call_id": "g1"
      },
@@ -1859,10 +1853,6 @@
       "content": "6",
       "role": "tool",
       "tool_call_id": "b6"
-     },
-     {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\nThe TodoWrite tool hasn't been used recently. If you're working on tasks that would benefit from tracking progress, consider using the TodoWrite tool to track progress. Also consider cleaning up the todo list if has become stale and no longer matches what you are working on. Only use it if it's relevant to the current work. This is just a gentle reminder - ignore if not applicable.\n\nHere are the existing contents of your todo list:\n[1. [in_progress] Read notes]",
-      "role": "system"
      },
      {
       "content": null,
@@ -2275,51 +2265,6 @@
      },
      {
       "function": {
-       "description": "Use this tool to create and manage a structured task list for the current session.\n\n## When to use\n\n- Complex multi-step work (roughly three or more distinct steps), or the user handed you several tasks at once.\n- Mark a todo `in_progress` BEFORE you start it and `completed` the moment it is fully done — keep exactly ONE item `in_progress` at a time.\n- Update the list in real time as work lands; you may batch a TodoWrite with file, search and shell calls, or with `Task` calls, in the same response — not with `AskUserQuestion` or `skill`, which go on their own.\n\n## When NOT to use\n\n- A single, straightforward step, or a purely conversational / informational request — the bookkeeping overhead is not worth it.\n\n## Shape\n\nA call replaces the entire list — always send the FULL list, never a delta; omitting an item deletes it. Each item is `{content, status, activeForm}`: `content` in imperative form (\"Run tests\"), `status` one of `pending` / `in_progress` / `completed`, `activeForm` in present-continuous form (\"Running tests\"), shown while the item is in progress.\n\nOnly mark `completed` when the item truly succeeded; if it is blocked, errored, or tests still fail, keep it `in_progress` and add a follow-up item.",
-       "name": "TodoWrite",
-       "parameters": {
-        "properties": {
-         "todos": {
-          "description": "The full checklist (replace-all). Each item: {content, status, activeForm}.",
-          "items": {
-           "properties": {
-            "activeForm": {
-             "description": "Present-continuous form shown while in_progress, e.g. 'Running tests'.",
-             "type": "string"
-            },
-            "content": {
-             "description": "Imperative form of the task, e.g. 'Run tests'.",
-             "type": "string"
-            },
-            "status": {
-             "enum": [
-              "pending",
-              "in_progress",
-              "completed"
-             ],
-             "type": "string"
-            }
-           },
-           "required": [
-            "content",
-            "status",
-            "activeForm"
-           ],
-           "type": "object"
-          },
-          "type": "array"
-         }
-        },
-        "required": [
-         "todos"
-        ],
-        "type": "object"
-       }
-      },
-      "type": "function"
-     },
-     {
-      "function": {
        "description": "Fetch the full definition of deferred tools so you can call them.\n\nSome tools are deferred: only their names are listed, in a message in this conversation, and their parameter schemas are not loaded. Calling a deferred tool before loading it fails. Pass a query here; the tools it matches are loaded, and from then on you call each one directly by its own name, exactly like the tools defined at the start. A loaded tool stays available for the rest of the conversation.\n\nThe matched definitions come back in the same encoding as the tool list you started with: one <function>{\"description\": ..., \"name\": ..., \"parameters\": ...}</function> line per tool, inside a <functions> block.\n\nWays to query:\n- \"select:WebFetch,NotebookEdit\" loads exactly the named tools\n- \"fetch url page\" searches names and descriptions and loads up to max_results best matches\n- \"+mcp resource\" keeps only tools whose name contains \"mcp\", ranked by the other words",
        "name": "ToolSearch",
        "parameters": {
@@ -2339,6 +2284,39 @@
         "required": [
          "query",
          "max_results"
+        ],
+        "type": "object"
+       }
+      },
+      "type": "function"
+     },
+     {
+      "function": {
+       "description": "Fetches a URL, turns the page into Markdown and answers `prompt` about it with a small, fast model: you get the answer, not the page.\n\n- Pages behind a login, or otherwise private, fail. For those use an MCP tool that has access, or `gh` for GitHub.\n- `localhost` and host names without a dot cannot be fetched; reach a local server with `curl` through Bash.\n- `http` URLs are fetched over `https`.\n- A redirect to a different host is not followed: the result names the new URL, and you call again with it.\n- Pages are cached per URL for 15 minutes, so asking again about the same page is cheap.\n- A page too long for one call is answered from the part that fits, and the result gives the `offset` to continue from.",
+       "name": "WebFetch",
+       "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+         "offset": {
+          "description": "Character position in the page text to continue from, as given by the previous result, for a page too long for one call.",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+         },
+         "prompt": {
+          "description": "What to find out from the fetched page.",
+          "type": "string"
+         },
+         "url": {
+          "description": "The URL to fetch.",
+          "format": "uri",
+          "type": "string"
+         }
+        },
+        "required": [
+         "url",
+         "prompt"
         ],
         "type": "object"
        }
@@ -2433,17 +2411,6 @@
      },
      {
       "function": {
-       "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
-       "name": "DeferredToolPlaceholder",
-       "parameters": {
-        "properties": {},
-        "type": "object"
-       }
-      },
-      "type": "function"
-     },
-     {
-      "function": {
        "description": "Persist a named memory as a markdown file; reusing a name updates that memory, and 'created'/'updated' dates are stamped automatically. Names are slugs (letters, digits, '.', '_', '-'; max 128 chars). Every field follows one rule — omit it to keep what the memory has, pass it empty to remove it, pass a value to replace it — so a rewrite never drops what it does not mention. Frontmatter keys without a parameter of their own ride a leading `---` block in the text under the same rule, and text that is only such a block leaves the body as it is. If the result lists similar existing memories, update one of those instead of keeping a near-duplicate.",
        "name": "memory_write",
        "parameters": {
@@ -2488,6 +2455,17 @@
          "name",
          "text"
         ],
+        "type": "object"
+       }
+      },
+      "type": "function"
+     },
+     {
+      "function": {
+       "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
+       "name": "DeferredToolPlaceholder",
+       "parameters": {
+        "properties": {},
         "type": "object"
        }
       },
@@ -2577,15 +2555,25 @@
       "type": "message"
      },
      {
-      "arguments": "{\"todos\": [{\"content\": \"Read notes\", \"status\": \"in_progress\", \"activeForm\": \"Reading notes\"}]}",
+      "arguments": "{\"query\": \"select:WebFetch\", \"max_results\": 1}",
       "call_id": "t1",
-      "name": "TodoWrite",
+      "name": "ToolSearch",
       "type": "function_call"
      },
      {
       "call_id": "t1",
-      "output": "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable",
+      "output": "Loaded: WebFetch",
       "type": "function_call_output"
+     },
+     {
+      "content": [
+       {
+        "text": "Tool loaded.",
+        "type": "input_text"
+       }
+      ],
+      "role": "user",
+      "type": "message"
      },
      {
       "arguments": "{\"file_path\": \"<TMP>/work/notes.txt\"}",
@@ -2594,9 +2582,9 @@
       "type": "function_call"
      },
      {
-      "arguments": "{\"pattern\": \"*.txt\"}",
+      "arguments": "{\"command\": \"ls *.txt\", \"description\": \"List the text files\"}",
       "call_id": "g1",
-      "name": "Glob",
+      "name": "Bash",
       "type": "function_call"
      },
      {
@@ -2606,7 +2594,7 @@
      },
      {
       "call_id": "g1",
-      "output": "No tool named 'Glob' is available in this task; use one of the offered tools.",
+      "output": "notes.txt",
       "type": "function_call_output"
      },
      {
@@ -2696,20 +2684,6 @@
       "call_id": "b6",
       "output": "6",
       "type": "function_call_output"
-     },
-     {
-      "content": [
-       {
-        "text": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]",
-        "type": "input_text"
-       },
-       {
-        "text": "The TodoWrite tool hasn't been used recently. If you're working on tasks that would benefit from tracking progress, consider using the TodoWrite tool to track progress. Also consider cleaning up the todo list if has become stale and no longer matches what you are working on. Only use it if it's relevant to the current work. This is just a gentle reminder - ignore if not applicable.\n\nHere are the existing contents of your todo list:\n[1. [in_progress] Read notes]",
-        "type": "input_text"
-       }
-      ],
-      "role": "system",
-      "type": "message"
      },
      {
       "arguments": "{\"command\": \"echo 7\", \"description\": \"echo\"}",
@@ -3100,49 +3074,6 @@
       "type": "function"
      },
      {
-      "description": "Use this tool to create and manage a structured task list for the current session.\n\n## When to use\n\n- Complex multi-step work (roughly three or more distinct steps), or the user handed you several tasks at once.\n- Mark a todo `in_progress` BEFORE you start it and `completed` the moment it is fully done — keep exactly ONE item `in_progress` at a time.\n- Update the list in real time as work lands; you may batch a TodoWrite with file, search and shell calls, or with `Task` calls, in the same response — not with `AskUserQuestion` or `skill`, which go on their own.\n\n## When NOT to use\n\n- A single, straightforward step, or a purely conversational / informational request — the bookkeeping overhead is not worth it.\n\n## Shape\n\nA call replaces the entire list — always send the FULL list, never a delta; omitting an item deletes it. Each item is `{content, status, activeForm}`: `content` in imperative form (\"Run tests\"), `status` one of `pending` / `in_progress` / `completed`, `activeForm` in present-continuous form (\"Running tests\"), shown while the item is in progress.\n\nOnly mark `completed` when the item truly succeeded; if it is blocked, errored, or tests still fail, keep it `in_progress` and add a follow-up item.",
-      "name": "TodoWrite",
-      "parameters": {
-       "properties": {
-        "todos": {
-         "description": "The full checklist (replace-all). Each item: {content, status, activeForm}.",
-         "items": {
-          "properties": {
-           "activeForm": {
-            "description": "Present-continuous form shown while in_progress, e.g. 'Running tests'.",
-            "type": "string"
-           },
-           "content": {
-            "description": "Imperative form of the task, e.g. 'Run tests'.",
-            "type": "string"
-           },
-           "status": {
-            "enum": [
-             "pending",
-             "in_progress",
-             "completed"
-            ],
-            "type": "string"
-           }
-          },
-          "required": [
-           "content",
-           "status",
-           "activeForm"
-          ],
-          "type": "object"
-         },
-         "type": "array"
-        }
-       },
-       "required": [
-        "todos"
-       ],
-       "type": "object"
-      },
-      "type": "function"
-     },
-     {
       "description": "Fetch the full definition of deferred tools so you can call them.\n\nSome tools are deferred: only their names are listed, in a message in this conversation, and their parameter schemas are not loaded. Calling a deferred tool before loading it fails. Pass a query here; the tools it matches are loaded, and from then on you call each one directly by its own name, exactly like the tools defined at the start. A loaded tool stays available for the rest of the conversation.\n\nThe matched definitions come back in the same encoding as the tool list you started with: one <function>{\"description\": ..., \"name\": ..., \"parameters\": ...}</function> line per tool, inside a <functions> block.\n\nWays to query:\n- \"select:WebFetch,NotebookEdit\" loads exactly the named tools\n- \"fetch url page\" searches names and descriptions and loads up to max_results best matches\n- \"+mcp resource\" keeps only tools whose name contains \"mcp\", ranked by the other words",
       "name": "ToolSearch",
       "parameters": {
@@ -3162,6 +3093,37 @@
        "required": [
         "query",
         "max_results"
+       ],
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Fetches a URL, turns the page into Markdown and answers `prompt` about it with a small, fast model: you get the answer, not the page.\n\n- Pages behind a login, or otherwise private, fail. For those use an MCP tool that has access, or `gh` for GitHub.\n- `localhost` and host names without a dot cannot be fetched; reach a local server with `curl` through Bash.\n- `http` URLs are fetched over `https`.\n- A redirect to a different host is not followed: the result names the new URL, and you call again with it.\n- Pages are cached per URL for 15 minutes, so asking again about the same page is cheap.\n- A page too long for one call is answered from the part that fits, and the result gives the `offset` to continue from.",
+      "name": "WebFetch",
+      "parameters": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "additionalProperties": false,
+       "properties": {
+        "offset": {
+         "description": "Character position in the page text to continue from, as given by the previous result, for a page too long for one call.",
+         "maximum": 9007199254740991,
+         "minimum": 0,
+         "type": "integer"
+        },
+        "prompt": {
+         "description": "What to find out from the fetched page.",
+         "type": "string"
+        },
+        "url": {
+         "description": "The URL to fetch.",
+         "format": "uri",
+         "type": "string"
+        }
+       },
+       "required": [
+        "url",
+        "prompt"
        ],
        "type": "object"
       },
@@ -3246,15 +3208,6 @@
       "type": "function"
      },
      {
-      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
-      "name": "DeferredToolPlaceholder",
-      "parameters": {
-       "properties": {},
-       "type": "object"
-      },
-      "type": "function"
-     },
-     {
       "description": "Persist a named memory as a markdown file; reusing a name updates that memory, and 'created'/'updated' dates are stamped automatically. Names are slugs (letters, digits, '.', '_', '-'; max 128 chars). Every field follows one rule — omit it to keep what the memory has, pass it empty to remove it, pass a value to replace it — so a rewrite never drops what it does not mention. Frontmatter keys without a parameter of their own ride a leading `---` block in the text under the same rule, and text that is only such a block leaves the body as it is. If the result lists similar existing memories, update one of those instead of keeping a near-duplicate.",
       "name": "memory_write",
       "parameters": {
@@ -3299,6 +3252,15 @@
         "name",
         "text"
        ],
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
+      "name": "DeferredToolPlaceholder",
+      "parameters": {
+       "properties": {},
        "type": "object"
       },
       "type": "function"

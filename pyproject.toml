@@ -37,7 +37,6 @@ shell = "noeta.plugins.shell:Shell"
 skills = "noeta.plugins.skills:Skills"
 structured_output = "noeta.plugins.structured:StructuredOutput"
 subtasks = "noeta.plugins.subtasks:Subtasks"
-todo = "noeta.plugins.todo:Todo"
 web = "noeta.plugins.web:Web"
 
 [project.entry-points."noeta.providers"]
