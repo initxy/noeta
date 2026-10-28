@@ -53,19 +53,19 @@ async def test_read_empty_file_warns(h: Harness, ws: Path) -> None:
     (ws / "empty.txt").write_text("")
     out = await h.call(ReadTool(), file_path="empty.txt")
     assert not out.is_error
-    text = text_of(out)
-    assert text == "(The file exists but has empty contents.)"
-    assert "<system-reminder" not in text
+    assert text_of(out) == "Warning: the file is there but holds no content."
 
 
 async def test_read_offset_past_end_warns_with_line_count(h: Harness, ws: Path) -> None:
+    # Lines are counted as Claude Code counts them: a final newline starts
+    # one more (empty) line.
     (ws / "short.txt").write_text("one\ntwo\n")
     out = await h.call(ReadTool(), file_path="short.txt", offset=10)
     assert not out.is_error
     assert text_of(out) == (
-        "(The file has only 2 lines, fewer than the requested offset 10. "
-        "Nothing was read.)"
-    )
+        "Warning: offset 10 is past the end of the file, which has 3 lines.")
+    last = await h.call(ReadTool(), file_path="short.txt", offset=3)
+    assert text_of(last) == "3\t"
 
 
 async def test_read_refuses_a_window_past_the_token_ceiling(h: Harness, ws: Path) -> None:

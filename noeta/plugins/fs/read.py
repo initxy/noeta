@@ -414,13 +414,13 @@ def _render(scan: _Scan, w: _Window) -> ToolOutput:
     if scan.bytes_replaced:
         meta["bytes_replaced"] = True
     if total == 0:
-        return text_output(_note("The file exists but has empty contents."), **meta)
-    if start >= total:
+        return text_output("Warning: the file is there but holds no content.", **meta)
+    # Claude Code counts a final newline as starting one more, empty, line.
+    lines_counted = total + (1 if scan.ends_with_newline else 0)
+    if start >= lines_counted:
         return text_output(
-            _note(
-                f"The file has only {total} lines, fewer than the "
-                f"requested offset {w.offset}. Nothing was read."
-            ),
+            f"Warning: offset {w.offset} is past the end of the file, which has "
+            f"{lines_counted} lines.",
             **meta,
         )
 
