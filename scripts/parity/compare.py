@@ -365,8 +365,14 @@ def compare_session(name: str, cc: Mapping[str, Any], no: Mapping[str, Any],
         found.add("compaction", f"Claude Code compacted ({len(cc_comp)} requests), noeta "
                                 "never did", f"{name}/{cc_comp[0]['step']}")
     elif cc_comp and no_comp:
-        _compare_pair(cc_comp[0], no_comp[0], f"{name}/{no_comp[0]['step']}", found,
-                      prefix="compaction: ")
+        # A retry of the same summarize call (same messages) counts once.
+        cc_comp = [r for i, r in enumerate(cc_comp)
+                   if not i or r["messages"] != cc_comp[i - 1]["messages"]]
+        for a, b in zip(cc_comp, no_comp, strict=False):
+            _compare_pair(a, b, f"{name}/{b['step']}", found, prefix="compaction: ")
+        if len(cc_comp) != len(no_comp):
+            found.add("compaction", f"Claude Code compacted {len(cc_comp)} times, noeta "
+                                    f"{len(no_comp)}", f"{name}/{cc_comp[0]['step']}")
 
     # side requests
     side = {r["kind"] for r in cc_rows
