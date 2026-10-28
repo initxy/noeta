@@ -33,6 +33,8 @@ so a third-party plugin is used exactly like a built-in one. A file without
 from __future__ import annotations
 
 import logging
+import os
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -54,6 +56,7 @@ __all__ = [
     "parse_agent_file",
     "parse_plugin_list",
     "read_agent_dir",
+    "resolve_secrets",
 ]
 
 log = logging.getLogger("noeta.agents")
@@ -235,6 +238,42 @@ def _freeze(value: Any) -> Any:
     return value
 
 
+_SECRET = re.compile(r"\{(env|keyring):([^{}]+)\}")
+
+
+def resolve_secrets(value: Any, where: str = "") -> Any:
+    """``value`` (a plugin's arguments) with each ``{env:NAME}`` replaced
+    by that environment variable and each ``{keyring:service/user}`` by the
+    OS keyring's secret (the optional ``keyring`` package), inside strings
+    of any nesting. The references, not the secrets, are what config files
+    and records hold."""
+    if isinstance(value, str):
+        return _SECRET.sub(lambda m: _secret(m[1], m[2], where), value)
+    if isinstance(value, Mapping):
+        return {k: resolve_secrets(v, where) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(resolve_secrets(v, where) for v in value)
+    return value
+
+
+def _secret(kind: str, ref: str, where: str) -> str:
+    if kind == "env":
+        found = os.environ.get(ref)
+        if found is None:
+            raise ValueError(f"{where}: {{env:{ref}}} names an environment variable that is "
+                             "not set")
+        return found
+    service, _, account = ref.partition("/")
+    try:
+        import keyring  # type: ignore[import-not-found]
+    except ImportError:
+        raise ValueError(f"{where}: {{keyring:{ref}}} needs the keyring package") from None
+    secret = keyring.get_password(service, account)
+    if secret is None:
+        raise ValueError(f"{where}: the keyring has no secret for {ref!r}")
+    return str(secret)
+
+
 def _setting(name: str, value: PluginSetting) -> tuple[bool, Mapping[str, Any], Extension | None]:
     """``value`` as (enabled, host arguments, ready instance)."""
     if isinstance(value, bool):
@@ -285,7 +324,7 @@ def build_agents(
         if key not in made:
             factory = registry.load(registry.PLUGINS, name)
             arguments = {**host_args, **args}
-            made[key] = factory(**arguments)
+            made[key] = factory(**resolve_secrets(arguments, f"plugin {name!r}"))
             registry.note_arguments(made[key], arguments)
         return made[key]
 
