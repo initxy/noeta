@@ -154,6 +154,8 @@ def bypasses_classifier(rule: Rule) -> bool:
     if rule.tool in ("Bash", "Monitor"):
         if rule.content is None:
             return True
+        if "*" not in rule.content:
+            return False  # an exact command was read when the rule was written
         words = rule.content.replace(":*", " *").split()
         first = words[0] if words else ""
         if first == "*" or first in INTERPRETERS or first in WRAPPER_PROGRAMS:

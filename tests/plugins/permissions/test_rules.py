@@ -130,9 +130,12 @@ def test_auto_mode_ignores_rules_that_run_project_scripts() -> None:
     def drops(text: str) -> bool:
         return bypasses_classifier(parse_rule(text))
 
-    for text in ("Bash(npm run *)", "Bash(npm run build)", "Bash(npm *)", "Bash(make)",
-                 "Bash(make test)", "Bash(uv run *)", "Bash(uv:*)", "Bash(yarn run x)",
+    for text in ("Bash(npm run *)", "Bash(npm run:*)", "Bash(npm *)", "Bash(make *)",
+                 "Bash(uv run *)", "Bash(uv:*)", "Bash(yarn run x *)",
                  "Bash(npx *)", "Bash(python3 *)", "Bash(sh *)", "Bash"):
         assert drops(text), text
-    for text in ("Bash(npm test *)", "Bash(uv sync)", "Bash(git status)", "Bash(makedirs x)"):
+    # An exact command stays, as in Claude Code.
+    for text in ("Bash(npm test *)", "Bash(uv sync)", "Bash(git status)", "Bash(makedirs x)",
+                 "Bash(uv run pytest)", "Bash(npm run build)", "Bash(make)", "Bash(make test)",
+                 "Bash(python3 -m pytest)"):
         assert not drops(text), text
