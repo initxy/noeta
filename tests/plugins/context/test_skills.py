@@ -344,3 +344,12 @@ async def test_skill_dirs_are_listed_workspace_first_never_claude_codes(
     assert h.provider.requests[0].messages[-1].text == (
         f"{ROSTER_HEADER}\n\n- release-notes: Draft release notes.\n"
         "- a-user-skill: From the user.")
+
+
+async def test_when_to_use_follows_the_description_in_the_listing(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship the app.",
+                when_to_use="Use when the user says ship it.")
+    h.provider.add(reply("ok"))
+    await h.start(agent())
+    assert h.provider.requests[0].messages[1].text == (
+        f"{ROSTER_HEADER}\n\n- deploy: Ship the app. - Use when the user says ship it.")

@@ -69,6 +69,9 @@ class SkillDescription:
     source_path: str | None = None
     metadata: tuple[tuple[str, str], ...] = ()
     resources: tuple[str, ...] = ()
+    #: ``when_to_use``: when the model should reach for the skill; the
+    #: listing shows it after the description.
+    when_to_use: str | None = None
 
     @property
     def base_dir(self) -> str | None:
@@ -163,6 +166,7 @@ def parse_skill(path: str, raw: str, resources: tuple[str, ...] = ()) -> SkillDe
         metadata=tuple(sorted((k, v) for k, v in fields.items()
                               if k not in _frontmatter.KNOWN_KEYS)),
         resources=resources,
+        when_to_use=fields.get("when_to_use") or None,
     )
 
 
