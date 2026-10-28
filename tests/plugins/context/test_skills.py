@@ -108,7 +108,19 @@ async def test_unknown_and_disabled_skills_are_refused(h: Harness) -> None:
     first, second = await h.results(tid)
     assert first.result.is_error
     assert first.result.text == "unknown skill 'hidden'; available: deploy"
-    assert second.result.text == "skill must be a non-empty string"
+    assert second.result.text == "Not a skill name: ''"
+
+
+async def test_a_leading_slash_and_spaces_around_the_name_are_ignored(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    h.provider.add(reply("", ("Skill", {"skill": " /deploy "})), reply("", ("Skill", {"skill": " "})),
+                   reply("done"))
+    tid = await h.start(agent())
+    first, second = await h.results(tid)
+    assert not first.result.is_error
+    [act] = await h.records(tid, "skills", "activated")
+    assert act.data["name"] == "deploy"
+    assert second.result.is_error
 
 
 async def test_skill_may_share_a_reply_with_other_calls(h: Harness) -> None:

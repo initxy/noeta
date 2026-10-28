@@ -58,6 +58,7 @@ from noeta.plugins.skills.tool import (
     SKILL_TOOL,
     SkillTool,
     activation_data,
+    skill_name,
     unlocked_skills,
 )
 from noeta.toolkit import permission_rules as pr
@@ -415,8 +416,8 @@ class Skills(Extension):
         of the skill's ``agent`` type gets the rendered body as its prompt
         and its result comes back as any agent's does. Without an ``Agent``
         tool the skill loads inline."""
-        name, args = call.input.get("skill"), call.input.get("args")
-        if not isinstance(name, str) or (args is not None and not isinstance(args, str)):
+        name, args = skill_name(call.input.get("skill")), call.input.get("args")
+        if name is None or (args is not None and not isinstance(args, str)):
             return None
         state = view.ext_state(self.name) or {}
         registry = await self.registry(task_env(view.env, view.state.config))

@@ -25,7 +25,15 @@ SKILL_TOOL = "Skill"
 _SKILL_PROP_DESCRIPTION = ("The skill's name exactly as the skill listing gives it, without "
                            "a leading slash; never a guessed name.")
 _ARGS_PROP_DESCRIPTION = "Optional text passed to the skill."
-_SKILL_NAME_MAX_LEN = 200
+
+
+def skill_name(raw: Any) -> str | None:
+    """The name a ``Skill`` call asks for: trimmed, without a leading ``/``
+    (the model often writes the slash command); ``None`` when empty."""
+    if not isinstance(raw, str):
+        return None
+    name = raw.strip()
+    return (name[1:] if name.startswith("/") else name) or None
 
 
 def _skill_description() -> str:
@@ -58,11 +66,10 @@ class SkillTool:
         }
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
-        name = input.get("skill")
-        if not isinstance(name, str) or not name:
-            return text_output("skill must be a non-empty string", is_error=True)
-        if len(name) > _SKILL_NAME_MAX_LEN:
-            return text_output(f"skill too long (max {_SKILL_NAME_MAX_LEN})", is_error=True)
+        raw = input.get("skill")
+        name = skill_name(raw)
+        if name is None:
+            return text_output(f"Not a skill name: {raw!r}", is_error=True)
         registry = await self._owner.registry(task_env(ctx.env, {}))
         menu = registry.model_invocable(unlocked_skills(ctx.state.get(self._owner.name)))
         desc = registry.get(name)

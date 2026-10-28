@@ -85,6 +85,7 @@ def test_tool_families() -> None:
     assert m("Agent(Explore)", "Agent", subagent_type="Explore")
     assert not m("Agent(Explore)", "Agent", subagent_type="Plan")
     assert m("Skill(release-notes)", "Skill", skill="release-notes", args="v1")
+    assert m("Skill(release-notes)", "Skill", skill=" /release-notes")
 
 
 def test_the_settings_surface_is_validated() -> None:
