@@ -449,20 +449,20 @@ class ReadTool:
         shown = page.count("\n") + 1
         total = scan.total_lines + (1 if scan.ends_with_newline else 0)
         hint = (" Even with allow_large it does not fit." if w.large else
-                " To have all of it anyway, call Read again with allow_large: true (only when "
-                "you need every part, or the user asked for the whole file).")
+                " allow_large: true returns more of it; use that only when every part matters "
+                "or the user wants the file entire.")
         head = (f"[Partial view, cut to fit the read limit: {w.resolved}")
         size = f"({tokens} tokens; the cap is {cap})"
         if not by_chars and shown < total:
             banner = (f"{head} shows lines 1-{shown} of {total} {size}. For the next part call "
                       f"Read with offset={shown + 1} limit={shown}, or search the file for the "
-                      f"section you need.{hint} Do not answer from this part alone if the "
-                      "answer could be further on.]")
+                      f"section you need.{hint} What you need may lie past "
+                      "this part; check before relying on it alone.]")
         else:
             banner = (f"{head} shows its first {len(page)} of {len(text)} characters {size}; "
                       "its lines are too long to page by line. Search the file for the section "
-                      f"you need, or page through it with Read's offset and limit.{hint} Do not "
-                      "answer from this excerpt alone if the answer could be elsewhere.]")
+                      f"you need, or page through it with Read's offset and limit.{hint} What you "
+                      "need may lie past this excerpt; check before relying on it alone.]")
         _record_read(ctx, w.resolved, scan.digest, w.mtime, [1, shown], partial=True)
         ctx.record(FS, KIND_NOTICE, {"text": banner})
         rendered = "\n".join(f"{i}\t{line}" for i, line in enumerate(page.split("\n"), 1))

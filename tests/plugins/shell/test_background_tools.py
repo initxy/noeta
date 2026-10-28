@@ -118,8 +118,8 @@ async def test_ends_with_turn_wording_and_cd_note(tmp_path: Path) -> None:
                        description="go root")
     assert "it is stopped when you give your final response" in text(out)
     assert text(out).endswith(
-        "\n" + f"Session cwd remains {tmp_path}; directory changes made by the backgrounded "
-        "command do not apply to subsequent commands.")
+        "\n" + f"The shell's directory stays {tmp_path}: a cd inside a background command does "
+        "not carry over to later commands.")
     await h.settle(out.meta["job_id"])
     assert 'Background command "go root" completed (exit code 0)' in h.posts[0][1]
 

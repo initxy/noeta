@@ -56,11 +56,11 @@ WITHDRAWN_ERROR = "Question withdrawn by user (no answer provided)."
 #: A question with one option (or none) has nothing to decide; the model is
 #: steered to go ahead with that path instead of padding the list.
 SINGLE_OPTION_ERROR = (
-    "Rejected: a question in this call had fewer than 2 options, so the user was shown "
-    "nothing. One option leaves nothing to choose. Do not repeat the call and do not make "
-    "up a second option: take that one path as your approach, say so, and carry on. Any "
-    "questions in this call that had 2-4 distinct options may be asked again in a new call "
-    "without the others. Ask only when the user has at least two real alternatives.")
+    "This call was refused and none of it reached the user: a question offered fewer than "
+    "2 options, and a question needs at least two answers to be a choice. If only one "
+    "approach makes sense, adopt it, say which, and keep working instead of asking or "
+    "inventing alternatives. The call's questions that had 2-4 distinct options can go in a "
+    "new call on their own.")
 #: Leads the result of a call whose posted answer did not fit the questions.
 INVALID_ANSWER_ERROR = "The user's answer could not be used: {error}"
 

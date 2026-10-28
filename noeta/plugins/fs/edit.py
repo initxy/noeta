@@ -203,7 +203,7 @@ class EditTool:
                     "both ways; neither matched, so the difference is elsewhere in old_string. "
                     "Read the file again and copy the exact text.)" if tried_escapes else "")
             return tool_error(
-                self.name, f"String to replace not found in file.\nString: {old}{hint}")
+                self.name, f"old_string does not occur in the file.\nLooked for: {old}{hint}")
         if count > 1 and not replace_all:
             return tool_error(
                 self.name,

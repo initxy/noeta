@@ -256,7 +256,7 @@ async def _save_blob(ctx: ToolContext, alias: str, entry: dict[str, Any],
     try:
         await ctx.env.write_bytes(path, raw)
     except OSError as exc:
-        return {**out, "text": f"Binary content could not be saved to disk: {exc}"}
+        return {**out, "text": f"The binary data was not saved ({exc}); it is not available here."}
     return {**out, "blobSavedTo": path,
             "text": f"[Resource from {alias} at {entry.get('uri')}] Binary content "
                     f"({mime or 'unknown type'}, {format_size(len(raw))}) saved to {path}"}

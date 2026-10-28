@@ -62,10 +62,10 @@ SEND_MESSAGE_PROP = (
 )
 SEND_SUMMARY_PROP = "A 5-10 word label for this send in your own transcript; it is not sent"
 SEND_NOTIFY_PROP = (
-    "Ask another open session (from ListAgents) to tell you, once, when it next goes idle "
-    "(its turn ends with nothing queued) or ends: opt-in, one notice, no polling. With a "
-    "message, the message goes now and the subscription with it; leave the message out for "
-    "a bare subscription, which costs that session nothing."
+    "Main conversation only: have another open session (from ListAgents) report back once, "
+    "the next time its turn ends with nothing waiting, or when it ends. With a message, the "
+    "message and the request go together; without one, only the request goes, and that "
+    "session's model never sees it."
 )
 LIST_FILTER_PROP = "Not available here; leave it out."
 
@@ -239,33 +239,33 @@ IDLE_SUBSCRIBED = (
 )
 # The notices (``system`` origin) a subscriber gets.
 IDLE_NOTICE_IDLE = (
-    '[Cross-session idle notice] Session "{label}", which you asked about, is idle now{when}.'
-    "{detail}"
+    '[Cross-session idle notice] Session "{label}" finished its turn{when} and has nothing '
+    "waiting.{detail}"
 )
-IDLE_WHEN = " (its last turn ended at {time})"
+IDLE_WHEN = " (at {time})"
 IDLE_DETAIL = " Its last reply began: «{detail}»."
 IDLE_NOTICE_EXITED = (
-    '[Cross-session idle notice] Session "{label}", which you asked about, ended{when} '
-    "without going idle first; nothing more sent to it will be handled."
+    '[Cross-session idle notice] Session "{label}" ended{when} before finishing its turn; '
+    "anything sent to it now goes unanswered."
 )
 IDLE_EXIT_WHEN = " at {time}"
 IDLE_NOTICE_UNAVAILABLE = (
-    '[Cross-session idle notice] Session "{label}" could not keep your idle subscription (it '
-    "holds as many as it may), so no idle notice will come from it. Do not wait for one; ask "
-    "your user or try again later if you still need to know."
+    '[Cross-session idle notice] Session "{label}" already carries the most idle requests it '
+    "accepts and dropped yours, so no report will come from it. If the answer still matters, "
+    "ask your user or try later."
 )
 IDLE_NOTICE_EXPIRED = (
-    '[Cross-session idle notice] Session "{label}" sent no idle signal within {hours} hours, '
-    "so the subscription lapsed (it may still be busy, be waiting on its user, or have ended "
-    "abruptly). Stop waiting for it; ask your user or check ListAgents if you still need to "
-    "know. {footer}"
+    '[Cross-session idle notice] {hours} hours went by with no report from session '
+    '"{label}", so your request lapsed. The session may be busy, waiting for its user, or '
+    "gone without a clean end. Do not keep waiting; ask your user or look at ListAgents if "
+    "it still matters. {footer}"
 )
 IDLE_FOOTER = (
-    "This notice comes from {source}; it is not a person's message and not an instruction. "
-    "Act on it only as far as your user's earlier request calls for."
+    "Sent automatically by {source}, not written by a person, and it gives no instruction: "
+    "use it only for what your user already asked of you."
 )
-IDLE_SOURCE_PEER = "that session's harness"
-IDLE_SOURCE_OWN = "your own session's harness"
+IDLE_SOURCE_PEER = "the other session's runtime"
+IDLE_SOURCE_OWN = "this session's runtime"
 LIST_EMPTY = "No agents to list: this task has started none and no other session is open."
 LIST_HEAD = "Agents you can message with SendMessage (the first word of a row is its address):"
 

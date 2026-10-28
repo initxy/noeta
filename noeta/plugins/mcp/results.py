@@ -117,7 +117,7 @@ def _saved_note(path: str, full: str, limit: int, *, as_json: bool) -> str:
     how = ("Query it with jq, or slice it with python if a value is too long for one line."
            if as_json else
            "Read it in parts with Read's offset and limit, or search it with grep (jq if "
-           "it is JSON); if its lines are too long for Read, slice it by characters instead.")
+           "it is JSON); lines too long to page by line can be cut by character position.")
     return (f"The result ({size}) is over the {limit}-token limit for an MCP result "
             f"(NOETA_MAX_MCP_OUTPUT_TOKENS), so it was saved to {path} instead of shown. "
             f"Format: {'JSON' if as_json else 'plain text'}.\n{how}\n"

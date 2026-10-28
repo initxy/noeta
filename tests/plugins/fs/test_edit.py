@@ -248,7 +248,7 @@ async def test_edit_zero_match_fails_no_write(h: Harness, ws: Path) -> None:
     out = await h.call(EditTool(), file_path="a.py", old_string="missing", new_string="x")
     assert out.is_error
     # Claude Code echoes the string it looked for.
-    assert text_of(out) == "Edit: String to replace not found in file.\nString: missing"
+    assert text_of(out) == "Edit: old_string does not occur in the file.\nLooked for: missing"
     assert target.read_text() == "foo\n"
 
 
@@ -321,7 +321,7 @@ async def test_edit_replace_all_zero_match_still_fails(h: Harness, ws: Path) -> 
         EditTool(), file_path="a.py", old_string="missing", new_string="x", replace_all=True
     )
     assert out.is_error
-    assert "String to replace not found in file." in text_of(out)
+    assert "old_string does not occur in the file." in text_of(out)
 
 
 async def test_edit_deletes_with_empty_new_string(h: Harness, ws: Path) -> None:

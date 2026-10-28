@@ -98,7 +98,7 @@ async def test_a_message_goes_now_and_the_notice_follows_its_turn(store: SqliteS
     assert text == "\n".join([texts.SENT.format(to=peer), texts.IDLE_SUBSCRIBED.format(to=peer)])
     assert "please do the thing" in o.requests[1].messages[-1].text
     [notice] = notices(p.requests[2])
-    assert "is idle now (its last turn ended at " in notice and "«did the thing»" in notice
+    assert "finished its turn (at " in notice and "«did the thing»" in notice
 
 
 async def test_a_session_cancelled_before_going_idle_sends_an_exited_notice(
@@ -115,8 +115,7 @@ async def test_a_session_cancelled_before_going_idle_sends_an_exited_notice(
     await runtime(store, {"o": ScriptedProvider()}, other(), queues=("slow",)).run_until_idle()
     await rt.run_until_idle()
     [notice] = notices(p.requests[-1])
-    assert notice.startswith(f'[Cross-session idle notice] Session "{peer}", which you asked '
-                             "about, ended at ")
+    assert notice.startswith(f'[Cross-session idle notice] Session "{peer}" ended at ')
 
 
 async def test_refusals(store: SqliteStore) -> None:
@@ -172,6 +171,7 @@ async def test_a_subscription_nobody_answers_expires(store: SqliteStore,
     await client.create("main", "go")
     await rt.run_until_idle()
     [notice] = notices(p.requests[2])
-    assert "sent no idle signal within 12 hours" in notice
-    assert notice.startswith(f'[Cross-session idle notice] Session "{peer}" sent no idle')
+    assert "12 hours went by with no report" in notice
+    assert notice.startswith("[Cross-session idle notice] 12 hours went by with no report "
+                             f'from session "{peer}"')
     assert texts.IDLE_SOURCE_OWN in notice

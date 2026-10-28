@@ -167,8 +167,8 @@ class BackgroundBash(BashTool):
                                   ends_with_turn=self.ends_with_turn)
         if tracked and _CD_WORD.search(command):
             # Claude Code's note for a backgrounded ``cd``.
-            text += ("\n" + f"Session cwd remains {cwd}; directory changes made by "
-                     "the backgrounded command do not apply to subsequent commands.")
+            text += ("\n" + f"The shell's directory stays {cwd}: a cd inside a "
+                     "background command does not carry over to later commands.")
         return text_output(text, job_id=job.job_id)
 
     async def _execute(self, ctx: ToolContext, *, command: str, script: str,
@@ -268,8 +268,8 @@ class BackgroundBash(BashTool):
         text = moved_to_background(job.job_id, job.out_path, timeout_s, printed=size > 0,
                                    ends_with_turn=self.ends_with_turn)
         if tracked and _CD_WORD.search(command):
-            text += ("\n" + f"Session cwd remains {cwd}; directory changes made by "
-                     "the backgrounded command do not apply to subsequent commands.")
+            text += ("\n" + f"The shell's directory stays {cwd}: a cd inside a "
+                     "background command does not carry over to later commands.")
         return text_output(f"{so_far}\n{text}" if so_far else text, job_id=job.job_id,
                            timed_out_after_ms=timeout_s * 1000)
 

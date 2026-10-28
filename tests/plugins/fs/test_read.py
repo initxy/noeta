@@ -388,10 +388,10 @@ async def test_a_whole_read_past_the_token_cap_returns_the_first_page(
     assert notes == [
         f"[Partial view, cut to fit the read limit: {ws / 'wide.txt'} shows lines 1-{shown} "
         f"of 1701 (63750 tokens; the cap is 25000). For the next part call Read with "
-        f"offset={shown + 1} limit={shown}, or search the file for the section you need. To "
-        "have all of it anyway, call Read again with allow_large: true (only when you need "
-        "every part, or the user asked for the whole file). Do not answer from this part "
-        "alone if the answer could be further on.]"]
+        f"offset={shown + 1} limit={shown}, or search the file for the section you need. "
+        "allow_large: true returns more of it; use that only when every part matters or the "
+        "user wants the file entire. What you need may lie past this part; check before "
+        "relying on it alone.]"]
     assert h.fs.reads[str(ws / "wide.txt")].partial
     # A window asked for explicitly is still refused, as before.
     assert (await h.call(ReadTool(), file_path="wide.txt", limit=1000)).is_error
