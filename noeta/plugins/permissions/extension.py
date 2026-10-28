@@ -39,6 +39,7 @@ from noeta.core.extension import (
     Extension,
     Gate,
     Reminder,
+    Rewrite,
     TaskView,
 )
 from noeta.core.tool import Tool, ToolContext, ToolOutput
@@ -449,6 +450,11 @@ class Permissions(Extension):
     # ------------------------------------------------------------ the gate
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
+        updated = _updated_input(view, call)
+        if updated is not None:
+            # Approved with changed input (a headless client's
+            # ``updatedInput``): that input runs, and is gated again.
+            return Rewrite(input=updated)
         name = call.name
         if name in self.disallowed:
             return Deny(reason=p.DENIED_BY_POLICY.format(name=name))
@@ -1156,6 +1162,18 @@ def _keep(d: dict[str, Any]) -> dict[str, Any]:
     while len(d) > _KEEP:
         d.pop(next(iter(d)))
     return d
+
+
+def _updated_input(view: TaskView, call: ToolUse) -> dict[str, Any] | None:
+    """The input a person's approval of this call replaced its own with
+    (``Answer.data`` ``{"updated_input": {...}}``), if any."""
+    answer = view.state.answers.get(call.id)
+    if answer is None or answer.decision != "allow" or not isinstance(answer.data, dict):
+        return None
+    updated = answer.data.get("updated_input")
+    if not isinstance(updated, dict) or updated == call.input:
+        return None
+    return dict(updated)
 
 
 def _path(args: Mapping[str, Any]) -> str | None:

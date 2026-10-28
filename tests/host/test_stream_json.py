@@ -251,6 +251,30 @@ async def test_permission_prompts_go_to_the_client(tmp_path: Path) -> None:
         assert (await asyncio.wait_for(running, 10)) is not None
 
 
+async def test_an_approval_with_updated_input_runs_the_updated_call(tmp_path: Path) -> None:
+    from noeta.plugins.permissions import Permissions
+
+    echo = Echo()
+    provider = ScriptedProvider([reply("", ("Echo", {"x": 1})), reply("echo done")])
+    app = local(tmp_path, provider, Agent(name="main", model=MODEL, tools=[echo],
+                                          extensions=[Permissions(mode="default"),
+                                                      AskEcho()]))
+    c = Client()
+    c.answer = lambda request: {"behavior": "allow",
+                                "updatedInput": {**request["input"], "x": 42}}
+    async with app:
+        conv = StreamJson(app, HeadlessOptions(model=MODEL, cwd=str(tmp_path), ask_client=True),
+                          c.emit)
+        running = asyncio.create_task(drive(conv, lines=c.lines()))
+        c.say("echo please")
+        await c.until(lambda m: m["type"] == "result")
+        assert echo.runs == [{"x": 42}] and results(c)[0]["result"] == "echo done"
+        asks = [m for m in c.out if m["type"] == "control_request"]
+        assert len(asks) == 1  # the person's approval covers the changed call
+        await c.inbox.put(None)
+        await asyncio.wait_for(running, 10)
+
+
 async def test_without_a_prompt_host_asks_are_refused_and_the_turn_goes_on(
         tmp_path: Path) -> None:
     echo = Echo()
