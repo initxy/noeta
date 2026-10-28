@@ -4,7 +4,8 @@
     noeta -p "fix the test"    run one prompt in the current directory and print the answer;
                                Claude Code's headless flags and stream-json protocol
                                (``noeta.cli.headless``)
-    noeta acp                  serve the Agent Client Protocol on stdio (editors)
+    noeta acp                  serve the Agent Client Protocol on stdio (editors);
+                               ``--server URL`` drives a ``noeta serve`` server's tasks
     noeta worker               run tasks from the store until stopped (multi-machine)
     noeta serve                the client API over HTTP (and workers, unless --no-worker)
     noeta plugin ...           install (pinned), list and remove plugins
@@ -52,7 +53,10 @@ def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="noeta", description="Durable AI agents.")
     _common(ap)
     sub = ap.add_subparsers(dest="command")
-    sub.add_parser("acp", help="serve the Agent Client Protocol on stdio")
+    ac = sub.add_parser("acp", help="serve the Agent Client Protocol on stdio")
+    ac.add_argument("--server", metavar="URL",
+                    help="drive the tasks of a noeta server (token: NOETA_SERVER_TOKEN or "
+                         "~/.noeta/server-token) instead of running them here")
     w = sub.add_parser("worker", help="run tasks from the store until stopped")
     w.add_argument("--queue", action="append", default=None)
     w.add_argument("--concurrency", type=int, default=8)
@@ -215,6 +219,12 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(mcp_command.run(args, cwd))
     if args.command == "acp":
         from noeta.host.acp import EditorServers, serve_stdio
+        if args.server:
+            from noeta.cli.config import server_token
+            from noeta.host.remote import RemoteApp
+            asyncio.run(serve_stdio(RemoteApp(args.server, token=server_token()),
+                                    model=args.model or ""))
+            return
         s = _settings(args)
         servers = EditorServers()
         asyncio.run(serve_stdio(_app(s, cwd=cwd, plugins={"mcp": {"servers": servers}},

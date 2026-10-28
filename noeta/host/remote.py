@@ -13,10 +13,13 @@ import httpx
 import msgspec
 
 from noeta.core.client import ClientAPI, Input
+from noeta.core.commands import Typed
 from noeta.core.errors import NoetaError, UnknownTask
 from noeta.core.events import Recorded
+from noeta.core.extension import Command, CommandContext
 from noeta.core.store import Status, TaskRow
 from noeta.core.types import Delta
+from noeta.host.app import AppAPI
 
 #: Reconnects in a row (without an event in between) before ``watch`` gives up.
 WATCH_RETRIES = 5
@@ -152,12 +155,18 @@ def _is_client(client: RemoteClient) -> ClientAPI:
     return client  # mypy checks RemoteClient against ClientAPI here
 
 
-class RemoteApp:
-    """What a front end needs (``client``, ``deltas``, ``start``, ``stop``)
-    against a remote server; workers run wherever the server's store is."""
+def _is_app(app: RemoteApp) -> AppAPI:
+    return app  # and RemoteApp against AppAPI
 
-    def __init__(self, url: str, *, token: str | None = None) -> None:
-        self.client = RemoteClient(url, token=token)
+
+class RemoteApp:
+    """What a front end runs on (``noeta.host.app.AppAPI``) against a
+    remote server; workers run wherever the server's store is. Live output
+    arrives with the events of a task being watched."""
+
+    def __init__(self, url: str, *, token: str | None = None,
+                 transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self.client = RemoteClient(url, token=token, transport=transport)
         self._sinks: list[Callable[[str, Delta], None]] = []
         self.client.on_delta = self._fan_out
 
@@ -172,6 +181,30 @@ class RemoteApp:
     async def adopt(self, task_id: str) -> None:
         """Workers run on the server's side; nothing to do here."""
         return None
+
+    async def agent_names(self) -> list[str]:
+        return sorted(str(a["name"]) for a in await self.client._call("GET", "/agents"))
+
+    async def commands(self, agent: str, ctx: CommandContext) -> list[Command]:
+        params = {k: v for k, v in {"agent": agent, "task_id": ctx.task_id,
+                                    "cwd": ctx.cwd}.items() if v}
+        listed = await self.client._call("GET", "/commands", params=params)
+        return [Command(name=c["name"], description=c.get("description") or "",
+                        argument_hint=c.get("argument_hint") or "",
+                        local=bool(c.get("local"))) for c in listed]
+
+    async def run_command(self, agent: str, ctx: CommandContext, text: str) -> Typed | None:
+        got = await self.client._call("POST", "/commands/run", json={
+            "text": text, "agent": agent, "task_id": ctx.task_id, "cwd": ctx.cwd})
+        return None if got is None else Typed(str(got["text"]), bool(got.get("local")))
+
+    async def context(self, task_id: str) -> dict[str, Any] | None:
+        try:
+            return await self.client.context(task_id)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 501:
+                return None
+            raise
 
     async def start(self) -> None:
         return None

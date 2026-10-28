@@ -19,13 +19,14 @@ from typing import Any
 from noeta.core.agent import Agent
 from noeta.core.channel import Channel
 from noeta.core.client import Client, Input
+from noeta.core.commands import Typed
 from noeta.core.errors import NoetaError
+from noeta.core.extension import Command, CommandContext
 from noeta.core.provider import Provider
 from noeta.core.runner import Runtime
 from noeta.core.store import Store
 from noeta.core.types import Delta
-
-DeltaSink = Callable[[str, Delta], None]
+from noeta.host.app import AppAPI, DeltaSink, agent_commands, agent_run_command
 
 
 def default_spill_root() -> str:
@@ -113,6 +114,21 @@ class LocalApp:
         self._sinks.append(sink)
         return lambda: self._sinks.remove(sink) if sink in self._sinks else None
 
+    async def agent_names(self) -> list[str]:
+        return sorted(self.runtime.agents)
+
+    async def commands(self, agent: str, ctx: CommandContext) -> list[Command]:
+        return await agent_commands(self.runtime.agents, agent, ctx)
+
+    async def run_command(self, agent: str, ctx: CommandContext, text: str) -> Typed | None:
+        return await agent_run_command(self.runtime.agents, agent, ctx, text)
+
+    async def context(self, task_id: str) -> dict[str, Any] | None:
+        from noeta.host.usage import context_breakdown
+
+        preview = await self.runtime.preview(task_id)
+        return context_breakdown(preview) if preview is not None else None
+
     async def adopt(self, task_id: str) -> None:
         """Serve the tree of an existing task (one being resumed). Raises
         :class:`UnknownAgent` when the task's agent is not one this app runs:
@@ -152,3 +168,7 @@ class LocalApp:
 
     async def __aexit__(self, *exc: Any) -> None:
         await self.stop()
+
+
+def _is_app(app: LocalApp) -> AppAPI:
+    return app  # mypy checks LocalApp against AppAPI here

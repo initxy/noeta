@@ -25,7 +25,9 @@ events; when this process also runs workers, live model output streams too.
     GET  /tasks/{id}/context          what fills the next request (workers in this process)
     GET  /tasks/{id}/rewind           the person's prompts, each with the files changed since
     POST /tasks/{id}/rewind           {index, conversation?, files?} -> {task_id, prompt, files}
-    GET  /commands?agent=&task_id=    slash commands an agent's plugins offer
+    GET  /commands?agent=&task_id=&cwd=  slash commands an agent's plugins offer
+    POST /commands/run                {text, agent?, task_id?, cwd?} -> {text, local} or null:
+                                      a "/name args" run as the agent's command, nothing sent
     GET  /agents                      the agents this server runs
     GET  /models                      the model catalog and its aliases
     GET  /openapi.json                this API as an OpenAPI 3.1 document
@@ -66,16 +68,17 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from noeta.core import models
 from noeta.core.agent import Agent
 from noeta.core.client import Client, ClientAPI, Input
-from noeta.core.commands import list_commands, run_typed
+from noeta.core.commands import Typed
 from noeta.core.errors import UnknownTask
 from noeta.core.events import Recorded
-from noeta.core.extension import CommandContext
+from noeta.core.extension import Command, CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.store import Status, TaskRow
 from noeta.core.types import Delta, Message
+from noeta.host.app import AppAPI, agent_commands, agent_run_command
 from noeta.host.pending import card_title, choices, pending_tree
 from noeta.host.rewind import rewind, rewind_points
-from noeta.host.usage import context_breakdown, tree_usage
+from noeta.host.usage import tree_usage
 from noeta.toolkit.permission_modes import MODE_SIGNAL
 
 _enc = msgspec.json.Encoder()
@@ -95,13 +98,35 @@ def _input(value: Any) -> Any:
 @dataclasses.dataclass
 class _Front:
     """What a stream-json conversation runs on when this server has no
-    ``LocalApp`` of its own (API only): the client, and deltas if any."""
+    ``LocalApp`` of its own (API only): the client, the agents' commands,
+    and deltas if any."""
 
     client: Any
-    deltas: Any = None
-    runtime: Any = None
+    agents: Mapping[str, Agent]
+    live: Any = None
+
+    def deltas(self, sink: Any) -> Any:
+        return self.live(sink) if self.live is not None else (lambda: None)
 
     async def adopt(self, task_id: str) -> None:
+        return None
+
+    async def start(self) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+    async def agent_names(self) -> list[str]:
+        return sorted(self.agents)
+
+    async def commands(self, agent: str, ctx: CommandContext) -> list[Command]:
+        return await agent_commands(self.agents, agent, ctx)
+
+    async def run_command(self, agent: str, ctx: CommandContext, text: str) -> Typed | None:
+        return await agent_run_command(self.agents, agent, ctx, text)
+
+    async def context(self, task_id: str) -> dict[str, Any] | None:
         return None
 
 
@@ -244,8 +269,9 @@ def create_app(client: Client, *, token: str | None = None,
     agents = agents if agents is not None else getattr(getattr(app, "runtime", None),
                                                        "agents", None)
     guarded = _GuardedClient(client, allow_bypass=allow_bypass, cwd=cwd, roots=roots)
-    front = _GuardedFront(app if app is not None else _Front(client=client, deltas=deltas),
-                          guarded)
+    serving: AppAPI = app if app is not None else _Front(client=client, agents=agents or {},
+                                                          live=deltas)
+    front = _GuardedFront(serving, guarded)
     hosts = None if allowed_hosts is None else {h.lower() for h in allowed_hosts}
     allowed_origins = {o.rstrip("/").lower() for o in origins}
 
@@ -321,15 +347,13 @@ def create_app(client: Client, *, token: str | None = None,
         body = await request.json()
         task_id = request.path_params["task_id"]
         value = _input(body["input"])
-        if isinstance(value, str) and value.startswith("/") and agents:
+        if isinstance(value, str) and value.startswith("/"):
             row = await client.get(task_id)
-            agent = agents.get(row.agent)
-            if agent is not None:
-                typed = await run_typed(agent.all_extensions(),
-                                        CommandContext(cwd="", task_id=task_id), value)
-                if typed is not None and typed.local:
-                    return _json({"output": typed.text})
-                value = typed.text if typed is not None else value
+            typed = await serving.run_command(row.agent, CommandContext(cwd="", task_id=task_id),
+                                              value)
+            if typed is not None and typed.local:
+                return _json({"output": typed.text})
+            value = typed.text if typed is not None else value
         seq = await guarded.send(task_id, value,
                                  when=body.get("when", "next_turn"),
                                  dedupe_key=body.get("dedupe_key"))
@@ -368,15 +392,13 @@ def create_app(client: Client, *, token: str | None = None,
                                    for name, m in total.by_model.items()}})
 
     async def context(request: Request) -> Response:
-        runtime = getattr(app, "runtime", None)
-        if runtime is None:
-            return _json({"error": "no workers run in this server process"}, 501)
         task_id = request.path_params["task_id"]
         await client.get(task_id)
-        preview = await runtime.preview(task_id)
-        if preview is None:
-            return _json({"error": "this server does not run the task's agent"}, 501)
-        return _json(context_breakdown(preview))
+        parts = await serving.context(task_id)
+        if parts is None:
+            return _json({"error": "no worker in this server process runs the task's agent"},
+                         501)
+        return _json(parts)
 
     async def rewind_list(request: Request) -> Response:
         task_id = request.path_params["task_id"]
@@ -402,12 +424,20 @@ def create_app(client: Client, *, token: str | None = None,
         name = q.get("agent") or "main"
         if q.get("task_id"):
             name = (await client.get(q["task_id"])).agent
-        agent = (agents or {}).get(name)
-        if agent is None:
-            return _json([])
-        listed = await list_commands(agent, CommandContext(cwd="", task_id=q.get("task_id")))
+        listed = await serving.commands(name, CommandContext(cwd=q.get("cwd") or "",
+                                                             task_id=q.get("task_id")))
         return _json([{"name": c.name, "description": c.description,
                        "argument_hint": c.argument_hint, "local": c.local} for c in listed])
+
+    async def run_command(request: Request) -> Response:
+        body = await request.json()
+        task_id = body.get("task_id")
+        name = body.get("agent") or "main"
+        if task_id:
+            name = (await client.get(task_id)).agent
+        typed = await serving.run_command(
+            name, CommandContext(cwd=body.get("cwd") or "", task_id=task_id), str(body["text"]))
+        return _json(None if typed is None else {"text": typed.text, "local": typed.local})
 
     async def list_agents(request: Request) -> Response:
         return _json([{"name": a.name, "description": a.description, "model": a.model,
@@ -556,6 +586,7 @@ def create_app(client: Client, *, token: str | None = None,
         Route("/tasks/{task_id}/rewind", guard(rewind_list), methods=["GET"]),
         Route("/tasks/{task_id}/rewind", guard(rewind_post), methods=["POST"]),
         Route("/commands", guard(commands), methods=["GET"]),
+        Route("/commands/run", guard(run_command), methods=["POST"]),
         Route("/agents", guard(list_agents), methods=["GET"]),
         Route("/models", guard(list_models), methods=["GET"]),
         Route("/openapi.json", guard(openapi), methods=["GET"]),
@@ -648,7 +679,12 @@ OPENAPI: dict[str, Any] = {
                                              "conversation": {"type": "boolean"},
                                              "files": {"type": "boolean"}},
                               "required": ["index"]})},
-        "/commands": {"get": _op("Slash commands an agent offers", query=("agent", "task_id"))},
+        "/commands": {"get": _op("Slash commands an agent offers",
+                                 query=("agent", "task_id", "cwd"))},
+        "/commands/run": {"post": _op(
+            "Run a slash command without sending it: the message it stands for, or a local "
+            "command's output", body=_props("text", agent="string", task_id="string",
+                                             cwd="string"))},
         "/agents": {"get": _op("The agents this server runs")},
         "/models": {"get": _op("The model catalog")},
         "/openapi.json": {"get": _op("This document")},

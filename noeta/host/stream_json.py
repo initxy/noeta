@@ -38,7 +38,6 @@ from typing import Any
 
 from noeta.core import models, records
 from noeta.core.client import ClientAPI
-from noeta.core.commands import list_commands, run_typed
 from noeta.core.events import (
     ChildEnded,
     Compacted,
@@ -56,6 +55,7 @@ from noeta.core.events import (
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.types import Delta, Image, Message, Text, Thinking, ToolUse, Usage
+from noeta.host.app import AppAPI
 from noeta.host.pending import Pending, card_title, pending_tree
 from noeta.host.pending import follow_tree as _follow_tree
 from noeta.host.pending import tree_busy as _tree_busy
@@ -64,7 +64,6 @@ from noeta.host.rewind import diff_stats, file_plan, rewind, rewind_points
 from noeta.host.usage import (
     TreeUsage,
     add_events,
-    context_breakdown,
     cost_text,
     tree_usage,
 )
@@ -205,11 +204,10 @@ async def find_latest_task(client: ClientAPI, cwd: str, agent: str = "main") -> 
 
 class StreamJson:
     """One conversation over the headless protocol. ``app`` is what a front
-    end runs on (``LocalApp``: ``client``, ``deltas``, ``adopt``, and
-    ``runtime`` for the agents and the request preview); ``emit`` writes
-    one outgoing message."""
+    end runs on (``noeta.host.app.AppAPI``: in process or a remote server);
+    ``emit`` writes one outgoing message."""
 
-    def __init__(self, app: Any, options: HeadlessOptions, emit: Emit) -> None:
+    def __init__(self, app: AppAPI, options: HeadlessOptions, emit: Emit) -> None:
         self.app = app
         self.client = app.client
         self.options = options
@@ -256,14 +254,6 @@ class StreamJson:
 
     # ------------------------------------------------------------ lifecycle
 
-    @property
-    def runtime(self) -> Any:
-        return getattr(self.app, "runtime", None)
-
-    def _agent(self) -> Any:
-        rt = self.runtime
-        return rt.agents.get(self.options.agent) if rt is not None else None
-
     async def start(self, prompt: Message | None = None) -> str:
         """Create or resume the task (with ``prompt`` as its first
         message), announce it (``system``/``init``) and follow it."""
@@ -293,7 +283,7 @@ class StreamJson:
             self.task_id = await self.client.create(
                 o.agent, None, task_id=o.task_id, config=config, history_from=source)
         self._put(await self._init_message())
-        if self.options.include_partial_messages and hasattr(self.app, "deltas"):
+        if self.options.include_partial_messages:
             self._unsubscribe = self.app.deltas(self._on_delta)
         after = (await self.client.get(self.task_id)).last_seq
         self._follower = asyncio.create_task(self._follow(after))
@@ -316,15 +306,13 @@ class StreamJson:
     async def _init_message(self) -> dict[str, Any]:
         tools: list[str] = []
         model = self.options.model
-        rt = self.runtime
-        if rt is not None:
-            with contextlib.suppress(Exception):
-                request = await rt.preview(self.task_id)
-                if request is not None:
-                    tools = [t.name for t in request.tools]
-                    model = request.model or model
+        with contextlib.suppress(Exception):
+            parts = await self.app.context(self.task_id)
+            if parts is not None:
+                tools = list(parts.get("tools") or [])
+                model = parts.get("model") or model
         commands = await self._commands()
-        agents = sorted(getattr(rt, "agents", {}) or {})
+        agents = await self.app.agent_names()
         mode = MODE_ALIASES.get(self.options.permission_mode or "", self.options.permission_mode)
         return self._message(
             type="system", subtype="init", cwd=self.options.cwd, tools=tools, mcp_servers=[],
@@ -334,12 +322,10 @@ class StreamJson:
             skills=[], plugins=[])
 
     async def _commands(self) -> list[dict[str, Any]]:
-        agent = self._agent()
-        if agent is None:
-            return []
         ctx = CommandContext(cwd=self.options.cwd, task_id=self.task_id or None)
         return [{"name": c.name, "description": c.description,
-                 "argumentHint": c.argument_hint} for c in await list_commands(agent, ctx)]
+                 "argumentHint": c.argument_hint}
+                for c in await self.app.commands(self.options.agent, ctx)]
 
     # ------------------------------------------------------------ input
 
@@ -376,9 +362,8 @@ class StreamJson:
                        "uuid": prompt_uuid})  # the id rewind_files names it by
         text = message.text
         if text.startswith("/") and len(message.content) == 1:
-            agent = self._agent()
             ctx = CommandContext(cwd=self.options.cwd, task_id=self.task_id)
-            typed = await run_typed(agent.all_extensions(), ctx, text) if agent else None
+            typed = await self.app.run_command(self.options.agent, ctx, text)
             if typed is not None and typed.local:
                 self._put(self._message(type="system", subtype="local_command_output",
                                         content=typed.text))
@@ -482,11 +467,9 @@ class StreamJson:
         return {"text": cost_text(await tree_usage(self.client, self.task_id))}
 
     async def _on_get_context_usage(self, request: dict[str, Any]) -> dict[str, Any]:
-        rt = self.runtime
-        preview = await rt.preview(self.task_id) if rt is not None else None
-        if preview is None:
+        parts = await self.app.context(self.task_id)
+        if parts is None:
             raise ValueError("this host cannot preview the task's next request")
-        parts = context_breakdown(preview)
         window = max(int(parts["window"]), 1)
         return {"categories": [{"name": k, "tokens": v} for k, v in parts["categories"].items()],
                 "totalTokens": parts["total"], "maxTokens": window,

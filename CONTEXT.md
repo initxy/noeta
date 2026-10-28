@@ -50,14 +50,15 @@ import no plugin; they read what plugins publish (permissions' `modes`). SDK = a
 
 ## Ways in
 
-One API, the client (`noeta/core/client.py`): create, send, answer, cancel, read and watch
-events. HTTP (`noeta/host/http.py`, `noeta serve`) is that API on the wire; ACP
-(`noeta/host/acp.py`) translates the protocol editors speak into it, and
-`noeta/host/stream_json.py` Claude Code's headless protocol (`noeta -p`, the server's
-`/stream-json`). A new outside protocol is another translation in `host`, never a second API.
-A long-running listener for an outside conversation (a chat) is a `Channel`
-(`noeta/core/channel.py`, group `noeta.channels`), run by `noeta worker` / `noeta serve`; its
-posts are idempotent (`deliver`), and replies go out from inside the task (a plugin).
+One API, the client (`noeta/core/client.py`): create, send, answer, cancel, read, watch. HTTP
+(`noeta/host/http.py`, `noeta serve`) is it on the wire; ACP (`noeta/host/acp.py`) and
+`noeta/host/stream_json.py` (`noeta -p`, `/stream-json`) translate editors' and Claude Code's
+headless protocols into it. A front end runs on `AppAPI` (`noeta/host/app.py`: client, agents,
+commands, request preview), `LocalApp` in process or `RemoteApp` against a server (`--server`).
+A new outside protocol is another translation in `host`, never a second API. A long-running
+listener for an outside conversation (a chat) is a `Channel` (`noeta/core/channel.py`, group
+`noeta.channels`), run by `noeta worker` / `noeta serve`; its posts are idempotent (`deliver`),
+and replies go out from inside the task (a plugin).
 
 ## Where code goes
 
