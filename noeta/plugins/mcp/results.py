@@ -21,15 +21,15 @@ from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import Image, Text
+from noeta.toolkit.images import ImageTooLarge, fit_image
 from noeta.toolkit.tools import spill_path, truncate_bytes
 
-__all__ = ["IMAGE_MAX_BYTES", "INLINE_MAX_BYTES", "render_result"]
+__all__ = ["INLINE_MAX_BYTES", "render_result"]
 
 INLINE_MAX_BYTES = 1024 * 1024
 #: The inline share of an over-cap result: half the ceiling.
 _RESULT_INLINE_MAX_BYTES = INLINE_MAX_BYTES // 2
 _INLINE_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
-IMAGE_MAX_BYTES = 5 * 1024 * 1024
 
 
 def _decode_b64(data: object) -> bytes | None:
@@ -53,10 +53,11 @@ def _describe_block(block: object) -> tuple[str, Image | None]:
             return f"[image ({mime_s}): data is not valid base64, not shown]", None
         if mime not in _INLINE_IMAGE_TYPES:
             return f"[image ({mime_s}, {len(raw)} bytes): type not shown inline]", None
-        if len(raw) > IMAGE_MAX_BYTES:
-            return (f"[image ({mime_s}, {len(raw)} bytes): over the "
-                    f"{IMAGE_MAX_BYTES} byte inline limit, not shown]"), None
-        return "", Image(media_type=str(mime), data=raw)
+        try:
+            fitted = fit_image(raw, str(mime))
+        except ImageTooLarge as exc:
+            return f"[image ({mime_s}, {len(raw)} bytes): not shown: {exc}]", None
+        return fitted.note() or "", Image(media_type=fitted.media_type, data=fitted.data)
     if kind == "audio":
         raw = _decode_b64(block.get("data"))
         size = f", {len(raw)} bytes" if raw is not None else ""

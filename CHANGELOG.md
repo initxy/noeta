@@ -26,6 +26,14 @@ All notable changes to Noeta are documented here. The format is based on
   agent file without `one_shot: true` (every Claude Code agent file) used to leave its
   sub-agent waiting for input and its foreground parent waiting forever. The main agent
   stays conversational.
+- **An image that the API would refuse no longer enters the history.** `Read` compared raw bytes
+  with 5 MB, so a 4–5 MB image (over 5 MB once base64 encoded) failed every later request of
+  the task. Images from `Read` and MCP results now go through `noeta.toolkit.images.fit_image`
+  with Claude Code's limits: shrunk into 2000 x 2000 px and 3.75 MB raw with Pillow (the new
+  `images` extra), else passed only when already within 5 MB of base64 and 8000 px a side, and
+  refused with a reason otherwise. A scaled image's result says how coordinates map back.
+  `Read`'s image file ceiling is now 128 MB (`IMAGE_MAX_BYTES`); `noeta.plugins.mcp.results`
+  no longer exports `IMAGE_MAX_BYTES`.
 - `make example` ran a build uv had cached; it now installs the example plugin editable.
 - A second `registry.provider()` call for a family failed once that family's adapter module
   had been imported (the entry point named a package attribute the submodule rebound).

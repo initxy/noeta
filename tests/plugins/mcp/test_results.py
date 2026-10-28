@@ -11,6 +11,7 @@ from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.tool import ToolContext
 from noeta.core.types import Image
 from noeta.plugins.mcp.results import INLINE_MAX_BYTES, render_result
+from tests.images import png
 
 
 def ctx(tmp_path: Path, spill: bool = True) -> ToolContext:
@@ -20,22 +21,27 @@ def ctx(tmp_path: Path, spill: bool = True) -> ToolContext:
 
 
 async def test_blocks_are_rendered_in_order(tmp_path: Path) -> None:
-    png = base64.b64encode(b"png").decode()
+    real = base64.b64encode(png(2, 2)).decode()
+    raw = base64.b64encode(b"png").decode()
     result: dict[str, Any] = {"content": [
         {"type": "text", "text": "a"},
         {"type": "resource", "resource": {"uri": "x", "text": "embedded"}},
         {"type": "resource_link", "uri": "file:///y", "name": "y", "mimeType": "text/plain"},
-        {"type": "image", "mimeType": "image/png", "data": png},
-        {"type": "image", "mimeType": "image/tiff", "data": png},
+        {"type": "image", "mimeType": "image/png", "data": real},
+        {"type": "image", "mimeType": "image/tiff", "data": raw},
         {"type": "image", "mimeType": "image/png", "data": "!!"},
+        {"type": "image", "mimeType": "image/png", "data": raw},
     ], "structuredContent": {"k": 1}}
     out = await render_result(result, ctx(tmp_path))
     body = json.loads(out.content[0].text)  # type: ignore[union-attr]
+    assert body["text"].startswith(
+        "a\nembedded\n[resource link: y <file:///y> (text/plain)]\n"
+        "[image (image/tiff, 3 bytes): type not shown inline]\n"
+        "[image (image/png): data is not valid base64, not shown]\n"
+        "[image (image/png, 3 bytes): not shown: ")
     assert body == {
-        "text": "a\nembedded\n[resource link: y <file:///y> (text/plain)]\n"
-                "[image (image/tiff, 3 bytes): type not shown inline]\n"
-                "[image (image/png): data is not valid base64, not shown]",
-        "non_text_blocks": 5,
+        "text": body["text"],
+        "non_text_blocks": 6,
         "structured_content": {"k": 1},
     }
     assert [type(b) for b in out.content[1:]] == [Image]

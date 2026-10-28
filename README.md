@@ -9,7 +9,7 @@ holding no worker, and runs on one laptop or many machines without changing the 
 ## Use it
 
 ```bash
-uv tool install 'noeta[tui]'
+uv tool install 'noeta[tui,images]'    # images: shrink large images as Claude Code does
 export NOETA_MODEL=claude-sonnet-4-6 NOETA_API_KEY=sk-ant-...
 noeta                             # full-screen terminal UI
 noeta -p "fix the failing test"   # one prompt, print the answer

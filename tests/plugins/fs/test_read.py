@@ -5,12 +5,18 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 from pathlib import Path
 
+import pytest
+
 from noeta.backends.execenvs.local import LocalExecEnv
+from noeta.plugins.fs import read as read_module
 from noeta.plugins.fs.grep import GrepTool
-from noeta.plugins.fs.read import IMAGE_MAX_BYTES, ReadTool
+from noeta.plugins.fs.read import ReadTool
 from noeta.plugins.fs.state import FS
+from noeta.toolkit.images import image_dimensions
+from tests.images import png
 from tests.plugins.conftest import Harness, images_of, text_of
 
 
@@ -161,7 +167,7 @@ async def test_read_stray_invalid_bytes_decoded_leniently(h: Harness, ws: Path) 
     assert "(Non-utf8 bytes were replaced with U+FFFD.)" in text
 
 
-_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+_PNG = png(4, 3)
 
 
 async def test_read_image_surfaces_for_vision(h: Harness, ws: Path) -> None:
@@ -182,25 +188,45 @@ async def test_read_image_detected_by_content_not_extension(h: Harness, ws: Path
 
 
 async def test_read_other_image_kinds(h: Harness, ws: Path) -> None:
-    kinds = {
-        "a.jpg": (b"\xff\xd8\xff\xe0" + b"\x00" * 8, "image/jpeg"),
-        "a.gif": (b"GIF89a" + b"\x00" * 8, "image/gif"),
-        "a.webp": (b"RIFF\x00\x00\x00\x00WEBPVP8 ", "image/webp"),
-    }
-    for name, (body, media_type) in kinds.items():
-        (ws / name).write_bytes(body)
+    pil = pytest.importorskip("PIL.Image")
+    for name, fmt, media_type in (("a.jpg", "JPEG", "image/jpeg"), ("a.gif", "GIF", "image/gif"),
+                                  ("a.webp", "WEBP", "image/webp")):
+        pil.new("RGB", (5, 4)).save(ws / name, fmt)
         [img] = images_of(await h.call(ReadTool(), file_path=name))
         assert img.media_type == media_type
 
 
-async def test_read_image_over_limit_degrades(h: Harness, ws: Path) -> None:
-    (ws / "huge.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * (IMAGE_MAX_BYTES + 1))
+async def test_read_image_over_the_file_limit_degrades(h: Harness, ws: Path,
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(read_module, "IMAGE_MAX_BYTES", 100)
+    (ws / "huge.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 101)
     out = await h.call(ReadTool(), file_path="huge.png")
     assert out.is_error
     assert text_of(out) == (
-        f"Read: 'huge.png' is a PNG image of {IMAGE_MAX_BYTES + 9} bytes, over "
-        "the 5MB inline limit — crop/resize it smaller before reading"
+        "Read: 'huge.png' is a PNG image of 109 bytes, over the 0MB image read limit — "
+        "resize it or export a smaller copy, then read that"
     )
+
+
+async def test_read_shrinks_a_large_image_to_claude_codes_box(h: Harness, ws: Path) -> None:
+    pytest.importorskip("PIL")
+    (ws / "big.png").write_bytes(png(4000, 1000))
+    out = await h.call(ReadTool(), file_path="big.png")
+    [img] = images_of(out)
+    assert image_dimensions(img.data) == (2000, 500)
+    assert "scaled from 4000x1000 to 2000x500 px; multiply coordinates by 2.00" in text_of(out)
+
+
+async def test_an_image_that_cannot_be_sent_never_reaches_the_history(
+        h: Harness, ws: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "PIL", None)  # no image library
+    (ws / "wide.png").write_bytes(png(9000, 10))
+    out = await h.call(ReadTool(), file_path="wide.png")
+    assert out.is_error and not images_of(out)
+    assert "9000x10 px" in text_of(out) and "noeta[images]" in text_of(out)
+    (ws / "corrupt.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+    out = await h.call(ReadTool(), file_path="corrupt.png")
+    assert out.is_error and not images_of(out)
 
 
 async def test_read_fake_pdf_reports_failure(h: Harness, ws: Path) -> None:
