@@ -190,7 +190,7 @@ class Memory(Extension):
         """The repository's main checkout when the working directory is in
         one (so every worktree shares one memory), else the directory."""
         env = task_env(view.env, view.state.config)
-        cwd = str(view.state.config.get("cwd") or env.cwd)
+        cwd = view.cwd or env.cwd
         try:
             out = await env.run(["git", "rev-parse", "--path-format=absolute",
                                  "--git-common-dir"], cwd=cwd, timeout=5, output_cap=4096)

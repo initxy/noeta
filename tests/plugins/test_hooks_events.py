@@ -127,6 +127,15 @@ class AskAll(Extension):
         return Ask(prompt="may I?", firm=self.firm)
 
 
+async def test_a_task_without_a_configured_cwd_runs_its_hooks_in_the_env_cwd(
+        tmp_path: Path) -> None:
+    s = Setup(tmp_path, {"PreToolUse": hook("pre", "Read")}, [reply("", READ_A), reply("done")])
+    s.tid = await s.client.create("a", "go")  # no config cwd: the exec env's is the task's
+    await s.runtime().run_until_idle()
+    [payload] = s.runner.payloads("pre")
+    assert payload["cwd"] == str(s.work)
+
+
 # ---------------------------------------------------------------- PreToolUse
 
 

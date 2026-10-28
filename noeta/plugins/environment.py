@@ -336,7 +336,7 @@ class Environment(Extension):
         if view.ext_state(self.name):
             return
         env = task_env(view.env, view.state.config)
-        cwd = str(view.state.config.get("cwd") or env.cwd)
+        cwd = view.cwd or env.cwd
         model = self._model(view)
         text = await capture_environment(env, cwd, model if self.model_name else "")
         # Held for the first request's system turn, after the prompt.

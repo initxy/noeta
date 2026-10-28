@@ -221,7 +221,7 @@ class Hooks(Extension):
 
     @staticmethod
     def _cwd(view: TaskView) -> str | None:
-        return str(view.state.config.get("cwd") or "") or None
+        return view.cwd or None
 
     def _payload(self, event: str, view: TaskView, payload: Mapping[str, Any]) -> dict[str, Any]:
         """Claude Code's common input fields, then the event's own. The root

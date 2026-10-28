@@ -412,11 +412,7 @@ class Permissions(Extension):
         return (*self.allow_rules, *remembered)
 
     def _root(self, view: TaskView) -> str:
-        cwd = view.state.config.get("cwd")
-        if isinstance(cwd, str) and cwd:
-            return cwd
-        env_cwd = getattr(view.env, "cwd", None)
-        return env_cwd if isinstance(env_cwd, str) and env_cwd else os.getcwd()
+        return view.cwd or os.getcwd()
 
     def _scope(self, view: TaskView) -> sc.Scope:
         root = posixpath.normpath(self._root(view))
