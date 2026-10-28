@@ -128,7 +128,8 @@ async def test_acp_announces_and_expands(tmp_path: Path) -> None:
     await agent._announce_commands(session.session_id)
     [update, *_] = [u for u in editor.updates
                     if u.session_update == "available_commands_update"]
-    assert [c.name for c in update.available_commands] == ["greet", "shout"]
+    assert [c.name for c in update.available_commands] == [
+        "greet", "shout", "model", "context", "cost", "rewind"]
     assert update.available_commands[1].input.root.hint == "<word>"
 
     def block(text: str) -> list[Any]:
@@ -141,6 +142,16 @@ async def test_acp_announces_and_expands(tmp_path: Path) -> None:
     assert resp.stop_reason == "end_turn" and len(provider.requests) == 1
     assert any(getattr(getattr(u, "content", None), "text", "") == "/shout failed: no voice"
                for u in editor.updates)
+
+    def said() -> str:
+        return getattr(getattr(editor.updates[-1], "content", None), "text", "")
+
+    for typed, expected in [("/cost", "Total cost"), ("/context", "Free space"),
+                            ("/model opus", "model set to claude-opus-5-5"),
+                            ("/rewind", "1. HI!"), ("/rewind 1 code", "nothing to restore")]:
+        resp = await agent.prompt(session.session_id, block(typed))
+        assert resp.stop_reason == "end_turn" and expected in said(), (typed, said())
+    assert len(provider.requests) == 1
     await app.stop()
 
 
