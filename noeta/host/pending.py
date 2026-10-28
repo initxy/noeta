@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -22,6 +22,7 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.types import ToolUse
+from noeta.host.feed import tool_title
 
 if TYPE_CHECKING:
     from noeta.core.client import ClientAPI
@@ -68,13 +69,44 @@ def choices(detail: dict[str, Any]) -> list[dict[str, str]]:
     return out
 
 
+def _call_title(item: Pending) -> str:
+    return tool_title(ToolUse(id=item.request_id, name=item.tool, input=item.input)) \
+        if item.tool else ""
+
+
 def card_title(item: Pending, root_task_id: str = "") -> str:
-    """What the card is about (``Bash command``), and which sub-agent asks
-    (``· from the Explore agent``) when it is not the root."""
-    title = str(item.detail.get("title") or item.tool or "Tool call")
+    """What the card is about: the gate's title (``Bash command``) or the
+    call itself (``Read src/app.py``), and which sub-agent asks (``· from
+    the Explore agent``) when it is not the root."""
+    title = str(item.detail.get("title") or "") or _call_title(item) or "Tool call"
     if root_task_id and item.task_id != root_task_id and item.agent:
         title += f" · from the {item.agent} agent"
     return title
+
+
+def card_prompt(item: Pending) -> str:
+    """The card's body: the gate's prompt, under the call itself when the
+    title names something else."""
+    call = _call_title(item)
+    if call and card_title(item) != call:
+        return f"{call}\n{item.prompt}".strip()
+    return item.prompt
+
+
+def approvals(waiting: Waiting, uses: Mapping[str, ToolUse], task_id: str = "",
+              agent: str = "") -> list[Pending]:
+    """The approvals an approval ``Waiting`` asks for, with the calls they
+    are about (``uses`` by call id; a missing one leaves the tool empty)."""
+    if waiting.on != "approval":
+        return []
+    out = []
+    for rid in waiting.ids:
+        use = uses.get(rid)
+        d = dict(waiting.detail.get(rid) or {})
+        out.append(Pending(task_id=task_id, request_id=rid, kind="approval",
+                           tool=use.name if use else "", input=dict(use.input) if use else {},
+                           prompt=str(d.get("prompt") or ""), detail=d, agent=agent))
+    return out
 
 
 async def answer_choice(client: ClientAPI, task_id: str, request_id: str, choice: str,
@@ -133,21 +165,16 @@ def pending(events: Sequence[Recorded], task_id: str = "") -> list[Pending]:
             done.add(ev.result.call_id)
     if waiting is None or waiting.on not in ("approval", "question"):
         return []
+    if waiting.on == "approval":
+        return [p for p in approvals(waiting, uses, task_id, agent) if p.request_id not in done]
     out: list[Pending] = []
     for rid in waiting.ids:
-        if rid in done or (waiting.on == "question" and rid not in parked):
+        if rid in done or rid not in parked:
             continue  # a question wait also lists the children of other parked calls
         use = uses.get(rid)
-        tool = use.name if use else ""
-        args = dict(use.input) if use else {}
-        if waiting.on == "approval":
-            d = dict(waiting.detail.get(rid) or {})
-            out.append(Pending(task_id=task_id, request_id=rid, kind="approval", tool=tool,
-                               input=args, prompt=str(d.get("prompt") or ""), detail=d,
-                               agent=agent))
-        else:
-            out.append(Pending(task_id=task_id, request_id=rid, kind="question", tool=tool,
-                               input=args, detail=parked.get(rid, {}), agent=agent))
+        out.append(Pending(task_id=task_id, request_id=rid, kind="question",
+                           tool=use.name if use else "", input=dict(use.input) if use else {},
+                           detail=parked.get(rid, {}), agent=agent))
     return out
 
 

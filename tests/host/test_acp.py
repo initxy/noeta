@@ -44,6 +44,7 @@ class FakeEditor:
     def __init__(self, choice: str = "allow") -> None:
         self.updates: list[Any] = []
         self.asked: list[str] = []
+        self.bodies: list[list[str]] = []
         self.options: list[list[str]] = []
         self.choice = choice
 
@@ -53,6 +54,7 @@ class FakeEditor:
     async def request_permission(self, session_id: str, tool_call: Any, options: Any,
                                  **kw: Any) -> Any:
         self.asked.append(tool_call.title)
+        self.bodies.append([c.content.text for c in tool_call.content or ()])
         self.options.append([o.name for o in options])
         return schema.RequestPermissionResponse(
             outcome=schema.AllowedOutcome(outcome="selected", option_id=self.choice))
@@ -76,7 +78,8 @@ async def test_prompt_streams_tools_and_asks(tmp_path: Path) -> None:
     resp = await acp_agent.prompt(session.session_id, [schema.TextContentBlock(type="text",
                                                                                text="read a.py")])
     assert resp.stop_reason == "end_turn"
-    assert editor.asked == ["run Read?"]
+    # The card names the call; the gate's prompt is its body.
+    assert editor.asked == ["Read a.py"] and editor.bodies == [["run Read?"]]
     k = kinds(editor.updates)
     assert k.index("tool_call") < k.index("tool_call_update")
     assert "agent_message_chunk" in k

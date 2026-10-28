@@ -27,7 +27,6 @@ from noeta.cli.tui.widgets import (
     QuestionCard,
     ToolCall,
     UserMessage,
-    tool_title,
 )
 from noeta.core import models
 from noeta.core.commands import list_commands, run_typed
@@ -52,6 +51,8 @@ from noeta.host.local import LocalApp, UnknownAgent
 from noeta.host.pending import (
     Pending,
     answer_choice,
+    approvals,
+    card_prompt,
     card_title,
     choices,
     follow_tree,
@@ -407,7 +408,7 @@ class NoetaApp(App[None]):
                     await self.decide(call_id, choice, task_id=task_id)
 
                 await transcript.mount(ApprovalCard(
-                    p.request_id, card_title(p, self.task_id), p.prompt, decide,
+                    p.request_id, card_title(p, self.task_id), card_prompt(p), decide,
                     choices(p.detail)))
             else:
                 self.waiting_for = f"{who} waits for your answer"
@@ -559,18 +560,13 @@ class NoetaApp(App[None]):
                                 "question": "waiting for your answer",
                                 "children": "waiting for subtasks"}.get(ev.on, "")
             if ev.on == "approval":
-                for call_id in ev.ids:
-                    asked = self.calls.get(call_id)
-                    if asked is not None:
-                        asked.set_state("waiting")
-                    detail = ev.detail.get(call_id) or {}
-                    title = str(detail.get("title") or "") or (
-                        tool_title(asked.call) if asked is not None else call_id)
-                    prompt = str(detail.get("prompt") or "")
-                    if asked is not None and title != tool_title(asked.call):
-                        prompt = f"{tool_title(asked.call)}\n{prompt}".strip()
-                    await transcript.mount(ApprovalCard(call_id, title, prompt, self.decide,
-                                                        choices(detail)))
+                uses = {i: block.call for i, block in self.calls.items()}
+                for p in approvals(ev, uses, self.task_id):
+                    if p.request_id in self.calls:
+                        self.calls[p.request_id].set_state("waiting")
+                    await transcript.mount(ApprovalCard(
+                        p.request_id, card_title(p, self.task_id), card_prompt(p),
+                        self.decide, choices(p.detail)))
             elif ev.on == "question":
                 questions = [k for k, v in ev.detail.items()
                              if isinstance(v, dict) and v.get("on") == "question"]

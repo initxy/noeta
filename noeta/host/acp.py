@@ -40,9 +40,11 @@ from noeta.host.local import LocalApp, UnknownAgent
 from noeta.host.pending import (
     Pending,
     answer_choice,
+    card_prompt,
     card_title,
     choices,
     follow_tree,
+    pending,
     pending_tree,
 )
 from noeta.host.questions import next_question, typed_answer
@@ -561,24 +563,26 @@ class NoetaAcpAgent:
             self._asked.add((p.task_id, p.request_id))
             await out.join()
             await self._ask_one(session_id, p.task_id, p.request_id,
-                                card_title(p, session_id), choices(p.detail))
+                                card_title(p, session_id), choices(p.detail), card_prompt(p))
         return False
 
     async def _ask_permissions(self, session_id: str, waiting: Waiting) -> None:
-        for call_id in waiting.ids:
-            detail = waiting.detail.get(call_id) or {}
-            title = str(detail.get("title") or detail.get("prompt") or call_id)
-            await self._ask_one(session_id, session_id, call_id, title, choices(detail))
+        for p in pending(await self.app.client.events(session_id), session_id):
+            if p.kind == "approval" and p.request_id in waiting.ids:
+                await self._ask_one(session_id, session_id, p.request_id,
+                                    card_title(p, session_id), choices(p.detail),
+                                    card_prompt(p))
 
     async def _ask_one(self, session_id: str, task_id: str, call_id: str, title: str,
-                       options: list[dict[str, str]]) -> None:
+                       options: list[dict[str, str]], prompt: str = "") -> None:
         kinds = {"allow": "allow_once", "always": "allow_always", "deny": "reject_once"}
+        body: list[Any] | None = [acp.tool_content(acp.text_block(prompt))] if prompt else None
         resp = await self.conn.request_permission(
             session_id=session_id, options=[
                 schema.PermissionOption(option_id=o["id"], name=o["label"],
                                         kind=kinds.get(o["id"], "allow_once"))  # type: ignore[arg-type]
                 for o in options],
-            tool_call=schema.ToolCallUpdate(tool_call_id=call_id, title=title))
+            tool_call=schema.ToolCallUpdate(tool_call_id=call_id, title=title, content=body))
         chosen = getattr(resp.outcome, "option_id", None)
         known = {o["id"] for o in options}
         await answer_choice(self.app.client, task_id, call_id,
