@@ -140,3 +140,13 @@ def test_the_trust_and_plugins_commands(home: Path, tmp_path: Path,
     out = capsys.readouterr().out
     assert "web\tpackage noeta" in out
     assert f"waver\t{project.resolve() / '.noeta' / 'plugins' / 'waver.py'}" in out
+
+
+def test_the_example_plugin_works_as_a_plain_directory(home: Path) -> None:
+    import shutil
+
+    example = Path(__file__).parents[2] / "examples" / "hello-plugin" / "src" / "noeta_hello"
+    shutil.copytree(example, home / "plugins" / "hello",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    assert registry.load_plugin_files([home / "plugins"]) == ["hello"]
+    assert registry.load(registry.PLUGINS, "hello")(greeting="Yo").greeting == "Yo"

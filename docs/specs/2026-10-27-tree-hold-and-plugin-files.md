@@ -76,7 +76,7 @@ ask the person a question or tell them something, and front ends depend on no pl
 - [x] Plugin files: registry sources, `trusted.json`, `noeta trust`, `noeta plugins`
 - [x] `noeta/core/questions.py`, `ask_user` on it, `TaskView.notify`, MCP servers as data,
       the apps ↛ plugins contract
-- [ ] The example plugin asks a question and sends a notice
+- [x] The example plugin asks a question and sends a notice
 - [ ] README / CONTEXT / CHANGELOG
 
 ## Acceptance criteria
@@ -110,3 +110,6 @@ ask the person a question or tell them something, and front ends depend on no pl
   reproduce it; its wait is now split so the next failure says which side stopped.
 - 2026-10-27: step 4 done; `make check` 1366 passed, the new import contract kept. `resume`
   has no access to the parked detail, so `read_answer` takes the plugin's own `ask(...)` result.
+- 2026-10-27: step 5 done; `make check` 1367 + the example's 4. Found on the way: `make example`
+  ran a build uv had cached, so edits to the example were not what its tests ran; it now installs
+  the example editable (`--with-editable`). The example also loads as a plain plugin directory.
