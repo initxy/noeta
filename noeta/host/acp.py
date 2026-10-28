@@ -38,7 +38,7 @@ from noeta.core.questions import next_question, typed_answer
 from noeta.core.types import Delta, Image, Message, Text, ToolUse
 from noeta.host.local import LocalApp, UnknownAgent
 
-log = logging.getLogger("noeta.apps.acp")
+log = logging.getLogger("noeta.host.acp")
 
 #: Tool name → ACP tool kind (what an editor shows next to the call).
 TOOL_KINDS: dict[str, str] = {

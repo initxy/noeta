@@ -15,10 +15,10 @@ import pytest
 
 pytest.importorskip("textual")
 
-import noeta.apps.cli as cli
-from noeta.apps.tui.app import NoetaApp
-from noeta.apps.tui.widgets import ApprovalCard, QuestionCard, UserMessage
+import noeta.cli.main as cli
 from noeta.backends.stores.sqlite import SqliteStore
+from noeta.cli.tui.app import NoetaApp
+from noeta.cli.tui.widgets import ApprovalCard, QuestionCard, UserMessage
 from noeta.core.agent import Agent
 from noeta.core.errors import Transient
 from noeta.core.events import Answer, ToolFinished

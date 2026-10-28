@@ -18,10 +18,10 @@ pytest.importorskip("starlette")
 import httpx
 from acp import schema
 
-import noeta.apps.cli as cli
-from noeta.apps.tui.app import NoetaApp
-from noeta.apps.tui.widgets import AssistantMessage, QuestionCard
+import noeta.cli.main as cli
 from noeta.backends.stores.sqlite import SqliteStore
+from noeta.cli.tui.app import NoetaApp
+from noeta.cli.tui.widgets import AssistantMessage, QuestionCard
 from noeta.core.agent import Agent
 from noeta.core.errors import NoetaError, Transient
 from noeta.core.events import (
@@ -33,9 +33,9 @@ from noeta.core.events import (
 )
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.core.types import Delta, ModelRequest, ModelResponse
+from noeta.host.http import create_app
 from noeta.host.local import LocalApp
 from noeta.host.remote import RemoteClient
-from noeta.host.server import create_app
 from noeta.testing import ScriptedProvider, reply
 
 

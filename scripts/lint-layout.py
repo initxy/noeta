@@ -27,7 +27,7 @@ from pathlib import Path
 
 TOP_LEVEL = {
     "__init__.py", "py.typed",
-    "core", "toolkit", "plugins", "backends", "host", "agents", "apps", "testing",
+    "core", "toolkit", "plugins", "backends", "host", "agents", "cli", "testing",
 }
 
 #: Kernel modules no other kernel module imports, and why they belong to it.

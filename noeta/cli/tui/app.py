@@ -16,7 +16,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Markdown, Static
 from textual.widgets.markdown import MarkdownStream
 
-from noeta.apps.tui.widgets import (
+from noeta.cli.tui.widgets import (
     ApprovalCard,
     AssistantMessage,
     Notice,
@@ -48,7 +48,7 @@ from noeta.core.questions import next_question, typed_answer
 from noeta.core.types import Delta, Usage
 from noeta.host.local import LocalApp, UnknownAgent
 
-log = logging.getLogger("noeta.apps.tui")
+log = logging.getLogger("noeta.cli.tui")
 
 HELP = """\
 **Commands**  `/new` new task · `/resume` pick a task · `/stop` stop the turn · `/exit` quit

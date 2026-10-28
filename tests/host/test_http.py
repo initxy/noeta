@@ -22,9 +22,9 @@ from noeta.core.events import ModelReplied, ToolFinished, Waiting  # noqa: E402
 from noeta.core.extension import Ask, Extension, TaskView  # noqa: E402
 from noeta.core.tool import ToolContext, ToolOutput, text_output  # noqa: E402
 from noeta.core.types import Delta, ToolUse  # noqa: E402
+from noeta.host.http import create_app  # noqa: E402
 from noeta.host.local import LocalApp  # noqa: E402
 from noeta.host.remote import RemoteClient  # noqa: E402
-from noeta.host.server import create_app  # noqa: E402
 from noeta.testing import ScriptedProvider, reply  # noqa: E402
 
 

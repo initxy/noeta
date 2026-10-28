@@ -18,7 +18,7 @@ tui = ["textual>=8.0"]
 acp = ["agent-client-protocol>=0.12,<0.13"]
 
 [project.scripts]
-noeta = "noeta.apps.cli:main"
+noeta = "noeta.cli.main:main"
 
 # Built-in plugins and backends register exactly as a third-party package
 # would (noeta/core/registry.py).
@@ -110,10 +110,10 @@ root_package = "noeta"
 
 # The layers, top to bottom; a module may import only from layers below it.
 [[tool.importlinter.contracts]]
-name = "layers: apps > agents > plugins | backends | host > toolkit > core"
+name = "layers: cli > agents > plugins | backends | host > toolkit > core"
 type = "layers"
 layers = [
-    "noeta.apps",
+    "noeta.cli",
     "noeta.agents",
     "noeta.plugins | noeta.backends | noeta.host",
     "noeta.toolkit",
@@ -126,12 +126,12 @@ name = "plugins do not import each other"
 type = "independence"
 modules = ["noeta.plugins.*"]
 
-# Front ends reach plugins only through the kernel (settings by name, the
+# Front ends and protocol adapters reach plugins only through the kernel (settings by name, the
 # question form, commands), so any plugin can be removed or replaced.
 [[tool.importlinter.contracts]]
 name = "front ends do not import plugins"
 type = "forbidden"
-source_modules = ["noeta.apps"]
+source_modules = ["noeta.cli", "noeta.host"]
 forbidden_modules = ["noeta.plugins"]
 
 [[tool.importlinter.contracts]]

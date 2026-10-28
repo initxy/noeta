@@ -149,3 +149,7 @@ pieces an embedder needs (`local.py`, `remote.py`, `server.py`); `local.from_set
   skipped, `make example` green; no old path left outside CHANGELOG; an embedding script
   (`default_agents`, `LocalApp`, `RemoteClient`) loads no `noeta.apps` module; a store written
   by `main`'s code reads and resumes with the new code.
+- 2026-10-28: follow-up on owner review ("why two protocols", "is apps just the TUI"): ACP
+  is a translation of the client API like HTTP, so `apps/acp.py` -> `host/acp.py` and
+  `host/server.py` -> `host/http.py`; what is left of `apps` is the `noeta` command and its
+  TUI, renamed `noeta/cli` (`cli.py` -> `main.py`). CONTEXT.md gains "Ways in".

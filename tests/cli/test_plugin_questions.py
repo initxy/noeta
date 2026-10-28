@@ -12,17 +12,17 @@ from typing import Any
 
 import pytest
 
-from noeta.apps.acp import EditorServers
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.events import ToolFinished
 from noeta.core.extension import Extension, TaskView
 from noeta.core.questions import AnswerValidationError, answer_question, ask, read_answer
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
+from noeta.host.acp import EditorServers
 from noeta.host.local import LocalApp
 from noeta.plugins.mcp import Mcp, McpPool
 from noeta.testing import ScriptedProvider, reply
-from tests.apps.test_acp_review import acp_session, text_block
+from tests.host.test_acp_review import acp_session, text_block
 
 FAKE_MCP = str(Path(__file__).parents[1] / "plugins" / "mcp" / "fake_server.py")
 
@@ -98,8 +98,8 @@ def test_read_answer() -> None:
 
 async def test_the_tui_asks_for_a_plugin(tmp_path: Path) -> None:
     pytest.importorskip("textual")
-    from noeta.apps.tui.app import NoetaApp
-    from tests.apps.test_frontends_rereview import settle
+    from noeta.cli.tui.app import NoetaApp
+    from tests.cli.test_frontends_rereview import settle
 
     provider = ScriptedProvider([reply("", ("Deploy", {})), reply("done")])
     app = NoetaApp(_local(tmp_path, provider), agent="main", model="m", cwd=str(tmp_path))

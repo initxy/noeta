@@ -20,8 +20,10 @@ All notable changes to Noeta are documented here. The format is based on
   `context` (code plugins share; the kernel never used it); `noeta.core.store.base` ->
   `noeta.core.store`; `noeta.core.store.sqlite` -> `noeta.backends.stores.sqlite`;
   `noeta.backends.postgres` -> `noeta.backends.stores.postgres`; `noeta.backends.execenv` ->
-  `noeta.backends.execenvs`; `noeta.apps.local` / `remote` / `server` -> `noeta.host.*`, with
-  `from_settings` in `noeta.apps.config`; `noeta.presets` -> `noeta.agents` (agent files in
+  `noeta.backends.execenvs`; `noeta.apps.local` / `remote` -> `noeta.host.*`,
+  `noeta.apps.server` -> `noeta.host.http`, `noeta.apps.acp` -> `noeta.host.acp` (the ways in
+  sit together); `noeta.apps` -> `noeta.cli` (the command is `noeta.cli.main`), with
+  `from_settings` in `noeta.cli.config`; `noeta.presets` -> `noeta.agents` (agent files in
   `noeta/agents/files/`); `noeta.core.agent_files` -> `noeta.agents.agent_files`. `noeta`
   exports `LocalApp` and `RemoteClient`. The store contract tests ship as
   `noeta.testing.store_contract`. `scripts/lint-layout.py` (in `make check`) keeps code where
