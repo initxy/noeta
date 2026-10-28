@@ -50,10 +50,11 @@ from noeta.plugins.permissions import plan as pl
 from noeta.plugins.permissions import policy as p
 from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
+from noeta.plugins.permissions.rule_specs import rule_spec_from_command, rule_spec_text
 from noeta.toolkit import permission_rules as r
 from noeta.toolkit.permission_modes import MODE_SIGNAL as MODE_SIGNAL
 from noeta.toolkit.sandbox import leaves_sandbox, runs_sandboxed, sandbox_of
-from noeta.toolkit.shell import parse_argv, rule_spec_from_command, rule_spec_text
+from noeta.toolkit.shell import parse_argv
 
 log = logging.getLogger("noeta.permissions")
 

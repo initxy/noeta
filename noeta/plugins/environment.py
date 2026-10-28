@@ -33,7 +33,7 @@ from noeta.core.types import Message, ToolResult, system_message, user
 from noeta.toolkit.commands import is_command_message
 from noeta.toolkit.context import task_env
 from noeta.toolkit.local_env import is_local
-from noeta.toolkit.shell import _harden_git
+from noeta.toolkit.shell import harden_git
 
 #: Git status beyond this is cut at a line boundary and marked.
 GIT_STATUS_MAX_BYTES = 2048
@@ -64,7 +64,7 @@ ORDER_DATE = 90
 async def _git(env: ExecEnv, cwd: str, *args: str) -> str:
     argv = ["git", *args]
     if args and args[0] == "status":
-        argv = _harden_git(argv)
+        argv = harden_git(argv)
     argv = [argv[0], *_GIT_FLAGS, *argv[1:]]
     try:
         out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20)

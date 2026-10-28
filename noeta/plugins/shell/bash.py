@@ -29,6 +29,7 @@ from typing import Any
 
 from noeta.core.execenv import RunResult
 from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.plugins.shell.hardening import DEFAULT_SHELL_RULES, AllowRule, hardened_argv
 from noeta.toolkit.sandbox import (
     CommandSandbox,
     PreparedCommand,
@@ -36,13 +37,7 @@ from noeta.toolkit.sandbox import (
     sandbox_of,
     violations_block,
 )
-from noeta.toolkit.shell import (
-    DEFAULT_SHELL_RULES,
-    AllowRule,
-    long_leading_sleep,
-    matching_rule,
-    parse_argv,
-)
+from noeta.toolkit.shell import long_leading_sleep
 from noeta.toolkit.shell_syntax import parse
 from noeta.toolkit.tools import SCHEMA_DIALECT as SCHEMA_DIALECT
 from noeta.toolkit.tools import (
@@ -440,11 +435,10 @@ class BashTool:
         # A command that only reads with git runs under the hardening git
         # function instead, wherever it reads.
         prelude = git_prelude(command, guard_root(ws, ctx)) if self.hardening_rules else ""
-        rule = None if prelude else matching_rule(command, self.hardening_rules)
-        argv = parse_argv(command) if rule is not None and rule.harden is not None else None
-        track = argv is None
-        if rule is not None and rule.harden is not None and argv:
-            exec_argv = ["bash", "-c", 'exec 2>&1; exec "$@"', "bash", *rule.harden(argv)]
+        hardened = None if prelude else hardened_argv(command, self.hardening_rules)
+        track = hardened is None
+        if hardened is not None:
+            exec_argv = ["bash", "-c", 'exec 2>&1; exec "$@"', "bash", *hardened]
         else:
             exec_argv = ["bash", "-c", _track_cwd(prelude + command)]
 
