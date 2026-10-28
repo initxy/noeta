@@ -6,21 +6,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, field
 from typing import Any
 
 import msgspec
 
 from noeta.core import models
-from noeta.core.agent import Agent
 from noeta.core.events import ChildEnded, External, InputTaken, ModelReplied, Recorded, Say
 from noeta.core.extension import Deny, Extension, Gate, Reminder, Rewrite, TaskView
 from noeta.core.loop.state import TaskState
 from noeta.core.tool import Tool, ToolContext
 from noeta.core.types import Message, ModelRequest, ToolUse, user
 from noeta.plugins.subtasks import texts
+from noeta.plugins.subtasks.roster import Roster, SubagentSpec, check_roster
+from noeta.plugins.subtasks.roster import agent_list as listing
 from noeta.plugins.subtasks.tool import (
     DELEGATION_TOOLS,
     DEPTH_KEY,
@@ -33,13 +32,14 @@ from noeta.plugins.subtasks.tool import (
     batch_refusal,
     handback_sender,
 )
+from noeta.plugins.subtasks.worktree import close_worktree
 from noeta.toolkit import notices
 from noeta.toolkit.notices import NOTICE_GUARD, escape
 
+__all__ = ["SubagentSpec", "Subtasks", "task_notification"]
+
 log = logging.getLogger("noeta.plugins.subtasks")
 
-#: ``agents=["*"]``: every agent of the worker that has a description.
-ALL_AGENTS = "*"
 #: The sub-agent's model call that also asks for a progress label (Claude
 #: Code's was alongside the third), and the inbox signal carrying it.
 PROGRESS_AT_CALL = 3
@@ -49,48 +49,6 @@ AUTO_MODE = "auto"
 #: The agent list's place in the first request's joined system turn
 #: (``Reminder.order``): after the environment and the deferred tools.
 AGENT_LIST_ORDER = 40
-
-
-@dataclass(frozen=True)
-class SubagentSpec:
-    """One agent type the model may start.
-
-    ``name`` is what the model passes as ``subagent_type``; ``description``
-    its line in the agent list. ``agent`` names the registered ``Agent`` the
-    child runs (default: ``name``), whose definition decides the child's
-    model, prompt and tools. ``config`` is merged into the child's
-    ``TaskCreated.config``; ``queue`` routes the child (default: the
-    extension's ``queue``). ``tools`` is the agent list's tools column.
-    """
-
-    name: str
-    description: str
-    agent: str = ""
-    config: Mapping[str, Any] = field(default_factory=dict)
-    queue: str | None = None
-    tools: str = "*"
-
-
-def _roster(roster: Mapping[str, SubagentSpec] | Sequence[SubagentSpec]) -> dict[str, SubagentSpec]:
-    specs = list(roster.values()) if isinstance(roster, Mapping) else list(roster)
-    out: dict[str, SubagentSpec] = {}
-    for spec in specs:
-        if not spec.description.strip():
-            raise ValueError(f"sub-agent {spec.name!r} needs a non-blank description")
-        if spec.name in out:
-            raise ValueError(f"duplicate sub-agent name {spec.name!r}")
-        out[spec.name] = spec
-    return out
-
-
-def _tools_column(agent: Any) -> str:
-    allowed = getattr(agent, "allowed_tools", None)
-    denied = list(getattr(agent, "denied_tools", ()) or ())
-    if allowed is not None:
-        return ", ".join(allowed)
-    if denied:
-        return "All tools except " + ", ".join(denied)
-    return "*"
 
 
 def task_notification(*, agent_id: str, call_id: str, status: str, summary: str,
@@ -147,11 +105,11 @@ class Subtasks(Extension):
         queue: str = "default",
         progress_labels: bool = True,
     ) -> None:
-        self.roster = _roster(roster)
+        self.roster = check_roster(roster)
         self.progress_labels = progress_labels
         self._labels: set[asyncio.Task[None]] = set()
         self.agents = tuple(agents)
-        self._resolved: dict[tuple[Any, ...], dict[str, SubagentSpec]] = {}
+        self._roster = Roster(self.roster, self.agents)
         self.max_depth = max_depth
         self.max_background = max_background
         self.max_fanout = max_fanout
@@ -219,61 +177,12 @@ class Subtasks(Extension):
         config[TYPE_KEY] = kind
         return config
 
-    async def add_worktree(self, ctx: ToolContext, config: Mapping[str, Any]
-                           ) -> dict[str, str] | str:
-        """A fresh git worktree for an isolated agent, or why there is none."""
-        env = ctx.env
-        if env is None:
-            return texts.WORKTREE_FAILED.format(reason="this task has no execution environment")
-        cwd = str(config.get("cwd") or env.cwd)
-        top = await env.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd)
-        if top.exit_code != 0:
-            return texts.WORKTREE_FAILED.format(reason=f"{cwd} is not in a git repository")
-        root = top.stdout.decode().strip()
-        base = (await env.run(["git", "rev-parse", "HEAD"], cwd=root)).stdout.decode().strip()
-        name = "agent-" + re.sub(r"[^A-Za-z0-9_-]", "", ctx.call_id)[-16:]
-        path, branch = f"{root}/.noeta/worktrees/{name}", f"worktree-{name}"
-        made = await env.run(["git", "worktree", "add", "-b", branch, path, "HEAD"], cwd=root)
-        if made.exit_code != 0:
-            reason = made.stderr.decode(errors="replace").strip() or "git worktree add failed"
-            return texts.WORKTREE_FAILED.format(reason=reason)
-        return {"path": path, "branch": branch, "base": base, "root": root}
-
-    async def _close_worktree(self, view: TaskView, tree: Mapping[str, str]) -> str:
-        """Remove an unchanged worktree; otherwise say where the work is."""
-        env = view.env
-        if env is None:
-            return ""
-        status = await env.run(["git", "status", "--porcelain"], cwd=tree["path"])
-        ahead = await env.run(["git", "rev-list", "--count", f"{tree['base']}..HEAD"],
-                              cwd=tree["path"])
-        if status.exit_code == 0 and not status.stdout.strip() \
-                and ahead.stdout.decode().strip() == "0":
-            await env.run(["git", "worktree", "remove", "--force", tree["path"]],
-                          cwd=tree["root"])
-            await env.run(["git", "branch", "-D", tree["branch"]], cwd=tree["root"])
-            return ""
-        return texts.WORKTREE_KEPT.format(path=tree["path"], branch=tree["branch"])
-
     # ------------------------------------------------------------ tools
 
     def roster_for(self, view: TaskView) -> dict[str, SubagentSpec]:
         """The agent types: the given specs, plus each named agent the worker
         has (a name it lacks is left out)."""
-        if not self.agents:
-            return self.roster
-        names = [n for n in view.agents if n != view.state.agent] \
-            if ALL_AGENTS in self.agents else [n for n in self.agents if n in view.agents]
-        named = tuple((n, view.agents[n].description, _tools_column(view.agents[n]),
-                       _freeze(_definition_config(view.agents[n])))
-                      for n in names if view.agents[n].description.strip())
-        roster = self._resolved.get(named)
-        if roster is None:
-            roster = _roster([*self.roster.values(),
-                              *(SubagentSpec(name=n, description=d, tools=t, config=dict(c))
-                                for n, d, t, c in named if n not in self.roster)])
-            self._resolved[named] = roster
-        return roster
+        return self._roster.for_view(view)
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
         state = view.state
@@ -347,12 +256,7 @@ class Subtasks(Extension):
 
     def agent_list(self, view: TaskView) -> str | None:
         """The agent types this task can start, one line each with its tools."""
-        roster = self.roster_for(view)
-        if not roster:
-            return None
-        lines = [f"- {s.name}: {s.description} (Tools: {s.tools})"
-                 for s in sorted(roster.values(), key=lambda s: s.name.lower())]
-        return "\n".join([texts.AGENT_LIST_HEAD, *lines, "", texts.AGENT_LIST_TAIL])
+        return listing(self.roster_for(view))
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
         """After a compaction the agent list goes out again with the next
@@ -434,7 +338,7 @@ class Subtasks(Extension):
         tree = agent.get("worktree")
         if tree and agent["task_id"] == ended.child_id:
             try:
-                kept = await self._close_worktree(view, tree)
+                kept = await close_worktree(view, tree)
             except Exception:
                 log.exception("closing worktree %s failed", tree.get("path"))
                 kept = texts.WORKTREE_KEPT.format(path=tree["path"], branch=tree["branch"])
@@ -480,22 +384,3 @@ def _auto_mode(owner: Extension, view: TaskView) -> bool:
         if ext is not owner:
             inherited.update(ext.inherit(view.state))
     return bool(inherited.get("permission_mode", AUTO_MODE) == AUTO_MODE)
-
-
-def _definition_config(agent: Agent) -> dict[str, Any]:
-    """Child config an agent's definition asks for: its own model and effort
-    (so the parent's are not inherited over them) and permission mode."""
-    out: dict[str, Any] = {}
-    if not agent.inherit_model:
-        out["model"] = models.resolve_alias(agent.model)
-    if agent.effort:
-        out["effort"] = agent.effort
-    if agent.permission_mode:
-        out["permission_mode"] = agent.permission_mode
-    if agent.isolation == "worktree":
-        out["isolation"] = "worktree"
-    return out
-
-
-def _freeze(value: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
-    return tuple(sorted(value.items()))

@@ -65,6 +65,57 @@ def _source(text: str) -> list[str]:
     return text.splitlines(keepends=True)
 
 
+def _input_error(input: dict[str, Any], path: str) -> str | None:
+    """Why the call's arguments cannot edit a notebook, if they cannot."""
+    if not isinstance(input.get("new_source"), str):
+        return "requires string 'new_source'"
+    mode = input.get("edit_mode") or "replace"
+    if mode not in ("replace", "insert", "delete"):
+        return "edit_mode must be replace, insert or delete"
+    cell_type = input.get("cell_type")
+    if cell_type not in (None, "code", "markdown"):
+        return "cell_type must be code or markdown"
+    cell_id = input.get("cell_id")
+    if cell_id is not None and not isinstance(cell_id, str):
+        return "cell_id must be a string"
+    if mode != "insert" and not cell_id:
+        return f"cell_id is required to {mode} a cell"
+    if mode == "insert" and cell_type is None:
+        return "cell_type is required to insert a cell"
+    if not path.endswith(".ipynb"):
+        return "only .ipynb notebooks can be edited; use Edit for other files"
+    return None
+
+
+def _apply(cells: list[Any], mode: str, index: int | None, cell_id: str | None,
+           cell_type: str | None, source: str) -> str:
+    """Make the edit in ``cells``; what was done."""
+    if mode == "delete":
+        assert index is not None
+        cells.pop(index)
+        return f"Deleted cell {cell_id}"
+    if mode == "insert":
+        new_id = secrets.token_hex(4)
+        cell: dict[str, Any] = {"cell_type": cell_type, "id": new_id, "metadata": {},
+                                "source": _source(source)}
+        if cell_type == "code":
+            cell.update(execution_count=None, outputs=[])
+        cells.insert(0 if index is None else index + 1, cell)
+        return f"Inserted cell {new_id}"
+    assert index is not None
+    cell = cells[index]
+    cell["source"] = _source(source)
+    if cell_type is not None and cell_type != cell.get("cell_type"):
+        cell["cell_type"] = cell_type
+        if cell_type == "markdown":
+            cell.pop("outputs", None)
+            cell.pop("execution_count", None)
+    if cell.get("cell_type") == "code":
+        cell["execution_count"] = None
+        cell["outputs"] = []
+    return f"Updated cell {cell_id}"
+
+
 class NotebookEditTool:
     name = "NotebookEdit"
     description = load_description("noeta.plugins.fs", "notebook_edit")
@@ -81,25 +132,13 @@ class NotebookEditTool:
         path = require_str(input, "notebook_path")
         if path is None:
             return tool_error(self.name, "requires non-empty 'notebook_path'")
-        source = input.get("new_source")
-        if not isinstance(source, str):
-            return tool_error(self.name, "requires string 'new_source'")
-        mode = input.get("edit_mode") or "replace"
-        if mode not in ("replace", "insert", "delete"):
-            return tool_error(self.name, "edit_mode must be replace, insert or delete")
-        cell_type = input.get("cell_type")
-        if cell_type not in (None, "code", "markdown"):
-            return tool_error(self.name, "cell_type must be code or markdown")
-        cell_id = input.get("cell_id")
-        if cell_id is not None and not isinstance(cell_id, str):
-            return tool_error(self.name, "cell_id must be a string")
-        if mode != "insert" and not cell_id:
-            return tool_error(self.name, f"cell_id is required to {mode} a cell")
-        if mode == "insert" and cell_type is None:
-            return tool_error(self.name, "cell_type is required to insert a cell")
-        if not path.endswith(".ipynb"):
-            return tool_error(self.name, "only .ipynb notebooks can be edited; use Edit for "
-                                         "other files")
+        wrong = _input_error(input, path)
+        if wrong is not None:
+            return tool_error(self.name, wrong)
+        source: str = input["new_source"]
+        mode: str = input.get("edit_mode") or "replace"
+        cell_type: str | None = input.get("cell_type")
+        cell_id: str | None = input.get("cell_id")
 
         env = ctx.env
         ws = await Workspace.of(env)
@@ -127,31 +166,7 @@ class NotebookEditTool:
         index = _find(cells, cell_id) if cell_id else None
         if cell_id and index is None:
             return tool_error(self.name, f"no cell with id {cell_id!r}")
-        if mode == "delete":
-            assert index is not None
-            cells.pop(index)
-            done = f"Deleted cell {cell_id}"
-        elif mode == "insert":
-            new_id = secrets.token_hex(4)
-            cell: dict[str, Any] = {"cell_type": cell_type, "id": new_id, "metadata": {},
-                                    "source": _source(source)}
-            if cell_type == "code":
-                cell.update(execution_count=None, outputs=[])
-            cells.insert(0 if index is None else index + 1, cell)
-            done = f"Inserted cell {new_id}"
-        else:
-            assert index is not None
-            cell = cells[index]
-            cell["source"] = _source(source)
-            if cell_type is not None and cell_type != cell.get("cell_type"):
-                cell["cell_type"] = cell_type
-                if cell_type == "markdown":
-                    cell.pop("outputs", None)
-                    cell.pop("execution_count", None)
-            if cell.get("cell_type") == "code":
-                cell["execution_count"] = None
-                cell["outputs"] = []
-            done = f"Updated cell {cell_id}"
+        done = _apply(cells, mode, index, cell_id, cell_type, source)
         body = (json.dumps(nb, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
         try:
             await env.write_bytes(resolved, body)

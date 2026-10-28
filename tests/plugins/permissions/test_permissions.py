@@ -288,17 +288,17 @@ async def test_the_shells_directory_resolves_relative_paths(tmp_path: Path) -> N
     from types import SimpleNamespace
 
     from noeta.plugins.permissions import scope as sc
+    from noeta.plugins.permissions.shell_check import shell_scope
 
-    perms = Permissions(mode="acceptEdits")
     scope = sc.Scope(dirs=(str(tmp_path),), home="/home/u")
     shell = SimpleNamespace(cwd=str(tmp_path / ".git"))
     view: Any = SimpleNamespace(ext_state=lambda name: shell if name == "shell" else None)
-    here = perms._shell_scope(view, scope)
+    here = shell_scope(view, scope)
     assert here.cwd == str(tmp_path / ".git")
     [part] = sc.parts("sed -i s/a/b/ config", here) or []
     assert part.writes == (str(tmp_path / ".git" / "config"),)
     shell.cwd = "/etc"  # outside: the working directory stands
-    assert perms._shell_scope(view, scope).cwd == str(tmp_path)
+    assert shell_scope(view, scope).cwd == str(tmp_path)
 
 
 async def test_disabled_bypass_mode_holds_against_a_task_config(store: SqliteStore,
@@ -336,7 +336,7 @@ def test_settings_files_can_disable_bypass_mode(tmp_path: Path) -> None:
 ])
 def test_always_remembers_no_more_than_the_command_shows(command: str, rule: str) -> None:
     from noeta.plugins.permissions import scope as sc
-    from noeta.plugins.permissions.extension import _shell_always
+    from noeta.plugins.permissions.shell_check import shell_always as _shell_always
 
     scope = sc.Scope(dirs=("/proj",), home="/home/u")
     always, _label = _shell_always(sc.parts(command, scope) or [], scope)
