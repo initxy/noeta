@@ -46,6 +46,9 @@ MODEL = "cluster-scripted"
 ROOT_AGENT = "cluster"
 CHILD_AGENT = "cluster-child"
 INTERRUPTED = "outcome is unknown"
+#: Workers write fold snapshots this often, so claims under faults start
+#: from them (the runs' logs are a few dozen events).
+SNAPSHOT_EVERY = 5
 
 ROOT_FILE = """---
 name: cluster
@@ -146,7 +149,8 @@ class Cluster:
         self.spawned += 1
         log = open(self.logs / f"worker-{self.spawned}.log", "wb")
         with log:
-            return subprocess.Popen([NOETA, "worker", "--lease", str(self.lease)],
+            return subprocess.Popen([NOETA, "worker", "--lease", str(self.lease),
+                                     "--snapshot-every", str(SNAPSHOT_EVERY)],
                                     cwd=self.work, env=self.env, stdout=log, stderr=log)
 
     async def start(self) -> None:
@@ -265,6 +269,8 @@ class Outcome:
     watch: EpochWatch
     faults: Faults
     worker_logs: Path
+    #: Tasks the workers left a fold snapshot of.
+    snapshots: int = 0
 
     def settled(self, row: TaskRow) -> bool:
         return row.status in ("waiting", "ended") and row.inbox_read_seq == row.inbox_seq
@@ -403,9 +409,10 @@ async def collect(cluster: Cluster, *, seed: int, specs: dict[str, Spec],
                   faults: Faults) -> Outcome:
     rows = await cluster.rows()
     logs = {r.task_id: await cluster.client.events(r.task_id) for r in rows}
+    snapshots = [await cluster.store.snapshot(r.task_id) for r in rows]
     return Outcome(seed=seed, specs=specs, roots=roots, pings=pings, rows=rows, logs=logs,
                    journal=cluster.journal_lines(), watch=watch, faults=faults,
-                   worker_logs=cluster.logs)
+                   worker_logs=cluster.logs, snapshots=sum(s is not None for s in snapshots))
 
 
 async def watch_rows(cluster: Cluster, watch: EpochWatch, stop: asyncio.Event) -> None:

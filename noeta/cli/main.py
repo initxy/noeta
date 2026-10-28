@@ -59,6 +59,9 @@ def _parser() -> argparse.ArgumentParser:
     w.add_argument("--lease", type=float, default=None, metavar="SECONDS",
                    help="how long a claim lasts without renewal (default 30); a dead "
                         "worker's tasks wait about this long before another takes them")
+    w.add_argument("--snapshot-every", type=int, default=None, metavar="EVENTS",
+                   help="write a task's fold snapshot every this many events (default 100; "
+                        "0 never)")
     sv = sub.add_parser("serve", help="the client API over HTTP")
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8642)
@@ -181,10 +184,12 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
 
 
 async def _worker(s: Settings, queues: list[str], concurrency: int,
-                  lease: float | None = None) -> None:
+                  lease: float | None = None, snapshot_every: int | None = None) -> None:
     from noeta.host.channels import run_channels
 
     kw: dict[str, Any] = {"lease_seconds": lease} if lease else {}
+    if snapshot_every is not None:
+        kw["snapshot_every"] = snapshot_every
     app = _app(s, queues=tuple(queues), concurrency=concurrency, with_channels=True, **kw)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -223,7 +228,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "worker":
         asyncio.run(_worker(_settings(args), args.queue or ["default"], args.concurrency,
-                            args.lease))
+                            args.lease, args.snapshot_every))
         return
     if args.command == "serve":
         if args.no_token and args.host not in ("127.0.0.1", "localhost", "::1"):

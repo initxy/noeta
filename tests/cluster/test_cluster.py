@@ -135,6 +135,7 @@ async def run_cluster(tmp_path: Path, url: str, seed: int, specs: dict[str, Spec
           f"stops={faults.stops} targeted={faults.targeted} "
           f"interrupted={outcome.interrupted_calls()} lost_jobs={outcome.lost_jobs()} "
           f"lookups_rerun={sum(s > 1 for s, _t in outcome.lookups().values())} "
+          f"snapshots={outcome.snapshots} "
           f"journal={len(outcome.journal)} samples={watch.samples}")
     return outcome
 
