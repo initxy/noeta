@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -218,3 +219,47 @@ def test_sandbox_settings_merge_and_reach_the_env(home: Path) -> None:
     settings = env.sandbox.settings  # type: ignore[attr-defined]
     assert settings.allowed_domains == ("a.com", "b.com") and settings.allow_write == ()
     assert settings.deny_read == ("secret",)
+
+
+def test_serve_refuses_bypass_in_the_plugin_itself(
+        home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``noeta serve`` without ``--allow-bypass-permissions`` turns on the
+    plugin's own refusal, so no way in (a signal, an answer, a settings
+    file's ``defaultMode``) can switch a served task into bypassPermissions."""
+    import asyncio
+    import types
+
+    import uvicorn
+
+    from noeta.cli import main
+
+    (home / "settings.json").write_text(json.dumps(
+        {"permissions": {"defaultMode": "bypassPermissions"}}))
+    (home / "config.toml").write_text(
+        'model = "m"\nprovider = "anthropic"\napi_key = "k"\n'
+        f'store = "sqlite:///{home / "t.db"}"\n')
+    apps: list[Any] = []
+    real_app = main._app
+
+    def capture(s: Any, **kw: Any) -> Any:
+        apps.append(real_app(s, **kw))
+        return apps[-1]
+
+    class _Server:
+        def __init__(self, _config: object) -> None:
+            pass
+
+        async def serve(self) -> None:
+            return None
+
+    monkeypatch.setattr(main, "_app", capture)
+    monkeypatch.setattr(uvicorn, "Server", _Server)
+    for allow in (False, True):
+        args = types.SimpleNamespace(host="127.0.0.1", no_worker=True, no_token=True,
+                                     allow_origin=[], allow_bypass_permissions=allow,
+                                     allow_root=[], port=0)
+        asyncio.run(main._serve(load_settings(cwd=str(home)), args, str(home)))
+        exts = {e.name: e for e in apps[-1].runtime.agents["main"].extensions}
+        perms = exts["permissions"]
+        assert perms.disable_bypass is not allow
+        assert (perms.mode == "bypassPermissions") is allow

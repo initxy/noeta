@@ -330,9 +330,9 @@ def create_app(client: Client, *, token: str | None = None,
                 if typed is not None and typed.local:
                     return _json({"output": typed.text})
                 value = typed.text if typed is not None else value
-        seq = await client.send(task_id, value,
-                                when=body.get("when", "next_turn"),
-                                dedupe_key=body.get("dedupe_key"))
+        seq = await guarded.send(task_id, value,
+                                 when=body.get("when", "next_turn"),
+                                 dedupe_key=body.get("dedupe_key"))
         return _json({"inbox_seq": seq})
 
     async def answer(request: Request) -> Response:
@@ -353,8 +353,8 @@ def create_app(client: Client, *, token: str | None = None,
 
     async def cancel(request: Request) -> Response:
         body = await request.json() if await request.body() else {}
-        await client.cancel(request.path_params["task_id"], body.get("reason", ""),
-                            turn_only=bool(body.get("turn_only")))
+        await guarded.cancel(request.path_params["task_id"], body.get("reason", ""),
+                             turn_only=bool(body.get("turn_only")))
         return _json({"ok": True})
 
     async def usage(request: Request) -> Response:

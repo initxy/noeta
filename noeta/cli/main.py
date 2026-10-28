@@ -150,7 +150,10 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     token = None if args.no_token else server_token(create=True)
     if token is not None and not os.environ.get("NOETA_SERVER_TOKEN"):
         print(f"noeta: bearer token in {HOME / 'server-token'}: {token}", file=sys.stderr)
-    app = _app(s, cwd=cwd)
+    # The plugin refuses bypassPermissions itself, whatever way it is asked.
+    refuse = {} if args.allow_bypass_permissions else {
+        "permissions": {"disable_bypass_mode": True}}
+    app = _app(s, cwd=cwd, **refuse)
     if with_worker:
         await app.start()
     api = create_app(app.client, token=token,

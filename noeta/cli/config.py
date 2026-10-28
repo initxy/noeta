@@ -387,6 +387,10 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
             permission_args[key] = [*permission_args.get(key, ()), *value]
         else:
             permission_args[key] = value
+    if permission_args.get("disable_bypass_mode") and \
+            permission_args.get("mode") == "bypassPermissions":
+        log.warning("permission mode bypassPermissions is disabled here; ignored")
+        del permission_args["mode"]
     if cwd and project_trusted(cwd):
         permission_args["trusted_workspace"] = True
     # The file tools may write in the additional directories too.
