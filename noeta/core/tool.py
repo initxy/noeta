@@ -66,10 +66,11 @@ class ToolContext(CoreNotices):
     #: never makes a second child.
     spawn: Callable[..., str] | None = None
     #: Post to this task's own inbox from outside a step (a background job
-    #: finishing), or with ``task_id=`` to any other task in the store (the
+    #: finishing), or with ``task_id=`` to any other task of its tenant (the
     #: root once the spawner has ended; another conversation ``SendMessage``
-    #: writes to, as Claude Code messages its other open sessions). Wakes the
-    #: task if it is waiting; idempotent with a ``dedupe_key=``.
+    #: writes to, as Claude Code messages its other open sessions); another
+    #: tenant's task raises ``UnknownTask``. Wakes the task if it is waiting;
+    #: idempotent with a ``dedupe_key=``.
     post: Callable[..., Awaitable[None]] | None = None
     #: The root task's id (background jobs notify the spawner, then the root).
     root_id: str = ""
@@ -79,8 +80,8 @@ class ToolContext(CoreNotices):
     #: hold: its worker and epoch, and ``on_lost`` to stop with it.
     hold: Callable[[], Awaitable[Release]] | None = None
     #: ``await tasks(parent_id=..., status=..., limit=...)``: rows of the
-    #: store's task table (``Store.tasks``), e.g. to list other tasks a
-    #: message could go to.
+    #: store's task table (``Store.tasks``) of this task's tenant, e.g. to
+    #: list other tasks a message could go to.
     tasks: Callable[..., Awaitable[list[Any]]] | None = None
     extras: dict[str, Any] = field(default_factory=dict)
     #: The model made this call (the runner's calls), so what earlier calls

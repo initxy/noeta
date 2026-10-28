@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from noeta.core import records as core_records
 from noeta.core.deferred import is_deferred
+from noeta.core.errors import UnknownTask
 from noeta.core.events import (
     Event,
     ExtensionRecorded,
@@ -195,17 +196,26 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
             {"id": child_id, "call_id": use.id, "background": background}])))
         return child_id
 
+    tenant = run.state.tenant
+
     async def post(body: InboxKind, task_id: str | None = None,
                    dedupe_key: str | None = None) -> None:
-        await run.store.post(Post(task_id=task_id or run.task_id, body=body,
-                                  dedupe_key=dedupe_key))
+        target = task_id or run.task_id
+        if target != run.task_id:
+            row = await run.store.get(target)
+            if row is None or row.tenant != tenant:
+                raise UnknownTask(target)  # another tenant's task is not there for it
+        await run.store.post(Post(task_id=target, body=body, dedupe_key=dedupe_key))
+
+    async def tasks(**kw: Any) -> list[Any]:
+        return list(await run.store.tasks(**{**kw, "tenant": tenant}))
 
     root = run.state.root_id or run.task_id
     answer = run.state.answers.get(use.id)
     return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
                        state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
                        spawn=spawn, post=post, root_id=root, prompt=run.state.prompt,
-                       tasks=run.store.tasks, count_tokens=run.counter(run.model),
+                       tasks=tasks, count_tokens=run.counter(run.model),
                        hold=lambda: run.rt.hold(root), by_model=True,
                        approved=answer is not None and answer.decision == "allow")
 

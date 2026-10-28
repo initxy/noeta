@@ -40,6 +40,11 @@ process. This process's own changes are reported synchronously after commit
 and their echoes are dropped by backend pid. Notifications sent while the
 listener was reconnecting are lost; polling covers that gap.
 
+Live model output (``publish_deltas`` / ``on_delta``) rides a second
+channel, ``<schema>_deltas``, outside any task transaction, heard only by
+processes that subscribe: best effort, never stored, each notification
+under Postgres' 8000-byte payload limit.
+
 Connection loss: a connection that drops before ``COMMIT`` is sent leaves
 nothing behind, so the transaction is re-run once on a fresh connection. A
 drop while ``COMMIT`` is in flight raises ``CommitUnknown`` (a ``Conflict``)
@@ -55,9 +60,10 @@ import logging
 import re
 import threading
 import weakref
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, TypeVar
 
+import msgspec
 import psycopg
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
@@ -84,6 +90,7 @@ from noeta.core.store import (
     hold_lost,
     next_row_state,
 )
+from noeta.core.types import Delta
 
 T = TypeVar("T")
 Conn = psycopg.AsyncConnection[Any]
@@ -92,6 +99,7 @@ log = logging.getLogger("noeta.backends.stores.postgres")
 
 SCHEMA_VERSION = 1
 _LOCK_CLASS = 0x6E6F6574  # "noet": the advisory-lock namespace for schema setup
+_TENANT_LOCK_CLASS = 0x6E6F7465  # "note": one claim at a time per limited tenant
 _RETRY_SQLSTATES = frozenset({"40001", "40P01"})  # serialization failure, deadlock
 _LOST_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
 _DEADLOCK_RETRIES = 5
@@ -152,6 +160,58 @@ CREATE TABLE IF NOT EXISTS {s}.tree_holds (
 CREATE INDEX IF NOT EXISTS tree_holds_until ON {s}.tree_holds (until);
 """
 
+#: Bytes of one delta notification's payload (Postgres refuses 8000 and up).
+_DELTA_PAYLOAD_BYTES = 7000
+_delta_batch = msgspec.json.Decoder(list[tuple[str, Delta]])
+
+
+def _delta_payloads(deltas: Sequence[tuple[str, Delta]]) -> list[str]:
+    """``deltas`` as JSON payloads under the notification limit, in order;
+    a fragment too long for one is cut into several."""
+    pieces: list[tuple[str, Delta]] = []
+    for task_id, d in deltas:
+        text = d.text
+        step = _DELTA_PAYLOAD_BYTES // 8  # a character takes at most 6 bytes as JSON
+        for i in range(0, max(len(text), 1), step):
+            pieces.append((task_id, msgspec.structs.replace(d, text=text[i:i + step])))
+    out: list[str] = []
+    batch: list[tuple[str, Delta]] = []
+    size = 2
+    for piece in pieces:
+        n = len(msgspec.json.encode(piece)) + 1
+        if batch and size + n > _DELTA_PAYLOAD_BYTES:
+            out.append(msgspec.json.encode(batch).decode())
+            batch, size = [], 2
+        batch.append(piece)
+        size += n
+    if batch:
+        out.append(msgspec.json.encode(batch).decode())
+    return out
+
+
+#: Added after the tables were first created; existing rows take the
+#: default, nothing is ever dropped.
+_ADDED = """
+ALTER TABLE {s}.tasks ADD COLUMN IF NOT EXISTS tenant TEXT NOT NULL DEFAULT 'default';
+CREATE INDEX IF NOT EXISTS tasks_tenant ON {s}.tasks (tenant, status);
+"""
+
+
+_TABLES = """
+CREATE TABLE IF NOT EXISTS {s}.tenant_usage (
+    tenant   TEXT NOT NULL,
+    period   TEXT NOT NULL,
+    tokens   BIGINT NOT NULL DEFAULT 0,
+    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant, period)
+);
+"""
+
+
+class _TenantFull(Exception):
+    """A claim found its tenant at its running limit after all."""
+
+
 def _lost(conn: Conn | None, exc: BaseException) -> bool:
     """Whether ``exc`` means the connection is gone (not a query error)."""
     if not isinstance(exc, psycopg.OperationalError | psycopg.InterfaceError):
@@ -185,6 +245,7 @@ class PostgresStore:
         self.dsn = dsn
         self.schema = schema
         self.channel = f"{schema}_changes"
+        self.delta_channel = f"{schema}_deltas"
         self.connect_timeout = connect_timeout
         self.listen_check_interval = listen_check_interval
         self._pool = AsyncConnectionPool(
@@ -202,8 +263,10 @@ class PostgresStore:
         self._opened = False
         self._closed = False
         self._listener: asyncio.Task[None] | None = None
+        self._delta_listener: asyncio.Task[None] | None = None
         self._lock = threading.Lock()
         self._listeners: list[tuple[OnChange, asyncio.AbstractEventLoop | None]] = []
+        self._delta_listeners: list[Callable[[str, Delta], None]] = []
         #: Backend pids of this store's pool connections: their notifications
         #: were already reported locally. Weak, so a closed connection's pid
         #: (which the server may reuse) drops out.
@@ -243,6 +306,12 @@ class PostgresStore:
                                (_LOCK_CLASS, self.schema))
             await conn.execute(self._q('CREATE SCHEMA IF NOT EXISTS {s}'))
             await conn.execute(self._q(_SCHEMA))
+            cur = await conn.execute(
+                "SELECT 1 FROM information_schema.columns WHERE table_schema = %s"
+                " AND table_name = 'tasks' AND column_name = 'tenant'", (self.schema,))
+            if await cur.fetchone() is None:  # ALTER locks the table; only when needed
+                await conn.execute(self._q(_ADDED))
+            await conn.execute(self._q(_TABLES))
             cur = await conn.execute(self._q("SELECT max(version) FROM {s}.noeta_schema"))
             row = await cur.fetchone()
             version = row[0] if row else None
@@ -297,22 +366,24 @@ class PostgresStore:
 
     # ------------------------------------------------------------ change feed
 
-    async def _listen_connection(self) -> Conn:
+    async def _listen_connection(self, channel: str | None = None) -> Conn:
         conn = await psycopg.AsyncConnection.connect(
             self.dsn, autocommit=True, connect_timeout=max(int(self.connect_timeout), 1))
-        await conn.execute(f'LISTEN "{self.channel}"')
+        await conn.execute(f'LISTEN "{channel or self.channel}"')
         return conn
 
-    async def _listen(self, conn: Conn | None) -> None:
+    async def _listen(self, conn: Conn | None, channel: str | None = None,
+                      handle: Callable[[int, str], None] | None = None) -> None:
+        handle = handle or self._remote
         backoff = 0.1
         while True:
             try:
                 if conn is None:
-                    conn = await self._listen_connection()
+                    conn = await self._listen_connection(channel)
                     backoff = 0.1
                 while True:
                     async for n in conn.notifies(timeout=self.listen_check_interval):
-                        self._remote(n.pid, n.payload)
+                        handle(n.pid, n.payload)
                     # Quiet for a while: make sure the connection is alive.
                     await conn.execute("SELECT 1")
             except asyncio.CancelledError:
@@ -335,6 +406,51 @@ class PostgresStore:
         task_id, _, kind = payload.rpartition(":")
         if task_id and kind in ("appended", "posted", "created", "released"):
             self._deliver([(task_id, kind)])  # type: ignore[list-item]
+
+    def _remote_deltas(self, pid: int, payload: str) -> None:
+        own = self._own.get(pid)
+        if own is not None and not own.closed:
+            return  # this process's own output reached its sinks directly
+        try:
+            items = _delta_batch.decode(payload)
+        except msgspec.DecodeError:
+            log.warning("dropped a malformed delta notification")
+            return
+        for task_id, delta in items:
+            for cb in list(self._delta_listeners):
+                try:
+                    cb(task_id, delta)
+                except Exception:
+                    log.exception("on_delta listener failed")
+
+    async def publish_deltas(self, deltas: Sequence[tuple[str, Delta]]) -> None:
+        """Send live output to the other processes on this store
+        (:meth:`on_delta`): best effort, never stored."""
+        payloads = _delta_payloads(deltas)
+        if not payloads:
+            return
+
+        async def send(conn: Conn) -> None:
+            await conn.execute("SELECT pg_notify(%s, p) FROM unnest(%s::text[]) AS p",
+                               (self.delta_channel, payloads))
+
+        await self._tx(send, write=False)
+
+    def on_delta(self, callback: Callable[[str, Delta], None]) -> Callable[[], None]:
+        """Call ``callback(task_id, delta)`` with the live output other
+        processes publish; returns the unsubscribe function. Its own
+        ``LISTEN`` connection opens with the first callback, so a process
+        nobody watches through never receives output."""
+        self._delta_listeners.append(callback)
+        if self._delta_listener is None and not self._closed:
+            self._delta_listener = asyncio.get_running_loop().create_task(
+                self._listen(None, self.delta_channel, self._remote_deltas))
+
+        def unsubscribe() -> None:
+            if callback in self._delta_listeners:
+                self._delta_listeners.remove(callback)
+
+        return unsubscribe
 
     def _deliver(self, changes: Sequence[tuple[str, ChangeKind]]) -> None:
         with self._lock:
@@ -371,11 +487,12 @@ class PostgresStore:
 
     async def close(self) -> None:
         self._closed = True
-        if self._listener is not None:
-            self._listener.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._listener
-            self._listener = None
+        for listening in (self._listener, self._delta_listener):
+            if listening is not None:
+                listening.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await listening
+        self._listener = self._delta_listener = None
         await self._pool.close()
         self._opened = False
 
@@ -385,11 +502,11 @@ class PostgresStore:
         created = task.created
         cur = await conn.execute(self._q(
             "INSERT INTO {s}.tasks (task_id, parent_id, root_id, agent, queue, status, last_seq,"
-            " inbox_seq, dedupe_key, created_at, updated_at)"
-            f" VALUES (%s, %s, %s, %s, %s, 'ready', 1, %s, %s, {_NOW}, {_NOW})"
+            " inbox_seq, dedupe_key, created_at, updated_at, tenant)"
+            f" VALUES (%s, %s, %s, %s, %s, 'ready', 1, %s, %s, {_NOW}, {_NOW}, %s)"
             " ON CONFLICT DO NOTHING RETURNING task_id"),
             (task.task_id, created.parent_id, created.root_id or task.task_id, created.agent,
-             task.queue, len(task.inbox), task.dedupe_key))
+             task.queue, len(task.inbox), task.dedupe_key, created.tenant))
         if await cur.fetchone() is None:
             if task.dedupe_key is not None:
                 cur = await conn.execute(
@@ -570,12 +687,16 @@ class PostgresStore:
         parent_id: str | None = None,
         status: Status | None = None,
         limit: int = 100,
+        tenant: str | None = None,
     ) -> list[TaskRow]:
         where: list[str] = []
         args: list[Any] = []
         if parent_id is not None:
             where.append("parent_id = %s")
             args.append(parent_id)
+        if tenant is not None:
+            where.append("tenant = %s")
+            args.append(tenant)
         if status is not None:
             where.append("status = %s")
             args.append(status)
@@ -593,15 +714,27 @@ class PostgresStore:
     async def claim(
         self, worker: str, queues: Sequence[str], lease_seconds: float,
         *, roots: Sequence[str] | None = None,
+        tenant_limits: Mapping[str, int] | None = None,
     ) -> Claim | None:
         if not queues or (roots is not None and not roots):
             return None
         in_roots = " AND root_id = ANY(%(r)s)" if roots is not None else ""
+        limits = dict(tenant_limits or {})
+
+        async def running(conn: Conn, tenant: str, besides: str = "") -> int:
+            cur = await conn.execute(self._q(
+                "SELECT count(*) FROM {s}.tasks WHERE tenant = %s AND status = 'running'"
+                " AND task_id <> %s"), (tenant, besides))
+            row = await cur.fetchone()
+            return int(row[0]) if row else 0
 
         async def tx(conn: Conn) -> Claim | None:
+            full = [t for t, most in limits.items() if await running(conn, t) >= most]
             cur = await conn.execute(self._q(
-                "WITH c AS (SELECT task_id FROM {s}.tasks k WHERE queue = ANY(%(q)s)"
-                + in_roots + " AND ("
+                "WITH c AS (SELECT task_id, status AS was FROM {s}.tasks k"
+                " WHERE queue = ANY(%(q)s)" + in_roots
+                + (" AND (status = 'running' OR tenant <> ALL(%(full)s))" if full else "")
+                + " AND ("
                 f" (status = 'ready' AND (ready_at IS NULL OR ready_at <= {_NOW}))"
                 f" OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= {_NOW})"
                 f" OR (status = 'running' AND lease_until < {_NOW}))"
@@ -612,16 +745,48 @@ class PostgresStore:
                 f" owner_epoch = t.owner_epoch + 1, lease_until = {_NOW} + %(ls)s,"
                 f" ready_at = NULL, waiting_on = NULL, updated_at = {_NOW}"
                 " FROM c WHERE t.task_id = c.task_id"
-                " RETURNING t.task_id, t.owner_epoch, t.lease_until"),
+                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.tenant, c.was"),
                 {"q": list(queues), "w": worker, "ls": lease_seconds,
-                 "r": list(roots or [])})
+                 "r": list(roots or []), "full": full})
             row = await cur.fetchone()
             if row is None:
                 return None
-            return Claim(task_id=str(row[0]), worker=worker, epoch=int(row[1]),
+            task_id, tenant = str(row[0]), str(row[3])
+            if tenant in limits and row[4] != "running":
+                # Workers claiming at once each counted before the others
+                # committed: one at a time per tenant, count again.
+                await conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
+                                   (_TENANT_LOCK_CLASS, f"{self.schema}:{tenant}"))
+                if await running(conn, tenant, besides=task_id) >= limits[tenant]:
+                    raise _TenantFull
+            return Claim(task_id=task_id, worker=worker, epoch=int(row[1]),
                          lease_until=float(row[2]))
 
-        return await self._tx(tx)
+        try:
+            return await self._tx(tx)
+        except _TenantFull:
+            return None  # rolled back: the task stays where it was
+
+    async def add_tenant_usage(self, tenant: str, period: str, tokens: int,
+                               cost_usd: float) -> None:
+        async def tx(conn: Conn) -> None:
+            await conn.execute(self._q(
+                "INSERT INTO {s}.tenant_usage AS u (tenant, period, tokens, cost_usd)"
+                " VALUES (%s, %s, %s, %s) ON CONFLICT (tenant, period) DO UPDATE SET"
+                " tokens = u.tokens + excluded.tokens,"
+                " cost_usd = u.cost_usd + excluded.cost_usd"), (tenant, period, tokens, cost_usd))
+
+        await self._tx(tx)
+
+    async def tenant_usage(self, tenant: str, period: str) -> tuple[int, float]:
+        async def q(conn: Conn) -> tuple[int, float]:
+            cur = await conn.execute(self._q(
+                "SELECT tokens, cost_usd FROM {s}.tenant_usage WHERE tenant = %s"
+                " AND period = %s"), (tenant, period))
+            row = await cur.fetchone()
+            return (int(row[0]), float(row[1])) if row else (0, 0.0)
+
+        return await self._tx(q, write=False)
 
     async def renew(self, claim: Claim, lease_seconds: float) -> Claim | None:
         async def tx(conn: Conn) -> Claim | None:

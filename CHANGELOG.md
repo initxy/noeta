@@ -133,6 +133,8 @@ All notable changes to Noeta are documented here. The format is based on
   flags an Agent SDK passes that noeta does not use are accepted and named on stderr.
   Without `--permission-prompt-tool stdio` anything that would ask is refused and the turn
   goes on (it used to exit 2). `--json` is gone; use `--output-format stream-json --verbose`.
+- **`create_app` requires a bearer token**, as `noeta serve` does: without `token=` it
+  raises unless the host passes `auth=False`.
 
 ### Added
 
@@ -148,6 +150,26 @@ All notable changes to Noeta are documented here. The format is based on
   `--strict-mcp-config` and `--agents`, and a `can_use_tool` answer's `updatedInput` for every
   tool. MCP and Agent results reach Anthropic models as a block list
   (`ToolOutput.block_list`); a reply with unparseable tool-call arguments is retried once.
+- **Front ends run on one API, in process or against a server** (`noeta.host.app.AppAPI`):
+  ACP and stream-json no longer reach into a local `Runtime`; `noeta acp --server URL`
+  drives a `noeta serve` server's tasks. New `POST /commands/run`.
+- **Live output across machines**: on Postgres a worker publishes its streamed text
+  (`PostgresStore.publish_deltas`, channel `<schema>_deltas`, best effort) and a server's
+  `/watch` hears it (`on_delta`), so `noeta serve --no-worker` streams tasks that `noeta
+  worker` processes elsewhere run. On sqlite live output stays in its process.
+- **Tenants**: a task carries `TaskCreated.tenant` (children inherit it; the `tasks` table
+  gains a `tenant` column at store open, existing rows `default`). `Client.scoped(tenant)`,
+  `create_app(tokens=)` and `noeta token add --tenant X` (`~/.noeta/tokens.json`) confine every
+  read, list, watch, message, answer, signal and cancel to the caller's tenant; a task's
+  `SendMessage` / `ToolContext.post` reaches only its own tenant's tasks. The server token
+  stays the default tenant's.
+- **Per-tenant settings** in `~/.noeta/tenants/<name>/config.toml`: a `workspace` its tasks'
+  `cwd` must lie in (and default to), `max_running` (the claim leaves its other tasks
+  waiting; exact across workers), `budget_tokens` / `budget_usd` per UTC month (a model call
+  past it fails the turn with `budget_spent`; counted in a new `tenant_usage` table), and its
+  own `provider` / `base_url` / `api_key` (`{env:}` / `{keyring:}`). `Runtime(tenants=)`,
+  `Store.claim(tenant_limits=)`, `create_app(workspaces=)`.
+
 - **Claude Code's headless protocol** (`noeta.host.stream_json`): the stream-json messages
   (`system`/`init`, `assistant`, tool-result `user`, `stream_event`, `result` with usage, cost,
   durations, turns, permission denials and `structured_output`; the root task's id is the

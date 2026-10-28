@@ -306,7 +306,7 @@ def child_task(task_id: str, state: TaskState, extensions: Sequence[Extension], 
         child_config.update(ext.inherit(state))
     return TaskCreated(agent=agent, config=child_config, parent_id=task_id,
                        root_id=state.root_id or task_id, history_from=history_from,
-                       history_through=history_through)
+                       history_through=history_through, tenant=state.tenant)
 
 
 GatePhase = Literal["model", "user"]

@@ -4,11 +4,13 @@
     noeta -p "fix the test"    run one prompt in the current directory and print the answer;
                                Claude Code's headless flags and stream-json protocol
                                (``noeta.cli.headless``)
-    noeta acp                  serve the Agent Client Protocol on stdio (editors)
+    noeta acp                  serve the Agent Client Protocol on stdio (editors);
+                               ``--server URL`` drives a ``noeta serve`` server's tasks
     noeta worker               run tasks from the store until stopped (multi-machine)
     noeta serve                the client API over HTTP (and workers, unless --no-worker)
     noeta plugin ...           install (pinned), list and remove plugins
     noeta mcp ...              add, list, remove and sign in to MCP servers
+    noeta token ...            add, list and remove the server's tenant tokens
 
 Model and provider come from ``--model`` / ``--provider`` or the environment
 (``NOETA_MODEL``, ``NOETA_PROVIDER``, ``NOETA_BASE_URL``, ``NOETA_API_KEY``)
@@ -25,11 +27,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from noeta.cli import config, mcp_command, plugin_command
+from noeta.cli import config, mcp_command, plugin_command, tenants
 from noeta.cli.config import Settings, load_settings
 from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
-SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp")
+SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp", "token")
 
 
 def _common(ap: argparse.ArgumentParser) -> None:
@@ -52,7 +54,10 @@ def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="noeta", description="Durable AI agents.")
     _common(ap)
     sub = ap.add_subparsers(dest="command")
-    sub.add_parser("acp", help="serve the Agent Client Protocol on stdio")
+    ac = sub.add_parser("acp", help="serve the Agent Client Protocol on stdio")
+    ac.add_argument("--server", metavar="URL",
+                    help="drive the tasks of a noeta server (token: NOETA_SERVER_TOKEN or "
+                         "~/.noeta/server-token) instead of running them here")
     w = sub.add_parser("worker", help="run tasks from the store until stopped")
     w.add_argument("--queue", action="append", default=None)
     w.add_argument("--concurrency", type=int, default=8)
@@ -75,6 +80,7 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("plugins", help="list the plugins and where each comes from")
     plugin_command.add_parser(sub)
     mcp_command.add_parser(sub)
+    tenants.add_parser(sub)
     return ap
 
 
@@ -151,6 +157,13 @@ def _app(s: Settings, **kw: Any) -> Any:
     return from_settings(s, **kw)
 
 
+def _tenants(s: Settings) -> dict[str, tenants.TenantPlace]:
+    try:
+        return tenants.load_tenants(s)
+    except (ValueError, OSError) as exc:
+        sys.exit(f"noeta: {exc}")
+
+
 async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     import uvicorn
 
@@ -164,15 +177,20 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     # The plugin refuses bypassPermissions itself, whatever way it is asked.
     refuse = {} if args.allow_bypass_permissions else {
         "permissions": {"disable_bypass_mode": True}}
-    app = _app(s, cwd=cwd, with_channels=True, **refuse)
+    places = _tenants(s)
+    app = _app(s, cwd=cwd, with_channels=True,
+               tenants={name: p.allowed for name, p in places.items()}, **refuse)
     await app.start(worker=with_worker)
-    api = create_app(app.client, token=token,
-                     deltas=app.deltas if with_worker else None, agents=app.runtime.agents,
+    api = create_app(app.client, token=token, auth=token is not None,
+                     tokens=tenants.tenant_tokens(),
+                     deltas=app.deltas, agents=app.runtime.agents,
                      app=app if with_worker else None,
                      allowed_hosts=LOOPBACK_HOSTS if host in LOOPBACK_HOSTS else None,
                      origins=args.allow_origin,
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
-                     roots=[os.path.abspath(r) for r in args.allow_root])
+                     roots=[os.path.abspath(r) for r in args.allow_root],
+                     workspaces={name: p.workspace for name, p in places.items()
+                                 if p.workspace})
     port = args.port
     try:
         await uvicorn.Server(uvicorn.Config(api, host=host, port=port)).serve()
@@ -185,6 +203,7 @@ async def _worker(s: Settings, queues: list[str], concurrency: int,
     from noeta.host.channels import run_channels
 
     kw: dict[str, Any] = {"lease_seconds": lease} if lease else {}
+    kw["tenants"] = {name: p.allowed for name, p in _tenants(s).items()}
     app = _app(s, queues=tuple(queues), concurrency=concurrency, with_channels=True, **kw)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -213,8 +232,16 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(plugin_command.run(args, cwd))
     if args.command == "mcp":
         sys.exit(mcp_command.run(args, cwd))
+    if args.command == "token":
+        sys.exit(tenants.run(args))
     if args.command == "acp":
         from noeta.host.acp import EditorServers, serve_stdio
+        if args.server:
+            from noeta.cli.config import server_token
+            from noeta.host.remote import RemoteApp
+            asyncio.run(serve_stdio(RemoteApp(args.server, token=server_token()),
+                                    model=args.model or ""))
+            return
         s = _settings(args)
         servers = EditorServers()
         asyncio.run(serve_stdio(_app(s, cwd=cwd, plugins={"mcp": {"servers": servers}},

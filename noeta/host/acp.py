@@ -19,7 +19,7 @@ import acp
 from acp import schema
 
 from noeta.core import models, records
-from noeta.core.commands import list_commands, parse_command, run_typed
+from noeta.core.commands import parse_command
 from noeta.core.events import (
     ExtensionRecorded,
     InputTaken,
@@ -35,8 +35,9 @@ from noeta.core.events import (
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.types import Delta, Image, Message, Text, ToolUse
+from noeta.host.app import AppAPI
 from noeta.host.feed import failure_text, tool_title
-from noeta.host.local import LocalApp, UnknownAgent
+from noeta.host.local import UnknownAgent
 from noeta.host.pending import (
     Pending,
     answer_choice,
@@ -49,7 +50,7 @@ from noeta.host.pending import (
 )
 from noeta.host.questions import next_question, typed_answer
 from noeta.host.rewind import rewind, rewind_points
-from noeta.host.usage import context_breakdown, context_text, cost_text, tree_usage
+from noeta.host.usage import context_text, cost_text, tree_usage
 from noeta.toolkit.permission_modes import (
     MODE_SIGNAL,
     PERMISSION_MODES,
@@ -253,9 +254,11 @@ HOST_COMMANDS = (
 
 
 class NoetaAcpAgent:
-    """The ACP agent side. ``agent`` names the noeta agent each session runs."""
+    """The ACP agent side. ``agent`` names the noeta agent each session runs;
+    ``app`` runs here (``LocalApp``) or is a ``noeta serve`` server
+    (``RemoteApp``)."""
 
-    def __init__(self, app: LocalApp, *, agent: str = "main", model: str = "",
+    def __init__(self, app: AppAPI, *, agent: str = "main", model: str = "",
                  servers: EditorServers | None = None) -> None:
         self.app = app
         self.servers = servers
@@ -325,12 +328,12 @@ class NoetaAcpAgent:
 
     async def _announce_commands(self, session_id: str) -> None:
         """The agent's plugin commands, as the editor's slash commands."""
-        agent = self.app.runtime.agents.get(self.agent)
-        if agent is None or self.conn is None:
+        if self.conn is None:
             return
         try:
             commands = [(c.name, c.argument_hint, c.description or c.name)
-                        for c in await list_commands(agent, self._command_context(session_id))]
+                        for c in await self.app.commands(self.agent,
+                                                         self._command_context(session_id))]
             own = {name for name, _h, _d in commands}
             commands += [c for c in HOST_COMMANDS if c[0] not in own]
             await self.conn.session_update(
@@ -408,11 +411,10 @@ class NoetaAcpAgent:
                     turn.start(after)  # a sub-agent took it; follow the root from here
             else:
                 text = message.text if len(message.content) == 1 else ""
-                agent = self.app.runtime.agents.get(self.agent)
-                if agent is not None and parse_command(text) is not None:
+                if parse_command(text) is not None:
                     try:
-                        typed = await run_typed(agent.all_extensions(),
-                                                self._command_context(session_id), text)
+                        typed = await self.app.run_command(
+                            self.agent, self._command_context(session_id), text)
                         shown = typed.text if typed is not None and typed.local else None
                         if typed is None:
                             shown = await self._host_command(session_id, text)
@@ -454,8 +456,8 @@ class NoetaAcpAgent:
         if name == "cost":
             return cost_text(await tree_usage(client, session_id))
         if name == "context":
-            preview = await self.app.runtime.preview(session_id)
-            return context_text(context_breakdown(preview)) if preview is not None \
+            parts = await self.app.context(session_id)
+            return context_text(parts) if parts is not None \
                 else "this session's agent is not one this editor adapter runs"
         if name != "rewind":
             return None
@@ -597,7 +599,7 @@ class NoetaAcpAgent:
                             chosen if chosen in known else "deny")
 
 
-async def serve_stdio(app: LocalApp, *, agent: str = "main", model: str = "",
+async def serve_stdio(app: AppAPI, *, agent: str = "main", model: str = "",
                       servers: EditorServers | None = None) -> None:
     await acp.run_agent(NoetaAcpAgent(app, agent=agent, model=model,  # type: ignore[arg-type]
                                       servers=servers))

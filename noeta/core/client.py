@@ -1,17 +1,31 @@
 """The client API hosts, the TUI and the server use. Everything that is not
 the running task talks to it through here: create, send, answer, cancel,
-read, watch."""
+read, watch.
+
+A client scoped to a tenant (:meth:`Client.scoped`) creates its tasks in
+that tenant and treats every other tenant's task as unknown: no read, list,
+watch, message, answer, signal or cancel reaches it. An unscoped client is
+the host's: it creates in the default tenant and sees the whole store."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Literal, Protocol, Union
 
 from noeta.core.errors import UnknownTask
-from noeta.core.events import Answer, Cancel, External, Recorded, Say, TaskCreated
+from noeta.core.events import (
+    DEFAULT_TENANT,
+    Answer,
+    Cancel,
+    External,
+    Recorded,
+    Say,
+    TaskCreated,
+)
 from noeta.core.store import NewTask, Post, Status, Store, TaskRow, pin_history
 from noeta.core.types import Message, user
 
@@ -59,9 +73,29 @@ class ClientAPI(Protocol):
 
 
 class Client:
-    def __init__(self, store: Store, *, poll_interval: float = 0.5) -> None:
+    def __init__(self, store: Store, *, poll_interval: float = 0.5,
+                 tenant: str | None = None) -> None:
         self.store = store
         self.poll_interval = poll_interval
+        #: The one tenant this client reaches; ``None``: the whole store.
+        self.tenant = tenant
+
+    def scoped(self, tenant: str) -> Client:
+        """This client confined to ``tenant``'s tasks."""
+        other = copy.copy(self)
+        other.tenant = tenant
+        return other
+
+    async def _row(self, task_id: str) -> TaskRow:
+        """The task's row; :class:`UnknownTask` for another tenant's."""
+        row = await self.store.get(task_id)
+        if row is None or (self.tenant is not None and row.tenant != self.tenant):
+            raise UnknownTask(task_id)
+        return row
+
+    async def _reach(self, task_id: str) -> None:
+        if self.tenant is not None:
+            await self._row(task_id)
 
     async def create(
         self,
@@ -84,9 +118,14 @@ class Client:
         ``history_from`` starts it from another task's conversation, up to
         that task's event ``history_through`` (a fork, a rewind)."""
         tid = task_id or uuid.uuid4().hex
+        if history_from is not None:
+            await self._reach(history_from)
         created = await pin_history(self.store, TaskCreated(
             agent=agent, config=dict(config or {}), root_id=tid,
-            history_from=history_from, history_through=history_through))
+            history_from=history_from, history_through=history_through,
+            tenant=self.tenant or DEFAULT_TENANT))
+        if dedupe_key is not None and self.tenant not in (None, DEFAULT_TENANT):
+            dedupe_key = f"tenant:{self.tenant}:{dedupe_key}"  # keys are store-wide
         task = NewTask(
             task_id=tid,
             created=created,
@@ -95,6 +134,8 @@ class Client:
             inbox=[Say(message=_message(input))] if input is not None else [],
         )
         created_id, _ = await self.store.create(task)
+        if created_id != tid or task_id is not None:
+            await self._reach(created_id)  # a task id or key another tenant holds
         return created_id
 
     async def send(
@@ -107,6 +148,7 @@ class Client:
     ) -> int:
         """Send a message. ``now`` lands at the next step of the running
         turn; ``next_turn`` waits for the current turn to finish."""
+        await self._reach(task_id)
         seq, _ = await self.store.post(
             Post(task_id=task_id, body=Say(message=_message(input), when=when),
                  dedupe_key=dedupe_key))
@@ -123,6 +165,7 @@ class Client:
     ) -> int:
         """Answer an approval or a question; returns the answer's inbox seq
         (the first one's, when the question was already answered)."""
+        await self._reach(task_id)
         seq, _ = await self.store.post(Post(
             task_id=task_id,
             body=Answer(request_id=request_id, decision=decision, always=always, data=data),
@@ -135,30 +178,32 @@ class Client:
         """Post a named signal (``External``) a plugin of the task reads, such
         as the permissions plugin's ``permission_mode``; returns its inbox
         seq. It opens no turn."""
+        await self._reach(task_id)
         seq, _ = await self.store.post(Post(task_id=task_id, body=External(name=name, data=data),
                                             dedupe_key=dedupe_key))
         return seq
 
     async def cancel(self, task_id: str, reason: str = "", *, turn_only: bool = False) -> None:
         """End the task, or with ``turn_only`` stop only the current turn."""
+        await self._reach(task_id)
         await self.store.post(Post(task_id=task_id,
                                    body=Cancel(reason=reason, turn_only=turn_only)))
 
     async def get(self, task_id: str) -> TaskRow:
-        row = await self.store.get(task_id)
-        if row is None:
-            raise UnknownTask(task_id)
-        return row
+        return await self._row(task_id)
 
     async def tasks(self, *, parent_id: str | None = None, status: Status | None = None,
                     limit: int = 100) -> list[TaskRow]:
-        return await self.store.tasks(parent_id=parent_id, status=status, limit=limit)
+        return await self.store.tasks(parent_id=parent_id, status=status, limit=limit,
+                                      tenant=self.tenant)
 
     async def events(self, task_id: str, after: int = 0) -> list[Recorded]:
+        await self._reach(task_id)
         return await self.store.read(task_id, after)
 
     async def watch(self, task_id: str, after: int = 0) -> AsyncIterator[Recorded]:
         """Yield the task's events from ``after`` on, live, until it ends."""
+        await self._reach(task_id)
         loop = asyncio.get_running_loop()
         changed = asyncio.Event()
 

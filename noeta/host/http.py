@@ -25,7 +25,9 @@ events; when this process also runs workers, live model output streams too.
     GET  /tasks/{id}/context          what fills the next request (workers in this process)
     GET  /tasks/{id}/rewind           the person's prompts, each with the files changed since
     POST /tasks/{id}/rewind           {index, conversation?, files?} -> {task_id, prompt, files}
-    GET  /commands?agent=&task_id=    slash commands an agent's plugins offer
+    GET  /commands?agent=&task_id=&cwd=  slash commands an agent's plugins offer
+    POST /commands/run                {text, agent?, task_id?, cwd?} -> {text, local} or null:
+                                      a "/name args" run as the agent's command, nothing sent
     GET  /agents                      the agents this server runs
     GET  /models                      the model catalog and its aliases
     GET  /openapi.json                this API as an OpenAPI 3.1 document
@@ -36,8 +38,8 @@ events; when this process also runs workers, live model output streams too.
     POST /stream-json                 the same, one-way: the request body's JSON lines in,
                                       the reply's JSON lines out; permission prompts refused
 
-A bearer token is required when one is configured (``NOETA_SERVER_TOKEN``;
-``?token=`` for a WebSocket from a browser). A request from a web page of
+A bearer token is required (``NOETA_SERVER_TOKEN``; ``?token=`` for a
+WebSocket from a browser) unless the host turns auth off. A request from a web page of
 another origin is refused, and so is one whose ``Host`` is not in
 ``allowed_hosts`` (DNS rebinding). No request starts or switches a task into
 ``bypassPermissions`` unless ``allow_bypass``, or runs it outside ``cwd`` and
@@ -49,11 +51,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-import hmac
+import hashlib
 import json
 import logging
 import os
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Any, Literal
 
 import msgspec
@@ -66,16 +68,17 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from noeta.core import models
 from noeta.core.agent import Agent
 from noeta.core.client import Client, ClientAPI, Input
-from noeta.core.commands import list_commands, run_typed
+from noeta.core.commands import Typed
 from noeta.core.errors import UnknownTask
-from noeta.core.events import Recorded
-from noeta.core.extension import CommandContext
+from noeta.core.events import DEFAULT_TENANT, Recorded
+from noeta.core.extension import Command, CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.store import Status, TaskRow
 from noeta.core.types import Delta, Message
+from noeta.host.app import AppAPI, agent_commands, agent_run_command
 from noeta.host.pending import card_title, choices, pending_tree
 from noeta.host.rewind import rewind, rewind_points
-from noeta.host.usage import context_breakdown, tree_usage
+from noeta.host.usage import tree_usage
 from noeta.toolkit.permission_modes import MODE_SIGNAL
 
 _enc = msgspec.json.Encoder()
@@ -95,13 +98,35 @@ def _input(value: Any) -> Any:
 @dataclasses.dataclass
 class _Front:
     """What a stream-json conversation runs on when this server has no
-    ``LocalApp`` of its own (API only): the client, and deltas if any."""
+    ``LocalApp`` of its own (API only): the client, the agents' commands,
+    and deltas if any."""
 
     client: Any
-    deltas: Any = None
-    runtime: Any = None
+    agents: Mapping[str, Agent]
+    live: Any = None
+
+    def deltas(self, sink: Any) -> Any:
+        return self.live(sink) if self.live is not None else (lambda: None)
 
     async def adopt(self, task_id: str) -> None:
+        return None
+
+    async def start(self) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+    async def agent_names(self) -> list[str]:
+        return sorted(self.agents)
+
+    async def commands(self, agent: str, ctx: CommandContext) -> list[Command]:
+        return await agent_commands(self.agents, agent, ctx)
+
+    async def run_command(self, agent: str, ctx: CommandContext, text: str) -> Typed | None:
+        return await agent_run_command(self.agents, agent, ctx, text)
+
+    async def context(self, task_id: str) -> dict[str, Any] | None:
         return None
 
 
@@ -117,12 +142,17 @@ class _GuardedClient:
     ``bypassPermissions`` (unless allowed) or with a ``cwd`` outside the
     server's directory and its other ``roots``. A relative ``cwd`` is taken
     from the server's directory (not the process's) and passed on
-    absolute, so every worker resolves it the same."""
+    absolute, so every worker resolves it the same. With a ``workspace``
+    (a tenant's) that directory is the only root, and a task created
+    without a ``cwd`` runs in it."""
 
     def __init__(self, client: ClientAPI, *, allow_bypass: bool, cwd: str | None,
-                 roots: Sequence[str] = ()) -> None:
+                 roots: Sequence[str] = (), workspace: str | None = None) -> None:
         self._client = client
         self._allow_bypass = allow_bypass
+        self._fill = workspace is not None
+        if workspace is not None:
+            cwd, roots = workspace, ()
         self._cwd = os.path.realpath(cwd) if cwd else None
         self._roots = [r for r in (self._cwd, *(os.path.realpath(r) for r in roots)) if r]
 
@@ -139,6 +169,8 @@ class _GuardedClient:
         real = os.path.realpath(os.path.join(self._cwd, str(cwd)))
         if not any(real == r or real.startswith(r.rstrip("/") + "/") for r in self._roots):
             where = ", ".join(self._roots)
+            if self._fill:
+                raise Refused(f"cwd {cwd!r} is outside this tenant's workspace ({where})")
             raise Refused(f"cwd {cwd!r} is outside this server's directories ({where}); "
                           "start it there or add the directory with --allow-root")
         return real
@@ -158,8 +190,11 @@ class _GuardedClient:
                      queue: str = "default", dedupe_key: str | None = None,
                      history_from: str | None = None,
                      history_through: int | None = None) -> str:
+        config = self.check_config(config)
+        if self._fill and not (config or {}).get("cwd"):
+            config = {**(config or {}), "cwd": self._cwd}
         return await self._client.create(
-            agent, input, task_id=task_id, config=self.check_config(config), queue=queue,
+            agent, input, task_id=task_id, config=config, queue=queue,
             dedupe_key=dedupe_key, history_from=history_from, history_through=history_through)
 
     async def send(self, task_id: str, input: Input, *,
@@ -204,6 +239,35 @@ class _GuardedClient:
         return await self._client.wait(task_id, timeout=timeout)
 
 
+@dataclasses.dataclass
+class _Scope:
+    """What a request of one tenant reaches: its scoped client, that client
+    guarded, and a stream-json front on it."""
+
+    client: Any
+    guarded: _GuardedClient
+    front: Any
+
+
+def _digest(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _token_lookup(token: str | None, tokens: Any) -> Callable[[str], str | None]:
+    """A token's tenant, compared by digest (a lookup that leaks no timing
+    about the tokens it holds)."""
+    table: dict[str, str] = {_digest(token): DEFAULT_TENANT} if token else {}
+    if isinstance(tokens, Mapping):
+        table.update({_digest(t): name for t, name in tokens.items()})
+    find = tokens if callable(tokens) else None
+
+    def lookup(got: str) -> str | None:
+        hit = table.get(_digest(got))
+        return hit if hit is not None or find is None else find(got)
+
+    return lookup
+
+
 class _GuardedFront:
     """A stream-json front whose ``client`` is guarded."""
 
@@ -227,34 +291,65 @@ def _hostname(value: str) -> str:
 
 
 def create_app(client: Client, *, token: str | None = None,
-               deltas: Any = None, agents: Mapping[str, Agent] | None = None,
+               tokens: Mapping[str, str] | Callable[[str], str | None] | None = None,
+               auth: bool = True, deltas: Any = None, agents: Mapping[str, Agent] | None = None,
                app: Any = None, allowed_hosts: Sequence[str] | None = None,
                origins: Sequence[str] = (), allow_bypass: bool = False,
-               cwd: str | None = None, roots: Sequence[str] = ()) -> Starlette:
+               cwd: str | None = None, roots: Sequence[str] = (),
+               workspaces: Mapping[str, str] | None = None) -> Starlette:
     """``deltas`` is ``LocalApp.deltas`` when workers run in this process;
     ``agents`` (by name) lets a message run its task agent's slash commands;
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
     (``/context``) and serves new stream-json conversations' trees.
 
+    Every request needs a bearer token: ``token`` is the default tenant's,
+    ``tokens`` maps more tokens to their tenants (or finds a token's
+    tenant). A request reaches only its tenant's tasks (``Client.scoped``);
+    another tenant's task answers 404. Serving without a token takes
+    ``auth=False`` (a loopback-only development server; the default
+    tenant).
+
     ``allowed_hosts``: the ``Host`` names served (any when ``None``);
     ``origins``: web origins (``https://host:port``) allowed besides the
     server's own; ``allow_bypass``: requests may ask for
     ``bypassPermissions``; ``cwd``: tasks a request creates run in it or
-    below it, or below one of ``roots`` (anywhere when ``None``)."""
+    below it, or below one of ``roots`` (anywhere when ``None``);
+    ``workspaces``: per tenant, the directory its tasks run in or below
+    (instead of ``cwd`` and ``roots``), and by default."""
+    if auth and not token and not tokens:
+        raise ValueError("create_app needs a bearer token (token= or tokens=); pass "
+                         "auth=False to serve every request without one")
+    if tokens and not hasattr(client, "scoped"):
+        raise ValueError("tenant tokens need a client that can be scoped to a tenant")
+    tenant_of = _token_lookup(token, tokens)
     agents = agents if agents is not None else getattr(getattr(app, "runtime", None),
                                                        "agents", None)
-    guarded = _GuardedClient(client, allow_bypass=allow_bypass, cwd=cwd, roots=roots)
-    front = _GuardedFront(app if app is not None else _Front(client=client, deltas=deltas),
-                          guarded)
+    serving: AppAPI = app if app is not None else _Front(client=client, agents=agents or {},
+                                                          live=deltas)
+    scopes: dict[str, _Scope] = {}
+
+    def scope_for(tenant: str) -> _Scope:
+        found = scopes.get(tenant)
+        if found is None:
+            scoped = client.scoped(tenant) if hasattr(client, "scoped") else client
+            guarded = _GuardedClient(scoped, allow_bypass=allow_bypass, cwd=cwd, roots=roots,
+                                     workspace=(workspaces or {}).get(tenant))
+            found = scopes[tenant] = _Scope(scoped, guarded, _GuardedFront(serving, guarded))
+        return found
+
+    def scope(request: Request) -> _Scope:
+        found: _Scope = request.state.scope
+        return found
     hosts = None if allowed_hosts is None else {h.lower() for h in allowed_hosts}
     allowed_origins = {o.rstrip("/").lower() for o in origins}
 
-    def authorized(headers: Any, query: Any) -> bool:
-        if not token:
-            return True
+    def tenant(headers: Any, query: Any) -> str | None:
+        """The request's tenant; ``None`` when its token is missing or wrong."""
+        if not auth:
+            return DEFAULT_TENANT
         got = headers.get("authorization", "").removeprefix("Bearer ").strip() \
             or query.get("token", "")
-        return hmac.compare_digest(got, token)
+        return tenant_of(got) if got else None
 
     def same_site(headers: Any) -> bool:
         """Whether the request comes from an allowed ``Host`` and, when a
@@ -272,8 +367,10 @@ def create_app(client: Client, *, token: str | None = None,
         async def wrapped(request: Request) -> Response:
             if not same_site(request.headers):
                 return JSONResponse({"error": "cross-site request refused"}, status_code=403)
-            if not authorized(request.headers, request.query_params):
+            who = tenant(request.headers, request.query_params)
+            if who is None:
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
+            request.state.scope = scope_for(who)
             try:
                 result: Response = await handler(request)
                 return result
@@ -287,7 +384,7 @@ def create_app(client: Client, *, token: str | None = None,
 
     async def create(request: Request) -> Response:
         body = await request.json()
-        task_id = await guarded.create(
+        task_id = await scope(request).guarded.create(
             body["agent"], _input(body.get("input")), config=body.get("config"),
             queue=body.get("queue", "default"), dedupe_key=body.get("dedupe_key"),
             history_from=body.get("history_from"), history_through=body.get("history_through"))
@@ -295,21 +392,21 @@ def create_app(client: Client, *, token: str | None = None,
 
     async def list_tasks(request: Request) -> Response:
         q = request.query_params
-        rows = await client.tasks(parent_id=q.get("parent_id"), status=q.get("status"),  # type: ignore[arg-type]
-                                  limit=int(q.get("limit", "100")))
+        rows = await scope(request).client.tasks(
+            parent_id=q.get("parent_id"), status=q.get("status"), limit=int(q.get("limit", "100")))
         return _json(rows)
 
     async def get_task(request: Request) -> Response:
-        return _json(await client.get(request.path_params["task_id"]))
+        return _json(await scope(request).client.get(request.path_params["task_id"]))
 
     async def events(request: Request) -> Response:
         after = int(request.query_params.get("after", "0"))
-        return _json(await client.events(request.path_params["task_id"], after))
+        return _json(await scope(request).client.events(request.path_params["task_id"], after))
 
     async def pending(request: Request) -> Response:
         task_id = request.path_params["task_id"]
         out = []
-        for item in await pending_tree(client, task_id):
+        for item in await pending_tree(scope(request).client, task_id):
             row = dataclasses.asdict(item)
             row["title"] = card_title(item, task_id)
             if item.kind == "approval":
@@ -321,25 +418,23 @@ def create_app(client: Client, *, token: str | None = None,
         body = await request.json()
         task_id = request.path_params["task_id"]
         value = _input(body["input"])
-        if isinstance(value, str) and value.startswith("/") and agents:
-            row = await client.get(task_id)
-            agent = agents.get(row.agent)
-            if agent is not None:
-                typed = await run_typed(agent.all_extensions(),
-                                        CommandContext(cwd="", task_id=task_id), value)
-                if typed is not None and typed.local:
-                    return _json({"output": typed.text})
-                value = typed.text if typed is not None else value
-        seq = await guarded.send(task_id, value,
+        if isinstance(value, str) and value.startswith("/"):
+            row = await scope(request).client.get(task_id)
+            typed = await serving.run_command(row.agent, CommandContext(cwd="", task_id=task_id),
+                                              value)
+            if typed is not None and typed.local:
+                return _json({"output": typed.text})
+            value = typed.text if typed is not None else value
+        seq = await scope(request).guarded.send(task_id, value,
                                  when=body.get("when", "next_turn"),
                                  dedupe_key=body.get("dedupe_key"))
         return _json({"inbox_seq": seq})
 
     async def answer(request: Request) -> Response:
         body = await request.json()
-        seq = await guarded.answer(request.path_params["task_id"], body["request_id"],
-                                  body.get("decision"), always=bool(body.get("always")),
-                                  data=body.get("data"))
+        seq = await scope(request).guarded.answer(
+            request.path_params["task_id"], body["request_id"], body.get("decision"),
+            always=bool(body.get("always")), data=body.get("data"))
         return _json({"ok": True, "inbox_seq": seq})
 
     async def signal(request: Request) -> Response:
@@ -347,20 +442,22 @@ def create_app(client: Client, *, token: str | None = None,
         name = body["name"]
         if not isinstance(name, str) or not name:
             raise ValueError("a signal needs a non-empty 'name'")
-        seq = await guarded.signal(request.path_params["task_id"], name, body.get("data"),
-                                  dedupe_key=body.get("dedupe_key"))
+        seq = await scope(request).guarded.signal(
+            request.path_params["task_id"], name, body.get("data"),
+            dedupe_key=body.get("dedupe_key"))
         return _json({"ok": True, "inbox_seq": seq})
 
     async def cancel(request: Request) -> Response:
         body = await request.json() if await request.body() else {}
-        await guarded.cancel(request.path_params["task_id"], body.get("reason", ""),
-                             turn_only=bool(body.get("turn_only")))
+        await scope(request).guarded.cancel(
+            request.path_params["task_id"], body.get("reason", ""),
+            turn_only=bool(body.get("turn_only")))
         return _json({"ok": True})
 
     async def usage(request: Request) -> Response:
         task_id = request.path_params["task_id"]
-        await client.get(task_id)
-        total = await tree_usage(client, task_id)
+        await scope(request).client.get(task_id)
+        total = await tree_usage(scope(request).client, task_id)
         return _json({"tasks": total.tasks, "cost_usd": total.cost_usd,
                       "api_seconds": total.api_seconds, "usage": total.usage,
                       "by_model": {name: {"usage": m.usage, "calls": m.calls,
@@ -368,29 +465,27 @@ def create_app(client: Client, *, token: str | None = None,
                                    for name, m in total.by_model.items()}})
 
     async def context(request: Request) -> Response:
-        runtime = getattr(app, "runtime", None)
-        if runtime is None:
-            return _json({"error": "no workers run in this server process"}, 501)
         task_id = request.path_params["task_id"]
-        await client.get(task_id)
-        preview = await runtime.preview(task_id)
-        if preview is None:
-            return _json({"error": "this server does not run the task's agent"}, 501)
-        return _json(context_breakdown(preview))
+        await scope(request).client.get(task_id)
+        parts = await serving.context(task_id)
+        if parts is None:
+            return _json({"error": "no worker in this server process runs the task's agent"},
+                         501)
+        return _json(parts)
 
     async def rewind_list(request: Request) -> Response:
         task_id = request.path_params["task_id"]
-        await client.get(task_id)
+        await scope(request).client.get(task_id)
         return _json([{"index": i, "task_id": p.task_id, "seq": p.seq, "at": p.at,
                        "text": p.text, "files": list(p.files)}
-                      for i, p in enumerate(await rewind_points(client, task_id))])
+                      for i, p in enumerate(await rewind_points(scope(request).client, task_id))])
 
     async def rewind_post(request: Request) -> Response:
         task_id = request.path_params["task_id"]
         body = await request.json()
-        points = await rewind_points(client, task_id)
+        points = await rewind_points(scope(request).client, task_id)
         point = points[int(body["index"])]
-        done = await rewind(client, task_id, point,
+        done = await rewind(scope(request).client, task_id, point,
                             conversation=bool(body.get("conversation", True)),
                             files=bool(body.get("files", True)))
         if done.task_id != task_id and app is not None:
@@ -401,13 +496,21 @@ def create_app(client: Client, *, token: str | None = None,
         q = request.query_params
         name = q.get("agent") or "main"
         if q.get("task_id"):
-            name = (await client.get(q["task_id"])).agent
-        agent = (agents or {}).get(name)
-        if agent is None:
-            return _json([])
-        listed = await list_commands(agent, CommandContext(cwd="", task_id=q.get("task_id")))
+            name = (await scope(request).client.get(q["task_id"])).agent
+        listed = await serving.commands(name, CommandContext(cwd=q.get("cwd") or "",
+                                                             task_id=q.get("task_id")))
         return _json([{"name": c.name, "description": c.description,
                        "argument_hint": c.argument_hint, "local": c.local} for c in listed])
+
+    async def run_command(request: Request) -> Response:
+        body = await request.json()
+        task_id = body.get("task_id")
+        name = body.get("agent") or "main"
+        if task_id:
+            name = (await scope(request).client.get(task_id)).agent
+        typed = await serving.run_command(
+            name, CommandContext(cwd=body.get("cwd") or "", task_id=task_id), str(body["text"]))
+        return _json(None if typed is None else {"text": typed.text, "local": typed.local})
 
     async def list_agents(request: Request) -> Response:
         return _json([{"name": a.name, "description": a.description, "model": a.model,
@@ -429,8 +532,8 @@ def create_app(client: Client, *, token: str | None = None,
         from noeta.host.stream_json import StreamJson, drive
 
         options = _options(request.query_params, ask_client=False)
-        guarded.check_config({"permission_mode": options.permission_mode})
-        options.cwd = guarded.check_cwd(options.cwd)
+        scope(request).guarded.check_config({"permission_mode": options.permission_mode})
+        options.cwd = scope(request).guarded.check_cwd(options.cwd)
         lines = [json.loads(x) for x in (await request.body()).decode().splitlines()
                  if x.strip()]
         queue: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -444,7 +547,7 @@ def create_app(client: Client, *, token: str | None = None,
 
         async def run() -> None:
             try:
-                await drive(StreamJson(front, options, emit), lines=given())
+                await drive(StreamJson(scope(request).front, options, emit), lines=given())
             finally:
                 queue.put_nowait(None)
 
@@ -466,13 +569,15 @@ def create_app(client: Client, *, token: str | None = None,
         if not same_site(ws.headers):
             await ws.close(code=4403)
             return
-        if not authorized(ws.headers, ws.query_params):
+        who = tenant(ws.headers, ws.query_params)
+        if who is None:
             await ws.close(code=4401)
             return
+        mine = scope_for(who)
         options = _options(ws.query_params, ask_client=True)
         try:
-            guarded.check_config({"permission_mode": options.permission_mode})
-            options.cwd = guarded.check_cwd(options.cwd)
+            mine.guarded.check_config({"permission_mode": options.permission_mode})
+            options.cwd = mine.guarded.check_cwd(options.cwd)
         except Refused:
             await ws.close(code=4403)
             return
@@ -489,7 +594,7 @@ def create_app(client: Client, *, token: str | None = None,
                         yield value
 
         try:
-            await drive(StreamJson(front, options, emit), lines=lines())
+            await drive(StreamJson(mine.front, options, emit), lines=lines())
         except UnknownTask as exc:
             await ws.send_text(json.dumps({"type": "error", "error": f"unknown task {exc}"}))
         with contextlib.suppress(Exception):
@@ -497,7 +602,7 @@ def create_app(client: Client, *, token: str | None = None,
 
     async def watch(request: Request) -> Response:
         task_id = request.path_params["task_id"]
-        await client.get(task_id)
+        await scope(request).client.get(task_id)
         after = int(request.query_params.get("after", "0"))
         queue: asyncio.Queue[bytes] = asyncio.Queue()
 
@@ -508,7 +613,7 @@ def create_app(client: Client, *, token: str | None = None,
         async def follow() -> None:
             end: dict[str, Any] = {}
             try:
-                async for rec in client.watch(task_id, after):
+                async for rec in scope(request).client.watch(task_id, after):
                     queue.put_nowait(b"event: event\ndata: " + _enc.encode(rec) + b"\n\n")
             except asyncio.CancelledError:
                 raise
@@ -556,6 +661,7 @@ def create_app(client: Client, *, token: str | None = None,
         Route("/tasks/{task_id}/rewind", guard(rewind_list), methods=["GET"]),
         Route("/tasks/{task_id}/rewind", guard(rewind_post), methods=["POST"]),
         Route("/commands", guard(commands), methods=["GET"]),
+        Route("/commands/run", guard(run_command), methods=["POST"]),
         Route("/agents", guard(list_agents), methods=["GET"]),
         Route("/models", guard(list_models), methods=["GET"]),
         Route("/openapi.json", guard(openapi), methods=["GET"]),
@@ -648,7 +754,12 @@ OPENAPI: dict[str, Any] = {
                                              "conversation": {"type": "boolean"},
                                              "files": {"type": "boolean"}},
                               "required": ["index"]})},
-        "/commands": {"get": _op("Slash commands an agent offers", query=("agent", "task_id"))},
+        "/commands": {"get": _op("Slash commands an agent offers",
+                                 query=("agent", "task_id", "cwd"))},
+        "/commands/run": {"post": _op(
+            "Run a slash command without sending it: the message it stands for, or a local "
+            "command's output", body=_props("text", agent="string", task_id="string",
+                                             cwd="string"))},
         "/agents": {"get": _op("The agents this server runs")},
         "/models": {"get": _op("The model catalog")},
         "/openapi.json": {"get": _op("This document")},

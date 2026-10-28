@@ -107,7 +107,8 @@ def _tool_tokens(spec: Any) -> int:
 def context_breakdown(request: ModelRequest) -> dict[str, Any]:
     """Estimated tokens per part of ``request`` (a ``Runtime.preview``),
     against the model's window: ``categories`` (name -> tokens, in Claude
-    Code's ``/context`` order), ``total``, ``window``, ``model``."""
+    Code's ``/context`` order), ``total``, ``window``, ``model``, and the
+    ``tools`` it offers by name."""
     system = sum(estimate_tokens(p.text) for p in request.system)
     loaded = [t for t in request.tools if not t.defer_loading]
     mcp = sum(_tool_tokens(t) for t in loaded if t.name.startswith("mcp__"))
@@ -118,7 +119,8 @@ def context_breakdown(request: ModelRequest) -> dict[str, Any]:
     categories = {"System prompt": system, "System tools": tools, "MCP tools": mcp,
                   "Messages": messages, "Free space": max(window - used, 0)}
     return {"model": request.model, "window": window, "total": used,
-            "categories": categories, "deferred_tools": len(request.tools) - len(loaded)}
+            "categories": categories, "deferred_tools": len(request.tools) - len(loaded),
+            "tools": [t.name for t in request.tools]}
 
 
 def _plain(message: Any) -> Any:

@@ -45,6 +45,7 @@ asyncio.run(main())
 Run more workers on the same Postgres store (`noeta worker --store postgres://…`) to spread
 tasks across machines; serve the client API over HTTP with `noeta serve` and reach it with
 `noeta.RemoteClient`. `noeta.LocalApp` is a store, a worker and a client in one process.
+Deploying many workers, tokens and tenants: [docs/server.md](docs/server.md).
 Everything an embedder needs is outside `noeta.cli`, which is the `noeta` command itself.
 
 ## Extend it
