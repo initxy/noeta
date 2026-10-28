@@ -101,7 +101,7 @@ class Schedule(Extension):
         if prompt.strip() in (texts.DYNAMIC_SENTINEL, texts.CRON_SENTINEL):
             return sentinel_text if prompt.strip() == texts.DYNAMIC_SENTINEL \
                 else texts.CRON_TICK
-        cwd = str(view.state.config.get("cwd") or getattr(view.env, "cwd", "") or "")
+        cwd = view.cwd
         try:
             expanded = await expand_with(view.extensions, CommandContext(cwd=cwd,
                                                                          task_id=view.task_id),

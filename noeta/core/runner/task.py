@@ -37,7 +37,7 @@ from noeta.core.events import (
     ToolFinished,
     Waiting,
 )
-from noeta.core.extension import Extension, TaskView
+from noeta.core.extension import Extension, TaskView, task_cwd
 from noeta.core.loop import decide
 from noeta.core.loop.state import TaskState, apply, continued, fold
 from noeta.core.prompts import load_overrides
@@ -145,7 +145,7 @@ class TaskRun:
         """Read the prompt override files once, when the task first starts,
         and record them so every later pickup sends the same bytes."""
         env = self.env()
-        cwd = str(self.state.config.get("cwd") or getattr(env, "cwd", "") or "")
+        cwd = task_cwd(self.state, env)
         trusted = self.rt.workspace_trusted
         found = await load_overrides(self.rt.prompt_dirs, env, cwd,
                                      workspace=trusted is None or (bool(cwd) and trusted(cwd)))

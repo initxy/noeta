@@ -175,6 +175,12 @@ class TaskView(records.CoreNotices):
     def task_id(self) -> str:
         return self.state.task_id
 
+    @property
+    def cwd(self) -> str:
+        """The task's working directory: its config's ``cwd``, else its
+        exec env's, else ``""``."""
+        return task_cwd(self.state, self.env)
+
     def ext_state(self, name: str) -> Any:
         return self.state.ext.get(name)
 
@@ -256,6 +262,11 @@ class TaskView(records.CoreNotices):
         finally:
             self.keeps_tail = None
         return out
+
+
+def task_cwd(state: TaskState, env: ExecEnv | None) -> str:
+    """A task's working directory: its config's ``cwd``, else ``env``'s."""
+    return str(state.config.get("cwd") or getattr(env, "cwd", "") or "")
 
 
 def child_task(task_id: str, state: TaskState, extensions: Sequence[Extension], agent: str,

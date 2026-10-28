@@ -360,7 +360,7 @@ class WorkflowTool:
         if isinstance(name, str) and name:
             if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
                 return text_output(f"{TOOL}: {name!r} is not a workflow name.", is_error=True)
-            cwd = str(self.view.state.config.get("cwd") or ctx.env.cwd)
+            cwd = self.view.cwd
             try:
                 return (await ctx.env.read_bytes(f"{cwd}/{PROJECT_WORKFLOWS}/{name}.js")
                         ).decode("utf-8")
