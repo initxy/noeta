@@ -292,8 +292,15 @@ class AnthropicProvider:
                         block["text"] = MID_TURN_MESSAGE.format(text=block["text"])
             # Host text meant to read as part of the person's turn rides in it, plain.
             inline = message.role == "user" and message.origin == "inline"
+            # A local command's message is no turn of its own: the next
+            # prompt joins it (Claude Code, after /compact).
+            after_command = (
+                message.role == "user" and outbound and outbound[-1]["role"] == "user"
+                and any(b.get("type") == "text"
+                        and str(b.get("text", "")).startswith(_COMMAND_TAGS[2])
+                        for b in outbound[-1]["content"][-1:]))
             if (
-                (injected or prev_injected or mid_turn or inline)
+                (injected or prev_injected or mid_turn or inline or after_command)
                 and wire["role"] == "user"
                 and outbound
                 and outbound[-1]["role"] == "user"
@@ -466,6 +473,25 @@ def _image_to_wire(block: Image) -> dict[str, Any]:
     }
 
 
+#: The tags of a local command's message (the caveat, the command, its
+#: output): Claude Code sends each as a text block of its own.
+_COMMAND_TAGS = ("<local-command-caveat>", "<command-name>", "<local-command-stdout>")
+
+
+def _command_parts(text: str) -> list[str]:
+    """A local command's message cut into one part per tag; any other text
+    whole."""
+    if not text.startswith(_COMMAND_TAGS):
+        return [text]
+    parts: list[str] = []
+    for para in text.split("\n\n"):
+        if parts and not para.startswith(_COMMAND_TAGS):
+            parts[-1] += "\n\n" + para
+        else:
+            parts.append(para)
+    return parts
+
+
 def _wrap_system_reminder(text: str) -> str:
     """Anthropic-only tag syntax. The wrapped text is neutralised first:
     several host-authored turns stand in for text produced elsewhere (a
@@ -503,8 +529,10 @@ def _user_to_wire(message: Message, vision: bool) -> dict[str, Any]:
                 }
             )
         elif isinstance(block, Text):
-            text = _wrap_system_reminder(block.text) if wrap else block.text
-            rest.append({"type": "text", "text": text})
+            if wrap:
+                rest.append({"type": "text", "text": _wrap_system_reminder(block.text)})
+            else:
+                rest += [{"type": "text", "text": t} for t in _command_parts(block.text)]
         elif isinstance(block, Image):
             rest.append(_image_to_wire(block))
     return {"role": "user", "content": [*results, *rest]}

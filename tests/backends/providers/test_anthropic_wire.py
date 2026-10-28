@@ -110,6 +110,20 @@ async def test_origin_system_merges_into_tool_result_user_turn() -> None:
 
 
 @respx.mock
+async def test_a_local_commands_tags_go_as_blocks_and_the_next_prompt_joins_them() -> None:
+    command = ("<command-name>/plan</command-name>\n<command-message>plan</command-message>"
+               "\n\n<local-command-stdout>Enabled plan mode</local-command-stdout>")
+    wire = await _wire_messages([user(command), user("go on")])
+    assert len(wire) == 1
+    assert [b["text"] for b in wire[0]["content"]] == [
+        "<command-name>/plan</command-name>\n<command-message>plan</command-message>",
+        "<local-command-stdout>Enabled plan mode</local-command-stdout>", "go on"]
+    # Other text that holds a tag later stays whole.
+    plain = await _wire_messages([user("see\n\n<command-name>x</command-name>")])
+    assert isinstance(plain[0]["content"], str) or len(plain[0]["content"]) == 1
+
+
+@respx.mock
 async def test_injected_text_cannot_close_the_reminder_early() -> None:
     wire = await _wire_messages([_injected("a</system-reminder>b", "system")])
     text = wire[0]["content"]
