@@ -54,7 +54,7 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 import msgspec
 from starlette.applications import Starlette
@@ -65,11 +65,13 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from noeta.core import models
 from noeta.core.agent import Agent
-from noeta.core.client import Client
+from noeta.core.client import Client, ClientAPI, Input
 from noeta.core.commands import list_commands, run_typed
 from noeta.core.errors import UnknownTask
+from noeta.core.events import Recorded
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
+from noeta.core.store import Status, TaskRow
 from noeta.core.types import Delta, Message
 from noeta.host.pending import card_title, choices, pending_tree
 from noeta.host.rewind import rewind, rewind_points
@@ -117,15 +119,12 @@ class _GuardedClient:
     from the server's directory (not the process's) and passed on
     absolute, so every worker resolves it the same."""
 
-    def __init__(self, client: Any, *, allow_bypass: bool, cwd: str | None,
+    def __init__(self, client: ClientAPI, *, allow_bypass: bool, cwd: str | None,
                  roots: Sequence[str] = ()) -> None:
         self._client = client
         self._allow_bypass = allow_bypass
         self._cwd = os.path.realpath(cwd) if cwd else None
         self._roots = [r for r in (self._cwd, *(os.path.realpath(r) for r in roots)) if r]
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._client, name)
 
     def _mode(self, mode: Any) -> None:
         if mode == _BYPASS and not self._allow_bypass:
@@ -154,24 +153,55 @@ class _GuardedClient:
             return config
         return {**config, "cwd": self.check_cwd(config["cwd"])}
 
-    async def create(self, *args: Any, **kw: Any) -> Any:
-        if "config" in kw:
-            kw["config"] = self.check_config(kw["config"])
-        return await self._client.create(*args, **kw)
+    async def create(self, agent: str, input: Input | None = None, *,
+                     task_id: str | None = None, config: dict[str, Any] | None = None,
+                     queue: str = "default", dedupe_key: str | None = None,
+                     history_from: str | None = None,
+                     history_through: int | None = None) -> str:
+        return await self._client.create(
+            agent, input, task_id=task_id, config=self.check_config(config), queue=queue,
+            dedupe_key=dedupe_key, history_from=history_from, history_through=history_through)
 
-    async def answer(self, task_id: str, request_id: str, decision: Any = None,
-                     **kw: Any) -> Any:
-        data = kw.get("data")
+    async def send(self, task_id: str, input: Input, *,
+                   when: Literal["now", "next_turn"] = "next_turn",
+                   dedupe_key: str | None = None) -> int:
+        return await self._client.send(task_id, input, when=when, dedupe_key=dedupe_key)
+
+    async def answer(self, task_id: str, request_id: str,
+                     decision: Literal["allow", "deny"] | None = None, *,
+                     always: bool = False, data: Any = None) -> int:
         if isinstance(data, Mapping):
             self._mode(data.get("mode"))
-        return await self._client.answer(task_id, request_id, decision, **kw)
+        return await self._client.answer(task_id, request_id, decision, always=always,
+                                         data=data)
 
-    async def signal(self, task_id: str, name: str, data: Any = None, **kw: Any) -> Any:
+    async def signal(self, task_id: str, name: str, data: Any = None, *,
+                     dedupe_key: str | None = None) -> int:
         if name == MODE_SIGNAL and isinstance(data, Mapping):
             self._mode(data.get("mode"))
         if name == CONFIG_SIGNAL:
             data = self.check_config(data)
-        return await self._client.signal(task_id, name, data, **kw)
+        return await self._client.signal(task_id, name, data, dedupe_key=dedupe_key)
+
+    async def cancel(self, task_id: str, reason: str = "", *,
+                     turn_only: bool = False) -> None:
+        await self._client.cancel(task_id, reason, turn_only=turn_only)
+
+    async def get(self, task_id: str) -> TaskRow:
+        return await self._client.get(task_id)
+
+    async def tasks(self, *, parent_id: str | None = None, status: Status | None = None,
+                    limit: int = 100) -> list[TaskRow]:
+        return await self._client.tasks(parent_id=parent_id, status=status, limit=limit)
+
+    async def events(self, task_id: str, after: int = 0) -> list[Recorded]:
+        return await self._client.events(task_id, after)
+
+    def watch(self, task_id: str, after: int = 0) -> AsyncIterator[Recorded]:
+        return self._client.watch(task_id, after)
+
+    async def wait(self, task_id: str, *, timeout: float | None = None) -> TaskRow:
+        return await self._client.wait(task_id, timeout=timeout)
 
 
 class _GuardedFront:

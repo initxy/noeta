@@ -12,12 +12,12 @@ from typing import Any, Literal
 import httpx
 import msgspec
 
+from noeta.core.client import ClientAPI, Input
 from noeta.core.errors import NoetaError, UnknownTask
 from noeta.core.events import Recorded
 from noeta.core.store import Status, TaskRow
-from noeta.core.types import Delta, Message
+from noeta.core.types import Delta
 
-Input = str | Message
 #: Reconnects in a row (without an event in between) before ``watch`` gives up.
 WATCH_RETRIES = 5
 
@@ -146,6 +146,10 @@ class RemoteClient:
 
     async def close(self) -> None:
         await self.http.aclose()
+
+
+def _is_client(client: RemoteClient) -> ClientAPI:
+    return client  # mypy checks RemoteClient against ClientAPI here
 
 
 class RemoteApp:

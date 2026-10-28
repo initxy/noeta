@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from noeta.core import models
+from noeta.core.client import ClientAPI
 from noeta.core.events import ModelCalled, ModelReplied, TaskCreated
 from noeta.core.types import ModelRequest, Usage
 from noeta.toolkit.context import estimate_tokens
@@ -71,7 +72,7 @@ def add_events(total: TreeUsage, events: list[Any], *, after: int = 0) -> None:
                       rec.at - called_at if called_at else 0.0)
 
 
-async def tree_usage(client: Any, task_id: str) -> TreeUsage:
+async def tree_usage(client: ClientAPI, task_id: str) -> TreeUsage:
     """Every model call of the task and its sub-agents, by model."""
     total = TreeUsage()
     pending = [task_id]

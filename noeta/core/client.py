@@ -8,7 +8,7 @@ import asyncio
 import contextlib
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any, Literal, Union
+from typing import Any, Literal, Protocol, Union
 
 from noeta.core.errors import UnknownTask
 from noeta.core.events import Answer, Cancel, External, Recorded, Say, TaskCreated
@@ -20,6 +20,42 @@ Input = Union[str, Message]
 
 def _message(value: Input) -> Message:
     return user(value, origin="human") if isinstance(value, str) else value
+
+
+class ClientAPI(Protocol):
+    """What every client offers, in process (:class:`Client`) or over HTTP
+    (``noeta.host.remote.RemoteClient``): create, drive and read tasks."""
+
+    async def create(self, agent: str, input: Input | None = None, *,
+                     task_id: str | None = None, config: dict[str, Any] | None = None,
+                     queue: str = "default", dedupe_key: str | None = None,
+                     history_from: str | None = None,
+                     history_through: int | None = None) -> str: ...
+
+    async def send(self, task_id: str, input: Input, *,
+                   when: Literal["now", "next_turn"] = "next_turn",
+                   dedupe_key: str | None = None) -> int: ...
+
+    async def answer(self, task_id: str, request_id: str,
+                     decision: Literal["allow", "deny"] | None = None, *,
+                     always: bool = False, data: Any = None) -> int: ...
+
+    async def signal(self, task_id: str, name: str, data: Any = None, *,
+                     dedupe_key: str | None = None) -> int: ...
+
+    async def cancel(self, task_id: str, reason: str = "", *,
+                     turn_only: bool = False) -> None: ...
+
+    async def get(self, task_id: str) -> TaskRow: ...
+
+    async def tasks(self, *, parent_id: str | None = None, status: Status | None = None,
+                    limit: int = 100) -> list[TaskRow]: ...
+
+    async def events(self, task_id: str, after: int = 0) -> list[Recorded]: ...
+
+    def watch(self, task_id: str, after: int = 0) -> AsyncIterator[Recorded]: ...
+
+    async def wait(self, task_id: str, *, timeout: float | None = None) -> TaskRow: ...
 
 
 class Client:

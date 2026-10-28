@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from noeta.core import models
+from noeta.core.client import ClientAPI
 from noeta.core.commands import list_commands, run_typed
 from noeta.core.events import (
     ChildEnded,
@@ -169,7 +170,7 @@ def _message_from(content: Any) -> Message:
     return Message(role="user", content=blocks, origin="human")
 
 
-async def find_latest_task(client: Any, cwd: str, agent: str = "main") -> str | None:
+async def find_latest_task(client: ClientAPI, cwd: str, agent: str = "main") -> str | None:
     """``--continue``: the newest root task of ``agent`` started in ``cwd``."""
     rows = [r for r in await client.tasks(limit=200) if r.parent_id is None and r.agent == agent]
     rows.sort(key=lambda r: r.created_at, reverse=True)

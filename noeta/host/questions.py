@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from noeta.core.client import Client
+from noeta.core.client import ClientAPI
 from noeta.core.questions import AnswerValidationError, detail_questions, normalize_answer
 from noeta.host.pending import pending
 
@@ -65,7 +65,7 @@ def typed_answer(detail: dict[str, Any], text: str,
     return out
 
 
-async def answer_question(client: Client, task_id: str, request_id: str, data: Any) -> None:
+async def answer_question(client: ClientAPI, task_id: str, request_id: str, data: Any) -> None:
     """Answer a pending question after checking it against what was asked —
     nothing is posted for a stale or invalid answer (raises
     :class:`AnswerValidationError`)."""

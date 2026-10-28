@@ -24,7 +24,7 @@ from noeta.core.events import (
 from noeta.core.types import ToolUse
 
 if TYPE_CHECKING:
-    from noeta.core.client import Client
+    from noeta.core.client import ClientAPI
 
 
 @dataclass(frozen=True)
@@ -77,7 +77,7 @@ def card_title(item: Pending, root_task_id: str = "") -> str:
     return title
 
 
-async def answer_choice(client: Any, task_id: str, request_id: str, choice: str,
+async def answer_choice(client: ClientAPI, task_id: str, request_id: str, choice: str,
                         message: str = "") -> None:
     """Answer an approval with one of its :func:`choices` (``message``: what
     the person said when declining)."""
@@ -151,7 +151,7 @@ def pending(events: Sequence[Recorded], task_id: str = "") -> list[Pending]:
     return out
 
 
-async def pending_tree(client: Client, task_id: str) -> list[Pending]:
+async def pending_tree(client: ClientAPI, task_id: str) -> list[Pending]:
     """:func:`pending` for the task and every waiting descendant: a
     sub-agent's approval or question surfaces at the root, carrying the
     sub-agent's ``task_id`` to answer it on."""
@@ -162,7 +162,7 @@ async def pending_tree(client: Client, task_id: str) -> list[Pending]:
     return out
 
 
-async def tree_busy(client: Client, task_id: str) -> bool:
+async def tree_busy(client: ClientAPI, task_id: str) -> bool:
     """Whether a task below ``task_id`` (a background sub-agent) has not ended."""
     for child in await client.tasks(parent_id=task_id, limit=10_000):
         if child.status != "ended" or await tree_busy(client, child.task_id):
@@ -170,7 +170,7 @@ async def tree_busy(client: Client, task_id: str) -> bool:
     return False
 
 
-async def follow_tree(client: Client, task_id: str, after: int = 0, *,
+async def follow_tree(client: ClientAPI, task_id: str, after: int = 0, *,
                       poll: float = 1.0) -> AsyncIterator[Recorded | list[Pending]]:
     """``client.watch(task_id, after)``, plus what its sub-agents wait on a
     human for: while the task waits and a sub-agent below it is still
