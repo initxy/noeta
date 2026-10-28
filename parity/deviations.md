@@ -39,6 +39,7 @@ A row without an id is a difference the replay cannot see.
 | `5a78a8ed` `0a9c6f15` | The two system cache marks sit on `system[0]` and `system[1]` instead of `system[1]` and `system[2]`. | Same blocks (identity, prompt); the index shifts only because the billing header is absent. |
 | `7678a2ee` | A sub-agent's request has no billing header block either. | As for the main request. |
 | `098ae292` | A sub-agent's two system cache marks sit on `system[0]` and `system[1]`. | As for the main request: the billing header is absent. |
+| `d334efde` | The summarize call's two system cache marks sit on `system[0]` and `system[1]`. | As for the main request: the billing header is absent. |
 
 ## Main prompt and environment message
 
