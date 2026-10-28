@@ -192,3 +192,27 @@ async def test_requests_cannot_bypass_permissions_or_leave_the_directory(
         answer = json.loads(await asyncio.wait_for(ws.recv(), 10))
         assert answer["response"]["subtype"] == "error"
         assert "bypassPermissions" in answer["response"]["error"]
+
+
+async def test_a_relative_cwd_is_the_servers_and_more_roots_can_be_allowed(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.core.client import Client
+
+    served, other = tmp_path / "served", tmp_path / "other"
+    (served / "sub").mkdir(parents=True)
+    other.mkdir()
+    monkeypatch.chdir(tmp_path)  # the process's directory is not the server's
+    store = SqliteStore(str(tmp_path / "t.db"))
+    client = Client(store)
+    app = create_app(client, cwd=str(served), roots=[str(other)])
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                 base_url="http://127.0.0.1") as http:
+        for cwd, where in (("sub", served / "sub"), (str(other), other)):
+            got = await http.post("/tasks", json={"agent": "main", "config": {"cwd": cwd}})
+            assert got.status_code == 201, cwd
+            first = (await client.events(got.json()["task_id"]))[0].event
+            assert first.config["cwd"] == str(where)  # type: ignore[attr-defined]
+        for cwd in ("../elsewhere", str(tmp_path)):
+            got = await http.post("/tasks", json={"agent": "main", "config": {"cwd": cwd}})
+            assert got.status_code == 403 and "--allow-root" in got.json()["error"], cwd
+    await store.close()

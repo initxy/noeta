@@ -65,6 +65,8 @@ def _parser() -> argparse.ArgumentParser:
                     help="a web origin (https://host:port) whose pages may call the API")
     sv.add_argument("--allow-bypass-permissions", action="store_true",
                     help="let requests start or switch tasks into bypassPermissions")
+    sv.add_argument("--allow-root", action="append", default=[], metavar="PATH",
+                    help="a directory besides the server's own tasks may run in")
     sub.add_parser("trust", help="load this project's plugins, agents, prompts and skills")
     sub.add_parser("plugins", help="list the plugins and where each comes from")
     mcp_command.add_parser(sub)
@@ -156,7 +158,8 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      app=app if with_worker else None,
                      allowed_hosts=LOOPBACK_HOSTS if host in LOOPBACK_HOSTS else None,
                      origins=args.allow_origin,
-                     allow_bypass=args.allow_bypass_permissions, cwd=cwd)
+                     allow_bypass=args.allow_bypass_permissions, cwd=cwd,
+                     roots=[os.path.abspath(r) for r in args.allow_root])
     port = args.port
     try:
         await uvicorn.Server(uvicorn.Config(api, host=host, port=port)).serve()

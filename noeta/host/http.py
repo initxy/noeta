@@ -40,8 +40,8 @@ A bearer token is required when one is configured (``NOETA_SERVER_TOKEN``;
 ``?token=`` for a WebSocket from a browser). A request from a web page of
 another origin is refused, and so is one whose ``Host`` is not in
 ``allowed_hosts`` (DNS rebinding). No request starts or switches a task into
-``bypassPermissions`` unless ``allow_bypass``, or runs it outside ``cwd``.
-Needs the ``server`` extra.
+``bypassPermissions`` unless ``allow_bypass``, or runs it outside ``cwd`` and
+the ``roots`` (a relative ``cwd`` is taken from ``cwd``). Needs the ``server`` extra.
 """
 
 from __future__ import annotations
@@ -112,12 +112,16 @@ _BYPASS = "bypassPermissions"
 class _GuardedClient:
     """``client`` refusing what a request may not ask for: a task in
     ``bypassPermissions`` (unless allowed) or with a ``cwd`` outside the
-    server's."""
+    server's directory and its other ``roots``. A relative ``cwd`` is taken
+    from the server's directory (not the process's) and passed on
+    absolute, so every worker resolves it the same."""
 
-    def __init__(self, client: Any, *, allow_bypass: bool, cwd: str | None) -> None:
+    def __init__(self, client: Any, *, allow_bypass: bool, cwd: str | None,
+                 roots: Sequence[str] = ()) -> None:
         self._client = client
         self._allow_bypass = allow_bypass
         self._cwd = os.path.realpath(cwd) if cwd else None
+        self._roots = [r for r in (self._cwd, *(os.path.realpath(r) for r in roots)) if r]
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._client, name)
@@ -127,25 +131,38 @@ class _GuardedClient:
             raise Refused("this server does not allow bypassPermissions "
                           "(start it with --allow-bypass-permissions)")
 
-    def check_config(self, config: Any) -> None:
+    def check_cwd(self, cwd: Any) -> Any:
+        """``cwd`` made absolute; raises :class:`Refused` when it lies
+        outside the server's directories."""
+        if not cwd or self._cwd is None:
+            return cwd
+        real = os.path.realpath(os.path.join(self._cwd, str(cwd)))
+        if not any(real == r or real.startswith(r.rstrip("/") + "/") for r in self._roots):
+            where = ", ".join(self._roots)
+            raise Refused(f"cwd {cwd!r} is outside this server's directories ({where}); "
+                          "start it there or add the directory with --allow-root")
+        return real
+
+    def check_config(self, config: Any) -> Any:
+        """``config`` with its ``cwd`` absolute; raises :class:`Refused` for
+        what a request may not ask for."""
         if not isinstance(config, Mapping):
-            return
+            return config
         self._mode(config.get("permission_mode"))
-        cwd = config.get("cwd")
-        if cwd and self._cwd is not None:
-            real = os.path.realpath(str(cwd))
-            if real != self._cwd and not real.startswith(self._cwd.rstrip("/") + "/"):
-                raise Refused(f"cwd {cwd!r} is outside this server's directory {self._cwd}")
+        if not config.get("cwd"):
+            return config
+        return {**config, "cwd": self.check_cwd(config["cwd"])}
 
     async def create(self, *args: Any, **kw: Any) -> Any:
-        self.check_config(kw.get("config"))
+        if "config" in kw:
+            kw["config"] = self.check_config(kw["config"])
         return await self._client.create(*args, **kw)
 
     async def signal(self, task_id: str, name: str, data: Any = None, **kw: Any) -> Any:
         if name == MODE_SIGNAL and isinstance(data, Mapping):
             self._mode(data.get("mode"))
         if name == CONFIG_SIGNAL:
-            self.check_config(data)
+            data = self.check_config(data)
         return await self._client.signal(task_id, name, data, **kw)
 
 
@@ -175,7 +192,7 @@ def create_app(client: Client, *, token: str | None = None,
                deltas: Any = None, agents: Mapping[str, Agent] | None = None,
                app: Any = None, allowed_hosts: Sequence[str] | None = None,
                origins: Sequence[str] = (), allow_bypass: bool = False,
-               cwd: str | None = None) -> Starlette:
+               cwd: str | None = None, roots: Sequence[str] = ()) -> Starlette:
     """``deltas`` is ``LocalApp.deltas`` when workers run in this process;
     ``agents`` (by name) lets a message run its task agent's slash commands;
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
@@ -185,10 +202,10 @@ def create_app(client: Client, *, token: str | None = None,
     ``origins``: web origins (``https://host:port``) allowed besides the
     server's own; ``allow_bypass``: requests may ask for
     ``bypassPermissions``; ``cwd``: tasks a request creates run in it or
-    below it (anywhere when ``None``)."""
+    below it, or below one of ``roots`` (anywhere when ``None``)."""
     agents = agents if agents is not None else getattr(getattr(app, "runtime", None),
                                                        "agents", None)
-    guarded = _GuardedClient(client, allow_bypass=allow_bypass, cwd=cwd)
+    guarded = _GuardedClient(client, allow_bypass=allow_bypass, cwd=cwd, roots=roots)
     front = _GuardedFront(app if app is not None else _Front(client=client, deltas=deltas),
                           guarded)
     hosts = None if allowed_hosts is None else {h.lower() for h in allowed_hosts}
@@ -374,7 +391,8 @@ def create_app(client: Client, *, token: str | None = None,
         from noeta.host.stream_json import StreamJson, drive
 
         options = _options(request.query_params, ask_client=False)
-        guarded.check_config({"permission_mode": options.permission_mode, "cwd": options.cwd})
+        guarded.check_config({"permission_mode": options.permission_mode})
+        options.cwd = guarded.check_cwd(options.cwd)
         lines = [json.loads(x) for x in (await request.body()).decode().splitlines()
                  if x.strip()]
         queue: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -415,8 +433,8 @@ def create_app(client: Client, *, token: str | None = None,
             return
         options = _options(ws.query_params, ask_client=True)
         try:
-            guarded.check_config({"permission_mode": options.permission_mode,
-                                  "cwd": options.cwd})
+            guarded.check_config({"permission_mode": options.permission_mode})
+            options.cwd = guarded.check_cwd(options.cwd)
         except Refused:
             await ws.close(code=4403)
             return
