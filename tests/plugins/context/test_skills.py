@@ -113,6 +113,18 @@ async def test_unknown_and_disabled_skills_are_refused(h: Harness) -> None:
     assert second.result.text == "Not a skill name: ''"
 
 
+async def test_an_unknown_skill_suggests_a_near_name_not_the_whole_list(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    write_skill(skills_dir(h), "review", "Review.")
+    h.provider.add(reply("", ("Skill", {"skill": "deplyo"})), reply("", ("Skill", {"skill": "x"})),
+                   reply("done"))
+    tid = await h.start(agent())
+    first, second = await h.results(tid)
+    assert first.result.is_error and second.result.is_error
+    assert first.result.text == "There is no skill named deplyo. Did you mean deploy?"
+    assert second.result.text == "There is no skill named x."
+
+
 async def test_a_leading_slash_and_spaces_around_the_name_are_ignored(h: Harness) -> None:
     write_skill(skills_dir(h), "deploy", "Ship.")
     h.provider.add(reply("", ("Skill", {"skill": " /deploy "})), reply("", ("Skill", {"skill": " "})),
@@ -487,7 +499,7 @@ async def test_a_skill_with_paths_is_offered_once_a_matching_file_is_touched(
     tid = await h.start(agent())
     assert h.provider.requests[0].messages[1].text == f"{ROSTER_HEADER}\n\n- deploy: Ship."
     refused, _readme, _src, loaded = await h.results(tid)
-    assert refused.result.is_error and "available: deploy" in refused.result.text
+    assert refused.result.is_error and "no skill named pyfix" in refused.result.text
     assert not loaded.result.is_error
     [unlocked] = await h.records(tid, "skills", "unlocked")
     assert unlocked.data == {"names": ["pyfix"]}

@@ -18,6 +18,8 @@ from noeta.toolkit.context import task_env
 from noeta.toolkit.tools import SCHEMA_DIALECT
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from noeta.plugins.skills.extension import Skills
 
 SKILL_TOOL = "Skill"
@@ -81,8 +83,9 @@ class SkillTool:
         if desc is not None and not desc.model_invocable:
             return text_output(USER_ONLY_SKILL.format(name=name), is_error=True)
         if desc is None or name not in menu:
-            available = ", ".join(menu) if menu else "(none)"
-            return text_output(f"unknown skill {name!r}; available: {available}", is_error=True)
+            near = closest_name(name, menu)
+            hint = f" Did you mean {near}?" if near is not None else ""
+            return text_output(f"There is no skill named {name}.{hint}", is_error=True)
         args = input.get("args")
         if args is not None and not isinstance(args, str):
             return text_output("args must be a string", is_error=True)
@@ -91,6 +94,26 @@ class SkillTool:
             f"context from your next step.",
             skill_activation=activation_data(desc, "model", args, ctx.env.cwd),
         )
+
+
+def closest_name(name: str, names: Sequence[str], max_distance: int = 2) -> str | None:
+    """The name in ``names`` nearest to ``name`` by edit distance, if within
+    ``max_distance`` (first in order on a tie)."""
+    best: tuple[int, str] | None = None
+    for candidate in names:
+        d = _edit_distance(name, candidate)
+        if d <= max_distance and (best is None or d < best[0]):
+            best = (d, candidate)
+    return best[1] if best else None
+
+
+def _edit_distance(a: str, b: str) -> int:
+    row = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        prev, row[0] = row[0], i
+        for j, cb in enumerate(b, 1):
+            prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (ca != cb))
+    return row[-1]
 
 
 def activation_data(desc: SkillDescription, source: str,
