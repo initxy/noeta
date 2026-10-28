@@ -140,8 +140,8 @@ def _spec(flags: str = "", valued: str = "", path_valued: str = "", glob_valued:
 
 
 _GREP = _spec(
-    "-i -v -n -c -l -L -h -H -r -R -E -F -G -P -w -x -o -s -q -z -a -I -b -U -T -Z "
-    "--color --color= --colour= --recursive --dereference-recursive --ignore-case "
+    "-i -v -n -c -l -L -h -H -r -E -F -G -P -w -x -o -s -q -z -a -I -b -U -T -Z "
+    "--color --color= --colour= --recursive --ignore-case "
     "--no-ignore-case --invert-match --line-number --count --files-with-matches "
     "--files-without-match --no-filename --with-filename --word-regexp --line-regexp "
     "--only-matching --no-messages --quiet --silent --null --null-data --text "
@@ -152,12 +152,12 @@ _GREP = _spec(
     path_valued="-f --file", operands="pattern", pattern_flags=_set("-e --regexp -f --file"),
     numeric=True, lead_glob=True)
 _RG = _spec(
-    "-i -s -S -v -n -N -c -l -w -x -o -F -P -U -H -I -L -u -uu -uuu -a -z -0 -p -q -e "
+    "-i -s -S -v -n -N -c -l -w -x -o -F -P -U -H -I -u -uu -uuu -a -z -0 -p -q -e "
     "--ignore-case --case-sensitive --smart-case --invert-match --line-number "
     "--no-line-number --count --count-matches --files-with-matches --files-without-match "
     "--word-regexp --line-regexp --only-matching --fixed-strings --pcre2 --multiline "
     "--with-filename --no-filename --no-heading --heading --hidden --no-ignore "
-    "--no-ignore-vcs --follow --text --null --pretty --quiet --files --json --vimgrep "
+    "--no-ignore-vcs --text --null --pretty --quiet --files --json --vimgrep "
     "--column --stats --sort= --sortr= --color= --type-list --trim --unrestricted "
     "--no-messages --max-columns-preview --passthru --crlf --byte-offset",
     valued="-e -t -T -m -A -B -C -d -M -r -j --regexp --type --type-not "
@@ -175,6 +175,11 @@ def _jq_ok(_flags: list[tuple[str, str | None]], operands: list[Word]) -> bool:
                          operands[0].text)
 
 
+def _ls_ok(flags: list[tuple[str, str | None]], _operands: list[Word]) -> bool:
+    names = {name for name, _v in flags}
+    return not (names & {"-L", "--dereference"} and names & {"-R", "--recursive"})
+
+
 def _date_ok(_flags: list[tuple[str, str | None]], operands: list[Word]) -> bool:
     return all(w.text.startswith("+") for w in operands)
 
@@ -184,7 +189,10 @@ def _date_ok(_flags: list[tuple[str, str | None]], operands: list[Word]) -> bool
 #: Left out on purpose: ``env``, ``command``, ``nice``, ``xargs`` (they run
 #: another program; ``xargs`` is judged with its program below), ``less`` /
 #: ``more`` (run commands), ``yq`` (``-i``), ``printenv`` (prints secrets),
-#: ``awk`` / ``sed`` (run programs, write files).
+#: ``awk`` / ``sed`` (run programs, write files), and the flags that make a
+#: recursion follow every link it meets (``grep -R``, ``rg -L``, ``find -L``,
+#: ``du -L``, ``tree -l``, ``ls -LR``): only the paths written on the command
+#: line are checked for where they lead.
 READ_ONLY: dict[str, _Spec] = {
     "cat": _spec("-A -b -e -E -n -s -t -T -u -v --show-all --number --number-nonblank "
                  "--squeeze-blank --show-ends --show-tabs --show-nonprinting", lead_glob=True),
@@ -200,7 +208,8 @@ READ_ONLY: dict[str, _Spec] = {
                 "--reverse --recursive --size --inode --directory --dereference --no-group "
                 "--numeric-uid-gid --indicator-style= --format= --quoting-style= "
                 "--literal --escape --hide= --ignore= --ignore-backups --width=",
-                valued="-I -w -T --ignore --hide --block-size", lead_glob=True),
+                valued="-I -w -T --ignore --hide --block-size", lead_glob=True,
+                check=_ls_ok),
     "pwd": _spec("-L -P", operands="none"),
     "echo": _spec(any_flags=True, operands="text"),
     "printf": _spec(any_flags=True, operands="text"),
@@ -211,17 +220,16 @@ READ_ONLY: dict[str, _Spec] = {
     "which": _spec("-a -s", operands="text"),
     "type": _spec("-a -t -p -P -f", operands="text"),
     "file": _spec("-b -i -L -h -z -k -N -0 -r --brief --mime --mime-type --mime-encoding "
-                  "--dereference --no-dereference --uncompress --keep-going --raw",
-                  lead_glob=True),
+                  "--dereference --no-dereference --uncompress --keep-going --raw"),
     "stat": _spec("-L -t -f --dereference --terse --file-system",
                   valued="-c --format --printf", lead_glob=True),
-    "du": _spec("-a -b -c -h -k -m -s -x -L -H -l -0 --all --bytes --total --human-readable "
-                "--summarize --apparent-size --one-file-system --dereference --si "
+    "du": _spec("-a -b -c -h -k -m -s -x -H -l -0 --all --bytes --total --human-readable "
+                "--summarize --apparent-size --one-file-system --dereference-args --si "
                 "--max-depth= --threshold= --time",
                 valued="-d -t -B --max-depth --exclude --block-size", lead_glob=True),
     "df": _spec("-a -h -H -i -k -l -P -T --all --human-readable --si --inodes --local "
                 "--portability --print-type --total --output="),
-    "tree": _spec("-a -d -f -i -l -s -h -D -C -n -F -p -u -g -q -N -r -t -v -U -x -J -X "
+    "tree": _spec("-a -d -f -i -s -h -D -C -n -F -p -u -g -q -N -r -t -v -U -x -J -X "
                   "--noreport --dirsfirst --du --prune --gitignore --charset= --sort=",
                   valued="-L -I -P --filelimit"),
     "grep": _GREP, "egrep": _GREP, "fgrep": _GREP,
@@ -608,7 +616,7 @@ def _xargs_ok(words: Sequence[Word], scope: Scope) -> bool:
 #: of those the ones whose value is a path. Anything else (``-exec``,
 #: ``-delete``, ``-fprint``, ``-files0-from`` ...) is not read-only.
 _FIND_FLAGS = frozenset("""-print -print0 -prune -o -a -or -and -not ! ( ) , -empty -readable
-    -writable -executable -depth -xdev -mount -follow -true -false -ls -nouser -nogroup -quit
+    -writable -executable -depth -xdev -mount -true -false -ls -nouser -nogroup -quit
     -noleaf -ignore_readdir_race -daystart""".split())
 _FIND_VALUED = frozenset("""-name -iname -path -ipath -wholename -iwholename -regex -iregex
     -type -xtype -maxdepth -mindepth -size -mtime -mmin -atime -amin -ctime -cmin -user -group
@@ -618,7 +626,7 @@ _FIND_PATH_VALUED = frozenset({"-newer", "-anewer", "-cnewer", "-samefile"})
 
 def _find_ok(words: Sequence[Word], scope: Scope) -> bool:
     i = 0
-    while i < len(words) and words[i].text in ("-L", "-H", "-P") and words[i].plain:
+    while i < len(words) and words[i].text in ("-H", "-P") and words[i].plain:
         i += 1
     while i < len(words) and not (words[i].text.startswith("-") or words[i].text in "()!,"):
         if not _path_ok(words[i], scope):

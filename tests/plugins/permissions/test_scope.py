@@ -37,6 +37,9 @@ S = Scope(dirs=("/proj", "/lib"), home="/home/u")
     "grep -rn foo --include=*.py .", "grep -rn foo --include *.py --exclude-dir=.* .",
     "rg foo -g *.py", "rg foo --glob *.test.ts src", "rg foo --iglob=*.PY",
     "[ -d src ]", "[ -f a.txt ] && cat a.txt", "test -d src", "du -sh *", "stat *.py",
+    # Recursion that does not follow links, and following that does not recurse.
+    "grep -r k .", "ls -L src", "ls -R src", "find -H . -name x", "du -H -s src", "tree -a",
+    "file a.txt",
 ])
 def test_read_only_inside(command: str) -> None:
     assert read_only(command, S)
@@ -74,6 +77,12 @@ ADVERSARIAL = [
     # Writes git can do.
     "git push", "git tag v1", "git branch new", "git branch -D x", "git reflog expire --all",
     "git config user.name x", "git stash drop", "git remote add x y",
+    # Recursion following every link it meets reads where the links lead.
+    "grep -R k .", "grep -rR k .", "grep --dereference-recursive k .", "rg -L k", "rg --follow k",
+    "find -L .", "find . -follow -name x", "du -L -a .", "du --dereference -s .", "tree -l",
+    "ls -LR", "ls -L -R .", "ls --dereference --recursive .", "find . | xargs grep -R k",
+    # ``file *`` may meet a file named ``-C`` (it writes a .mgc).
+    "file *", "file -- *",
     # Reads outside, including through a changed directory.
     "ls /etc", "cat ~/.ssh/id_rsa", "cat ../other/x", "cd .. && cat x", "cd /etc; cat passwd",
     "cd sub | cat ../../etc/passwd", "cd nonexistent; cat ../x", "cd -; cat x",
