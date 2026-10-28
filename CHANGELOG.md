@@ -39,6 +39,13 @@ All notable changes to Noeta are documented here. The format is based on
   instead of saved to a file. `LocalApp` now defaults it to `<tmp>/noeta-<uid>/tool-results`
   (`noeta.host.local.default_spill_root`) and the `noeta` command (TUI, `-p`, ACP, `serve`,
   `worker`) to `~/.noeta/tool-results`; one directory per task below it.
+- **MCP results and timeouts follow Claude Code.** A result is held to 25,000 tokens
+  (`MAX_MCP_OUTPUT_TOKENS`; four characters a token, 1,600 an image) instead of 1 MiB: images
+  past it are left out with a note, text past it is cut to a marked head and saved.
+  A tool call is bounded by the server's `timeout` (milliseconds, read from settings files
+  now; under 1000 ignored), else `MCP_TOOL_TIMEOUT`, else 1e8 ms, instead of 30 s; every other
+  request by `MCP_TIMEOUT` (default 30 s). `noeta.plugins.mcp.results` no longer exports
+  `INLINE_MAX_BYTES`.
 - `make example` ran a build uv had cached; it now installs the example plugin editable.
 - A second `registry.provider()` call for a family failed once that family's adapter module
   had been imported (the entry point named a package attribute the submodule rebound).

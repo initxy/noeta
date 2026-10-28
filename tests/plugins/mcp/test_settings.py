@@ -16,6 +16,7 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.runner import Runtime
 from noeta.plugins.mcp import Mcp, McpPool, McpServer
+from noeta.plugins.mcp.config import MAX_TIMEOUT_S, request_timeout_s, tool_timeout_s
 from noeta.plugins.mcp.settings import alias_for, read_servers
 from noeta.testing import ScriptedProvider, reply
 
@@ -46,6 +47,34 @@ def test_the_claude_code_format(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     (tmp_path / "junk.json").write_text("{")
     assert read_servers([tmp_path / "junk.json"]) == []
     assert alias_for("") == "_" and len(alias_for("x" * 50)) == 32
+
+
+def test_a_server_timeout_in_milliseconds(tmp_path: Path) -> None:
+    f = write(tmp_path / "s.json", {"mcpServers": {
+        "slow": {"command": "srv", "timeout": 120_000},
+        "tiny": {"command": "srv", "timeout": 500},  # under 1 s: ignored, as in Claude Code
+        "web": {"url": "https://x", "timeout": 2500},
+    }})
+    slow, tiny, web = read_servers([f])
+    assert (slow.call_timeout, tiny.call_timeout, web.call_timeout) == (120.0, None, 2.5)
+
+
+def test_timeouts_follow_claude_codes_defaults_and_variables(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MCP_TIMEOUT", raising=False)
+    monkeypatch.delenv("MCP_TOOL_TIMEOUT", raising=False)
+    assert request_timeout_s() == 30.0
+    assert tool_timeout_s(None) == 100_000.0  # 1e8 ms: no practical limit
+    assert tool_timeout_s(5.0) == 5.0 and tool_timeout_s(0.2) == 1.0
+    monkeypatch.setenv("MCP_TIMEOUT", "60000")
+    monkeypatch.setenv("MCP_TOOL_TIMEOUT", "90000")
+    assert request_timeout_s() == 60.0
+    assert tool_timeout_s(None) == 90.0
+    assert tool_timeout_s(5.0) == 5.0  # the server's own wins
+    monkeypatch.setenv("MCP_TOOL_TIMEOUT", "1e20")
+    assert tool_timeout_s(None) == MAX_TIMEOUT_S
+    monkeypatch.setenv("MCP_TIMEOUT", "junk")
+    assert request_timeout_s() == 30.0
 
 
 def test_workspace_servers_need_consent(tmp_path: Path) -> None:

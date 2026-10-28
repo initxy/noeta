@@ -49,6 +49,7 @@ from noeta.plugins.mcp.config import (
     McpServer,
     describe_tool,
     map_server_names,
+    tool_timeout_s,
 )
 from noeta.plugins.mcp.pool import McpPool, default_pool
 from noeta.plugins.mcp.prompts import McpPrompt, expand_prompt, list_prompts
@@ -182,7 +183,8 @@ class Mcp(Extension):
         try:
             result = await self.pool().use(
                 server, scope,
-                lambda c: c.call_tool(tool.remote, args, timeout=server.call_timeout))
+                lambda c: c.call_tool(tool.remote, args,
+                                      timeout=tool_timeout_s(server.call_timeout)))
         except McpError as exc:
             return text_output(f"{tool.name}: {exc}", is_error=True)
         return await render_result(result, ctx)
