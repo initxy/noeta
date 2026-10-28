@@ -132,7 +132,7 @@ class SkillTool:
         return text_output(
             f"Skill '{name}' loaded; its instructions will appear in your "
             f"context from your next step.",
-            skill_activation=_activation_data(desc, "model", args),
+            skill_activation=_activation_data(desc, "model", args, ctx.env.cwd),
         )
 
 
@@ -147,7 +147,7 @@ def _typed_command(text: str) -> tuple[str, str] | None:
 
 
 def _activation_data(desc: SkillDescription, source: str,
-                     args: str | None = None) -> dict[str, Any]:
+                     args: str | None = None, cwd: str | None = None) -> dict[str, Any]:
     raw = desc.meta("allowed-tools")
     allowed: list[str] | None = None
     if raw is not None:
@@ -160,7 +160,7 @@ def _activation_data(desc: SkillDescription, source: str,
         "scripts": [r for r in desc.resources if is_skill_script_resource(r)],
         "allowed_tools": allowed,
         "args": args,
-        "text": render_activation(desc, args),
+        "text": render_activation(desc, args, cwd),
     }
 
 
@@ -338,7 +338,7 @@ class Skills(Extension):
                 if desc is None:
                     _log.warning("skills: preload %r is not an indexed skill; skipped", name)
                     continue
-                self._record_activation(view, _activation_data(desc, "preload"))
+                self._record_activation(view, _activation_data(desc, "preload", cwd=view.cwd))
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         """The listing taken at start, in the environment's system turn
@@ -380,10 +380,10 @@ class Skills(Extension):
             typed = _typed_command(message.text)
             desc = registry.get(typed[0]) if typed else None
             if typed and desc is not None and desc.name not in state.get("active", {}):
-                data = _activation_data(desc, "user", typed[1])
+                data = _activation_data(desc, "user", typed[1], view.cwd)
                 # The body rides in the person's turn as plain text, after
                 # the command's tags (Claude Code's slash-command shape).
-                data["text"] = render_command_body(desc, typed[1])
+                data["text"] = render_command_body(desc, typed[1], view.cwd)
                 view.record(self.name, "activated", data,
                             message=user(data["text"], origin="inline"))
 
@@ -468,7 +468,7 @@ class Skills(Extension):
                 desc = registry.get(name)
                 if desc is not None:
                     parts.append(f"### Skill: {desc.name}\nPath: {desc.base_dir or desc.name}"
-                                 f"\n\n{render_activation(desc, entry.get('args'))}")
+                                 f"\n\n{render_activation(desc, entry.get('args'), view.cwd)}")
             if len(parts) > 1 and view.keeps_tail is not None:
                 view.record(self.name, "invoked_rehold", {"text": "\n\n".join(parts)})
         if view.keeps_tail is not None and state.get("listings"):

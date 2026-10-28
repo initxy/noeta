@@ -31,9 +31,11 @@ __all__ = [
     "load_registry",
     "parse_list",
     "render_activation",
+    "render_body",
     "render_command_body",
     "strip_argument_placeholder",
     "substitute_arguments",
+    "substitute_variables",
 ]
 
 _log = logging.getLogger(__name__)
@@ -345,19 +347,48 @@ def substitute_arguments(body: str, args: str | None,
     return text.replace(_ESCAPED_DOLLAR, "$")
 
 
-def render_activation(desc: SkillDescription, args: str | None = None) -> str:
-    """The text an activated skill puts in the conversation, its body's
-    placeholders filled from ``args`` (:func:`substitute_arguments`)."""
+#: Directory variables a skill's text may name: noeta's names, and Claude
+#: Code's for skills written for it.
+SKILL_DIR_VARIABLES = ("${NOETA_SKILL_DIR}", "${CLAUDE_SKILL_DIR}")
+PROJECT_DIR_VARIABLES = ("${NOETA_PROJECT_DIR}", "${CLAUDE_PROJECT_DIR}")
+
+
+def substitute_variables(text: str, skill_dir: str | None, project_dir: str | None) -> str:
+    """``text`` with the skill's directory and the project's (the task's
+    working directory) filled in; a variable with no value stays as
+    written."""
+    for names, value in ((SKILL_DIR_VARIABLES, skill_dir),
+                         (PROJECT_DIR_VARIABLES, project_dir)):
+        if value:
+            for name in names:
+                text = text.replace(name, value)
+    return text
+
+
+def render_body(desc: SkillDescription, args: str | None = None,
+                project_dir: str | None = None) -> str:
+    """The skill's body as the model gets it: the directory variables, then
+    the argument placeholders (an argument naming a variable stays as
+    typed)."""
+    body = substitute_variables(desc.body, desc.base_dir, project_dir)
+    return substitute_arguments(body, args, desc.arguments)
+
+
+def render_activation(desc: SkillDescription, args: str | None = None,
+                      project_dir: str | None = None) -> str:
+    """The text an activated skill puts in the conversation, its body
+    rendered by :func:`render_body`."""
     base = f"Base directory for this skill: {desc.base_dir}\n\n" if desc.base_dir else ""
     return (
         f"Activated skill: {desc.name}\n\n"
         f"{strip_argument_placeholder(desc.description)}\n\n"
-        f"{base}{substitute_arguments(desc.body, args, desc.arguments)}"
+        f"{base}{render_body(desc, args, project_dir)}"
     )
 
 
-def render_command_body(desc: SkillDescription, args: str | None = None) -> str:
+def render_command_body(desc: SkillDescription, args: str | None = None,
+                        project_dir: str | None = None) -> str:
     """What ``/<name> <args>`` adds to the person's turn after the command
-    tags: the skill's directory and its body, placeholders filled."""
+    tags: the skill's directory and its rendered body."""
     base = f"Base directory for this skill: {desc.base_dir}\n\n" if desc.base_dir else ""
-    return f"{base}{substitute_arguments(desc.body, args, desc.arguments)}"
+    return f"{base}{render_body(desc, args, project_dir)}"

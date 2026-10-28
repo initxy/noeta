@@ -361,3 +361,13 @@ async def test_named_arguments_fill_a_typed_skill(h: Harness) -> None:
     h.provider.add(reply("ok"))
     await h.start(agent(), "/notes v0.3")
     assert h.provider.requests[0].messages[-2].text.endswith("Notes for v0.3.\n")
+
+
+async def test_directory_variables_name_the_skill_and_the_project(h: Harness) -> None:
+    d = write_skill(skills_dir(h), "deploy", "Ship.",
+                    body="Run ${NOETA_SKILL_DIR}/go.sh in ${CLAUDE_PROJECT_DIR}; "
+                         "also ${CLAUDE_SKILL_DIR}.\n")
+    h.provider.add(reply("", ("Skill", {"skill": "deploy"})), reply("done"))
+    await h.start(agent())
+    assert h.provider.requests[1].messages[-1].text.endswith(
+        f"Run {d}/go.sh in {h.work}; also {d}.\n")
