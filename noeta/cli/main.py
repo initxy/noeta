@@ -26,7 +26,7 @@ from typing import Any
 
 from noeta.cli import mcp_command
 from noeta.cli.config import Settings, load_settings
-from noeta.core.pending import PERMISSION_MODES
+from noeta.toolkit.permission_modes import PERMISSION_MODES
 
 SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "mcp")
 

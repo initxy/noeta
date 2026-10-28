@@ -42,7 +42,6 @@ from noeta.core.extension import (
     Reminder,
     TaskView,
 )
-from noeta.core.pending import MODE_SIGNAL as _MODE_SIGNAL
 from noeta.core.tool import Tool, ToolOutput
 from noeta.core.types import ModelRequest, ToolResult, ToolUse
 from noeta.plugins.permissions import classifier as c
@@ -52,6 +51,7 @@ from noeta.plugins.permissions import policy as p
 from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
 from noeta.toolkit import permission_rules as r
+from noeta.toolkit.permission_modes import MODE_SIGNAL as MODE_SIGNAL
 from noeta.toolkit.sandbox import leaves_sandbox, runs_sandboxed, sandbox_of
 from noeta.toolkit.shell import parse_argv, rule_spec_from_command, rule_spec_text
 
@@ -71,8 +71,6 @@ DENIED_BY_HUMAN = "denied by human"
 _KEEP = 256
 #: Task config key a child reads its parent's remembered rules from.
 INHERITED_RULES_KEY = "permission_rules"
-#: The signal front ends post to switch the mode (``Client.signal``).
-MODE_SIGNAL = _MODE_SIGNAL
 #: The signal the plan-name side request answers with.
 PLAN_NAME_SIGNAL = "plan_name"
 #: Claude Code's denial limits before auto mode falls back to asking.

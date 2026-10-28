@@ -54,7 +54,7 @@ from noeta.core.events import (
 )
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
-from noeta.core.pending import MODE_SIGNAL, PERMISSION_MODES, Pending, card_title, pending_tree
+from noeta.core.pending import Pending, card_title, pending_tree
 from noeta.core.pending import follow_tree as _follow_tree
 from noeta.core.pending import tree_busy as _tree_busy
 from noeta.core.questions import typed_answer
@@ -68,6 +68,7 @@ from noeta.host.usage import (
     cost_text,
     tree_usage,
 )
+from noeta.toolkit.permission_modes import MODE_SIGNAL, PERMISSION_MODES
 
 __all__ = ["HeadlessOptions", "StreamJson", "drive", "find_latest_task", "noeta_version"]
 

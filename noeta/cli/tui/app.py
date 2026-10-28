@@ -46,19 +46,17 @@ from noeta.core.events import (
 )
 from noeta.core.extension import CommandContext
 from noeta.core.pending import (
-    MODE_SIGNAL,
     Pending,
     answer_choice,
     card_title,
     choices,
-    current_mode,
     follow_tree,
-    next_mode,
 )
 from noeta.core.questions import next_question, typed_answer
 from noeta.core.records import CORE
 from noeta.core.types import Delta, Image, Usage
 from noeta.host.local import LocalApp, UnknownAgent
+from noeta.toolkit.permission_modes import MODE_SIGNAL, current_mode, next_mode
 
 log = logging.getLogger("noeta.cli.tui")
 

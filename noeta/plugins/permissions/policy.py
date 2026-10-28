@@ -13,23 +13,18 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Literal
 
-from noeta.core.pending import MODE_CYCLE as _CYCLE
-from noeta.core.pending import PERMISSION_MODES as _MODES
+from noeta.toolkit.permission_modes import MODE_CYCLE as MODE_CYCLE
+from noeta.toolkit.permission_modes import PERMISSION_MODES as PERMISSION_MODES
+from noeta.toolkit.permission_modes import PermissionMode as PermissionMode
 from noeta.toolkit.permission_rules import Rule, idna
 from noeta.toolkit.shell import WRAPPER_PROGRAMS
 
-PermissionMode = Literal["default", "acceptEdits", "plan", "auto", "dontAsk",
-                         "bypassPermissions"]
-
-#: Claude Code's permission modes and the mode key's order (their home is
-#: ``noeta.core.pending``, which front ends read): ``default`` asks before
-#: anything that needs permission, ``acceptEdits`` also lets file edits in
-#: the working directories run, ``plan`` explores without changing anything,
-#: ``auto`` lets a classifier model approve or block what would ask,
-#: ``dontAsk`` refuses what would ask, ``bypassPermissions`` asks only for
-#: ask rules and protected paths.
-PERMISSION_MODES = _MODES
-MODE_CYCLE = _CYCLE
+# Claude Code's permission modes (``noeta.toolkit.permission_modes``, which
+# front ends read too): ``default`` asks before anything that needs
+# permission, ``acceptEdits`` also lets file edits in the working directories
+# run, ``plan`` explores without changing anything, ``auto`` lets a classifier
+# model approve or block what would ask, ``dontAsk`` refuses what would ask,
+# ``bypassPermissions`` asks only for ask rules and protected paths.
 
 RiskLevel = Literal["low", "medium", "high"]
 
