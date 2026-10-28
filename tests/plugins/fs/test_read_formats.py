@@ -160,6 +160,28 @@ async def test_missing_pdftoppm_says_how_to_install_it(ws: Path) -> None:
 
 
 @needs_poppler
+async def test_a_pdf_is_known_by_its_extension(h: Harness, ws: Path) -> None:
+    # Claude Code goes by the .pdf extension: an empty or headerless one is
+    # refused as a PDF, never shown as text.
+    (ws / "empty.pdf").write_bytes(b"")
+    out = await h.call(ReadTool(), file_path="empty.pdf")
+    assert out.is_error and text_of(out) == "Read: The PDF empty.pdf has no content (0 bytes)."
+    (ws / "page.pdf").write_text("<html>not found</html>\n")
+    out = await h.call(ReadTool(), file_path="page.pdf")
+    assert out.is_error and text_of(out) == (
+        "Read: page.pdf does not start with a %PDF- header, so it is not a PDF.")
+
+
+async def test_a_pdf_over_100mb_is_refused(h: Harness, ws: Path) -> None:
+    with open(ws / "huge.pdf", "wb") as f:
+        f.write(b"%PDF-1.7\n")
+        f.truncate(100 * 1024 * 1024 + 1)
+    out = await h.call(ReadTool(), file_path="huge.pdf", pages="1")
+    assert out.is_error
+    assert text_of(out) == (
+        "Read: The PDF huge.pdf is over the 100MB that page rendering accepts.")
+
+
 async def test_a_broken_pdf_reports_the_render_failure(h: Harness, ws: Path) -> None:
     (ws / "doc.pdf").write_bytes(b"%PDF-1.4\nnot really a pdf\n")
     out = await h.call(ReadTool(), file_path="doc.pdf")

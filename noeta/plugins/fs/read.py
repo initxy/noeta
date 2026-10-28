@@ -356,7 +356,7 @@ class ReadTool:
         except OSError as exc:
             return tool_error(self.name, f"read failed: {exc}")
 
-        if head.startswith(b"%PDF-"):
+        if ext == ".pdf" or (ext == "" and head.startswith(b"%PDF-")):
             return await read_pdf(self.name, env, resolved, display, size, input.get("pages"))
 
         if posixpath.splitext(resolved)[1] == ".ipynb":
