@@ -27,7 +27,8 @@ A row without an id is a difference the replay cannot see.
 
 | id | difference | reason |
 |---|---|---|
-| | `Workflow` scripts run in the worker's Node.js (18+); without it the tool refuses and starts nothing. | The model writes JavaScript and no dependency-free engine embeds in Python; Claude Code runs the script in its own JavaScript runtime. |
+| | `Workflow` scripts run in an embedded V8 (`mini-racer`), no system Node: a fresh context per replay with a time and memory limit; where mini-racer cannot load, the tool refuses and starts nothing. | Owner-confirmed (2026-10-28): the contract (JavaScript, the script API) is Claude Code's; Claude Code runs the script in its own JavaScript runtime, noeta in a capability-free engine inside the worker. |
+| | `Workflow`'s `name` loads a saved workflow from the project's `.noeta/workflows/`, then `~/.noeta/workflows/`, never `.claude/workflows/`, and its parameter description says so. | noeta reads only its own config places (owner, 2026-10-28). |
 | | `Workflow`'s description carries a short script-API reference (`tool.Workflow.8`): there is no bundled `workflow-authoring` skill to load. | noeta ships no bundled skills yet; the reference returns to a skill when it does. |
 
 ## Request envelope

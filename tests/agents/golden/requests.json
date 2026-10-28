@@ -1,24 +1,24 @@
 {
  "hashes": [
   "main 15ed555a4b46c3f1",
-  "main 9a373e4ec88f1657",
-  "main 21e6f40bf690624d",
-  "main d8270ef007928f06",
+  "main ed727e35842db8ca",
+  "main 9e342640fbee2c35",
+  "main 7944fb254c35d5ce",
   "child b1fca3e89720acaf",
   "child c44bd8ace012af47",
-  "main b5acc25a0d911b05",
-  "main e5abaa000b08548b",
-  "main 47561d03385223d0",
-  "main 130e6cdf55b983d2",
-  "main 2bb96ea2a8bbf17c",
-  "main bb899a9b5846172e",
-  "main 1c2e675367b9d859",
-  "main da7d654d4cbe98ca",
-  "main 2a64815393675bb9",
-  "main 4d952be6bbb54c10",
-  "main 9f903c78262da43a",
-  "main 178f429fa33d3537",
-  "main 7b07087da17d0a80"
+  "main b1ac42d4d29858f8",
+  "main 684afa052acc5dd0",
+  "main 25530ea29adda57c",
+  "main e07eff6edf4647f2",
+  "main ab35a704f420a5ca",
+  "main cfa36a652d7afea0",
+  "main b450486eca7c9a4a",
+  "main 44e770bc64848c89",
+  "main 1371dfa8864528b5",
+  "main 7b00251e96e81dc9",
+  "main 57202639fc4514e9",
+  "main c080ca52a80b2d2d",
+  "main c2a76ee3d1963c56"
  ],
  "last": {
   "child": {
@@ -1721,7 +1721,7 @@
          "type": "string"
         },
         "name": {
-         "description": "The name of a saved workflow (in .claude/workflows/ or .noeta/workflows/ as <name>.js), which supplies the script.",
+         "description": "The name of a saved workflow (in the project's .noeta/workflows/ or ~/.noeta/workflows/ as <name>.js), which supplies the script.",
          "type": "string"
         },
         "resumeFromRunId": {
@@ -2677,7 +2677,7 @@
           "type": "string"
          },
          "name": {
-          "description": "The name of a saved workflow (in .claude/workflows/ or .noeta/workflows/ as <name>.js), which supplies the script.",
+          "description": "The name of a saved workflow (in the project's .noeta/workflows/ or ~/.noeta/workflows/ as <name>.js), which supplies the script.",
           "type": "string"
          },
          "resumeFromRunId": {
@@ -3793,7 +3793,7 @@
          "type": "string"
         },
         "name": {
-         "description": "The name of a saved workflow (in .claude/workflows/ or .noeta/workflows/ as <name>.js), which supplies the script.",
+         "description": "The name of a saved workflow (in the project's .noeta/workflows/ or ~/.noeta/workflows/ as <name>.js), which supplies the script.",
          "type": "string"
         },
         "resumeFromRunId": {
