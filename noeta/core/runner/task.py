@@ -411,7 +411,8 @@ class TaskRun:
             posts.append(Post(
                 task_id=self.state.parent_id,
                 body=ChildEnded(child_id=self.task_id, status=status,  # type: ignore[arg-type]
-                                answer=answer, error=error),
+                                answer=answer, error=error, last_usage=self.state.last_usage,
+                                tool_calls=self.state.tool_calls),
                 dedupe_key=f"child:{self.task_id}",
             ))
         await self.append([TaskEnded(status=status, answer=answer, error=error)],  # type: ignore[arg-type]

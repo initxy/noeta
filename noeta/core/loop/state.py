@@ -117,6 +117,8 @@ class TaskState:
     prompt_files: dict[str, str] | None = None
 
     usage: Usage = field(default_factory=Usage)
+    #: Tool calls this task finished (a continued task counts its own).
+    tool_calls: int = 0
     ext: dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------ queries
@@ -205,6 +207,7 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
                 if ev.call != c.use:
                     c.ran = ev.call
     elif isinstance(ev, ToolFinished):
+        state.tool_calls += 1
         for c in state.calls:
             if c.use.id == ev.result.call_id:
                 c.result = ev.result
