@@ -118,9 +118,11 @@ async def test_it_may_share_a_reply_with_other_calls(store: SqliteStore) -> None
         "0": {"other": "Passkeys"}, "1": {"selected": ["A"]}})
     await rt.run_until_idle()
     result = finished(await events(client, tid))[-1]
-    assert result.text == ('The user answered your questions: "Which auth?"="Passkeys", '
+    # "Passkeys" is typed text, not an option: the model is told to read it as written.
+    assert result.text == ('The user replied: "Which auth?"="Passkeys", '
                            '"Layout?"="A" selected preview:\n+--+\n|a |. '
-                           "Go on with these answers in mind.")
+                           "What they wrote may ask for clarification, for changes, or for "
+                           "you to stop: read it closely and do what it actually says.")
 
 
 def test_schema_shape() -> None:

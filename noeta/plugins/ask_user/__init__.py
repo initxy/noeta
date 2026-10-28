@@ -267,22 +267,33 @@ def validate_answer(call_input: dict[str, Any], data: Any) -> dict[str, dict[str
 
 def render_answers(questions: list[dict[str, Any]], answers: dict[str, dict[str, Any]]) -> str:
     """The result the model reads: each question with what the user chose
-    (labels, then any typed text), a chosen option's preview after it."""
+    (labels, then any typed text), a chosen option's preview after it.
+    When some answer is the user's own text rather than listed options, the
+    closing line tells the model to read it as written: it may ask for
+    something other than a choice."""
     parts: list[str] = []
+    only_options = True
     for q in questions:
         answer = answers.get(q["id"]) or {}
         chosen = list(answer.get("selected") or [])
         other = answer.get("other")
         if isinstance(other, str) and other.strip():
             chosen.append(other.strip())
+        labels = {o["label"] for o in q["options"]}
+        if not all(c in labels for c in chosen) or (len(chosen) > 1 and not q["multiSelect"]):
+            only_options = False
         part = f'"{q["question"]}"="{", ".join(chosen)}"'
         previews = [o["preview"] for o in q["options"]
                     if o.get("preview") and o["label"] in (answer.get("selected") or [])]
         if previews:
             part += " selected preview:\n" + "\n".join(previews)
         parts.append(part)
-    return ("The user answered your questions: " + ", ".join(parts)
-            + ". Go on with these answers in mind.")
+    if only_options:
+        return ("The user answered your questions: " + ", ".join(parts)
+                + ". Go on with these answers in mind.")
+    return ("The user replied: " + ", ".join(parts) + ". What they wrote may ask for "
+            "clarification, for changes, or for you to stop: read it closely and do what "
+            "it actually says.")
 
 
 class AskUserQuestionTool:
