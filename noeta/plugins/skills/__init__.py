@@ -2,8 +2,6 @@
 ``/<name>``, ``run_skill_script`` and ``allowed-tools`` enforcement."""
 
 from noeta.plugins.skills.extension import (
-    CONTROL_TOOLS,
-    SKILL_NOT_ALONE,
     SKILL_TOOL,
     Skills,
     SkillTool,
@@ -12,8 +10,6 @@ from noeta.plugins.skills.registry import SkillDescription, SkillRegistry, load_
 from noeta.plugins.skills.usage import UsageRank, usage_rank
 
 __all__ = [
-    "CONTROL_TOOLS",
-    "SKILL_NOT_ALONE",
     "SKILL_TOOL",
     "SkillDescription",
     "SkillRegistry",

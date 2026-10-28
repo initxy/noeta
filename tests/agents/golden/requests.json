@@ -1,23 +1,23 @@
 {
  "hashes": [
-  "main ba72ac861469a7c2",
-  "main b3e1e4ed9a368184",
-  "main 581cd72894bb3248",
-  "child 5ed4f665cd5584a2",
-  "child 36e5f13c61665259",
-  "main c51d7003f55d0f37",
-  "main a4f4e4f51ad2986b",
-  "main eb2cafe93f2ce65f",
-  "main 14f5c290963bde1d",
-  "main 42b22ef054f5ec87",
-  "main ce1b98e01c09f35c",
-  "main 3093cc2bd153fc8e",
-  "main f33f76273e60f3f3",
-  "main 5751d725a9834bab",
-  "main d909fca8306a058a",
-  "main cd30c5685fca5e8a",
-  "main 67d5fc1aaa303a6d",
-  "main e845bbd258222a7c"
+  "main e88ca6d6a6bab4c9",
+  "main 0ecbacf8c7396652",
+  "main 0b2cc36c0208727d",
+  "child 78cd54b11b1842b1",
+  "child 5b2a1d8928adf21e",
+  "main 3f445c66170e1937",
+  "main d66e45a2709b7a47",
+  "main b21c35fe96ede120",
+  "main b443d0d28dda74e0",
+  "main ea7a9abcdeeb4929",
+  "main 5deaed2903f4af8c",
+  "main 371aeb86a46f77a6",
+  "main 900726d67e98365c",
+  "main b4c69ae9e3d52293",
+  "main d9058667de045ec0",
+  "main 63f8a9c7b3044b70",
+  "main d5828286e58e67cd",
+  "main 80fe7ed9e0341c04"
  ],
  "last": {
   "child": {
@@ -183,6 +183,40 @@
       "name": "RecallHistory"
      },
      {
+      "description": "Runs a skill inside the conversation.\n\nA skill is a packaged set of instructions that the user or the project set up for one kind of task, such as release steps, a review checklist or a repository's workflow. The available skills are listed one line each in a message in this conversation.\n\n- When a listed skill covers the task, call this tool before anything else: its instructions then take the place of your usual approach for this turn.\n- Some skills run in a sub-agent and return the finished result instead of loading instructions. One that runs in the background answers with only an agent name; its outcome arrives later in a task notification, so do not wait for it or call the skill again meanwhile.\n- When the user names a skill or types `/<name>` (a slash command), they are asking you to run it.\n- `skill` is the exact listed name, without a leading slash. A plugin's skill is named `plugin:skill`.\n- A skill scoped to a directory has a path prefix (`apps/web:deploy`). When a scoped and an unscoped skill share a name, take the one whose directory contains the files you are working on, the deepest first, and otherwise the unscoped one.\n- Only listed names, or names the user typed, are valid.\n- Built-in commands such as `/help` or `/clear` are not skills.\n- If a `<command-name>` block is already in the current turn, that skill is already loaded: follow it instead of calling this tool again.",
+      "input_schema": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "additionalProperties": false,
+       "properties": {
+        "args": {
+         "description": "Optional text passed to the skill.",
+         "type": "string"
+        },
+        "skill": {
+         "description": "The skill's name exactly as the skill listing gives it, without a leading slash; never a guessed name.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "skill"
+       ],
+       "type": "object"
+      },
+      "name": "Skill"
+     },
+     {
+      "defer_loading": true,
+      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
+      "input_schema": {
+       "properties": {},
+       "type": "object"
+      },
+      "name": "DeferredToolPlaceholder"
+     },
+     {
+      "cache_control": {
+       "type": "ephemeral"
+      },
       "description": "Fetch the full definition of deferred tools so you can call them.\n\nSome tools are deferred: only their names are listed, in a message in this conversation, and their parameter schemas are not loaded. Calling a deferred tool before loading it fails. Pass a query here; the tools it matches are loaded, and from then on you call each one directly by its own name, exactly like the tools defined at the start. A loaded tool stays available for the rest of the conversation.\n\nThe matched definitions come back in the same encoding as the tool list you started with: one <function>{\"description\": ..., \"name\": ..., \"parameters\": ...}</function> line per tool, inside a <functions> block.\n\nWays to query:\n- \"select:WebFetch,NotebookEdit\" loads exactly the named tools\n- \"fetch url page\" searches names and descriptions and loads up to max_results best matches\n- \"+mcp resource\" keeps only tools whose name contains \"mcp\", ranked by the other words",
       "input_schema": {
        "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -205,38 +239,6 @@
        "type": "object"
       },
       "name": "ToolSearch"
-     },
-     {
-      "defer_loading": true,
-      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
-      "input_schema": {
-       "properties": {},
-       "type": "object"
-      },
-      "name": "DeferredToolPlaceholder"
-     },
-     {
-      "cache_control": {
-       "type": "ephemeral"
-      },
-      "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing, with its arguments, if any, in `args` (what follows `/<name>`); its\ninstructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
-      "input_schema": {
-       "properties": {
-        "args": {
-         "description": "Optional arguments for the skill.",
-         "type": "string"
-        },
-        "skill": {
-         "description": "Name of the skill to activate, from the skill listing in your context.",
-         "type": "string"
-        }
-       },
-       "required": [
-        "skill"
-       ],
-       "type": "object"
-      },
-      "name": "skill"
      }
     ]
    },
@@ -388,25 +390,23 @@
      },
      {
       "function": {
-       "description": "Fetch the full definition of deferred tools so you can call them.\n\nSome tools are deferred: only their names are listed, in a message in this conversation, and their parameter schemas are not loaded. Calling a deferred tool before loading it fails. Pass a query here; the tools it matches are loaded, and from then on you call each one directly by its own name, exactly like the tools defined at the start. A loaded tool stays available for the rest of the conversation.\n\nThe matched definitions come back in the same encoding as the tool list you started with: one <function>{\"description\": ..., \"name\": ..., \"parameters\": ...}</function> line per tool, inside a <functions> block.\n\nWays to query:\n- \"select:WebFetch,NotebookEdit\" loads exactly the named tools\n- \"fetch url page\" searches names and descriptions and loads up to max_results best matches\n- \"+mcp resource\" keeps only tools whose name contains \"mcp\", ranked by the other words",
-       "name": "ToolSearch",
+       "description": "Runs a skill inside the conversation.\n\nA skill is a packaged set of instructions that the user or the project set up for one kind of task, such as release steps, a review checklist or a repository's workflow. The available skills are listed one line each in a message in this conversation.\n\n- When a listed skill covers the task, call this tool before anything else: its instructions then take the place of your usual approach for this turn.\n- Some skills run in a sub-agent and return the finished result instead of loading instructions. One that runs in the background answers with only an agent name; its outcome arrives later in a task notification, so do not wait for it or call the skill again meanwhile.\n- When the user names a skill or types `/<name>` (a slash command), they are asking you to run it.\n- `skill` is the exact listed name, without a leading slash. A plugin's skill is named `plugin:skill`.\n- A skill scoped to a directory has a path prefix (`apps/web:deploy`). When a scoped and an unscoped skill share a name, take the one whose directory contains the files you are working on, the deepest first, and otherwise the unscoped one.\n- Only listed names, or names the user typed, are valid.\n- Built-in commands such as `/help` or `/clear` are not skills.\n- If a `<command-name>` block is already in the current turn, that skill is already loaded: follow it instead of calling this tool again.",
+       "name": "Skill",
        "parameters": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
-         "max_results": {
-          "default": 5,
-          "description": "The most tools a keyword search loads (default 5).",
-          "type": "number"
+         "args": {
+          "description": "Optional text passed to the skill.",
+          "type": "string"
          },
-         "query": {
-          "description": "Which tools to load: \"select:<name>[,<name>...]\" for exact names, otherwise keywords to search for.",
+         "skill": {
+          "description": "The skill's name exactly as the skill listing gives it, without a leading slash; never a guessed name.",
           "type": "string"
          }
         },
         "required": [
-         "query",
-         "max_results"
+         "skill"
         ],
         "type": "object"
        }
@@ -426,21 +426,25 @@
      },
      {
       "function": {
-       "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing, with its arguments, if any, in `args` (what follows `/<name>`); its\ninstructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
-       "name": "skill",
+       "description": "Fetch the full definition of deferred tools so you can call them.\n\nSome tools are deferred: only their names are listed, in a message in this conversation, and their parameter schemas are not loaded. Calling a deferred tool before loading it fails. Pass a query here; the tools it matches are loaded, and from then on you call each one directly by its own name, exactly like the tools defined at the start. A loaded tool stays available for the rest of the conversation.\n\nThe matched definitions come back in the same encoding as the tool list you started with: one <function>{\"description\": ..., \"name\": ..., \"parameters\": ...}</function> line per tool, inside a <functions> block.\n\nWays to query:\n- \"select:WebFetch,NotebookEdit\" loads exactly the named tools\n- \"fetch url page\" searches names and descriptions and loads up to max_results best matches\n- \"+mcp resource\" keeps only tools whose name contains \"mcp\", ranked by the other words",
+       "name": "ToolSearch",
        "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
-         "args": {
-          "description": "Optional arguments for the skill.",
-          "type": "string"
+         "max_results": {
+          "default": 5,
+          "description": "The most tools a keyword search loads (default 5).",
+          "type": "number"
          },
-         "skill": {
-          "description": "Name of the skill to activate, from the skill listing in your context.",
+         "query": {
+          "description": "Which tools to load: \"select:<name>[,<name>...]\" for exact names, otherwise keywords to search for.",
           "type": "string"
          }
         },
         "required": [
-         "skill"
+         "query",
+         "max_results"
         ],
         "type": "object"
        }
@@ -619,6 +623,38 @@
       "type": "function"
      },
      {
+      "description": "Runs a skill inside the conversation.\n\nA skill is a packaged set of instructions that the user or the project set up for one kind of task, such as release steps, a review checklist or a repository's workflow. The available skills are listed one line each in a message in this conversation.\n\n- When a listed skill covers the task, call this tool before anything else: its instructions then take the place of your usual approach for this turn.\n- Some skills run in a sub-agent and return the finished result instead of loading instructions. One that runs in the background answers with only an agent name; its outcome arrives later in a task notification, so do not wait for it or call the skill again meanwhile.\n- When the user names a skill or types `/<name>` (a slash command), they are asking you to run it.\n- `skill` is the exact listed name, without a leading slash. A plugin's skill is named `plugin:skill`.\n- A skill scoped to a directory has a path prefix (`apps/web:deploy`). When a scoped and an unscoped skill share a name, take the one whose directory contains the files you are working on, the deepest first, and otherwise the unscoped one.\n- Only listed names, or names the user typed, are valid.\n- Built-in commands such as `/help` or `/clear` are not skills.\n- If a `<command-name>` block is already in the current turn, that skill is already loaded: follow it instead of calling this tool again.",
+      "name": "Skill",
+      "parameters": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "additionalProperties": false,
+       "properties": {
+        "args": {
+         "description": "Optional text passed to the skill.",
+         "type": "string"
+        },
+        "skill": {
+         "description": "The skill's name exactly as the skill listing gives it, without a leading slash; never a guessed name.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "skill"
+       ],
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
+      "name": "DeferredToolPlaceholder",
+      "parameters": {
+       "properties": {},
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
       "description": "Fetch the full definition of deferred tools so you can call them.\n\nSome tools are deferred: only their names are listed, in a message in this conversation, and their parameter schemas are not loaded. Calling a deferred tool before loading it fails. Pass a query here; the tools it matches are loaded, and from then on you call each one directly by its own name, exactly like the tools defined at the start. A loaded tool stays available for the rest of the conversation.\n\nThe matched definitions come back in the same encoding as the tool list you started with: one <function>{\"description\": ..., \"name\": ..., \"parameters\": ...}</function> line per tool, inside a <functions> block.\n\nWays to query:\n- \"select:WebFetch,NotebookEdit\" loads exactly the named tools\n- \"fetch url page\" searches names and descriptions and loads up to max_results best matches\n- \"+mcp resource\" keeps only tools whose name contains \"mcp\", ranked by the other words",
       "name": "ToolSearch",
       "parameters": {
@@ -638,36 +674,6 @@
        "required": [
         "query",
         "max_results"
-       ],
-       "type": "object"
-      },
-      "type": "function"
-     },
-     {
-      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
-      "name": "DeferredToolPlaceholder",
-      "parameters": {
-       "properties": {},
-       "type": "object"
-      },
-      "type": "function"
-     },
-     {
-      "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing, with its arguments, if any, in `args` (what follows `/<name>`); its\ninstructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
-      "name": "skill",
-      "parameters": {
-       "properties": {
-        "args": {
-         "description": "Optional arguments for the skill.",
-         "type": "string"
-        },
-        "skill": {
-         "description": "Name of the skill to activate, from the skill listing in your context.",
-         "type": "string"
-        }
-       },
-       "required": [
-        "skill"
        ],
        "type": "object"
       },
@@ -1366,6 +1372,28 @@
       "name": "RecallHistory"
      },
      {
+      "description": "Runs a skill inside the conversation.\n\nA skill is a packaged set of instructions that the user or the project set up for one kind of task, such as release steps, a review checklist or a repository's workflow. The available skills are listed one line each in a message in this conversation.\n\n- When a listed skill covers the task, call this tool before anything else: its instructions then take the place of your usual approach for this turn.\n- Some skills run in a sub-agent and return the finished result instead of loading instructions. One that runs in the background answers with only an agent name; its outcome arrives later in a task notification, so do not wait for it or call the skill again meanwhile.\n- When the user names a skill or types `/<name>` (a slash command), they are asking you to run it.\n- `skill` is the exact listed name, without a leading slash. A plugin's skill is named `plugin:skill`.\n- A skill scoped to a directory has a path prefix (`apps/web:deploy`). When a scoped and an unscoped skill share a name, take the one whose directory contains the files you are working on, the deepest first, and otherwise the unscoped one.\n- Only listed names, or names the user typed, are valid.\n- Built-in commands such as `/help` or `/clear` are not skills.\n- If a `<command-name>` block is already in the current turn, that skill is already loaded: follow it instead of calling this tool again.",
+      "input_schema": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "additionalProperties": false,
+       "properties": {
+        "args": {
+         "description": "Optional text passed to the skill.",
+         "type": "string"
+        },
+        "skill": {
+         "description": "The skill's name exactly as the skill listing gives it, without a leading slash; never a guessed name.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "skill"
+       ],
+       "type": "object"
+      },
+      "name": "Skill"
+     },
+     {
       "description": "Launch a sub-agent to handle a focused, self-contained task and get its result back.\n\n## What it does\n\nSpawns one sub-agent per call: pick a `subagent_type` from the roster, give it the full task as `prompt`, and label it with a short `description` (3–5 words, shown to the user). The agent works in its own context and returns its final text as this call's result; that text is NOT shown to the user, so relay what matters.\n\n**Parallelism**: emit SEVERAL Task calls in ONE assistant turn — they run CONCURRENTLY and their results come back together. Issuing one Task per turn is strictly sequential; when work is independent, always batch the calls into a single turn.\n\nOnce you have delegated a piece of work, do not also do it yourself — wait for the result and build on it.\n\n## When to use\n\n- The task fits a sub-agent type: a read-only scout for broad searches, a general-purpose worker for a self-contained coding task, an architect for a plan.\n- Delegating independent work keeps your own context clean, or the answer means sweeping many files and you only need the conclusion, not the file dumps.\n\n## When NOT to use\n\n- A single-fact lookup where you already know the file or symbol — just look it up yourself.\n- Work that needs your accumulated conversation context — a sub-agent starts fresh and sees ONLY its `prompt`, so make the prompt self-contained: the goal, the constraints, and what to return.",
       "input_schema": {
        "properties": {
@@ -1541,6 +1569,18 @@
       "name": "memory_search"
      },
      {
+      "defer_loading": true,
+      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
+      "input_schema": {
+       "properties": {},
+       "type": "object"
+      },
+      "name": "DeferredToolPlaceholder"
+     },
+     {
+      "cache_control": {
+       "type": "ephemeral"
+      },
       "description": "Persist a named memory as a markdown file; reusing a name updates that memory, and 'created'/'updated' dates are stamped automatically. Names are slugs (letters, digits, '.', '_', '-'; max 128 chars). Every field follows one rule — omit it to keep what the memory has, pass it empty to remove it, pass a value to replace it — so a rewrite never drops what it does not mention. Frontmatter keys without a parameter of their own ride a leading `---` block in the text under the same rule, and text that is only such a block leaves the body as it is. If the result lists similar existing memories, update one of those instead of keeping a near-duplicate.",
       "input_schema": {
        "additionalProperties": false,
@@ -1587,38 +1627,6 @@
        "type": "object"
       },
       "name": "memory_write"
-     },
-     {
-      "defer_loading": true,
-      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
-      "input_schema": {
-       "properties": {},
-       "type": "object"
-      },
-      "name": "DeferredToolPlaceholder"
-     },
-     {
-      "cache_control": {
-       "type": "ephemeral"
-      },
-      "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing, with its arguments, if any, in `args` (what follows `/<name>`); its\ninstructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
-      "input_schema": {
-       "properties": {
-        "args": {
-         "description": "Optional arguments for the skill.",
-         "type": "string"
-        },
-        "skill": {
-         "description": "Name of the skill to activate, from the skill listing in your context.",
-         "type": "string"
-        }
-       },
-       "required": [
-        "skill"
-       ],
-       "type": "object"
-      },
-      "name": "skill"
      }
     ]
    },
@@ -2204,6 +2212,31 @@
      },
      {
       "function": {
+       "description": "Runs a skill inside the conversation.\n\nA skill is a packaged set of instructions that the user or the project set up for one kind of task, such as release steps, a review checklist or a repository's workflow. The available skills are listed one line each in a message in this conversation.\n\n- When a listed skill covers the task, call this tool before anything else: its instructions then take the place of your usual approach for this turn.\n- Some skills run in a sub-agent and return the finished result instead of loading instructions. One that runs in the background answers with only an agent name; its outcome arrives later in a task notification, so do not wait for it or call the skill again meanwhile.\n- When the user names a skill or types `/<name>` (a slash command), they are asking you to run it.\n- `skill` is the exact listed name, without a leading slash. A plugin's skill is named `plugin:skill`.\n- A skill scoped to a directory has a path prefix (`apps/web:deploy`). When a scoped and an unscoped skill share a name, take the one whose directory contains the files you are working on, the deepest first, and otherwise the unscoped one.\n- Only listed names, or names the user typed, are valid.\n- Built-in commands such as `/help` or `/clear` are not skills.\n- If a `<command-name>` block is already in the current turn, that skill is already loaded: follow it instead of calling this tool again.",
+       "name": "Skill",
+       "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+         "args": {
+          "description": "Optional text passed to the skill.",
+          "type": "string"
+         },
+         "skill": {
+          "description": "The skill's name exactly as the skill listing gives it, without a leading slash; never a guessed name.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "skill"
+        ],
+        "type": "object"
+       }
+      },
+      "type": "function"
+     },
+     {
+      "function": {
        "description": "Launch a sub-agent to handle a focused, self-contained task and get its result back.\n\n## What it does\n\nSpawns one sub-agent per call: pick a `subagent_type` from the roster, give it the full task as `prompt`, and label it with a short `description` (3–5 words, shown to the user). The agent works in its own context and returns its final text as this call's result; that text is NOT shown to the user, so relay what matters.\n\n**Parallelism**: emit SEVERAL Task calls in ONE assistant turn — they run CONCURRENTLY and their results come back together. Issuing one Task per turn is strictly sequential; when work is independent, always batch the calls into a single turn.\n\nOnce you have delegated a piece of work, do not also do it yourself — wait for the result and build on it.\n\n## When to use\n\n- The task fits a sub-agent type: a read-only scout for broad searches, a general-purpose worker for a self-contained coding task, an architect for a plan.\n- Delegating independent work keeps your own context clean, or the answer means sweeping many files and you only need the conclusion, not the file dumps.\n\n## When NOT to use\n\n- A single-fact lookup where you already know the file or symbol — just look it up yourself.\n- Work that needs your accumulated conversation context — a sub-agent starts fresh and sees ONLY its `prompt`, so make the prompt self-contained: the goal, the constraints, and what to return.",
        "name": "Task",
        "parameters": {
@@ -2400,6 +2433,17 @@
      },
      {
       "function": {
+       "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
+       "name": "DeferredToolPlaceholder",
+       "parameters": {
+        "properties": {},
+        "type": "object"
+       }
+      },
+      "type": "function"
+     },
+     {
+      "function": {
        "description": "Persist a named memory as a markdown file; reusing a name updates that memory, and 'created'/'updated' dates are stamped automatically. Names are slugs (letters, digits, '.', '_', '-'; max 128 chars). Every field follows one rule — omit it to keep what the memory has, pass it empty to remove it, pass a value to replace it — so a rewrite never drops what it does not mention. Frontmatter keys without a parameter of their own ride a leading `---` block in the text under the same rule, and text that is only such a block leaves the body as it is. If the result lists similar existing memories, update one of those instead of keeping a near-duplicate.",
        "name": "memory_write",
        "parameters": {
@@ -2443,40 +2487,6 @@
         "required": [
          "name",
          "text"
-        ],
-        "type": "object"
-       }
-      },
-      "type": "function"
-     },
-     {
-      "function": {
-       "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
-       "name": "DeferredToolPlaceholder",
-       "parameters": {
-        "properties": {},
-        "type": "object"
-       }
-      },
-      "type": "function"
-     },
-     {
-      "function": {
-       "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing, with its arguments, if any, in `args` (what follows `/<name>`); its\ninstructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
-       "name": "skill",
-       "parameters": {
-        "properties": {
-         "args": {
-          "description": "Optional arguments for the skill.",
-          "type": "string"
-         },
-         "skill": {
-          "description": "Name of the skill to activate, from the skill listing in your context.",
-          "type": "string"
-         }
-        },
-        "required": [
-         "skill"
         ],
         "type": "object"
        }
@@ -3031,6 +3041,29 @@
       "type": "function"
      },
      {
+      "description": "Runs a skill inside the conversation.\n\nA skill is a packaged set of instructions that the user or the project set up for one kind of task, such as release steps, a review checklist or a repository's workflow. The available skills are listed one line each in a message in this conversation.\n\n- When a listed skill covers the task, call this tool before anything else: its instructions then take the place of your usual approach for this turn.\n- Some skills run in a sub-agent and return the finished result instead of loading instructions. One that runs in the background answers with only an agent name; its outcome arrives later in a task notification, so do not wait for it or call the skill again meanwhile.\n- When the user names a skill or types `/<name>` (a slash command), they are asking you to run it.\n- `skill` is the exact listed name, without a leading slash. A plugin's skill is named `plugin:skill`.\n- A skill scoped to a directory has a path prefix (`apps/web:deploy`). When a scoped and an unscoped skill share a name, take the one whose directory contains the files you are working on, the deepest first, and otherwise the unscoped one.\n- Only listed names, or names the user typed, are valid.\n- Built-in commands such as `/help` or `/clear` are not skills.\n- If a `<command-name>` block is already in the current turn, that skill is already loaded: follow it instead of calling this tool again.",
+      "name": "Skill",
+      "parameters": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "additionalProperties": false,
+       "properties": {
+        "args": {
+         "description": "Optional text passed to the skill.",
+         "type": "string"
+        },
+        "skill": {
+         "description": "The skill's name exactly as the skill listing gives it, without a leading slash; never a guessed name.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "skill"
+       ],
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
       "description": "Launch a sub-agent to handle a focused, self-contained task and get its result back.\n\n## What it does\n\nSpawns one sub-agent per call: pick a `subagent_type` from the roster, give it the full task as `prompt`, and label it with a short `description` (3–5 words, shown to the user). The agent works in its own context and returns its final text as this call's result; that text is NOT shown to the user, so relay what matters.\n\n**Parallelism**: emit SEVERAL Task calls in ONE assistant turn — they run CONCURRENTLY and their results come back together. Issuing one Task per turn is strictly sequential; when work is independent, always batch the calls into a single turn.\n\nOnce you have delegated a piece of work, do not also do it yourself — wait for the result and build on it.\n\n## When to use\n\n- The task fits a sub-agent type: a read-only scout for broad searches, a general-purpose worker for a self-contained coding task, an architect for a plan.\n- Delegating independent work keeps your own context clean, or the answer means sweeping many files and you only need the conclusion, not the file dumps.\n\n## When NOT to use\n\n- A single-fact lookup where you already know the file or symbol — just look it up yourself.\n- Work that needs your accumulated conversation context — a sub-agent starts fresh and sees ONLY its `prompt`, so make the prompt self-contained: the goal, the constraints, and what to return.",
       "name": "Task",
       "parameters": {
@@ -3213,6 +3246,15 @@
       "type": "function"
      },
      {
+      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
+      "name": "DeferredToolPlaceholder",
+      "parameters": {
+       "properties": {},
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
       "description": "Persist a named memory as a markdown file; reusing a name updates that memory, and 'created'/'updated' dates are stamped automatically. Names are slugs (letters, digits, '.', '_', '-'; max 128 chars). Every field follows one rule — omit it to keep what the memory has, pass it empty to remove it, pass a value to replace it — so a rewrite never drops what it does not mention. Frontmatter keys without a parameter of their own ride a leading `---` block in the text under the same rule, and text that is only such a block leaves the body as it is. If the result lists similar existing memories, update one of those instead of keeping a near-duplicate.",
       "name": "memory_write",
       "parameters": {
@@ -3256,36 +3298,6 @@
        "required": [
         "name",
         "text"
-       ],
-       "type": "object"
-      },
-      "type": "function"
-     },
-     {
-      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
-      "name": "DeferredToolPlaceholder",
-      "parameters": {
-       "properties": {},
-       "type": "object"
-      },
-      "type": "function"
-     },
-     {
-      "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing, with its arguments, if any, in `args` (what follows `/<name>`); its\ninstructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
-      "name": "skill",
-      "parameters": {
-       "properties": {
-        "args": {
-         "description": "Optional arguments for the skill.",
-         "type": "string"
-        },
-        "skill": {
-         "description": "Name of the skill to activate, from the skill listing in your context.",
-         "type": "string"
-        }
-       },
-       "required": [
-        "skill"
        ],
        "type": "object"
       },

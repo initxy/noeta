@@ -57,7 +57,6 @@ RECOGNIZED_TOOL_NAMES: frozenset[str] = frozenset(
         "TodoWrite",
         "AskUserQuestion",
         "Task",
-        "skill",
         # skills
         "run_skill_script",
         # app

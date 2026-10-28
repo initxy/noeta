@@ -123,7 +123,7 @@ async def test_residents_rehang_after_a_compaction(h: Harness, tmp_path: Path) -
     (mem / "note.md").write_text("A note.\n")
     a = Agent(name="a", model="m", extensions=[
         Skills(), Memory(root=mem), Instructions(), FileTools(), MakeRoom()])
-    h.provider.add(reply("", ("skill", {"skill": "deploy"})), reply("done"),
+    h.provider.add(reply("", ("Skill", {"skill": "deploy"})), reply("done"),
                    ContextOverflow("too long"), reply("fits"))
     tid = await h.start(a)
     await h.say(a, tid, "next")

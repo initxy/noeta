@@ -57,7 +57,6 @@ DEFAULT_RISK: Mapping[str, str] = {
     "Task": "low",
     "TodoWrite": "low",
     "AskUserQuestion": "low",
-    "skill": "low",
     "Skill": "low",
     "RecallHistory": "low",
     "structured_output": "low",
