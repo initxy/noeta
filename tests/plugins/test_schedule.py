@@ -197,6 +197,25 @@ async def test_cron_jobs_create_list_fire_rearm_and_delete(store: SqliteStore) -
     assert recurring["id"] not in (await _state(client, tid, ext))["jobs"]
 
 
+async def test_a_continued_task_does_not_inherit_its_sources_jobs(store: SqliteStore) -> None:
+    provider = ScriptedProvider([
+        reply("", ("ToolSearch", {"query": "select:CronCreate,CronList"})),
+        reply("", (texts.CRON_CREATE_TOOL, {"cron": "*/5 * * * *", "prompt": "check CI"})),
+        reply("scheduled"),
+        reply("", (texts.CRON_LIST_TOOL, {})),
+        reply("listed"),
+    ])
+    ext = Schedule()
+    rt = runtime(store, provider, ext)
+    client = Client(store)
+    src = await client.create("a", "set it up")
+    await rt.run_until_idle()
+    assert (await _state(client, src, ext))["jobs"]
+    fork = await client.create("a", "what is scheduled here?", history_from=src)
+    await rt.run_until_idle()
+    assert _results([r.event for r in await client.events(fork)]) == [texts.CRON_NONE]
+
+
 async def _state(client: Client, tid: str, ext: Schedule) -> dict[str, object]:
     st: object = ext.initial_state()
     for r in await client.events(tid):

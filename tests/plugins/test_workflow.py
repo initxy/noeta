@@ -314,3 +314,11 @@ async def test_meta_must_be_a_pure_literal() -> None:
                             "phases: [{title: 'P', detail: 'x => y'}]}\nreturn 1")
     assert ok == {"meta": {"name": "a (b)", "description": "d",
                            "phases": [{"title": "P", "detail": "x => y"}]}}
+
+
+def test_a_continuation_keeps_finished_runs_only() -> None:
+    ext = Orchestration()
+    st = ext.reduce(None, "run", {"run_id": "r1"})
+    st = ext.reduce(st, "run", {"run_id": "r2"})
+    st = ext.reduce(st, "ended", {"run_id": "r2", "status": "done"})
+    assert list(ext.continue_state(st)["runs"]) == ["r2"]

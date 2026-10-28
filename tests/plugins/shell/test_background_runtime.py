@@ -255,3 +255,13 @@ async def test_a_release_after_shutdown_does_not_touch_the_store(
     await store.close()
     await release()  # a job ending after the store closed
     assert "unhold failed" not in caplog.text
+
+
+def test_a_continuation_drops_the_running_jobs_of_its_source() -> None:
+    ext = Shell(registry=Registry())
+    st = ext.reduce(None, "cwd", {"cwd": "/w/sub"})
+    st = ext.reduce(st, "started", {"job_id": "a"})
+    st = ext.reduce(st, "started", {"job_id": "b"})
+    st = ext.reduce(st, "ended", {"job_id": "b", "status": "completed"})
+    out = ext.continue_state(st)
+    assert out.cwd == "/w/sub" and list(out.jobs) == ["b"]

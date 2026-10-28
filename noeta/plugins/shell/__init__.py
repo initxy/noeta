@@ -24,6 +24,7 @@ from __future__ import annotations
 import copy
 import re
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any
 
 from noeta.core.events import ExtensionRecorded, InputTaken, Recorded, Say, TaskEnded, Waiting
@@ -92,6 +93,14 @@ class Shell(Extension):
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         return reduce_shell(state, kind, data)
+
+    def continue_state(self, state: Any) -> Any:
+        """A continuation keeps the cwd and finished jobs: a running job
+        belongs to the source task, whose notices it posts."""
+        if not isinstance(state, ShellState):
+            return state
+        return replace(state, jobs={k: j for k, j in state.jobs.items()
+                                    if j.get("status") != "running"})
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
         sandbox = sandbox_of(view.env)

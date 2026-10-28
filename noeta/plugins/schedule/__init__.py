@@ -77,6 +77,12 @@ class Schedule(Extension):
             loop = {}
         return {"jobs": jobs, "loop": loop}
 
+    def continue_state(self, state: Any) -> Any:
+        """A continuation starts with no jobs and no loop: their kernel
+        timers stay with the source task, which keeps firing them, so
+        copies here would be listed and never fire."""
+        return self.initial_state()
+
     def _st(self, state: Any) -> dict[str, Any]:
         return {**self.initial_state(), **(state or {})}
 

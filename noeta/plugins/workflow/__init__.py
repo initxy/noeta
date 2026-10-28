@@ -133,6 +133,14 @@ class Orchestration(Extension):
         runs[rid] = run
         return {**st, "runs": runs}
 
+    def continue_state(self, state: Any) -> Any:
+        """A continuation keeps finished runs only: a running one's agents
+        are the source task's children and report to it, so here it would
+        never settle (or be driven twice)."""
+        st = _st(state)
+        return {**st, "runs": {rid: r for rid, r in st["runs"].items()
+                               if r.get("status") != "running"}}
+
     def runs(self, view: TaskView) -> dict[str, dict[str, Any]]:
         return dict(_st(view.ext_state(self.name))["runs"])
 
