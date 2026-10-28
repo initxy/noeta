@@ -179,8 +179,8 @@ async def test_http_transport_redirects_and_media() -> None:
     assert str(page) == "<p>hi</p>" and page.content_type.startswith("text/html")
     with pytest.raises(CrossHostRedirect):
         await transport.fetch("https://site.com/away")
-    with pytest.raises(ValueError, match="image/png content"):
-        await transport.fetch("https://site.com/img")
+    image = await transport.fetch("https://site.com/img")
+    assert image.raw == b"x" and image.content_type == "image/png"
     await client.aclose()
 
 
@@ -256,6 +256,25 @@ async def test_an_offset_past_the_end_is_said_not_failed(tmp_path: Path) -> None
                          _ctx(tmp_path))
     assert not out.is_error
     assert text(out) == "Nothing is left to read from offset 60: the page's text is 50 characters long."
+
+
+async def test_binary_content_is_saved_for_the_model_to_read(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "application/pdf"},
+                              content=b"%PDF-1.4 hello")
+
+    tool = _mock_fetch(handler)
+    ctx = ToolContext(task_id="t", call_id="c", env=LocalExecEnv(str(tmp_path)), state={},
+                      record=lambda *_: None, spill_dir=str(tmp_path / "spill"))
+    out = await tool.run({"url": "https://s.com/doc.pdf", "prompt": "p"}, ctx)
+    assert not out.is_error
+    note = text(out).rsplit("\n", 1)[-1]
+    assert note.startswith("[The response is binary (application/pdf, 14 bytes); it was saved to ")
+    saved = note.removeprefix(
+        "[The response is binary (application/pdf, 14 bytes); it was saved to ").rstrip("]")
+    assert Path(saved).read_bytes() == b"%PDF-1.4 hello" and saved.endswith(".pdf")
+    without = await tool.run({"url": "https://s.com/other.pdf", "prompt": "p"}, _ctx(tmp_path))
+    assert without.is_error and "application/pdf" in text(without)
 
 
 class FakeSearch:

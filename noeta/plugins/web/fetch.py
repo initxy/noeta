@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import mimetypes
+import posixpath
 import time
 from collections.abc import Awaitable, Callable
 from http import HTTPStatus
@@ -26,9 +28,16 @@ from noeta.plugins.web.render import (
     check_text_media,
     collapse_whitespace,
     decode_body,
+    media_type_of,
     render,
 )
-from noeta.toolkit.tools import SCHEMA_DIALECT, limit_output, truncate_bytes
+from noeta.toolkit.tools import (
+    SCHEMA_DIALECT,
+    format_size,
+    limit_output,
+    spill_path,
+    truncate_bytes,
+)
 
 __all__ = [
     "CrossHostRedirect",
@@ -266,7 +275,11 @@ class HttpFetchTransport:
                         raise HttpStatus(resp.status_code, retry if retry.isdigit()
                                          and len(retry) <= 6 else None)
                     content_type = resp.headers.get("content-type", "")
-                    check_text_media(current, content_type)
+                    try:
+                        check_text_media(current, content_type)
+                        binary = False
+                    except ValueError:
+                        binary = True
                     chunks: list[bytes] = []
                     total = 0
                     async for chunk in resp.aiter_bytes():
@@ -274,8 +287,11 @@ class HttpFetchTransport:
                         if total > self.max_bytes:
                             raise ValueError(f"response exceeds {self.max_bytes} byte limit")
                         chunks.append(chunk)
-                    return FetchedPage(decode_body(b"".join(chunks), content_type),
-                                       content_type)
+                    body = b"".join(chunks)
+                    if binary:
+                        return FetchedPage(body.decode("utf-8", errors="replace"),
+                                           content_type, raw=body)
+                    return FetchedPage(decode_body(body, content_type), content_type)
             raise RuntimeError(f"too many redirects (>{_MAX_REDIRECT_HOPS}) fetching {url}")
         finally:
             if self.client is None:
@@ -356,6 +372,7 @@ class WebFetchTool:
             return text_output(refusal, is_error=True)
         cache = self.cache_for(ctx)
         cached = cache.get(url)
+        binary_note = ""
         if cached is not None:
             title, markdown = cached
         else:
@@ -369,7 +386,21 @@ class WebFetchTool:
                                    status=status.status)
             except Exception as exc:  # noqa: BLE001 - degrade, don't crash the step
                 return text_output(f"WebFetch failed: {exc}", is_error=True)
+            raw = fetched.raw if isinstance(fetched, FetchedPage) else None
+            if raw is not None:
+                assert isinstance(fetched, FetchedPage)
+                saved = await _save_binary(ctx, raw, fetched.content_type)
+                if saved is None:
+                    try:
+                        check_text_media(url, fetched.content_type)
+                    except ValueError as exc:
+                        return text_output(f"WebFetch failed: {exc}", is_error=True)
+                media = media_type_of(fetched.content_type)
+                binary_note = (f"\n[The response is binary ({media}, {format_size(len(raw))}); "
+                               f"it was saved to {saved}]")
             title, markdown = render(fetched)
+            if not markdown.strip() and binary_note:
+                return text_output(binary_note.strip(), url=url)
             if not markdown.strip():
                 return text_output(
                     f"WebFetch got no readable text from {truncate_bytes(url, 100)} — the page "
@@ -401,4 +432,20 @@ class WebFetchTool:
                 meta["digested"] = True
             else:
                 body = f"(Digest unavailable — raw page rendering follows.)\n{page}{more}"
-        return text_output(await limit_output(body, WEBFETCH_RESULT_LIMIT, ctx), **meta)
+        body = await limit_output(body, WEBFETCH_RESULT_LIMIT, ctx)
+        return text_output(body + binary_note, **meta)
+
+
+async def _save_binary(ctx: ToolContext, raw: bytes, content_type: str) -> str | None:
+    """A binary body saved under the spill directory, for the model to open
+    (with ``Read``); ``None`` when there is nowhere to save it."""
+    if not ctx.spill_dir:
+        return None
+    ext = mimetypes.guess_extension(media_type_of(content_type)) or ".bin"
+    base = posixpath.splitext(spill_path(ctx.spill_dir, ctx.task_id, ctx.call_id))[0]
+    path = f"{posixpath.dirname(base)}/webfetch-{posixpath.basename(base)}{ext}"
+    try:
+        await ctx.env.write_bytes(path, raw)
+    except OSError:
+        return None
+    return path
