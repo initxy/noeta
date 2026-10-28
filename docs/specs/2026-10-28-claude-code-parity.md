@@ -173,7 +173,7 @@ Phase 3 — behaviors around the model
   `context: fork`, `` !`cmd` ``, `${CLAUDE_SKILL_DIR}`, `paths`), directory walk.
 - [ ] Agent files: every baseline frontmatter field; unknown fields warn.
 - [x] Memory: `CLAUDE.md` layers, `@import`, `.claude/rules`, per-project auto memory.
-- [ ] MCP: OAuth, headersHelper, SSE, streamable-http spelling, resources tools, elicitation via
+- [x] MCP: OAuth, headersHelper, SSE, streamable-http spelling, resources tools, elicitation via
   `noeta.core.questions`, deferred by default.
 - [x] Sandbox for local exec (bubblewrap on Linux) with Claude Code's settings shape and domain
   proxy.
@@ -409,3 +409,21 @@ Phase 5 — front ends
   Bash parameter (auto mode), the platform notes of Claude Code's sandbox section, violation
   notes for background jobs, git commits from a sandboxed linked worktree (its `.git` lives
   in the main repository, outside the writable set), macOS run on a real Mac.
+- 2026-10-28: Phase 3 MCP. Transports `stdio` / `http` (`streamable-http` too) / `sse` / `ws`
+  (asyncio WebSocket, no new dependency), multiplexed by request id (a timed-out call is
+  cancelled, the connection kept). OAuth 2.1 (RFC 9728 / 8414 / 7591, PKCE S256, loopback
+  callback on Claude Code's port choice, tokens in `$NOETA_HOME/mcp-auth` 0700/0600,
+  refresh); the sign-in never blocks a tool call: as in Claude Code, a server needing it
+  offers `mcp__<server>__authenticate` / `__complete_authentication` (model-visible, our
+  wording, `noeta/plugins/mcp/descriptions/`). `headersHelper` (`NOETA_MCP_SERVER_NAME` /
+  `_URL`). Client capabilities `roots` + `elicitation` (protocol 2025-11-25); elicitation
+  parks the call on `noeta.core.questions.ask`; `roots/list` answers the task's cwd;
+  `tools/list_changed` re-lists after the call. `ReadMcpResourceDirTool` is build-flagged
+  off in 2.1.312 and absent from the recording: not added (tool.mcp.11 n/a). `noeta mcp
+  add|add-json|list|get|remove|login|logout` (`noeta/cli/mcp_command.py`, through
+  `Mcp.admin` by registry name). For the owner: Claude Code's `local` scope writes
+  `.noeta/settings.local.json`'s `mcpServers`, read only once the project is trusted. Open:
+  a second elicitation in one call is declined (a resumed call cannot park again), a worker
+  restart loses an open elicitation (result unknown), no workspace-trust gate on a project's
+  `headersHelper` beyond the consent keys, the Streamable HTTP server-push GET stream,
+  `roots/list_changed`, sampling.

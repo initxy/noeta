@@ -75,6 +75,24 @@ All notable changes to Noeta are documented here. The format is based on
   argument: `network`, `read_only`, `caps`, `pids_limit`, plus `memory` / `cpus`). Its
   `sandbox=` maps `network.allowedDomains` onto an internal Docker network whose only way
   out is noeta's filtering proxy (`ensure_container_proxy` serves it again after a restart).
+- **MCP transports as Claude Code's:** `sse` (legacy HTTP+SSE) and `ws` (WebSocket) join
+  `stdio` and `http` (`type: "streamable-http"` reads as `http`); `alwaysLoad` and
+  `bareElicitationCapability` are read from settings. Requests are multiplexed: a timed-out
+  call is cancelled and no longer breaks a stdio connection.
+- **MCP OAuth 2.1** for `http` / `sse` servers: resource and authorization-server discovery,
+  dynamic client registration or `oauth.clientId`, PKCE, `oauth.callbackPort` /
+  `NOETA_MCP_OAUTH_CALLBACK_PORT`, `oauth.authServerMetadataUrl`, `oauth.scopes`; tokens in
+  `$NOETA_HOME/mcp-auth` (0600) and refreshed. A server that needs a sign-in offers
+  `mcp__<server>__authenticate` / `mcp__<server>__complete_authentication` in place of its
+  tools. `headersHelper` runs a command for the headers when a connection opens
+  (`NOETA_MCP_SERVER_NAME` / `NOETA_MCP_SERVER_URL` set).
+- **MCP servers can ask the user** (elicitation, turned into the question form; the call
+  waits for the answer), read the task's workspace from `roots/list`, and refresh their tools
+  with `list_changed`.
+- **`noeta mcp add|add-json|list|get|remove|login|logout`** with Claude Code's flags, writing
+  `~/.noeta/settings.json` (user), `.noeta/mcp.json` (project) and
+  `.noeta/settings.local.json` (local). `McpPool(http=...)` routes remote MCP connections
+  and sign-ins through the host's `httpx.AsyncClient`.
 
 ### Fixed
 
