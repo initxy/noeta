@@ -85,7 +85,9 @@ only once trusted), `NOETA.md` and the cross-tool `AGENTS.md`, and the machine's
 directory (`/etc/noeta`). The mechanisms and formats inside are Claude Code's (instruction
 layering, settings, skills, agents, `.noeta/mcp.json`); its own places (`~/.claude/`,
 `.claude/`, `CLAUDE.md`, `.mcp.json`, `CLAUDE_*` variables) are never read
-(`noeta/cli/settings_files.py`, `noeta/plugins/instructions/files.py`).
+(`noeta/cli/settings_files.py`, `noeta/plugins/instructions/files.py`). Trusted projects are
+listed in `~/.noeta/trusted.json` (`noeta trust`); a project's MCP servers start only with
+Claude Code's consent keys, so a cloned repository never starts a process by itself.
 
 ## Extension
 
@@ -156,9 +158,10 @@ _Avoid_: `class Run`, `class Workflow`, `WorkflowRunner`, `class Mutator`, `clas
 
 ## Naming: model-visible tool names
 
-Tool names the model sees follow Claude Code (`Read`, `Glob`, `Grep`, `Edit`, `Write`, `Bash`,
-`TodoWrite`, `AskUserQuestion`, `Agent`, `WebFetch`, `WebSearch`, …) because models carry their
-strongest prior on those names. Everything else is snake_case.
+Tool names the model sees follow Claude Code (`Read`, `Edit`, `Write`, `Bash`, `Agent`,
+`AskUserQuestion`, `Skill`, `ToolSearch`, `WebFetch`, `Workflow`, …) because models carry their
+strongest prior on those names; they are exempt from the bans above. Everything else is
+snake_case.
 
 ## Naming: enforcement
 
