@@ -5,6 +5,7 @@ read, watch."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Literal, Union
@@ -135,7 +136,7 @@ class Client:
                 row = await self.get(task_id)
                 if row.status == "ended" and row.last_seq <= after:
                     return
-                with _suppress_timeout():
+                with contextlib.suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(changed.wait(), self.poll_interval)
         finally:
             unsubscribe()
@@ -151,11 +152,3 @@ class Client:
                 await asyncio.sleep(self.poll_interval / 5)
 
         return await asyncio.wait_for(settled(), timeout)
-
-
-class _suppress_timeout:
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
-        return exc_type is asyncio.TimeoutError

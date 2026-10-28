@@ -270,8 +270,13 @@ class TaskRun:
         assert self.agent is not None
         return self.agent.one_shot or self.state.parent_id is not None
 
+    @property
+    def model(self) -> str:
+        """The task's model: its config's, else its agent's."""
+        return str(self.state.config.get("model") or (self.agent.model if self.agent else ""))
+
     def view(self) -> TaskView:
-        model = str(self.state.config.get("model") or (self.agent.model if self.agent else ""))
+        model = self.model
         return TaskView(state=self.state, complete=self.complete, env=self.env(),
                         post=self.post_self, extensions=self.exts, model=model,
                         agents=self.rt.agents,

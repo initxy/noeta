@@ -38,13 +38,13 @@ def build_model_request(run: TaskRun, *, final: bool) -> ModelRequest:
     config = run.state.config
     request = build_request(
         run.state,
-        model=str(config.get("model") or agent.model),
+        model=run.model,
         system_prompt=run.state.prompt(f"system/{agent.name}", agent.system_prompt),
         identity=run.state.prompt(f"identity/{agent.name}", agent.identity),
         parts=[p for ext in run.exts for p in ext.context(view)],
         tools=run.tools(view),
         effort=config.get("effort") or agent.effort,
-        max_tokens=agent.max_tokens or _output_ceiling(str(config.get("model") or agent.model)),
+        max_tokens=agent.max_tokens or _output_ceiling(run.model),
         output_schema=config.get("output_schema") or agent.output_schema,
     )
     if final:
