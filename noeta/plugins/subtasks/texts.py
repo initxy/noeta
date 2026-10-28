@@ -82,6 +82,7 @@ EXCLUSIVE = (
 )
 SPAWN_DENIED = "No agent was started: {reason}"
 UNKNOWN_AGENT = "there is no agent type {name!r}. Available agent types: {available}."
+AMBIGUOUS_AGENT = "agent type {name!r} could mean {matches}. Use the exact name."
 DEPTH_REACHED = (
     "agents may nest only {n} levels deep, and this one is at depth {depth}. Do this task "
     "yourself with your own tools instead of starting another agent."

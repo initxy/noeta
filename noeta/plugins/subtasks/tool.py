@@ -14,6 +14,7 @@ from __future__ import annotations
 import posixpath
 import re
 import time
+import unicodedata
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -88,9 +89,24 @@ def transcript_file(directory: str, agent_id: str) -> str:
     return posixpath.join(directory, f"{_UNSAFE_NAME.sub('_', agent_id) or 'agent'}.output")
 
 
-def agent_type(args: Mapping[str, Any]) -> str:
+def agent_type(args: Mapping[str, Any], roster: Mapping[str, Any] | None = None) -> str:
+    """The agent type a call names. A name that is not a type exactly but
+    matches one type (or ``fork``) once case, spaces, dashes and underscores
+    are ignored means that type, as in Claude Code."""
     value = args.get("subagent_type")
-    return value if isinstance(value, str) and value.strip() else texts.DEFAULT_TYPE
+    name = value if isinstance(value, str) and value.strip() else texts.DEFAULT_TYPE
+    roster = roster or {}
+    if name in roster or name == texts.FORK_TYPE:
+        return name
+    key = _loose(name)
+    if key == _loose(texts.FORK_TYPE):
+        return texts.FORK_TYPE
+    matches = [k for k in roster if _loose(k) == key]
+    return matches[0] if len(matches) == 1 else name
+
+
+def _loose(name: str) -> str:
+    return re.sub(r"[\s\-_\u2010-\u2015]+", "", unicodedata.normalize("NFKC", name).lower())
 
 
 def argument_refusal(args: Mapping[str, Any]) -> str | None:
@@ -116,14 +132,16 @@ def call_refusal(ext: Subtasks, state: TaskState, call: ToolUse,
     refusal = argument_refusal(args)
     if refusal is not None:
         return refusal
-    name = agent_type(args)
+    name = agent_type(args, roster)
     reason = None
     if name == texts.FORK_TYPE:
         if state.config.get(FORK_KEY):
             reason = texts.FORK_IN_FORK
     elif name not in roster:
         available = ", ".join(sorted([*roster, texts.FORK_TYPE]))
-        reason = texts.UNKNOWN_AGENT.format(name=name, available=available)
+        alike = sorted(k for k in roster if _loose(k) == _loose(name))
+        reason = texts.AMBIGUOUS_AGENT.format(name=name, matches=" or ".join(alike)) \
+            if alike else texts.UNKNOWN_AGENT.format(name=name, available=available)
     if reason is None and args.get("isolation") == "remote":
         reason = texts.NO_REMOTE
     depth = int(state.config.get(DEPTH_KEY) or 0)
@@ -211,7 +229,7 @@ class AgentTool:
         if refusal is not None:  # normally denied at the gate already
             return text_output(refusal, is_error=True)
         assert ctx.spawn is not None
-        kind = agent_type(input)
+        kind = agent_type(input, self._roster)
         prompt = str(input["prompt"])
         description = str(input.get("description") or "")
         fork = kind == texts.FORK_TYPE

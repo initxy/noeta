@@ -544,3 +544,21 @@ async def test_a_background_agent_keeps_its_transcript_file(store: SqliteStore,
     notice = p.requests[3].messages[-2].text
     assert (f"<tool-use-id>{p.requests[1].messages[-2].tool_uses[0].id}</tool-use-id>\n"
             f"<output-file>{path}</output-file>\n<status>completed</status>") in notice
+
+
+async def test_an_agent_type_matches_loosely_when_only_one_fits(store: SqliteStore) -> None:
+    roster = [*ROSTER, SubagentSpec(name="code-review", description="Reviews.", agent="worker"),
+              SubagentSpec(name="code_review", description="Also reviews.", agent="worker")]
+    p = ScriptedProvider([reply("", agent("a", "Scout"), agent("b", "General Purpose"),
+                                agent("c", "Code Review")), reply("ok")])
+    main = Agent(name="main", model="p", extensions=[Subtasks(roster, queue="kids")])
+    rt = runtime(store, {"p": p}, main, worker())
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    kinds = sorted([(await events(client, r.task_id))[0].config["subagent_type"]
+                    for r in await client.tasks(parent_id=tid)])
+    assert kinds == ["general-purpose", "scout"]
+    ambiguous = texts.SPAWN_DENIED.format(reason=texts.AMBIGUOUS_AGENT.format(
+        name="Code Review", matches="code-review or code_review"))
+    assert (ambiguous, True) in await results(client, tid)
