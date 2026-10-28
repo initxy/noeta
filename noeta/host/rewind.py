@@ -176,7 +176,8 @@ async def rewind(client: Any, task_id: str, point: RewindPoint, *, conversation:
     """Rewind to before ``point``. With ``conversation`` a new task (same
     agent and config) continues the log up to just before the prompt; with
     ``files`` the files changed since are written back as they were, by
-    the task that goes on."""
+    ``task_id`` itself: its log holds the snapshots the checkpoints plugin
+    checks a restore against (the fork's stops before them)."""
     target = task_id
     if conversation:
         events = await client.events(point.task_id)
@@ -190,7 +191,7 @@ async def rewind(client: Any, task_id: str, point: RewindPoint, *, conversation:
     if files:
         plan = await file_plan(client, task_id, point)
         if plan.files:
-            await client.signal(target, RESTORE_SIGNAL, {"files": [
+            await client.signal(task_id, RESTORE_SIGNAL, {"files": [
                 {"path": p, "data": base64.b64encode(c).decode() if c is not None else None}
                 for p, c in plan.files.items()]})
             restored = tuple(plan.files)

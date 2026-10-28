@@ -4,6 +4,7 @@ the conversation before a prompt and puts the files back."""
 
 from __future__ import annotations
 
+import base64
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,7 @@ from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded
 from noeta.core.runner import Runtime
 from noeta.host.rewind import diff_stats, file_plan, rewind, rewind_points
-from noeta.plugins.checkpoints import Checkpoints
+from noeta.plugins.checkpoints import RESTORE_SIGNAL, Checkpoints
 from noeta.plugins.fs import FileTools
 from noeta.testing import ScriptedProvider, reply
 
@@ -94,5 +95,43 @@ async def test_files_and_conversation_go_back_to_before_a_prompt(
     assert [p.text for p in back] == ["change a", "again"]
     only_files = await rewind(client, done.task_id, back[0], conversation=False)
     assert only_files.task_id == done.task_id
+    await rt.run_until_idle()
+    assert a.read_text() == "one\n"
+
+
+async def test_a_restore_puts_back_only_what_this_task_snapshotted(
+        store: SqliteStore, tmp_path: Path) -> None:
+    work = tmp_path / "w"
+    work.mkdir()
+    a, other, outside = work / "a.txt", work / "other.txt", tmp_path / "outside.txt"
+    a.write_text("one\n")
+    other.write_text("keep\n")
+    provider = ScriptedProvider([
+        reply("", ("Read", {"file_path": str(a)})),
+        reply("", ("Edit", {"file_path": str(a), "old_string": "one", "new_string": "two"})),
+        reply("done"),
+    ])
+    rt = _runtime(store, provider, work)
+    client = Client(store)
+    tid = await client.create("a", "change a", config={"model": "m"})
+    await rt.run_until_idle()
+
+    def b64(text: str) -> str:
+        return base64.b64encode(text.encode()).decode()
+
+    await client.signal(tid, RESTORE_SIGNAL, {"files": [
+        {"path": str(outside), "data": b64("planted\n")},   # outside the workspace
+        {"path": str(other), "data": b64("planted\n")},     # never snapshotted
+        {"path": str(other), "data": None},
+        {"path": str(a), "data": b64("planted\n")},         # not a snapshot of it
+        {"path": str(a), "data": None},                     # it existed then
+    ]})
+    await rt.run_until_idle()
+    assert not outside.exists() and other.read_text() == "keep\n"
+    assert a.read_text() == "two\n"
+    [restored] = [r.event.data for r in await client.events(tid)
+                  if isinstance(r.event, ExtensionRecorded) and r.event.kind == "restored"]
+    assert restored["files"] == [] and len(restored["errors"]) == 3
+    await client.signal(tid, RESTORE_SIGNAL, {"files": [{"path": str(a), "data": b64("one\n")}]})
     await rt.run_until_idle()
     assert a.read_text() == "one\n"

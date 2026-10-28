@@ -16,8 +16,12 @@ front ends (``noeta.host.rewind``):
 
 The ``restore_files`` signal (``{"files": [{"path", "data": base64 |
 None}]}``) writes files back through the task's environment, wherever the
-task runs; ``None`` removes the file. Changes made through ``Bash`` are not
-tracked, as in Claude Code.
+task runs; ``None`` removes the file. It only puts back what this task's
+log (or a conversation it continues) snapshotted: a path inside the
+workspace with a snapshot of it, and content hashing to one of that path's
+snapshots (``None`` only when a snapshot found it absent); anything else is
+reported as not restored. Changes made through ``Bash`` are not tracked, as
+in Claude Code.
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ from typing import Any
 from noeta.core.events import External, InputTaken, Recorded, ToolStarted
 from noeta.core.extension import Extension, TaskView
 from noeta.core.types import ToolUse
+from noeta.toolkit.tools import Workspace
 
 __all__ = ["EDITING_TOOLS", "MAX_SNAPSHOT_BYTES", "NAME", "RESTORE_SIGNAL", "Checkpoints"]
 
@@ -59,15 +64,20 @@ class Checkpoints(Extension):
 
     def initial_state(self) -> Any:
         #: ``shas``: blobs this task recorded; ``saved``: per path, the
-        #: prompt (log seq) it was last saved for.
-        return {"shas": frozenset(), "saved": {}}
+        #: prompt (log seq) it was last saved for; ``snaps``: per path, every
+        #: content sha a snapshot found (``None``: the file did not exist).
+        return {"shas": frozenset(), "saved": {}, "snaps": {}}
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         if kind != "snapshot" or not isinstance(data, dict):
             return state
         shas = state["shas"] | {data["sha"]} if data.get("blob") is not None else state["shas"]
-        saved = {**state["saved"], str(data.get("path")): str(data.get("prompt") or "")}
-        return {"shas": shas, "saved": saved}
+        path = str(data.get("path"))
+        saved = {**state["saved"], path: str(data.get("prompt") or "")}
+        snaps = dict(state.get("snaps") or {})
+        if data.get("sha") != "":  # "" = no content kept: nothing to restore from
+            snaps[path] = snaps.get(path, frozenset()) | {data.get("sha")}
+        return {"shas": shas, "saved": saved, "snaps": snaps}
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         ev = recorded.event
@@ -114,21 +124,33 @@ class Checkpoints(Extension):
         files = data.get("files") if isinstance(data, dict) else None
         if env is None or not isinstance(files, list):
             return
+        snaps = (view.ext_state(NAME) or self.initial_state()).get("snaps") or {}
         done: list[str] = []
         errors: dict[str, str] = {}
+        ws: Workspace | None = None
         for entry in files:
             path = entry.get("path") if isinstance(entry, dict) else None
             if not isinstance(path, str) or not path:
                 continue
             try:
+                ws = ws or await Workspace.of(env)
+                resolved = await ws.resolve_write(path)
+                known = snaps.get(resolved)
+                if known is None:
+                    raise PermissionError("this task has no snapshot of the file")
                 blob = entry.get("data")
                 if blob is None:
-                    if await env.stat(path) is not None:
-                        result = await env.run(["rm", "-f", "--", path], timeout=30)
+                    if None not in known:
+                        raise PermissionError("no snapshot found the file absent")
+                    if await env.stat(resolved) is not None:
+                        result = await env.run(["rm", "-f", "--", resolved], timeout=30)
                         if result.exit_code != 0:
                             raise OSError(result.stderr.decode(errors="replace").strip())
                 else:
-                    await env.write_bytes(path, base64.b64decode(blob))
+                    content = base64.b64decode(blob)
+                    if hashlib.sha256(content).hexdigest() not in known:
+                        raise PermissionError("the content matches no snapshot of the file")
+                    await env.write_bytes(resolved, content)
                 done.append(path)
             except Exception as exc:  # noqa: BLE001 — reported, the rest still restored
                 errors[path] = f"{type(exc).__name__}: {exc}"
