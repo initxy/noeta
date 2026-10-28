@@ -18,7 +18,7 @@ import asyncio
 
 import pytest
 
-from noeta.core.errors import Conflict, UnknownTask
+from noeta.core.errors import Conflict, InboxUnread, UnknownTask
 from noeta.core.events import DEFAULT_TENANT, Cancel, External, Say, TaskCreated, TaskEnded, Waiting
 from noeta.core.store import HOLD_LOST, NewTask, Patch, Post, Snapshot, Store
 from noeta.core.types import user
@@ -192,6 +192,22 @@ async def test_going_to_wait_with_unread_inbox_stays_ready(store: Store) -> None
     assert row is not None and row.status == "ready"
     again = await store.claim("w", ["default"], 30)
     assert again is not None and again.epoch == claim.epoch + 1
+
+
+async def test_ending_over_an_unread_inbox_is_refused(store: Store) -> None:
+    await store.create(new())
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None
+    seq, _ = await store.post(Post(task_id="t1", body=say("arrived while ending")))
+    with pytest.raises(InboxUnread):
+        await store.append(claim, [TaskEnded(status="done")], expected_seq=1,
+                           patch=Patch(status="ended", inbox_read_seq=seq - 1))
+    row = await store.get("t1")
+    assert row is not None and row.status == "running" and row.last_seq == 1
+    await store.append(claim, [TaskEnded(status="done")], expected_seq=1,
+                       patch=Patch(status="ended", inbox_read_seq=seq))
+    row = await store.get("t1")
+    assert row is not None and row.status == "ended"
 
 
 async def test_post_dedupe_and_unknown_task(store: Store) -> None:

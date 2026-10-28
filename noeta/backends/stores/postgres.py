@@ -607,6 +607,8 @@ class PostgresStore:
             if last_seq != expected_seq:
                 raise Conflict(
                     f"{claim.task_id}: expected seq {expected_seq}, log is at {last_seq}")
+            new_status, waiting_on, ready_at, read_seq = next_row_state(patch, inbox_seq,
+                                                                        read_seq)
             seq = int(last_seq) + len(events)
             if events:
                 await conn.execute(self._q(
@@ -615,8 +617,6 @@ class PostgresStore:
                     " FROM unnest(%s::bigint[], %s::text[], %s::bytea[]) AS u(s, t, d)"),
                     (claim.task_id, list(range(int(last_seq) + 1, seq + 1)),
                      [event_type(e) for e in events], [encode(e) for e in events]))
-            new_status, waiting_on, ready_at, read_seq = next_row_state(patch, inbox_seq,
-                                                                        read_seq)
             releasing = new_status != "running"
             cur = await conn.execute(self._q(
                 "UPDATE {s}.tasks SET last_seq = %s, status = %s, waiting_on = %s,"

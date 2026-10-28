@@ -346,6 +346,8 @@ class SqliteStore:
                 raise Conflict(
                     f"{claim.task_id}: expected seq {expected_seq}, log is at {last_seq}"
                 )
+            new_status, waiting_on, ready_at, read_seq = next_row_state(patch, inbox_seq,
+                                                                        read_seq)
             seq = int(last_seq)
             for event in events:
                 seq += 1
@@ -353,8 +355,6 @@ class SqliteStore:
                     "INSERT INTO events (task_id, seq, type, at, data) VALUES (?, ?, ?, ?, ?)",
                     (claim.task_id, seq, event_type(event), now, encode(event)),
                 )
-            new_status, waiting_on, ready_at, read_seq = next_row_state(patch, inbox_seq,
-                                                                        read_seq)
             releasing = new_status != "running"
             conn.execute(
                 "UPDATE tasks SET last_seq = ?, status = ?, waiting_on = ?, ready_at = ?,"
