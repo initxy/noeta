@@ -125,6 +125,21 @@ async def test_an_unknown_skill_suggests_a_near_name_not_the_whole_list(h: Harne
     assert second.result.text == "There is no skill named x."
 
 
+async def test_calling_an_active_skill_again_follows_it_again(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.", body="Scope: $ARGUMENTS\n")
+    h.provider.add(reply("", ("Skill", {"skill": "deploy", "args": "eu"})),
+                   reply("", ("Skill", {"skill": "deploy", "args": "eu"})),
+                   reply("", ("Skill", {"skill": "deploy", "args": "us"})),
+                   reply("done"))
+    tid = await h.start(agent())
+    same = h.provider.requests[2].messages[-1].text
+    assert "deploy" in same and "Arguments: eu" in same and "Scope:" not in same
+    changed = h.provider.requests[3].messages[-1].text
+    assert changed.startswith("(/deploy called again") and changed.endswith("Scope: us\n")
+    acts = await h.records(tid, "skills", "activated")
+    assert [a.data["args"] for a in acts] == ["eu", "us"]
+
+
 async def test_a_leading_slash_and_spaces_around_the_name_are_ignored(h: Harness) -> None:
     write_skill(skills_dir(h), "deploy", "Ship.")
     h.provider.add(reply("", ("Skill", {"skill": " /deploy "})), reply("", ("Skill", {"skill": " "})),
