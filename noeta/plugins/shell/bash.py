@@ -479,27 +479,14 @@ class BashTool:
         prelude = git_prelude(command, guard_root(ws, ctx)) if self.hardening_rules else ""
         hardened = None if prelude else hardened_argv(command, self.hardening_rules)
         track = hardened is None
-        if hardened is not None:
-            exec_argv = ["bash", "-c", 'exec 2>&1; exec "$@"', "bash", *hardened]
-        else:
-            exec_argv = ["bash", "-c", _track_cwd(prelude + command)]
-
-        confined = await confine(env, command, input.get("dangerouslyDisableSandbox"),
-                                 exec_argv, cwd)
-        if isinstance(confined, str):
-            return tool_error(self.name, confined)
-        try:
-            result = await env.run(
-                confined.argv if confined else exec_argv,
-                cwd=cwd,
-                env={**self._command_env(ctx), **(confined.env if confined else {})},
-                timeout=float(timeout_s),
-                output_cap=self.output_cap,
-            )
-        finally:
-            refused = confined.violations() if confined else []
-            if confined:
-                await confined.close()
+        description = input.get("description")
+        ran = await self._execute(
+            ctx, command=command, script=prelude + command, hardened=hardened, cwd=cwd,
+            timeout_s=timeout_s, disable=input.get("dangerouslyDisableSandbox"),
+            description=description if isinstance(description, str) else "")
+        if isinstance(ran, ToolOutput):
+            return ran
+        result, refused = ran
         stdout, stderr = result.stdout, result.stderr
         final, left = cwd, False
         if track:
@@ -545,6 +532,35 @@ class BashTool:
         if failed:
             return error_output(f"Exit code {result.exit_code}", body, **meta)
         return text_output(body, **meta)
+
+    async def _execute(self, ctx: ToolContext, *, command: str, script: str,
+                       hardened: list[str] | None, cwd: str, timeout_s: int, disable: Any,
+                       description: str) -> tuple[RunResult, list[str]] | ToolOutput:
+        """Run the command (``script`` through ``bash -c``, tracked; or the
+        ``hardened`` argv) and return what it printed with the hosts the
+        sandbox refused, or the call's result when it ends some other way.
+        A tracked command's final directory follows its output on a marker
+        line (:func:`_split_cwd`)."""
+        if hardened is not None:
+            exec_argv = ["bash", "-c", 'exec 2>&1; exec "$@"', "bash", *hardened]
+        else:
+            exec_argv = ["bash", "-c", _track_cwd(script)]
+        confined = await confine(ctx.env, command, disable, exec_argv, cwd)
+        if isinstance(confined, str):
+            return tool_error(self.name, confined)
+        try:
+            result = await ctx.env.run(
+                confined.argv if confined else exec_argv,
+                cwd=cwd,
+                env={**self._command_env(ctx), **(confined.env if confined else {})},
+                timeout=float(timeout_s),
+                output_cap=self.output_cap,
+            )
+        finally:
+            refused = confined.violations() if confined else []
+            if confined:
+                await confined.close()
+        return result, refused
 
     async def _start_cwd(self, ws: Workspace, ctx: ToolContext) -> tuple[str, bool]:
         """Where this command starts, and whether the recorded directory had
