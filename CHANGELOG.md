@@ -135,6 +135,99 @@ All notable changes to Noeta are documented here. The format is based on
   goes on (it used to exit 2). `--json` is gone; use `--output-format stream-json --verbose`.
 - **`create_app` requires a bearer token**, as `noeta serve` does: without `token=` it
   raises unless the host passes `auth=False`.
+- **The main loop sends what Claude Code 2.1.312 sends an API-key user.** The system prompt is
+  two cached blocks: an identity line (`Agent.identity`, agent-file `identity:`, prompt name
+  `identity/<agent>`) and the main prompt, rewritten to Claude Code's rules and section order
+  in our own words (noeta-only rules dropped, `parity/rules/main-prompt.md`). The project
+  instructions, a git snapshot and a commit/PR attribution note ride in the first user turn;
+  the environment (with the model's name and knowledge cutoff), the skill listing and the date
+  follow it as a mid-conversation system turn (`Message.role="system"`, `Reminder.role` and
+  `Reminder.order`; the Anthropic adapter joins adjacent ones, the OpenAI adapters send them as
+  framed system messages). A `<total_tokens>` budget note follows every prompt and tool result,
+  and five tool-only steps in a row earn one nudge to update the user (`quiet_nudge` plugin).
+  The Anthropic adapter sends Claude Code's beta set, adaptive thinking with summarized
+  updates, `context_management` keeping old thinking, effort `medium` by default,
+  `metadata.user_id` (a random device id kept in `~/.noeta/device_id`, the task tree's id),
+  three cache marks (no tool mark; one message mark, on the last message), single-text turns
+  as bare strings, and a message sent mid-turn inside the tool results' turn.
+  `AnthropicProvider(system_turns=False)` is for an endpoint without system turns.
+  `ContextPart.cache` is gone (the prompt is one cached block). Accepted differences are listed
+  in `parity/deviations.md`.
+- **Packages say what they hold** (old paths are gone, no aliases):
+  `noeta.core.shell` / `tool_helpers` / `helpers` -> `noeta.toolkit.shell` / `tools` /
+  `context` (code plugins share; the kernel never used it); `noeta.core.store.base` ->
+  `noeta.core.store`; `noeta.core.store.sqlite` -> `noeta.backends.stores.sqlite`;
+  `noeta.backends.postgres` -> `noeta.backends.stores.postgres`; `noeta.backends.execenv` ->
+  `noeta.backends.execenvs`; `noeta.apps.local` / `remote` -> `noeta.host.*`,
+  `noeta.apps.server` -> `noeta.host.http`, `noeta.apps.acp` -> `noeta.host.acp` (the ways in
+  sit together); `noeta.apps` -> `noeta.cli` (the command is `noeta.cli.main`), with
+  `from_settings` in `noeta.cli.config`; `noeta.presets` -> `noeta.agents` (agent files in
+  `noeta/agents/files/`); `noeta.core.agent_files` -> `noeta.agents.agent_files`. `noeta`
+  exports `LocalApp` and `RemoteClient`. The store contract tests ship as
+  `noeta.testing.store_contract`. `scripts/lint-layout.py` (in `make check`) keeps code where
+  CONTEXT.md's "Where code goes" puts it.
+- **1.0 is a rewrite, one package `noeta`.** Tasks are append-only event logs with one writer
+  (conditional appends, claims in the store), an inbox as the only way in, and one `Extension`
+  interface for every capability. Includes the `noeta` command (terminal UI, `-p`, `acp`,
+  `worker`, `serve`). Nothing from 0.x is compatible: APIs, stores and plugins.
+- **Plugins are set from one table.** `config.toml` takes `[plugins.<name>]` (arguments,
+  `enabled = false`) and `[agents.<name>] add_plugins`; `default_agents` takes `plugins=` and
+  `add=` instead of one keyword per built-in plugin.
+- **MCP servers from settings.** The terminal front ends start the `mcpServers` of
+  `~/.noeta/settings.json` (Claude Code's format) and the `.noeta/mcp.json` servers it
+  consents to.
+- **Plugin slash commands** show in the TUI's `/help` and as the editor's commands over ACP;
+  MCP prompts are commands.
+- **Background jobs hold their task tree.** While a job runs, no other worker claims a task of
+  its tree (`Store.hold` / `unhold` / `reap_holds`, a `tree_holds` table, `ToolContext.hold`),
+  so the next turn can read and stop it with several workers on one store. A hold carries an
+  epoch; every worker reaps a silent worker's holds and posts `External("hold_lost")` to the
+  tree's tasks in the same transaction, and the model is told the job was lost (Claude Code's
+  `<task-notification>` shape). A job runs beside a guard that kills it when its worker dies
+  or freezes; its end is posted as `External("shell_job_ended")` before the hold is released
+  and settled once by the task's runner. A worker stopping on purpose (closing the TUI) posts
+  `hold_lost` without waking the task (`Post.wake`): it hears with its next message. Third-party
+  stores implement `hold`, `unhold` and `reap_holds` (a store an earlier
+  development build opened keeps an unused `holds` table).
+- **Plugins as files.** `~/.noeta/plugins/*.py` (or a directory) is a plugin without packaging;
+  a project's `.noeta/plugins/` loads once trusted (`noeta trust`). `noeta plugins` lists where
+  each plugin comes from.
+- **Any plugin can ask the person and notify them.** `noeta.ask` / `noeta.read_answer`
+  (`noeta.core.questions`, moved from `ask_user`) and `notify` on `TaskView` / `ToolContext`;
+  front ends import no plugin. `Mcp` takes servers in Claude Code's `mcpServers` shape.
+- **Kernel and toolkit surfaces moved to where they are used** (no aliases):
+  the permission-mode vocabulary is `noeta.toolkit.permission_modes`; approval cards, the
+  pending projection and the typed-answer helpers are `noeta.host.pending` /
+  `noeta.host.questions`; env scrubbing and Claude Code's command tags are
+  `noeta.toolkit.local_env` / `noeta.toolkit.commands`; `noeta.toolkit.context` is split into
+  `tokens`, `paths` and `memory_index`; shell hardening (`HardeningRule`, was `AllowRule`) is in
+  the shell plugin; `toolkit.simulated_state` is `TaskView.folded()`. The core's own records
+  have typed payloads (`noeta.core.records`, `records.event` / `records.decode`; bytes
+  unchanged). `core.client.ClientAPI` names the client API that `Client` and `RemoteClient`
+  implement. Renamed for what they do: `Agent.max_steps_per_turn` -> `step_budget`,
+  `ModelSpec.family` -> `vendor` (a models file keeps `"family"`), the module
+  `noeta.plugins.structured` -> `noeta.plugins.structured_output` (its registry name).
+- **Store interface.** `append` returns `Appended(seq, at)` (the stored time); a claim clears
+  the row's `waiting_on`; giving back a claim or a hold reports a `released` change, only when a
+  row changed; optional `snapshot` / `put_snapshot`; `claim(tenant_limits=)`; `Post.wake`.
+  Creating a task with a known id is idempotent under a race (store contract test).
+- **The plugin set is pinned per task.** A task records each plugin's name, source (package
+  version or file hash) and a hash of its arguments when it first starts and when a pickup
+  finds them changed; a worker missing one ends the task failed with `plugin_missing` instead
+  of running it without.
+- **`Agent` fields for what a sub-agent definition asks**: `inherit_model`, `permission_mode`,
+  `isolation` (were read from `Agent.extra`). An agent built in code runs its sub-agents on its
+  own model unless it sets `inherit_model`.
+- `Runtime.output_ceiling(model)` gives a request's default `max_tokens` (default: the catalog);
+  plugins read the working directory through `TaskView.cwd` (config, else the exec env), so a
+  task created without a `cwd` runs its hooks and finds its project MCP servers where its
+  commands run; `UsageRank` reads through a client; `ToolContext.post` takes a `dedupe_key` and
+  reaches any task of the caller's tenant; permissions records `probed` / `compacted` and a
+  front end's `resumed` signal is SessionStart `resume` (so a task moving between workers
+  sends the same request).
+- **The permissions plugin publishes its modes** (a `modes` record without
+  `bypassPermissions` when that is disabled); the TUI and ACP offer what it lists. `noeta serve`
+  turns on the plugin's own `bypassPermissions` refusal.
 
 ### Added
 
@@ -169,7 +262,6 @@ All notable changes to Noeta are documented here. The format is based on
   past it fails the turn with `budget_spent`; counted in a new `tenant_usage` table), and its
   own `provider` / `base_url` / `api_key` (`{env:}` / `{keyring:}`). `Runtime(tenants=)`,
   `Store.claim(tenant_limits=)`, `create_app(workspaces=)`.
-
 - **Claude Code's headless protocol** (`noeta.host.stream_json`): the stream-json messages
   (`system`/`init`, `assistant`, tool-result `user`, `stream_event`, `result` with usage, cost,
   durations, turns, permission denials and `structured_output`; the root task's id is the
@@ -206,6 +298,39 @@ All notable changes to Noeta are documented here. The format is based on
   next request, unrecorded); `Command.local` and `run_typed` (a plugin command whose output
   is shown, not sent); an `Answer` deny with `"interrupt": false` gives the model an error
   result and lets the turn go on.
+- **Plugins as single files that join agents by themselves**: `Extension.add_to` (`("main",)`,
+  `("*",)`) for a file in `~/.noeta/plugins` or a trusted project's `.noeta/plugins` (an
+  installed package's is ignored). `/reload-plugins` (`LocalApp.reload_plugins`) re-imports
+  plugin files and remakes the agents between turns.
+- **`noeta plugin add|list|remove`**: installs from `<git-url>@<commit>` (a commit is
+  required), a local path, or a Claude Code `marketplace.json` (`--marketplace`, only read,
+  entries pinned by sha); nothing from the plugin runs while installing.
+- **Claude Code plugin directories** in noeta's plugin places load through the plugins that
+  read their formats (skills, agents, hooks, `.mcp.json`; `commands/*.md` through the new
+  `markdown_commands` plugin as `/<plugin>:<command>`), with `${CLAUDE_PLUGIN_ROOT}` and
+  `${CLAUDE_PLUGIN_DATA}` filled in.
+- **Channels** (`noeta.core.channel.Channel`, entry-point group `noeta.channels`,
+  `config.toml` `[channels.<name>]`): long-running listeners run by `noeta worker` and
+  `noeta serve`, posting idempotently through `deliver()` so replicas are safe.
+- `function_tool(fn)`: a typed Python function becomes a `Tool` (exported from `noeta`).
+  Secrets in plugin arguments as `{env:NAME}` / `{keyring:service/user}` (the optional
+  `keyring` package), resolved only when the plugin is made. Machine policy:
+  `/etc/noeta/config.toml` `[policy] allowed_plugins` / `blocked_plugins` win over every other
+  setting.
+- **Crash-safe tool calls beyond "outcome unknown"**: `ToolContext.idempotency_key`
+  (`<task id>:<call id>`, also sent as MCP `tools/call` `_meta`), `Tool.recover` (look the
+  outcome up) and `Tool.retry_safe` (run again, bounded). Read, ToolSearch, WebFetch,
+  WebSearch, CronList, ListAgents and the MCP resource tools are retry-safe.
+- **Fold snapshots** (`noeta.core.snapshots`, a `snapshots` table in both stores): a claim
+  folds the task's newest snapshot plus the events after it; written every
+  `Runtime.snapshot_every` (100) events, versioned by the code that folds, never trusted when
+  the version differs. A 20,002-event log claims in 21 ms instead of 120 ms on sqlite.
+- `noeta worker --lease` and `--snapshot-every`; one worker id `host:pid:random`.
+- `make cluster`: worker processes on Postgres under random SIGKILL / SIGSTOP with a scripted
+  provider (tool calls, background jobs, sub-agents, timers, Cron, mid-run messages); a CI job
+  runs it. Example plugins `examples/run-tests`, `examples/chat-bridge` and
+  `examples/house-style`, run by `make example`. Docs: `docs/extending.md`,
+  `docs/server.md`, `docs/architecture.md`, `docs/adr/`.
 
 ### Fixed
 
@@ -234,7 +359,6 @@ All notable changes to Noeta are documented here. The format is based on
 - A timer set again for the same name and time fired only once, and the task then spun;
   `TaskView.spawn` without a `key` reused the first child's id; children `view.spawn` staged
   in `after_tool` were never created.
-
 - **An "always" shell approval no longer widens to the program and its first argument.**
   Approving `rm -rf build` used to let `rm -rf /` run unasked (and wrote that rule to a
   trusted project's `.noeta/shell-allowlist.json`). The remembered rule is now Claude Code's
@@ -306,59 +430,22 @@ All notable changes to Noeta are documented here. The format is based on
 - `make example` ran a build uv had cached; it now installs the example plugin editable.
 - A second `registry.provider()` call for a family failed once that family's adapter module
   had been imported (the entry point named a package attribute the submodule rebound).
-
-### Changed
-
-- **The main loop sends what Claude Code 2.1.312 sends an API-key user.** The system prompt is
-  two cached blocks: an identity line (`Agent.identity`, agent-file `identity:`, prompt name
-  `identity/<agent>`) and the main prompt, rewritten to Claude Code's rules and section order
-  in our own words (noeta-only rules dropped, `parity/rules/main-prompt.md`). The project
-  instructions, a git snapshot and a commit/PR attribution note ride in the first user turn;
-  the environment (with the model's name and knowledge cutoff), the skill listing and the date
-  follow it as a mid-conversation system turn (`Message.role="system"`, `Reminder.role` and
-  `Reminder.order`; the Anthropic adapter joins adjacent ones, the OpenAI adapters send them as
-  framed system messages). A `<total_tokens>` budget note follows every prompt and tool result,
-  and five tool-only steps in a row earn one nudge to update the user (`quiet_nudge` plugin).
-  The Anthropic adapter sends Claude Code's beta set, adaptive thinking with summarized
-  updates, `context_management` keeping old thinking, effort `medium` by default,
-  `metadata.user_id` (a random device id kept in `~/.noeta/device_id`, the task tree's id),
-  three cache marks (no tool mark; one message mark, on the last message), single-text turns
-  as bare strings, and a message sent mid-turn inside the tool results' turn.
-  `AnthropicProvider(system_turns=False)` is for an endpoint without system turns.
-  `ContextPart.cache` is gone (the prompt is one cached block). Accepted differences are listed
-  in `parity/deviations.md`.
-- **Packages say what they hold** (old paths are gone, no aliases):
-  `noeta.core.shell` / `tool_helpers` / `helpers` -> `noeta.toolkit.shell` / `tools` /
-  `context` (code plugins share; the kernel never used it); `noeta.core.store.base` ->
-  `noeta.core.store`; `noeta.core.store.sqlite` -> `noeta.backends.stores.sqlite`;
-  `noeta.backends.postgres` -> `noeta.backends.stores.postgres`; `noeta.backends.execenv` ->
-  `noeta.backends.execenvs`; `noeta.apps.local` / `remote` -> `noeta.host.*`,
-  `noeta.apps.server` -> `noeta.host.http`, `noeta.apps.acp` -> `noeta.host.acp` (the ways in
-  sit together); `noeta.apps` -> `noeta.cli` (the command is `noeta.cli.main`), with
-  `from_settings` in `noeta.cli.config`; `noeta.presets` -> `noeta.agents` (agent files in
-  `noeta/agents/files/`); `noeta.core.agent_files` -> `noeta.agents.agent_files`. `noeta`
-  exports `LocalApp` and `RemoteClient`. The store contract tests ship as
-  `noeta.testing.store_contract`. `scripts/lint-layout.py` (in `make check`) keeps code where
-  CONTEXT.md's "Where code goes" puts it.
-- **1.0 is a rewrite, one package `noeta`.** Tasks are append-only event logs with one writer
-  (conditional appends, claims in the store), an inbox as the only way in, and one `Extension`
-  interface for every capability. Includes the `noeta` command (terminal UI, `-p`, `acp`,
-  `worker`, `serve`). Nothing from 0.x is compatible: APIs, stores and plugins.
-- **Plugins are set from one table.** `config.toml` takes `[plugins.<name>]` (arguments,
-  `enabled = false`) and `[agents.<name>] add_plugins`; `default_agents` takes `plugins=` and
-  `add=` instead of one keyword per built-in plugin.
-- **MCP servers from settings.** The terminal front ends start the `mcpServers` of
-  `~/.noeta/settings.json` (Claude Code's format) and the `.noeta/mcp.json` servers it
-  consents to.
-- **Plugin slash commands** show in the TUI's `/help` and as the editor's commands over ACP;
-  MCP prompts are commands.
-- **Background jobs hold their task tree.** While a job runs, no other worker claims a task of
-  its tree (`Store.hold` / `unhold`, a `holds` table, `ToolContext.hold`), so the next turn can
-  read and stop it with several workers on one store; a job whose worker is gone is reported
-  lost to the model. Third-party stores implement `hold` and `unhold`.
-- **Plugins as files.** `~/.noeta/plugins/*.py` (or a directory) is a plugin without packaging;
-  a project's `.noeta/plugins/` loads once trusted (`noeta trust`). `noeta plugins` lists where
-  each plugin comes from.
-- **Any plugin can ask the person and notify them.** `noeta.ask` / `noeta.read_answer`
-  (`noeta.core.questions`, moved from `ask_user`) and `notify` on `TaskView` / `ToolContext`;
-  front ends import no plugin. `Mcp` takes servers in Claude Code's `mcpServers` shape.
+- **No request switches a served task into `bypassPermissions` through an answer**: HTTP
+  answers (and the stream-json front) go through the same guard as create and signal; send and
+  cancel do too.
+- **Crashes at the wrong moment no longer lose work.** A worker dying right after a timer fired
+  no longer drops a recurring Cron job, a fired one-shot job's deletion or a `/loop` fallback; a
+  root that dies after taking `hold_lost` still tells its ended sub-agents' lost jobs; a parked
+  MCP call whose worker died ends at once instead of when someone answers; a job of an ended
+  sub-agent that is lost is told to the root; a finished job is no longer recorded lost when
+  another worker takes its end; a background job counts as running until its end is posted.
+- A timer due while a turn is parked fires once the turn ends (as Claude Code fires only when
+  idle); documented and tested.
+- `--continue` found no conversation behind more than 200 newer tasks.
+- The TUI's status-bar cost is the whole task tree's, as `/cost` reports it, and resets when
+  another task opens; the TUI no longer shows the hooks plugin's own `retry` records as model
+  retries; every front end builds approval cards the same way (`host.pending`).
+- After `/compact`, what is given again goes ahead of the command, and a local command's tags
+  reach the model as one block each with the next prompt joined to them, as Claude Code sends
+  them.
+- Workflow end notices keep their dedupe key.
