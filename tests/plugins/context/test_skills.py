@@ -26,6 +26,7 @@ from noeta.plugins.skills.listing import (
     short_summary,
 )
 from noeta.plugins.skills.registry import SkillDescription, SkillRegistry, path_patterns
+from noeta.plugins.subtasks import SubagentSpec, Subtasks
 from noeta.testing import reply
 from noeta.toolkit.tokens import estimate_tokens
 from tests.plugins.context.conftest import Harness
@@ -484,3 +485,24 @@ def test_path_patterns() -> None:
     assert path_patterns("- src/**\n- docs/") == ("src", "docs/")
     assert path_patterns("**") == ()
     assert path_patterns(None) == ()
+
+
+async def test_a_fork_skill_runs_in_a_sub_agent(h: Harness) -> None:
+    write_skill(skills_dir(h), "review", "Review.", body="Review $ARGUMENTS closely.\n",
+                context="fork", agent="scout")
+    main = Agent(name="a", model="m", extensions=[
+        FileTools(), Subtasks([SubagentSpec(name="scout", description="Looks.", agent="w")]),
+        Skills()])
+    worker = Agent(name="w", model="m", extensions=[])
+    h.provider.add(reply("", ("Skill", {"skill": "review", "args": "a.py"})),
+                   reply("started"), reply("child report"), reply("thanks"))
+    tid = await h.client.create("a", "go")
+    await h.runtime(main, worker).run_until_idle()
+    first = (await h.results(tid))[0]
+    assert not first.result.is_error
+    [launched] = await h.records(tid, "subtasks", "launched")
+    assert launched.data["type"] == "scout" and launched.data["description"] == (
+        "Run the review skill")
+    assert any(m.text.endswith("Review a.py closely.\n")
+               for r in h.provider.requests for m in r.messages)
+    assert await h.records(tid, "skills", "activated") == []

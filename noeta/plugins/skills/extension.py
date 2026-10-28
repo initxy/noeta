@@ -26,6 +26,7 @@ from noeta.core.extension import (
     Extension,
     Gate,
     Reminder,
+    Rewrite,
     TaskView,
 )
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
@@ -44,6 +45,7 @@ from noeta.plugins.skills.registry import (
     SkillRegistry,
     load_registry,
     render_activation,
+    render_body,
     render_command_body,
     substitute_variables,
 )
@@ -67,6 +69,11 @@ __all__ = [
 _log = logging.getLogger(__name__)
 
 SKILL_TOOL = "Skill"
+AGENT_TOOL = "Agent"
+#: The agent a ``context: fork`` skill runs in when it names none.
+DEFAULT_FORK_AGENT = "general-purpose"
+#: The forked agent's ``description``.
+FORK_DESCRIPTION = "Run the {name} skill"
 #: Calls whose file makes a skill with matching ``paths`` available.
 FILE_TOOLS = frozenset({"Read", "Write", "Edit", "NotebookEdit"})
 
@@ -301,6 +308,9 @@ class Skills(Extension):
         if kind == "activated":
             entry = {k: v for k, v in data.items() if k != "text"}
             return {**state, "active": {**state["active"], data["name"]: entry}}
+        if kind == "forked":
+            return {**state, "forks": {**(state.get("forks") or {}),
+                                       data["call_id"]: data["prompt"]}}
         if kind == "unlocked":
             have = list(state.get("unlocked") or [])
             return {**state, "unlocked": have + [n for n in data["names"] if n not in have]}
@@ -444,7 +454,7 @@ class Skills(Extension):
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
         if call.name == SKILL_TOOL:
-            return None
+            return await self._fork(view, call)
         state = view.ext_state(self.name) or {}
         active: dict[str, Any] = state.get("active") or {}
         if call.name == SKILL_SCRIPT_TOOL_NAME and self.scripts:
@@ -488,6 +498,34 @@ class Skills(Extension):
             _log.warning("skills: rank resolver failed; keeping tier order", exc_info=True)
             return None
         return dict(got) if got else None
+
+    async def _fork(self, view: TaskView, call: ToolUse) -> Gate | None:
+        """A ``context: fork`` skill runs as an ``Agent`` call: a sub-agent
+        of the skill's ``agent`` type gets the rendered body as its prompt
+        and its result comes back as any agent's does. Without an ``Agent``
+        tool the skill loads inline."""
+        name, args = call.input.get("skill"), call.input.get("args")
+        if not isinstance(name, str) or (args is not None and not isinstance(args, str)):
+            return None
+        state = view.ext_state(self.name) or {}
+        registry = await self.registry(task_env(view.env, view.state.config))
+        desc = registry.get(name)
+        if desc is None or not desc.fork or name not in registry.model_invocable(
+                _unlocked(state)) or view.find_tool(AGENT_TOOL) is None:
+            return None
+        prompt = (state.get("forks") or {}).get(call.id)
+        if prompt is None:
+            data = _activation_data(desc, "model", args, view.cwd)
+            data["text"] = render_body(desc, args, view.cwd)
+            try:
+                prompt = (await self._expand(view, data, call.id))["text"]
+            except InlineCommandError as exc:
+                return Deny(reason=str(exc))
+            view.record(self.name, "forked", {"call_id": call.id, "name": name,
+                                              "prompt": prompt})
+        return Rewrite(name=AGENT_TOOL, input={
+            "description": FORK_DESCRIPTION.format(name=name), "prompt": prompt,
+            "subagent_type": desc.agent or DEFAULT_FORK_AGENT})
 
     async def _unlock(self, view: TaskView, call: ToolUse) -> None:
         """Offer the skills whose ``paths`` match the file this call touched,

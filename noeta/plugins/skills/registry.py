@@ -84,6 +84,10 @@ class SkillDescription:
     #: these patterns (gitignore-style, from the working directory) is
     #: touched; ``()`` = always offered.
     paths: tuple[str, ...] = ()
+    #: ``context: fork``: the skill runs in a sub-agent of type ``agent``
+    #: (the default agent when unset) and its result comes back from there.
+    fork: bool = False
+    agent: str | None = None
 
     @property
     def base_dir(self) -> str | None:
@@ -187,6 +191,8 @@ def parse_skill(path: str, raw: str, resources: tuple[str, ...] = ()) -> SkillDe
         when_to_use=fields.get("when_to_use") or None,
         arguments=argument_names(fields.get("arguments")),
         paths=path_patterns(fields.get("paths")),
+        fork=(fields.get("context") or "").strip() == "fork",
+        agent=(fields.get("agent") or "").strip() or None,
     )
 
 

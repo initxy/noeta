@@ -42,6 +42,8 @@ KNOWN_KEYS: frozenset[str] = frozenset(
         "when_to_use",
         "arguments",
         "paths",
+        "context",
+        "agent",
     }
 )
 
