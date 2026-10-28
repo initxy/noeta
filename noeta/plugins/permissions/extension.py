@@ -154,7 +154,7 @@ class Permissions(Extension):
         webfetch_allowed_hosts: Iterable[str] = (),
         budget: g.Budget | None = None,
         max_turns: int | None = None,
-        spawn_tools: Iterable[str] = ("Task",),
+        spawn_tools: Iterable[str] = ("Agent", "Task"),
         repetition_threshold: int = 0,
         repetition_action: g.RepetitionAction = "require_approval",
         repetition_window: int = 8,

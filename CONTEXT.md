@@ -89,9 +89,10 @@ them something with `notify`; neither reaches the model as the user.
 
 ## Agent file
 
-An agent is a markdown file (`noeta/agents/agent_files.py`): YAML frontmatter (`name`,
-`description`, `model`, `plugins` as names or `name: {arguments}`, optional `tools`,
-`one_shot`) and the system prompt as body. One plugin instance per name and arguments is shared
+An agent is a markdown file (`noeta/agents/agent_files.py`): YAML frontmatter (Claude Code's
+fields, plus `plugins` as names or `name: {arguments}` and `one_shot`) and the system prompt as
+body. A sub-agent runs in the background and ends its run with `SubagentHandback`, whose report
+reaches its caller as an `agent`-origin message (`noeta/plugins/subtasks`). One plugin instance per name and arguments is shared
 by every agent naming it. The built-ins are `noeta/agents/files/*.md`.
 
 ## Prompt name
@@ -135,7 +136,7 @@ _Avoid_: `class Run`, `class Workflow`, `WorkflowRunner`, `class Mutator`, `clas
 ## Naming: model-visible tool names
 
 Tool names the model sees follow Claude Code (`Read`, `Glob`, `Grep`, `Edit`, `Write`, `Bash`,
-`TodoWrite`, `AskUserQuestion`, `Task`, `WebFetch`, `WebSearch`, …) because models carry their
+`TodoWrite`, `AskUserQuestion`, `Agent`, `WebFetch`, `WebSearch`, …) because models carry their
 strongest prior on those names. Everything else is snake_case.
 
 ## Naming: enforcement

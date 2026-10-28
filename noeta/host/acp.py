@@ -45,7 +45,7 @@ TOOL_KINDS: dict[str, str] = {
     "Read": "read", "Edit": "edit", "Write": "edit", "Bash": "execute",
     "BashOutput": "execute", "KillShell": "execute", "Monitor": "execute",
     "Grep": "search", "Glob": "search", "ToolSearch": "search",
-    "WebFetch": "fetch", "WebSearch": "fetch", "Task": "think",
+    "WebFetch": "fetch", "WebSearch": "fetch", "Task": "think", "Agent": "think",
 }
 #: Characters of a tool result shown in the editor.
 RESULT_PREVIEW_CHARS = 4000

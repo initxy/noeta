@@ -57,7 +57,11 @@ RECOGNIZED_TOOL_NAMES: frozenset[str] = frozenset(
         # control tools
         "TodoWrite",
         "AskUserQuestion",
+        "Agent",
         "Task",
+        "SendMessage",
+        "ListAgents",
+        "SubagentHandback",
         "skill",
         # skills
         "run_skill_script",

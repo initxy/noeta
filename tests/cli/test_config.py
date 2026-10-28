@@ -60,12 +60,12 @@ def test_from_settings_applies_the_tables(home: Path) -> None:
         f'store = "sqlite:///{home / "t.db"}"\n'
         '[plugins.web]\nenabled = false\n'
         '[plugins.memory]\nread_only = true\n'
-        '[agents.explore]\nadd_plugins = ["todo"]\n')
+        '[agents.Explore]\nadd_plugins = ["todo"]\n')
     app = from_settings(load_settings(), cwd=str(home))
     agents = app.runtime.agents
     names = {n: {e.name for e in a.extensions} for n, a in agents.items()}
     assert "web" not in names["main"] and "web" not in names["general-purpose"]
-    assert "todo" in names["explore"]
+    assert "todo" in names["Explore"]
     [memory] = [e for e in agents["main"].extensions if e.name == "memory"]
     # The front end's root, with config.toml's arguments laid over it.
     assert memory.root == str(home / "memory") and memory.read_only  # type: ignore[attr-defined]
