@@ -56,12 +56,16 @@ Gate = Union[Allow, Deny, Ask, Rewrite]
 class ContextPart(Struct):
     """System prompt text an extension contributes: it continues the agent's
     prompt, after a newline, in ``order``, inside the prompt's one cached
-    block. Text that must sit in the conversation instead is recorded as a
-    message (``TaskView.record(..., message=...)``) so the request prefix
-    stays byte-stable."""
+    block. With ``before``, it goes ahead of the prompt's first line equal
+    to it instead (a section placed before a heading), followed by a blank
+    line; a prompt without that line gets it at the end. Text that must sit
+    in the conversation instead is recorded as a message
+    (``TaskView.record(..., message=...)``) so the request prefix stays
+    byte-stable."""
 
     text: str
     order: int = 100
+    before: str = ""
 
 
 class Reminder(Struct):
