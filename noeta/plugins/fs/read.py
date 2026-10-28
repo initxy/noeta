@@ -13,7 +13,6 @@ short note instead of the content again (Claude Code's dedupe).
 from __future__ import annotations
 
 import asyncio
-import codecs
 import hashlib
 import posixpath
 from collections.abc import AsyncIterator, Callable
@@ -54,9 +53,6 @@ _JS_MAX_SAFE = 9007199254740991
 #: Without ``limit`` every line is read (Claude Code's reader sets no line
 #: count of its own); the size and token ceilings bound the window instead.
 _ALL_LINES = _JS_MAX_SAFE
-#: Per-line visible-char cap: a minified file can be one multi-MB line.
-_MAX_LINE_CHARS = 2000
-_LINE_TRUNC_MARKER = " … [line truncated]"
 
 #: Claude Code's whole-file ceiling for a read without ``limit`` (256 KB).
 _READ_MAX_FILE_BYTES = 262_144
@@ -66,9 +62,6 @@ _READ_MAX_FILE_BYTES = 262_144
 _READ_MAX_SERVED_BYTES = MAX_READ_TOKENS * 4 * 4
 _READ_CHUNK_BYTES = 1024 * 1024
 _SNIFF_BYTES = 16
-#: Bytes of one line kept while streaming: enough for ``_MAX_LINE_CHARS``
-#: characters of up to four UTF-8 bytes each, plus a trailing ``\r``.
-_LINE_KEEP_BYTES = _MAX_LINE_CHARS * 4 + 1
 
 #: Largest image file read at all (Claude Code's); what is read is then made
 #: to fit a request by :func:`noeta.toolkit.images.fit_image`.
@@ -102,25 +95,15 @@ def _note(text: str) -> str:
     return f"({text})"
 
 
-def _decode_line(raw: bytes, clipped: bool) -> tuple[str, bool]:
-    """One line's display text (a trailing ``\\r`` dropped, a long line
-    clipped) and whether invalid UTF-8 was replaced. A clipped line may end
-    mid-character; the incremental decoder holds that partial back."""
+def _decode_line(raw: bytes) -> tuple[str, bool]:
+    """One line's text (a trailing ``\\r`` dropped) and whether invalid
+    UTF-8 was replaced. A line is never cut short (Claude Code's)."""
     if raw.endswith(b"\r"):
         raw = raw[:-1]
     try:
-        text = codecs.getincrementaldecoder("utf-8")("strict").decode(
-            raw, final=not clipped
-        )
-        replaced = False
+        return raw.decode("utf-8"), False
     except UnicodeDecodeError:
-        text = codecs.getincrementaldecoder("utf-8")("replace").decode(
-            raw, final=not clipped
-        )
-        replaced = True
-    if clipped or len(text) > _MAX_LINE_CHARS:
-        return text[:_MAX_LINE_CHARS] + _LINE_TRUNC_MARKER, replaced
-    return text, replaced
+        return raw.decode("utf-8", "replace"), True
 
 
 @dataclass
@@ -158,8 +141,11 @@ class _Scan:
     def _take(self, line_no: int) -> bool:
         return self.start <= line_no < self.start + self.limit and not self.capped
 
-    def _finish_line(self, raw: bytes, clipped: bool) -> None:
-        text, replaced = _decode_line(raw, clipped)
+    def _finish_line(self, raw: bytes, over: bool) -> None:
+        if over:  # one line past the bound: the window cannot be served
+            self.capped = True
+            return
+        text, replaced = _decode_line(raw)
         cost = len(text.encode("utf-8")) + 8  # number column + tab + newline
         if self.window and self.served + cost > self.max_served:
             self.capped = True
@@ -180,13 +166,13 @@ class _Scan:
         while pos < n:
             nl = chunk.find(b"\n", pos)
             stop = n if nl < 0 else nl
-            if self._take(self.total_lines) and len(self._cur) < _LINE_KEEP_BYTES:
-                self._cur += chunk[pos : min(stop, pos + _LINE_KEEP_BYTES - len(self._cur))]
+            if self._take(self.total_lines) and len(self._cur) <= self.max_served:
+                self._cur += chunk[pos : min(stop, pos + self.max_served + 1 - len(self._cur))]
             self._cur_len += stop - pos
             if nl < 0:
                 break
             if self._take(self.total_lines):
-                self._finish_line(bytes(self._cur), self._cur_len > _LINE_KEEP_BYTES)
+                self._finish_line(bytes(self._cur), self._cur_len > self.max_served)
             self.total_lines += 1
             self._cur.clear()
             self._cur_len = 0
@@ -196,7 +182,7 @@ class _Scan:
     def finish(self) -> None:
         if self._cur_len:
             if self._take(self.total_lines):
-                self._finish_line(bytes(self._cur), self._cur_len > _LINE_KEEP_BYTES)
+                self._finish_line(bytes(self._cur), self._cur_len > self.max_served)
             self.total_lines += 1
             self._cur.clear()
             self._cur_len = 0

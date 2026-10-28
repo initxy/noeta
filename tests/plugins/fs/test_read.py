@@ -90,18 +90,18 @@ async def test_read_without_limit_returns_every_line_that_fits(h: Harness, ws: P
     assert text.endswith("\n2500\t2499\n2501\t")
 
 
-async def test_read_clips_overlong_line(h: Harness, ws: Path) -> None:
+async def test_read_keeps_a_long_line_whole(h: Harness, ws: Path) -> None:
+    # Claude Code cuts no line short; only the size and token ceilings apply.
     (ws / "wide.txt").write_text("x" * 5000 + "\nshort\n")
     lines = text_of(await h.call(ReadTool(), file_path="wide.txt")).splitlines()
-    assert lines[0].endswith("… [line truncated]")
-    assert len(lines[0]) < 2200
+    assert lines[0] == "1\t" + "x" * 5000
     assert lines[1] == "2\tshort"
 
 
-async def test_read_clips_overlong_line_crlf(h: Harness, ws: Path) -> None:
+async def test_read_keeps_a_long_crlf_line_whole(h: Harness, ws: Path) -> None:
     (ws / "wide.txt").write_bytes(b"y" * 5000 + b"\r\nnext\r\n")
     lines = text_of(await h.call(ReadTool(), file_path="wide.txt")).splitlines()
-    assert "… [line truncated]" in lines[0]
+    assert lines[0] == "1\t" + "y" * 5000
     assert lines[1] == "2\tnext"
 
 
@@ -345,13 +345,14 @@ async def test_read_json_counts_two_chars_per_token(h: Harness, ws: Path) -> Non
     assert not (await h.call(ReadTool(), file_path="d.txt", limit=600)).is_error
 
 
-async def test_read_clips_a_huge_single_line_without_buffering_it(ws: Path) -> None:
+async def test_read_refuses_a_huge_single_line_without_buffering_it(ws: Path) -> None:
     h = Harness(env=_NoWholeReads(str(ws)))
     (ws / "min.js").write_bytes(b"x" * (8 * 1024 * 1024) + b"\nnext\n")
     out = await h.call(ReadTool(), file_path="min.js", limit=2)
-    lines = text_of(out).splitlines()
-    assert lines[0].endswith("… [line truncated]")
-    assert lines[1] == "2\tnext"
+    assert out.is_error
+    assert "exceeds maximum allowed tokens" in text_of(out)
+    ok = await h.call(ReadTool(), file_path="min.js", offset=2, limit=1)
+    assert text_of(ok) == "2\tnext"
 
 
 async def test_read_numbering_splits_on_newline_only(h: Harness, ws: Path) -> None:
