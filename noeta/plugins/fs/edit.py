@@ -23,6 +23,7 @@ from noeta.plugins.fs._mutate import (
     mutation_result,
     read_precondition_error,
     record_written,
+    seen_whole,
     stale_error,
 )
 from noeta.toolkit.tools import (
@@ -121,6 +122,7 @@ class EditTool:
         if refused is not None:
             return refused
         stale = changed_since_read(ctx, resolved, raw)
+        in_view = seen_whole(ctx, resolved, raw)
 
         # ``Read`` shows lines without their ``\r``, so the model writes bare
         # ``\n``. In a CRLF file, match and write with the file's own ending —
@@ -154,10 +156,11 @@ class EditTool:
             await env.write_bytes(resolved, after_bytes)
         except OSError as exc:
             return tool_error(self.name, f"write failed: {exc}")
-        await record_written(ctx, resolved, after_bytes)
+        await record_written(ctx, resolved, after_bytes, whole=in_view)
 
         return ToolOutput(
-            content=[Text(text=mutation_result(resolved, created=False, stale=stale))],
+            content=[Text(text=mutation_result(resolved, created=False, stale=stale,
+                                               in_view=in_view))],
             meta={
                 "path": rel,
                 "diff": diff,

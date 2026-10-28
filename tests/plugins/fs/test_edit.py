@@ -56,11 +56,35 @@ async def test_edit_output_is_exact(h: Harness, ws: Path) -> None:
     assert text_of(out) == f"The file {ws / 'a.txt'} has been updated successfully. (what you wrote is the file's current state; no need to Read it back)"
 
 
-async def test_an_edit_of_noeta_md_has_no_file_state_note(h: Harness, ws: Path) -> None:
+async def test_an_edit_of_noeta_md_read_whole_has_the_file_state_note(
+        h: Harness, ws: Path) -> None:
+    # Claude Code's CLAUDE.md edit after a whole read carries the note (r2 m1/0071).
     (ws / "NOETA.md").write_text("a\n")
     await _read(h, "NOETA.md")
     out = await h.call(EditTool(), file_path="NOETA.md", old_string="a", new_string="b")
-    assert text_of(out) == f"The file {ws / 'NOETA.md'} has been updated successfully."
+    assert text_of(out) == (f"The file {ws / 'NOETA.md'} has been updated successfully. "
+                            "(what you wrote is the file's current state; no need to Read it "
+                            "back)")
+
+
+async def test_an_edit_without_the_whole_file_in_view_has_no_note(h: Harness, ws: Path) -> None:
+    target = ws / "a.py"
+    target.write_text("one\ntwo\nthree\n")
+    await h.call(ReadTool(), file_path="a.py", offset=2)
+    out = await h.call(EditTool(), file_path="a.py", old_string="two", new_string="TWO")
+    assert text_of(out) == f"The file {target} has been updated successfully."
+    # The next edit still lacks the rest of the file.
+    out = await h.call(EditTool(), file_path="a.py", old_string="TWO", new_string="2")
+    assert text_of(out) == f"The file {target} has been updated successfully."
+    # Never read (an edit allowed outright): no note either.
+    (ws / "b.py").write_text("x\n")
+    out = await h.call(EditTool(), file_path="b.py", old_string="x", new_string="y")
+    assert text_of(out) == f"The file {ws / 'b.py'} has been updated successfully."
+    # A limited read that reached the end saw the whole file.
+    (ws / "c.py").write_text("x\n")
+    await h.call(ReadTool(), file_path="c.py", limit=50)
+    out = await h.call(EditTool(), file_path="c.py", old_string="x", new_string="y")
+    assert text_of(out).endswith("no need to Read it back)")
 
 
 async def test_consecutive_edits_chain_without_a_reread(h: Harness, ws: Path) -> None:

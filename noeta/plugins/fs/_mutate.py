@@ -23,6 +23,7 @@ __all__ = [
     "mutation_result",
     "read_precondition_error",
     "record_written",
+    "seen_whole",
     "stale_error",
 ]
 
@@ -95,9 +96,20 @@ def changed_since_read(ctx: ToolContext, resolved: str, raw: bytes) -> bool:
     return entry is not None and entry.digest != hashlib.sha256(raw).hexdigest()
 
 
-async def record_written(ctx: ToolContext, resolved: str, body: bytes) -> None:
+def seen_whole(ctx: ToolContext, resolved: str, raw: bytes) -> bool:
+    """The model has these exact bytes in view as a whole file: a read from
+    the top to the end (or its own write over one) that nothing has changed
+    since. Only then does an ``Edit`` result carry the file-state note."""
+    entry = current_fs_state(ctx.state).reads.get(resolved)
+    return (entry is not None and entry.whole and not entry.partial
+            and entry.digest == hashlib.sha256(raw).hexdigest())
+
+
+async def record_written(ctx: ToolContext, resolved: str, body: bytes, *,
+                         whole: bool = True) -> None:
     """Record the new digest after a successful write, so consecutive edits
-    chain without a re-read (the model has seen exactly what it wrote)."""
+    chain without a re-read (the model has seen exactly what it wrote).
+    ``whole=False``: the model did not have the rest of the file in view."""
     try:
         st = await ctx.env.stat(resolved)
     except OSError:
@@ -109,6 +121,7 @@ async def record_written(ctx: ToolContext, resolved: str, body: bytes) -> None:
             "path": resolved,
             "digest": hashlib.sha256(body).hexdigest(),
             "mtime": st.mtime if st is not None else 0.0,
+            **({} if whole else {"whole": False}),
         },
     )
 
@@ -122,15 +135,17 @@ STALE_EDIT_NOTE = (
     "the text around it)")
 
 
-def mutation_result(path: str, *, created: bool, stale: bool = False) -> str:
+def mutation_result(path: str, *, created: bool, stale: bool = False,
+                    in_view: bool = True) -> str:
     """The one-line result of a successful ``Edit`` or ``Write`` (absolute
-    path). A ``NOETA.md`` gets no note: its text reaches the model as
-    project instructions, not as the file it wrote."""
+    path). The file-state note follows only when the model holds the whole
+    file as it now is (``in_view``); an edit over changes made since the
+    read says so instead (Claude Code's rules)."""
     head = (f"File created successfully at: {path}" if created
             else f"The file {path} has been updated successfully.")
     if stale:
         return f"{head} {STALE_EDIT_NOTE}"
-    if posixpath.basename(path) == "NOETA.md":
+    if not in_view:
         return head
     return f"{head} {FILE_STATE_NOTE}"
 

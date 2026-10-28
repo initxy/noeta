@@ -13,7 +13,9 @@ Kinds:
   (``[offset, limit]``) is set by ``Read`` and is what an unchanged re-read
   of the same range is answered from; ``partial`` marks a read cut to fit
   the token ceiling, which counts as not read for ``Edit`` / ``Write`` and is
-  never answered as unchanged. ``Edit`` and ``Write``
+  never answered as unchanged; ``whole: false`` marks a view that was not
+  the whole file (a window, or an edit made without the file in view), which
+  takes the file-state note off ``Edit``'s result. ``Edit`` and ``Write``
   refuse to change a file without an entry whose digest still matches the
   bytes on disk. A successful write records the new digest, so consecutive
   edits chain without a re-read.
@@ -67,6 +69,9 @@ class FileRead(Struct):
     range: list[int] | None = None
     #: The read was cut to fit the token ceiling: the model saw only part.
     partial: bool = False
+    #: The model had the whole file in view (a read from the top to the end,
+    #: or what it wrote itself over such a view).
+    whole: bool = True
 
 
 class FsState(Struct):
@@ -102,7 +107,8 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
         reads = dict(base.reads)
         reads.pop(path, None)
         reads[path] = FileRead(digest=digest, mtime=float(mtime), range=lines,
-                               partial=data.get("partial") is True)
+                               partial=data.get("partial") is True,
+                               whole=data.get("whole") is not False)
         return msgspec.structs.replace(base, reads=reads)
     if kind in (KIND_NOTICE, KIND_NOTICE_SENT):
         text = data.get("text")

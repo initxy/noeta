@@ -367,7 +367,7 @@ class ReadTool:
             notebook = read_notebook(self.name, raw_nb, display)
             if not notebook.is_error:
                 _record_read(ctx, resolved, hashlib.sha256(raw_nb).hexdigest(), st.mtime,
-                             asked)
+                             asked, whole=offset <= 1 and explicit_limit is None)
             return notebook
 
         image = detect_image(head)
@@ -431,7 +431,10 @@ class ReadTool:
 
         # Keyed by the canonical path and digesting the raw bytes of the whole
         # file, so a later mutation check compares like with like.
-        _record_read(ctx, w.resolved, scan.digest, w.mtime, [w.offset, w.explicit_limit or 0])
+        whole = w.offset <= 1 and (w.explicit_limit is None
+                                   or len(scan.window) < w.explicit_limit)
+        _record_read(ctx, w.resolved, scan.digest, w.mtime, [w.offset, w.explicit_limit or 0],
+                     whole=whole)
 
         return _render(scan, w)
 
@@ -568,10 +571,13 @@ def _first_part(text: str, tokens: int, cap: int) -> tuple[str, bool]:
 
 
 def _record_read(ctx: ToolContext, path: str, digest: str, mtime: float,
-                 lines: list[int] | None = None, *, partial: bool = False) -> None:
+                 lines: list[int] | None = None, *, partial: bool = False,
+                 whole: bool = True) -> None:
     data: dict[str, Any] = {"path": path, "digest": digest, "mtime": mtime}
     if lines is not None:
         data["range"] = lines
     if partial:
         data["partial"] = True
+    if not whole or partial:
+        data["whole"] = False
     ctx.record(FS, KIND_READ, data)

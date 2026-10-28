@@ -72,6 +72,13 @@ async def test_an_overwrite_after_a_cut_read_is_refused_even_when_allowed(
     assert out.is_error and "has not been read yet" in text_of(out)
 
 
+async def test_a_write_of_noeta_md_has_the_file_state_note(h: Harness, ws: Path) -> None:
+    out = await h.call(WriteTool(), file_path="NOETA.md", content="a\n")
+    assert text_of(out) == (f"File created successfully at: {ws / 'NOETA.md'} "
+                            "(what you wrote is the file's current state; no need to Read it "
+                            "back)")
+
+
 async def test_write_existing_path_after_read_overwrites(h: Harness, ws: Path) -> None:
     (ws / "exists.txt").write_text("old\n")
     await _read(h, "exists.txt")
