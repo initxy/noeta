@@ -25,7 +25,10 @@ once and answers), a ``ScheduleWakeup`` whose prompt is
 ``CLUSTER-WAKE <id>``. With ``child_bg`` > 0 the sub-agent also starts a
 background ``Bash`` (``child_bg`` seconds, journalling ``<id>-cbg``) and ends
 without waiting for it; the root then waits for that job's end or loss too.
-Every ``CLUSTER-PING <id> <j>`` message it is sent
+With ``cron`` > 0 it loads the cron tools (``ToolSearch``), creates a
+recurring ``CronCreate`` job whose prompt is ``CLUSTER-CRON <id>``, and
+deletes it (``CronDelete``, again if a crash leaves the outcome unknown)
+once it has fired ``cron`` times. Every ``CLUSTER-PING <id> <j>`` message it is sent
 gets one ``Effect`` (token ``<id>-p<j>``); the wake-up, once it arrives, is
 stopped. The task answers ``DONE <id>`` once the job's end (or loss), the
 sub-agent's end and the wake-up have all reached it, else ``WAITING <id>``.
@@ -220,6 +223,9 @@ def root_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
         cid = f"png-{rid}-{m.group(2)}"
         if cid not in seen.issued:
             return _call(cid, "Effect", {"token": f"{rid}-p{m.group(2)}"})
+    cron_step, cron_pending = _cron(rid, int(spec.get("cron", 0) or 0), seen)
+    if cron_step is not None:
+        return cron_step
     woke = f"CLUSTER-WAKE {rid}" in seen.text
     stop_id = f"wstop-{rid}"
     if spec.get("wake") and woke and stop_id not in seen.issued:
@@ -234,9 +240,42 @@ def root_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
         pending.append("the sub-agent's job")
     if spec.get("wake") and not seen.failed(wake_id) and not woke:
         pending.append("wake")
+    if cron_pending:
+        pending.append("cron")
     if pending:
         return _say(f"WAITING {rid} for {', '.join(pending)}")
     return _say(f"DONE {rid}")
+
+
+#: Attempts at deleting the cron job before the script gives up on it.
+CRON_DELETES = 4
+
+
+def _cron(rid: str, fires: int, seen: _Seen) -> tuple[ModelResponse | None, bool]:
+    """The cron part of a root's script: ``(the next call, still waiting)``."""
+    if fires <= 0:
+        return None, False
+    search, create = f"ts-{rid}", f"cron-{rid}"
+    if search not in seen.issued:
+        return _call(search, "ToolSearch", {"query": "select:CronCreate,CronDelete",
+                                            "max_results": 5}), True
+    if create not in seen.issued:
+        return _call(create, "CronCreate", {"cron": "* * * * *", "recurring": True,
+                                            "prompt": f"CLUSTER-CRON {rid}"}), True
+    if create not in seen.results or seen.failed(create):
+        return None, create not in seen.results
+    if seen.text.count(f"CLUSTER-CRON {rid}") < fires:
+        return None, True
+    job = re.search(r"job ([0-9a-f]{8})", seen.results[create][0])
+    for n in range(CRON_DELETES):
+        delete = f"cdel-{rid}-{n}"
+        if delete not in seen.issued:
+            return _call(delete, "CronDelete", {"id": job.group(1) if job else ""}), True
+        if delete not in seen.results:
+            return None, True
+        if not seen.failed(delete):
+            return None, False
+    return None, False
 
 
 def child_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:

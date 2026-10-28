@@ -57,6 +57,8 @@ TASKS = int(os.environ.get("NOETA_CLUSTER_TASKS", "24"))
 SECONDS = float(os.environ.get("NOETA_CLUSTER_SECONDS", "20"))
 DRAIN = float(os.environ.get("NOETA_CLUSTER_DRAIN", "90"))
 LEASE = 1.0
+#: Faults in the cron scenario last past the jobs' second firing.
+CRON_SECONDS = 70.0
 
 
 class Gap(AssertionError):
@@ -94,11 +96,12 @@ def make_specs(rng: random.Random, n: int, *, bg: bool) -> dict[str, Spec]:
 
 async def run_cluster(tmp_path: Path, url: str, seed: int, specs: dict[str, Spec], *,
                       seconds: float, targets: set[str] | None = None,
-                      workers: int = 3, drain: float = DRAIN, faulty: Any = chaos) -> Outcome:
+                      workers: int = 3, drain: float = DRAIN, faulty: Any = chaos,
+                      fire_after: float = 2.0) -> Outcome:
     """Create the roots, run the faults and the pings for ``seconds``, then
     let the workers drain until every root is done or ``DRAIN`` passes."""
     rng = random.Random(seed)
-    cluster = Cluster(tmp_path, url, workers=workers, lease=LEASE)
+    cluster = Cluster(tmp_path, url, workers=workers, lease=LEASE, fire_after=fire_after)
     faults, watch, stop = Faults(), EpochWatch(), asyncio.Event()
     await cluster.start()
     watcher = asyncio.create_task(watch_rows(cluster, watch, stop))
@@ -176,6 +179,25 @@ async def test_timers_and_sub_agents_outlive_every_worker(tmp_path: Path, pg_url
              for i in range(8)}
     outcome = await run_cluster(tmp_path, pg_url, seed, specs, seconds=12, faulty=kill_all)
     assert outcome.faults.kills >= 9, fail(outcome, ["too few faults to mean anything"])
+    assert_invariants(outcome)
+    assert_all_done(outcome)
+
+
+async def test_cron_jobs_outlive_every_worker(tmp_path: Path, pg_url: str) -> None:
+    """Recurring ``CronCreate`` jobs (every minute) under a minute of
+    SIGKILL / SIGSTOP. The clock runs ten minutes behind, so a job's first
+    firing is due at once; it then fires every real minute. Each root
+    deletes its job after one or two firings: every job fires that often,
+    is deleted, and never fires once its deletion is in the log (the
+    one-firing roots are a minute past their deletion by the end)."""
+    seed = seed_from_env()
+    rng = random.Random(seed)
+    specs = {f"r{i:02d}": Spec(id=f"r{i:02d}", effects=1, cron=[1, 2][i] if i < 2
+                               else rng.choice([1, 2]), pings=rng.choice([0, 1]))
+             for i in range(8)}
+    outcome = await run_cluster(tmp_path, pg_url, seed, specs, seconds=CRON_SECONDS,
+                                fire_after=-540.0)
+    assert outcome.faults.kills >= 3, fail(outcome, ["too few faults to mean anything"])
     assert_invariants(outcome)
     assert_all_done(outcome)
 

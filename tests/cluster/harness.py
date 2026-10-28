@@ -24,7 +24,7 @@ from typing import Any
 
 from noeta.core import registry
 from noeta.core.client import Client
-from noeta.core.events import Recorded, ToolFinished, ToolStarted
+from noeta.core.events import InputTaken, Recorded, TimerFired, ToolFinished, ToolStarted
 from noeta.core.store import TaskRow
 from noeta.core.tool import MAX_ATTEMPTS
 from tests.cluster.invariants import (
@@ -98,12 +98,13 @@ class Spec:
     pings: int = 0
     lookup: float = 0.0
     child_bg: float = 0.0
+    cron: int = 0
 
     def prompt(self, journal: str) -> str:
         return "CLUSTER-ROOT " + json.dumps({
             "id": self.id, "journal": journal, "effects": self.effects, "bg": self.bg,
             "agent": self.agent, "wake": self.wake, "lookup": self.lookup,
-            "child_bg": self.child_bg})
+            "child_bg": self.child_bg, "cron": self.cron})
 
 
 @dataclass
@@ -314,6 +315,31 @@ class Outcome:
         if spec.wake and "schedule.wakeup" not in timers_taken(records) \
                 and not self.interrupted(tid, f"wake-{sid}"):
             out.append(f"root {sid}: its wake-up never fired")
+        if spec.cron:
+            out += self.cron_problems(sid)
+        return out
+
+    def cron_problems(self, sid: str) -> list[str]:
+        """The cron job fired at least ``cron`` times, and never once its
+        deletion is in the log (unless creating it had an unknown outcome,
+        which leaves no job)."""
+        tid, spec = self.roots[sid], self.specs[sid]
+        records = self.logs[tid]
+        if self.interrupted(tid, f"cron-{sid}"):
+            return []
+        deleted = next((r.seq for r in records if isinstance(r.event, ToolFinished)
+                        and r.event.result.call_id.startswith(f"cdel-{sid}-")
+                        and not r.event.result.is_error), None)
+        fires = [r.seq for r in records if isinstance(r.event, InputTaken)
+                 for i in r.event.items if isinstance(i.body, TimerFired)
+                 and i.body.name.startswith("schedule.job:")]
+        out = []
+        if deleted is None:
+            out.append(f"root {sid}: its cron job was never deleted")
+        elif any(seq > deleted for seq in fires):
+            out.append(f"root {sid}: its cron job fired after it was deleted (seq {deleted})")
+        if len(fires) < spec.cron:
+            out.append(f"root {sid}: its cron job fired {len(fires)} times, not {spec.cron}")
         return out
 
     def interrupted(self, tid: str, call_id: str) -> bool:
