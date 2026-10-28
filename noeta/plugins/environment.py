@@ -50,6 +50,8 @@ PROJECT_URL = "https://github.com/initxy/noeta"
 #: the environment first, the budget and the date last.
 ORDER_ENVIRONMENT = 0
 ORDER_DEFERRED = 30
+#: A sub-agent's environment turn opens with its deferred tools.
+ORDER_DEFERRED_SUBAGENT = -10
 ORDER_BUDGET = 80
 ORDER_DATE = 90
 
@@ -350,9 +352,9 @@ class Environment(Extension):
             # list does not change for the rest of the conversation.
             names = view.deferred_tool_names()
             if names:
+                order = ORDER_DEFERRED_SUBAGENT if view.state.parent_id else ORDER_DEFERRED
                 out.append(Reminder(text=deferred_list(names), kind="deferred",
-                                    data={"names": names}, role="system",
-                                    order=ORDER_DEFERRED))
+                                    data={"names": names}, role="system", order=order))
             out.append(Reminder(text=date_line(st["date"]), kind="date",
                                 data={"date": st["date"]}, role="system", order=ORDER_DATE))
         elif self.date_change and not view.state.steps_in_turn and st.get("date"):
@@ -361,7 +363,10 @@ class Environment(Extension):
                 text = view.prompt("reminder/date_changed", DATE_CHANGED_REMINDER)
                 out.append(Reminder(text=text.replace("{date}", today), kind="date",
                                     data={"date": today}, role="system", order=ORDER_DATE))
-        if self.token_budget and _owes_budget_note(view.state.messages):
+        # A sub-agent gets no per-turn budget notes (Claude Code's carries
+        # the counter in its system prompt).
+        if self.token_budget and not view.state.parent_id \
+                and _owes_budget_note(view.state.messages):
             spent = view.state.usage.output
             base = spent if not view.state.steps_in_turn else st.get("turn_base", 0)
             left = max(self.token_budget - (spent - base), 0)

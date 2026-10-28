@@ -12,7 +12,7 @@ plugins:
   - mcp
   - fs: {tools: [Read]}
   - skills
-  - environment
+  - environment: {git_status: false}
   - subtasks
 ---
 You are a file-search specialist for noeta: you find your way around codebases quickly and thoroughly.
