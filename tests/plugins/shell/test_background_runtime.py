@@ -21,6 +21,7 @@ from noeta.core.runner import Runtime
 from noeta.plugins.fs import FileTools
 from noeta.plugins.shell import Registry, Shell
 from noeta.testing import ScriptedProvider, reply
+from noeta.toolkit.notices import NOTICE_GUARD
 
 
 @pytest.fixture
@@ -76,7 +77,7 @@ async def test_an_end_notice_wakes_the_idle_task(store: SqliteStore, tmp_path: P
     await rt.run_until_idle()
     notice = provider.requests[2].messages[-1]
     assert notice.origin == "system"
-    assert notice.text.startswith("<task-notification>\n<task-id>")
+    assert notice.text.startswith(f"{NOTICE_GUARD}\n\n<task-notification>\n<task-id>")
     assert "<output-file>" in notice.text
     assert notice.text.endswith("completed (exit code 0)</summary>\n</task-notification>")
     [job] = (await _jobs(client, tid, ext)).values()
@@ -242,7 +243,7 @@ async def test_a_sub_agents_job_notifies_the_root_after_it_ended(store: SqliteSt
     await _settle(shells)
     await rt.run_until_idle()
     notice = provider.requests[-1].messages[-1]
-    assert notice.text.startswith("<task-notification>")
+    assert notice.text.startswith(f"{NOTICE_GUARD}\n\n<task-notification>")
     assert 'Background command "sleep 0.3; echo late" completed' in notice.text
 
 

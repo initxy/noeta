@@ -13,7 +13,8 @@ and ``[exited with code N]``.
 
 When a job ends — or a monitor emits an event — the notice goes to the task
 that started it while that task is live, else to the root, as a
-system-origin message posted with ``when="now"``: it lands after the running
+system-origin message behind the not-the-user guard, posted with
+``when="now"``: it lands after the running
 batch's tool results, and wakes an idle task into a turn.
 
 Job logs live in a private directory per user inside the env: by default
@@ -53,6 +54,7 @@ from noeta.plugins.shell.notices import (
     shell_end_summary,
     task_notification,
 )
+from noeta.toolkit.notices import NOTICE_GUARD
 
 log = logging.getLogger("noeta.plugins.shell")
 
@@ -343,7 +345,8 @@ class Registry:
             if text is None:
                 return
             try:
-                await job.post(Say(message=user(text, origin="system"), when="now"),
+                await job.post(Say(message=user(f"{NOTICE_GUARD}\n\n{text}", origin="system"),
+                                   when="now"),
                                task_id=self._target(job))
             except Exception as exc:  # noqa: BLE001 - a lost notice must not kill the sender
                 log.warning("background notice for %s not delivered: %s", job.job_id, exc)

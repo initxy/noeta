@@ -41,7 +41,7 @@ def lost_text(job_id: str) -> str:
     return f"Background job {job_id} was lost: {LOST_REASON}."
 
 _NOTICE = re.compile(
-    r"\A<task-notification>\n<task-id>([0-9a-z]{9})</task-id>\n"
+    r"(?:\A|\n\n)<task-notification>\n<task-id>([0-9a-z]{9})</task-id>\n"
     r"(?:<tool-use-id>[^<]*</tool-use-id>\n)?(?:<output-file>[^<]*</output-file>\n)?"
     r"<status>(\w+)</status>")
 
@@ -124,7 +124,7 @@ class Shell(Extension):
                 body = item.body
                 if not isinstance(body, Say) or body.message.origin != "system":
                     continue
-                match = _NOTICE.match(body.message.text)
+                match = _NOTICE.search(body.message.text)
                 if match and known.get(match.group(1), {}).get("status") == "running":
                     view.record(self.name, "ended",
                                 {"job_id": match.group(1), "status": match.group(2)})
