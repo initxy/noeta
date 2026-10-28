@@ -41,8 +41,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-import time
-import urllib.parse
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Union
@@ -68,11 +66,12 @@ from noeta.plugins.mcp.config import (
     tool_timeout_s,
 )
 from noeta.plugins.mcp.elicitation import elicitation_questions, elicitation_result
-from noeta.plugins.mcp.oauth import SignIn, store_for
 from noeta.plugins.mcp.pool import McpPool, default_pool
 from noeta.plugins.mcp.prompts import McpPrompt, expand_prompt, list_prompts
 from noeta.plugins.mcp.results import render_result
 from noeta.plugins.mcp.settings import read_servers, servers_from
+from noeta.plugins.mcp.sign_ins import SIGN_IN_REUSE_S as SIGN_IN_REUSE_S
+from noeta.plugins.mcp.sign_ins import SignIns
 from noeta.plugins.mcp.tools import (
     ListMcpResourcesTool,
     McpAuthTool,
@@ -91,11 +90,6 @@ log = logging.getLogger("noeta.plugins.mcp")
 Servers = Union[Sequence[McpServer], Mapping[str, Any]]
 ServersFn = Callable[[TaskView], Union[Servers, Awaitable[Servers]]]
 ScopeFn = Callable[[TaskView], Union[str, None]]
-
-
-#: A sign-in started within this long is handed out again rather than
-#: restarted.
-SIGN_IN_REUSE_S = 180.0
 
 
 def _as_list(servers: Servers) -> list[McpServer]:
@@ -125,14 +119,6 @@ class _Parked:
     answer: asyncio.Future[dict[str, Any]]
     asked: Park
     release: Callable[[], Awaitable[None]] | None
-
-
-@dataclass
-class _SignInRun:
-    sign_in: SignIn
-    url: str
-    started: float
-    done: asyncio.Task[None]
 
 
 class Mcp(Extension):
@@ -193,8 +179,7 @@ class Mcp(Extension):
         self._roots: dict[str, list[str]] = {}
         #: (task id, call id) -> a call waiting on the person's answer.
         self._parked: dict[tuple[str, str], _Parked] = {}
-        #: (scope, server identity) -> the sign-in in progress.
-        self._sign_ins: dict[tuple[object, ...], _SignInRun] = {}
+        self._sign_ins = SignIns(self.pool)
 
     # ------------------------------------------------------------ state
 
@@ -371,71 +356,10 @@ class Mcp(Extension):
                                "for this task", is_error=True)
         scope = self._scopes.get(ctx.task_id)
         if tool.stub == "authenticate":
-            return await self._start_sign_in(tool, server, scope)
-        return await self._complete_sign_in(tool, server, scope, args, ctx)
-
-    async def _start_sign_in(self, tool: McpAuthTool, server: McpServer,
-                             scope: str | None) -> ToolOutput:
-        key = self.pool().key(server, scope)
-        complete = tool.name.removesuffix("authenticate") + "complete_authentication"
-        run = self._sign_ins.get(key)
-        reused = run is not None and not run.done.done() \
-            and time.monotonic() - run.started < SIGN_IN_REUSE_S
-        if not reused:
-            if run is not None:
-                await run.sign_in.close()
-            sign_in = SignIn(server, store_for(server, scope), http=self.pool().http)
-            try:
-                url = await sign_in.start()
-            except McpError as exc:
-                await sign_in.close()
-                return text_output(f"Could not start the sign-in to {server.alias!r}: {exc}. "
-                                   "Tell the user it is not available right now.",
-                                   is_error=True)
-            run = _SignInRun(sign_in, url, time.monotonic(),
-                             asyncio.create_task(self._await_sign_in(server, scope, sign_in)))
-            self._sign_ins[key] = run
-        assert run is not None
-        earlier = ("A sign-in started earlier is still waiting, so this is its link. "
-                   if reused else "")
-        return text_output(
-            f"{earlier}Ask the user to open this URL in their browser to authorize the "
-            f"{server.alias!r} MCP server:\n{run.url}\n\nOnce they have, its tools become "
-            "available from their next message. If the browser shows a connection error on "
-            "the page it is sent back to, ask them for the full URL in the address bar and "
-            f"call `{complete}` with it.")
-
-    async def _await_sign_in(self, server: McpServer, scope: str | None,
-                             sign_in: SignIn) -> None:
-        try:
-            await sign_in.finish()
-        except McpError as exc:
-            log.warning("mcp: the sign-in to %s failed: %s", server.alias, exc)
-            raise
-        await self.pool().forget(server, scope)
-
-    async def _complete_sign_in(self, tool: McpAuthTool, server: McpServer, scope: str | None,
-                                args: dict[str, Any], ctx: ToolContext) -> ToolOutput:
-        start = tool.name.removesuffix("complete_authentication") + "authenticate"
-        run = self._sign_ins.get(self.pool().key(server, scope))
-        if run is None or (run.done.done() and run.done.exception() is not None):
-            return text_output(f"No sign-in to {server.alias!r} is in progress. Call `{start}` "
-                               "first, then retry with the callback URL.", is_error=True)
-        url = str(args.get("callback_url") or "")
-        query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
-        if "code" not in query and "error" not in query:
-            return text_output("That URL carries no authorization code. Ask the user for the "
-                               "full address from the browser's address bar, including the "
-                               "`?code=...&state=...` part.", is_error=True)
-        if not run.done.done() and not run.sign_in.submit(url):
-            return text_output(f"That URL belongs to another sign-in attempt to "
-                               f"{server.alias!r}; the current one is still waiting. Ask the "
-                               "user for the URL from the page this sign-in opened.",
-                               is_error=True)
-        try:
-            await asyncio.shield(run.done)
-        except McpError as exc:
-            return text_output(f"The sign-in to {server.alias!r} failed: {exc}", is_error=True)
+            return await self._sign_ins.start(tool, server, scope)
+        failed = await self._sign_ins.finish(tool, server, scope, args)
+        if failed is not None:
+            return failed
         try:
             raw = await self.pool().use(server, scope, lambda c: c.list_tools(),
                                         context=self._context(ctx.task_id))
