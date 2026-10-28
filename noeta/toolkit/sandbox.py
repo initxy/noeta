@@ -217,21 +217,27 @@ def _entry_matches(entry: str, host: str, port: int) -> bool:
     return host == idna(name)
 
 
-#: Hosts that name the machine itself: reachable only when an entry names
-#: them with a port (a bare host would open every local port).
-_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", "::"})
+def _names_this_machine(host: str) -> bool:
+    """Whether ``host`` names the machine itself — ``localhost`` or a
+    loopback or unspecified address in any spelling (``[0:0::1]``,
+    ``::ffff:127.0.0.1``): judged by the parsed address, never the text."""
+    if host == "localhost":
+        return True
+    ip = _address(host)
+    return ip is not None and (ip.is_loopback or ip.is_unspecified)
 
 
 def domain_allowed(host: str, port: int, allowed: Sequence[str],
                    denied: Sequence[str] = ()) -> bool:
     """May a sandboxed command connect to ``host:port``? A denied entry wins;
-    a local address must be allowed with its port."""
+    a local address must be allowed with its port (a bare host, or ``*``,
+    would open every local port)."""
     host = idna(host.strip().strip("[]").rstrip(".").lower())
     if not host:
         return False
     if any(_entry_matches(e, host, port) for e in denied):
         return False
-    local = host in _LOCAL_HOSTS or host.startswith("127.")
+    local = _names_this_machine(host)
     for entry in allowed:
         if local and _split_port(entry.strip())[1] is None:
             continue
@@ -262,8 +268,11 @@ def _address(value: str) -> _Address | None:
         ip = ipaddress.ip_address(value.split("%", 1)[0])
     except ValueError:
         return None
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        return ip.ipv4_mapped
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            return ip.ipv4_mapped
+        if 1 < int(ip) < 1 << 32:  # IPv4-compatible (``::127.0.0.1``)
+            return ipaddress.IPv4Address(int(ip))
     return ip
 
 

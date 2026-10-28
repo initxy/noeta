@@ -73,6 +73,10 @@ def test_domain_matching() -> None:
     assert not domain_allowed("github.com", 443, allowed, denied=["github.com"])
     assert not domain_allowed("", 80, ["*"])
     assert domain_allowed("anything.io", 1, ["*"])
+    # This machine in any spelling needs an entry with its port.
+    for host in ("localhost", "127.0.0.2", "[::1]", "[::ffff:127.0.0.1]", "::ffff:7f00:1",
+                 "[0:0:0:0:0:0:0:1]", "0:0::1", "::127.0.0.1", "0.0.0.0", "[0::0]"):
+        assert not domain_allowed(host, 80, ["*"]), host
 
 
 def test_an_allowed_name_may_not_resolve_to_a_local_or_metadata_address() -> None:

@@ -133,6 +133,11 @@ async def test_proxy_checks_the_address_a_name_resolves_to(
         assert (await reader.readline()).startswith(b"HTTP/1.1 403")
         writer.close()
         assert ls.refused == [f"0x7f000001:{server}", f"169.254.169.254:{server}"]
+        # So is a loopback address spelled any other way: ``*`` never opens
+        # this machine's ports.
+        for host in ("::ffff:127.0.0.1", "0:0:0:0:0:0:0:1", "0:0::1", "::127.0.0.1"):
+            out = await _http_get(ls.http[1], f"http://[{host}]:{server}/x")
+            assert out.startswith(b"HTTP/1.1 403"), host
     finally:
         await proxy.close(ls)
     # The connection goes to the address that was checked, not to a second
