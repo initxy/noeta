@@ -46,7 +46,7 @@ from noeta.core.events import (
 )
 from noeta.core.extension import CommandContext
 from noeta.core.records import CORE
-from noeta.core.types import Delta, Image, Usage
+from noeta.core.types import Delta, Image
 from noeta.host.feed import failure_text
 from noeta.host.local import LocalApp, UnknownAgent
 from noeta.host.pending import (
@@ -57,6 +57,7 @@ from noeta.host.pending import (
     follow_tree,
 )
 from noeta.host.questions import next_question, typed_answer
+from noeta.host.usage import tree_usage
 from noeta.toolkit.permission_modes import MODE_SIGNAL, current_mode, next_mode
 from noeta.toolkit.signals import RESUMED_SIGNAL
 
@@ -127,7 +128,8 @@ class NoetaApp(App[None]):
         #: A delta is taken off the queue but not yet written.
         self._pumping = False
         self.busy = False
-        self.usage = Usage()
+        #: What the task tree has cost so far (``host.usage``, as ``/cost``).
+        self.cost_usd = 0.0
         self.context_tokens = 0
         #: The question the next input line answers: its call id, the task
         #: asking (the root or a sub-agent), its detail, and answers so far.
@@ -203,6 +205,7 @@ class NoetaApp(App[None]):
         await self._end_stream()
         self.streamed.clear()
         self.attempts.clear()
+        self.cost_usd = 0.0
         self.called = 0
         transcript = self.query_one("#transcript")
         await transcript.remove_children()
@@ -517,8 +520,8 @@ class NoetaApp(App[None]):
                 block = ToolCall(call)
                 self.calls[call.id] = block
                 await transcript.mount(block)
-            self.usage = self.usage + ev.response.usage
             self.context_tokens = ev.response.usage.input + ev.response.usage.output
+            self._refresh_cost(self.task_id)
         elif isinstance(ev, ToolStarted):
             if ev.call.id in self.calls:
                 self.calls[ev.call.id].set_state("running")
@@ -579,6 +582,7 @@ class NoetaApp(App[None]):
                 self._set_question("", "", {})
         elif isinstance(ev, TaskEnded):
             self.busy = False
+            self._refresh_cost(self.task_id)
             await transcript.mount(Notice(f"task {ev.status}" + (f": {ev.error}" if ev.error
                                                                  else "")))
         transcript.scroll_end(animate=False)
@@ -588,18 +592,21 @@ class NoetaApp(App[None]):
         spec = models.find_spec(self.model)
         window = spec.context_window if spec else models.UNKNOWN_MODEL_CONTEXT_WINDOW
         used = f"{self.context_tokens / window:.0%}" if self.context_tokens else "-"
-        cost = ""
-        if spec is not None and spec.input_price_per_mtok and spec.output_price_per_mtok:
-            u = self.usage
-            usd = (u.uncached * spec.input_price_per_mtok + u.output * spec.output_price_per_mtok
-                   + u.cache_read * (spec.cache_read_price_per_mtok or 0)
-                   + u.cache_write * (spec.cache_write_price_per_mtok or 0)) / 1e6
-            cost = f" · ${usd:.2f}"
+        cost = f" · ${self.cost_usd:.2f}" if self.cost_usd else ""
         state = self.waiting_for or ("working… (Esc to stop)" if self.busy else "ready")
         width = max(self.size.width - len(self.model) - len(state) - 30, 12)
         self.query_one("#status", Static).update(RichText(
             f"{state} · {self.model} · {self.mode or self.permission_mode or 'auto'} mode "
             f"(shift+tab) · context {used}{cost} · {_short_path(self.cwd, width)}"))
+
+    @work(exclusive=True, group="cost", exit_on_error=False)
+    async def _refresh_cost(self, task_id: str) -> None:
+        """The status bar's cost: the whole tree's (sub-agents too), priced
+        per model as ``/cost`` prices it."""
+        total = await tree_usage(self.local.client, task_id)
+        if task_id == self.task_id:
+            self.cost_usd = total.cost_usd
+            self.update_status()
 
     @work(exclusive=True, group="side", exit_on_error=False)
     async def _refresh_side(self) -> None:
