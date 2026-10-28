@@ -146,6 +146,43 @@ def resolve_timeout(raw: Any, default_s: int) -> int:
     return max(1, ms // 1000)
 
 
+#: Commands whose exit status 1 is an answer, not a failure (no match, a
+#: difference, a false condition): Claude Code's table. Status 2 and up
+#: still fail.
+_EXIT_ONE_ANSWERS = frozenset({"grep", "rg", "egrep", "fgrep", "find", "diff", "test", "["})
+#: ``git`` subcommands read the same way.
+_GIT_EXIT_ONE_ANSWERS = frozenset({"diff", "grep"})
+#: Where a command line is split into its last command when it cannot be
+#: parsed.
+_COMMAND_SEPARATOR = re.compile(r"&&|\|\||[;|\n]")
+
+
+def _last_command(command: str) -> list[str]:
+    """The words of the command line's last command (what decides its exit
+    status), by the parser when it can read the line, else by splitting on
+    the control operators."""
+    parsed = parse(command)
+    if not parsed.opaque:
+        return parsed.commands[-1].argv if parsed.commands else []
+    return _COMMAND_SEPARATOR.split(command)[-1].split()
+
+
+def exit_fails(command: str, exit_code: int) -> bool:
+    """Whether ``exit_code`` makes ``command`` an error result."""
+    if exit_code == 0:
+        return False
+    if exit_code != 1:
+        return True
+    argv = _last_command(command)
+    name = argv[0] if argv else ""
+    if name == "git":
+        i = 1
+        while i < len(argv) and argv[i].startswith("-"):
+            i += 2 if argv[i] in ("-C", "-c") else 1
+        return i >= len(argv) or argv[i] not in _GIT_EXIT_ONE_ANSWERS
+    return name not in _EXIT_ONE_ANSWERS
+
+
 def _blocked_sleep(described: str) -> str:
     """Claude Code's refusal of a long leading ``sleep``."""
     return (
@@ -483,7 +520,8 @@ class BashTool:
         if result.timed_out:
             meta["timed_out"] = True
         ran_ok = not result.timed_out and result.exit_code == 0
-        if ran_ok and not body:
+        failed = result.timed_out or exit_fails(command, result.exit_code)
+        if not failed and not body:
             body = NO_OUTPUT
         # Only the root task's shell keeps a directory, and only one a
         # command ended in successfully.
@@ -504,7 +542,7 @@ class BashTool:
         body = await limit_output(body, SHELL_OUTPUT_LIMIT, ctx)
         if result.timed_out:
             return error_output(f"Command timed out after {timeout_s}s", body, **meta)
-        if result.exit_code != 0:
+        if failed:
             return error_output(f"Exit code {result.exit_code}", body, **meta)
         return text_output(body, **meta)
 

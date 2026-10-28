@@ -72,6 +72,7 @@ Observed in `m1`, `m2`, `m3`, `s1`.
 | `tool.Bash.r.5` | background start | one paragraph: running in background with an ID (9 lower-case alphanumerics); the absolute path of the output file (under the per-project temp dir, `.../<session>/tasks/<id>.output`); the model will be notified on completion and must not poll or sleep; read the file only if the user asks for progress or a line (such as a server's ready line or port) is needed before going on | covered |
 | `tool.Bash.r.6` | background output file | when the job ends, the file holds the output followed by a blank line and `[exited with code <n>]` (seen via `cat` in `s1`) | covered |
 | `tool.Bash.r.7` | background completion | arrives later as a background-task notification, not as a tool result (see `reminders.md`) | see `reminders.md` |
+| `tool.Bash.r.9` | exit 1 of a search or comparison | when the last command of the line is `grep`, `rg`, `egrep`, `fgrep`, `find`, `diff`, `test`, `[` or `git diff` / `git grep`, exit status 1 (no match, a difference, a false condition) is not a failure: no `Exit code` line, `is_error` false, `(Bash completed with no output)` when it printed nothing; status 2 and up still fails (2.1.312 bundle) | covered |
 | `tool.Bash.r.8` | attached context | a result may carry `<system-reminder>` blocks appended after the output (after compaction, the `CLAUDE.md` and git-status reminders rode on the first tool result, `m1/0059`) | see `compaction.md` |
 
 ## Variants
