@@ -41,6 +41,8 @@ PLACEHOLDER = "DeferredToolPlaceholder"
 TOOL_LOADED_TEXT = "Tool loaded."
 #: Matches a keyword search returns when the model gives no count.
 DEFAULT_MAX_RESULTS = 5
+#: A ``select:`` query reads at most this many names.
+MAX_SELECT_NAMES = 64
 
 SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 
@@ -128,6 +130,14 @@ def request_tools(tools: Sequence[Tool], loaded: Iterable[str],
     return [*head[:-1], placeholder_spec(), head[-1]]
 
 
+def _mcp_tool_part(name: str) -> str | None:
+    """``t`` of an ``mcp__<server>__t`` tool name, else ``None``."""
+    if not name.startswith("mcp__"):
+        return None
+    _, sep, tool = name[len("mcp__"):].partition("__")
+    return tool if sep and tool else None
+
+
 def _terms(text: str) -> set[str]:
     return set(_WORD.findall(_CAMEL.sub(" ", text).lower()))
 
@@ -165,13 +175,17 @@ class ToolSearchTool:
     def search(self, query: str, max_results: int = DEFAULT_MAX_RESULTS) -> list[str]:
         q = query.strip()
         if q.lower().startswith("select:"):
-            wanted = [n.strip() for n in q[len("select:"):].split(",") if n.strip()]
+            listed = q[len("select:"):].split(",")[:MAX_SELECT_NAMES]
+            wanted = [n.strip() for n in listed if n.strip()]
             by_lower = {n.lower(): n for n in self._tools}
             out: list[str] = []
             for n in wanted:
                 hit = n if n in self._tools else by_lower.get(n.lower())
-                if hit is not None and hit not in out:
-                    out.append(hit)
+                # An MCP tool may also be named by its own name, without the
+                # ``mcp__<server>__`` prefix (every server's tool of that name).
+                hits = [hit] if hit is not None else [
+                    t for t in self._tools if _mcp_tool_part(t) == n]
+                out.extend(h for h in hits if h not in out)
             return out
         words = q.split()
         required = [w[1:].lower() for w in words if w.startswith("+") and len(w) > 1]

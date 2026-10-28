@@ -91,6 +91,15 @@ def test_search_forms() -> None:
     assert schema["properties"]["max_results"]["default"] == 5
 
 
+def test_select_takes_an_mcp_tool_by_its_own_name() -> None:
+    search = ToolSearchTool({t.name: t for t in [
+        Fake("mcp__slack__send"), Fake("mcp__mail__send"), Fake("mcp__docs__query-docs")]})
+    assert search.search("select:query-docs") == ["mcp__docs__query-docs"]
+    assert search.search("select:send") == ["mcp__slack__send", "mcp__mail__send"]
+    many = ",".join(["nope"] * 64 + ["query-docs"])
+    assert search.search(f"select:{many}") == []  # only the first 64 names count
+
+
 class Offers(Extension):
     name = "offers"
 
