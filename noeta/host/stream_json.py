@@ -171,15 +171,36 @@ def _message_from(content: Any) -> Message:
 
 
 async def find_latest_task(client: ClientAPI, cwd: str, agent: str = "main") -> str | None:
-    """``--continue``: the newest root task of ``agent`` started in ``cwd``."""
-    rows = [r for r in await client.tasks(limit=200) if r.parent_id is None and r.agent == agent]
-    rows.sort(key=lambda r: r.created_at, reverse=True)
-    for row in rows:
-        events = await client.events(row.task_id, 0)
-        first = events[0].event if events else None
-        if isinstance(first, TaskCreated) and str(first.config.get("cwd") or "") == cwd:
-            return str(row.task_id)
-    return None
+    """``--continue``: the newest root task of ``agent`` started in ``cwd``.
+    Tasks come most recently updated first; the window grows until the
+    newest match is certain (no task beyond it can have started later) or
+    every task has been seen."""
+    checked: dict[str, bool] = {}
+
+    async def started_here(task_id: str) -> bool:
+        if task_id not in checked:
+            events = await client.events(task_id, 0)
+            first = events[0].event if events else None
+            checked[task_id] = isinstance(first, TaskCreated) \
+                and str(first.config.get("cwd") or "") == cwd
+        return checked[task_id]
+
+    limit = 200
+    while True:
+        rows = await client.tasks(limit=limit)
+        everything = len(rows) < limit
+        # A task not listed was last updated (so started) before this.
+        horizon = min((r.updated_at for r in rows), default=0.0)
+        roots = sorted((r for r in rows if r.parent_id is None and r.agent == agent),
+                       key=lambda r: r.created_at, reverse=True)
+        for row in roots:
+            if not everything and row.created_at < horizon:
+                break
+            if await started_here(row.task_id):
+                return str(row.task_id)
+        if everything:
+            return None
+        limit *= 10
 
 
 class StreamJson:
