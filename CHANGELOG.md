@@ -66,9 +66,12 @@ All notable changes to Noeta are documented here. The format is based on
   paths (`noeta.toolkit.protected_paths`: the whole `.noeta` directory, `.vscode`, `.husky`,
   `.envrc`, `.pre-commit-config.yaml`, shell and package-manager settings, ...),
   `.git/hooks`, `.git/config`, `.git/config.worktree`, each submodule's config and hooks
-  under `.git/modules`, and the hooks directory git uses (`core.hooksPath`). A missing one
-  cannot be created either (an empty read-only placeholder covers it while the command runs),
-  and no directory above one can be renamed away. Git keeps working (status, add, commit,
+  under `.git/modules`, and the hooks directory git uses (`core.hooksPath`). A missing
+  `.noeta`, `.git`, or git hook/config path cannot be created either (an empty read-only
+  placeholder covers it while the command runs); the other protected names are read-only
+  only when present, since each runs only after a separate step of the person's (`direnv
+  allow`, an editor trusting the workspace). No directory above a protected path can be
+  renamed away. Git keeps working (status, add, commit,
   checkout, submodule status), but **in a directory that is not a repository `git init`
   fails inside the sandbox** (no `.git` can be created), and **nothing under `.noeta/` —
   skills and commands included — can be written from the sandbox** (the permissions plugin

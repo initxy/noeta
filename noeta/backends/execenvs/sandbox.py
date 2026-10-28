@@ -45,6 +45,7 @@ from noeta.toolkit.sandbox import SandboxSettings
 
 __all__ = [
     "DEFAULT_DENY_READ",
+    "PLACEHOLDERS",
     "PROTECTED",
     "LocalSandbox",
     "Prepared",
@@ -67,15 +68,23 @@ HOME_ALLOW_READ = ("tool-results", "projects")
 #: permissions plugin's protected directories and files (noeta's project
 #: directory, editor tasks, hook runners, shell and package-manager
 #: settings) and git's hooks and config — code that would later run outside
-#: the sandbox. A missing one is covered by an empty read-only placeholder,
-#: so it cannot be created either. ``.git`` itself stays writable (git works
-#: in the sandbox) but pinned.
+#: the sandbox. ``.git`` itself stays writable (git works in the sandbox) but
+#: pinned. Only a missing :data:`PLACEHOLDERS` path is covered by an empty
+#: read-only placeholder, so it cannot be created either.
 PROTECTED = (
     *(d for d in PROTECTED_DIRS if d != ".git"),
     *("/".join(n) for n in PROTECTED_NESTED),
     *sorted(PROTECTED_FILES),
     ".git/hooks", ".git/config", ".git/config.worktree",
 )
+#: The protected names a command must not create when missing: noeta's own
+#: directory and git's (hooks and config run outside the sandbox at once).
+#: The other protected names are read-only when present but get no
+#: placeholder: each placeholder is a directory the person sees appear in
+#: the project while a command runs, and those files only run after a
+#: separate step of the person's (``direnv allow``, an editor trusting the
+#: workspace, a hook runner installed in the protected hooks directory).
+PLACEHOLDERS = frozenset({".noeta", ".git/hooks", ".git/config", ".git/config.worktree"})
 #: Directories that stay writable but are mounted onto themselves: a mount
 #: point cannot be renamed, so what is protected inside cannot be moved
 #: away and recreated. Every directory between a working directory and a
@@ -275,7 +284,10 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
     pinned = sorted(dict.fromkeys(p for p in pinned if p not in deny_write),
                     key=lambda p: p.count("/"))
     placeholders: dict[str, bool] = {}
-    for path in [*user_deny, *protected]:
+    guarded = [os.path.join(p, n) for p in projects for n in PLACEHOLDERS]
+    guarded += [path for path in protected
+                if not any(path == os.path.join(p, n) for p in projects for n in PROTECTED)]
+    for path in [*user_deny, *guarded]:
         missing = _first_missing(path)
         if missing is not None and path in deny_write \
                 and any(_within(missing, w) and missing != w for w in writes):

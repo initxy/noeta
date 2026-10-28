@@ -382,7 +382,12 @@ def test_the_protected_list_follows_the_permissions_and_git(tmp_path: Path, home
     # directory, which git does not list.
     assert held[str(ws / ".git" / "config.worktree")] is True
     assert held[str(module / "config.worktree")] is True
-    assert held[str(ws / ".pre-commit-config.yaml")] is False
+    assert held[str(ws / ".noeta")] is False
+    # Other protected names are read-only when present, never placeheld: a
+    # placeholder is a directory the person sees appear in the project.
+    assert str(ws / ".pre-commit-config.yaml") not in held
+    assert set(held) <= {str(ws / n) for n in sb.PLACEHOLDERS} | {
+        str(module / "config.worktree"), str(module / "hooks")}, held
     # Every directory above a protected path is pinned: none can be renamed.
     assert {str(ws / ".git"), str(ws / ".git" / "modules"), str(module)} <= set(plan.pinned)
 
@@ -392,6 +397,11 @@ async def test_what_runs_outside_the_sandbox_cannot_be_written(tmp_path: Path,
                                                                home: Path) -> None:
     ws = tmp_path / "ws"
     _repo_with_hooks_elsewhere(ws)
+    (ws / ".pre-commit-config.yaml").write_text("")
+    (ws / ".config" / "git").mkdir(parents=True)
+    (ws / ".config" / "git" / "config").write_text("")
+    with (ws / ".git" / "info" / "exclude").open("a") as f:
+        f.write(".pre-commit-config.yaml\n.config/\n")
     before = sorted(os.listdir(ws))
     env = LocalExecEnv(str(ws), sandbox={"enabled": True})
     for command in ("echo x >> .git/modules/lib/config",
@@ -405,7 +415,7 @@ async def test_what_runs_outside_the_sandbox_cannot_be_written(tmp_path: Path,
                     "echo 'repos: []' > .pre-commit-config.yaml",
                     "echo x > .vscode/tasks.json",
                     "echo x >> .envrc",
-                    "mkdir -p .config/git && echo x > .config/git/config"):
+                    "echo x > .config/git/config"):
         code, _, _ = await _run(env, command)
         assert code != 0, command
     assert sorted(os.listdir(ws)) == before
