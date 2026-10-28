@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ASK_USER_QUESTION_TOOL",
+    "SINGLE_OPTION_ERROR",
     "WITHDRAWN_ERROR",
     "AnswerValidationError",
     "AskUser",
@@ -57,6 +58,14 @@ _MAX_OPTION_DESCRIPTION_LEN = 300
 _MAX_PREVIEW_LEN = 20_000
 
 WITHDRAWN_ERROR = "Question withdrawn by user (no answer provided)."
+#: A question with one option (or none) has nothing to decide; the model is
+#: steered to go ahead with that path instead of padding the list.
+SINGLE_OPTION_ERROR = (
+    "Rejected: a question in this call had fewer than 2 options, so the user was shown "
+    "nothing. One option leaves nothing to choose. Do not repeat the call and do not make "
+    "up a second option: take that one path as your approach, say so, and carry on. Any "
+    "questions in this call that had 2-4 distinct options may be asked again in a new call "
+    "without the others. Ask only when the user has at least two real alternatives.")
 #: Leads the result of a call whose posted answer did not fit the questions.
 INVALID_ANSWER_ERROR = "The user's answer could not be used: {error}"
 
@@ -222,6 +231,9 @@ def validate_questions(arguments: Any) -> list[dict[str, Any]] | str:
         return "questions must be a list"
     if not 1 <= len(raw) <= _MAX_QUESTIONS:
         return f"questions must contain 1-{_MAX_QUESTIONS} items"
+    if any(isinstance(item, dict) and isinstance(item.get("options"), list)
+           and len(item["options"]) < _MIN_OPTIONS for item in raw):
+        return SINGLE_OPTION_ERROR
     questions: list[dict[str, Any]] = []
     for index, item in enumerate(raw):
         if not isinstance(item, dict):

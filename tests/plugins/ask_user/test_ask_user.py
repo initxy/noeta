@@ -16,6 +16,7 @@ from noeta.host.pending import pending
 from noeta.host.questions import answer_question
 from noeta.plugins.ask_user import (
     INPUT_SCHEMA,
+    SINGLE_OPTION_ERROR,
     AnswerValidationError,
     AskUser,
     validate_questions,
@@ -66,7 +67,10 @@ def test_limits() -> None:
     [default] = validate_questions({"questions": [no_multi]})
     assert default["multiSelect"] is False
     one = [{"label": "a", "description": "d"}]
-    assert validate_questions({"questions": [q(options=one)]}) == \
+    assert validate_questions({"questions": [q(options=one)]}) == SINGLE_OPTION_ERROR
+    assert validate_questions({"questions": [q(), q(question="B?", options=one)]}) == \
+        SINGLE_OPTION_ERROR
+    assert validate_questions({"questions": [q(options=one * 5)]}) == \
         "options must contain 2-4 items"
     dup = [{"label": "a", "description": "d"}] * 2
     assert validate_questions({"questions": [q(options=dup)]}) == "duplicate option label: 'a'"
