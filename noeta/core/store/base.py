@@ -132,13 +132,25 @@ class Store(Protocol):
         *, roots: Sequence[str] | None = None,
     ) -> Claim | None:
         """Take one claimable task: ``ready`` (and due), ``waiting`` with a due
-        ``ready_at``, or ``running`` with an expired lease. Bumps the epoch.
+        ``ready_at``, or ``running`` with an expired lease, of a tree no other
+        worker holds (:meth:`hold`). Bumps the epoch.
         With ``roots``, only tasks whose ``root_id`` is one of them (a front
         end serving its own task trees); ``None`` takes any task."""
         ...
 
     async def renew(self, claim: Claim, lease_seconds: float) -> Claim | None:
         """Extend the lease; ``None`` when the claim was lost."""
+        ...
+
+    async def hold(self, root_id: str, worker: str, seconds: float) -> bool:
+        """Keep the task tree of ``root_id`` with ``worker`` for ``seconds``:
+        until then ``claim`` by any other worker skips every task of the
+        tree. Renewing is holding again. ``False`` (nothing changed) while
+        another worker's hold on the tree has not run out."""
+        ...
+
+    async def unhold(self, root_id: str, worker: str) -> None:
+        """Drop ``worker``'s hold on the tree; a no-op without one."""
         ...
 
     async def release(self, claim: Claim) -> None:

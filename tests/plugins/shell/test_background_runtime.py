@@ -1,6 +1,7 @@
 """Background shells under the runner: an end notice wakes an idle task into
 a turn and is recorded; stopping, cancelling and turn ends kill jobs
-silently; a job the process forgot (a restart) is marked lost."""
+silently; a tree with a running job stays with its worker, and a job whose
+worker is gone is marked lost."""
 
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import pytest
 
 from noeta.core.agent import Agent
 from noeta.core.client import Client
-from noeta.core.events import ToolFinished
+from noeta.core.events import ExtensionRecorded, ToolFinished
 from noeta.core.loop.state import fold
 from noeta.core.runner import Runtime
 from noeta.core.store.sqlite import SqliteStore
@@ -140,21 +141,47 @@ async def test_jobs_end_with_the_turn_when_configured(store: SqliteStore,
     assert job.status == "killed" and job.quiet
 
 
-async def test_a_job_the_process_forgot_is_marked_lost(store: SqliteStore,
-                                                       tmp_path: Path) -> None:
+async def test_a_tree_with_a_job_stays_with_its_worker_until_that_worker_is_gone(
+        store: SqliteStore, tmp_path: Path) -> None:
     provider = ScriptedProvider([reply("", _bg("sleep 30")), reply("ok"), reply("again")])
+    rt, ext = _setup(store, provider, tmp_path)
+    rt.lease_seconds = 0.15
+    client = Client(store)
+    tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
+    await rt.run_until_idle()
+    # Another worker process: same agent, empty job table.
+    rt2, ext2 = _setup(store, provider, tmp_path)
+    await client.send(tid, "status?")
+    await asyncio.sleep(0.4)  # longer than a hold: the first worker keeps renewing it
+    assert not await rt2.run_once()
+    # The first worker dies: nothing renews its hold, which runs out.
+    assert rt._renewer is not None
+    rt._renewer.cancel()
+    await asyncio.sleep(rt.hold_seconds + 0.1)
+    await rt2.run_until_idle()
+    [job] = (await _jobs(client, tid, ext2)).values()
+    assert job["status"] == "lost"
+    texts = [r.event.message.text for r in await client.events(tid)
+             if isinstance(r.event, ExtensionRecorded) and r.event.kind == "lost"
+             and r.event.message is not None]
+    assert texts and "was lost" in texts[0]
+    ext.registry.kill_where(tid)
+    await _settle(ext)
+
+
+async def test_the_hold_is_released_when_the_job_ends(store: SqliteStore,
+                                                      tmp_path: Path) -> None:
+    provider = ScriptedProvider([reply("", _bg("true")), reply("ok"), reply("again")])
     rt, ext = _setup(store, provider, tmp_path)
     client = Client(store)
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
     await rt.run_until_idle()
-    # A new worker process: same agent, empty job table.
-    rt2, ext2 = _setup(store, provider, tmp_path)
-    await client.send(tid, "status?")
-    await rt2.run_until_idle()
-    [job] = (await _jobs(client, tid, ext2)).values()
-    assert job["status"] == "lost"
-    ext.registry.kill_where(tid)
     await _settle(ext)
+    await asyncio.sleep(0)
+    assert rt._holds == {}
+    rt2, _ext2 = _setup(store, provider, tmp_path)
+    await client.send(tid, "next")
+    assert await rt2.run_once()
 
 
 async def test_a_killed_job_is_recorded_when_the_task_runs_again(store: SqliteStore,

@@ -132,6 +132,11 @@ CREATE TABLE IF NOT EXISTS {s}.inbox (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS inbox_dedupe ON {s}.inbox (task_id, dedupe_key)
     WHERE dedupe_key IS NOT NULL;
+CREATE TABLE IF NOT EXISTS {s}.holds (
+    root_id TEXT PRIMARY KEY,
+    worker  TEXT NOT NULL,
+    until   DOUBLE PRECISION NOT NULL
+);
 """
 
 _TASK_COLUMNS = (
@@ -602,12 +607,14 @@ class PostgresStore:
 
         async def tx(conn: Conn) -> Claim | None:
             cur = await conn.execute(self._q(
-                "WITH c AS (SELECT task_id FROM {s}.tasks WHERE queue = ANY(%(q)s)"
+                "WITH c AS (SELECT task_id FROM {s}.tasks k WHERE queue = ANY(%(q)s)"
                 + in_roots + " AND ("
                 f" (status = 'ready' AND (ready_at IS NULL OR ready_at <= {_NOW}))"
                 f" OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= {_NOW})"
                 f" OR (status = 'running' AND lease_until < {_NOW}))"
-                " ORDER BY updated_at LIMIT 1 FOR UPDATE SKIP LOCKED)"
+                " AND NOT EXISTS (SELECT 1 FROM {s}.holds h WHERE h.root_id = k.root_id"
+                f" AND h.worker <> %(w)s AND h.until > {_NOW})"
+                " ORDER BY updated_at LIMIT 1 FOR UPDATE OF k SKIP LOCKED)"
                 " UPDATE {s}.tasks t SET status = 'running', owner = %(w)s,"
                 f" owner_epoch = t.owner_epoch + 1, lease_until = {_NOW} + %(ls)s,"
                 f" ready_at = NULL, updated_at = {_NOW}"
@@ -636,6 +643,30 @@ class PostgresStore:
                          lease_until=float(row[0]))
 
         return await self._tx(tx)
+
+    async def hold(self, root_id: str, worker: str, seconds: float) -> bool:
+        async def tx(conn: Conn) -> bool:
+            cur = await conn.execute(self._q(
+                "INSERT INTO {s}.holds (root_id, worker, until)"
+                f" VALUES (%(r)s, %(w)s, {_NOW} + %(ls)s)"
+                " ON CONFLICT (root_id) DO UPDATE SET worker = excluded.worker,"
+                " until = excluded.until WHERE {s}.holds.worker = excluded.worker"
+                f" OR {{s}}.holds.until <= {_NOW}"),
+                {"r": root_id, "w": worker, "ls": seconds})
+            return cur.rowcount > 0
+
+        return await self._tx(tx)
+
+    async def unhold(self, root_id: str, worker: str) -> None:
+        async def tx(conn: Conn) -> bool:
+            cur = await conn.execute(self._q(
+                "DELETE FROM {s}.holds WHERE root_id = %s AND worker = %s"), (root_id, worker))
+            if cur.rowcount:
+                await self._notify(conn, [(root_id, "posted")])
+            return cur.rowcount > 0
+
+        if await self._tx(tx):
+            self._deliver([(root_id, "posted")])
 
     async def release(self, claim: Claim) -> None:
         async def tx(conn: Conn) -> bool:

@@ -68,9 +68,9 @@ ask the person a question or tell them something, and front ends depend on no pl
 
 ## Plan
 
-- [ ] Tree hold: `holds` table, `hold` / `unhold` and the claim filter in SQLite and Postgres
+- [x] Tree hold: `holds` table, `hold` / `unhold` and the claim filter in SQLite and Postgres
       (contract tests, Postgres run locally), `Runtime` renewal, `ToolContext.hold`
-- [ ] Shell jobs hold their root; the lost rule on start; two-runtime tests
+- [x] Shell jobs hold their root; the lost rule on start; two-runtime tests
 - [ ] Plugin files: registry sources, `trusted_projects`, `noeta trust`, `noeta plugins`
 - [ ] `noeta/core/questions.py`, `ask_user` on it, `TaskView.notify`, MCP servers as data,
       the apps ↛ plugins contract
@@ -97,3 +97,7 @@ ask the person a question or tell them something, and front ends depend on no pl
 ## Progress log
 
 - 2026-10-27: spec written.
+- 2026-10-27: steps 1-2 done; `make check` 1353 passed; store contract + Postgres tests pass on a
+  local postgres:16 container (40 + 28). Friction: the renewal loop first used `Runtime.sleep`,
+  which tests replace with a no-op, and spun; it now sleeps in real time. A lost job now tells
+  the model (it was a silent record).

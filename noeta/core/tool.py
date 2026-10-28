@@ -61,6 +61,10 @@ class ToolContext:
     post: Callable[..., Awaitable[None]] | None = None
     #: The root task's id (background jobs notify the spawner, then the root).
     root_id: str = ""
+    #: ``await hold()`` keeps this task tree with this worker until the
+    #: returned release is awaited (``Runtime.hold``): for what lives only in
+    #: this process, e.g. a background job.
+    hold: Callable[[], Awaitable[Callable[[], Awaitable[None]]]] | None = None
     extras: dict[str, Any] = field(default_factory=dict)
     #: ``prompt(name, default)``: the task's text for a named prompt
     #: (``noeta.core.prompts``).

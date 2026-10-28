@@ -69,8 +69,7 @@ DEFAULT_LOG_DIR = ""
 #: Tasks remembered as ended (their notices go to the root) at most.
 ENDED_KEEP = 4096
 
-#: This worker process: recorded with each job so another process that picks
-#: the task up can tell a job running elsewhere from a lost one.
+#: This worker process, recorded with each job (for people reading the log).
 WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
 
 #: Makes (or checks) the log directory: ``$1`` an explicit directory, else
@@ -87,22 +86,10 @@ printf '%s' "$d"
 """
 
 
-def worker_alive(worker: str) -> bool:
-    """Whether the worker process ``host:pid`` may still be running: on
-    this host the pid is checked, another host's is assumed alive."""
-    host, _, pid = worker.rpartition(":")
-    if host != socket.gethostname() or not pid.isdigit():
-        return True
-    try:
-        os.kill(int(pid), 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        return True
-    return True
-
 #: ``(body, task_id)`` posts an inbox message to a task.
 Post = Callable[..., Awaitable[None]]
+#: Gives back the job's hold on its task tree (``ToolContext.hold``).
+Release = Callable[[], Awaitable[None]]
 
 
 @dataclass(eq=False)
@@ -117,6 +104,7 @@ class Job:
     out_path: str
     err_path: str | None
     post: Post
+    release: Release | None = None
     status: str = "running"  # running | exited | killed
     exit_code: int | None = None
     #: Output bytes already handed to ``BashOutput``.
@@ -206,8 +194,22 @@ class Registry:
 
     async def spawn(self, *, env: ExecEnv, command: str, cwd: str, env_vars: Mapping[str, str],
                     root_id: str, spawner_id: str, tool_use_id: str, description: str,
-                    post: Post, monitor_timeout_ms: float | None = None) -> Job | str:
-        """Start a job, or return the refusal text."""
+                    post: Post, monitor_timeout_ms: float | None = None,
+                    release: Release | None = None) -> Job | str:
+        """Start a job, or return the refusal text. ``release`` is awaited
+        once the job has ended (or was refused)."""
+        job = await self._spawn(env=env, command=command, cwd=cwd, env_vars=env_vars,
+                                root_id=root_id, spawner_id=spawner_id,
+                                tool_use_id=tool_use_id, description=description, post=post,
+                                monitor_timeout_ms=monitor_timeout_ms, release=release)
+        if isinstance(job, str) and release is not None:
+            await release()
+        return job
+
+    async def _spawn(self, *, env: ExecEnv, command: str, cwd: str, env_vars: Mapping[str, str],
+                     root_id: str, spawner_id: str, tool_use_id: str, description: str,
+                     post: Post, monitor_timeout_ms: float | None,
+                     release: Release | None) -> Job | str:
         running = len(self.running(root_id))
         if running >= self.max_jobs:
             return (f"too many background jobs ({running}/{self.max_jobs}); kill one with "
@@ -226,7 +228,7 @@ class Registry:
             return "background jobs are unavailable: could not create the job's log file"
         job = Job(job_id=job_id, root_id=root_id, spawner_id=spawner_id, command=command,
                   description=_label(description or command), tool_use_id=tool_use_id,
-                  env=env, out_path=out, err_path=err, post=post)
+                  env=env, out_path=out, err_path=err, post=post, release=release)
         if monitor_timeout_ms is not None:
             job.monitor = MonitorStream(sink=lambda text, _note: self._event(job, text),
                                         stop=lambda: self._stop_quietly(job))
@@ -270,6 +272,9 @@ class Registry:
             finally:
                 job.done.set()
                 job.outbox.put_nowait(None)
+                if job.release is not None:
+                    with contextlib.suppress(Exception):
+                        await job.release()
 
     async def _finish(self, job: Job) -> None:
         if job.monitor is not None:

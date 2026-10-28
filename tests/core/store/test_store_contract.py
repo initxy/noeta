@@ -222,3 +222,35 @@ async def test_append_skips_a_post_to_an_unknown_task(store: Store) -> None:
     row = await store.get("parent")
     assert row is not None and row.status == "ended"
     assert len(await store.inbox("other")) == 1
+
+
+async def test_a_held_tree_is_claimed_only_by_its_worker(store: Store) -> None:
+    await store.create(new("root"))
+    await store.create(NewTask(task_id="root.child",
+                               created=TaskCreated(agent="a", parent_id="root", root_id="root")))
+    await store.create(new("other"))
+    assert await store.hold("root", "w1", 30)
+    assert await store.hold("root", "w1", 30)  # renewing
+    assert not await store.hold("root", "w2", 30)
+    claim = await store.claim("w2", ["default"], 30)
+    assert claim is not None and claim.task_id == "other"
+    assert await store.claim("w2", ["default"], 30) is None
+    got = {c.task_id for c in [await store.claim("w1", ["default"], 30) for _ in range(2)] if c}
+    assert got == {"root", "root.child"}
+
+
+async def test_a_released_or_expired_hold_frees_the_tree(store: Store) -> None:
+    await store.create(new("a"))
+    await store.create(new("b"))
+    assert await store.hold("a", "w1", 30)
+    await store.unhold("a", "w2")  # not w2's hold: no change
+    assert await store.claim("w2", ["default"], 30, roots=["a"]) is None
+    await store.unhold("a", "w1")
+    claim = await store.claim("w2", ["default"], 30, roots=["a"])
+    assert claim is not None and claim.task_id == "a"
+    assert await store.hold("b", "w1", 0.05)
+    await asyncio.sleep(0.15)
+    assert await store.hold("b", "w2", 30)  # w1's hold ran out: w2 may take it over
+    assert await store.claim("w1", ["default"], 30, roots=["b"]) is None
+    claim = await store.claim("w2", ["default"], 30, roots=["b"])
+    assert claim is not None and claim.task_id == "b"
