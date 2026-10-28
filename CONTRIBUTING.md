@@ -1,112 +1,90 @@
 # Contributing
 
-Noeta is a small, AI-native agent runtime — its primary user is "the agent that
-reads and edits the code." The contribution flow is deliberately lightweight.
+noeta is written by people and coding agents together; the working agreement both follow is
+[`AGENTS.md`](AGENTS.md). Read it first — it is short, needs no particular tool, and says how
+work is shaped, specified, verified and reviewed. This page is the part a first-time
+contributor needs on top.
 
-## Read AGENTS.md first
+## Set up and verify
 
-Before changing code, read the root [`AGENTS.md`](AGENTS.md). It holds the
-project's working conventions: how to communicate, the language rules for docs
-and terminology, and the engineering constraints (prefer existing patterns,
-favor deep modules behind small interfaces, don't introduce a seam without a
-real need to substitute the implementation, run verification matched to the risk
-of the change).
-
-`AGENTS.md` is self-contained: you (or your agent) need no particular tool
-or skill set to follow it.
-
-## Hard rules
-
-Three rules are load-bearing. A change that pushes against one should stop and
-read the matching decision file first:
-
-- **Provider-neutral** — every external provider (LLM / storage / observability)
-  enters through an adapter implementing a Noeta-shape Protocol. No vendor's
-  wire vocabulary becomes the internal contract
-  ([`docs/adr/016-provider-neutral.md`](docs/adr/016-provider-neutral.md)).
-- **Runtime / SDK boundary** — `noeta-runtime` is the pure engine; `noeta.sdk`
-  is the only public surface, and it forwards in-process without exposing engine
-  internals
-  ([`docs/adr/011-library-sdk-architecture.md`](docs/adr/011-library-sdk-architecture.md)).
-- **Nothing statically imports `noeta.builtins`** — every official capability is
-  a built-in plugin, reachable only through the plugin loader's dynamic `ref`
-  resolution. `lint-imports` fails on a static import
-  ([`docs/adr/014-package-layout.md`](docs/adr/014-package-layout.md)).
-
-## Architecture decisions
-
-Cross-module architectural trade-offs live as decision files under
-[`docs/adr/`](docs/adr/). Each one describes the live design: what the system
-does, the invariant that shape protects, and which alternatives were weighed and
-rejected. Read the relevant file before changing a subsystem — the rationale is
-the part the code cannot tell you. When a change moves a decision, write a new
-ADR that refines or supersedes the old one, and update the glossary
-[`CONTEXT.md`](CONTEXT.md) in lockstep. Term definitions belong in [`CONTEXT.md`](CONTEXT.md); the file format and the index
-of decisions are in [`docs/adr/index.md`](docs/adr/index.md).
-
-## Verify with `make check`
-
-`make check` is the local gate. It mirrors
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml), minus what needs CI
-infrastructure:
+You need Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-make install   # uv sync: workspace toolchain, kernel + dev group
-make check     # the gate
+make install   # uv sync --all-extras: the package, every extra, the dev tools
+make check     # the gate; CI's test job runs this same target
 ```
 
-`make check` is six steps, and any one of them failing fails the gate:
+`make check` runs, and fails on any of:
 
-1. `ruff check packages tests scripts`.
+1. `make lint`: `ruff`, `mypy --strict` (settings in `pyproject.toml`), `scripts/lint-naming.py`
+   (banned names, see `CONTEXT.md`), `scripts/lint-layout.py` (where code goes) and
+   `lint-imports` (the layer contracts in `pyproject.toml` `[tool.importlinter]`).
 2. `pytest -n auto` with coverage over `noeta`, failing under 85%.
-3. `mypy --strict` on both packages (`uv run mypy`; settings in `[tool.mypy]` of the root `pyproject.toml`).
-4. `scripts/lint-naming.py` — the banned class names.
-5. `lint-imports --config .importlinter` — the import topology contracts.
-6. `scripts/check-docs.sh` — doc hygiene: spec statuses, ADR status lines,
-   the `AGENTS.md` / `CONTEXT.md` size budgets, and repo paths that no longer
-   resolve.
+3. `make example`: `examples/hello-plugin` installed as its own package, and the single-file
+   example plugins, each with its tests.
+4. `scripts/check-docs.sh`: doc hygiene — spec statuses, ADR status lines, the `AGENTS.md` /
+   `CONTEXT.md` budgets, code paths and `docs/` links that no longer resolve.
 
-Two other targets exist for tighter loops: `make test` runs the suite with
-coverage but no threshold, and `make lint` runs the static checks only — `ruff`
-plus the naming and import-topology lints, no tests.
+Run `make check` unpiped (or redirected to a file): a pipe can hide the coverage gate's output.
 
-Three CI steps have no local equivalent — don't chase them:
+Other targets, never part of `check`:
 
-- **Postgres storage contract tests.** CI runs `make check` with
-  `NOETA_TEST_POSTGRES_DSN` pointing at a Postgres service, which enables the
-  `postgres` parameter of the storage contract suites. Without that variable
-  those parameters skip.
-- **Python version matrix.** CI runs the suite on Python 3.11, 3.12 and 3.13;
-  locally you run whichever interpreter `uv sync` picked.
-- **Fresh-venv install smoke.** A separate CI job builds both wheels into a
-  clean virtualenv on Linux and macOS, checks that each carries `LICENSE` and
-  its `py.typed` markers, and imports them
-  (`pytest -m install_smoke tests/test_install_smoke.py`).
+| Target | What it does | Needs |
+|---|---|---|
+| `make test` / `make lint` | the suite with coverage but no threshold / the static checks only | — |
+| `make e2e` | `-m live` tests against a real model (providers, ACP) | `NOETA_LIVE_*` in `.env` (see `.env.example`) |
+| `make eval` | prompt-regression scenarios against a real model, compared to `evals/baseline.json` (`make eval-baseline` re-records it) | same |
+| `make parity` | noeta replayed through Claude Code's recorded scenarios; every request difference in `parity/report.md` (`scripts/parity/README.md`) | the recordings |
+| `make cluster` | worker processes on one Postgres under random SIGKILL / SIGSTOP (`tests/cluster`) | docker, or `NOETA_TEST_POSTGRES_DSN` |
+| `make build` | wheel and sdist into `dist/` | — |
 
-The SDK examples under [`examples/`](examples/) are covered by
-`tests/test_examples_smoke.py`: each one must import cleanly, expose a `run()`
-entrypoint, and name what it demonstrates in its module docstring (the literal
-phrase `Demonstrated SDK capability`). Keep them working when you change the
-SDK's public surface.
+CI adds what needs infrastructure: the Postgres parameters of the store contract tests
+(`NOETA_TEST_POSTGRES_DSN`), Python 3.11 / 3.12 / 3.13, and a `cluster` job.
 
-## Large changes
+A change to model-facing text (prompts, tool descriptions, reminders) or provider wire behavior
+also runs `make eval` and `make parity`, and the relevant `make e2e` tests: `make check` cannot
+judge those.
 
-Open an issue first for anything large or decision-changing. Once the
-approach is agreed, it becomes a spec in [`docs/specs/`](docs/specs/) (format in
-[`docs/specs/TEMPLATE.md`](docs/specs/TEMPLATE.md)) and implementation proceeds
-against it.
+## Where code goes
+
+The package is layered and imports only downward: `noeta/cli` > `noeta/agents` >
+`noeta/plugins/<name>` | `noeta/backends` | `noeta/host` > `noeta/toolkit` > `noeta/core`.
+The kernel (`core`) carries no capability; a plugin imports only `core` and `toolkit`; two
+plugins never import each other; front ends import no plugin. `CONTEXT.md` ("Layers", "Where
+code goes") is the rule, and the lints enforce it. [docs/architecture.md](docs/architecture.md)
+explains the design.
+
+## How a change flows
+
+- **Small, clear changes** (a bug fix with obvious expected behavior, a change inside one
+  module): implement directly, with a test that fails before; the why goes in the commit
+  message.
+- **Anything with an open decision**: open an issue first. Once the approach is agreed it
+  becomes a spec in `docs/specs/<YYYY-MM-DD>-<slug>.md` (format in
+  [`docs/specs/TEMPLATE.md`](docs/specs/TEMPLATE.md)), implemented against its Plan, with
+  progress and decision changes logged in it. `AGENTS.md` ("Task flow") has the details.
+- **Decisions that are costly to reverse** are distilled into [`docs/adr/`](docs/adr/index.md)
+  when the work merges; changing one is a new ADR that refines or supersedes it.
+- **Structure and behavior never share a commit.** A refactor (moving, splitting, renaming)
+  changes no behavior and says so; a behavior change comes with its test. Mixing them makes
+  both unreviewable.
+- **One fact, one home.** Docs link instead of repeating each other; when code and docs
+  disagree, the code is right and the doc is fixed in the same change.
+
+Everything committed is English. Reviews follow [`docs/reviewing.md`](docs/reviewing.md).
 
 ## AI-assisted contributions
 
-Noeta is an AI-native project; contributions written with or by agents are
-first-class and welcome. Two requirements keep that workable:
+Contributions written with or by agents are welcome. Two requirements keep that workable:
 
-- **A human owner.** Every PR has a person who has read the change, understands
-  it, and can answer review questions about it. "The agent wrote it" is not an
-  answer.
-- **Verification evidence.** The PR shows its `make check` result and notes
-  anything that couldn't be verified and why (see the PR template).
+- **A human owner.** Every pull request has a person who has read the change, understands it
+  and can answer review questions about it.
+- **Verification evidence.** The pull request shows its `make check` result and says what could
+  not be verified and why.
 
-There is no disclosure requirement — how a change was produced matters less
-than whether someone can stand behind it. Submissions showing no understanding
-of the change are closed without detailed review.
+Submissions that show no understanding of the change are closed without detailed review.
+
+## Conduct and security
+
+Participation follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities
+privately as [SECURITY.md](SECURITY.md) describes, never in a public issue.
