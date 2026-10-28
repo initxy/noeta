@@ -25,7 +25,7 @@ import logging
 import re
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -34,7 +34,7 @@ import msgspec
 from noeta.core.errors import ContextOverflow, ModelError, RequestStale, TurnDone, TurnFailed
 from noeta.core.events import Compacted
 from noeta.core.execenv import is_local
-from noeta.core.extension import Command, CommandContext, Deny, Extension, TaskView
+from noeta.core.extension import Command, CommandContext, Deny, Extension, Reminder, TaskView
 from noeta.core.loop.state import TaskState
 from noeta.core.models import model_limits
 from noeta.core.tool import Tool, ToolContext
@@ -53,6 +53,10 @@ from noeta.plugins.compaction.window import (
 from noeta.toolkit.context import noeta_home, project_dir, simulated_state
 
 log = logging.getLogger("noeta.compaction")
+
+#: The restored files' place in the next request's system turn
+#: (``Reminder.order``): first, ahead of the invoked skills and the lists.
+RESTORED_ORDER = 10
 
 #: The ``/compact`` command and the text it puts in the conversation.
 COMMAND = "compact"
@@ -82,6 +86,8 @@ class CompactionState:
     compactions: int = 0
     #: Replies the last compaction kept after its summary.
     kept_replies: int = 0
+    #: Files read again after the last compaction, owed to the next request.
+    restored: tuple[str, ...] = ()
 
 
 def _user_turns(state: TaskState) -> int:
@@ -152,10 +158,22 @@ class Compaction(Extension):
 
     def reduce(self, state: Any, kind: str, data: Any) -> CompactionState:
         st = state if isinstance(state, CompactionState) else CompactionState()
-        if kind != "compacted" or not isinstance(data, Mapping):
+        if not isinstance(data, Mapping):
             return st
-        return CompactionState(compactions=st.compactions + 1,
-                               kept_replies=int(data.get("kept_replies") or 0))
+        if kind == "restored":
+            return replace(st, restored=tuple(data.get("texts") or ()))
+        if kind == "restored_sent":
+            return replace(st, restored=())
+        if kind != "compacted":
+            return st
+        return replace(st, compactions=st.compactions + 1,
+                       kept_replies=int(data.get("kept_replies") or 0))
+
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        """The files read again after a compaction, first in the next
+        request's system turn (Claude Code's place for them)."""
+        return [Reminder(text=text, kind="restored_sent", data={}, role="system",
+                         order=RESTORED_ORDER) for text in self._ext(view.state).restored]
 
     def _ext(self, state: TaskState) -> CompactionState:
         ext = state.ext.get(self.name)
@@ -340,9 +358,10 @@ class Compaction(Extension):
             restored, records = await restore_files(
                 recent_files(state.history, raw_cut), read_tool,
                 self._restore_context(view, state))
-            after.extend(restored)
             for ext_name, kind, data in records:
                 view.record(ext_name, kind, data)
+            if restored:
+                view.record(self.name, "restored", {"texts": [m.text for m in restored]})
         after.extend(await view.residents(keeps_tail=tail))
         if manual:
             # Claude Code gives it all again with the next prompt, after the

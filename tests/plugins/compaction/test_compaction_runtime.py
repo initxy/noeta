@@ -226,10 +226,9 @@ async def test_layout_after_a_compaction(store: SqliteStore, tmp_path: Path) -> 
     [lead] = [m.text for m in compacted.lead]
     assert lead.startswith("Below are instructions from the codebase") and \
         lead.endswith("(project instructions, part of the repository):\n\nRULE: say hi")
-    # After the kept messages: the files read before, as a Read call.
-    assert compacted.after[0].text.startswith(
-        f'The Read tool was called with this input: {{"file_path":"{target}"}}\nIt returned:')
-    assert "alpha" in compacted.after[0].text and compacted.after[0].origin == "system"
+    # The files read before, as a Read call, first in the next request's
+    # system turn.
+    restored = f'The Read tool was called with this input: {{"file_path":"{target}"}}\nIt returned:'
     # The full transcript, as JSON lines, named in the summary.
     transcript = next(home.glob("projects/*/*.jsonl"))
     assert str(transcript) in compacted.summary
@@ -240,9 +239,9 @@ async def test_layout_after_a_compaction(store: SqliteStore, tmp_path: Path) -> 
     texts = [m.text for m in after.messages]
     assert texts[0].startswith("Below are instructions from the codebase") and \
         texts[1].startswith(SUMMARY_PREAMBLE)
-    # After the summary and whatever it kept (whether the last call is kept
-    # depends on the token estimate, which the temp path's length moves).
-    assert texts.index(compacted.after[0].text) > 1
+    [file] = [m for m in after.messages if m.text.startswith(restored)]
+    assert file.role == "system" and "alpha" in file.text
+    assert after.messages.index(file) > 1
     await assert_rebuilds(store, a, tid)
 
 

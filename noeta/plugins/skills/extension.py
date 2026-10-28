@@ -73,6 +73,8 @@ _SKILL_NAME_MAX_LEN = 200
 #: The listing's place in the joined system turn (``Reminder.order``): after
 #: the environment, deferred tools and agents, before the budget and date.
 LISTING_ORDER = 50
+#: The skills invoked before a compaction, after it: ahead of the lists.
+INVOKED_ORDER = 20
 
 #: The directories a workspace contributes, relative to its root.
 WORKSPACE_SKILLS_DIR = ".noeta/skills"
@@ -266,6 +268,10 @@ class Skills(Extension):
         state = state or self.initial_state()
         if kind == "listing":
             return {**state, "listings": [*state["listings"], data]}
+        if kind == "invoked_rehold":
+            return {**state, "invoked": data.get("text")}
+        if kind == "invoked_sent":
+            return {**state, "invoked": None}
         if kind == "listing_rehold":
             return {**state, "listings": [{**listing, "held": True}
                                           for listing in state["listings"]]}
@@ -337,12 +343,16 @@ class Skills(Extension):
         """The listing taken at start, in the environment's system turn
         (Claude Code's place for it)."""
         state = view.ext_state(self.name) or {}
+        out: list[Reminder] = []
+        if state.get("invoked"):
+            out.append(Reminder(text=state["invoked"], kind="invoked_sent", data={},
+                                role="system", order=INVOKED_ORDER))
         held = [line for listing in state.get("listings", []) if listing.get("held")
                 for line in listing["lines"]]
-        if not held:
-            return ()
-        return (Reminder(text=render_listing(True, held), kind="listing_sent", data={},
-                         role="system", order=LISTING_ORDER),)
+        if held:
+            out.append(Reminder(text=render_listing(True, held), kind="listing_sent", data={},
+                                role="system", order=LISTING_ORDER))
+        return out
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         messages = new_user_messages(view.state, recorded.seq)
@@ -442,9 +452,9 @@ class Skills(Extension):
                     message=user(data["text"], origin=self.origin))
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
-        """After a compaction: the skills invoked before it, in one message
-        that says not to run them again; the whole listing so far goes out
-        again with the next request, in the environment's system turn."""
+        """After a compaction, given again with the next request in its
+        system turn: the skills invoked before it, in one note that says not
+        to run them again, and the whole listing so far."""
         if not self.rehang:
             return ()
         state = view.ext_state(self.name) or {}
@@ -458,8 +468,8 @@ class Skills(Extension):
                 if desc is not None:
                     parts.append(f"### Skill: {desc.name}\nPath: {desc.base_dir or desc.name}"
                                  f"\n\n{render_activation(desc, entry.get('args'))}")
-            if len(parts) > 1:
-                out.append(user("\n\n".join(parts), origin=self.origin))
+            if len(parts) > 1 and view.keeps_tail is not None:
+                view.record(self.name, "invoked_rehold", {"text": "\n\n".join(parts)})
         if view.keeps_tail is not None and state.get("listings"):
             view.record(self.name, "listing_rehold", {})
         return out
