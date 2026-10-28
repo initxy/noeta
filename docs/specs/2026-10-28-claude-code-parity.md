@@ -266,8 +266,10 @@ Phase 5 — front ends
   list from `.claude/skills` (Phase 3), background-event wording, side requests (session title,
   plan name, count_tokens), m3 no longer compacts under replay (noeta's token estimate below
   Claude Code's count), ReportFindings/ScheduleWakeup/Workflow/ExitPlanMode, auto mode.
-  Background sub-agents' approvals wait at the root (Claude Code denies the one call) — owner to
-  decide.
+  Background sub-agents' approvals wait at the root — and that matches Claude Code: the
+  re-recording (r2, m2 card 004) shows the card raised to the user, titled with the agent
+  ("· from the general-purpose agent"); the earlier "Claude Code denies the call" was an
+  unverified guess. To match: say which agent asks on the card.
 - 2026-10-28: re-recorded 2.1.312 as `~/cc-recordings/2.1.312-r2/` (the first recording kept)
   and re-distilled `parity/2.1.312` from it. `drive.py session` now gives each session a fresh
   project and config, types only when Claude Code is idle (no request in flight per the
