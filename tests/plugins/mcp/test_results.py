@@ -52,21 +52,36 @@ async def test_a_structured_only_result_is_its_json(tmp_path: Path) -> None:
     assert texts(out) == ['{"a": 2, "b": 1}']
 
 
-async def test_a_text_over_25000_tokens_is_cut_to_a_marked_head_and_saved(
+async def test_a_text_over_25000_tokens_is_saved_and_only_pointed_to(
         tmp_path: Path) -> None:
-    text = "x" * 100_005  # 25,000 tokens are 100,000 characters
+    text = "x" * 100_004 + "\ny"  # 25,000 tokens are 100,000 characters
     out = await render_result({"content": [{"type": "text", "text": text}], "isError": True},
                               ctx(tmp_path))
-    note, cut = texts(out)
-    assert note.startswith("[output truncated: over the 25000 token limit for an MCP result "
-                           "(NOETA_MAX_MCP_OUTPUT_TOKENS); the server returned 100005 characters, "
-                           "what follows is the first 100000.")
-    saved = note.rsplit("the full text is in ", 1)[1].rstrip("]")
-    assert cut == "x" * 100_000 and Path(saved).read_text() == text
+    [note] = texts(out)
+    assert note.startswith("The result (100,006 characters in 2 lines) is over the 25000-token "
+                           "limit for an MCP result (NOETA_MAX_MCP_OUTPUT_TOKENS), so it was "
+                           "saved to ")
+    saved = note.split("saved to ", 1)[1].split(" instead of shown", 1)[0]
+    assert Path(saved).read_text() == text
+    assert "Format: plain text." in note and "x" * 100 not in note
     assert out.is_error
     fits = await render_result({"content": [{"type": "text", "text": "x" * 100_000}]},
                                ctx(tmp_path))
     assert texts(fits) == ["x" * 100_000]
+    structured = await render_result({"content": [], "structuredContent": {"k": "v" * 100_000}},
+                                     ctx(tmp_path))
+    assert "Format: JSON." in texts(structured)[0]
+
+
+async def test_without_a_spill_directory_the_head_is_kept_and_marked_at_the_end(
+        tmp_path: Path) -> None:
+    out = await render_result({"content": [{"type": "text", "text": "x" * 100_005}]},
+                              ctx(tmp_path, spill=False))
+    cut, note = texts(out)
+    assert cut == "x" * 100_000
+    assert note.startswith("[output truncated: over the 25000 token limit for an MCP result "
+                           "(NOETA_MAX_MCP_OUTPUT_TOKENS); the server returned 100005 characters "
+                           "and only the first 100000 are shown above.")
 
 
 async def test_the_budget_follows_max_mcp_output_tokens(tmp_path: Path,
@@ -80,9 +95,11 @@ async def test_the_budget_follows_max_mcp_output_tokens(tmp_path: Path,
     ]}, ctx(tmp_path))
     # One image (1,600 tokens) fits in 2,000; the text gets the 400 tokens left.
     assert sum(isinstance(b, Image) for b in out.content) == 1
-    note, left_out, ys = texts(out)
+    # A result with images is cut, not saved.
+    left_out, ys, note = texts(out)
     assert note.startswith("[output truncated: over the 2000 token limit")
     assert left_out == "[1 image(s) left out: over the tool output limit]"
     assert ys.startswith("yyy")
+    assert not (tmp_path / "spill").exists()
     monkeypatch.setenv("NOETA_MAX_MCP_OUTPUT_TOKENS", "nonsense")
     assert max_output_tokens() == 25_000
