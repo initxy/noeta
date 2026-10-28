@@ -62,12 +62,12 @@ def estimate_tokens(text: str, suffix: str) -> int:
     return round(len(text) / per_token)
 
 
-def too_many_tokens(tokens: int) -> str:
+def too_many_tokens(tokens: int, limit: int = MAX_READ_TOKENS) -> str:
     return (
         f"File content ({tokens} tokens) exceeds maximum allowed tokens "
-        f"({MAX_READ_TOKENS}). Use offset and limit parameters to read "
-        "specific portions of the file, or search for specific content "
-        "instead of reading the whole file."
+        f"({limit}). Use offset and limit parameters to read "
+        "specific portions of the file, search for specific content "
+        "instead of reading the whole file, or set allow_large when you need all of it."
     )
 
 

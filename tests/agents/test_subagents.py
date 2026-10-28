@@ -30,11 +30,11 @@ def test_built_in_agent_files() -> None:
 
 def test_tool_sets_and_no_delegation() -> None:
     agents = _agents()
-    assert {"Edit", "Glob", "Grep", "Read", "Write", "Bash"} <= _tools(
+    assert {"Edit", "Read", "Write", "Bash"} <= _tools(
         agents["general-purpose"], agents)
     for name in ("explore", "plan"):
         tools = _tools(agents[name], agents)
-        assert {"Bash", "Glob", "Grep", "Read"} <= tools
+        assert {"Bash", "Read"} <= tools
         assert not {"Edit", "Write", "Task"} & tools
     for name in ("general-purpose", "explore", "plan"):
         a = agents[name]

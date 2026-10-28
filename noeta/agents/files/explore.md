@@ -9,7 +9,7 @@ plugins:
   - hooks
   - shell
   - web
-  - fs: {tools: [Read, Grep, Glob]}
+  - fs: {tools: [Read]}
   - skills
   - instructions
   - environment

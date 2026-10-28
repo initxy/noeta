@@ -13,17 +13,19 @@ from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import Text
+from noeta.plugins.fs._globs import compile_glob, glob_matches
 from noeta.plugins.fs._mutate import (
     WriteRoots,
     authorized_roots,
     compute_diff,
     diff_display,
     diff_stat_counts,
+    mutation_result,
     read_precondition_error,
     record_written,
 )
-from noeta.plugins.fs._rg import compile_glob, glob_matches
 from noeta.toolkit.tools import (
+    SCHEMA_DIALECT,
     PathError,
     Workspace,
     load_description,
@@ -40,10 +42,13 @@ WRITE_FILE_MAX_BYTES = 8 * 1024 * 1024
 
 def _input_schema() -> dict[str, Any]:
     return {
+        "$schema": SCHEMA_DIALECT,
         "type": "object",
         "properties": {
-            "file_path": {"type": "string"},
-            "content": {"type": "string"},
+            "file_path": {"type": "string",
+                          "description": ("Absolute path of the file to write (an absolute "
+                                          "path, not a relative one).")},
+            "content": {"type": "string", "description": "The whole content of the file."},
         },
         "required": ["file_path", "content"],
         "additionalProperties": False,
@@ -143,11 +148,7 @@ class WriteTool:
         except OSError as exc:
             return tool_error(self.name, f"write failed: {exc}")
         await record_written(ctx, resolved, body)
-        output = (
-            f"The file {rel} has been updated."
-            if overwrite
-            else f"File created successfully at: {rel}"
-        )
+        output = mutation_result(resolved, created=not overwrite)
         return ToolOutput(
             content=[Text(text=output)],
             meta={

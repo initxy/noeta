@@ -8,9 +8,9 @@ and whose body is its system prompt — Claude Code's agent file format, plus
     model: inherit                # or a model id (Claude Code's sonnet/opus/haiku inherit)
     plugins:                      # the extensions, in order: a name, or name: {arguments}
       - compaction
-      - fs: {tools: [Read, Grep, Glob]}
+      - fs: {tools: [Read]}
       - instructions
-    tools: Read, Grep, Glob       # optional: offer only these tools
+    tools: Read, Bash             # optional: offer only these tools
     one_shot: true                # optional: end with the first turn's answer
     effort: high                  # optional
     ---

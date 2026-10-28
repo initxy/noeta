@@ -10,7 +10,7 @@ plugins:
   - shell
   - ask_user
   - web
-  - fs: {tools: [Read, Grep, Glob]}
+  - fs: {tools: [Read]}
   - instructions
   - environment
   - subtasks

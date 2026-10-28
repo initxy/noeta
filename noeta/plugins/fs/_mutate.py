@@ -19,6 +19,7 @@ __all__ = [
     "compute_diff",
     "diff_display",
     "diff_stat_counts",
+    "mutation_result",
     "read_precondition_error",
     "record_written",
 ]
@@ -84,6 +85,21 @@ async def record_written(ctx: ToolContext, resolved: str, body: bytes) -> None:
             "mtime": st.mtime if st is not None else 0.0,
         },
     )
+
+
+#: Follows a successful write: the model already holds the file as written.
+FILE_STATE_NOTE = "(what you wrote is the file's current state; no need to Read it back)"
+
+
+def mutation_result(path: str, *, created: bool) -> str:
+    """The one-line result of a successful ``Edit`` or ``Write`` (absolute
+    path). A ``CLAUDE.md`` gets no note: its text reaches the model as
+    project instructions, not as the file it wrote."""
+    head = (f"File created successfully at: {path}" if created
+            else f"The file {path} has been updated successfully.")
+    if posixpath.basename(path) == "CLAUDE.md":
+        return head
+    return f"{head} {FILE_STATE_NOTE}"
 
 
 def compute_diff(before: str, after: str, rel_path: str) -> str:

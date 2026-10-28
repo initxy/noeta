@@ -44,7 +44,7 @@ log = logging.getLogger("noeta.host.acp")
 TOOL_KINDS: dict[str, str] = {
     "Read": "read", "Edit": "edit", "Write": "edit", "Bash": "execute",
     "TaskStop": "execute", "Monitor": "execute",
-    "Grep": "search", "Glob": "search", "ToolSearch": "search",
+    "ToolSearch": "search",
     "WebFetch": "fetch", "WebSearch": "fetch", "Task": "think",
 }
 #: Characters of a tool result shown in the editor.

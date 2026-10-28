@@ -66,6 +66,10 @@ class ToolContext:
     #: this process, e.g. a background job.
     hold: Callable[[], Awaitable[Callable[[], Awaitable[None]]]] | None = None
     extras: dict[str, Any] = field(default_factory=dict)
+    #: The model made this call (the runner's calls), so what earlier calls
+    #: returned is in its conversation; ``False`` when an extension runs a
+    #: tool itself.
+    by_model: bool = False
     #: ``prompt(name, default)``: the task's text for a named prompt
     #: (``noeta.core.prompts``).
     prompt: Callable[[str, str], str] = field(default=lambda _name, default: default)

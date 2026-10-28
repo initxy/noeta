@@ -9,8 +9,7 @@ never reaches a command (``docker exec`` starts from the container's own).
 What the container needs: ``sh``, GNU coreutils (``cat``, ``head``,
 ``tail``, ``stat``, ``realpath``, ``mktemp``) and util-linux ``setsid`` —
 every Debian/Ubuntu-based image has them, busybox/alpine does not — plus
-``bash`` for the ``Bash`` tool and **ripgrep (``rg``) for ``Grep`` and
-``Glob``**, which report it missing otherwise. Add ``rg`` to the image.
+``bash`` for the ``Bash`` tool.
 
 Mechanics, and the pitfalls they avoid:
 

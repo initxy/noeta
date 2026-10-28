@@ -25,21 +25,17 @@ def test_write_metadata() -> None:
     assert tool.read_only is False
     assert tool.clearable is True
     assert tool.allowed_path_globs == ()
-    assert tool.input_schema == {
-        "type": "object",
-        "properties": {
-            "file_path": {"type": "string"},
-            "content": {"type": "string"},
-        },
-        "required": ["file_path", "content"],
-        "additionalProperties": False,
-    }
+    schema = tool.input_schema
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert schema["required"] == ["file_path", "content"]
+    assert schema["additionalProperties"] is False
+    assert all(p["description"] for p in schema["properties"].values())
 
 
 async def test_write_creates_new_file(h: Harness, ws: Path) -> None:
     out = await h.call(WriteTool(), file_path="new.txt", content="hello\n")
     assert not out.is_error
-    assert text_of(out) == "File created successfully at: new.txt"
+    assert text_of(out) == f"File created successfully at: {ws / 'new.txt'} (what you wrote is the file's current state; no need to Read it back)"
     assert (ws / "new.txt").read_text() == "hello\n"
     diff = out.meta["diff"]
     assert "+hello" in diff
@@ -63,7 +59,8 @@ async def test_write_existing_path_after_read_overwrites(h: Harness, ws: Path) -
     await _read(h, "exists.txt")
     out = await h.call(WriteTool(), file_path="exists.txt", content="new\n")
     assert not out.is_error
-    assert text_of(out) == "The file exists.txt has been updated."
+    assert text_of(out) == (f"The file {ws / 'exists.txt'} has been updated successfully."
+                            " (what you wrote is the file's current state; no need to Read it back)")
     assert (ws / "exists.txt").read_text() == "new\n"
     assert out.meta["created"] is False
     assert "-old" in out.meta["diff"] and "+new" in out.meta["diff"]
@@ -161,7 +158,7 @@ async def test_write_inside_sub_dir(h: Harness, ws: Path) -> None:
     (ws / "sub").mkdir()
     out = await h.call(WriteTool(), file_path="sub/x.txt", content="x")
     assert not out.is_error
-    assert text_of(out) == "File created successfully at: sub/x.txt"
+    assert text_of(out) == f"File created successfully at: {ws / 'sub' / 'x.txt'} (what you wrote is the file's current state; no need to Read it back)"
 
 
 async def test_write_onto_a_directory_rejected(h: Harness, ws: Path) -> None:
@@ -288,7 +285,7 @@ async def test_write_outside_lands_once_authorized(h: Harness, ws: Path) -> None
     out = await h.call(tool, file_path=str(other / "a.txt"), content="x")
     assert not out.is_error, text_of(out)
     assert (other / "a.txt").read_text() == "x"
-    assert text_of(out) == f"File created successfully at: {other / 'a.txt'}"
+    assert text_of(out) == f"File created successfully at: {other / 'a.txt'} (what you wrote is the file's current state; no need to Read it back)"
 
 
 async def test_authorization_covers_subdirectories(h: Harness, ws: Path) -> None:

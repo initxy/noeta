@@ -3,7 +3,7 @@
 The match must be exactly once — zero or several matches fail and write
 nothing (unless ``replace_all``). There is deliberately no unified-diff
 applier: an invalid patch lands too easily on a file that shifted underneath.
-The result shows a ``cat -n`` snippet of the edited region; the diff rides in
+The result is one line naming the file (Claude Code's); the diff rides in
 ``meta`` and ``display``.
 """
 
@@ -19,10 +19,12 @@ from noeta.plugins.fs._mutate import (
     compute_diff,
     diff_display,
     diff_stat_counts,
+    mutation_result,
     read_precondition_error,
     record_written,
 )
 from noeta.toolkit.tools import (
+    SCHEMA_DIALECT,
     PathError,
     Workspace,
     load_description,
@@ -31,21 +33,6 @@ from noeta.toolkit.tools import (
 )
 
 __all__ = ["EditTool"]
-
-#: Lines of surrounding context in the post-edit ``cat -n`` snippet.
-_SNIPPET_CONTEXT_LINES = 4
-
-
-def _lines(text: str) -> list[str]:
-    """``text`` split the way ``Read`` numbers it: on ``\\n`` only, each
-    line's trailing ``\\r`` dropped, no phantom line after a final newline."""
-    if not text:
-        return []
-    parts = text.split("\n")
-    if parts[-1] == "":
-        parts.pop()
-    return [p.removesuffix("\r") for p in parts]
-
 
 def _to_eol(text: str, eol: str) -> str:
     lf = text.replace("\r\n", "\n")
@@ -58,32 +45,20 @@ def _dominant_eol(text: str) -> str:
     return "\r\n" if crlf and crlf >= text.count("\n") - crlf else "\n"
 
 
-def _first_changed_line(before: str, after: str) -> int:
-    b_lines, a_lines = _lines(before), _lines(after)
-    for i, (b, a) in enumerate(zip(b_lines, a_lines, strict=False)):
-        if b != a:
-            return i
-    return min(len(b_lines), len(a_lines))
-
-
-def _cat_n_snippet(after_lines: list[str], center: int, span: int) -> str:
-    """``cat -n`` rendering of the edited region plus context. ``center`` is
-    the 0-based first changed line of the AFTER text; ``span`` the lines the
-    replacement occupies (0 for a deletion: the snippet shows the seam)."""
-    lo = max(0, center - _SNIPPET_CONTEXT_LINES)
-    hi = min(len(after_lines), center + max(span, 1) + _SNIPPET_CONTEXT_LINES)
-    return "\n".join(f"{i + 1:>6}\t{after_lines[i]}" for i in range(lo, hi))
-
-
-
 def _input_schema() -> dict[str, Any]:
     return {
+        "$schema": SCHEMA_DIALECT,
         "type": "object",
         "properties": {
-            "file_path": {"type": "string"},
-            "old_string": {"type": "string"},
-            "new_string": {"type": "string"},
-            "replace_all": {"type": "boolean"},
+            "file_path": {"type": "string",
+                          "description": "Absolute path of the file to change."},
+            "old_string": {"type": "string", "description": "The text to replace."},
+            "new_string": {"type": "string",
+                           "description": "The text to put in its place (it must differ "
+                                          "from old_string)."},
+            "replace_all": {"type": "boolean", "default": False,
+                            "description": "Replace every occurrence of old_string "
+                                           "(default false)."},
         },
         "required": ["file_path", "old_string", "new_string"],
         "additionalProperties": False,
@@ -172,15 +147,8 @@ class EditTool:
             return tool_error(self.name, f"write failed: {exc}")
         await record_written(ctx, resolved, after_bytes)
 
-        snippet = _cat_n_snippet(
-            _lines(after), _first_changed_line(before, after), len(_lines(new))
-        )
-        head = (
-            f"The file {rel} has been updated. Here's the result of "
-            "running `cat -n` on a snippet of the edited file:"
-        )
         return ToolOutput(
-            content=[Text(text=f"{head}\n{snippet}")],
+            content=[Text(text=mutation_result(resolved, created=False))],
             meta={
                 "path": rel,
                 "diff": diff,

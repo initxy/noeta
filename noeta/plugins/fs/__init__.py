@@ -1,4 +1,4 @@
-"""The file tools as one extension: Read, Write, Edit, Grep and Glob, the
+"""The file tools as one extension: Read, Write and Edit, the
 fold of what they record (the files the model has read), and Claude Code's
 reminder when one of those files changed on disk since.
 
@@ -14,16 +14,15 @@ import hashlib
 from collections.abc import Sequence
 from typing import Any
 
+from noeta.core.events import Compacted, Recorded
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.tool import Tool
 from noeta.plugins.fs.edit import EditTool
-from noeta.plugins.fs.glob import GlobTool
-from noeta.plugins.fs.grep import GrepTool
 from noeta.plugins.fs.read import ReadTool
-from noeta.plugins.fs.state import FS, KIND_CHANGED, FsState, reduce_fs
+from noeta.plugins.fs.state import FS, KIND_CHANGED, KIND_FORGET_RANGES, FsState, reduce_fs
 from noeta.plugins.fs.write import WriteTool
 
-__all__ = ["EditTool", "FileTools", "GlobTool", "GrepTool", "ReadTool", "WriteTool"]
+__all__ = ["EditTool", "FileTools", "ReadTool", "WriteTool"]
 
 
 #: How many of the most recently read files the turn-start check looks at.
@@ -38,13 +37,13 @@ FILE_CHANGED_REMINDER = (
 )
 
 _BY_NAME: dict[str, type[Tool]] = {
-    "Read": ReadTool, "Write": WriteTool, "Edit": EditTool, "Grep": GrepTool, "Glob": GlobTool,
+    "Read": ReadTool, "Write": WriteTool, "Edit": EditTool,
 }
 
 
 class FileTools(Extension):
     """``tools``: which file tools to offer, by name or as tool objects
-    (default: all five, in the order Read, Write, Edit, Grep, Glob)."""
+    (default: all three, in the order Read, Write, Edit)."""
 
     name = FS
 
@@ -61,6 +60,11 @@ class FileTools(Extension):
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
         return self._tools
+
+    async def on_event(self, view: TaskView, recorded: Recorded) -> None:
+        # The earlier Read results are gone: a re-read must return content.
+        if isinstance(recorded.event, Compacted):
+            view.record(self.name, KIND_FORGET_RANGES, {})
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         st = view.ext_state(self.name)

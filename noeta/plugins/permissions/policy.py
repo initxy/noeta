@@ -40,8 +40,6 @@ KNOWN_RISK_LEVELS: tuple[str, ...] = ("low", "medium", "high")
 #: AskUserQuestion, skill, ...) were never gated in 0.6 and are ``low``.
 DEFAULT_RISK: Mapping[str, str] = {
     "Read": "low",
-    "Glob": "low",
-    "Grep": "low",
     "Edit": "high",
     "Write": "high",
     "Bash": "high",

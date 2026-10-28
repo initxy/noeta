@@ -8,14 +8,18 @@ the task's log.
 
 Kinds:
 
-- ``read`` — ``{"path", "digest", "mtime"}``: the model has seen ``path``
-  whose raw bytes hash (sha256 hex) to ``digest``. ``Edit`` and ``Write``
+- ``read`` — ``{"path", "digest", "mtime", "range"?}``: the model has seen
+  ``path`` whose raw bytes hash (sha256 hex) to ``digest``; ``range``
+  (``[offset, limit]``) is set by ``Read`` and is what an unchanged re-read
+  of the same range is answered from. ``Edit`` and ``Write``
   refuse to change a file without an entry whose digest still matches the
   bytes on disk. A successful write records the new digest, so consecutive
   edits chain without a re-read.
 - ``changed`` — ``{"path", "digest"}``: the model was told that ``path``
   changed on disk since it read it (to those bytes); it is told once per
   change.
+- ``forget_ranges`` — a compaction dropped the earlier results: no re-read is
+  answered from them.
 
 An unknown kind or malformed data leaves the state unchanged.
 """
@@ -32,6 +36,7 @@ from noeta.core.types import Struct
 __all__ = [
     "FS",
     "KIND_CHANGED",
+    "KIND_FORGET_RANGES",
     "KIND_READ",
     "FileRead",
     "FsState",
@@ -43,11 +48,14 @@ __all__ = [
 FS = "fs"
 KIND_READ = "read"
 KIND_CHANGED = "changed"
+KIND_FORGET_RANGES = "forget_ranges"
 
 
 class FileRead(Struct):
     digest: str
     mtime: float = 0.0
+    #: ``[offset, limit]`` of the ``Read`` that recorded this, if one did.
+    range: list[int] | None = None
 
 
 class FsState(Struct):
@@ -74,10 +82,17 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
         mtime = data.get("mtime", 0.0)
         if isinstance(mtime, bool) or not isinstance(mtime, (int, float)):
             mtime = 0.0
+        lines = data.get("range")
+        if not (isinstance(lines, list) and len(lines) == 2
+                and all(isinstance(n, int) and not isinstance(n, bool) for n in lines)):
+            lines = None
         reads = dict(base.reads)
         reads.pop(path, None)
-        reads[path] = FileRead(digest=digest, mtime=float(mtime))
+        reads[path] = FileRead(digest=digest, mtime=float(mtime), range=lines)
         return msgspec.structs.replace(base, reads=reads)
+    if kind == KIND_FORGET_RANGES:
+        return msgspec.structs.replace(base, reads={
+            p: msgspec.structs.replace(r, range=None) for p, r in base.reads.items()})
     if kind == KIND_CHANGED:
         path, digest = data.get("path"), data.get("digest")
         if not isinstance(path, str) or not isinstance(digest, str):
