@@ -30,7 +30,7 @@ from noeta.agents.agent_files import (
     PluginSetting,
     parse_plugin_list,
 )
-from noeta.core import registry
+from noeta.core import models, registry
 from noeta.core.provider import Provider
 
 if TYPE_CHECKING:
@@ -257,6 +257,8 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     notices = load_plugin_files(cwd)
     notices += [n for sub in PROJECT_GATED_DIRS if sub != ".noeta/plugins"
                 if (n := _untrusted_notice(cwd, sub)) is not None]
+    if (unknown := models.unknown_model_notice(settings.model)) is not None:
+        notices.append(unknown)
     for notice in notices:
         log.warning("%s", notice)
     files = read_agent_dir(HOME / "agents")

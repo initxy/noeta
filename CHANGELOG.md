@@ -53,6 +53,12 @@ All notable changes to Noeta are documented here. The format is based on
   the body on an `ARGUMENTS:` line, and a call without `args` leaves the body as written.
   The arguments are kept with the activation, so the body re-attached after a compaction is
   the same (`noeta.plugins.skills.registry.substitute_arguments`).
+- **Model catalog: the Claude 5.5 family and Fable 5.1.** `claude-opus-5-5`,
+  `claude-sonnet-5-5`, `claude-haiku-5-5` and `claude-fable-5-1` are catalogued with Claude
+  Code 2.1.312's windows, output caps and prices, and the aliases follow Claude Code
+  (`opus` / `sonnet` / `haiku` -> the 5.5 family, new `fable` -> Fable 5.1). An uncatalogued
+  model is now a notice the `noeta` command shows (`noeta.core.models.unknown_model_notice`),
+  not only a log line.
 - `make example` ran a build uv had cached; it now installs the example plugin editable.
 - A second `registry.provider()` call for a family failed once that family's adapter module
   had been imported (the entry point named a package attribute the submodule rebound).
