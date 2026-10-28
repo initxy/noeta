@@ -48,3 +48,17 @@ async def test_nudged_once_after_five_quiet_steps(tmp_path: Path) -> None:
     # Request 0 is the prompt; 1 follows the step with text; 2..6 follow
     # quiet steps 1..5, so the fifth quiet step's results carry the nudge.
     assert [nudges(i) for i in range(len(provider.requests))] == [0, 0, 0, 0, 0, 0, 1, 1, 1]
+
+
+def test_a_question_the_person_answered_starts_the_stretch_again() -> None:
+    from noeta.core.types import Message, Text, ToolResult, ToolUse
+    from noeta.plugins.quiet_nudge import quiet_steps
+
+    def step(name: str, i: int) -> list[Message]:
+        return [Message(role="assistant", content=[ToolUse(id=f"c{i}", name=name, input={})]),
+                Message(role="user", content=[ToolResult(call_id=f"c{i}",
+                                                          content=[Text(text="ok")])])]
+
+    messages = [*step("Probe", 0), *step("ExitPlanMode", 1),
+                *(m for i in range(2, 6) for m in step("Probe", i))]
+    assert quiet_steps(messages, NUDGE) == 4
