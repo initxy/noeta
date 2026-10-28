@@ -73,10 +73,17 @@ server/remote surfaces, which stay noeta's own.
   cache-breakpoint positions, permission modes and rule syntax, hook events and their
   input/output fields, skill/agent frontmatter fields. noeta's request for the same scenario is
   checked against it.
-- **Claude Code's files are first-class inputs.** noeta reads `CLAUDE.md` (with `@import` and
-  the directory walk), `.claude/settings*.json`, `.claude/skills`, `.claude/agents`,
-  `.claude/rules`, `.mcp.json` and `~/.claude/*` with Claude Code's meaning, alongside `.noeta/`,
-  behind the same workspace trust gate. A Claude Code project works in noeta unchanged.
+- **noeta's own files, Claude Code's mechanisms (owner, 2026-10-28; replaces "Claude Code's files
+  are first-class inputs").** Running a Claude Code project unchanged is not a goal. noeta reads
+  only its own places — `~/.noeta/` and the project's `.noeta/`, instructions in `NOETA.md`
+  (plus the cross-tool `AGENTS.md`) — never `~/.claude/`, `.claude/`, `CLAUDE.md` or `.mcp.json`
+  implicitly, so the two tools never pick up each other's hooks, env or instructions. The
+  mechanisms and formats inside are Claude Code's: instruction layering, `@import`,
+  path-scoped rules, settings with allow/deny/ask/hooks/env, skill and agent directories,
+  saved workflows.
+- **Contract vs implementation (owner, 2026-10-28).** What the model or the user sees (tool
+  interfaces, script language, file formats, behaviour) matches Claude Code; how it is executed
+  may differ wherever noeta's way is better.
 - **Headless protocol parity.** `noeta -p` speaks Claude Code's `stream-json` input/output and
   control-request protocol, so clients written against Claude Code's SDK drive noeta (locally or
   through the server). This is the server-friendly surface's main door; noeta's own HTTP API
@@ -189,7 +196,6 @@ Phase 5 — front ends
 ## Acceptance criteria
 
 - `make parity` passes on the baseline scenarios: no mismatch outside `parity/deviations.md`.
-- A Claude Code project (CLAUDE.md, `.claude/`, `.mcp.json`) runs in noeta with no edits.
 - A client written for Claude Code's headless `stream-json` protocol drives `noeta -p`.
 - `make eval` shows no regression; the benchmark is run once at the end against Claude Code on
   the same sample.
