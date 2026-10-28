@@ -108,7 +108,9 @@ async def test_saved_workflows_come_from_noetas_own_places(store: SqliteStore,
     assert texts["project"][1].startswith('Workflow "project-wf" started')
     assert texts["user"][1].startswith('Workflow "user-wf" started')
     # Claude Code's directory is not one of noeta's places.
-    assert texts["claude"] == (True, "Workflow: no saved workflow is named 'claude'.")
+    # The refusal names the saved workflows there are.
+    assert texts["claude"] == (True, "Workflow: no saved workflow is named 'claude'. Saved "
+                                     "workflows: project, user.")
 
 
 async def test_a_workflow_runs_its_agents_and_notifies_its_end(store: SqliteStore) -> None:
