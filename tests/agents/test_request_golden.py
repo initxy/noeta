@@ -108,8 +108,8 @@ async def test_default_agent_requests_match_golden(tmp_path: Path,
     ]
     child = [
         _reply("", ("c1", "Read", {"file_path": str(work / "notes.txt")})),
-        _reply("Found it.", ("c2", "SubagentHandback",
-                             {"message": "notes.txt is in the root."})),
+        # Outside auto mode the agent's last reply is its report.
+        _reply("notes.txt is in the root."),
     ]
     router = Router(main, child)
     store = SqliteStore(str(tmp_path / "t.db"))

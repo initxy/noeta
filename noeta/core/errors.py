@@ -74,3 +74,9 @@ class TurnDone(Exception):
     """Raised by ``before_model`` when the turn is complete without a model
     call (a local command such as ``/compact`` did its work). The runner
     records what the hook recorded and closes the turn."""
+
+
+class RequestStale(Exception):
+    """Raised by ``before_model`` after it changed the conversation the
+    request was built from (a compaction): the runner records what the hooks
+    recorded and builds the request again, every hook seeing the new state."""

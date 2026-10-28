@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 import msgspec
 
 from noeta.core import models
-from noeta.core.errors import ContextOverflow, ModelError, TurnDone, TurnFailed
+from noeta.core.errors import ContextOverflow, ModelError, RequestStale, TurnDone, TurnFailed
 from noeta.core.events import ExtensionRecorded, ModelCalled, ModelReplied
 from noeta.core.extension import Reminder, TaskView
 from noeta.core.loop.request import build_request, cache_breakpoints, request_hash
@@ -117,10 +117,13 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     view = run.view()
     request = _request(run, final=final)
     try:
+        # The reminders first, as Claude Code adds its notes before it
+        # decides to compact: the hooks see the request that would go.
+        request = await _remind(run, request)
+        view = run.view()
         for ext in run.exts:
             request = await ext.before_model(view, request)
         await run.flush(view)
-        request = await _remind(run, request)
     except TurnFailed as exc:
         await run.flush(view)
         return await run.fail_turn(exc.reason, exc.detail)
@@ -128,15 +131,20 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         await run.flush(view)
         await run.append([ExtensionRecorded(extension=CORE, kind="turn_done")])
         return True
+    except RequestStale:
+        await run.flush(view)
+        return True  # the next boundary builds the request from the new state
     await run.append([ModelCalled(model=request.model, request_hash=request_hash(request),
                                   attempt=run.state.model_attempts + 1)])
 
-    on_delta = None
     current = {"attempt": 1}
-    if run.rt.on_delta is not None:
-        sink, tid, called = run.rt.on_delta, run.task_id, run.state.last_seq
+    sink, tid, called = run.rt.on_delta, run.task_id, run.state.last_seq
+    run.partial = []
 
-        def on_delta(d: Delta) -> None:
+    def on_delta(d: Delta) -> None:
+        if d.kind == "text":
+            run.partial.append(d.text)
+        if sink is not None:
             sink(tid, msgspec.structs.replace(d, call_seq=called, attempt=current["attempt"]))
 
     pending: list[asyncio.Task[None]] = []
@@ -144,6 +152,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     def on_retry(attempt: int, delay: float, error: Exception) -> None:
         # Hosts see "retrying" (and drop the failed attempt's deltas).
         current["attempt"] = attempt + 1
+        run.partial = []
         pending.append(asyncio.ensure_future(run.append([ExtensionRecorded(
             extension=CORE, kind="retry",
             data={"attempt": attempt, "delay": delay,
@@ -169,6 +178,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         await asyncio.gather(*pending, return_exceptions=True)
         return await run.fail_turn(texts.LLM_ERROR, _detail(exc))
     await asyncio.gather(*pending, return_exceptions=True)
+    run.partial = []
 
     if final:
         response = _final_answer(run, response)

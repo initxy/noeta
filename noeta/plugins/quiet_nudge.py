@@ -1,7 +1,7 @@
 """Claude Code's quiet-stretch nudge: after several steps in a row that only
-called tools, with no text for the user since their last message, the model
-is told once (in a system turn) to keep the user posted when there is
-something worth saying."""
+called tools, with no text for the user since their last message (or their
+answer to a question), the model is told once (in a system turn) to keep
+the user posted when there is something worth saying."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from noeta.core.types import Message
 QUIET_STEPS = 5
 #: Its place in a joined system turn: before the budget note.
 ORDER = 60
+#: Calls the person answers: the quiet stretch starts again after one.
+ASKS_USER = frozenset({"AskUserQuestion", "ExitPlanMode"})
 
 NUDGE = (
     "The user has heard nothing from you for a while. When you have something worth "
@@ -29,7 +31,8 @@ def quiet_steps(messages: Sequence[Message], nudge: str) -> int:
         if m.role == "system" and nudge in m.text:
             return -1
         if m.role == "assistant":
-            if m.text.strip() or not m.tool_uses:
+            if m.text.strip() or not m.tool_uses \
+                    or any(u.name in ASKS_USER for u in m.tool_uses):
                 break
             n += 1
         elif m.role == "user" and m.origin in (None, "human") and m.text:

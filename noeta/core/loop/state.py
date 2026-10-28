@@ -264,6 +264,15 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
     elif isinstance(ev, ExtensionRecorded):
         if ev.extension == CORE and ev.kind == "turn_stopped":
             state.stop_turn_requested = None
+            stopped = ev.data if isinstance(ev.data, dict) else {}
+            if stopped.get("marker"):
+                # A reply stopped mid-stream keeps what streamed; the marker
+                # (plain text) opens the person's next turn.
+                if stopped.get("partial"):
+                    state._add(Message(role="assistant",
+                                       content=[Text(text=str(stopped["partial"]))]), rec.seq)
+                state._add(Message(role="user", content=[Text(text=str(stopped["marker"]))],
+                                   origin="inline"), rec.seq)
             _end_turn(state, rec.seq)
         if ev.extension == CORE and ev.kind == "parked":
             for c in state.calls:
@@ -422,12 +431,17 @@ def _compact(state: TaskState, ev: Compacted) -> None:
             break
     tail = state.messages[keep_from:]
     tail_seqs = state.message_seqs[keep_from:]
-    # A plain user turn, as 0.6 sent it: the summary carries its own framing
-    # line, and must not read as a host reminder.
-    summary = Message(role="user", content=[Text(text=ev.summary)])
-    state.messages = [*ev.lead, summary, *ev.kept, *tail, *ev.after]
-    state.message_seqs = [0] * (len(ev.lead) + 1 + len(ev.kept)) + tail_seqs \
-        + [0] * len(ev.after)
+    # Plain text in the user's channel: the summary carries its own framing
+    # line and must not read as a host reminder, nor count as a prompt.
+    summary = Message(role="user", content=[Text(text=ev.summary)], origin="inline")
+    # What is re-attached joins the kept messages' last turn: ahead of the
+    # system turns (per-request notes) they end with.
+    k = len(tail)
+    while k and tail[k - 1].role == "system":
+        k -= 1
+    state.messages = [*ev.lead, summary, *ev.kept, *tail[:k], *ev.after, *tail[k:]]
+    state.message_seqs = [0] * (len(ev.lead) + 1 + len(ev.kept)) + tail_seqs[:k] \
+        + [0] * len(ev.after) + tail_seqs[k:]
     state.compaction = ev
     state.last_usage = None
     # A compaction-and-retry is not a crash loop.

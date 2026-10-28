@@ -427,3 +427,32 @@ Phase 5 — front ends
   restart loses an open elicitation (result unknown), no workspace-trust gate on a project's
   `headersHelper` beyond the consent keys, the Streamable HTTP server-push GET stream,
   `roots/list_changed`, sampling.
+- 2026-10-28: model-visible context, layout, cache and headers. `make parity` 42 -> 0 (7
+  accepted deviations, all the billing-header block and the cache-mark index it shifts). The
+  comparator now also pairs every sub-agent call and every summarize call, and the replay
+  waits for an `idle` step's background jobs and compares Claude Code's interrupted request.
+  Changes: background-job and Monitor notices behind the shared guard; a typed skill command
+  as `<command-message>`/`<command-name>`/`<command-args>` plus the body as plain text in the
+  same turn (new origin `inline`), no `<total_tokens>` after a typed command; a reply stopped
+  mid-stream keeps its streamed text and the next turn opens with
+  `[Request interrupted by user]`; `SubagentHandback` only in auto mode (m2's agent, default
+  mode, has none and its last reply is the result), sub-agents' own identity line, the agent
+  list / auto-mode note / token counters from a sub-agent's second request; Monitor `ws`
+  (an in-process RFC 6455 client); the quiet nudge counts from an answered question;
+  compaction as recorded (keep the newest reply unless it answered the first request after
+  the previous compaction, wait when nothing precedes it, no rapid-refill breaker, the
+  re-attachments' places, re-sent lists in Claude Code's order, `fallback-credit` and no
+  `afk-mode` on the summarize call, which reuses the request as every plugin left it:
+  compaction last in the plugin lists, kernel `RequestStale`, reminders recorded before
+  `before_model`); the environment block no longer appears twice when the first request is
+  over the threshold. Known differences the comparator does not count: `Agent` / MCP tool
+  results sent as a string where Claude Code sends a one-block list; `/plan`'s tags and
+  output in one text block (two in Claude Code); after a manual `/compact` the re-attached
+  instructions follow the command in its turn (Claude Code puts them first) and Claude
+  Code's empty `output_config` system turn has no counterpart; a notice taken mid-turn
+  rides as a `<system-reminder>` in the results' turn (rem.task-notification.1 says a
+  system turn; not in the r2 recording). `make eval` not run (needs credentials).
+- 2026-10-28: open (found at the merge of the sandbox and the parity residuals): a Monitor with
+  `ws` connects from the worker process, outside the sandbox's network proxy, so with the
+  sandbox on it bypasses `allowedDomains` — check the URL's host against the sandbox's network
+  rules (or route it through the proxy) before connecting.

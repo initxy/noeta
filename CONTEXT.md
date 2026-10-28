@@ -95,12 +95,12 @@ The one capability-plugin interface (`noeta/core/extension.py`): tools, context 
 reminders, `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow;
 an approving Allow satisfies asks that are not firm), `resolve_ask` (answers asks before the
 call parks), `after_tool`, `on_event`, `reduce`, `inherit`, `on_context_overflow`,
-`before_compact` (asked by the compacting plugin), `resident`, `lead_resident`. Every method is optional. Commands (`commands(ctx)` / `run_command`) are slash
-commands front ends list and expand through `noeta/core/commands.py`: a template filled with
-`{args}`, or text the plugin returns; a `before_model` that raises `TurnDone` ends the turn
-without a model call (`/compact`). A tool asks the person by parking on `ask(...)`
-(`noeta/core/questions.py`) and tells them something with `notify`; neither reaches the model
-as the user.
+`before_compact` (asked by the compacting plugin), `resident`, `lead_resident`. Every method is
+optional. Commands (`commands(ctx)` / `run_command`) are slash commands front ends list and
+expand through `noeta/core/commands.py`. A `before_model` that raises `TurnDone` ends the turn
+without a model call (`/compact`); `RequestStale` has the request built again (a compaction).
+A tool asks the person by parking on `ask(...)` (`noeta/core/questions.py`) and tells them
+something with `notify`; neither reaches the model as the user.
 
 ## Deferred tool
 
@@ -112,8 +112,9 @@ sent only once the model loads it with `ToolSearch`, which the runner adds while
 
 An agent is a markdown file (`noeta/agents/agent_files.py`): YAML frontmatter (Claude Code's
 fields, plus `plugins` as names or `name: {arguments}` and `one_shot`) and the system prompt as
-body. A sub-agent runs in the background and ends its run with `SubagentHandback`, whose report
-reaches its caller as an `agent`-origin message (`noeta/plugins/subtasks`). One plugin instance per name and arguments is shared
+body. A sub-agent runs in the background; in auto mode it ends its run with `SubagentHandback`,
+whose report reaches its caller as an `agent`-origin message, elsewhere its last reply is the
+result in its completion notice (`noeta/plugins/subtasks`). One plugin instance per name and arguments is shared
 by every agent naming it. The built-ins are `noeta/agents/files/*.md`.
 
 ## Prompt name
@@ -141,7 +142,9 @@ A tool call that waits (a question, an approval, children) parks: the task ends 
 
 A message's `origin` says who speaks in the user channel: `user`, `system` / `memory` for
 text the host or a plugin adds (reminders, notices, recalled memory), or `agent` for another
-agent's framed message (a sub-agent's hand-back, sent as plain text). Providers render those as
+agent's framed message (a sub-agent's hand-back, sent as plain text), or `inline` for host text
+joined into the person's turn as plain text (a typed command's skill body, the interrupted
+marker). Providers render `system` / `memory` as
 `<system-reminder>` blocks (Anthropic) or with a preamble saying it is not the user (OpenAI
 shapes); user text cannot forge the tag.
 

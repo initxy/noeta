@@ -157,6 +157,9 @@ class TaskView:
     allowed_tools: Sequence[str] | None = None
     #: Tool names the agent never offers.
     denied_tools: Sequence[str] = ()
+    #: While a compaction asks for residents: whether the newest messages
+    #: stay after its summary (``None`` outside a compaction).
+    keeps_tail: bool | None = None
 
     @property
     def task_id(self) -> str:
@@ -240,17 +243,24 @@ class TaskView:
         """Record a compaction (the compaction extension's one core event)."""
         self.pending.append(event)
 
-    async def residents(self, *, lead: bool = False) -> list[Message]:
+    async def residents(self, *, lead: bool = False,
+                        keeps_tail: bool | None = None) -> list[Message]:
         """Every extension's ``resident`` messages (``lead_resident`` with
         ``lead``), in extension order: what a compaction rebuilds after the
-        kept messages (ahead of its summary). An extension that fails is
-        logged and skipped."""
+        kept messages (ahead of its summary). A compaction passes
+        ``keeps_tail`` (whether messages stay after its summary), which the
+        extensions read as ``keeps_tail``. An extension that fails is logged
+        and skipped."""
         out: list[Message] = []
-        for ext in self.extensions:
-            try:
-                out.extend(await (ext.lead_resident(self) if lead else ext.resident(self)))
-            except Exception:
-                log.exception("extension %s resident failed", ext.name)
+        self.keeps_tail = keeps_tail
+        try:
+            for ext in self.extensions:
+                try:
+                    out.extend(await (ext.lead_resident(self) if lead else ext.resident(self)))
+                except Exception:
+                    log.exception("extension %s resident failed", ext.name)
+        finally:
+            self.keeps_tail = None
         return out
 
 
@@ -305,8 +315,9 @@ class Extension:
 
     async def lead_resident(self, view: TaskView) -> Sequence[Message]:
         """Content a compaction rebuilds ahead of its summary (project
-        instructions, the memory index), recorded in ``Compacted.lead``;
-        otherwise as ``resident``."""
+        instructions, the memory index), recorded in ``Compacted.lead`` (a
+        system turn among it goes right after the summary); otherwise as
+        ``resident``."""
         return ()
 
     async def on_start(self, view: TaskView) -> None:

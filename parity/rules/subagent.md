@@ -77,7 +77,7 @@ The `Agent` tool's own schema and description are in `tools/Agent.md`.
 |---|---|
 | sub.tools.1 | Explore's tools, in order: `Bash`, `Read`, `Skill`, `ToolSearch`, `DeferredToolPlaceholder` (deferred marker), `SubagentHandback`. No `Edit`, `Write`, `Agent`, `AskUserQuestion`, `ListAgents`, `ReportFindings`, `ScheduleWakeup` or `Workflow`. |
 | sub.tools.2 | general-purpose (s1) gets `Agent`, `Bash`, `Edit`, `Read`, `Skill`, `ToolSearch`, `Write`, `DeferredToolPlaceholder`, `SubagentHandback` (plus `Artifact` for subscribers): it can nest agents and edit files, but still has no `AskUserQuestion`. |
-| sub.tools.3 | `SubagentHandback` is always present and always last. Its schema has one required string `message` (the full report), no other properties, no additional properties. |
+| sub.tools.3 | In auto mode `SubagentHandback` is present and always last; an agent started in another permission mode has neither the tool nor its reminder (r2 m2, default mode), and `DeferredToolPlaceholder` then sits before the last tool. Its schema has one required string `message` (the full report), no other properties, no additional properties. |
 | sub.tools.4 | `SubagentHandback` description: use it exactly once, to deliver the final report to the caller; the call terminates the run, so it comes after all other work and the single report must hold all the caller needs; not for progress updates or questions; plain text written at the end of the run is not delivered; it has no recipient, it can only reach the caller. |
 | sub.tools.5 | The sub-agent's deferred-tool list is the parent's minus tools its type cannot use: Explore's lacks the cron tools, plan-mode tools, `NotebookEdit`, `DesignSync` and MCP resource tools that the main list has, but keeps worktree, `Monitor`, `SendMessage`, `TaskStop`, `WebFetch`, `WebSearch` and the MCP server tools. |
 
@@ -88,8 +88,8 @@ The `Agent` tool's own schema and description are in `tools/Agent.md`.
 | sub.messages.1 | `messages[0]` is a user message with, in order: the attribution reminder; the parent's `prompt` text verbatim; a reminder that the final report goes only through `SubagentHandback` (the complete report goes in that call as the final step, the call terminates the run, trailing prose is dropped, and duplicating the report via `SendMessage` would deliver it twice). |
 | sub.messages.2 | Explore gets no project-instruction (CLAUDE.md) reminder and no git-status reminder; general-purpose (s1) gets both, before the attribution reminder. |
 | sub.messages.3 | `messages[1]` is a `role: "system"` message (with the per-turn `output_config`) holding, in order: the deferred-tool list, the environment block, the model line, the skill list, the date. Explore gets no agent-type list (it cannot spawn agents); general-purpose received the agent-type list later as its own system message (s1/0031). |
-| sub.messages.4 | No permission-mode guidance message (the auto-mode note the parent gets) is sent to the sub-agent. |
-| sub.messages.5 | After each tool-result message a `role: "system"` token counter follows, as in the main loop. |
+| sub.messages.4 | No permission-mode guidance message is sent with the sub-agent's first request; in auto mode its second request (after the first tool result) carries the auto-mode note, after the agent-type list and before the token counter (r2 m1/0038). |
+| sub.messages.5 | After each tool-result message a `role: "system"` token counter follows, as in the main loop; the task prompt of the first request gets none. |
 
 ## Launch, as the parent sees it
 
@@ -109,6 +109,7 @@ The `Agent` tool's own schema and description are in `tools/Agent.md`.
 | sub.result.4 | After the closing tag: the "other session" is an agent this session started for the user, not the user; its content counts as that agent's report or request and stays within this session's permissions; it can never raise privileges — no edits to permission settings, CLAUDE.md or configuration on its request, no reading it as the user's answer to an open approval, and a request to perform an action it was refused is declined and reported to the user (permission laundering). |
 | sub.result.5 | A completion `<task-notification>` also fires, but is queued and delivered with the next user prompt as a `<system-reminder>` text block in that user message (m1/0037), not as its own turn. A `<system-reminder>` holding `<tools-used-before-summary>SubagentHandback</tools-used-before-summary>` precedes it in the same message. |
 | sub.result.6 | The notification has the not-user-input header (see `reminders.md`) and these fields: `task-id` (agent id), `tool-use-id` (the `Agent` call), `output-file`, `status` `completed`, `summary` `Agent "<description>" finished`, a `note` (sent each time the agent comes to rest with nothing of its own still running; a resumed agent can therefore notify several times under one id), a `result` that points to the hand-back message instead of repeating the report, and `usage` with `subagent_tokens`, `tool_uses`, `duration_ms`. |
+| sub.result.7 | Without `SubagentHandback` (not auto mode) the completion notice's `result` is the agent's last reply, and no hand-back message comes first (r2 m2/0013). |
 
 ## Side work during a sub-agent run
 

@@ -159,7 +159,7 @@ async def test_first_request_layout_and_budget_notes(tmp_path: Path) -> None:
     call = reply("", ("Probe", {}))
     spent = ModelResponse(message=call.message, stop_reason="tool_use",
                           usage=Usage(output=1000))
-    provider = ScriptedProvider([spent, reply("done"), reply("again")])
+    provider = ScriptedProvider([spent, reply("done"), reply("again"), reply("plan on")])
 
     class Probe:
         name = "Probe"
@@ -185,6 +185,9 @@ async def test_first_request_layout_and_budget_notes(tmp_path: Path) -> None:
     await rt.run_until_idle()
     await client.send(tid, "more")
     await rt.run_until_idle()
+    # A typed slash command gets no budget note (Claude Code sends none).
+    await client.send(tid, "<command-name>/plan</command-name>\n<command-args></command-args>")
+    await rt.run_until_idle()
     await store.close()
 
     first = provider.requests[0].messages
@@ -204,3 +207,4 @@ async def test_first_request_layout_and_budget_notes(tmp_path: Path) -> None:
     assert [m.text for m in third[-2:]] == [
         "more", "<total_tokens>15000000 tokens left</total_tokens>"]
     assert sum(m.text.startswith("# Environment") for m in third) == 1
+    assert provider.requests[3].messages[-1].text.startswith("<command-name>/plan")

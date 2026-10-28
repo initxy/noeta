@@ -78,8 +78,10 @@ Block = Union[Text, Thinking, Image, ToolUse, ToolResult]
 #: host or an extension speaking in the user channel (reminders, notices);
 #: ``memory`` is recalled material; ``agent`` is another agent's message (a
 #: sub-agent's hand-back), plain text that frames itself and carries no user
-#: authority. Adapters decide how each reaches the wire.
-Origin = Literal["human", "system", "memory", "agent"]
+#: authority; ``inline`` is text the host adds to the person's turn as plain
+#: text, not as a reminder (a typed command's skill body, the interrupted
+#: marker), joined into that turn. Adapters decide how each reaches the wire.
+Origin = Literal["human", "system", "memory", "agent", "inline"]
 
 
 class Message(Struct):

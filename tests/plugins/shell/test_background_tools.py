@@ -19,6 +19,7 @@ from noeta.core.types import Text
 from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.shell.jobs import Job
 from noeta.plugins.shell.notices import format_duration, monitor_expired_note
+from noeta.toolkit.notices import NOTICE_GUARD
 
 
 @dataclass
@@ -36,7 +37,9 @@ class Harness:
     async def post(self, body: Any, task_id: str | None = None) -> None:
         assert isinstance(body, Say) and body.when == "now"
         assert body.message.origin == "system"
-        self.posts.append((task_id or "task", body.message.text))
+        guard, _, notice = body.message.text.partition("\n\n<task-notification>")
+        assert guard == NOTICE_GUARD  # every notice opens with the not-the-user guard
+        self.posts.append((task_id or "task", "<task-notification>" + notice))
 
     def ctx(self, task_id: str = "task", root_id: str = "task") -> ToolContext:
         self.calls += 1
@@ -186,7 +189,7 @@ async def test_monitor_expiry_sends_one_note_and_no_end_notice(h: Harness) -> No
 
 async def test_monitor_needs_command_and_description(h: Harness) -> None:
     assert text(await h.call("Monitor", description="x")) == (
-        "Monitor: requires non-empty 'command'")
+        "Monitor: requires non-empty 'command' (or 'ws')")
     assert text(await h.call("Monitor", command="true")) == (
         "Monitor: requires non-empty 'description'")
 

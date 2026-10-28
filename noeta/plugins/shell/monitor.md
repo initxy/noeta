@@ -33,3 +33,9 @@ Silence is not success: a filter that only matches the good outcome says nothing
 Every stdout line becomes a message in the conversation, so pass only the lines you would act on and never a raw log. A monitor that emits too fast is muted and then stopped; start it again with a narrower filter. Lines printed within 200 ms of each other arrive as one notification.
 
 The script runs in the same shell environment as Bash. When it exits the watch ends and its exit code is reported. Each monitor expires after `timeout_ms` (default 5 minutes, at most 30 minutes): it is stopped and you get one notice with the number of events. Re-arm it if you still need it; for a long watch, use the maximum and re-arm at each expiry. Stop it early with TaskStop.
+
+**WebSocket source**: instead of `command`, pass `ws` to connect to a WebSocket and turn every text message the server pushes into an event; nothing runs in a shell and nothing polls.
+
+  Monitor({ws: {url: 'wss://events.example.com/stream', protocols: ['v1']}, description: 'deploy events'})
+
+A text message is one notification, however many lines it has. A binary message shows as `[binary frame, N bytes]`, never its content. The watch ends when the socket closes, and the notice gives the close code; a connection error is reported before that. Rate limits are those of a command, so subscribe to a filtered feed where the server offers one. Prefer this to a WebSocket client run in `command`: no extra process and no line buffering to get wrong. Use a command when the messages need shell tools to filter or reshape them first.

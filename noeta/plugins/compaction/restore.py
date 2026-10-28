@@ -4,9 +4,9 @@ After a summary, the files the newest successful ``Read`` / ``Edit`` /
 ``Write`` calls touched are read again through the ``Read`` tool, newest
 first, at most 5, each within 5,000 tokens and 50,000 in all, skipping a
 file whose ``Read`` the kept messages already show and the instruction
-files. Each is recorded in ``Compacted.after`` as a Read call and its result
-(or a too-large note), so a resume folds them back and never reads the disk
-again.
+files. Each is recorded as a Read call and its result (or a too-large
+note) and given in the next request's system turn, so a resume folds them
+back and never reads the disk again.
 """
 
 from __future__ import annotations

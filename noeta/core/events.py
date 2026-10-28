@@ -129,7 +129,8 @@ class ToolFinished(Struct, tag="ToolFinished", tag_field="type"):
 class Compacted(Struct, tag="Compacted", tag_field="type"):
     """History up to and including event ``through`` is replaced by
     ``summary`` when building requests: the conversation becomes ``lead``,
-    the summary, ``kept``, the messages after ``through``, then ``after``."""
+    the summary, ``kept``, the messages after ``through``, then ``after``
+    (ahead of the system turns those messages end with)."""
 
     summary: str
     through: int

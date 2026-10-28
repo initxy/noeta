@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 import msgspec
 
+from noeta.core.commands import command_message, parse_command_message
 from noeta.core.events import Recorded
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import (
@@ -37,6 +38,7 @@ from noeta.plugins.skills.registry import (
     SkillRegistry,
     load_registry,
     render_activation,
+    render_command_body,
 )
 from noeta.plugins.skills.script import (
     SKILL_SCRIPT_TOOL_NAME,
@@ -71,6 +73,8 @@ _SKILL_NAME_MAX_LEN = 200
 #: The listing's place in the joined system turn (``Reminder.order``): after
 #: the environment, deferred tools and agents, before the budget and date.
 LISTING_ORDER = 50
+#: The skills invoked before a compaction, after it: ahead of the lists.
+INVOKED_ORDER = 20
 
 #: The directories a workspace contributes, relative to its root.
 WORKSPACE_SKILLS_DIR = ".noeta/skills"
@@ -129,6 +133,16 @@ class SkillTool:
             f"context from your next step.",
             skill_activation=_activation_data(desc, "model", args),
         )
+
+
+def _typed_command(text: str) -> tuple[str, str] | None:
+    """``(name, args)`` of a slash command the person typed: the command's
+    tags a front end sends, or the bare ``/<name> <args>``."""
+    tagged = parse_command_message(text)
+    if tagged is not None:
+        return tagged[0], tagged[1].strip()
+    m = re.match(r"/([a-z0-9][a-z0-9-]*)(?:\s+|$)(.*)", text.lstrip(), re.DOTALL)
+    return (m.group(1), m.group(2).strip()) if m else None
 
 
 def _activation_data(desc: SkillDescription, source: str,
@@ -254,6 +268,13 @@ class Skills(Extension):
         state = state or self.initial_state()
         if kind == "listing":
             return {**state, "listings": [*state["listings"], data]}
+        if kind == "invoked_rehold":
+            return {**state, "invoked": data.get("text")}
+        if kind == "invoked_sent":
+            return {**state, "invoked": None}
+        if kind == "listing_rehold":
+            return {**state, "listings": [{**listing, "held": True}
+                                          for listing in state["listings"]]}
         if kind == "listing_sent":
             return {**state, "listings": [{k: v for k, v in listing.items() if k != "held"}
                                           for listing in state["listings"]]}
@@ -292,7 +313,7 @@ class Skills(Extension):
                 name = fields.get("name")
                 if name and re.fullmatch(r"[a-z0-9][a-z0-9-]*", name):
                     found[name] = fields.get("description", "")
-        return [Command(name=n, description=d, template=f"/{n} {{args}}")
+        return [Command(name=n, description=d, template=command_message(n, "{args}"))
                 for n, d in sorted(found.items())]
 
     async def on_start(self, view: TaskView) -> None:
@@ -322,12 +343,16 @@ class Skills(Extension):
         """The listing taken at start, in the environment's system turn
         (Claude Code's place for it)."""
         state = view.ext_state(self.name) or {}
+        out: list[Reminder] = []
+        if state.get("invoked"):
+            out.append(Reminder(text=state["invoked"], kind="invoked_sent", data={},
+                                role="system", order=INVOKED_ORDER))
         held = [line for listing in state.get("listings", []) if listing.get("held")
                 for line in listing["lines"]]
-        if not held:
-            return ()
-        return (Reminder(text=render_listing(True, held), kind="listing_sent", data={},
-                         role="system", order=LISTING_ORDER),)
+        if held:
+            out.append(Reminder(text=render_listing(True, held), kind="listing_sent", data={},
+                                role="system", order=LISTING_ORDER))
+        return out
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         messages = new_user_messages(view.state, recorded.seq)
@@ -351,12 +376,15 @@ class Skills(Extension):
             if lines:
                 self._record_listing(view, lines, first=True)
         for message in messages:
-            m = re.match(r"/([a-z0-9][a-z0-9-]*)(?:\s+|$)(.*)", message.text.lstrip(),
-                         re.DOTALL)
-            desc = registry.get(m.group(1)) if m else None
-            if m and desc is not None and desc.name not in state.get("active", {}):
-                self._record_activation(view, _activation_data(desc, "user",
-                                                               m.group(2).strip()))
+            typed = _typed_command(message.text)
+            desc = registry.get(typed[0]) if typed else None
+            if typed and desc is not None and desc.name not in state.get("active", {}):
+                data = _activation_data(desc, "user", typed[1])
+                # The body rides in the person's turn as plain text, after
+                # the command's tags (Claude Code's slash-command shape).
+                data["text"] = render_command_body(desc, typed[1])
+                view.record(self.name, "activated", data,
+                            message=user(data["text"], origin="inline"))
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
         data = output.meta.get("skill_activation")
@@ -424,8 +452,9 @@ class Skills(Extension):
                     message=user(data["text"], origin=self.origin))
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
-        """After a compaction: the skills invoked before it, in one message
-        that says not to run them again, then the whole listing so far."""
+        """After a compaction, given again with the next request in its
+        system turn: the skills invoked before it, in one note that says not
+        to run them again, and the whole listing so far."""
         if not self.rehang:
             return ()
         state = view.ext_state(self.name) or {}
@@ -439,11 +468,10 @@ class Skills(Extension):
                 if desc is not None:
                     parts.append(f"### Skill: {desc.name}\nPath: {desc.base_dir or desc.name}"
                                  f"\n\n{render_activation(desc, entry.get('args'))}")
-            if len(parts) > 1:
-                out.append(user("\n\n".join(parts), origin=self.origin))
-        lines = [line for listing in state.get("listings", []) for line in listing["lines"]]
-        if lines:
-            out.append(user(render_listing(True, lines), origin=self.origin))
+            if len(parts) > 1 and view.keeps_tail is not None:
+                view.record(self.name, "invoked_rehold", {"text": "\n\n".join(parts)})
+        if view.keeps_tail is not None and state.get("listings"):
+            view.record(self.name, "listing_rehold", {})
         return out
 
 

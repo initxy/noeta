@@ -40,7 +40,7 @@ summary, so their hash is specific to this recording; review them for the templa
 | compact.request.3 | The prompt-cache breakpoint is moved to the message just before the instruction (the last assistant message in m1/0055), so the request reads the whole prior conversation from cache (m1/0058 read 21,952 cached tokens and wrote nothing new). |
 | compact.request.4 | Per-turn `role: "system"` messages already in history (token counters, notifications, environment) stay in place; nothing is stripped or rewritten before summarizing. |
 | compact.request.5 | The same instruction text is used for manual `/compact` and for auto-compaction (identical hash in m1 and m3). |
-| compact.request.6 | Which messages are summarized: when the step that triggers compaction is a large new tool result, the assistant message that made those calls and its results are left out of the request and kept verbatim after the summary instead (m3/0009, m3/0017). When the trigger is the accumulated context, everything up to and including the latest tool results is summarized and nothing is kept (m3/0012, m3/0021). A manual `/compact` after an interrupted turn kept the interrupted call and its result (m1/0059). |
+| compact.request.6 | Which messages are summarized (re-recording r2, seven auto-compactions and a manual one): everything before the newest assistant reply; that reply and what followed it are kept verbatim after the summary (r2 m3/0006, 0014, 0022, 0031; m1/0076 kept the final text reply). When the newest reply answered the first request after the previous compaction, everything is summarized and nothing is kept (r2 m3/0018, 0026, 0037). With no earlier reply to summarize, no compaction happens and the request goes over the threshold (r2 m3/0004). The request ends with the notes due for the request it replaces (token counter, auto-mode note) as a trailing system turn. |
 
 ## Instruction contents (what the summary must contain)
 
@@ -95,8 +95,9 @@ summary, so their hash is specific to this recording; review them for the templa
 | compact.reattach.6 | If plan mode is active, the full plan-mode instructions are re-attached, including the plan file path (or that no plan file exists yet). |
 | compact.reattach.7 | The deferred-tool list, agent-type list, skill list, environment block and model line are re-sent in full in the attachment message (they are not part of the summary). |
 | compact.reattach.8 | The attribution reminder is re-sent once after compaction (in the summary message or the next user message). |
-| compact.reattach.9 | The permission-mode guidance (auto mode) is not in the attachment message; it is re-sent as its own `role: "system"` message after the next user prompt (m3/0014). |
+| compact.reattach.9 | The permission-mode guidance (auto mode) is not in the first request after an automatic compaction; it is re-sent with the first request that follows a new prompt or tool result (r2 m3/0009, 0020). After a manual compaction it rides in the attachment message after the next prompt (r2 m1/0077). |
 | compact.reattach.10 | Background tasks: none were running at any recorded compaction, so their re-attachment is not observed. |
+| compact.reattach.11 | Layout of the request right after an automatic compaction (r2 m3): with kept messages, the instructions and the git snapshot precede the summary in its user message, the date follows as its own system turn, the attribution note joins the kept tool results, and the token counter, deferred tools, agent list, skill list, environment and model line form the closing system turn; without kept messages, the instructions, git snapshot and attribution note precede the summary and the closing system turn holds the deferred tools, agent list, skill list, environment, model line and date (no token counter). After a manual compaction the summary message stands alone and everything else comes with the next prompt (r2 m1/0077). |
 
 ## Manual `/compact`
 

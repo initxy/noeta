@@ -13,7 +13,8 @@ and ``[exited with code N]``.
 
 When a job ends — or a monitor emits an event — the notice goes to the task
 that started it while that task is live, else to the root, as a
-system-origin message posted with ``when="now"``: it lands after the running
+system-origin message behind the not-the-user guard, posted with
+``when="now"``: it lands after the running
 batch's tool results, and wakes an idle task into a turn.
 
 Job logs live in a private directory per user inside the env: by default
@@ -52,7 +53,10 @@ from noeta.plugins.shell.notices import (
     monitor_expired_note,
     shell_end_summary,
     task_notification,
+    ws_end_summary,
 )
+from noeta.plugins.shell.websocket import NORMAL_CLOSES, run_ws
+from noeta.toolkit.notices import NOTICE_GUARD
 
 log = logging.getLogger("noeta.plugins.shell")
 
@@ -116,6 +120,8 @@ class Job:
     #: already sent its last word.
     quiet: bool = False
     monitor: MonitorStream | None = None
+    #: A monitor's WebSocket source ``(url, protocols)``, instead of a command.
+    ws: tuple[str, list[str]] | None = None
     #: The env's run of the command; cancelling it kills the job.
     proc: asyncio.Task[Any] | None = None
     task: asyncio.Task[None] | None = None
@@ -194,16 +200,18 @@ class Registry:
                     root_id: str, spawner_id: str, tool_use_id: str, description: str,
                     post: Post, monitor_timeout_ms: float | None = None,
                     release: Release | None = None,
-                    argv: Sequence[str] | None = None) -> Job | str:
+                    argv: Sequence[str] | None = None,
+                    ws: tuple[str, list[str]] | None = None) -> Job | str:
         """Start a job, or return the refusal text. ``release`` is awaited
         once the job has ended (or was refused). ``argv``: what runs instead
         of ``bash -c command`` (the command wrapped in a sandbox); the log
-        redirection stays outside it."""
+        redirection stays outside it. A monitor with ``ws`` streams that
+        WebSocket's messages instead of running ``command``."""
         job = await self._spawn(env=env, command=command, cwd=cwd, env_vars=env_vars,
                                 root_id=root_id, spawner_id=spawner_id,
                                 tool_use_id=tool_use_id, description=description, post=post,
                                 monitor_timeout_ms=monitor_timeout_ms, release=release,
-                                argv=argv)
+                                argv=argv, ws=ws)
         if isinstance(job, str) and release is not None:
             await release()
         return job
@@ -211,7 +219,8 @@ class Registry:
     async def _spawn(self, *, env: ExecEnv, command: str, cwd: str, env_vars: Mapping[str, str],
                      root_id: str, spawner_id: str, tool_use_id: str, description: str,
                      post: Post, monitor_timeout_ms: float | None,
-                     release: Release | None, argv: Sequence[str] | None) -> Job | str:
+                     release: Release | None, argv: Sequence[str] | None,
+                     ws: tuple[str, list[str]] | None = None) -> Job | str:
         running = len(self.running(root_id))
         if running >= self.max_jobs:
             return (f"too many background jobs ({running}/{self.max_jobs}); stop one with "
@@ -230,18 +239,22 @@ class Registry:
             return "background jobs are unavailable: could not create the job's log file"
         job = Job(job_id=job_id, root_id=root_id, spawner_id=spawner_id, command=command,
                   description=_label(description or command), tool_use_id=tool_use_id,
-                  env=env, out_path=out, err_path=err, post=post, release=release)
+                  env=env, out_path=out, err_path=err, post=post, release=release, ws=ws)
         if monitor_timeout_ms is not None:
             job.monitor = MonitorStream(sink=lambda text, _note: self._event(job, text),
                                         stop=lambda: self._stop_quietly(job))
         self.jobs.setdefault(root_id, {})[job_id] = job
-        redirect = f"2>{shlex.quote(err)}" if err is not None else "2>&1"
-        script = f"exec >{shlex.quote(out)} {redirect}\n" + (
-            'exec "$@"' if argv is not None else command)
-        run = ["bash", "-c", script] + (["bash", *argv] if argv is not None else [])
-        job.proc = asyncio.ensure_future(env.run(run, cwd=cwd,
-                                                 env=dict(env_vars), timeout=None,
-                                                 output_cap=4096))
+        if ws is not None and job.monitor is not None:
+            stream = job.monitor
+            job.proc = asyncio.ensure_future(run_ws(*ws, lambda text: stream.feed(text + "\n")))
+        else:
+            redirect = f"2>{shlex.quote(err)}" if err is not None else "2>&1"
+            script = f"exec >{shlex.quote(out)} {redirect}\n" + (
+                'exec "$@"' if argv is not None else command)
+            run = ["bash", "-c", script] + (["bash", *argv] if argv is not None else [])
+            job.proc = asyncio.ensure_future(env.run(run, cwd=cwd,
+                                                     env=dict(env_vars), timeout=None,
+                                                     output_cap=4096))
         job.task = asyncio.create_task(self._run(job, monitor_timeout_ms))
         job.sender = asyncio.create_task(self._send(job))
         return job
@@ -349,7 +362,8 @@ class Registry:
             if text is None:
                 return
             try:
-                await job.post(Say(message=user(text, origin="system"), when="now"),
+                await job.post(Say(message=user(f"{NOTICE_GUARD}\n\n{text}", origin="system"),
+                                   when="now"),
                                task_id=self._target(job))
             except Exception as exc:  # noqa: BLE001 - a lost notice must not kill the sender
                 log.warning("background notice for %s not delivered: %s", job.job_id, exc)
@@ -400,7 +414,8 @@ class Registry:
     async def _end_notice(self, job: Job) -> str | None:
         killed = job.status == "killed"
         code = None if killed else job.exit_code
-        status = "killed" if killed else ("completed" if code == 0 else "failed")
+        ok = code in NORMAL_CLOSES if job.ws is not None else code == 0
+        status = "killed" if killed else ("completed" if ok else "failed")
         stream = job.monitor
         if stream is None:
             if job.quiet:
@@ -418,10 +433,12 @@ class Registry:
         parts = [rest] if rest else []
         if stderr:
             parts.append(f"stderr:\n{stderr}")
+        summary = ws_end_summary(job.description, status, code) if job.ws is not None \
+            else monitor_end_summary(job.description, status, code,
+                                     produced_output=stream.saw_output)
         return task_notification(
             task_id=job.job_id, tool_use_id=job.tool_use_id, status=status,
-            summary=monitor_end_summary(job.description, status, code,
-                                        produced_output=stream.saw_output),
+            summary=summary,
             body=event_body("\n".join(parts)) if parts else "")
 
 

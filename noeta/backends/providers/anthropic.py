@@ -49,7 +49,7 @@ from noeta.backends.providers._sse import iter_sse_events
 from noeta.core import models
 from noeta.core.errors import Fatal
 from noeta.core.provider import OnDelta
-from noeta.core.runner.texts import REJECTED_MARKER
+from noeta.core.runner.texts import INTERRUPTED_MARKER, REJECTED_MARKER
 from noeta.core.types import (
     Image,
     Message,
@@ -273,13 +273,14 @@ class AnthropicProvider:
                 and any(b.get("type") == "tool_result" for b in outbound[-1]["content"])
                 and not any(b.get("type") == "tool_result" for b in wire["content"])
             )
-            after_decline = (
+            after_stop = (
                 message.role == "user" and message.origin == "human" and outbound
                 and outbound[-1]["role"] == "user" and outbound[-1]["content"]
-                and outbound[-1]["content"][-1].get("text") == REJECTED_MARKER)
-            if after_decline:
-                # The turn stopped at a declined call: the next prompt joins
-                # the results' turn after the marker, unframed (Claude Code).
+                and outbound[-1]["content"][-1].get("text") in (REJECTED_MARKER,
+                                                                INTERRUPTED_MARKER))
+            if after_stop:
+                # The turn stopped at a declined call or mid-reply: the next
+                # prompt joins the marker's turn, unframed (Claude Code).
                 outbound[-1]["content"] = [*outbound[-1]["content"], *wire["content"]]
                 prev_injected = injected
                 continue
@@ -289,8 +290,10 @@ class AnthropicProvider:
                 for block in wire["content"]:
                     if block.get("type") == "text":
                         block["text"] = MID_TURN_MESSAGE.format(text=block["text"])
+            # Host text meant to read as part of the person's turn rides in it, plain.
+            inline = message.role == "user" and message.origin == "inline"
             if (
-                (injected or prev_injected or mid_turn)
+                (injected or prev_injected or mid_turn or inline)
                 and wire["role"] == "user"
                 and outbound
                 and outbound[-1]["role"] == "user"

@@ -2,7 +2,6 @@
 name: main
 model: inherit
 plugins:
-  - compaction
   - permissions
   - hooks
   - shell
@@ -22,6 +21,7 @@ plugins:
   - title
   - workflow
   - mcp
+  - compaction
 ---
 
 You are an agent that works alongside the user on what they are trying to achieve, using your own judgment as you go.

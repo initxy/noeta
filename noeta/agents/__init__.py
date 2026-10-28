@@ -37,9 +37,10 @@ __all__ = [
 #: The extensions of an agent file that names none (a Claude Code agent
 #: file): the general-purpose sub-agent's.
 DEFAULT_PLUGINS: tuple[PluginEntry, ...] = (
-    ("compaction", {}), ("permissions", {}), ("hooks", {}), ("shell", {}), ("web", {}),
-    ("mcp", {}),
+    ("permissions", {}), ("hooks", {}), ("shell", {}), ("web", {}), ("mcp", {}),
     ("fs", {}), ("skills", {}), ("instructions", {}), ("environment", {}), ("subtasks", {}),
+    # Last: the summarize call reuses the request as the others left it.
+    ("compaction", {}),
 )
 
 

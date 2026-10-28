@@ -64,6 +64,11 @@ KEPT_NOTE = (
     "already be done there."
 )
 
+#: Beta flags the summarize call adds to the main request's (Claude Code's).
+SUMMARY_BETAS = ("fallback-credit-2026-06-01",)
+#: Per-turn tool-use flags the summarize call leaves out (it runs no tool).
+SUMMARY_DROPPED_BETAS = ("afk-mode-2026-01-31",)
+
 #: The stable head of every summarize failure (hosts branch on the prefix).
 SUMMARY_FAILED_REASON = "compaction_summary_failed"
 
@@ -118,10 +123,13 @@ def summary_request(main: ModelRequest, history: Sequence[Message], text: str, *
         m = messages[at]
         messages[at] = Message(role="user", content=[*m.content, Text(text=text)],
                                origin=m.origin)
+    betas = [*(b for b in main.betas if b not in SUMMARY_DROPPED_BETAS),
+             *(b for b in SUMMARY_BETAS if b not in main.betas)]
     return msgspec.structs.replace(
         main, model=model or main.model, messages=messages,
         max_tokens=max_tokens if max_tokens is not None else main.max_tokens,
-        cache_after=[at - 1] if at > 0 else [], output_schema=None, tool_choice=None)
+        cache_after=[at - 1] if at > 0 else [], output_schema=None, tool_choice=None,
+        betas=betas)
 
 
 def joined_text(response: ModelResponse) -> str:
@@ -146,7 +154,8 @@ def tools_used(messages: Sequence[Message]) -> list[str]:
     names = {b.name for m in messages if m.role == "assistant"
              for b in m.content if isinstance(b, ToolUse)}
     for m in messages:
-        if m.role == "user" and m.origin is None and m.text.startswith(SUMMARY_PREAMBLE):
+        if m.role == "user" and m.origin in (None, "inline") \
+                and m.text.startswith(SUMMARY_PREAMBLE):
             found = _TOOLS_USED.search(m.text)
             if found:
                 names.update(n.strip() for n in found.group(1).split(",") if n.strip())

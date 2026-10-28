@@ -282,10 +282,26 @@ def _by(rows: Iterable[Mapping[str, Any]], kind: str) -> dict[tuple[str, int], M
             if r.get("kind") == kind and r.get("call") and r.get("status", 200) == 200}
 
 
+def _number_interrupted(rows: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Claude Code's main-loop request the person interrupted gets the call
+    number it had in its step, as noeta's stalled request has one, so the
+    two are compared."""
+    out: list[Mapping[str, Any]] = []
+    calls: dict[str, int] = {}
+    for r in rows:
+        if r.get("kind") == "main" and r.get("call"):
+            calls[r["step"]] = max(calls.get(r["step"], 0), r["call"])
+        elif r.get("kind") == "main" and r.get("interrupted"):
+            calls[r["step"]] = calls.get(r["step"], 0) + 1
+            r = {**r, "call": calls[r["step"]]}
+        out.append(r)
+    return out
+
+
 def compare_session(name: str, cc: Mapping[str, Any], no: Mapping[str, Any],
                     cc_tools: Mapping[str, Any], no_tools: Mapping[str, Any],
                     found: Findings) -> None:
-    cc_rows = cc["requests"]
+    cc_rows = _number_interrupted(cc["requests"])
     no_rows = no["requests"]
     renames = TOOL_NAMES
     for r in no_rows:
@@ -327,16 +343,20 @@ def compare_session(name: str, cc: Mapping[str, Any], no: Mapping[str, Any],
             continue
         _compare_pair(a, b, where, found)
 
-    # sub-agents: first call of each
+    # sub-agents: call by call, in order
     for kind in sorted({r["kind"] for r in cc_rows if r["kind"].startswith("subagent:")}):
-        a = next(r for r in cc_rows if r["kind"] == kind)
-        b = next((r for r in no_rows if r.get("kind") == kind), None)
-        where = f"{name}/{a['step']}"
-        if b is None:
-            found.add("subagent", f"{kind}: noeta made no such sub-agent call", where)
+        a_calls = [r for r in cc_rows if r["kind"] == kind and r.get("status", 200) == 200]
+        b_calls = [r for r in no_rows if r.get("kind") == kind]
+        if not b_calls:
+            found.add("subagent", f"{kind}: noeta made no such sub-agent call",
+                      f"{name}/{a_calls[0]['step']}")
             continue
-        _compare_pair(a, b, where, found,
-                      prefix=f"{kind}: ")
+        for i, (a, b) in enumerate(zip(a_calls, b_calls, strict=False)):
+            where = f"{name}/{a['step']}" + (f"#{i + 1}" if i else "")
+            _compare_pair(a, b, where, found, prefix=f"{kind}: ")
+        if len(a_calls) != len(b_calls):
+            found.add("subagent", f"{kind}: Claude Code made {len(a_calls)} calls, noeta "
+                                  f"{len(b_calls)}", f"{name}/{a_calls[0]['step']}")
 
     # compaction
     cc_comp = [r for r in cc_rows if r["kind"] == "compaction" and r.get("status") == 200]
@@ -345,8 +365,14 @@ def compare_session(name: str, cc: Mapping[str, Any], no: Mapping[str, Any],
         found.add("compaction", f"Claude Code compacted ({len(cc_comp)} requests), noeta "
                                 "never did", f"{name}/{cc_comp[0]['step']}")
     elif cc_comp and no_comp:
-        _compare_pair(cc_comp[0], no_comp[0], f"{name}/{no_comp[0]['step']}", found,
-                      prefix="compaction: ")
+        # A retry of the same summarize call (same messages) counts once.
+        cc_comp = [r for i, r in enumerate(cc_comp)
+                   if not i or r["messages"] != cc_comp[i - 1]["messages"]]
+        for a, b in zip(cc_comp, no_comp, strict=False):
+            _compare_pair(a, b, f"{name}/{b['step']}", found, prefix="compaction: ")
+        if len(cc_comp) != len(no_comp):
+            found.add("compaction", f"Claude Code compacted {len(cc_comp)} times, noeta "
+                                    f"{len(no_comp)}", f"{name}/{cc_comp[0]['step']}")
 
     # side requests
     side = {r["kind"] for r in cc_rows

@@ -18,6 +18,7 @@ __all__ = [
     "monitor_expired_note",
     "shell_end_summary",
     "task_notification",
+    "ws_end_summary",
 ]
 
 
@@ -72,6 +73,13 @@ def monitor_end_summary(description: str, status: str, exit_code: int | None, *,
     if status == "failed":
         return f'Monitor "{description}" script failed{code}'
     return f'Monitor "{description}" stopped'
+
+
+def ws_end_summary(description: str, status: str, close_code: int | None) -> str:
+    """A WebSocket monitor's end: the close code the socket ended with."""
+    if status == "killed":
+        return f'Monitor "{description}" stopped'
+    return f'Monitor "{description}" socket closed (code {close_code})'
 
 
 def format_duration(ms: float) -> str:

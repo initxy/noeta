@@ -29,6 +29,7 @@ __all__ = [
     "index_dir",
     "load_registry",
     "render_activation",
+    "render_command_body",
     "strip_argument_placeholder",
     "substitute_arguments",
 ]
@@ -298,3 +299,10 @@ def render_activation(desc: SkillDescription, args: str | None = None) -> str:
         f"{strip_argument_placeholder(desc.description)}\n\n"
         f"{base}{substitute_arguments(desc.body, args)}"
     )
+
+
+def render_command_body(desc: SkillDescription, args: str | None = None) -> str:
+    """What ``/<name> <args>`` adds to the person's turn after the command
+    tags: the skill's directory and its body, placeholders filled."""
+    base = f"Base directory for this skill: {desc.base_dir}\n\n" if desc.base_dir else ""
+    return f"{base}{substitute_arguments(desc.body, args)}"

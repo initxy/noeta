@@ -19,6 +19,9 @@ REJECTED_WITH_MESSAGE = "\nThe user's reason for declining: {message}"
 #: Follows the results of a reply in which the person declined a call
 #: (Claude Code's marker, verbatim: models know it).
 REJECTED_MARKER = "[Request interrupted by user for tool use]\n"
+#: Opens the person's next turn after they stopped a reply mid-stream, after
+#: the part of the reply that streamed (Claude Code's marker, verbatim).
+INTERRUPTED_MARKER = "[Request interrupted by user]\n"
 UNKNOWN_TOOL = "No tool named {name!r} is available in this task; use one of the offered tools."
 DEFERRED_NOT_LOADED = (
     "InputValidationError: {name} is a deferred tool whose schema is not loaded. Load it with "
