@@ -25,11 +25,9 @@ on, as in Claude Code's headless mode.
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
 import json
 import logging
-import os
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -54,20 +52,15 @@ from noeta.core.events import (
 )
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
-from noeta.core.types import Delta, Image, Message, Text, Thinking, ToolUse, Usage
+from noeta.core.types import Delta, Message, Text, Usage
+from noeta.host._stream_json_control import ControlRequests
+from noeta.host._stream_json_wire import PartialMessages, block_json, message_from, usage_json
 from noeta.host.app import AppAPI
-from noeta.host.pending import Pending, card_title, pending_tree
+from noeta.host.pending import Pending, pending_tree
 from noeta.host.pending import follow_tree as _follow_tree
 from noeta.host.pending import tree_busy as _tree_busy
-from noeta.host.questions import typed_answer
-from noeta.host.rewind import diff_stats, file_plan, rewind, rewind_points
-from noeta.host.usage import (
-    TreeUsage,
-    add_events,
-    cost_text,
-    tree_usage,
-)
-from noeta.toolkit.permission_modes import MODE_ALIASES, MODE_SIGNAL, PERMISSION_MODES
+from noeta.host.usage import TreeUsage, add_events, tree_usage
+from noeta.toolkit.permission_modes import MODE_ALIASES, MODE_SIGNAL
 from noeta.toolkit.signals import RESUMED_SIGNAL
 
 __all__ = ["HeadlessOptions", "StreamJson", "drive", "find_latest_task", "noeta_version"]
@@ -130,45 +123,6 @@ class _Turn:
     denials: list[dict[str, Any]] = field(default_factory=list)
 
 
-def _usage_json(u: Usage) -> dict[str, Any]:
-    return {"input_tokens": u.uncached, "cache_creation_input_tokens": u.cache_write,
-            "cache_read_input_tokens": u.cache_read, "output_tokens": u.output,
-            "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0},
-            "service_tier": "standard"}
-
-
-def _block_json(block: Any) -> dict[str, Any] | None:
-    if isinstance(block, Text):
-        return {"type": "text", "text": block.text}
-    if isinstance(block, Thinking):
-        return {"type": "thinking", "thinking": block.text, "signature": block.signature or ""}
-    if isinstance(block, ToolUse):
-        return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
-    if isinstance(block, Image):
-        return {"type": "image", "source": {"type": "base64", "media_type": block.media_type,
-                                            "data": base64.b64encode(block.data).decode()}}
-    return None
-
-
-def _message_from(content: Any) -> Message:
-    """A ``user`` message's content (a string or Anthropic content blocks)."""
-    if isinstance(content, str):
-        return Message(role="user", content=[Text(text=content)], origin="human")
-    blocks: list[Any] = []
-    for b in content if isinstance(content, list) else []:
-        if not isinstance(b, dict):
-            continue
-        if b.get("type") == "text" and isinstance(b.get("text"), str):
-            blocks.append(Text(text=b["text"]))
-        elif b.get("type") == "image" and isinstance(b.get("source"), dict) \
-                and b["source"].get("type") == "base64":
-            blocks.append(Image(media_type=str(b["source"].get("media_type") or "image/png"),
-                                data=base64.b64decode(b["source"].get("data") or "")))
-    if not blocks:
-        raise ValueError("a user message needs text or image content")
-    return Message(role="user", content=blocks, origin="human")
-
-
 async def find_latest_task(client: ClientAPI, cwd: str, agent: str = "main") -> str | None:
     """``--continue``: the newest root task of ``agent`` started in ``cwd``.
     Tasks come most recently updated first; the window grows until the
@@ -202,10 +156,11 @@ async def find_latest_task(client: ClientAPI, cwd: str, agent: str = "main") -> 
         limit *= 10
 
 
-class StreamJson:
+class StreamJson(ControlRequests):
     """One conversation over the headless protocol. ``app`` is what a front
     end runs on (``noeta.host.app.AppAPI``: in process or a remote server);
-    ``emit`` writes one outgoing message."""
+    ``emit`` writes one outgoing message. The control requests both ways
+    are :class:`~noeta.host._stream_json_control.ControlRequests`."""
 
     def __init__(self, app: AppAPI, options: HeadlessOptions, emit: Emit) -> None:
         self.app = app
@@ -225,7 +180,7 @@ class StreamJson:
         self._called = 0
         #: Prompts waiting for the open one's result: (message, uuid).
         self._queued: list[tuple[Message, str]] = []
-        self._streaming: dict[int, int] = {}
+        self._partial = PartialMessages(self._stream_event)
         self._writer: asyncio.Task[None] | None = None
         self._follower: asyncio.Task[None] | None = None
         self._unsubscribe: Callable[[], None] | None = None
@@ -334,7 +289,7 @@ class StreamJson:
         kind = line.get("type")
         if kind == "user":
             message = line.get("message") or {}
-            await self.send(_message_from(message.get("content")),
+            await self.send(message_from(message.get("content")),
                             str(line.get("uuid") or uuid.uuid4()))
         elif kind == "control_request":
             await self._control(str(line.get("request_id") or ""), line.get("request") or {})
@@ -358,7 +313,7 @@ class StreamJson:
         if self.options.replay_user_messages:
             self._put({**self._message(type="user", parent_tool_use_id=None, isReplay=True,
                                        message={"role": "user", "content": [
-                                           b for b in map(_block_json, message.content) if b]}),
+                                           b for b in map(block_json, message.content) if b]}),
                        "uuid": prompt_uuid})  # the id rewind_files names it by
         text = message.text
         if text.startswith("/") and len(message.content) == 1:
@@ -379,7 +334,7 @@ class StreamJson:
     def _finish_local(self, text: str) -> None:
         result = self._message(type="result", subtype="success", is_error=False,
                                duration_ms=0, duration_api_ms=0, num_turns=0, result=text,
-                               stop_reason=None, total_cost_usd=0.0, usage=_usage_json(Usage()),
+                               stop_reason=None, total_cost_usd=0.0, usage=usage_json(Usage()),
                                modelUsage={}, permission_denials=[])
         self._deliver(result)
 
@@ -389,206 +344,11 @@ class StreamJson:
             await self._send_now(message, prompt_uuid)
             self._queued.pop(0)  # only now: until its turn is open, it keeps ``busy``
 
-    # ------------------------------------------------------------ control
-
-    async def request(self, subtype: str, **fields: Any) -> str:
-        """Send a control request to the client; returns its id."""
-        self._requests += 1
-        request_id = f"req_{self._requests}_{uuid.uuid4().hex[:8]}"
-        self._put({"type": "control_request", "request_id": request_id,
-                   "request": {"subtype": subtype, **fields}})
-        return request_id
-
-    def _reply(self, request_id: str, response: dict[str, Any] | None = None,
-               error: str | None = None) -> None:
-        if error is not None:
-            body: dict[str, Any] = {"subtype": "error", "request_id": request_id, "error": error}
-        else:
-            body = {"subtype": "success", "request_id": request_id, "response": response or {}}
-        self._put({"type": "control_response", "response": body})
-
-    async def _control(self, request_id: str, request: dict[str, Any]) -> None:
-        subtype = request.get("subtype")
-        try:
-            handler = getattr(self, f"_on_{subtype}", None)
-            if handler is None:
-                raise ValueError(f"Unsupported control request subtype: {subtype}")
-            self._reply(request_id, await handler(request))
-        except Exception as exc:  # noqa: BLE001 — the client gets the error, the run goes on
-            self._reply(request_id, error=str(exc) or type(exc).__name__)
-
-    async def _on_initialize(self, request: dict[str, Any]) -> dict[str, Any]:
-        if request.get("hooks"):
-            log.warning("hook callbacks from the client are not supported; ignored")
-        return {"commands": await self._commands(), "output_style": "default",
-                "available_output_styles": ["default"], "models": self._models(),
-                "account": {}, "pid": os.getpid()}
-
-    def _models(self) -> list[dict[str, Any]]:
-        out = [{"value": alias, "displayName": alias.capitalize(), "description": real}
-               for alias, real in models.ALIASES.items()]
-        if self.options.model and self.options.model not in models.ALIASES:
-            out.insert(0, {"value": self.options.model, "displayName": self.options.model,
-                           "description": "the model this run started with"})
-        return out
-
-    async def _on_list_models(self, request: dict[str, Any]) -> dict[str, Any]:
-        return {"models": self._models()}
-
-    async def _on_interrupt(self, request: dict[str, Any]) -> dict[str, Any]:
-        if self._turn is not None:
-            self._turn.stopped = True
-            await self.client.cancel(self.task_id, "interrupted by the client", turn_only=True)
-        return {}
-
-    async def _on_set_permission_mode(self, request: dict[str, Any]) -> dict[str, Any]:
-        mode = str(request.get("mode") or "")
-        mode = MODE_ALIASES.get(mode, mode)
-        if mode not in PERMISSION_MODES:
-            raise ValueError(f"unknown permission mode {mode!r}")
-        await self.client.signal(self.task_id, MODE_SIGNAL, {"mode": mode})
-        self.options.permission_mode = mode
-        return {"mode": mode}
-
-    async def _on_set_model(self, request: dict[str, Any]) -> dict[str, Any]:
-        model = request.get("model")
-        if model in (None, "", "default"):
-            model = self.options.model or None
-        await self.client.signal(self.task_id, CONFIG_SIGNAL, {"model": model})
-        return {}
-
-    async def _on_set_max_thinking_tokens(self, request: dict[str, Any]) -> dict[str, Any]:
-        return {}
-
-    async def _on_mcp_status(self, request: dict[str, Any]) -> dict[str, Any]:
-        return {"mcpServers": []}
-
-    async def _on_get_session_cost(self, request: dict[str, Any]) -> dict[str, Any]:
-        return {"text": cost_text(await tree_usage(self.client, self.task_id))}
-
-    async def _on_get_context_usage(self, request: dict[str, Any]) -> dict[str, Any]:
-        parts = await self.app.context(self.task_id)
-        if parts is None:
-            raise ValueError("this host cannot preview the task's next request")
-        window = max(int(parts["window"]), 1)
-        return {"categories": [{"name": k, "tokens": v} for k, v in parts["categories"].items()],
-                "totalTokens": parts["total"], "maxTokens": window,
-                "rawMaxTokens": window, "percentage": round(100 * parts["total"] / window, 1),
-                "model": parts["model"]}
-
-    async def _on_rewind_files(self, request: dict[str, Any]) -> dict[str, Any]:
-        wanted = str(request.get("user_message_id") or "")
-        if wanted not in self._uuids:
-            return {"canRewind": False, "error": f"no prompt with id {wanted!r} in this run"}
-        points = await rewind_points(self.client, self.task_id)
-        inbox = self._uuids[wanted]
-        point = next((p for p in points if p.inbox_seq == inbox and p.task_id == self.task_id),
-                     None)
-        if point is None and inbox == 0 and points:
-            point = points[0]
-        if point is None:
-            return {"canRewind": False, "error": "that prompt has not been taken yet"}
-        plan = await file_plan(self.client, self.task_id, point)
-        added, removed = diff_stats(plan)
-        if not request.get("dry_run"):
-            await rewind(self.client, self.task_id, point, conversation=False)
-        return {"canRewind": True, "filesChanged": sorted(plan.files), "insertions": added,
-                "deletions": removed}
-
-    # ------------------------------------------------------------ permission prompts
-
-    async def _ask(self, items: list[Pending]) -> None:
-        for p in items:
-            key = (p.task_id, p.request_id)
-            if key in self._shown:
-                continue
-            self._shown.add(key)
-            if not self.options.ask_client:
-                await self._refuse(p, "")
-                continue
-            fields: dict[str, Any] = {"tool_name": p.tool, "input": p.input,
-                                      "tool_use_id": p.request_id, "permission_suggestions": []}
-            if p.prompt:
-                fields["decision_reason"] = p.prompt
-            if p.task_id != self.task_id:
-                fields["agent_id"] = p.task_id
-            fields["title"] = card_title(p, self.task_id)
-            self._asked[await self.request("can_use_tool", **fields)] = p
-
-    async def _refuse(self, p: Pending, message: str, *, interrupt: bool = False) -> None:
-        if self._turn is not None:
-            self._turn.denials.append({"tool_name": p.tool, "tool_use_id": p.request_id,
-                                       "tool_input": p.input})
-        if p.kind == "question":
-            await self.client.answer(p.task_id, p.request_id, "deny")
-            return
-        reason = message or (p.prompt or f"Permission to use {p.tool} was not granted.")
-        data: dict[str, Any] = {"message": reason}
-        if not interrupt:
-            data["interrupt"] = False
-        await self.client.answer(p.task_id, p.request_id, "deny", data=data)
-
-    async def _answered(self, response: dict[str, Any]) -> None:
-        p = self._asked.pop(str(response.get("request_id") or ""), None)
-        if p is None:
-            return
-        body = response.get("response") if response.get("subtype") == "success" else None
-        if not isinstance(body, dict) or body.get("behavior") != "allow":
-            message = str((body or {}).get("message") or response.get("error") or "")
-            await self._refuse(p, message, interrupt=bool((body or {}).get("interrupt")))
-            return
-        if p.kind == "question":
-            given = (body.get("updatedInput") or {}).get("answers")
-            answers: dict[str, Any] = {}
-            questions = [q for q in p.detail.get("questions") or [] if isinstance(q, dict)]
-            for q in questions:
-                said = given.get(q.get("question")) if isinstance(given, dict) else None
-                answers = typed_answer(p.detail, str(said or ""), answers)
-            await self.client.answer(p.task_id, p.request_id, data={"answers": answers})
-            return
-        # An approval may change the call (Claude Code's ``updatedInput``);
-        # the permissions plugin runs the call with that input.
-        updated = body.get("updatedInput")
-        data = {"updated_input": updated} \
-            if isinstance(updated, dict) and updated != p.input else None
-        await self.client.answer(p.task_id, p.request_id, "allow",
-                                 always=bool(body.get("updatedPermissions")), data=data)
-
     # ------------------------------------------------------------ following
 
     def _on_delta(self, task_id: str, delta: Delta) -> None:
-        if task_id != self.task_id:
-            return
-        call = delta.call_seq
-        if delta.attempt < self._streaming.get(call, 1):
-            return  # the tail of an attempt that failed
-        if call in self._streaming and delta.attempt > self._streaming[call]:
-            # A retry starts over: the failed attempt's message ends unfinished.
-            if self._open_block >= 0:
-                self._stream_event({"type": "content_block_stop", "index": self._open_block})
-            self._stream_event({"type": "message_stop"})
-            del self._streaming[call]
-        if call not in self._streaming:
-            self._streaming[call] = delta.attempt
-            self._stream_event({"type": "message_start", "message": {
-                "id": f"msg_{call}", "type": "message", "role": "assistant",
-                "model": self.options.model, "content": [], "stop_reason": None,
-                "stop_sequence": None, "usage": _usage_json(Usage())}})
-            self._open_block = -1
-        if delta.index != self._open_block:
-            if self._open_block >= 0:
-                self._stream_event({"type": "content_block_stop", "index": self._open_block})
-            self._open_block = delta.index
-            block = {"type": "text", "text": ""} if delta.kind == "text" \
-                else {"type": "thinking", "thinking": "", "signature": ""}
-            self._stream_event({"type": "content_block_start", "index": delta.index,
-                                "content_block": block})
-        piece = {"type": "text_delta", "text": delta.text} if delta.kind == "text" \
-            else {"type": "thinking_delta", "thinking": delta.text}
-        self._stream_event({"type": "content_block_delta", "index": delta.index,
-                            "delta": piece})
-
-    _open_block = -1
+        if task_id == self.task_id:
+            self._partial.delta(delta, self.options.model)
 
     def _stream_event(self, event: dict[str, Any]) -> None:
         self._put(self._message(type="stream_event", event=event, parent_tool_use_id=None))
@@ -619,7 +379,7 @@ class StreamJson:
         elif isinstance(ev, ToolFinished):
             result = ev.result
             content: Any = result.text if all(isinstance(b, Text) for b in result.content) \
-                else [b for b in map(_block_json, result.content) if b]
+                else [b for b in map(block_json, result.content) if b]
             self._put(self._message(type="user", parent_tool_use_id=None, message={
                 "role": "user", "content": [{"type": "tool_result", "tool_use_id": result.call_id,
                                              "content": content, "is_error": result.is_error}]}))
@@ -637,7 +397,7 @@ class StreamJson:
                     self._put(self._message(
                         type="system", subtype="task_notification", task_id=body.child_id,
                         status=status, output_file="", summary=body.answer or body.error,
-                        usage=_usage_json(body.last_usage or Usage())))
+                        usage=usage_json(body.last_usage or Usage())))
                 elif isinstance(item.body, Say) \
                         and item.body.message.origin in (None, "human"):
                     if self._turn is None:
@@ -657,20 +417,13 @@ class StreamJson:
         response = ev.response
         if self._turn is not None:
             self._turn.api_calls += 1
-        if self._called in self._streaming:
-            if self._open_block >= 0:
-                self._stream_event({"type": "content_block_stop", "index": self._open_block})
-                self._open_block = -1
-            self._stream_event({"type": "message_delta", "delta": {
-                "stop_reason": response.stop_reason, "stop_sequence": None},
-                "usage": {"output_tokens": response.usage.output}})
-            self._stream_event({"type": "message_stop"})
+        self._partial.replied(self._called, response.stop_reason, response.usage.output)
         self._put(self._message(type="assistant", parent_tool_use_id=None, message={
             "id": f"msg_{self._called or rec.seq}", "type": "message", "role": "assistant",
             "model": response.model or self.options.model,
-            "content": [b for b in map(_block_json, response.message.content) if b],
+            "content": [b for b in map(block_json, response.message.content) if b],
             "stop_reason": response.stop_reason, "stop_sequence": None,
-            "usage": _usage_json(response.usage)}))
+            "usage": usage_json(response.usage)}))
         budget = self.options.max_budget_usd
         if budget is not None and self._turn is not None and not self._turn.over_budget:
             total = await tree_usage(self.client, self.task_id)
@@ -740,7 +493,7 @@ class StreamJson:
         result["duration_api_ms"] = int(mine.api_seconds * 1000)
         result["num_turns"] = sum(m.calls for m in mine.by_model.values())
         result["total_cost_usd"] = round(total.cost_usd, 6)
-        result["usage"] = _usage_json(mine.usage)
+        result["usage"] = usage_json(mine.usage)
         result["modelUsage"] = {
             name: {"inputTokens": m.usage.uncached, "outputTokens": m.usage.output,
                    "cacheReadInputTokens": m.usage.cache_read,
@@ -768,13 +521,6 @@ class StreamJson:
             await asyncio.wait(waiters, timeout=0.5, return_when=asyncio.FIRST_COMPLETED)
             for w in waiters:
                 w.cancel()
-
-    async def refuse_open_asks(self) -> None:
-        """The client can no longer answer (its input ended): what it was
-        asked is refused, so the turn can finish."""
-        asked, self._asked = list(self._asked.values()), {}
-        for p in asked:
-            await self._refuse(p, "")
 
 
 async def drive(conversation: StreamJson, *, prompt: Message | None = None,
