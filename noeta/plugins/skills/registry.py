@@ -14,11 +14,12 @@ import logging
 import posixpath
 import re
 import shlex
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from noeta.core.execenv import ExecEnv
 from noeta.plugins.skills import _frontmatter
+from noeta.plugins.skills.inline_commands import has_commands, neutralise
 from noeta.toolkit.context import read_text
 
 __all__ = [
@@ -292,14 +293,14 @@ def argument_names(raw: str | None) -> tuple[str, ...]:
     return tuple(n for n in parse_list(raw) if not n.isdigit())
 
 
-def substitute_arguments(body: str, args: str | None,
-                         names: Sequence[str] = ()) -> str:
+def substitute_arguments(body: str, args: str | None, names: Sequence[str] = (),
+                         escape: Callable[[str], str] | None = None) -> str:
     """``body`` with its argument placeholders filled the way Claude Code
     fills them: ``$ARGUMENTS`` is the whole argument string,
     ``$ARGUMENTS[N]`` and ``$N`` the N-th (from 0) shell-quoted word (left as
     written when there is no such word), ``$<name>`` the word at that name's
     place in ``names`` (the skill's ``arguments``), and ``\\$`` keeps a
-    ``$`` literal.
+    ``$`` literal. ``escape`` transforms each value filled in.
     When arguments are given but no placeholder took them, they follow the
     body on an ``ARGUMENTS:`` line. ``None`` (no arguments passed) leaves the
     body as written."""
@@ -317,6 +318,8 @@ def substitute_arguments(body: str, args: str | None,
     def fill(value: str) -> str:
         nonlocal used
         used = True
+        if escape is not None:
+            value = escape(value)
         return value.replace("$", _ESCAPED_DOLLAR)
 
     kept = [(n, i) for i, n in enumerate(names) if n and len(n) <= MAX_ARGUMENT_NAME_LEN]
@@ -371,7 +374,8 @@ def render_body(desc: SkillDescription, args: str | None = None,
     the argument placeholders (an argument naming a variable stays as
     typed)."""
     body = substitute_variables(desc.body, desc.base_dir, project_dir)
-    return substitute_arguments(body, args, desc.arguments)
+    escape = neutralise if has_commands(body) else None
+    return substitute_arguments(body, args, desc.arguments, escape)
 
 
 def render_activation(desc: SkillDescription, args: str | None = None,

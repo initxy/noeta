@@ -32,6 +32,12 @@ from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ToolUse, user
 from noeta.plugins.skills import _frontmatter
 from noeta.plugins.skills.allowed_tools import allow_rule_texts, resolve_skill_allowed_tools
+from noeta.plugins.skills.inline_commands import (
+    InlineCommandError,
+    has_commands,
+    run_inline_commands,
+    strip_commands,
+)
 from noeta.plugins.skills.listing import listing_lines, render_listing
 from noeta.plugins.skills.registry import (
     SkillDescription,
@@ -200,6 +206,9 @@ class Skills(Extension):
     * ``rehang`` — put the listing and active skills right after a
       compaction's summary (``resident``; ADR-036 re-hang).
     * ``origin`` — origin of recorded listing / skill text (``"system"``).
+    * ``shell_commands`` — run the ``!`command``` lines of a skill body when
+      it loads (Claude Code's ``disableSkillShellExecution`` turned off);
+      ``False`` leaves a marker in their place.
     """
 
     name = "skills"
@@ -220,6 +229,7 @@ class Skills(Extension):
         tool_enforcement: Enforcement = "off",
         rehang: bool = True,
         origin: Literal["system"] | None = "system",
+        shell_commands: bool = True,
     ) -> None:
         if budget_tokens is not None and budget_tokens <= 0:
             raise ValueError("Skills: budget_tokens must be a positive int")
@@ -239,6 +249,7 @@ class Skills(Extension):
         self.tool_enforcement = tool_enforcement
         self.rehang = rehang
         self.origin = origin
+        self.shell_commands = shell_commands
         self._skill_tool = SkillTool(self)
         self._script_tool = RunSkillScriptTool(self.name)
 
@@ -344,7 +355,13 @@ class Skills(Extension):
                 if desc is None:
                     _log.warning("skills: preload %r is not an indexed skill; skipped", name)
                     continue
-                self._record_activation(view, _activation_data(desc, "preload", cwd=view.cwd))
+                data = _activation_data(desc, "preload", cwd=view.cwd)
+                try:
+                    data = await self._expand(view, data, f"skill-preload-{name}")
+                except InlineCommandError as exc:
+                    _log.warning("skills: preload %r skipped: %s", name, exc)
+                    continue
+                self._record_activation(view, data)
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         """The listing taken at start, in the environment's system turn
@@ -390,6 +407,14 @@ class Skills(Extension):
                 # The body rides in the person's turn as plain text, after
                 # the command's tags (Claude Code's slash-command shape).
                 data["text"] = render_command_body(desc, typed[1], view.cwd)
+                try:
+                    data = await self._expand(view, data, f"skill-{recorded.seq}")
+                except InlineCommandError as exc:
+                    view.notify(str(exc))
+                    view.record(self.name, "load_failed", {"name": desc.name},
+                                message=user(f"The skill could not load: {exc}",
+                                             origin="inline"))
+                    continue
                 view.record(self.name, "activated", data,
                             message=user(data["text"], origin="inline"))
 
@@ -398,6 +423,10 @@ class Skills(Extension):
         if call.name != SKILL_TOOL or output.is_error or not isinstance(data, dict):
             return output
         if data["name"] not in (view.ext_state(self.name) or {}).get("active", {}):
+            try:
+                data = await self._expand(view, data, call.id)
+            except InlineCommandError as exc:
+                return text_output(str(exc), is_error=True)
             self._record_activation(view, data)
         meta = {k: v for k, v in output.meta.items() if k != "skill_activation"}
         meta["skill"] = data["name"]
@@ -450,6 +479,22 @@ class Skills(Extension):
             return None
         return dict(got) if got else None
 
+    async def _expand(self, view: TaskView, data: dict[str, Any], call_id: str
+                      ) -> dict[str, Any]:
+        """``data`` with the commands of its text run (or blanked when the
+        host turned them off); the text they produced is kept as
+        ``rendered`` so a compaction re-attaches it without running them
+        again."""
+        text = data["text"]
+        if not has_commands(text):
+            return data
+        if not self.shell_commands:
+            text = strip_commands(text)
+        else:
+            text = await run_inline_commands(view, text, skill=data["name"], call_id=call_id,
+                                             approve_rules=data.get("allow_rules") or ())
+        return {**data, "text": text, "rendered": text}
+
     def _record_listing(self, view: TaskView, lines: Sequence[tuple[str, str]],
                         *, first: bool) -> None:
         names = [n for n, _ in lines]
@@ -476,8 +521,10 @@ class Skills(Extension):
             for name, entry in active.items():
                 desc = registry.get(name)
                 if desc is not None:
+                    text = entry.get("rendered") or strip_commands(
+                        render_activation(desc, entry.get("args"), view.cwd), "")
                     parts.append(f"### Skill: {desc.name}\nPath: {desc.base_dir or desc.name}"
-                                 f"\n\n{render_activation(desc, entry.get('args'), view.cwd)}")
+                                 f"\n\n{text}")
             if len(parts) > 1 and view.keeps_tail is not None:
                 view.record(self.name, "invoked_rehold", {"text": "\n\n".join(parts)})
         if view.keeps_tail is not None and state.get("listings"):

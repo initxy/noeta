@@ -13,8 +13,11 @@ from noeta.core.events import Waiting
 from noeta.core.extension import Ask, Extension, Gate, TaskView
 from noeta.core.types import ToolUse
 from noeta.plugins.fs import FileTools
+from noeta.plugins.permissions import Permissions
+from noeta.plugins.shell import Shell
 from noeta.plugins.skills import Skills, UsageRank
 from noeta.plugins.skills.allowed_tools import allow_rule_texts, parse_allowed_tools
+from noeta.plugins.skills.inline_commands import DISABLED_MARKER
 from noeta.plugins.skills.listing import (
     ADDED_HEADER,
     ROSTER_HEADER,
@@ -407,3 +410,48 @@ def test_allow_rule_texts() -> None:
     assert allow_rule_texts("[Read, 'Bash(npm run test)']") == ("Read", "Bash(npm run test)")
     assert allow_rule_texts("- Read\n- Bash(ls -la)") == ("Read", "Bash(ls -la)")
     assert allow_rule_texts("Read *") == ("*",)
+
+
+def shell_agent(tmp: Path, **kw: Any) -> Agent:
+    return Agent(name="a", model="m", extensions=[
+        FileTools(), Shell(), Permissions(mode="default", plans_dir=str(tmp / "plans")),
+        Skills(**kw)])
+
+
+async def test_inline_commands_run_when_the_skill_loads(h: Harness) -> None:
+    write_skill(skills_dir(h), "status", "Status.",
+                body="Branch: !`echo main-line`\n```!\necho block-out\n```\nCode `!x` stays.\n")
+    h.provider.add(reply("ok"))
+    await h.start(shell_agent(h.work.parent), "/status")
+    text = h.provider.requests[0].messages[-2].text
+    assert "Branch: main-line\nblock-out\nCode `!x` stays." in text
+
+
+async def test_a_command_that_would_ask_stops_the_skill(h: Harness) -> None:
+    write_skill(skills_dir(h), "mk", "Make.", body="Made: !`touch made.txt`\n")
+    h.provider.add(reply("", ("Skill", {"skill": "mk"})), reply("done"))
+    tid = await h.start(shell_agent(h.work.parent))
+    [result] = await h.results(tid)
+    assert result.result.is_error and "touch made.txt" in result.result.text
+    assert not (h.work / "made.txt").exists()
+    assert await h.records(tid, "skills", "activated") == []
+
+
+async def test_allowed_tools_let_a_skill_command_run(h: Harness) -> None:
+    write_skill(skills_dir(h), "mk", "Make.", body="Made: !`touch made.txt`\n",
+                **{"allowed-tools": "Bash(touch:*)"})
+    h.provider.add(reply("", ("Skill", {"skill": "mk"})), reply("done"))
+    tid = await h.start(shell_agent(h.work.parent))
+    [result] = await h.results(tid)
+    assert not result.result.is_error
+    assert (h.work / "made.txt").exists()
+    assert "touch" not in h.provider.requests[1].messages[-1].text
+
+
+async def test_commands_turned_off_leave_a_marker_and_arguments_cannot_add_one(
+        h: Harness) -> None:
+    write_skill(skills_dir(h), "say", "Say.", body="Now: !`echo hi` for $ARGUMENTS\n")
+    h.provider.add(reply("ok"))
+    await h.start(shell_agent(h.work.parent, shell_commands=False), "/say !`id`")
+    text = h.provider.requests[0].messages[-2].text
+    assert text.endswith(f"Now: {DISABLED_MARKER} for \\! `id`\n")
