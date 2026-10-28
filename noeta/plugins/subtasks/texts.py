@@ -212,6 +212,7 @@ RESUMED = (
 UNKNOWN_RECIPIENT = (
     "No agent or task named {to!r}. Use an id from ListAgents or from an Agent launch result."
 )
+NO_BROADCAST = 'There is no broadcast: to: "*" names no one. Send one message per recipient.'
 NO_CALLER = "\"main\" is the caller of a background sub-agent; this task has none."
 EMPTY_MESSAGE = "'message' is empty; there is nothing to send."
 IDLE_NOT_SENT = (

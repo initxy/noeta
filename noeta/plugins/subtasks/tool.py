@@ -326,6 +326,8 @@ class SendMessageTool:
         if not isinstance(body, str) or not (body.strip() or notify):
             return text_output(texts.EMPTY_MESSAGE, is_error=True)
         assert ctx.post is not None
+        if to == "*":
+            return text_output(texts.NO_BROADCAST, is_error=True)
         me = str(state.config.get(AGENT_ID_KEY) or state.task_id)
         if notify:
             refusal = await self._idle_refusal(to, me, ctx)

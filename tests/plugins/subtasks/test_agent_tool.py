@@ -268,7 +268,8 @@ async def test_send_message_refusals_and_other_tasks(store: SqliteStore) -> None
     p = ScriptedProvider([
         reply("", ("SendMessage", {"to": "nobody", "message": "hi"}),
               ("SendMessage", {"to": "main", "message": "hi"}),
-              ("SendMessage", {"to": "x", "message": " "})),
+              ("SendMessage", {"to": "x", "message": " "}),
+              ("SendMessage", {"to": "*", "message": "all of you"})),
         reply("ok")])
     rt = runtime(store, {"p": p, "o": other_p}, parent(),
                  Agent(name="other", model="o"))
@@ -280,14 +281,14 @@ async def test_send_message_refusals_and_other_tasks(store: SqliteStore) -> None
     await rt.run_until_idle()
     assert await results(client, tid) == [
         (texts.UNKNOWN_RECIPIENT.format(to="nobody"), True), (texts.NO_CALLER, True),
-        (texts.EMPTY_MESSAGE, True)]
+        (texts.EMPTY_MESSAGE, True), (texts.NO_BROADCAST, True)]
     p.add(reply("", ("SendMessage", {"to": other, "message": "ping"}), ("ListAgents", {})),
           reply("done"))
     await client.send(tid, "ping the other one")
     await rt.run_until_idle()
     out = await results(client, tid)
-    assert out[3] == (texts.SENT.format(to=other), False)
-    assert out[4][0].startswith(texts.LIST_HEAD) and f"- {other} — session" in out[4][0]
+    assert out[4] == (texts.SENT.format(to=other), False)
+    assert out[5][0].startswith(texts.LIST_HEAD) and f"- {other} — session" in out[5][0]
     got = other_p.requests[-1].messages[-1]
     assert got.origin == "agent" and '<cross-session-message from="' in got.text
 
