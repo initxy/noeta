@@ -163,6 +163,11 @@ class Post(Struct):
     #: Make a waiting task ready. Off: the item waits in the inbox for the
     #: task's next wake (news that needs no turn of its own).
     wake: bool = True
+    #: When the task has ended (so it reads nothing more), post to its root
+    #: instead, decided under the task's row lock: no end can slip between
+    #: the check and the post, and the item reaches whoever settles for an
+    #: ended task (a background job's end, for one). Same dedupe key.
+    forward_if_ended: bool = False
 
 
 def hold_lost(task_id: str, worker: str, epoch: int, *, wake: bool = True) -> Post:
@@ -224,9 +229,10 @@ class Store(Protocol):
     async def read(self, task_id: str, after: int = 0) -> list[Recorded]: ...
 
     async def post(self, post: Post) -> tuple[int, bool]:
-        """Add to the task's inbox; returns ``(inbox_seq, created)``. A known
-        ``dedupe_key`` returns the first post's seq and ``False``. Raises
-        ``noeta.core.errors.UnknownTask``."""
+        """Add to the task's inbox (its root's, for ``forward_if_ended``
+        when it has ended); returns ``(inbox_seq, created)`` of the inbox it
+        went to. A known ``dedupe_key`` returns the first post's seq and
+        ``False``. Raises ``noeta.core.errors.UnknownTask``."""
         ...
 
     async def inbox(self, task_id: str, after: int = 0) -> list[InboxItem]: ...

@@ -14,6 +14,8 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import TypeVar
 
+from msgspec.structs import replace
+
 from noeta.backends.stores._rows import (
     TASK_COLUMNS,
     encode,
@@ -281,6 +283,19 @@ class SqliteStore:
         return task.task_id, True
 
     @staticmethod
+    def _forwarded(conn: sqlite3.Connection, post: Post) -> Post:
+        """``post``, or the same post to its task's root when it asks to be
+        forwarded and the task has ended (see ``Post.forward_if_ended``)."""
+        if not post.forward_if_ended:
+            return post
+        row = conn.execute(
+            "SELECT status, root_id FROM tasks WHERE task_id = ?", (post.task_id,)
+        ).fetchone()
+        if row is None or row[0] != "ended" or row[1] == post.task_id:
+            return post
+        return replace(post, task_id=str(row[1]), forward_if_ended=False)
+
+    @staticmethod
     def _insert_post(conn: sqlite3.Connection, post: Post, now: float) -> tuple[int, bool]:
         row = conn.execute(
             "SELECT status, inbox_seq FROM tasks WHERE task_id = ?", (post.task_id,)
@@ -379,6 +394,7 @@ class SqliteStore:
                     changes.append((task_id, "created"))
             for post in posts:
                 try:
+                    post = self._forwarded(conn, post)
                     _, created = self._insert_post(conn, post, now)
                 except UnknownTask:
                     continue  # a notice for a task that does not exist is dropped
@@ -401,9 +417,13 @@ class SqliteStore:
         return await self._run(q)
 
     async def post(self, post: Post) -> tuple[int, bool]:
-        result = await self._write(lambda conn: self._insert_post(conn, post, time.time()))
+        def tx(conn: sqlite3.Connection) -> tuple[Post, tuple[int, bool]]:
+            to = self._forwarded(conn, post)
+            return to, self._insert_post(conn, to, time.time())
+
+        to, result = await self._write(tx)
         if result[1]:
-            self._notify([(post.task_id, "posted")])
+            self._notify([(to.task_id, "posted")])
         return result
 
     async def inbox(self, task_id: str, after: int = 0) -> list[InboxItem]:

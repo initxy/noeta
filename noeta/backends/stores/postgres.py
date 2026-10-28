@@ -541,6 +541,21 @@ class PostgresStore:
                                  (task_id,))
         return await cur.fetchone() is not None
 
+    async def _forwarded(self, conn: Conn, post: Post) -> Post:
+        """``post``, or the same post to its task's root when it asks to be
+        forwarded and the task has ended (see ``Post.forward_if_ended``).
+        The task's row stays locked to the end of the transaction, so its
+        end cannot land between this check and the post."""
+        if not post.forward_if_ended:
+            return post
+        cur = await conn.execute(self._q(
+            "SELECT status, root_id FROM {s}.tasks WHERE task_id = %s FOR UPDATE"),
+            (post.task_id,))
+        row = await cur.fetchone()
+        if row is None or row[0] != "ended" or row[1] == post.task_id:
+            return post
+        return msgspec.structs.replace(post, task_id=str(row[1]), forward_if_ended=False)
+
     async def _insert_post(self, conn: Conn, post: Post) -> tuple[int, bool]:
         cur = await conn.execute(
             self._q("SELECT inbox_seq FROM {s}.tasks WHERE task_id = %s FOR UPDATE"),
@@ -636,6 +651,7 @@ class PostgresStore:
             for post in posts:
                 if not await self._exists(conn, post.task_id):
                     continue  # a notice for a task that does not exist is dropped
+                post = await self._forwarded(conn, post)
                 _, created = await self._insert_post(conn, post)
                 if created:
                     changes.append((post.task_id, "posted"))
@@ -657,15 +673,16 @@ class PostgresStore:
         return await self._tx(q, write=False)
 
     async def post(self, post: Post) -> tuple[int, bool]:
-        async def tx(conn: Conn) -> tuple[int, bool]:
-            result = await self._insert_post(conn, post)
+        async def tx(conn: Conn) -> tuple[Post, tuple[int, bool]]:
+            to = await self._forwarded(conn, post)
+            result = await self._insert_post(conn, to)
             if result[1]:
-                await self._notify(conn, [(post.task_id, "posted")])
-            return result
+                await self._notify(conn, [(to.task_id, "posted")])
+            return to, result
 
-        result = await self._tx(tx)
+        to, result = await self._tx(tx)
         if result[1]:
-            self._deliver([(post.task_id, "posted")])
+            self._deliver([(to.task_id, "posted")])
         return result
 
     async def inbox(self, task_id: str, after: int = 0) -> list[InboxItem]:

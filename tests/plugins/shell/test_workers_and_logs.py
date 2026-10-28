@@ -182,7 +182,7 @@ async def test_the_tools_say_a_job_was_lost(tmp_path: Path) -> None:
                 assert out.is_error and "was lost" in body, body
 
 
-async def _posted(_body: Any, task_id: str | None = None) -> None:
+async def _posted(_body: Any, task_id: str | None = None, **_kw: Any) -> None:
     return None
 
 

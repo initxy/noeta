@@ -210,6 +210,26 @@ async def test_ending_over_an_unread_inbox_is_refused(store: Store) -> None:
     assert row is not None and row.status == "ended"
 
 
+async def test_a_post_to_an_ended_task_can_go_to_its_root(store: Store) -> None:
+    await store.create(new("root"))
+    await store.create(NewTask(task_id="root.child",
+                               created=TaskCreated(agent="a", parent_id="root", root_id="root")))
+    claims = [await store.claim("w", ["default"], 30) for _ in range(2)]
+    claim = next(c for c in claims if c is not None and c.task_id == "root.child")
+    live = Post(task_id="root.child", body=say("live"), forward_if_ended=True)
+    await store.post(live)
+    read = (await store.get("root.child")).inbox_seq  # type: ignore[union-attr]
+    await store.append(claim, [TaskEnded(status="done")], expected_seq=1,
+                       patch=Patch(status="ended", inbox_read_seq=read))
+    late = Post(task_id="root.child", body=say("late"), dedupe_key="k", forward_if_ended=True)
+    assert (await store.post(late))[1]
+    assert not (await store.post(late))[1]  # the same dedupe key, at the root
+    assert [i.body for i in await store.inbox("root")] == [say("late")]
+    assert [i.body for i in await store.inbox("root.child")] == [say("live")]
+    await store.post(Post(task_id="root.child", body=say("plain")))
+    assert len(await store.inbox("root.child")) == 2
+
+
 async def test_post_dedupe_and_unknown_task(store: Store) -> None:
     await store.create(new())
     assert await store.post(Post(task_id="t1", body=say("a"), dedupe_key="k")) == (1, True)

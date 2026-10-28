@@ -36,7 +36,8 @@ class Harness:
         return next(t for t in self.ext._tools if t.name == name)
 
     async def post(self, body: Any, task_id: str | None = None,
-                   dedupe_key: str | None = None) -> None:
+                   dedupe_key: str | None = None, forward_if_ended: bool = False) -> None:
+        assert forward_if_ended  # a spawner may end before its notice lands
         if isinstance(body, External):  # a job's end, posted once
             assert body.name == JOB_ENDED
             assert dedupe_key == f"{JOB_ENDED}:{body.data['job_id']}"

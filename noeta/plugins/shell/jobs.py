@@ -419,8 +419,10 @@ class Registry:
         data = {"job_id": job.job_id, "status": self._status(job), "exit_code": job.exit_code,
                 "notice": f"{NOTICE_GUARD}\n\n{notice}" if notice is not None else None}
         try:
+            # Forwarded to the root by the store when the spawner ended
+            # after ``_target`` looked (this process marks ends late).
             await job.post(External(name=JOB_ENDED, data=data), task_id=self._target(job),
-                           dedupe_key=f"{JOB_ENDED}:{job.job_id}")
+                           dedupe_key=f"{JOB_ENDED}:{job.job_id}", forward_if_ended=True)
         except Exception as exc:  # noqa: BLE001 - its hold runs out and the tree is told
             log.warning("background job %s: its end was not posted: %s", job.job_id, exc)
 
@@ -501,7 +503,7 @@ class Registry:
             try:
                 await job.post(Say(message=user(f"{NOTICE_GUARD}\n\n{text}", origin="system"),
                                    when="now"),
-                               task_id=self._target(job))
+                               task_id=self._target(job), forward_if_ended=True)
             except Exception as exc:  # noqa: BLE001 - a lost notice must not kill the sender
                 log.warning("background notice for %s not delivered: %s", job.job_id, exc)
 

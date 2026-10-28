@@ -139,7 +139,7 @@ async def test_background_jobs_run_sandboxed(tmp_path: Path) -> None:
     env, fake = fake_env(work)
     posts: list[str] = []
 
-    async def post(body: Any, task_id: str | None = None) -> None:
+    async def post(body: Any, task_id: str | None = None, **_kw: Any) -> None:
         assert isinstance(body, Say)
         posts.append(body.message.text)
 

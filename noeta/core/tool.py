@@ -70,7 +70,8 @@ class ToolContext(CoreNotices):
     #: root once the spawner has ended; another conversation ``SendMessage``
     #: writes to, as Claude Code messages its other open sessions); another
     #: tenant's task raises ``UnknownTask``. Wakes the task if it is waiting;
-    #: idempotent with a ``dedupe_key=``.
+    #: idempotent with a ``dedupe_key=``; ``forward_if_ended=True`` sends it
+    #: to the root instead when the task has ended (``Post.forward_if_ended``).
     post: Callable[..., Awaitable[None]] | None = None
     #: The root task's id (background jobs notify the spawner, then the root).
     root_id: str = ""
