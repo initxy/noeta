@@ -440,8 +440,11 @@ class NoetaAcpAgent:
                 elif ev.kind == "turn_stopped":
                     return "cancelled"
                 elif ev.kind == "notice":
-                    text = str((ev.data or {}).get("text") or "")
-                    out.put_nowait(acp.update_agent_message_text(f"\n\n[{text}]\n\n"))
+                    data = ev.data if isinstance(ev.data, dict) else {}
+                    text = str(data.get("text") or "")
+                    # Structured news (a review's findings) goes as markdown.
+                    shown = text if data.get("kind") else f"[{text}]"
+                    out.put_nowait(acp.update_agent_message_text(f"\n\n{shown}\n\n"))
             elif isinstance(ev, Waiting):
                 if ev.on == "approval":
                     await out.join()

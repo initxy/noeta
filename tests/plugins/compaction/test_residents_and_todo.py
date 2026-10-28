@@ -40,12 +40,12 @@ async def test_default_agents_residents_follow_every_summary(
     work = tmp_path / "work"
     work.mkdir()
     (work / "AGENTS.md").write_text("RULE: always say hi")
-    # main's prompt and tools take ~5K tokens: a 40K cap leaves the same
+    # main's prompt and tools take ~8K tokens: a 40K cap leaves the same
     # few-thousand-token working window the other compaction tests use.
     [main, *_] = default_agents(
         "m", tools=[Probe(size=2000)], plugins={
             "permissions": Permissions(mode="bypassPermissions"),
-            "compaction": Compaction(auto_compact_window=36_000)})
+            "compaction": Compaction(auto_compact_window=40_000)})
     model = Model([*(call() for _ in range(40)), answer("done")])
     _client, tid = await run(store, main, model, env_for=lambda _s: LocalExecEnv(str(work)))
     assert len(model.summarize_requests) >= 2

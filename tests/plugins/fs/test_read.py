@@ -315,6 +315,25 @@ async def test_read_refuses_more_than_25000_tokens(h: Harness, ws: Path) -> None
     assert not ok.is_error
 
 
+async def test_read_checks_a_large_window_with_the_exact_count(h: Harness, ws: Path) -> None:
+    (ws / "wide.txt").write_text(("y" * 150 + "\n") * 3000)
+    counted: list[int] = []
+
+    async def count(text: str) -> int | None:
+        counted.append(len(text))
+        return 20_000  # under the ceiling, though the estimate (37750) is over
+
+    ctx = h.ctx()
+    ctx.count_tokens = count
+    out = await ReadTool().run({"file_path": "wide.txt", "limit": 1000}, ctx)
+    assert not out.is_error and counted == [151 * 1000 - 1]
+    small = h.ctx()
+    small.count_tokens = count
+    # Under a quarter of the ceiling the estimate stands: no count request.
+    assert not (await ReadTool().run({"file_path": "wide.txt", "limit": 100}, small)).is_error
+    assert len(counted) == 1
+
+
 async def test_read_json_counts_two_chars_per_token(h: Harness, ws: Path) -> None:
     (ws / "d.json").write_text(("y" * 150 + "\n") * 600)
     out = await h.call(ReadTool(), file_path="d.json", limit=600)

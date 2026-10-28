@@ -30,6 +30,7 @@ from noeta.plugins.subtasks.tool import (
     handback_sender,
 )
 from noeta.testing import ScriptedProvider, reply
+from noeta.toolkit.notices import NOTICE_GUARD
 from tests.plugins.subtasks.conftest import Probe, events, runtime
 
 ROSTER = [
@@ -151,7 +152,7 @@ async def test_launch_hand_back_and_notice(store: SqliteStore) -> None:
         "<tools-used-before-summary>SubagentHandback</tools-used-before-summary>")
     notice = msgs[-2].text
     assert msgs[-2].origin == "system" and msgs[-1].text == "thanks"
-    assert notice.startswith(texts.NOTICE_GUARD)
+    assert notice.startswith(NOTICE_GUARD)
     for part in (f"<task-id>{cid}</task-id>", "<status>completed</status>",
                  '<summary>Agent "do it" finished</summary>',
                  texts.RESULT_POINTER.format(id=cid),

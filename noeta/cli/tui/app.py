@@ -437,7 +437,9 @@ class NoetaApp(App[None]):
                 finished.set_result(ev.result.text, is_error=ev.result.is_error, diff=diff)
         elif isinstance(ev, ExtensionRecorded):
             data = ev.data if isinstance(ev.data, dict) else {}
-            if ev.kind == "retry":
+            if ev.extension == "title" and ev.kind == "title":
+                self.sub_title = str(data.get("title") or "")
+            elif ev.kind == "retry":
                 await self._retried(int(data.get("attempt") or 1))
                 await transcript.mount(Notice(f"retrying (attempt {data.get('attempt')}): "
                                               f"{str(data.get('error', ''))[:120]}"))
@@ -449,7 +451,10 @@ class NoetaApp(App[None]):
                 reason = ": ".join(str(x) for x in (data.get("reason"), data.get("detail")) if x)
                 await transcript.mount(Notice(f"turn failed: {reason}", classes="-error"))
             elif ev.kind == "notice" and ev.extension == CORE:
-                await transcript.mount(Notice(str(data.get("text") or "")))
+                text = str(data.get("text") or "")
+                # Structured news (a review's findings) reads as a list.
+                await transcript.mount(Markdown(text, classes="notice") if data.get("kind")
+                                       else Notice(text))
         elif isinstance(ev, Waiting):
             await self._end_stream()
             self.waiting_for = {"approval": "waiting for your approval (y/a/n)",

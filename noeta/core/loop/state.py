@@ -28,7 +28,16 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.prompts import resolve
-from noeta.core.types import Message, StopReason, Text, ToolReference, ToolResult, ToolUse, Usage
+from noeta.core.types import (
+    Message,
+    StopReason,
+    Text,
+    ToolReference,
+    ToolResult,
+    ToolUse,
+    Usage,
+    user,
+)
 
 Reducer = Callable[[Any, str, Any], Any]
 
@@ -110,6 +119,10 @@ class TaskState:
     spawned: dict[str, dict[str, Any]] = field(default_factory=dict)
     children: dict[str, ChildEnded | None] = field(default_factory=dict)
     signals: list[TimerFired | External] = field(default_factory=list)
+    #: Timers set and not yet fired or cleared, by name: ``{"at": epoch
+    #: seconds, "text": message or ""}``. A due timer fires while the task is
+    #: idle; its text arrives as a message, as if sent for the next turn.
+    timers: dict[str, dict[str, Any]] = field(default_factory=dict)
     waiting: Waiting | None = None
     ended: TaskEnded | None = None
     compaction: Compacted | None = None
@@ -253,6 +266,13 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         if ev.extension == CORE and ev.kind == "spawned":
             for child in ev.data["children"]:
                 state.spawned[child["id"]] = child
+        if ev.extension == CORE and ev.kind == "timer":
+            data = ev.data if isinstance(ev.data, dict) else {}
+            if data.get("name"):
+                state.timers[str(data["name"])] = {"at": float(data.get("at") or 0),
+                                                   "text": str(data.get("text") or "")}
+        if ev.extension == CORE and ev.kind == "timer_cleared":
+            state.timers.pop(str((ev.data or {}).get("name") or ""), None)
         if ev.extension == CORE and ev.kind == "prompts":
             data = ev.data if isinstance(ev.data, dict) else {}
             state.prompt_files = {str(k): v for k, v in data.items() if isinstance(v, str)}
@@ -317,19 +337,7 @@ def _take(state: TaskState, ev: InputTaken, seq: int) -> None:
     for item in ev.items:
         body = item.body
         if isinstance(body, Say):
-            if body.when == "next_turn" and state.turn_open:
-                state.queued.append(body.message)
-                continue
-            said_now = state.turn_open or said_now
-            if state.calls:
-                state.held.append(body.message)
-            else:
-                state._add(body.message, seq)
-            if not state.turn_open:
-                state.steps_in_turn = 0
-                state.turn_error = None
-            state.turn_open = True
-            state.waiting = None
+            said_now = _say(state, body.message, seq, now=body.when == "now") or said_now
         elif isinstance(body, Cancel):
             if body.turn_only:
                 if state.turn_open:
@@ -342,8 +350,31 @@ def _take(state: TaskState, ev: InputTaken, seq: int) -> None:
             state.children[body.child_id] = body
         else:
             state.signals.append(body)
+            timer = state.timers.pop(body.name, None) if isinstance(body, TimerFired) else None
+            if timer and timer["text"]:
+                _say(state, user(timer["text"]), seq)
     if said_now and state.stop_turn_requested is not None:
         state.reopen_after_stop = True
+
+
+def _say(state: TaskState, message: Message, seq: int, *, now: bool = False) -> bool:
+    """A message for the agent: queued behind an open turn unless ``now``,
+    otherwise added (held behind open calls) and opening a turn. ``True``
+    when it was taken into an open turn."""
+    if not now and state.turn_open:
+        state.queued.append(message)
+        return False
+    into_open = state.turn_open
+    if state.calls:
+        state.held.append(message)
+    else:
+        state._add(message, seq)
+    if not state.turn_open:
+        state.steps_in_turn = 0
+        state.turn_error = None
+    state.turn_open = True
+    state.waiting = None
+    return into_open
 
 
 def _end_turn(state: TaskState, seq: int) -> None:

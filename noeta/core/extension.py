@@ -15,10 +15,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Union
 
 from noeta.core.deferred import deferred_names
-from noeta.core.events import Compacted, Event, ExtensionRecorded, Recorded
+from noeta.core.events import Compacted, Event, ExtensionRecorded, Recorded, Say, TaskCreated
 from noeta.core.execenv import ExecEnv
-from noeta.core.tool import Tool, ToolOutput
-from noeta.core.types import Message, ModelRequest, ModelResponse, Struct, ToolUse
+from noeta.core.tool import Tool, ToolOutput, notice_data
+from noeta.core.types import Message, ModelRequest, ModelResponse, Struct, ToolUse, user
 
 if TYPE_CHECKING:
     from noeta.core.agent import Agent
@@ -108,6 +108,15 @@ class CommandContext:
     task_id: str | None = None
 
 
+class StagedChild(Struct):
+    """A child task ``TaskView.spawn`` staged; the runner creates it."""
+
+    task_id: str
+    created: TaskCreated
+    queue: str
+    first: Say
+
+
 @dataclass
 class TaskView:
     """What an extension sees: the folded task state (read only) and a way to
@@ -125,6 +134,11 @@ class TaskView:
     #: turn, a cancel); idempotent with a ``dedupe_key``.
     post: Callable[..., Awaitable[None]] | None = None
     pending: list[Event] = field(default_factory=list)
+    #: Child tasks staged by ``spawn``, created with ``pending``.
+    creates: list[StagedChild] = field(default_factory=list)
+    #: ``await count_tokens(text)``: the provider's exact token count of one
+    #: user message holding ``text`` (``None`` when it cannot count).
+    count_tokens: Callable[[str], Awaitable[int | None]] | None = None
     #: The task's extensions, in the agent's order (``residents``).
     extensions: Sequence[Extension] = ()
     #: The model the task runs on (its config's, else its agent's).
@@ -157,10 +171,41 @@ class TaskView:
             ExtensionRecorded(extension=extension, kind=kind, data=data, message=message)
         )
 
-    def notify(self, text: str) -> None:
+    def notify(self, text: str, *, kind: str | None = None, data: Any = None) -> None:
         """Tell the person ``text``; front ends show it, the model never sees
-        it (a ``core`` / ``notice`` record)."""
-        self.record("core", "notice", {"text": text})
+        it (a ``core`` / ``notice`` record). ``kind`` and ``data`` carry the
+        same news as structured data for a front end that renders it
+        (``text`` stays the plain fallback)."""
+        self.record("core", "notice", notice_data(text, kind, data))
+
+    def set_timer(self, name: str, at: float, text: str = "") -> None:
+        """Wake the task at ``at`` (epoch seconds) once it is idle, with
+        ``text`` as the next message (``TimerFired(name)`` either way); a
+        timer of the same name is replaced. Durable: any worker fires it."""
+        self.record("core", "timer", {"name": name, "at": at, "text": text})
+
+    def clear_timer(self, name: str) -> None:
+        self.record("core", "timer_cleared", {"name": name})
+
+    def spawn(self, agent: str, prompt: str | Message, *, config: Mapping[str, Any] | None = None,
+              queue: str = "default", key: str = "") -> str:
+        """Stage a child task outside a tool call (a background
+        orchestration): created with the records this hook leaves, and
+        tracked like any child (its ``ChildEnded`` arrives in the inbox).
+        ``key`` names the child; the same key gives the same child id."""
+        child_id = f"{self.task_id}.{key or len(self.creates) + 1}"
+        message = user(prompt) if isinstance(prompt, str) else prompt
+        child_config = dict(config or {})
+        for ext in self.extensions:
+            child_config.update(ext.inherit(self.state))
+        self.creates.append(StagedChild(
+            task_id=child_id,
+            created=TaskCreated(agent=agent, config=child_config, parent_id=self.task_id,
+                                root_id=self.state.root_id or self.task_id),
+            queue=queue, first=Say(message=message)))
+        self.record("core", "spawned", {"children": [
+            {"id": child_id, "call_id": "", "background": True}]})
+        return child_id
 
     def find_tool(self, name: str) -> Tool | None:
         """The tool named ``name`` that this task offers (the first extension

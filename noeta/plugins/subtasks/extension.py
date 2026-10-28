@@ -31,6 +31,7 @@ from noeta.plugins.subtasks.tool import (
     batch_refusal,
     handback_sender,
 )
+from noeta.toolkit.notices import NOTICE_GUARD, escape
 
 log = logging.getLogger("noeta.plugins.subtasks")
 
@@ -87,19 +88,15 @@ def _tools_column(agent: Any) -> str:
     return "*"
 
 
-def _escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
 def task_notification(*, agent_id: str, call_id: str, status: str, summary: str,
                       result: str, ended: ChildEnded, duration_ms: int) -> str:
     """A finished agent's ``<task-notification>``, behind the not-the-user guard."""
     usage = ended.last_usage
     tokens = usage.input + usage.output if usage is not None else 0
-    return (f"{texts.NOTICE_GUARD}\n\n<task-notification>\n<task-id>{agent_id}</task-id>\n"
+    return (f"{NOTICE_GUARD}\n\n<task-notification>\n<task-id>{agent_id}</task-id>\n"
             f"<tool-use-id>{call_id}</tool-use-id>\n<status>{status}</status>\n"
-            f"<summary>{_escape(summary)}</summary>\n<note>{texts.NOTICE_NOTE}</note>\n"
-            f"<result>{_escape(result)}\n</result>\n"
+            f"<summary>{escape(summary)}</summary>\n<note>{texts.NOTICE_NOTE}</note>\n"
+            f"<result>{escape(result)}\n</result>\n"
             f"<usage><subagent_tokens>{tokens}</subagent_tokens><tool_uses>{ended.tool_calls}"
             f"</tool_uses><duration_ms>{duration_ms}</duration_ms></usage>\n"
             "</task-notification>")

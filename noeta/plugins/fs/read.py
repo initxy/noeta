@@ -335,9 +335,12 @@ class ReadTool:
         scan.finish()
         # Claude Code's token ceiling on what one read returns. A window the
         # scan had to stop is past it by construction.
-        tokens = estimate_tokens(
-            scan.window_text(), posixpath.splitext(resolved)[1].lstrip(".").lower()
-        )
+        text = scan.window_text()
+        tokens = estimate_tokens(text, posixpath.splitext(resolved)[1].lstrip(".").lower())
+        if not scan.capped and tokens > max_tokens // 4 and ctx.count_tokens is not None:
+            # Past a quarter of the ceiling the estimate is checked against
+            # the provider's exact count, as Claude Code does.
+            tokens = await ctx.count_tokens(text) or tokens
         if scan.capped or tokens > max_tokens:
             return tool_error(self.name, too_many_tokens(tokens, max_tokens))
 
