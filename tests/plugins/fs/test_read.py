@@ -403,6 +403,7 @@ async def test_a_page_of_one_long_line_is_cut_by_characters(h: Harness, ws: Path
 
 async def test_a_cut_read_does_not_count_as_read_for_an_edit(h: Harness, ws: Path) -> None:
     from noeta.plugins.fs import EditTool
+    h.approved = True  # asked about: the read-first check holds
     (ws / "wide.txt").write_text("".join("y" * 150 + "\n" for _ in range(1700)))
     await h.call(ReadTool(), file_path="wide.txt")
     out = await h.call(EditTool(), file_path="wide.txt", old_string="y\n", new_string="z\n",

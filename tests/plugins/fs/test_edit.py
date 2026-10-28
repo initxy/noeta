@@ -74,6 +74,9 @@ async def test_consecutive_edits_chain_without_a_reread(h: Harness, ws: Path) ->
 
 
 async def test_edit_without_read_first_rejected(h: Harness, ws: Path) -> None:
+    # A person was asked about this edit: Claude Code keeps the read-first
+    # check for a write that is not allowed outright.
+    h.approved = True
     target = ws / "a.py"
     target.write_text("hello\n")
     out = await h.call(EditTool(), file_path="a.py", old_string="hello", new_string="world")
@@ -82,6 +85,16 @@ async def test_edit_without_read_first_rejected(h: Harness, ws: Path) -> None:
         "Edit: File has not been read yet. Read it first before editing it."
     )
     assert target.read_text() == "hello\n"
+
+
+async def test_an_allowed_edit_needs_no_read_first(h: Harness, ws: Path) -> None:
+    # Claude Code skips the read-first check for a write its permissions allow
+    # outright (an Edit after the model saw the file through Bash `cat`).
+    target = ws / "a.py"
+    target.write_text("hello\n")
+    out = await h.call(EditTool(), file_path="a.py", old_string="hello", new_string="world")
+    assert not out.is_error, text_of(out)
+    assert target.read_text() == "world\n"
 
 
 async def test_edit_stale_read_rejected(h: Harness, ws: Path) -> None:

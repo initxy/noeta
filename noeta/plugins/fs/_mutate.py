@@ -50,19 +50,31 @@ async def authorized_roots(
 
 
 def read_precondition_error(
-    ctx: ToolContext, resolved: str, raw: bytes, *, tool_name: str, verb: str
+    ctx: ToolContext, resolved: str, raw: bytes, *, tool_name: str, verb: str,
+    unread_ok: bool = False, partial_ok: bool = False,
 ) -> ToolOutput | None:
     """The file must have been read (an ``fs`` entry for the canonical path)
     and its bytes must still hash to what was read — otherwise the model
-    would change content it has not seen."""
+    would change content it has not seen.
+
+    Claude Code skips the read-first part for a write its permissions allow
+    outright; here that is a call no person was asked about
+    (``not ctx.approved``), which the caller passes as ``unread_ok``.
+    ``partial_ok`` extends that to a read cut to fit the token ceiling
+    (``Edit``; a whole-file ``Write`` over a partial view is always
+    refused)."""
     entry = current_fs_state(ctx.state).reads.get(resolved)
     # A read cut to fit the token ceiling showed only part of the file.
-    recorded = entry.digest if entry is not None and not entry.partial else None
-    if recorded is None:
-        return tool_error(
-            tool_name, f"File has not been read yet. Read it first before {verb} it."
-        )
-    if recorded != hashlib.sha256(raw).hexdigest():
+    seen = entry is not None and not entry.partial
+    if not seen:
+        if not unread_ok or (entry is not None and not partial_ok):
+            return tool_error(
+                tool_name, f"File has not been read yet. Read it first before {verb} it."
+            )
+        if entry is None:
+            return None
+    assert entry is not None
+    if entry.digest != hashlib.sha256(raw).hexdigest():
         return tool_error(
             tool_name,
             "File has been modified since it was read. Read it again before "

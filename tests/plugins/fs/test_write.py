@@ -45,6 +45,7 @@ async def test_write_creates_new_file(h: Harness, ws: Path) -> None:
 
 
 async def test_write_existing_path_without_read_rejected(h: Harness, ws: Path) -> None:
+    h.approved = True  # asked about: the read-first check holds
     (ws / "exists.txt").write_text("old\n")
     out = await h.call(WriteTool(), file_path="exists.txt", content="new\n")
     assert out.is_error
@@ -52,6 +53,23 @@ async def test_write_existing_path_without_read_rejected(h: Harness, ws: Path) -
         "Write: File has not been read yet. Read it first before overwriting it."
     )
     assert (ws / "exists.txt").read_text() == "old\n"
+
+
+async def test_an_allowed_overwrite_needs_no_read_first(h: Harness, ws: Path) -> None:
+    (ws / "exists.txt").write_text("old\n")
+    out = await h.call(WriteTool(), file_path="exists.txt", content="new\n")
+    assert not out.is_error, text_of(out)
+    assert (ws / "exists.txt").read_text() == "new\n"
+
+
+async def test_an_overwrite_after_a_cut_read_is_refused_even_when_allowed(
+        h: Harness, ws: Path) -> None:
+    # A read cut to fit the token cap showed only part: Claude Code refuses a
+    # whole-file Write over it whatever the permissions say.
+    (ws / "wide.txt").write_text("".join("y" * 150 + "\n" for _ in range(1700)))
+    await _read(h, "wide.txt")
+    out = await h.call(WriteTool(), file_path="wide.txt", content="new\n")
+    assert out.is_error and "has not been read yet" in text_of(out)
 
 
 async def test_write_existing_path_after_read_overwrites(h: Harness, ws: Path) -> None:
@@ -323,6 +341,7 @@ async def test_relative_authorized_root_grants_nothing(h: Harness, ws: Path) -> 
 
 
 async def test_authorized_write_still_refuses_an_unread_overwrite(h: Harness, ws: Path) -> None:
+    h.approved = True
     other = _neighbour(ws)
     target = other / "keep.txt"
     target.write_text("keep\n")

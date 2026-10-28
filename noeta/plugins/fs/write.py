@@ -130,7 +130,8 @@ class WriteTool:
             except OSError as exc:
                 return tool_error(self.name, f"read failed: {exc}")
             refused = read_precondition_error(
-                ctx, resolved, existing, tool_name=self.name, verb="overwriting"
+                ctx, resolved, existing, tool_name=self.name, verb="overwriting",
+                unread_ok=not ctx.approved,
             )
             if refused is not None:
                 return refused

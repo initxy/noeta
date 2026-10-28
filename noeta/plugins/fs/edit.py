@@ -113,7 +113,8 @@ class EditTool:
         except UnicodeDecodeError:
             return tool_error(self.name, f"{path!r} is not utf-8 text")
         refused = read_precondition_error(
-            ctx, resolved, raw, tool_name=self.name, verb="editing"
+            ctx, resolved, raw, tool_name=self.name, verb="editing",
+            unread_ok=not ctx.approved, partial_ok=True,
         )
         if refused is not None:
             return refused

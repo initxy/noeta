@@ -26,6 +26,8 @@ class Harness:
     spill_dir: str | None = None
     task_id: str = "task-1"
     calls: int = 0
+    #: Calls run as if a person allowed them at an approval prompt.
+    approved: bool = False
 
     @property
     def root(self) -> Path:
@@ -56,6 +58,7 @@ class Harness:
             state=self.state,
             record=self.record,
             spill_dir=self.spill_dir,
+            approved=self.approved,
         )
 
     async def call(self, tool: Tool, **input: Any) -> ToolOutput:
