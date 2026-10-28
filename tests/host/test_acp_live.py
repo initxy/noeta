@@ -59,7 +59,7 @@ async def test_noeta_acp_over_stdio(tmp_path: Path) -> None:
     }
     editor = Editor()
     async with acp.spawn_agent_process(lambda _agent: editor, sys.executable, "-m",
-                                       "noeta.apps.cli", "acp", env=env, cwd=str(tmp_path)) as (conn, _):
+                                       "noeta.cli.main", "acp", env=env, cwd=str(tmp_path)) as (conn, _):
         init = await conn.initialize(protocol_version=acp.PROTOCOL_VERSION)
         assert init.agent_capabilities.load_session
         session = await conn.new_session(cwd=str(tmp_path), mcp_servers=[])

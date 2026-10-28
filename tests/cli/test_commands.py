@@ -11,11 +11,11 @@ from typing import Any
 import pytest
 from acp import schema
 
-from noeta.apps.acp import NoetaAcpAgent
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.commands import expand_command, list_commands, parse_command
 from noeta.core.extension import Command, CommandContext, Extension
+from noeta.host.acp import NoetaAcpAgent
 from noeta.host.local import LocalApp
 from noeta.plugins.mcp import Mcp, McpPool, McpServer
 from noeta.plugins.skills import Skills
@@ -83,7 +83,7 @@ async def test_tui_help_and_plugin_commands(tmp_path: Path) -> None:
     pytest.importorskip("textual")
     from textual.widgets import Markdown
 
-    from noeta.apps.tui.app import NoetaApp
+    from noeta.cli.tui.app import NoetaApp
 
     provider = ScriptedProvider([reply("hi bob"), reply("ok")])
     app = NoetaApp(_app(tmp_path, provider), agent="main", model="m", cwd=str(tmp_path))

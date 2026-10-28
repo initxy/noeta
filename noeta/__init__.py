@@ -4,7 +4,7 @@ The names a host or a plugin author needs, importable from ``noeta``
 (loaded on first use, so ``import noeta`` stays cheap). Everything else is
 imported from its module: ``noeta.core.*`` (the kernel), ``noeta.toolkit.*``,
 ``noeta.plugins.*``, ``noeta.backends.*``, ``noeta.host.*``, ``noeta.agents``.
-``noeta.apps`` is the ``noeta`` command and its front ends, not SDK.
+``noeta.cli`` is the ``noeta`` command and its terminal UI, not SDK.
 """
 
 from __future__ import annotations

@@ -21,7 +21,7 @@ import signal
 import sys
 from typing import Any
 
-from noeta.apps.config import Settings, load_settings
+from noeta.cli.config import Settings, load_settings
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -58,7 +58,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _plugins(cwd: str) -> None:
-    from noeta.apps.config import load_plugin_files
+    from noeta.cli.config import load_plugin_files
     from noeta.core import registry
 
     notices = load_plugin_files(cwd)
@@ -83,7 +83,7 @@ def _settings(args: argparse.Namespace) -> Settings:
 
 
 def _app(s: Settings, **kw: Any) -> Any:
-    from noeta.apps.config import from_settings
+    from noeta.cli.config import from_settings
 
     kw.setdefault("cwd", os.getcwd())
     return from_settings(s, **kw)
@@ -172,7 +172,7 @@ async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool,
 async def _serve(s: Settings, host: str, port: int, with_worker: bool) -> None:
     import uvicorn
 
-    from noeta.host.server import create_app
+    from noeta.host.http import create_app
 
     app = _app(s)
     if with_worker:
@@ -199,14 +199,14 @@ def main(argv: list[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     cwd = os.path.abspath(args.cwd or os.getcwd())
     if args.command == "trust":
-        from noeta.apps.config import trust_project
+        from noeta.cli.config import trust_project
         print(f"trusted {trust_project(cwd)}: its .noeta/plugins load from now on")
         return
     if args.command == "plugins":
         _plugins(cwd)
         return
     if args.command == "acp":
-        from noeta.apps.acp import EditorServers, serve_stdio
+        from noeta.host.acp import EditorServers, serve_stdio
         s = _settings(args)
         servers = EditorServers()
         asyncio.run(serve_stdio(_app(s, cwd=cwd, plugins={"mcp": {"servers": servers}},
@@ -226,7 +226,7 @@ def main(argv: list[str] | None = None) -> None:
                                          as_json=args.json,
                                          permission_mode=args.permission_mode)))
     try:
-        from noeta.apps.tui import run_tui
+        from noeta.cli.tui import run_tui
     except ImportError:
         sys.exit("noeta: the terminal UI needs the tui extra: pip install 'noeta[tui]'")
     run_tui(_settings(args), cwd=cwd, resume=args.resume, server=args.server,

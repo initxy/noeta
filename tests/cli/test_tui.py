@@ -10,14 +10,14 @@ import pytest
 
 pytest.importorskip("textual")
 
-from noeta.apps.tui.app import NoetaApp
-from noeta.apps.tui.widgets import (
+from noeta.backends.stores.sqlite import SqliteStore
+from noeta.cli.tui.app import NoetaApp
+from noeta.cli.tui.widgets import (
     ApprovalCard,
     AssistantMessage,
     ToolCall,
     UserMessage,
 )
-from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.extension import Ask, Extension, TaskView
 from noeta.core.tool import ToolContext, ToolOutput, text_output

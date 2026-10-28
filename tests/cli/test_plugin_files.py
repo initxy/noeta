@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from noeta.apps import cli, config
-from noeta.apps.config import from_settings, load_settings, trust_project
+from noeta.cli import config, main
+from noeta.cli.config import from_settings, load_settings, trust_project
 from noeta.core import registry
 
 PLUGIN = '''
@@ -133,9 +133,9 @@ def test_the_trust_and_plugins_commands(home: Path, tmp_path: Path,
     project = tmp_path / "repo"
     (project / ".noeta" / "plugins").mkdir(parents=True)
     _write(project / ".noeta" / "plugins" / "waver.py", "waver")
-    cli.main(["--cwd", str(project), "trust"])
+    main.main(["--cwd", str(project), "trust"])
     assert "trusted" in capsys.readouterr().out
-    cli.main(["--cwd", str(project), "plugins"])
+    main.main(["--cwd", str(project), "plugins"])
     out = capsys.readouterr().out
     assert "web\tpackage noeta" in out
     assert f"waver\t{project.resolve() / '.noeta' / 'plugins' / 'waver.py'}" in out

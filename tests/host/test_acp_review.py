@@ -19,7 +19,6 @@ pytest.importorskip("starlette")
 import acp
 from acp import schema
 
-from noeta.apps.acp import NoetaAcpAgent
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.errors import Transient
@@ -34,6 +33,7 @@ from noeta.core.extension import Ask, Extension, TaskView
 from noeta.core.store import Post
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.core.types import Delta, ModelRequest, ModelResponse, ToolUse
+from noeta.host.acp import NoetaAcpAgent
 from noeta.host.local import LocalApp
 from noeta.plugins.ask_user import AskUser
 from noeta.testing import ScriptedProvider, reply

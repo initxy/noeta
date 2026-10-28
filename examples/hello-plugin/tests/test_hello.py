@@ -9,9 +9,9 @@ import pytest
 
 from noeta import CommandContext, Runtime, parse_agent_file
 from noeta.agents.agent_files import build_agents
-from noeta.apps import config
-from noeta.apps.config import from_settings, load_settings
 from noeta.backends.stores.sqlite import SqliteStore
+from noeta.cli import config
+from noeta.cli.config import from_settings, load_settings
 from noeta.core import registry
 from noeta.core.client import Client
 from noeta.core.commands import expand_command

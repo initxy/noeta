@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from noeta.apps import config
-from noeta.apps.config import from_settings, load_settings, merge_plugin_settings
+from noeta.cli import config
+from noeta.cli.config import from_settings, load_settings, merge_plugin_settings
 from noeta.plugins.web import Web
 
 

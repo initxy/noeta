@@ -36,7 +36,7 @@ from noeta.core.provider import Provider
 if TYPE_CHECKING:
     from noeta.host.local import LocalApp
 
-log = logging.getLogger("noeta.apps")
+log = logging.getLogger("noeta.cli")
 
 HOME = Path(os.environ.get("NOETA_HOME") or Path.home() / ".noeta")
 
