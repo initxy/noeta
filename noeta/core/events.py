@@ -75,10 +75,16 @@ class InboxItem(Struct):
 
 
 class TaskCreated(Struct, tag="TaskCreated", tag_field="type"):
+    """``history_from`` starts the task from another task's conversation:
+    that task's log up to ``history_through`` (all of it when unset) is
+    folded first, so the task continues it (a resumed or forked sub-agent)."""
+
     agent: str
     config: dict[str, Any] = msgspec.field(default_factory=dict)
     parent_id: str | None = None
     root_id: str | None = None
+    history_from: str | None = None
+    history_through: int | None = None
 
 
 class InputTaken(Struct, tag="InputTaken", tag_field="type"):
@@ -107,6 +113,9 @@ class ToolFinished(Struct, tag="ToolFinished", tag_field="type"):
     result: ToolResult
     #: Data for front ends (a diff, an exit code); not sent to the model.
     meta: dict[str, Any] = msgspec.field(default_factory=dict)
+    #: The turn ends once the reply's results land, with this as its answer
+    #: (``ToolOutput.end_turn``).
+    end_turn: str | None = None
 
 
 class Compacted(Struct, tag="Compacted", tag_field="type"):

@@ -86,6 +86,9 @@ class TaskState:
     continuing: bool = False
     #: Every tool-call id this task has recorded: ids are unique per task.
     call_ids: set[str] = field(default_factory=set)
+    #: A call of the open batch ended the turn (``ToolFinished.end_turn``):
+    #: the turn's answer once the batch's results land.
+    end_turn: str | None = None
     #: A turn-only stop arrived with ``now`` messages: the turn reopens once
     #: the stop has landed, so those messages are answered.
     reopen_after_stop: bool = False
@@ -205,6 +208,8 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         for c in state.calls:
             if c.use.id == ev.result.call_id:
                 c.result = ev.result
+        if ev.end_turn is not None:
+            state.end_turn = ev.end_turn
         if state.calls and not state.open_calls:
             results = [c.result for c in state.calls if c.result is not None]
             state._add(Message(role="user", content=list(results)), rec.seq)
@@ -213,6 +218,10 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
             for m in state.held:
                 state._add(m, rec.seq)
             state.held = []
+            if state.end_turn is not None:
+                state.answer_parts = [state.end_turn]
+                state.end_turn = None
+                _close_turn(state, rec.seq)
     elif isinstance(ev, Compacted):
         _compact(state, ev)
     elif isinstance(ev, Waiting):
@@ -248,6 +257,31 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
             else:
                 state._add(ev.message, rec.seq)
     return state
+
+
+def continued(state: TaskState) -> TaskState:
+    """``state`` (another task's, folded) as the start of a task that
+    continues its conversation: messages and extension state stay; what
+    belongs to that task's run (its log positions, inbox, children, open
+    turn) does not. Calls still open there are answered here with
+    :data:`CONTINUED_CALL` so the conversation stays well formed."""
+    out = TaskState(ext=dict(state.ext), prompt_files=state.prompt_files,
+                    compaction=state.compaction, last_usage=state.last_usage,
+                    call_ids=set(state.call_ids))
+    for m in [*state.messages, *state.held]:
+        out._add(m, 0)
+    out.history, out.history_seqs = list(state.history), [0] * len(state.history)
+    if state.calls:
+        results = [c.result or ToolResult(call_id=c.use.id, content=[Text(text=CONTINUED_CALL)],
+                                          is_error=True) for c in state.calls]
+        out._add(Message(role="user", content=list(results)), 0)
+    return out
+
+
+#: The result a continued task sees for a call its source task still had
+#: open: that call ran (or runs) in the source task, not here.
+CONTINUED_CALL = ("This call belongs to the conversation this one continues from; it ran "
+                  "there, not here, and its result went there.")
 
 
 def fold(
@@ -302,6 +336,7 @@ def _end_turn(state: TaskState, seq: int) -> None:
     not answered (held behind its calls, or sent with the stop) join the
     conversation and open the next turn, as queued messages do."""
     state.calls = []
+    state.end_turn = None
     reopen = bool(state.held) or state.reopen_after_stop or state.held_unseen
     for m in state.held:
         state._add(m, seq)

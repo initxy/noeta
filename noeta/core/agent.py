@@ -35,6 +35,9 @@ class Agent:
     #: Only these tool names are offered (Claude Code's agent ``tools``);
     #: ``None`` = every tool the extensions offer.
     allowed_tools: Sequence[str] | None = None
+    #: Tool names never offered, whatever offers them (Claude Code's agent
+    #: ``disallowedTools``).
+    denied_tools: Sequence[str] = ()
 
     def all_extensions(self) -> list[Extension]:
         exts = list(self.extensions)

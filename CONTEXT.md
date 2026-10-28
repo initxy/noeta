@@ -7,7 +7,9 @@ crashes, waits for a person at no cost, and runs on one process or many machines
 
 The only unit of work. A task has an agent, a config, an event log, an inbox and a row in
 `tasks` (a projection of the log written in the same transaction). Sub-agents are child tasks
-with `parent_id` / `root_id`. There is no session, run or workflow entity.
+with `parent_id` / `root_id`; a task may start from another's conversation
+(`TaskCreated.history_from`: a resumed or forked sub-agent). There is no session, run or workflow
+entity.
 
 ## Event log
 
@@ -113,8 +115,9 @@ A tool call that waits (a question, an approval, children) parks: the task ends 
 
 ## origin
 
-A message's `origin` says who speaks in the user channel: `user`, or `system` / `memory` for
-text the host or a plugin adds (reminders, notices, recalled memory). Providers render those as
+A message's `origin` says who speaks in the user channel: `user`, `system` / `memory` for
+text the host or a plugin adds (reminders, notices, recalled memory), or `agent` for another
+agent's framed message (a sub-agent's hand-back, sent as plain text). Providers render those as
 `<system-reminder>` blocks (Anthropic) or with a preamble saying it is not the user (OpenAI
 shapes); user text cannot forge the tag.
 

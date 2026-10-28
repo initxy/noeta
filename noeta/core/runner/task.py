@@ -28,13 +28,14 @@ from noeta.core.events import (
     ExtensionRecorded,
     InputTaken,
     Recorded,
+    TaskCreated,
     TaskEnded,
     ToolFinished,
     Waiting,
 )
 from noeta.core.extension import Extension, TaskView
 from noeta.core.loop import decide
-from noeta.core.loop.state import CORE, TaskState, apply, fold
+from noeta.core.loop.state import CORE, TaskState, apply, continued, fold
 from noeta.core.prompts import load_overrides
 from noeta.core.runner import texts
 from noeta.core.runner.runtime import Runtime
@@ -147,7 +148,13 @@ class TaskRun:
             self.exts = self.agent.all_extensions()
             self.reducers = {e.name: e.reduce for e in self.exts}
         initial = {e.name: e.initial_state() for e in self.exts}
-        self.state = fold(records, self.reducers, initial)
+        base = None
+        if isinstance(first, TaskCreated) and first.history_from:
+            source = await self.store.read(first.history_from)
+            through = first.history_through
+            base = continued(fold([r for r in source if through is None or r.seq <= through],
+                                  self.reducers, initial))
+        self.state = fold(records, self.reducers, initial, state=base)
         self.state.task_id = self.task_id  # the log never names its own task
 
     async def _keep_claim(self) -> None:
@@ -242,7 +249,8 @@ class TaskRun:
         return TaskView(state=self.state, complete=self.complete, env=self.env(),
                         post=self.post_self, extensions=self.exts, model=model,
                         agents=self.rt.agents,
-                        allowed_tools=self.agent.allowed_tools if self.agent else None)
+                        allowed_tools=self.agent.allowed_tools if self.agent else None,
+                        denied_tools=self.agent.denied_tools if self.agent else ())
 
     async def post_self(self, body: Any, dedupe_key: str | None = None) -> None:
         """Post to this task's own inbox (extensions: ``TaskView.post``)."""
@@ -270,11 +278,12 @@ class TaskRun:
 
     def tools(self, view: TaskView) -> list[Tool]:
         allowed = self.agent.allowed_tools if self.agent is not None else None
+        denied = set(self.agent.denied_tools if self.agent is not None else ())
         tools: list[Tool] = []
         seen: set[str] = set()
         for ext in self.exts:
             for t in ext.tools(view):
-                if allowed is not None and t.name not in allowed:
+                if (allowed is not None and t.name not in allowed) or t.name in denied:
                     continue
                 if t.name not in seen:
                     seen.add(t.name)

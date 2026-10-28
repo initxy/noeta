@@ -33,6 +33,9 @@ class ToolOutput(Struct):
     display: Display | None = None
     #: Set instead of a result when the call must wait (see ``Park``).
     park: Park | None = None
+    #: End the turn once this reply's results land, with this text as the
+    #: turn's answer: no further model call (a sub-agent's hand-back).
+    end_turn: str | None = None
 
 
 def text_output(text: str, *, is_error: bool = False, **meta: Any) -> ToolOutput:
@@ -51,9 +54,11 @@ class ToolContext:
     record: Callable[[str, str, Any], None]
     #: Directory for full outputs too large to return inline, or ``None``.
     spill_dir: str | None = None
-    #: Stage a child task: ``spawn(agent, prompt, config=..., background=...)``
-    #: returns its id. The child is created atomically with this call's
-    #: record, so a retried call never makes a second child.
+    #: Stage a child task: ``spawn(agent, prompt, config=..., background=...,
+    #: history_from=..., history_through=...)`` returns its id (``history_*``:
+    #: the child continues that task's conversation, see ``TaskCreated``). The
+    #: child is created atomically with this call's record, so a retried call
+    #: never makes a second child.
     spawn: Callable[..., str] | None = None
     #: Post to this task's own inbox from outside a step (a background job
     #: finishing), or with ``task_id=`` to another task of the same tree (the
@@ -65,6 +70,10 @@ class ToolContext:
     #: returned release is awaited (``Runtime.hold``): for what lives only in
     #: this process, e.g. a background job.
     hold: Callable[[], Awaitable[Callable[[], Awaitable[None]]]] | None = None
+    #: ``await tasks(parent_id=..., status=..., limit=...)``: rows of the
+    #: store's task table (``Store.tasks``), e.g. to list other tasks a
+    #: message could go to.
+    tasks: Callable[..., Awaitable[list[Any]]] | None = None
     extras: dict[str, Any] = field(default_factory=dict)
     #: ``prompt(name, default)``: the task's text for a named prompt
     #: (``noeta.core.prompts``).

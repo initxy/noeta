@@ -103,5 +103,10 @@ def next_action(state: TaskState, *, one_shot: bool, max_steps: int) -> Action:
             return Continue()
         return CallModel()
     if one_shot and state.messages:
+        live = state.live_children()
+        if live:
+            # Its background sub-agents still run: their hand-backs may open
+            # another turn, so the task ends only once they have.
+            return WaitParked(on="children", ids=live)
         return End(status="done", answer=state.last_answer)
     return WaitInput()
