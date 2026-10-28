@@ -165,6 +165,25 @@ async def test_edit_stale_read_rejected(h: Harness, ws: Path) -> None:
     assert target.read_text() == "v2-changed-on-disk\n"
 
 
+async def test_an_empty_old_string_creates_a_file(h: Harness, ws: Path) -> None:
+    h.approved = True  # no read is needed to create a file, asked about or not
+    out = await h.call(EditTool(), file_path="new/dir/a.txt", old_string="", new_string="hi\n")
+    assert not out.is_error, text_of(out)
+    assert (ws / "new" / "dir" / "a.txt").read_text() == "hi\n"
+    assert text_of(out) == (f"The file {ws / 'new/dir/a.txt'} has been updated successfully. "
+                            "(what you wrote is the file's current state; no need to Read it "
+                            "back)")
+    # An existing empty file is filled; one with content is refused.
+    (ws / "empty.txt").write_text("  \n")
+    assert not (await h.call(EditTool(), file_path="empty.txt", old_string="",
+                             new_string="x\n")).is_error
+    assert (ws / "empty.txt").read_text() == "x\n"
+    out = await h.call(EditTool(), file_path="empty.txt", old_string="", new_string="y\n")
+    assert text_of(out) == (
+        "Edit: An empty old_string creates a new file, but this file already has content. "
+        "Give the text to replace instead.")
+
+
 async def test_edit_zero_match_fails_no_write(h: Harness, ws: Path) -> None:
     target = ws / "a.py"
     target.write_text("foo\n")
@@ -298,10 +317,10 @@ async def test_edit_not_a_file(h: Harness, ws: Path) -> None:
     assert text_of(out) == "Edit: not a file: 'sub'"
 
 
-async def test_edit_missing_file(h: Harness) -> None:
+async def test_edit_missing_file(h: Harness, ws: Path) -> None:
     out = await h.call(EditTool(), file_path="nope.txt", old_string="x", new_string="y")
     assert out.is_error
-    assert text_of(out) == "Edit: not a file: 'nope.txt'"
+    assert text_of(out) == f"Edit: No file at that path (the working directory is {ws})."
 
 
 async def test_edit_binary_rejected(h: Harness, ws: Path) -> None:
@@ -316,7 +335,7 @@ async def test_edit_binary_rejected(h: Harness, ws: Path) -> None:
     [
         ({"old_string": "x", "new_string": "y"}, "requires non-empty 'file_path'"),
         ({"file_path": "", "old_string": "x", "new_string": "y"}, "requires non-empty 'file_path'"),
-        ({"file_path": "a.py", "old_string": "", "new_string": "y"}, "requires non-empty 'old_string'"),
+        ({"file_path": "a.py", "old_string": 3, "new_string": "y"}, "requires string 'old_string'"),
         ({"file_path": "a.py", "old_string": "x", "new_string": 5}, "requires string 'new_string'"),
         ({"file_path": 1, "old_string": "x", "new_string": "y"}, "requires non-empty 'file_path'"),
     ],

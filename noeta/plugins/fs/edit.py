@@ -1,4 +1,5 @@
-"""``Edit``: replace an exact, unique string in a file the model has read.
+"""``Edit``: replace an exact, unique string in a file the model has read,
+or create a file (an empty ``old_string``).
 
 The match must be exactly once — zero or several matches fail and write
 nothing (unless ``replace_all``). There is deliberately no unified-diff
@@ -13,6 +14,7 @@ from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import Text
+from noeta.plugins.fs._missing import missing_file_message
 from noeta.plugins.fs._mutate import (
     WriteRoots,
     authorized_roots,
@@ -82,13 +84,42 @@ class EditTool:
         self.input_schema = _input_schema()
         self.write_roots = write_roots
 
+    def _replace(self, before: str, old: str, new: str, replace_all: bool, stale: bool,
+                 approved: bool) -> tuple[int, str] | ToolOutput:
+        """``(matches, new content)``, or why the edit cannot be made."""
+        # ``Read`` shows lines without their ``\r``, so the model writes bare
+        # ``\n``. In a CRLF file, match and write with the file's own ending —
+        # never a mixed file.
+        if _dominant_eol(before) == "\r\n":
+            old_eol, new_eol = _to_eol(old, "\r\n"), _to_eol(new, "\r\n")
+            if before.count(old_eol):
+                old, new = old_eol, new_eol
+        count = before.count(old)
+        # Claude Code applies an edit over changes made since the read when
+        # its permissions allow the write outright and old_string still
+        # picks one place (or replace_all); otherwise the model must re-read.
+        if stale and (approved or count == 0 or (count > 1 and not replace_all)):
+            return stale_error(self.name, "editing")
+        if count == 0:
+            return tool_error(self.name, f"String to replace not found in file.\nString: {old}")
+        if count > 1 and not replace_all:
+            return tool_error(
+                self.name,
+                f"Found {count} matches of the string to replace, but "
+                "replace_all is false. To replace all occurrences, set "
+                "replace_all to true. To replace only one, provide more "
+                "surrounding context to uniquely identify the instance.",
+            )
+        return count, (before.replace(old, new) if replace_all
+                       else before.replace(old, new, 1))
+
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         path = require_str(input, "file_path")
         if path is None:
             return tool_error(self.name, "requires non-empty 'file_path'")
-        old = require_str(input, "old_string")
-        if old is None:
-            return tool_error(self.name, "requires non-empty 'old_string'")
+        old = input.get("old_string")
+        if not isinstance(old, str):
+            return tool_error(self.name, "requires string 'old_string'")
         new = input.get("new_string")
         if not isinstance(new, str):
             return tool_error(self.name, "requires string 'new_string'")
@@ -105,49 +136,44 @@ class EditTool:
         except PathError as exc:
             return tool_error(self.name, str(exc))
         st = await env.stat(resolved)
-        if st is None or st.is_dir:
+        if st is not None and st.is_dir:
             return tool_error(self.name, f"not a file: {path!r}")
-        try:
-            raw = await env.read_bytes(resolved)
-        except OSError as exc:
-            return tool_error(self.name, f"read failed: {exc}")
+        if st is None:
+            # An empty old_string creates the file (Claude Code's).
+            if old:
+                return tool_error(self.name, await missing_file_message(ws, resolved))
+            raw = b""
+        else:
+            try:
+                raw = await env.read_bytes(resolved)
+            except OSError as exc:
+                return tool_error(self.name, f"read failed: {exc}")
         try:
             before = raw.decode("utf-8")
         except UnicodeDecodeError:
             return tool_error(self.name, f"{path!r} is not utf-8 text")
-        refused = read_precondition_error(
-            ctx, resolved, raw, tool_name=self.name, verb="editing",
-            unread_ok=not ctx.approved, partial_ok=True, check_stale=False,
-        )
-        if refused is not None:
-            return refused
-        stale = changed_since_read(ctx, resolved, raw)
-        in_view = seen_whole(ctx, resolved, raw)
-
-        # ``Read`` shows lines without their ``\r``, so the model writes bare
-        # ``\n``. In a CRLF file, match and write with the file's own ending —
-        # never a mixed file.
-        if _dominant_eol(before) == "\r\n":
-            old_eol, new_eol = _to_eol(old, "\r\n"), _to_eol(new, "\r\n")
-            if before.count(old_eol):
-                old, new = old_eol, new_eol
-        count = before.count(old)
-        # Claude Code applies an edit over changes made since the read when
-        # its permissions allow the write outright and old_string still
-        # picks one place (or replace_all); otherwise the model must re-read.
-        if stale and (ctx.approved or count == 0 or (count > 1 and not replace_all)):
-            return stale_error(self.name, "editing")
-        if count == 0:
-            return tool_error(self.name, f"String to replace not found in file.\nString: {old}")
-        if count > 1 and not replace_all:
-            return tool_error(
-                self.name,
-                f"Found {count} matches of the string to replace, but "
-                "replace_all is false. To replace all occurrences, set "
-                "replace_all to true. To replace only one, provide more "
-                "surrounding context to uniquely identify the instance.",
+        stale = False
+        if not old:
+            # Creating a file, or filling an empty one: nothing to have read.
+            if before.strip():
+                return tool_error(
+                    self.name, "An empty old_string creates a new file, but this file already "
+                    "has content. Give the text to replace instead.")
+            in_view = st is None
+            count, after = 1, new
+        else:
+            refused = read_precondition_error(
+                ctx, resolved, raw, tool_name=self.name, verb="editing",
+                unread_ok=not ctx.approved, partial_ok=True, check_stale=False,
             )
-        after = before.replace(old, new) if replace_all else before.replace(old, new, 1)
+            if refused is not None:
+                return refused
+            stale = changed_since_read(ctx, resolved, raw)
+            in_view = seen_whole(ctx, resolved, raw)
+            planned = self._replace(before, old, new, replace_all, stale, ctx.approved)
+            if isinstance(planned, ToolOutput):
+                return planned
+            count, after = planned
         rel = ws.relative(resolved)
         diff = compute_diff(before, after, rel)
         added, removed = diff_stat_counts(diff)
