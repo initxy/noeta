@@ -21,7 +21,7 @@ from noeta.plugins.skills.listing import (
 )
 from noeta.plugins.skills.registry import SkillDescription, SkillRegistry
 from noeta.testing import reply
-from noeta.toolkit.context import estimate_tokens
+from noeta.toolkit.tokens import estimate_tokens
 from tests.plugins.context.conftest import Harness
 
 

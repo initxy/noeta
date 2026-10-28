@@ -47,7 +47,7 @@ from typing import Any
 import httpx
 
 from noeta.plugins.mcp.config import McpError, McpServer, OAuthSettings
-from noeta.toolkit.context import noeta_home
+from noeta.toolkit.paths import noeta_home
 
 __all__ = [
     "AUTH_DIR",

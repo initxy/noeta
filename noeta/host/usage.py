@@ -12,7 +12,7 @@ from noeta.core import models
 from noeta.core.client import ClientAPI
 from noeta.core.events import ModelCalled, ModelReplied, TaskCreated
 from noeta.core.types import ModelRequest, Usage
-from noeta.toolkit.context import estimate_tokens
+from noeta.toolkit.tokens import estimate_tokens
 
 __all__ = ["ModelUse", "TreeUsage", "context_breakdown", "context_text", "cost_text",
            "tree_usage"]

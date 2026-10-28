@@ -16,7 +16,7 @@ from noeta.plugins.memory.extension import (
     RECALL_MAX_FILES,
 )
 from noeta.testing import reply
-from noeta.toolkit.context import project_slug
+from noeta.toolkit.paths import project_slug
 from tests.plugins.context.conftest import Harness
 
 

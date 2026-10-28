@@ -19,7 +19,7 @@ import re
 from collections.abc import Mapping, Sequence
 
 from noeta.plugins.skills.registry import SkillRegistry, strip_argument_placeholder
-from noeta.toolkit.context import estimate_tokens
+from noeta.toolkit.tokens import estimate_tokens
 
 __all__ = [
     "ADDED_HEADER",

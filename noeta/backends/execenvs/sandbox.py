@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from noeta.backends.execenvs.sandbox_proxy import FilterProxy, Listeners, default_proxy
-from noeta.toolkit.context import noeta_home
+from noeta.toolkit.paths import noeta_home
 from noeta.toolkit.protected_paths import PROTECTED_DIRS, PROTECTED_FILES, PROTECTED_NESTED
 from noeta.toolkit.sandbox import SandboxSettings
 

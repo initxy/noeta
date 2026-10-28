@@ -15,7 +15,7 @@ from typing import Any
 from noeta.core.questions import ask, read_answer
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import ModelRequest, SystemPart, user
-from noeta.toolkit.context import plans_dir as _plans_dir
+from noeta.toolkit.paths import plans_dir as _plans_dir
 from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, tool_error
 
 __all__ = [

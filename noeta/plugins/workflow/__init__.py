@@ -28,8 +28,8 @@ from noeta.core.extension import Extension, TaskView
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, user
 from noeta.plugins.workflow.engine import Engine, EngineMissing, Replay
-from noeta.toolkit.context import noeta_home
 from noeta.toolkit.notices import NOTICE_GUARD, escape
+from noeta.toolkit.paths import noeta_home
 from noeta.toolkit.tools import SCHEMA_DIALECT, load_description
 
 __all__ = ["Orchestration", "WorkflowTool"]

@@ -28,17 +28,15 @@ from typing import Any
 from noeta.core.events import Recorded
 from noeta.core.extension import ContextPart, Extension, TaskView
 from noeta.core.types import Message, ModelRequest, SystemPart, user
-from noeta.toolkit.context import (
+from noeta.toolkit.context import new_user_messages, task_env
+from noeta.toolkit.memory_index import (
     MEMORY_INDEX_FILE,
     MEMORY_INDEX_MAX_BYTES,
     MEMORY_INDEX_MAX_LINES,
-    new_user_messages,
-    noeta_home,
-    project_dir,
     read_memory_index,
-    task_env,
     trim_memory_index,
 )
+from noeta.toolkit.paths import noeta_home, project_dir
 
 __all__ = ["INDEX_FILE", "MEMORY_SECTION", "Memory", "load_index", "memory_dir_for"]
 

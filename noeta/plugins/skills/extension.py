@@ -45,7 +45,8 @@ from noeta.plugins.skills.script import (
     is_skill_script_resource,
 )
 from noeta.toolkit.commands import command_message, parse_command_message
-from noeta.toolkit.context import new_user_messages, resident_budget, task_env
+from noeta.toolkit.context import new_user_messages, task_env
+from noeta.toolkit.tokens import resident_budget
 from noeta.toolkit.tools import SCHEMA_DIALECT
 
 __all__ = [

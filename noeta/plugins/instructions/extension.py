@@ -52,7 +52,8 @@ from noeta.plugins.instructions.files import (
     Reader,
     clean,
 )
-from noeta.toolkit.context import read_memory_index, read_text, task_env
+from noeta.toolkit.context import read_text, task_env
+from noeta.toolkit.memory_index import read_memory_index
 from noeta.toolkit.tools import path_within
 
 __all__ = ["DEFAULT_INSTRUCTIONS_FILENAMES", "Instructions", "render_file",

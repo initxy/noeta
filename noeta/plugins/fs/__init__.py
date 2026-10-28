@@ -23,7 +23,7 @@ from noeta.plugins.fs.notebook import NotebookEditTool
 from noeta.plugins.fs.read import ReadTool
 from noeta.plugins.fs.state import FS, KIND_CHANGED, KIND_FORGET_RANGES, FsState, reduce_fs
 from noeta.plugins.fs.write import WriteTool
-from noeta.toolkit.context import plans_dir
+from noeta.toolkit.paths import plans_dir
 
 __all__ = ["EditTool", "FileTools", "NotebookEditTool", "ReadTool", "WriteTool"]
 

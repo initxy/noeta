@@ -49,8 +49,8 @@ from noeta.plugins.compaction.window import (
     percent_from_env,
     window_from_env,
 )
-from noeta.toolkit.context import noeta_home, project_dir
 from noeta.toolkit.local_env import is_local
+from noeta.toolkit.paths import noeta_home, project_dir
 
 log = logging.getLogger("noeta.compaction")
 
