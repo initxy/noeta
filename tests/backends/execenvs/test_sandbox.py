@@ -118,6 +118,40 @@ async def test_socks_proxy_checks_the_host(server: int) -> None:
         await proxy.close(ls)
 
 
+async def test_proxy_checks_the_address_a_name_resolves_to(
+        server: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    proxy = FilterProxy()
+    ls = await proxy.open(allowed=["*"], tcp_host="127.0.0.1")
+    try:
+        # An allowed name (here every name) resolving to this machine or a
+        # metadata address is refused like a host not allowed.
+        for host in ("0x7f000001", "169.254.169.254"):
+            out = await _http_get(ls.http[1], f"http://{host}:{server}/x")
+            assert out.startswith(b"HTTP/1.1 403"), host
+        reader, writer = await asyncio.open_connection(*ls.http)
+        writer.write(f"CONNECT 0x7f000001:{server} HTTP/1.1\r\n\r\n".encode())
+        assert (await reader.readline()).startswith(b"HTTP/1.1 403")
+        writer.close()
+        assert ls.refused == [f"0x7f000001:{server}", f"169.254.169.254:{server}"]
+    finally:
+        await proxy.close(ls)
+    # The connection goes to the address that was checked, not to a second
+    # lookup of the name.
+    from noeta.backends.execenvs import sandbox_proxy
+
+    async def pinned(host: str, port: int, *_a: object) -> str:
+        assert host == "pinned.example"
+        return "127.0.0.1"
+
+    monkeypatch.setattr(sandbox_proxy, "resolve_allowed", pinned)
+    ls = await proxy.open(allowed=["pinned.example"], tcp_host="127.0.0.1")
+    try:
+        out = await _http_get(ls.http[1], f"http://pinned.example:{server}/p")
+        assert out.endswith(b"reached-/p")
+    finally:
+        await proxy.close(ls)
+
+
 async def test_proxy_hands_off_to_the_users_own(server: int) -> None:
     proxy = FilterProxy()
     # The "user's proxy" here is the test server itself: the request

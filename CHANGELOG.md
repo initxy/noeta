@@ -60,7 +60,9 @@ All notable changes to Noeta are documented here. The format is based on
   project's `.noeta` directory, `.git/hooks`, `.git/config` — not even to create them when
   missing, and `.git` cannot be renamed away), read everything but `denyRead`, credential stores
   and noeta's home, and reach only `network.allowedDomains` through a filtering HTTP/SOCKS
-  proxy; refused hosts follow the output in `<sandbox_violations>`. `Edit` allow rules,
+  proxy, which connects to the address it checked and refuses one that is loopback,
+  link-local, multicast, a cloud metadata service or this machine's own unless an IP or CIDR
+  entry allows it (as Claude Code); refused hosts follow the output in `<sandbox_violations>`. `Edit` allow rules,
   `additionalDirectories`, `Read` deny rules and `WebFetch(domain:)` allow rules feed it;
   `excludedCommands`, `allowUnsandboxedCommands`, `autoAllowBashIfSandboxed` (default on),
   `failIfUnavailable`, `credentials` (`mask` acts as `deny`), `httpProxyPort` /

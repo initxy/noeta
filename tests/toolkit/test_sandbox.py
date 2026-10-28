@@ -6,10 +6,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+import pytest
+
 from noeta.toolkit.sandbox import (
     SandboxSettings,
+    address_refusal,
     domain_allowed,
     leaves_sandbox,
+    resolve_allowed,
     runs_sandboxed,
     sandbox_of,
     violations_block,
@@ -69,6 +73,41 @@ def test_domain_matching() -> None:
     assert not domain_allowed("github.com", 443, allowed, denied=["github.com"])
     assert not domain_allowed("", 80, ["*"])
     assert domain_allowed("anything.io", 1, ["*"])
+
+
+def test_an_allowed_name_may_not_resolve_to_a_local_or_metadata_address() -> None:
+    allowed = ["*", "10.1.2.3", "fd00:ec2::254:443"]
+    assert address_refusal("api.x.com", "93.184.216.34", 443, allowed) is None
+    assert address_refusal("corp.example", "10.0.0.7", 443, allowed) is None  # as Claude Code
+    for address, reason in (("127.0.0.1", "a loopback address"),
+                            ("::ffff:127.0.0.1", "a loopback address"),
+                            ("0.0.0.0", "an unspecified address"),
+                            ("169.254.169.254", "a link-local address"),
+                            ("fe80::1", "a link-local address"),
+                            ("100.100.100.200", "a cloud metadata address"),
+                            ("224.0.0.1", "a multicast address")):
+        assert address_refusal("rebound.example", address, 443, allowed) == reason, address
+    # Spellings of an address that only resolve to it are checked the same.
+    assert address_refusal("0x7f000001", "127.0.0.1", 80, ["*"]) == "a loopback address"
+    assert address_refusal("169.254.169.254", "169.254.169.254", 80, ["*"]) \
+        == "a link-local address"
+    # Unless an IP entry lets it through, or the name is a loopback one.
+    assert address_refusal("x.example", "10.1.2.3", 1, allowed) is None
+    assert address_refusal("md.example", "fd00:ec2::254", 443, allowed) is None
+    assert address_refusal("md.example", "fd00:ec2::254", 80, allowed) is not None
+    assert address_refusal("localhost", "127.0.0.1", 3000, ["localhost:3000"]) is None
+    assert address_refusal("localhost", "10.0.0.1", 3000, ["localhost:3000"]) \
+        == "a non-loopback address"
+    assert address_refusal("x.example", "10.1.2.3", 1, allowed, denied=["10.0.0.0/8"]) \
+        == "a deny-listed address"
+    assert address_refusal("me.example", "192.168.1.5", 1, ["*"], own=["192.168.1.5"]) \
+        == "one of this host's addresses"
+
+
+async def test_resolution_returns_the_checked_address() -> None:
+    assert await resolve_allowed("127.0.0.1", 80, ["127.0.0.1:80"]) == "127.0.0.1"
+    with pytest.raises(PermissionError, match="loopback"):
+        await resolve_allowed("0x7f000001", 80, ["*"])
 
 
 @dataclass
