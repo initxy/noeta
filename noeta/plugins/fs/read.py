@@ -68,9 +68,13 @@ _SNIFF_BYTES = 16
 #: to fit a request by :func:`noeta.toolkit.images.fit_image`.
 IMAGE_MAX_BYTES = 128 * 1024 * 1024
 
-#: Leading magic bytes -> (human label, media type). Detection is by content,
-#: not extension, so a mis-named image is still caught. WebP (a RIFF
-#: container with a ``WEBP`` fourcc at offset 8) is checked separately.
+#: Extensions read as images (Claude Code's); a file without an extension is
+#: an image when its content says so.
+_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+#: Leading magic bytes -> (human label, media type), which confirm an image
+#: extension and name the format. WebP (a RIFF container with a ``WEBP``
+#: fourcc at offset 8) is checked separately.
 _IMAGE_MAGIC: tuple[tuple[bytes, str, str], ...] = (
     (b"\x89PNG\r\n\x1a\n", "PNG image", "image/png"),
     (b"\xff\xd8\xff", "JPEG image", "image/jpeg"),
@@ -336,7 +340,14 @@ class ReadTool:
             return read_notebook(self.name, raw_nb, display)
 
         image = detect_image(head)
-        if image is not None:
+        ext = posixpath.splitext(resolved)[1].lower()
+        if ext in _IMAGE_EXTENSIONS and image is None:
+            return tool_error(
+                self.name,
+                f"{display} has an image extension, but its bytes are not a PNG, JPEG, GIF or "
+                "WebP image (often a saved error or login page). Check it with `file`, or "
+                "look at it as text through Bash (`head -c 500`).")
+        if image is not None and (ext in _IMAGE_EXTENSIONS or ext == ""):
             return await self._read_image(path, resolved, display, size, image, chunks)
 
         return await self._read_text(

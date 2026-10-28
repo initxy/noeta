@@ -209,6 +209,19 @@ async def test_read_image_without_extension_detected_by_content(h: Harness, ws: 
     assert images_of(out)
 
 
+async def test_read_image_kind_follows_the_extension(h: Harness, ws: Path) -> None:
+    # Claude Code goes by the extension; content is sniffed only without one.
+    (ws / "fake.png").write_text("<html>login</html>\n")
+    out = await h.call(ReadTool(), file_path="fake.png")
+    assert out.is_error
+    assert text_of(out) == (
+        "Read: fake.png has an image extension, but its bytes are not a PNG, JPEG, GIF or "
+        "WebP image (often a saved error or login page). Check it with `file`, or look at "
+        "it as text through Bash (`head -c 500`).")
+    (ws / "pic.txt").write_bytes(_PNG)
+    assert not images_of(await h.call(ReadTool(), file_path="pic.txt"))
+
+
 async def test_read_other_image_kinds(h: Harness, ws: Path) -> None:
     pil = pytest.importorskip("PIL.Image")
     for name, fmt, media_type in (("a.jpg", "JPEG", "image/jpeg"), ("a.gif", "GIF", "image/gif"),
