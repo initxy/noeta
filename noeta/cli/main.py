@@ -108,7 +108,7 @@ def _subcommand(argv: list[str]) -> bool:
 
 
 def _plugins(cwd: str) -> None:
-    from noeta.cli.config import load_plugin_files
+    from noeta.cli.config import claude_plugins, load_plugin_files
     from noeta.core import registry
 
     notices = load_plugin_files(cwd)
@@ -116,6 +116,10 @@ def _plugins(cwd: str) -> None:
         print(f"{name}\t{source}")
     for name, source in registry.sources(registry.CHANNELS).items():
         print(f"{name}\t{source}\t(channel)")
+    found, more = claude_plugins(cwd)
+    for plugin in found:
+        print(f"{plugin.name}\t{plugin.root}\t(Claude Code plugin {plugin.version})".rstrip())
+    notices += more
     for path, why in registry.broken_plugin_files().items():
         print(f"(failed) {path}: {why}", file=sys.stderr)
     for notice in notices:

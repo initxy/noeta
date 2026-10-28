@@ -36,6 +36,7 @@ from noeta.agents.agent_files import (
     PluginSetting,
     parse_plugin_list,
 )
+from noeta.cli.claude_plugins import ClaudePlugin, find_claude_plugins, plugin_settings
 from noeta.cli.settings_files import (
     FileSettings,
     apply_env,
@@ -399,26 +400,33 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     # The file tools may write in the additional directories too.
     write_roots = [str(Path(cwd or os.getcwd(), d))
                    for d in permission_args.get("additional_directories") or ()]
-    table = merge_plugin_settings(
+    base = merge_plugin_settings(
         {"memory": {"home": str(HOME)},
          "hooks": {"settings_files": setting_files},
          "mcp": {"settings_files": setting_files, "project": project_trusted},
          "skills": {"trusted": project_trusted, "global_dir": str(HOME / "skills")},
          "instructions": {"user_dir": str(HOME), "managed_dir": str(managed_dir())},
-         "permissions": permission_args, "fs": {"write_roots": write_roots}},
-        settings.plugins, plugins or {})
+         "permissions": permission_args, "fs": {"write_roots": write_roots}})
     made: dict[Any, Any] = {}
     model, add_plugins = settings.model, settings.add_plugins
 
     def make_agents() -> list[Agent]:
         """The agents from the agent files and plugins found now; a plugin
         whose code and arguments did not change is the one made before."""
-        files = read_agent_dir(HOME / "agents")
+        claude, found_notices = claude_plugins(cwd)
+        notices.extend(n for n in found_notices if n not in notices)
+        files = [a for p in claude for a in p.agents if a.name not in BUILTIN_AGENTS]
+        files += read_agent_dir(HOME / "agents")
         if cwd and project_trusted(cwd):
             files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
+        from_plugins, plugin_notices = plugin_settings(claude)
+        notices.extend(n for n in plugin_notices if n not in notices)
+        table = merge_plugin_settings(base, from_plugins, settings.plugins, plugins or {})
         add = {agent: tuple(entries) for agent, entries in add_plugins.items()}
         for agent, names in registry.added_by_files().items():
             add[agent] = (*add.get(agent, ()), *((name, {}) for name in names))
+        if "markdown_commands" in from_plugins:
+            add["*"] = (*add.get("*", ()), ("markdown_commands", {}))
         return default_agents(model, plugins=table, add=add, extra_files=files, made=made)
 
     agents = make_agents()
@@ -469,6 +477,23 @@ def make_channels(tables: Mapping[str, Mapping[str, Any]]) -> list[Channel]:
         cls = registry.load(registry.CHANNELS, name)
         out.append(cls(**resolve_secrets(args, f"channel {name!r}")))
     return out
+
+
+#: The built-in agents' names: a plugin's agent file never replaces one.
+BUILTIN_AGENTS = frozenset({"main", "general-purpose", "Explore", "Plan"})
+
+
+def claude_plugins(cwd: str | None) -> tuple[list[ClaudePlugin], list[str]]:
+    """The Claude Code plugin directories of ``~/.noeta/plugins`` and, for a
+    trusted project, ``<cwd>/.noeta/plugins`` (:mod:`noeta.cli.claude_plugins`),
+    with notices for the person (an agent named like a built-in one)."""
+    places = [(HOME / "plugins", False)]
+    if cwd and project_trusted(cwd):
+        places.append((Path(cwd).expanduser().resolve() / ".noeta" / "plugins", True))
+    found = find_claude_plugins(places, HOME / "plugin-data")
+    notices = [f"plugin {p.name}: agent {a.name!r} is a built-in agent's name; not loaded"
+               for p in found for a in p.agents if a.name in BUILTIN_AGENTS]
+    return found, notices
 
 
 def plugin_changes(before: Mapping[str, Agent], after: Mapping[str, Agent]) -> list[str]:
