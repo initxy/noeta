@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         Reminder,
         TaskView,
     )
+    from noeta.core.questions import ask, read_answer
     from noeta.core.registry import provider, store
     from noeta.core.runner import Runtime
     from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
@@ -43,10 +44,12 @@ _EXPORTS = {
     "Tool": "noeta.core.tool",
     "ToolContext": "noeta.core.tool",
     "ToolOutput": "noeta.core.tool",
+    "ask": "noeta.core.questions",
     "default_agents": "noeta.presets",
     "parse_agent_file": "noeta.core.agent_files",
     "provider": "noeta.core.registry",
     "read_agent_dir": "noeta.core.agent_files",
+    "read_answer": "noeta.core.questions",
     "store": "noeta.core.registry",
     "text_output": "noeta.core.tool",
 }
@@ -64,11 +67,13 @@ __all__ = [
     "Tool",
     "ToolContext",
     "ToolOutput",
+    "ask",
     "connect",
     "default_agents",
     "parse_agent_file",
     "provider",
     "read_agent_dir",
+    "read_answer",
     "store",
     "text_output",
 ]

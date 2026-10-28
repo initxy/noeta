@@ -125,6 +125,14 @@ name = "plugins do not import each other"
 type = "independence"
 modules = ["noeta.plugins.*"]
 
+# Front ends reach plugins only through the kernel (settings by name, the
+# question form, commands), so any plugin can be removed or replaced.
+[[tool.importlinter.contracts]]
+name = "front ends do not import plugins"
+type = "forbidden"
+source_modules = ["noeta.apps"]
+forbidden_modules = ["noeta.plugins"]
+
 [[tool.importlinter.contracts]]
 name = "backends do not import each other"
 type = "independence"

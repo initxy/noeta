@@ -43,9 +43,10 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import CommandContext
+from noeta.core.loop.state import CORE
 from noeta.core.pending import Pending, follow_tree
+from noeta.core.questions import next_question, typed_answer
 from noeta.core.types import Delta, Usage
-from noeta.plugins.ask_user import next_question, typed_answer
 
 log = logging.getLogger("noeta.apps.tui")
 
@@ -446,6 +447,8 @@ class NoetaApp(App[None]):
             elif ev.kind == "turn_failed":
                 reason = ": ".join(str(x) for x in (data.get("reason"), data.get("detail")) if x)
                 await transcript.mount(Notice(f"turn failed: {reason}", classes="-error"))
+            elif ev.kind == "notice" and ev.extension == CORE:
+                await transcript.mount(Notice(str(data.get("text") or "")))
         elif isinstance(ev, Waiting):
             await self._end_stream()
             self.waiting_for = {"approval": "waiting for your approval (y/a/n)",

@@ -70,6 +70,11 @@ class ToolContext:
     #: (``noeta.core.prompts``).
     prompt: Callable[[str, str], str] = field(default=lambda _name, default: default)
 
+    def notify(self, text: str) -> None:
+        """Tell the person ``text``; front ends show it, the model never sees
+        it (a ``core`` / ``notice`` record)."""
+        self.record("core", "notice", {"text": text})
+
 
 class Tool(Protocol):
     name: str

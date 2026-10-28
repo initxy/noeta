@@ -103,7 +103,8 @@ async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool,
                       permission_mode: str | None) -> int:
     import msgspec
 
-    from noeta.core.events import ModelReplied, TaskEnded, Waiting
+    from noeta.core.events import ExtensionRecorded, ModelReplied, TaskEnded, Waiting
+    from noeta.core.loop.state import CORE
     from noeta.core.pending import follow_tree
     from noeta.core.types import Usage
 
@@ -145,6 +146,9 @@ async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool,
                 sys.stdout.flush()
             if isinstance(ev, ModelReplied):
                 usage = usage + ev.response.usage
+            if (isinstance(ev, ExtensionRecorded) and ev.extension == CORE
+                    and ev.kind == "notice" and not as_json):
+                print(f"noeta: {(ev.data or {}).get('text', '')}", file=sys.stderr)
             if isinstance(ev, Waiting) and ev.on == "input":
                 failed = ev.detail.get("turn_failed")
                 answer = ev.detail.get("answer", "")

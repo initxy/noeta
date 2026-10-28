@@ -35,8 +35,8 @@ from noeta.core.events import (
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CORE
 from noeta.core.pending import Pending, follow_tree, pending_tree
+from noeta.core.questions import next_question, typed_answer
 from noeta.core.types import Delta, Image, Message, Text, ToolUse
-from noeta.plugins.ask_user import next_question, typed_answer
 
 log = logging.getLogger("noeta.apps.acp")
 
@@ -205,31 +205,28 @@ class _Turn:
 
 
 class EditorServers:
-    """MCP servers an editor named for each session. Kept in memory only:
-    their env and headers are credentials and never enter the task log. Pass
-    it as the ``mcp`` plugin's ``servers``."""
+    """MCP servers an editor named for each session, in Claude Code's
+    ``mcpServers`` shape. Kept in memory only: their env and headers are
+    credentials and never enter the task log. Pass it as the ``mcp``
+    plugin's ``servers``."""
 
     def __init__(self) -> None:
-        self.by_task: dict[str, list[Any]] = {}
+        self.by_task: dict[str, dict[str, dict[str, Any]]] = {}
 
-    def __call__(self, view: Any) -> list[Any]:
-        return self.by_task.get(view.state.root_id or view.task_id, [])
+    def __call__(self, view: Any) -> dict[str, dict[str, Any]]:
+        return self.by_task.get(view.state.root_id or view.task_id, {})
 
     def add(self, task_id: str, servers: Iterable[Any]) -> None:
-        from noeta.plugins.mcp import McpServer
-        from noeta.plugins.mcp.settings import alias_for
-
-        converted = []
+        table: dict[str, dict[str, Any]] = {}
         for s in servers:
-            alias = alias_for(s.name)
             given = getattr(s, "env", None) or getattr(s, "headers", None) or []
             pairs = {p.name: p.value for p in given}
             if getattr(s, "command", None):
-                converted.append(McpServer(alias=alias, command=[s.command, *(s.args or [])],
-                                           env=pairs))
+                table[s.name] = {"command": s.command, "args": list(s.args or []),
+                                 "env": pairs}
             elif getattr(s, "url", None):
-                converted.append(McpServer(alias=alias, url=s.url, headers=pairs))
-        self.by_task[task_id] = converted
+                table[s.name] = {"type": "http", "url": s.url, "headers": pairs}
+        self.by_task[task_id] = table
 
 
 class NoetaAcpAgent:
@@ -442,6 +439,9 @@ class NoetaAcpAgent:
                     out.put_nowait(acp.update_agent_message_text(f"\n\n[turn failed: {reason}]"))
                 elif ev.kind == "turn_stopped":
                     return "cancelled"
+                elif ev.kind == "notice":
+                    text = str((ev.data or {}).get("text") or "")
+                    out.put_nowait(acp.update_agent_message_text(f"\n\n[{text}]\n\n"))
             elif isinstance(ev, Waiting):
                 if ev.on == "approval":
                     await out.join()

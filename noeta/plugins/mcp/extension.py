@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Union
 
 from noeta.core.events import Recorded, TaskEnded, Waiting
@@ -53,24 +53,33 @@ from noeta.plugins.mcp.config import (
 from noeta.plugins.mcp.pool import McpPool, default_pool
 from noeta.plugins.mcp.prompts import McpPrompt, expand_prompt, list_prompts
 from noeta.plugins.mcp.results import render_result
-from noeta.plugins.mcp.settings import read_servers
+from noeta.plugins.mcp.settings import read_servers, servers_from
 from noeta.plugins.mcp.tools import MCP_CALL_TOOL, McpCallTool, McpTool, ToolSearchTool, route_call
 
 __all__ = ["Mcp", "ServersFn"]
 
 log = logging.getLogger("noeta.plugins.mcp")
 
-Servers = Sequence[McpServer]
+#: Servers as objects, or in Claude Code's ``mcpServers`` shape (name ->
+#: ``{"command", "args", "env"}`` or ``{"type": "http", "url", "headers"}``).
+Servers = Union[Sequence[McpServer], Mapping[str, Any]]
 ServersFn = Callable[[TaskView], Union[Servers, Awaitable[Servers]]]
 ScopeFn = Callable[[TaskView], Union[str, None]]
+
+
+def _as_list(servers: Servers) -> list[McpServer]:
+    if isinstance(servers, Mapping):
+        return servers_from({"mcpServers": servers}, "servers")
+    return list(servers)
 
 
 class Mcp(Extension):
     """Tools from MCP servers.
 
-    ``servers``: the servers a task may use — a fixed list, or a function of
-    the task (``TaskView -> [McpServer]``, sync or async) evaluated each time a
-    runner picks the task up. It replaces 0.6's ``Options.mcp_servers`` and
+    ``servers``: the servers a task may use — a fixed list (or a mapping in
+    Claude Code's ``mcpServers`` shape), or a function of the task returning
+    one (sync or async), evaluated each time a runner picks the task up. It
+    replaces 0.6's ``Options.mcp_servers`` and
     ``HostConfig.mcp_server_resolver``; derive it from the task (its config,
     ``state.root_id`` for a child) so any worker gets the same answer.
 
@@ -215,6 +224,7 @@ class Mcp(Extension):
             if callable(servers):
                 got = servers(view)
                 servers = await got if inspect.isawaitable(got) else got
+            servers = _as_list(servers)
             scope = self._scope
             self._scopes[view.task_id] = scope(view) if callable(scope) else scope
             servers = [*servers, *await self._from_files(view)]
@@ -243,7 +253,7 @@ class Mcp(Extension):
         fixed ones and the settings files'."""
         if ctx.task_id and ctx.task_id in self._known:
             return list(self._known[ctx.task_id].values())
-        given = [] if callable(self._servers) else list(self._servers)
+        given = [] if callable(self._servers) else _as_list(self._servers)
         files: list[McpServer] = []
         if self._settings_files or self._project:
             files = await asyncio.to_thread(read_servers, self._settings_files,

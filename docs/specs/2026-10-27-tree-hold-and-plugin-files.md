@@ -58,10 +58,11 @@ ask the person a question or tell them something, and front ends depend on no pl
   to deploy plugins to many machines. `noeta plugins` lists every plugin and where it comes from.
 - **Questions are a kernel form.** `noeta/core/questions.py` holds the question shape
   (`{"questions": [{id, question, header?, options?, multiSelect?}]}`, answers
-  `{id: {"selected": [...]} | {"other": text}}`), `next_question`, `typed_answer` and validation
-  against the parked detail. A question without options asks for free text. `ask_user` builds on
+  `{id: {"selected": [...]} | {"other": text}}`), `ask` (builds the park), `read_answer` (checks
+  an answer against the same `ask` result in `resume`), `next_question`, `typed_answer` and
+  `answer_question`. A question without options asks for free text. `ask_user` builds on
   it; the model-facing `AskUserQuestion` does not change.
-- **Notices.** `TaskView.notify(text)` records a note for the person that is never sent to the
+- **Notices.** `TaskView.notify(text)` and `ToolContext.notify(text)` record a note for the person that is never sent to the
   model; the TUI shows it as a notice, ACP as an agent message.
 - **Front ends import no plugin.** `Mcp` takes Claude Code's `mcpServers` mapping as plain data,
   so ACP passes the editor's servers through plugin settings. An import-linter contract forbids
@@ -73,7 +74,7 @@ ask the person a question or tell them something, and front ends depend on no pl
       (contract tests, Postgres run locally), `Runtime` renewal, `ToolContext.hold`
 - [x] Shell jobs hold their root; the lost rule on start; two-runtime tests
 - [x] Plugin files: registry sources, `trusted.json`, `noeta trust`, `noeta plugins`
-- [ ] `noeta/core/questions.py`, `ask_user` on it, `TaskView.notify`, MCP servers as data,
+- [x] `noeta/core/questions.py`, `ask_user` on it, `TaskView.notify`, MCP servers as data,
       the apps ↛ plugins contract
 - [ ] The example plugin asks a question and sends a notice
 - [ ] README / CONTEXT / CHANGELOG
@@ -107,3 +108,5 @@ ask the person a question or tell them something, and front ends depend on no pl
   after the merge): the wait after allowing a sub-agent's approval ran its full 20 s, so it is a
   stall, not a tight timeout. 24 concurrent single runs and 6 `-n 8` runs of `tests/apps` did not
   reproduce it; its wait is now split so the next failure says which side stopped.
+- 2026-10-27: step 4 done; `make check` 1366 passed, the new import contract kept. `resume`
+  has no access to the parked detail, so `read_answer` takes the plugin's own `ask(...)` result.
