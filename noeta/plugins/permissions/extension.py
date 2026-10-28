@@ -601,12 +601,29 @@ class Permissions(Extension):
                        and r.path_pattern_matches(x.content or "", real, ctx)
                        for x in edit_rules)
 
+        # Every target is judged on the disk as it is before the command
+        # runs: a link an earlier part copies or moves into place (or that a
+        # part a rule lets through may make) is not there yet, so a later
+        # write under what such a part wrote is not judged here.
+        placed: list[str] = []
+        unknown = False
+
+        def under_placed(path: str) -> bool:
+            return unknown or any(path == p or path.startswith(p.rstrip("/") + "/")
+                                  for p in placed)
+
         open_parts: list[sc.Part] = []
         for part in sc.shell_parts(command, here):
-            if part.read_only or any(r.shell_rule_matches(x.content or "", part.text, every=True)
-                                     for x in bash_rules):
+            if part.read_only:
                 continue
-            if part.writes is not None and all([await writable(x) for x in part.writes]):
+            if any(r.shell_rule_matches(x.content or "", part.text, every=True)
+                   for x in bash_rules):
+                unknown = True
+                continue
+            if part.writes is not None and all(
+                    [not under_placed(x) and await writable(x) for x in part.writes]):
+                if _may_place_links(part.argv):
+                    placed.extend(part.writes)
                 continue
             open_parts.append(part)
         if not open_parts:
@@ -1074,6 +1091,29 @@ def _newest_prompt(view: TaskView) -> int:
 
 def _platform() -> str:
     return {"darwin": "macos", "win32": "windows"}.get(sys.platform, sys.platform)
+
+
+#: ``cp`` flags that copy what links point to, never a link itself.
+_CP_PLAIN_FLAGS = frozenset({"--force", "--interactive", "--no-clobber", "--verbose",
+                             "--update", "--dereference"})
+
+
+def _may_place_links(argv: Sequence[str]) -> bool:
+    """A file command that may leave a symlink (or a hard link) at what it
+    writes: ``mv``, and ``cp`` unless only plain-copy flags are given."""
+    if argv[:1] == ("mv",):
+        return True
+    if argv[:1] != ("cp",):
+        return False
+    for word in argv[1:]:
+        if word == "--":
+            break
+        if word.startswith("--"):
+            if word not in _CP_PLAIN_FLAGS:
+                return True
+        elif word.startswith("-") and word != "-" and set(word[1:]) - set("finvupL"):
+            return True
+    return False
 
 
 def _shell_always(parts: Sequence[sc.Part],

@@ -164,6 +164,65 @@ async def test_a_symlink_into_a_protected_directory_still_asks(
     assert len(bash.runs) == (0 if mode == "acceptEdits" else 1)
 
 
+@pytest.mark.parametrize("command", [
+    "cp -r dir c && cp payload c/link", "cp -r dir c; cp payload c/link/x",
+    "mv dir c && cp payload c/link", "cp -a dir/link out && sed -i s/a/b/ out",
+    "cp -r dir c && cd c && cp ../payload link", "mv dir/link l && touch l",
+])
+async def test_a_link_an_earlier_part_copies_is_not_written_through(
+        store: SqliteStore, tmp_path: Path, command: str) -> None:
+    """Each target is judged before anything runs: a link the same command
+    copies or moves first is not on disk yet, so a later write under it asks."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    ws = tmp_path / "ws"
+    (ws / "dir").mkdir(parents=True)
+    (ws / ".git" / "hooks").mkdir(parents=True)
+    (ws / "payload").write_text("x")
+    (ws / "dir" / "link").symlink_to(outside if "link/x" in command else outside / "f")
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": command}))])
+    client, tid, _ = await start(store, provider, Permissions(mode="acceptEdits"), [bash],
+                                 cwd=ws)
+    assert asked(await events(client, tid)) and not bash.runs
+
+
+async def test_a_link_into_git_hooks_copied_in_the_same_command_asks(
+        store: SqliteStore, tmp_path: Path) -> None:
+    (tmp_path / ".git" / "hooks").mkdir(parents=True)
+    (tmp_path / "dir").mkdir()
+    (tmp_path / "dir" / "link").symlink_to(tmp_path / ".git" / "hooks" / "pre-commit")
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply(
+        "", ("Bash", {"command": "cp -r dir c && cp payload c/link"}))])
+    client, tid, _ = await start(store, provider, Permissions(mode="acceptEdits"), [bash],
+                                 cwd=tmp_path)
+    assert asked(await events(client, tid)) and not bash.runs
+
+
+async def test_a_write_after_a_part_a_rule_lets_through_asks(store: SqliteStore,
+                                                             tmp_path: Path) -> None:
+    """What ``npm run build`` leaves behind (a link, perhaps) is unknown."""
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply(
+        "", ("Bash", {"command": "npm run build && cp payload dist/x"}))])
+    perms = Permissions(mode="acceptEdits", allow=["Bash(npm run build)"])
+    client, tid, _ = await start(store, provider, perms, [bash], cwd=tmp_path)
+    assert asked(await events(client, tid)) and not bash.runs
+
+
+async def test_ordinary_multi_part_file_commands_still_run(store: SqliteStore,
+                                                           tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("a")
+    bash = Fake("Bash")
+    commands = ["mkdir -p out && cp a.txt out/", "mkdir -p out/sub && touch out/sub/x",
+                "cp a.txt b.txt && sed -i s/a/b/ b.txt", "rm -f c.txt && cp a.txt c.txt"]
+    provider = ScriptedProvider([reply("", *(("Bash", {"command": c}) for c in commands)),
+                                 reply("ok")])
+    await start(store, provider, Permissions(mode="acceptEdits"), [bash], cwd=tmp_path)
+    assert [r["command"] for r in bash.runs] == commands
+
+
 async def test_a_directory_change_in_the_command_moves_its_paths(store: SqliteStore,
                                                                  tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
