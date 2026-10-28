@@ -110,13 +110,13 @@ def test_request_facts_registers_the_tool_set() -> None:
 
 
 def test_sse_round_trips_through_the_recorded_response_reader() -> None:
-    content = [{"type": "text", "text": "hi"},
+    content = [{"type": "thinking", "thinking": "hm"}, {"type": "text", "text": "hi"},
                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}]
     raw = b"".join(wire.sse(content, "tool_use", model="m")).decode()
     msg = wire.parse_response(raw)
     assert msg is not None and msg["stop_reason"] == "tool_use"
     assert wire.script_turn(msg)["content"] == [
-        {"type": "text", "text": "hi"},
+        {"type": "thinking", "thinking": "hm"}, {"type": "text", "text": "hi"},
         {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]
     assert wire.parse_response('{"type": "error", "error": {}}') is None
     assert wire.parse_response('{"content": [], "stop_reason": "end_turn"}') == {
@@ -294,3 +294,28 @@ def test_compare_all_reports_and_counts(tmp_path: Path) -> None:
     (tmp_path / "parity" / "deviations.md").write_text(f"- `{ids[0]}` accepted\n")
     _, count = compare.compare_all(cdir, noeta)
     assert count == 4
+
+
+def test_distill_reads_answered_cards(tmp_path: Path) -> None:
+    cards = tmp_path / "s.cards"
+    cards.mkdir()
+    (cards / "001-a.txt").write_text("# step a; answered with Escape\nthe card\n")
+    assert distill.read_cards(tmp_path / "s") == [{"step": "a", "key": "Escape"}]
+
+
+def test_proxy_rewrites_only_upstream_bodies(tmp_path: Path) -> None:
+    from scripts.parity import record
+
+    rec = record.Recorder(tmp_path, "http://up", model="cheap", effort={"medium": "high"})
+    rec.drop_disabled_thinking = True
+    body = {"model": "claude", "thinking": {"type": "disabled"},
+            "output_config": {"effort": "medium"}}
+    fwd, done = rec.outbound(body)
+    assert fwd == {"model": "cheap", "output_config": {"effort": "high"}}
+    assert done == ["model", "effort", "thinking-disabled-dropped"]
+    assert body["thinking"] == {"type": "disabled"}
+    idx = rec.next_index()
+    rec.progress(idx, 10)
+    assert json.loads((tmp_path / ".live").read_text()) == {str(idx): 10}
+    rec.progress(idx, None)
+    assert json.loads((tmp_path / ".live").read_text()) == {}

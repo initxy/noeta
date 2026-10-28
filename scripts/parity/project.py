@@ -68,11 +68,20 @@ def data_rows() -> str:
                      for i in range(4000))
 
 
-def write_project(dest: Path, *, data: bool = False, python: str = "python3",
-                  git_user: str = "parity") -> Path:
+#: Project settings with a PreToolUse command hook that appends each hook
+#: input to ``hook.log`` beside the project (outside it, so git stays clean).
+HOOK_SETTINGS = {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{
+    "type": "command",
+    "command": "cat >> \"$CLAUDE_PROJECT_DIR/../hook.log\"; echo >> \"$CLAUDE_PROJECT_DIR/../hook.log\"",
+}]}]}}
+
+
+def write_project(dest: Path, *, data: bool = False, hooks: bool = False,
+                  python: str = "python3", git_user: str = "parity") -> Path:
     """Write the project under ``dest/proj`` (committed as ``init calc``) and
     the MCP server beside it; returns the project directory. With ``data``,
-    ``data.txt`` is added after the commit, untracked, as the recording had it."""
+    ``data.txt`` is added after the commit, untracked, as the recording had it;
+    with ``hooks``, ``.claude/settings.json`` holds :data:`HOOK_SETTINGS`."""
     dest = dest.resolve()
     proj = dest / "proj"
     files = {
@@ -82,6 +91,8 @@ def write_project(dest: Path, *, data: bool = False, python: str = "python3",
         ".mcp.json": json.dumps({"mcpServers": {"echo": {
             "command": python, "args": [str(dest / "mcp_echo.py")]}}}, indent=2) + "\n",
     }
+    if hooks:
+        files[".claude/settings.json"] = json.dumps(HOOK_SETTINGS, indent=2) + "\n"
     for rel, text in files.items():
         path = proj / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -101,9 +112,11 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("dest", type=Path)
     ap.add_argument("--data", action="store_true", help="add data.txt (auto-compaction scenario)")
+    ap.add_argument("--hooks", action="store_true", help="add a logging PreToolUse hook")
     ap.add_argument("--python", default="python3", help="interpreter .mcp.json starts the server with")
     args = ap.parse_args(argv)
-    print(write_project(args.dest.expanduser(), data=args.data, python=args.python))
+    print(write_project(args.dest.expanduser(), data=args.data, hooks=args.hooks,
+                        python=args.python))
 
 
 if __name__ == "__main__":

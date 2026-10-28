@@ -80,11 +80,13 @@ def parse_response(raw: str) -> dict[str, Any] | None:
 
 
 def script_turn(message: Mapping[str, Any]) -> dict[str, Any]:
-    """What the model said, as a replay script turn: text and tool calls
-    (thinking dropped — it is never resent to the model as-is)."""
-    content = []
+    """What the model said, as a replay script turn: thinking, text and tool
+    calls (a thinking block's signature is the upstream model's, not kept)."""
+    content: list[dict[str, Any]] = []
     for b in message.get("content") or []:
-        if b.get("type") == "text" and b.get("text"):
+        if b.get("type") == "thinking" and b.get("thinking"):
+            content.append({"type": "thinking", "thinking": b["thinking"]})
+        elif b.get("type") == "text" and b.get("text"):
             content.append({"type": "text", "text": b["text"]})
         elif b.get("type") == "tool_use":
             content.append({"type": "tool_use", "name": b.get("name"),
@@ -104,7 +106,17 @@ def sse(content: list[dict[str, Any]], stop_reason: str | None, *, model: str,
         "id": message_id, "type": "message", "role": "assistant", "model": model,
         "content": [], "stop_reason": None, "stop_sequence": None, "usage": usage}})
     for i, b in enumerate(content):
-        if b["type"] == "text":
+        if b["type"] == "thinking":
+            yield ev("content_block_start", {"type": "content_block_start", "index": i,
+                                             "content_block": {"type": "thinking",
+                                                               "thinking": ""}})
+            yield ev("content_block_delta", {"type": "content_block_delta", "index": i,
+                                             "delta": {"type": "thinking_delta",
+                                                       "thinking": b["thinking"]}})
+            yield ev("content_block_delta", {"type": "content_block_delta", "index": i,
+                                             "delta": {"type": "signature_delta",
+                                                       "signature": ""}})
+        elif b["type"] == "text":
             yield ev("content_block_start", {"type": "content_block_start", "index": i,
                                              "content_block": {"type": "text", "text": ""}})
             yield ev("content_block_delta", {"type": "content_block_delta", "index": i,

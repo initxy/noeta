@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import json
 import os
 import shutil
@@ -302,11 +303,13 @@ class SessionReplay:
 
     def prepare(self) -> None:
         if not self.proj.exists():
-            write_project(self.scratch, data=bool(self.spec.get("data")), python=sys.executable)
+            write_project(self.scratch, data=bool(self.spec.get("data")),
+                          hooks=bool(self.spec.get("hooks")), python=sys.executable)
         elif self.spec.get("data") and not (self.proj / "data.txt").exists():
             from scripts.parity.project import data_rows
             (self.proj / "data.txt").write_text(data_rows(), "utf-8")
-        self.replayer.subs = {"{PROJECT}": str(self.proj), "{HOME}": str(self.home)}
+        self.replayer.subs = {"{PROJECT}": str(self.proj), "{HOME}": str(self.home),
+                              "{USER}": getpass.getuser()}
 
     async def drive(self, endpoint: Endpoint, task_id: str | None) -> str | None:
         from noeta.cli.config import Settings, from_settings
@@ -348,12 +351,15 @@ class SessionReplay:
                       after: int) -> None:
         """Until the turn the step started is over: the task waits for input
         again after taking the step's message (or has ended). Approvals are
-        allowed and questions get their first option meanwhile."""
+        answered as the recording's driver answered Claude Code's cards (the
+        step's ``cards`` keys in order: ``Escape`` denies, ``2`` allows
+        always, anything else allows), questions get their first option."""
         from noeta.core.events import InputTaken, Waiting
         from noeta.core.pending import pending_tree
 
         deadline = time.monotonic() + STEP_TIMEOUT_S
         self.replayer.stalls.clear()
+        keys = iter(step.get("cards") or [])
         while time.monotonic() < deadline:
             await asyncio.sleep(0.2)
             if step.get("interrupt") and self.replayer.stalls.is_set():
@@ -362,8 +368,11 @@ class SessionReplay:
                 await app.client.cancel(task_id, "interrupted", turn_only=True)
             for p in await pending_tree(app.client, task_id):
                 if p.kind == "approval":
+                    key = next(keys, "1")
                     self.notes.append(f"step {step['name']}: approval asked for {p.tool}")
-                    await app.client.answer(p.task_id, p.request_id, "allow")
+                    await app.client.answer(p.task_id, p.request_id,
+                                            "deny" if key == "Escape" else "allow",
+                                            always=key == "2")
                 else:
                     qs = p.detail.get("questions") or []
                     data = {str(q.get("id")): {"selected": [q["options"][0]["label"]]}
