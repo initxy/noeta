@@ -457,7 +457,7 @@ class _ToolView:
 
     async def _post(self, body: Any, dedupe_key: str | None = None) -> None:
         assert self._ctx.post is not None
-        await self._ctx.post(body)
+        await self._ctx.post(body, dedupe_key=dedupe_key)
 
     def notify(self, text: str, *, kind: str | None = None, data: Any = None) -> None:
         self._ctx.notify(text, kind=kind, data=data)

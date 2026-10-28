@@ -63,7 +63,8 @@ class ToolContext(CoreNotices):
     spawn: Callable[..., str] | None = None
     #: Post to this task's own inbox from outside a step (a background job
     #: finishing), or with ``task_id=`` to another task of the same tree (the
-    #: root, once the spawner has ended). Wakes the task if it is waiting.
+    #: root, once the spawner has ended). Wakes the task if it is waiting;
+    #: idempotent with a ``dedupe_key=``.
     post: Callable[..., Awaitable[None]] | None = None
     #: The root task's id (background jobs notify the spawner, then the root).
     root_id: str = ""
