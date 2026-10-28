@@ -144,22 +144,23 @@ Phase 1 — P0 fixes (needed regardless of parity)
 - [x] Model catalog: Claude 5.5 family and Fable; unknown models announced, not silently 128K.
 
 Phase 2 — what the model sees
-- [ ] Tool set and order as the baseline: `Agent` (alias `Task`), deferred tools + `ToolSearch`
+- [x] Tool set and order as the baseline: `Agent` (alias `Task`), deferred tools + `ToolSearch`
   (`select:` syntax), retired tools removed, Glob/Grep handled as the native build does.
 - [ ] Each tool's schema and behavior per contract (Read paging on token cap, file-unchanged
   dedupe, Edit on externally changed files, notebook, WebFetch paging/PDF/4xx, Bash
   timeout-to-background, read-only command table, Monitor modes, TaskStop).
-- [ ] System prompt sections per checklist, including the `<system-reminder>` explanation.
-- [ ] Reminder catalog: every baseline reminder kind that applies, with Claude Code's triggers
+- [x] System prompt sections per checklist, including the `<system-reminder>` explanation.
+- [x] Reminder catalog: every baseline reminder kind that applies, with Claude Code's triggers
   (background-task status after compaction, mid-turn user message wording, todo/plan nudges,
   file-changed, token/budget where the baseline shows them).
-- [ ] Compaction per contract: trigger formula, clearing (keep count), summary prompt sections,
+- [x] Compaction per contract: trigger formula, clearing (keep count), summary prompt sections,
   post-compaction re-attachments and their caps, idle compaction, failure breaker.
-- [ ] Prompt cache: breakpoint positions and TTL choices per contract (1-hour where the baseline
+- [x] Prompt cache: breakpoint positions and TTL choices per contract (1-hour where the baseline
   uses it).
 - [ ] Loop edge cases: empty reply and tool-intent-without-call retried once, interrupt leaves
   `[Request interrupted by user]` and keeps the partial reply, `Retry-After` capped, max_tokens
   shrink on window overflow, mid-turn injection on by default in every front end.
+  Left: malformed tool calls are still retried by the transient policy, not once.
 
 Phase 3 — behaviors around the model
 - [x] Permission modes (default, acceptEdits, plan, dontAsk, auto, bypassPermissions) and one
@@ -172,11 +173,13 @@ Phase 3 — behaviors around the model
 - [ ] Skills: every baseline frontmatter field (`allowed-tools` as pre-approval, `when_to_use`,
   `context: fork`, `` !`cmd` ``, `${CLAUDE_SKILL_DIR}`, `paths`), directory walk.
 - [ ] Agent files: every baseline frontmatter field; unknown fields warn.
-- [x] Memory: `CLAUDE.md` layers, `@import`, `.claude/rules`, per-project auto memory.
+- [x] Memory: `NOETA.md` layers, `@import`, `.noeta/rules`, per-project auto memory.
 - [x] MCP: OAuth, headersHelper, SSE, streamable-http spelling, resources tools, elicitation via
   `noeta.core.questions`, deferred by default.
 - [x] Sandbox for local exec (bubblewrap on Linux) with Claude Code's settings shape and domain
   proxy.
+- [ ] Monitor `ws` under the sandbox's network rules: it connects from the worker process,
+  outside the proxy, so it bypasses `allowedDomains`.
 
 Phase 4 — missing tools
 - [ ] `SendMessage` (resume a finished sub-agent from its log) and fork sub-agents, background by
@@ -478,3 +481,15 @@ Phase 5 — front ends
   Model-visible text added: the `@`-mention attachment, `Permission to use {name} was
   denied.`, and the headless refusal (the gate's prompt). `make eval` not run (needs
   credentials).
+- 2026-10-28: merge gates on parity @dcb90f9: make check 1619 passed, make parity 0 (7
+  accepted deviations), make eval 0.974 vs 0.987 baseline (within tolerance;
+  `read_over_shell_cat` 0.67), make e2e 7 passed. Pre-merge review: revise (3 P0, 7 P1) →
+  fixes in progress. Kernel fixes: a continuation pins `history_through` at creation
+  (`noeta.core.store.pin_history`), keeps the source's loaded deferred tools, answers open
+  calls before held messages, and each plugin chooses what of its state carries over
+  (`Extension.continue_state`: schedule none, workflow finished runs, shell cwd and finished
+  jobs); `restore_files` writes only what the task's log snapshotted, inside the workspace
+  (a conversation rewind now signals the rewound task; a sub-agent's edits are not
+  restored); timers dedupe on the record that set them; `TaskView.spawn` without a key gets
+  a fresh id, and spawns in `after_tool` are created. Phase 2 ledger caught up (five items
+  ticked).

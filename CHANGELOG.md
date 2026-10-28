@@ -9,6 +9,11 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **Stop every worker before upgrading; workers of different versions must not share a
+  store.** This release writes log entries an older worker cannot decode (messages with
+  `role="system"`, origins `inline` and `agent`, `ToolReference` blocks), so an older worker
+  that picks up a task a newer one touched fails on it again and again. Logs written by
+  older versions still load.
 - **noeta reads only its own places, with Claude Code's mechanisms.** `~/.claude/`,
   `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json` and `CLAUDE_CONFIG_DIR` are no
   longer read, so the two tools never pick up each other's hooks, env or instructions.
@@ -136,6 +141,26 @@ All notable changes to Noeta are documented here. The format is based on
 - **A fork of a fork keeps the whole conversation.** A task continuing another
   (`history_from`) folded only that task's own log, so a second rewind, or a sub-agent
   resumed twice through `SendMessage`, lost everything before the first continuation.
+- **A continued task's conversation no longer moves.** A task created with `history_from`
+  and no `history_through` (`--fork-session`, a resumed sub-agent) folded its source's whole
+  log on every load, so it changed whenever the source went on. Creating it now records the
+  source's last seq (`noeta.core.store.pin_history`).
+- **A continued task keeps the tools its source loaded** with `ToolSearch`; they were no longer
+  sent while the history still referenced them, and calls to them were refused. Calls its
+  source left open are answered right after their `tool_use`, ahead of messages held behind
+  them (the API refused the first request of a fork taken with an interjection).
+- **A continued task leaves its source's timers and jobs behind.** Plugin state was copied
+  whole: cron jobs and `/loop` wake-ups were listed in the new task and never fired, a
+  running workflow could be driven twice. `Extension.continue_state` decides per plugin;
+  schedule starts empty, workflow keeps finished runs, shell its cwd and finished jobs.
+- **`restore_files` puts back only what the task snapshotted.** The signal (also open as
+  `POST /tasks/{id}/signals`) wrote any content to any path. It now writes a file inside the
+  workspace only when the task's log snapshotted it and the content hashes to one of its
+  snapshots. A conversation rewind restores through the rewound task; edits a sub-agent made
+  are not restored.
+- A timer set again for the same name and time fired only once, and the task then spun;
+  `TaskView.spawn` without a `key` reused the first child's id; children `view.spawn` staged
+  in `after_tool` were never created.
 
 - **An "always" shell approval no longer widens to the program and its first argument.**
   Approving `rm -rf build` used to let `rm -rf /` run unasked (and wrote that rule to a
