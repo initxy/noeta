@@ -7,6 +7,7 @@ authors = [{ name = "The Noeta Authors" }]
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28.1",
+    "mini-racer>=0.14,<0.15",
     "msgspec>=0.19",
     "pyyaml>=6.0",
 ]

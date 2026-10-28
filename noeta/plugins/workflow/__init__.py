@@ -48,9 +48,9 @@ RETURN_NOTE = ("\n\nYou are a step of a workflow script: your final reply is ret
                "script as data, not shown to a person. End with exactly the result asked for.")
 SCHEMA_NOTE = ("\n\nYou are a step of a workflow script: your final reply is parsed as JSON "
                "matching this schema and returned to the script:\n{schema}")
-NO_ENGINE = ("Workflow needs Node.js {major} or newer on the worker that runs this task "
-             "({reason}); nothing was started. Use the Agent tool instead, or install Node.js "
-             "(or set NOETA_NODE to its path).")
+NO_ENGINE = ("Workflow cannot run scripts on the worker that runs this task: its embedded "
+             "JavaScript engine does not load here ({reason}). Nothing was started. Use the "
+             "Agent tool instead.")
 STARTED = ('Workflow "{name}" started in the background as {run_id}: {launched} agent(s) '
            "running. A <task-notification> arrives when it finishes; do not wait for it or "
            "guess its result.{saved}")
@@ -384,9 +384,7 @@ class WorkflowTool:
         try:
             checked = await self.ext.engine.check(script)
         except EngineMissing as exc:
-            from noeta.plugins.workflow.engine import MIN_NODE_MAJOR
-
-            return text_output(NO_ENGINE.format(major=MIN_NODE_MAJOR, reason=exc), is_error=True)
+            return text_output(NO_ENGINE.format(reason=exc), is_error=True)
         if "error" in checked:
             return text_output(f"{TOOL}: {checked['error']}. The script must be plain "
                                "JavaScript that starts with the meta literal.", is_error=True)
