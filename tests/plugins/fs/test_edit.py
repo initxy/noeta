@@ -171,7 +171,8 @@ async def test_edit_zero_match_fails_no_write(h: Harness, ws: Path) -> None:
     await _read(h, "a.py")
     out = await h.call(EditTool(), file_path="a.py", old_string="missing", new_string="x")
     assert out.is_error
-    assert text_of(out) == "Edit: String to replace not found in file."
+    # Claude Code echoes the string it looked for.
+    assert text_of(out) == "Edit: String to replace not found in file.\nString: missing"
     assert target.read_text() == "foo\n"
 
 

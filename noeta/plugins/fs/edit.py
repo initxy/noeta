@@ -138,7 +138,7 @@ class EditTool:
         if stale and (ctx.approved or count == 0 or (count > 1 and not replace_all)):
             return stale_error(self.name, "editing")
         if count == 0:
-            return tool_error(self.name, "String to replace not found in file.")
+            return tool_error(self.name, f"String to replace not found in file.\nString: {old}")
         if count > 1 and not replace_all:
             return tool_error(
                 self.name,
