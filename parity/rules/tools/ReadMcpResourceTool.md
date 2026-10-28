@@ -14,8 +14,7 @@ Reads one resource from an MCP server by server name and URI. **Deferred** like
 then sent with `defer_loading: true`, alphabetically between `Read` and `ReportFindings`, and kept
 for the rest of the conversation.
 
-noeta equivalent: none as a tool. noeta reads resources only when the user `@`-mentions one
-(`noeta/plugins/mcp/prompts.py`).
+noeta equivalent: `ReadMcpResourceTool` in `noeta/plugins/mcp/tools.py`.
 
 ## Parameters
 
@@ -23,22 +22,22 @@ JSON Schema 2020-12, `additionalProperties: false`.
 
 | id | name | type | required | enum / default / limits | noeta today |
 |---|---|---|---|---|---|
-| `tool.ReadMcpResourceTool.p.server` | `server` | string | yes | MCP server name (as configured) | missing |
-| `tool.ReadMcpResourceTool.p.uri` | `uri` | string | yes | resource URI | missing |
+| `tool.ReadMcpResourceTool.p.server` | `server` | string | yes | MCP server name (as configured) | covered |
+| `tool.ReadMcpResourceTool.p.uri` | `uri` | string | yes | resource URI | covered |
 
 ## Rules
 
 | id | rule | noeta today |
 |---|---|---|
-| `tool.ReadMcpResourceTool.1` | Reads one resource from one MCP server, identified by server name and URI. | missing |
-| `tool.ReadMcpResourceTool.2` | The description restates both parameters as required in a `Parameters:` list and starts and ends with a blank line. | missing |
-| `tool.ReadMcpResourceTool.3` | Observed: the model may call it in the same assistant message as an MCP server tool (parallel calls, `m1/0021`). | missing |
+| `tool.ReadMcpResourceTool.1` | Reads one resource from one MCP server, identified by server name and URI. | covered |
+| `tool.ReadMcpResourceTool.2` | The description restates both parameters as required in a `Parameters:` list and starts and ends with a blank line. | covered |
+| `tool.ReadMcpResourceTool.3` | Observed: the model may call it in the same assistant message as an MCP server tool (parallel calls, `m1/0021`). | covered |
 
 ## Result shape
 
 | id | case | shape | noeta today |
 |---|---|---|---|
-| `tool.ReadMcpResourceTool.r.1` | text resource | the server's `resources/read` result as one compact JSON string: `{"contents":[{"uri":...,"text":...}]}` (no spaces, fields as the server sent them) | missing (an `@` mention inlines only the text contents) |
+| `tool.ReadMcpResourceTool.r.1` | text resource | the server's `resources/read` result as one compact JSON string: `{"contents":[{"uri":...,"text":...}]}` (no spaces, fields as the server sent them) | covered |
 
 ## Variants
 

@@ -25,11 +25,11 @@ position 2 of 13 in the baseline list. noeta's counterpart is `AskUserQuestion`
 | `tool.AskUserQuestion.p.questions.options` | `questions[].options` | array of object | yes | 2–4 items, distinct and mutually exclusive unless `multiSelect`; no "Other" option (added automatically) | covered |
 | `tool.AskUserQuestion.p.options.label` | `options[].label` | string | yes | 1–5 words, what the user sees and picks | covered (no 1–5 words guidance in schema; noeta caps 80 chars) |
 | `tool.AskUserQuestion.p.options.description` | `options[].description` | string | yes | what choosing it means; trade-offs | covered |
-| `tool.AskUserQuestion.p.options.preview` | `options[].preview` | string | no | content shown when the option is focused (mockup, code, comparison) | missing |
-| `tool.AskUserQuestion.p.questions.multiSelect` | `questions[].multiSelect` | boolean | yes | default false; true when choices are not exclusive | covered (default not declared) |
-| `tool.AskUserQuestion.p.answers` | `answers` | object string→string | no | filled by the permission UI with the user's answers, not by the model | missing |
-| `tool.AskUserQuestion.p.annotations` | `annotations` | object keyed by question text → `{preview?, notes?}` | no | user notes per question; `preview` = the chosen option's preview | missing |
-| `tool.AskUserQuestion.p.metadata` | `metadata` | object `{source?}` | no | analytics only, not shown (e.g. `source: "remember"`) | missing |
+| `tool.AskUserQuestion.p.options.preview` | `options[].preview` | string | no | content shown when the option is focused (mockup, code, comparison) | covered |
+| `tool.AskUserQuestion.p.questions.multiSelect` | `questions[].multiSelect` | boolean | yes | default false; true when choices are not exclusive | covered |
+| `tool.AskUserQuestion.p.answers` | `answers` | object string→string | no | filled by the permission UI with the user's answers, not by the model | covered in the schema (front ends do not fill it) |
+| `tool.AskUserQuestion.p.annotations` | `annotations` | object keyed by question text → `{preview?, notes?}` | no | user notes per question; `preview` = the chosen option's preview | covered in the schema (front ends do not fill it) |
+| `tool.AskUserQuestion.p.metadata` | `metadata` | object `{source?}` | no | analytics only, not shown (e.g. `source: "remember"`) | covered |
 
 ## Rules
 
@@ -39,22 +39,21 @@ position 2 of 13 in the baseline list. noeta's counterpart is `AskUserQuestion`
 | `tool.AskUserQuestion.2` | The user can always choose "Other" and type free text. | covered |
 | `tool.AskUserQuestion.3` | `multiSelect: true` allows several answers to one question. | covered |
 | `tool.AskUserQuestion.4` | A recommended option goes first and its label ends with "(Recommended)". | covered |
-| `tool.AskUserQuestion.5` | Entering plan mode is done with `EnterPlanMode`, not this tool. | missing |
-| `tool.AskUserQuestion.6` | In plan mode, use it to clarify requirements or pick an approach before the plan is final. | missing |
-| `tool.AskUserQuestion.7` | Never use it to ask whether the plan is ready or whether to proceed, or refer to "the plan" in a question — the user cannot see the plan until `ExitPlanMode`. | missing (noeta bans "should I proceed?" check-ins generally, not the plan-specific rule) |
+| `tool.AskUserQuestion.5` | Entering plan mode is done with `EnterPlanMode`, not this tool. | covered |
+| `tool.AskUserQuestion.6` | In plan mode, use it to clarify requirements or pick an approach before the plan is final. | covered |
+| `tool.AskUserQuestion.7` | Never use it to ask whether the plan is ready or whether to proceed, or refer to "the plan" in a question — the user cannot see the plan until `ExitPlanMode`. | covered |
 | `tool.AskUserQuestion.8` | Reserve it for decisions whose answer changes what happens next; for choices with a conventional default or facts checkable in the code, pick the obvious option, say so, and continue. | covered |
-| `tool.AskUserQuestion.9` | The user may see only the question dialog, not earlier tool results or text; each question must stand alone — state briefly what it depends on and name the items asked about. | missing |
-| `tool.AskUserQuestion.10` | Use `preview` to compare concrete artifacts: ASCII UI mockups, code variants, diagram variants, config examples. | missing |
-| `tool.AskUserQuestion.11` | A preview is rendered as markdown in a monospace box and may span lines; when any option has one, the dialog switches to a side-by-side layout (options left, preview right). | missing |
-| `tool.AskUserQuestion.12` | No previews for simple preference questions; previews only for single-select questions. | missing |
-| — | noeta-only: must be the only call in its response. | contradicts — the baseline sets no such restriction |
+| `tool.AskUserQuestion.9` | The user may see only the question dialog, not earlier tool results or text; each question must stand alone — state briefly what it depends on and name the items asked about. | covered |
+| `tool.AskUserQuestion.10` | Use `preview` to compare concrete artifacts: ASCII UI mockups, code variants, diagram variants, config examples. | covered |
+| `tool.AskUserQuestion.11` | A preview is rendered as markdown in a monospace box and may span lines; when any option has one, the dialog switches to a side-by-side layout (options left, preview right). | covered |
+| `tool.AskUserQuestion.12` | No previews for simple preference questions; previews only for single-select questions. | covered |
 
 ## Result shape
 
 | id | shape (observed) |
 |---|---|
 | `tool.AskUserQuestion.r.1` | A plain string (m1/0047): a lead saying the questions were answered, then for each question `"<question>"="<chosen label>"`; when the chosen option had a preview, ` selected preview:` + newline + the preview text; then a closing sentence inviting the model to proceed using the answers |
-| `tool.AskUserQuestion.r.2` | noeta today returns sorted JSON `{"answers": {<index>: {"selected": [...], "other": ...}}, "question_id": ...}` — contradicts r.1 (no question text, no preview, not prose). |
+| `tool.AskUserQuestion.r.2` | noeta today: r.1, in our wording. |
 
 ## Variants
 

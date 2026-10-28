@@ -21,7 +21,7 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 
 | id | name | type | required | enum / default / limits | noeta today |
 |---|---|---|---|---|---|
-| `tool.Write.p.file_path` | `file_path` | string | yes | absolute path; the property text stresses absolute, not relative | contradicts: relative accepted and advertised |
+| `tool.Write.p.file_path` | `file_path` | string | yes | absolute path; the property text stresses absolute, not relative | covered (stated; relative paths still accepted) |
 | `tool.Write.p.content` | `content` | string | yes | full file content | covered (noeta also caps the size) |
 
 ## Rules
@@ -32,15 +32,15 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | `tool.Write.2` | Use it to create a file or to replace a file already read in full. | covered |
 | `tool.Write.3` | Overwriting an existing file that was not read first fails. | covered (also fails when changed since the read) |
 | `tool.Write.4` | For a partial change use `Edit`. | covered |
-| `tool.Write.5` | The description says nothing about parent directories, outside-workspace paths, placeholders or diffs. | contradicts: noeta adds those rules (extra text) |
+| `tool.Write.5` | The description says nothing about parent directories, outside-workspace paths, placeholders or diffs. | covered |
 | `tool.Write.6` | Observed: the plan file is written with `Write` under the config dir's `plans/` folder, outside the project (`m1/0060`). | see `reminders.md` / plan mode |
 
 ## Result shape
 
 | id | case | shape | noeta today |
 |---|---|---|---|
-| `tool.Write.r.1` | new file | `File created successfully at:` + absolute path, then the parenthesised "file state is current, no need to read it back" note | covered for the first part (relative path); note missing |
-| `tool.Write.r.2` | overwrite | same wording as `Edit`'s success: the file (absolute path) was updated successfully, plus the same note | contradicts: noeta says "has been updated." with a relative path and no note |
+| `tool.Write.r.1` | new file | `File created successfully at:` + absolute path, then the parenthesised "file state is current, no need to read it back" note | covered |
+| `tool.Write.r.2` | overwrite | same wording as `Edit`'s success: the file (absolute path) was updated successfully, plus the same note | covered |
 
 ## Variants
 
