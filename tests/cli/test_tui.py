@@ -101,3 +101,33 @@ async def test_shift_tab_cycles_the_permission_mode(tmp_path: Path) -> None:
         await settle(pilot, app, lambda: app.mode == "acceptEdits")
         inbox = [i.body for i in await app.local.store.inbox(app.task_id)]
         assert External(name="permission_mode", data={"mode": "acceptEdits"}) in inbox
+
+
+async def test_an_approval_decided_before_its_card_mounts() -> None:
+    """On a slow event loop a card can be decided after it composed its
+    buttons but before its mount handler ran; that handler used to look for
+    the removed buttons and take the whole app down."""
+    from textual import events, on
+    from textual.app import App
+    from textual.widgets import Button, Static
+
+    picked: list[str] = []
+
+    async def decide(call_id: str, choice: str) -> None:
+        picked.append(choice)
+
+    class DecidedEarly(ApprovalCard):
+        @on(events.Mount)  # runs before the card's own on_mount
+        async def _decide_first(self) -> None:
+            await self.choose("allow")
+
+    options = [{"id": "allow", "label": "Yes"}, {"id": "deny", "label": "No"}]
+    app: App[None] = App()
+    async with app.run_test() as pilot:
+        card = DecidedEarly("c1", "Echo", "", decide, options)
+        await app.screen.mount(card)
+        await pilot.pause()
+        assert app.is_running and app._exception is None
+        assert picked == ["allow"] and not card.query(Button)
+        [result] = card.query(".approval-result").results(Static)
+        assert str(result.render()) == "Yes"

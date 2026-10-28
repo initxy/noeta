@@ -106,6 +106,8 @@ class ApprovalCard(Vertical):
         if self.prompt and self.prompt != self.title_text:
             yield Static(self.prompt, classes="approval-prompt")
         yield Static("Do you want to proceed?", classes="approval-prompt")
+        if self.done:
+            return
         with Vertical(classes="approval-buttons"):
             for n, option in enumerate(self.options, 1):
                 variant = {"allow": "success", "deny": "error"}.get(option["id"], "default")
@@ -113,7 +115,10 @@ class ApprovalCard(Vertical):
                              variant=variant, compact=True)  # type: ignore[arg-type]
 
     def on_mount(self) -> None:
-        self.query_one("#option-1", Button).focus()
+        # A card can be decided before it finishes mounting (a slow event
+        # loop): its buttons are gone then, and an error here ends the app.
+        if not self.done:
+            self.query_one("#option-1", Button).focus()
 
     async def action_choose(self, choice: str) -> None:
         await self.choose(choice)
