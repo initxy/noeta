@@ -30,17 +30,6 @@ def parse_answer(text: str) -> tuple[Any, bool]:
         return text, False
 
 
-def render_answer(value: Any) -> str:
-    """A structured answer as text: a string verbatim, anything else as
-    sorted, indented JSON (never a Python repr), as 0.6 rendered it."""
-    if isinstance(value, str):
-        return value
-    try:
-        return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
-    except (TypeError, ValueError):
-        return str(value)
-
-
 def structured_answer(records: Iterable[Recorded]) -> Any:
     """The latest turn's answer value from a task's events (``None`` when no
     turn has finished yet)."""

@@ -46,7 +46,7 @@ from typing import Any
 
 import httpx
 
-from noeta.plugins.mcp.config import McpAuthRequired, McpError, McpServer, OAuthSettings
+from noeta.plugins.mcp.config import McpError, McpServer, OAuthSettings
 from noeta.toolkit.context import noeta_home
 
 __all__ = [
@@ -368,11 +368,6 @@ async def _client(http: httpx.AsyncClient | None) -> Any:
         return
     async with httpx.AsyncClient(follow_redirects=True) as own:
         yield own
-
-
-def auth_required(server: McpServer, challenge: str = "") -> McpAuthRequired:
-    return McpAuthRequired(f"MCP server {server.alias!r} requires authentication",
-                           challenge)
 
 
 # ---------------------------------------------------------------- sign-in

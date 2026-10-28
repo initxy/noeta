@@ -12,7 +12,7 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.runner import Runtime
-from noeta.plugins.structured import StructuredOutput, render_answer, structured_answer
+from noeta.plugins.structured import StructuredOutput, structured_answer
 from noeta.testing import ScriptedProvider, reply
 
 SCHEMA = {"type": "object", "properties": {"a": {"type": "integer"}}}
@@ -45,7 +45,6 @@ async def test_json_answer_is_recorded_as_a_value_on_a_parked_turn(store: Sqlite
     assert (await client.get(tid)).waiting_on == "input"
     value = structured_answer(await client.events(tid))
     assert value == {"b": [1], "a": 2}
-    assert render_answer(value) == '{\n  "a": 2,\n  "b": [\n    1\n  ]\n}'
     assert provider.requests[0].output_schema == SCHEMA
 
 

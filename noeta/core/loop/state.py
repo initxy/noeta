@@ -127,7 +127,6 @@ class TaskState:
     #: Children this task spawned: id -> {"call_id", "background"}.
     spawned: dict[str, dict[str, Any]] = field(default_factory=dict)
     children: dict[str, ChildEnded | None] = field(default_factory=dict)
-    signals: list[TimerFired | External] = field(default_factory=list)
     #: Timers set and not yet fired or cleared, by name: ``{"at": epoch
     #: seconds, "text": message or "", "seq": the log seq that set it}``. A
     #: due timer fires while the task is idle; its text arrives as a
@@ -385,7 +384,6 @@ def _take(state: TaskState, ev: InputTaken, seq: int) -> None:
         elif isinstance(body, ChildEnded):
             state.children[body.child_id] = body
         else:
-            state.signals.append(body)
             if isinstance(body, External) and body.name == CONFIG_SIGNAL:
                 _configure(state, body.data)
             timer = state.timers.pop(body.name, None) if isinstance(body, TimerFired) else None
