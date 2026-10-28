@@ -117,3 +117,21 @@ async def test_the_auto_mode_note_waits_for_new_input_after_a_compaction(
     await client.send(tid, "more")
     await runtime(store, a, model).run_until_idle()
     assert noted(len(model.requests) - 1)
+
+
+async def test_a_first_request_over_the_threshold_sends_the_environment_once(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """A first prompt already over the threshold: nothing before it to
+    summarize, so the request goes as it is, with one environment block
+    (a compaction of the prompt alone used to add a second)."""
+    a = Agent(name="a", model="m", tools=[Probe()],
+              extensions=(Environment(today=lambda: TODAY),
+                          Compaction(auto_compact_window=SMALL)))
+    model = Model([answer("read it")])
+    client, tid = await run(store, a, model, goal="x" * 40_000,
+                            env_for=lambda _s: LocalExecEnv(str(tmp_path)))
+    assert not [r for r in await client.events(tid) if isinstance(r.event, Compacted)]
+    [request] = model.requests
+    texts = [m.text for m in request.messages]
+    assert sum(t.startswith("# Environment") for t in texts) == 1
+    assert sum(t == date_line(TODAY) for t in texts) == 1

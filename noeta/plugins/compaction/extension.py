@@ -282,7 +282,7 @@ class Compaction(Extension):
         automatic compaction waits (``None``) and a manual one takes all."""
         last = _last_reply(state.messages[:n])
         if last < 0 or not any(m.role == "assistant" for m in state.messages[:last]):
-            return n if manual or last < 0 else None
+            return n if manual else None
         replies = sum(1 for m in state.messages[:n] if m.role == "assistant")
         if state.compaction is not None and replies == self._ext(state).kept_replies + 1:
             return n
