@@ -334,6 +334,9 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Fixed
 
+- **The terminal UI no longer stays "working" after a fast turn.** It marked itself busy only
+  once the message was sent, so a turn that ended (and was shown ending) before the send
+  returned left it busy until the next one; it is now busy from the moment it sends.
 - **A command missing its optional dependency says which extra to install.** `noeta serve`,
   `noeta acp`, the terminal UI, a Postgres `--store` and the other extras' imports exit with
   `pip install 'noeta[<extra>]'` instead of a `ModuleNotFoundError` traceback.
