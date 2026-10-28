@@ -81,6 +81,14 @@ server/remote surfaces, which stay noeta's own.
   control-request protocol, so clients written against Claude Code's SDK drive noeta (locally or
   through the server). This is the server-friendly surface's main door; noeta's own HTTP API
   stays.
+- **No noeta-only surface in the default agent (owner, 2026-10-28).** Tools the baseline lacks
+  go: `Grep`/`Glob` (search through Bash, as the native build), `TodoWrite`, `BashOutput`/
+  `KillShell` (Monitor/TaskStop), `RecallHistory`, `memory_*` (memory becomes Claude Code's: a
+  directory of files written with `Write`, indexed by `MEMORY.md`). The main prompt's rules
+  with no baseline counterpart are deleted. WebFetch refuses what Claude Code refuses
+  (localhost, dotless hosts), reversing the 2026-09-18 "refuse nothing" choice. Every baseline
+  tool noeta lacks is built (`Workflow`, `ReportFindings`, `ListAgents`/`SendMessage`,
+  `ScheduleWakeup`/`Cron*`, plan mode, `SubagentHandback`).
 - **Deviations are listed, not implied.** A model-visible difference is allowed only when the
   kernel forces it, and each one is a row in `parity/deviations.md` with its reason. Starting
   list:
@@ -239,3 +247,5 @@ Phase 5 — front ends
   1429 passed, 87.31 %. Open: Claude Code's per-model image limits (2576 px / 4784 tokens on
   the 5.5 family) not applied, the 2000 px default is; skill `arguments` names (`$name`) not
   read; malformed tool calls still retried by the transient policy, not once.
+- 2026-10-28: Phase 1 merged (8f52fc5, make check 1444 passed). Owner decisions: drop noeta-only
+  tools and prompt rules, WebFetch as Claude Code, build every missing baseline tool.
