@@ -601,3 +601,17 @@ async def test_a_child_runs_in_its_parents_mode_with_its_rules(store: SqliteStor
     await rt.run_until_idle()
     assert await pending_tree(client, tid) == []
     assert [r["file_path"] for r in write.runs] == ["a", "b"]
+
+
+async def test_a_glob_that_takes_in_a_link_out_of_the_workspace_asks(
+        store: SqliteStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ws = _linked_ssh(tmp_path, monkeypatch)
+    (ws / "k").symlink_to(tmp_path / "home" / ".ssh" / "id_rsa")
+    (ws / "notes.txt").write_text("n")
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply(
+        "", ("Bash", {"command": "cat *"}), ("Bash", {"command": "grep -r k *"}),
+        ("Bash", {"command": "cat *.txt"}), ("Bash", {"command": "cat [kn]*"}))])
+    client, tid, _ = await start(store, provider, Permissions(mode="default"), [bash], cwd=ws)
+    assert len(asked(await events(client, tid))) == 3
+    assert [r["command"] for r in bash.runs] == ["cat *.txt"]

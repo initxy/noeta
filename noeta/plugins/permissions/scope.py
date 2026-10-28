@@ -74,8 +74,8 @@ class Scope:
     dirs: tuple[str, ...]
     home: str
     here: str | None = None
-    #: Collects every path a read-only check accepted (absolute; a glob's
-    #: directory), when set.
+    #: Collects every path a read-only check accepted (absolute; a glob as
+    #: written, for the caller to expand), when set.
     seen: list[str] | None = field(default=None, compare=False, hash=False, repr=False)
 
     @property
@@ -543,12 +543,12 @@ def _path_ok(word: Word, scope: Scope, *, lead_glob: bool = False) -> bool:
     text = word.text
     if word.tilde and not (text == "~" or text.startswith("~/")):
         return False
+    if scope.seen is not None:
+        scope.seen.append(scope.absolute(text))
     if word.glob:
         text = re.split(r"[*?\[]", text, maxsplit=1)[0] or "."
         if not text.endswith("/"):
             text = posixpath.dirname(text) or "."
-    if scope.seen is not None:
-        scope.seen.append(scope.absolute(text))
     return scope.contains(text)
 
 

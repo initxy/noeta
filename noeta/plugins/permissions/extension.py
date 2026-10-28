@@ -11,7 +11,9 @@ import inspect
 import logging
 import os
 import posixpath
+import re
 import shlex
+import subprocess
 import sys
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -90,6 +92,9 @@ PLAN_COMMAND = ("<command-name>/plan</command-name>\n            <command-messag
                 "</command-message>\n            <command-args>{args}</command-args>\n\n"
                 "<local-command-stdout>Enabled plan mode</local-command-stdout>")
 _PLAN_COMMAND_HEAD = "<command-name>/plan</command-name>"
+
+#: A path with glob characters: judged by what it expands to.
+_GLOB = re.compile(r"[*?\[]")
 
 
 class UntrustedProjectShellAllowlistWarning(UserWarning):
@@ -606,8 +611,14 @@ class Permissions(Extension):
         real_scope = await self._real_scope(view, scope)
 
         async def reads_inside(part: sc.Part) -> bool:
-            # A path inside as written may be a link out of the directory.
-            return all([real_scope.contains(await self._real(view, x)) for x in part.reads])
+            # A path inside as written may be a link out of the directory;
+            # a glob is judged by what it expands to.
+            for x in part.reads:
+                targets = await self._expand(view, x) if _GLOB.search(x) else [x]
+                if targets is None or not all(
+                        [real_scope.contains(await self._real(view, t)) for t in targets]):
+                    return False
+            return True
 
         found = sc.parts(command, here)
         if found is not None and all(p.read_only for p in found) and all(
@@ -681,6 +692,27 @@ class Permissions(Extension):
             return await asyncio.to_thread(os.path.realpath, path)
         except Exception:  # noqa: BLE001 — unresolvable: judged as written
             return path
+
+    async def _expand(self, view: TaskView, pattern: str) -> list[str] | None:
+        """What ``pattern`` (absolute) expands to in the task's env, as bash
+        expands it for the command; ``None`` when that cannot be told."""
+        script = 'IFS=; shopt -s nullglob; for f in $1; do printf "%s\\0" "$f"; done'
+        try:
+            if view.env is not None:
+                result = await view.env.run(["bash", "-c", script, "_", pattern], timeout=10)
+                if result.exit_code != 0 or result.timed_out or result.stdout_truncated:
+                    return None
+                out = result.stdout.decode("utf-8", "surrogateescape")
+            else:
+                done = await asyncio.to_thread(
+                    subprocess.run, ["bash", "-c", script, "_", pattern],
+                    capture_output=True, text=True, timeout=10)
+                if done.returncode != 0:
+                    return None
+                out = done.stdout
+        except Exception:  # noqa: BLE001 — unknown expansion: ask
+            return None
+        return [p for p in out.split("\0") if p]
 
     async def _real_scope(self, view: TaskView, scope: sc.Scope) -> sc.Scope:
         dirs = [await self._real(view, d) for d in scope.dirs]
