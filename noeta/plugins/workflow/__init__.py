@@ -28,6 +28,7 @@ from noeta.core.extension import Extension, TaskView
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, user
 from noeta.plugins.workflow.engine import Engine, EngineMissing, Replay
+from noeta.toolkit import notices
 from noeta.toolkit.notices import NOTICE_GUARD, escape
 from noeta.toolkit.paths import noeta_home
 from noeta.toolkit.tools import SCHEMA_DIALECT, load_description
@@ -233,12 +234,13 @@ class Orchestration(Extension):
             summary = f'Workflow "{run["name"]}" failed: {error}'
             result = error
         duration = int(max(0.0, time.time() - float(run.get("started_at") or time.time())) * 1000)
-        text = (f"{NOTICE_GUARD}\n\n<task-notification>\n<task-id>{rid}</task-id>\n"
-                f"<tool-use-id>{run.get('call_id', '')}</tool-use-id>\n<status>{status}</status>\n"
-                f"<summary>{escape(summary)}</summary>\n<result>{escape(result)}\n</result>\n"
-                f"<usage><subagent_tokens>{int(run.get('spent') or 0)}</subagent_tokens>"
-                f"<agents>{agents}</agents><duration_ms>{duration}</duration_ms></usage>\n"
-                "</task-notification>")
+        element = notices.task_notification(
+            (("task-id", rid), ("tool-use-id", f"{run.get('call_id', '')}"), ("status", status),
+             ("summary", escape(summary))),
+            body=(f"\n<result>{escape(result)}\n</result>\n<usage><subagent_tokens>"
+                  f"{int(run.get('spent') or 0)}</subagent_tokens><agents>{agents}</agents>"
+                  f"<duration_ms>{duration}</duration_ms></usage>"))
+        text = f"{NOTICE_GUARD}\n\n{element}"
         sink.notify(summary, kind="workflow", data={"run_id": rid, "status": status})
         if sink.post is not None:
             await sink.post(Say(message=user(text, origin="system"), when="now"),

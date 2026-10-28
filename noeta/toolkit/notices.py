@@ -1,9 +1,12 @@
-"""The opening of every notice about background work (a finished sub-agent,
-a finished workflow), so the model never reads one as the user speaking."""
+"""Notices about background work (a finished sub-agent, workflow or
+command): the opening that keeps the model from reading one as the user
+speaking, and Claude Code's ``<task-notification>`` element."""
 
 from __future__ import annotations
 
-__all__ = ["NOTICE_GUARD", "escape"]
+from collections.abc import Iterable
+
+__all__ = ["NOTICE_GUARD", "escape", "task_notification"]
 
 NOTICE_GUARD = (
     "[BACKGROUND EVENT - NOT FROM THE USER]\n"
@@ -18,3 +21,12 @@ NOTICE_GUARD = (
 def escape(text: str) -> str:
     """Text safe inside a notice's XML-like tags."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def task_notification(fields: Iterable[tuple[str, str]], *, body: str = "",
+                      trailing: str = "") -> str:
+    """Claude Code's ``<task-notification>`` element: one child per ``(tag,
+    text)`` of ``fields`` in order (text as given: escape it first), then
+    ``body`` before the closing tag and ``trailing`` after it."""
+    out = "<task-notification>" + "".join(f"\n<{tag}>{text}</{tag}>" for tag, text in fields)
+    return f"{out}{body}\n</task-notification>{trailing}"

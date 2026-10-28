@@ -9,6 +9,9 @@ import asyncio
 import time
 from collections.abc import Callable
 
+from noeta.toolkit import notices
+from noeta.toolkit.notices import escape
+
 __all__ = [
     "MonitorStream",
     "event_body",
@@ -22,25 +25,15 @@ __all__ = [
 ]
 
 
-def _escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
 def task_notification(*, task_id: str, summary: str, tool_use_id: str = "", status: str = "",
                       body: str = "", trailing: str = "", output_file: str = "") -> str:
-    """Claude Code's ``<task-notification>`` element: one child per non-empty
-    field in its order, ``body`` before the closing tag, ``trailing`` after."""
-    out = "<task-notification>"
-    for tag, value in (
-        ("task-id", task_id),
-        ("tool-use-id", tool_use_id),
-        ("output-file", output_file),
-        ("status", status),
-        ("summary", _escape(summary)),
-    ):
-        if value:
-            out += f"\n<{tag}>{value}</{tag}>"
-    return f"{out}{body}\n</task-notification>{trailing}"
+    """A background command's ``<task-notification>``: one child per
+    non-empty field in its order, ``body`` before the closing tag,
+    ``trailing`` after."""
+    fields = (("task-id", task_id), ("tool-use-id", tool_use_id),
+              ("output-file", output_file), ("status", status), ("summary", escape(summary)))
+    return notices.task_notification(((tag, value) for tag, value in fields if value),
+                                     body=body, trailing=trailing)
 
 
 def monitor_event(*, task_id: str, description: str, text: str) -> str:
@@ -49,7 +42,7 @@ def monitor_event(*, task_id: str, description: str, text: str) -> str:
 
 
 def event_body(text: str) -> str:
-    return f"\n<event>{_escape(text)}</event>"
+    return f"\n<event>{escape(text)}</event>"
 
 
 def shell_end_summary(description: str, status: str, exit_code: int | None) -> str:
