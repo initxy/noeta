@@ -90,6 +90,8 @@ class TaskState:
     #: A call of the open batch ended the turn (``ToolFinished.end_turn``):
     #: the turn's answer once the batch's results land.
     end_turn: str | None = None
+    #: ``ToolFinished.note`` s of the open batch, added after its results.
+    notes: list[str] = field(default_factory=list)
     #: A turn-only stop arrived with ``now`` messages: the turn reopens once
     #: the stop has landed, so those messages are answered.
     reopen_after_stop: bool = False
@@ -218,6 +220,8 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
                 c.result = ev.result
         if ev.end_turn is not None:
             state.end_turn = ev.end_turn
+        if ev.note:
+            state.notes.append(ev.note)
         refs = [b.tool_name for b in ev.result.content if isinstance(b, ToolReference)]
         state.loaded_tools += [n for n in dict.fromkeys(refs) if n not in state.loaded_tools]
         if state.calls and not state.open_calls:
@@ -225,6 +229,8 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
             content: list[Any] = list(results)
             if any(isinstance(b, ToolReference) for r in results for b in r.content):
                 content.append(Text(text=TOOL_LOADED_TEXT))
+            content += [Text(text=n) for n in dict.fromkeys(state.notes)]
+            state.notes = []
             state._add(Message(role="user", content=content), rec.seq)
             state.calls = []
             state.held_unseen = state.held_unseen or bool(state.held)
@@ -352,6 +358,7 @@ def _end_turn(state: TaskState, seq: int) -> None:
     conversation and open the next turn, as queued messages do."""
     state.calls = []
     state.end_turn = None
+    state.notes = []
     reopen = bool(state.held) or state.reopen_after_stop or state.held_unseen
     for m in state.held:
         state._add(m, seq)

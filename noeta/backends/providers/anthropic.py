@@ -49,6 +49,7 @@ from noeta.backends.providers._sse import iter_sse_events
 from noeta.core import models
 from noeta.core.errors import Fatal
 from noeta.core.provider import OnDelta
+from noeta.core.runner.texts import REJECTED_MARKER
 from noeta.core.types import (
     Image,
     Message,
@@ -248,6 +249,16 @@ class AnthropicProvider:
                 and any(b.get("type") == "tool_result" for b in outbound[-1]["content"])
                 and not any(b.get("type") == "tool_result" for b in wire["content"])
             )
+            after_decline = (
+                message.role == "user" and message.origin == "human" and outbound
+                and outbound[-1]["role"] == "user" and outbound[-1]["content"]
+                and outbound[-1]["content"][-1].get("text") == REJECTED_MARKER)
+            if after_decline:
+                # The turn stopped at a declined call: the next prompt joins
+                # the results' turn after the marker, unframed (Claude Code).
+                outbound[-1]["content"] = [*outbound[-1]["content"], *wire["content"]]
+                prev_injected = injected
+                continue
             if mid_turn:
                 # A message the person sent while the turn ran rides in the
                 # tool results' turn, framed as Claude Code frames it.

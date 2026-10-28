@@ -121,6 +121,9 @@ class ToolFinished(Struct, tag="ToolFinished", tag_field="type"):
     #: The turn ends once the reply's results land, with this as its answer
     #: (``ToolOutput.end_turn``).
     end_turn: str | None = None
+    #: Text that follows the reply's results in their message (the marker of
+    #: a call the person declined).
+    note: str | None = None
 
 
 class Compacted(Struct, tag="Compacted", tag_field="type"):

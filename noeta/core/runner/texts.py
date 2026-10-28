@@ -10,6 +10,15 @@ STOPPED_CALL_ERROR = "interrupted: a human stop landed during this batch"
 #: Answers a call left open when its turn failed (followed by the reason).
 TURN_FAILED_CALL_ERROR = "not run: the turn failed: "
 DENIED_BY_HUMAN = "denied by human"
+#: A call the person declined at its approval prompt; the turn then stops.
+REJECTED_BY_USER = (
+    "The user declined this tool call, so it did not run (for a file edit: nothing was "
+    "written). Stop here and wait for the user to tell you how to go on.")
+#: What the person said when declining, after the text above.
+REJECTED_WITH_MESSAGE = "\nThe user's reason for declining: {message}"
+#: Follows the results of a reply in which the person declined a call
+#: (Claude Code's marker, verbatim: models know it).
+REJECTED_MARKER = "[Request interrupted by user for tool use]\n"
 UNKNOWN_TOOL = "No tool named {name!r} is available in this task; use one of the offered tools."
 DEFERRED_NOT_LOADED = (
     "InputValidationError: {name} is a deferred tool whose schema is not loaded. Load it with "

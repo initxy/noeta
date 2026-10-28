@@ -44,7 +44,7 @@ async def gate(run: TaskRun, view: TaskView, call: ToolUse) -> Gate:
     extension may answer the asks (``resolve_ask``) before the call parks."""
     answer = run.state.answers.get(call.id)
     if answer is not None and answer.decision == "deny":
-        return Deny(reason=_denied_by_human(answer.data))
+        return Deny(reason=rejected_text(answer.data))
     verdicts: list[Gate] = []
     for ext in run.exts:
         try:
@@ -76,13 +76,14 @@ async def gate(run: TaskRun, view: TaskView, call: ToolUse) -> Gate:
     return asks[0]
 
 
-def _denied_by_human(data: Any) -> str:
-    """A person's refusal, with what they said when they said something
-    (``Answer.data`` ``{"message": ...}`` or a plain string)."""
+def rejected_text(data: Any) -> str:
+    """A person's refusal at an approval prompt, with what they said when
+    they said something (``Answer.data`` ``{"message": ...}`` or a string)."""
     message = data.get("message") if isinstance(data, dict) else data
     if isinstance(message, str) and message.strip():
-        return f"{texts.DENIED_BY_HUMAN}: {message.strip()}"
-    return texts.DENIED_BY_HUMAN
+        return texts.REJECTED_BY_USER + texts.REJECTED_WITH_MESSAGE.format(
+            message=message.strip())
+    return texts.REJECTED_BY_USER
 
 
 async def resolve(run: TaskRun, view: TaskView, use: ToolUse) -> tuple[ToolUse, Gate]:
@@ -124,6 +125,15 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
                 and c.use.name not in run.state.loaded_tools:
             await run.append([run.error_result(
                 c.use.id, texts.DEFERRED_NOT_LOADED.format(name=c.use.name))])
+            continue
+        answer = run.state.answers.get(c.use.id)
+        if answer is not None and answer.decision == "deny":
+            # Declined at its prompt: the call does not run and, as in Claude
+            # Code, the turn stops once the reply's results land.
+            await run.append([ToolFinished(
+                result=ToolResult(call_id=c.use.id, content=[Text(text=rejected_text(
+                    answer.data))], is_error=True), end_turn="",
+                note=texts.REJECTED_MARKER)])
             continue
         use, verdict = await resolve(run, view, c.use)
         if isinstance(verdict, Deny):

@@ -91,3 +91,33 @@ async def test_a_signal_reaches_the_task_without_a_turn(store: SqliteStore) -> N
              for i in e.items]
     assert External(name="permission_mode", data={"mode": "plan"}) in taken
     assert (await client.get(tid)).waiting_on == "input"
+
+
+async def test_a_declined_call_stops_the_turn(store: SqliteStore) -> None:
+    """Claude Code stops the turn when the person declines: no further model
+    call; the results carry the marker and the next prompt joins them."""
+    from noeta.backends.providers.anthropic import AnthropicProvider
+    from noeta.core.runner.texts import REJECTED_BY_USER, REJECTED_MARKER
+    from noeta.core.types import ModelRequest
+
+    tool = Fake("T")
+    provider = ScriptedProvider([reply("", ("T", {})), reply("after")])
+    rt = runtime(store, provider, agent([Fixed("p", Ask(prompt="?"))], [tool]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    [rid] = [e for e in await events(client, tid) if isinstance(e, Waiting)][-1].ids
+    await client.answer(tid, rid, "deny", data={"message": "not now"})
+    await rt.run_until_idle()
+    assert not tool.runs and len(provider.requests) == 1
+    assert (await client.get(tid)).waiting_on == "input"
+    [finished] = [e for e in await events(client, tid) if isinstance(e, ToolFinished)]
+    assert finished.result.text.startswith(REJECTED_BY_USER) and "not now" in finished.result.text
+    await client.send(tid, "next")
+    await rt.run_until_idle()
+    request = provider.requests[-1]
+    body = AnthropicProvider(api_key="k").build_body(
+        ModelRequest(model="m", messages=request.messages, max_tokens=1))
+    last = body["messages"][-1]["content"]
+    assert [b["type"] for b in last] == ["tool_result", "text", "text"]
+    assert last[1]["text"] == REJECTED_MARKER and last[2]["text"] == "next"
