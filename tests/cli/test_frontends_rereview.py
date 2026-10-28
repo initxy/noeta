@@ -235,3 +235,36 @@ async def test_print_json_tags_fragments_with_their_attempt(
     assert [(d["text"], d["attempt"]) for d in deltas] == [("broken par", 1), ("good answer", 2)]
     assert deltas[0]["call"] == deltas[1]["call"] > 0
     assert lines[-1]["answer"] == "good answer"
+
+
+async def test_print_mode_waits_for_background_agents_and_surfaces_their_approvals(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from noeta.plugins.subtasks import SubagentSpec, Subtasks
+
+    roster = [SubagentSpec(name="general-purpose", description="Works.", agent="worker")]
+    agents = [Agent(name="main", model=MODEL, extensions=[Subtasks(roster)]),
+              Agent(name="worker", model=MODEL, tools=[Echo()],
+                    extensions=[Subtasks(progress_labels=False)])]
+    provider = ScriptedProvider([
+        reply("", ("Agent", {"description": "d", "prompt": "sub job"})),
+        reply("launched"),
+        reply("", ("SubagentHandback", {"message": "the report"})),
+        reply("final from the report")])
+    monkeypatch.setattr(cli, "_app",
+                        lambda s, cwd=None, **kw: local(tmp_path, provider, *agents, **kw))
+    code = await asyncio.wait_for(cli._print_mode(
+        cli.Settings(model="m"), "go", cwd=str(tmp_path), as_json=False,
+        permission_mode=None), 10)
+    assert code == 0
+    assert capsys.readouterr().out.strip() == "final from the report"
+    provider = ScriptedProvider([
+        reply("", ("Agent", {"description": "d", "prompt": "sub job"})),
+        reply("launched"), reply("", ("Echo", {}))])
+    agents[1] = Agent(name="worker", model=MODEL, tools=[Echo()],
+                      extensions=[Subtasks(progress_labels=False), AskEcho()])
+    (tmp_path / "t.db").unlink()
+    code = await asyncio.wait_for(cli._print_mode(
+        cli.Settings(model="m"), "go", cwd=str(tmp_path), as_json=False,
+        permission_mode=None), 10)
+    assert code == 2 and "may the worker echo?" in capsys.readouterr().err
