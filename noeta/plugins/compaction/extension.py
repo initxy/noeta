@@ -50,7 +50,7 @@ from noeta.plugins.compaction.window import (
     percent_from_env,
     window_from_env,
 )
-from noeta.toolkit.context import noeta_home, project_dir, simulated_state
+from noeta.toolkit.context import noeta_home, project_dir
 
 log = logging.getLogger("noeta.compaction")
 
@@ -378,7 +378,7 @@ class Compaction(Extension):
                                              "estimated": estimated, "turn": _user_turns(state),
                                              "kept_replies": kept_replies})
         log.info("task %s: compacted through seq %s (%s)", view.task_id, through, reason)
-        return simulated_state(view, {self.name: self.reduce})
+        return view.folded({self.name: self.reduce})
 
     def _transcript(self, view: TaskView, state: TaskState) -> str | None:
         """Write the whole conversation so far as JSON lines and return the

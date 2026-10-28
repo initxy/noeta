@@ -52,7 +52,7 @@ from noeta.plugins.instructions.files import (
     Reader,
     clean,
 )
-from noeta.toolkit.context import read_memory_index, read_text, simulated_state, task_env
+from noeta.toolkit.context import read_memory_index, read_text, task_env
 from noeta.toolkit.tools import path_within
 
 __all__ = ["DEFAULT_INSTRUCTIONS_FILENAMES", "Instructions", "render_file",
@@ -196,7 +196,7 @@ class Instructions(Extension):
         return out
 
     def _memory_dir(self, view: TaskView, *, pending: bool) -> str | None:
-        state = simulated_state(view, {e.name: e.reduce for e in view.extensions}) \
+        state = view.folded({e.name: e.reduce for e in view.extensions}) \
             if pending else view.state
         memory = state.ext.get(MEMORY_PLUGIN)
         directory = memory.get("dir") if isinstance(memory, dict) else None

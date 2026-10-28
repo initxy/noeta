@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,7 +15,6 @@ from noeta.core.execenv import ExecEnv
 from noeta.core.types import Message, ToolResult
 
 if TYPE_CHECKING:
-    from noeta.core.extension import TaskView
     from noeta.core.loop.state import TaskState
 
 #: The 1 % of a model's window a resident listing (skills, memory index) may
@@ -142,38 +141,6 @@ async def read_text(env: ExecEnv, path: str) -> str | None:
         return (await env.read_bytes(path)).decode("utf-8")
     except (OSError, UnicodeDecodeError, ValueError):
         return None
-
-
-def simulated_state(view: TaskView,
-                    reducers: Mapping[str, Callable[[Any, str, Any], Any]] | None = None
-                    ) -> TaskState:
-    """The task state with every record pending on ``view`` folded in, on a
-    copy: what the next fold will see (a compaction made earlier in the same
-    ``before_model`` round included). ``reducers`` folds those extensions'
-    own records too."""
-    import dataclasses
-
-    from noeta.core.events import Recorded
-    from noeta.core.loop.state import apply
-
-    state = view.state
-    if not view.pending:
-        return state
-    # Every container is copied (and each call, which ``apply`` updates in
-    # place), so folding on the copy never reaches the live state.
-    copies: dict[str, Any] = {}
-    for f in dataclasses.fields(state):
-        value = getattr(state, f.name)
-        if f.name == "calls":
-            copies[f.name] = [dataclasses.replace(c) for c in value]
-        elif f.name == "timers":
-            copies[f.name] = {k: dict(v) for k, v in value.items()}
-        elif isinstance(value, (list, dict, set)):
-            copies[f.name] = type(value)(value)
-    sim = dataclasses.replace(state, **copies)
-    for i, event in enumerate(view.pending, 1):
-        apply(sim, Recorded(seq=state.last_seq + i, at=0.0, event=event), dict(reducers or {}))
-    return sim
 
 
 #: The auto memory index a memory directory keeps, and how much of it is

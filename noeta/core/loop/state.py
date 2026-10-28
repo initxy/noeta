@@ -3,7 +3,8 @@ the same state, which is what makes recovery a matter of re-reading the log."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+import dataclasses
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -14,6 +15,7 @@ from noeta.core.events import (
     Cancel,
     ChildEnded,
     Compacted,
+    Event,
     ExtensionRecorded,
     External,
     InputTaken,
@@ -321,6 +323,29 @@ def _on_core_record(state: TaskState, core: records.CoreRecord, seq: int) -> Non
     elif isinstance(core, records.TurnFailed):
         state.turn_error = core.error
         _end_turn(state, seq)
+
+
+def fold_on_copy(state: TaskState, events: Sequence[Event],
+                 reducers: Mapping[str, Reducer]) -> TaskState:
+    """``state`` with ``events`` folded in after its last seq, on a copy the
+    live state never sees (``state`` itself when there are none)."""
+    if not events:
+        return state
+    # Every container is copied (and each call, which ``apply`` updates in
+    # place), so folding on the copy never reaches the live state.
+    copies: dict[str, Any] = {}
+    for f in dataclasses.fields(state):
+        value = getattr(state, f.name)
+        if f.name == "calls":
+            copies[f.name] = [dataclasses.replace(c) for c in value]
+        elif f.name == "timers":
+            copies[f.name] = {k: dict(v) for k, v in value.items()}
+        elif isinstance(value, (list, dict, set)):
+            copies[f.name] = type(value)(value)
+    sim = dataclasses.replace(state, **copies)
+    for i, event in enumerate(events, 1):
+        apply(sim, Recorded(seq=state.last_seq + i, at=0.0, event=event), reducers)
+    return sim
 
 
 def continued(state: TaskState,

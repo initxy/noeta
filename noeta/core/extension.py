@@ -184,6 +184,16 @@ class TaskView(records.CoreNotices):
     def ext_state(self, name: str) -> Any:
         return self.state.ext.get(name)
 
+    def folded(self, reducers: Mapping[str, Callable[[Any, str, Any], Any]] | None = None
+               ) -> TaskState:
+        """The task state with every record pending on this view folded in,
+        on a copy: what the next fold will see (a compaction made earlier in
+        the same ``before_model`` round included). ``reducers`` folds those
+        extensions' own records too."""
+        from noeta.core.loop.state import fold_on_copy
+
+        return fold_on_copy(self.state, self.pending, dict(reducers or {}))
+
     def prompt(self, name: str, default: str) -> str:
         """The prompt text ``name`` for this task (``noeta.core.prompts``)."""
         return self.state.prompt(name, default)
