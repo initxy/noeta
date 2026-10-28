@@ -14,7 +14,7 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
-from noeta.core.events import ExtensionRecorded, ToolFinished, ToolStarted, Waiting
+from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
 from noeta.core.extension import Ask, Deny, Extension, Gate, TaskView
 from noeta.core.runner import Runtime
 from noeta.core.types import Image, ModelRequest, ToolUse
@@ -27,6 +27,7 @@ FAKE = str(Path(__file__).with_name("fake_server.py"))
 
 
 def server(alias: str = "fake", *, deferred: bool = False, **env: str) -> McpServer:
+    """A test server; its tools are sent in full unless ``deferred``."""
     return McpServer(alias=alias, command=[sys.executable, FAKE], env=env, deferred=deferred)
 
 
@@ -68,7 +69,12 @@ def records(evs: list[Any], kind: str) -> list[ExtensionRecorded]:
 
 
 def tool_names(request: ModelRequest) -> list[str]:
-    return [t.name for t in request.tools]
+    """The server tools a request sends."""
+    return [t.name for t in request.tools if t.name.startswith("mcp__")]
+
+
+def texts(result: Any) -> list[str]:
+    return [b.text for b in result.content if not isinstance(b, Image)]
 
 
 async def test_server_tools_are_offered_called_and_recorded_once(
@@ -86,17 +92,17 @@ async def test_server_tools_are_offered_called_and_recorded_once(
     await rt.run_until_idle()
     first = provider.requests[0]
     assert tool_names(first) == ["mcp__fake__die", "mcp__fake__echo", "mcp__fake__fail",
-                                 "mcp__fake__image", "mcp__fake__sleep"]
+                                 "mcp__fake__image", "mcp__fake__pid", "mcp__fake__sleep"]
     echo = next(t for t in first.tools if t.name == "mcp__fake__echo")
-    assert echo.description == "[MCP server 'fake'] Echo the text back."
+    assert echo.description == "Echo the text back." and not echo.defer_loading
+    # Server tools come last; the resource tools stay deferred.
+    assert [t.name for t in first.tools][:2] == ["ToolSearch", "DeferredToolPlaceholder"]
     evs = await events(client, tid)
     echo_r, fail_r, image_r = (f.result for f in finished(evs))
-    body = json.loads(echo_r.text)
-    assert body["text"] == "echo: hi" and "pid" in body["structured_content"]
-    assert fail_r.is_error and json.loads(fail_r.text)["text"] == "it broke"
-    assert json.loads(image_r.text) == {"text": "[audio (audio/wav, 12 bytes): not shown]",
-                                        "non_text_blocks": 2}
-    assert any(isinstance(b, Image) for b in image_r.content)
+    assert texts(echo_r) == ["echo: hi"]
+    assert fail_r.is_error and texts(fail_r) == ["it broke"]
+    assert texts(image_r) == ["[audio (audio/wav, 12 bytes): not shown]"]
+    assert isinstance(image_r.content[0], Image)
     # A second turn with the same tools records nothing new; the prefix holds.
     await client.send(tid, "more")
     await rt.run_until_idle()
@@ -158,38 +164,42 @@ async def test_a_task_resumed_in_a_fresh_process_keeps_its_mcp_tools(
     finally:
         await pool2.close()
     result = finished(await events(client, tid))[0].result
-    assert not result.is_error and json.loads(result.text)["text"] == "echo: x"
+    assert not result.is_error and texts(result) == ["echo: x"]
     assert "mcp__fake__echo" in tool_names(provider2.requests[0])
 
 
-async def test_deferred_servers_are_reached_through_toolsearch_and_mcpcall(
+async def test_deferred_server_tools_are_loaded_with_toolsearch_then_called_directly(
         store: SqliteStore, pool: McpPool) -> None:
     provider = ScriptedProvider([
-        reply("", ("ToolSearch", {"query": "echo text"}), ("ToolSearch", {"query": ""})),
-        reply("", ("McpCall", {"tool": "mcp__fake__echo", "arguments": {"text": "via"}}),
-              ("McpCall", {"tool": "mcp__fake__nope", "arguments": {}}),
-              ("McpCall", {"tool": "mcp__fake__echo"})),
+        reply("", ("mcp__fake__echo", {"text": "early"})),
+        reply("", ("ToolSearch", {"query": "select:mcp__fake__echo,ListMcpResourcesTool,"
+                                           "ReadMcpResourceTool", "max_results": 3})),
+        reply("", ("mcp__fake__echo", {"text": "via"}),
+              ("ReadMcpResourceTool", {"server": "fake", "uri": "file:///notes.md"}),
+              ("ListMcpResourcesTool", {})),
         reply("done"),
     ])
     agent = Agent(name="a", model="m", extensions=[Mcp([server(deferred=True)], pool=pool)])
     client = Client(store)
     tid = await client.create("a", "go")
     await runtime(store, provider, agent).run_until_idle()
-    assert tool_names(provider.requests[0]) == ["ToolSearch", "McpCall"]
-    evs = await events(client, tid)
-    by_id = {f.result.call_id: f.result for f in finished(evs)}
-    ids = [u.id for m in provider.requests[2].messages for u in m.tool_uses]
-    search, listing, routed, unknown, no_args = (by_id[i] for i in ids)
-    [hit] = json.loads(search.text)
-    assert hit["name"] == "mcp__fake__echo" and hit["input_schema"]["type"] == "object"
-    assert listing.text.splitlines()[0] == "mcp__fake__die — [MCP server 'fake'] Exits the server."
-    assert json.loads(routed.text)["text"] == "echo: via"
-    started = [e.call for e in evs if isinstance(e, ToolStarted)]
-    assert started[-1].name == "mcp__fake__echo" and started[-1].id == ids[2]
-    assert unknown.is_error and unknown.text == (
-        "'mcp__fake__nope' is not a deferred tool. If it is in your tool list, call it "
-        "directly; otherwise find the right name with ToolSearch.")
-    assert no_args.is_error and "McpCall needs `arguments`" in no_args.text
+    names = [t.name for t in provider.requests[0].tools]
+    assert names == ["DeferredToolPlaceholder", "ToolSearch"]
+    loaded = provider.requests[2].tools
+    assert [(t.name, t.defer_loading) for t in loaded] == [
+        ("ListMcpResourcesTool", True), ("ReadMcpResourceTool", True), ("ToolSearch", False),
+        ("DeferredToolPlaceholder", True), ("mcp__fake__echo", True)]
+    early, search, echo, read, listing = (f.result for f in finished(await events(client, tid)))
+    assert early.is_error and early.text.startswith(
+        "InputValidationError: mcp__fake__echo is a deferred tool")
+    assert [b.tool_name for b in search.content] == [  # type: ignore[union-attr]
+        "mcp__fake__echo", "ListMcpResourcesTool", "ReadMcpResourceTool"]
+    after = provider.requests[2].messages[-1]
+    assert after.text == "Tool loaded."
+    assert texts(echo) == ["echo: via"]
+    assert read.text == '{"contents":[{"uri":"file:///notes.md","text":"the notes"}]}'
+    assert json.loads(listing.text) == [{"uri": "file:///notes.md", "name": "notes",
+                                         "server": "fake"}]
 
 
 class DenyEcho(Extension):
@@ -199,14 +209,12 @@ class DenyEcho(Extension):
         return Deny(reason="no echo") if call.name == "mcp__fake__echo" else None
 
 
-async def test_guards_see_the_real_tool_behind_mcpcall(
-        store: SqliteStore, pool: McpPool) -> None:
+async def test_guards_see_server_tool_calls(store: SqliteStore, pool: McpPool) -> None:
     provider = ScriptedProvider([
-        reply("", ("McpCall", {"tool": "mcp__fake__echo", "arguments": {"text": "x"}})),
+        reply("", ("mcp__fake__echo", {"text": "x"})),
         reply("done"),
     ])
-    agent = Agent(name="a", model="m",
-                  extensions=[Mcp([server(deferred=True)], pool=pool), DenyEcho()])
+    agent = Agent(name="a", model="m", extensions=[Mcp([server()], pool=pool), DenyEcho()])
     client = Client(store)
     tid = await client.create("a", "go")
     await runtime(store, provider, agent).run_until_idle()
@@ -214,13 +222,12 @@ async def test_guards_see_the_real_tool_behind_mcpcall(
     assert result.is_error and result.text == "no echo"
 
 
-async def test_an_approved_mcpcall_runs_the_real_tool(store: SqliteStore, pool: McpPool) -> None:
+async def test_an_approved_server_tool_call_runs(store: SqliteStore, pool: McpPool) -> None:
     provider = ScriptedProvider([
-        reply("", ("McpCall", {"tool": "mcp__fake__echo", "arguments": {"text": "y"}})),
+        reply("", ("mcp__fake__echo", {"text": "y"})),
         reply("done"),
     ])
-    agent = Agent(name="a", model="m",
-                  extensions=[Mcp([server(deferred=True)], pool=pool), AskForMcp()])
+    agent = Agent(name="a", model="m", extensions=[Mcp([server()], pool=pool), AskForMcp()])
     client = Client(store)
     tid = await client.create("a", "go")
     rt = runtime(store, provider, agent)
@@ -230,7 +237,7 @@ async def test_an_approved_mcpcall_runs_the_real_tool(store: SqliteStore, pool: 
     await client.answer(tid, waiting.ids[0], decision="allow")
     await rt.run_until_idle()
     [result] = [f.result for f in finished(await events(client, tid))]
-    assert json.loads(result.text)["text"] == "echo: y"
+    assert texts(result) == ["echo: y"]
 
 
 async def test_a_dead_server_is_dropped_and_reported_once(
@@ -244,8 +251,8 @@ async def test_a_dead_server_is_dropped_and_reported_once(
     await rt.run_until_idle()
     await client.send(tid, "again")
     await rt.run_until_idle()
-    names = tool_names(provider.requests[0])
-    assert "ToolSearch" in names and "McpCall" in names  # the prefix does not move
+    names = [t.name for t in provider.requests[0].tools]
+    assert "ToolSearch" in names  # the prefix does not move
     assert not any(n.startswith("mcp__dead__") for n in names)
     downs = records(await events(client, tid), "server_down")
     assert len(downs) == 1 and downs[0].data["alias"] == "dead"
@@ -258,7 +265,7 @@ async def test_scopes_partition_connections(store: SqliteStore, pool: McpPool) -
                      extensions=[Mcp([server()], pool=pool,
                                      scope=lambda v: v.state.config.get("tenant"))])
 
-    provider = ScriptedProvider([reply("", ("mcp__fake__echo", {})), reply("ok")] * 3)
+    provider = ScriptedProvider([reply("", ("mcp__fake__pid", {})), reply("ok")] * 3)
     rt = runtime(store, provider, make("x"))
     client = Client(store)
     pids = []
@@ -266,7 +273,7 @@ async def test_scopes_partition_connections(store: SqliteStore, pool: McpPool) -
         tid = await client.create("a-x", "go", config={"tenant": tenant})
         await rt.run_until_idle()
         result = finished(await events(client, tid))[0].result
-        pids.append(json.loads(result.text)["structured_content"]["pid"])
+        pids.append(result.text)
     assert pids[0] == pids[1] != pids[2]
 
 
@@ -299,9 +306,10 @@ def test_tool_names_are_provider_safe_and_stable() -> None:
     assert len(set(names.values())) == 3
 
 
-def test_descriptions_are_attributed_and_capped() -> None:
-    assert describe_tool("s", None) == "[MCP server 's']"
-    text = describe_tool("s", "é" * 2000)
+def test_descriptions_are_the_servers_own_capped() -> None:
+    assert describe_tool(None) == ""
+    assert describe_tool("Echo.") == "Echo."
+    text = describe_tool("é" * 2000)
     assert text.endswith("[truncated: description exceeded 1024 bytes]")
 
 
@@ -340,7 +348,7 @@ async def test_a_remote_http_server_works_end_to_end(store: SqliteStore) -> None
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     pool = McpPool(connect=lambda s: connect(s, http=http))
     remote = McpServer(alias="docs", url="https://mcp.example/mcp",
-                       headers={"Authorization": "Bearer secret"})
+                       headers={"Authorization": "Bearer secret"}, deferred=False)
     provider = ScriptedProvider([reply("", ("mcp__docs__search_docs", {})), reply("ok")])
     agent = Agent(name="a", model="m", extensions=[Mcp([remote], pool=pool)])
     client = Client(store)
@@ -350,32 +358,32 @@ async def test_a_remote_http_server_works_end_to_end(store: SqliteStore) -> None
     finally:
         await pool.close()
     [result] = [f.result for f in finished(await events(client, tid))]
-    assert json.loads(result.text) == {"text": "found"}
+    assert texts(result) == ["found"]
     assert set(seen) == {"Bearer secret"}
     # Credentials stay host-side: nothing in the log carries them.
     assert "secret" not in str(await client.events(tid))
 
 
-async def test_permissions_ask_about_the_real_tool_behind_mcpcall(
+async def test_permissions_ask_about_server_tools_not_toolsearch(
         store: SqliteStore, pool: McpPool) -> None:
     from noeta.plugins.permissions import Permissions
 
     provider = ScriptedProvider([
-        reply("", ("McpCall", {"tool": "mcp__fake__echo", "arguments": {"text": "p"}}),
-              ("ToolSearch", {"query": "echo"})),
+        reply("", ("ToolSearch", {"query": "select:mcp__fake__echo", "max_results": 1})),
+        reply("", ("mcp__fake__echo", {"text": "p"})),
         reply("done"),
     ])
     agent = Agent(name="a", model="m",
-                  extensions=[Mcp([server(deferred=True)], pool=pool), Permissions()])
+                  extensions=[Mcp([server(deferred=True)], pool=pool), Permissions(mode="default")])
     client = Client(store)
     tid = await client.create("a", "go")
     rt = runtime(store, provider, agent)
     await rt.run_until_idle()
     waiting = (await events(client, tid))[-1]
-    # ToolSearch (low risk) ran; the routed call waits as the real, high-risk tool.
+    # ToolSearch (low risk) ran; the server tool waits for approval.
     assert isinstance(waiting, Waiting) and waiting.on == "approval"
     assert "mcp__fake__echo" in str(waiting.detail) and len(waiting.ids) == 1
     await client.answer(tid, waiting.ids[0], decision="allow")
     await rt.run_until_idle()
     results = [f.result for f in finished(await events(client, tid))]
-    assert json.loads(results[-1].text)["text"] == "echo: p"
+    assert texts(results[-1]) == ["echo: p"]

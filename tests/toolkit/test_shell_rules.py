@@ -19,6 +19,7 @@ from noeta.toolkit.shell import (
     parse_argv,
     rule_from_spec,
     rule_spec_from_command,
+    rule_spec_text,
     subcommands,
 )
 
@@ -197,15 +198,67 @@ def test_build_allowlist_keeps_base_rules_first() -> None:
     assert not command_in_allowlist("make all", DEFAULT_SHELL_RULES)
 
 
-def test_rule_spec_from_command() -> None:
-    assert rule_spec_from_command("npm start --port 3") == {
-        "program": "npm",
-        "subcommand": "start",
-    }
-    assert rule_spec_from_command("ls") == {"program": "ls"}
-    assert rule_spec_from_command("ls | cat") is None
-    assert rule_spec_from_command("ls 'x") is None
-    assert rule_spec_from_command("") is None
+@pytest.mark.parametrize(("command", "rule"), [
+    ("npm start --port 3", "npm start *"),
+    ("git push origin feat", "git push *"),
+    ("ls -la", "ls *"),
+    ("ls", "ls *"),
+    ("make", "make *"),
+    # destructive file programs, interpreters and wrappers: the exact command
+    ("rm -rf build", "rm -rf build"),
+    ("mv a b", "mv a b"),
+    ("python -c print", "python -c print"),
+    ("python script.py", "python script.py"),
+    ("sudo apt install x", "sudo apt install x"),
+    ("bash -c 'echo hi'", "bash -c 'echo hi'"),
+    ("FOO=1 make", "FOO=1 make"),
+    ("./run.sh --fast", "./run.sh --fast"),
+])
+def test_rule_spec_from_command(command: str, rule: str) -> None:
+    assert rule_spec_from_command(command) == {"rule": rule}
+
+
+@pytest.mark.parametrize("command", ["ls | cat", "ls 'x", "", "rm *.o", "cat ~/x"])
+def test_rule_spec_from_command_remembers_nothing_for_unmatchable_commands(
+        command: str) -> None:
+    assert rule_spec_from_command(command) is None
+
+
+def test_a_remembered_approval_never_widens_past_its_rule() -> None:
+    def allowed(approved: str, later: str) -> bool:
+        spec = rule_spec_from_command(approved)
+        assert spec is not None
+        return command_in_allowlist(later, build_allowlist([spec]))
+
+    assert allowed("rm -rf build", "rm -rf build")
+    assert not allowed("rm -rf build", "rm -rf /")
+    assert not allowed("rm -rf build", "rm -rf build /")
+    assert not allowed("python -c print", "python -c 'import os'")
+    assert allowed("git push origin feat", "git push origin main")
+    assert not allowed("git push origin feat", "git pull")
+    assert allowed("npm start", "npm start --x")
+    assert not allowed("npm start", "npm test")
+
+
+def test_rule_text_matches_by_argv() -> None:
+    exact = rule_from_spec({"rule": "rm -rf build"})
+    assert exact.matches(["rm", "-rf", "build"])
+    assert not exact.matches(["rm", "-rf", "build", "/"])
+    prefix = rule_from_spec({"rule": "git push *"})
+    assert prefix.matches(["git", "push"]) and prefix.matches(["git", "push", "-f"])
+    assert not prefix.matches(["git", "pull"])
+    quoted = rule_from_spec({"rule": "echo 'a b'"})
+    assert quoted.matches(["echo", "a b"])
+    with pytest.raises(ValueError):
+        rule_from_spec({"rule": " *"})
+    with pytest.raises(ValueError):
+        rule_from_spec({"rule": 3})
+
+
+def test_rule_spec_text() -> None:
+    assert rule_spec_text({"rule": "git push *"}) == "git push *"
+    assert rule_spec_text({"program": "npm", "subcommand": "start"}) == "npm start *"
+    assert rule_spec_text({"program": "make"}) == "make *"
 
 
 def test_meta_and_expansion_predicates() -> None:

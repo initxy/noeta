@@ -9,10 +9,12 @@ holding no worker, and runs on one laptop or many machines without changing the 
 ## Use it
 
 ```bash
-uv tool install 'noeta[tui]'
+uv tool install 'noeta[tui,images]'    # images: shrink large images as Claude Code does
 export NOETA_MODEL=claude-sonnet-4-6 NOETA_API_KEY=sk-ant-...
 noeta                             # full-screen terminal UI
-noeta -p "fix the failing test"   # one prompt, print the answer
+noeta -p "fix the failing test"   # one prompt, print the answer (Claude Code's headless flags)
+noeta --input-format stream-json --output-format stream-json --verbose
+                                  # Claude Code's SDK protocol: give an Agent SDK this as its CLI
 noeta acp                         # an Agent Client Protocol agent for Zed and other editors
 ```
 
@@ -53,9 +55,9 @@ the built-in ones exactly like yours.
 - **Plugins** subclass `noeta.Extension`: tools, system-prompt parts, reminders, slash
   commands, gates on tool calls, hooks on events, state folded from the task's log. Register one
   under the `noeta.plugins` entry point group, or drop the file in `~/.noeta/plugins/` (a
-  project's `.noeta/plugins/` loads after `noeta trust`), and name it in an agent file or
-  `config.toml`. A tool can ask the person (`noeta.ask`) and tell them things (`notify`); the
-  terminal UI and editors show both. `examples/hello-plugin` is a complete one.
+  project's `.noeta/plugins/`, like its `.noeta/agents`, `prompts` and `skills`, loads after
+  `noeta trust`), and name it in an agent file or `config.toml`. A tool can ask the person
+  (`noeta.ask`) and tell them things (`notify`); the terminal UI and editors show both. `examples/hello-plugin` is a complete one.
 - **Plugin settings** live in `~/.noeta/config.toml`:
 
   ```toml
@@ -69,15 +71,22 @@ the built-in ones exactly like yours.
 
 - **Agents** are markdown files: YAML frontmatter (`name`, `description`, `model`, `plugins`,
   optional `tools`) and the system prompt as body. Drop one in `~/.noeta/agents/` or
-  `.noeta/agents/`; Claude Code agent files work as they are.
-- **Prompts** have names (`system/main`, `tool/Read`, `reminder/todo`, …). A file
+  `.noeta/agents/`; a Claude Code agent file works as it is once copied there.
+- **Prompts** have names (`system/main`, `tool/Read`, `reminder/file_changed`, …). A file
   `.noeta/prompts/tool/Read.md` replaces that text, `tool/Read.append.md` adds to it; so do
   `~/.noeta/prompts/`, a task's `prompts` config, and `--system-prompt` /
   `--append-system-prompt`. A task keeps the texts it started with.
-- **Hooks and MCP servers** in Claude Code's format (`~/.noeta/settings.json`): hooks run
-  commands on `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` and `Notification`, and
-  can add context or block; `mcpServers` are started for every task. A workspace's `.mcp.json`
-  servers start only once named in `enabledMcpjsonServers` (or `enableAllProjectMcpServers`).
+- **Instructions, settings, hooks and MCP servers** use Claude Code's mechanisms and formats in
+  noeta's own places; noeta never reads `~/.claude/`, `.claude/`, `CLAUDE.md` or `.mcp.json`.
+  Instructions are `NOETA.md` (user `~/.noeta/NOETA.md` and `~/.noeta/rules/`; per directory
+  `NOETA.md`, `.noeta/NOETA.md`, `.noeta/rules/`, `NOETA.local.md`; `AGENTS.md` where a
+  directory has no `NOETA.md`). Settings are `~/.noeta/settings.json`, then a trusted
+  project's `.noeta/settings.json` and `.noeta/settings.local.json`, then the machine's
+  `/etc/noeta/managed-settings.json`: permissions, `env`, `model`, and hooks, which run
+  commands on `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` and `Notification` and
+  can add context or block; `mcpServers` are started for every task. A project's
+  `.noeta/mcp.json` servers start only once named in `enabledMcpjsonServers` (or
+  `enableAllProjectMcpServers`).
 - **Backends** — model providers, execution environments, stores — register under
   `noeta.providers`, `noeta.execenvs` and `noeta.stores`. A store passes the tests in
   `noeta.testing.store_contract` (import them next to a `store` fixture).

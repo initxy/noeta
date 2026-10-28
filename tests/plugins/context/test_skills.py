@@ -10,7 +10,7 @@ from typing import Any
 from noeta.core.agent import Agent
 from noeta.core.events import Waiting
 from noeta.plugins.fs import FileTools
-from noeta.plugins.skills import SKILL_NOT_ALONE, Skills, UsageRank
+from noeta.plugins.skills import Skills, UsageRank
 from noeta.plugins.skills.allowed_tools import parse_allowed_tools
 from noeta.plugins.skills.listing import (
     ADDED_HEADER,
@@ -49,24 +49,25 @@ async def test_listing_is_recorded_once_and_offers_the_skill_tool(h: Harness) ->
     h.provider.add(reply("ok"), reply("again"))
     tid = await h.start(a)
     first = h.provider.requests[0]
-    assert first.messages[0].text == f"{ROSTER_HEADER}\n- deploy: Ship the app."
-    assert first.messages[0].origin == "system"
-    assert [t.name for t in first.tools][-1] == "skill"
+    # Held for the first request's system turn, after the prompt.
+    assert [m.text for m in first.messages] == ["go", f"{ROSTER_HEADER}\n\n- deploy: Ship the app."]
+    assert first.messages[1].role == "system"
+    assert "Skill" in [t.name for t in first.tools]
     await h.say(a, tid, "more")
     assert len(await h.records(tid, "skills", "listing")) == 1
 
 
-async def test_no_skills_means_no_tool_and_no_listing(h: Harness) -> None:
+async def test_no_skills_means_no_listing_but_the_tool_stays(h: Harness) -> None:
     h.provider.add(reply("ok"))
     tid = await h.start(agent())
-    assert "skill" not in [t.name for t in h.provider.requests[0].tools]
+    assert "Skill" in [t.name for t in h.provider.requests[0].tools]
     assert await h.records(tid, "skills") == []
 
 
 async def test_activation_records_the_body_after_the_result(h: Harness) -> None:
     d = write_skill(skills_dir(h), "deploy", "Ship $ARGUMENTS now.",
                     body="Step one.\n\nScope: $ARGUMENTS\nStep two.\n")
-    h.provider.add(reply("", ("skill", {"skill": "deploy"})), reply("done"))
+    h.provider.add(reply("", ("Skill", {"skill": "deploy", "args": "prod eu"})), reply("done"))
     tid = await h.start(agent())
     [result] = await h.results(tid)
     assert result.result.text == ("Skill 'deploy' loaded; its instructions will appear in "
@@ -74,15 +75,27 @@ async def test_activation_records_the_body_after_the_result(h: Harness) -> None:
     msgs = h.provider.requests[1].messages
     body = msgs[-1]
     assert body.text == (f"Activated skill: deploy\n\nShip now.\n\nBase directory for this "
-                         f"skill: {d}\n\nStep one.\nStep two.\n")
+                         f"skill: {d}\n\nStep one.\n\nScope: prod eu\nStep two.\n")
     [act] = await h.records(tid, "skills", "activated")
-    assert act.data["source"] == "model"
+    assert act.data["source"] == "model" and act.data["args"] == "prod eu"
+
+
+async def test_a_slash_command_fills_the_skill_from_what_follows_it(h: Harness) -> None:
+    write_skill(skills_dir(h), "notes", "Release notes.", body="Notes for $0 since $1.\n")
+    write_skill(skills_dir(h), "plain", "No placeholder.", body="Do it.\n")
+    a = agent()
+    h.provider.add(reply("ok"), reply("ok"))
+    tid = await h.start(a, "/notes v0.2 'last week'")
+    assert h.provider.requests[0].messages[-2].text.endswith("Notes for v0.2 since last week.\n")
+    await h.say(a, tid, "/plain fast please")
+    assert h.provider.requests[1].messages[-1].text.endswith(
+        "Do it.\n\nARGUMENTS: fast please")
 
 
 async def test_unknown_and_disabled_skills_are_refused(h: Harness) -> None:
     write_skill(skills_dir(h), "deploy", "Ship.")
     write_skill(skills_dir(h), "hidden", "User only.", **{"disable-model-invocation": "yes"})
-    h.provider.add(reply("", ("skill", {"skill": "hidden"})), reply("", ("skill", {"skill": ""})),
+    h.provider.add(reply("", ("Skill", {"skill": "hidden"})), reply("", ("Skill", {"skill": ""})),
                    reply("done"))
     tid = await h.start(agent())
     first, second = await h.results(tid)
@@ -91,28 +104,24 @@ async def test_unknown_and_disabled_skills_are_refused(h: Harness) -> None:
     assert second.result.text == "skill must be a non-empty string"
 
 
-async def test_skill_beside_other_calls_runs_the_others_only(h: Harness) -> None:
+async def test_skill_may_share_a_reply_with_other_calls(h: Harness) -> None:
     write_skill(skills_dir(h), "deploy", "Ship.")
     (h.work / "f.txt").write_text("hello\n")
-    h.provider.add(reply("", ("skill", {"skill": "deploy"}), ("Read", {"file_path": "f.txt"})),
+    h.provider.add(reply("", ("Skill", {"skill": "deploy"}), ("Read", {"file_path": "f.txt"})),
                    reply("done"))
     tid = await h.start(agent())
     skill_result, read_result = await h.results(tid)
-    assert skill_result.result.is_error and skill_result.result.text == SKILL_NOT_ALONE
+    assert not skill_result.result.is_error
     assert not read_result.result.is_error and "hello" in read_result.result.text
-    assert await h.records(tid, "skills", "activated") == []
+    assert len(await h.records(tid, "skills", "activated")) == 1
 
 
-async def test_two_skill_calls_refuse_the_whole_response(h: Harness) -> None:
-    write_skill(skills_dir(h), "deploy", "Ship.")
-    (h.work / "f.txt").write_text("hello\n")
-    h.provider.add(reply("", ("skill", {"skill": "deploy"}), ("skill", {"skill": "deploy"}),
-                         ("Read", {"file_path": "f.txt"})), reply("done"))
-    tid = await h.start(agent())
-    results = await h.results(tid)
-    assert len(results) == 3
-    assert all(r.result.is_error and r.result.text.startswith("Nothing in this response ran")
-               for r in results)
+def test_skill_schema() -> None:
+    from noeta.plugins.skills.extension import SkillTool
+    schema = SkillTool(Skills()).input_schema
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert schema["additionalProperties"] is False and schema["required"] == ["skill"]
+    assert SkillTool(Skills()).name == "Skill"
 
 
 async def test_new_skills_are_announced_at_the_next_message(h: Harness) -> None:
@@ -124,7 +133,7 @@ async def test_new_skills_are_announced_at_the_next_message(h: Harness) -> None:
     await h.say(a, tid, "next")
     msgs = h.last_messages()
     assert msgs[-2].text == "next"
-    assert msgs[-1].text == f"{ADDED_HEADER}\n- review: Review code."
+    assert msgs[-1].text == f"{ADDED_HEADER}\n\n- review: Review code."
     assert len(await h.records(tid, "skills", "listing")) == 2
 
 
@@ -149,10 +158,9 @@ async def test_a_skill_installed_into_an_empty_task_is_announced(h: Harness) -> 
     h.provider.add(reply("", ("Install", {})), reply("ok"))
     await h.start(a)
     first, second = h.provider.requests
-    assert "skill" not in [t.name for t in first.tools]
+    assert first.tools == second.tools  # the prefix does not move
     texts = [m.text for m in second.messages]
-    assert texts[-2:] == ["next", f"{ROSTER_HEADER}\n- review: Review code."]
-    assert [t.name for t in second.tools][-1] == "skill"
+    assert texts[-2:] == ["next", f"{ROSTER_HEADER}\n\n- review: Review code."]
 
 
 async def test_slash_command_activates_even_a_user_only_skill(h: Harness) -> None:
@@ -162,9 +170,30 @@ async def test_slash_command_activates_even_a_user_only_skill(h: Harness) -> Non
     tid = await h.start(agent(), "/hidden please")
     msgs = h.provider.requests[0].messages
     assert msgs[0].text == "/hidden please"
-    assert msgs[1].text.startswith("Activated skill: hidden") and "Secret steps." in msgs[1].text
+    assert msgs[1].origin == "inline"
+    assert msgs[1].text.startswith("Base directory for this skill: ")
+    assert msgs[1].text.endswith("Secret steps.\n\nARGUMENTS: please")
     [act] = await h.records(tid, "skills", "activated")
     assert act.data["source"] == "user"
+
+
+async def test_a_command_in_its_tags_puts_the_body_in_the_persons_turn(h: Harness) -> None:
+    from noeta.backends.providers.anthropic import AnthropicProvider
+    from noeta.core.commands import expand_with
+    from noeta.core.extension import CommandContext
+
+    d = write_skill(skills_dir(h), "notes", "Release notes.", body="Notes for $ARGUMENTS.\n")
+    skills = Skills()
+    text = await expand_with([skills], CommandContext(cwd=str(h.work)), "/notes v0.2")
+    assert text == ("<command-message>notes</command-message>\n<command-name>/notes"
+                    "</command-name>\n<command-args>v0.2</command-args>")
+    h.provider.add(reply("ok"))
+    await h.start(Agent(name="a", model="m", extensions=[FileTools(), skills]), text)
+    request = h.provider.requests[0]
+    assert request.messages[1].text == f"Base directory for this skill: {d}\n\nNotes for v0.2.\n"
+    wire = AnthropicProvider(api_key="k").build_body(request)["messages"]
+    # The tags and the body share the person's turn, both plain.
+    assert [b["text"] for b in wire[0]["content"]] == [text, request.messages[1].text]
 
 
 async def test_preload_and_tiers(h: Harness, tmp_path: Path) -> None:
@@ -175,9 +204,9 @@ async def test_preload_and_tiers(h: Harness, tmp_path: Path) -> None:
     h.provider.add(reply("ok"))
     tid = await h.start(agent(global_dir=user_dir, preload=["lint"]))
     msgs = h.provider.requests[0].messages
-    assert msgs[0].text == f"{ROSTER_HEADER}\n- deploy: Workspace deploy.\n- lint: Lint."
-    assert msgs[1].text.startswith("Activated skill: lint")
-    assert msgs[2].text == "go"
+    assert msgs[0].text.startswith("Activated skill: lint")
+    assert msgs[1].text == "go"
+    assert msgs[2].text == f"{ROSTER_HEADER}\n\n- deploy: Workspace deploy.\n- lint: Lint."
     assert (await h.records(tid, "skills", "activated"))[0].data["source"] == "preload"
 
 
@@ -194,7 +223,7 @@ async def test_untrusted_workspace_skips_its_skill_dirs(h: Harness, tmp_path: Pa
 
     await h.start(agent(dirs=[tmp_path / "borrowed"], trusted=trusted))
     assert set(seen) == {str(h.work)}
-    assert h.provider.requests[0].messages[0].text == f"{ROSTER_HEADER}\n- borrowed: Borrowed."
+    assert h.provider.requests[0].messages[-1].text == f"{ROSTER_HEADER}\n\n- borrowed: Borrowed."
 
 
 async def test_run_skill_script_asks_and_runs_only_active_scripts(h: Harness) -> None:
@@ -204,7 +233,7 @@ async def test_run_skill_script_asks_and_runs_only_active_scripts(h: Harness) ->
     a = agent(scripts=True)
     h.provider.add(
         reply("", ("run_skill_script", {"skill": "tools", "relpath": "scripts/hi.sh"})),
-        reply("", ("skill", {"skill": "tools"})),
+        reply("", ("Skill", {"skill": "tools"})),
         reply("", ("run_skill_script", {"skill": "tools", "relpath": "scripts/hi.sh",
                                         "args": ["there"]})),
         reply("ran it"),
@@ -226,7 +255,7 @@ async def test_allowed_tools_enforcement_denies_outside_the_grant(h: Harness) ->
     write_skill(skills_dir(h), "readonly", "Read only.", **{"allowed-tools": "[Read, Grep]"})
     (h.work / "f.txt").write_text("x\n")
     h.provider.add(
-        reply("", ("skill", {"skill": "readonly"})),
+        reply("", ("Skill", {"skill": "readonly"})),
         reply("", ("Read", {"file_path": "f.txt"})),
         reply("", ("Bash", {"command": "echo hi"})),
         reply("done"),
@@ -249,15 +278,15 @@ async def test_rank_resolver_is_asked_once_and_shapes_the_fit(h: Harness) -> Non
 
     h.provider.add(reply("ok"))
     await h.start(agent(rank=rank, budget_tokens=60))
-    listing = h.provider.requests[0].messages[0].text.split("\n")
+    listing = h.provider.requests[0].messages[-1].text.split("\n")
     assert asked == [1]
-    assert listing[1] == "- alpha: Very long description sentence."
-    assert listing[2] == "- beta: Very long description sentence."
+    assert listing[2] == "- alpha: Very long description sentence."
+    assert listing[3] == "- beta: Very long description sentence."
 
 
 async def test_usage_rank_counts_model_and_user_activations(h: Harness) -> None:
     write_skill(skills_dir(h), "deploy", "Ship.")
-    h.provider.add(reply("", ("skill", {"skill": "deploy"})), reply("done"))
+    h.provider.add(reply("", ("Skill", {"skill": "deploy"})), reply("done"))
     await h.start(agent())
     ranker = UsageRank(h.store)
     assert ranker() == {}
@@ -302,3 +331,15 @@ def test_allowed_tools_parsing() -> None:
     assert parse_allowed_tools("[Read, Bash(git:*)]") == frozenset({"Read", "Bash"})
     assert parse_allowed_tools("Read, Grep") == frozenset({"Read", "Grep"})
     assert parse_allowed_tools("{Read}") is None
+
+
+async def test_skill_dirs_are_listed_workspace_first_never_claude_codes(
+        h: Harness, tmp_path: Path) -> None:
+    write_skill(h.work / ".noeta" / "skills", "release-notes", "Draft release notes.")
+    write_skill(h.work / ".claude" / "skills", "cc-skill", "Never listed.")
+    write_skill(tmp_path / "noeta-user" / "skills", "a-user-skill", "From the user.")
+    h.provider.add(reply("ok"))
+    await h.start(agent(dirs=[tmp_path / "noeta-user" / "skills"]))
+    assert h.provider.requests[0].messages[-1].text == (
+        f"{ROSTER_HEADER}\n\n- release-notes: Draft release notes.\n"
+        "- a-user-skill: From the user.")

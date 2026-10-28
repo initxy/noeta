@@ -10,9 +10,8 @@ from typing import Any, Protocol
 import httpx
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.plugins.web.fetch import WEB_SOURCE_LINE
 from noeta.plugins.web.render import collapse_whitespace
-from noeta.toolkit.tools import limit_output, truncate_bytes
+from noeta.toolkit.tools import SCHEMA_DIALECT, limit_output, truncate_bytes
 
 __all__ = ["HttpSearchTransport", "SearchResult", "SearchTransport", "WebSearchTool"]
 
@@ -102,14 +101,21 @@ class WebSearchTool:
     name = "WebSearch"
     read_only = True
     clearable = True
+    deferred = True
 
     def __init__(self, transport: SearchTransport) -> None:
         self.transport = transport
         self.description = (resources.files(__package__) / "web_search.md").read_text(
             "utf-8").rstrip("\n")
         self.input_schema: dict[str, Any] = {
+            "$schema": SCHEMA_DIALECT,
             "type": "object",
-            "properties": {"query": {"type": "string"}, "count": {"type": "integer"}},
+            "properties": {
+                "query": {"type": "string", "minLength": 2,
+                          "description": "What to search for."},
+                "count": {"type": "integer",
+                          "description": "How many results to return (default 5, at most 20)."},
+            },
             "required": ["query"],
             "additionalProperties": False,
         }
@@ -133,5 +139,5 @@ class WebSearchTool:
                 f"\n(Results truncated: showing the first "
                 f"{_INLINE_RESULT_MAX_CHARS} of {total} characters. Refine "
                 "the query or lower 'count'.)")
-        text = await limit_output(f"{WEB_SOURCE_LINE}\n\n{body}", WEBSEARCH_RESULT_LIMIT, ctx)
+        text = await limit_output(body, WEBSEARCH_RESULT_LIMIT, ctx)
         return text_output(text, hits=len(results))

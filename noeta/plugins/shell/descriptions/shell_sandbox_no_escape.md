@@ -1,0 +1,3 @@
+- `dangerouslyDisableSandbox` is switched off by this configuration: setting it does not take a command out of the sandbox.
+- When a command the task needs fails on a sandbox restriction, tell the user which restriction it hit; changing the sandbox settings is their call.
+- Never suggest adding sensitive paths (`~/.bashrc`, `~/.zshrc`, `~/.ssh/*`, credential files) to the sandbox's allowed paths.

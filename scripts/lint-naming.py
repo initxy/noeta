@@ -86,6 +86,15 @@ _SESSION_TOKEN = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 SESSION_RULE_REL_DIRS: tuple[tuple[str, ...], ...] = (
     ("noeta",),
 )
+#: Wire names a protocol spells with the word, allowed only where noeta
+#: speaks that protocol: Claude Code's hook events and their input field
+#: (the root task's id goes out as ``session_id``).
+SESSION_ALLOWED_IN: tuple[tuple[tuple[str, ...], frozenset[str]], ...] = (
+    (("noeta", "plugins", "hooks"), frozenset({"SessionStart", "SessionEnd", "session_id"})),
+    # Claude Code's headless protocol: its messages' field and a control request.
+    (("noeta", "host", "stream_json.py"),
+     frozenset({"session_id", "get_session_cost", "_on_get_session_cost"})),
+)
 
 
 def _is_compound(token: str) -> bool:
@@ -130,6 +139,8 @@ EXEMPT_FILE_NAMES: frozenset[str] = frozenset(
         # (new_session, session_update, session_id): the adapter and its test
         # must use them as the protocol spells them.
         "acp.py",
+        # Anthropic's metadata.user_id spells its conversation field so.
+        "_anthropic_user_id.py",
         "test_acp.py",
         "test_acp_live.py",
         "test_acp_review.py",
@@ -202,13 +213,17 @@ def scan(root: Path) -> list[tuple[Path, int, str, str]]:
         session_rule_applies = any(
             _is_under(rel_parts, prefix) for prefix in SESSION_RULE_REL_DIRS
         )
+        wire_names: frozenset[str] = frozenset().union(
+            *(names for prefix, names in SESSION_ALLOWED_IN if _is_under(rel_parts, prefix))
+        )
         for lineno, line in enumerate(text.splitlines(), start=1):
             for display, pattern in BANNED:
                 if pattern.search(line):
                     violations.append((path, lineno, display, line.rstrip()))
             if session_rule_applies:
                 for token in session_identity_violations(line):
-                    violations.append((path, lineno, token, line.rstrip()))
+                    if token not in wire_names:
+                        violations.append((path, lineno, token, line.rstrip()))
     return violations
 
 

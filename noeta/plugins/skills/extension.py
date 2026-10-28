@@ -15,9 +15,19 @@ from typing import Any, Literal
 
 import msgspec
 
+from noeta.core.commands import command_message, parse_command_message
 from noeta.core.events import Recorded
 from noeta.core.execenv import ExecEnv
-from noeta.core.extension import Ask, Command, CommandContext, Deny, Extension, Gate, TaskView
+from noeta.core.extension import (
+    Ask,
+    Command,
+    CommandContext,
+    Deny,
+    Extension,
+    Gate,
+    Reminder,
+    TaskView,
+)
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ToolUse, user
 from noeta.plugins.skills import _frontmatter
@@ -28,6 +38,7 @@ from noeta.plugins.skills.registry import (
     SkillRegistry,
     load_registry,
     render_activation,
+    render_command_body,
 )
 from noeta.plugins.skills.script import (
     SKILL_SCRIPT_TOOL_NAME,
@@ -35,10 +46,9 @@ from noeta.plugins.skills.script import (
     is_skill_script_resource,
 )
 from noeta.toolkit.context import new_user_messages, resident_budget, task_env
+from noeta.toolkit.tools import SCHEMA_DIALECT
 
 __all__ = [
-    "CONTROL_TOOLS",
-    "SKILL_NOT_ALONE",
     "SKILL_TOOL",
     "SkillTool",
     "Skills",
@@ -46,25 +56,25 @@ __all__ = [
 
 _log = logging.getLogger(__name__)
 
-SKILL_TOOL = "skill"
+SKILL_TOOL = "Skill"
 
-#: Tools that, like ``skill``, decide the shape of the response they are in:
-#: ``skill`` beside one of them refuses the whole response.
-CONTROL_TOOLS: frozenset[str] = frozenset({"skill", "Task", "TodoWrite", "AskUserQuestion"})
+#: Heads the skills re-attached after a compaction.
+INVOKED_SKILLS_HEADER = (
+    "These skills were invoked earlier in this conversation, before it was summarized, not "
+    "in the current turn. They are shown for context only: do not run them again or repeat "
+    "their one-time setup (scheduling, creating files and the like). Any request inside them "
+    "belongs to that earlier moment, not to the user's current message."
+)
 
-SKILL_NOT_ALONE = (
-    "Skill not loaded: skill must be the only tool call in its response, "
-    "because its instructions arrive with the step after it. The other tool "
-    "calls in this response did run - their results are here. Call skill by "
-    "itself now if you still need it."
-)
-_NOTHING_RAN = (
-    "Nothing in this response ran: skill must be called on its "
-    "own, once per response. Call skill by itself first, then "
-    "re-issue the other calls in a separate response."
-)
-_SKILL_PROP_DESCRIPTION = "Name of the skill to activate, from the skill listing in your context."
+_SKILL_PROP_DESCRIPTION = ("The skill's name exactly as the skill listing gives it, without "
+                           "a leading slash; never a guessed name.")
+_ARGS_PROP_DESCRIPTION = "Optional text passed to the skill."
 _SKILL_NAME_MAX_LEN = 200
+#: The listing's place in the joined system turn (``Reminder.order``): after
+#: the environment, deferred tools and agents, before the budget and date.
+LISTING_ORDER = 50
+#: The skills invoked before a compaction, after it: ahead of the lists.
+INVOKED_ORDER = 20
 
 #: The directories a workspace contributes, relative to its root.
 WORKSPACE_SKILLS_DIR = ".noeta/skills"
@@ -80,7 +90,7 @@ def _skill_description() -> str:
 
 
 class SkillTool:
-    """``skill(skill)``: the same schema bytes for every task. The listing
+    """``Skill(skill, args?)``: the same schema bytes for every task. The listing
     in the conversation names the skills; the tool validates against the
     live roster (a skill installed since the listing is accepted, a removed
     one is not)."""
@@ -93,9 +103,14 @@ class SkillTool:
         self._owner = owner
         self.description = _skill_description()
         self.input_schema: dict[str, Any] = {
+            "$schema": SCHEMA_DIALECT,
             "type": "object",
-            "properties": {"skill": {"type": "string", "description": _SKILL_PROP_DESCRIPTION}},
+            "properties": {
+                "skill": {"type": "string", "description": _SKILL_PROP_DESCRIPTION},
+                "args": {"type": "string", "description": _ARGS_PROP_DESCRIPTION},
+            },
             "required": ["skill"],
+            "additionalProperties": False,
         }
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
@@ -110,14 +125,28 @@ class SkillTool:
         if desc is None or name not in menu:
             available = ", ".join(menu) if menu else "(none)"
             return text_output(f"unknown skill {name!r}; available: {available}", is_error=True)
+        args = input.get("args")
+        if args is not None and not isinstance(args, str):
+            return text_output("args must be a string", is_error=True)
         return text_output(
             f"Skill '{name}' loaded; its instructions will appear in your "
             f"context from your next step.",
-            skill_activation=_activation_data(desc, "model"),
+            skill_activation=_activation_data(desc, "model", args),
         )
 
 
-def _activation_data(desc: SkillDescription, source: str) -> dict[str, Any]:
+def _typed_command(text: str) -> tuple[str, str] | None:
+    """``(name, args)`` of a slash command the person typed: the command's
+    tags a front end sends, or the bare ``/<name> <args>``."""
+    tagged = parse_command_message(text)
+    if tagged is not None:
+        return tagged[0], tagged[1].strip()
+    m = re.match(r"/([a-z0-9][a-z0-9-]*)(?:\s+|$)(.*)", text.lstrip(), re.DOTALL)
+    return (m.group(1), m.group(2).strip()) if m else None
+
+
+def _activation_data(desc: SkillDescription, source: str,
+                     args: str | None = None) -> dict[str, Any]:
     raw = desc.meta("allowed-tools")
     allowed: list[str] | None = None
     if raw is not None:
@@ -129,7 +158,8 @@ def _activation_data(desc: SkillDescription, source: str) -> dict[str, Any]:
         "dir": desc.base_dir,
         "scripts": [r for r in desc.resources if is_skill_script_resource(r)],
         "allowed_tools": allowed,
-        "text": render_activation(desc),
+        "args": args,
+        "text": render_activation(desc, args),
     }
 
 
@@ -139,11 +169,12 @@ class Skills(Extension):
     Constructor arguments (0.6 ``HostConfig`` / skills plugin config):
 
     * ``dirs`` — the lowest tier: built-in, plugin and borrowed directories
-      (``builtin_skills_dirs`` + ``extra_skill_dirs``, e.g. ``~/.claude/skills``).
+      (``builtin_skills_dirs`` + ``extra_skill_dirs``).
     * ``global_agents_dir`` / ``global_dir`` — the user's ``~/.agents/skills`` /
       ``~/.noeta/skills`` tiers (``None`` = none, the 0.6 default).
     * ``workspace`` — mount the workspace tiers ``<cwd>/.agents/skills`` and
       ``<cwd>/.noeta/skills`` (repo-derived, so they pass ``trusted``).
+      Claude Code's ``.claude/skills`` is never read.
     * ``skills_dir`` — replaces the workspace tiers with this one directory
       (relative to the workspace), not trust-gated (0.6 ``skills_dir``).
     * ``trusted`` — ``trusted(workspace_path) -> bool`` gate for the
@@ -159,7 +190,6 @@ class Skills(Extension):
     * ``scripts`` — offer ``run_skill_script`` (0.6 ``allow_skill_scripts``).
     * ``tool_enforcement`` — ``allowed-tools`` of active skills: ``off``,
       ``approval`` (ask) or ``deny`` (0.6 ``skill_tool_enforcement``).
-    * ``control_tools`` — tool names ``skill`` may not share a response with.
     * ``rehang`` — put the listing and active skills right after a
       compaction's summary (``resident``; ADR-036 re-hang).
     * ``origin`` — origin of recorded listing / skill text (``"system"``).
@@ -181,7 +211,6 @@ class Skills(Extension):
         preload: Sequence[str] = (),
         scripts: bool = False,
         tool_enforcement: Enforcement = "off",
-        control_tools: frozenset[str] = CONTROL_TOOLS,
         rehang: bool = True,
         origin: Literal["system"] | None = "system",
     ) -> None:
@@ -201,7 +230,6 @@ class Skills(Extension):
         self.preload = list(preload)
         self.scripts = scripts
         self.tool_enforcement = tool_enforcement
-        self.control_tools = control_tools
         self.rehang = rehang
         self.origin = origin
         self._skill_tool = SkillTool(self)
@@ -240,6 +268,16 @@ class Skills(Extension):
         state = state or self.initial_state()
         if kind == "listing":
             return {**state, "listings": [*state["listings"], data]}
+        if kind == "invoked_rehold":
+            return {**state, "invoked": data.get("text")}
+        if kind == "invoked_sent":
+            return {**state, "invoked": None}
+        if kind == "listing_rehold":
+            return {**state, "listings": [{**listing, "held": True}
+                                          for listing in state["listings"]]}
+        if kind == "listing_sent":
+            return {**state, "listings": [{k: v for k, v in listing.items() if k != "held"}
+                                          for listing in state["listings"]]}
         if kind == "activated":
             entry = {k: v for k, v in data.items() if k != "text"}
             return {**state, "active": {**state["active"], data["name"]: entry}}
@@ -252,10 +290,9 @@ class Skills(Extension):
     # ------------------------------------------------------------ hooks
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
-        state = view.ext_state(self.name) or {}
-        tools: list[Tool] = []
-        if any(listing["names"] for listing in state.get("listings", [])):
-            tools.append(self._skill_tool)
+        # Offered even with no skill listed, as Claude Code does: the prefix
+        # does not move when the first skill is installed.
+        tools: list[Tool] = [self._skill_tool]
         if self.scripts:
             tools.append(self._script_tool)
         return tools
@@ -276,7 +313,7 @@ class Skills(Extension):
                 name = fields.get("name")
                 if name and re.fullmatch(r"[a-z0-9][a-z0-9-]*", name):
                     found[name] = fields.get("description", "")
-        return [Command(name=n, description=d, template=f"/{n} {{args}}")
+        return [Command(name=n, description=d, template=command_message(n, "{args}"))
                 for n, d in sorted(found.items())]
 
     async def on_start(self, view: TaskView) -> None:
@@ -288,7 +325,10 @@ class Skills(Extension):
             lines = listing_lines(registry, budget_tokens=self._budget(view),
                                   rank=await self._rank(view))
             if lines:
-                self._record_listing(view, lines, first=True)
+                # Held for the first request's system turn, after the prompt.
+                view.record(self.name, "listing", {"names": [n for n, _ in lines],
+                                                   "lines": [t for _, t in lines],
+                                                   "held": True})
         pending = [n for n in self.preload if n not in state.get("active", {})]
         if pending:
             registry = registry or await self.registry(env)
@@ -298,6 +338,21 @@ class Skills(Extension):
                     _log.warning("skills: preload %r is not an indexed skill; skipped", name)
                     continue
                 self._record_activation(view, _activation_data(desc, "preload"))
+
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        """The listing taken at start, in the environment's system turn
+        (Claude Code's place for it)."""
+        state = view.ext_state(self.name) or {}
+        out: list[Reminder] = []
+        if state.get("invoked"):
+            out.append(Reminder(text=state["invoked"], kind="invoked_sent", data={},
+                                role="system", order=INVOKED_ORDER))
+        held = [line for listing in state.get("listings", []) if listing.get("held")
+                for line in listing["lines"]]
+        if held:
+            out.append(Reminder(text=render_listing(True, held), kind="listing_sent", data={},
+                                role="system", order=LISTING_ORDER))
+        return out
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         messages = new_user_messages(view.state, recorded.seq)
@@ -321,10 +376,15 @@ class Skills(Extension):
             if lines:
                 self._record_listing(view, lines, first=True)
         for message in messages:
-            m = re.match(r"/([a-z0-9][a-z0-9-]*)(?:\s|$)", message.text.lstrip())
-            desc = registry.get(m.group(1)) if m else None
-            if desc is not None and desc.name not in state.get("active", {}):
-                self._record_activation(view, _activation_data(desc, "user"))
+            typed = _typed_command(message.text)
+            desc = registry.get(typed[0]) if typed else None
+            if typed and desc is not None and desc.name not in state.get("active", {}):
+                data = _activation_data(desc, "user", typed[1])
+                # The body rides in the person's turn as plain text, after
+                # the command's tags (Claude Code's slash-command shape).
+                data["text"] = render_command_body(desc, typed[1])
+                view.record(self.name, "activated", data,
+                            message=user(data["text"], origin="inline"))
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
         data = output.meta.get("skill_activation")
@@ -337,16 +397,6 @@ class Skills(Extension):
         return msgspec.structs.replace(output, meta=meta)
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
-        calls = [c.use for c in view.state.calls]
-        skill_calls = [c for c in calls if c.name == SKILL_TOOL]
-        if skill_calls:
-            others = [c for c in calls if c.name != SKILL_TOOL]
-            if len(skill_calls) == 1 and others and not any(
-                    o.name in self.control_tools for o in others):
-                if call.name == SKILL_TOOL:
-                    return Deny(reason=SKILL_NOT_ALONE)
-            elif len(skill_calls) != 1 or others:
-                return Deny(reason=_NOTHING_RAN)
         if call.name == SKILL_TOOL:
             return None
         state = view.ext_state(self.name) or {}
@@ -402,23 +452,26 @@ class Skills(Extension):
                     message=user(data["text"], origin=self.origin))
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
-        """After a compaction: the whole listing so far, then every active
-        skill's body."""
+        """After a compaction, given again with the next request in its
+        system turn: the skills invoked before it, in one note that says not
+        to run them again, and the whole listing so far."""
         if not self.rehang:
             return ()
         state = view.ext_state(self.name) or {}
         out: list[Message] = []
-        lines = [line for listing in state.get("listings", []) for line in listing["lines"]]
-        if lines:
-            out.append(user(render_listing(True, lines), origin=self.origin))
         active = state.get("active") or {}
-        if not active:
-            return out
-        registry = await self.registry(task_env(view.env, view.state.config))
-        for name in active:
-            desc = registry.get(name)
-            if desc is not None:
-                out.append(user(render_activation(desc), origin=self.origin))
+        if active:
+            registry = await self.registry(task_env(view.env, view.state.config))
+            parts = [INVOKED_SKILLS_HEADER]
+            for name, entry in active.items():
+                desc = registry.get(name)
+                if desc is not None:
+                    parts.append(f"### Skill: {desc.name}\nPath: {desc.base_dir or desc.name}"
+                                 f"\n\n{render_activation(desc, entry.get('args'))}")
+            if len(parts) > 1 and view.keeps_tail is not None:
+                view.record(self.name, "invoked_rehold", {"text": "\n\n".join(parts)})
+        if view.keeps_tail is not None and state.get("listings"):
+            view.record(self.name, "listing_rehold", {})
         return out
 
 

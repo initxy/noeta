@@ -1,11 +1,11 @@
 """The shell: ``Bash`` (whose working directory carries over between
-commands), and background jobs: ``run_in_background``, ``BashOutput``,
-``KillShell`` and ``Monitor``.
+commands), and background jobs: ``run_in_background``, ``Monitor`` and
+``TaskStop`` (both deferred).
 
 Jobs belong to the worker process (a process-local table keyed by the task
 tree's root, see :mod:`.jobs`), so while a job runs its worker holds the task
 tree (``ToolContext.hold``): no other worker claims a task of it, and the
-next turn can read and stop the job. What the log keeps is what a reader
+next turn can stop the job. What the log keeps is what a reader
 needs: a ``started`` record in the task that launched the job, an ``ended``
 record when its end notice is taken, and ``lost`` for a job missing from the
 worker that picks the task up — its worker stopped and the hold ran out
@@ -21,8 +21,10 @@ of the task that started it ends.
 
 from __future__ import annotations
 
+import copy
 import re
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any
 
 from noeta.core.events import ExtensionRecorded, InputTaken, Recorded, Say, TaskEnded, Waiting
@@ -30,15 +32,10 @@ from noeta.core.extension import Extension, TaskView
 from noeta.core.loop.state import CORE
 from noeta.core.tool import Tool
 from noeta.core.types import user
-from noeta.plugins.shell.bash import SHELL, BashTool, ShellState, reduce_shell
+from noeta.plugins.shell.bash import SHELL, BashTool, ShellState, reduce_shell, sandbox_description
 from noeta.plugins.shell.jobs import DEFAULT_LOG_DIR, REGISTRY, Registry
-from noeta.plugins.shell.tools import (
-    LOST_REASON,
-    BackgroundBash,
-    BashOutputTool,
-    KillShellTool,
-    MonitorTool,
-)
+from noeta.plugins.shell.tools import LOST_REASON, BackgroundBash, MonitorTool, TaskStopTool
+from noeta.toolkit.sandbox import sandbox_of
 
 __all__ = ["SHELL", "BashTool", "Registry", "Shell", "lost_text"]
 
@@ -47,8 +44,9 @@ def lost_text(job_id: str) -> str:
     return f"Background job {job_id} was lost: {LOST_REASON}."
 
 _NOTICE = re.compile(
-    r"\A<task-notification>\n<task-id>(bg-[0-9a-f]+)</task-id>\n"
-    r"(?:<tool-use-id>[^<]*</tool-use-id>\n)?<status>(\w+)</status>")
+    r"(?:\A|\n\n)<task-notification>\n<task-id>([0-9a-z]{9})</task-id>\n"
+    r"(?:<tool-use-id>[^<]*</tool-use-id>\n)?(?:<output-file>[^<]*</output-file>\n)?"
+    r"<status>(\w+)</status>")
 
 
 class Shell(Extension):
@@ -57,8 +55,7 @@ class Shell(Extension):
     Arguments a host sets:
 
     * ``background`` — offer background jobs (``run_in_background``,
-      ``BashOutput``, ``KillShell``, ``Monitor``); off = foreground ``Bash``
-      only.
+      ``Monitor``, ``TaskStop``); off = foreground ``Bash`` only.
     * ``background_ends_with_turn`` — end a task's jobs when its turn ends
       (one-shot workers); the launch results then say so (0.6's
       ``HostConfig.background_ends_with_turn``).
@@ -67,27 +64,27 @@ class Shell(Extension):
       the same as ``BashTool``'s.
     * ``registry`` — the job table; by default the process-wide one, so every
       agent of a worker shares the per-root cap of 8 jobs. ``max_jobs`` /
-      ``output_cap`` / ``log_dir`` configure a private one instead.
+      ``log_dir`` configure a private one instead.
     """
 
     name = SHELL
 
     def __init__(self, *, background: bool = True, background_ends_with_turn: bool = False,
                  bash: dict[str, Any] | None = None, registry: Registry | None = None,
-                 max_jobs: int | None = None, output_cap: int | None = None,
-                 log_dir: str | None = None) -> None:
-        if registry is None and (max_jobs or output_cap or log_dir):
-            registry = Registry(max_jobs=max_jobs or 8, output_cap=output_cap or 256 * 1024,
-                                log_dir=log_dir or DEFAULT_LOG_DIR)
+                 max_jobs: int | None = None, log_dir: str | None = None) -> None:
+        if registry is None and (max_jobs or log_dir):
+            registry = Registry(max_jobs=max_jobs or 8, log_dir=log_dir or DEFAULT_LOG_DIR)
         self.registry = registry if registry is not None else REGISTRY
         self.ends_with_turn = background_ends_with_turn
+        #: The tool list with ``Bash`` describing the sandbox, per settings
+        #: and working directory.
+        self._sandboxed: dict[tuple[Any, str], list[Tool]] = {}
         if not background:
             self._tools: list[Tool] = [BashTool(**(bash or {}))]
             return
         self.bash = BackgroundBash(self.registry, ends_with_turn=background_ends_with_turn,
                                    **(bash or {}))
-        self._tools = [self.bash, BashOutputTool(self.registry),
-                       KillShellTool(self.registry), MonitorTool(self.bash)]
+        self._tools = [self.bash, MonitorTool(self.bash), TaskStopTool(self.registry)]
 
     # ------------------------------------------------------------ state
 
@@ -97,8 +94,25 @@ class Shell(Extension):
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         return reduce_shell(state, kind, data)
 
+    def continue_state(self, state: Any) -> Any:
+        """A continuation keeps the cwd and finished jobs: a running job
+        belongs to the source task, whose notices it posts."""
+        if not isinstance(state, ShellState):
+            return state
+        return replace(state, jobs={k: j for k, j in state.jobs.items()
+                                    if j.get("status") != "running"})
+
     def tools(self, view: TaskView) -> Sequence[Tool]:
-        return self._tools
+        sandbox = sandbox_of(view.env)
+        if sandbox is None or sandbox.unavailable() is not None:
+            return self._tools
+        root = str(getattr(view.env, "cwd", "") or "")
+        key = (sandbox.settings, root)
+        if key not in self._sandboxed:
+            bash = copy.copy(self._tools[0])
+            bash.description = sandbox_description(bash.description, sandbox, root)
+            self._sandboxed[key] = [bash, *self._tools[1:]]
+        return self._sandboxed[key]
 
     # ------------------------------------------------------------ lifecycle
 
@@ -133,7 +147,7 @@ class Shell(Extension):
                 body = item.body
                 if not isinstance(body, Say) or body.message.origin != "system":
                     continue
-                match = _NOTICE.match(body.message.text)
+                match = _NOTICE.search(body.message.text)
                 if match and known.get(match.group(1), {}).get("status") == "running":
                     view.record(self.name, "ended",
                                 {"job_id": match.group(1), "status": match.group(2)})

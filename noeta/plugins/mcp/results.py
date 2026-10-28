@@ -1,14 +1,18 @@
-"""A ``tools/call`` result as the model sees it (0.6's shape).
+"""A ``tools/call`` result as the model sees it (Claude Code's shape).
 
-The body is the JSON object 0.6 sent: ``{"text": ...}``, plus
-``non_text_blocks`` when any block was not plain text and
-``structured_content`` when the server returned it. Text blocks and embedded
-text resources join the text in order; anything the model cannot see inline
-(audio, a resource link, a binary resource, an unusable image) becomes a
-one-line description; a displayable image travels as an image block. A text
-over 1 MiB is cut to a marked head (the full text is saved under the spill
-directory when there is one), and a large ``structuredContent`` is saved the
-same way instead of inlined. ``isError: true`` is an error result.
+The server's ``content`` blocks pass through as the result's blocks, in
+order, with no wrapper: a text block stays a text block, an embedded text
+resource becomes its text, a displayable image travels as an image block, and
+anything the model cannot see inline (audio, a resource link, a binary
+resource, an unusable image) becomes a one-line description. A result with
+only ``structuredContent`` is that JSON as text.
+
+A result is held to Claude Code's budget (25,000 tokens, or
+``NOETA_MAX_MCP_OUTPUT_TOKENS``, its ``MAX_MCP_OUTPUT_TOKENS``; four
+characters a token, an image 1,600): images that do not fit are left out,
+and text over what is left is cut to a marked head (the full text is saved
+under the spill directory when there is one). ``isError: true`` is an error
+result.
 """
 
 from __future__ import annotations
@@ -16,20 +20,33 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import os
 import posixpath
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import Image, Text
-from noeta.toolkit.tools import spill_path, truncate_bytes
+from noeta.toolkit.images import ImageTooLarge, fit_image
+from noeta.toolkit.tools import spill_path
 
-__all__ = ["IMAGE_MAX_BYTES", "INLINE_MAX_BYTES", "render_result"]
+__all__ = ["DEFAULT_MAX_OUTPUT_TOKENS", "IMAGE_TOKENS", "max_output_tokens", "render_result"]
 
-INLINE_MAX_BYTES = 1024 * 1024
-#: The inline share of an over-cap result: half the ceiling.
-_RESULT_INLINE_MAX_BYTES = INLINE_MAX_BYTES // 2
+#: Claude Code's budget for one MCP result, in tokens.
+DEFAULT_MAX_OUTPUT_TOKENS = 25_000
+#: What one image counts against it (Claude Code's estimate).
+IMAGE_TOKENS = 1_600
+_CHARS_PER_TOKEN = 4
 _INLINE_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
-IMAGE_MAX_BYTES = 5 * 1024 * 1024
+
+
+def max_output_tokens() -> int:
+    """``NOETA_MAX_MCP_OUTPUT_TOKENS`` when it is a positive number, else the
+    default."""
+    try:
+        value = int(os.environ.get("NOETA_MAX_MCP_OUTPUT_TOKENS", ""))
+    except ValueError:
+        return DEFAULT_MAX_OUTPUT_TOKENS
+    return value if value > 0 else DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def _decode_b64(data: object) -> bytes | None:
@@ -53,10 +70,11 @@ def _describe_block(block: object) -> tuple[str, Image | None]:
             return f"[image ({mime_s}): data is not valid base64, not shown]", None
         if mime not in _INLINE_IMAGE_TYPES:
             return f"[image ({mime_s}, {len(raw)} bytes): type not shown inline]", None
-        if len(raw) > IMAGE_MAX_BYTES:
-            return (f"[image ({mime_s}, {len(raw)} bytes): over the "
-                    f"{IMAGE_MAX_BYTES} byte inline limit, not shown]"), None
-        return "", Image(media_type=str(mime), data=raw)
+        try:
+            fitted = fit_image(raw, str(mime))
+        except ImageTooLarge as exc:
+            return f"[image ({mime_s}, {len(raw)} bytes): not shown: {exc}]", None
+        return fitted.note() or "", Image(media_type=fitted.media_type, data=fitted.data)
     if kind == "audio":
         raw = _decode_b64(block.get("data"))
         size = f", {len(raw)} bytes" if raw is not None else ""
@@ -94,46 +112,58 @@ async def _save(ctx: ToolContext, suffix: str, data: bytes) -> str | None:
 async def render_result(result: dict[str, Any], ctx: ToolContext) -> ToolOutput:
     is_error = bool(result.get("isError"))
     content = result.get("content")
-    parts: list[str] = []
-    images: list[Image] = []
+    blocks: list[Text | Image] = []
     non_text = 0
     if isinstance(content, list):
         for block in content:
             if isinstance(block, dict) and block.get("type") == "text":
                 t = block.get("text")
                 if isinstance(t, str):
-                    parts.append(t)
+                    blocks.append(Text(text=t))
                 continue
             non_text += 1
             line, image = _describe_block(block)
             if image is not None:
-                images.append(image)
-            if line:
-                parts.append(line)
-    text = "\n".join(parts)
-    output: dict[str, Any] = {"text": text}
-    if non_text:
-        output["non_text_blocks"] = non_text
+                blocks.append(image)
+            elif line:
+                blocks.append(Text(text=line))
+            if image is not None and line:
+                blocks.append(Text(text=line))
     structured = result.get("structuredContent")
-    if structured is not None:
-        encoded_s = json.dumps(structured, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        if len(encoded_s) > _RESULT_INLINE_MAX_BYTES:
-            output["structured_content_bytes"] = len(encoded_s)
-            saved = await _save(ctx, ".structured.json", encoded_s)
-            if saved:
-                output["structured_content_saved_to"] = saved
-        else:
-            output["structured_content"] = structured
-    encoded = text.encode("utf-8")
-    if len(encoded) > INLINE_MAX_BYTES:
-        # The marker leads: a later trim cuts from the end.
-        head = truncate_bytes(text, _RESULT_INLINE_MAX_BYTES)
-        output["text"] = (f"[truncated: the server returned {len(encoded)} bytes; what "
-                          f"follows is the first {len(head.encode('utf-8'))}]\n{head}")
-        saved = await _save(ctx, ".txt", encoded)
-        if saved:
-            output["text_saved_to"] = saved
-    body = json.dumps(output, ensure_ascii=False)
-    return ToolOutput(content=[Text(text=body), *images], is_error=is_error,
-                      meta={"non_text_blocks": non_text, "images": len(images),
+    if structured is not None and not blocks:
+        # Only a structured result: its JSON is the text.
+        blocks.append(Text(text=json.dumps(structured, ensure_ascii=False, sort_keys=True)))
+    limit = max_output_tokens()
+    budget = limit * _CHARS_PER_TOKEN
+    image_chars = IMAGE_TOKENS * _CHARS_PER_TOKEN
+    images = [b for b in blocks if isinstance(b, Image)]
+    fitting = min(len(images), budget // image_chars)
+    if fitting < len(images):
+        drop = {id(b) for b in images[fitting:]}
+        blocks = [b for b in blocks if id(b) not in drop]
+        # First, so cutting the text cannot drop it.
+        blocks.insert(0, Text(text=f"[{len(images) - fitting} image(s) left out: over the "
+                                   "tool output limit]"))
+    budget -= fitting * image_chars
+    text_len = sum(len(b.text) for b in blocks if isinstance(b, Text))
+    if text_len > budget:
+        full = "\n".join(b.text for b in blocks if isinstance(b, Text))
+        saved = await _save(ctx, ".txt", full.encode("utf-8"))
+        note = (f"[output truncated: over the {limit} token limit for an MCP result "
+                f"(NOETA_MAX_MCP_OUTPUT_TOKENS); the server returned {text_len} characters, what "
+                f"follows is the first {budget}. Use the server's pagination or filtering to "
+                "get the rest; without them, tell the user the result is incomplete"
+                + (f"; the full text is in {saved}" if saved else "") + "]")
+        cut: list[Text | Image] = [Text(text=note)]
+        left = budget
+        for b in blocks:
+            if isinstance(b, Image):
+                cut.append(b)
+            elif left > 0:
+                cut.append(Text(text=b.text[:left]))
+                left -= len(b.text)
+        blocks = cut
+    return ToolOutput(content=list(blocks), is_error=is_error,
+                      meta={"non_text_blocks": non_text,
+                            "images": sum(isinstance(b, Image) for b in blocks),
                             "structured": structured is not None})

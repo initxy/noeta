@@ -55,9 +55,16 @@ class ToolUse(Struct, tag="tool_use", tag_field="type"):
     input: dict[str, Any]
 
 
+class ToolReference(Struct, tag="tool_reference", tag_field="type"):
+    """A tool result naming a deferred tool whose schema is now loaded
+    (``noeta.core.deferred``): from the next request on, the tool is sent."""
+
+    tool_name: str
+
+
 class ToolResult(Struct, tag="tool_result", tag_field="type"):
     call_id: str
-    content: list[Text | Image]
+    content: list[Text | Image | ToolReference]
     is_error: bool = False
 
     @property
@@ -69,12 +76,20 @@ Block = Union[Text, Thinking, Image, ToolUse, ToolResult]
 
 #: Who wrote a user-role message. ``human`` is the person; ``system`` is the
 #: host or an extension speaking in the user channel (reminders, notices);
-#: ``memory`` is recalled material. Adapters decide how each reaches the wire.
-Origin = Literal["human", "system", "memory"]
+#: ``memory`` is recalled material; ``agent`` is another agent's message (a
+#: sub-agent's hand-back), plain text that frames itself and carries no user
+#: authority; ``inline`` is text the host adds to the person's turn as plain
+#: text, not as a reminder (a typed command's skill body, the interrupted
+#: marker), joined into that turn. Adapters decide how each reaches the wire.
+Origin = Literal["human", "system", "memory", "agent", "inline"]
 
 
 class Message(Struct):
-    role: Literal["user", "assistant"]
+    """A turn of the conversation. ``system`` is a harness note between the
+    turns (Claude Code's mid-conversation system message: the environment,
+    the token budget, per-step notes); adapters join adjacent ones."""
+
+    role: Literal["user", "assistant", "system"]
     content: list[Block]
     origin: Origin | None = None
 
@@ -91,6 +106,10 @@ def user(text: str, origin: Origin | None = None) -> Message:
     return Message(role="user", content=[Text(text=text)], origin=origin)
 
 
+def system_message(text: str) -> Message:
+    return Message(role="system", content=[Text(text=text)], origin="system")
+
+
 # --------------------------------------------------------------------------
 # Model request / response
 # --------------------------------------------------------------------------
@@ -100,6 +119,9 @@ class ToolSpec(Struct):
     name: str
     description: str
     input_schema: dict[str, Any]
+    #: A deferred tool (sent once loaded, see ``noeta.core.deferred``); the
+    #: adapter marks it so the vendor keeps it out of the cached prefix.
+    defer_loading: bool = False
 
 
 class SystemPart(Struct):
@@ -120,16 +142,32 @@ class ModelRequest(Struct):
     tools: list[ToolSpec] = msgspec.field(default_factory=list)
     max_tokens: int | None = None
     effort: Effort | None = None
-    thinking: bool = True
+    #: ``True`` asks for the model's reasoning where it has some, ``False``
+    #: switches it off, ``None`` sends nothing (the vendor's default).
+    thinking: bool | None = True
     output_schema: dict[str, Any] | None = None
+    #: Text that ends the reply where the model writes it (not included).
+    stop_sequences: list[str] = msgspec.field(default_factory=list)
     #: Indices into ``messages`` after which the adapter places a cache
     #: breakpoint (the composer decides; adapters that cannot cache ignore it).
     cache_after: list[int] = msgspec.field(default_factory=list)
+    #: ``(message index, block index)`` pairs: a breakpoint after that one
+    #: content block of a message that has several.
+    cache_blocks: list[tuple[int, int]] = msgspec.field(default_factory=list)
     headers: dict[str, str] = msgspec.field(default_factory=dict)
     #: ``"auto"`` / ``"none"`` / ``"any"``; ``None`` sends nothing (the vendor
     #: default). The summarize call sets ``"none"`` so a summarizer cannot
     #: answer with a tool call.
     tool_choice: str | None = None
+    #: The task tree the call serves (its root task's id); an adapter may
+    #: send it as the vendor's per-conversation id.
+    root_id: str | None = None
+    #: Vendor opt-ins an adapter adds to its own (Anthropic ``anthropic-beta``
+    #: flags); adapters of other vendors ignore them.
+    betas: list[str] = msgspec.field(default_factory=list)
+    #: Top-level body fields for the vendor (Anthropic ``safeguards``);
+    #: adapters of other vendors ignore them.
+    vendor_fields: dict[str, Any] = msgspec.field(default_factory=dict)
 
 
 class Usage(Struct):

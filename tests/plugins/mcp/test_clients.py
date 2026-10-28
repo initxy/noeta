@@ -95,12 +95,16 @@ async def test_stdio_dead_server_breaks_the_connection() -> None:
         await client.close()
 
 
-async def test_stdio_timeout_breaks_and_close_kills() -> None:
-    client = stdio()
+async def test_stdio_timeout_cancels_the_call_not_the_connection(tmp_path: Path) -> None:
+    log = tmp_path / "log.txt"
+    client = stdio(FAKE_LOG=str(log))
     await client.start()
     with pytest.raises(McpError, match="timeout"):
-        await client.call_tool("sleep", {"seconds": 30}, timeout=0.3)
-    assert client.broken
+        await client.call_tool("sleep", {"seconds": 1}, timeout=0.2)
+    assert client.broken is None
+    # The late reply is dropped; the next call gets its own.
+    assert (await client.call_tool("echo", {"text": "x"}))["content"][0]["text"] == "echo: x"
+    assert "notifications/cancelled" in log.read_text()
     pid = client.pid
     assert pid is not None
     await client.close()

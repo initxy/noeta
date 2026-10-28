@@ -40,6 +40,7 @@ __all__ = [
     "register_models",
     "resolve_alias",
     "spec_for",
+    "unknown_model_notice",
 ]
 
 
@@ -97,6 +98,11 @@ class ModelSpec:
     #: inference. This is the *vendor*, not the wire an adapter speaks
     #: (``Provider.family``).
     family: str | None = None
+    #: The name people call the model by (``Claude Opus 5.5``): the model
+    #: line of the environment message and the commit co-author trailer.
+    display_name: str | None = None
+    #: The month its training data ends (``June 2026``), when published.
+    knowledge_cutoff: str | None = None
 
     @property
     def is_priced(self) -> bool:
@@ -124,8 +130,62 @@ class ModelSpec:
 
 CATALOG: dict[str, ModelSpec] = {
     # --- Anthropic ---------------------------------------------------------
+    # The 5.5 family and Fable 5.1 as Claude Code 2.1.312's model catalog
+    # gives them: window, default output cap (what it sends), adaptive
+    # thinking, and its pricing tiers (5-min cache write, cache read).
+    "claude-opus-5-5": ModelSpec(
+        real_model_id="claude-opus-5-5",
+        display_name="Claude Opus 5.5",
+        knowledge_cutoff="June 2026",
+        context_window=1_000_000,
+        max_output_tokens=128_000,
+        input_price_per_mtok=4.00,
+        output_price_per_mtok=20.00,
+        cache_read_price_per_mtok=0.20,
+        cache_write_price_per_mtok=5.00,
+        is_reasoning=True,
+        supports_vision=True,
+    ),
+    "claude-sonnet-5-5": ModelSpec(
+        real_model_id="claude-sonnet-5-5",
+        display_name="Claude Sonnet 5.5",
+        context_window=1_000_000,
+        max_output_tokens=128_000,
+        input_price_per_mtok=2.00,
+        output_price_per_mtok=10.00,
+        cache_read_price_per_mtok=0.10,
+        cache_write_price_per_mtok=2.50,
+        is_reasoning=True,
+        supports_vision=True,
+    ),
+    "claude-haiku-5-5": ModelSpec(
+        real_model_id="claude-haiku-5-5",
+        display_name="Claude Haiku 5.5",
+        context_window=1_000_000,
+        max_output_tokens=128_000,
+        # The base tier; past 100K prompt tokens the rates are five times these.
+        input_price_per_mtok=0.10,
+        output_price_per_mtok=0.50,
+        cache_read_price_per_mtok=0.01,
+        cache_write_price_per_mtok=0.125,
+        is_reasoning=True,
+        supports_vision=True,
+    ),
+    "claude-fable-5-1": ModelSpec(
+        real_model_id="claude-fable-5-1",
+        display_name="Claude Fable 5.1",
+        context_window=1_000_000,
+        max_output_tokens=64_000,
+        input_price_per_mtok=10.00,
+        output_price_per_mtok=50.00,
+        cache_read_price_per_mtok=0.25,
+        cache_write_price_per_mtok=12.50,
+        is_reasoning=True,
+        supports_vision=True,
+    ),
     "claude-opus-5": ModelSpec(
         real_model_id="claude-opus-5",
+        display_name="Claude Opus 5",
         context_window=1_000_000,
         max_output_tokens=128_000,
         input_price_per_mtok=5.00,
@@ -137,6 +197,7 @@ CATALOG: dict[str, ModelSpec] = {
     ),
     "claude-sonnet-5": ModelSpec(
         real_model_id="claude-sonnet-5",
+        display_name="Claude Sonnet 5",
         context_window=1_000_000,
         max_output_tokens=128_000,
         # Standard rates. An introductory $2.00 / $10.00 ran to 2026-08-31;
@@ -152,6 +213,7 @@ CATALOG: dict[str, ModelSpec] = {
     ),
     "claude-opus-4-8": ModelSpec(
         real_model_id="claude-opus-4-8",
+        display_name="Claude Opus 4.8",
         context_window=1_000_000,
         max_output_tokens=128_000,
         input_price_per_mtok=5.00,
@@ -163,6 +225,7 @@ CATALOG: dict[str, ModelSpec] = {
     ),
     "claude-sonnet-4-6": ModelSpec(
         real_model_id="claude-sonnet-4-6",
+        display_name="Claude Sonnet 4.6",
         context_window=1_000_000,
         max_output_tokens=128_000,
         input_price_per_mtok=3.00,
@@ -174,6 +237,7 @@ CATALOG: dict[str, ModelSpec] = {
     ),
     "claude-haiku-4-5": ModelSpec(
         real_model_id="claude-haiku-4-5",
+        display_name="Claude Haiku 4.5",
         context_window=200_000,
         max_output_tokens=64_000,
         input_price_per_mtok=1.00,
@@ -233,12 +297,13 @@ CATALOG: dict[str, ModelSpec] = {
 
 #: Alias → real model id. The aliases track the CURRENT generation, so a host
 #: that binds ``"opus"`` follows the vendor forward without a code change; the
-#: superseded rows stay addressable by their full id. There is no haiku 5 row,
-#: so ``haiku`` stays on 4.5.
+#: superseded rows stay addressable by their full id. Claude Code's aliases
+#: name the same models.
 ALIASES: dict[str, str] = {
-    "opus": "claude-opus-5",
-    "sonnet": "claude-sonnet-5",
-    "haiku": "claude-haiku-4-5",
+    "opus": "claude-opus-5-5",
+    "sonnet": "claude-sonnet-5-5",
+    "haiku": "claude-haiku-5-5",
+    "fable": "claude-fable-5-1",
 }
 
 
@@ -445,6 +510,19 @@ def model_limits(model: str) -> tuple[int, int]:
         )
         return UNKNOWN_MODEL_CONTEXT_WINDOW, UNKNOWN_MODEL_MAX_OUTPUT_TOKENS
     return spec.context_window, spec.max_output_tokens
+
+
+def unknown_model_notice(model: str) -> str | None:
+    """What to tell the person when ``model`` is not in the catalog (the
+    limits it then runs under, and how to give the real ones), else ``None``.
+    Front ends show it where the person sees it, not only in the log."""
+    if not model or find_spec(model) is not None:
+        return None
+    return (f"noeta doesn't recognize the model {resolve_alias(model)!r}, so it assumes a "
+            f"context window of {UNKNOWN_MODEL_CONTEXT_WINDOW:,} tokens and an output cap of "
+            f"{UNKNOWN_MODEL_MAX_OUTPUT_TOKENS:,}; describe it in a models file "
+            "(NOETA_MODELS_FILE / models_file) or with register_models to use its real "
+            "limits")
 
 
 def price(model_id: str, usage: Usage) -> float:

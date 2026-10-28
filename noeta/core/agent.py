@@ -19,14 +19,17 @@ class Agent:
     name: str
     model: str
     system_prompt: str = ""
+    #: A one-line identity sent as its own cached system block ahead of the
+    #: prompt (the prompt name ``identity/<agent>``); empty sends none.
+    identity: str = ""
     #: What the agent is for: its line in another agent's sub-agent roster.
     description: str = ""
     extensions: Sequence[Extension] = ()
     tools: Sequence[Tool] = ()
     effort: Effort | None = None
     max_tokens: int | None = None
-    #: End the task when the first turn ends (subagents, one-shot jobs)
-    #: instead of waiting for the next message.
+    #: End the task when the first turn ends (a one-shot job) instead of
+    #: waiting for the next message. A sub-agent's task always ends so.
     one_shot: bool = False
     output_schema: dict[str, Any] | None = None
     #: Model calls allowed in one turn before the turn fails.
@@ -35,6 +38,9 @@ class Agent:
     #: Only these tool names are offered (Claude Code's agent ``tools``);
     #: ``None`` = every tool the extensions offer.
     allowed_tools: Sequence[str] | None = None
+    #: Tool names never offered, whatever offers them (Claude Code's agent
+    #: ``disallowedTools``).
+    denied_tools: Sequence[str] = ()
 
     def all_extensions(self) -> list[Extension]:
         exts = list(self.extensions)

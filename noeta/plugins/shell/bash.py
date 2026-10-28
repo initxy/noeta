@@ -1,13 +1,18 @@
 """``Bash``: run a command through ``bash -c`` in the foreground.
 
 Every command gets a bounded timeout, a scrubbed environment (the env
-backend's job), a per-stream capture cap that keeps the tail, and the
-directory the previous command left the shell in — tracked with an EXIT trap
-and recorded as ``shell`` / ``cwd``. A command that leaves the workspace
-sends the next one back to the root. Past 30,000 characters the output is
+backend's job), stdout and stderr merged in the order printed, a capture cap
+that keeps the tail, and — in a root task, after a command that succeeds —
+the directory it left the shell in, tracked with an EXIT trap and recorded as
+``shell`` / ``cwd``. A command that ends outside the workspace sends the next
+one back to the root. Past 30,000 characters the output is
 saved under ``ctx.spill_dir`` with a preview inline, or cut to its start and
-end when there is no spill directory. The process is **not** sandboxed:
-trusted workspaces only.
+end when there is no spill directory. When the env carries a sandbox
+(``noeta.toolkit.sandbox``) a command runs confined unless the settings
+exclude it or the call leaves it (``dangerouslyDisableSandbox``, which the
+permissions plugin asks about); the hosts the sandbox refused follow the
+output in a ``<sandbox_violations>`` block. Without one the process can do
+anything the host user can: trusted workspaces only.
 
 Background commands (``run_in_background``) need the ``Shell`` extension's
 background jobs; without them this tool refuses them.
@@ -17,12 +22,20 @@ from __future__ import annotations
 
 import posixpath
 import re
-from collections.abc import Callable, Mapping
+import shlex
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
 from noeta.core.execenv import RunResult
 from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.toolkit.sandbox import (
+    CommandSandbox,
+    PreparedCommand,
+    belongs_in_sandbox,
+    sandbox_of,
+    violations_block,
+)
 from noeta.toolkit.shell import (
     DEFAULT_SHELL_RULES,
     AllowRule,
@@ -30,6 +43,8 @@ from noeta.toolkit.shell import (
     matching_rule,
     parse_argv,
 )
+from noeta.toolkit.shell_syntax import parse
+from noeta.toolkit.tools import SCHEMA_DIALECT as SCHEMA_DIALECT
 from noeta.toolkit.tools import (
     Workspace,
     error_output,
@@ -43,10 +58,14 @@ __all__ = [
     "DEFAULT_SHELL_OUTPUT_CAP",
     "DEFAULT_SHELL_TIMEOUT_S",
     "MAX_SHELL_TIMEOUT_MS",
+    "NO_OUTPUT",
+    "SCHEMA_DIALECT",
     "SHELL",
     "BashTool",
     "ShellEnv",
     "ShellState",
+    "git_prelude",
+    "guard_root",
     "reduce_shell",
     "shell_state",
 ]
@@ -102,6 +121,8 @@ MAX_SHELL_TIMEOUT_MS = 600_000
 DEFAULT_SHELL_OUTPUT_CAP = 256 * 1024
 #: Claude Code's ``maxResultSizeChars`` for Bash.
 SHELL_OUTPUT_LIMIT = 30_000
+#: The result of a command that succeeds and prints nothing.
+NO_OUTPUT = "(Bash completed with no output)"
 
 #: ``ctx -> variables`` a host adds to this call's command on top of the
 #: scrubbed environment. Asked per command; never recorded.
@@ -135,11 +156,120 @@ def _blocked_sleep(described: str) -> str:
     )
 
 
+#: ``git`` subcommands that only read (those the permissions plugin can let
+#: through without asking).
+_GIT_READ_SUBCOMMANDS = frozenset(
+    "log show diff whatchanged shortlog status ls-files ls-tree blame rev-parse cat-file "
+    "describe grep reflog merge-base name-rev count-objects branch tag remote config "
+    "stash".split())
+#: Global ``git`` options whose value is the next word.
+_GIT_GLOBAL_VALUED = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env",
+                      "--super-prefix")
+#: Settings a reading ``git`` runs with over any repository's own: no
+#: fsmonitor hook, hooks, pager, signature program or transport (a lazy
+#: fetch), and (git 2.38+) no repository found by walking into a bare one.
+_GIT_SAFE_CONFIG = ("core.fsmonitor=", "core.hooksPath=/dev/null", "core.pager=cat",
+                    "safe.bareRepository=explicit", "protocol.allow=never",
+                    "log.showSignature=false", "gpg.program=false",
+                    "gpg.openpgp.program=false", "gpg.x509.program=false",
+                    "gpg.ssh.program=false")
+#: A ``git`` function every reading command runs under: it runs ``git``
+#: with :data:`_GIT_SAFE_CONFIG` and without external diff programs or
+#: ``textconv`` filters, and with a guard (:data:`_GIT_GUARD`) refuses a
+#: repository planted in the workspace.
+_GIT_FUNCTION = """git() {
+  local _noeta_pre=() _noeta_sub=() _noeta_dir _noeta_top _noeta_named
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      @VALUED@) [ "$#" -ge 2 ] || break; _noeta_pre+=("$1" "$2"); shift 2 ;;
+      -*) _noeta_pre+=("$1"); shift ;;
+      *) break ;;
+    esac
+  done
+@GUARD@  case "${1-}" in
+    diff|log|show|whatchanged) _noeta_sub=("$1" --no-ext-diff --no-textconv); shift ;;
+    blame) _noeta_sub=(blame --no-textconv); shift ;;
+    stash) if [ "${2-}" = show ]; then
+        _noeta_sub=(stash show --no-ext-diff --no-textconv); shift 2; fi ;;
+    reflog) case "${2-}" in
+        expire|delete|drop|exists|list) ;;
+        show) _noeta_sub=(reflog show --no-ext-diff --no-textconv); shift 2 ;;
+        *) _noeta_sub=(reflog show --no-ext-diff --no-textconv); shift ;;
+      esac ;;
+  esac
+  command git "${_noeta_pre[@]+"${_noeta_pre[@]}"}" @CONFIG@ \\
+    "${_noeta_sub[@]+"${_noeta_sub[@]}"}" "$@"
+}
+""".replace("@VALUED@", "|".join(_GIT_GLOBAL_VALUED)).replace(
+    "@CONFIG@", " ".join(f"-c {c}" for c in _GIT_SAFE_CONFIG))
+#: The refusal of a repository whose git directory lies under the guard
+#: root (``@ROOT@``) without being a ``.git`` directory or the one a
+#: ``.git`` file at its top names: a bare repository committed into the
+#: workspace, whose config its author wrote. A clone cannot carry a
+#: ``.git`` file, so a worktree's or a separate git directory passes.
+_GIT_GUARD = """  if _noeta_dir=$(command git "${_noeta_pre[@]+"${_noeta_pre[@]}"}" \\
+      -c core.fsmonitor= rev-parse --absolute-git-dir 2>/dev/null) \\
+      && _noeta_dir=$(cd "$_noeta_dir" 2>/dev/null && pwd -P); then
+    case "$_noeta_dir/" in
+      @ROOT@/*) case "$_noeta_dir" in
+        */.git|*/.git/*) ;;
+        *) _noeta_top=$(command git "${_noeta_pre[@]+"${_noeta_pre[@]}"}" -c core.fsmonitor= \\
+             rev-parse --show-toplevel 2>/dev/null) || _noeta_top=
+          _noeta_named=
+          if [ -n "$_noeta_top" ] && [ -f "$_noeta_top/.git" ]; then
+            _noeta_named=$(cd "$(command git -C "$_noeta_top" -c core.fsmonitor= \\
+              rev-parse --absolute-git-dir 2>/dev/null)" 2>/dev/null && pwd -P)
+          fi
+          if [ "$_noeta_named" != "$_noeta_dir" ]; then
+            printf 'git: refused the repository at %s: not a .git directory\\n' \\
+              "$_noeta_dir" >&2; return 128
+          fi ;;
+      esac ;;
+    esac
+  fi
+"""
+
+
+def git_prelude(command: str, guard_root: str = "") -> str:
+    """:data:`_GIT_FUNCTION` when ``command`` runs ``git`` only to read
+    (every ``git`` in it has a :data:`_GIT_READ_SUBCOMMANDS` subcommand),
+    so whatever directory it reads in, a repository's config runs nothing;
+    ``""`` otherwise (a ``git commit`` keeps its hooks). With
+    ``guard_root`` (a canonical directory) it also carries
+    :data:`_GIT_GUARD` for that root."""
+    parsed = parse(command)
+    if parsed.opaque:
+        return ""
+    found = False
+    for cmd in parsed.commands:
+        argv = cmd.argv
+        if not argv or argv[0] != "git":
+            continue
+        found = True
+        i = 1
+        while i < len(argv) and argv[i].startswith("-"):
+            i += 2 if argv[i] in _GIT_GLOBAL_VALUED else 1
+        if i >= len(argv) or argv[i] not in _GIT_READ_SUBCOMMANDS:
+            return ""
+    if not found:
+        return ""
+    guard = _GIT_GUARD.replace("@ROOT@", shlex.quote(guard_root)) if guard_root else ""
+    return _GIT_FUNCTION.replace("@GUARD@", guard)
+
+
+def guard_root(ws: Workspace, ctx: ToolContext) -> str:
+    """The root :func:`git_prelude` refuses planted repositories under: the
+    workspace, unless a person approved this command (it then runs
+    hardened, as approved)."""
+    return "" if ctx.approved else ws.root
+
+
 def _track_cwd(command: str) -> str:
     """``command`` with an EXIT trap printing the shell's final directory, so
     it is reported however the command ends short of a kill (``exit N``
     included) and the exit status is untouched."""
-    return f"trap 'printf \"\\n%s%s\\n\" \"{_CWD_MARK}\" \"$(pwd -P)\"' EXIT\n{command}"
+    return (f"exec 2>&1\ntrap 'printf \"\\n%s%s\\n\" \"{_CWD_MARK}\" \"$(pwd -P)\"' EXIT\n"
+            f"{command}")
 
 
 def _split_cwd(stream: bytes) -> tuple[bytes, str | None]:
@@ -156,44 +286,105 @@ def _split_cwd(stream: bytes) -> tuple[bytes, str | None]:
 
 
 def _render_streams(stdout: bytes, stderr: bytes) -> str:
-    """stdout, then stderr under a label only when both carry content."""
-    out_text = stdout.decode("utf-8", errors="replace").rstrip("\n")
-    err_text = stderr.decode("utf-8", errors="replace").rstrip("\n")
-    if out_text and err_text:
-        return f"{out_text}\nstderr:\n{err_text}"
-    return out_text or err_text
+    """The merged output (stderr is redirected into stdout; anything left on
+    stderr follows), trailing newlines trimmed."""
+    text = (stdout + stderr).decode("utf-8", errors="replace")
+    return text.rstrip("\n")
 
 
 def _capture_notice(result: RunResult, output_cap: int) -> str:
     """Name a stream whose HEAD the capture cap dropped, or ``""``."""
-    streams = [
-        name
-        for name, dropped in (
-            ("stdout", result.stdout_truncated),
-            ("stderr", result.stderr_truncated),
-        )
-        if dropped
-    ]
-    if not streams:
+    if not (result.stdout_truncated or result.stderr_truncated):
         return ""
     size = f"{output_cap // 1024} KB" if output_cap >= 1024 else f"{output_cap} bytes"
-    return (
-        f"[earlier output dropped: only the last {size} of "
-        f"{' and '.join(streams)} was captured]"
-    )
+    return f"[earlier output dropped: only the last {size} was captured]"
 
+
+
+_DESCRIPTION_FIELD = (
+    "What the command does, in plain words and the active voice, for a user who reads "
+    "this without seeing the command: do not repeat the command, its flags or its paths, "
+    "and do not use the words \"complex\" or \"risk\".\n\n"
+    "A simple command gets about 5-10 words:\n"
+    "- pytest -q -> \"Run the test suite\"\n"
+    "- git log -5 -> \"Show the five latest commits\"\n"
+    "- make build -> \"Build the package\"\n\n"
+    "A pipeline or an unusual flag gets enough context to be understood:\n"
+    "- du -sh * | sort -h | tail -3 -> \"Show which three folders here use the most disk\"\n"
+    "- docker ps -q | xargs docker stop -> \"Stop every running container\"\n"
+    "- tar -xzf release.tgz -C out -> \"Unpack the release archive into the out folder\"")
+
+
+def sandbox_required(reason: str) -> str:
+    return (f"the sandbox is required (sandbox.failIfUnavailable) but cannot start: {reason}. "
+            "The command was not run, and running it outside the sandbox "
+            "(dangerouslyDisableSandbox) is refused too.")
+
+
+async def confine(env: Any, command: str, disable: Any, argv: list[str], cwd: str,
+                  writable: Sequence[str] = ()) -> PreparedCommand | str | None:
+    """``argv`` made ready to run in the env's sandbox when ``command``
+    belongs there; ``None`` to run it as it is; a refusal when it belongs
+    there, the sandbox cannot start and the settings require it."""
+    sandbox = sandbox_of(env)
+    if sandbox is None or not belongs_in_sandbox(sandbox, command):  # excluded
+        return None
+    reason = sandbox.unavailable()
+    if reason is not None:
+        return sandbox_required(reason) if sandbox.settings.fail_if_unavailable else None
+    if not belongs_in_sandbox(sandbox, command, disable):
+        return None
+    return await sandbox.prepare(argv, cwd=cwd, writable=writable)
+
+
+def _listing(paths: Sequence[str], limit: int = 8) -> str:
+    shown = ", ".join(f"`{p}`" for p in paths[:limit])
+    return shown + (f" and {len(paths) - limit} more" if len(paths) > limit else "")
+
+
+def sandbox_description(base: str, sandbox: CommandSandbox, root: str) -> str:
+    """``Bash``'s description with the sandbox section for ``sandbox``."""
+    s = sandbox.settings
+    if s.filesystem_disabled:
+        filesystem = "not confined: commands read and write as you do."
+    else:
+        writable = [root, *(s.resolve(p, root) for p in s.allow_write)]
+        filesystem = (f"writes are allowed only in {_listing(writable)} and `$TMPDIR`; "
+                      "everything else is read-only. Credential stores (SSH and GPG keys, "
+                      "cloud sign-ins)" + (f", {_listing(list(s.deny_read))}" if s.deny_read
+                                           else "") + " cannot be read.")
+    if s.http_proxy_port or s.socks_proxy_port:
+        network = "connections go through the user's proxy."
+    elif s.allowed_domains:
+        network = (f"only these hosts can be reached: {_listing(list(s.allowed_domains), 20)}."
+                   )
+    else:
+        network = "no host can be reached."
+    escape = load_description("noeta.plugins.shell", "shell_sandbox_escape"
+                              if s.allow_unsandboxed else "shell_sandbox_no_escape")
+    section = load_description("noeta.plugins.shell", "shell_sandbox")
+    section = (section.replace("{filesystem}", filesystem).replace("{network}", network)
+               .replace("{escape}", escape))
+    return f"{base}\n\n{section}"
 
 
 def _input_schema() -> dict[str, Any]:
     return {
+        "$schema": SCHEMA_DIALECT,
         "type": "object",
         "properties": {
-            "command": {"type": "string"},
-            # per-call wall-clock cap in milliseconds (ceiling 600000)
-            "timeout": {"type": "number"},
-            # UI hint only; does not affect execution
-            "description": {"type": "string"},
-            "run_in_background": {"type": "boolean"},
+            "command": {"type": "string", "description": "The command line to run."},
+            "timeout": {"type": "number",
+                        "description": ("Time limit in milliseconds; at most 600000 for a "
+                                        "command run in the foreground.")},
+            "description": {"type": "string", "description": _DESCRIPTION_FIELD},
+            "run_in_background": {"type": "boolean",
+                                  "description": ("Run it detached and get its ID at once; "
+                                                  "you are told when it ends.")},
+            "dangerouslyDisableSandbox": {
+                "type": "boolean",
+                "description": ("Ask to run this command outside the sandbox; only when the "
+                                "sandbox is what makes it fail.")},
         },
         "required": ["command"],
         "additionalProperties": False,
@@ -203,7 +394,9 @@ def _input_schema() -> dict[str, Any]:
 class BashTool:
     """``Bash`` (foreground). ``shell_env`` adds per-call variables;
     ``hardening_rules`` are the rules whose ``harden`` rewrite applies to a
-    matching command (the curated ``git`` flags by default)."""
+    matching command (the curated ``git`` flags by default); a command that
+    only reads with ``git`` runs under :func:`git_prelude` instead, unless
+    the rules are empty (hardening off)."""
 
     name = "Bash"
     description = load_description("noeta.plugins.shell", "shell_run")
@@ -244,23 +437,35 @@ class BashTool:
         # exactly what bash would run, so nothing but the injected flags
         # changes. Such a command cannot change directory, so it is not
         # tracked.
-        rule = matching_rule(command, self.hardening_rules)
+        # A command that only reads with git runs under the hardening git
+        # function instead, wherever it reads.
+        prelude = git_prelude(command, guard_root(ws, ctx)) if self.hardening_rules else ""
+        rule = None if prelude else matching_rule(command, self.hardening_rules)
         argv = parse_argv(command) if rule is not None and rule.harden is not None else None
         track = argv is None
         if rule is not None and rule.harden is not None and argv:
-            exec_argv = rule.harden(argv)
+            exec_argv = ["bash", "-c", 'exec 2>&1; exec "$@"', "bash", *rule.harden(argv)]
         else:
-            exec_argv = ["bash", "-c", _track_cwd(command)]
+            exec_argv = ["bash", "-c", _track_cwd(prelude + command)]
 
-        result = await env.run(
-            exec_argv,
-            cwd=cwd,
-            env=self._command_env(ctx),
-            timeout=float(timeout_s),
-            output_cap=self.output_cap,
-        )
+        confined = await confine(env, command, input.get("dangerouslyDisableSandbox"),
+                                 exec_argv, cwd)
+        if isinstance(confined, str):
+            return tool_error(self.name, confined)
+        try:
+            result = await env.run(
+                confined.argv if confined else exec_argv,
+                cwd=cwd,
+                env={**self._command_env(ctx), **(confined.env if confined else {})},
+                timeout=float(timeout_s),
+                output_cap=self.output_cap,
+            )
+        finally:
+            refused = confined.violations() if confined else []
+            if confined:
+                await confined.close()
         stdout, stderr = result.stdout, result.stderr
-        final = cwd
+        final, left = cwd, False
         if track:
             stdout, reported = _split_cwd(stdout)
             if reported is None:  # the command sent its stdout to stderr
@@ -269,7 +474,7 @@ class BashTool:
                 if path_within(reported, ws.root):
                     final = reported
                 else:
-                    final, moved_back = ws.root, True
+                    final, left = ws.root, True
 
         body = _render_streams(stdout, stderr)
         notice = _capture_notice(result, self.output_cap)
@@ -278,16 +483,25 @@ class BashTool:
         meta: dict[str, Any] = {"exit_code": result.exit_code}
         if result.timed_out:
             meta["timed_out"] = True
-        if not result.timed_out and result.exit_code == 0 and not body:
-            body = "(no output)"
+        ran_ok = not result.timed_out and result.exit_code == 0
+        if ran_ok and not body:
+            body = NO_OUTPUT
+        # Only the root task's shell keeps a directory, and only one a
+        # command ended in successfully.
+        if not ran_ok or (ctx.root_id and ctx.root_id != ctx.task_id):
+            final, left = cwd, False
+        moved_back = moved_back or left
         if moved_back:
             # Claude Code's note when a command left the project.
             note = f"Shell cwd was reset to {ws.root}"
-            kept = body.strip() if body != "(no output)" else ""
+            kept = body.strip() if body != NO_OUTPUT else ""
             body = f"{kept}\n{note}" if kept else note
         if final != cwd or moved_back:
             ctx.record(SHELL, "cwd", {"cwd": final})
             meta["cwd"] = final
+        if refused:
+            block = violations_block(refused)
+            body = block if body == NO_OUTPUT else f"{body}\n{block}"
         body = await limit_output(body, SHELL_OUTPUT_LIMIT, ctx)
         if result.timed_out:
             return error_output(f"Command timed out after {timeout_s}s", body, **meta)

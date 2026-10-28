@@ -1,5 +1,5 @@
-"""The built-in agents: read-only tool sets for explore and plan, no
-delegation below main, main's roster from the sub-agents' descriptions."""
+"""The built-in agents: Claude Code's Explore, Plan and general-purpose with
+their tool sets, main's agent types from every described agent."""
 
 from __future__ import annotations
 
@@ -18,60 +18,57 @@ def _agents(**kw: Any) -> dict[str, Agent]:
     return {a.name: a for a in default_agents("m", **kw)}
 
 
-def _tools(agent: Agent, agents: dict[str, Agent]) -> set[str]:
-    view = TaskView(state=TaskState(), agents=agents)
-    return {t.name for e in agent.all_extensions() for t in e.tools(view)}
+def _tools(agent: Agent, agents: dict[str, Agent], *, child: bool = True) -> list[str]:
+    state = TaskState(agent=agent.name, parent_id="p" if child else None,
+                      config={"subagent_type": agent.name} if child else {})
+    view = TaskView(state=state, agents=agents)
+    names = [t.name for e in agent.all_extensions() for t in e.tools(view)]
+    return [n for n in names if (agent.allowed_tools is None or n in agent.allowed_tools)
+            and n not in agent.denied_tools]
 
 
 def test_built_in_agent_files() -> None:
     names = [f.name for f in builtin_agent_files()]
-    assert names == ["main", "explore", "general-purpose", "plan"]
+    assert names == ["main", "Explore", "general-purpose", "Plan"]
 
 
-def test_tool_sets_and_no_delegation() -> None:
+def test_tool_sets() -> None:
     agents = _agents()
-    assert {"Edit", "Glob", "Grep", "Read", "Write", "Bash"} <= _tools(
-        agents["general-purpose"], agents)
-    for name in ("explore", "plan"):
+    gp = _tools(agents["general-purpose"], agents)
+    assert {"Agent", "Bash", "Edit", "Read", "Write", "SendMessage"} <= set(gp)
+    assert gp[-1] == "SubagentHandback" and "ListAgents" not in gp
+    for name in ("Explore", "Plan"):
         tools = _tools(agents[name], agents)
-        assert {"Bash", "Glob", "Grep", "Read"} <= tools
-        assert not {"Edit", "Write", "Task"} & tools
-    for name in ("general-purpose", "explore", "plan"):
-        a = agents[name]
-        assert a.one_shot
-        assert any(isinstance(e, Subtasks) and not e.roster and not e.agents
-                   for e in a.extensions)
-    assert agents["explore"].system_prompt.startswith("You are a read-only scout")
+        assert {"Bash", "Read", "SendMessage"} <= set(tools)
+        assert not {"Edit", "Write", "Agent", "AskUserQuestion", "ListAgents"} & set(tools)
+        assert tools[-1] == "SubagentHandback"
+        assert agents[name].denied_tools == ("Agent", "ExitPlanMode", "Edit", "Write",
+                                             "NotebookEdit")
+    main = _tools(agents["main"], agents, child=False)
+    assert {"Agent", "ListAgents", "SendMessage"} <= set(main)
+    assert "SubagentHandback" not in main
 
 
-def test_main_roster_schema() -> None:
+def test_main_agent_types_come_from_described_agents() -> None:
     agents = _agents()
-    view = TaskView(state=TaskState(), agents=agents)
-    [task] = [t for e in agents["main"].all_extensions() for t in e.tools(view)
-              if t.name == "Task"]
-    prop = task.input_schema["properties"]["subagent_type"]
-    assert prop["enum"] == ["explore", "general-purpose", "plan"]
-    assert prop["description"] == (
-        "The type of specialized agent to use for this task. Available: "
-        "explore — Read-only scout: fans out (glob/grep/read + read-only shell) to investigate "
-        "the workspace and report facts (never edits).; "
-        "general-purpose — General-purpose worker for self-contained coding tasks: search, "
-        "read, write, edit, run shell commands, then return the result.; "
-        "plan — Architect: reads the code and returns a concrete ordered implementation plan "
-        "(read-only — never writes any file).")
+    [sub] = [e for e in agents["main"].extensions if isinstance(e, Subtasks)]
+    roster = sub.roster_for(TaskView(state=TaskState(agent="main"), agents=agents))
+    assert sorted(roster) == ["Explore", "Plan", "general-purpose"]
+    assert roster["Explore"].tools == ("All tools except Agent, ExitPlanMode, Edit, Write, "
+                                       "NotebookEdit")
+    assert roster["general-purpose"].tools == "*"
+    assert roster["Explore"].description.startswith("Read-only search agent")
 
 
 def test_extension_sets_and_sharing() -> None:
     agents = _agents(plugins={"mcp": Mcp()})
     names = {n: {e.name for e in a.all_extensions()} for n, a in agents.items()}
-    common = {"compaction", "permissions", "shell", "web", "instructions", "environment"}
-    assert common | {"skills", "mcp"} <= names["general-purpose"]
-    assert common | {"skills"} <= names["explore"]
-    assert "mcp" not in names["explore"]
-    assert common | {"ask_user"} <= names["plan"]
-    assert not {"mcp", "skills"} & names["plan"]
+    common = {"compaction", "permissions", "shell", "web", "environment", "skills", "mcp"}
+    assert common | {"instructions"} <= names["general-purpose"]
+    for name in ("Explore", "Plan"):
+        assert common <= names[name]
+        assert "instructions" not in names[name]  # Claude Code sends them no instruction files
     assert "memory" not in names["main"]  # memory is off until set
-    # One instance per plugin and arguments, shared by every agent naming it.
     shells = {id(e) for a in agents.values() for e in a.extensions if e.name == "shell"}
     assert len(shells) == 1
 
@@ -85,3 +82,6 @@ def test_main_kw_and_extra_files() -> None:
     r = agents["reviewer"]
     assert r.system_prompt == "Review.\n" and r.allowed_tools == ("Read", "Grep")
     assert {e.name for e in r.extensions} >= {"fs", "shell", "subtasks"}
+    [sub] = [e for e in agents["main"].extensions if isinstance(e, Subtasks)]
+    roster = sub.roster_for(TaskView(state=TaskState(agent="main"), agents=agents))
+    assert roster["reviewer"].tools == "Read, Grep"

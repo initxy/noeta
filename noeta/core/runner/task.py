@@ -19,7 +19,10 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
+from msgspec.structs import replace
+
 from noeta.core.agent import Agent
+from noeta.core.deferred import with_tool_search
 from noeta.core.errors import Conflict, StoreUnavailable
 from noeta.core.events import (
     Cancel,
@@ -28,21 +31,28 @@ from noeta.core.events import (
     ExtensionRecorded,
     InputTaken,
     Recorded,
+    TaskCreated,
     TaskEnded,
+    TimerFired,
     ToolFinished,
     Waiting,
 )
 from noeta.core.extension import Extension, TaskView
 from noeta.core.loop import decide
-from noeta.core.loop.state import CORE, TaskState, apply, fold
+from noeta.core.loop.state import CORE, TaskState, apply, continued, fold
 from noeta.core.prompts import load_overrides
 from noeta.core.runner import texts
 from noeta.core.runner.runtime import Runtime
-from noeta.core.store import Claim, Patch, Post
+from noeta.core.store import Claim, NewTask, Patch, Post, pin_history
 from noeta.core.tool import Tool
 from noeta.core.types import Text, ToolResult, user
 
 log = logging.getLogger("noeta.core.runner")
+
+
+#: Continued conversations followed back from a task (``history_from``)
+#: before the rest of the chain is ignored.
+MAX_HISTORY_DEPTH = 64
 
 
 class LostClaim(Exception):
@@ -63,6 +73,9 @@ class TaskRun:
         self._lost = False
         self._write_lock = asyncio.Lock()
         self._env: Any = None
+        #: The text the model call in flight has streamed so far (what an
+        #: interrupted reply keeps).
+        self.partial: list[str] = []
 
     # ------------------------------------------------------------ lifecycle
 
@@ -70,7 +83,7 @@ class TaskRun:
         keeper = asyncio.create_task(self._keep_claim())
         unsubscribe = self.store.on_change(self._on_change)
         try:
-            await self._load()
+            await self.load()
             if self.agent is None:
                 # Releasing would hand it straight back to this worker; a task
                 # whose agent only some workers have must be routed by queue.
@@ -132,12 +145,15 @@ class TaskRun:
         and record them so every later pickup sends the same bytes."""
         env = self.env()
         cwd = str(self.state.config.get("cwd") or getattr(env, "cwd", "") or "")
-        found = await load_overrides(self.rt.prompt_dirs, env, cwd)
+        trusted = self.rt.workspace_trusted
+        found = await load_overrides(self.rt.prompt_dirs, env, cwd,
+                                     workspace=trusted is None or (bool(cwd) and trusted(cwd)))
         view = self.view()
         view.record(CORE, "prompts", found)
         await self.flush(view)
 
-    async def _load(self) -> None:
+    async def load(self) -> None:
+        """Read and fold the log (and the conversation it continues)."""
         records = await self.store.read(self.task_id)
         first = records[0].event if records else None
         self.agent = self.rt.agents.get(getattr(first, "agent", ""))
@@ -145,8 +161,25 @@ class TaskRun:
             self.exts = self.agent.all_extensions()
             self.reducers = {e.name: e.reduce for e in self.exts}
         initial = {e.name: e.initial_state() for e in self.exts}
-        self.state = fold(records, self.reducers, initial)
+        base = await self._history(first, initial)
+        self.state = fold(records, self.reducers, initial, state=base)
         self.state.task_id = self.task_id  # the log never names its own task
+
+    async def _history(self, first: Any, initial: dict[str, Any],
+                       depth: int = 0) -> TaskState | None:
+        """The conversation a task created with ``history_from`` starts
+        from: its source's log up to ``history_through``, itself folded on
+        the conversation that source continued (a fork of a fork, a resumed
+        sub-agent resumed again)."""
+        if not isinstance(first, TaskCreated) or not first.history_from \
+                or depth > MAX_HISTORY_DEPTH:
+            return None
+        source = await self.store.read(first.history_from)
+        through = first.history_through
+        base = await self._history(source[0].event if source else None, initial, depth + 1)
+        return continued(fold([r for r in source if through is None or r.seq <= through],
+                              self.reducers, initial, state=base),
+                         {e.name: e.continue_state for e in self.exts})
 
     async def _keep_claim(self) -> None:
         interval = max(self.rt.lease_seconds / 3, 0.05)
@@ -199,6 +232,8 @@ class TaskRun:
     ) -> None:
         if self._lost:
             raise LostClaim()
+        creates = [replace(c, created=await pin_history(self.store, c.created))
+                   for c in creates]
         async with self._write_lock:
             base = self.state.last_seq
             write = asyncio.ensure_future(self.store.append(
@@ -227,12 +262,49 @@ class TaskRun:
                     log.exception("extension %s on_event failed", ext.name)
         await self.flush(view)
 
+    @property
+    def one_shot(self) -> bool:
+        """The task ends when its turn ends: a one-shot agent, or any
+        sub-agent (its parent waits for it to end, whatever its agent file
+        says)."""
+        assert self.agent is not None
+        return self.agent.one_shot or self.state.parent_id is not None
+
     def view(self) -> TaskView:
         model = str(self.state.config.get("model") or (self.agent.model if self.agent else ""))
         return TaskView(state=self.state, complete=self.complete, env=self.env(),
                         post=self.post_self, extensions=self.exts, model=model,
                         agents=self.rt.agents,
-                        allowed_tools=self.agent.allowed_tools if self.agent else None)
+                        allowed_tools=self.agent.allowed_tools if self.agent else None,
+                        denied_tools=self.agent.denied_tools if self.agent else (),
+                        count_tokens=self.counter(model), read_log=self.store.read,
+                        child_tasks=self._child_ids)
+
+    async def _child_ids(self, task_id: str) -> list[str]:
+        return [row.task_id for row in await self.store.tasks(parent_id=task_id, limit=10_000)]
+
+    def counter(self, model: str) -> Any:
+        """``count_tokens(text)`` against ``model``'s provider, or ``None``
+        when the provider cannot count."""
+        if not model:
+            return None
+        try:
+            provider = self.rt.provider_for(model)
+        except Exception:  # noqa: BLE001 — no provider, no exact count
+            return None
+        count = getattr(provider, "count_tokens", None)
+        if count is None:
+            return None
+
+        async def counted(text: str) -> int | None:
+            try:
+                result: int | None = await count(model, text)
+            except Exception:  # an estimate stands in for a failed count
+                log.debug("count_tokens failed", exc_info=True)
+                return None
+            return result
+
+        return counted
 
     async def post_self(self, body: Any, dedupe_key: str | None = None) -> None:
         """Post to this task's own inbox (extensions: ``TaskView.post``)."""
@@ -254,22 +326,30 @@ class TaskRun:
                                            sleep=self.rt.sleep)
 
     async def flush(self, view: TaskView) -> None:
-        if view.pending:
+        if view.pending or view.creates:
             events, view.pending = list(view.pending), []
-            await self.append(events)
+            await self.append(events, creates=self.staged(view))
+
+    @staticmethod
+    def staged(view: TaskView) -> list[NewTask]:
+        """The children ``view.spawn`` staged, taken out of the view."""
+        staged, view.creates = list(view.creates), []
+        return [NewTask(task_id=c.task_id, created=c.created, queue=c.queue, inbox=[c.first])
+                for c in staged]
 
     def tools(self, view: TaskView) -> list[Tool]:
         allowed = self.agent.allowed_tools if self.agent is not None else None
+        denied = set(self.agent.denied_tools if self.agent is not None else ())
         tools: list[Tool] = []
         seen: set[str] = set()
         for ext in self.exts:
             for t in ext.tools(view):
-                if allowed is not None and t.name not in allowed:
+                if (allowed is not None and t.name not in allowed) or t.name in denied:
                     continue
                 if t.name not in seen:
                     seen.add(t.name)
                     tools.append(t)
-        return tools
+        return with_tool_search(tools)
 
     @staticmethod
     def error_result(call_id: str, text: str) -> ToolFinished:
@@ -286,7 +366,7 @@ class TaskRun:
 
         await self._take_input()
         assert self.agent is not None
-        action = decide.next_action(self.state, one_shot=self.agent.one_shot,
+        action = decide.next_action(self.state, one_shot=self.one_shot,
                                     max_steps=self.agent.max_steps_per_turn)
         if isinstance(action, decide.Idle):
             return False
@@ -297,14 +377,18 @@ class TaskRun:
             detail: dict[str, Any] = {"answer": self.state.last_answer}
             if self.state.turn_error:
                 detail = {"turn_failed": self.state.turn_error}
-            await self.append([Waiting(on="input", detail=detail)],
-                              patch=Patch(status="waiting", waiting_on="input",
+            due = self.next_timer()
+            await self.append([Waiting(on="input", detail=detail, until=due)],
+                              patch=Patch(status="waiting", waiting_on="input", ready_at=due,
                                           inbox_read_seq=self.state.inbox_read))
             return False
         if isinstance(action, decide.Interrupted):
             await self.append([self.error_result(i, texts.INTERRUPTED_CALL_ERROR)
                                for i in action.call_ids])
             return True
+        if isinstance(action, decide.MaxTurns):
+            return await self.fail_turn(texts.MAX_TURNS,
+                                        texts.MAX_TURNS_DETAIL.format(n=action.limit))
         if isinstance(action, decide.StopTurn):
             await self._stop_turn(action.call_ids)
             return True
@@ -352,13 +436,39 @@ class TaskRun:
             self._step = None
 
     async def _take_input(self) -> None:
+        await self._fire_timers()
         items = await self.store.inbox(self.task_id, after=self.state.inbox_read)
         if items:
             await self.append([InputTaken(items=items, through=items[-1].seq)])
 
+    async def _fire_timers(self) -> None:
+        """Post the due timers to the inbox while the task is idle (a turn
+        in progress keeps them for later). The dedupe key, the record that
+        set the timer, makes a crash between post and take harmless and
+        lets a timer set again for the same name and time fire again."""
+        st = self.state
+        if st.turn_open or st.calls or st.ended is not None or not st.timers:
+            return
+        now = time.time()
+        for name, timer in sorted(st.timers.items(), key=lambda kv: kv[1]["at"]):
+            if timer["at"] <= now:
+                await self.store.post(Post(task_id=self.task_id, body=TimerFired(name=name),
+                                           dedupe_key=f"timer:{name}:{timer['seq']}"))
+
+    def next_timer(self) -> float | None:
+        """When the earliest timer is due, or ``None`` without timers."""
+        return min((t["at"] for t in self.state.timers.values()), default=None)
+
     async def _stop_turn(self, call_ids: Sequence[str]) -> None:
+        data = None
+        if not call_ids and self.state.model_attempts:
+            # Stopped while the reply streamed: the streamed text stays in
+            # the conversation and the marker opens the person's next turn.
+            data = {"partial": "".join(self.partial), "marker": texts.INTERRUPTED_MARKER}
+        self.partial = []
         await self._close_calls(call_ids, texts.STOPPED_CALL_ERROR,
-                                ExtensionRecorded(extension=CORE, kind="turn_stopped"),
+                                ExtensionRecorded(extension=CORE, kind="turn_stopped",
+                                                  data=data),
                                 "the parent's turn was stopped")
 
     async def _close_calls(self, call_ids: Sequence[str], error: str, closing: Event,
@@ -392,7 +502,8 @@ class TaskRun:
             posts.append(Post(
                 task_id=self.state.parent_id,
                 body=ChildEnded(child_id=self.task_id, status=status,  # type: ignore[arg-type]
-                                answer=answer, error=error),
+                                answer=answer, error=error, last_usage=self.state.last_usage,
+                                tool_calls=self.state.tool_calls),
                 dedupe_key=f"child:{self.task_id}",
             ))
         await self.append([TaskEnded(status=status, answer=answer, error=error)],  # type: ignore[arg-type]
@@ -405,7 +516,7 @@ class TaskRun:
         interactive one keeps its conversation and waits for the next
         message (0.6's ``turn_failed``)."""
         assert self.agent is not None
-        if self.agent.one_shot:
+        if self.one_shot:
             error = f"{reason}: {detail}" if detail else reason
             await self.end("failed", self.state.last_answer, error)
             return False

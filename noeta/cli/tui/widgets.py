@@ -12,7 +12,7 @@ from rich.syntax import Syntax
 from rich.text import Text as RichText
 from textual import on
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical
 from textual.widgets import Button, Collapsible, Markdown, Static, TextArea
 
 from noeta.core.types import ToolUse
@@ -77,18 +77,24 @@ class ToolCall(Collapsible):
                 self.collapsed = False
 
 
-Decide = Callable[[str, str, bool], Awaitable[None]]
+#: ``decide(call_id, choice_id)``.
+Decide = Callable[[str, str], Awaitable[None]]
 
 
 class ApprovalCard(Vertical):
-    """Asks before a tool runs: allow once, always, or deny (y / a / n)."""
+    """Asks before a tool runs, with Claude Code's choices
+    (:func:`noeta.core.pending.choices`: Yes, don't ask again, switch mode,
+    No), picked by number, or y / a / n for yes / always / no."""
 
     DEFAULT_CLASSES = "approval"
-    BINDINGS = [("y", "choose('allow')", "Allow"), ("a", "choose('always')", "Always"),
-                ("n", "choose('deny')", "Deny")]
+    BINDINGS = [("y", "choose('allow')", "Yes"), ("a", "choose('always')", "Always"),
+                ("n", "choose('deny')", "No"),
+                *((str(n), f"pick({n})", "") for n in range(1, 10))]
 
-    def __init__(self, call_id: str, title: str, prompt: str, decide: Decide) -> None:
+    def __init__(self, call_id: str, title: str, prompt: str, decide: Decide,
+                 options: list[dict[str, str]]) -> None:
         super().__init__()
+        self.options = options
         self.call_id = call_id
         self.title_text = title
         self.prompt = prompt
@@ -96,33 +102,44 @@ class ApprovalCard(Vertical):
         self.done = False
 
     def compose(self) -> ComposeResult:
-        yield Static(f"[b]Allow?[/b] {escape(self.title_text)}")
+        yield Static(f"[b]{escape(self.title_text)}[/b]")
         if self.prompt and self.prompt != self.title_text:
             yield Static(self.prompt, classes="approval-prompt")
-        with Horizontal(classes="approval-buttons"):
-            yield Button("Allow (y)", id="allow", variant="success", compact=True)
-            yield Button("Always (a)", id="always", compact=True)
-            yield Button("Deny (n)", id="deny", variant="error", compact=True)
+        yield Static("Do you want to proceed?", classes="approval-prompt")
+        if self.done:
+            return
+        with Vertical(classes="approval-buttons"):
+            for n, option in enumerate(self.options, 1):
+                variant = {"allow": "success", "deny": "error"}.get(option["id"], "default")
+                yield Button(f"{n}. {escape(option['label'])}", id=f"option-{n}",
+                             variant=variant, compact=True)  # type: ignore[arg-type]
 
     def on_mount(self) -> None:
-        self.query_one("#allow", Button).focus()
+        # A card can be decided before it finishes mounting (a slow event
+        # loop): its buttons are gone then, and an error here ends the app.
+        if not self.done:
+            self.query_one("#option-1", Button).focus()
 
     async def action_choose(self, choice: str) -> None:
         await self.choose(choice)
 
+    async def action_pick(self, n: int) -> None:
+        if 1 <= n <= len(self.options):
+            await self.choose(self.options[n - 1]["id"])
+
     async def choose(self, choice: str) -> None:
-        if self.done:
+        picked = next((o for o in self.options if o["id"] == choice), None)
+        if self.done or picked is None:
             return
         self.done = True
-        await self.decide(self.call_id, "deny" if choice == "deny" else "allow",
-                          choice == "always")
+        await self.decide(self.call_id, choice)
         self.remove_children(".approval-buttons")
-        await self.mount(Static({"allow": "allowed", "always": "always allowed",
-                                 "deny": "denied"}[choice], classes="approval-result"))
+        await self.mount(Static(escape(picked["label"]), classes="approval-result"))
 
     @on(Button.Pressed)
     async def _pressed(self, event: Button.Pressed) -> None:
-        await self.choose(event.button.id or "deny")
+        n = int((event.button.id or "option-0").rsplit("-", 1)[1])
+        await self.action_pick(n)
 
 
 class QuestionCard(Vertical):
@@ -153,10 +170,33 @@ class QuestionCard(Vertical):
 class PromptInput(TextArea):
     """Enter sends; ctrl+j adds a line."""
 
-    def __init__(self, on_submit: Callable[[str], Awaitable[None]]) -> None:
+    def __init__(self, on_submit: Callable[[str], Awaitable[None]],
+                 on_image: Callable[[Any, str], Awaitable[None]] | None = None) -> None:
         super().__init__(id="prompt", soft_wrap=True, compact=True,
-                         placeholder="Message noeta — / for commands, Esc to stop")
+                         placeholder="Message noeta — / for commands, @ for files, Esc to stop")
         self.on_submit_cb = on_submit
+        self.on_image = on_image
+
+    async def _on_paste(self, event: Any) -> None:
+        """A pasted path to an image file (a file dropped on the terminal)
+        attaches that image instead of its path."""
+        from pathlib import Path
+
+        from noeta.cli.mentions import image_file
+
+        raw = event.text.strip().strip("'\"")
+        if self.on_image is not None and raw and "\n" not in raw:
+            path = Path(raw).expanduser()
+            try:
+                image = image_file(path) if path.is_absolute() else None
+            except OSError:
+                image = None
+            if image is not None:
+                event.prevent_default()
+                event.stop()
+                await self.on_image(image, path.name)
+                return
+        await super()._on_paste(event)
 
     async def _on_key(self, event: Any) -> None:
         if event.key == "enter":

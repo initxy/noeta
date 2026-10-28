@@ -8,20 +8,30 @@ from typing import TYPE_CHECKING, Any
 import msgspec
 
 from noeta.core import models
-from noeta.core.errors import ContextOverflow, ModelError, TurnFailed
+from noeta.core.errors import ContextOverflow, ModelError, RequestStale, TurnDone, TurnFailed
 from noeta.core.events import ExtensionRecorded, ModelCalled, ModelReplied
+from noeta.core.extension import Reminder, TaskView
 from noeta.core.loop.request import build_request, cache_breakpoints, request_hash
 from noeta.core.loop.state import CORE
 from noeta.core.retry import complete_with_retries
 from noeta.core.runner import texts
-from noeta.core.types import Delta, Message, ModelRequest, ModelResponse, Text, ToolUse, user
+from noeta.core.types import (
+    Delta,
+    Message,
+    ModelRequest,
+    ModelResponse,
+    Text,
+    ToolUse,
+    system_message,
+    user,
+)
 
 if TYPE_CHECKING:
     from noeta.core.loop.state import TaskState
     from noeta.core.runner.task import TaskRun
 
 
-def _request(run: TaskRun, *, final: bool) -> ModelRequest:
+def build_model_request(run: TaskRun, *, final: bool) -> ModelRequest:
     agent = run.agent
     assert agent is not None
     view = run.view()
@@ -30,11 +40,12 @@ def _request(run: TaskRun, *, final: bool) -> ModelRequest:
         run.state,
         model=str(config.get("model") or agent.model),
         system_prompt=run.state.prompt(f"system/{agent.name}", agent.system_prompt),
+        identity=run.state.prompt(f"identity/{agent.name}", agent.identity),
         parts=[p for ext in run.exts for p in ext.context(view)],
         tools=run.tools(view),
         effort=config.get("effort") or agent.effort,
         max_tokens=agent.max_tokens or _output_ceiling(str(config.get("model") or agent.model)),
-        output_schema=agent.output_schema,
+        output_schema=config.get("output_schema") or agent.output_schema,
     )
     if final:
         # The step-limit round: tool schemas stay (the prefix stays cached),
@@ -52,13 +63,15 @@ async def _remind(run: TaskRun, request: ModelRequest) -> ModelRequest:
     step-limit prompt, stay last), with the breakpoints the next request,
     built from the log, gets."""
     view = run.view()
+    due: list[tuple[str, Reminder]] = []
     try:
         for ext in run.exts:
-            for r in await ext.reminders(view):
-                view.record(ext.name, r.kind, r.data, message=user(r.text, origin=r.origin))
+            due += [(ext.name, r) for r in await ext.reminders(view)]
     except TurnFailed:
+        _record_reminders(view, due)
         await run.flush(view)  # what was recorded before the failure stands
         raise
+    _record_reminders(view, due)
     if not view.pending:
         return request
     n = len(run.state.messages)
@@ -67,6 +80,13 @@ async def _remind(run: TaskRun, request: ModelRequest) -> ModelRequest:
     return msgspec.structs.replace(
         request, messages=[*request.messages[:n], *added, *request.messages[n:]],
         cache_after=cache_breakpoints(run.state))
+
+
+def _record_reminders(view: TaskView, due: list[tuple[str, Reminder]]) -> None:
+    due.sort(key=lambda item: (item[1].role == "system", item[1].order))
+    for name, r in due:
+        message = system_message(r.text) if r.role == "system" else user(r.text, origin=r.origin)
+        view.record(name, r.kind, r.data, message=message)
 
 
 def _output_ceiling(model: str) -> int:
@@ -95,24 +115,36 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     if run.state.model_attempts >= texts.MAX_MODEL_ATTEMPTS:
         return await run.fail_turn(texts.LLM_ERROR, "the model call kept being interrupted")
     view = run.view()
-    request = _request(run, final=final)
+    request = build_model_request(run, final=final)
     try:
+        # The reminders first, as Claude Code adds its notes before it
+        # decides to compact: the hooks see the request that would go.
+        request = await _remind(run, request)
+        view = run.view()
         for ext in run.exts:
             request = await ext.before_model(view, request)
         await run.flush(view)
-        request = await _remind(run, request)
     except TurnFailed as exc:
         await run.flush(view)
         return await run.fail_turn(exc.reason, exc.detail)
+    except TurnDone:
+        await run.flush(view)
+        await run.append([ExtensionRecorded(extension=CORE, kind="turn_done")])
+        return True
+    except RequestStale:
+        await run.flush(view)
+        return True  # the next boundary builds the request from the new state
     await run.append([ModelCalled(model=request.model, request_hash=request_hash(request),
                                   attempt=run.state.model_attempts + 1)])
 
-    on_delta = None
     current = {"attempt": 1}
-    if run.rt.on_delta is not None:
-        sink, tid, called = run.rt.on_delta, run.task_id, run.state.last_seq
+    sink, tid, called = run.rt.on_delta, run.task_id, run.state.last_seq
+    run.partial = []
 
-        def on_delta(d: Delta) -> None:
+    def on_delta(d: Delta) -> None:
+        if d.kind == "text":
+            run.partial.append(d.text)
+        if sink is not None:
             sink(tid, msgspec.structs.replace(d, call_seq=called, attempt=current["attempt"]))
 
     pending: list[asyncio.Task[None]] = []
@@ -120,6 +152,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     def on_retry(attempt: int, delay: float, error: Exception) -> None:
         # Hosts see "retrying" (and drop the failed attempt's deltas).
         current["attempt"] = attempt + 1
+        run.partial = []
         pending.append(asyncio.ensure_future(run.append([ExtensionRecorded(
             extension=CORE, kind="retry",
             data={"attempt": attempt, "delay": delay,
@@ -145,6 +178,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         await asyncio.gather(*pending, return_exceptions=True)
         return await run.fail_turn(texts.LLM_ERROR, _detail(exc))
     await asyncio.gather(*pending, return_exceptions=True)
+    run.partial = []
 
     if final:
         response = _final_answer(run, response)

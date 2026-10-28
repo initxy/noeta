@@ -88,16 +88,17 @@ def text_block(text: str) -> list[Any]:
 # ------------------------------------------------------------ #2 noeta -p
 
 
-async def test_print_mode_waits_for_a_foreground_sub_agent(
+def test_print_mode_waits_for_a_foreground_sub_agent(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     provider = ScriptedProvider([reply("", ("Task", {})), reply("child done"), reply("final")])
     agents = [Agent(name="main", model="m", tools=[Delegate()]),
               Agent(name="worker", model="m", one_shot=True)]
-    monkeypatch.setattr(cli, "_app", lambda s, cwd=None, **kw: local(tmp_path, provider, *agents, **kw))
-    code = await cli._print_mode(cli.Settings(model="m"), "go", cwd=str(tmp_path),
-                                 as_json=False, permission_mode=None)
-    assert code == 0
+    monkeypatch.setattr(cli, "_app", lambda s, cwd=None, **kw: local(tmp_path, provider, *agents,
+                                                                     own_tasks_only=True))
+    with pytest.raises(SystemExit) as done:
+        cli.main(["-p", "go", "--model", "m", "--cwd", str(tmp_path)])
+    assert done.value.code == 0
     assert capsys.readouterr().out.strip() == "final"
 
 

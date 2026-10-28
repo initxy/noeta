@@ -1,6 +1,6 @@
 """The bytes the default agents send, locked: one scripted session through
 ``default_agents`` with every built-in context source (project instructions,
-skills, memory, environment, todo reminder, a sub-agent), rendered by each
+skills, memory, environment, a loaded deferred tool, a sub-agent), rendered by each
 provider adapter and compared with ``golden/requests.json`` (a hash per
 request, and the full body of each agent's last request).
 
@@ -29,6 +29,8 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
 from noeta.core.runner import Runtime
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolUse, Usage
+from noeta.plugins.memory import memory_dir_for
+from noeta.toolkit.context import project_slug
 
 GOLDEN = Path(__file__).parent / "golden" / "requests.json"
 MODEL = "claude-sonnet-4-6"
@@ -43,7 +45,7 @@ def _reply(text: str = "", *calls: tuple[str, str, dict[str, Any]]) -> ModelResp
 
 
 class Router:
-    """The main agent's script and the explore sub-agent's script, told
+    """The main agent's script and the Explore sub-agent's script, told
     apart by the system prompt; keeps every request in order."""
 
     def __init__(self, main: list[ModelResponse], child: list[ModelResponse]) -> None:
@@ -51,7 +53,8 @@ class Router:
         self.requests: list[tuple[str, ModelRequest]] = []
 
     async def complete(self, request: ModelRequest, on_delta: Any = None) -> ModelResponse:
-        who = "child" if request.system[0].text.startswith("You are a read-only scout") else "main"
+        child = any(b.text.startswith("You are a file-search specialist") for b in request.system)
+        who = "child" if child else "main"
         self.requests.append((who, request))
         script = self.child if who == "child" else self.main
         assert script, f"{who} script ran out"
@@ -63,9 +66,10 @@ async def _no_sleep(_: float) -> None:
 
 
 def _normalize(text: str, tmp: str) -> str:
-    text = text.replace(tmp, "<TMP>")
+    text = text.replace(tmp, "<TMP>").replace(project_slug(tmp), "<TMP-SLUG>")
     text = re.sub(r"\d{4}-\d{2}-\d{2}", "<DATE>", text)
     text = re.sub(r"(?m)^ - (Platform|Shell|OS Version): .*$", r" - \1: <X>", text)
+    text = re.sub(r"<duration_ms>\d+</duration_ms>", "<duration_ms>N</duration_ms>", text)
     return re.sub(r"\b[0-9a-f]{32}\b", "<ID>", text)
 
 
@@ -81,19 +85,22 @@ async def test_default_agent_requests_match_golden(tmp_path: Path,
         "---\nname: release-notes\ndescription: Draft release notes from git log.\n---\n"
         "Read git log and summarize.\n")
     (work / "notes.txt").write_text("the secret word is tangerine\n")
-    mem = tmp_path / "mem"
-    mem.mkdir()
+    noeta_home = tmp_path / "noeta-home"
+    mem = Path(memory_dir_for(str(work), noeta_home))
+    mem.mkdir(parents=True)
     (mem / "deploy-steps.md").write_text(
-        "---\nname: deploy-steps\ndescription: How we deploy.\nkeywords: [deploy]\n---\n"
-        "Tag, then wait for the release run.\n")
+        "---\nname: deploy-steps\ndescription: How we deploy.\nmetadata:\n  type: project\n"
+        "---\nTag, then wait for the release run.\n")
+    (mem / "MEMORY.md").write_text("- [Deploy steps](deploy-steps.md) — tag, then wait\n")
 
-    todos = [{"content": "Read notes", "status": "in_progress", "activeForm": "Reading notes"}]
     main = [
-        _reply("Planning.", ("t1", "TodoWrite", {"todos": todos})),
+        _reply("Planning.", ("t1", "ToolSearch", {"query": "select:WebFetch",
+                                                  "max_results": 1})),
         _reply("", ("r1", "Read", {"file_path": str(work / "notes.txt")}),
-               ("g1", "Glob", {"pattern": "*.txt"})),
-        _reply("", ("k1", "Task", {"description": "find notes", "prompt": "Find notes.txt.",
-                                   "subagent_type": "explore"})),
+               ("g1", "Bash", {"command": "ls *.txt", "description": "List the text files"})),
+        _reply("", ("k1", "Agent", {"description": "find notes", "prompt": "Find notes.txt.",
+                                    "subagent_type": "Explore"})),
+        _reply("Started an agent to look."),
         *[_reply("", (f"b{i}", "Bash", {"command": f"echo {i}", "description": "echo"}))
           for i in range(11)],
         _reply("The word is tangerine."),
@@ -101,11 +108,12 @@ async def test_default_agent_requests_match_golden(tmp_path: Path,
     ]
     child = [
         _reply("", ("c1", "Read", {"file_path": str(work / "notes.txt")})),
+        # Outside auto mode the agent's last reply is its report.
         _reply("notes.txt is in the root."),
     ]
     router = Router(main, child)
     store = SqliteStore(str(tmp_path / "t.db"))
-    agents = default_agents(MODEL, plugins={"memory": {"root": str(mem)}})
+    agents = default_agents(MODEL, plugins={"memory": {"home": str(noeta_home)}})
     rt = Runtime(store=store, agents={a.name: a for a in agents},
                  provider_for=lambda _m: router,  # type: ignore[arg-type,return-value]
                  env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or work)),
@@ -121,7 +129,7 @@ async def test_default_agent_requests_match_golden(tmp_path: Path,
     assert not main and not child
 
     adapters = {
-        "anthropic": AnthropicProvider(api_key="x"),
+        "anthropic": AnthropicProvider(api_key="x", device_id="d" * 64),
         "openai_compat": OpenAICompatProvider(api_key="x", base_url="http://x"),
         "openai_responses": OpenAIResponsesProvider(api_key="x", base_url="http://x"),
     }

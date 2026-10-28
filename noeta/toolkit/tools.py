@@ -15,6 +15,7 @@ from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Text
 
 __all__ = [
+    "SCHEMA_DIALECT",
     "PathError",
     "Workspace",
     "error_output",
@@ -27,6 +28,10 @@ __all__ = [
     "tool_error",
     "truncate_bytes",
 ]
+
+
+#: The ``$schema`` every built-in tool schema declares (Claude Code's).
+SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 
 
 @cache

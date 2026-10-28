@@ -240,7 +240,7 @@ def _map_effort(request: ModelRequest) -> str | None:
     """``thinking=False`` is explicitly suppressed reasoning → ``"minimal"``
     (overrides any effort). Otherwise the effort level maps through
     :data:`_EFFORT_MAP`; no effort → no ``reasoning`` parameter."""
-    if not request.thinking:
+    if request.thinking is False:
         return "minimal"
     if request.effort is None:
         return None

@@ -18,6 +18,8 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import Literal, Protocol
 
+from msgspec.structs import replace
+
 from noeta.core.events import Event, InboxItem, InboxKind, Recorded, TaskCreated
 from noeta.core.types import Struct
 
@@ -165,3 +167,14 @@ class Store(Protocol):
         ...
 
     async def close(self) -> None: ...
+
+
+async def pin_history(store: Store, created: TaskCreated) -> TaskCreated:
+    """``created`` with its continuation pinned: a ``history_from`` without
+    ``history_through`` ends at its source's last event as of now, so the
+    source growing later never changes what the new task's log folds to.
+    An unknown source is left as given (it folds to no history)."""
+    if created.history_from is None or created.history_through is not None:
+        return created
+    row = await store.get(created.history_from)
+    return created if row is None else replace(created, history_through=row.last_seq)

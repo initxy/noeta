@@ -1,4 +1,4 @@
-"""``Edit``: exact unique match, read-first, CRLF, snippet, write fence."""
+"""``Edit``: exact unique match, read-first, CRLF, the result line, write fence."""
 
 from __future__ import annotations
 
@@ -23,17 +23,12 @@ def test_edit_metadata() -> None:
     assert tool.name == "Edit"
     assert tool.read_only is False
     assert tool.clearable is True
-    assert tool.input_schema == {
-        "type": "object",
-        "properties": {
-            "file_path": {"type": "string"},
-            "old_string": {"type": "string"},
-            "new_string": {"type": "string"},
-            "replace_all": {"type": "boolean"},
-        },
-        "required": ["file_path", "old_string", "new_string"],
-        "additionalProperties": False,
-    }
+    schema = tool.input_schema
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert schema["required"] == ["file_path", "old_string", "new_string"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["replace_all"]["default"] is False
+    assert all(p["description"] for p in schema["properties"].values())
 
 
 async def test_edit_writes_on_unique_match(h: Harness, ws: Path) -> None:
@@ -43,8 +38,7 @@ async def test_edit_writes_on_unique_match(h: Harness, ws: Path) -> None:
     out = await h.call(EditTool(), file_path="a.py", old_string="return 1", new_string="return 2")
     assert not out.is_error
     text = text_of(out)
-    assert "The file a.py has been updated" in text
-    assert "\t    return 2" in text
+    assert text == f"The file {ws / 'a.py'} has been updated successfully. (what you wrote is the file's current state; no need to Read it back)"
     assert target.read_text() == "def foo():\n    return 2\n"
     diff = out.meta["diff"]
     assert "-    return 1" in diff
@@ -59,10 +53,14 @@ async def test_edit_output_is_exact(h: Harness, ws: Path) -> None:
     (ws / "a.txt").write_text("a\nb\nc\n")
     await _read(h, "a.txt")
     out = await h.call(EditTool(), file_path="a.txt", old_string="b", new_string="B")
-    assert text_of(out) == (
-        "The file a.txt has been updated. Here's the result of running `cat -n` "
-        "on a snippet of the edited file:\n     1\ta\n     2\tB\n     3\tc"
-    )
+    assert text_of(out) == f"The file {ws / 'a.txt'} has been updated successfully. (what you wrote is the file's current state; no need to Read it back)"
+
+
+async def test_an_edit_of_noeta_md_has_no_file_state_note(h: Harness, ws: Path) -> None:
+    (ws / "NOETA.md").write_text("a\n")
+    await _read(h, "NOETA.md")
+    out = await h.call(EditTool(), file_path="NOETA.md", old_string="a", new_string="b")
+    assert text_of(out) == f"The file {ws / 'NOETA.md'} has been updated successfully."
 
 
 async def test_consecutive_edits_chain_without_a_reread(h: Harness, ws: Path) -> None:
@@ -150,7 +148,7 @@ async def test_edit_replace_all_replaces_every_match(h: Harness, ws: Path) -> No
         EditTool(), file_path="a.py", old_string="foo", new_string="bar", replace_all=True
     )
     assert not out.is_error
-    assert "The file a.py has been updated" in text_of(out)
+    assert text_of(out).startswith(f"The file {ws / 'a.py'} has been updated successfully.")
     assert target.read_text() == "bar\nbar\nbar\n"
     assert out.meta["diff"].count("+bar") == 3
     assert out.meta["diff"].count("-foo") == 3
@@ -293,23 +291,6 @@ async def test_lf_file_edit_is_unchanged(h: Harness, ws: Path) -> None:
     out = await h.call(EditTool(), file_path="lf.txt", old_string="a\nb", new_string="x\ny")
     assert not out.is_error
     assert target.read_bytes() == b"x\ny\n"
-
-
-async def test_edit_snippet_numbers_match_read(h: Harness, ws: Path) -> None:
-    (ws / "f.txt").write_text("a\x0cb\nc\nd\n")
-    await _read(h, "f.txt")
-    out = await h.call(EditTool(), file_path="f.txt", old_string="d", new_string="D")
-    assert "     3\tD" in text_of(out)
-
-
-async def test_edit_snippet_shows_only_the_region(h: Harness, ws: Path) -> None:
-    (ws / "long.txt").write_text("".join(f"line{i}\n" for i in range(1, 31)))
-    await _read(h, "long.txt")
-    out = await h.call(EditTool(), file_path="long.txt", old_string="line15\n", new_string="X\n")
-    lines = text_of(out).split("\n")[1:]
-    assert lines[0] == "    11\tline11"
-    assert "    15\tX" in lines
-    assert lines[-1] == "    19\tline19"
 
 
 async def test_edit_keeps_file_permissions(h: Harness, ws: Path) -> None:

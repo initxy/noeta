@@ -10,7 +10,25 @@ STOPPED_CALL_ERROR = "interrupted: a human stop landed during this batch"
 #: Answers a call left open when its turn failed (followed by the reason).
 TURN_FAILED_CALL_ERROR = "not run: the turn failed: "
 DENIED_BY_HUMAN = "denied by human"
+#: A call the person declined at its approval prompt; the turn then stops.
+REJECTED_BY_USER = (
+    "The user declined this tool call, so it did not run (for a file edit: nothing was "
+    "written). Stop here and wait for the user to tell you how to go on.")
+#: What the person said when declining, after the text above.
+REJECTED_WITH_MESSAGE = "\nThe user's reason for declining: {message}"
+#: Follows the results of a reply in which the person declined a call
+#: (Claude Code's marker, verbatim: models know it).
+REJECTED_MARKER = "[Request interrupted by user for tool use]\n"
+#: Opens the person's next turn after they stopped a reply mid-stream, after
+#: the part of the reply that streamed (Claude Code's marker, verbatim).
+INTERRUPTED_MARKER = "[Request interrupted by user]\n"
+#: A call a permission callback refused without stopping the turn (an
+#: ``Answer`` whose data says ``"interrupt": false``) and gave no reason for.
+DENIED_BY_CALLBACK = "Permission to use {name} was denied."
 UNKNOWN_TOOL = "No tool named {name!r} is available in this task; use one of the offered tools."
+DEFERRED_NOT_LOADED = (
+    "InputValidationError: {name} is a deferred tool whose schema is not loaded. Load it with "
+    "ToolSearch (query \"select:{name}\"), then call it again.")
 
 #: Output-limit recovery, copied from Claude Code (2.1.300).
 OUTPUT_LIMIT_RESUME_NUDGE = (
@@ -43,6 +61,10 @@ LLM_ERROR = "llm_error"
 LLM_EMPTY_RESPONSE = "llm_empty_response"
 LLM_TRUNCATED = "llm_truncated"
 CONTEXT_OVERFLOW = "context_overflow"
+#: The turn reached ``config["max_turns"]`` model calls (Claude Code's
+#: ``--max-turns``); the detail says how many.
+MAX_TURNS = "max_turns"
+MAX_TURNS_DETAIL = "Reached maximum number of turns ({n})"
 #: A bug in the runner, an extension hook or a provider adapter.
 INTERNAL_ERROR = "internal_error"
 #: An unattended task (``config["unattended"]``, e.g. a background sub-agent)

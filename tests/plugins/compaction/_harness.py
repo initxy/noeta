@@ -11,6 +11,7 @@ from typing import Any
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
+from noeta.core.deferred import with_tool_search
 from noeta.core.events import ModelCalled
 from noeta.core.extension import TaskView
 from noeta.core.loop.request import build_request, request_hash
@@ -24,10 +25,13 @@ from noeta.plugins.compaction.estimate import messages_tokens, prefix_tokens
 from noeta.plugins.compaction.summary import SUMMARIZE_PROMPT
 
 NOTE = (
-    "## 1. Primary Request & Intent\nProbe things.\n\n"
-    "## 5. All user messages\n- go\n\n"
-    "## 8. Current Work\nProbing."
+    "<analysis>\nWalked the conversation.\n</analysis>\n\n<summary>\n"
+    "1. Primary Request and Intent:\n   Probe things.\n\n"
+    "8. Current Work:\n   Probing.\n</summary>"
 )
+#: ``NOTE`` as the summary message shows it.
+FORMATTED = ("Summary:\n1. Primary Request and Intent:\n   Probe things.\n"
+             "8. Current Work:\n   Probing.")
 
 _ids = itertools.count(1)
 
@@ -63,7 +67,15 @@ Step = ModelResponse | Exception | Callable[[ModelRequest], ModelResponse]
 
 
 def is_summarize(request: ModelRequest) -> bool:
-    return bool(request.messages) and request.messages[-1].text == SUMMARIZE_PROMPT
+    """The instruction rides the last user message, before any trailing
+    system turn."""
+    tail = []
+    for m in reversed(request.messages):
+        if m.role == "assistant":
+            break
+        tail.append(m)
+    return any(isinstance(b, Text) and b.text.startswith(SUMMARIZE_PROMPT)
+               for m in tail for b in m.content)
 
 
 class Model:
@@ -98,7 +110,7 @@ class Probe:
     description = "Look."
     input_schema = {"type": "object"}
     read_only = True
-    clearable = True
+    clearable = False
 
     def __init__(self, size: int = 2_000) -> None:
         self.size = size
@@ -148,8 +160,8 @@ async def rebuilt(store: SqliteStore, agent: Agent, tid: str) -> list[tuple[str,
                 if t.name not in {x.name for x in tools}:
                     tools.append(t)
         request = build_request(
-            state, model=agent.model, system_prompt=agent.system_prompt,
-            parts=[p for e in exts for p in e.context(view)], tools=tools,
+            state, model=agent.model, system_prompt=agent.system_prompt, identity=agent.identity,
+            parts=[p for e in exts for p in e.context(view)], tools=with_tool_search(tools),
             effort=agent.effort, max_tokens=agent.max_tokens or _output_ceiling(agent.model),
             output_schema=agent.output_schema)
         for e in exts:

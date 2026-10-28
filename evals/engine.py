@@ -114,7 +114,7 @@ def run_trial(
     ws.mkdir()
     setup(ws)
     kw: dict[str, Any] = {"one_shot": True, "max_steps_per_turn": _MAX_STEPS_PER_TURN}
-    plugins: dict[str, Any] = {"memory": {"root": str(root / "memory")}}
+    plugins: dict[str, Any] = {"memory": {"home": str(root / "home")}}
     if cfg.system_prompt is not None:
         kw["system_prompt"] = cfg.system_prompt
     if small_window:

@@ -1,4 +1,4 @@
-"""The file tools as one extension: Read, Write, Edit, Grep and Glob, the
+"""The file tools as one extension: Read, Write, Edit and NotebookEdit, the
 fold of what they record (the files the model has read), and Claude Code's
 reminder when one of those files changed on disk since.
 
@@ -11,19 +11,21 @@ told once (the prompt ``reminder/file_changed``; ``{path}`` is the file).
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import Sequence
 from typing import Any
 
+from noeta.core.events import Compacted, Recorded
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.tool import Tool
 from noeta.plugins.fs.edit import EditTool
-from noeta.plugins.fs.glob import GlobTool
-from noeta.plugins.fs.grep import GrepTool
+from noeta.plugins.fs.notebook import NotebookEditTool
 from noeta.plugins.fs.read import ReadTool
-from noeta.plugins.fs.state import FS, KIND_CHANGED, FsState, reduce_fs
+from noeta.plugins.fs.state import FS, KIND_CHANGED, KIND_FORGET_RANGES, FsState, reduce_fs
 from noeta.plugins.fs.write import WriteTool
+from noeta.toolkit.context import plans_dir
 
-__all__ = ["EditTool", "FileTools", "GlobTool", "GrepTool", "ReadTool", "WriteTool"]
+__all__ = ["EditTool", "FileTools", "NotebookEditTool", "ReadTool", "WriteTool"]
 
 
 #: How many of the most recently read files the turn-start check looks at.
@@ -38,29 +40,45 @@ FILE_CHANGED_REMINDER = (
 )
 
 _BY_NAME: dict[str, type[Tool]] = {
-    "Read": ReadTool, "Write": WriteTool, "Edit": EditTool, "Grep": GrepTool, "Glob": GlobTool,
+    "Read": ReadTool, "Write": WriteTool, "Edit": EditTool, "NotebookEdit": NotebookEditTool,
 }
 
 
 class FileTools(Extension):
     """``tools``: which file tools to offer, by name or as tool objects
-    (default: all five, in the order Read, Write, Edit, Grep, Glob)."""
+    (default: all four, in the order Read, Write, Edit, NotebookEdit).
+    ``write_roots``: directories outside the working directory the named
+    tools may write (Claude Code's ``additionalDirectories``); plan mode's
+    plan directory is always one."""
 
     name = FS
 
-    def __init__(self, tools: Sequence[str | Tool] | None = None) -> None:
+    def __init__(self, tools: Sequence[str | Tool] | None = None, *,
+                 write_roots: Sequence[str] = ()) -> None:
         if tools is None:
             tools = list(_BY_NAME)
         unknown = [t for t in tools if isinstance(t, str) and t not in _BY_NAME]
         if unknown:
             raise ValueError(f"FileTools: unknown tools {unknown}; known: {list(_BY_NAME)}")
-        self._tools: list[Tool] = [_BY_NAME[t]() if isinstance(t, str) else t for t in tools]
+        extra = tuple(os.path.expanduser(d) for d in write_roots)
+
+        def roots(_ctx: Any) -> list[str]:
+            return [*extra, str(plans_dir())]
+
+        self._tools: list[Tool] = [
+            (_BY_NAME[t](write_roots=roots) if t != "Read" else _BY_NAME[t]())  # type: ignore[call-arg]
+            if isinstance(t, str) else t for t in tools]
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         return reduce_fs(state, kind, data)
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
         return self._tools
+
+    async def on_event(self, view: TaskView, recorded: Recorded) -> None:
+        # The earlier Read results are gone: a re-read must return content.
+        if isinstance(recorded.event, Compacted):
+            view.record(self.name, KIND_FORGET_RANGES, {})
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         st = view.ext_state(self.name)

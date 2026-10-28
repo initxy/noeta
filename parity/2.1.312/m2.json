@@ -1,0 +1,1393 @@
+{
+ "session": "m2",
+ "about": "default permission mode: approve, don't ask again, deny, and a sub-agent's approval (card keys: 1 yes, 2 yes and do not ask again, Escape no; the number of No differs per card)",
+ "requests": [
+  {
+   "n": 1,
+   "kind": "session-title",
+   "step": "approve",
+   "status": 200,
+   "params": {
+    "keys": [
+     "max_tokens",
+     "messages",
+     "metadata",
+     "output_config",
+     "stream",
+     "system",
+     "tools"
+    ],
+    "max_tokens": 128000,
+    "output_config": {
+     "effort": "medium",
+     "format": {
+      "type": "json_schema",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "title": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "title"
+       ],
+       "additionalProperties": false
+      }
+     }
+    },
+    "stream": true,
+    "metadata": {
+     "user_id": {
+      "json": {
+       "account_uuid": "str",
+       "device_id": "str",
+       "session_id": "str"
+      }
+     }
+    }
+   },
+   "headers": {
+    "betas": [
+     "claude-code-20250219",
+     "context-management-2025-06-27",
+     "effort-2025-11-24",
+     "interleaved-thinking-2025-05-14",
+     "mid-conversation-tool-changes-2026-07-01",
+     "per-turn-control-2026-07-01",
+     "redact-thinking-2026-02-12",
+     "structured-outputs-2025-12-15",
+     "thinking-token-count-2026-05-13"
+    ],
+    "anthropic-version": "2023-06-01",
+    "names": [
+     "accept",
+     "anthropic-beta",
+     "anthropic-dangerous-direct-browser-access",
+     "anthropic-version",
+     "authorization",
+     "content-type",
+     "user-agent",
+     "x-app",
+     "x-claude-code-session-id"
+    ]
+   },
+   "system": [
+    {
+     "kind": "billing-header",
+     "len": 70,
+     "sha": "d5de3626b6"
+    },
+    {
+     "kind": "identity",
+     "len": 57,
+     "sha": "2719b7a469"
+    },
+    {
+     "kind": "title-prompt",
+     "len": 3059,
+     "sha": "765b5ba2fa"
+    }
+   ],
+   "toolset": null,
+   "messages": [
+    "user: text:<session>+title-instruction"
+   ]
+  },
+  {
+   "n": 2,
+   "kind": "main",
+   "step": "approve",
+   "status": 200,
+   "call": 1,
+   "params": {
+    "keys": [
+     "context_management",
+     "max_tokens",
+     "messages",
+     "metadata",
+     "output_config",
+     "stream",
+     "system",
+     "thinking",
+     "tools"
+    ],
+    "max_tokens": 128000,
+    "thinking": {
+     "type": "adaptive",
+     "display": "updates"
+    },
+    "context_management": {
+     "edits": [
+      {
+       "type": "clear_thinking_20251015",
+       "keep": "all"
+      }
+     ]
+    },
+    "output_config": {
+     "effort": "medium"
+    },
+    "stream": true,
+    "metadata": {
+     "user_id": {
+      "json": {
+       "account_uuid": "str",
+       "device_id": "str",
+       "session_id": "str"
+      }
+     }
+    }
+   },
+   "headers": {
+    "betas": [
+     "advanced-tool-use-2025-11-20",
+     "claude-code-20250219",
+     "context-management-2025-06-27",
+     "effort-2025-11-24",
+     "interleaved-thinking-2025-05-14",
+     "mid-conversation-tool-changes-2026-07-01",
+     "per-turn-control-2026-07-01",
+     "thinking-display-updates-2026-08-18",
+     "thinking-token-count-2026-05-13"
+    ],
+    "anthropic-version": "2023-06-01",
+    "names": [
+     "accept",
+     "anthropic-beta",
+     "anthropic-dangerous-direct-browser-access",
+     "anthropic-version",
+     "authorization",
+     "content-type",
+     "user-agent",
+     "x-app",
+     "x-claude-code-session-id"
+    ]
+   },
+   "system": [
+    {
+     "kind": "billing-header",
+     "len": 70,
+     "sha": "1af9df8a09"
+    },
+    {
+     "kind": "identity",
+     "len": 57,
+     "sha": "2719b7a469",
+     "cache": "*"
+    },
+    {
+     "kind": "main-prompt",
+     "len": 5927,
+     "sha": "8098c52047",
+     "cache": "*"
+    }
+   ],
+   "toolset": "78556df638be",
+   "messages": [
+    "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:prompt",
+    "system: text:environment+model-identity+deferred-tools+agent-list+skill-list+<total_tokens>+date*"
+   ]
+  },
+  {
+   "n": 3,
+   "kind": "main",
+   "step": "approve",
+   "status": 200,
+   "call": 2,
+   "params": {
+    "keys": [
+     "context_management",
+     "max_tokens",
+     "messages",
+     "metadata",
+     "output_config",
+     "stream",
+     "system",
+     "thinking",
+     "tools"
+    ],
+    "max_tokens": 128000,
+    "thinking": {
+     "type": "adaptive",
+     "display": "updates"
+    },
+    "context_management": {
+     "edits": [
+      {
+       "type": "clear_thinking_20251015",
+       "keep": "all"
+      }
+     ]
+    },
+    "output_config": {
+     "effort": "medium"
+    },
+    "stream": true,
+    "metadata": {
+     "user_id": {
+      "json": {
+       "account_uuid": "str",
+       "device_id": "str",
+       "session_id": "str"
+      }
+     }
+    }
+   },
+   "headers": {
+    "betas": [
+     "advanced-tool-use-2025-11-20",
+     "claude-code-20250219",
+     "context-management-2025-06-27",
+     "effort-2025-11-24",
+     "interleaved-thinking-2025-05-14",
+     "mid-conversation-tool-changes-2026-07-01",
+     "per-turn-control-2026-07-01",
+     "thinking-display-updates-2026-08-18",
+     "thinking-token-count-2026-05-13"
+    ],
+    "anthropic-version": "2023-06-01",
+    "names": [
+     "accept",
+     "anthropic-beta",
+     "anthropic-dangerous-direct-browser-access",
+     "anthropic-version",
+     "authorization",
+     "content-type",
+     "user-agent",
+     "x-app",
+     "x-claude-code-session-id"
+    ]
+   },
+   "system": [
+    {
+     "kind": "billing-header",
+     "len": 70,
+     "sha": "1af9df8a09"
+    },
+    {
+     "kind": "identity",
+     "len": 57,
+     "sha": "2719b7a469",
+     "cache": "*"
+    },
+    {
+     "kind": "main-prompt",
+     "len": 5927,
+     "sha": "8098c52047",
+     "cache": "*"
+    }
+   ],
+   "toolset": "78556df638be",
+   "messages": [
+    "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:prompt",
+    "system(str): text:environment+model-identity+deferred-tools+agent-list+skill-list+<total_tokens>+date",
+    "assistant: thinking | tool_use:Read",
+    "user: tool_result",
+    "system: text:<total_tokens>*"
+   ]
+  },
+  {
+   "n": 4,
+   "kind": "main",
+   "step": "approve",
+   "status": 200,
+   "call": 3,
+   "params": {
+    "keys": [
+     "context_management",
+     "max_tokens",
+     "messages",
+     "metadata",
+     "output_config",
+     "stream",
+     "system",
+     "thinking",
+     "tools"
+    ],
+    "max_tokens": 128000,
+    "thinking": {
+     "type": "adaptive",
+     "display": "updates"
+    },
+    "context_management": {
+     "edits": [
+      {
+       "type": "clear_thinking_20251015",
+       "keep": "all"
+      }
+     ]
+    },
+    "output_config": {
+     "effort": "medium"
+    },
+    "stream": true,
+    "metadata": {
+     "user_id": {
+      "json": {
+       "account_uuid": "str",
+       "device_id": "str",
+       "session_id": "str"
+      }
+     }
+    }
+   },
+   "headers": {
+    "betas": [
+     "advanced-tool-use-2025-11-20",
+     "claude-code-20250219",
+     "context-management-2025-06-27",
+     "effort-2025-11-24",
+     "interleaved-thinking-2025-05-14",
+     "mid-conversation-tool-changes-2026-07-01",
+     "per-turn-control-2026-07-01",
+     "thinking-display-updates-2026-08-18",
+     "thinking-token-count-2026-05-13"
+    ],
+    "anthropic-version": "2023-06-01",
+    "names": [
+     "accept",
+     "anthropic-beta",
+     "anthropic-dangerous-direct-browser-access",
+     "anthropic-version",
+     "authorization",
+     "content-type",
+     "user-agent",
+     "x-app",
+     "x-claude-code-session-id"
+    ]
+   },
+   "system": [
+    {
+     "kind": "billing-header",
+     "len": 70,
+     "sha": "1af9df8a09"
+    },
+    {
+     "kind": "identity",
+     "len": 57,
+     "sha": "2719b7a469",
+     "cache": "*"
+    },
+    {
+     "kind": "main-prompt",
+     "len": 5927,
+     "sha": "8098c52047",
+     "cache": "*"
+    }
+   ],
+   "toolset": "78556df638be",
+   "messages": [
+    "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:prompt",
+    "system(str): text:environment+model-identity+deferred-tools+agent-list+skill-list+<total_tokens>+date",
+    "assistant: thinking | tool_use:Read",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Write",
+    "user: tool_result",
+    "system: text:<total_tokens>*"
+   ]
+  },
+  {
+   "n": 5,
+   "kind": "main",
+   "step": "approve",
+   "status": 200,
+   "call": 4,
+   "params": {
+    "keys": [
+     "context_management",
+     "max_tokens",
+     "messages",
+     "metadata",
+     "output_config",
+     "stream",
+     "system",
+     "thinking",
+     "tools"
+    ],
+    "max_tokens": 128000,
+    "thinking": {
+     "type": "adaptive",
+     "display": "updates"
+    },
+    "context_management": {
+     "edits": [
+      {
+       "type": "clear_thinking_20251015",
+       "keep": "all"
+      }
+     ]
+    },
+    "output_config": {
+     "effort": "medium"
+    },
+    "stream": true,
+    "metadata": {
+     "user_id": {
+      "json": {
+       "account_uuid": "str",
+       "device_id": "str",
+       "session_id": "str"
+      }
+     }
+    }
+   },
+   "headers": {
+    "betas": [
+     "advanced-tool-use-2025-11-20",
+     "claude-code-20250219",
+     "context-management-2025-06-27",
+     "effort-2025-11-24",
+     "interleaved-thinking-2025-05-14",
+     "mid-conversation-tool-changes-2026-07-01",
+     "per-turn-control-2026-07-01",
+     "thinking-display-updates-2026-08-18",
+     "thinking-token-count-2026-05-13"
+    ],
+    "anthropic-version": "2023-06-01",
+    "names": [
+     "accept",
+     "anthropic-beta",
+     "anthropic-dangerous-direct-browser-access",
+     "anthropic-version",
+     "authorization",
+     "content-type",
+     "user-agent",
+     "x-app",
+     "x-claude-code-session-id"
+    ]
+   },
+   "system": [
+    {
+     "kind": "billing-header",
+     "len": 70,
+     "sha": "1af9df8a09"
+    },
+    {
+     "kind": "identity",
+     "len": 57,
+     "sha": "2719b7a469",
+     "cache": "*"
+    },
+    {
+     "kind": "main-prompt",
+     "len": 5927,
+     "sha": "8098c52047",
+     "cache": "*"
+    }
+   ],
+   "toolset": "78556df638be",
+   "messages": [
+    "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:prompt",
+    "system(str): text:environment+model-identity+deferred-tools+agent-list+skill-list+<total_tokens>+date",
+    "assistant: thinking | tool_use:Read",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Write",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result",
+    "system: text:<total_tokens>*"
+   ]
+  },
+  {
+   "n": 6,
+   "kind": "main",
+   "step": "always",
+   "status": 200,
+   "call": 1,
+   "params": {
+    "keys": [
+     "context_management",
+     "max_tokens",
+     "messages",
+     "metadata",
+     "output_config",
+     "stream",
+     "system",
+     "thinking",
+     "tools"
+    ],
+    "max_tokens": 128000,
+    "thinking": {
+     "type": "adaptive",
+     "display": "updates"
+    },
+    "context_management": {
+     "edits": [
+      {
+       "type": "clear_thinking_20251015",
+       "keep": "all"
+      }
+     ]
+    },
+    "output_config": {
+     "effort": "medium"
+    },
+    "stream": true,
+    "metadata": {
+     "user_id": {
+      "json": {
+       "account_uuid": "str",
+       "device_id": "str",
+       "session_id": "str"
+      }
+     }
+    }
+   },
+   "headers": {
+    "betas": [
+     "advanced-tool-use-2025-11-20",
+     "claude-code-20250219",
+     "context-management-2025-06-27",
+     "effort-2025-11-24",
+     "interleaved-thinking-2025-05-14",
+     "mid-conversation-tool-changes-2026-07-01",
+     "per-turn-control-2026-07-01",
+     "thinking-display-updates-2026-08-18",
+     "thinking-token-count-2026-05-13"
+    ],
+    "anthropic-version": "2023-06-01",
+    "names": [
+     "accept",
+     "anthropic-beta",
+     "anthropic-dangerous-direct-browser-access",
+     "anthropic-version",
+     "authorization",
+     "content-type",
+     "user-agent",
+     "x-app",
+     "x-claude-code-session-id"
+    ]
+   },
+   "system": [
+    {
+     "kind": "billing-header",
+     "len": 70,
+     "sha": "1af9df8a09"
+    },
+    {
+     "kind": "identity",
+     "len": 57,
+     "sha": "2719b7a469",
+     "cache": "*"
+    },
+    {
+     "kind": "main-prompt",
+     "len": 5927,
+     "sha": "8098c52047",
+     "cache": "*"
+    }
+   ],
+   "toolset": "78556df638be",
+   "messages": [
+    "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:prompt",
+    "system(str): text:environment+model-identity+deferred-tools+agent-list+skill-list+<total_tokens>+date",
+    "assistant: thinking | tool_use:Read",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Write",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | text",
+    "user(str): text:prompt",
+    "system: text:<total_tokens>*"
+   ]
+  },
+  {
+   "n": 7,
+   "kind": "main",
+   "step": "always",
+   "status": 200,
+   "call": 2,
+   "params": {
+    "keys": [
+     "context_management",
+     "max_tokens",
+     "messages",
+     "metadata",
+     "output_config",
+     "stream",
+     "system",
+     "thinking",
+     "tools"
+    ],
+    "max_tokens": 128000,
+    "thinking": {
+     "type": "adaptive",
+     "display": "updates"
+    },
+    "context_management": {
+     "edits": [
+      {
+       "type": "clear_thinking_20251015",
+       "keep": "all"
+      }
+     ]
+    },
+    "output_config": {
+     "effort": "medium"
+    },
+    "stream": true,
+    "metadata": {
+     "user_id": {
+      "json": {
+       "account_uuid": "str",
+       "device_id": "str",
+       "session_id": "str"
+      }
+     }
+    }
+   },
+   "headers": {
+    "betas": [
+     "advanced-tool-use-2025-11-20",
+     "claude-code-20250219",
+     "context-management-2025-06-27",
+     "effort-2025-11-24",
+     "interleaved-thinking-2025-05-14",
+     "mid-conversation-tool-changes-2026-07-01",
+     "per-turn-control-2026-07-01",
+     "thinking-display-updates-2026-08-18",
+     "thinking-token-count-2026-05-13"
+    ],
+    "anthropic-version": "2023-06-01",
+    "names": [
+     "accept",
+     "anthropic-beta",
+     "anthropic-dangerous-direct-browser-access",
+     "anthropic-version",
+     "authorization",
+     "content-type",
+     "user-agent",
+     "x-app",
+     "x-claude-code-session-id"
+    ]
+   },
+   "system": [
+    {
+     "kind": "billing-header",
+     "len": 70,
+     "sha": "1af9df8a09"
+    },
+    {
+     "kind": "identity",
+     "len": 57,
+     "sha": "2719b7a469",
+     "cache": "*"
+    },
+    {
+     "kind": "main-prompt",
+     "len": 5927,
+     "sha": "8098c52047",
+     "cache": "*"
+    }
+   ],
+   "toolset": "78556df638be",
+   "messages": [
+    "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:prompt",
+    "system(str): text:environment+model-identity+deferred-tools+agent-list+skill-list+<total_tokens>+date",
+    "assistant: thinking | tool_use:Read",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Write",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | text",
+    "user(str): text:prompt",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result",
+    "system: text:<total_tokens>*"
+   ]
+  },
+  {
+   "n": 8,
+   "kind": "main",
+   "step": "deny",
+   "status": 200,
+   "call": 1,
+   "params": {
+    "keys": [
+     "context_management",
+     "max_tokens",
+     "messages",
+     "metadata",
+     "output_config",
+     "stream",
+     "system",
+     "thinking",
+     "tools"
+    ],
+    "max_tokens": 128000,
+    "thinking": {
+     "type": "adaptive",
+     "display": "updates"
+    },
+    "context_management": {
+     "edits": [
+      {
+       "type": "clear_thinking_20251015",
+       "keep": "all"
+      }
+     ]
+    },
+    "output_config": {
+     "effort": "medium"
+    },
+    "stream": true,
+    "metadata": {
+     "user_id": {
+      "json": {
+       "account_uuid": "str",
+       "device_id": "str",
+       "session_id": "str"
+      }
+     }
+    }
+   },
+   "headers": {
+    "betas": [
+     "advanced-tool-use-2025-11-20",
+     "claude-code-20250219",
+     "context-management-2025-06-27",
+     "effort-2025-11-24",
+     "interleaved-thinking-2025-05-14",
+     "mid-conversation-tool-changes-2026-07-01",
+     "per-turn-control-2026-07-01",
+     "thinking-display-updates-2026-08-18",
+     "thinking-token-count-2026-05-13"
+    ],
+    "anthropic-version": "2023-06-01",
+    "names": [
+     "accept",
+     "anthropic-beta",
+     "anthropic-dangerous-direct-browser-access",
+     "anthropic-version",
+     "authorization",
+     "content-type",
+     "user-agent",
+     "x-app",
+     "x-claude-code-session-id"
+    ]
+   },
+   "system": [
+    {
+     "kind": "billing-header",
+     "len": 70,
+     "sha": "1af9df8a09"
+    },
+    {
+     "kind": "identity",
+     "len": 57,
+     "sha": "2719b7a469",
+     "cache": "*"
+    },
+    {
+     "kind": "main-prompt",
+     "len": 5927,
+     "sha": "8098c52047",
+     "cache": "*"
+    }
+   ],
+   "toolset": "78556df638be",
+   "messages": [
+    "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:prompt",
+    "system(str): text:environment+model-identity+deferred-tools+agent-list+skill-list+<total_tokens>+date",
+    "assistant: thinking | tool_use:Read",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Write",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | text",
+    "user(str): text:prompt",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | text",
+    "user(str): text:prompt",
+    "system: text:<total_tokens>*"
+   ]
+  },
+  {
+   "n": 9,
+   "kind": "main",
+   "step": "agent-approval",
+   "status": 200,
+   "call": 1,
+   "params": {
+    "keys": [
+     "context_management",
+     "max_tokens",
+     "messages",
+     "metadata",
+     "output_config",
+     "stream",
+     "system",
+     "thinking",
+     "tools"
+    ],
+    "max_tokens": 128000,
+    "thinking": {
+     "type": "adaptive",
+     "display": "updates"
+    },
+    "context_management": {
+     "edits": [
+      {
+       "type": "clear_thinking_20251015",
+       "keep": "all"
+      }
+     ]
+    },
+    "output_config": {
+     "effort": "medium"
+    },
+    "stream": true,
+    "metadata": {
+     "user_id": {
+      "json": {
+       "account_uuid": "str",
+       "device_id": "str",
+       "session_id": "str"
+      }
+     }
+    }
+   },
+   "headers": {
+    "betas": [
+     "advanced-tool-use-2025-11-20",
+     "claude-code-20250219",
+     "context-management-2025-06-27",
+     "effort-2025-11-24",
+     "interleaved-thinking-2025-05-14",
+     "mid-conversation-tool-changes-2026-07-01",
+     "per-turn-control-2026-07-01",
+     "thinking-display-updates-2026-08-18",
+     "thinking-token-count-2026-05-13"
+    ],
+    "anthropic-version": "2023-06-01",
+    "names": [
+     "accept",
+     "anthropic-beta",
+     "anthropic-dangerous-direct-browser-access",
+     "anthropic-version",
+     "authorization",
+     "content-type",
+     "user-agent",
+     "x-app",
+     "x-claude-code-session-id"
+    ]
+   },
+   "system": [
+    {
+     "kind": "billing-header",
+     "len": 70,
+     "sha": "1af9df8a09"
+    },
+    {
+     "kind": "identity",
+     "len": 57,
+     "sha": "2719b7a469",
+     "cache": "*"
+    },
+    {
+     "kind": "main-prompt",
+     "len": 5927,
+     "sha": "8098c52047",
+     "cache": "*"
+    }
+   ],
+   "toolset": "78556df638be",
+   "messages": [
+    "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:prompt",
+    "system(str): text:environment+model-identity+deferred-tools+agent-list+skill-list+<total_tokens>+date",
+    "assistant: thinking | tool_use:Read",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Write",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | text",
+    "user(str): text:prompt",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | text",
+    "user(str): text:prompt",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result:error | text:interrupted-at-tool-use | text:prompt",
+    "system: text:<total_tokens>*"
+   ]
+  },
+  {
+   "n": 10,
+   "kind": "main",
+   "step": "agent-approval",
+   "status": 200,
+   "call": 2,
+   "params": {
+    "keys": [
+     "context_management",
+     "max_tokens",
+     "messages",
+     "metadata",
+     "output_config",
+     "stream",
+     "system",
+     "thinking",
+     "tools"
+    ],
+    "max_tokens": 128000,
+    "thinking": {
+     "type": "adaptive",
+     "display": "updates"
+    },
+    "context_management": {
+     "edits": [
+      {
+       "type": "clear_thinking_20251015",
+       "keep": "all"
+      }
+     ]
+    },
+    "output_config": {
+     "effort": "medium"
+    },
+    "stream": true,
+    "metadata": {
+     "user_id": {
+      "json": {
+       "account_uuid": "str",
+       "device_id": "str",
+       "session_id": "str"
+      }
+     }
+    }
+   },
+   "headers": {
+    "betas": [
+     "advanced-tool-use-2025-11-20",
+     "claude-code-20250219",
+     "context-management-2025-06-27",
+     "effort-2025-11-24",
+     "interleaved-thinking-2025-05-14",
+     "mid-conversation-tool-changes-2026-07-01",
+     "per-turn-control-2026-07-01",
+     "thinking-display-updates-2026-08-18",
+     "thinking-token-count-2026-05-13"
+    ],
+    "anthropic-version": "2023-06-01",
+    "names": [
+     "accept",
+     "anthropic-beta",
+     "anthropic-dangerous-direct-browser-access",
+     "anthropic-version",
+     "authorization",
+     "content-type",
+     "user-agent",
+     "x-app",
+     "x-claude-code-session-id"
+    ]
+   },
+   "system": [
+    {
+     "kind": "billing-header",
+     "len": 70,
+     "sha": "1af9df8a09"
+    },
+    {
+     "kind": "identity",
+     "len": 57,
+     "sha": "2719b7a469",
+     "cache": "*"
+    },
+    {
+     "kind": "main-prompt",
+     "len": 5927,
+     "sha": "8098c52047",
+     "cache": "*"
+    }
+   ],
+   "toolset": "78556df638be",
+   "messages": [
+    "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:prompt",
+    "system(str): text:environment+model-identity+deferred-tools+agent-list+skill-list+<total_tokens>+date",
+    "assistant: thinking | tool_use:Read",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Write",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | text",
+    "user(str): text:prompt",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | text",
+    "user(str): text:prompt",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result:error | text:interrupted-at-tool-use | text:prompt",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | text | tool_use:Agent",
+    "user: tool_result[text]",
+    "system: text:<total_tokens>*"
+   ]
+  },
+  {
+   "n": 11,
+   "kind": "subagent:general-purpose-prompt",
+   "step": "agent-approval",
+   "status": 200,
+   "params": {
+    "keys": [
+     "context_management",
+     "max_tokens",
+     "messages",
+     "metadata",
+     "output_config",
+     "stream",
+     "system",
+     "thinking",
+     "tools"
+    ],
+    "max_tokens": 128000,
+    "thinking": {
+     "type": "adaptive",
+     "display": "updates"
+    },
+    "context_management": {
+     "edits": [
+      {
+       "type": "clear_thinking_20251015",
+       "keep": "all"
+      }
+     ]
+    },
+    "output_config": {
+     "effort": "medium"
+    },
+    "stream": true,
+    "metadata": {
+     "user_id": {
+      "json": {
+       "account_uuid": "str",
+       "device_id": "str",
+       "session_id": "str"
+      }
+     }
+    }
+   },
+   "headers": {
+    "betas": [
+     "advanced-tool-use-2025-11-20",
+     "claude-code-20250219",
+     "context-management-2025-06-27",
+     "effort-2025-11-24",
+     "interleaved-thinking-2025-05-14",
+     "mid-conversation-tool-changes-2026-07-01",
+     "per-turn-control-2026-07-01",
+     "thinking-display-updates-2026-08-18",
+     "thinking-token-count-2026-05-13"
+    ],
+    "anthropic-version": "2023-06-01",
+    "names": [
+     "accept",
+     "anthropic-beta",
+     "anthropic-dangerous-direct-browser-access",
+     "anthropic-version",
+     "authorization",
+     "content-type",
+     "user-agent",
+     "x-app",
+     "x-claude-code-agent-id",
+     "x-claude-code-session-id"
+    ]
+   },
+   "system": [
+    {
+     "kind": "billing-header",
+     "len": 91,
+     "sha": "3de391fcd7"
+    },
+    {
+     "kind": "agent-identity",
+     "len": 62,
+     "sha": "0d7062851d",
+     "cache": "*"
+    },
+    {
+     "kind": "general-purpose-prompt",
+     "len": 2720,
+     "sha": "40e32d0860",
+     "cache": "*"
+    }
+   ],
+   "toolset": "facec68637f4",
+   "messages": [
+    "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:task",
+    "system: text:deferred-tools+environment+model-identity+skill-list+date*"
+   ]
+  },
+  {
+   "n": 12,
+   "kind": "subagent:general-purpose-prompt",
+   "step": "agent-approval",
+   "status": 200,
+   "params": {
+    "keys": [
+     "context_management",
+     "max_tokens",
+     "messages",
+     "metadata",
+     "output_config",
+     "stream",
+     "system",
+     "thinking",
+     "tools"
+    ],
+    "max_tokens": 128000,
+    "thinking": {
+     "type": "adaptive",
+     "display": "updates"
+    },
+    "context_management": {
+     "edits": [
+      {
+       "type": "clear_thinking_20251015",
+       "keep": "all"
+      }
+     ]
+    },
+    "output_config": {
+     "effort": "medium"
+    },
+    "stream": true,
+    "metadata": {
+     "user_id": {
+      "json": {
+       "account_uuid": "str",
+       "device_id": "str",
+       "session_id": "str"
+      }
+     }
+    }
+   },
+   "headers": {
+    "betas": [
+     "advanced-tool-use-2025-11-20",
+     "claude-code-20250219",
+     "context-management-2025-06-27",
+     "effort-2025-11-24",
+     "interleaved-thinking-2025-05-14",
+     "mid-conversation-tool-changes-2026-07-01",
+     "per-turn-control-2026-07-01",
+     "thinking-display-updates-2026-08-18",
+     "thinking-token-count-2026-05-13"
+    ],
+    "anthropic-version": "2023-06-01",
+    "names": [
+     "accept",
+     "anthropic-beta",
+     "anthropic-dangerous-direct-browser-access",
+     "anthropic-version",
+     "authorization",
+     "content-type",
+     "user-agent",
+     "x-app",
+     "x-claude-code-agent-id",
+     "x-claude-code-session-id"
+    ]
+   },
+   "system": [
+    {
+     "kind": "billing-header",
+     "len": 91,
+     "sha": "3de391fcd7"
+    },
+    {
+     "kind": "agent-identity",
+     "len": 62,
+     "sha": "0d7062851d",
+     "cache": "*"
+    },
+    {
+     "kind": "general-purpose-prompt",
+     "len": 2720,
+     "sha": "40e32d0860",
+     "cache": "*"
+    }
+   ],
+   "toolset": "facec68637f4",
+   "messages": [
+    "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:task",
+    "system(str): text:deferred-tools+environment+model-identity+skill-list+date",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result",
+    "system: text:agent-list+<total_tokens>*"
+   ]
+  },
+  {
+   "n": 13,
+   "kind": "main",
+   "step": "agent-approval",
+   "status": 200,
+   "call": 3,
+   "params": {
+    "keys": [
+     "context_management",
+     "max_tokens",
+     "messages",
+     "metadata",
+     "output_config",
+     "stream",
+     "system",
+     "thinking",
+     "tools"
+    ],
+    "max_tokens": 128000,
+    "thinking": {
+     "type": "adaptive",
+     "display": "updates"
+    },
+    "context_management": {
+     "edits": [
+      {
+       "type": "clear_thinking_20251015",
+       "keep": "all"
+      }
+     ]
+    },
+    "output_config": {
+     "effort": "medium"
+    },
+    "stream": true,
+    "metadata": {
+     "user_id": {
+      "json": {
+       "account_uuid": "str",
+       "device_id": "str",
+       "session_id": "str"
+      }
+     }
+    }
+   },
+   "headers": {
+    "betas": [
+     "advanced-tool-use-2025-11-20",
+     "claude-code-20250219",
+     "context-management-2025-06-27",
+     "effort-2025-11-24",
+     "interleaved-thinking-2025-05-14",
+     "mid-conversation-tool-changes-2026-07-01",
+     "per-turn-control-2026-07-01",
+     "thinking-display-updates-2026-08-18",
+     "thinking-token-count-2026-05-13"
+    ],
+    "anthropic-version": "2023-06-01",
+    "names": [
+     "accept",
+     "anthropic-beta",
+     "anthropic-dangerous-direct-browser-access",
+     "anthropic-version",
+     "authorization",
+     "content-type",
+     "user-agent",
+     "x-app",
+     "x-claude-code-session-id"
+    ]
+   },
+   "system": [
+    {
+     "kind": "billing-header",
+     "len": 70,
+     "sha": "1af9df8a09"
+    },
+    {
+     "kind": "identity",
+     "len": 57,
+     "sha": "2719b7a469",
+     "cache": "*"
+    },
+    {
+     "kind": "main-prompt",
+     "len": 5927,
+     "sha": "8098c52047",
+     "cache": "*"
+    }
+   ],
+   "toolset": "78556df638be",
+   "messages": [
+    "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:prompt",
+    "system(str): text:environment+model-identity+deferred-tools+agent-list+skill-list+<total_tokens>+date",
+    "assistant: thinking | tool_use:Read",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Write",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | text",
+    "user(str): text:prompt",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | text",
+    "user(str): text:prompt",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | tool_use:Bash",
+    "user: tool_result:error | text:interrupted-at-tool-use | text:prompt",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | text | tool_use:Agent",
+    "user: tool_result[text]",
+    "system(str): text:<total_tokens>",
+    "assistant: thinking | text",
+    "user: text:reminder/background-event+<task-notification>*"
+   ]
+  }
+ ],
+ "cards": [
+  {
+   "step": "approve",
+   "key": "1"
+  },
+  {
+   "step": "always",
+   "key": "2"
+  },
+  {
+   "step": "deny",
+   "key": "Escape"
+  },
+  {
+   "step": "agent-approval",
+   "key": "1"
+  }
+ ]
+}

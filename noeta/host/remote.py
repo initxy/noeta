@@ -44,9 +44,11 @@ class RemoteClient:
 
     async def create(self, agent: str, input: Input | None = None, *,
                      task_id: str | None = None, config: dict[str, Any] | None = None,
-                     queue: str = "default", dedupe_key: str | None = None) -> str:
+                     queue: str = "default", dedupe_key: str | None = None,
+                     history_from: str | None = None, history_through: int | None = None) -> str:
         body = {"agent": agent, "input": _body(input), "config": config or {}, "queue": queue,
-                "dedupe_key": dedupe_key}
+                "dedupe_key": dedupe_key, "history_from": history_from,
+                "history_through": history_through}
         return str((await self._call("POST", "/tasks", json=body))["task_id"])
 
     async def send(self, task_id: str, input: Input, *,
@@ -60,6 +62,12 @@ class RemoteClient:
                      always: bool = False, data: Any = None) -> int:
         got = await self._call("POST", f"/tasks/{task_id}/answers", json={
             "request_id": request_id, "decision": decision, "always": always, "data": data})
+        return int(got.get("inbox_seq", 0))
+
+    async def signal(self, task_id: str, name: str, data: Any = None, *,
+                     dedupe_key: str | None = None) -> int:
+        got = await self._call("POST", f"/tasks/{task_id}/signals", json={
+            "name": name, "data": data, "dedupe_key": dedupe_key})
         return int(got.get("inbox_seq", 0))
 
     async def cancel(self, task_id: str, reason: str = "", *, turn_only: bool = False) -> None:
@@ -120,6 +128,11 @@ class RemoteClient:
                 if failures > WATCH_RETRIES:
                     raise NoetaError(f"the watch of {task_id} kept closing without an end")
             await asyncio.sleep(min(0.2 * 2 ** (failures - 1), 5.0))
+
+    async def context(self, task_id: str) -> dict[str, Any]:
+        """What fills the task's next request (``GET /tasks/{id}/context``)."""
+        got: dict[str, Any] = await self._call("GET", f"/tasks/{task_id}/context")
+        return got
 
     async def wait(self, task_id: str, *, timeout: float | None = None) -> TaskRow:
         async def settled() -> TaskRow:

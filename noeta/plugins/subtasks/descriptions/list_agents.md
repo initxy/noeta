@@ -1,0 +1,1 @@
+List the agents you can reach with SendMessage: the sub-agents this session started, and other open sessions (tasks) in this store. Each row is labelled with its kind and state. The first word of a row is its address: send with SendMessage({to: "<address>", message: "..."}), copying it character for character.

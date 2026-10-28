@@ -18,7 +18,8 @@ from typing import Any
 import acp
 from acp import schema
 
-from noeta.core.commands import expand_command, list_commands, parse_command
+from noeta.core import models
+from noeta.core.commands import list_commands, parse_command, run_typed
 from noeta.core.events import (
     ExtensionRecorded,
     InputTaken,
@@ -32,20 +33,33 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import CommandContext
-from noeta.core.loop.state import CORE
-from noeta.core.pending import Pending, follow_tree, pending_tree
+from noeta.core.loop.state import CONFIG_SIGNAL, CORE
+from noeta.core.pending import (
+    MODE_NAMES,
+    MODE_SIGNAL,
+    PERMISSION_MODES,
+    Pending,
+    answer_choice,
+    card_title,
+    choices,
+    current_mode,
+    follow_tree,
+    pending_tree,
+)
 from noeta.core.questions import next_question, typed_answer
 from noeta.core.types import Delta, Image, Message, Text, ToolUse
 from noeta.host.local import LocalApp, UnknownAgent
+from noeta.host.rewind import rewind, rewind_points
+from noeta.host.usage import context_breakdown, context_text, cost_text, tree_usage
 
 log = logging.getLogger("noeta.host.acp")
 
 #: Tool name → ACP tool kind (what an editor shows next to the call).
 TOOL_KINDS: dict[str, str] = {
     "Read": "read", "Edit": "edit", "Write": "edit", "Bash": "execute",
-    "BashOutput": "execute", "KillShell": "execute", "Monitor": "execute",
-    "Grep": "search", "Glob": "search", "ToolSearch": "search",
-    "WebFetch": "fetch", "WebSearch": "fetch", "Task": "think",
+    "TaskStop": "execute", "Monitor": "execute",
+    "ToolSearch": "search",
+    "WebFetch": "fetch", "WebSearch": "fetch", "Task": "think", "Agent": "think",
 }
 #: Characters of a tool result shown in the editor.
 RESULT_PREVIEW_CHARS = 4000
@@ -229,6 +243,16 @@ class EditorServers:
         self.by_task[task_id] = table
 
 
+#: Commands the adapter answers itself (name, hint, description).
+HOST_COMMANDS = (
+    ("model", "[name]", "Show or switch the model"),
+    ("context", "", "What fills the next request"),
+    ("cost", "", "Tokens and cost of this session and its sub-agents"),
+    ("rewind", "[n] [both|conversation|code]",
+     "Go back to before a prompt: files here, the conversation in a new session"),
+)
+
+
 class NoetaAcpAgent:
     """The ACP agent side. ``agent`` names the noeta agent each session runs."""
 
@@ -272,11 +296,28 @@ class NoetaAcpAgent:
             self.servers.add(task_id, mcp_servers)
         await self.app.client.wait(task_id, timeout=30)
         self._cwd[task_id] = cwd
+        modes = await self._modes(task_id)
         # After the response, so the editor knows the session it names.
         announce = asyncio.create_task(self._announce_commands(task_id))
         self._background.add(announce)
         announce.add_done_callback(self._background.discard)
-        return schema.NewSessionResponse(session_id=task_id)
+        return schema.NewSessionResponse(session_id=task_id, modes=modes)
+
+    async def _modes(self, task_id: str) -> schema.SessionModeState | None:
+        """The permission modes, as ACP session modes (none when the agent
+        records no mode: it has no permissions plugin)."""
+        mode = current_mode(await self.app.client.events(task_id))
+        if mode is None:
+            return None
+        return schema.SessionModeState(current_mode_id=mode, available_modes=[
+            schema.SessionMode(id=m, name=MODE_NAMES[m]) for m in PERMISSION_MODES])
+
+    async def set_session_mode(self, session_id: str, mode_id: str,
+                               **kw: Any) -> schema.SetSessionModeResponse:
+        if mode_id not in PERMISSION_MODES:
+            raise acp.RequestError(-32602, f"unknown mode {mode_id!r}")
+        await self.app.client.signal(session_id, MODE_SIGNAL, {"mode": mode_id})
+        return schema.SetSessionModeResponse()
 
     def _command_context(self, session_id: str) -> CommandContext:
         return CommandContext(cwd=self._cwd.get(session_id) or os.getcwd(), task_id=session_id)
@@ -287,19 +328,20 @@ class NoetaAcpAgent:
         if agent is None or self.conn is None:
             return
         try:
-            commands = await list_commands(agent, self._command_context(session_id))
-            if not commands:
-                return
+            commands = [(c.name, c.argument_hint, c.description or c.name)
+                        for c in await list_commands(agent, self._command_context(session_id))]
+            own = {name for name, _h, _d in commands}
+            commands += [c for c in HOST_COMMANDS if c[0] not in own]
             await self.conn.session_update(
                 session_id=session_id, update=schema.AvailableCommandsUpdate(
                     session_update="available_commands_update",
                     available_commands=[
                         schema.AvailableCommand(
-                            name=c.name, description=c.description or c.name,
+                            name=name, description=description,
                             input=schema.AvailableCommandInput(
-                                root=schema.UnstructuredCommandInput(hint=c.argument_hint))
-                            if c.argument_hint else None)
-                        for c in commands]))
+                                root=schema.UnstructuredCommandInput(hint=hint))
+                            if hint else None)
+                        for name, hint, description in commands]))
         except Exception:
             log.exception("acp: announcing the commands of %s failed", session_id)
 
@@ -367,15 +409,19 @@ class NoetaAcpAgent:
                 agent = self.app.runtime.agents.get(self.agent)
                 if agent is not None and parse_command(text) is not None:
                     try:
-                        expanded = await expand_command(
-                            agent, self._command_context(session_id), text)
+                        typed = await run_typed(agent.all_extensions(),
+                                                self._command_context(session_id), text)
+                        shown = typed.text if typed is not None and typed.local else None
+                        if typed is None:
+                            shown = await self._host_command(session_id, text)
                     except Exception as exc:  # noqa: BLE001 — shown to the user
-                        failed = f"{text.split()[0]} failed: {exc}"
+                        shown = f"{text.split()[0]} failed: {exc}"
+                    if shown is not None:
                         await self.conn.session_update(
-                            session_id=session_id, update=acp.update_agent_message_text(failed))
+                            session_id=session_id, update=acp.update_agent_message_text(shown))
                         return schema.PromptResponse(stop_reason="end_turn")
-                    if expanded is not None:
-                        message = Message(role="user", content=[Text(text=expanded)],
+                    if typed is not None:
+                        message = Message(role="user", content=[Text(text=typed.text)],
                                           origin="human")
                 turn.seq = await client.send(session_id, message)
             pumping = asyncio.create_task(self._pump(session_id, turn.out))
@@ -390,6 +436,44 @@ class NoetaAcpAgent:
             turn.done = True
             unsubscribe()
         return schema.PromptResponse(stop_reason=stop)  # type: ignore[arg-type]
+
+    async def _host_command(self, session_id: str, text: str) -> str | None:
+        """The adapter's own commands (:data:`HOST_COMMANDS`): the text to
+        show, or ``None`` when ``text`` is not one of them."""
+        parsed = parse_command(text)
+        name, arg = parsed if parsed is not None else ("", "")
+        client = self.app.client
+        if name == "model":
+            if not arg:
+                return f"model: {self.model or '(the agent default)'}"
+            real = models.resolve_alias(arg)
+            await client.signal(session_id, CONFIG_SIGNAL, {"model": real})
+            return f"model set to {real} from the next request on"
+        if name == "cost":
+            return cost_text(await tree_usage(client, session_id))
+        if name == "context":
+            preview = await self.app.runtime.preview(session_id)
+            return context_text(context_breakdown(preview)) if preview is not None \
+                else "this session's agent is not one this editor adapter runs"
+        if name != "rewind":
+            return None
+        points = await rewind_points(client, session_id)
+        words = arg.split()
+        if not words or not words[0].isdigit() or not 1 <= int(words[0]) <= len(points):
+            return "Rewind to before a prompt with /rewind <n> [both|conversation|code]:\n" + \
+                "\n".join(f"{n}. {p.text.splitlines()[0][:80] if p.text else ''}"
+                          + (f" ({len(p.files)} file(s) changed since)" if p.files else "")
+                          for n, p in enumerate(points, 1))
+        what = words[1] if len(words) > 1 else "both"
+        done = await rewind(client, session_id, points[int(words[0]) - 1],
+                            conversation=what in ("both", "conversation"),
+                            files=what in ("both", "code"))
+        lines = [f"restored {len(done.files)} file(s)"] if done.files else []
+        if done.task_id != session_id:
+            await self._adopt(done.task_id)
+            lines.append(f"the conversation before that prompt goes on in session "
+                         f"{done.task_id}; load it to continue (the prompt was: {done.prompt})")
+        return "; ".join(lines) or "nothing to restore"
 
     async def _pump(self, session_id: str, out: asyncio.Queue[Any]) -> None:
         while True:
@@ -429,6 +513,11 @@ class NoetaAcpAgent:
                 out.put_nowait(acp.update_tool_call(ev.call.id, status="in_progress"))
             elif isinstance(ev, ToolFinished):
                 out.put_nowait(finish_update(ev))
+            elif isinstance(ev, ExtensionRecorded) and ev.extension == "permissions" \
+                    and current_mode([rec]):
+                out.put_nowait(schema.CurrentModeUpdate(
+                    session_update="current_mode_update",
+                    current_mode_id=current_mode([rec]) or ""))
             elif isinstance(ev, ExtensionRecorded) and ev.extension == CORE:
                 if ev.kind == "retry":
                     turn.retried(int((ev.data or {}).get("attempt") or 1))
@@ -440,8 +529,11 @@ class NoetaAcpAgent:
                 elif ev.kind == "turn_stopped":
                     return "cancelled"
                 elif ev.kind == "notice":
-                    text = str((ev.data or {}).get("text") or "")
-                    out.put_nowait(acp.update_agent_message_text(f"\n\n[{text}]\n\n"))
+                    data = ev.data if isinstance(ev.data, dict) else {}
+                    text = str(data.get("text") or "")
+                    # Structured news (a review's findings) goes as markdown.
+                    shown = text if data.get("kind") else f"[{text}]"
+                    out.put_nowait(acp.update_agent_message_text(f"\n\n{shown}\n\n"))
             elif isinstance(ev, Waiting):
                 if ev.on == "approval":
                     await out.join()
@@ -481,29 +573,28 @@ class NoetaAcpAgent:
             self._asked.add((p.task_id, p.request_id))
             await out.join()
             await self._ask_one(session_id, p.task_id, p.request_id,
-                                f"[{p.agent or 'sub-agent'}] {p.prompt or p.tool or p.request_id}")
+                                card_title(p, session_id), choices(p.detail))
         return False
 
     async def _ask_permissions(self, session_id: str, waiting: Waiting) -> None:
         for call_id in waiting.ids:
             detail = waiting.detail.get(call_id) or {}
-            await self._ask_one(session_id, session_id, call_id,
-                                str(detail.get("prompt") or call_id))
+            title = str(detail.get("title") or detail.get("prompt") or call_id)
+            await self._ask_one(session_id, session_id, call_id, title, choices(detail))
 
-    async def _ask_one(self, session_id: str, task_id: str, call_id: str, title: str) -> None:
-        options = [
-            schema.PermissionOption(option_id="allow", name="Allow", kind="allow_once"),
-            schema.PermissionOption(option_id="always", name="Always allow", kind="allow_always"),
-            schema.PermissionOption(option_id="deny", name="Deny", kind="reject_once"),
-        ]
+    async def _ask_one(self, session_id: str, task_id: str, call_id: str, title: str,
+                       options: list[dict[str, str]]) -> None:
+        kinds = {"allow": "allow_once", "always": "allow_always", "deny": "reject_once"}
         resp = await self.conn.request_permission(
-            session_id=session_id, options=options,
+            session_id=session_id, options=[
+                schema.PermissionOption(option_id=o["id"], name=o["label"],
+                                        kind=kinds.get(o["id"], "allow_once"))  # type: ignore[arg-type]
+                for o in options],
             tool_call=schema.ToolCallUpdate(tool_call_id=call_id, title=title))
         chosen = getattr(resp.outcome, "option_id", None)
-        if chosen in ("allow", "always"):
-            await self.app.client.answer(task_id, call_id, "allow", always=chosen == "always")
-        else:
-            await self.app.client.answer(task_id, call_id, "deny")
+        known = {o["id"] for o in options}
+        await answer_choice(self.app.client, task_id, call_id,
+                            chosen if chosen in known else "deny")
 
 
 async def serve_stdio(app: LocalApp, *, agent: str = "main", model: str = "",

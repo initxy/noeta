@@ -1,0 +1,161 @@
+"""``NotebookEdit``: replace, insert or delete one cell of a Jupyter notebook
+the model has read. Deferred, as in Claude Code.
+
+A cell is named by the id ``Read`` shows (its ``id``, or ``cell-<index>``
+for a notebook without ids). Replacing a code cell clears its outputs and
+execution count. The notebook is written back with Jupyter's one-space
+indent.
+"""
+
+from __future__ import annotations
+
+import json
+import secrets
+from typing import Any
+
+from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.plugins.fs._mutate import (
+    WriteRoots,
+    authorized_roots,
+    read_precondition_error,
+    record_written,
+)
+from noeta.toolkit.tools import (
+    SCHEMA_DIALECT,
+    PathError,
+    Workspace,
+    load_description,
+    require_str,
+    tool_error,
+)
+
+__all__ = ["NotebookEditTool"]
+
+def _schema() -> dict[str, Any]:
+    return {
+        "$schema": SCHEMA_DIALECT,
+        "type": "object",
+        "properties": {
+            "notebook_path": {"type": "string",
+                              "description": "Absolute path of the notebook to edit."},
+            "cell_id": {"type": "string",
+                        "description": ("The cell to edit. With edit_mode insert, the new cell "
+                                        "goes after this one, or first when it is left out.")},
+            "new_source": {"type": "string", "description": "The cell's new source."},
+            "cell_type": {"type": "string", "enum": ["code", "markdown"],
+                          "description": ("code or markdown. Defaults to the cell's current "
+                                          "type; required with edit_mode insert.")},
+            "edit_mode": {"type": "string", "enum": ["replace", "insert", "delete"],
+                          "description": "replace (the default), insert or delete."},
+        },
+        "required": ["notebook_path", "new_source"],
+        "additionalProperties": False,
+    }
+
+
+def _find(cells: list[Any], cell_id: str) -> int | None:
+    for i, cell in enumerate(cells):
+        if isinstance(cell, dict) and (cell.get("id") or f"cell-{i}") == cell_id:
+            return i
+    return None
+
+
+def _source(text: str) -> list[str]:
+    """Notebook source form: lines keeping their newlines."""
+    return text.splitlines(keepends=True)
+
+
+class NotebookEditTool:
+    name = "NotebookEdit"
+    description = load_description("noeta.plugins.fs", "notebook_edit")
+    read_only = False
+    clearable = False
+    deferred = True
+    input_schema: dict[str, Any]
+
+    def __init__(self, *, write_roots: WriteRoots | None = None) -> None:
+        self.input_schema = _schema()
+        self.write_roots = write_roots
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        path = require_str(input, "notebook_path")
+        if path is None:
+            return tool_error(self.name, "requires non-empty 'notebook_path'")
+        source = input.get("new_source")
+        if not isinstance(source, str):
+            return tool_error(self.name, "requires string 'new_source'")
+        mode = input.get("edit_mode") or "replace"
+        if mode not in ("replace", "insert", "delete"):
+            return tool_error(self.name, "edit_mode must be replace, insert or delete")
+        cell_type = input.get("cell_type")
+        if cell_type not in (None, "code", "markdown"):
+            return tool_error(self.name, "cell_type must be code or markdown")
+        cell_id = input.get("cell_id")
+        if cell_id is not None and not isinstance(cell_id, str):
+            return tool_error(self.name, "cell_id must be a string")
+        if mode != "insert" and not cell_id:
+            return tool_error(self.name, f"cell_id is required to {mode} a cell")
+        if mode == "insert" and cell_type is None:
+            return tool_error(self.name, "cell_type is required to insert a cell")
+        if not path.endswith(".ipynb"):
+            return tool_error(self.name, "only .ipynb notebooks can be edited; use Edit for "
+                                         "other files")
+
+        env = ctx.env
+        ws = await Workspace.of(env)
+        try:
+            resolved = await ws.resolve_write(
+                path, await authorized_roots(ws, self.write_roots, ctx))
+        except PathError as exc:
+            return tool_error(self.name, str(exc))
+        try:
+            raw = await env.read_bytes(resolved)
+        except OSError as exc:
+            return tool_error(self.name, f"read failed: {exc}")
+        refused = read_precondition_error(ctx, resolved, raw, tool_name=self.name,
+                                          verb="editing")
+        if refused is not None:
+            return refused
+        try:
+            nb = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            return tool_error(self.name, f"the notebook is not valid JSON: {exc}")
+        cells = nb.get("cells") if isinstance(nb, dict) else None
+        if not isinstance(cells, list):
+            return tool_error(self.name, "the notebook has no cells array")
+
+        index = _find(cells, cell_id) if cell_id else None
+        if cell_id and index is None:
+            return tool_error(self.name, f"no cell with id {cell_id!r}")
+        if mode == "delete":
+            assert index is not None
+            cells.pop(index)
+            done = f"Deleted cell {cell_id}"
+        elif mode == "insert":
+            new_id = secrets.token_hex(4)
+            cell: dict[str, Any] = {"cell_type": cell_type, "id": new_id, "metadata": {},
+                                    "source": _source(source)}
+            if cell_type == "code":
+                cell.update(execution_count=None, outputs=[])
+            cells.insert(0 if index is None else index + 1, cell)
+            done = f"Inserted cell {new_id}"
+        else:
+            assert index is not None
+            cell = cells[index]
+            cell["source"] = _source(source)
+            if cell_type is not None and cell_type != cell.get("cell_type"):
+                cell["cell_type"] = cell_type
+                if cell_type == "markdown":
+                    cell.pop("outputs", None)
+                    cell.pop("execution_count", None)
+            if cell.get("cell_type") == "code":
+                cell["execution_count"] = None
+                cell["outputs"] = []
+            done = f"Updated cell {cell_id}"
+        body = (json.dumps(nb, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
+        try:
+            await env.write_bytes(resolved, body)
+        except OSError as exc:
+            return tool_error(self.name, f"write failed: {exc}")
+        await record_written(ctx, resolved, body)
+        return text_output(f"{done} in {resolved}.", path=ws.relative(resolved), mode=mode)

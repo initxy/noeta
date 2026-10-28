@@ -36,9 +36,10 @@ class Pending:
     question; ``noeta.plugins.ask_user.answer_question`` validates first).
 
     ``detail``: for an approval, what the gate said (``prompt``, ``reason``,
-    and ``always`` — the rule an "always" answer would remember, or
-    ``None``); for a question, ``{"questions": [...]}`` as the tool
-    normalised them (each with its ``id``)."""
+    ``always`` — the rule an "always" answer would remember, or ``None`` —
+    and ``always_label``, that rule as a person reads it); for a question,
+    ``{"questions": [...]}`` as the tool normalised them (each with its
+    ``id``)."""
 
     task_id: str
     request_id: str
@@ -49,6 +50,97 @@ class Pending:
     detail: dict[str, Any] = field(default_factory=dict)
     #: The agent of the task that asks (a sub-agent's name, for showing).
     agent: str = ""
+
+
+#: Claude Code's permission modes (the permissions plugin's), how front ends
+#: name them, the order a front end's mode key steps through (``dontAsk``
+#: is set only by configuration), and the signal that switches the mode
+#: (``client.signal(task_id, MODE_SIGNAL, {"mode": ...})``).
+PERMISSION_MODES: tuple[str, ...] = ("default", "acceptEdits", "plan", "auto", "dontAsk",
+                                     "bypassPermissions")
+MODE_CYCLE: tuple[str, ...] = ("default", "acceptEdits", "plan", "auto", "bypassPermissions")
+MODE_NAMES: dict[str, str] = {
+    "default": "Default (ask before changes)",
+    "acceptEdits": "Accept edits",
+    "plan": "Plan (explore, change nothing)",
+    "auto": "Auto (a classifier screens what would ask)",
+    "dontAsk": "Don't ask (refuse what would ask)",
+    "bypassPermissions": "Bypass permissions (ask for nothing)",
+}
+MODE_SIGNAL = "permission_mode"
+
+
+def current_mode(events: Sequence[Recorded]) -> str | None:
+    """The task's permission mode, as its permissions plugin last recorded
+    it (``None`` before it has)."""
+    mode = None
+    for rec in events:
+        ev = rec.event
+        if isinstance(ev, ExtensionRecorded) and ev.extension == "permissions" \
+                and ev.kind in ("mode", "plan_exit") and isinstance(ev.data, dict):
+            mode = str(ev.data.get("mode") or "") or mode
+    return mode
+
+
+def next_mode(mode: str | None) -> str:
+    """The mode after ``mode`` in :data:`MODE_CYCLE`."""
+    if mode not in MODE_CYCLE:
+        return MODE_CYCLE[0]
+    return MODE_CYCLE[(MODE_CYCLE.index(mode) + 1) % len(MODE_CYCLE)]
+
+
+def choices(detail: dict[str, Any]) -> list[dict[str, str]]:
+    """An approval's options, Claude Code's card: ``Yes``, the "don't ask
+    again" rule, a mode switch, ``No``. Each is ``{"id", "label"}``; answer
+    with :func:`answer_choice`. A gate that names no choices gets yes /
+    always (when it offers one) / no."""
+    given = detail.get("choices")
+    if isinstance(given, list) and given:
+        return [{"id": str(c.get("id")), "label": str(c.get("label"))}
+                for c in given if isinstance(c, dict)]
+    out = [{"id": "allow", "label": "Yes"}]
+    always = always_option(detail)
+    if always is not None:
+        out.append({"id": "always", "label": always})
+    out.append({"id": "deny", "label": "No"})
+    return out
+
+
+def card_title(item: Pending, root_task_id: str = "") -> str:
+    """What the card is about (``Bash command``), and which sub-agent asks
+    (``· from the Explore agent``) when it is not the root."""
+    title = str(item.detail.get("title") or item.tool or "Tool call")
+    if root_task_id and item.task_id != root_task_id and item.agent:
+        title += f" · from the {item.agent} agent"
+    return title
+
+
+async def answer_choice(client: Any, task_id: str, request_id: str, choice: str,
+                        message: str = "") -> None:
+    """Answer an approval with one of its :func:`choices` (``message``: what
+    the person said when declining)."""
+    if choice == "deny":
+        await client.answer(task_id, request_id, "deny",
+                            data={"message": message} if message else None)
+    elif choice == "always":
+        await client.answer(task_id, request_id, "allow", always=True)
+    elif choice.startswith("mode:"):
+        await client.answer(task_id, request_id, "allow", data={"mode": choice[5:]})
+    else:
+        await client.answer(task_id, request_id, "allow")
+
+
+def always_option(detail: dict[str, Any]) -> str | None:
+    """What an approval's "always" choice says it remembers: ``Always allow
+    Bash(git push *)`` when the gate named its rule, a bare ``Always allow``
+    when the gate said nothing about one, ``None`` when the gate said nothing
+    would be remembered (no "always" choice to offer)."""
+    label = detail.get("always_label")
+    if isinstance(label, str) and label:
+        return f"Always allow {label}"
+    if "always" in detail and detail["always"] is None:
+        return None
+    return "Always allow"
 
 
 def pending(events: Sequence[Recorded], task_id: str = "") -> list[Pending]:
@@ -103,20 +195,31 @@ async def pending_tree(client: Client, task_id: str) -> list[Pending]:
     sub-agent's approval or question surfaces at the root, carrying the
     sub-agent's ``task_id`` to answer it on."""
     out = pending(await client.events(task_id), task_id)
-    for child in await client.tasks(parent_id=task_id, status="waiting"):
-        out.extend(await pending_tree(client, child.task_id))
+    for child in await client.tasks(parent_id=task_id, limit=10_000):
+        if child.status != "ended":
+            out.extend(await pending_tree(client, child.task_id))
     return out
+
+
+async def tree_busy(client: Client, task_id: str) -> bool:
+    """Whether a task below ``task_id`` (a background sub-agent) has not ended."""
+    for child in await client.tasks(parent_id=task_id, limit=10_000):
+        if child.status != "ended" or await tree_busy(client, child.task_id):
+            return True
+    return False
 
 
 async def follow_tree(client: Client, task_id: str, after: int = 0, *,
                       poll: float = 1.0) -> AsyncIterator[Recorded | list[Pending]]:
     """``client.watch(task_id, after)``, plus what its sub-agents wait on a
-    human for: while the task waits on its children, the tree is checked
-    every ``poll`` seconds and, when a descendant waits on an approval or a
-    question, that list is yielded (again on every check until answered —
-    a front end remembers what it has shown)."""
+    human for: while the task waits and a sub-agent below it is still
+    running, the tree is checked every ``poll`` seconds and, when a
+    descendant waits on an approval or a question, that list is yielded
+    (again on every check until answered — a front end remembers what it
+    has shown)."""
     row = await client.get(task_id)
-    on_children = row.status == "waiting" and row.waiting_on == "children"
+    on_children = row.status == "waiting" and (row.waiting_on == "children"
+                                               or await tree_busy(client, task_id))
     records = client.watch(task_id, after).__aiter__()
     nxt: asyncio.Future[Recorded] = asyncio.ensure_future(records.__anext__())
     try:
@@ -126,12 +229,14 @@ async def follow_tree(client: Client, task_id: str, after: int = 0, *,
                 found = [p for p in await pending_tree(client, task_id) if p.task_id != task_id]
                 if found:
                     yield found
+                on_children = await tree_busy(client, task_id)
                 continue
             try:
                 rec = nxt.result()
             except StopAsyncIteration:
                 return
-            on_children = isinstance(rec.event, Waiting) and rec.event.on == "children"
+            on_children = isinstance(rec.event, Waiting) and (
+                rec.event.on == "children" or await tree_busy(client, task_id))
             nxt = asyncio.ensure_future(records.__anext__())
             yield rec
     finally:

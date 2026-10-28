@@ -10,8 +10,8 @@ from collections.abc import AsyncIterator
 from typing import Any, Literal, Union
 
 from noeta.core.errors import UnknownTask
-from noeta.core.events import Answer, Cancel, Recorded, Say, TaskCreated
-from noeta.core.store import NewTask, Post, Status, Store, TaskRow
+from noeta.core.events import Answer, Cancel, External, Recorded, Say, TaskCreated
+from noeta.core.store import NewTask, Post, Status, Store, TaskRow, pin_history
 from noeta.core.types import Message, user
 
 Input = Union[str, Message]
@@ -35,13 +35,20 @@ class Client:
         config: dict[str, Any] | None = None,
         queue: str = "default",
         dedupe_key: str | None = None,
+        history_from: str | None = None,
+        history_through: int | None = None,
     ) -> str:
         """Create a task for ``agent``, optionally with its first message.
-        With ``dedupe_key`` a repeated call returns the first task's id."""
+        With ``dedupe_key`` a repeated call returns the first task's id.
+        ``history_from`` starts it from another task's conversation, up to
+        that task's event ``history_through`` (a fork, a rewind)."""
         tid = task_id or uuid.uuid4().hex
+        created = await pin_history(self.store, TaskCreated(
+            agent=agent, config=dict(config or {}), root_id=tid,
+            history_from=history_from, history_through=history_through))
         task = NewTask(
             task_id=tid,
-            created=TaskCreated(agent=agent, config=dict(config or {}), root_id=tid),
+            created=created,
             queue=queue,
             dedupe_key=dedupe_key,
             inbox=[Say(message=_message(input))] if input is not None else [],
@@ -80,6 +87,15 @@ class Client:
             body=Answer(request_id=request_id, decision=decision, always=always, data=data),
             dedupe_key=f"answer:{request_id}",
         ))
+        return seq
+
+    async def signal(self, task_id: str, name: str, data: Any = None, *,
+                     dedupe_key: str | None = None) -> int:
+        """Post a named signal (``External``) a plugin of the task reads, such
+        as the permissions plugin's ``permission_mode``; returns its inbox
+        seq. It opens no turn."""
+        seq, _ = await self.store.post(Post(task_id=task_id, body=External(name=name, data=data),
+                                            dedupe_key=dedupe_key))
         return seq
 
     async def cancel(self, task_id: str, reason: str = "", *, turn_only: bool = False) -> None:

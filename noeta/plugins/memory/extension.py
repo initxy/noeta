@@ -1,305 +1,276 @@
-"""The ``Memory`` extension: the four tools, the index recorded once per
-task, the index-change line, auto-recall on each user message, the recall
-judge, and the consolidation curator."""
+"""The ``Memory`` extension: Claude Code's auto memory.
+
+Memory is a directory of markdown files, one fact per file, under
+``<noeta home>/projects/<workspace>/memory/`` (the workspace being the
+repository's main checkout, else the working directory). The model writes
+and edits the files with the ordinary ``Write`` / ``Edit`` tools, as the
+memory section of the system prompt tells it. ``MEMORY.md``, the model's
+index, is read when the task starts (its first 200 lines and 25,000 bytes)
+and again after a compaction; when the agent runs the instructions plugin
+after this one, that plugin shows it with the instruction files (Claude
+Code's place for it), reading the directory this plugin records. With a
+``recall_model``, each user message asks that model which memory files bear
+on it and attaches up to five.
+"""
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import inspect
+import json
 import logging
-from collections.abc import Awaitable, Callable, Collection, Sequence
+import posixpath
+import re
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from noeta.core.agent import Agent
 from noeta.core.events import Recorded
 from noeta.core.extension import ContextPart, Extension, TaskView
-from noeta.core.tool import Tool
 from noeta.core.types import Message, ModelRequest, SystemPart, user
-from noeta.plugins.memory.index import (
-    INDEX_DELTA_PREFIX,
-    RECALLED_BODY_FRAME,
-    format_index_delta,
-    format_recall_text,
-    format_recalled_body,
-    index_delta_items,
-    render_memory_index_text,
+from noeta.toolkit.context import (
+    MEMORY_INDEX_FILE,
+    MEMORY_INDEX_MAX_BYTES,
+    MEMORY_INDEX_MAX_LINES,
+    new_user_messages,
+    noeta_home,
+    project_dir,
+    read_memory_index,
+    task_env,
+    trim_memory_index,
 )
-from noeta.plugins.memory.matching import MemoryEntries
-from noeta.plugins.memory.recall import (
-    parse_judge_reply,
-    read_memory_names,
-    recall_memories,
-    render_judge_system,
-)
-from noeta.plugins.memory.store import DEFAULT_GLOBAL_MEMORY_DIR, MemoryStore
-from noeta.plugins.memory.tools import (
-    MEMORY_READ,
-    MemoryArchiveTool,
-    MemoryReadTool,
-    MemorySearchTool,
-    MemoryWriteTool,
-    load_text,
-)
-from noeta.toolkit.context import new_user_messages, resident_budget
 
-__all__ = [
-    "CONSOLIDATION_AGENT_NAME",
-    "MEMORY_POLICY_PROMPT",
-    "MEMORY_POLICY_READ_ONLY_PROMPT",
-    "Memory",
-    "consolidation_agent",
-]
+__all__ = ["INDEX_FILE", "MEMORY_SECTION", "Memory", "load_index", "memory_dir_for"]
 
-_log = logging.getLogger(__name__)
-
-#: The memory-policy fragment a memory-enabled agent's prompt ends with.
-MEMORY_POLICY_PROMPT = load_text("memory-policy", strip=False)
-#: The variant for a read-only store (only ``memory_read`` / ``memory_search``).
-MEMORY_POLICY_READ_ONLY_PROMPT = load_text("memory-policy-read-only", strip=False)
-CONSOLIDATION_PROMPT = load_text("consolidation", strip=False)
-CONSOLIDATION_AGENT_NAME = "__consolidation__"
-_JUDGE_INSTRUCTIONS = load_text("recall_judge")
-_JUDGE_MAX_TOKENS = 200
+log = logging.getLogger("noeta.memory")
 
 
-def _sha(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def _load(name: str) -> str:
+    return (resources.files("noeta.plugins.memory") / "prompts" / f"{name}.md").read_text(
+        "utf-8").strip()
+
+
+#: The system prompt's memory section (``memory/section``); ``{dir}`` is the
+#: memory directory.
+MEMORY_SECTION = _load("section")
+#: The section goes ahead of the agent prompt's environment section, as
+#: Claude Code places it (after the session-specific guidance).
+ENVIRONMENT_HEADING = "# Environment"
+#: The recall selector's instructions (``memory/recall``).
+RECALL_PROMPT = _load("recall")
+
+INDEX_FILE = MEMORY_INDEX_FILE
+INDEX_MAX_LINES = MEMORY_INDEX_MAX_LINES
+INDEX_MAX_BYTES = MEMORY_INDEX_MAX_BYTES
+#: The index as attached when the agent has no instructions plugin to show
+#: it: its path, then its text.
+INDEX_HEAD = ("Contents of {path} (your auto memory index for this project, kept across "
+              "conversations):")
+#: The plugin that shows the index with the instruction files when it runs
+#: after this one.
+INSTRUCTIONS = "instructions"
+
+#: Recall: memories attached per message, the selector's output ceiling, and
+#: the bytes attached over a whole task.
+RECALL_MAX_FILES = 5
+RECALL_MAX_TOKENS = 512
+RECALL_TASK_BYTES = 61_440
+RECALL_HEAD = ("Memories that may be relevant to this message; use one only if it really "
+               "applies to what the user asked.")
+_RECALL_SCHEMA = {
+    "type": "object",
+    "properties": {"selected_memories": {"type": "array", "items": {"type": "string"}}},
+    "required": ["selected_memories"],
+    "additionalProperties": False,
+}
+
+
+def load_index(text: str) -> str:
+    """``MEMORY.md`` within its line and byte limits, with a note when cut."""
+    return trim_memory_index(text)
+
+
+def memory_dir_for(root: str, home: Path | None = None) -> str:
+    return str(project_dir(root, home or noeta_home()) / "memory") + "/"
+
+
+_FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*(\n|\Z)", re.S)
+
+
+def _field(head: str, key: str) -> str:
+    m = re.search(rf"^\s*{key}:\s*(.+?)\s*$", head, re.M)
+    return m.group(1).strip().strip("'\"") if m else ""
+
+
+def _instructions_show_index(view: TaskView, name: str) -> bool:
+    """Whether the instructions plugin runs after this one: it then shows
+    ``MEMORY.md`` among the instruction files, as Claude Code does, reading
+    the directory this plugin records (its ``dir`` record)."""
+    names = [e.name for e in view.extensions]
+    return name in names and INSTRUCTIONS in names[names.index(name) + 1:]
 
 
 class Memory(Extension):
-    """Cross-session memory in a directory of markdown files.
+    """Constructor arguments:
 
-    Constructor arguments (0.6 ``HostConfig`` / memory plugin config):
-
-    * ``root`` — the store directory, or ``root(view)`` returning it (sync or
-      async; ``None`` = the default), resolved once when the task starts
-      and recorded, so the task keeps it (0.6 ``memory_dir`` /
-      ``global_memory_dir`` / ``memory_root_resolver``). Default
-      ``~/.noeta/memories``.
-    * ``read_only`` — offer only ``memory_read`` / ``memory_search``
-      (``memory_read_only``) and the read-only policy.
-    * ``max_bytes`` — page cap for ``memory_write`` (``memory_max_bytes``).
-    * ``index_budget_tokens`` — index budget; ``None`` = 1 % of the task
-      model's window, at most 4,096.
-    * ``recall`` — auto-recall and the index-change line on each user
-      message (off for the consolidation curator).
-    * ``recall_model`` — the judge model asked when a message named no
-      memory (``Options.recall_model``); ``recall_timeout`` bounds it.
-    * ``exclude`` — memory names recall never surfaces (``recall_exclude``).
-    * ``rehang`` — put the index and recalled bodies right after a
-      compaction's summary (``resident``).
+    * ``home`` — noeta's home (default ``$NOETA_HOME`` or ``~/.noeta``); the
+      memory directory is ``<home>/projects/<workspace>/memory/``.
+    * ``directory`` — use this directory instead.
+    * ``recall_model`` — the model asked, on each user message, which memory
+      files to attach (off when unset).
+    * ``rehang`` — read ``MEMORY.md`` again after a compaction.
     """
 
     name = "memory"
 
-    def __init__(
-        self,
-        *,
-        root: Any = None,
-        read_only: bool = False,
-        max_bytes: int | None = None,
-        index_budget_tokens: int | None = None,
-        recall: bool = True,
-        recall_model: str | None = None,
-        recall_timeout: float = 10.0,
-        exclude: Collection[str] = (),
-        rehang: bool = True,
-    ) -> None:
-        if isinstance(exclude, (str, bytes)):
-            raise ValueError("Memory: exclude must be a collection of memory names")
-        for label, value in (("max_bytes", max_bytes), ("index_budget_tokens",
-                                                        index_budget_tokens)):
-            if value is not None and (isinstance(value, bool) or value <= 0):
-                raise ValueError(f"Memory: {label} must be a positive int")
-        self.root = root
-        self.read_only = read_only
-        self.max_bytes = max_bytes
-        self.index_budget_tokens = index_budget_tokens
-        self.recall = recall
+    def __init__(self, *, home: str | None = None, directory: str | None = None,
+                 recall_model: str | None = None, rehang: bool = True) -> None:
+        self.home = Path(home).expanduser() if home else None
+        self.directory = directory
         self.recall_model = recall_model
-        self.recall_timeout = recall_timeout
-        self.exclude = frozenset(exclude)
         self.rehang = rehang
-        self._tools: list[Tool] = [MemoryReadTool(self.name), MemorySearchTool(self.name)]
-        if not read_only:
-            self._tools = [MemoryWriteTool(self.name, max_bytes=max_bytes), *self._tools,
-                           MemoryArchiveTool(self.name)]
-
-    @property
-    def policy(self) -> str:
-        return MEMORY_POLICY_READ_ONLY_PROMPT if self.read_only else MEMORY_POLICY_PROMPT
-
-    def context(self, view: TaskView) -> Sequence[ContextPart]:
-        """The memory policy, after the agent's own prompt."""
-        name = "memory/policy-read-only" if self.read_only else "memory/policy"
-        return (ContextPart(text=view.prompt(name, self.policy)),)
 
     # ------------------------------------------------------------ state
 
     def initial_state(self) -> Any:
-        return {"root": None, "index": None, "bodies": {}}
+        return {"dir": None, "surfaced": [], "bytes": 0}
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         state = state or self.initial_state()
-        if kind == "root":
-            return {**state, "root": data["root"]}
-        if kind == "index":
-            return {**state, "index": data["text"]}
+        if kind == "dir":
+            return {**state, "dir": data["dir"]}
         if kind == "recalled":
-            return {**state, "bodies": {**state["bodies"], data["name"]: data["hash"]}}
+            return {**state, "surfaced": [*state["surfaced"], *data["paths"]],
+                    "bytes": state["bytes"] + int(data.get("bytes") or 0)}
         return state
 
-    def tools(self, view: TaskView) -> Sequence[Tool]:
-        return self._tools
+    def _dir(self, view: TaskView) -> str | None:
+        return (view.ext_state(self.name) or {}).get("dir")
 
-    def store(self, view: TaskView) -> MemoryStore | None:
-        root = (view.ext_state(self.name) or {}).get("root")
-        return MemoryStore(Path(root)) if root else None
+    # ------------------------------------------------------------ prompt
+
+    def context(self, view: TaskView) -> Sequence[ContextPart]:
+        directory = self._dir(view)
+        if directory is None:
+            return ()
+        text = view.prompt("memory/section", MEMORY_SECTION).replace("{dir}", directory)
+        return (ContextPart(text=text, before=ENVIRONMENT_HEADING),)
 
     # ------------------------------------------------------------ hooks
 
     async def on_start(self, view: TaskView) -> None:
-        state = view.ext_state(self.name) or {}
-        if not state.get("root"):
-            root = await self._resolve_root(view)
-            view.record(self.name, "root", {"root": root})
-        else:
-            root = state["root"]
-        if state.get("index") is None:
-            store = MemoryStore(Path(root))
-            entries, updated = await asyncio.to_thread(store.index_snapshot)
-            if entries:
-                text = render_memory_index_text(entries, budget_tokens=self._budget(view),
-                                                updated=updated)
-                view.record(self.name, "index", {"text": text},
-                            message=user(text, origin="system"))
+        if self._dir(view) is not None:
+            return
+        directory = self.directory or memory_dir_for(await self._workspace(view), self.home)
+        try:
+            Path(directory).mkdir(parents=True, exist_ok=True)
+        except OSError:
+            log.warning("memory: could not create %s", directory)
+        view.record(self.name, "dir", {"dir": directory})
+        index = None if _instructions_show_index(view, self.name) else self._index(directory)
+        if index is not None:
+            view.record(self.name, "index", {}, message=user(index, origin="system"))
+
+    async def lead_resident(self, view: TaskView) -> Sequence[Message]:
+        directory = self._dir(view)
+        if not self.rehang or directory is None or _instructions_show_index(view, self.name):
+            return ()
+        index = self._index(directory)
+        return (user(index, origin="system"),) if index is not None else ()
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
-        if not self.recall:
+        directory = self._dir(view)
+        if not self.recall_model or view.complete is None or directory is None:
             return
         messages = new_user_messages(view.state, recorded.seq)
-        store = self.store(view)
-        if not messages or store is None:
-            return
-        for message in messages:
-            await self._recall(view, store, message.text)
-        await self._delta(view, store)
-
-    # ------------------------------------------------------------ recall
-
-    async def _recall(self, view: TaskView, store: MemoryStore, text: str) -> None:
-        state = view.ext_state(self.name) or {}
-        pinned: dict[str, str] = state.get("bodies") or {}
-        visible = {n for n in pinned if self._body_visible(view, n)}
-        changed = set()
-        for name, digest in pinned.items():
-            current = await asyncio.to_thread(store.read, name)
-            if current is not None and _sha(current) != digest:
-                changed.add(name)
-        resident = (visible | read_memory_names(view.state.messages, MEMORY_READ)) - changed
-        judge = self._judge(view) if self.recall_model else None
-        hits = await recall_memories(store, text, resident=resident, exclude=self.exclude,
-                                     judge=judge)
-        for hit in hits:
-            if hit.full:
-                view.record(self.name, "recalled", {"name": hit.name, "hash": _sha(hit.text)},
-                            message=user(format_recalled_body(hit.name, hit.text),
-                                         origin="memory"))
-        pointers = [h for h in hits if not h.full]
-        if pointers:
-            view.record(self.name, "pointers", {"names": [h.name for h in pointers]},
-                        message=user(format_recall_text(pointers), origin="memory"))
-
-    @staticmethod
-    def _body_visible(view: TaskView, name: str) -> bool:
-        head = f"{RECALLED_BODY_FRAME}\n\n## {name}\n"
-        return any(m.origin == "memory" and m.text.startswith(head) for m in view.state.messages)
-
-    def _judge(self, view: TaskView) -> Callable[[MemoryEntries, str],
-                                                 Awaitable[tuple[str, ...]]] | None:
-        complete = view.complete
-        model = self.recall_model
-        if complete is None or not model:
-            return None
-        budget = self._budget(view)
-
-        async def judge(entries: MemoryEntries, text: str) -> tuple[str, ...]:
-            if not entries:
-                return ()
-            system = render_judge_system(
-                entries, view.prompt("memory/recall_judge", _JUDGE_INSTRUCTIONS),
-                budget_tokens=budget)
-            request = ModelRequest(model=model, system=[SystemPart(text=system, cache=True)],
-                                   messages=[user(text)], max_tokens=_JUDGE_MAX_TOKENS,
-                                   thinking=False)
-            try:
-                response = await asyncio.wait_for(complete(request), self.recall_timeout)
-            except Exception:  # noqa: BLE001 — a judge failure is a lexical miss
-                _log.info("memory: recall judge failed; treating as a miss", exc_info=True)
-                return ()
-            return parse_judge_reply(response.message.text, entries)
-
-        return judge
-
-    async def _delta(self, view: TaskView, store: MemoryStore) -> None:
-        snapshot = (view.ext_state(self.name) or {}).get("index")
-        if snapshot is None:
-            return
-        entries, updated = await asyncio.to_thread(store.index_snapshot)
-        text = format_index_delta(index_delta_items(snapshot, entries, updated))
-        if text is None:
-            return
-        last = next((m.text for m in reversed(view.state.messages)
-                     if m.origin == "system" and m.text.startswith(INDEX_DELTA_PREFIX)), None)
-        if text != last:
-            view.record(self.name, "delta", {}, message=user(text, origin="system"))
+        if messages:
+            await self._recall(view, directory, "\n\n".join(m.text for m in messages))
 
     # ------------------------------------------------------------ helpers
 
-    async def _resolve_root(self, view: TaskView) -> str:
-        root = self.root
-        if callable(root):
-            root = root(view)
-            if inspect.isawaitable(root):
-                root = await root
-        return str(Path(root).expanduser() if root is not None else DEFAULT_GLOBAL_MEMORY_DIR)
+    async def _workspace(self, view: TaskView) -> str:
+        """The repository's main checkout when the working directory is in
+        one (so every worktree shares one memory), else the directory."""
+        env = task_env(view.env, view.state.config)
+        cwd = str(view.state.config.get("cwd") or env.cwd)
+        try:
+            out = await env.run(["git", "rev-parse", "--path-format=absolute",
+                                 "--git-common-dir"], cwd=cwd, timeout=5, output_cap=4096)
+        except Exception:  # noqa: BLE001 — not a repository, or no git
+            return cwd
+        common = out.stdout.decode("utf-8", errors="replace").strip()
+        if out.exit_code != 0 or not common:
+            return cwd
+        return posixpath.dirname(common.rstrip("/")) if common.rstrip("/").endswith("/.git") \
+            else cwd
 
-    def _budget(self, view: TaskView) -> int:
-        if self.index_budget_tokens is not None:
-            return self.index_budget_tokens
-        return resident_budget(str(view.state.config.get("model") or ""))
+    @staticmethod
+    def _index(directory: str) -> str | None:
+        found = read_memory_index(directory)
+        if found is None:
+            return None
+        path, text = found
+        return f"{INDEX_HEAD.format(path=path)}\n\n{text}"
 
-    async def resident(self, view: TaskView) -> Sequence[Message]:
-        """After a compaction: the index, then every recalled body (read
-        again; its new hash is recorded so recall stays silent on it)."""
-        if not self.rehang:
-            return ()
+    @staticmethod
+    def _manifest(directory: str, skip: set[str]) -> list[tuple[str, str]]:
+        """``(file name, manifest line)`` for every memory file not yet attached."""
+        out: list[tuple[str, float, str]] = []
+        for path in Path(directory).glob("*.md"):
+            if path.name == INDEX_FILE or str(path) in skip:
+                continue
+            try:
+                text = path.read_text("utf-8")
+                mtime = path.stat().st_mtime
+            except (OSError, UnicodeDecodeError):
+                continue
+            m = _FRONTMATTER.match(text)
+            head = m.group(1) if m else ""
+            kind, desc = _field(head, "type"), _field(head, "description")
+            when = datetime.fromtimestamp(mtime, tz=UTC).isoformat(timespec="seconds")
+            line = f"- {f'[{kind}] ' if kind else ''}{path.name} ({when})"
+            out.append((path.name, mtime, f"{line}: {desc}" if desc else line))
+        out.sort(key=lambda t: -t[1])
+        return [(name, line) for name, _, line in out]
+
+    async def _recall(self, view: TaskView, directory: str, query: str) -> None:
         state = view.ext_state(self.name) or {}
-        out: list[Message] = []
-        if state.get("index") is not None:
-            out.append(user(state["index"], origin="system"))
-        store = self.store(view)
-        if store is None:
-            return out
-        for name in state.get("bodies") or {}:
-            text = await asyncio.to_thread(store.read, name)
-            if text is not None:
-                view.record(self.name, "recalled", {"name": name, "hash": _sha(text)})
-                out.append(user(format_recalled_body(name, text), origin="memory"))
-        return out
-
-
-def consolidation_agent(model: str, *, root: Any = None, **memory: Any) -> Agent:
-    """The background curator (ADR-035): an ordinary one-shot agent with only
-    the memory tools and the index (no recall), driven by the host with a
-    digest of recent sessions as its message. Register it under
-    :data:`CONSOLIDATION_AGENT_NAME` next to ``main``."""
-    return Agent(
-        name=CONSOLIDATION_AGENT_NAME,
-        model=model,
-        system_prompt=CONSOLIDATION_PROMPT,
-        extensions=(Memory(root=root, recall=False, read_only=False, **memory),),
-        one_shot=True,
-    )
+        if int(state.get("bytes") or 0) >= RECALL_TASK_BYTES:
+            return
+        manifest = self._manifest(directory, set(state.get("surfaced") or []))
+        if not manifest:
+            return
+        assert view.complete is not None and self.recall_model is not None
+        listing = "\n".join(line for _, line in manifest)
+        request = ModelRequest(
+            model=self.recall_model,
+            system=[SystemPart(text=view.prompt("memory/recall", RECALL_PROMPT), cache=True)],
+            messages=[user(f"Memory files:\n{listing}\n\nPick the memories relevant to:\n"
+                           f"{query}")],
+            max_tokens=RECALL_MAX_TOKENS, thinking=False, output_schema=_RECALL_SCHEMA)
+        try:
+            response = await view.complete(request)
+            picked = json.loads(response.message.text).get("selected_memories") or []
+        except Exception:
+            log.info("memory: recall selection failed", exc_info=True)
+            return
+        names = {name for name, _ in manifest}
+        budget = RECALL_TASK_BYTES - int(state.get("bytes") or 0)
+        parts: list[str] = []
+        paths: list[str] = []
+        used = 0
+        for name in [p for p in picked if isinstance(p, str) and p in names][:RECALL_MAX_FILES]:
+            path = Path(directory) / name
+            try:
+                body = path.read_text("utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            size = len(body.encode("utf-8"))
+            if used + size > budget:
+                break
+            used += size
+            parts.append(f"Memory {path}:\n{body.strip()}")
+            paths.append(str(path))
+        if parts:
+            view.record(self.name, "recalled", {"paths": paths, "bytes": used},
+                        message=user(RECALL_HEAD + "\n\n" + "\n\n".join(parts), origin="memory"))

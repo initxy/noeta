@@ -7,7 +7,9 @@ crashes, waits for a person at no cost, and runs on one process or many machines
 
 The only unit of work. A task has an agent, a config, an event log, an inbox and a row in
 `tasks` (a projection of the log written in the same transaction). Sub-agents are child tasks
-with `parent_id` / `root_id`. There is no session, run or workflow entity.
+with `parent_id` / `root_id`; a task may start from another's conversation
+(`TaskCreated.history_from`: a resumed or forked sub-agent). There is no session, run or workflow
+entity.
 
 ## Event log
 
@@ -39,14 +41,17 @@ the ways in: HTTP with `RemoteClient`, ACP) > `noeta/toolkit` (code plugins shar
 `noeta/core`. `|` siblings never import each other, nor do two plugins or two backends
 (`lint-imports`). One plugin reaches another only through the kernel: a tool by name
 (`TaskView.find_tool`), inherited config (`Extension.inherit`), runnable agents
-(`TaskView.agents`). Front ends import no plugin. The SDK is everything but `noeta/cli`.
+(`TaskView.agents`), or a record another plugin documents as read by others (the memory
+plugin's `dir`, which the instructions plugin reads to show `MEMORY.md`; the shell plugin's
+`cwd`, which the permissions plugin judges commands from). Front ends import no plugin. The SDK is everything but `noeta/cli`.
 
 ## Ways in
 
 One API, the client (`noeta/core/client.py`): create, send, answer, cancel, read and watch
 events. HTTP (`noeta/host/http.py`, `noeta serve`) is that API on the wire; ACP
-(`noeta/host/acp.py`) translates the protocol editors speak into it. A new outside protocol is
-another translation in `host`, never a second API.
+(`noeta/host/acp.py`) translates the protocol editors speak into it, and
+`noeta/host/stream_json.py` Claude Code's headless protocol (`noeta -p`, the server's
+`/stream-json`). A new outside protocol is another translation in `host`, never a second API.
 
 ## Where code goes
 
@@ -75,36 +80,61 @@ it off), a ready `Extension`, or on/off. One table at every level (`build_agents
 plugin merge key by key. `add` (`[agents.<name>] add_plugins`, `"*"` for all) appends plugins
 to an agent without copying its file. The built-in agents keep memory and MCP off until set.
 
+## Config places
+
+noeta reads only its own places: `~/.noeta/` (`NOETA_HOME`), a project's `.noeta/` (most of it
+only once trusted), `NOETA.md` and the cross-tool `AGENTS.md`, and the machine's managed
+directory (`/etc/noeta`). The mechanisms and formats inside are Claude Code's (instruction
+layering, settings, skills, agents, `.noeta/mcp.json`); its own places (`~/.claude/`,
+`.claude/`, `CLAUDE.md`, `.mcp.json`, `CLAUDE_*` variables) are never read
+(`noeta/cli/settings_files.py`, `noeta/plugins/instructions/files.py`). Trusted projects are
+listed in `~/.noeta/trusted.json` (`noeta trust`); a trusted project's MCP servers start only
+with Claude Code's consent keys in its own settings, so a cloned repository never starts a
+process by itself.
+
 ## Extension
 
 The one capability-plugin interface (`noeta/core/extension.py`): tools, context parts, commands,
-reminders, `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow),
-`after_tool`, `on_event`, `reduce`, `inherit`, `on_context_overflow`, `resident`. Every method
-is optional. Commands (`commands(ctx)` / `run_command`) are slash commands front ends list and
-expand through `noeta/core/commands.py`: a template filled with `{args}`, or text the plugin
-returns. A tool asks the person by parking on `ask(...)` (`noeta/core/questions.py`) and tells
-them something with `notify`; neither reaches the model as the user.
+reminders, `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow;
+an approving Allow satisfies asks that are not firm), `resolve_ask` (answers asks before the
+call parks), `after_tool`, `on_event`, `reduce`, `continue_state`, `inherit`, `on_context_overflow`,
+`before_compact` (asked by the compacting plugin), `resident`, `lead_resident`. Every method is
+optional. Commands (`commands(ctx)` / `run_command`) are slash commands front ends list and
+expand through `noeta/core/commands.py`. A `before_model` that raises `TurnDone` ends the turn
+without a model call (`/compact`); `RequestStale` has the request built again (a compaction).
+A tool asks the person by parking on `ask(...)` (`noeta/core/questions.py`) and tells them
+something with `notify`; neither reaches the model as the user.
+
+## Deferred tool
+
+A tool that sets `deferred = True` is named to the model (`TaskView.deferred_tool_names`) and
+sent only once the model loads it with `ToolSearch`, which the runner adds while any is offered
+(`noeta/core/deferred.py`). MCP tools are deferred by default.
 
 ## Agent file
 
-An agent is a markdown file (`noeta/agents/agent_files.py`): YAML frontmatter (`name`,
-`description`, `model`, `plugins` as names or `name: {arguments}`, optional `tools`,
-`one_shot`) and the system prompt as body. One plugin instance per name and arguments is shared
+An agent is a markdown file (`noeta/agents/agent_files.py`): YAML frontmatter (Claude Code's
+fields, plus `plugins` as names or `name: {arguments}` and `one_shot`) and the system prompt as
+body. A sub-agent runs in the background; in auto mode it ends its run with `SubagentHandback`,
+whose report reaches its caller as an `agent`-origin message, elsewhere its last reply is the
+result in its completion notice (`noeta/plugins/subtasks`). One plugin instance per name and arguments is shared
 by every agent naming it. The built-ins are `noeta/agents/files/*.md`.
 
 ## Prompt name
 
-Every model-facing text has a name: `system/<agent>`, `tool/<Tool>`, `<plugin>/<key>`,
-`reminder/<key>`. The owning code holds the default; overrides (host prompt dirs <
+Every model-facing text has a name: `system/<agent>`, `identity/<agent>`, `tool/<Tool>`,
+`<plugin>/<key>`, `reminder/<key>`. The owning code holds the default; overrides (host prompt dirs <
 `<cwd>/.noeta/prompts` < task config `prompts`) are recorded when the task first starts, so a
 resumed task sends the same bytes (`noeta/core/prompts.py`).
 
 ## Reminder
 
 Text for the model that is not the user speaking. A plugin returns `Reminder`s from
-`reminders(view)`, called before every model call; the runner records them as `system`-origin
-messages and puts them in that request. Text fixed at task start (environment, instructions,
-skill listing) is recorded in `on_start`; what must wake a waiting task goes through the inbox.
+`reminders(view)`, called before every model call; the runner records them and puts them in
+that request: `role="user"` ones as `system`-origin text in the user's turn, then `role="system"`
+ones as system turns by `order` (adapters join adjacent system turns, as Claude Code sends its
+environment and budget notes). Text fixed at task start is captured in `on_start`; what must
+wake a waiting task goes through the inbox.
 
 ## Park
 
@@ -113,8 +143,11 @@ A tool call that waits (a question, an approval, children) parks: the task ends 
 
 ## origin
 
-A message's `origin` says who speaks in the user channel: `user`, or `system` / `memory` for
-text the host or a plugin adds (reminders, notices, recalled memory). Providers render those as
+A message's `origin` says who speaks in the user channel: `user`, `system` / `memory` for
+text the host or a plugin adds (reminders, notices, recalled memory), or `agent` for another
+agent's framed message (a sub-agent's hand-back, sent as plain text), or `inline` for host text
+joined into the person's turn as plain text (a typed command's skill body, the interrupted
+marker). Providers render `system` / `memory` as
 `<system-reminder>` blocks (Anthropic) or with a preamble saying it is not the user (OpenAI
 shapes); user text cannot forge the tag.
 
@@ -131,9 +164,10 @@ _Avoid_: `class Run`, `class Workflow`, `WorkflowRunner`, `class Mutator`, `clas
 
 ## Naming: model-visible tool names
 
-Tool names the model sees follow Claude Code (`Read`, `Glob`, `Grep`, `Edit`, `Write`, `Bash`,
-`TodoWrite`, `AskUserQuestion`, `Task`, `WebFetch`, `WebSearch`, …) because models carry their
-strongest prior on those names. Everything else is snake_case.
+Tool names the model sees follow Claude Code (`Read`, `Edit`, `Write`, `Bash`, `Agent`,
+`AskUserQuestion`, `Skill`, `ToolSearch`, `WebFetch`, `Workflow`, …) because models carry their
+strongest prior on those names; they are exempt from the bans above. Everything else is
+snake_case.
 
 ## Naming: enforcement
 

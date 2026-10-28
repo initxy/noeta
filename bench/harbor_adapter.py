@@ -254,9 +254,9 @@ class Noeta(BaseInstalledAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
-        """Invoke `noeta -p --json` once and tee its output to the logs
-        directory; its last line is the usage summary the post-run hook
-        parses. Credentials come from harbor's environment (see the module
+        """Invoke `noeta -p --output-format stream-json` once and tee its
+        output to the logs directory; its `result` line carries the usage
+        the post-run hook parses. Credentials come from harbor's environment (see the module
         docstring)."""
         model = self.model_name or _DEFAULT_MODEL
         env: dict[str, str] = _proxy_env()
@@ -280,7 +280,7 @@ class Noeta(BaseInstalledAgent):
         effort_arg = f"--effort {shlex.quote(_EFFORT)} " if _EFFORT else ""
         command = (
             f'NOETA_BIN=$(cat {shlex.quote(_REMOTE_BIN_MARKER)} 2>/dev/null || echo noeta); '
-            f'"$NOETA_BIN" -p {shlex.quote(instruction)} --json --permission-mode bypassPermissions '
+            f'"$NOETA_BIN" -p {shlex.quote(instruction)} --output-format stream-json --verbose --permission-mode bypassPermissions '
             f"--cwd {cwd_arg} "
             f"--model {shlex.quote(model)} "
             f"{effort_arg}"
@@ -291,9 +291,10 @@ class Noeta(BaseInstalledAgent):
     def populate_context_post_run(self, context: AgentContext) -> None:
         """Read token usage from the CLI's JSON output.
 
-        `noeta -p --json` ends with `{"answer", "task_id", "model", "usage"}`; the tee
-        above may prepend tool/log lines, so scan for the last parseable object
-        carrying a `usage` key rather than assuming a single clean line. A run
+        `noeta -p --output-format stream-json` ends with Claude Code's `result`
+        message, whose `modelUsage` covers the task and its sub-agents; the tee
+        above may mix in log lines, so scan for the last parseable `result`
+        rather than assuming a clean stream. A run
         that produced no parseable usage leaves the context counters at their
         defaults — best-effort, exactly as `pi` tolerates a missing field.
         """
@@ -301,7 +302,7 @@ class Noeta(BaseInstalledAgent):
         if not output_file.exists():
             return
 
-        usage: dict[str, Any] | None = None
+        by_model: dict[str, Any] | None = None
         for line in output_file.read_text().splitlines():
             line = line.strip()
             if not line.startswith("{"):
@@ -310,14 +311,18 @@ class Noeta(BaseInstalledAgent):
                 payload = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(payload, dict) and "usage" in payload:
-                usage = payload["usage"]
+            if isinstance(payload, dict) and payload.get("type") == "result":
+                by_model = payload.get("modelUsage")
 
-        if not isinstance(usage, dict):
+        if not isinstance(by_model, dict):
             return
 
-        context.n_input_tokens = int(
-            (usage.get("uncached", 0) or 0) + (usage.get("cache_read", 0) or 0)
-            + (usage.get("cache_write", 0) or 0))
-        context.n_output_tokens = int(usage.get("output", 0) or 0)
-        context.n_cache_tokens = int(usage.get("cache_read", 0) or 0)
+        def total(key: str) -> int:
+            return sum(int(m.get(key, 0) or 0) for m in by_model.values()
+                       if isinstance(m, dict))
+
+        cache_read = total("cacheReadInputTokens")
+        context.n_input_tokens = (total("inputTokens") + cache_read
+                                  + total("cacheCreationInputTokens"))
+        context.n_output_tokens = total("outputTokens")
+        context.n_cache_tokens = cache_read

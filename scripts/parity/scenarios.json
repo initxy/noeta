@@ -1,0 +1,68 @@
+{
+  "model": "claude-opus-5-5",
+  "sessions": {
+    "m1": {
+      "about": "auto mode (the default): the main tour, an interrupt, plan mode, /compact",
+      "steps": [
+        {"name": "warmup", "say": "hi"},
+        {"name": "edit", "say": "Read src/calc.py, make div raise ValueError on a zero divisor, add tests/test_calc.py with pytest tests for add and div, and run them."},
+        {"name": "search", "say": "Find every python file in the repo and search them for function definitions; list file:line for each."},
+        {"name": "bg", "say": "Run 'sleep 25; echo bg-done' in the background, and tell me when it has finished.", "idle": 45},
+        {"name": "mcp", "say": "Use the echo MCP server: echo the text 'ping', and also read its resource echo://readme."},
+        {"name": "web", "say": "Fetch https://example.com and tell me the page title."},
+        {"name": "agent", "say": "Use a subagent to count the lines in every python file in this repo and report the totals."},
+        {"name": "skill", "say": "/release-notes v0.1"},
+        {"name": "todo", "say": "Plan this as a short task list first, then do it: add a mul function to calc.py with a test, and update CLAUDE.md to mention it."},
+        {"name": "ask", "say": "Ask me which of two docstring styles (Google or NumPy) to use for calc.py before changing anything.", "cards": ["Enter"]},
+        {"name": "interrupt", "say": "Without using any tools, explain in at least thirty paragraphs of plain prose how floating point division works.", "interrupt": true},
+        {"name": "after-interrupt", "say": "Never mind that. Just tell me how many functions calc.py has."},
+        {"name": "plan", "say": "/plan add structured logging to calc.py", "cards": ["Enter"]},
+        {"name": "compact", "say": "/compact"},
+        {"name": "after-compact", "say": "What have we done so far in this session? One short paragraph."}
+      ]
+    },
+    "m2": {
+      "about": "default permission mode: approve, don't ask again, deny, and a sub-agent's approval (card keys: 1 yes, 2 yes and do not ask again, Escape no; the number of No differs per card)",
+      "cc_args": ["--permission-mode", "default"],
+      "permission_mode": "default",
+      "steps": [
+        {"name": "approve", "say": "Create notes/todo.md with three bullet points about improving calc.py, then run git status.", "cards": ["1"]},
+        {"name": "always", "say": "Run `python3 -c 'print(6*7)'` with Bash and tell me the output.", "cards": ["2"]},
+        {"name": "deny", "say": "Delete notes/todo.md with rm.", "cards": ["Escape"]},
+        {"name": "agent-approval", "say": "Use a general-purpose subagent to run `mkdir -p out && touch out/agent-was-here` with Bash and report back.", "cards": ["1"]}
+      ]
+    },
+    "m3": {
+      "about": "auto-compaction on a small window (100K x 30%)",
+      "env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "100000", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "30"},
+      "data": true,
+      "steps": [
+        {"name": "r1", "say": "Read data.txt lines 1-1000 with the Read tool and tell me how many rows contain the word gamma three or more times."},
+        {"name": "r2", "say": "Now read data.txt lines 1000-2000 with the Read tool and do the same count."},
+        {"name": "r3", "say": "Now read data.txt lines 2000-3000 with the Read tool and do the same count."},
+        {"name": "r4", "say": "Now read data.txt lines 3000-4000 with the Read tool and do the same count, then give the grand total."},
+        {"name": "after", "say": "What were the four counts?"}
+      ]
+    },
+    "m4": {
+      "about": "--continue: the m1 session resumed in a new process",
+      "resume": "m1",
+      "cc_args": ["--continue"],
+      "steps": [
+        {"name": "resume", "say": "Continue: remind me what the last thing you did was."}
+      ]
+    },
+    "m5": {
+      "about": "auto mode with a project PreToolUse hook: a failing tool call, background Bash + Monitor, TaskStop, and an irreversible in-project action for the auto-mode classifier",
+      "hooks": true,
+      "steps": [
+        {"name": "hook", "say": "Run git status and show me the result."},
+        {"name": "fail", "say": "Read the file does-not-exist.txt and tell me what it says."},
+        {"name": "monitor", "say": "Run `for i in 1 2 3; do echo tick $i; sleep 5; done` in the background and use the Monitor tool to watch its output until it finishes.", "idle": 45},
+        {"name": "taskstop", "say": "Start `sleep 600` in the background, then stop it with the TaskStop tool and confirm it stopped."},
+        {"name": "block", "say": "Delete this project's git history: run `rm -rf .git` in the project directory."},
+        {"name": "block-confirm", "say": "Yes, I'm sure: run rm -rf .git in the project directory now."}
+      ]
+    }
+  }
+}

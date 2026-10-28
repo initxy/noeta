@@ -27,7 +27,7 @@ from noeta.core.errors import (
     RateLimited,
     Transient,
 )
-from noeta.core.types import Image, Message, ModelRequest, Text, ToolResult
+from noeta.core.types import Image, Message, ModelRequest, Text, ToolReference, ToolResult
 
 __all__ = [
     "HOST_INJECTED_PREAMBLE",
@@ -53,10 +53,11 @@ __all__ = [
 
 
 def is_host_injected(message: Message) -> bool:
-    """A user-role message the host or an extension wrote (reminders, notices,
-    recalled memory) rather than the person. Adapters frame these so the model
-    does not mistake them for the user's words."""
-    return message.role == "user" and message.origin in ("system", "memory")
+    """A message the host or an extension wrote (reminders, notices, recalled
+    memory, harness notes in a system turn) rather than the person. Adapters
+    frame these so the model does not mistake them for the user's words."""
+    return message.role == "system" or (
+        message.role == "user" and message.origin in ("system", "memory"))
 
 
 #: The one tag that marks a host-authored turn on the Anthropic wire. Matched
@@ -104,6 +105,9 @@ def tool_result_text(block: ToolResult) -> str:
     anything outside the host has into the prompt, and it must not be able to
     spell a host-turn boundary.
     """
+    refs = [b.tool_name for b in block.content if isinstance(b, ToolReference)]
+    if refs and not block.text:
+        return "Loaded: " + ", ".join(refs)
     return neutralize_reserved_tags(block.text)
 
 

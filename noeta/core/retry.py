@@ -4,12 +4,13 @@ Adapters never retry: each raises one neutral :mod:`noeta.core.errors` failure.
 This helper is the one place that decides whether to try again:
 
 * :class:`~noeta.core.errors.Transient` (network failures, 5xx, overloaded, a
-  stream cut before its terminal event) and :class:`~noeta.core.errors.RateLimited`
-  are retried;
+  stream cut before its terminal event, and
+  :class:`~noeta.core.errors.MalformedToolArguments` — a tool call whose
+  arguments did not parse, which Claude Code also asks for again) and
+  :class:`~noeta.core.errors.RateLimited` are retried;
 * :class:`~noeta.core.errors.ContextOverflow` and :class:`~noeta.core.errors.Fatal`
-  (including :class:`~noeta.core.errors.MalformedToolArguments`) surface at once —
-  overflow's recovery is compaction, and re-sending a refused request cannot
-  help.
+  surface at once — overflow's recovery is compaction, and re-sending a
+  refused request cannot help.
 
 Cancellation is plain ``asyncio`` cancellation: a cancel during the call or
 during a backoff sleep propagates immediately.

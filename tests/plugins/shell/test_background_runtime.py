@@ -21,6 +21,7 @@ from noeta.core.runner import Runtime
 from noeta.plugins.fs import FileTools
 from noeta.plugins.shell import Registry, Shell
 from noeta.testing import ScriptedProvider, reply
+from noeta.toolkit.notices import NOTICE_GUARD
 
 
 @pytest.fixture
@@ -76,9 +77,9 @@ async def test_an_end_notice_wakes_the_idle_task(store: SqliteStore, tmp_path: P
     await rt.run_until_idle()
     notice = provider.requests[2].messages[-1]
     assert notice.origin == "system"
-    assert notice.text.startswith("<task-notification>\n<task-id>bg-")
-    assert notice.text.endswith("completed (exit code 0)</summary>\n</task-notification>"
-                                "\nLast output:\ndone-here")
+    assert notice.text.startswith(f"{NOTICE_GUARD}\n\n<task-notification>\n<task-id>")
+    assert "<output-file>" in notice.text
+    assert notice.text.endswith("completed (exit code 0)</summary>\n</task-notification>")
     [job] = (await _jobs(client, tid, ext)).values()
     assert job["status"] == "completed" and job["command"] == "sleep 0.3; echo done-here"
     assert (await client.get(tid)).waiting_on == "input"
@@ -135,7 +136,7 @@ async def test_jobs_end_with_the_turn_when_configured(store: SqliteStore,
     await rt.run_until_idle()
     [result] = [r.event.result for r in await client.events(tid)
                 if isinstance(r.event, ToolFinished)]
-    assert "terminated when you give your final response" in result.text
+    assert "stopped when you give your final response" in result.text
     [job] = ext.registry.jobs[tid].values()
     await asyncio.wait_for(job.done.wait(), 10)
     assert job.status == "killed" and job.quiet
@@ -242,4 +243,25 @@ async def test_a_sub_agents_job_notifies_the_root_after_it_ended(store: SqliteSt
     await _settle(shells)
     await rt.run_until_idle()
     notice = provider.requests[-1].messages[-1]
-    assert notice.text.startswith("<task-notification>") and notice.text.endswith("late")
+    assert notice.text.startswith(f"{NOTICE_GUARD}\n\n<task-notification>")
+    assert 'Background command "sleep 0.3; echo late" completed' in notice.text
+
+
+async def test_a_release_after_shutdown_does_not_touch_the_store(
+        store: SqliteStore, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    rt, _ext = _setup(store, ScriptedProvider([]), tmp_path)
+    release = await rt.hold("root")
+    await rt._drop_holds()  # the serve loop's way out
+    await store.close()
+    await release()  # a job ending after the store closed
+    assert "unhold failed" not in caplog.text
+
+
+def test_a_continuation_drops_the_running_jobs_of_its_source() -> None:
+    ext = Shell(registry=Registry())
+    st = ext.reduce(None, "cwd", {"cwd": "/w/sub"})
+    st = ext.reduce(st, "started", {"job_id": "a"})
+    st = ext.reduce(st, "started", {"job_id": "b"})
+    st = ext.reduce(st, "ended", {"job_id": "b", "status": "completed"})
+    out = ext.continue_state(st)
+    assert out.cwd == "/w/sub" and list(out.jobs) == ["b"]

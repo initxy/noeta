@@ -9,7 +9,7 @@ from typing import Any, Literal, Protocol
 import msgspec
 
 from noeta.core.execenv import ExecEnv
-from noeta.core.types import Display, Image, Struct, Text
+from noeta.core.types import Display, Image, Struct, Text, ToolReference
 
 
 class Park(Struct):
@@ -25,7 +25,7 @@ class Park(Struct):
 
 
 class ToolOutput(Struct):
-    content: list[Text | Image] = msgspec.field(default_factory=list)
+    content: list[Text | Image | ToolReference] = msgspec.field(default_factory=list)
     is_error: bool = False
     #: Recorded with the result for front ends and extensions; never sent to
     #: the model.
@@ -33,6 +33,9 @@ class ToolOutput(Struct):
     display: Display | None = None
     #: Set instead of a result when the call must wait (see ``Park``).
     park: Park | None = None
+    #: End the turn once this reply's results land, with this text as the
+    #: turn's answer: no further model call (a sub-agent's hand-back).
+    end_turn: str | None = None
 
 
 def text_output(text: str, *, is_error: bool = False, **meta: Any) -> ToolOutput:
@@ -51,9 +54,11 @@ class ToolContext:
     record: Callable[[str, str, Any], None]
     #: Directory for full outputs too large to return inline, or ``None``.
     spill_dir: str | None = None
-    #: Stage a child task: ``spawn(agent, prompt, config=..., background=...)``
-    #: returns its id. The child is created atomically with this call's
-    #: record, so a retried call never makes a second child.
+    #: Stage a child task: ``spawn(agent, prompt, config=..., background=...,
+    #: history_from=..., history_through=...)`` returns its id (``history_*``:
+    #: the child continues that task's conversation, see ``TaskCreated``). The
+    #: child is created atomically with this call's record, so a retried call
+    #: never makes a second child.
     spawn: Callable[..., str] | None = None
     #: Post to this task's own inbox from outside a step (a background job
     #: finishing), or with ``task_id=`` to another task of the same tree (the
@@ -65,15 +70,50 @@ class ToolContext:
     #: returned release is awaited (``Runtime.hold``): for what lives only in
     #: this process, e.g. a background job.
     hold: Callable[[], Awaitable[Callable[[], Awaitable[None]]]] | None = None
+    #: ``await tasks(parent_id=..., status=..., limit=...)``: rows of the
+    #: store's task table (``Store.tasks``), e.g. to list other tasks a
+    #: message could go to.
+    tasks: Callable[..., Awaitable[list[Any]]] | None = None
     extras: dict[str, Any] = field(default_factory=dict)
+    #: The model made this call (the runner's calls), so what earlier calls
+    #: returned is in its conversation; ``False`` when an extension runs a
+    #: tool itself.
+    by_model: bool = False
+    #: A person allowed this call at its approval prompt (rather than no
+    #: extension asking).
+    approved: bool = False
     #: ``prompt(name, default)``: the task's text for a named prompt
     #: (``noeta.core.prompts``).
     prompt: Callable[[str, str], str] = field(default=lambda _name, default: default)
 
-    def notify(self, text: str) -> None:
+    #: ``await count_tokens(text)``: the provider's exact token count of one
+    #: user message holding ``text``; ``None`` when it cannot count.
+    count_tokens: Callable[[str], Awaitable[int | None]] | None = None
+
+    def notify(self, text: str, *, kind: str | None = None, data: Any = None) -> None:
         """Tell the person ``text``; front ends show it, the model never sees
-        it (a ``core`` / ``notice`` record)."""
-        self.record("core", "notice", {"text": text})
+        it (a ``core`` / ``notice`` record). ``kind`` / ``data``: the same as
+        structured data for front ends that render it."""
+        self.record("core", "notice", notice_data(text, kind, data))
+
+    def set_timer(self, name: str, at: float, text: str = "") -> None:
+        """Wake the task at ``at`` once it is idle, ``text`` as its next
+        message (``TaskView.set_timer``)."""
+        self.record("core", "timer", {"name": name, "at": at, "text": text})
+
+    def clear_timer(self, name: str) -> None:
+        self.record("core", "timer_cleared", {"name": name})
+
+
+def notice_data(text: str, kind: str | None = None, data: Any = None) -> dict[str, Any]:
+    """A ``core`` / ``notice`` record's data: ``text``, and for structured
+    news its ``kind`` and ``data``."""
+    out: dict[str, Any] = {"text": text}
+    if kind:
+        out["kind"] = kind
+    if data is not None:
+        out["data"] = data
+    return out
 
 
 class Tool(Protocol):

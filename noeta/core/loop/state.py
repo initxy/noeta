@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from noeta.core.deferred import TOOL_LOADED_TEXT
 from noeta.core.events import (
     Answer,
     Cancel,
@@ -27,12 +28,28 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.prompts import resolve
-from noeta.core.types import Message, StopReason, Text, ToolResult, ToolUse, Usage
+from noeta.core.types import (
+    Message,
+    StopReason,
+    Text,
+    ToolReference,
+    ToolResult,
+    ToolUse,
+    Usage,
+    user,
+)
 
 Reducer = Callable[[Any, str, Any], Any]
 
 #: The extension name the core itself records under (continuation notes).
 CORE = "core"
+
+#: The signal that changes a running task's config
+#: (``client.signal(task_id, CONFIG_SIGNAL, {"model": ...})``): only the
+#: :data:`CHANGEABLE_CONFIG` keys, from the next model call on; a ``None``
+#: value removes the key.
+CONFIG_SIGNAL = "config"
+CHANGEABLE_CONFIG = ("model", "effort", "max_turns")
 
 
 @dataclass
@@ -61,7 +78,7 @@ class TaskState:
     #: Log seq that produced each entry of ``messages`` (0 for a summary).
     message_seqs: list[int] = field(default_factory=list)
     #: Every message ever added, in order, never compacted (and its log seq):
-    #: what a compaction collapsed stays readable here (``RecallHistory``).
+    #: what a compaction collapsed stays readable here (its saved transcript).
     history: list[Message] = field(default_factory=list)
     history_seqs: list[int] = field(default_factory=list)
     #: Usage of the newest model reply; ``None`` before the first one and
@@ -86,6 +103,11 @@ class TaskState:
     continuing: bool = False
     #: Every tool-call id this task has recorded: ids are unique per task.
     call_ids: set[str] = field(default_factory=set)
+    #: A call of the open batch ended the turn (``ToolFinished.end_turn``):
+    #: the turn's answer once the batch's results land.
+    end_turn: str | None = None
+    #: ``ToolFinished.note`` s of the open batch, added after its results.
+    notes: list[str] = field(default_factory=list)
     #: A turn-only stop arrived with ``now`` messages: the turn reopens once
     #: the stop has landed, so those messages are answered.
     reopen_after_stop: bool = False
@@ -106,6 +128,11 @@ class TaskState:
     spawned: dict[str, dict[str, Any]] = field(default_factory=dict)
     children: dict[str, ChildEnded | None] = field(default_factory=dict)
     signals: list[TimerFired | External] = field(default_factory=list)
+    #: Timers set and not yet fired or cleared, by name: ``{"at": epoch
+    #: seconds, "text": message or "", "seq": the log seq that set it}``. A
+    #: due timer fires while the task is idle; its text arrives as a
+    #: message, as if sent for the next turn.
+    timers: dict[str, dict[str, Any]] = field(default_factory=dict)
     waiting: Waiting | None = None
     ended: TaskEnded | None = None
     compaction: Compacted | None = None
@@ -113,7 +140,13 @@ class TaskState:
     #: text, see ``noeta.core.prompts``); ``None`` until they were looked for.
     prompt_files: dict[str, str] | None = None
 
+    #: Deferred tools a ``ToolSearch`` result loaded, in load order; kept
+    #: across compaction (``noeta.core.deferred``).
+    loaded_tools: list[str] = field(default_factory=list)
+
     usage: Usage = field(default_factory=Usage)
+    #: Tool calls this task finished (a continued task counts its own).
+    tool_calls: int = 0
     ext: dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------ queries
@@ -202,17 +235,33 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
                 if ev.call != c.use:
                     c.ran = ev.call
     elif isinstance(ev, ToolFinished):
+        state.tool_calls += 1
         for c in state.calls:
             if c.use.id == ev.result.call_id:
                 c.result = ev.result
+        if ev.end_turn is not None:
+            state.end_turn = ev.end_turn
+        if ev.note:
+            state.notes.append(ev.note)
+        refs = [b.tool_name for b in ev.result.content if isinstance(b, ToolReference)]
+        state.loaded_tools += [n for n in dict.fromkeys(refs) if n not in state.loaded_tools]
         if state.calls and not state.open_calls:
             results = [c.result for c in state.calls if c.result is not None]
-            state._add(Message(role="user", content=list(results)), rec.seq)
+            content: list[Any] = list(results)
+            if any(isinstance(b, ToolReference) for r in results for b in r.content):
+                content.append(Text(text=TOOL_LOADED_TEXT))
+            content += [Text(text=n) for n in dict.fromkeys(state.notes)]
+            state.notes = []
+            state._add(Message(role="user", content=content), rec.seq)
             state.calls = []
             state.held_unseen = state.held_unseen or bool(state.held)
             for m in state.held:
                 state._add(m, rec.seq)
             state.held = []
+            if state.end_turn is not None:
+                state.answer_parts = [state.end_turn]
+                state.end_turn = None
+                _close_turn(state, rec.seq)
     elif isinstance(ev, Compacted):
         _compact(state, ev)
     elif isinstance(ev, Waiting):
@@ -223,6 +272,15 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
     elif isinstance(ev, ExtensionRecorded):
         if ev.extension == CORE and ev.kind == "turn_stopped":
             state.stop_turn_requested = None
+            stopped = ev.data if isinstance(ev.data, dict) else {}
+            if stopped.get("marker"):
+                # A reply stopped mid-stream keeps what streamed; the marker
+                # (plain text) opens the person's next turn.
+                if stopped.get("partial"):
+                    state._add(Message(role="assistant",
+                                       content=[Text(text=str(stopped["partial"]))]), rec.seq)
+                state._add(Message(role="user", content=[Text(text=str(stopped["marker"]))],
+                                   origin="inline"), rec.seq)
             _end_turn(state, rec.seq)
         if ev.extension == CORE and ev.kind == "parked":
             for c in state.calls:
@@ -231,9 +289,19 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         if ev.extension == CORE and ev.kind == "spawned":
             for child in ev.data["children"]:
                 state.spawned[child["id"]] = child
+        if ev.extension == CORE and ev.kind == "timer":
+            data = ev.data if isinstance(ev.data, dict) else {}
+            if data.get("name"):
+                state.timers[str(data["name"])] = {"at": float(data.get("at") or 0),
+                                                   "text": str(data.get("text") or ""),
+                                                   "seq": rec.seq}
+        if ev.extension == CORE and ev.kind == "timer_cleared":
+            state.timers.pop(str((ev.data or {}).get("name") or ""), None)
         if ev.extension == CORE and ev.kind == "prompts":
             data = ev.data if isinstance(ev.data, dict) else {}
             state.prompt_files = {str(k): v for k, v in data.items() if isinstance(v, str)}
+        if ev.extension == CORE and ev.kind == "turn_done":
+            _end_turn(state, rec.seq)
         if ev.extension == CORE and ev.kind == "turn_failed":
             data = ev.data if isinstance(ev.data, dict) else {}
             reason, detail = data.get("reason", "failed"), data.get("detail", "")
@@ -248,6 +316,43 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
             else:
                 state._add(ev.message, rec.seq)
     return state
+
+
+def continued(state: TaskState,
+              carry: Mapping[str, Callable[[Any], Any]] | None = None) -> TaskState:
+    """``state`` (another task's, folded) as the start of a task that
+    continues its conversation: messages, loaded tools and extension state
+    stay (each extension's through ``carry[name]``, its
+    ``Extension.continue_state``); what belongs to that task's run (its log
+    positions, inbox, children, timers, open turn) does not. Calls still
+    open there are answered here with :data:`CONTINUED_CALL`, right after
+    their ``tool_use`` and ahead of messages held behind them, so the
+    conversation stays well formed."""
+    carry = carry or {}
+    ext = {name: carry[name](value) if name in carry else value
+           for name, value in state.ext.items()}
+    out = TaskState(ext=ext, prompt_files=state.prompt_files,
+                    compaction=state.compaction, last_usage=state.last_usage,
+                    call_ids=set(state.call_ids), loaded_tools=list(state.loaded_tools))
+    for m in state.messages:
+        out._add(m, 0)
+    out.history, out.history_seqs = list(state.history), [0] * len(state.history)
+    if state.calls:
+        results = [c.result or ToolResult(call_id=c.use.id, content=[Text(text=CONTINUED_CALL)],
+                                          is_error=True) for c in state.calls]
+        content: list[Any] = list(results)
+        if any(isinstance(b, ToolReference) for r in results for b in r.content):
+            content.append(Text(text=TOOL_LOADED_TEXT))
+        out._add(Message(role="user", content=content), 0)
+    for m in state.held:
+        out._add(m, 0)
+    return out
+
+
+#: The result a continued task sees for a call its source task still had
+#: open: that call ran (or runs) in the source task, not here.
+CONTINUED_CALL = ("This call belongs to the conversation this one continues from; it ran "
+                  "there, not here, and its result went there.")
 
 
 def fold(
@@ -268,19 +373,7 @@ def _take(state: TaskState, ev: InputTaken, seq: int) -> None:
     for item in ev.items:
         body = item.body
         if isinstance(body, Say):
-            if body.when == "next_turn" and state.turn_open:
-                state.queued.append(body.message)
-                continue
-            said_now = state.turn_open or said_now
-            if state.calls:
-                state.held.append(body.message)
-            else:
-                state._add(body.message, seq)
-            if not state.turn_open:
-                state.steps_in_turn = 0
-                state.turn_error = None
-            state.turn_open = True
-            state.waiting = None
+            said_now = _say(state, body.message, seq, now=body.when == "now") or said_now
         elif isinstance(body, Cancel):
             if body.turn_only:
                 if state.turn_open:
@@ -293,8 +386,46 @@ def _take(state: TaskState, ev: InputTaken, seq: int) -> None:
             state.children[body.child_id] = body
         else:
             state.signals.append(body)
+            if isinstance(body, External) and body.name == CONFIG_SIGNAL:
+                _configure(state, body.data)
+            timer = state.timers.pop(body.name, None) if isinstance(body, TimerFired) else None
+            if timer and timer["text"]:
+                _say(state, user(timer["text"]), seq)
     if said_now and state.stop_turn_requested is not None:
         state.reopen_after_stop = True
+
+
+def _configure(state: TaskState, data: Any) -> None:
+    if not isinstance(data, dict):
+        return
+    config = dict(state.config)
+    for key in CHANGEABLE_CONFIG:
+        if key in data:
+            if data[key] is None:
+                config.pop(key, None)
+            else:
+                config[key] = data[key]
+    state.config = config
+
+
+def _say(state: TaskState, message: Message, seq: int, *, now: bool = False) -> bool:
+    """A message for the agent: queued behind an open turn unless ``now``,
+    otherwise added (held behind open calls) and opening a turn. ``True``
+    when it was taken into an open turn."""
+    if not now and state.turn_open:
+        state.queued.append(message)
+        return False
+    into_open = state.turn_open
+    if state.calls:
+        state.held.append(message)
+    else:
+        state._add(message, seq)
+    if not state.turn_open:
+        state.steps_in_turn = 0
+        state.turn_error = None
+    state.turn_open = True
+    state.waiting = None
+    return into_open
 
 
 def _end_turn(state: TaskState, seq: int) -> None:
@@ -302,6 +433,8 @@ def _end_turn(state: TaskState, seq: int) -> None:
     not answered (held behind its calls, or sent with the stop) join the
     conversation and open the next turn, as queued messages do."""
     state.calls = []
+    state.end_turn = None
+    state.notes = []
     reopen = bool(state.held) or state.reopen_after_stop or state.held_unseen
     for m in state.held:
         state._add(m, seq)
@@ -334,11 +467,17 @@ def _compact(state: TaskState, ev: Compacted) -> None:
             break
     tail = state.messages[keep_from:]
     tail_seqs = state.message_seqs[keep_from:]
-    # A plain user turn, as 0.6 sent it: the summary carries its own framing
-    # line, and must not read as a host reminder.
-    summary = Message(role="user", content=[Text(text=ev.summary)])
-    state.messages = [summary, *ev.kept, *tail]
-    state.message_seqs = [0] * (1 + len(ev.kept)) + tail_seqs
+    # Plain text in the user's channel: the summary carries its own framing
+    # line and must not read as a host reminder, nor count as a prompt.
+    summary = Message(role="user", content=[Text(text=ev.summary)], origin="inline")
+    # What is re-attached joins the kept messages' last turn: ahead of the
+    # system turns (per-request notes) they end with.
+    k = len(tail)
+    while k and tail[k - 1].role == "system":
+        k -= 1
+    state.messages = [*ev.lead, summary, *ev.kept, *tail[:k], *ev.after, *tail[k:]]
+    state.message_seqs = [0] * (len(ev.lead) + 1 + len(ev.kept)) + tail_seqs[:k] \
+        + [0] * len(ev.after) + tail_seqs[k:]
     state.compaction = ev
     state.last_usage = None
     # A compaction-and-retry is not a crash loop.

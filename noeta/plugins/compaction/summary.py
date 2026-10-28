@@ -1,9 +1,11 @@
-"""The summarize call: its request, the note gate, and the verbatim safety
-constraints. Every function here is pure, so the same history and the same
-recorded reply always give the same note.
+"""The summarize call and the summary message, as Claude Code shapes them.
 
-Texts are 0.6's byte for byte (``prompts/summarize.md``, the frame, the
-constraint header, the truncation marker, the failure reasons).
+The call is the main request with the instruction appended to the last user
+message; the reply's ``<analysis>`` is dropped and its ``<summary>`` becomes
+``Summary:``; the summary message frames it (what it stands for, the tools
+used before it, where the full transcript is, how to carry on, and whether
+messages were kept after it). Every function here is pure, so the same
+history and the same recorded reply always give the same message.
 """
 
 from __future__ import annotations
@@ -12,78 +14,170 @@ import re
 from collections.abc import Sequence
 from importlib import resources
 
+import msgspec
+
 from noeta.core.errors import ContextOverflow, Fatal, ModelError, RateLimited, Transient
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolResult, ToolUse, user
 
 
 def load_prompt(name: str) -> str:
-    """A prompt file next to this module, stripped like 0.6's description
-    loader."""
     return (resources.files("noeta.plugins.compaction") / "prompts" / f"{name}.md").read_text(
         "utf-8").strip()
 
 
-#: The trailing user turn of the summarize request (ADR-003, 049).
+#: The instruction appended to the conversation (``compaction/summarize``).
 SUMMARIZE_PROMPT = load_prompt("summarize")
-
-#: The line that opens the summary message: without it the note reads as a
-#: fresh instruction and a "the user asked for X" in it is acted on again.
-SUMMARY_FRAME = (
-    "This conversation is continued from earlier turns that no longer fit in "
-    "context. The note below summarises them and stands in for the messages "
-    "it replaced; anything it restates, including requests and instructions, "
-    "is a record of what already happened, not a new request."
+#: Ahead of the instructions a ``/compact`` argument adds.
+EXTRA_INSTRUCTIONS_HEAD = "Further instructions for this summary:"
+#: The instruction's last paragraph, after any extra instructions.
+CLOSING_REMINDER = (
+    "Once more: no tool calls. Reply in plain text only, an <analysis> block and then a "
+    "<summary> block; a tool call is refused and fails the task."
 )
+
+#: The summary message's first line.
+SUMMARY_PREAMBLE = (
+    "This conversation picks up from an earlier one that outgrew the context window; the "
+    "summary below stands in for that earlier part."
+)
+#: Where the full transcript is (``{path}``).
+TRANSCRIPT_NOTE = (
+    "The complete conversation from before this summary, with exact code, error messages "
+    "and your own earlier output, is in {path}; read it when a detail matters."
+)
+#: When the oldest rounds had to be dropped for the summarize call to fit.
+HEAD_DROPPED_NOTE = (
+    "The oldest part of the conversation did not fit into the summarize call and is not "
+    "covered here. If the work turns out to depend on it, say so instead of guessing."
+)
+HEAD_DROPPED_TRANSCRIPT = " The transcript above still holds it."
+#: How to carry on.
+CONTINUE_NOTE = (
+    "Carry on with the work from where it stopped and ask the user nothing further. Go "
+    "straight back to it: do not mention this summary, do not recap, and do not announce "
+    "that you are resuming. Treat the last task as if it had never been interrupted."
+)
+#: When the newest messages were kept as they were after the summary.
+KEPT_NOTE = (
+    "The messages after this summary are the newest ones from before it, kept exactly as "
+    "they were. The summary was written without them, so work it calls unfinished may "
+    "already be done there."
+)
+
+#: Beta flags the summarize call adds to the main request's (Claude Code's).
+SUMMARY_BETAS = ("fallback-credit-2026-06-01",)
+#: Per-turn tool-use flags the summarize call leaves out (it runs no tool).
+SUMMARY_DROPPED_BETAS = ("afk-mode-2026-01-31",)
 
 #: The stable head of every summarize failure (hosts branch on the prefix).
 SUMMARY_FAILED_REASON = "compaction_summary_failed"
-#: The new boundary would not advance past what is already collapsed.
-NO_PROGRESS_REASON = "compaction_no_progress"
 
 #: Retries of a summarize call that is itself too long (Claude Code's).
 MAX_SUMMARY_OVERFLOW_RETRIES = 3
-SUMMARY_TRUNCATION_MARKER = "[earlier conversation truncated for compaction retry]"
+#: The output ceiling of the second attempt after a failed first one.
+RETRY_MAX_TOKENS = 64_000
+
+_ANALYSIS = re.compile(r"<analysis>[\s\S]*?</analysis>")
+_SUMMARY = re.compile(r"<summary>([\s\S]*?)</summary>")
+_RESERVED_TAG = re.compile(r"<(\s*/?\s*system-reminder\s*)>", re.IGNORECASE)
+_FAILURE_EXCERPT_CHARS = 160
 
 
-def framed(note: str) -> str:
-    return note if note.startswith(SUMMARY_FRAME) else f"{SUMMARY_FRAME}\n\n{note}"
+def instruction(prompt: str, extra: str = "") -> str:
+    """The instruction text: the prompt, the extra instructions a manual
+    compaction was given, the closing reminder."""
+    text = prompt
+    if extra.strip():
+        text += f"\n\n{EXTRA_INSTRUCTIONS_HEAD}\n{extra.strip()}"
+    return f"{text}\n\n{CLOSING_REMINDER}"
 
 
-def summary_request(
-    main: ModelRequest,
-    history: Sequence[Message],
-    *,
-    model: str,
-    max_tokens: int | None,
-    forbid_tools: bool = False,
-    instruction: str = SUMMARIZE_PROMPT,
-) -> ModelRequest:
-    """The main request's system prompt and tools, ``history``, and the
-    instruction as the trailing user turn. No ``tool_choice`` on the first
-    attempt (so Anthropic's message-tier cache entry is still read); the one
-    retry forbids tools. Never streamed: it goes through ``view.complete``."""
-    return ModelRequest(
-        model=model,
-        system=list(main.system),
-        messages=[*history, user(instruction)],
-        tools=list(main.tools),
-        max_tokens=max_tokens,
-        thinking=main.thinking,
-        headers=dict(main.headers),
-        cache_after=[len(history) - 1] if history else [],
-        tool_choice="none" if forbid_tools else None,
-    )
+def _host_injected(message: Message) -> bool:
+    """A reminder or a system turn: the instruction goes to the user message
+    before it, and it stays where it is (Claude Code leaves the trailing
+    token-count system turn after the instruction)."""
+    return message.role == "system" or (message.role == "user"
+                                        and message.origin in ("system", "memory"))
+
+
+def summary_request(main: ModelRequest, history: Sequence[Message], text: str, *,
+                    model: str | None = None, max_tokens: int | None = None) -> ModelRequest:
+    """The main request with ``history`` as its conversation and ``text``
+    appended to the last user message that is neither a reminder nor
+    followed by a reply (a new user message when there is none); the cache
+    mark sits on the message before it, so the call reads the conversation
+    from cache. Everything else is the main request's."""
+    messages = list(history)
+    at = None
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if m.role == "assistant":
+            break
+        if not _host_injected(m):
+            at = i
+            break
+    if at is None:
+        messages.append(user(text))
+        at = len(messages) - 1
+    else:
+        m = messages[at]
+        messages[at] = Message(role="user", content=[*m.content, Text(text=text)],
+                               origin=m.origin)
+    betas = [*(b for b in main.betas if b not in SUMMARY_DROPPED_BETAS),
+             *(b for b in SUMMARY_BETAS if b not in main.betas)]
+    return msgspec.structs.replace(
+        main, model=model or main.model, messages=messages,
+        max_tokens=max_tokens if max_tokens is not None else main.max_tokens,
+        cache_after=[at - 1] if at > 0 else [], output_schema=None, tool_choice=None,
+        betas=betas)
 
 
 def joined_text(response: ModelResponse) -> str:
     return "\n".join(b.text for b in response.message.content if isinstance(b, Text))
 
 
-def needs_tool_free_retry(response: ModelResponse, text: str) -> bool:
-    """A first attempt that answered with a tool call, or with no text."""
-    if any(isinstance(b, ToolUse) for b in response.message.content):
-        return True
-    return not text.strip()
+def format_summary(text: str) -> str:
+    """The reply without its ``<analysis>``, ``<summary>`` unwrapped under
+    ``Summary:``, runs of blank lines collapsed."""
+    out = _ANALYSIS.sub("", text)
+    out = _SUMMARY.sub(lambda m: f"Summary:\n{m.group(1).strip()}", out)
+    out = re.sub(r"\n\n+", "\n", out)
+    return _RESERVED_TAG.sub(r"&lt;\1>", out.strip())
+
+
+_TOOLS_USED = re.compile(r"<tools-used-before-summary>(.*?)</tools-used-before-summary>")
+
+
+def tools_used(messages: Sequence[Message]) -> list[str]:
+    """The tools called in ``messages``, and those an earlier summary among
+    them names, sorted."""
+    names = {b.name for m in messages if m.role == "assistant"
+             for b in m.content if isinstance(b, ToolUse)}
+    for m in messages:
+        if m.role == "user" and m.origin in (None, "inline") \
+                and m.text.startswith(SUMMARY_PREAMBLE):
+            found = _TOOLS_USED.search(m.text)
+            if found:
+                names.update(n.strip() for n in found.group(1).split(",") if n.strip())
+    return sorted(names)
+
+
+def summary_message(note: str, *, tools: Sequence[str], transcript: str | None,
+                    head_dropped: bool, kept: bool) -> str:
+    """The text of the user message that stands for the summarized part."""
+    used = ""
+    if tools:
+        used = ("<system-reminder>\n<tools-used-before-summary>"
+                f"{', '.join(tools)}</tools-used-before-summary>\n</system-reminder>\n")
+    text = f"{SUMMARY_PREAMBLE}\n\n{used}{format_summary(note)}"
+    if transcript:
+        text += "\n\n" + TRANSCRIPT_NOTE.format(path=transcript)
+    if head_dropped:
+        text += "\n" + HEAD_DROPPED_NOTE + (HEAD_DROPPED_TRANSCRIPT if transcript else "")
+    text += "\n" + CONTINUE_NOTE
+    if kept:
+        text += "\n\n" + KEPT_NOTE
+    return text
 
 
 # --------------------------------------------------------------------------
@@ -91,28 +185,16 @@ def needs_tool_free_retry(response: ModelResponse, text: str) -> bool:
 # --------------------------------------------------------------------------
 
 
-def _is_truncation_marker(message: Message) -> bool:
-    return (message.role == "user" and len(message.content) == 1
-            and isinstance(message.content[0], Text)
-            and message.content[0].text == SUMMARY_TRUNCATION_MARKER)
-
-
 def _is_tool_results(message: Message) -> bool:
     return any(isinstance(b, ToolResult) for b in message.content)
 
 
-def drop_oldest_rounds(messages: Sequence[Message], *, keep_first: bool) -> list[Message] | None:
-    """``messages`` less the oldest fifth (at least one) of its rounds, behind
-    the truncation marker; ``None`` when no round is left to drop. A round
-    opens at every message that is not a tool result, so no result loses its
-    call; ``keep_first`` holds the previous note in place; a marker from an
-    earlier retry is replaced, not stacked."""
-    head = list(messages[:1]) if keep_first else []
-    body = list(messages[1:]) if keep_first else list(messages)
-    if body and _is_truncation_marker(body[0]):
-        body = body[1:]
+def drop_oldest_rounds(messages: Sequence[Message]) -> list[Message] | None:
+    """``messages`` less the oldest fifth (at least one) of its rounds;
+    ``None`` when no round is left to drop. A round opens at every message
+    that is not a tool result, so no result loses its call."""
     rounds: list[list[Message]] = []
-    for message in body:
+    for message in messages:
         if _is_tool_results(message) and rounds:
             rounds[-1].append(message)
         else:
@@ -120,102 +202,15 @@ def drop_oldest_rounds(messages: Sequence[Message], *, keep_first: bool) -> list
     if len(rounds) < 2:
         return None
     kept = rounds[max(1, len(rounds) // 5):]
-    return [*head, user(SUMMARY_TRUNCATION_MARKER), *(m for r in kept for m in r)]
-
-
-# --------------------------------------------------------------------------
-# Safety / permission constraints survive verbatim (ADR-003)
-# --------------------------------------------------------------------------
-
-_CONSTRAINT_TRIGGERS: tuple[str, ...] = (
-    # English
-    "do not touch", "don't touch", "do not modify", "don't modify", "do not edit",
-    "don't edit", "do not access", "don't access", "do not delete", "don't delete",
-    "never edit", "never modify", "never touch", "never access", "never delete",
-    "must not", "you may not", "not allowed to", "forbidden", "off-limits", "off limits",
-    # Chinese
-    "禁止", "不得", "不准", "不要修改", "不要碰", "不要动", "不要访问", "不要删除",
-    "别碰", "别动", "严禁", "切勿", "勿",
-)
-#: Stripped off a detected line, so a constraint re-injected as ``- <line>``
-#: is not re-injected one bullet deeper on the next pass.
-_BULLET_PREFIXES: tuple[str, ...] = ("- ", "* ", "+ ")
-VERBATIM_HEADER = "PRESERVED SAFETY/PERMISSION CONSTRAINTS (verbatim):"
-
-
-def _line_is_constraint(line: str) -> bool:
-    low = line.lower()
-    return any(trigger in low for trigger in _CONSTRAINT_TRIGGERS)
-
-
-def extract_safety_constraints(messages: Sequence[Message]) -> list[str]:
-    """The verbatim constraint lines of every message the model did not
-    write and the host did not inject (``origin`` unset or ``human``): never
-    a tool result, an assistant turn, a reminder or a recalled memory. The
-    previous note is passed with ``origin`` unset, so a constraint preserved
-    once keeps binding across every later compaction."""
-    seen: set[str] = set()
-    out: list[str] = []
-    for msg in messages:
-        if msg.role == "assistant" or msg.origin in ("system", "memory"):
-            continue
-        for block in msg.content:
-            if not isinstance(block, Text):
-                continue
-            for raw_line in block.text.split("\n"):
-                line = raw_line.strip()
-                for bullet in _BULLET_PREFIXES:
-                    if line.startswith(bullet):
-                        line = line[len(bullet):].strip()
-                        break
-                if not line or not _line_is_constraint(line) or line in seen:
-                    continue
-                seen.add(line)
-                out.append(line)
+    out = [m for r in kept for m in r]
+    if out and out[0].role == "assistant":
+        out.insert(0, user("(earlier conversation left out)"))
     return out
 
 
-def enforce_verbatim_constraints(summary: str, constraints: Sequence[str]) -> str:
-    """Append, under :data:`VERBATIM_HEADER`, every constraint the note does
-    not already contain verbatim. Only adds; idempotent."""
-    missing = [c for c in constraints if c not in summary]
-    if not missing:
-        return summary
-    block = "\n".join(f"- {c}" for c in missing)
-    return f"{summary}\n\n{VERBATIM_HEADER}\n{block}"
-
-
 # --------------------------------------------------------------------------
-# The note gate (ADR-003, 060)
+# Failures
 # --------------------------------------------------------------------------
-
-SUMMARY_SECTION_TITLES: tuple[str, ...] = (
-    "Primary Request & Intent",
-    "Key Technical Concepts",
-    "Files & Code",
-    "Errors & Fixes",
-    "All user messages",
-    "Pending Tasks",
-    "Decisions & Constraints",
-    "Current Work",
-    "Next Step",
-)
-_SUMMARY_MIN_SECTIONS = 2
-#: A localised heading: a markdown heading or bold run opening with the
-#: section number. A bare ``1. ...`` line is a narration's plan, not a note.
-_LOCALISED_SECTION_HEADING = re.compile(
-    r"^[ \t]*(?:#{1,6}[ \t]*|\*\*[ \t]*)([1-9])[ \t]*[.)、．:：]", re.MULTILINE  # noqa: RUF001
-)
-_FAILURE_EXCERPT_CHARS = 160
-
-
-def looks_like_summary_note(text: str) -> bool:
-    lowered = text.lower()
-    found = sum(1 for title in SUMMARY_SECTION_TITLES if title.lower() in lowered)
-    if found >= _SUMMARY_MIN_SECTIONS:
-        return True
-    numbered = {m.group(1) for m in _LOCALISED_SECTION_HEADING.finditer(text)}
-    return len(numbered) >= _SUMMARY_MIN_SECTIONS
 
 
 def _excerpt(text: str, limit: int = _FAILURE_EXCERPT_CHARS) -> str:
@@ -234,17 +229,13 @@ def error_category(error: ModelError) -> str:
 
 
 def summary_failure(outcome: ModelResponse | ModelError, text: str) -> str | None:
-    """Why the reply must not become the note (the facts a host needs to tell
-    the refusals apart), or ``None`` when it may."""
+    """Why the reply cannot become the summary, or ``None`` when it can."""
     if isinstance(outcome, ModelError):
         error = _excerpt(str(outcome))
         return (f"errored summarize round-trip (category={error_category(outcome)}"
                 + (f", error={error!r}" if error else "") + ")")
-    facts = f"stop_reason={outcome.stop_reason}, output_tokens={outcome.usage.output}"
-    if not text.strip():
+    if not format_summary(text):
+        facts = f"stop_reason={outcome.stop_reason}, output_tokens={outcome.usage.output}"
         kinds = ", ".join(type(b).__name__ for b in outcome.message.content) or "none"
         return f"empty summarize response ({facts}, blocks={kinds})"
-    if not looks_like_summary_note(text):
-        return (f"summarize response is not a note ({facts}, "
-                f"text_len={len(text)}, head={_excerpt(text, 80)!r})")
     return None

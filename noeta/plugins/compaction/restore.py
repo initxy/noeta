@@ -1,12 +1,12 @@
-"""Claude Code's post-compaction file restore (ADR-064).
+"""Claude Code's post-compaction file restore.
 
 After a summary, the files the newest successful ``Read`` / ``Edit`` /
-``Write`` calls touched are read again through the ``Read`` tool, at most 5,
-each within 5,000 tokens, 50,000 in all and never more than the protected
-tail, skipping a file whose ``Read`` the kept tail already shows and the
-instruction files. They are recorded in ``Compacted.kept`` as Claude Code's
-call/result pair (or its too-large note), so a resume folds them back and
-never reads the disk again.
+``Write`` calls touched are read again through the ``Read`` tool, newest
+first, at most 5, each within 5,000 tokens and 50,000 in all, skipping a
+file whose ``Read`` the kept messages already show and the instruction
+files. Each is recorded as a Read call and its result (or a too-large
+note) and given in the next request's system turn, so a resume folds them
+back and never reads the disk again.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ POST_COMPACT_TOKEN_BUDGET = 50_000
 READ_TOOL = "Read"
 _FILE_TOOLS = (READ_TOOL, "Edit", "Write")
 #: Carried by the instructions resident; restoring them would repeat it.
-_INSTRUCTION_FILE_NAMES = frozenset({"NOETA.md", "AGENTS.md", "CLAUDE.md"})
+_INSTRUCTION_FILE_NAMES = frozenset({"NOETA.md", "NOETA.local.md", "AGENTS.md"})
 
 
 def _touched(message: Message, succeeded: set[str]) -> list[tuple[str, str]]:
@@ -81,16 +81,12 @@ async def restore_files(
     paths: Sequence[str],
     read_tool: Tool,
     context: Callable[[int, Callable[[str, str, Any], None]], ToolContext],
-    *,
-    tail_budget: int,
 ) -> tuple[list[Message], list[tuple[str, str, Any]]]:
     """The restore turns for ``paths`` (host-injected user messages), and
     what the reads of the restored files recorded (so ``Edit`` treats them
     as read; not for a file too large to include). A read that fails, or
     returns an image, is skipped."""
     budget = POST_COMPACT_TOKEN_BUDGET
-    if tail_budget > 0:
-        budget = min(budget, tail_budget)
     texts: list[str] = []
     records: list[tuple[str, str, Any]] = []
     used = 0
@@ -110,22 +106,17 @@ async def restore_files(
         if too_large:
             # The model never sees these contents, so the read is not
             # recorded: Edit / Write must Read the file again first.
-            pair = [
-                f"Note: {path} was read before the last conversation was "
-                f"summarized, but the contents are too large to include. "
-                f"Use {READ_TOOL} tool if you need to access it."
-            ]
+            text = (f"{path} was read before the summary, but it is too large to show "
+                    f"again here; read it with the {READ_TOOL} tool if you need it.")
         else:
-            pair = [
-                f"Called the {READ_TOOL} tool with the following input: "
-                + json.dumps(arguments, ensure_ascii=False, separators=(",", ":")),
-                f"Result of calling the {READ_TOOL} tool:\n{output}",
-            ]
-        size = sum(_estimate(t) for t in pair)
+            text = (f"The {READ_TOOL} tool was called with this input: "
+                    + json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+                    + f"\nIt returned:\n{output}")
+        size = _estimate(text)
         if used + size > budget:
             continue
         used += size
-        texts.extend(pair)
+        texts.append(text)
         if not too_large:
             records.extend(recorded)
     return [user(t, origin="system") for t in texts], records

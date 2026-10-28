@@ -619,3 +619,55 @@ def test_an_answer_applies_only_to_its_own_batch() -> None:
     done = ToolFinished(result=ToolResult(call_id="c1", content=[Text(text="ok")]))
     st = fold([_rec(6, done), _rec(7, nxt)], {}, state=st)
     assert st.answers == {} and st.call_ids == {"c1", "c2"}
+
+
+# ------------------------------------------------------------ an interrupted reply
+
+
+class _Stalls:
+    """Streams a little of a reply, then never finishes (until cancelled);
+    later calls answer from ``after``."""
+
+    family = "scripted"
+
+    def __init__(self, after: ScriptedProvider) -> None:
+        self.after = after
+        self.stalled = asyncio.Event()
+        self.requests: list[Any] = []
+
+    async def complete(self, request: Any, on_delta: Any = None) -> ModelResponse:
+        self.requests.append(request)
+        if len(self.requests) > 1:
+            return await self.after.complete(request, on_delta)
+        from noeta.core.types import Delta
+        on_delta(Delta(kind="text", text="Floating point "))
+        on_delta(Delta(kind="text", text="division"))
+        self.stalled.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+async def test_a_reply_stopped_mid_stream_keeps_its_text_and_marks_the_next_turn(
+        store: SqliteStore) -> None:
+    from noeta.backends.providers.anthropic import AnthropicProvider
+
+    provider = _Stalls(ScriptedProvider([reply("3 functions")]))
+    rt = runtime(store, provider, Agent(name="a", model="m"))
+    client = Client(store)
+    tid = await client.create("a", "explain at length")
+    running = asyncio.create_task(rt.run_until_idle())
+    await asyncio.wait_for(provider.stalled.wait(), 5)
+    await client.cancel(tid, "interrupted", turn_only=True)
+    await asyncio.wait_for(running, 5)
+    assert (await client.get(tid)).waiting_on == "input"
+    await client.send(tid, "never mind: how many functions?")
+    await rt.run_until_idle()
+    messages = provider.requests[1].messages
+    assert [(m.role, m.text, m.origin) for m in messages[-3:]] == [
+        ("assistant", "Floating point division", None),
+        ("user", "[Request interrupted by user]\n", "inline"),
+        ("user", "never mind: how many functions?", "human")]
+    # On the wire the marker and the next prompt share one user turn.
+    wire = AnthropicProvider(api_key="k").build_body(provider.requests[1])["messages"]
+    assert [b["text"] for b in wire[-1]["content"]] == [
+        "[Request interrupted by user]\n", "never mind: how many functions?"]

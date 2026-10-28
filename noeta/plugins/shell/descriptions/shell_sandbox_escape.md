@@ -1,0 +1,6 @@
+- Run every command in the sandbox. Set `dangerouslyDisableSandbox: true` only when the user explicitly asks to bypass it, or when a command just failed and the output shows the sandbox caused it; commands fail for many other reasons (a missing file, a wrong argument, a network outage).
+- Signs the sandbox caused a failure: "Operation not permitted" or "Read-only file system" on a file or network operation, access refused to a path outside the writable directories, a connection to a host that is not allowed failing or listed in `<sandbox_violations>`, an error connecting to a Unix socket.
+- When those signs show, retry at once with `dangerouslyDisableSandbox: true` without asking first (the retry goes through the permission check), and say briefly which restriction most likely caused the failure and that the user can change the `sandbox` section of their settings.
+- A refusal on a credential, file or host the task does not involve is the sandbox doing its job: tell the user instead of retrying outside it.
+- Decide for each command on its own: one that ran outside the sandbox does not make the next one run outside it.
+- Never suggest adding sensitive paths (`~/.bashrc`, `~/.zshrc`, `~/.ssh/*`, credential files) to the sandbox's allowed paths.

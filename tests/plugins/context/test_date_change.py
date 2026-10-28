@@ -30,11 +30,11 @@ async def test_told_once_when_the_day_changes(tmp_path: Path) -> None:
     tid = await client.create("a", "hi", config={"prompts": {
         "reminder/date_changed.append": "(It is {date}.)"}})
     await rt.run_until_idle()
-    assert "Today's date is 2026-10-27." in provider.requests[0].messages[0].text
+    assert "The date today is 2026-10-27." in [m.text for m in provider.requests[0].messages]
 
     def notes(i: int) -> list[str]:
         return [m.text for m in provider.requests[i].messages
-                if m.origin == "system" and m.text.startswith("The date has changed")]
+                if m.role == "system" and m.text.startswith("The date moved on")]
 
     await client.send(tid, "same day")
     await rt.run_until_idle()
@@ -43,9 +43,8 @@ async def test_told_once_when_the_day_changes(tmp_path: Path) -> None:
     day["today"] = "2026-10-28"
     await client.send(tid, "next day")
     await rt.run_until_idle()
-    assert notes(2) == ["The date has changed. Today's date is now 2026-10-28. DO NOT mention "
-                        "this to the user explicitly because they are already aware.\n\n"
-                        "(It is 2026-10-28.)"]
+    assert notes(2) == ["The date moved on during this conversation: today is 2026-10-28. "
+                        "The user knows, so do not point it out.\n\n(It is 2026-10-28.)"]
 
     await client.send(tid, "still the next day")
     await rt.run_until_idle()

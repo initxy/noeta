@@ -1,24 +1,12 @@
-Activate a named skill so its instructions load into the current task.
+Runs a skill inside the conversation.
 
-## What it does
+A skill is a packaged set of instructions that the user or the project set up for one kind of task, such as release steps, a review checklist or a repository's workflow. The available skills are listed one line each in a message in this conversation.
 
-A single call activates ONE skill, chosen by the `skill` parameter from the
-skill listing; its instructions are in your context from your next step. A
-listing line may be shortened to save context —
-the skill behind it is complete, and activating it loads everything.
-
-Make it the only tool call in its response. Batched with other tool calls,
-those calls run but the skill is not loaded.
-
-## When to use
-
-- The task matches an available skill — activate it BEFORE producing other output
-  about the task, so its guidance is in force while you work.
-- The user references a skill by name or types `/<name>`.
-
-## When NOT to use
-
-- The skill you want is not in the listing — never guess or invent a name; pick
-  only from the listed ones.
-- A skill is already active — do not re-activate it.
-- No listed skill covers the task — just proceed without one.
+- When a listed skill covers the task, call this tool before anything else: its instructions then take the place of your usual approach for this turn.
+- Some skills run in a sub-agent and return the finished result instead of loading instructions. One that runs in the background answers with only an agent name; its outcome arrives later in a task notification, so do not wait for it or call the skill again meanwhile.
+- When the user names a skill or types `/<name>` (a slash command), they are asking you to run it.
+- `skill` is the exact listed name, without a leading slash. A plugin's skill is named `plugin:skill`.
+- A skill scoped to a directory has a path prefix (`apps/web:deploy`). When a scoped and an unscoped skill share a name, take the one whose directory contains the files you are working on, the deepest first, and otherwise the unscoped one.
+- Only listed names, or names the user typed, are valid.
+- Built-in commands such as `/help` or `/clear` are not skills.
+- If a `<command-name>` block is already in the current turn, that skill is already loaded: follow it instead of calling this tool again.

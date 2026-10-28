@@ -128,7 +128,8 @@ async def test_acp_announces_and_expands(tmp_path: Path) -> None:
     await agent._announce_commands(session.session_id)
     [update, *_] = [u for u in editor.updates
                     if u.session_update == "available_commands_update"]
-    assert [c.name for c in update.available_commands] == ["greet", "shout"]
+    assert [c.name for c in update.available_commands] == [
+        "greet", "shout", "model", "context", "cost", "rewind"]
     assert update.available_commands[1].input.root.hint == "<word>"
 
     def block(text: str) -> list[Any]:
@@ -141,6 +142,16 @@ async def test_acp_announces_and_expands(tmp_path: Path) -> None:
     assert resp.stop_reason == "end_turn" and len(provider.requests) == 1
     assert any(getattr(getattr(u, "content", None), "text", "") == "/shout failed: no voice"
                for u in editor.updates)
+
+    def said() -> str:
+        return getattr(getattr(editor.updates[-1], "content", None), "text", "")
+
+    for typed, expected in [("/cost", "Total cost"), ("/context", "Free space"),
+                            ("/model opus", "model set to claude-opus-5-5"),
+                            ("/rewind", "1. HI!"), ("/rewind 1 code", "nothing to restore")]:
+        resp = await agent.prompt(session.session_id, block(typed))
+        assert resp.stop_reason == "end_turn" and expected in said(), (typed, said())
+    assert len(provider.requests) == 1
     await app.stop()
 
 
@@ -150,7 +161,9 @@ async def test_skills_commands_follow_the_cwd(tmp_path: Path) -> None:
     (skill / "SKILL.md").write_text("---\nname: deploy\ndescription: Ship it.\n---\nSteps.\n")
     [c] = await Skills(global_dir=None, global_agents_dir=None).commands(
         CommandContext(cwd=str(tmp_path)))
-    assert (c.name, c.description, c.template) == ("deploy", "Ship it.", "/deploy {args}")
+    assert (c.name, c.description) == ("deploy", "Ship it.")
+    assert c.template == ("<command-message>deploy</command-message>\n<command-name>/deploy"
+                          "</command-name>\n<command-args>{args}</command-args>")
 
 
 async def test_mcp_prompts_are_commands(tmp_path: Path) -> None:
@@ -167,3 +180,22 @@ async def test_mcp_prompts_are_commands(tmp_path: Path) -> None:
         assert await dead.commands(CTX) == []
     finally:
         await pool.close()
+
+
+class Status(Extension):
+    name = "status"
+
+    async def commands(self, ctx: CommandContext) -> Sequence[Command]:
+        return [Command(name="where", description="Where am I", local=True)]
+
+    async def run_command(self, ctx: CommandContext, name: str, args: str) -> str:
+        return f"in {ctx.cwd}"
+
+
+async def test_a_local_command_runs_but_sends_nothing() -> None:
+    from noeta.core.commands import Typed, run_typed
+
+    agent = Agent(name="main", model="m", extensions=[Status(), Greeter()])
+    assert await run_typed(agent.all_extensions(), CTX, "/where") == Typed("in /w", local=True)
+    assert await run_typed(agent.all_extensions(), CTX, "/greet x") == Typed("Say hello to x.")
+    assert await expand_command(agent, CTX, "/where") == ""

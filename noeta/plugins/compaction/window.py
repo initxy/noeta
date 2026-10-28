@@ -1,28 +1,30 @@
-"""The numbers compaction measures against, derived from the model catalog.
+"""The auto-compaction threshold, derived from the model catalog as Claude
+Code derives it.
 
-Claude Code's margin (ADR-066): the usable window is
-``window - min(output ceiling, 20_000) - 13_000``, whether the window is the
-model's or an ``auto_compact_window`` cap (ADR-060). A third of it is the
-verbatim tail a summary never covers (ADR-003); old tool results start being
-cleared at half of it, or at ``clear_tool_outputs_at`` (ADR-050, 061). An
-uncatalogued model gets the catalog's conservative 128K / 16,384 pair, never
-"compaction off".
+The effective window is the model's window (or the ``auto_compact_window``
+cap, ``NOETA_AUTO_COMPACT_WINDOW``: Claude Code's knob, noeta's name) less
+``min(output ceiling, 20_000)`` held back for the summary. The threshold is
+13,000 tokens under that, or ``auto_compact_percent`` of the effective
+window (``NOETA_AUTOCOMPACT_PCT_OVERRIDE``) when that is lower. An
+uncatalogued model gets the catalog's conservative 128K / 16,384 pair,
+never "compaction off".
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from noeta.core.models import model_limits, resolve_alias
 
 #: Most of the output ceiling held back under the window.
 OUTPUT_RESERVE_MAX_TOKENS = 20_000
-#: Where the summarize trigger sits under that.
-TRIGGER_MARGIN_TOKENS = 13_000
-#: ``tail = usable // 3``.
-TAIL_FRACTION_DENOM = 3
-#: The second clearing valve opens at this fraction of the usable window.
-MICROCOMPACT_FRACTION = 0.5
+#: How far under the effective window auto-compaction fires.
+AUTOCOMPACT_BUFFER_TOKENS = 13_000
+#: Claude Code's environment knobs under noeta's prefix, read when the plugin
+#: is not given one.
+WINDOW_ENV = "NOETA_AUTO_COMPACT_WINDOW"
+PERCENT_ENV = "NOETA_AUTOCOMPACT_PCT_OVERRIDE"
 
 
 @dataclass(frozen=True)
@@ -31,12 +33,10 @@ class Window:
     context_window: int
     #: The model's output ceiling.
     max_output_tokens: int
-    #: The summarize trigger and the relief valve's water mark.
-    usable: int
-    #: The verbatim tail a summary never covers, in real tokens.
-    tail_budget: int
-    #: The fraction of ``usable`` at which the second valve opens.
-    micro_fraction: float
+    #: ``context_window`` less the summary's output reserve.
+    effective: int
+    #: Tokens at which auto-compaction fires.
+    threshold: int
 
 
 def check_positive(name: str, value: int | None) -> None:
@@ -46,36 +46,48 @@ def check_positive(name: str, value: int | None) -> None:
         raise ValueError(f"{name} must be a positive int or None; got {value!r}")
 
 
-def derive_window(
-    model: str,
-    *,
-    auto_compact_window: int | None = None,
-    clear_tool_outputs_at: int | None = None,
-) -> Window:
+def check_percent(value: float | None) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= 100:
+        raise ValueError(f"auto_compact_percent must be in (0, 100] or None; got {value!r}")
+
+
+def window_from_env() -> int | None:
+    raw = os.environ.get(WINDOW_ENV, "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def percent_from_env() -> float | None:
+    raw = os.environ.get(PERCENT_ENV, "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if 0 < value <= 100 else None
+
+
+def derive_window(model: str, *, auto_compact_window: int | None = None,
+                  auto_compact_percent: float | None = None) -> Window:
     """The compaction numbers for ``model``. Raises ``ValueError`` when the
-    cap leaves no usable window under the model's reserve."""
+    cap leaves no window under the output reserve."""
     check_positive("auto_compact_window", auto_compact_window)
-    check_positive("clear_tool_outputs_at", clear_tool_outputs_at)
+    check_percent(auto_compact_percent)
     context_window, max_output_tokens = model_limits(model)
-    reserve = min(max_output_tokens, OUTPUT_RESERVE_MAX_TOKENS) + TRIGGER_MARGIN_TOKENS
     if auto_compact_window is not None:
-        if auto_compact_window - reserve <= 0:
-            raise ValueError(
-                f"auto_compact_window {auto_compact_window} leaves no usable "
-                f"window under model {resolve_alias(model)!r}'s {reserve}-token compaction "
-                f"reserve (min(output ceiling {max_output_tokens}, "
-                f"{OUTPUT_RESERVE_MAX_TOKENS}) plus the "
-                f"{TRIGGER_MARGIN_TOKENS}-token trigger margin)"
-            )
         context_window = min(context_window, auto_compact_window)
-    usable = max(0, context_window - reserve)
-    fraction = MICROCOMPACT_FRACTION
-    if clear_tool_outputs_at is not None and usable > 0:
-        fraction = min(1.0, clear_tool_outputs_at / usable)
-    return Window(
-        context_window=context_window,
-        max_output_tokens=max_output_tokens,
-        usable=usable,
-        tail_budget=usable // TAIL_FRACTION_DENOM,
-        micro_fraction=fraction,
-    )
+    reserve = min(max_output_tokens, OUTPUT_RESERVE_MAX_TOKENS)
+    effective = context_window - reserve
+    if effective <= 0:
+        raise ValueError(
+            f"auto_compact_window {auto_compact_window} leaves no window under model "
+            f"{resolve_alias(model)!r}'s {reserve}-token summary reserve")
+    threshold = effective - AUTOCOMPACT_BUFFER_TOKENS
+    if auto_compact_percent is not None:
+        threshold = min(int(effective * auto_compact_percent / 100), threshold)
+    return Window(context_window=context_window, max_output_tokens=max_output_tokens,
+                  effective=effective, threshold=max(1, threshold))

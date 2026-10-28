@@ -14,7 +14,7 @@ from noeta.core.agent import Agent
 from noeta.core.execenv import ExecEnv
 from noeta.core.provider import Provider
 from noeta.core.store import Claim, Store
-from noeta.core.types import Delta
+from noeta.core.types import Delta, ModelRequest
 
 if TYPE_CHECKING:
     from noeta.core.loop.state import TaskState
@@ -45,12 +45,16 @@ class Runtime:
     lease_seconds: float = 30.0
     poll_interval: float = 0.5
     concurrency: int = 8
-    #: Directory for tool outputs too large to return inline.
+    #: Directory for tool outputs too large to return inline; ``None`` cuts
+    #: them instead (built-in hosts always set one).
     spill_root: str | None = None
     #: Host directories of prompt override files (``noeta.core.prompts``),
     #: e.g. ``~/.noeta/prompts``; the task's ``<cwd>/.noeta/prompts`` is
-    #: always read too.
+    #: read too when :attr:`workspace_trusted` allows it.
     prompt_dirs: Sequence[str] = ()
+    #: ``workspace_trusted(cwd)``: may a task's workspace change what the
+    #: model is told (its ``.noeta/prompts``)? ``None`` trusts every workspace.
+    workspace_trusted: Callable[[str], bool] | None = None
     on_delta: OnDelta | None = None
     sleep: Callable[[float], Any] = asyncio.sleep
     #: Serve only the task trees whose root ids are in this set (a front end
@@ -85,7 +89,9 @@ class Runtime:
             if released:
                 return
             released = True
-            left = self._holds.get(root_id, 0) - 1
+            if root_id not in self._holds:
+                return  # dropped on the way out (_drop_holds), store maybe closed
+            left = self._holds[root_id] - 1
             if left > 0:
                 self._holds[root_id] = left
                 return
@@ -141,6 +147,22 @@ class Runtime:
             return False
         await self.run_claim(claim)
         return True
+
+    async def preview(self, task_id: str) -> ModelRequest | None:
+        """The request the task's next model call would start from (its
+        log folded, system prompt, tools and messages; no reminder or
+        ``before_model`` is run and nothing is recorded), for a front end
+        that shows what fills the context. ``None`` when this runtime does
+        not have the task's agent."""
+        from noeta.core.runner.model import build_model_request
+        from noeta.core.runner.task import TaskRun
+
+        run = TaskRun(self, Claim(task_id=task_id, worker=self.worker, epoch=0,
+                                  lease_until=0.0))
+        await run.load()
+        if run.agent is None:
+            return None
+        return build_model_request(run, final=False)
 
     def serve_root(self, root_id: str) -> None:
         """Add a task tree to ``roots`` (when this runtime is scoped) and

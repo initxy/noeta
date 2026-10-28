@@ -7,6 +7,7 @@ import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from noeta.core.deferred import is_deferred
 from noeta.core.events import (
     Event,
     ExtensionRecorded,
@@ -37,11 +38,13 @@ MAX_REWRITES = 3
 
 async def gate(run: TaskRun, view: TaskView, call: ToolUse) -> Gate:
     """Every extension is asked about this exact call: any deny wins, then
-    the first rewrite, then the first ask. A human's recorded answer denies,
-    or satisfies an ask — never a deny, and never instead of a rewrite."""
+    the first rewrite, then the asks. A human's recorded answer denies, or
+    satisfies the asks — never a deny, and never instead of a rewrite. An
+    approving ``Allow`` satisfies asks that are not firm; otherwise each
+    extension may answer the asks (``resolve_ask``) before the call parks."""
     answer = run.state.answers.get(call.id)
     if answer is not None and answer.decision == "deny":
-        return Deny(reason=texts.DENIED_BY_HUMAN)
+        return Deny(reason=rejected_text(answer.data))
     verdicts: list[Gate] = []
     for ext in run.exts:
         try:
@@ -53,13 +56,34 @@ async def gate(run: TaskRun, view: TaskView, call: ToolUse) -> Gate:
             v = None  # a rewrite to the same call is no rewrite
         if v is not None:
             verdicts.append(v)
-    for kind in (Deny, Rewrite, Ask):
+    for kind in (Deny, Rewrite):
         for v in verdicts:
             if isinstance(v, kind):
-                if isinstance(v, Ask) and answer is not None and answer.decision == "allow":
-                    return Allow()
                 return v
-    return Allow()
+    asks = [v for v in verdicts if isinstance(v, Ask)]
+    if not asks or (answer is not None and answer.decision == "allow"):
+        return Allow()
+    if not any(a.firm for a in asks) and any(
+            isinstance(v, Allow) and v.approve for v in verdicts):
+        return Allow()
+    for ext in run.exts:
+        try:
+            resolved = await ext.resolve_ask(view, call, asks)
+        except Exception as exc:  # noqa: BLE001 — a failing resolver denies
+            return Deny(reason=f"permission check failed: {exc}")
+        if isinstance(resolved, (Allow, Deny, Rewrite, Ask)):
+            return resolved
+    return asks[0]
+
+
+def rejected_text(data: Any) -> str:
+    """A person's refusal at an approval prompt, with what they said when
+    they said something (``Answer.data`` ``{"message": ...}`` or a string)."""
+    message = data.get("message") if isinstance(data, dict) else data
+    if isinstance(message, str) and message.strip():
+        return texts.REJECTED_BY_USER + texts.REJECTED_WITH_MESSAGE.format(
+            message=message.strip())
+    return texts.REJECTED_BY_USER
 
 
 async def resolve(run: TaskRun, view: TaskView, use: ToolUse) -> tuple[ToolUse, Gate]:
@@ -96,6 +120,29 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     runnable: list[tuple[ToolUse, Tool]] = []
     asks: dict[str, Ask] = {}
     for c in [c for c in run.state.calls if c.use.id in call_ids]:
+        wanted = tools.get(c.use.name)
+        if wanted is not None and is_deferred(wanted) \
+                and c.use.name not in run.state.loaded_tools:
+            await run.append([run.error_result(
+                c.use.id, texts.DEFERRED_NOT_LOADED.format(name=c.use.name))])
+            continue
+        answer = run.state.answers.get(c.use.id)
+        if answer is not None and answer.decision == "deny" and isinstance(answer.data, dict) \
+                and answer.data.get("interrupt") is False:
+            # Refused by a permission callback that lets the turn go on
+            # (Claude Code's SDK can_use_tool deny): the model reads why.
+            message = str(answer.data.get("message") or "").strip()
+            await run.append([run.error_result(
+                c.use.id, message or texts.DENIED_BY_CALLBACK.format(name=c.use.name))])
+            continue
+        if answer is not None and answer.decision == "deny":
+            # Declined at its prompt: the call does not run and, as in Claude
+            # Code, the turn stops once the reply's results land.
+            await run.append([ToolFinished(
+                result=ToolResult(call_id=c.use.id, content=[Text(text=rejected_text(
+                    answer.data))], is_error=True), end_turn="",
+                note=texts.REJECTED_MARKER)])
+            continue
         use, verdict = await resolve(run, view, c.use)
         if isinstance(verdict, Deny):
             await run.append([run.error_result(use.id, verdict.reason or "denied")])
@@ -136,7 +183,8 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
         records.append(ExtensionRecorded(extension=extension, kind=kind, data=data))
 
     def spawn(agent: str, prompt: str | Message, *, config: dict[str, Any] | None = None,
-              background: bool = False, queue: str = "default") -> str:
+              background: bool = False, queue: str = "default",
+              history_from: str | None = None, history_through: int | None = None) -> str:
         child_id = f"{run.task_id}.{use.id}.{len(creates) + 1}"
         message = user(prompt) if isinstance(prompt, str) else prompt
         child_config = dict(config or {})
@@ -145,7 +193,8 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
         creates.append(NewTask(
             task_id=child_id,
             created=TaskCreated(agent=agent, config=child_config, parent_id=run.task_id,
-                                root_id=run.state.root_id or run.task_id),
+                                root_id=run.state.root_id or run.task_id,
+                                history_from=history_from, history_through=history_through),
             queue=queue,
             inbox=[Say(message=message)],
         ))
@@ -157,10 +206,17 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
         await run.store.post(Post(task_id=task_id or run.task_id, body=body))
 
     root = run.state.root_id or run.task_id
+    answer = run.state.answers.get(use.id)
     return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
                        state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
                        spawn=spawn, post=post, root_id=root, prompt=run.state.prompt,
-                       hold=lambda: run.rt.hold(root))
+                       tasks=run.store.tasks, count_tokens=run.counter(_model(run)),
+                       hold=lambda: run.rt.hold(root), by_model=True,
+                       approved=answer is not None and answer.decision == "allow")
+
+
+def _model(run: TaskRun) -> str:
+    return str(run.state.config.get("model") or (run.agent.model if run.agent else ""))
 
 
 async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[Event],
@@ -182,8 +238,10 @@ async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[
     if output.display is not None:
         meta["display"] = output.display
     finished = ToolFinished(result=ToolResult(call_id=use.id, content=output.content,
-                                              is_error=output.is_error), meta=meta)
-    await run.append([*records, *view.pending, finished], creates=creates)
+                                              is_error=output.is_error), meta=meta,
+                            end_turn=output.end_turn)
+    await run.append([*records, *view.pending, finished],
+                     creates=[*creates, *run.staged(view)])
 
 
 def _drop_staged(records: list[Event], creates: list[NewTask]) -> None:

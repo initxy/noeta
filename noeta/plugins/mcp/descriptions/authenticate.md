@@ -1,0 +1,1 @@
+The "{server}" MCP server ({transport}) is configured, but the user has to sign in before its tools can be used. Call this tool to start the OAuth sign-in: it returns an authorization URL to give the user. Once they have authorized access in their browser, the server's real tools become available.

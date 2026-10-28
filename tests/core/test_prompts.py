@@ -44,23 +44,22 @@ async def test_overrides_layer_and_are_fixed_at_start(tmp_path: Path) -> None:
     (host / "system").mkdir(parents=True)
     (host / "system" / "a.append.md").write_text("From the host.\n")
     (host / "tool").mkdir()
-    (host / "tool" / "Glob.md").write_text("host glob\n")
-    (work / ".noeta" / "prompts" / "tool" / "Glob.md").write_text("workspace glob\n")
+    (host / "tool" / "Write.md").write_text("host write\n")
+    (work / ".noeta" / "prompts" / "tool" / "Write.md").write_text("workspace write\n")
     (work / ".noeta" / "prompts" / "tool" / "Read.md").write_text("Read a file.\n")
     store = SqliteStore(str(tmp_path / "t.db"))
     provider = ScriptedProvider([reply("one"), reply("two")])
     rt = _runtime(store, provider, work, host)
     client = Client(store)
-    tid = await client.create("a", "hi", config={"prompts": {"tool/Grep": "config grep"}})
+    tid = await client.create("a", "hi", config={"prompts": {"tool/Edit": "config edit"}})
     await rt.run_until_idle()
 
     first = provider.requests[0]
     assert first.system[0].text == "You help.\n\nFrom the host.\n"
     tools = {t.name: t.description for t in first.tools}
     assert tools["Read"] == "Read a file.\n"
-    assert tools["Glob"] == "workspace glob\n"  # the workspace wins over the host
-    assert tools["Grep"] == "config grep"  # the task config wins over both
-    assert tools["Edit"].startswith("Performs an exact string replacement")
+    assert tools["Write"] == "workspace write\n"  # the workspace wins over the host
+    assert tools["Edit"] == "config edit"  # the task config wins over both
 
     # Edited after the task started: the running task keeps what it recorded.
     (work / ".noeta" / "prompts" / "tool" / "Read.md").write_text("changed\n")
@@ -70,6 +69,26 @@ async def test_overrides_layer_and_are_fixed_at_start(tmp_path: Path) -> None:
     second = provider.requests[1]
     assert second.system[0].text == first.system[0].text
     assert {t.name: t.description for t in second.tools} == tools
+    await store.close()
+
+
+async def test_an_untrusted_workspace_changes_no_prompt(tmp_path: Path) -> None:
+    work, host = tmp_path / "w", tmp_path / "host"
+    (work / ".noeta" / "prompts" / "tool").mkdir(parents=True)
+    (work / ".noeta" / "prompts" / "tool" / "Read.md").write_text("workspace read\n")
+    (host / "tool").mkdir(parents=True)
+    (host / "tool" / "Write.md").write_text("host write\n")
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("ok")])
+    rt = _runtime(store, provider, work, host)
+    seen: list[str] = []
+    rt.workspace_trusted = lambda cwd: bool(seen.append(cwd))
+    await Client(store).create("a", "hi", config={"cwd": str(work)})
+    await rt.run_until_idle()
+    tools = {t.name: t.description for t in provider.requests[0].tools}
+    assert tools["Write"] == "host write\n"
+    assert tools["Read"] != "workspace read\n"
+    assert seen == [str(work)]
     await store.close()
 
 

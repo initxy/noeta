@@ -1,6 +1,6 @@
 """The large-output rule (Claude Code's persisted / truncated block), the
-tools that apply it, and the model-facing names, descriptions and schemas,
-which must stay exactly what 0.6 sent."""
+tools that apply it, and the shape of the model-facing names, descriptions
+and schemas."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from noeta.plugins.fs import EditTool, GlobTool, GrepTool, ReadTool, WriteTool
+from noeta.plugins.fs import EditTool, ReadTool, WriteTool
 from noeta.plugins.shell import BashTool
 from noeta.toolkit.tools import large_output_message, limit_output, spill_path
-from tests.plugins.conftest import Harness, text_of
+from tests.plugins.conftest import Harness
 
 # ---------------------------------------------------------------------------
 # large_output_message
@@ -110,127 +110,25 @@ async def test_limit_output_cuts_when_the_spill_fails(h: Harness, ws: Path) -> N
     assert out.startswith("<truncated-output>\n")
 
 
-async def test_grep_spills_past_20000_chars(h: Harness, ws: Path) -> None:
-    h.spill_dir = str(ws.parent / "spill")
-    (ws / "many.txt").write_text(("needle " + "q" * 100 + "\n") * 240)
-    out = await h.call(GrepTool(), pattern="needle", output_mode="content")
-    text = text_of(out)
-    assert not out.is_error
-    assert text.startswith("<persisted-output>\nOutput too large (")
-    [saved] = list((ws.parent / "spill").rglob("*.txt"))
-    assert saved.read_text().startswith("many.txt:1:needle ")
-    assert out.meta["matches"] == 240
-
-
-async def test_grep_under_20000_stays_inline(h: Harness, ws: Path) -> None:
-    (ws / "many.txt").write_text(("needle " + "q" * 50 + "\n") * 100)
-    text = text_of(await h.call(GrepTool(), pattern="needle", output_mode="content"))
-    assert text.startswith("many.txt:1:needle ")
-
-
-async def test_glob_cuts_past_50000_chars_without_spill_dir(h: Harness, ws: Path) -> None:
-    deep = ws / ("d" * 200)
-    deep.mkdir()
-    for i in range(200):
-        (deep / f"{'f' * 200}{i:03}.py").write_text("")
-    out = await h.call(GlobTool(), pattern="**/*.py")
-    text = text_of(out)
-    assert text.startswith("<truncated-output>\n")
-    assert len(text) <= 50_000
-
-
 # ---------------------------------------------------------------------------
-# What the model sees: names, descriptions, schemas (0.6's bytes)
+# What the model sees: names, descriptions, schema shape
 # ---------------------------------------------------------------------------
-
-_EXPECTED_SCHEMAS: dict[str, dict[str, Any]] = {
-    "Bash": {
-        "additionalProperties": False,
-        "properties": {
-            "command": {"type": "string"},
-            "description": {"type": "string"},
-            "run_in_background": {"type": "boolean"},
-            "timeout": {"type": "number"},
-        },
-        "required": ["command"],
-        "type": "object",
-    },
-    "Edit": {
-        "additionalProperties": False,
-        "properties": {
-            "file_path": {"type": "string"},
-            "new_string": {"type": "string"},
-            "old_string": {"type": "string"},
-            "replace_all": {"type": "boolean"},
-        },
-        "required": ["file_path", "old_string", "new_string"],
-        "type": "object",
-    },
-    "Glob": {
-        "additionalProperties": False,
-        "properties": {"path": {"type": "string"}, "pattern": {"type": "string"}},
-        "required": ["pattern"],
-        "type": "object",
-    },
-    "Grep": {
-        "additionalProperties": False,
-        "properties": {
-            "-A": {"minimum": 0, "type": "integer"},
-            "-B": {"minimum": 0, "type": "integer"},
-            "-C": {"minimum": 0, "type": "integer"},
-            "-i": {"type": "boolean"},
-            "-n": {"type": "boolean"},
-            "-o": {"type": "boolean"},
-            "-u": {"type": "boolean"},
-            "context": {"minimum": 0, "type": "integer"},
-            "glob": {"type": "string"},
-            "head_limit": {"minimum": 0, "type": "integer"},
-            "multiline": {"type": "boolean"},
-            "offset": {"minimum": 0, "type": "integer"},
-            "output_mode": {
-                "enum": ["files_with_matches", "content", "count"],
-                "type": "string",
-            },
-            "path": {"type": "string"},
-            "pattern": {"type": "string"},
-            "type": {"type": "string"},
-        },
-        "required": ["pattern"],
-        "type": "object",
-    },
-    "Read": {
-        "additionalProperties": False,
-        "properties": {
-            "file_path": {"type": "string"},
-            "limit": {"minimum": 1, "type": "integer"},
-            "offset": {"minimum": 1, "type": "integer"},
-            "pages": {"type": "string"},
-        },
-        "required": ["file_path"],
-        "type": "object",
-    },
-    "Write": {
-        "additionalProperties": False,
-        "properties": {"content": {"type": "string"}, "file_path": {"type": "string"}},
-        "required": ["file_path", "content"],
-        "type": "object",
-    },
-}
 
 _TOOLS: dict[str, tuple[Any, str]] = {
     "Bash": (BashTool(), "shell_run"),
     "Edit": (EditTool(), "edit"),
-    "Glob": (GlobTool(), "glob"),
-    "Grep": (GrepTool(), "grep"),
     "Read": (ReadTool(), "read"),
     "Write": (WriteTool(), "write"),
 }
 
 
-def test_tool_names_and_schemas_match_0_6() -> None:
+def test_schemas_are_claude_codes_shape() -> None:
     for name, (tool, _) in _TOOLS.items():
         assert tool.name == name
-        assert tool.input_schema == _EXPECTED_SCHEMAS[name], name
+        schema = tool.input_schema
+        assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema", name
+        assert schema["additionalProperties"] is False, name
+        assert all(p.get("description") for p in schema["properties"].values()), name
 
 
 def test_descriptions_are_the_md_files_minus_trailing_newlines() -> None:
@@ -245,26 +143,17 @@ def test_descriptions_are_the_md_files_minus_trailing_newlines() -> None:
         assert tool.description.encode("utf-8") == raw.rstrip(b"\n"), name
 
 
-def test_description_fingerprints() -> None:
-    # Spot checks so an accidental edit of a .md file is caught here too.
-    assert ReadTool().description.startswith("Reads a file from the filesystem.\n\n")
-    assert GrepTool().description.endswith("To match by filename use `Glob`.")
-    assert GlobTool().description.endswith("to read a known file use `Read`.")
-
-
-def test_read_only_and_clearable_flags_match_0_6() -> None:
+def test_read_only_and_clearable_flags() -> None:
     flags = {name: (t.read_only, t.clearable) for name, (t, _) in _TOOLS.items()}
     assert flags == {
         "Bash": (False, True),
         "Edit": (False, True),
-        "Glob": (True, True),
-        "Grep": (True, True),
         "Read": (True, True),
         "Write": (False, True),
     }
 
 
 def test_schemas_are_per_instance() -> None:
-    a, b = GrepTool(), GrepTool()
+    a, b = ReadTool(), ReadTool()
     a.input_schema["properties"]["x"] = {}
     assert "x" not in b.input_schema["properties"]

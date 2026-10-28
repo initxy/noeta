@@ -8,7 +8,8 @@ owning code holds the default; an override replaces it, and
 
 Overrides come from, lowest first: the host's prompt directories
 (``Runtime.prompt_dirs``, e.g. ``~/.noeta/prompts``), the task's workspace
-(``<cwd>/.noeta/prompts``), and the task config's ``prompts`` mapping. A
+(``<cwd>/.noeta/prompts``, when ``Runtime.workspace_trusted`` allows it),
+and the task config's ``prompts`` mapping. A
 file ``tool/Read.md`` overrides ``tool/Read``; ``tool/Read.append.md``
 appends to it.
 
@@ -93,12 +94,13 @@ async def _read_env_dir(env: ExecEnv, root: str) -> dict[str, str]:
 
 
 async def load_overrides(host_dirs: Iterable[str | Path], env: ExecEnv | None,
-                         cwd: str) -> dict[str, str]:
+                         cwd: str, *, workspace: bool = True) -> dict[str, str]:
     """The override files a task starting in ``cwd`` sees: the host's
-    directories, then the workspace's (which wins)."""
+    directories, then the workspace's (which wins) unless ``workspace`` is
+    false (an untrusted workspace)."""
     out: dict[str, str] = {}
     for d in host_dirs:
         out.update(await asyncio.to_thread(_read_host_dir, Path(d).expanduser()))
-    if env is not None and cwd:
+    if env is not None and cwd and workspace:
         out.update(await _read_env_dir(env, posixpath.join(cwd, WORKSPACE_PROMPTS_DIR)))
     return out

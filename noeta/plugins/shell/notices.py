@@ -18,6 +18,7 @@ __all__ = [
     "monitor_expired_note",
     "shell_end_summary",
     "task_notification",
+    "ws_end_summary",
 ]
 
 
@@ -26,13 +27,14 @@ def _escape(text: str) -> str:
 
 
 def task_notification(*, task_id: str, summary: str, tool_use_id: str = "", status: str = "",
-                      body: str = "", trailing: str = "") -> str:
+                      body: str = "", trailing: str = "", output_file: str = "") -> str:
     """Claude Code's ``<task-notification>`` element: one child per non-empty
     field in its order, ``body`` before the closing tag, ``trailing`` after."""
     out = "<task-notification>"
     for tag, value in (
         ("task-id", task_id),
         ("tool-use-id", tool_use_id),
+        ("output-file", output_file),
         ("status", status),
         ("summary", _escape(summary)),
     ):
@@ -71,6 +73,13 @@ def monitor_end_summary(description: str, status: str, exit_code: int | None, *,
     if status == "failed":
         return f'Monitor "{description}" script failed{code}'
     return f'Monitor "{description}" stopped'
+
+
+def ws_end_summary(description: str, status: str, close_code: int | None) -> str:
+    """A WebSocket monitor's end: the close code the socket ended with."""
+    if status == "killed":
+        return f'Monitor "{description}" stopped'
+    return f'Monitor "{description}" socket closed (code {close_code})'
 
 
 def format_duration(ms: float) -> str:
@@ -257,7 +266,7 @@ class MonitorStream:
         if self._suppressed > 0:
             self._sink(
                 f"[{self._suppressed} events suppressed — output rate too high. "
-                "Consider using KillShell to restart this monitor with a more "
+                "Consider stopping this monitor with TaskStop and restarting it with a more "
                 "selective filter.]",
                 True,
             )

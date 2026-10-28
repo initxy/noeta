@@ -1,6 +1,6 @@
 """The built-in agents, as agent files in ``files/``: ``main`` is the general
 coding agent with Claude Code's working style; it delegates to the
-general-purpose, explore and plan sub-agents.
+general-purpose, Explore and Plan sub-agents.
 
 ``default_agents(model)`` is what the ``noeta`` command registers, plus any
 agent files a host adds (``extra_files``, e.g. from ``~/.noeta/agents`` and
@@ -37,9 +37,10 @@ __all__ = [
 #: The extensions of an agent file that names none (a Claude Code agent
 #: file): the general-purpose sub-agent's.
 DEFAULT_PLUGINS: tuple[PluginEntry, ...] = (
-    ("compaction", {}), ("permissions", {}), ("hooks", {}), ("shell", {}), ("web", {}),
-    ("mcp", {}),
+    ("permissions", {}), ("hooks", {}), ("shell", {}), ("web", {}), ("mcp", {}),
     ("fs", {}), ("skills", {}), ("instructions", {}), ("environment", {}), ("subtasks", {}),
+    # Last: the summarize call reuses the request as the others left it.
+    ("compaction", {}),
 )
 
 

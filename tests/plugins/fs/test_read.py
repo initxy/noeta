@@ -5,12 +5,18 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
-from noeta.plugins.fs.grep import GrepTool
-from noeta.plugins.fs.read import IMAGE_MAX_BYTES, ReadTool
+from noeta.plugins.fs import read as read_module
+from noeta.plugins.fs.read import ReadTool
 from noeta.plugins.fs.state import FS
+from noeta.toolkit.images import image_dimensions
+from tests.images import png
 from tests.plugins.conftest import Harness, images_of, text_of
 
 
@@ -18,7 +24,8 @@ async def test_read_small_file_cat_n_form(h: Harness, ws: Path) -> None:
     (ws / "hello.txt").write_text("hi\nthere\n")
     out = await h.call(ReadTool(), file_path="hello.txt")
     assert not out.is_error
-    assert text_of(out) == "     1\thi\n     2\tthere"
+    # No padding; the final newline shows as a last, empty line.
+    assert text_of(out) == "1\thi\n2\tthere\n3\t"
 
 
 async def test_read_records_the_read(h: Harness, ws: Path) -> None:
@@ -37,13 +44,9 @@ async def test_read_records_the_read(h: Harness, ws: Path) -> None:
 async def test_read_offset_limit_slice_keeps_true_line_numbers(h: Harness, ws: Path) -> None:
     (ws / "many.txt").write_text("".join(f"line{i}\n" for i in range(1, 11)))
     out = await h.call(ReadTool(), file_path="many.txt", offset=3, limit=2)
-    text = text_of(out)
-    assert text.startswith("     3\tline3\n     4\tline4")
-    assert "Showing lines 3-4 of 10 total lines" in text
-    assert "offset=5" in text
-    assert text.endswith(
-        "\n\n(Showing lines 3-4 of 10 total lines. Use offset=5 to continue reading.)"
-    )
+    assert text_of(out) == "3\tline3\n4\tline4"  # no footer
+    tail = await h.call(ReadTool(), file_path="many.txt", offset=9, limit=5)
+    assert text_of(tail) == "9\tline9\n10\tline10\n11\t"
 
 
 async def test_read_empty_file_warns(h: Harness, ws: Path) -> None:
@@ -76,15 +79,13 @@ async def test_read_refuses_a_window_past_the_token_ceiling(h: Harness, ws: Path
 async def test_read_medium_file_fits_in_full(h: Harness, ws: Path) -> None:
     (ws / "mid.txt").write_text("".join(f"line {i}\n" for i in range(1500)))
     out = await h.call(ReadTool(), file_path="mid.txt")
-    text = text_of(out)
-    assert "Showing lines" not in text
-    assert text.endswith("  1500\tline 1499")
+    assert text_of(out).endswith("\n1500\tline 1499\n1501\t")
 
 
 async def test_read_default_limit_is_2000_lines(h: Harness, ws: Path) -> None:
     (ws / "long.txt").write_text("".join(f"{i}\n" for i in range(2500)))
     text = text_of(await h.call(ReadTool(), file_path="long.txt"))
-    assert "Showing lines 1-2000 of 2500 total lines. Use offset=2001" in text
+    assert text.endswith("\n2000\t1999")
 
 
 async def test_read_clips_overlong_line(h: Harness, ws: Path) -> None:
@@ -92,24 +93,24 @@ async def test_read_clips_overlong_line(h: Harness, ws: Path) -> None:
     lines = text_of(await h.call(ReadTool(), file_path="wide.txt")).splitlines()
     assert lines[0].endswith("… [line truncated]")
     assert len(lines[0]) < 2200
-    assert lines[1] == "     2\tshort"
+    assert lines[1] == "2\tshort"
 
 
 async def test_read_clips_overlong_line_crlf(h: Harness, ws: Path) -> None:
     (ws / "wide.txt").write_bytes(b"y" * 5000 + b"\r\nnext\r\n")
     lines = text_of(await h.call(ReadTool(), file_path="wide.txt")).splitlines()
     assert "… [line truncated]" in lines[0]
-    assert lines[1] == "     2\tnext"
+    assert lines[1] == "2\tnext"
 
 
 async def test_read_crlf_lines_drop_the_carriage_return(h: Harness, ws: Path) -> None:
     (ws / "crlf.txt").write_bytes(b"a\r\nb\r\n")
-    assert text_of(await h.call(ReadTool(), file_path="crlf.txt")) == "     1\ta\n     2\tb"
+    assert text_of(await h.call(ReadTool(), file_path="crlf.txt")) == "1\ta\n2\tb\n3\t"
 
 
 async def test_read_last_line_without_newline_counts(h: Harness, ws: Path) -> None:
     (ws / "n.txt").write_bytes(b"a\nb")
-    assert text_of(await h.call(ReadTool(), file_path="n.txt")) == "     1\ta\n     2\tb"
+    assert text_of(await h.call(ReadTool(), file_path="n.txt")) == "1\ta\n2\tb"
 
 
 async def test_read_missing_file_path_rejected(h: Harness) -> None:
@@ -161,7 +162,7 @@ async def test_read_stray_invalid_bytes_decoded_leniently(h: Harness, ws: Path) 
     assert "(Non-utf8 bytes were replaced with U+FFFD.)" in text
 
 
-_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+_PNG = png(4, 3)
 
 
 async def test_read_image_surfaces_for_vision(h: Harness, ws: Path) -> None:
@@ -182,25 +183,45 @@ async def test_read_image_detected_by_content_not_extension(h: Harness, ws: Path
 
 
 async def test_read_other_image_kinds(h: Harness, ws: Path) -> None:
-    kinds = {
-        "a.jpg": (b"\xff\xd8\xff\xe0" + b"\x00" * 8, "image/jpeg"),
-        "a.gif": (b"GIF89a" + b"\x00" * 8, "image/gif"),
-        "a.webp": (b"RIFF\x00\x00\x00\x00WEBPVP8 ", "image/webp"),
-    }
-    for name, (body, media_type) in kinds.items():
-        (ws / name).write_bytes(body)
+    pil = pytest.importorskip("PIL.Image")
+    for name, fmt, media_type in (("a.jpg", "JPEG", "image/jpeg"), ("a.gif", "GIF", "image/gif"),
+                                  ("a.webp", "WEBP", "image/webp")):
+        pil.new("RGB", (5, 4)).save(ws / name, fmt)
         [img] = images_of(await h.call(ReadTool(), file_path=name))
         assert img.media_type == media_type
 
 
-async def test_read_image_over_limit_degrades(h: Harness, ws: Path) -> None:
-    (ws / "huge.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * (IMAGE_MAX_BYTES + 1))
+async def test_read_image_over_the_file_limit_degrades(h: Harness, ws: Path,
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(read_module, "IMAGE_MAX_BYTES", 100)
+    (ws / "huge.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 101)
     out = await h.call(ReadTool(), file_path="huge.png")
     assert out.is_error
     assert text_of(out) == (
-        f"Read: 'huge.png' is a PNG image of {IMAGE_MAX_BYTES + 9} bytes, over "
-        "the 5MB inline limit — crop/resize it smaller before reading"
+        "Read: 'huge.png' is a PNG image of 109 bytes, over the 0MB image read limit — "
+        "resize it or export a smaller copy, then read that"
     )
+
+
+async def test_read_shrinks_a_large_image_to_claude_codes_box(h: Harness, ws: Path) -> None:
+    pytest.importorskip("PIL")
+    (ws / "big.png").write_bytes(png(4000, 1000))
+    out = await h.call(ReadTool(), file_path="big.png")
+    [img] = images_of(out)
+    assert image_dimensions(img.data) == (2000, 500)
+    assert "scaled from 4000x1000 to 2000x500 px; multiply coordinates by 2.00" in text_of(out)
+
+
+async def test_an_image_that_cannot_be_sent_never_reaches_the_history(
+        h: Harness, ws: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "PIL", None)  # no image library
+    (ws / "wide.png").write_bytes(png(9000, 10))
+    out = await h.call(ReadTool(), file_path="wide.png")
+    assert out.is_error and not images_of(out)
+    assert "9000x10 px" in text_of(out) and "noeta[images]" in text_of(out)
+    (ws / "corrupt.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+    out = await h.call(ReadTool(), file_path="corrupt.png")
+    assert out.is_error and not images_of(out)
 
 
 async def test_read_fake_pdf_reports_failure(h: Harness, ws: Path) -> None:
@@ -262,9 +283,7 @@ async def test_read_streams_the_window_and_hashes_the_whole_file(ws: Path) -> No
     body = b"".join(b"line %d\n" % i for i in range(1, 300_001))  # ~3.3 MB
     (ws / "big.log").write_bytes(body)
     out = await h.call(ReadTool(), file_path="big.log", offset=250_000, limit=3)
-    text = text_of(out)
-    assert text.startswith("250000\tline 250000\n250001\tline 250001\n250002\tline 250002")
-    assert "of 300000 total lines" in text
+    assert text_of(out) == "250000\tline 250000\n250001\tline 250001\n250002\tline 250002"
     assert h.fs.digest(str(ws / "big.log")) == hashlib.sha256(body).hexdigest()
 
 
@@ -278,6 +297,8 @@ async def test_read_refuses_a_whole_file_over_256kb(h: Harness, ws: Path) -> Non
         "file, or search for specific content instead of reading the whole "
         "file."
     )
+    big = await h.call(ReadTool(), file_path="wide.txt", allow_large=True)
+    assert not big.is_error and text_of(big).startswith("1\t" + "y" * 150)
 
 
 async def test_read_refuses_more_than_25000_tokens(h: Harness, ws: Path) -> None:
@@ -287,11 +308,30 @@ async def test_read_refuses_more_than_25000_tokens(h: Harness, ws: Path) -> None
     assert text_of(out) == (
         "Read: File content (37750 tokens) exceeds maximum allowed tokens "
         "(25000). Use offset and limit parameters to read specific portions "
-        "of the file, or search for specific content instead of reading the "
-        "whole file."
+        "of the file, search for specific content instead of reading the "
+        "whole file, or set allow_large when you need all of it."
     )
     ok = await h.call(ReadTool(), file_path="wide.txt", limit=500)
     assert not ok.is_error
+
+
+async def test_read_checks_a_large_window_with_the_exact_count(h: Harness, ws: Path) -> None:
+    (ws / "wide.txt").write_text(("y" * 150 + "\n") * 3000)
+    counted: list[int] = []
+
+    async def count(text: str) -> int | None:
+        counted.append(len(text))
+        return 20_000  # under the ceiling, though the estimate (37750) is over
+
+    ctx = h.ctx()
+    ctx.count_tokens = count
+    out = await ReadTool().run({"file_path": "wide.txt", "limit": 1000}, ctx)
+    assert not out.is_error and counted == [151 * 1000 - 1]
+    small = h.ctx()
+    small.count_tokens = count
+    # Under a quarter of the ceiling the estimate stands: no count request.
+    assert not (await ReadTool().run({"file_path": "wide.txt", "limit": 100}, small)).is_error
+    assert len(counted) == 1
 
 
 async def test_read_json_counts_two_chars_per_token(h: Harness, ws: Path) -> None:
@@ -309,14 +349,48 @@ async def test_read_clips_a_huge_single_line_without_buffering_it(ws: Path) -> N
     out = await h.call(ReadTool(), file_path="min.js", limit=2)
     lines = text_of(out).splitlines()
     assert lines[0].endswith("… [line truncated]")
-    assert lines[1] == "     2\tnext"
+    assert lines[1] == "2\tnext"
 
 
-async def test_read_numbering_matches_grep_across_odd_separators(
-    h: Harness, ws: Path
-) -> None:
-    (ws / "ff.py").write_text("a = 1\n\x0c\nb = 2 c = 3\x1cd\nTARGET = 3\n")  # noqa: RUF001
-    grep = await h.call(GrepTool(), pattern="TARGET", output_mode="content", **{"-n": True})
-    assert "ff.py:4:TARGET = 3" in text_of(grep)
+async def test_read_numbering_splits_on_newline_only(h: Harness, ws: Path) -> None:
+    (ws / "ff.py").write_text("a = 1\n\x0c\nb = 2 c = 3\x1cd\nTARGET = 3\n")
     read = await h.call(ReadTool(), file_path="ff.py", offset=4, limit=1)
-    assert text_of(read).startswith("     4\tTARGET = 3")
+    assert text_of(read) == "4\tTARGET = 3"
+
+
+async def test_an_unchanged_range_is_not_sent_twice(h: Harness, ws: Path) -> None:
+    target = ws / "a.txt"
+    target.write_text("one\ntwo\n")
+    tool = ReadTool()
+
+    async def read(**input: Any) -> str:
+        ctx = h.ctx()
+        ctx.by_model = True
+        return text_of(await tool.run({"file_path": "a.txt", **input}, ctx))
+
+    assert (await read()).startswith("1\tone")
+    assert (await read(offset=0)).startswith("File unchanged since you last read this range")
+    # An extension's own read (a compaction restoring files) gets the content.
+    assert text_of(await h.call(tool, file_path="a.txt")).startswith("1\tone")
+    assert await read(limit=1) == "1\tone"
+    target.write_text("one\ntwo\nthree\n")
+    os.utime(target, (1, 1))
+    assert await read(limit=1) == "1\tone"
+
+
+def test_a_compaction_forgets_read_ranges() -> None:
+    from noeta.plugins.fs.state import reduce_fs
+    st = reduce_fs(None, "read", {"path": "/a", "digest": "d", "mtime": 1.0, "range": [1, 9]})
+    assert st.reads["/a"].range == [1, 9]
+    st = reduce_fs(st, "forget_ranges", {})
+    assert st.reads["/a"].range is None and st.reads["/a"].digest == "d"
+
+
+def test_read_schema() -> None:
+    schema = ReadTool().input_schema
+    props = schema["properties"]
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert props["offset"]["minimum"] == 0 and props["offset"]["maximum"] == 2**53 - 1
+    assert props["limit"]["exclusiveMinimum"] == 0 and "minimum" not in props["limit"]
+    assert props["allow_large"]["type"] == "boolean"
+    assert all(p["description"] for p in props.values())

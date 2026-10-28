@@ -7,15 +7,17 @@ authors = [{ name = "The Noeta Authors" }]
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28.1",
+    "mini-racer>=0.14,<0.15",
     "msgspec>=0.19",
     "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary,pool]>=3.2"]
-server = ["starlette>=0.40", "uvicorn>=0.30"]
+server = ["starlette>=0.40", "uvicorn>=0.30", "websockets>=12"]
 tui = ["textual>=8.0"]
 acp = ["agent-client-protocol>=0.12,<0.13"]
+images = ["pillow>=10.4"]
 
 [project.scripts]
 noeta = "noeta.cli.main:main"
@@ -24,20 +26,25 @@ noeta = "noeta.cli.main:main"
 # would (noeta/core/registry.py).
 [project.entry-points."noeta.plugins"]
 ask_user = "noeta.plugins.ask_user:AskUser"
+checkpoints = "noeta.plugins.checkpoints:Checkpoints"
 compaction = "noeta.plugins.compaction:Compaction"
 environment = "noeta.plugins.environment:Environment"
+findings = "noeta.plugins.findings:Findings"
 fs = "noeta.plugins.fs:FileTools"
 hooks = "noeta.plugins.hooks:Hooks"
 instructions = "noeta.plugins.instructions:Instructions"
 mcp = "noeta.plugins.mcp:Mcp"
 memory = "noeta.plugins.memory:Memory"
 permissions = "noeta.plugins.permissions:Permissions"
+quiet_nudge = "noeta.plugins.quiet_nudge:QuietNudge"
+schedule = "noeta.plugins.schedule:Schedule"
 shell = "noeta.plugins.shell:Shell"
 skills = "noeta.plugins.skills:Skills"
 structured_output = "noeta.plugins.structured:StructuredOutput"
+title = "noeta.plugins.title:Title"
 subtasks = "noeta.plugins.subtasks:Subtasks"
-todo = "noeta.plugins.todo:Todo"
 web = "noeta.plugins.web:Web"
+workflow = "noeta.plugins.workflow:Orchestration"
 
 [project.entry-points."noeta.providers"]
 anthropic = "noeta.backends.providers:anthropic_provider"

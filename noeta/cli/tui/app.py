@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,8 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Markdown, Static
 from textual.widgets.markdown import MarkdownStream
 
+from noeta.cli import mentions
+from noeta.cli.tui import slash
 from noeta.cli.tui.widgets import (
     ApprovalCard,
     AssistantMessage,
@@ -27,7 +30,7 @@ from noeta.cli.tui.widgets import (
     tool_title,
 )
 from noeta.core import models
-from noeta.core.commands import expand_command, list_commands
+from noeta.core.commands import list_commands, run_typed
 from noeta.core.events import (
     Answer,
     ExtensionRecorded,
@@ -43,17 +46,33 @@ from noeta.core.events import (
 )
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CORE
-from noeta.core.pending import Pending, follow_tree
+from noeta.core.pending import (
+    MODE_SIGNAL,
+    Pending,
+    answer_choice,
+    card_title,
+    choices,
+    current_mode,
+    follow_tree,
+    next_mode,
+)
 from noeta.core.questions import next_question, typed_answer
-from noeta.core.types import Delta, Usage
+from noeta.core.types import Delta, Image, Usage
 from noeta.host.local import LocalApp, UnknownAgent
 
 log = logging.getLogger("noeta.cli.tui")
 
 HELP = """\
-**Commands**  `/new` new task · `/resume` pick a task · `/stop` stop the turn · `/exit` quit
-**Keys**  Enter send · Ctrl+J new line · Esc stop the turn · Ctrl+B side panel · y/a/n approvals
+**Commands**  `/new` or `/clear` new task · `/resume [n|id]` pick a task · `/stop` stop the
+turn · `/exit` quit
+**Keys**  Enter send · Ctrl+J new line · Esc stop the turn (Esc Esc when idle: rewind) ·
+Ctrl+B side panel · Shift+Tab permission mode · Ctrl+V paste an image · 1-9 or y/a/n approvals
+**Input**  `@path` attaches a file (or directory, or image); a pasted image file path
+attaches the image
 """
+
+#: Seconds between two presses of Esc that open the rewind list.
+DOUBLE_ESCAPE = 0.8
 
 
 def _short_path(path: str, width: int) -> str:
@@ -69,18 +88,30 @@ class NoetaApp(App[None]):
     BINDINGS = [
         Binding("escape", "stop_turn", "Stop", show=False),
         Binding("ctrl+b", "toggle_side", "Side panel", show=False),
+        Binding("shift+tab", "cycle_mode", "Mode", show=False, priority=True),
+        Binding("ctrl+v", "paste_image", "Paste image", show=False),
         Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
     ]
 
     def __init__(self, local: LocalApp | Any, *, agent: str, model: str, cwd: str,
-                 resume: str | None = None, permission_mode: str | None = None) -> None:
+                 resume: str | None = None, permission_mode: str | None = None,
+                 settings: Any = None) -> None:
         super().__init__()
         self.local = local
+        #: The front end's settings (``/config`` shows them), when known.
+        self.settings = settings
+        #: Images pasted for the next message.
+        self.images: list[Image] = []
+        self._last_escape = 0.0
+        #: The roots ``/resume`` listed last, so ``/resume <n>`` picks one.
+        self.listed: list[str] = []
         self.agent = agent
         self.model = model
         self.cwd = cwd
         self.resume = resume
         self.permission_mode = permission_mode
+        #: The task's permission mode, as its permissions plugin recorded it.
+        self.mode = ""
         self.task_id = ""
         self.calls: dict[str, ToolCall] = {}
         self.stream: MarkdownStream | None = None
@@ -120,7 +151,7 @@ class NoetaApp(App[None]):
             with Vertical(id="side"):
                 yield Static("[b]Subtasks[/b]", id="side-title")
                 yield Static("", id="side-body")
-        yield PromptInput(self.submit)
+        yield PromptInput(self.submit, self.add_image)
         yield Static("", id="status")
 
     async def on_mount(self) -> None:
@@ -187,8 +218,10 @@ class NoetaApp(App[None]):
             await self.new_task()
             return
         await self.open_task(roots[0].task_id)
-        lines = "\n".join(f"- `{r.task_id}` {r.status}" for r in roots[:10])
-        await self.say_notice(f"Resumed the latest task. Others: `/resume <id>`\n{lines}")
+        self.listed = [r.task_id for r in roots[:10]]
+        lines = "\n".join(f"{n}. `{r.task_id}` {r.status}" for n, r in enumerate(roots[:10], 1))
+        await self.say_markdown(f"Resumed the latest task. Others: `/resume <n>` or "
+                                f"`/resume <id>`\n{lines}")
 
     # ------------------------------------------------------------ input
 
@@ -207,7 +240,10 @@ class NoetaApp(App[None]):
         if self.waiting_question:
             await self.answer_question(text)
             return
-        await self.local.client.send(self.task_id, text, when="next_turn")
+        images, self.images = self.images, []
+        message = mentions.attach(text, self.cwd, images) \
+            if images or mentions.mentioned(text, self.cwd) else text
+        await self.local.client.send(self.task_id, message, when="next_turn")
         self.busy = True
         self.update_status()
 
@@ -218,14 +254,50 @@ class NoetaApp(App[None]):
         elif name == "new":
             await self.new_task()
         elif name == "resume":
-            await (self.open_task(arg.strip()) if arg.strip() else self.pick_task())
+            await self.resume_command(arg.strip())
         elif name == "stop":
             await self.action_stop_turn()
         elif name == "help":
+            builtin = "\n".join(f"- `/{n}` {h}" for n, h in slash.COMMANDS.items())
             await self.query_one("#transcript").mount(
-                Markdown(HELP + await self._plugin_help(), classes="notice"))
-        else:
+                Markdown(HELP + builtin + "\n" + await self._plugin_help(), classes="notice"))
+        elif not await slash.run(self, name, arg):
             await self._plugin_command(text, name)
+
+    async def resume_command(self, arg: str) -> None:
+        if arg.isdigit() and 1 <= int(arg) <= len(self.listed):
+            await self.open_task(self.listed[int(arg) - 1])
+        elif arg:
+            await self.open_task(arg)
+        else:
+            await self.pick_task()
+
+    async def say_markdown(self, text: str) -> None:
+        transcript = self.query_one("#transcript")
+        await transcript.mount(Markdown(text, classes="notice"))
+        transcript.scroll_end(animate=False)
+
+    def prefill(self, text: str) -> None:
+        """Put ``text`` in the input box for the person to edit and send."""
+        box = self.query_one(PromptInput)
+        box.text = text
+        box.move_cursor(box.document.end)
+        box.focus()
+
+    async def add_image(self, image: Image, label: str = "") -> None:
+        self.images.append(image)
+        box = self.query_one(PromptInput)
+        box.insert(f"[Image #{len(self.images)}]")
+        await self.say_notice(f"image attached{f' ({label})' if label else ''}; it goes with "
+                              "the next message")
+
+    async def action_paste_image(self) -> None:
+        image = mentions.clipboard_image()
+        if image is None:
+            await self.say_notice("no image on the clipboard (needs wl-paste, xclip or "
+                                  "pngpaste)")
+            return
+        await self.add_image(image, "clipboard")
 
     def _agent(self) -> Any:
         """This front end's agent, when it runs one (not attached to a server)."""
@@ -245,31 +317,47 @@ class NoetaApp(App[None]):
     async def _plugin_command(self, text: str, name: str) -> None:
         agent = self._agent()
         try:
-            message = await expand_command(agent, self._command_context(), text) \
+            typed = await run_typed(agent.all_extensions(), self._command_context(), text) \
                 if agent else None
         except Exception as exc:  # noqa: BLE001 — a plugin's failure is shown, not raised
             await self.say_notice(f"/{name} failed: {exc}")
             return
-        if message is None:
+        if typed is None:
             await self.say_notice(f"unknown command /{name} — try /help")
-        elif message:
-            await self.send(message)
+        elif typed.local:
+            await self.say_markdown(typed.text or f"/{name} done")
+        elif typed.text:
+            await self.send(typed.text)
 
     async def action_stop_turn(self) -> None:
         if self.task_id and self.busy:
             await self.local.client.cancel(self.task_id, "stopped from the terminal",
                                            turn_only=True)
+            return
+        now = time.monotonic()
+        if now - self._last_escape <= DOUBLE_ESCAPE and self.task_id and not self.read_only:
+            self._last_escape = 0.0
+            await slash.run(self, "rewind", "")
+        else:
+            self._last_escape = now
 
     def action_toggle_side(self) -> None:
         side = self.query_one("#side")
         side.display = not side.display
 
-    async def decide(self, call_id: str, decision: str, always: bool, *,
-                     task_id: str = "") -> None:
+    async def decide(self, call_id: str, choice: str, *, task_id: str = "") -> None:
         self.waiting_for = ""
-        await self.local.client.answer(task_id or self.task_id, call_id,
-                                       decision, always=always)  # type: ignore[arg-type]
+        await answer_choice(self.local.client, task_id or self.task_id, call_id, choice)
         self.query_one(PromptInput).focus()
+
+    async def action_cycle_mode(self) -> None:
+        """Step to the next permission mode (Claude Code's shift+tab)."""
+        if not self.task_id or self.read_only:
+            return
+        mode = next_mode(self.mode or self.permission_mode or "auto")
+        await self.local.client.signal(self.task_id, MODE_SIGNAL, {"mode": mode})
+        self.mode = mode
+        self.update_status()
 
     def _set_question(self, call_id: str, task_id: str, detail: dict[str, Any]) -> None:
         self.waiting_question = call_id
@@ -307,12 +395,13 @@ class NoetaApp(App[None]):
             if p.kind == "approval":
                 self.waiting_for = f"{who} waits for your approval (y/a/n)"
 
-                async def decide(call_id: str, decision: str, always: bool,
+                async def decide(call_id: str, choice: str,
                                  task_id: str = p.task_id) -> None:
-                    await self.decide(call_id, decision, always, task_id=task_id)
+                    await self.decide(call_id, choice, task_id=task_id)
 
                 await transcript.mount(ApprovalCard(
-                    p.request_id, f"[{who}] {p.tool}", p.prompt, decide))
+                    p.request_id, card_title(p, self.task_id), p.prompt, decide,
+                    choices(p.detail)))
             else:
                 self.waiting_for = f"{who} waits for your answer"
                 self._set_question(p.request_id, p.task_id, p.detail)
@@ -436,7 +525,12 @@ class NoetaApp(App[None]):
                 finished.set_result(ev.result.text, is_error=ev.result.is_error, diff=diff)
         elif isinstance(ev, ExtensionRecorded):
             data = ev.data if isinstance(ev.data, dict) else {}
-            if ev.kind == "retry":
+            mode = current_mode([rec])
+            if mode:
+                self.mode = mode
+            if ev.extension == "title" and ev.kind == "title":
+                self.sub_title = str(data.get("title") or "")
+            elif ev.kind == "retry":
                 await self._retried(int(data.get("attempt") or 1))
                 await transcript.mount(Notice(f"retrying (attempt {data.get('attempt')}): "
                                               f"{str(data.get('error', ''))[:120]}"))
@@ -448,7 +542,10 @@ class NoetaApp(App[None]):
                 reason = ": ".join(str(x) for x in (data.get("reason"), data.get("detail")) if x)
                 await transcript.mount(Notice(f"turn failed: {reason}", classes="-error"))
             elif ev.kind == "notice" and ev.extension == CORE:
-                await transcript.mount(Notice(str(data.get("text") or "")))
+                text = str(data.get("text") or "")
+                # Structured news (a review's findings) reads as a list.
+                await transcript.mount(Markdown(text, classes="notice") if data.get("kind")
+                                       else Notice(text))
         elif isinstance(ev, Waiting):
             await self._end_stream()
             self.waiting_for = {"approval": "waiting for your approval (y/a/n)",
@@ -459,9 +556,14 @@ class NoetaApp(App[None]):
                     asked = self.calls.get(call_id)
                     if asked is not None:
                         asked.set_state("waiting")
-                    title = tool_title(asked.call) if asked is not None else call_id
-                    prompt = str((ev.detail.get(call_id) or {}).get("prompt") or "")
-                    await transcript.mount(ApprovalCard(call_id, title, prompt, self.decide))
+                    detail = ev.detail.get(call_id) or {}
+                    title = str(detail.get("title") or "") or (
+                        tool_title(asked.call) if asked is not None else call_id)
+                    prompt = str(detail.get("prompt") or "")
+                    if asked is not None and title != tool_title(asked.call):
+                        prompt = f"{tool_title(asked.call)}\n{prompt}".strip()
+                    await transcript.mount(ApprovalCard(call_id, title, prompt, self.decide,
+                                                        choices(detail)))
             elif ev.on == "question":
                 questions = [k for k, v in ev.detail.items()
                              if isinstance(v, dict) and v.get("on") == "question"]
@@ -492,7 +594,8 @@ class NoetaApp(App[None]):
         state = self.waiting_for or ("working… (Esc to stop)" if self.busy else "ready")
         width = max(self.size.width - len(self.model) - len(state) - 30, 12)
         self.query_one("#status", Static).update(RichText(
-            f"{state} · {self.model} · context {used}{cost} · {_short_path(self.cwd, width)}"))
+            f"{state} · {self.model} · {self.mode or self.permission_mode or 'auto'} mode "
+            f"(shift+tab) · context {used}{cost} · {_short_path(self.cwd, width)}"))
 
     @work(exclusive=True, group="side", exit_on_error=False)
     async def _refresh_side(self) -> None:

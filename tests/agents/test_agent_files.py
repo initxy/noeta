@@ -49,7 +49,23 @@ def test_parse_keeps_the_body_and_reads_every_field() -> None:
 def test_claude_code_agent_file() -> None:
     f = parse_agent_file("---\nname: helper\ndescription: Helps.\ntools: Read, Bash\n"
                          "model: sonnet\n---\nHelp.\n")
-    assert f.tools == ("Read", "Bash") and f.model is None and f.plugins is None
+    assert f.tools == ("Read", "Bash") and f.model == "sonnet" and f.plugins is None
+
+
+def test_identity_line_defaults_and_goes_first_as_its_own_cached_block() -> None:
+    from noeta.agents.agent_files import DEFAULT_IDENTITY
+    from noeta.core.loop.request import build_request
+    from noeta.core.loop.state import TaskState
+
+    own = parse_agent_file("---\nname: a\nidentity: You are A.\nplugins: []\n---\nBody.\n")
+    plain = parse_agent_file("---\nname: b\nplugins: []\n---\nBody.\n")
+    a, b = build_agents([own, plain], model="m")
+    assert own.identity == "You are A." and a.identity == "You are A."
+    assert b.identity == DEFAULT_IDENTITY
+    request = build_request(TaskState(), model="m", system_prompt=b.system_prompt,
+                            identity=b.identity, parts=[], tools=[])
+    assert [(p.text, p.cache) for p in request.system] == [
+        (DEFAULT_IDENTITY, True), ("Body.\n", True)]
 
 
 @pytest.mark.parametrize("text", [
@@ -117,3 +133,39 @@ def test_settings_defaults_additions_and_models() -> None:
         build_agents(files, model="m", plugins={"fs": {"enabled": "no"}})
     with pytest.raises(TypeError):
         build_agents(files, model="m", plugins={"fs": 3})  # type: ignore[dict-item]
+
+
+def test_claude_code_fields_map_onto_the_agent(caplog: pytest.LogCaptureFixture) -> None:
+    f = parse_agent_file(
+        "---\nname: fixer\ndescription: Fixes.\ntools: Read, Bash(npm:*), Edit\n"
+        "disallowedTools: [Write]\nmodel: haiku\npermissionMode: acceptEdits\nmaxTurns: 7\n"
+        "omitClaudeMd: true\nisolation: worktree\nskills: [a]\nflavour: x\n---\nFix.\n",
+        source="f.md")
+    assert f.tools == ("Read", "Bash", "Edit") and f.denied_tools == ("Write",)
+    assert f.permission_mode == "acceptEdits" and f.max_turns == 7 and f.omit_instructions
+    assert f.extra == {"isolation": "worktree", "skills": ["a"], "flavour": "x"}
+    logged = caplog.text
+    assert "'flavour' is ignored" in logged and "'skills' is not applied" in logged
+    assert "isolation" not in logged
+    [agent] = build_agents([f], model="host", default_plugins=[("instructions", {})])
+    assert agent.model == "claude-haiku-5-5" and agent.denied_tools == ("Write",)
+    assert agent.max_steps_per_turn == 7 and agent.extensions == ()
+    assert agent.extra["permission_mode"] == "acceptEdits" and agent.extra["model"] == "haiku"
+
+
+def test_tools_star_and_inherit() -> None:
+    f = parse_agent_file("---\nname: a\ntools: '*'\nmodel: inherit\n---\n")
+    assert f.tools is None and f.model is None
+    [agent] = build_agents([f], model="host")
+    assert agent.model == "host" and agent.max_steps_per_turn == 1_000
+
+
+@pytest.mark.parametrize("text", [
+    "---\nname: a:b\n---\n",
+    "---\nname: a\nmaxTurns: 0\n---\n",
+    "---\nname: a\nomitClaudeMd: sometimes\n---\n",
+    "---\nname: a\npermissionMode: [x]\n---\n",
+])
+def test_bad_claude_code_fields(text: str) -> None:
+    with pytest.raises(AgentFileError):
+        parse_agent_file(text)
