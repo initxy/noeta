@@ -127,6 +127,14 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
                 c.use.id, texts.DEFERRED_NOT_LOADED.format(name=c.use.name))])
             continue
         answer = run.state.answers.get(c.use.id)
+        if answer is not None and answer.decision == "deny" and isinstance(answer.data, dict) \
+                and answer.data.get("interrupt") is False:
+            # Refused by a permission callback that lets the turn go on
+            # (Claude Code's SDK can_use_tool deny): the model reads why.
+            message = str(answer.data.get("message") or "").strip()
+            await run.append([run.error_result(
+                c.use.id, message or texts.DENIED_BY_CALLBACK.format(name=c.use.name))])
+            continue
         if answer is not None and answer.decision == "deny":
             # Declined at its prompt: the call does not run and, as in Claude
             # Code, the turn stops once the reply's results land.

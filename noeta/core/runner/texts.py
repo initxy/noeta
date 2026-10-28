@@ -19,7 +19,10 @@ REJECTED_WITH_MESSAGE = "\nThe user's reason for declining: {message}"
 #: Follows the results of a reply in which the person declined a call
 #: (Claude Code's marker, verbatim: models know it).
 REJECTED_MARKER = "[Request interrupted by user for tool use]\n"
-UNKNOWN_TOOL = "No tool named {name!r} is available in this task; use one of the offered tools."
+#: A call a permission callback refused without stopping the turn (an
+#: ``Answer`` whose data says ``"interrupt": false``) and gave no reason for.
+DENIED_BY_CALLBACK = "Permission to use {name} was denied."
+UNKNOWN_TOOL ="No tool named {name!r} is available in this task; use one of the offered tools."
 DEFERRED_NOT_LOADED = (
     "InputValidationError: {name} is a deferred tool whose schema is not loaded. Load it with "
     "ToolSearch (query \"select:{name}\"), then call it again.")
