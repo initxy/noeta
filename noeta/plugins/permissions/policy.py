@@ -11,8 +11,8 @@ import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Literal
-from urllib.parse import unquote, urlsplit
 
+from noeta.toolkit.permission_rules import idna, url_host
 from noeta.toolkit.shell import (
     DEFAULT_SHELL_RULES,
     AllowRule,
@@ -211,26 +211,6 @@ def append_project_rule(existing: Sequence[Mapping[str, Any]],
 _LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$")
 
 
-def _idna(host: str) -> str:
-    try:
-        return host.encode("idna").decode("ascii").lower()
-    except (UnicodeError, ValueError):
-        return host.lower()
-
-
-def url_host(url: str) -> str | None:
-    """The URL's real host, normalised (userinfo dropped, escapes decoded,
-    trailing dot dropped, IDNA); ``None`` when it names none."""
-    try:
-        host = urlsplit(url).hostname
-    except ValueError:
-        return None
-    if not host:
-        return None
-    host = unquote(host).strip().rstrip(".").lower()
-    return _idna(host) if host else None
-
-
 def normalize_allowed_hosts(entries: Iterable[object]) -> tuple[str, ...]:
     """Validate ``example.com`` / ``*.example.com`` entries; anything else
     raises (a security knob must not fail open on a typo)."""
@@ -261,7 +241,7 @@ def normalize_allowed_hosts(entries: Iterable[object]) -> tuple[str, ...]:
                     "write the host alone, e.g. 'example.com' or '*.example.com'"
                 )
         wildcard = entry.startswith("*.")
-        name = _idna(entry[2:] if wildcard else entry)
+        name = idna(entry[2:] if wildcard else entry)
         if not name or "*" in name:
             raise ValueError(
                 f"webfetch_allowed_hosts entry {raw!r} is not a host; the only "

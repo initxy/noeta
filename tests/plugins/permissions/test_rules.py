@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from noeta.plugins.permissions import Permissions
-from noeta.plugins.permissions.rules import (
+from noeta.toolkit.permission_rules import (
     RuleContext,
     format_rule,
     match,

@@ -20,7 +20,7 @@ from noeta.core.tool import ToolOutput
 from noeta.core.types import ModelRequest, ToolUse
 from noeta.plugins.permissions import guards as g
 from noeta.plugins.permissions import policy as p
-from noeta.plugins.permissions import rules as r
+from noeta.toolkit import permission_rules as r
 
 log = logging.getLogger("noeta.permissions")
 
@@ -112,7 +112,7 @@ class Permissions(Extension):
       :data:`policy.PERMISSION_MODES`. A task can override it with
       ``config["permission_mode"]``.
     * ``allow`` / ``deny`` / ``ask`` — rule strings
-      (:mod:`noeta.plugins.permissions.rules`: ``Bash(git push *)``,
+      (:mod:`noeta.toolkit.permission_rules`: ``Bash(git push *)``,
       ``Read(./.env)``, ``WebFetch(domain:example.com)``, ``mcp__server``).
       A deny rule wins over everything, then an ask rule (which no mode
       skips), then an allow rule.

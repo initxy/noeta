@@ -18,8 +18,9 @@
   ``Skill(name)`` a skill.
 
 A rule string that names a tool with no content covers every call of it.
-Nothing here touches a task: :func:`match` is a pure function of the rule,
-the call and the paths it is judged against.
+The permissions plugin and hook ``if`` conditions share this module;
+:func:`match` is a pure function of the rule, the call and the paths it is
+judged against.
 """
 
 from __future__ import annotations
@@ -30,19 +31,25 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from noeta.toolkit.shell import parse_argv, subcommands
 
 __all__ = [
     "EDIT_TOOLS",
     "READ_TOOLS",
+    "SHELL_TOOLS",
     "Rule",
     "RuleContext",
+    "first_match",
     "format_rule",
+    "idna",
     "match",
     "parse_rule",
     "parse_rules",
     "path_pattern_matches",
+    "shell_rule_matches",
+    "url_host",
 ]
 
 #: Tools an ``Edit(...)`` rule covers.
@@ -304,11 +311,29 @@ def path_pattern_matches(pattern: str, path: str, ctx: RuleContext) -> bool:
 # ---------------------------------------------------------------- web
 
 
+def idna(host: str) -> str:
+    try:
+        return host.encode("idna").decode("ascii").lower()
+    except (UnicodeError, ValueError):
+        return host.lower()
+
+
+def url_host(url: str) -> str | None:
+    """The URL's real host, normalised (userinfo dropped, escapes decoded,
+    trailing dot dropped, IDNA); ``None`` when it names none."""
+    try:
+        host = urlsplit(url).hostname
+    except ValueError:
+        return None
+    if not host:
+        return None
+    host = unquote(host).strip().rstrip(".").lower()
+    return idna(host) if host else None
+
+
 def _domain_matches(content: str, url: Any) -> bool:
     if not content.startswith("domain:") or not isinstance(url, str):
         return False
-    from noeta.plugins.permissions.policy import url_host
-
     host = url_host(url)
     entry = content[len("domain:"):].strip().lower().rstrip(".")
     if not host or not entry:
