@@ -8,10 +8,11 @@
 #   make e2e        live tests: real LLM / real container (needs credentials)
 #   make eval       prompt-regression eval vs evals/baseline.json (needs credentials)
 #   make parity     replay Claude Code's recorded scenarios against noeta, report every difference
+#   make cluster    worker processes on Postgres under random kills (needs docker or a DSN)
 #   make build      wheel + sdist into dist/
 
 .DEFAULT_GOAL := help
-.PHONY: help install check test lint example e2e eval eval-baseline parity build
+.PHONY: help install check test lint example e2e eval eval-baseline parity cluster build
 
 help:
 	@echo "noeta"
@@ -25,6 +26,7 @@ help:
 	@echo "  make eval       prompt-regression eval vs evals/baseline.json (needs credentials)"
 	@echo "  make eval-baseline  9-trial run, then rewrite evals/baseline.json"
 	@echo "  make parity     replay Claude Code's recorded scenarios, write parity/report.md"
+	@echo "  make cluster    worker processes on Postgres under random kills (docker or a DSN)"
 	@echo "  make build      wheel + sdist into dist/"
 
 install:
@@ -62,6 +64,12 @@ eval-baseline:
 ## offline; writes parity/report.md and exits 1 while any mismatch is left (never in check)
 parity:
 	uv run python -m scripts.parity.replay
+
+## several worker processes on one Postgres (a throwaway postgres:16 container,
+## or NOETA_TEST_POSTGRES_DSN) under random SIGKILL / SIGSTOP, offline with a
+## scripted provider (tests/cluster); NOETA_CLUSTER_SEED replays a run (never in check)
+cluster:
+	uv run --all-extras --with-editable ./tests/cluster/scripted pytest -m cluster -p no:cacheprovider -s -v tests/cluster
 
 build:
 	uv build

@@ -46,6 +46,7 @@
 - e2e: `make e2e` — `-m live` tests against a real LLM / sandbox container; needs credentials, never part of `check`
 - eval: `make eval` — prompt-regression scenarios against a real model, compared to `evals/baseline.json`; `make eval-baseline` re-records it; needs credentials, never part of `check`
 - parity: `make parity` — noeta replayed offline through Claude Code's recorded scenarios, every request difference in `parity/report.md` (`scripts/parity/README.md`); never part of `check`
+- cluster: `make cluster` — worker processes on one Postgres (a throwaway `postgres:16` container, or `NOETA_TEST_POSTGRES_DSN`) under random SIGKILL / SIGSTOP with a scripted provider (`tests/cluster`); a known gap is an `xfail(strict=True)` there; `NOETA_CLUSTER_SEED` replays a run; never part of `check`
 - check: `make check` — ruff, mypy --strict, `scripts/lint-naming.py`, `scripts/lint-layout.py` (placement), `lint-imports` (layering), pytest with coverage ≥ 85, `scripts/check-docs.sh`
 - release: tag push per `docs/releasing.md` — approval gate
 
