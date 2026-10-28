@@ -14,11 +14,11 @@ from typing import Any
 import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
-from noeta.core.events import Say
+from noeta.core.events import External, Say
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Text
 from noeta.plugins.shell import Registry, Shell
-from noeta.plugins.shell.jobs import Job
+from noeta.plugins.shell.jobs import JOB_ENDED, Job
 from noeta.plugins.shell.notices import format_duration, monitor_expired_note
 from noeta.toolkit.notices import NOTICE_GUARD
 
@@ -35,10 +35,19 @@ class Harness:
     def tool(self, name: str) -> Tool:
         return next(t for t in self.ext._tools if t.name == name)
 
-    async def post(self, body: Any, task_id: str | None = None) -> None:
-        assert isinstance(body, Say) and body.when == "now"
-        assert body.message.origin == "system"
-        guard, _, notice = body.message.text.partition("\n\n<task-notification>")
+    async def post(self, body: Any, task_id: str | None = None,
+                   dedupe_key: str | None = None) -> None:
+        if isinstance(body, External):  # a job's end, posted once
+            assert body.name == JOB_ENDED
+            assert dedupe_key == f"{JOB_ENDED}:{body.data['job_id']}"
+            message = body.data["notice"]
+            if message is None:
+                return  # stopped quietly
+        else:
+            assert isinstance(body, Say) and body.when == "now"
+            assert body.message.origin == "system"
+            message = body.message.text
+        guard, _, notice = message.partition("\n\n<task-notification>")
         assert guard == NOTICE_GUARD  # every notice opens with the not-the-user guard
         self.posts.append((task_id or "task", "<task-notification>" + notice))
 

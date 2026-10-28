@@ -6,47 +6,57 @@ Jobs belong to the worker process (a process-local table keyed by the task
 tree's root, see :mod:`.jobs`), so while a job runs its worker holds the task
 tree (``ToolContext.hold``): no other worker claims a task of it, and the
 next turn can stop the job. What the log keeps is what a reader
-needs: a ``started`` record in the task that launched the job, an ``ended``
-record when its end notice is taken, and ``lost`` for a job missing from the
-worker that picks the task up — its worker stopped and the hold ran out
-(nothing is probed or killed by PID).
+needs: a ``started`` record in the task that launched the job (with its
+worker and hold), then exactly one of ``ended`` or ``lost``, decided by the
+task's runner from its inbox, in inbox order: the job's end
+(``External(JOB_ENDED)``, posted before the job gives its hold back) makes it
+``ended``; ``hold_lost`` for the hold it ran under (its worker died, froze
+past the hold, or stopped; the job died with the hold) makes it ``lost``. An
+end that arrives after its job was called lost is dropped.
 
-A job's end — and each monitor event — reaches the model as Claude Code's
-``<task-notification>``, a system-origin message posted to the task that
-started it (the root once that task has ended). Stopping the root's turn,
-cancelling or ending the root kills every job of the tree without a notice;
-with ``background_ends_with_turn`` a job also dies, silently, when the turn
-of the task that started it ends.
+A job's end, its loss, and each monitor event reach the model as Claude
+Code's ``<task-notification>``, a system-origin message in the task that
+started it (the root once that task has ended), opening a turn if the task
+is idle. Stopping the root's turn, cancelling or ending the root kills every
+job of the tree without a notice; with ``background_ends_with_turn`` a job
+also dies, silently, when the turn of the task that started it ends.
 """
 
 from __future__ import annotations
 
 import copy
-import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
 from noeta.core import records
-from noeta.core.events import InputTaken, Recorded, Say, TaskEnded, Waiting
+from noeta.core.events import External, InboxItem, InputTaken, Recorded, Say, TaskEnded, Waiting
 from noeta.core.extension import Extension, TaskView
+from noeta.core.store import HOLD_LOST
 from noeta.core.tool import Tool
 from noeta.core.types import user
 from noeta.plugins.shell.bash import SHELL, BashTool, ShellState, reduce_shell, sandbox_description
-from noeta.plugins.shell.jobs import DEFAULT_LOG_DIR, REGISTRY, Registry
+from noeta.plugins.shell.jobs import DEFAULT_LOG_DIR, JOB_ENDED, REGISTRY, Registry
+from noeta.plugins.shell.notices import lost_summary, task_notification
 from noeta.plugins.shell.tools import LOST_REASON, BackgroundBash, MonitorTool, TaskStopTool
+from noeta.toolkit.notices import NOTICE_GUARD
 from noeta.toolkit.sandbox import sandbox_of
 
-__all__ = ["SHELL", "BashTool", "Registry", "Shell", "lost_text"]
+__all__ = ["JOB_ENDED", "SHELL", "BashTool", "Registry", "Shell", "lost_notice"]
 
 
-def lost_text(job_id: str) -> str:
-    return f"Background job {job_id} was lost: {LOST_REASON}."
+def lost_notice(job_id: str, job: Mapping[str, Any]) -> str:
+    """What the model is told of a job whose worker is gone."""
+    summary = lost_summary(str(job.get("description") or job.get("command") or job_id),
+                           monitor=bool(job.get("monitor")), reason=LOST_REASON)
+    text = task_notification(task_id=job_id, tool_use_id=str(job.get("tool_use_id") or ""),
+                             output_file=str(job.get("output_file") or ""), status="failed",
+                             summary=summary)
+    return f"{NOTICE_GUARD}\n\n{text}"
 
-_NOTICE = re.compile(
-    r"(?:\A|\n\n)<task-notification>\n<task-id>([0-9a-z]{9})</task-id>\n"
-    r"(?:<tool-use-id>[^<]*</tool-use-id>\n)?(?:<output-file>[^<]*</output-file>\n)?"
-    r"<status>(\w+)</status>")
+
+def _notice_key(job_id: str) -> str:
+    return f"shell:notice:{job_id}"
 
 
 class Shell(Extension):
@@ -117,40 +127,63 @@ class Shell(Extension):
     # ------------------------------------------------------------ lifecycle
 
     async def on_start(self, view: TaskView) -> None:
-        """Settle jobs the log still shows running: ended ones get their
-        status; one missing from this worker's table is lost (its worker
-        held the tree while it ran, so that worker is gone)."""
+        """Decide again what a crash may have left undecided: ends and
+        losses this task took from its inbox while a job still shows running
+        (the runner died between taking them and recording the decision).
+        Deciding twice changes nothing: a settled job is skipped."""
         st = view.ext_state(self.name)
-        jobs = st.jobs if isinstance(st, ShellState) else {}
-        for job_id, job in jobs.items():
-            if job.get("status") != "running":
+        if not isinstance(st, ShellState) or view.read_log is None or not any(
+                j.get("status") == "running" for j in st.jobs.values()):
+            return
+        items = [i for r in await view.read_log(view.task_id)
+                 if isinstance(r.event, InputTaken) for i in r.event.items]
+        self._decide(view, items)
+
+    def _decide(self, view: TaskView, items: Sequence[InboxItem]) -> None:
+        """Settle jobs from what the task took, in inbox order: a job's end
+        makes it ended and tells the model; ``hold_lost`` for the hold it ran
+        under makes it lost and tells the model so; anything about a job
+        already settled is dropped. The notice is posted with the record
+        (``enqueue``), so it opens a turn on an idle task."""
+        st = view.ext_state(self.name)
+        jobs = {k: dict(v) for k, v in (st.jobs if isinstance(st, ShellState) else {}).items()}
+        for item in items:
+            body = item.body
+            if not isinstance(body, External) or not isinstance(body.data, Mapping):
                 continue
-            live = self.registry.get(job_id)
-            if live is None:
-                view.record(self.name, "lost", {"job_id": job_id},
-                            message=user(lost_text(job_id), origin="system"))
-            elif live.status != "running":
-                code = live.exit_code
-                status = "killed" if live.status == "killed" else (
-                    "completed" if code == 0 else "failed")
-                view.record(self.name, "ended",
-                            {"job_id": job_id, "status": status, "exit_code": code})
+            if body.name == JOB_ENDED:
+                job_id = str(body.data.get("job_id") or "")
+                job = jobs.get(job_id)
+                notice = body.data.get("notice")
+                if job is not None and job.get("status") != "running":
+                    continue  # lost (or ended) already: one story only
+                if job is not None:
+                    job["status"] = "ended"
+                    view.record(self.name, "ended", {
+                        "job_id": job_id, "status": body.data.get("status"),
+                        "exit_code": body.data.get("exit_code")})
+                if isinstance(notice, str):
+                    # (A job of a task that has ended reports to the root,
+                    # whose log does not have it: its notice still goes in.)
+                    view.enqueue(Say(message=user(notice, origin="system"), when="now"),
+                                 dedupe_key=_notice_key(job_id))
+            elif body.name == HOLD_LOST:
+                for job_id, job in jobs.items():
+                    if job.get("status") != "running" or "hold" not in job \
+                            or job.get("hold") != body.data.get("epoch") \
+                            or job.get("worker") != body.data.get("worker"):
+                        continue
+                    job["status"] = "lost"
+                    view.record(self.name, "lost", {"job_id": job_id})
+                    view.enqueue(Say(message=user(lost_notice(job_id, job), origin="system"),
+                                     when="now"), dedupe_key=_notice_key(job_id))
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         event = recorded.event
         state = view.state
         root = state.root_id or state.task_id
         if isinstance(event, InputTaken):
-            st = view.ext_state(self.name)
-            known = st.jobs if isinstance(st, ShellState) else {}
-            for item in event.items:
-                body = item.body
-                if not isinstance(body, Say) or body.message.origin != "system":
-                    continue
-                match = _NOTICE.search(body.message.text)
-                if match and known.get(match.group(1), {}).get("status") == "running":
-                    view.record(self.name, "ended",
-                                {"job_id": match.group(1), "status": match.group(2)})
+            self._decide(view, event.items)
         elif isinstance(event, TaskEnded):
             self.registry.mark_ended(state.task_id, root)
             if state.parent_id is None:

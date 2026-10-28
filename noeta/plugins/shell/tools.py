@@ -162,13 +162,13 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
         job = await shell.registry.spawn(
             env=ctx.env, command=command, cwd="", env_vars={}, root_id=_root(ctx),
             spawner_id=ctx.task_id, tool_use_id=ctx.call_id, description=description,
-            post=ctx.post, monitor_timeout_ms=monitor_timeout_ms, release=release, ws=ws,
-            ws_resolve=resolve)
+            post=ctx.post, monitor_timeout_ms=monitor_timeout_ms, release=release,
+            tree=release.tree if release is not None else None, ws=ws, ws_resolve=resolve)
         if isinstance(job, str):
             return tool_error(tool, job)
         ctx.record(SHELL, "started", {
             "job_id": job.job_id, "command": command, "description": job.description,
-            "tool_use_id": ctx.call_id, "monitor": True, "worker": shell.registry.worker})
+            "tool_use_id": ctx.call_id, "monitor": True, **_holder(job)})
         return job, "", False
     workspace = await Workspace.of(ctx.env)
     cwd, _moved_back = await shell._start_cwd(workspace, ctx)
@@ -200,14 +200,24 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
         root_id=_root(ctx), spawner_id=ctx.task_id, tool_use_id=ctx.call_id,
         description=description or command, post=ctx.post,
         monitor_timeout_ms=monitor_timeout_ms, release=release_job,
+        tree=held.tree if held is not None else None,
         argv=confined.argv if confined else None)
     if isinstance(job, str):
         return tool_error(tool, job)
     ctx.record(SHELL, "started", {
         "job_id": job.job_id, "command": command, "description": job.description,
         "tool_use_id": ctx.call_id, "monitor": monitor_timeout_ms is not None,
-        "worker": shell.registry.worker})
+        "output_file": job.out_path, **_holder(job)})
     return job, cwd, tracked
+
+
+def _holder(job: Job) -> dict[str, Any]:
+    """Who runs the job: its worker and the epoch of the hold it lives by
+    (what ``hold_lost`` names when that worker is gone)."""
+    out: dict[str, Any] = {"worker": job.worker}
+    if job.tree is not None:
+        out["hold"] = job.tree.epoch
+    return out
 
 
 class TaskStopTool:

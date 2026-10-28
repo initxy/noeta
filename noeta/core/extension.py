@@ -16,7 +16,15 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 
 from noeta.core import records
 from noeta.core.deferred import deferred_names
-from noeta.core.events import Compacted, Event, ExtensionRecorded, Recorded, Say, TaskCreated
+from noeta.core.events import (
+    Compacted,
+    Event,
+    ExtensionRecorded,
+    InboxKind,
+    Recorded,
+    Say,
+    TaskCreated,
+)
 from noeta.core.execenv import ExecEnv
 from noeta.core.tool import Tool, ToolOutput
 from noeta.core.types import Message, ModelRequest, ModelResponse, Struct, ToolUse, user
@@ -147,6 +155,8 @@ class TaskView(records.CoreNotices):
     pending: list[Event] = field(default_factory=list)
     #: Child tasks staged by ``spawn``, created with ``pending``.
     creates: list[StagedChild] = field(default_factory=list)
+    #: Inbox items staged by ``enqueue``, posted with ``pending``.
+    enqueued: list[tuple[InboxKind, str | None]] = field(default_factory=list)
     #: ``await count_tokens(text)``: the provider's exact token count of one
     #: user message holding ``text`` (``None`` when it cannot count).
     count_tokens: Callable[[str], Awaitable[int | None]] | None = None
@@ -207,6 +217,13 @@ class TaskView(records.CoreNotices):
             ExtensionRecorded(extension=extension, kind=kind, data=data, message=message)
         )
 
+
+    def enqueue(self, body: InboxKind, *, dedupe_key: str | None = None) -> None:
+        """Post ``body`` to this task's own inbox in the same append as the
+        records this hook leaves: input that must open a turn (a notice),
+        made together with the record that decided it, so a crash keeps
+        both or neither. Idempotent with a ``dedupe_key``."""
+        self.enqueued.append((body, dedupe_key))
 
     def spawn(self, agent: str, prompt: str | Message, *, config: Mapping[str, Any] | None = None,
               queue: str = "default", key: str = "") -> str:

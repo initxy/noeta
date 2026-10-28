@@ -195,8 +195,10 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
             {"id": child_id, "call_id": use.id, "background": background}])))
         return child_id
 
-    async def post(body: InboxKind, task_id: str | None = None) -> None:
-        await run.store.post(Post(task_id=task_id or run.task_id, body=body))
+    async def post(body: InboxKind, task_id: str | None = None,
+                   dedupe_key: str | None = None) -> None:
+        await run.store.post(Post(task_id=task_id or run.task_id, body=body,
+                                  dedupe_key=dedupe_key))
 
     root = run.state.root_id or run.task_id
     answer = run.state.answers.get(use.id)
@@ -230,7 +232,7 @@ async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[
                                               is_error=output.is_error), meta=meta,
                             end_turn=output.end_turn)
     await run.append([*records, *view.pending, finished],
-                     creates=[*creates, *run.staged(view)])
+                     creates=[*creates, *run.staged(view)], posts=run.enqueued(view))
 
 
 def _drop_staged(records: list[Event], creates: list[NewTask]) -> None:

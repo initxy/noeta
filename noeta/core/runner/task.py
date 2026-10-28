@@ -77,6 +77,9 @@ class TaskRun:
         #: The text the model call in flight has streamed so far (what an
         #: interrupted reply keeps).
         self.partial: list[str] = []
+        #: An extension posted to this task's inbox with its records
+        #: (``TaskView.enqueue``) since the input was last taken.
+        self._enqueued = False
 
     # ------------------------------------------------------------ lifecycle
 
@@ -332,9 +335,15 @@ class TaskRun:
                                            sleep=self.rt.sleep)
 
     async def flush(self, view: TaskView) -> None:
-        if view.pending or view.creates:
+        if view.pending or view.creates or view.enqueued:
             events, view.pending = list(view.pending), []
-            await self.append(events, creates=self.staged(view))
+            await self.append(events, creates=self.staged(view), posts=self.enqueued(view))
+
+    def enqueued(self, view: TaskView) -> list[Post]:
+        """The posts to itself ``view.enqueue`` staged, taken out of the view."""
+        staged, view.enqueued = list(view.enqueued), []
+        self._enqueued = self._enqueued or bool(staged)
+        return [Post(task_id=self.task_id, body=body, dedupe_key=key) for body, key in staged]
 
     @staticmethod
     def staged(view: TaskView) -> list[NewTask]:
@@ -438,10 +447,18 @@ class TaskRun:
             self._step = None
 
     async def _take_input(self) -> None:
+        """Take the inbox. What extensions enqueue while handling it (a
+        notice decided from a signal) is taken in the same step, so it
+        reaches the same model call."""
         await self._fire_timers()
-        items = await self.store.inbox(self.task_id, after=self.state.inbox_read)
-        if items:
+        for _ in range(3):
+            self._enqueued = False
+            items = await self.store.inbox(self.task_id, after=self.state.inbox_read)
+            if not items:
+                return
             await self.append([InputTaken(items=items, through=items[-1].seq)])
+            if not self._enqueued:
+                return
 
     async def _fire_timers(self) -> None:
         """Post the due timers to the inbox while the task is idle (a turn
