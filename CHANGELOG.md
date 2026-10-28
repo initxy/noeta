@@ -26,6 +26,13 @@ All notable changes to Noeta are documented here. The format is based on
   of the summary.
 - **`/compact [instructions]`** summarizes the conversation on demand in the TUI, ACP and
   HTTP (`POST /tasks/{id}/messages` with `/compact`), without a model turn after it.
+- **Memory is Claude Code's auto memory.** The `memory_*` tools, the store, recall by
+  keywords and the consolidation agent are gone. Memory is a directory of markdown files
+  under `~/.noeta/projects/<workspace>/memory/`, written with `Write` / `Edit` as the system
+  prompt's memory section describes (types `user`, `feedback`, `project`, `reference`);
+  `MEMORY.md` is loaded at the start (200 lines / 25,000 bytes) and after a compaction.
+  With `recall_model`, each user message attaches up to five memories that model picks.
+  The plugin's arguments are now `home`, `directory`, `recall_model`, `rehang`.
 
 ### Fixed
 

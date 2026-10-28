@@ -1,21 +1,12 @@
-"""Cross-session memory: a directory of markdown files, four tools, the
-index, auto-recall and the consolidation curator."""
+"""Auto memory: a per-project directory of markdown files the model writes
+with ``Write`` / ``Edit``, indexed by ``MEMORY.md``."""
 
 from noeta.plugins.memory.extension import (
-    CONSOLIDATION_AGENT_NAME,
-    MEMORY_POLICY_PROMPT,
-    MEMORY_POLICY_READ_ONLY_PROMPT,
+    INDEX_FILE,
+    MEMORY_SECTION,
     Memory,
-    consolidation_agent,
+    load_index,
+    memory_dir_for,
 )
-from noeta.plugins.memory.store import DEFAULT_GLOBAL_MEMORY_DIR, MemoryStore
 
-__all__ = [
-    "CONSOLIDATION_AGENT_NAME",
-    "DEFAULT_GLOBAL_MEMORY_DIR",
-    "MEMORY_POLICY_PROMPT",
-    "MEMORY_POLICY_READ_ONLY_PROMPT",
-    "Memory",
-    "MemoryStore",
-    "consolidation_agent",
-]
+__all__ = ["INDEX_FILE", "MEMORY_SECTION", "Memory", "load_index", "memory_dir_for"]

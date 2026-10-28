@@ -59,7 +59,7 @@ def test_from_settings_applies_the_tables(home: Path) -> None:
         'model = "m"\nprovider = "anthropic"\napi_key = "k"\n'
         f'store = "sqlite:///{home / "t.db"}"\n'
         '[plugins.web]\nenabled = false\n'
-        '[plugins.memory]\nread_only = true\n'
+        '[plugins.memory]\nrecall_model = "small"\n'
         '[agents.explore]\nadd_plugins = ["todo"]\n')
     app = from_settings(load_settings(), cwd=str(home))
     agents = app.runtime.agents
@@ -68,7 +68,7 @@ def test_from_settings_applies_the_tables(home: Path) -> None:
     assert "todo" in names["explore"]
     [memory] = [e for e in agents["main"].extensions if e.name == "memory"]
     # The front end's root, with config.toml's arguments laid over it.
-    assert memory.root == str(home / "memory") and memory.read_only  # type: ignore[attr-defined]
+    assert str(memory.home) == str(home) and memory.recall_model == "small"  # type: ignore[attr-defined]
     # MCP is on: its servers come from settings.json and consented .mcp.json.
     [mcp] = [e for e in agents["main"].extensions if e.name == "mcp"]
     assert mcp._settings_files == (str(home / "settings.json"),)  # type: ignore[attr-defined]

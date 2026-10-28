@@ -12,7 +12,7 @@ from noeta.core.extension import Extension, TaskView
 from noeta.core.types import ToolResult
 from noeta.plugins.fs import FileTools
 from noeta.plugins.instructions import Instructions
-from noeta.plugins.memory import Memory
+from noeta.plugins.memory import Memory, memory_dir_for
 from noeta.plugins.skills import Skills
 from noeta.testing import reply
 from tests.plugins.context.conftest import Harness
@@ -119,22 +119,23 @@ async def test_residents_rehang_after_a_compaction(h: Harness, tmp_path: Path) -
     skill = h.work / ".noeta" / "skills" / "deploy"
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text("---\nname: deploy\ndescription: Ship.\n---\nSteps.\n")
-    mem = tmp_path / "mem"
-    mem.mkdir()
-    (mem / "note.md").write_text("A note.\n")
+    home = tmp_path / "home"
+    mem = Path(memory_dir_for(str(h.work), home))
+    mem.mkdir(parents=True)
+    (mem / "MEMORY.md").write_text("- [Note](note.md) — a note\n")
     a = Agent(name="a", model="m", extensions=[
-        Skills(), Memory(root=mem), Instructions(), FileTools(), MakeRoom()])
+        Skills(), Memory(home=str(home)), Instructions(), FileTools(), MakeRoom()])
     h.provider.add(reply("", ("skill", {"skill": "deploy"})), reply("done"),
                    ContextOverflow("too long"), reply("fits"))
     tid = await h.start(a)
     await h.say(a, tid, "next")
     texts = [m.text for m in h.last_messages()]
-    # Ahead of the summary: the project instructions; after it: the invoked
-    # skill, the listing, the memory index.
-    assert texts[0].startswith('<workspace-instructions source="AGENTS.md">')
-    assert texts[1] == "(summary)"
-    assert texts[2].startswith("These skills were invoked earlier")
-    assert "### Skill: deploy" in texts[2] and "Activated skill: deploy" in texts[2]
-    assert texts[3].startswith("The following skills are available")
-    assert texts[4].startswith("Long-term memory index.")
+    # Ahead of the summary: the memory index and the project instructions;
+    # after it: the invoked skill, then the listing.
+    assert texts[0].startswith(f"Contents of {mem / 'MEMORY.md'}")
+    assert texts[1].startswith('<workspace-instructions source="AGENTS.md">')
+    assert texts[2] == "(summary)"
+    assert texts[3].startswith("These skills were invoked earlier")
+    assert "### Skill: deploy" in texts[3] and "Activated skill: deploy" in texts[3]
+    assert texts[4].startswith("The following skills are available")
     assert len(texts) == 5

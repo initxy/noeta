@@ -240,7 +240,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
                   own_tasks_only: bool = False, **runtime_kw: Any) -> LocalApp:
     """The default agents on the configured store, model and provider, with
     the user's plugin files (``~/.noeta/plugins``, and a trusted project's
-    ``<cwd>/.noeta/plugins``), memory (``~/.noeta/memory``), prompt overrides
+    ``<cwd>/.noeta/plugins``), memory (``~/.noeta/projects/<workspace>/memory``), prompt overrides
     (``~/.noeta/prompts``), hooks and MCP servers (``~/.noeta/settings.json``,
     and the ``.mcp.json`` servers it consents to), agent files
     (``~/.noeta/agents``, then ``<cwd>/.noeta/agents``) and the plugin
@@ -265,7 +265,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     if cwd and project_trusted(cwd):
         files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
     table = merge_plugin_settings(
-        {"memory": {"root": str(HOME / "memory")},
+        {"memory": {"home": str(HOME)},
          "hooks": {"settings_files": [str(HOME / "settings.json")]},
          "mcp": {"settings_files": [str(HOME / "settings.json")], "project": True},
          "skills": {"trusted": project_trusted}},
