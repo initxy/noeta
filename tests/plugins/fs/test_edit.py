@@ -184,6 +184,14 @@ async def test_an_empty_old_string_creates_a_file(h: Harness, ws: Path) -> None:
         "Give the text to replace instead.")
 
 
+async def test_a_file_over_1gb_is_refused_unread(h: Harness, ws: Path) -> None:
+    with open(ws / "huge.log", "wb") as f:
+        f.truncate(1536 * 1024 * 1024)  # sparse: nothing is written
+    out = await h.call(EditTool(), file_path="huge.log", old_string="a", new_string="b")
+    assert text_of(out) == (
+        "Edit: At 1.5GB the file is too large for Edit, which takes files up to 1GB.")
+
+
 async def test_a_notebook_is_left_to_notebook_edit(h: Harness, ws: Path) -> None:
     (ws / "n.ipynb").write_text('{"cells": []}')
     out = await h.call(EditTool(), file_path="n.ipynb", old_string="[]", new_string="[1]")

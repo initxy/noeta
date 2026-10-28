@@ -32,12 +32,16 @@ from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
     PathError,
     Workspace,
+    format_size,
     load_description,
     require_str,
     tool_error,
 )
 
-__all__ = ["EditTool"]
+__all__ = ["EDIT_MAX_BYTES", "EditTool"]
+
+#: Largest file ``Edit`` changes (Claude Code's 1 GB).
+EDIT_MAX_BYTES = 1024 * 1024 * 1024
 
 def _to_eol(text: str, eol: str) -> str:
     lf = text.replace("\r\n", "\n")
@@ -138,6 +142,10 @@ class EditTool:
         st = await env.stat(resolved)
         if st is not None and st.is_dir:
             return tool_error(self.name, f"not a file: {path!r}")
+        if st is not None and st.size > EDIT_MAX_BYTES:
+            return tool_error(self.name, f"At {format_size(st.size)} the file is too large for "
+                                         f"Edit, which takes files up to "
+                                         f"{format_size(EDIT_MAX_BYTES)}.")
         if st is None:
             # An empty old_string creates the file (Claude Code's).
             if old:
