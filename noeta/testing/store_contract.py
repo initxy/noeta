@@ -101,6 +101,19 @@ async def test_waiting_releases_claim_and_post_wakes(store: Store) -> None:
     assert row is not None and row.status == "ready"
 
 
+async def test_claiming_a_woken_task_clears_what_it_waited_on(store: Store) -> None:
+    await store.create(new())
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None
+    await store.append(claim, [Waiting(on="input")], expected_seq=1,
+                       patch=Patch(status="waiting", waiting_on="input"))
+    await store.post(Post(task_id="t1", body=say("hi")))
+    again = await store.claim("w", ["default"], 30)
+    assert again is not None
+    row = await store.get("t1")
+    assert row is not None and row.status == "running" and row.waiting_on is None
+
+
 async def test_going_to_wait_with_unread_inbox_stays_ready(store: Store) -> None:
     await store.create(new())
     claim = await store.claim("w", ["default"], 30)

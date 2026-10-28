@@ -434,7 +434,8 @@ class SqliteStore:
             until = now + lease_seconds
             conn.execute(
                 "UPDATE tasks SET status = 'running', owner = ?, owner_epoch = ?,"
-                " lease_until = ?, ready_at = NULL, updated_at = ? WHERE task_id = ?",
+                " lease_until = ?, ready_at = NULL, waiting_on = NULL, updated_at = ?"
+                " WHERE task_id = ?",
                 (worker, epoch, until, now, task_id),
             )
             return Claim(task_id=task_id, worker=worker, epoch=epoch, lease_until=until)

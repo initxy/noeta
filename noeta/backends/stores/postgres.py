@@ -603,7 +603,7 @@ class PostgresStore:
                 " ORDER BY updated_at LIMIT 1 FOR UPDATE OF k SKIP LOCKED)"
                 " UPDATE {s}.tasks t SET status = 'running', owner = %(w)s,"
                 f" owner_epoch = t.owner_epoch + 1, lease_until = {_NOW} + %(ls)s,"
-                f" ready_at = NULL, updated_at = {_NOW}"
+                f" ready_at = NULL, waiting_on = NULL, updated_at = {_NOW}"
                 " FROM c WHERE t.task_id = c.task_id"
                 " RETURNING t.task_id, t.owner_epoch, t.lease_until"),
                 {"q": list(queues), "w": worker, "ls": lease_seconds,
