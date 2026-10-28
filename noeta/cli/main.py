@@ -171,7 +171,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     app = _app(s, cwd=cwd, with_channels=True, **refuse)
     await app.start(worker=with_worker)
     api = create_app(app.client, token=token, auth=token is not None,
-                     deltas=app.deltas if with_worker else None, agents=app.runtime.agents,
+                     deltas=app.deltas, agents=app.runtime.agents,
                      app=app if with_worker else None,
                      allowed_hosts=LOOPBACK_HOSTS if host in LOOPBACK_HOSTS else None,
                      origins=args.allow_origin,

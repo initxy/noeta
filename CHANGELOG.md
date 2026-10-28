@@ -141,6 +141,10 @@ All notable changes to Noeta are documented here. The format is based on
 - **Front ends run on one API, in process or against a server** (`noeta.host.app.AppAPI`):
   ACP and stream-json no longer reach into a local `Runtime`; `noeta acp --server URL`
   drives a `noeta serve` server's tasks. New `POST /commands/run`.
+- **Live output across machines**: on Postgres a worker publishes its streamed text
+  (`PostgresStore.publish_deltas`, channel `<schema>_deltas`, best effort) and a server's
+  `/watch` hears it (`on_delta`), so `noeta serve --no-worker` streams tasks that `noeta
+  worker` processes elsewhere run. On sqlite live output stays in its process.
 
 - **Claude Code's headless protocol** (`noeta.host.stream_json`): the stream-json messages
   (`system`/`init`, `assistant`, tool-result `user`, `stream_event`, `result` with usage, cost,

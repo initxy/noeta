@@ -40,6 +40,11 @@ process. This process's own changes are reported synchronously after commit
 and their echoes are dropped by backend pid. Notifications sent while the
 listener was reconnecting are lost; polling covers that gap.
 
+Live model output (``publish_deltas`` / ``on_delta``) rides a second
+channel, ``<schema>_deltas``, outside any task transaction, heard only by
+processes that subscribe: best effort, never stored, each notification
+under Postgres' 8000-byte payload limit.
+
 Connection loss: a connection that drops before ``COMMIT`` is sent leaves
 nothing behind, so the transaction is re-run once on a fresh connection. A
 drop while ``COMMIT`` is in flight raises ``CommitUnknown`` (a ``Conflict``)
@@ -58,6 +63,7 @@ import weakref
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, TypeVar
 
+import msgspec
 import psycopg
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
@@ -84,6 +90,7 @@ from noeta.core.store import (
     hold_lost,
     next_row_state,
 )
+from noeta.core.types import Delta
 
 T = TypeVar("T")
 Conn = psycopg.AsyncConnection[Any]
@@ -152,6 +159,35 @@ CREATE TABLE IF NOT EXISTS {s}.tree_holds (
 CREATE INDEX IF NOT EXISTS tree_holds_until ON {s}.tree_holds (until);
 """
 
+#: Bytes of one delta notification's payload (Postgres refuses 8000 and up).
+_DELTA_PAYLOAD_BYTES = 7000
+_delta_batch = msgspec.json.Decoder(list[tuple[str, Delta]])
+
+
+def _delta_payloads(deltas: Sequence[tuple[str, Delta]]) -> list[str]:
+    """``deltas`` as JSON payloads under the notification limit, in order;
+    a fragment too long for one is cut into several."""
+    pieces: list[tuple[str, Delta]] = []
+    for task_id, d in deltas:
+        text = d.text
+        step = _DELTA_PAYLOAD_BYTES // 8  # a character takes at most 6 bytes as JSON
+        for i in range(0, max(len(text), 1), step):
+            pieces.append((task_id, msgspec.structs.replace(d, text=text[i:i + step])))
+    out: list[str] = []
+    batch: list[tuple[str, Delta]] = []
+    size = 2
+    for piece in pieces:
+        n = len(msgspec.json.encode(piece)) + 1
+        if batch and size + n > _DELTA_PAYLOAD_BYTES:
+            out.append(msgspec.json.encode(batch).decode())
+            batch, size = [], 2
+        batch.append(piece)
+        size += n
+    if batch:
+        out.append(msgspec.json.encode(batch).decode())
+    return out
+
+
 def _lost(conn: Conn | None, exc: BaseException) -> bool:
     """Whether ``exc`` means the connection is gone (not a query error)."""
     if not isinstance(exc, psycopg.OperationalError | psycopg.InterfaceError):
@@ -185,6 +221,7 @@ class PostgresStore:
         self.dsn = dsn
         self.schema = schema
         self.channel = f"{schema}_changes"
+        self.delta_channel = f"{schema}_deltas"
         self.connect_timeout = connect_timeout
         self.listen_check_interval = listen_check_interval
         self._pool = AsyncConnectionPool(
@@ -202,8 +239,10 @@ class PostgresStore:
         self._opened = False
         self._closed = False
         self._listener: asyncio.Task[None] | None = None
+        self._delta_listener: asyncio.Task[None] | None = None
         self._lock = threading.Lock()
         self._listeners: list[tuple[OnChange, asyncio.AbstractEventLoop | None]] = []
+        self._delta_listeners: list[Callable[[str, Delta], None]] = []
         #: Backend pids of this store's pool connections: their notifications
         #: were already reported locally. Weak, so a closed connection's pid
         #: (which the server may reuse) drops out.
@@ -297,22 +336,24 @@ class PostgresStore:
 
     # ------------------------------------------------------------ change feed
 
-    async def _listen_connection(self) -> Conn:
+    async def _listen_connection(self, channel: str | None = None) -> Conn:
         conn = await psycopg.AsyncConnection.connect(
             self.dsn, autocommit=True, connect_timeout=max(int(self.connect_timeout), 1))
-        await conn.execute(f'LISTEN "{self.channel}"')
+        await conn.execute(f'LISTEN "{channel or self.channel}"')
         return conn
 
-    async def _listen(self, conn: Conn | None) -> None:
+    async def _listen(self, conn: Conn | None, channel: str | None = None,
+                      handle: Callable[[int, str], None] | None = None) -> None:
+        handle = handle or self._remote
         backoff = 0.1
         while True:
             try:
                 if conn is None:
-                    conn = await self._listen_connection()
+                    conn = await self._listen_connection(channel)
                     backoff = 0.1
                 while True:
                     async for n in conn.notifies(timeout=self.listen_check_interval):
-                        self._remote(n.pid, n.payload)
+                        handle(n.pid, n.payload)
                     # Quiet for a while: make sure the connection is alive.
                     await conn.execute("SELECT 1")
             except asyncio.CancelledError:
@@ -335,6 +376,51 @@ class PostgresStore:
         task_id, _, kind = payload.rpartition(":")
         if task_id and kind in ("appended", "posted", "created", "released"):
             self._deliver([(task_id, kind)])  # type: ignore[list-item]
+
+    def _remote_deltas(self, pid: int, payload: str) -> None:
+        own = self._own.get(pid)
+        if own is not None and not own.closed:
+            return  # this process's own output reached its sinks directly
+        try:
+            items = _delta_batch.decode(payload)
+        except msgspec.DecodeError:
+            log.warning("dropped a malformed delta notification")
+            return
+        for task_id, delta in items:
+            for cb in list(self._delta_listeners):
+                try:
+                    cb(task_id, delta)
+                except Exception:
+                    log.exception("on_delta listener failed")
+
+    async def publish_deltas(self, deltas: Sequence[tuple[str, Delta]]) -> None:
+        """Send live output to the other processes on this store
+        (:meth:`on_delta`): best effort, never stored."""
+        payloads = _delta_payloads(deltas)
+        if not payloads:
+            return
+
+        async def send(conn: Conn) -> None:
+            await conn.execute("SELECT pg_notify(%s, p) FROM unnest(%s::text[]) AS p",
+                               (self.delta_channel, payloads))
+
+        await self._tx(send, write=False)
+
+    def on_delta(self, callback: Callable[[str, Delta], None]) -> Callable[[], None]:
+        """Call ``callback(task_id, delta)`` with the live output other
+        processes publish; returns the unsubscribe function. Its own
+        ``LISTEN`` connection opens with the first callback, so a process
+        nobody watches through never receives output."""
+        self._delta_listeners.append(callback)
+        if self._delta_listener is None and not self._closed:
+            self._delta_listener = asyncio.get_running_loop().create_task(
+                self._listen(None, self.delta_channel, self._remote_deltas))
+
+        def unsubscribe() -> None:
+            if callback in self._delta_listeners:
+                self._delta_listeners.remove(callback)
+
+        return unsubscribe
 
     def _deliver(self, changes: Sequence[tuple[str, ChangeKind]]) -> None:
         with self._lock:
@@ -371,11 +457,12 @@ class PostgresStore:
 
     async def close(self) -> None:
         self._closed = True
-        if self._listener is not None:
-            self._listener.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._listener
-            self._listener = None
+        for listening in (self._listener, self._delta_listener):
+            if listening is not None:
+                listening.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await listening
+        self._listener = self._delta_listener = None
         await self._pool.close()
         self._opened = False
 

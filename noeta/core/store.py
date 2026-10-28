@@ -18,6 +18,12 @@ needs it, so a hold that was reaped stays lost to its old holder. A hold's
 time running out only makes it reapable; :meth:`Store.reap_holds` releases
 it and tells the tree's tasks (``hold_lost``) in one transaction, so no task
 of the tree is claimed by another worker before that notice is in its inbox.
+
+Optional members, for a store shared by processes on many machines:
+``async publish_deltas(deltas)`` sends live model output (``(task_id,
+Delta)`` pairs) to the other processes, and ``on_delta(callback)`` hears it
+(returning the unsubscribe function). Best effort and never stored; a store
+without them keeps live output in its process.
 """
 
 from __future__ import annotations
