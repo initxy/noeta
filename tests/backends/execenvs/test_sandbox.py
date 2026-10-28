@@ -173,12 +173,15 @@ def test_seatbelt_profile_shape(tmp_path: Path, home: Path) -> None:
     # Generated only: macOS is not available to run it here.
     settings = SandboxSettings(enabled=True, allow_local_binding=True,
                                allow_unix_sockets=("/var/run/x.sock",))
+    (tmp_path / ".git").mkdir()
     plan = sb.plan_paths(settings, str(tmp_path), str(tmp_path), ())
     profile = sb.seatbelt_profile(settings, plan, (4000, 4001))
     assert profile.startswith("(version 1)\n(allow default)\n(deny file-write*)")
     assert f'(allow file-write* (subpath "{tmp_path}"))' in profile
     assert '(allow network-outbound (remote ip "localhost:4000"))' in profile
     assert '(path-literal "/var/run/x.sock")' in profile
+    assert f'(deny file-write* (subpath "{tmp_path}/.noeta"))' in profile
+    assert f'(deny file-write* (literal "{tmp_path}/.git"))' in profile  # no rename
     assert profile.index("(deny network*)") < profile.index("localhost:4001")
 
 
@@ -237,7 +240,65 @@ async def test_writes_outside_the_allowed_paths_fail(tmp_path: Path, home: Path)
     code, out, _ = await _run(env, f"echo x >> {ws}/.git/config")
     assert code != 0
     assert (ws / ".git" / "config").read_text() == "[core]\n"
-    assert (ws / ".git" / "hooks").is_dir()  # made empty and read-only
+    # The empty read-only placeholder over the missing hooks directory is
+    # gone with the command.
+    assert not (ws / ".git" / "hooks").exists() and not (ws / ".noeta").exists()
+
+
+@needs_bwrap
+async def test_protected_paths_cannot_be_created_or_moved_away(tmp_path: Path,
+                                                               home: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    env = LocalExecEnv(str(ws), sandbox={"enabled": True})
+    # Missing: nothing under .noeta or .git can be created.
+    for command in ("mkdir -p .noeta/plugins && echo x > .noeta/plugins/x.py",
+                    "mkdir -p .noeta && echo {} > .noeta/settings.local.json",
+                    "echo {} > .noeta/mcp.json",
+                    "git init -q . && git config core.fsmonitor 'touch pwned'",
+                    "mkdir -p .git && echo '[core]' > .git/config"):
+        code, _, _ = await _run(env, command)
+        assert code != 0, command
+    assert sorted(os.listdir(ws)) == []
+    # Existing: neither directory can be renamed away and recreated.
+    (ws / ".noeta").mkdir()
+    (ws / ".noeta" / "settings.json").write_text("{}")
+    (ws / ".git" / "hooks").mkdir(parents=True)
+    (ws / ".git" / "config").write_text("[core]\n")
+    for command in ("mv .noeta old && mkdir .noeta && echo x > .noeta/settings.local.json",
+                    "mkdir .noeta/plugins",
+                    "echo x > .noeta/settings.local.json",
+                    "mv .git old && mkdir -p .git && echo x > .git/config",
+                    "rm -rf .git/hooks && mkdir .git/hooks && echo x > .git/hooks/pre-commit"):
+        code, _, _ = await _run(env, command)
+        assert code != 0, command
+    assert sorted(os.listdir(ws)) == [".git", ".noeta"]
+    assert os.listdir(ws / ".noeta") == ["settings.json"]
+    assert (ws / ".git" / "config").read_text() == "[core]\n"
+    assert os.listdir(ws / ".git" / "hooks") == []
+    # The rest of .git stays writable: git still commits.
+    code, out, _ = await _run(env, "echo ref > .git/HEAD.tmp && rm .git/HEAD.tmp && echo ok")
+    assert code == 0 and "ok" in out
+
+
+def test_a_worktree_git_file_is_read_only(tmp_path: Path, home: Path) -> None:
+    (tmp_path / ".git").write_text("gitdir: /elsewhere\n")
+    plan = sb.plan_paths(SandboxSettings(enabled=True), str(tmp_path), str(tmp_path / "t"))
+    assert str(tmp_path / ".git") in plan.deny_write and plan.pinned == []
+    assert plan.placeholders == [(str(tmp_path / ".noeta"), False)]
+
+
+def test_placeholders_outlive_no_command_but_the_last(tmp_path: Path, home: Path) -> None:
+    plan = sb.plan_paths(SandboxSettings(enabled=True), str(tmp_path), str(tmp_path / "t"))
+    first = sb._hold(plan)
+    (tmp_path / ".noeta").mkdir()  # what bwrap leaves on the host
+    (tmp_path / ".git").mkdir()
+    second = sb._hold(sb.plan_paths(SandboxSettings(enabled=True), str(tmp_path),
+                                    str(tmp_path / "t")))
+    sb._release(first)
+    assert (tmp_path / ".noeta").is_dir() and (tmp_path / ".git").is_dir()
+    sb._release(second)
+    assert not (tmp_path / ".noeta").exists() and not (tmp_path / ".git").exists()
 
 
 @needs_bwrap

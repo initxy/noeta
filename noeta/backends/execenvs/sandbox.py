@@ -62,13 +62,15 @@ DEFAULT_DENY_READ = (
 #: a command may still read: spilled tool output and project memory.
 HOME_ALLOW_READ = ("tool-results", "projects")
 #: Paths under a writable directory a confined command may not change:
-#: noeta's project settings and extensions, and git's hooks and config
-#: (code that would later run outside the sandbox).
-PROTECTED = (
-    ".noeta/settings.json", ".noeta/settings.local.json", ".noeta/mcp.json",
-    ".noeta/plugins", ".noeta/agents", ".noeta/skills", ".noeta/prompts",
-    ".noeta/rules", ".noeta/workflows", ".git/hooks", ".git/config",
-)
+#: noeta's project directory (settings, plugins, MCP servers, agents) and
+#: git's hooks and config (code that would later run outside the sandbox).
+#: A missing one is covered by an empty read-only placeholder, so it cannot
+#: be created either.
+PROTECTED = (".noeta", ".git/hooks", ".git/config")
+#: Directories that stay writable but are mounted onto themselves: a mount
+#: point cannot be renamed, so what is protected inside cannot be moved
+#: away and recreated.
+PINNED = (".git",)
 #: Loopback ports the proxies listen on inside a Linux sandbox.
 INNER_HTTP_PORT, INNER_SOCKS_PORT = 3128, 1080
 _BRIDGE = Path(__file__).with_name("sandbox_bridge.py")
@@ -81,6 +83,7 @@ class Prepared:
     proxy: FilterProxy | None = None
     listeners: Listeners | None = None
     workdir: str | None = None
+    placeholders: list[tuple[str, bool]] = field(default_factory=list)
     _closed: bool = field(default=False, repr=False)
 
     def violations(self) -> list[str]:
@@ -90,6 +93,7 @@ class Prepared:
         if self._closed:
             return
         self._closed = True
+        _release(self.placeholders)
         if self.proxy is not None and self.listeners is not None:
             await self.proxy.close(self.listeners)
         if self.workdir is not None:
@@ -123,12 +127,35 @@ def _within(path: str, root: str) -> bool:
 
 @dataclass(frozen=True)
 class Plan:
-    """What one command may touch, as absolute paths."""
+    """What one command may touch, as absolute paths.
+
+    ``pinned`` directories are mounted onto themselves (still writable).
+    ``placeholders`` are missing denied paths, each covered by an empty
+    read-only directory (or file, when ``True``) that ``bwrap`` creates on
+    the host as its mount point."""
 
     writable: list[str]
     deny_write: list[str]
     deny_read: list[str]
     allow_read: list[str]
+    pinned: list[str] = field(default_factory=list)
+    placeholders: list[tuple[str, bool]] = field(default_factory=list)
+
+
+def _first_missing(path: str) -> str | None:
+    """The outermost missing component of ``path``, when its parent is a
+    real directory; ``None`` when ``path`` exists or there is none."""
+    if os.path.lexists(path):
+        return None
+    current = path
+    while True:
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        if os.path.lexists(parent):
+            real_dir = os.path.isdir(parent) and not os.path.islink(parent)
+            return current if real_dir else None
+        current = parent
 
 
 def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
@@ -138,8 +165,16 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
     base = root
     writes = [root, *_expand(settings, settings.allow_write, base), tmpdir, *writable]
     writes = [w for w in dict.fromkeys(os.path.realpath(w) for w in writes) if os.path.exists(w)]
-    deny_write = [os.path.realpath(p) for p in _expand(settings, settings.deny_write, base)]
+    user_deny = [os.path.realpath(p) for p in _expand(settings, settings.deny_write, base)]
+    deny_write = list(user_deny)
+    pinned: list[str] = []
     for w in writes:
+        for name in PINNED:
+            path = os.path.join(w, name)
+            if os.path.isdir(path) and not os.path.islink(path):
+                pinned.append(path)
+            elif os.path.lexists(path):
+                deny_write.append(path)  # a worktree's ``.git`` file
         deny_write += [os.path.join(w, p) for p in PROTECTED]
     home = str(noeta_home())
     deny_read = _expand(settings, [*DEFAULT_DENY_READ, home, *settings.deny_read], base)
@@ -147,8 +182,26 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
                                     *settings.allow_read], base)
     # A denied directory holding a writable one would hide it.
     deny_read = [d for d in deny_read if not any(_within(w, d) for w in writes)]
-    return Plan(writable=writes, deny_write=list(dict.fromkeys(deny_write)),
-                deny_read=deny_read, allow_read=allow_read)
+    hidden = [d for d in deny_read if os.path.isdir(d)]
+    # Inside a hidden directory a path is unreadable and read-only already;
+    # binding it would show it again.
+    deny_write = [p for p in dict.fromkeys(deny_write)
+                  if not any(_within(p, d) for d in hidden)]
+    # Placeholders go where a missing path matters: the denyWrite settings
+    # and the protected paths of the working directories (not of TMPDIR or
+    # allowWrite, which no one trusts as a project).
+    projects = [os.path.realpath(p) for p in (root, *writable)]
+    wanted = [*user_deny, *(os.path.join(p, n) for p in projects for n in PROTECTED)]
+    placeholders: dict[str, bool] = {}
+    for path in wanted:
+        missing = _first_missing(path)
+        if missing is not None and path in deny_write \
+                and any(_within(missing, w) and missing != w for w in writes):
+            # A missing ``.git/config`` becomes an empty file, which git
+            # reads as no settings (a directory there would break git).
+            placeholders.setdefault(missing, missing.endswith("/.git/config"))
+    return Plan(writable=writes, deny_write=deny_write, deny_read=deny_read,
+                allow_read=allow_read, pinned=pinned, placeholders=list(placeholders.items()))
 
 
 def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
@@ -179,11 +232,15 @@ def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
                 args += ["--ro-bind", path, path]
         for path in hidden:
             args += ["--remount-ro", path]
+        for path in plan.pinned:
+            args += ["--bind", path, path]
         for path in plan.deny_write:
             if os.path.exists(path):
                 args += ["--ro-bind", path, path]
-            elif path.endswith("/.git/hooks") and os.path.isdir(os.path.dirname(path)):
-                # An empty read-only hooks directory: nothing can plant one.
+        for path, is_file in plan.placeholders:
+            if is_file:
+                args += ["--ro-bind", "/dev/null", path]
+            else:
                 args += ["--tmpfs", path, "--remount-ro", path]
     for path, _port in relays:
         args += ["--ro-bind", path, path]
@@ -221,6 +278,9 @@ def seatbelt_profile(settings: SandboxSettings, plan: Plan,
                   for p in plan.allow_read if any(_within(p, d) for d in plan.deny_read)]
         lines += [f"(deny file-write* (subpath {_sb_quote(os.path.realpath(p))}))"
                   for p in plan.deny_write]
+        # A subpath rule does not stop renaming a directory above it.
+        lines += [f"(deny file-write* (literal {_sb_quote(os.path.realpath(p))}))"
+                  for p in plan.pinned]
     lines.append("(deny network*)")
     lines += [f'(allow network-outbound (remote ip "localhost:{port}"))'
               for port in proxy_ports]
@@ -311,6 +371,7 @@ class LocalSandbox:
         try:
             plan = plan_paths(self.settings, self.root, self.tmpdir(), writable)
             if self.platform.startswith("linux"):
+                prepared.placeholders = _hold(plan)
                 await self._linux(prepared, plan, list(argv), cwd, work)
             else:
                 await self._darwin(prepared, plan, list(argv))
@@ -351,6 +412,45 @@ class LocalSandbox:
         prepared.env.update(_proxy_env(f"http://127.0.0.1:{http_port}",
                                        f"socks5h://127.0.0.1:{socks_port}"))
 
+
+
+#: Placeholders in use by this process's running commands. One is removed
+#: from the host when the last command using it is done — never while
+#: another still relies on it: deleting a mount point on the host unmounts
+#: it in every sandbox.
+_HELD: dict[str, tuple[int, bool]] = {}
+
+
+def _hold(plan: Plan) -> list[tuple[str, bool]]:
+    """The placeholders this command holds: its own, and those another
+    running command made that it now sees as existing paths."""
+    mine = dict(plan.placeholders)
+    for path in (*plan.pinned, *plan.deny_write):
+        if path in _HELD:
+            mine.setdefault(path, _HELD[path][1])
+    for path, is_file in mine.items():
+        _HELD[path] = (_HELD.get(path, (0, is_file))[0] + 1, is_file)
+    return list(mine.items())
+
+
+def _release(placeholders: list[tuple[str, bool]]) -> None:
+    # Deepest first: a placeholder may sit inside another one.
+    for path, is_file in sorted(placeholders, key=lambda p: -len(p[0])):
+        count = _HELD.get(path, (1, is_file))[0] - 1
+        if count > 0:
+            _HELD[path] = (count, is_file)
+            continue
+        _HELD.pop(path, None)
+        # Only what bwrap left: an empty directory or an empty file.
+        try:
+            if is_file:
+                if os.path.isfile(path) and not os.path.islink(path) \
+                        and os.path.getsize(path) == 0:
+                    os.unlink(path)
+            else:
+                os.rmdir(path)
+        except OSError:
+            pass
 
 
 _BASE: str | None = None

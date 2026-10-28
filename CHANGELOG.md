@@ -56,8 +56,9 @@ All notable changes to Noeta are documented here. The format is based on
   each command confined: bubblewrap on Linux (own network, PID, IPC namespaces; a seccomp
   filter refusing Unix sockets and new user namespaces unless `allowAllUnixSockets` /
   `allowNestedUserNamespaces`), Seatbelt on macOS. Commands write only in the working
-  directory, `filesystem.allowWrite` and a private `$TMPDIR` (never `denyWrite`, `.noeta`
-  config, `.git/hooks`, `.git/config`), read everything but `denyRead`, credential stores
+  directory, `filesystem.allowWrite` and a private `$TMPDIR` (never `denyWrite`, the
+  project's `.noeta` directory, `.git/hooks`, `.git/config` — not even to create them when
+  missing, and `.git` cannot be renamed away), read everything but `denyRead`, credential stores
   and noeta's home, and reach only `network.allowedDomains` through a filtering HTTP/SOCKS
   proxy; refused hosts follow the output in `<sandbox_violations>`. `Edit` allow rules,
   `additionalDirectories`, `Read` deny rules and `WebFetch(domain:)` allow rules feed it;
