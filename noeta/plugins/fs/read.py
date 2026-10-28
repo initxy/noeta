@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import posixpath
+import re
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -100,6 +101,24 @@ BINARY_EXTENSIONS = frozenset({
     ".pickle", ".psd", ".ai", ".eps", ".sketch", ".fig", ".xd", ".blend", ".3ds", ".max",
     ".swf", ".fla", ".lockb", ".dat", ".data",
 })
+
+
+#: Device and process files Read refuses (Claude Code's): they never end, block
+#: on input, or hand out another process's secrets.
+_DEVICE_FILES = frozenset({
+    "/dev/zero", "/dev/random", "/dev/urandom", "/dev/full", "/dev/stdin", "/dev/tty",
+    "/dev/console", "/proc/kmsg", "/dev/stdout", "/dev/stderr", "/dev/fd/0", "/dev/fd/1",
+    "/dev/fd/2",
+})
+_DEVICE_PATTERN = re.compile(
+    r"^/dev/(?:pts/(?:\d+|ptmx)|ptmx|tty[^/]*)$"
+    r"|^/proc/[^/]+/fd/[012]$"
+    r"|^/proc/[^/]+/(?:environ|cmdline|auxv|maps|smaps|smaps_rollup|numa_maps|pagemap|mem"
+    r"|stat|statm|status|syscall|stack)$")
+
+
+def is_device_file(path: str) -> bool:
+    return path in _DEVICE_FILES or _DEVICE_PATTERN.match(path) is not None
 
 
 def detect_image(raw: bytes) -> tuple[str, str] | None:
@@ -298,7 +317,14 @@ class ReadTool:
             return tool_error(self.name, "requires non-empty 'file_path'")
         env = ctx.env
         ws = await Workspace.of(env)
+        given = posixpath.normpath(posixpath.join(ws.root, path))
+        if is_device_file(given):
+            return tool_error(
+                self.name, f"Read does not read device or process files, and {path} is one.")
         resolved = await ws.canonical(path)
+        if is_device_file(resolved):
+            return tool_error(
+                self.name, f"Read does not read device or process files, and {path} is one.")
         ext = posixpath.splitext(path)[1].lower()
         if ext in BINARY_EXTENSIONS:
             return tool_error(

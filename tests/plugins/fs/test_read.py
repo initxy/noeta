@@ -154,6 +154,14 @@ async def test_read_missing_file_suggests_the_path_inside_the_workspace(
     assert text_of(out).endswith(f"Did you mean {ws / 'src' / 'm.py'}?")
 
 
+@pytest.mark.parametrize("path", ["/dev/zero", "/dev/stdin", "/dev/tty", "/dev/pts/3",
+                                  "/proc/self/environ", "/proc/12/fd/1", "/proc/self/mem"])
+async def test_read_refuses_device_and_process_files(h: Harness, path: str) -> None:
+    out = await h.call(ReadTool(), file_path=path)
+    assert out.is_error
+    assert text_of(out) == f"Read: Read does not read device or process files, and {path} is one."
+
+
 async def test_read_reaches_outside_the_workspace(h: Harness, ws: Path) -> None:
     outside = ws.parent / "elsewhere.txt"
     outside.write_text("outside\n")
