@@ -343,7 +343,8 @@ class ReadTool:
         limit = explicit_limit or _ALL_LINES
         large = input.get("allow_large") is True
         seen = current_fs_state(ctx.state).reads.get(resolved)
-        if ctx.by_model and seen is not None and seen.range == [offset, limit] \
+        asked = [offset, explicit_limit or 0]
+        if ctx.by_model and seen is not None and seen.range == asked \
                 and seen.mtime == st.mtime and not input.get("pages"):
             return text_output(FILE_UNCHANGED, path=display, unchanged=True)
         size = st.size
@@ -362,8 +363,11 @@ class ReadTool:
                 raw_nb = b"".join([c async for c in chunks()])
             except OSError as exc:
                 return tool_error(self.name, f"read failed: {exc}")
-            _record_read(ctx, resolved, hashlib.sha256(raw_nb).hexdigest(), st.mtime)
-            return read_notebook(self.name, raw_nb, display)
+            notebook = read_notebook(self.name, raw_nb, display)
+            if not notebook.is_error:
+                _record_read(ctx, resolved, hashlib.sha256(raw_nb).hexdigest(), st.mtime,
+                             asked)
+            return notebook
 
         image = detect_image(head)
         ext = posixpath.splitext(resolved)[1].lower()
@@ -424,7 +428,7 @@ class ReadTool:
 
         # Keyed by the canonical path and digesting the raw bytes of the whole
         # file, so a later mutation check compares like with like.
-        _record_read(ctx, w.resolved, scan.digest, w.mtime, [w.offset, w.limit])
+        _record_read(ctx, w.resolved, scan.digest, w.mtime, [w.offset, w.explicit_limit or 0])
 
         return _render(scan, w)
 

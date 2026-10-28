@@ -427,6 +427,36 @@ async def test_an_unchanged_range_is_not_sent_twice(h: Harness, ws: Path) -> Non
     assert await read(limit=1) == "1\tone"
 
 
+async def test_an_unchanged_range_must_repeat_the_same_arguments(h: Harness, ws: Path) -> None:
+    # Claude Code compares the arguments as given: no limit and limit=2000 differ.
+    (ws / "a.txt").write_text("one\ntwo\n")
+    tool = ReadTool()
+
+    async def read(**input: Any) -> str:
+        ctx = h.ctx()
+        ctx.by_model = True
+        return text_of(await tool.run({"file_path": "a.txt", **input}, ctx))
+
+    assert (await read()).startswith("1\tone")
+    assert (await read(limit=2000)).startswith("1\tone")
+    assert (await read(limit=2000)).startswith("File unchanged")
+
+
+async def test_an_unchanged_notebook_is_not_sent_twice(h: Harness, ws: Path) -> None:
+    (ws / "n.ipynb").write_text(
+        '{"cells": [{"id": "a", "cell_type": "code", "source": "x = 1", "outputs": []}],'
+        ' "metadata": {}, "nbformat": 4, "nbformat_minor": 5}')
+    tool = ReadTool()
+
+    async def read() -> str:
+        ctx = h.ctx()
+        ctx.by_model = True
+        return text_of(await tool.run({"file_path": "n.ipynb"}, ctx))
+
+    assert (await read()).startswith('<cell id="a">')
+    assert (await read()).startswith("File unchanged")
+
+
 def test_a_compaction_forgets_read_ranges() -> None:
     from noeta.plugins.fs.state import reduce_fs
     st = reduce_fs(None, "read", {"path": "/a", "digest": "d", "mtime": 1.0, "range": [1, 9]})
