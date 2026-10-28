@@ -41,7 +41,7 @@ from noeta.core.extension import (
     Reminder,
     TaskView,
 )
-from noeta.core.tool import Tool, ToolOutput
+from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import ModelRequest, ToolResult, ToolUse
 from noeta.plugins.permissions import classifier as c
 from noeta.plugins.permissions import guards as g
@@ -310,6 +310,7 @@ class Permissions(Extension):
                                for i, rule in enumerate(pre_tool_use))
         self.can_use_tool = can_use_tool
         self._exit_plan = pl.ExitPlanModeTool()
+        self._enter_plan = pl.EnterPlanModeTool(self._enter_plan_mode)
         self._background: set[asyncio.Future[Any]] = set()
         self._template: str | None = None
 
@@ -436,7 +437,7 @@ class Permissions(Extension):
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
         # Sub-agents do not plan for approval (none is offered it).
-        return () if view.state.parent_id else (self._exit_plan,)
+        return () if view.state.parent_id else (self._enter_plan, self._exit_plan)
 
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
         return (Command(name="plan", description="Switch to plan mode; with a request, plan it",
@@ -537,6 +538,13 @@ class Permissions(Extension):
         name, args = call.name, call.input
         if name == pl.EXIT_PLAN_MODE:
             return _Decision("allow")
+        if name == pl.ENTER_PLAN_MODE:
+            # Only a person agrees to plan mode, except where the classifier
+            # already judges every action (in plan mode it may let read-only
+            # actions through that would otherwise be asked about).
+            if mode in ("auto", "plan"):
+                return _Decision("allow")
+            return _Decision("ask", w.ASK_ENTER_PLAN, firm=True, why="plan")
         allowed = r.first_match(allow_rules, name, args, ctx, for_allow=True) is not None
         if name in r.READ_TOOLS:
             path = _path(args) or scope.cwd
@@ -934,6 +942,19 @@ class Permissions(Extension):
             path = (st.plan or {}).get("path") or pl.new_plan_path(self.plans_dir)
             data["plan"] = {"path": path, "pre_mode": current, "entered_seq": seq}
         view.record(NAME, "mode", data)
+
+    def _enter_plan_mode(self, ctx: ToolContext) -> bool:
+        """``EnterPlanMode``: record the switch to plan mode, as ``/plan``
+        does; ``False`` when the task is planning already."""
+        st = ctx.state.get(NAME)
+        st = st if isinstance(st, PermState) else PermState()
+        current = st.mode or self.mode
+        if current == "plan":
+            return False
+        path = (st.plan or {}).get("path") or pl.new_plan_path(self.plans_dir)
+        ctx.record(NAME, "mode", {"mode": "plan", "plan": {
+            "path": path, "pre_mode": current, "entered_seq": 0}})
+        return True
 
     def _name_plan(self, view: TaskView, parked: records.Parked) -> None:
         """The plan-name side request, when ``ExitPlanMode`` shows the plan."""

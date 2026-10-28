@@ -9,6 +9,7 @@ import json
 import posixpath
 import random
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,9 @@ from noeta.core.types import ModelRequest, SystemPart, user
 from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, tool_error
 
 __all__ = [
+    "ENTER_PLAN_MODE",
     "EXIT_PLAN_MODE",
+    "EnterPlanModeTool",
     "ExitPlanModeTool",
     "plan_active_text",
     "plan_exited_text",
@@ -26,6 +29,7 @@ __all__ = [
 ]
 
 EXIT_PLAN_MODE = "ExitPlanMode"
+ENTER_PLAN_MODE = "EnterPlanMode"
 NAME = "permissions"
 
 #: The plan-mode instructions (``rem.plan-active.*``); ``{path}`` is the
@@ -49,6 +53,17 @@ KEEP_PLANNING = ("The user did not approve the plan and wants you to keep planni
 KEEP_PLANNING_FEEDBACK = KEEP_PLANNING + " What they said about it:\n{feedback}"
 NOT_IN_PLAN_MODE = "Plan mode is not on, so there is no plan to approve."
 NO_PLAN = "There is no plan at {path} yet. Write the plan there first, then call this tool."
+
+#: ``EnterPlanMode``'s result: what planning means until the plan is approved.
+ENTERED = ("Plan mode is on. Until the plan is approved:\n"
+           "1. Explore the code to learn its patterns and structure.\n"
+           "2. Look for similar features and how they are built.\n"
+           "3. Weigh the possible approaches and their trade-offs.\n"
+           "4. Ask with AskUserQuestion when the approach needs the user's choice.\n"
+           "5. Settle on a concrete implementation plan.\n"
+           "6. Present it for approval with ExitPlanMode.\n"
+           "Do not write or edit any files yet: this phase only reads and plans.")
+ALREADY_PLANNING = "Plan mode is already on; go on planning."
 
 #: Approval choices (labels the person picks; ids are what they do).
 CHOICE_AUTO = "Yes, and use auto mode"
@@ -124,6 +139,30 @@ def _choices(pre_mode: str) -> list[dict[str, str]]:
     return [{"label": yes, "description": ""},
             {"label": CHOICE_DEFAULT, "description": ""},
             {"label": CHOICE_KEEP, "description": "Type what to change instead of picking."}]
+
+
+class EnterPlanModeTool:
+    """Switches the task to plan mode (the permissions gate asks the person
+    first unless the task is in auto mode). ``enter`` records the switch and
+    says whether one happened."""
+
+    name = ENTER_PLAN_MODE
+    description = load_description("noeta.plugins.permissions", "enter_plan_mode")
+    input_schema: dict[str, Any] = {
+        "$schema": SCHEMA_DIALECT,
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+    read_only = True
+    clearable = False
+    deferred = True
+
+    def __init__(self, enter: Callable[[ToolContext], bool]) -> None:
+        self._enter = enter
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        return text_output(ENTERED if self._enter(ctx) else ALREADY_PLANNING)
 
 
 class ExitPlanModeTool:

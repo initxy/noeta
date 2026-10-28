@@ -111,3 +111,44 @@ def test_plan_name_parsing() -> None:
     request = pl.plan_name_request("m", "x" * 2000)
     assert len(request.messages[0].text) < 1100
     assert request.output_schema == pl.PLAN_NAME_SCHEMA
+
+
+ENTER = ("ToolSearch", {"query": "select:EnterPlanMode", "max_results": 1})
+
+
+async def test_enter_plan_mode_asks_the_person_then_plans(store: SqliteStore,
+                                                          tmp_path: Path) -> None:
+    perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
+    provider = ScriptedProvider([reply("", ENTER), reply("", ("EnterPlanMode", {})),
+                                 reply("planning")])
+    rt = runtime(store, provider, agent([perms], []))
+    client = Client(store)
+    tid = await client.create("a", "add caching", config={"cwd": str(tmp_path)})
+    await rt.run_until_idle()
+    [item] = pending(await client.events(tid), tid)
+    assert "Enter plan mode?" in str(item.detail)
+    await client.answer(tid, item.request_id, "allow")
+    await rt.run_until_idle()
+    evs = await events(client, tid)
+    finished = [e for e in evs if isinstance(e, ToolFinished)][-1]
+    assert not finished.result.is_error and finished.result.text == pl.ENTERED
+    [entered] = [e.data for e in evs if isinstance(e, ExtensionRecorded)
+                 and e.kind == "mode" and e.data["mode"] == "plan"]
+    assert entered["plan"]["pre_mode"] == "default"
+    # The next request carries the plan-mode instructions.
+    assert any("Plan mode is on" in t for t in system_texts(provider.requests[-1]))
+
+
+async def test_enter_plan_mode_in_auto_mode_needs_no_approval(store: SqliteStore,
+                                                              tmp_path: Path) -> None:
+    perms = Permissions(mode="auto", plans_dir=str(tmp_path / "plans"))
+    provider = ScriptedProvider([reply("", ENTER), reply("", ("EnterPlanMode", {})),
+                                 reply("", ("EnterPlanMode", {})), reply("planning")])
+    rt = runtime(store, provider, agent([perms], []))
+    client = Client(store)
+    tid = await client.create("a", "add caching", config={"cwd": str(tmp_path)})
+    await rt.run_until_idle()
+    evs = await events(client, tid)
+    assert not pending(await client.events(tid), tid)
+    first, second = [e.result.text for e in evs if isinstance(e, ToolFinished)][-2:]
+    assert first == pl.ENTERED and second == pl.ALREADY_PLANNING
