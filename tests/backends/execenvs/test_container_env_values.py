@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from noeta.backends.execenv.container import ContainerExecEnv, start_container
+from noeta.backends.execenvs.container import ContainerExecEnv, start_container
 
 
 def _fake_docker(tmp_path: Path) -> tuple[str, Path]:

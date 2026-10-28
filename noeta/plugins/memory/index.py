@@ -11,8 +11,8 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from noeta.core.helpers import estimate_tokens
 from noeta.plugins.memory.matching import MemoryEntries
+from noeta.toolkit.context import estimate_tokens
 
 __all__ = [
     "INDEX_DELTA_MAX_BYTES",

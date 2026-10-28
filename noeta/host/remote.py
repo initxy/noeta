@@ -14,7 +14,7 @@ import msgspec
 
 from noeta.core.errors import NoetaError, UnknownTask
 from noeta.core.events import Recorded
-from noeta.core.store.base import Status, TaskRow
+from noeta.core.store import Status, TaskRow
 from noeta.core.types import Delta, Message
 
 Input = str | Message

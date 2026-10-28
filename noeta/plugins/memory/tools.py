@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.core.tool_helpers import truncate_bytes
 from noeta.plugins.memory.store import MEMORY_TYPES, MemoryStore, is_valid_name, write_memory
+from noeta.toolkit.tools import truncate_bytes
 
 __all__ = [
     "MEMORY_ARCHIVE",

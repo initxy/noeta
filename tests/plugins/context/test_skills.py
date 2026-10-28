@@ -9,7 +9,6 @@ from typing import Any
 
 from noeta.core.agent import Agent
 from noeta.core.events import Waiting
-from noeta.core.helpers import estimate_tokens
 from noeta.plugins.fs import FileTools
 from noeta.plugins.skills import SKILL_NOT_ALONE, Skills, UsageRank
 from noeta.plugins.skills.allowed_tools import parse_allowed_tools
@@ -22,6 +21,7 @@ from noeta.plugins.skills.listing import (
 )
 from noeta.plugins.skills.registry import SkillDescription, SkillRegistry
 from noeta.testing import reply
+from noeta.toolkit.context import estimate_tokens
 from tests.plugins.context.conftest import Harness
 
 

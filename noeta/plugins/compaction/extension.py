@@ -23,7 +23,6 @@ import msgspec
 from noeta.core.errors import ContextOverflow, ModelError, TurnFailed
 from noeta.core.events import Compacted
 from noeta.core.extension import Extension, TaskView
-from noeta.core.helpers import simulated_state
 from noeta.core.loop.request import cache_breakpoints
 from noeta.core.loop.state import TaskState
 from noeta.core.models import model_limits
@@ -39,6 +38,7 @@ from noeta.plugins.compaction.recall import (
 )
 from noeta.plugins.compaction.restore import recent_files, restore_files
 from noeta.plugins.compaction.window import Window, check_positive, derive_window
+from noeta.toolkit.context import simulated_state
 
 log = logging.getLogger("noeta.compaction")
 

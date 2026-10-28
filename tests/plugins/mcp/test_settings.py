@@ -11,10 +11,10 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.runner import Runtime
-from noeta.core.store.sqlite import SqliteStore
 from noeta.plugins.mcp import Mcp, McpPool, McpServer
 from noeta.plugins.mcp.settings import alias_for, read_servers
 from noeta.testing import ScriptedProvider, reply

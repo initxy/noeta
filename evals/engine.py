@@ -12,15 +12,15 @@ from typing import Any
 
 from evals import live_env as _live_env
 from evals.core import TRIAL_TIMEOUT_S, EvalConfig, Trace
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.agents import default_agents
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.providers import provider_for
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ModelReplied, TaskEnded, ToolFinished
 from noeta.core.provider import Provider
 from noeta.core.runner import Runtime
-from noeta.core.store.sqlite import SqliteStore
-from noeta.presets import default_agents
 
 _MAX_STEPS_PER_TURN = 60
 #: Usable history window for the compaction scenario.

@@ -8,7 +8,7 @@ from typing import Any
 
 import msgspec
 
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.plugins.fs import EditTool, ReadTool
 from noeta.plugins.fs.state import (
     FS,

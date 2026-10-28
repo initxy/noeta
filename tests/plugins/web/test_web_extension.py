@@ -11,13 +11,13 @@ from typing import Any
 import httpx
 import pytest
 
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.execenvs.local import LocalExecEnv
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ToolFinished
 from noeta.core.extension import Extension
 from noeta.core.runner import Runtime
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import ModelRequest, ModelResponse, Text
 from noeta.plugins.web import Web

@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from noeta.core.execenv import ExecEnv
     from noeta.core.provider import Provider
-    from noeta.core.store.base import Store
+    from noeta.core.store import Store
 
 __all__ = [
     "EXECENVS",

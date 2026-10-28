@@ -64,7 +64,7 @@ from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
 from noeta.core.errors import CommitUnknown, Conflict, StoreUnavailable, UnknownTask
 from noeta.core.events import Event, InboxItem, InboxKind, Recorded, event_type
-from noeta.core.store.base import (
+from noeta.core.store import (
     ChangeKind,
     Claim,
     NewTask,
@@ -78,7 +78,7 @@ from noeta.core.store.base import (
 T = TypeVar("T")
 Conn = psycopg.AsyncConnection[Any]
 
-log = logging.getLogger("noeta.backends.postgres")
+log = logging.getLogger("noeta.backends.stores.postgres")
 
 SCHEMA_VERSION = 1
 _LOCK_CLASS = 0x6E6F6574  # "noet": the advisory-lock namespace for schema setup

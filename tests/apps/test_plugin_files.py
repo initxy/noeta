@@ -10,8 +10,7 @@ from pathlib import Path
 import pytest
 
 from noeta.apps import cli, config
-from noeta.apps.config import load_settings, trust_project
-from noeta.apps.local import from_settings
+from noeta.apps.config import from_settings, load_settings, trust_project
 from noeta.core import registry
 
 PLUGIN = '''

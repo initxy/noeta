@@ -36,7 +36,7 @@ from noeta.core.errors import UnknownTask
 from noeta.core.types import Delta, Message
 
 _enc = msgspec.json.Encoder()
-log = logging.getLogger("noeta.apps.server")
+log = logging.getLogger("noeta.host.server")
 
 
 def _json(value: Any, status: int = 200) -> Response:

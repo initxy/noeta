@@ -83,7 +83,7 @@ def _settings(args: argparse.Namespace) -> Settings:
 
 
 def _app(s: Settings, **kw: Any) -> Any:
-    from noeta.apps.local import from_settings
+    from noeta.apps.config import from_settings
 
     kw.setdefault("cwd", os.getcwd())
     return from_settings(s, **kw)
@@ -172,7 +172,7 @@ async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool,
 async def _serve(s: Settings, host: str, port: int, with_worker: bool) -> None:
     import uvicorn
 
-    from noeta.apps.server import create_app
+    from noeta.host.server import create_app
 
     app = _app(s)
     if with_worker:

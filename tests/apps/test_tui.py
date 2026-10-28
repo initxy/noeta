@@ -10,7 +10,6 @@ import pytest
 
 pytest.importorskip("textual")
 
-from noeta.apps.local import LocalApp
 from noeta.apps.tui.app import NoetaApp
 from noeta.apps.tui.widgets import (
     ApprovalCard,
@@ -18,11 +17,12 @@ from noeta.apps.tui.widgets import (
     ToolCall,
     UserMessage,
 )
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.extension import Ask, Extension, TaskView
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import ToolUse
+from noeta.host.local import LocalApp
 from noeta.testing import ScriptedProvider, reply
 
 SHOTS = Path(__file__).parent / "_shots"

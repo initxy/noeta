@@ -17,10 +17,10 @@ import time
 from importlib import resources
 from typing import Any
 
-from noeta.core.helpers import task_env
-from noeta.core.shell import SHELL_META_CHARS
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.core.tool_helpers import path_within, truncate_bytes
+from noeta.toolkit.context import task_env
+from noeta.toolkit.shell import SHELL_META_CHARS
+from noeta.toolkit.tools import path_within, truncate_bytes
 
 __all__ = [
     "SKILL_SCRIPT_TOOL_NAME",

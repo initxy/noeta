@@ -10,12 +10,12 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import Event, ToolFinished, ToolStarted
 from noeta.core.runner import INTERRUPTED_CALL_ERROR, Runtime
-from noeta.core.store.base import Claim, NewTask, Patch, Post
-from noeta.core.store.sqlite import SqliteStore
+from noeta.core.store import Claim, NewTask, Patch, Post
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolResult, ToolUse, Usage
 

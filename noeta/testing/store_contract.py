@@ -1,30 +1,27 @@
-"""The store contract. Every backend runs this file; add a backend to
-``store`` below."""
+"""The store contract: what every ``Store`` must do, as tests. A store
+package runs them by defining a ``store`` fixture that yields a fresh, empty
+store and importing the tests next to it::
+
+    from noeta.testing.store_contract import *  # noqa: F403
+
+    @pytest.fixture
+    async def store(tmp_path):
+        s = MyStore(...)
+        yield s
+        await s.close()
+
+Needs pytest and pytest-asyncio (``asyncio_mode = "auto"``)."""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
 
 import pytest
 
 from noeta.core.errors import Conflict, UnknownTask
 from noeta.core.events import Cancel, Say, TaskCreated, TaskEnded, Waiting
-from noeta.core.store.base import NewTask, Patch, Post, Store
-from noeta.core.store.sqlite import SqliteStore
+from noeta.core.store import NewTask, Patch, Post, Store
 from noeta.core.types import user
-
-
-@pytest.fixture(params=["sqlite", "postgres"])
-async def store(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[Store]:
-    s: Store
-    if request.param == "postgres":
-        s = request.getfixturevalue("pg").store()
-    else:
-        s = SqliteStore(str(tmp_path / "t.db"))
-    yield s
-    await s.close()
 
 
 def new(task_id: str = "t1", **kw: object) -> NewTask:

@@ -7,7 +7,7 @@ import hashlib
 import os
 from pathlib import Path
 
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.plugins.fs.grep import GrepTool
 from noeta.plugins.fs.read import IMAGE_MAX_BYTES, ReadTool
 from noeta.plugins.fs.state import FS

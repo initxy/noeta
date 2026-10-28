@@ -10,11 +10,11 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, Waiting
 from noeta.core.pending import pending, pending_tree
-from noeta.core.store.sqlite import SqliteStore
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.subtasks import Subtasks
 from noeta.plugins.subtasks.extension import SubagentSpec

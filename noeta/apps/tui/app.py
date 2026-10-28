@@ -16,7 +16,6 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Markdown, Static
 from textual.widgets.markdown import MarkdownStream
 
-from noeta.apps.local import LocalApp, UnknownAgent
 from noeta.apps.tui.widgets import (
     ApprovalCard,
     AssistantMessage,
@@ -47,6 +46,7 @@ from noeta.core.loop.state import CORE
 from noeta.core.pending import Pending, follow_tree
 from noeta.core.questions import next_question, typed_answer
 from noeta.core.types import Delta, Usage
+from noeta.host.local import LocalApp, UnknownAgent
 
 log = logging.getLogger("noeta.apps.tui")
 

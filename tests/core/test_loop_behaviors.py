@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.errors import Fatal, Transient
@@ -22,7 +23,6 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.runner import OUTPUT_LIMIT_THINKING_NUDGE, Runtime, texts
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ModelResponse, Thinking
 from noeta.testing import ScriptedProvider, reply

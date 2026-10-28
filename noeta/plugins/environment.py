@@ -26,9 +26,9 @@ from typing import Any
 
 from noeta.core.execenv import ExecEnv, is_local
 from noeta.core.extension import Extension, Reminder, TaskView
-from noeta.core.helpers import task_env
-from noeta.core.shell import _harden_git
 from noeta.core.types import Message, user
+from noeta.toolkit.context import task_env
+from noeta.toolkit.shell import _harden_git
 
 #: Git status beyond this is cut at a line boundary and marked.
 GIT_STATUS_MAX_BYTES = 2048

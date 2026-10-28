@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.execenv import RunResult
 from noeta.core.tool import ToolContext
 from noeta.plugins.shell.bash import SHELL, BashTool, ShellState, reduce_shell, resolve_timeout

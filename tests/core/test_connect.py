@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 import noeta
-from noeta.apps.remote import RemoteClient
 from noeta.core.client import Client
+from noeta.host.remote import RemoteClient
 
 
 async def test_connect_sqlite_url(tmp_path: Path) -> None:

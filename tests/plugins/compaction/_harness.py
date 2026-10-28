@@ -8,6 +8,7 @@ import itertools
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ModelCalled
@@ -17,7 +18,6 @@ from noeta.core.loop.state import fold
 from noeta.core.provider import OnDelta
 from noeta.core.runner import Runtime
 from noeta.core.runner.model import _output_ceiling
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolUse, Usage
 from noeta.plugins.compaction.estimate import messages_tokens, prefix_tokens

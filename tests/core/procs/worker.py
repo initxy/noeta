@@ -11,9 +11,9 @@ import random
 import sys
 from typing import Any
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.runner import Runtime
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolResult, ToolUse, Usage
 
@@ -62,7 +62,7 @@ async def main(db: str, journal: str, schema: str | None) -> None:
     if schema is None:
         store = SqliteStore(db)
     else:
-        from noeta.backends.postgres import PostgresStore
+        from noeta.backends.stores.postgres import PostgresStore
 
         store = PostgresStore(db, schema=schema)
     agent = Agent(name="a", model="m", tools=[Effect(journal)])

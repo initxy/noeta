@@ -1,5 +1,5 @@
 """An agent: model, prompt, and the extensions that give it tools and
-behavior. Usually built from an agent file (``noeta.core.agent_files``); a
+behavior. Usually built from an agent file (``noeta.agents.agent_files``); a
 task names its agent, and every process that may run the task registers the
 same agent under that name."""
 

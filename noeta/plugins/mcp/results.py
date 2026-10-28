@@ -20,8 +20,8 @@ import posixpath
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput
-from noeta.core.tool_helpers import spill_path, truncate_bytes
 from noeta.core.types import Image, Text
+from noeta.toolkit.tools import spill_path, truncate_bytes
 
 __all__ = ["IMAGE_MAX_BYTES", "INLINE_MAX_BYTES", "render_result"]
 

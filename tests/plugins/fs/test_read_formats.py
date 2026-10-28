@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.execenv import RunResult
 from noeta.plugins.fs.read import ReadTool
 from tests.plugins.conftest import Harness, images_of, text_of

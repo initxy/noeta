@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.events import Say
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Text

@@ -10,12 +10,12 @@ import shlex
 from importlib import resources
 from typing import Any
 
-from noeta.core.shell import matching_rule, parse_argv
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.core.tool_helpers import Workspace, require_str, tool_error
 from noeta.plugins.shell.bash import SHELL, BashTool, shell_state
 from noeta.plugins.shell.jobs import Job, Registry
 from noeta.plugins.shell.notices import format_duration
+from noeta.toolkit.shell import matching_rule, parse_argv
+from noeta.toolkit.tools import Workspace, require_str, tool_error
 
 #: Claude Code's inline cap on a poll's new output.
 SHELL_INLINE_MAX_CHARS = 30_000

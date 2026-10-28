@@ -16,8 +16,8 @@ from typing import Any
 
 import pytest
 
-from noeta.backends.execenv import local as local_mod
-from noeta.backends.execenv.local import (
+from noeta.backends.execenvs import local as local_mod
+from noeta.backends.execenvs.local import (
     ENV_ALLOWLIST,
     LocalExecEnv,
     scrub_env,

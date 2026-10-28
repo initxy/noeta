@@ -15,7 +15,6 @@ from typing import Any
 from noeta.core.agent import Agent
 from noeta.core.events import Recorded
 from noeta.core.extension import ContextPart, Extension, TaskView
-from noeta.core.helpers import new_user_messages, resident_budget
 from noeta.core.tool import Tool
 from noeta.core.types import Message, ModelRequest, SystemPart, user
 from noeta.plugins.memory.index import (
@@ -43,6 +42,7 @@ from noeta.plugins.memory.tools import (
     MemoryWriteTool,
     load_text,
 )
+from noeta.toolkit.context import new_user_messages, resident_budget
 
 __all__ = [
     "CONSOLIDATION_AGENT_NAME",

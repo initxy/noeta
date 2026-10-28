@@ -19,7 +19,6 @@ from urllib.parse import urlsplit
 import httpx
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.core.tool_helpers import limit_output, truncate_bytes
 from noeta.plugins.web.render import (
     FetchedPage,
     check_text_media,
@@ -27,6 +26,7 @@ from noeta.plugins.web.render import (
     decode_body,
     render,
 )
+from noeta.toolkit.tools import limit_output, truncate_bytes
 
 __all__ = [
     "CrossHostRedirect",

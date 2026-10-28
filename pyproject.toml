@@ -45,13 +45,13 @@ openai_compat = "noeta.backends.providers:openai_compat_provider"
 openai_responses = "noeta.backends.providers:openai_responses_provider"
 
 [project.entry-points."noeta.execenvs"]
-local = "noeta.backends.execenv.local:LocalExecEnv"
-container = "noeta.backends.execenv.container:open_env"
+local = "noeta.backends.execenvs.local:LocalExecEnv"
+container = "noeta.backends.execenvs.container:open_env"
 
 [project.entry-points."noeta.stores"]
-sqlite = "noeta.core.store.sqlite:open_url"
-postgres = "noeta.backends.postgres:open_url"
-postgresql = "noeta.backends.postgres:open_url"
+sqlite = "noeta.backends.stores.sqlite:open_url"
+postgres = "noeta.backends.stores.postgres:open_url"
+postgresql = "noeta.backends.stores.postgres:open_url"
 
 [dependency-groups]
 dev = [
@@ -98,7 +98,7 @@ select = ["E", "F", "W", "I", "B", "UP", "RUF", "BLE"]
 ignore = ["RUF012", "UP007"]
 
 [tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = ["noeta.core.store.base.Patch", "Patch"]
+extend-immutable-calls = ["noeta.core.store.Patch", "Patch"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B008", "E501"]
@@ -110,12 +110,13 @@ root_package = "noeta"
 
 # The layers, top to bottom; a module may import only from layers below it.
 [[tool.importlinter.contracts]]
-name = "layers: apps > presets > plugins | backends > core"
+name = "layers: apps > agents > plugins | backends | host > toolkit > core"
 type = "layers"
 layers = [
     "noeta.apps",
-    "noeta.presets",
-    "noeta.plugins | noeta.backends",
+    "noeta.agents",
+    "noeta.plugins | noeta.backends | noeta.host",
+    "noeta.toolkit",
     "noeta.core",
 ]
 

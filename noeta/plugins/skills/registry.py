@@ -17,8 +17,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from noeta.core.execenv import ExecEnv
-from noeta.core.helpers import read_text
 from noeta.plugins.skills import _frontmatter
+from noeta.toolkit.context import read_text
 
 __all__ = [
     "ARGUMENTS_PLACEHOLDER",

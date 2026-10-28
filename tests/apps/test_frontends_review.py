@@ -19,11 +19,9 @@ import httpx
 from acp import schema
 
 import noeta.apps.cli as cli
-from noeta.apps.local import LocalApp
-from noeta.apps.remote import RemoteClient
-from noeta.apps.server import create_app
 from noeta.apps.tui.app import NoetaApp
 from noeta.apps.tui.widgets import AssistantMessage, QuestionCard
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.errors import NoetaError, Transient
 from noeta.core.events import (
@@ -33,9 +31,11 @@ from noeta.core.events import (
     TaskCreated,
     Waiting,
 )
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.core.types import Delta, ModelRequest, ModelResponse
+from noeta.host.local import LocalApp
+from noeta.host.remote import RemoteClient
+from noeta.host.server import create_app
 from noeta.testing import ScriptedProvider, reply
 
 

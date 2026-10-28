@@ -11,12 +11,12 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, ToolFinished, ToolStarted, Waiting
 from noeta.core.extension import Ask, Deny, Extension, Gate, TaskView
 from noeta.core.runner import Runtime
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.types import Image, ModelRequest, ToolUse
 from noeta.plugins.mcp import Mcp, McpPool, McpServer
 from noeta.plugins.mcp.config import describe_tool, make_tool_name, map_server_names

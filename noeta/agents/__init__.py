@@ -1,4 +1,4 @@
-"""Ready-made agents, as agent files in ``agents/``: ``main`` is the general
+"""The built-in agents, as agent files in ``files/``: ``main`` is the general
 coding agent with Claude Code's working style; it delegates to the
 general-purpose, explore and plan sub-agents.
 
@@ -16,14 +16,14 @@ from collections.abc import Iterable, Mapping, Sequence
 from importlib import resources
 from typing import Any
 
-from noeta.core.agent import Agent
-from noeta.core.agent_files import (
+from noeta.agents.agent_files import (
     AgentFile,
     PluginEntry,
     PluginSetting,
     build_agents,
     parse_agent_file,
 )
+from noeta.core.agent import Agent
 from noeta.core.extension import Extension
 
 __all__ = [
@@ -49,8 +49,8 @@ OFF_UNLESS_SET: frozenset[str] = frozenset({"memory", "mcp"})
 
 
 def builtin_agent_files() -> list[AgentFile]:
-    root = resources.files("noeta.presets") / "agents"
-    return [parse_agent_file(f.read_text("utf-8"), source=f"noeta.presets:{f.name}")
+    root = resources.files("noeta.agents") / "files"
+    return [parse_agent_file(f.read_text("utf-8"), source=f"noeta.agents:{f.name}")
             for f in sorted(root.iterdir(), key=lambda f: (f.name != "main.md", f.name))
             if f.name.endswith(".md")]
 
@@ -66,7 +66,7 @@ def default_agents(
 ) -> list[Agent]:
     """``main`` and the three sub-agents (and ``extra_files``' agents).
 
-    ``plugins`` and ``add`` are :func:`~noeta.core.agent_files.build_agents`'s:
+    ``plugins`` and ``add`` are :func:`~noeta.agents.agent_files.build_agents`'s:
     per plugin name its arguments, a ready instance, or ``False``. The
     plugins in :data:`OFF_UNLESS_SET` (memory, MCP) stay off until
     ``plugins`` has a setting for them. ``main_kw`` replaces fields of

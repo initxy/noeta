@@ -18,7 +18,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from noeta.core.tool_helpers import truncate_bytes
+from noeta.toolkit.tools import truncate_bytes
 
 __all__ = [
     "DEFAULT_TIMEOUT_S",

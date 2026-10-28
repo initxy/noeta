@@ -51,7 +51,7 @@ from typing import Any
 
 import msgspec
 
-from noeta.backends.execenv.local import ENV_ALLOWLIST, KILL_GRACE_S, LocalExecEnv
+from noeta.backends.execenvs.local import ENV_ALLOWLIST, KILL_GRACE_S, LocalExecEnv
 from noeta.core.execenv import FileStat, RunResult
 
 __all__ = [

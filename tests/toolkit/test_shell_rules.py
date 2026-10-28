@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from noeta.core.shell import (
+from noeta.toolkit.shell import (
     DEFAULT_SHELL_RULES,
     AllowRule,
     build_allowlist,

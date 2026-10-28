@@ -18,7 +18,6 @@ from typing import Any
 import acp
 from acp import schema
 
-from noeta.apps.local import LocalApp, UnknownAgent
 from noeta.core.commands import expand_command, list_commands, parse_command
 from noeta.core.events import (
     ExtensionRecorded,
@@ -37,6 +36,7 @@ from noeta.core.loop.state import CORE
 from noeta.core.pending import Pending, follow_tree, pending_tree
 from noeta.core.questions import next_question, typed_answer
 from noeta.core.types import Delta, Image, Message, Text, ToolUse
+from noeta.host.local import LocalApp, UnknownAgent
 
 log = logging.getLogger("noeta.apps.acp")
 

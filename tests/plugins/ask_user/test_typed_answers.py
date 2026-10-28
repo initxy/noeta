@@ -6,11 +6,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ToolFinished, Waiting
 from noeta.core.runner import Runtime
-from noeta.core.store.sqlite import SqliteStore
 from noeta.plugins.ask_user import (
     AskUser,
     next_question,

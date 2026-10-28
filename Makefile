@@ -35,6 +35,7 @@ lint:
 	uv run ruff check noeta tests evals bench scripts examples
 	uv run mypy
 	uv run python scripts/lint-naming.py
+	uv run python scripts/lint-layout.py
 	uv run lint-imports
 
 ## a third-party plugin end to end: built and installed from examples/hello-plugin

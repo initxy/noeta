@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.errors import Fatal
 from noeta.core.events import TaskCreated, TaskEnded, ToolFinished
 from noeta.core.runner.texts import STOPPED_CALL_ERROR
-from noeta.core.store.sqlite import SqliteStore
 from noeta.plugins.subtasks import SubagentSpec, Subtasks, texts
 from noeta.plugins.subtasks.tool import task_schema
 from noeta.testing import ScriptedProvider, reply

@@ -18,7 +18,7 @@ import msgspec
 
 from noeta.core.errors import Conflict, StoreUnavailable, UnknownTask
 from noeta.core.events import Event, InboxItem, InboxKind, Recorded, event_type
-from noeta.core.store.base import (
+from noeta.core.store import (
     ChangeKind,
     Claim,
     NewTask,

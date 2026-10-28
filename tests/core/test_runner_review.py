@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.errors import Fatal
@@ -33,7 +34,6 @@ from noeta.core.extension import Ask, Deny, Extension, Rewrite, TaskView
 from noeta.core.loop import decide
 from noeta.core.loop.state import CORE, fold
 from noeta.core.runner import Runtime
-from noeta.core.store.sqlite import SqliteStore
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ModelResponse, Text, ToolResult, ToolUse, Usage, user
 from noeta.testing import ScriptedProvider, reply

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from noeta.backends.execenv.local import LocalExecEnv
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.execenv import RunResult
 from noeta.plugins.fs._rg import compile_glob, expand_braces, glob_matches
 from noeta.plugins.fs.glob import GlobTool

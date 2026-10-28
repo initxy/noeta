@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from noeta.core.events import ModelReplied, Waiting
-from noeta.core.store.base import TaskRow
+from noeta.core.store import TaskRow
 from noeta.core.types import Struct, Usage
 
 if TYPE_CHECKING:  # the client layer sits above the extensions
