@@ -162,6 +162,9 @@ class EditTool:
             in_view = st is None
             count, after = 1, new
         else:
+            if resolved.endswith(".ipynb"):
+                return tool_error(self.name, "This is a Jupyter notebook: change its cells with "
+                                             "NotebookEdit.")
             refused = read_precondition_error(
                 ctx, resolved, raw, tool_name=self.name, verb="editing",
                 unread_ok=not ctx.approved, partial_ok=True, check_stale=False,

@@ -184,6 +184,13 @@ async def test_an_empty_old_string_creates_a_file(h: Harness, ws: Path) -> None:
         "Give the text to replace instead.")
 
 
+async def test_a_notebook_is_left_to_notebook_edit(h: Harness, ws: Path) -> None:
+    (ws / "n.ipynb").write_text('{"cells": []}')
+    out = await h.call(EditTool(), file_path="n.ipynb", old_string="[]", new_string="[1]")
+    assert text_of(out) == (
+        "Edit: This is a Jupyter notebook: change its cells with NotebookEdit.")
+
+
 async def test_edit_zero_match_fails_no_write(h: Harness, ws: Path) -> None:
     target = ws / "a.py"
     target.write_text("foo\n")
