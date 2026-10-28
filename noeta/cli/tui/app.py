@@ -28,7 +28,7 @@ from noeta.cli.tui.widgets import (
     ToolCall,
     UserMessage,
 )
-from noeta.core import models
+from noeta.core import models, records
 from noeta.core.commands import list_commands, run_typed
 from noeta.core.events import (
     Answer,
@@ -44,7 +44,6 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import CommandContext
-from noeta.core.records import CORE
 from noeta.core.types import Delta, Image
 from noeta.host.feed import failure_text
 from noeta.host.local import LocalApp, UnknownAgent
@@ -536,24 +535,26 @@ class NoetaApp(App[None]):
             mode = current_mode([rec])
             if mode:
                 self.mode = mode
+            # The core's own records by type: a plugin may record the same
+            # kind names (the hooks plugin's "retry") for something else.
+            core = records.decode(ev)
             if ev.extension == "title" and ev.kind == "title":
                 self.sub_title = str(data.get("title") or "")
-            elif ev.kind == "retry":
-                await self._retried(int(data.get("attempt") or 1))
-                await transcript.mount(Notice(f"retrying (attempt {data.get('attempt')}): "
-                                              f"{str(data.get('error', ''))[:120]}"))
-            elif ev.kind == "turn_stopped":
+            elif isinstance(core, records.Retry):
+                await self._retried(int(core.attempt or 1))
+                await transcript.mount(Notice(f"retrying (attempt {core.attempt}): "
+                                              f"{str(core.error or '')[:120]}"))
+            elif isinstance(core, records.TurnStopped):
                 await self._end_stream()
                 self._set_question("", "", {})
                 await transcript.mount(Notice("stopped"))
-            elif ev.kind == "turn_failed":
+            elif isinstance(core, records.TurnFailed):
                 await transcript.mount(Notice(f"turn failed: {failure_text(data)}",
                                               classes="-error"))
-            elif ev.kind == "notice" and ev.extension == CORE:
-                text = str(data.get("text") or "")
+            elif isinstance(core, records.Notice):
                 # Structured news (a review's findings) reads as a list.
-                await transcript.mount(Markdown(text, classes="notice") if data.get("kind")
-                                       else Notice(text))
+                await transcript.mount(Markdown(core.text, classes="notice")
+                                       if core.notice_kind else Notice(core.text))
         elif isinstance(ev, Waiting):
             await self._end_stream()
             self.waiting_for = {"approval": "waiting for your approval (y/a/n)",
