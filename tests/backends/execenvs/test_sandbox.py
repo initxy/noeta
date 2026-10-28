@@ -118,6 +118,40 @@ async def test_socks_proxy_checks_the_host(server: int) -> None:
         await proxy.close(ls)
 
 
+async def test_proxy_checks_the_address_a_name_resolves_to(
+        server: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    proxy = FilterProxy()
+    ls = await proxy.open(allowed=["*"], tcp_host="127.0.0.1")
+    try:
+        # An allowed name (here every name) resolving to this machine or a
+        # metadata address is refused like a host not allowed.
+        for host in ("0x7f000001", "169.254.169.254"):
+            out = await _http_get(ls.http[1], f"http://{host}:{server}/x")
+            assert out.startswith(b"HTTP/1.1 403"), host
+        reader, writer = await asyncio.open_connection(*ls.http)
+        writer.write(f"CONNECT 0x7f000001:{server} HTTP/1.1\r\n\r\n".encode())
+        assert (await reader.readline()).startswith(b"HTTP/1.1 403")
+        writer.close()
+        assert ls.refused == [f"0x7f000001:{server}", f"169.254.169.254:{server}"]
+    finally:
+        await proxy.close(ls)
+    # The connection goes to the address that was checked, not to a second
+    # lookup of the name.
+    from noeta.backends.execenvs import sandbox_proxy
+
+    async def pinned(host: str, port: int, *_a: object) -> str:
+        assert host == "pinned.example"
+        return "127.0.0.1"
+
+    monkeypatch.setattr(sandbox_proxy, "resolve_allowed", pinned)
+    ls = await proxy.open(allowed=["pinned.example"], tcp_host="127.0.0.1")
+    try:
+        out = await _http_get(ls.http[1], f"http://pinned.example:{server}/p")
+        assert out.endswith(b"reached-/p")
+    finally:
+        await proxy.close(ls)
+
+
 async def test_proxy_hands_off_to_the_users_own(server: int) -> None:
     proxy = FilterProxy()
     # The "user's proxy" here is the test server itself: the request
@@ -173,12 +207,15 @@ def test_seatbelt_profile_shape(tmp_path: Path, home: Path) -> None:
     # Generated only: macOS is not available to run it here.
     settings = SandboxSettings(enabled=True, allow_local_binding=True,
                                allow_unix_sockets=("/var/run/x.sock",))
+    (tmp_path / ".git").mkdir()
     plan = sb.plan_paths(settings, str(tmp_path), str(tmp_path), ())
     profile = sb.seatbelt_profile(settings, plan, (4000, 4001))
     assert profile.startswith("(version 1)\n(allow default)\n(deny file-write*)")
     assert f'(allow file-write* (subpath "{tmp_path}"))' in profile
     assert '(allow network-outbound (remote ip "localhost:4000"))' in profile
     assert '(path-literal "/var/run/x.sock")' in profile
+    assert f'(deny file-write* (subpath "{tmp_path}/.noeta"))' in profile
+    assert f'(deny file-write* (literal "{tmp_path}/.git"))' in profile  # no rename
     assert profile.index("(deny network*)") < profile.index("localhost:4001")
 
 
@@ -237,7 +274,65 @@ async def test_writes_outside_the_allowed_paths_fail(tmp_path: Path, home: Path)
     code, out, _ = await _run(env, f"echo x >> {ws}/.git/config")
     assert code != 0
     assert (ws / ".git" / "config").read_text() == "[core]\n"
-    assert (ws / ".git" / "hooks").is_dir()  # made empty and read-only
+    # The empty read-only placeholder over the missing hooks directory is
+    # gone with the command.
+    assert not (ws / ".git" / "hooks").exists() and not (ws / ".noeta").exists()
+
+
+@needs_bwrap
+async def test_protected_paths_cannot_be_created_or_moved_away(tmp_path: Path,
+                                                               home: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    env = LocalExecEnv(str(ws), sandbox={"enabled": True})
+    # Missing: nothing under .noeta or .git can be created.
+    for command in ("mkdir -p .noeta/plugins && echo x > .noeta/plugins/x.py",
+                    "mkdir -p .noeta && echo {} > .noeta/settings.local.json",
+                    "echo {} > .noeta/mcp.json",
+                    "git init -q . && git config core.fsmonitor 'touch pwned'",
+                    "mkdir -p .git && echo '[core]' > .git/config"):
+        code, _, _ = await _run(env, command)
+        assert code != 0, command
+    assert sorted(os.listdir(ws)) == []
+    # Existing: neither directory can be renamed away and recreated.
+    (ws / ".noeta").mkdir()
+    (ws / ".noeta" / "settings.json").write_text("{}")
+    (ws / ".git" / "hooks").mkdir(parents=True)
+    (ws / ".git" / "config").write_text("[core]\n")
+    for command in ("mv .noeta old && mkdir .noeta && echo x > .noeta/settings.local.json",
+                    "mkdir .noeta/plugins",
+                    "echo x > .noeta/settings.local.json",
+                    "mv .git old && mkdir -p .git && echo x > .git/config",
+                    "rm -rf .git/hooks && mkdir .git/hooks && echo x > .git/hooks/pre-commit"):
+        code, _, _ = await _run(env, command)
+        assert code != 0, command
+    assert sorted(os.listdir(ws)) == [".git", ".noeta"]
+    assert os.listdir(ws / ".noeta") == ["settings.json"]
+    assert (ws / ".git" / "config").read_text() == "[core]\n"
+    assert os.listdir(ws / ".git" / "hooks") == []
+    # The rest of .git stays writable: git still commits.
+    code, out, _ = await _run(env, "echo ref > .git/HEAD.tmp && rm .git/HEAD.tmp && echo ok")
+    assert code == 0 and "ok" in out
+
+
+def test_a_worktree_git_file_is_read_only(tmp_path: Path, home: Path) -> None:
+    (tmp_path / ".git").write_text("gitdir: /elsewhere\n")
+    plan = sb.plan_paths(SandboxSettings(enabled=True), str(tmp_path), str(tmp_path / "t"))
+    assert str(tmp_path / ".git") in plan.deny_write and plan.pinned == []
+    assert plan.placeholders == [(str(tmp_path / ".noeta"), False)]
+
+
+def test_placeholders_outlive_no_command_but_the_last(tmp_path: Path, home: Path) -> None:
+    plan = sb.plan_paths(SandboxSettings(enabled=True), str(tmp_path), str(tmp_path / "t"))
+    first = sb._hold(plan)
+    (tmp_path / ".noeta").mkdir()  # what bwrap leaves on the host
+    (tmp_path / ".git").mkdir()
+    second = sb._hold(sb.plan_paths(SandboxSettings(enabled=True), str(tmp_path),
+                                    str(tmp_path / "t")))
+    sb._release(first)
+    assert (tmp_path / ".noeta").is_dir() and (tmp_path / ".git").is_dir()
+    sb._release(second)
+    assert not (tmp_path / ".noeta").exists() and not (tmp_path / ".git").exists()
 
 
 @needs_bwrap
@@ -324,3 +419,62 @@ def _ppid_chain_has(pid: str, ancestor: int) -> bool:
             return False
         current = int(stat.rpartition(")")[2].split()[1])
     return False
+
+
+# ---------------------------------------------------------------- seccomp
+
+
+def _run_bpf(program: bytes, nr: int, arch: int, arg0: int = 0) -> int:
+    """What the classic BPF ``program`` returns for one system call."""
+    data = struct.pack("<iI", nr, arch) + struct.pack("<Q", 0) + struct.pack("<Q", arg0)
+    ins = [struct.unpack("HBBI", program[i:i + 8]) for i in range(0, len(program), 8)]
+    pc, acc = 0, 0
+    while True:
+        code, jt, jf, k = ins[pc]
+        if code == 0x20:
+            acc = struct.unpack_from("<I", data, k)[0]
+        elif code == 0x06:
+            return int(k)
+        elif code in (0x15, 0x45):
+            hit = acc == k if code == 0x15 else bool(acc & k)
+            pc += jt if hit else jf
+        else:
+            raise AssertionError(f"unexpected opcode {code:#x}")
+        pc += 1
+
+
+def test_seccomp_filter_refuses_other_abis(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.backends.execenvs import sandbox_bridge as bridge
+    monkeypatch.setattr(bridge.platform, "machine", lambda: "x86_64")
+    program = bridge._filter(allow_unix=False, allow_userns=False)
+    assert program is not None
+    x86_64, i386 = 0xC000003E, 0x40000003
+    allow, kill = 0x7FFF0000, 0x80000000
+    assert _run_bpf(program, 41, x86_64, 1) == 0x00050000 | 1  # socket(AF_UNIX)
+    assert _run_bpf(program, 41, x86_64, 2) == allow  # socket(AF_INET)
+    assert _run_bpf(program, 0, x86_64) == allow
+    # i386 calls (socket is 359, socketcall 102 there) never reach the
+    # x86_64 checks: any of them kills the process.
+    for nr in (359, 102, 20):
+        assert _run_bpf(program, nr, i386, 1) == kill
+    assert _run_bpf(program, 41 | 0x40000000, x86_64, 1) == 0x00050000 | 38  # x32
+
+
+_I386_SOCKET = (
+    "import ctypes,mmap;"
+    # push rbx; mov eax,359 (i386 socket); mov ebx,1 (AF_UNIX); mov ecx,1;
+    # xor edx,edx; int 0x80; pop rbx; ret
+    "c=bytes.fromhex('53b867010000bb01000000b90100000031d2cd805bc3');"
+    "m=mmap.mmap(-1,4096,prot=7);m.write(c);"
+    "a=ctypes.addressof(ctypes.c_char.from_buffer(m));"
+    "print('fd',ctypes.CFUNCTYPE(ctypes.c_int)(a)())")
+
+
+@needs_bwrap
+@pytest.mark.skipif(os.uname().machine != "x86_64", reason="an i386 call needs x86_64")
+async def test_an_i386_system_call_cannot_open_a_unix_socket(tmp_path: Path,
+                                                             home: Path) -> None:
+    env = LocalExecEnv(str(tmp_path), sandbox={"enabled": True})
+    code, out, _ = await _run(env, f'python3 -c "{_I386_SOCKET}"')
+    assert "fd " not in out
+    assert code != 0

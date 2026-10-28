@@ -176,12 +176,16 @@ def test_sandbox_settings_merge_and_reach_the_env(home: Path) -> None:
         ({"enabled": True, "allowUnsandboxedCommands": True, "bwrapPath": "/u/bwrap",
           "network": {"allowedDomains": ["a.com"], "allowLocalBinding": True}}, "user"),
         ({"enabled": False, "allowUnsandboxedCommands": False, "allowNestedUserNamespaces": True,
-          "filesystem": {"disabled": True, "denyRead": ["x"]},
-          "network": {"allowedDomains": ["b.com", "a.com"]}}, "project"),
+          "filesystem": {"disabled": True, "denyRead": ["x"], "allowWrite": ["~"],
+                         "allowRead": ["~/.ssh"]},
+          "excludedCommands": ["*"],
+          "network": {"allowedDomains": ["b.com", "a.com"], "deniedDomains": ["c.com"],
+                      "allowUnixSockets": ["/var/run/docker.sock"]}}, "project"),
         ({"bwrapPath": "/m/bwrap", "excludedCommands": ["docker *"]}, "managed")])
     assert merged == {
         "enabled": True, "allowUnsandboxedCommands": False, "bwrapPath": "/m/bwrap",
-        "network": {"allowedDomains": ["a.com", "b.com"], "allowLocalBinding": True},
+        "network": {"allowedDomains": ["a.com"], "allowLocalBinding": True,
+                    "deniedDomains": ["c.com"]},
         "filesystem": {"denyRead": ["x"]}, "excludedCommands": ["docker *"]}
     assert merge_sandbox([({"bwrapPath": "/u/bwrap"}, "user")]) == {}
     assert merge_sandbox([({"enabled": True}, "project")]) == {"enabled": True}
@@ -197,3 +201,20 @@ def test_sandbox_settings_merge_and_reach_the_env(home: Path) -> None:
     env = app.runtime.env_for(TaskState(task_id="t", config={"cwd": str(project)}))
     sandbox = getattr(env, "sandbox", None)
     assert sandbox is not None and sandbox.settings.allowed_domains == ("a.com", "b.com")
+
+    # A trusted project's permission rules widen what its tools may do
+    # unasked, not the sandbox: its allow rules and directories stay out.
+    (project / ".noeta").mkdir()
+    (project / ".noeta" / "settings.json").write_text(json.dumps({"permissions": {
+        "allow": ["WebFetch(domain:evil.com)", "Edit(~/**)"],
+        "additionalDirectories": ["/"], "deny": ["Read(secret/**)"]}}))
+    config.trust_project(str(project))
+    found = config.file_settings(str(project))
+    assert "WebFetch(domain:evil.com)" in found.permissions["allow"]
+    assert found.sandbox_permissions == {"deny": ["Read(secret/**)"],
+                                         "allow": ["WebFetch(domain:b.com)"]}
+    app = from_settings(load_settings(api_key="k", model="m"), cwd=str(project))
+    env = app.runtime.env_for(TaskState(task_id="t", config={"cwd": str(project)}))
+    settings = env.sandbox.settings  # type: ignore[attr-defined]
+    assert settings.allowed_domains == ("a.com", "b.com") and settings.allow_write == ()
+    assert settings.deny_read == ("secret",)

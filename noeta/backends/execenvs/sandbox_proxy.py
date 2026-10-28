@@ -23,7 +23,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from noeta.toolkit.sandbox import domain_allowed
+from noeta.toolkit.sandbox import domain_allowed, resolve_allowed
 
 __all__ = ["FilterProxy", "Listeners", "default_proxy"]
 
@@ -53,10 +53,28 @@ class Listeners:
     def check(self, host: str, port: int) -> bool:
         if domain_allowed(host, port, self.allowed, self.denied):
             return True
+        self.refuse(host, port)
+        return False
+
+    def refuse(self, host: str, port: int) -> None:
         entry = f"{host}:{port}"
         if entry not in self.refused:
             self.refused.append(entry)
-        return False
+
+    async def connect(self, host: str, port: int,
+                      ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter] | None:
+        """A connection to an allowed ``host:port``, at the address that was
+        checked; ``None`` when the name resolves only to addresses no
+        command may reach (refused like a host not allowed). A failed
+        connection raises."""
+        try:
+            address = await asyncio.wait_for(
+                resolve_allowed(host, port, self.allowed, self.denied), _CONNECT_TIMEOUT_S)
+        except PermissionError as exc:
+            log.info("sandbox: refused %s:%s: %s", host, port, exc)
+            self.refuse(host, port)
+            return None
+        return await _connect(address, port)
 
 
 class FilterProxy:
@@ -214,7 +232,8 @@ async def _forward(port: int, reader: asyncio.StreamReader,
 
 def _refusal(host: str, port: int) -> bytes:
     body = (f"Connection to {host}:{port} blocked by the noeta sandbox: the host is not in "
-            "sandbox.network.allowedDomains.\n").encode()
+            "sandbox.network.allowedDomains, or resolves only to a local, link-local or "
+            "metadata address.\n").encode()
     return (b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n"
             b"X-Proxy-Error: blocked-by-allowlist\r\nConnection: close\r\n"
             + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
@@ -254,10 +273,14 @@ async def _http(ls: Listeners, reader: asyncio.StreamReader,
             await _close_writer(writer)
             return
         try:
-            upstream = await _connect(host, port)
+            upstream = await ls.connect(host, port)
         except (TimeoutError, OSError) as exc:
             writer.write(f"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n{exc}\n"
                          .encode())
+            await _close_writer(writer)
+            return
+        if upstream is None:
+            writer.write(_refusal(host, port))
             await _close_writer(writer)
             return
         writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -276,9 +299,13 @@ async def _http(ls: Listeners, reader: asyncio.StreamReader,
         await _close_writer(writer)
         return
     try:
-        upstream = await _connect(host, port)
+        upstream = await ls.connect(host, port)
     except (TimeoutError, OSError) as exc:
         writer.write(f"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n{exc}\n".encode())
+        await _close_writer(writer)
+        return
+    if upstream is None:
+        writer.write(_refusal(host, port))
         await _close_writer(writer)
         return
     headers = [h for h in lines[1:] if h and h.split(":", 1)[0].strip().lower()
@@ -329,9 +356,13 @@ async def _socks(ls: Listeners, reader: asyncio.StreamReader,
         await _close_writer(writer)
         return
     try:
-        upstream = await _connect(host, port)
+        upstream = await ls.connect(host, port)
     except (TimeoutError, OSError):
         writer.write(reply(5))
+        await _close_writer(writer)
+        return
+    if upstream is None:
+        writer.write(reply(2))
         await _close_writer(writer)
         return
     writer.write(reply(0))

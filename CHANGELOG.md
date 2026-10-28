@@ -61,15 +61,22 @@ All notable changes to Noeta are documented here. The format is based on
   each command confined: bubblewrap on Linux (own network, PID, IPC namespaces; a seccomp
   filter refusing Unix sockets and new user namespaces unless `allowAllUnixSockets` /
   `allowNestedUserNamespaces`), Seatbelt on macOS. Commands write only in the working
-  directory, `filesystem.allowWrite` and a private `$TMPDIR` (never `denyWrite`, `.noeta`
-  config, `.git/hooks`, `.git/config`), read everything but `denyRead`, credential stores
+  directory, `filesystem.allowWrite` and a private `$TMPDIR` (never `denyWrite`, the
+  project's `.noeta` directory, `.git/hooks`, `.git/config` — not even to create them when
+  missing, and `.git` cannot be renamed away), read everything but `denyRead`, credential stores
   and noeta's home, and reach only `network.allowedDomains` through a filtering HTTP/SOCKS
-  proxy; refused hosts follow the output in `<sandbox_violations>`. `Edit` allow rules,
+  proxy, which connects to the address it checked and refuses one that is loopback,
+  link-local, multicast, a cloud metadata service or this machine's own unless an IP or CIDR
+  entry allows it (as Claude Code); refused hosts follow the output in `<sandbox_violations>`.
+  A `Monitor` WebSocket, which the worker opens itself, keeps to the same rules. `Edit` allow rules,
   `additionalDirectories`, `Read` deny rules and `WebFetch(domain:)` allow rules feed it;
   `excludedCommands`, `allowUnsandboxedCommands`, `autoAllowBashIfSandboxed` (default on),
   `failIfUnavailable`, `credentials` (`mask` acts as `deny`), `httpProxyPort` /
   `socksProxyPort`, `enableWeakerNestedSandbox`, `filesystem.disabled` and `bwrapPath` are
-  honoured, and a project's settings may tighten the sandbox but never loosen it.
+  honoured, and a project's settings may tighten the sandbox but never loosen it: its
+  `excludedCommands`, `allowWrite`, `allowRead`, `allowedDomains`, `allowUnixSockets`, the
+  loosening switches, and its permission allow rules and `additionalDirectories` never reach
+  the sandbox (only the user's and managed settings widen it).
   `dangerouslyDisableSandbox: true` runs a command outside after an approval that allow
   rules do not skip. `Bash`'s description gains a sandbox section while the sandbox is on.
   Without bwrap (or namespaces) front ends say why and commands run unconfined, or are
@@ -129,6 +136,13 @@ All notable changes to Noeta are documented here. The format is based on
 - **HTTP**: `/commands`, `/agents`, `/models`, `/tasks/{id}/usage`, `/tasks/{id}/context`,
   `/tasks/{id}/rewind`, `/openapi.json`; `POST /tasks` takes `history_from` /
   `history_through`. `websockets` joins the `server` extra.
+- **`noeta serve` always asks for a bearer token**: `NOETA_SERVER_TOKEN`, else one made
+  once in `~/.noeta/server-token` (owner-only, printed at start, read by `noeta --server`);
+  `--no-token` drops it on a loopback address only. A request from another web origin
+  (`--allow-origin` adds one) or with a `Host` other than a loopback name on a loopback
+  address is refused, and no request creates or switches a task into `bypassPermissions`
+  (`--allow-bypass-permissions`) or runs one outside the server's directory
+  (`create_app(allowed_hosts=, origins=, allow_bypass=, cwd=)`).
 - **Kernel**: the `config` signal changes a running task's `model`, `effort` or `max_turns`
   (`CONFIG_SIGNAL`); `config["max_turns"]` fails a turn after that many model calls
   (`max_turns`); `Client.create(history_from=, history_through=)`; `Runtime.preview` (the

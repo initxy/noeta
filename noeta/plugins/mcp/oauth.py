@@ -31,6 +31,7 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import html
 import json
 import os
 import random
@@ -517,7 +518,8 @@ class SignIn:
                 target.query if target else "").items() if v}
             ok = target is not None and target.path == "/callback" and self._accept(query)
             failed = not ok or self._code.exception() is not None
-            body = (_FAILED_PAGE + str(query.get("error", "unknown request")).encode()[:200]
+            reason = html.escape(str(query.get("error", "unknown request"))[:200])
+            body = (_FAILED_PAGE + reason.encode()
                     if failed else _DONE_PAGE)
             status = b"200 OK" if not failed else b"400 Bad Request"
             writer.write(b"HTTP/1.1 " + status + b"\r\nContent-Type: text/html; charset=utf-8"

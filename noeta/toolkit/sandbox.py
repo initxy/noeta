@@ -9,12 +9,15 @@ attribute (:func:`sandbox_of`); the ``Bash`` tool asks it to
 (:func:`runs_sandboxed`), runs the argv it gets back, and reports the hosts the
 sandbox's network filter refused (:func:`violations_block`).
 
-Nothing here starts a process.
+Nothing here starts a process; :func:`resolve_allowed` looks a name up.
 """
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import os
+import socket
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -25,9 +28,11 @@ __all__ = [
     "CommandSandbox",
     "PreparedCommand",
     "SandboxSettings",
+    "address_refusal",
     "belongs_in_sandbox",
     "domain_allowed",
     "leaves_sandbox",
+    "resolve_allowed",
     "runs_sandboxed",
     "sandbox_of",
     "violations_block",
@@ -233,6 +238,99 @@ def domain_allowed(host: str, port: int, allowed: Sequence[str],
         if _entry_matches(entry, host, port):
             return True
     return False
+
+
+#: Addresses an allowed name may not resolve to (Claude Code's list): a
+#: rebinding or a misconfigured record would reach the machine itself, the
+#: link or a cloud's metadata service.
+_BLOCKED_RANGES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("a loopback address", ("127.0.0.0/8", "::1/128")),
+    ("an unspecified address", ("0.0.0.0/8", "::/128")),
+    ("a link-local address", ("169.254.0.0/16", "fe80::/10")),
+    ("a multicast address", ("224.0.0.0/4", "ff00::/8")),
+    ("the broadcast address", ("255.255.255.255/32",)),
+    ("a cloud metadata address", (
+        "100.100.100.200/32", "168.63.129.16/32", "192.0.0.192/32", "fd00:ec2::/32",
+        "fd20:ce::254/128", "fd00:c1::a9fe:a9fe/128", "fd00:42::42/128",
+        "fd00:a9fe:a9fe::1/128", "fd00:100::100:200/128")),
+)
+_Address = ipaddress.IPv4Address | ipaddress.IPv6Address
+
+
+def _address(value: str) -> _Address | None:
+    try:
+        ip = ipaddress.ip_address(value.split("%", 1)[0])
+    except ValueError:
+        return None
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    return ip
+
+
+def _listed(ip: _Address, port: int, entries: Sequence[str]) -> bool:
+    """Whether an IP or CIDR entry (``host:port`` or bare) covers ``ip``."""
+    for entry in entries:
+        name, want_port = _split_port(entry.strip())
+        if want_port is not None and want_port != port:
+            continue
+        try:
+            if ip in ipaddress.ip_network(name, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def address_refusal(host: str, address: str, port: int, allowed: Sequence[str],
+                    denied: Sequence[str] = (), own: Sequence[str] = ()) -> str | None:
+    """Why a connection for ``host:port`` may not go to ``address`` (what
+    the name resolved to), or ``None`` when it may. An IP or CIDR entry in
+    the allowed list lets an address through; a loopback name may reach
+    only loopback; ``own`` are this machine's addresses."""
+    ip = _address(address)
+    if ip is None:
+        return "an unparsable address"
+    if _listed(ip, port, denied):
+        return "a deny-listed address"
+    if _listed(ip, port, allowed):
+        return None
+    name = host.strip().strip("[]").rstrip(".").lower()
+    literal = _address(name)
+    if name == "localhost" or (literal is not None and literal.is_loopback):
+        return None if ip.is_loopback else "a non-loopback address"
+    for reason, ranges in _BLOCKED_RANGES:
+        if any(ip in ipaddress.ip_network(r) for r in ranges):
+            return reason
+    if any(_address(a) == ip for a in own):
+        return "one of this host's addresses"
+    return None
+
+
+def _own_addresses() -> list[str]:
+    try:
+        infos = socket.getaddrinfo(socket.gethostname(), None)
+    except OSError:
+        return []
+    return [str(info[4][0]) for info in infos]
+
+
+async def resolve_allowed(host: str, port: int, allowed: Sequence[str],
+                          denied: Sequence[str] = ()) -> str:
+    """The address to connect to for ``host:port`` — the first it resolves
+    to that :func:`address_refusal` lets through, so the connection goes
+    where it was checked (no second lookup to rebind). Raises
+    :class:`PermissionError` naming why when none is."""
+    loop = asyncio.get_running_loop()
+    infos = await loop.getaddrinfo(host.strip("[]"), port, type=socket.SOCK_STREAM)
+    own = _own_addresses()
+    reasons: list[str] = []
+    for info in infos:
+        address = str(info[4][0])
+        reason = address_refusal(host, address, port, allowed, denied, own)
+        if reason is None:
+            return address
+        reasons.append(f"{address} ({reason})")
+    raise PermissionError(f"{host} resolves to {', '.join(reasons) or 'nothing'}")
 
 
 class PreparedCommand(Protocol):

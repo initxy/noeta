@@ -201,17 +201,20 @@ class Registry:
                     post: Post, monitor_timeout_ms: float | None = None,
                     release: Release | None = None,
                     argv: Sequence[str] | None = None,
-                    ws: tuple[str, list[str]] | None = None) -> Job | str:
+                    ws: tuple[str, list[str]] | None = None,
+                    ws_resolve: Callable[[str, int], Awaitable[str]] | None = None,
+                    ) -> Job | str:
         """Start a job, or return the refusal text. ``release`` is awaited
         once the job has ended (or was refused). ``argv``: what runs instead
         of ``bash -c command`` (the command wrapped in a sandbox); the log
         redirection stays outside it. A monitor with ``ws`` streams that
-        WebSocket's messages instead of running ``command``."""
+        WebSocket's messages instead of running ``command``, connecting where
+        ``ws_resolve`` says (``run_ws``'s ``resolve``)."""
         job = await self._spawn(env=env, command=command, cwd=cwd, env_vars=env_vars,
                                 root_id=root_id, spawner_id=spawner_id,
                                 tool_use_id=tool_use_id, description=description, post=post,
                                 monitor_timeout_ms=monitor_timeout_ms, release=release,
-                                argv=argv, ws=ws)
+                                argv=argv, ws=ws, ws_resolve=ws_resolve)
         if isinstance(job, str) and release is not None:
             await release()
         return job
@@ -220,7 +223,9 @@ class Registry:
                      root_id: str, spawner_id: str, tool_use_id: str, description: str,
                      post: Post, monitor_timeout_ms: float | None,
                      release: Release | None, argv: Sequence[str] | None,
-                     ws: tuple[str, list[str]] | None = None) -> Job | str:
+                     ws: tuple[str, list[str]] | None = None,
+                     ws_resolve: Callable[[str, int], Awaitable[str]] | None = None,
+                     ) -> Job | str:
         running = len(self.running(root_id))
         if running >= self.max_jobs:
             return (f"too many background jobs ({running}/{self.max_jobs}); stop one with "
@@ -246,7 +251,8 @@ class Registry:
         self.jobs.setdefault(root_id, {})[job_id] = job
         if ws is not None and job.monitor is not None:
             stream = job.monitor
-            job.proc = asyncio.ensure_future(run_ws(*ws, lambda text: stream.feed(text + "\n")))
+            job.proc = asyncio.ensure_future(run_ws(*ws, lambda text: stream.feed(text + "\n"),
+                                                    resolve=ws_resolve))
         else:
             redirect = f"2>{shlex.quote(err)}" if err is not None else "2>&1"
             script = f"exec >{shlex.quote(out)} {redirect}\n" + (

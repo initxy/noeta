@@ -37,7 +37,11 @@ events; when this process also runs workers, live model output streams too.
                                       the reply's JSON lines out; permission prompts refused
 
 A bearer token is required when one is configured (``NOETA_SERVER_TOKEN``;
-``?token=`` for a WebSocket from a browser). Needs the ``server`` extra.
+``?token=`` for a WebSocket from a browser). A request from a web page of
+another origin is refused, and so is one whose ``Host`` is not in
+``allowed_hosts`` (DNS rebinding). No request starts or switches a task into
+``bypassPermissions`` unless ``allow_bypass``, or runs it outside ``cwd``.
+Needs the ``server`` extra.
 """
 
 from __future__ import annotations
@@ -48,7 +52,8 @@ import dataclasses
 import hmac
 import json
 import logging
-from collections.abc import AsyncIterator, Mapping
+import os
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
 
 import msgspec
@@ -64,7 +69,8 @@ from noeta.core.client import Client
 from noeta.core.commands import list_commands, run_typed
 from noeta.core.errors import UnknownTask
 from noeta.core.extension import CommandContext
-from noeta.core.pending import card_title, choices, pending_tree
+from noeta.core.loop.state import CONFIG_SIGNAL
+from noeta.core.pending import MODE_SIGNAL, card_title, choices, pending_tree
 from noeta.core.types import Delta, Message
 from noeta.host.rewind import rewind, rewind_points
 from noeta.host.usage import context_breakdown, tree_usage
@@ -96,16 +102,97 @@ class _Front:
         return None
 
 
+class Refused(Exception):
+    """A request asked for what this server does not allow."""
+
+
+_BYPASS = "bypassPermissions"
+
+
+class _GuardedClient:
+    """``client`` refusing what a request may not ask for: a task in
+    ``bypassPermissions`` (unless allowed) or with a ``cwd`` outside the
+    server's."""
+
+    def __init__(self, client: Any, *, allow_bypass: bool, cwd: str | None) -> None:
+        self._client = client
+        self._allow_bypass = allow_bypass
+        self._cwd = os.path.realpath(cwd) if cwd else None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    def _mode(self, mode: Any) -> None:
+        if mode == _BYPASS and not self._allow_bypass:
+            raise Refused("this server does not allow bypassPermissions "
+                          "(start it with --allow-bypass-permissions)")
+
+    def check_config(self, config: Any) -> None:
+        if not isinstance(config, Mapping):
+            return
+        self._mode(config.get("permission_mode"))
+        cwd = config.get("cwd")
+        if cwd and self._cwd is not None:
+            real = os.path.realpath(str(cwd))
+            if real != self._cwd and not real.startswith(self._cwd.rstrip("/") + "/"):
+                raise Refused(f"cwd {cwd!r} is outside this server's directory {self._cwd}")
+
+    async def create(self, *args: Any, **kw: Any) -> Any:
+        self.check_config(kw.get("config"))
+        return await self._client.create(*args, **kw)
+
+    async def signal(self, task_id: str, name: str, data: Any = None, **kw: Any) -> Any:
+        if name == MODE_SIGNAL and isinstance(data, Mapping):
+            self._mode(data.get("mode"))
+        if name == CONFIG_SIGNAL:
+            self.check_config(data)
+        return await self._client.signal(task_id, name, data, **kw)
+
+
+class _GuardedFront:
+    """A stream-json front whose ``client`` is guarded."""
+
+    def __init__(self, front: Any, client: _GuardedClient) -> None:
+        self._front = front
+        self.client = client
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._front, name)
+
+
+#: ``Host`` names a server on a loopback address answers to.
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _hostname(value: str) -> str:
+    """The name in a ``Host`` header or an origin's authority (no port)."""
+    if value.startswith("["):
+        return value[1:].partition("]")[0]
+    return value.rpartition(":")[0] if value.count(":") == 1 else value
+
+
 def create_app(client: Client, *, token: str | None = None,
                deltas: Any = None, agents: Mapping[str, Agent] | None = None,
-               app: Any = None) -> Starlette:
+               app: Any = None, allowed_hosts: Sequence[str] | None = None,
+               origins: Sequence[str] = (), allow_bypass: bool = False,
+               cwd: str | None = None) -> Starlette:
     """``deltas`` is ``LocalApp.deltas`` when workers run in this process;
     ``agents`` (by name) lets a message run its task agent's slash commands;
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
-    (``/context``) and serves new stream-json conversations' trees."""
+    (``/context``) and serves new stream-json conversations' trees.
+
+    ``allowed_hosts``: the ``Host`` names served (any when ``None``);
+    ``origins``: web origins (``https://host:port``) allowed besides the
+    server's own; ``allow_bypass``: requests may ask for
+    ``bypassPermissions``; ``cwd``: tasks a request creates run in it or
+    below it (anywhere when ``None``)."""
     agents = agents if agents is not None else getattr(getattr(app, "runtime", None),
                                                        "agents", None)
-    front = app if app is not None else _Front(client=client, deltas=deltas)
+    guarded = _GuardedClient(client, allow_bypass=allow_bypass, cwd=cwd)
+    front = _GuardedFront(app if app is not None else _Front(client=client, deltas=deltas),
+                          guarded)
+    hosts = None if allowed_hosts is None else {h.lower() for h in allowed_hosts}
+    allowed_origins = {o.rstrip("/").lower() for o in origins}
 
     def authorized(headers: Any, query: Any) -> bool:
         if not token:
@@ -114,8 +201,22 @@ def create_app(client: Client, *, token: str | None = None,
             or query.get("token", "")
         return hmac.compare_digest(got, token)
 
+    def same_site(headers: Any) -> bool:
+        """Whether the request comes from an allowed ``Host`` and, when a
+        browser sent it, from this server's own page or an allowed one."""
+        host = headers.get("host", "")
+        if hosts is not None and _hostname(host).lower() not in hosts:
+            return False
+        origin = headers.get("origin")
+        if origin is None:
+            return True
+        origin = origin.rstrip("/").lower()
+        return origin in allowed_origins or origin.partition("://")[2] == host.lower()
+
     def guard(handler: Any) -> Any:
         async def wrapped(request: Request) -> Response:
+            if not same_site(request.headers):
+                return JSONResponse({"error": "cross-site request refused"}, status_code=403)
             if not authorized(request.headers, request.query_params):
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
             try:
@@ -123,13 +224,15 @@ def create_app(client: Client, *, token: str | None = None,
                 return result
             except UnknownTask as exc:
                 return JSONResponse({"error": f"unknown task {exc}"}, status_code=404)
+            except Refused as exc:
+                return JSONResponse({"error": str(exc)}, status_code=403)
             except (msgspec.ValidationError, ValueError, KeyError, IndexError) as exc:
                 return JSONResponse({"error": str(exc)}, status_code=400)
         return wrapped
 
     async def create(request: Request) -> Response:
         body = await request.json()
-        task_id = await client.create(
+        task_id = await guarded.create(
             body["agent"], _input(body.get("input")), config=body.get("config"),
             queue=body.get("queue", "default"), dedupe_key=body.get("dedupe_key"),
             history_from=body.get("history_from"), history_through=body.get("history_through"))
@@ -189,7 +292,7 @@ def create_app(client: Client, *, token: str | None = None,
         name = body["name"]
         if not isinstance(name, str) or not name:
             raise ValueError("a signal needs a non-empty 'name'")
-        seq = await client.signal(request.path_params["task_id"], name, body.get("data"),
+        seq = await guarded.signal(request.path_params["task_id"], name, body.get("data"),
                                   dedupe_key=body.get("dedupe_key"))
         return _json({"ok": True, "inbox_seq": seq})
 
@@ -271,6 +374,7 @@ def create_app(client: Client, *, token: str | None = None,
         from noeta.host.stream_json import StreamJson, drive
 
         options = _options(request.query_params, ask_client=False)
+        guarded.check_config({"permission_mode": options.permission_mode, "cwd": options.cwd})
         lines = [json.loads(x) for x in (await request.body()).decode().splitlines()
                  if x.strip()]
         queue: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -303,11 +407,20 @@ def create_app(client: Client, *, token: str | None = None,
     async def stream_socket(ws: WebSocket) -> None:
         from noeta.host.stream_json import StreamJson, drive
 
+        if not same_site(ws.headers):
+            await ws.close(code=4403)
+            return
         if not authorized(ws.headers, ws.query_params):
             await ws.close(code=4401)
             return
-        await ws.accept()
         options = _options(ws.query_params, ask_client=True)
+        try:
+            guarded.check_config({"permission_mode": options.permission_mode,
+                                  "cwd": options.cwd})
+        except Refused:
+            await ws.close(code=4403)
+            return
+        await ws.accept()
 
         async def emit(message: dict[str, Any]) -> None:
             await ws.send_text(json.dumps(message, ensure_ascii=False))
