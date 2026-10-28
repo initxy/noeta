@@ -345,13 +345,19 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     if not settings.model and claude.model:
         settings = dataclasses.replace(settings, model=claude.model)
     setting_files = [str(f) for f in claude.files]
+    permission_args = _permission_arguments(claude)
+    if cwd and project_trusted(cwd):
+        permission_args["trusted_workspace"] = True
+    # The file tools may write in the additional directories too.
+    write_roots = [str(Path(cwd or os.getcwd(), d))
+                   for d in permission_args.get("additional_directories") or ()]
     table = merge_plugin_settings(
         {"memory": {"home": str(HOME)},
          "hooks": {"settings_files": setting_files},
          "mcp": {"settings_files": setting_files, "project": True},
          "skills": {"trusted": project_trusted, "dirs": [str(CLAUDE_HOME / "skills")]},
          "instructions": {"user_dir": str(CLAUDE_HOME), "managed_dir": str(managed_dir())},
-         "permissions": _permission_arguments(claude)},
+         "permissions": permission_args, "fs": {"write_roots": write_roots}},
         settings.plugins, plugins or {})
     agents = default_agents(settings.model, plugins=table, add=settings.add_plugins,
                             extra_files=files)
