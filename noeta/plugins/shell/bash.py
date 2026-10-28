@@ -76,6 +76,8 @@ class ShellState:
     cwd: str | None = None
     #: Background job id -> what the log says about it.
     jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: The worktree ``EnterWorktree`` moved the shell into (``worktree.py``).
+    worktree: dict[str, Any] | None = None
 
 
 def reduce_shell(state: ShellState | None, kind: str, data: Any) -> ShellState:
@@ -87,6 +89,9 @@ def reduce_shell(state: ShellState | None, kind: str, data: Any) -> ShellState:
         cwd = data.get("cwd")
         return base if cwd is not None and not isinstance(cwd, str) \
             else replace(base, cwd=cwd or None)
+    if kind == "worktree":
+        tree = data.get("worktree")
+        return replace(base, worktree=dict(tree) if isinstance(tree, Mapping) else None)
     jobs = dict(base.jobs)
     job_id = data.get("job_id")
     if not isinstance(job_id, str):

@@ -35,6 +35,7 @@ from noeta.core.types import user
 from noeta.plugins.shell.bash import SHELL, BashTool, ShellState, reduce_shell, sandbox_description
 from noeta.plugins.shell.jobs import DEFAULT_LOG_DIR, REGISTRY, Registry
 from noeta.plugins.shell.tools import LOST_REASON, BackgroundBash, MonitorTool, TaskStopTool
+from noeta.plugins.shell.worktree import EnterWorktreeTool, ExitWorktreeTool
 from noeta.toolkit.sandbox import sandbox_of
 
 __all__ = ["SHELL", "BashTool", "Registry", "Shell", "lost_text"]
@@ -47,6 +48,10 @@ _NOTICE = re.compile(
     r"(?:\A|\n\n)<task-notification>\n<task-id>([0-9a-z]{9})</task-id>\n"
     r"(?:<tool-use-id>[^<]*</tool-use-id>\n)?(?:<output-file>[^<]*</output-file>\n)?"
     r"<status>(\w+)</status>")
+
+
+def _worktree_tools() -> list[Tool]:
+    return [EnterWorktreeTool(), ExitWorktreeTool()]
 
 
 class Shell(Extension):
@@ -80,11 +85,12 @@ class Shell(Extension):
         #: and working directory.
         self._sandboxed: dict[tuple[Any, str], list[Tool]] = {}
         if not background:
-            self._tools: list[Tool] = [BashTool(**(bash or {}))]
+            self._tools: list[Tool] = [BashTool(**(bash or {})), *_worktree_tools()]
             return
         self.bash = BackgroundBash(self.registry, ends_with_turn=background_ends_with_turn,
                                    **(bash or {}))
-        self._tools = [self.bash, MonitorTool(self.bash), TaskStopTool(self.registry)]
+        self._tools = [self.bash, MonitorTool(self.bash), TaskStopTool(self.registry),
+                       *_worktree_tools()]
 
     # ------------------------------------------------------------ state
 
