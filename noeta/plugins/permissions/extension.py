@@ -10,13 +10,8 @@ import asyncio
 import inspect
 import logging
 import os
-import posixpath
-import re
-import shlex
-import subprocess
-import sys
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -43,27 +38,34 @@ from noeta.core.extension import (
     TaskView,
 )
 from noeta.core.tool import Tool, ToolContext, ToolOutput
-from noeta.core.types import ModelRequest, ToolResult, ToolUse
-from noeta.plugins.permissions import classifier as c
+from noeta.core.types import ModelRequest, ToolUse
+from noeta.plugins.permissions import auto as a
 from noeta.plugins.permissions import guards as g
+from noeta.plugins.permissions import modes as md
 from noeta.plugins.permissions import plan as pl
 from noeta.plugins.permissions import policy as p
-from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
-from noeta.plugins.permissions.rule_specs import rule_spec_from_command, rule_spec_text
+from noeta.plugins.permissions.decision import Decision, choices
+from noeta.plugins.permissions.rule_check import RuleCheck
+from noeta.plugins.permissions.rule_specs import rule_spec_text
+from noeta.plugins.permissions.state import (
+    INHERITED_RULES_KEY,
+    NAME,
+    PermState,
+    fold,
+    inherited_rules,
+    state_of,
+)
 from noeta.toolkit import permission_modes as pm
 from noeta.toolkit import permission_rules as r
 from noeta.toolkit.paths import plans_dir as default_plans_dir
 from noeta.toolkit.permission_modes import MODE_SIGNAL as MODE_SIGNAL
-from noeta.toolkit.sandbox import leaves_sandbox, runs_sandboxed, sandbox_of
-from noeta.toolkit.shell import parse_argv
 from noeta.toolkit.signals import RESUMED_SIGNAL
 
-log = logging.getLogger("noeta.permissions")
+__all__ = ["DENIED_BY_HUMAN", "MODE_SIGNAL", "CanUseTool", "PermState", "Permissions",
+           "UntrustedProjectShellAllowlistWarning", "inherited_rules"]
 
-NAME = "permissions"
-#: The plugin whose ``cwd`` record says where the next shell command starts.
-SHELL_PLUGIN = "shell"
+log = logging.getLogger("noeta.permissions")
 
 #: The approval callback: ``(tool_name, input) -> bool`` (or awaitable).
 CanUseTool = Callable[[str, dict[str, Any]], "bool | Awaitable[bool]"]
@@ -71,110 +73,16 @@ CanUseTool = Callable[[str, dict[str, Any]], "bool | Awaitable[bool]"]
 #: Text a call refused by ``can_use_tool`` returns (0.6's deny default).
 DENIED_BY_HUMAN = "denied by human"
 
-#: Decisions kept in the folded state (per call id).
-_KEEP = 256
-#: Task config key a child reads its parent's remembered rules from.
-INHERITED_RULES_KEY = "permission_rules"
-#: The signal the plan-name side request answers with.
-PLAN_NAME_SIGNAL = "plan_name"
-#: Claude Code's denial limits before auto mode falls back to asking.
-MAX_CONSECUTIVE_DENIALS = 3
-MAX_TOTAL_DENIALS = 20
-#: Places in the joined system turn (``Reminder.order``): before the token
-#: budget, after the skill list.
-ORDER_PLAN = 64
-ORDER_AUTO = 70
-#: Betas Claude Code's auto-mode requests carry: every main-loop and
-#: sub-agent request names auto mode; the main loop also the server-side
-#: classifier one, until its first compaction (as recorded).
-AUTO_BETAS = ("afk-mode-2026-01-31",)
-MAIN_AUTO_BETAS = ("dangerous-tool-use-2026-09-03", "afk-mode-2026-01-31")
-#: The local command wrapper ``/plan`` sends (Claude Code's tags).
-PLAN_COMMAND = ("<command-name>/plan</command-name>\n            <command-message>plan"
-                "</command-message>\n            <command-args>{args}</command-args>\n\n"
-                "<local-command-stdout>Enabled plan mode</local-command-stdout>")
-_PLAN_COMMAND_HEAD = "<command-name>/plan</command-name>"
-
-#: A path with glob characters: judged by what it expands to.
-_GLOB = re.compile(r"[*?\[]")
-
 
 class UntrustedProjectShellAllowlistWarning(UserWarning):
     """Kept for hosts that filter it; the project allowlist file is gone
     (Claude Code keeps remembered rules in ``.noeta/settings.local.json``)."""
 
 
-@dataclass(frozen=True)
-class PermState:
-    """Folded from this extension's records."""
-
-    #: Allow rules remembered from "always" answers (rule strings).
-    rules: tuple[str, ...] = ()
-    #: The mode switched to during the task (``None``: the starting one).
-    mode: str | None = None
-    #: Plan mode: ``{"path", "pre_mode", "entered_seq"}``, kept after it ends.
-    plan: dict[str, Any] | None = None
-    steps: int = 0
-    tool_calls: int = 0
-    cost_usd: float = 0.0
-    #: ``call_id -> "allow" | "deny"`` decided by ``can_use_tool``.
-    auto: dict[str, str] = field(default_factory=dict)
-    #: ``call_id -> {"rules": [...]}``: what an "always" answer remembers.
-    asked: dict[str, dict[str, Any]] = field(default_factory=dict)
-    #: ``call_id -> {"decision", "reason", "category"}`` from the classifier.
-    classified: dict[str, dict[str, Any]] = field(default_factory=dict)
-    consecutive_denials: int = 0
-    total_denials: int = 0
-    #: The classifier moved to the main model.
-    demoted: bool = False
-    #: Notes owed to the next request: ``auto_guidance``, ``plan_exited``,
-    #: ``plan_active``.
-    due: tuple[str, ...] = ()
-    #: The seq of the newest prompt the plan-mode text was sent for.
-    plan_noted: int = 0
-    #: After a compaction, the auto-mode note waits for a prompt or a tool
-    #: result newer than this seq (Claude Code's).
-    guidance_after: int = 0
-    #: The server-side check was offered (on the first main auto-mode
-    #: request of the task, and again after a front end resumed it).
-    probed: bool = False
-    #: The task was compacted since it started or was last resumed.
-    compacted: bool = False
-    #: The mode vocabulary last published for front ends (``modes`` record).
-    offered: dict[str, Any] | None = None
-
-
-def inherited_rules(state: Any) -> list[str]:
-    """A task's remembered rules, its own and those it inherited: what a
-    child it spawns starts with (``config["permission_rules"]``)."""
-    st = state.ext.get(NAME)
-    own = list(st.rules) if isinstance(st, PermState) else []
-    parent = state.config.get(INHERITED_RULES_KEY)
-    rules = [x for x in parent if isinstance(x, str)] if isinstance(parent, list) else []
-    return [*rules, *(x for x in own if x not in rules)]
-
-
 def _directory(entry: object) -> str:
     if not isinstance(entry, str) or not entry.strip():
         raise ValueError(f"additional_directories entries must be non-empty paths; got {entry!r}")
     return entry.strip()
-
-
-@dataclass(frozen=True)
-class _Decision:
-    """What the permission system says about a call before any classifier."""
-
-    kind: str  # "allow" | "deny" | "ask"
-    reason: str = ""
-    firm: bool = False
-    #: The person-facing kind of ask: ``edit`` / ``command`` / ``read`` /
-    #: ``protected`` / ``plan`` / ``tool`` / ``fetch``.
-    why: str = ""
-    always: tuple[str, ...] = ()
-    always_label: str | None = None
-    mode_choice: str | None = None
-    #: In auto mode, an ask the classifier answers.
-    classify: bool = False
 
 
 class Permissions(Extension):
@@ -310,10 +218,15 @@ class Permissions(Extension):
         self.pre_rules = tuple(g.check_pre_rule(f"pre_tool_use[{i}]", rule)
                                for i, rule in enumerate(pre_tool_use))
         self.can_use_tool = can_use_tool
+        self._check = RuleCheck(
+            allow_rules=self.allow_rules, deny_rules=self.deny_rules, ask_rules=self.ask_rules,
+            additional_directories=self.additional_directories, risk=self.risk,
+            default_risk=self.default_risk, plans_dir=self.plans_dir)
+        self._classifier = a.Classifier(model=classifier_model, auto_mode=self.auto_mode,
+                                        deny_rules=self.deny_rules, trusted=self.trusted)
         self._exit_plan = pl.ExitPlanModeTool()
         self._enter_plan = pl.EnterPlanModeTool(self._enter_plan_mode)
         self._background: set[asyncio.Future[Any]] = set()
-        self._template: str | None = None
 
     # ------------------------------------------------------------ state
 
@@ -334,75 +247,11 @@ class Permissions(Extension):
         return PermState()
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
-        st: PermState = state if isinstance(state, PermState) else PermState()
-        d = data if isinstance(data, dict) else {}
-        if kind == "rule":
-            new = [x for x in d.get("rules") or [] if isinstance(x, str) and x not in st.rules]
-            return replace(st, rules=(*st.rules, *new)) if new else st
-        if kind == "mode":
-            mode = str(d.get("mode"))
-            due = st.due
-            if mode == "auto" and st.mode != "auto":
-                due = (*due, "auto_guidance")
-            plan = st.plan
-            if mode == "plan" and isinstance(d.get("plan"), dict):
-                plan = dict(d["plan"])
-                due = (*due, "plan_active")
-            return replace(st, mode=mode, plan=plan, due=due, consecutive_denials=0)
-        if kind == "plan_exit":
-            mode = str(d.get("mode") or "default")
-            # No auto-mode note again: Claude Code sends only the plan-exit
-            # note (r2 m1).
-            due = (*st.due, "plan_exited")
-            return replace(st, mode=mode, due=due)
-        if kind == "noted":
-            sent = set(d.get("kinds") or ())
-            return replace(st, due=tuple(k for k in st.due if k not in sent),
-                           plan_noted=int(d.get("plan_noted") or st.plan_noted))
-        if kind == "compacted":
-            extra: tuple[str, ...] = ("auto_guidance",) if d.get("auto") else ()
-            extra += ("plan_active",) if d.get("plan") else ()
-            return replace(st, due=(*st.due, *extra), compacted=True,
-                           guidance_after=int(d.get("seq") or st.guidance_after))
-        if kind == "probed":
-            return replace(st, probed=True)
-        if kind == pm.MODES_KIND:
-            return replace(st, offered=dict(d))
-        if kind == "resumed":
-            return replace(st, probed=False, compacted=False)
-        if kind == "step":
-            return replace(st, steps=st.steps + 1)
-        if kind == "tool_call":
-            return replace(st, tool_calls=st.tool_calls + 1)
-        if kind == "cost":
-            return replace(st, cost_usd=st.cost_usd + float(d.get("usd") or 0.0))
-        if kind == "auto":
-            return replace(st, auto=_keep({**st.auto, str(d["call_id"]): str(d["decision"])}))
-        if kind == "asked":
-            return replace(st, asked=_keep({**st.asked, str(d["call_id"]): dict(d)}))
-        if kind == "classified":
-            classified = _keep({**st.classified, str(d["call_id"]): dict(d)})
-            if d.get("decision") == "deny" and d.get("counted", True):
-                cons, total = st.consecutive_denials + 1, st.total_denials + 1
-            elif d.get("decision") == "allow":
-                cons, total = 0, st.total_denials
-            else:
-                cons, total = st.consecutive_denials, st.total_denials
-            if d.get("reset_total"):
-                cons, total = 0, 0
-            return replace(st, classified=classified, consecutive_denials=cons,
-                           total_denials=total)
-        if kind == "demoted":
-            return replace(st, demoted=True)
-        return st
-
-    def _state(self, view: TaskView) -> PermState:
-        st = view.ext_state(NAME)
-        return st if isinstance(st, PermState) else PermState()
+        return fold(state, kind, data)
 
     def mode_of(self, view: TaskView) -> str:
         """The task's current permission mode."""
-        st = self._state(view)
+        st = state_of(view)
         if st.mode is not None:
             return st.mode
         mode = view.state.config.get("permission_mode")
@@ -410,29 +259,6 @@ class Permissions(Extension):
                 mode == "bypassPermissions" and self.disable_bypass):
             return mode
         return self.mode
-
-    def _rules(self, view: TaskView) -> tuple[r.Rule, ...]:
-        """Allow rules: the host's, then those remembered (inherited and own)."""
-        remembered = []
-        for text in inherited_rules(view.state):
-            try:
-                remembered.append(r.parse_rule(text))
-            except ValueError:
-                continue
-        return (*self.allow_rules, *remembered)
-
-    def _root(self, view: TaskView) -> str:
-        return view.cwd or os.getcwd()
-
-    def _scope(self, view: TaskView) -> sc.Scope:
-        root = posixpath.normpath(self._root(view))
-        home = os.path.expanduser("~")
-        dirs = [root]
-        for d in self.additional_directories:
-            if d == "~" or d.startswith("~/"):
-                d = home + d[1:]
-            dirs.append(posixpath.normpath(d if posixpath.isabs(d) else posixpath.join(root, d)))
-        return sc.Scope(dirs=tuple(dict.fromkeys(dirs)), home=home)
 
     # ------------------------------------------------------------ tools and commands
 
@@ -445,7 +271,7 @@ class Permissions(Extension):
                         argument_hint="[request]"),)
 
     async def run_command(self, ctx: CommandContext, name: str, args: str) -> str:
-        return PLAN_COMMAND.format(args=args)
+        return md.PLAN_COMMAND.format(args=args)
 
     # ------------------------------------------------------------ the gate
 
@@ -460,7 +286,28 @@ class Permissions(Extension):
             return Deny(reason=p.DENIED_BY_POLICY.format(name=name))
         if self.allowed is not None and name not in self.allowed:
             return Deny(reason=p.NOT_IN_ALLOWLIST.format(name=name))
-        st = self._state(view)
+        st = state_of(view)
+        guard = self._guards(view, st, call)
+        if guard is not None:
+            return guard
+        decision = await self.decide(view, call)
+        if decision.kind == "allow":
+            return None
+        if decision.kind == "deny":
+            return Deny(reason=decision.reason)
+        rules = list(decision.always)
+        if rules and st.asked.get(call.id, {}).get("rules") != rules:
+            view.record(NAME, "asked", {"call_id": call.id, "rules": rules})
+        return Ask(prompt=decision.reason, firm=decision.firm, detail={
+            "by": NAME, "tool": name, "reason": decision.reason,
+            "title": w.TITLES.get(name, name),
+            "always": rules or None, "always_label": decision.always_label,
+            "choices": choices(decision), "classify": decision.classify})
+
+    def _guards(self, view: TaskView, st: PermState, call: ToolUse) -> Gate | None:
+        """noeta's own guards: the budget, the risk ceiling, the repetition
+        guard and the host's PreToolUse rules."""
+        name = call.name
         reason = g.budget_verdict(self.budget, self._counters(view, st, call),
                                   spawns=name in self.spawn_tools)
         if reason is not None:
@@ -481,274 +328,12 @@ class Permissions(Extension):
             return Deny(reason=hook[1])
         if hook is not None and hook[0] == "require_approval":
             return Ask(prompt=hook[1], detail={"by": NAME, "tool": name}, firm=True)
+        return None
 
-        decision = await self.decide(view, call)
-        if decision.kind == "allow":
-            return None
-        if decision.kind == "deny":
-            return Deny(reason=decision.reason)
-        rules = list(decision.always)
-        if rules and st.asked.get(call.id, {}).get("rules") != rules:
-            view.record(NAME, "asked", {"call_id": call.id, "rules": rules})
-        return Ask(prompt=decision.reason, firm=decision.firm, detail={
-            "by": NAME, "tool": name, "reason": decision.reason,
-            "title": w.TITLES.get(name, name),
-            "always": rules or None, "always_label": decision.always_label,
-            "choices": _choices(decision), "classify": decision.classify})
-
-    async def decide(self, view: TaskView, call: ToolUse) -> _Decision:
+    async def decide(self, view: TaskView, call: ToolUse) -> Decision:
         """Claude Code's order: deny rules, ask rules, then what the tool
         touches and the mode."""
-        name, args = call.name, call.input
-        mode = self.mode_of(view)
-        scope = self._scope(view)
-        ctx = r.RuleContext(root=scope.cwd, home=scope.home, cwd=scope.cwd)
-        # A file tool reaches where a symlink points: a deny or ask rule on
-        # either path applies.
-        seen = [args]
-        if name in r.READ_TOOLS or name in r.EDIT_TOOLS:
-            target = scope.absolute(_path(args) or scope.cwd)
-            real = await self._real(view, target)
-            if real != target:
-                seen.append(_with_path(args, real))
-        denied = next((m for a in seen if (m := r.first_match(self.deny_rules, name, a, ctx))
-                       is not None), None)
-        if denied is not None:
-            return _Decision("deny", w.DENIED_BY_RULE.format(name=name, rule=denied.text))
-        asked = next((m for a in seen if (m := r.first_match(self.ask_rules, name, a, ctx))
-                      is not None), None)
-        if asked is not None:
-            return self._in_mode(mode, _Decision(
-                "ask", w.ASK_RULE.format(rule=asked.text, name=name), firm=True, why="rule"),
-                name)
-        allow_rules = self._rules(view)
-        if mode == "auto":
-            allow_rules = tuple(x for x in allow_rules if not p.bypasses_classifier(x))
-        found = await self._needs(view, call, mode, scope, ctx, allow_rules)
-        return self._in_mode(mode, found, name)
-
-    def _in_mode(self, mode: str, d: _Decision, name: str) -> _Decision:
-        """What the mode makes of an ask."""
-        if d.kind != "ask":
-            return d
-        if mode == "dontAsk":
-            return _Decision("deny", w.DONT_ASK_DENIED.format(name=name))
-        if mode == "bypassPermissions" and not d.firm and d.why != "protected":
-            return _Decision("allow")
-        if mode == "auto" and not d.firm:
-            return replace(d, classify=True)
-        return d
-
-    async def _needs(self, view: TaskView, call: ToolUse, mode: str, scope: sc.Scope,
-                     ctx: r.RuleContext, allow_rules: Sequence[r.Rule]) -> _Decision:
-        name, args = call.name, call.input
-        if name == pl.EXIT_PLAN_MODE:
-            return _Decision("allow")
-        if name == pl.ENTER_PLAN_MODE:
-            # Only a person agrees to plan mode, except where the classifier
-            # already judges every action (in plan mode it may let read-only
-            # actions through that would otherwise be asked about).
-            if mode in ("auto", "plan"):
-                return _Decision("allow")
-            return _Decision("ask", w.ASK_ENTER_PLAN, firm=True, why="plan")
-        allowed = r.first_match(allow_rules, name, args, ctx, for_allow=True) is not None
-        if name in r.READ_TOOLS:
-            path = _path(args) or scope.cwd
-            literal = scope.absolute(path)
-            target = await self._real(view, literal)
-            if target != literal:
-                # Read through a link: judged where it points (an allow rule
-                # too: "always" offers one on the target's directory).
-                real_scope = await self._real_scope(view, scope)
-                inside = scope.contains(literal) and real_scope.contains(target)
-                allowed = r.first_match(allow_rules, name, _with_path(args, target), ctx,
-                                        for_allow=True) is not None
-            else:
-                inside = scope.contains(literal)
-            if inside or allowed or self._in_plans(literal):
-                return _Decision("allow")
-            return _Decision("ask", w.ASK_READ_OUTSIDE.format(name=name, path=target),
-                             why="read", always=(r.format_rule("Read", f"//{_dir_of(target)}/**"),),
-                             always_label=w.CHOICE_ALWAYS_RULE.format(
-                                 rules=f"Read(//{_dir_of(target)}/**)"))
-        if name in r.EDIT_TOOLS:
-            written = _path(args)
-            target = scope.absolute(written) if written else scope.cwd
-            plan = self._state(view).plan
-            if mode == "plan" and plan and target == plan.get("path"):
-                return _Decision("allow")
-            if not scope.contains(target) and not self._in_plans(target):
-                return _Decision("deny", w.OUTSIDE_WRITE.format(
-                    name=name, dirs=", ".join(scope.dirs), path=target))
-            if sc.is_protected(target) or sc.is_protected(await self._real(view, target)):
-                # The tools write where a symlink points: judge that too.
-                return _Decision("ask", w.ASK_PROTECTED.format(name=name, path=target),
-                                 why="protected")
-            if mode == "plan":
-                return _Decision("ask", w.ASK_PLAN.format(name=name), why="plan")
-            if allowed or mode in ("acceptEdits", "auto", "bypassPermissions"):
-                return _Decision("allow")
-            verb = w.ASK_EDIT if name != "Write" or os.path.exists(target) else w.ASK_CREATE
-            return _Decision("ask", verb.format(name=name, path=target), why="edit",
-                             mode_choice="acceptEdits")
-        if name in r.SHELL_TOOLS:
-            return await self._shell(view, args, mode, scope, ctx, allow_rules)
-        if name == p.WEBFETCH_TOOL:
-            if allowed:
-                return _Decision("allow")
-            url = args.get("url")
-            host = r.url_host(url) if isinstance(url, str) else None
-            rule = (r.format_rule("WebFetch", f"domain:{host}"),) if host else ()
-            return _Decision("ask", w.ASK_FETCH.format(name=name, host=host or url), why="fetch",
-                             always=rule, always_label=w.CHOICE_ALWAYS_RULE.format(
-                                 rules=rule[0]) if rule else None, mode_choice="auto")
-        if allowed:
-            return _Decision("allow")
-        if self.risk.get(name, self.default_risk) == "low":
-            if mode == "auto" and name not in p.AUTO_SAFE_TOOLS:
-                return _Decision("ask", w.ASK_TOOL.format(name=name), why="tool", classify=True)
-            return _Decision("allow")
-        if mode == "plan" and name not in p.AUTO_SAFE_TOOLS:
-            return _Decision("ask", w.ASK_PLAN.format(name=name), why="plan")
-        return _Decision("ask", w.ASK_TOOL.format(name=name), why="tool", always=(name,),
-                         always_label=w.CHOICE_ALWAYS_RULE.format(rules=name),
-                         mode_choice="auto")
-
-    async def _shell(self, view: TaskView, args: Mapping[str, Any], mode: str,
-                     scope: sc.Scope, ctx: r.RuleContext,
-                     allow_rules: Sequence[r.Rule]) -> _Decision:
-        command = args.get("command")
-        if not isinstance(command, str) or not command.strip():
-            return _Decision("ask", w.ASK_COMMAND, why="command")
-        if p.CONFIG_DIR in command and mode != "bypassPermissions":
-            return _Decision("ask", w.ASK_PROTECTED.format(name="Bash", path=p.CONFIG_DIR),
-                             why="protected")
-        sandbox = sandbox_of(view.env)
-        disable = args.get("dangerouslyDisableSandbox")
-        if leaves_sandbox(sandbox, command, disable):
-            # Leaving the sandbox is asked about whatever the allow rules say.
-            return _Decision("ask", w.ASK_UNSANDBOXED.format(name="Bash"), why="sandbox")
-        if (sandbox is not None and sandbox.settings.auto_allow_bash and mode != "plan"
-                and runs_sandboxed(sandbox, command, disable)):
-            return _Decision("allow")
-        here = self._shell_scope(view, scope)
-        real_scope = await self._real_scope(view, scope)
-
-        async def reads_inside(part: sc.Part) -> bool:
-            # A path inside as written may be a link out of the directory;
-            # a glob is judged by what it expands to, and as written too (a
-            # quoted ``[`` names a file literally).
-            for x in part.reads:
-                targets: list[str] | None = [x]
-                if _GLOB.search(x):
-                    expanded = await self._expand(view, x)
-                    targets = None if expanded is None else [*expanded, x]
-                if targets is None or not all(
-                        [real_scope.contains(await self._real(view, t)) for t in targets]):
-                    return False
-            return True
-
-        found = sc.parts(command, here)
-        if found is not None and all(p.read_only for p in found) and all(
-                [await reads_inside(p) for p in found]):
-            return _Decision("allow")
-        bash_rules = [x for x in allow_rules if x.tool == "Bash" and x.content is not None]
-        if any(x.tool == "Bash" and x.content is None for x in allow_rules):
-            return _Decision("allow")
-        edit_rules = [x for x in allow_rules if x.tool == "Edit" and x.content is not None]
-
-        async def writable(path: str) -> bool:
-            real = await self._real(view, path)
-            if path in scope.dirs or sc.is_protected(path) or sc.is_protected(real):
-                return False
-            if mode in ("acceptEdits", "bypassPermissions"):
-                return scope.contains(path) and real_scope.contains(real)
-            return any(r.path_pattern_matches(x.content or "", path, ctx)
-                       and r.path_pattern_matches(x.content or "", real, ctx)
-                       for x in edit_rules)
-
-        # Every target is judged on the disk as it is before the command
-        # runs: a link an earlier part copies or moves into place (or that a
-        # part a rule lets through may make) is not there yet, so a later
-        # write (or read) under what such a part wrote is not judged here.
-        placed: list[str] = []
-        unknown = False
-
-        def under_placed(path: str, *, reading: bool = False) -> bool:
-            return (unknown and not reading) or any(
-                path == p or path.startswith(p.rstrip("/") + "/") for p in placed)
-
-        open_parts: list[sc.Part] = []
-        for part in found if found is not None else [sc.Part(command.strip(), False)]:
-            if part.read_only and not any(under_placed(x, reading=True) for x in part.reads) \
-                    and await reads_inside(part):
-                continue
-            if any(r.shell_rule_matches(x.content or "", part.text, every=True)
-                   for x in bash_rules):
-                unknown = True
-                continue
-            if part.writes is not None and all(
-                    [not under_placed(x) and await writable(x) for x in part.writes]):
-                if _may_place_links(part.argv):
-                    placed.extend(part.writes)
-                continue
-            open_parts.append(part)
-        if not open_parts:
-            return _Decision("allow")
-        if mode == "plan":
-            return _Decision("ask", w.ASK_PLAN.format(name="Bash"), why="plan")
-        always, label = _shell_always(open_parts, here)
-        return _Decision("ask", w.ASK_COMMAND, why="command", always=always,
-                         always_label=label, mode_choice="auto")
-
-    def _shell_scope(self, view: TaskView, scope: sc.Scope) -> sc.Scope:
-        """``scope`` at the directory the shell's next command starts in
-        (the shell plugin's ``cwd`` record)."""
-        cwd = getattr(view.ext_state(SHELL_PLUGIN), "cwd", None)
-        if isinstance(cwd, str) and cwd and posixpath.isabs(cwd):
-            cwd = posixpath.normpath(cwd)
-            if scope.contains(cwd):
-                return scope.at(cwd)
-        return scope
-
-    async def _real(self, view: TaskView, path: str) -> str:
-        """``path`` with its symlinks resolved as the task's env sees them
-        (a missing tail kept as named)."""
-        try:
-            if view.env is not None:
-                return posixpath.normpath(await view.env.realpath(path))
-            return await asyncio.to_thread(os.path.realpath, path)
-        except Exception:  # noqa: BLE001 — unresolvable: judged as written
-            return path
-
-    async def _expand(self, view: TaskView, pattern: str) -> list[str] | None:
-        """What ``pattern`` (absolute) expands to in the task's env, as bash
-        expands it for the command; ``None`` when that cannot be told."""
-        script = 'IFS=; shopt -s nullglob; for f in $1; do printf "%s\\0" "$f"; done'
-        try:
-            if view.env is not None:
-                result = await view.env.run(["bash", "-c", script, "_", pattern], timeout=10)
-                if result.exit_code != 0 or result.timed_out or result.stdout_truncated:
-                    return None
-                out = result.stdout.decode("utf-8", "surrogateescape")
-            else:
-                done = await asyncio.to_thread(
-                    subprocess.run, ["bash", "-c", script, "_", pattern],
-                    capture_output=True, text=True, timeout=10)
-                if done.returncode != 0:
-                    return None
-                out = done.stdout
-        except Exception:  # noqa: BLE001 — unknown expansion: ask
-            return None
-        return [p for p in out.split("\0") if p]
-
-    async def _real_scope(self, view: TaskView, scope: sc.Scope) -> sc.Scope:
-        dirs = [await self._real(view, d) for d in scope.dirs]
-        return sc.Scope(dirs=tuple(dict.fromkeys(dirs)), home=scope.home)
-
-    def _in_plans(self, path: str) -> bool:
-        base = posixpath.normpath(self.plans_dir)
-        return path.startswith(base.rstrip("/") + "/")
+        return await self._check.decide(view, call, self.mode_of(view))
 
     def _counters(self, view: TaskView, st: PermState, call: ToolUse) -> g.Counters:
         before = 0
@@ -767,17 +352,17 @@ class Permissions(Extension):
 
     async def resolve_ask(self, view: TaskView, call: ToolUse,
                           asks: Sequence[Ask]) -> Gate | None:
-        mine = [a for a in asks if a.detail.get("by") == NAME]
+        mine = [x for x in asks if x.detail.get("by") == NAME]
         if not mine or len(mine) != len(asks):
             return None
         if self.can_use_tool is not None:
             return await self._auto(view, call)
-        if not all(a.detail.get("classify") for a in mine):
+        if not all(x.detail.get("classify") for x in mine):
             return None
-        return await self._classify(view, call, mine[0])
+        return await self._classifier.answer(view, call, mine[0])
 
     async def _auto(self, view: TaskView, call: ToolUse) -> Gate:
-        decision = self._state(view).auto.get(call.id)
+        decision = state_of(view).auto.get(call.id)
         if decision is None:
             assert self.can_use_tool is not None
             verdict = self.can_use_tool(call.name, dict(call.input))
@@ -788,113 +373,10 @@ class Permissions(Extension):
                                        "resolver": "can_use_tool"})
         return Allow() if decision == "allow" else Deny(reason=DENIED_BY_HUMAN)
 
-    async def _classify(self, view: TaskView, call: ToolUse, ask: Ask) -> Gate | None:
-        st = self._state(view)
-        done = st.classified.get(call.id)
-        if done is None:
-            done = await self._run_classifier(view, call, st)
-            view.record(NAME, "classified", done)
-        if done.get("fallback"):
-            return Ask(prompt=str(done.get("fallback")), detail={**ask.detail, "classify": False},
-                       firm=True)
-        if done["decision"] == "allow":
-            return Allow()
-        if done.get("counted", True):
-            return Deny(reason=w.CLASSIFIER_BLOCKED.format(reason=done.get("reason") or ""))
-        return Deny(reason=w.CLASSIFIER_NO_VERDICT.format(reason=done.get("reason") or ""))
-
-    async def _run_classifier(self, view: TaskView, call: ToolUse,
-                              st: PermState) -> dict[str, Any]:
-        out: dict[str, Any] = {"call_id": call.id}
-        try:
-            verdict, demoted = await self._verdict(view, call, st)
-        except Exception as exc:  # noqa: BLE001 — no verdict holds the call back
-            log.warning("auto-mode classifier failed for %s: %s", call.name, exc)
-            return {**out, "decision": "deny", "counted": False,
-                    "reason": w.CLASSIFIER_UNAVAILABLE}
-        if demoted:
-            view.record(NAME, "demoted")
-        if verdict.block is None:
-            return {**out, "decision": "deny", "counted": False,
-                    "reason": w.CLASSIFIER_UNPARSED}
-        if not verdict.block:
-            return {**out, "decision": "allow"}
-        out.update(decision="deny", reason=verdict.reason, category=verdict.category)
-        cons, total = st.consecutive_denials + 1, st.total_denials + 1
-        if cons >= MAX_CONSECUTIVE_DENIALS or total >= MAX_TOTAL_DENIALS:
-            text = (w.DENIAL_LIMIT_TOTAL.format(n=total, reason=verdict.reason)
-                    if total >= MAX_TOTAL_DENIALS else
-                    w.DENIAL_LIMIT_CONSECUTIVE.format(n=cons, reason=verdict.reason))
-            out.update(fallback=text, reset_total=total >= MAX_TOTAL_DENIALS)
-        return out
-
-    def _model(self, view: TaskView, st: PermState) -> tuple[str, bool]:
-        """The classifier model and whether it is the fast one."""
-        main = view.model or str(view.state.config.get("model") or "")
-        if self.classifier_model:
-            return self.classifier_model, self.classifier_model != main
-        if st.demoted or not main.startswith("claude"):
-            return main, False
-        return c.FAST_MODEL, True
-
-    async def _verdict(self, view: TaskView, call: ToolUse,
-                       st: PermState) -> tuple[c.Verdict, bool]:
-        if view.complete is None:
-            raise RuntimeError("no model is available to the classifier")
-        transcript = self._transcript(view, call, st)
-        instructions = await self._instructions(view)
-        prompt = c.render_prompt(self._prompt(view), self.auto_mode, self._deny_texts(view))
-        model, fast = self._model(view, st)
-        demoted = False
-
-        async def stage(n: int) -> str:
-            nonlocal model, fast, demoted
-            assert view.complete is not None
-            request = c.classifier_request(model=model, prompt=prompt, instructions=instructions,
-                                           transcript=transcript, stage=n, fast=fast,
-                                           trusted=self.trusted)
-            try:
-                response = await view.complete(request)
-            except Exception:
-                main = view.model or str(view.state.config.get("model") or "")
-                if not fast or model == main or self.classifier_model:
-                    raise
-                model, fast, demoted = main, False, True
-                response = await view.complete(c.classifier_request(
-                    model=model, prompt=prompt, instructions=instructions,
-                    transcript=transcript, stage=n, fast=False, trusted=self.trusted))
-            return response.message.text
-
-        first = c.parse_stage1(await stage(1))
-        if first.block is False:
-            return first, demoted
-        return c.parse_stage2(await stage(2)), demoted
-
-    def _transcript(self, view: TaskView, call: ToolUse, st: PermState) -> list[str]:
-        summary_at = len(view.state.compaction.lead) if view.state.compaction else None
-        entries = c.transcript_entries(view.state.messages, call.id, summary_at=summary_at,
-                                       shown=st.classified)
-        if not entries or entries[-1].call_id != call.id:
-            rendered = c.render_call(call)
-            entries.append(c.Entry(c._entry(call.name, rendered), call.id))
-        return c.chunks(entries, [k for k in st.classified if k != call.id])
-
-    async def _instructions(self, view: TaskView) -> str:
-        texts = [m.text for m in await view.residents(lead=True) if m.text.strip()]
-        return "\n\n".join(texts)
-
-    def _deny_texts(self, view: TaskView) -> list[str]:
-        return [x.text for x in self.deny_rules] + list(view.denied_tools)
-
-    def _prompt(self, view: TaskView) -> str:
-        if self._template is None:
-            self._template = c.prompt_template()
-        return view.prompt(f"{NAME}/auto_mode_classifier", self._template)
-
     # ------------------------------------------------------------ events
 
     async def on_start(self, view: TaskView) -> None:
-        st = self._state(view)
+        st = state_of(view)
         if st.mode is None:
             view.record(NAME, "mode", {"mode": self.mode_of(view)})
         offered = pm.modes_record(self._modes)
@@ -910,90 +392,44 @@ class Permissions(Extension):
             view.record(NAME, "cost", {"usd": price(model, ev.response.usage) if model else 0.0})
         elif isinstance(ev, InputTaken):
             for item in ev.items:
-                body = item.body
-                if isinstance(body, Answer):
-                    await self._remember(view, body)
-                elif isinstance(body, External) and body.name == MODE_SIGNAL:
-                    data = body.data if isinstance(body.data, dict) else {}
-                    self._switch(view, data.get("mode"), recorded.seq)
-                elif isinstance(body, External) and body.name == RESUMED_SIGNAL:
-                    view.record(NAME, "resumed")
-                elif isinstance(body, External) and body.name == PLAN_NAME_SIGNAL:
-                    name = (body.data or {}).get("name") if isinstance(body.data, dict) else None
-                    if isinstance(name, str) and name:
-                        view.record(NAME, "plan_name", {"name": name})
-                        view.notify(f"plan: {name}")
-                elif isinstance(body, Say) and body.message.role == "user" and \
-                        body.message.text.startswith(_PLAN_COMMAND_HEAD):
-                    self._switch(view, "plan", recorded.seq)
+                await self._on_input(view, item.body, recorded.seq)
         elif isinstance(ev, Compacted):
             mode = self.mode_of(view)
             view.record(NAME, "compacted", {"auto": mode == "auto", "plan": mode == "plan",
                                             "seq": recorded.seq})
         elif isinstance(parked := records.decode(ev), records.Parked):
-            self._name_plan(view, parked)
+            md.name_plan(view, parked, self._background)
+
+    async def _on_input(self, view: TaskView, body: Any, seq: int) -> None:
+        if isinstance(body, Answer):
+            await self._remember(view, body)
+        elif isinstance(body, External) and body.name == MODE_SIGNAL:
+            data = body.data if isinstance(body.data, dict) else {}
+            self._switch(view, data.get("mode"), seq)
+        elif isinstance(body, External) and body.name == RESUMED_SIGNAL:
+            view.record(NAME, "resumed")
+        elif isinstance(body, External) and body.name == md.PLAN_NAME_SIGNAL:
+            name = (body.data or {}).get("name") if isinstance(body.data, dict) else None
+            if isinstance(name, str) and name:
+                view.record(NAME, "plan_name", {"name": name})
+                view.notify(f"plan: {name}")
+        elif isinstance(body, Say) and body.message.role == "user" and \
+                body.message.text.startswith(md.PLAN_COMMAND_HEAD):
+            self._switch(view, "plan", seq)
 
     def _switch(self, view: TaskView, mode: Any, seq: int) -> None:
-        if not isinstance(mode, str) or mode not in p.PERMISSION_MODES:
-            return
-        if mode == "bypassPermissions" and self.disable_bypass:
-            view.notify("bypassPermissions is disabled here")
-            return
-        current = self.mode_of(view)
-        if mode == current:
-            return
-        data: dict[str, Any] = {"mode": mode}
-        if mode == "plan":
-            st = self._state(view)
-            path = (st.plan or {}).get("path") or pl.new_plan_path(self.plans_dir)
-            data["plan"] = {"path": path, "pre_mode": current, "entered_seq": seq}
-        view.record(NAME, "mode", data)
+        md.switch(view, mode, seq, current=self.mode_of(view),
+                  disable_bypass=self.disable_bypass, plans_dir=self.plans_dir)
 
     def _enter_plan_mode(self, ctx: ToolContext) -> bool:
-        """``EnterPlanMode``: record the switch to plan mode, as ``/plan``
-        does; ``False`` when the task is planning already."""
-        st = ctx.state.get(NAME)
-        st = st if isinstance(st, PermState) else PermState()
-        current = st.mode or self.mode
-        if current == "plan":
-            return False
-        path = (st.plan or {}).get("path") or pl.new_plan_path(self.plans_dir)
-        ctx.record(NAME, "mode", {"mode": "plan", "plan": {
-            "path": path, "pre_mode": current, "entered_seq": 0}})
-        return True
-
-    def _name_plan(self, view: TaskView, parked: records.Parked) -> None:
-        """The plan-name side request, when ``ExitPlanMode`` shows the plan."""
-        call = next((cl.use for cl in view.state.calls
-                     if cl.use.id == parked.call_id), None)
-        if call is None or call.name != pl.EXIT_PLAN_MODE or view.complete is None \
-                or view.post is None:
-            return
-        questions = (parked.detail or {}).get("questions") or [{}]
-        text = str(questions[0].get("question") or "")
-        complete, post = view.complete, view.post
-        model = view.model or str(view.state.config.get("model") or "")
-
-        async def name_it() -> None:
-            try:
-                response = await complete(pl.plan_name_request(model, text))
-                name = pl.parse_plan_name(response.message.text)
-                if name:
-                    await post(External(name=PLAN_NAME_SIGNAL, data={"name": name}),
-                               dedupe_key=f"{PLAN_NAME_SIGNAL}:{call.id}")
-            except Exception:
-                log.debug("plan name failed", exc_info=True)
-
-        job = asyncio.ensure_future(name_it())
-        self._background.add(job)
-        job.add_done_callback(self._background.discard)
+        return md.enter_plan(ctx, default_mode=self.mode, plans_dir=self.plans_dir)
 
     async def _remember(self, view: TaskView, answer: Answer) -> None:
         """An "always" allow remembers the rules the card showed; a choice
         to switch modes switches."""
         if answer.decision != "allow":
             return
-        st = self._state(view)
+        st = state_of(view)
         waiting = view.state.waiting
         detail = waiting.detail.get(answer.request_id) if waiting is not None else None
         if isinstance(detail, dict) and detail.get("by") not in (None, NAME):
@@ -1011,33 +447,9 @@ class Permissions(Extension):
         view.record(NAME, "rule", {"rules": rules})
         if self.trusted and self.remember_to_project:
             try:
-                await self._append_project(view, rules)
+                await _append_project(view, rules)
             except Exception:
                 log.warning("could not save rules to %s", p.LOCAL_SETTINGS, exc_info=True)
-
-    async def _append_project(self, view: TaskView, rules: Sequence[str]) -> None:
-        path = os.path.join(self._root(view), p.LOCAL_SETTINGS)
-        raw = await self._read(view, path)
-        text = p.add_allow_rules(raw, rules)
-        if text is None:
-            return
-        data = text.encode("utf-8")
-        if view.env is not None:
-            await view.env.write_bytes(path, data)
-        else:
-            def write() -> None:
-                Path(path).parent.mkdir(parents=True, exist_ok=True)
-                Path(path).write_bytes(data)
-
-            await asyncio.to_thread(write)
-
-    async def _read(self, view: TaskView, path: str) -> bytes | None:
-        try:
-            if view.env is not None:
-                return await view.env.read_bytes(path)
-            return await asyncio.to_thread(Path(path).read_bytes)
-        except Exception:  # noqa: BLE001 — absent or unreadable
-            return None
 
     # ------------------------------------------------------------ requests
 
@@ -1051,117 +463,26 @@ class Permissions(Extension):
             if len(tools) != len(request.tools):
                 request = msgspec.structs.replace(request, tools=tools)
         mode = self.mode_of(view)
-        plan = self._state(view).plan or {}
+        plan = state_of(view).plan or {}
         if mode != "auto" and not (mode == "plan" and plan.get("pre_mode") == "auto"):
             return request
-        # As Claude Code per process: the first main request offers the
-        # server-side check (the API answers an API-key session that it does
-        # not run it), and its beta rides along until the first compaction.
-        # A front end resuming the task is the new process; a worker picking
-        # it up is not (both facts are recorded: every worker sends the same
-        # bytes).
-        main = view.state.parent_id is None
-        st = self._state(view)
-        wanted = MAIN_AUTO_BETAS if main and not st.compacted else AUTO_BETAS
-        betas = [*request.betas, *(b for b in wanted if b not in request.betas)]
-        fields = dict(request.vendor_fields)
-        if main and not st.probed:
-            fields["safeguards"] = [{"type": "dangerous_tool_use",
-                                     "classifier_context": self._context(view)}]
-            view.record(NAME, "probed")
-        return msgspec.structs.replace(request, betas=betas, vendor_fields=fields)
+        return a.auto_request(view, request, lambda: a.server_context(
+            self._check.scope(view), plans_dir=self.plans_dir, allow=self._check.rules(view),
+            deny=self.deny_rules, ask=self.ask_rules, auto_mode=self.auto_mode))
 
     def _offered(self, name: str) -> bool:
         return name not in self.disallowed and (self.allowed is None or name in self.allowed)
-
-    def _context(self, view: TaskView) -> dict[str, Any]:
-        """What Claude Code tells the API about its permission state on the
-        first auto-mode request (the server answers an API-key session that
-        it does not classify, and the classifier runs here)."""
-        scope = self._scope(view)
-        return {
-            "v": 1, "permission_mode": "auto", "platform": _platform(), "live_cwd": scope.cwd,
-            "home_dir": scope.home,
-            "rule_roots": {"userSettings": str(Path(self.plans_dir).parent),
-                           "projectSettings": scope.cwd, "localSettings": scope.cwd},
-            "trusted_directories": {
-                "primary": {"path": scope.cwd, "resolved": [scope.cwd]},
-                "additional": list(scope.dirs[1:]), "network": [],
-                "block_reads_outside_working_directories": False},
-            "rules": {"allow": [x.text for x in self._rules(view)],
-                      "deny": [x.text for x in self.deny_rules],
-                      "ask": [x.text for x in self.ask_rules]},
-            "auto_mode": {k: list(v) for k, v in self.auto_mode.items()},
-            "artifact_consent_holdback": False, "case_insensitive_paths":
-                sys.platform == "darwin",
-            "restricted": False, "is_remote_mode": False, "classify_all_shell": False,
-            "user_identity": c._user_name(),
-            "git_state": {"cwd": scope.cwd, "root": scope.cwd, "branch": None,
-                          "default_branch": None, "status": None, "visibility": None},
-        }
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
         if self.budget.max_tool_calls is not None:
             view.record(NAME, "tool_call")
         return output
 
-    # ------------------------------------------------------------ reminders
-
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
-        st = self._state(view)
-        mode = self.mode_of(view)
-        out: list[Reminder] = []
-        sent: list[str] = []
-        plan_noted = st.plan_noted
-        if mode == "plan" and st.plan is not None:
-            newest = _newest_prompt(view)
-            entered = int(st.plan.get("entered_seq") or 0)
-            same_turn = view.state.steps_in_turn == 0 and newest == entered
-            if ("plan_active" in st.due and not same_turn) or (
-                    newest > max(st.plan_noted, entered) and view.state.steps_in_turn == 0):
-                out.append(Reminder(text=pl.plan_active_text(
-                    st.plan["path"], await self._exists(view, st.plan["path"])),
-                    kind="plan_active", role="system", order=ORDER_PLAN))
-                sent.append("plan_active")
-                plan_noted = max(newest, entered)
-        if "plan_exited" in st.due and st.plan is not None:
-            out.append(Reminder(text=pl.plan_exited_text(st.plan["path"]), kind="plan_exited",
-                                role="system", order=ORDER_PLAN))
-            sent.append("plan_exited")
-        # The main conversation's first request; a sub-agent's second (as
-        # Claude Code sends them).
-        replies = sum(1 for m in view.state.history if m.role == "assistant")
-        first = replies == (1 if view.state.parent_id else 0)
-        guidance = "auto_guidance" in st.due and _new_input(view, st.guidance_after) \
-            and view.state.parent_id is None
-        if mode == "auto" and (guidance or first):
-            out.append(Reminder(text=w.AUTO_MODE_GUIDANCE, kind="auto_guidance", role="system",
-                                order=ORDER_AUTO))
-            sent.append("auto_guidance")
-        stale = [k for k in st.due if k not in sent and (
-            (k == "auto_guidance" and (mode != "auto" or view.state.parent_id is not None))
-            or (k == "plan_active" and mode != "plan"))]
-        if sent or stale or plan_noted != st.plan_noted:
-            view.record(NAME, "noted", {"kinds": [*sent, *stale], "plan_noted": plan_noted})
-        return out
-
-    async def _exists(self, view: TaskView, path: str) -> bool:
-        try:
-            if view.env is not None:
-                stat = await view.env.stat(path)
-                return stat is not None
-        except Exception:  # noqa: BLE001
-            pass
-        return await asyncio.to_thread(os.path.isfile, path)
+        return await md.mode_reminders(view, self.mode_of(view))
 
 
 # ---------------------------------------------------------------- helpers
-
-
-def _keep(d: dict[str, Any]) -> dict[str, Any]:
-    while len(d) > _KEEP:
-        d.pop(next(iter(d)))
-    return d
 
 
 def _updated_input(view: TaskView, call: ToolUse) -> dict[str, Any] | None:
@@ -1176,123 +497,28 @@ def _updated_input(view: TaskView, call: ToolUse) -> dict[str, Any] | None:
     return dict(updated)
 
 
-def _path(args: Mapping[str, Any]) -> str | None:
-    for key in ("file_path", "notebook_path", "path"):
-        value = args.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
+async def _append_project(view: TaskView, rules: Sequence[str]) -> None:
+    """Add ``rules`` to the project's ``.noeta/settings.local.json``."""
+    path = os.path.join(view.cwd or os.getcwd(), p.LOCAL_SETTINGS)
+    raw = await _read(view, path)
+    text = p.add_allow_rules(raw, rules)
+    if text is None:
+        return
+    data = text.encode("utf-8")
+    if view.env is not None:
+        await view.env.write_bytes(path, data)
+    else:
+        def write() -> None:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_bytes(data)
+
+        await asyncio.to_thread(write)
 
 
-def _with_path(args: Mapping[str, Any], path: str) -> dict[str, Any]:
-    """``args`` naming ``path`` instead of the path they name."""
-    key = next((k for k in ("file_path", "notebook_path", "path")
-                if isinstance(args.get(k), str) and args.get(k)), "path")
-    return {**args, key: path}
-
-
-def _dir_of(path: str) -> str:
-    return posixpath.dirname(path).lstrip("/") or ""
-
-
-def _new_input(view: TaskView, after: int) -> bool:
-    """Whether a prompt or a tool result came in after log seq ``after``."""
-    return any(seq > after and m.role == "user" and (
-        m.origin in (None, "human") or any(isinstance(b, ToolResult) for b in m.content))
-        for seq, m in zip(view.state.message_seqs, view.state.messages, strict=False))
-
-
-def _newest_prompt(view: TaskView) -> int:
-    return max((seq for seq, m in zip(view.state.message_seqs, view.state.messages,
-                                      strict=False)
-                if m.from_person and seq), default=0)
-
-
-def _platform() -> str:
-    return {"darwin": "macos", "win32": "windows"}.get(sys.platform, sys.platform)
-
-
-#: ``cp`` flags that copy what links point to, never a link itself.
-_CP_PLAIN_FLAGS = frozenset({"--force", "--interactive", "--no-clobber", "--verbose",
-                             "--update", "--dereference"})
-
-
-def _may_place_links(argv: Sequence[str]) -> bool:
-    """A file command that may leave a symlink (or a hard link) at what it
-    writes: ``mv``, and ``cp`` unless only plain-copy flags are given."""
-    if argv[:1] == ("mv",):
-        return True
-    if argv[:1] != ("cp",):
-        return False
-    for word in argv[1:]:
-        if word == "--":
-            break
-        if word.startswith("--"):
-            if word not in _CP_PLAIN_FLAGS:
-                return True
-        elif word.startswith("-") and word != "-" and set(word[1:]) - set("finvupL"):
-            return True
-    return False
-
-
-def _shell_always(parts: Sequence[sc.Part],
-                  scope: sc.Scope) -> tuple[tuple[str, ...], str | None]:
-    """The rules an "always" answer to these subcommands remembers, and how
-    the card says it: a file command's directory, or each command's rule."""
-    dirs: list[str] = []
-    for part in parts:
-        if part.writes is None or not all(scope.contains(x) for x in part.writes):
-            dirs = []
-            break
-        dirs += [posixpath.dirname(x) if x not in scope.dirs else x for x in part.writes]
-    if dirs and len(set(dirs)) == 1:
-        target = dirs[0]
-        # ``//`` anchors the pattern at the filesystem root.
-        return (r.format_rule("Edit", f"/{target}/**"),), w.CHOICE_ALWAYS_DIR.format(dir=target)
-    rules: list[str] = []
-    for part in parts:
-        spec = _remembered_rule(part.text)
-        if spec is None:
-            return (), None
-        rules.append(r.format_rule("Bash", spec))
-    shown = ", ".join(x[5:-1] for x in rules)
-    label = (w.CHOICE_ALWAYS_COMMANDS.format(rules=f"{shown} commands", dir=scope.cwd)
-             if len(rules) > 1 else w.CHOICE_ALWAYS_RULE.format(rules=f"{shown}"))
-    return tuple(dict.fromkeys(rules)), label
-
-
-#: Programs whose arguments can run code or write anywhere (a script, an
-#: ``-exec``, a ``w`` command): an "always" answer remembers the exact
-#: command, never a prefix.
-_EXACT_RULE_PROGRAMS = frozenset({"awk", "gawk", "mawk", "nawk", "sed", "gsed", "find", "perl",
-                                  "make", "gmake", "npx", "bunx", "uvx", "ssh", "tar", "rsync"})
-
-
-def _remembered_rule(command: str) -> str | None:
-    """What an "always" answer to ``command`` remembers: Claude Code's
-    seeded rule (``git push *``, ``ls *``), narrowed to the exact command
-    when a flag comes before any subcommand (``git -c x=y log``) or the
-    program's arguments can run code (``awk``, ``sed``, ``find``)."""
-    spec = rule_spec_from_command(command)
-    if spec is None:
+async def _read(view: TaskView, path: str) -> bytes | None:
+    try:
+        if view.env is not None:
+            return await view.env.read_bytes(path)
+        return await asyncio.to_thread(Path(path).read_bytes)
+    except Exception:  # noqa: BLE001 — absent or unreadable
         return None
-    rule = str(spec["rule"])
-    argv = parse_argv(command) or []
-    if not rule.endswith(" *") or not argv:
-        return rule
-    if argv[0] in _EXACT_RULE_PROGRAMS or (len(argv) > 1 and argv[1].startswith("-")):
-        return shlex.join(argv)
-    return rule
-
-
-def _choices(d: _Decision) -> list[dict[str, str]]:
-    """The card's options (``id`` is what the answer does)."""
-    out = [{"id": "allow", "label": w.CHOICE_YES}]
-    if d.always and d.always_label:
-        out.append({"id": "always", "label": d.always_label})
-    if d.mode_choice and not d.firm:
-        out.append({"id": f"mode:{d.mode_choice}", "label": w.CHOICE_MODE[d.mode_choice]})
-    out.append({"id": "deny", "label": w.CHOICE_NO})
-    return out
-
-
