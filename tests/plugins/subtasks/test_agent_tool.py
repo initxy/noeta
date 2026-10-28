@@ -498,3 +498,19 @@ async def test_send_message_is_deferred(store: SqliteStore) -> None:
     await rt.run_until_idle()
     assert [t.name for t in p.requests[0].tools] == [
         "Agent", "ListAgents", "DeferredToolPlaceholder", "ToolSearch"]
+
+
+async def test_a_sub_agent_hears_of_agent_types_with_its_second_request(
+        store: SqliteStore) -> None:
+    p = ScriptedProvider([reply("", agent("look")), reply("launched"), reply("ok")])
+    c = ScriptedProvider([reply("", ("Probe", {})), handback("seen")])
+    rt = runtime(store, {"p": p, "c": c}, parent(), worker(roster=ROSTER))
+    await Client(store).create("main", "go")
+    await rt.run_until_idle()
+
+    def listed(request: ModelRequest) -> bool:
+        return any(m.role == "system" and m.text.startswith(texts.AGENT_LIST_HEAD)
+                   for m in request.messages)
+
+    first, second = c.requests
+    assert not listed(first) and listed(second)

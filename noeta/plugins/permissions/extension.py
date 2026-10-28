@@ -957,9 +957,13 @@ class Permissions(Extension):
             out.append(Reminder(text=pl.plan_exited_text(st.plan["path"]), kind="plan_exited",
                                 role="system", order=ORDER_PLAN))
             sent.append("plan_exited")
-        first = not any(m.role == "assistant" for m in view.state.history)
-        guidance = "auto_guidance" in st.due and _new_input(view, st.guidance_after)
-        if mode == "auto" and (guidance or first) and view.state.parent_id is None:
+        # The main conversation's first request; a sub-agent's second (as
+        # Claude Code sends them).
+        replies = sum(1 for m in view.state.history if m.role == "assistant")
+        first = replies == (1 if view.state.parent_id else 0)
+        guidance = "auto_guidance" in st.due and _new_input(view, st.guidance_after) \
+            and view.state.parent_id is None
+        if mode == "auto" and (guidance or first):
             out.append(Reminder(text=w.AUTO_MODE_GUIDANCE, kind="auto_guidance", role="system",
                                 order=ORDER_AUTO))
             sent.append("auto_guidance")

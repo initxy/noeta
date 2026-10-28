@@ -2,7 +2,8 @@
 same places: a git snapshot and the commit-attribution note in the first
 user turn, the environment (with the model line, the deferred tools, the
 token budget and today's date) as a system turn right after it, and a
-``<total_tokens>`` budget note after every prompt and tool result.
+``<total_tokens>`` budget note after every prompt and tool result (a
+sub-agent's after its tool results).
 
 Everything is captured through the task's ExecEnv (``view.env``), never by a
 host subprocess: on a container the facts describe the container's checkout,
@@ -256,10 +257,10 @@ DATE_CHANGED_REMINDER = (
 )
 
 
-def _owes_budget_note(messages: Sequence[Message]) -> bool:
-    """Whether a prompt or a tool result came in since the last budget note;
-    a typed slash command is not a prompt here (Claude Code sends none after
-    one)."""
+def _owes_budget_note(messages: Sequence[Message], *, prompts: bool = True) -> bool:
+    """Whether a prompt (with ``prompts``) or a tool result came in since the
+    last budget note; a typed slash command is not a prompt here (Claude
+    Code sends none after one)."""
     for m in reversed(messages):
         if m.role == "assistant":
             return False
@@ -268,7 +269,7 @@ def _owes_budget_note(messages: Sequence[Message]) -> bool:
         if m.role == "user" and any(isinstance(b, ToolResult) for b in m.content):
             return True
         if m.role == "user" and m.origin in (None, "human"):
-            return not is_command_message(m.text)
+            return prompts and not is_command_message(m.text)
     return False
 
 
@@ -377,10 +378,9 @@ class Environment(Extension):
                 text = view.prompt("reminder/date_changed", DATE_CHANGED_REMINDER)
                 out.append(Reminder(text=text.replace("{date}", today), kind="date",
                                     data={"date": today}, role="system", order=ORDER_DATE))
-        # A sub-agent gets no per-turn budget notes (Claude Code's carries
-        # the counter in its system prompt).
-        if self.token_budget and not view.state.parent_id \
-                and _owes_budget_note(view.state.messages):
+        # A sub-agent's task prompt gets none; its tool results do.
+        if self.token_budget and _owes_budget_note(view.state.messages,
+                                                   prompts=not view.state.parent_id):
             spent = view.state.usage.output
             base = spent if not view.state.steps_in_turn else st.get("turn_base", 0)
             left = max(self.token_budget - (spent - base), 0)

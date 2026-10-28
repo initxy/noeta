@@ -333,9 +333,10 @@ class Subtasks(Extension):
         out: list[Reminder] = []
         if _hands_back(view.state.config) and not st["reminded"]:
             out.append(Reminder(text=texts.HANDBACK_REMINDER, kind="handback_reminder"))
-        if st["held_list"]:
-            # The first request: the agent list joins the environment's
-            # system turn, after the deferred tools.
+        if st["held_list"] and (not view.state.parent_id or _replied(view.state.messages)):
+            # The first request (a sub-agent's second, as Claude Code's):
+            # the agent list joins the environment's system turn, after the
+            # deferred tools.
             out.append(Reminder(text=st["held_list"], kind="agent_list_sent", data={},
                                 role="system", order=AGENT_LIST_ORDER))
         return out
@@ -361,9 +362,7 @@ class Subtasks(Extension):
 
     async def on_start(self, view: TaskView) -> None:
         st = self._state(view.state)
-        # Only the main conversation is told the agent types (as Claude
-        # Code's sub-agents are not).
-        text = None if view.state.parent_id else self.agent_list(view)
+        text = self.agent_list(view)
         if text and not st["listed"]:
             # Held for the first request's system turn (``reminders``).
             view.record(self.name, "agent_list", {"text": text})
@@ -458,6 +457,10 @@ class Subtasks(Extension):
         await view.post(Say(message=message, when="now"),
                         dedupe_key=f"subtasks:notice:{ended.child_id}")
         view.record(self.name, "noticed", data)
+
+
+def _replied(messages: Sequence[Message]) -> bool:
+    return any(m.role == "assistant" for m in messages)
 
 
 def _hands_back(config: Mapping[str, Any]) -> bool:
