@@ -23,7 +23,7 @@ from typing import Any
 
 from noeta.core.execenv import ExecEnv
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.core.types import Image, Text
+from noeta.core.types import Image
 from noeta.plugins.fs._missing import missing_file_message
 from noeta.plugins.fs._read_formats import (
     MAX_READ_TOKENS,
@@ -379,7 +379,7 @@ class ReadTool:
                 "WebP image (often a saved error or login page). Check it with `file`, or "
                 "look at it as text through Bash (`head -c 500`).")
         if image is not None and (ext in _IMAGE_EXTENSIONS or ext == ""):
-            return await self._read_image(path, resolved, display, size, image, chunks)
+            return await self._read_image(ctx, path, display, size, image, chunks)
 
         return await self._read_text(
             ctx, _Window(path=path, resolved=resolved, display=display, size=size,
@@ -466,8 +466,8 @@ class ReadTool:
 
     async def _read_image(
         self,
+        ctx: ToolContext,
         path: str,
-        resolved: str,
         display: str,
         size: int,
         image: tuple[str, str],
@@ -496,13 +496,13 @@ class ReadTool:
             fitted = await asyncio.to_thread(fit_image, bytes(buf), media_type)
         except ImageTooLarge as exc:
             return tool_error(self.name, f"{path!r} is a {label} that cannot be sent: {exc}")
-        text = f"Read image {display} ({fitted.media_type}, {len(fitted.data)} bytes)"
+        # Claude Code's result is the image alone; how its pixels map back to
+        # the file (when it was scaled) follows as a note.
         note = fitted.note()
+        if note:
+            ctx.record(FS, KIND_NOTICE, {"text": f"{display}: {note}"})
         return ToolOutput(
-            content=[
-                Text(text=f"{text}\n{note}" if note else text),
-                Image(media_type=fitted.media_type, data=fitted.data),
-            ],
+            content=[Image(media_type=fitted.media_type, data=fitted.data)],
             meta={"path": display, "media_type": fitted.media_type,
                   "bytes": len(fitted.data)},
         )

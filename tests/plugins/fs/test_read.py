@@ -207,7 +207,8 @@ async def test_read_image_surfaces_for_vision(h: Harness, ws: Path) -> None:
     [img] = images_of(out)
     assert img.media_type == "image/png"
     assert img.data == _PNG
-    assert text_of(out) == f"Read image shot.png (image/png, {len(_PNG)} bytes)"
+    # Claude Code's result is the image alone.
+    assert out.content == [img]
     assert h.records == []  # images are not recorded for read-first
 
 
@@ -257,7 +258,10 @@ async def test_read_shrinks_a_large_image_to_claude_codes_box(h: Harness, ws: Pa
     out = await h.call(ReadTool(), file_path="big.png")
     [img] = images_of(out)
     assert image_dimensions(img.data) == (2000, 500)
-    assert "scaled from 4000x1000 to 2000x500 px; multiply coordinates by 2.00" in text_of(out)
+    assert out.content == [img]
+    # How the pixels map back to the file follows the result as a note.
+    [note] = [d["text"] for e, k, d in h.records if (e, k) == (FS, "notice")]
+    assert "scaled from 4000x1000 to 2000x500 px; multiply coordinates by 2.00" in note
 
 
 async def test_an_image_that_cannot_be_sent_never_reaches_the_history(
