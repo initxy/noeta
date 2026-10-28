@@ -316,22 +316,34 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
     return state
 
 
-def continued(state: TaskState) -> TaskState:
+def continued(state: TaskState,
+              carry: Mapping[str, Callable[[Any], Any]] | None = None) -> TaskState:
     """``state`` (another task's, folded) as the start of a task that
-    continues its conversation: messages and extension state stay; what
-    belongs to that task's run (its log positions, inbox, children, open
-    turn) does not. Calls still open there are answered here with
-    :data:`CONTINUED_CALL` so the conversation stays well formed."""
-    out = TaskState(ext=dict(state.ext), prompt_files=state.prompt_files,
+    continues its conversation: messages, loaded tools and extension state
+    stay (each extension's through ``carry[name]``, its
+    ``Extension.continue_state``); what belongs to that task's run (its log
+    positions, inbox, children, timers, open turn) does not. Calls still
+    open there are answered here with :data:`CONTINUED_CALL`, right after
+    their ``tool_use`` and ahead of messages held behind them, so the
+    conversation stays well formed."""
+    carry = carry or {}
+    ext = {name: carry[name](value) if name in carry else value
+           for name, value in state.ext.items()}
+    out = TaskState(ext=ext, prompt_files=state.prompt_files,
                     compaction=state.compaction, last_usage=state.last_usage,
-                    call_ids=set(state.call_ids))
-    for m in [*state.messages, *state.held]:
+                    call_ids=set(state.call_ids), loaded_tools=list(state.loaded_tools))
+    for m in state.messages:
         out._add(m, 0)
     out.history, out.history_seqs = list(state.history), [0] * len(state.history)
     if state.calls:
         results = [c.result or ToolResult(call_id=c.use.id, content=[Text(text=CONTINUED_CALL)],
                                           is_error=True) for c in state.calls]
-        out._add(Message(role="user", content=list(results)), 0)
+        content: list[Any] = list(results)
+        if any(isinstance(b, ToolReference) for r in results for b in r.content):
+            content.append(Text(text=TOOL_LOADED_TEXT))
+        out._add(Message(role="user", content=content), 0)
+    for m in state.held:
+        out._add(m, 0)
     return out
 
 

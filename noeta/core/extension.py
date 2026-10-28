@@ -280,6 +280,14 @@ class Extension:
         """Fold one of this extension's own records into its state."""
         return state
 
+    def continue_state(self, state: Any) -> Any:
+        """This extension's state as a task that continues this
+        conversation starts from it (a fork, a resumed sub-agent): all of it
+        unless overridden. What belongs to the source's run — its timers,
+        its running jobs — stays there; the core carries neither its
+        timers nor its children."""
+        return state
+
     def tools(self, view: TaskView) -> Sequence[Tool]:
         return ()
 

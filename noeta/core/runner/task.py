@@ -178,7 +178,8 @@ class TaskRun:
         through = first.history_through
         base = await self._history(source[0].event if source else None, initial, depth + 1)
         return continued(fold([r for r in source if through is None or r.seq <= through],
-                              self.reducers, initial, state=base))
+                              self.reducers, initial, state=base),
+                         {e.name: e.continue_state for e in self.exts})
 
     async def _keep_claim(self) -> None:
         interval = max(self.rt.lease_seconds / 3, 0.05)

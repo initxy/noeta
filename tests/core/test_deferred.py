@@ -153,6 +153,31 @@ async def test_a_loaded_tool_is_sent_and_callable_and_survives_compaction(
     assert TaskView(state=TaskState(), extensions=[ext]).deferred_tool_names() == ["WebFetch"]
 
 
+async def test_a_continued_task_keeps_the_tools_its_source_loaded(store: SqliteStore) -> None:
+    provider = ScriptedProvider([
+        reply("", ("ToolSearch", {"query": "select:WebFetch", "max_results": 1})),
+        reply("loaded"),
+        reply("", ("WebFetch", {})),
+        reply("done"),
+    ])
+    ext = Offers([Fake("Read"), Fake("WebFetch", deferred=True)])
+    agent = Agent(name="a", model="m", extensions=[ext])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 env_for=lambda _s: None, sleep=_no_sleep)  # type: ignore[arg-type,return-value]
+    client = Client(store)
+    src = await client.create("a", "load it")
+    await rt.run_until_idle()
+    resumed = await client.create("a", "now use it", history_from=src)
+    await rt.run_until_idle()
+    first = provider.requests[2]
+    assert "WebFetch*" in names(first.tools)
+    assert any(isinstance(b, ToolReference) for m in first.messages for r in m.content
+               if isinstance(r, ToolResult) for b in r.content)
+    [ran] = [r.event.result for r in await client.events(resumed)
+             if isinstance(r.event, ToolFinished)]
+    assert not ran.is_error and ran.text == "WebFetch ran"
+
+
 def _result_message() -> Message:
     return Message(role="user", content=[
         ToolResult(call_id="c1", content=[ToolReference(tool_name="WebFetch")]),

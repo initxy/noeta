@@ -13,10 +13,10 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import TaskEnded, Waiting
-from noeta.core.loop.state import CONTINUED_CALL
+from noeta.core.loop.state import CONTINUED_CALL, Call, TaskState, continued
 from noeta.core.runner import Runtime
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.core.types import Text, ToolResult
+from noeta.core.types import Message, Text, ToolResult, ToolUse, user
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -167,6 +167,21 @@ async def test_a_fork_answers_the_calls_its_source_still_had_open(store: SqliteS
     results = [b for b in msgs[2].content if isinstance(b, ToolResult)]
     assert [r.text for r in results] == [CONTINUED_CALL, CONTINUED_CALL]
     assert msgs[-1].text == "you are the fork"
+
+
+def test_a_continuation_answers_open_calls_before_messages_held_behind_them() -> None:
+    use = ToolUse(id="c1", name="Probe", input={})
+    source = TaskState(calls=[Call(use=use)], held=[user("interjected")],
+                       ext={"keep": {"x": 1}, "drop": {"timers": 1}})
+    source._add(user("go"), 1)
+    source._add(Message(role="assistant", content=[use]), 2)
+    out = continued(source, {"drop": lambda _s: None})
+    roles = [m.role for m in out.messages]
+    assert roles == ["user", "assistant", "user", "user"]
+    [result] = out.messages[2].content
+    assert isinstance(result, ToolResult) and result.call_id == "c1"
+    assert out.messages[3].text == "interjected"
+    assert out.ext == {"keep": {"x": 1}, "drop": None}
 
 
 async def test_denied_tools_are_never_offered(store: SqliteStore) -> None:
