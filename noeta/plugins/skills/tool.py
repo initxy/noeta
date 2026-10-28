@@ -25,6 +25,11 @@ SKILL_TOOL = "Skill"
 _SKILL_PROP_DESCRIPTION = ("The skill's name exactly as the skill listing gives it, without "
                            "a leading slash; never a guessed name.")
 _ARGS_PROP_DESCRIPTION = "Optional text passed to the skill."
+#: A ``disable-model-invocation`` skill called through the tool.
+USER_ONLY_SKILL = (
+    "The skill {name} is marked disable-model-invocation: only the user can start it, so "
+    "the Skill tool will not run it. Ask the user to type /{name} themselves, and do not "
+    "carry out its steps by other means.")
 
 
 def skill_name(raw: Any) -> str | None:
@@ -73,6 +78,8 @@ class SkillTool:
         registry = await self._owner.registry(task_env(ctx.env, {}))
         menu = registry.model_invocable(unlocked_skills(ctx.state.get(self._owner.name)))
         desc = registry.get(name)
+        if desc is not None and not desc.model_invocable:
+            return text_output(USER_ONLY_SKILL.format(name=name), is_error=True)
         if desc is None or name not in menu:
             available = ", ".join(menu) if menu else "(none)"
             return text_output(f"unknown skill {name!r}; available: {available}", is_error=True)

@@ -107,7 +107,9 @@ async def test_unknown_and_disabled_skills_are_refused(h: Harness) -> None:
     tid = await h.start(agent())
     first, second = await h.results(tid)
     assert first.result.is_error
-    assert first.result.text == "unknown skill 'hidden'; available: deploy"
+    # A user-only skill is named as such, with the way to start it.
+    assert first.result.text.startswith("The skill hidden is marked disable-model-invocation")
+    assert "/hidden" in first.result.text
     assert second.result.text == "Not a skill name: ''"
 
 
