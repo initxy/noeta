@@ -33,7 +33,6 @@ import msgspec
 
 from noeta.core.errors import ContextOverflow, ModelError, RequestStale, TurnDone, TurnFailed
 from noeta.core.events import Compacted
-from noeta.core.execenv import is_local
 from noeta.core.extension import Command, CommandContext, Deny, Extension, Reminder, TaskView
 from noeta.core.loop.state import TaskState
 from noeta.core.models import model_limits
@@ -51,6 +50,7 @@ from noeta.plugins.compaction.window import (
     window_from_env,
 )
 from noeta.toolkit.context import noeta_home, project_dir
+from noeta.toolkit.local_env import is_local
 
 log = logging.getLogger("noeta.compaction")
 

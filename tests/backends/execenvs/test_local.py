@@ -17,13 +17,9 @@ from typing import Any
 import pytest
 
 from noeta.backends.execenvs import local as local_mod
-from noeta.backends.execenvs.local import (
-    ENV_ALLOWLIST,
-    LocalExecEnv,
-    scrub_env,
-    send_group_signal,
-)
+from noeta.backends.execenvs.local import LocalExecEnv, send_group_signal
 from noeta.core.execenv import ExecEnv, FileStat, RunResult
+from noeta.toolkit.local_env import ENV_ALLOWLIST, scrub_env
 
 
 def _alive(pid: int) -> bool:

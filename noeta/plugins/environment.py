@@ -27,11 +27,12 @@ from datetime import datetime
 from typing import Any
 
 from noeta.core import models
-from noeta.core.commands import is_command_message
-from noeta.core.execenv import ExecEnv, is_local
+from noeta.core.execenv import ExecEnv
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.types import Message, ToolResult, system_message, user
+from noeta.toolkit.commands import is_command_message
 from noeta.toolkit.context import task_env
+from noeta.toolkit.local_env import is_local
 from noeta.toolkit.shell import _harden_git
 
 #: Git status beyond this is cut at a line boundary and marked.

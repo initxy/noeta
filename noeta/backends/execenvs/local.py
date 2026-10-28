@@ -25,10 +25,11 @@ import tempfile
 from collections.abc import Mapping, Sequence
 
 from noeta.backends.execenvs.sandbox import LocalSandbox
-from noeta.core.execenv import ENV_ALLOWLIST, FileStat, RunResult, scrub_env
+from noeta.core.execenv import FileStat, RunResult
+from noeta.toolkit.local_env import scrub_env
 from noeta.toolkit.sandbox import SandboxSettings
 
-__all__ = ["ENV_ALLOWLIST", "LocalExecEnv", "scrub_env", "send_group_signal"]
+__all__ = ["LocalExecEnv", "send_group_signal"]
 
 
 
@@ -155,7 +156,7 @@ class LocalExecEnv:
     the commands the shell tools run.
     """
 
-    #: Commands run on this machine (``noeta.core.execenv.is_local``).
+    #: Commands run on this machine (``noeta.toolkit.local_env.is_local``).
     local = True
 
     def __init__(

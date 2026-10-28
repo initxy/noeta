@@ -19,9 +19,9 @@ from typing import Any
 
 import httpx
 
-from noeta.core.execenv import scrub_env
 from noeta.core.types import Message, ModelRequest, ModelResponse, SystemPart, Text, user
 from noeta.plugins.hooks.config import HookCommand
+from noeta.toolkit.local_env import scrub_env
 
 log = logging.getLogger("noeta.hooks")
 

@@ -15,7 +15,6 @@ from typing import Any, Literal
 
 import msgspec
 
-from noeta.core.commands import command_message, parse_command_message
 from noeta.core.events import Recorded
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import (
@@ -45,6 +44,7 @@ from noeta.plugins.skills.script import (
     RunSkillScriptTool,
     is_skill_script_resource,
 )
+from noeta.toolkit.commands import command_message, parse_command_message
 from noeta.toolkit.context import new_user_messages, resident_budget, task_env
 from noeta.toolkit.tools import SCHEMA_DIALECT
 

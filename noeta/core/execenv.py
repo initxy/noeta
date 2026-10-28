@@ -3,8 +3,7 @@ machine; a container backend implements the same interface."""
 
 from __future__ import annotations
 
-import os
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from noeta.core.types import Struct
@@ -82,40 +81,3 @@ class ExecEnv(Protocol):
     async def stat(self, path: str) -> FileStat | None:
         """``None`` when the path does not exist."""
         ...
-
-
-#: The only parent-environment variables a spawned command inherits, so a
-#: child never picks up the host's credentials by accident. A host that needs
-#: more names them in ``LocalExecEnv(inherit_env=...)``.
-ENV_ALLOWLIST = frozenset(
-    {
-        "PATH",
-        "HOME",
-        "LANG",
-        "LC_ALL",
-        "TERM",
-        "TMPDIR",
-        # Python + uv interpreter discovery
-        "PYTHONHASHSEED",
-        "PYTHONPATH",
-        "VIRTUAL_ENV",
-    }
-)
-
-
-def scrub_env(
-    allowlist: Iterable[str] | None = None,
-    *,
-    inherit: Iterable[str] = (),
-) -> dict[str, str]:
-    """A minimal environment built from the parent's: :data:`ENV_ALLOWLIST`
-    (or ``allowlist``) plus the ``inherit`` names, nothing else."""
-    parent = os.environ
-    keys = set(ENV_ALLOWLIST if allowlist is None else allowlist) | set(inherit)
-    return {key: parent[key] for key in sorted(keys) if key in parent}
-
-
-def is_local(env: object) -> bool:
-    """Whether ``env`` runs commands on this machine (so facts about this
-    machine, such as its shell and OS, describe it)."""
-    return bool(getattr(env, "local", False))

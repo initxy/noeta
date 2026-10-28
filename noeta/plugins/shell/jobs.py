@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from noeta.core.events import Say
-from noeta.core.execenv import ExecEnv, is_local
+from noeta.core.execenv import ExecEnv
 from noeta.core.types import user
 from noeta.plugins.shell.notices import (
     MonitorStream,
@@ -56,6 +56,7 @@ from noeta.plugins.shell.notices import (
     ws_end_summary,
 )
 from noeta.plugins.shell.websocket import NORMAL_CLOSES, run_ws
+from noeta.toolkit.local_env import is_local
 from noeta.toolkit.notices import NOTICE_GUARD
 
 log = logging.getLogger("noeta.plugins.shell")

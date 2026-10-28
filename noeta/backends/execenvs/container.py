@@ -50,9 +50,10 @@ from typing import Any
 
 import msgspec
 
-from noeta.backends.execenvs.local import ENV_ALLOWLIST, KILL_GRACE_S, LocalExecEnv
+from noeta.backends.execenvs.local import KILL_GRACE_S, LocalExecEnv
 from noeta.backends.execenvs.sandbox_proxy import Listeners, default_proxy
 from noeta.core.execenv import FileStat, RunResult
+from noeta.toolkit.local_env import ENV_ALLOWLIST
 from noeta.toolkit.sandbox import SandboxSettings
 
 __all__ = [
