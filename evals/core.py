@@ -95,6 +95,7 @@ def mentions(call: ToolUse, rel: str) -> bool:
 SHELL_READ_SEARCH = re.compile(
     r"(^|[\s;&|(])(cat|head|tail|less|more|sed|awk|grep|egrep|rg|find|ag)\s"
 )
+SHELL_SEARCH = re.compile(r"(^|[\s;&|(])(grep|egrep|rg|ag|git grep)\s")
 
 
 def cleanup(root: Path) -> None:

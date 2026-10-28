@@ -12,6 +12,7 @@ from typing import Any
 from evals import fixtures as fx
 from evals.core import (
     SHELL_READ_SEARCH,
+    SHELL_SEARCH,
     Judge,
     Scenario,
     Trace,
@@ -62,13 +63,11 @@ def score_no_delegate_lookup(t: Trace, judge: Judge) -> Result:
 # --------------------------------------------------------------------------- #
 
 
-def score_grep_over_bash(t: Trace, judge: Judge) -> Result:
-    shell_search = [c for c in t.bash_commands() if SHELL_READ_SEARCH.search(c)]
-    used_grep = bool(t.named("Grep"))
+def score_search_through_shell(t: Trace, judge: Judge) -> Result:
+    """The baseline has no Grep tool: a search runs grep/rg through Bash."""
+    shell_search = [c for c in t.bash_commands() if SHELL_SEARCH.search(c)]
     found = sum(1 for f in fx.LEGACY_CALL_SITES if f in t.final_text)
-    tool_ok = used_grep and not shell_search
-    return 0.5 * tool_ok + 0.5 * (found / len(fx.LEGACY_CALL_SITES)), {
-        "used_grep": used_grep,
+    return 0.5 * bool(shell_search) + 0.5 * (found / len(fx.LEGACY_CALL_SITES)), {
         "shell_search_commands": shell_search,
         "call_sites_reported": found,
     }
@@ -223,11 +222,11 @@ SCENARIOS: list[Scenario] = [
         tags=("delegation",),
     ),
     Scenario(
-        name="grep_over_shell_search",
-        behavior="searches with Grep, not grep/rg/find through Bash",
+        name="search_through_shell",
+        behavior="searches with grep/rg through Bash and reports every call site",
         goal="List every call site of legacy_connect( in this repo (not its definition), as file:line.",
         setup=fx.shop,
-        score=score_grep_over_bash,
+        score=score_search_through_shell,
         tags=("tool_choice",),
     ),
     Scenario(
