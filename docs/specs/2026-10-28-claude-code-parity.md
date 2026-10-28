@@ -493,3 +493,6 @@ Phase 5 — front ends
   restored); timers dedupe on the record that set them; `TaskView.spawn` without a key gets
   a fresh id, and spawns in `after_tool` are created. Phase 2 ledger caught up (five items
   ticked).
+- 2026-10-28: open: rewind no longer restores sub-agents' file changes (snapshots live in child
+  logs; the restore now trusts only the task's own log) — check Claude Code and fix; the
+  "restored N files" notice lands in the rewound task, not the one the front end follows.
