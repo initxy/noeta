@@ -61,13 +61,24 @@ All notable changes to Noeta are documented here. The format is based on
   each command confined: bubblewrap on Linux (own network, PID, IPC namespaces; a seccomp
   filter refusing Unix sockets and new user namespaces unless `allowAllUnixSockets` /
   `allowNestedUserNamespaces`), Seatbelt on macOS. Commands write only in the working
-  directory, `filesystem.allowWrite` and a private `$TMPDIR` (never `denyWrite`, the
-  project's `.noeta` directory, `.git/hooks`, `.git/config` — not even to create them when
-  missing, and `.git` cannot be renamed away), read everything but `denyRead`, credential stores
-  and noeta's home, and reach only `network.allowedDomains` through a filtering HTTP/SOCKS
-  proxy, which connects to the address it checked and refuses one that is loopback,
-  link-local, multicast, a cloud metadata service or this machine's own unless an IP or CIDR
-  entry allows it (as Claude Code); refused hosts follow the output in `<sandbox_violations>`.
+  directory, `filesystem.allowWrite` and a private `$TMPDIR`. Never in `denyWrite` or what
+  runs or configures code outside the sandbox later: the permissions plugin's protected
+  paths (`noeta.toolkit.protected_paths`: the whole `.noeta` directory, `.vscode`, `.husky`,
+  `.envrc`, `.pre-commit-config.yaml`, shell and package-manager settings, ...),
+  `.git/hooks`, `.git/config`, `.git/config.worktree`, each submodule's config and hooks
+  under `.git/modules`, and the hooks directory git uses (`core.hooksPath`). A missing one
+  cannot be created either (an empty read-only placeholder covers it while the command runs),
+  and no directory above one can be renamed away. Git keeps working (status, add, commit,
+  checkout, submodule status), but **in a directory that is not a repository `git init`
+  fails inside the sandbox** (no `.git` can be created), and **nothing under `.noeta/` —
+  skills and commands included — can be written from the sandbox** (the permissions plugin
+  still lets `Edit`/`Write` change `.noeta/skills` and `.noeta/commands`). Commands read
+  everything but `denyRead`, credential stores and noeta's home, and reach only
+  `network.allowedDomains` through a filtering HTTP/SOCKS proxy, which connects to the
+  address it checked and refuses one that is loopback, link-local, multicast, a cloud
+  metadata service or this machine's own unless an IP or CIDR entry allows it (as Claude
+  Code); this machine, in any spelling of its address, needs an entry with its port even
+  under `*`. Refused hosts follow the output in `<sandbox_violations>`.
   A `Monitor` WebSocket, which the worker opens itself, keeps to the same rules. `Edit` allow rules,
   `additionalDirectories`, `Read` deny rules and `WebFetch(domain:)` allow rules feed it;
   `excludedCommands`, `allowUnsandboxedCommands`, `autoAllowBashIfSandboxed` (default on),
@@ -141,8 +152,11 @@ All notable changes to Noeta are documented here. The format is based on
   `--no-token` drops it on a loopback address only. A request from another web origin
   (`--allow-origin` adds one) or with a `Host` other than a loopback name on a loopback
   address is refused, and no request creates or switches a task into `bypassPermissions`
-  (`--allow-bypass-permissions`) or runs one outside the server's directory
-  (`create_app(allowed_hosts=, origins=, allow_bypass=, cwd=)`).
+  (`--allow-bypass-permissions`) or runs one outside the server's directory. **`noeta
+  --server` started in a directory outside it is refused**: start the server there, or add
+  the directory with `noeta serve --allow-root PATH` (repeatable). A relative `cwd` in a
+  request is taken from the server's directory, not the server process's, and stored
+  absolute (`create_app(allowed_hosts=, origins=, allow_bypass=, cwd=, roots=)`).
 - **Kernel**: the `config` signal changes a running task's `model`, `effort` or `max_turns`
   (`CONFIG_SIGNAL`); `config["max_turns"]` fails a turn after that many model calls
   (`max_turns`); `Client.create(history_from=, history_through=)`; `Runtime.preview` (the
@@ -170,8 +184,10 @@ All notable changes to Noeta are documented here. The format is based on
 - **`restore_files` puts back only what the task snapshotted.** The signal (also open as
   `POST /tasks/{id}/signals`) wrote any content to any path. It now writes a file inside the
   workspace only when the task's log snapshotted it and the content hashes to one of its
-  snapshots. A conversation rewind restores through the rewound task; edits a sub-agent made
-  are not restored.
+  snapshots — snapshots of this task, of the conversations it continues and of the
+  sub-agents under them (`TaskView.read_log`, `TaskView.child_tasks`), so a rewind still
+  puts back what a sub-agent edited. A rewind restores through the task the front end goes
+  on with (the fork, when the conversation is rewound), which shows the notice.
 - A timer set again for the same name and time fired only once, and the task then spun;
   `TaskView.spawn` without a `key` reused the first child's id; children `view.spawn` staged
   in `after_tool` were never created.

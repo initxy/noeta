@@ -197,6 +197,8 @@ Phase 5 — front ends
 - [ ] ACP: real diffs, mode and model switching, plan updates. HTTP: command list, pending
   questions, agent/model list.
 - [x] Rewind with file checkpoints; session fork.
+- [x] Rewind restores sub-agents' file changes; the restore notice reaches the task the front
+  end follows.
 
 ## Acceptance criteria
 
@@ -483,16 +485,33 @@ Phase 5 — front ends
   credentials).
 - 2026-10-28: merge gates on parity @dcb90f9: make check 1619 passed, make parity 0 (7
   accepted deviations), make eval 0.974 vs 0.987 baseline (within tolerance;
-  `read_over_shell_cat` 0.67), make e2e 7 passed. Pre-merge review: revise (3 P0, 7 P1) →
-  fixes in progress. Kernel fixes: a continuation pins `history_through` at creation
-  (`noeta.core.store.pin_history`), keeps the source's loaded deferred tools, answers open
-  calls before held messages, and each plugin chooses what of its state carries over
-  (`Extension.continue_state`: schedule none, workflow finished runs, shell cwd and finished
-  jobs); `restore_files` writes only what the task's log snapshotted, inside the workspace
-  (a conversation rewind now signals the rewound task; a sub-agent's edits are not
-  restored); timers dedupe on the record that set them; `TaskView.spawn` without a key gets
-  a fresh id, and spawns in `after_tool` are created. Phase 2 ledger caught up (five items
-  ticked).
-- 2026-10-28: open: rewind no longer restores sub-agents' file changes (snapshots live in child
-  logs; the restore now trusts only the task's own log) — check Claude Code and fix; the
-  "restored N files" notice lands in the rewound task, not the one the front end follows.
+  `read_over_shell_cat` 0.67), make e2e 7 passed. Pre-merge review: revise (3 P0, 7 P1).
+- 2026-10-28: first-review fixes. Kernel and ledger: a continuation pins `history_through`
+  at creation (`noeta.core.store.pin_history`), keeps the source's loaded deferred tools,
+  answers open calls before held messages, and each plugin chooses what of its state carries
+  over (`Extension.continue_state`); `restore_files` writes only what was snapshotted, inside
+  the workspace; timers dedupe on the record that set them; `TaskView.spawn` without a key
+  gets a fresh id, spawns in `after_tool` are created; Phase 2 ledger caught up. Sandbox and
+  serve: seccomp kills other ABIs, missing protected paths get read-only placeholders and
+  `.git` is pinned, the proxy judges the resolved address; `noeta serve` requires a token,
+  refuses other origins and `Host`s, `bypassPermissions` and a `cwd` outside its directory.
+  Permissions: a parser-backed read-only check with per-program flag lists, allow rules no
+  longer match substitutions or redirections, symlinked and `cd`-reached protected paths ask,
+  project MCP consent only from a trusted project's own settings, the classifier sees
+  `Write`/`Edit` content and fences untrusted instructions. `simulated_state` deep-copies
+  calls and timers.
+- 2026-10-28: second review (`docs/reviewing.md`, fresh context): the 3 P0 fixed, 5 of 7 P1
+  fixed (the protected-path bypass half fixed, the ledger stale), 3 new P1 (read-only git
+  runs an embedded bare repository's config, a link made earlier in one command bypasses
+  protected paths, deny/ask rules beaten by quoting) plus P2s. Round-2 fixes: the sandbox's
+  read-only list follows the permissions plugin's protected list
+  (`noeta.toolkit.protected_paths`) plus submodule git directories, `.git/config.worktree`
+  and the configured hooks directory, with every directory above them pinned; the network
+  filter judges this machine by the parsed address (IPv6 spellings of loopback were let
+  through under `*`); rewind restores what sub-agents changed (`TaskView.read_log` /
+  `child_tasks`: the checkpoints plugin trusts the logs the host's plan reads) and signals
+  the fork, which shows the notice; a server request's relative `cwd` is the server
+  directory's, `noeta serve --allow-root`. The three new P1 and the permission P2s are fixed
+  in the permissions plugin in a parallel change. Gates before round 2: make check 1774 passed (87.02%), make
+  parity 0 (7 accepted deviations), make eval 0.962 vs 0.987 (within tolerance; one
+  `delegate_parallel_review` trial chose to review itself), make e2e 7 passed.
