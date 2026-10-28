@@ -47,23 +47,49 @@ class Recorder:
         self.client = httpx.Client(timeout=600, proxy=proxy or None, trust_env=False)
         self.lock = threading.Lock()
         self.counter = len(list(out.glob("*.json")))
+        #: Requests in flight -> bytes streamed so far, mirrored to ``OUT/.live``
+        #: so a driver can tell a busy client from an idle one.
+        self.live: dict[int, int] = {}
+        self.drop_disabled_thinking = False
 
     def next_index(self) -> int:
         with self.lock:
             self.counter += 1
+            self.live[self.counter] = 0
+            self._write_live()
             return self.counter
 
-    def outbound(self, body: Any) -> Any:
-        """The body as sent upstream: model and effort rewritten."""
+    def progress(self, idx: int, n: int | None) -> None:
+        """``n`` more bytes streamed for ``idx``; ``None``: it finished."""
+        with self.lock:
+            if n is None:
+                self.live.pop(idx, None)
+            else:
+                self.live[idx] = self.live.get(idx, 0) + n
+            self._write_live()
+
+    def _write_live(self) -> None:
+        (self.out / ".live").write_text(json.dumps({str(k): v for k, v in self.live.items()}))
+
+    def outbound(self, body: Any) -> tuple[Any, list[str]]:
+        """The body as sent upstream (model and effort rewritten, and what
+        the upstream model rejects adjusted) and the rewrites applied."""
         if not isinstance(body, dict) or "model" not in body:
-            return body
+            return body, []
         fwd = dict(body)
+        done = []
         if self.model:
             fwd["model"] = self.model
+            done.append("model")
         oc = fwd.get("output_config")
         if isinstance(oc, dict) and oc.get("effort") in self.effort:
             fwd["output_config"] = {**oc, "effort": self.effort[oc["effort"]]}
-        return fwd
+            done.append("effort")
+        th = fwd.get("thinking")
+        if self.drop_disabled_thinking and isinstance(th, dict) and th.get("type") == "disabled":
+            del fwd["thinking"]
+            done.append("thinking-disabled-dropped")
+        return fwd, done
 
     def headers_out(self, headers: dict[str, str]) -> dict[str, str]:
         if not self.token:
@@ -97,9 +123,11 @@ def handler(rec: Recorder) -> type[BaseHTTPRequestHandler]:
                 entry["body"] = body
             except ValueError:
                 entry["body_raw"] = raw.decode("utf-8", "replace")
-            fwd = rec.outbound(body)
+            fwd, rewrites = rec.outbound(body)
             if fwd is not body:
                 raw = json.dumps(fwd).encode()
+            if rewrites:
+                entry["upstream_rewrites"] = rewrites
             chunks: list[bytes] = []
             try:
                 req = rec.client.build_request(self.command, rec.upstream + self.path,
@@ -116,6 +144,7 @@ def handler(rec: Recorder) -> type[BaseHTTPRequestHandler]:
                 try:
                     for chunk in resp.iter_bytes():
                         chunks.append(chunk)
+                        rec.progress(idx, len(chunk))
                         self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                         self.wfile.flush()
                     self.wfile.write(b"0\r\n\r\n")
@@ -124,6 +153,7 @@ def handler(rec: Recorder) -> type[BaseHTTPRequestHandler]:
             except (BrokenPipeError, ConnectionResetError):
                 entry["interrupted"] = True
             finally:
+                rec.progress(idx, None)
                 entry["response"] = b"".join(chunks).decode("utf-8", "replace")
                 name = self.path.split("?")[0].strip("/").replace("/", "_") or "root"
                 (rec.out / f"{idx:04d}-{name}.json").write_text(
@@ -144,6 +174,9 @@ def main(argv: list[str] | None = None) -> None:
                     help="remap output_config.effort upstream (repeatable)")
     ap.add_argument("--auth-env", help="environment variable holding the upstream token")
     ap.add_argument("--proxy", help="HTTP proxy for the upstream connection")
+    ap.add_argument("--drop-disabled-thinking", action="store_true",
+                    help="forward thinking={type: disabled} without the field (for an upstream "
+                         "model that rejects it)")
     args = ap.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
     token = os.environ.get(args.auth_env) if args.auth_env else None
@@ -152,6 +185,7 @@ def main(argv: list[str] | None = None) -> None:
     rec = Recorder(args.out, args.upstream, model=args.model,
                    effort=dict(e.split("=", 1) for e in args.effort), token=token,
                    proxy=args.proxy)
+    rec.drop_disabled_thinking = args.drop_disabled_thinking
     print(f"recording to {args.out} on 127.0.0.1:{args.port} -> {rec.upstream}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), handler(rec)).serve_forever()
 

@@ -14,7 +14,7 @@
  },
  "<conversation>": {
   "shas": {
-   "33dcc8e00f": 1031
+   "10f8aec89e": 1031
   },
   "varies": false
  },
@@ -27,8 +27,7 @@
  "<local-command-stdout>": {
   "shas": {
    "6f870d42a3": 93,
-   "a6747d3300": 62,
-   "cfcefd9233": 63
+   "a6747d3300": 62
   },
   "varies": false
  },
@@ -36,6 +35,7 @@
   "shas": {
    "48c9057a60": 155,
    "4baf907454": 112,
+   "7bc0334642": 59,
    "f8f03d640f": 136
   },
   "varies": false
@@ -43,16 +43,16 @@
  "<system-reminder>/<tools-used-before-summary>": {
   "len": [
    109,
-   10294
+   11864
   ],
   "varies": true
  },
  "<task-notification>": {
-  "shas": {
-   "0236432778": 882,
-   "6ded5ae67a": 398
-  },
-  "varies": false
+  "len": [
+   173,
+   1107
+  ],
+  "varies": true
  },
  "<total_tokens>": {
   "len": [
@@ -87,19 +87,13 @@
  },
  "agent-message": {
   "shas": {
-   "a02c82d199": 2116
+   "9796a92989": 1900
   },
   "varies": false
  },
  "auto-mode": {
   "shas": {
    "3ae37a6aa6": 479
-  },
-  "varies": false
- },
- "background-event": {
-  "shas": {
-   "a1aa171c75": 492
   },
   "varies": false
  },
@@ -118,15 +112,15 @@
  },
  "classifier-instructions-intro": {
   "shas": {
-   "8f206f9261": 898,
-   "9854db6935": 984
+   "309bde8daf": 904,
+   "6796062439": 904,
+   "cdccfa5591": 904
   },
   "varies": false
  },
  "classifier-prompt": {
   "shas": {
-   "5b0f7e3f3f": 140239,
-   "712af5431a": 140834
+   "5b0f7e3f3f": 140239
   },
   "varies": false
  },
@@ -138,6 +132,7 @@
  },
  "compact-instruction": {
   "shas": {
+   "3a2e12effb": 6755,
    "63e2bfb4de": 6361
   },
   "varies": false
@@ -156,8 +151,8 @@
  },
  "compact-transcript-note": {
   "shas": {
-   "9bedb949a8": 543,
-   "aefed60742": 543
+   "769997c2a5": 552,
+   "df8d63539e": 552
   },
   "varies": false
  },
@@ -169,22 +164,22 @@
  },
  "deferred-tools": {
   "shas": {
-   "94034d3ebb": 339,
+   "709118cefd": 352,
    "a7fbc1639d": 486,
    "d06421e9fd": 485
   },
   "varies": false
  },
  "environment": {
-  "shas": {
-   "2aef3188e7": 1140,
-   "db14a8dd10": 693
-  },
-  "varies": false
+  "len": [
+   699,
+   1140
+  ],
+  "varies": true
  },
- "explore-prompt": {
+ "general-purpose-prompt": {
   "shas": {
-   "9489434d8c": 3212
+   "178608ba0a": 2669
   },
   "varies": false
  },
@@ -200,17 +195,18 @@
   },
   "varies": false
  },
- "main-prompt": {
+ "interrupted-at-tool-use": {
   "shas": {
-   "0a2cb3e845": 4725,
-   "d005524d03": 4725,
-   "d019d465fa": 4725
+   "1b694b2a24": 43
   },
   "varies": false
  },
- "mid-turn-message": {
+ "main-prompt": {
   "shas": {
-   "d3a645614e": 308
+   "33e2bb19f5": 4734,
+   "366ca7a3dc": 4734,
+   "40bc5670fe": 4734,
+   "5907b6cc5a": 4734
   },
   "varies": false
  },
@@ -222,15 +218,23 @@
  },
  "p:021fb596": {
   "len": [
-   32,
-   619
+   28,
+   1221
   ],
   "varies": true
  },
  "p:634768da": {
   "shas": {
-   "246a553bd3": 79043,
-   "d22a04099c": 79081
+   "4497e264d7": 79104,
+   "cb6c117fed": 79120,
+   "d22a04099c": 79081,
+   "fdb9d5309c": 77783
+  },
+  "varies": false
+ },
+ "p:94115126": {
+  "shas": {
+   "a82c52d807": 352
   },
   "varies": false
  },
@@ -242,13 +246,13 @@
  },
  "plan-mode": {
   "shas": {
-   "52ecd8ee7a": 4908
+   "6ba6d6ce57": 4908
   },
   "varies": false
  },
  "plan-mode-exit": {
   "shas": {
-   "9c2cbc6763": 222
+   "b2e5921ed1": 222
   },
   "varies": false
  },
@@ -260,9 +264,10 @@
  },
  "post-compact-file": {
   "shas": {
-   "322c1d39b0": 674,
-   "72412ac46a": 431,
-   "7f87720391": 883
+   "0ab98f6482": 253,
+   "677a2f7f3d": 3394,
+   "da986ce0d5": 1247,
+   "fda906170f": 1193
   },
   "varies": false
  },
@@ -286,13 +291,11 @@
   "varies": false
  },
  "reminder/context": {
-  "shas": {
-   "0d09c10688": 592,
-   "29c4aa9e01": 653,
-   "455d4d6459": 654,
-   "92c9db42cf": 641
-  },
-  "varies": false
+  "len": [
+   592,
+   641
+  ],
+  "varies": true
  },
  "reminder/handback-how": {
   "shas": {
@@ -301,17 +304,11 @@
   "varies": false
  },
  "reminder/instructions": {
-  "shas": {
-   "0fb1169754": 588,
-   "a984c93168": 504
-  },
-  "varies": false
- },
- "reminder/instructions-changed": {
-  "shas": {
-   "f60ca57c7c": 577
-  },
-  "varies": false
+  "len": [
+   510,
+   647
+  ],
+  "varies": true
  },
  "silence-nudge": {
   "shas": {
@@ -321,8 +318,8 @@
  },
  "skill-body": {
   "shas": {
-   "13a48efe74": 203,
-   "2c26bcc189": 204
+   "71b97c8d56": 209,
+   "a8ef303f34": 210
   },
   "varies": false
  },
@@ -334,7 +331,8 @@
  },
  "task": {
   "shas": {
-   "c7aae694f1": 359
+   "23eb76fc2d": 327,
+   "33867bb2b9": 407
   },
   "varies": false
  },
@@ -358,7 +356,7 @@
  },
  "webfetch-page": {
   "shas": {
-   "27772964f2": 779
+   "b30cd82078": 765
   },
   "varies": false
  }

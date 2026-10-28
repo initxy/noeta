@@ -36,31 +36,29 @@ hash in the report) and the reason.
 The baseline is an API-key user on default settings (see the parity spec). A
 Mac with Claude Code and tmux, reachable over ssh, records through a gateway:
 
-1. On this machine, start the proxy per session; the token stays here:
+1. Record each session (sessions on different ports can run at once; m4
+   resumes m1 and runs after it). `drive.py session` writes a fresh project
+   and config under `--root/<session>` on the Mac, starts the proxy here and
+   an ssh tunnel to it, drives every step, and stops it all; the upstream
+   token stays on this machine (`PARITY_UPSTREAM_TOKEN`):
 
-        PARITY_UPSTREAM_TOKEN=... python -I scripts/parity/record.py ~/cc-recordings/<ver>/m1 \
-            --port 18801 --upstream https://<gateway> --model <cheap-model> --effort medium=high \
-            --auth-env PARITY_UPSTREAM_TOKEN
-        ssh -N -R 18801:127.0.0.1:18801 mac &
+        PARITY_UPSTREAM_TOKEN=... python -u scripts/parity/drive.py session m1 --ssh mac \
+            --tmux /opt/homebrew/bin/tmux --port 18811 --root /Users/<you>/cc-rec/r2 \
+            --out-root ~/cc-recordings/<ver> --upstream https://<gateway> --model <cheap-model>
 
-2. Write the project on the Mac (`m3` needs `--data`; later sessions reuse
-   the project as earlier ones left it, as the 2.1.312 recording did):
+   Pick an upstream model that answers in seconds and accepts every request
+   shape Claude Code sends: the auto-mode classifier's first stage sends
+   `thinking: {type: disabled}` with `max_tokens` 64, which some gateways turn
+   into a reasoning setting their model rejects (`--drop-disabled-thinking`
+   forwards it without the field; the recording keeps Claude Code's body and
+   notes each rewrite in `upstream_rewrites`).
 
-        ssh mac python3 - '~/cc-rec' < scripts/parity/project.py
+2. Read `<session>.marks`: a `!!!` line is a step that did not go as
+   scripted (a prompt that started no request, a card that never showed).
+   `<session>.cards/` holds each card and the key that answered it. Re-run
+   the session if needed; then distill and look at the diff of `parity/`:
 
-3. Start Claude Code and drive the session; repeat 1–3 for m2, m3, m4 (m4
-   resumes m1's config directory with `--continue`):
-
-        python scripts/parity/drive.py start m1 --ssh mac --tmux /opt/homebrew/bin/tmux \
-            --port 18801 --project /Users/<you>/cc-rec/proj
-        python scripts/parity/drive.py run m1 --ssh mac --tmux /opt/homebrew/bin/tmux \
-            --out ~/cc-recordings/<ver>/m1
-
-4. Check each step's prompt reached the model (a prompt typed while Claude
-   Code is busy can be lost) and re-run a session if not; then distill and
-   look at the diff of `parity/`:
-
-        uv run python -m scripts.parity.distill ~/cc-recordings/<ver>
+        uv run python -m scripts.parity.distill ~/cc-recordings/<ver> --out parity/<ver>
 
 Unnamed kinds show as `p:<hash>` in the contract; name the ones that matter
 in `names.json` (our words) and distill again.

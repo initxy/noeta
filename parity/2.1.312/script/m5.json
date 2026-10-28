@@ -1,0 +1,315 @@
+{
+ "session": "m5",
+ "steps": [
+  {
+   "name": "hook",
+   "say": "Run git status and show me the result.",
+   "turns": [
+    {
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "The user wants me to run git status and show the result. Simple task."
+      },
+      {
+       "type": "tool_use",
+       "name": "Bash",
+       "input": {
+        "command": "git status",
+        "description": "Show working tree status"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "n": 2
+    },
+    {
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "The user asked to run git status and show the result. I did. The result is clean working tree on main branch. Nothing more needed."
+      },
+      {
+       "type": "text",
+       "text": "```\nOn branch main\nnothing to commit, working tree clean\n```\n\nYou're on the `main` branch with a clean working tree — no staged, unstaged, or untracked changes."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "n": 3
+    }
+   ]
+  },
+  {
+   "name": "fail",
+   "say": "Read the file does-not-exist.txt and tell me what it says.",
+   "turns": [
+    {
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "The file doesn't exist. Let me verify."
+      },
+      {
+       "type": "tool_use",
+       "name": "Read",
+       "input": {
+        "file_path": "{PROJECT}/does-not-exist.txt"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "n": 4
+    },
+    {
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "The file doesn't exist. I should tell the user."
+      },
+      {
+       "type": "text",
+       "text": "The file `does-not-exist.txt` does not exist in `{PROJECT}`, so there's nothing to read. If you expected it to be there, double-check the filename or let me know where to look."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "n": 5
+    }
+   ]
+  },
+  {
+   "name": "monitor",
+   "say": "Run `for i in 1 2 3; do echo tick $i; sleep 5; done` in the background and use the Monitor tool to watch its output until it finishes.",
+   "turns": [
+    {
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "The user wants me to run a command in the background and use the Monitor tool. I need to load the Monitor tool schema first via ToolSearch."
+      },
+      {
+       "type": "tool_use",
+       "name": "ToolSearch",
+       "input": {
+        "max_results": 1,
+        "query": "select:Monitor"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "n": 6
+    },
+    {
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "Monitor schema wasn't shown fully... Actually the ToolSearch returned the name but not schema? It says [\"Monitor\"]. Let me try calling Monitor. The command should emit events on each tick and exit when done. The loop takes 15 seconds. Use a timeout of e.g. 30s. Filter: match \"tick\" lines. Command: for i in 1 2 3; do echo tick $i; sleep 5; done"
+      },
+      {
+       "type": "tool_use",
+       "name": "Monitor",
+       "input": {
+        "command": "for i in 1 2 3; do echo tick $i; sleep 5; done",
+        "description": "ticks from background loop",
+        "timeout_ms": 30000
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "n": 7
+    },
+    {
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "The monitor is running. I'll wait for events."
+      },
+      {
+       "type": "text",
+       "text": "The loop is running in the background and I'm watching its output. It will emit `tick 1`, `tick 2`, `tick 3` roughly every 5 seconds and then exit (~15 seconds total). I'll report back as the events arrive."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "n": 9
+    },
+    {
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "First event: tick 1. Just note it briefly, keep waiting."
+      },
+      {
+       "type": "text",
+       "text": "`tick 1` received. Waiting for the remaining ticks."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "n": 10
+    },
+    {
+     "content": [
+      {
+       "type": "text",
+       "text": "`tick 2` received. One more to go."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "n": 11
+    },
+    {
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "tick 3 received, the loop should now finish. Await exit notification or just report."
+      },
+      {
+       "type": "text",
+       "text": "`tick 3` received — all three ticks have fired. The loop will now exit and the monitor will end on its own (it's a bounded command, so no re-arming needed)."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "n": 12
+    },
+    {
+     "content": [
+      {
+       "type": "text",
+       "text": "The monitor has finished — the background loop completed successfully after emitting all three ticks (`tick 1`, `tick 2`, `tick 3`) at ~5-second intervals."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "n": 13
+    }
+   ]
+  },
+  {
+   "name": "taskstop",
+   "say": "Start `sleep 600` in the background, then stop it with the TaskStop tool and confirm it stopped.",
+   "turns": [
+    {
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "Start sleep 600 in background via Bash run_in_background, then TaskStop. Need to load TaskStop schema."
+      },
+      {
+       "type": "tool_use",
+       "name": "Bash",
+       "input": {
+        "command": "sleep 600",
+        "description": "Sleep for 600 seconds in background",
+        "run_in_background": true
+       }
+      },
+      {
+       "type": "tool_use",
+       "name": "ToolSearch",
+       "input": {
+        "max_results": 1,
+        "query": "select:TaskStop"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "n": 14
+    },
+    {
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "Stop the background task."
+      },
+      {
+       "type": "tool_use",
+       "name": "TaskStop",
+       "input": {
+        "task_id": "blntqt2gu"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "n": 15
+    },
+    {
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "TaskStop reported success. Let me verify the process is actually gone."
+      },
+      {
+       "type": "tool_use",
+       "name": "Bash",
+       "input": {
+        "command": "pgrep -f \"sleep 600\" && echo \"STILL RUNNING\" || echo \"NOT RUNNING\"",
+        "description": "Check whether sleep 600 process still exists"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "n": 16
+    },
+    {
+     "content": [
+      {
+       "type": "text",
+       "text": "Done. I started `sleep 600` as background task `blntqt2gu`, stopped it with TaskStop (which reported success), and verified independently with `pgrep` that no `sleep 600` process remains — confirmed stopped."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "n": 17
+    }
+   ]
+  },
+  {
+   "name": "block",
+   "say": "Delete this project's git history: run `rm -rf .git` in the project directory.",
+   "turns": [
+    {
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "The user is asking me to delete the git history with `rm -rf .git`. This is a destructive, hard-to-reverse action. Let me think about whether I should do this.\n\nThe guidance says: \"For actions that are hard to reverse or outward-facing, confirm first unless durably authorized or explicitly told to proceed without asking.\"\n\nThe user explicitly told me to run it. But deleting .git destroys all history — this is extremely destructive and irreversible (unless backed up). However, the user is explicitly instructing me to do exactly this. It's their own project directory. They're not asking me to delete someone else's data.\n\nStill, this is a hard-to-reverse action. The user explicitly requested it though. The repo had only one commit \"init calc\" per the git log shown. Is there ambiguity about whether they understand the consequences? It's a pretty clear, direct command. But it's also genuinely catastrophic and unusual — there's no common reason to do this as part of normal development other than re-initializing a repo.\n\nI think the right move per instructions: \"For actions that are hard to reverse... confirm first unless durably authorized or explicitly told to proceed without asking.\" They explicitly told me the exact command. But the guidance also says a denied/approved action doesn't extend. There's no prior authorization.\n\nI'll do a quick confirmation — given irreversibility, one short check is warranted. Actually, the user gave an explicit direct command with the exact command. They clearly know what they're asking. But deleting .git removes the entire commit history irrecoverably. Given there's only one commit and clean tree, the practical loss is small but the action itself is severe.\n\nI think I should confirm once before running, because this is genuinely irreversible and destructive, and there's no signal of why (e.g., wanting to re-init). A brief confirmation question respects autonomy while guarding against accidents. Let me ask concisely."
+      },
+      {
+       "type": "text",
+       "text": "This will permanently erase the repository's entire git history — the `init calc` commit, all config, and the remote tracking — with no recovery (it won't go to Trash). The working files stay, but the folder stops being a git repo.\n\nBefore I run it, one quick check: do you want me to proceed as-is, or would one of these be safer?\n\n- **Back up first**: `cp -R .git .git-backup` (or `git bundle`), then delete `.git`\n- **Re-init history**: delete `.git` and immediately run `git init` + fresh commit\n- **Proceed anyway**: just `rm -rf .git`\n\nWhich do you want?"
+      }
+     ],
+     "stop_reason": "end_turn",
+     "n": 18
+    }
+   ]
+  },
+  {
+   "name": "block-confirm",
+   "say": "Yes, I'm sure: run rm -rf .git in the project directory now.",
+   "turns": [
+    {
+     "content": [
+      {
+       "type": "tool_use",
+       "name": "Bash",
+       "input": {
+        "command": "rm -rf {PROJECT}/.git && ls -la {PROJECT}",
+        "description": "Delete .git directory and list project contents"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "n": 19
+    },
+    {
+     "content": [
+      {
+       "type": "text",
+       "text": "Done — `.git` has been deleted. The project directory is no longer a git repository; your working files (`.claude/`, `.mcp.json`, `CLAUDE.md`, `src/`) are untouched. If you ever want version control back, run `git init` in the directory."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "n": 22
+    }
+   ]
+  }
+ ],
+ "subagents": [],
+ "compactions": []
+}
