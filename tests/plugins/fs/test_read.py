@@ -82,10 +82,12 @@ async def test_read_medium_file_fits_in_full(h: Harness, ws: Path) -> None:
     assert text_of(out).endswith("\n1500\tline 1499\n1501\t")
 
 
-async def test_read_default_limit_is_2000_lines(h: Harness, ws: Path) -> None:
+async def test_read_without_limit_returns_every_line_that_fits(h: Harness, ws: Path) -> None:
+    # Claude Code's reader applies no line count of its own: without ``limit``
+    # the whole file comes back, bounded only by the size and token ceilings.
     (ws / "long.txt").write_text("".join(f"{i}\n" for i in range(2500)))
     text = text_of(await h.call(ReadTool(), file_path="long.txt"))
-    assert text.endswith("\n2000\t1999")
+    assert text.endswith("\n2500\t2499\n2501\t")
 
 
 async def test_read_clips_overlong_line(h: Harness, ws: Path) -> None:

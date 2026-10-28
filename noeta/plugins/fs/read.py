@@ -51,8 +51,9 @@ FILE_UNCHANGED = (
 _LARGE_FACTOR = 8
 _JS_MAX_SAFE = 9007199254740991
 
-
-_DEFAULT_READ_LIMIT = 2000  # lines
+#: Without ``limit`` every line is read (Claude Code's reader sets no line
+#: count of its own); the size and token ceilings bound the window instead.
+_ALL_LINES = _JS_MAX_SAFE
 #: Per-line visible-char cap: a minified file can be one multi-MB line.
 _MAX_LINE_CHARS = 2000
 _LINE_TRUNC_MARKER = " … [line truncated]"
@@ -294,7 +295,7 @@ class ReadTool:
         display = ws.relative(resolved)
         offset = _positive_int(input.get("offset")) or 1
         explicit_limit = _positive_int(input.get("limit"))
-        limit = explicit_limit or _DEFAULT_READ_LIMIT
+        limit = explicit_limit or _ALL_LINES
         large = input.get("allow_large") is True
         seen = current_fs_state(ctx.state).reads.get(resolved)
         if ctx.by_model and seen is not None and seen.range == [offset, limit] \
