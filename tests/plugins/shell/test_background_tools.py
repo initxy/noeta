@@ -5,6 +5,7 @@ go."""
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -136,16 +137,24 @@ async def test_a_leading_sleep_is_fine_in_the_background_only(h: Harness) -> Non
 async def test_task_stop_stops_a_job_and_its_end_is_noticed(h: Harness) -> None:
     out = await h.call("Bash", command="echo keep; sleep 5", run_in_background=True)
     job_id = out.meta["job_id"]
-    assert text(await stop(h, "nope12345")) == (
-        "TaskStop: unknown background job 'nope12345'")
+    assert text(await stop(h, "nope12345")) == "TaskStop: No task found with ID: nope12345"
     assert text(await h.call("TaskStop")) == "TaskStop: requires a non-empty 'task_id'"
     stopped = await stop(h, job_id)
-    assert text(stopped) == f"Stopped task {job_id} (echo keep; sleep 5)"
+    assert not stopped.is_error
+    assert json.loads(text(stopped)) == {
+        "message": f"Successfully stopped task: {job_id} (echo keep; sleep 5)",
+        "task_id": job_id, "task_type": "local_bash", "command": "echo keep; sleep 5"}
     await h.settle(job_id)
     assert "<status>killed</status>" in h.posts[-1][1]
     assert 'Background command "echo keep; sleep 5" was stopped' in h.posts[-1][1]
     again = await h.call("TaskStop", shell_id=job_id)
-    assert again.is_error and text(again) == f"TaskStop: task {job_id} is not running (killed)"
+    assert again.is_error and text(again) == (
+        f"TaskStop: Task {job_id} is not running (status: killed)")
+    done = await h.call("Bash", command="true", run_in_background=True)
+    await h.settle(done.meta["job_id"])
+    finished = await stop(h, done.meta["job_id"])
+    assert text(finished) == (
+        f"TaskStop: Task {done.meta['job_id']} is not running (status: completed)")
 
 
 def test_monitor_and_task_stop_are_deferred(h: Harness) -> None:

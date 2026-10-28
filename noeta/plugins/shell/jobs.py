@@ -437,7 +437,7 @@ class Registry:
     async def _post_end(self, job: Job, notice: str | None) -> None:
         if job.fenced:
             return  # its hold is gone: the tree was told it is lost
-        data = {"job_id": job.job_id, "status": self._status(job), "exit_code": job.exit_code,
+        data = {"job_id": job.job_id, "status": self.status_of(job), "exit_code": job.exit_code,
                 "notice": f"{NOTICE_GUARD}\n\n{notice}" if notice is not None else None}
         try:
             await job.post(External(name=JOB_ENDED, data=data), task_id=self._target(job),
@@ -603,7 +603,7 @@ class Registry:
         return data.decode("utf-8", errors="replace")
 
     @staticmethod
-    def _status(job: Job) -> str:
+    def status_of(job: Job) -> str:
         """``completed`` / ``failed`` / ``killed``, as the notice says."""
         if job.status == "killed":
             return "killed"
@@ -611,7 +611,7 @@ class Registry:
         return "completed" if ok else "failed"
 
     async def _end_notice(self, job: Job) -> str | None:
-        status = self._status(job)
+        status = self.status_of(job)
         code = None if status == "killed" else job.exit_code
         stream = job.monitor
         if stream is None:

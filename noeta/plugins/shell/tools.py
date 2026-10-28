@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import shlex
 from collections.abc import Awaitable, Callable
@@ -59,7 +60,7 @@ def _unknown(registry: Registry, ctx: ToolContext, job_id: str) -> str:
     job = shell_state(ctx.state).jobs.get(job_id) or {}
     if job.get("status") in ("running", "lost"):
         return f"background job {job_id!r} was lost: {LOST_REASON}"
-    return f"unknown background job {job_id!r}"
+    return f"No task found with ID: {job_id}"
 
 
 def background_started(job_id: str, out_path: str, *, ends_with_turn: bool) -> str:
@@ -410,12 +411,17 @@ class TaskStopTool:
         if job_id is None:
             return tool_error(self.name, "requires a non-empty 'task_id'")
         job = self.registry.find(_root(ctx), job_id)
-        if job is None:
+        if job is None or job.foreground:
             return tool_error(self.name, _unknown(self.registry, ctx, job_id))
         if job.status != "running":
-            return tool_error(self.name, f"task {job_id} is not running ({job.status})")
+            return tool_error(self.name, f"Task {job_id} is not running (status: "
+                                         f"{Registry.status_of(job)})")
         self.registry.kill(job)
-        return text_output(f"Stopped task {job_id} ({job.description})", job_id=job_id)
+        # Claude Code's result: the stop as a JSON object.
+        return text_output(json.dumps({
+            "message": f"Successfully stopped task: {job_id} ({job.description})",
+            "task_id": job_id, "task_type": "monitor_ws" if job.ws else "local_bash",
+            "command": job.description}, ensure_ascii=False), job_id=job_id)
 
 
 class MonitorTool:
