@@ -28,7 +28,7 @@ from noeta.cli import mcp_command
 from noeta.cli.config import Settings, load_settings
 from noeta.core.pending import PERMISSION_MODES
 
-SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins")
+SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "mcp")
 
 
 def _common(ap: argparse.ArgumentParser) -> None:
