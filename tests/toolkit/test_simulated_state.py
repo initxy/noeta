@@ -6,7 +6,8 @@ from typing import Any
 
 from noeta.core.events import ExtensionRecorded
 from noeta.core.extension import TaskView
-from noeta.core.loop.state import CORE, TaskState
+from noeta.core.loop.state import TaskState
+from noeta.core.records import CORE
 from noeta.toolkit.context import simulated_state
 
 

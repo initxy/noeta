@@ -21,6 +21,7 @@ from typing import Any
 
 from msgspec.structs import replace
 
+from noeta.core import records as core_records
 from noeta.core.agent import Agent
 from noeta.core.deferred import with_tool_search
 from noeta.core.errors import Conflict, StoreUnavailable
@@ -28,7 +29,6 @@ from noeta.core.events import (
     Cancel,
     ChildEnded,
     Event,
-    ExtensionRecorded,
     InputTaken,
     Recorded,
     TaskCreated,
@@ -39,8 +39,9 @@ from noeta.core.events import (
 )
 from noeta.core.extension import Extension, TaskView
 from noeta.core.loop import decide
-from noeta.core.loop.state import CORE, TaskState, apply, continued, fold
+from noeta.core.loop.state import TaskState, apply, continued, fold
 from noeta.core.prompts import load_overrides
+from noeta.core.records import CORE
 from noeta.core.runner import texts
 from noeta.core.runner.runtime import Runtime
 from noeta.core.store import Claim, NewTask, Post, patch_for, pin_history
@@ -149,7 +150,8 @@ class TaskRun:
         found = await load_overrides(self.rt.prompt_dirs, env, cwd,
                                      workspace=trusted is None or (bool(cwd) and trusted(cwd)))
         view = self.view()
-        view.record(CORE, "prompts", found)
+        prompts = core_records.Prompts(files=found)
+        view.record(CORE, prompts.kind, prompts.data())
         await self.flush(view)
 
     async def load(self) -> None:
@@ -461,15 +463,14 @@ class TaskRun:
         return min((t["at"] for t in self.state.timers.values()), default=None)
 
     async def _stop_turn(self, call_ids: Sequence[str]) -> None:
-        data = None
+        stopped = core_records.TurnStopped()
         if not call_ids and self.state.model_attempts:
             # Stopped while the reply streamed: the streamed text stays in
             # the conversation and the marker opens the person's next turn.
-            data = {"partial": "".join(self.partial), "marker": texts.INTERRUPTED_MARKER}
+            stopped = core_records.TurnStopped(partial="".join(self.partial),
+                                          marker=texts.INTERRUPTED_MARKER)
         self.partial = []
-        await self._close_calls(call_ids, texts.STOPPED_CALL_ERROR,
-                                ExtensionRecorded(extension=CORE, kind="turn_stopped",
-                                                  data=data),
+        await self._close_calls(call_ids, texts.STOPPED_CALL_ERROR, core_records.event(stopped),
                                 "the parent's turn was stopped")
 
     async def _close_calls(self, call_ids: Sequence[str], error: str, closing: Event,
@@ -521,8 +522,7 @@ class TaskRun:
             return False
         await self._close_calls(
             [c.use.id for c in self.state.open_calls], f"{texts.TURN_FAILED_CALL_ERROR}{reason}",
-            ExtensionRecorded(extension=CORE, kind="turn_failed",
-                              data={"reason": reason, "detail": detail}),
+            core_records.event(core_records.TurnFailed(reason=reason, detail=detail)),
             "the parent's turn failed", started_error=texts.INTERRUPTED_CALL_ERROR)
         return True
 
@@ -539,6 +539,6 @@ class TaskRun:
                                         "the response kept hitting the output token limit")
         nudge = texts.OUTPUT_LIMIT_THINKING_NUDGE if thinking_only \
             else texts.OUTPUT_LIMIT_RESUME_NUDGE
-        await self.append([ExtensionRecorded(extension=CORE, kind="continue",
-                                             message=user(nudge, origin="system"))])
+        await self.append([core_records.event(core_records.Continue(),
+                                         message=user(nudge, origin="system"))])
         return True

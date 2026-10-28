@@ -14,7 +14,9 @@ entity.
 ## Event log
 
 Ten event types (`noeta/core/events.py`). Plugin state is never a new event type: a plugin records
-`ExtensionRecorded(extension, kind, data, message?)` and folds it in its own `reduce`. The loop
+`ExtensionRecorded(extension, kind, data, message?)` and folds it in its own `reduce`. The core's
+own entries use the same event under `extension="core"`, one typed payload per kind
+(`noeta/core/records.py`), which the kernel writes and folds them through. The loop
 state is a pure fold of the log; the model request is a pure function of that state.
 
 ## Inbox

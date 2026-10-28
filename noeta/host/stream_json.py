@@ -53,11 +53,12 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import CommandContext
-from noeta.core.loop.state import CONFIG_SIGNAL, CORE
+from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.pending import MODE_SIGNAL, PERMISSION_MODES, Pending, card_title, pending_tree
 from noeta.core.pending import follow_tree as _follow_tree
 from noeta.core.pending import tree_busy as _tree_busy
 from noeta.core.questions import typed_answer
+from noeta.core.records import CORE
 from noeta.core.types import Delta, Image, Message, Text, Thinking, ToolUse, Usage
 from noeta.host.rewind import diff_stats, file_plan, rewind, rewind_points
 from noeta.host.usage import (

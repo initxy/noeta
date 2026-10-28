@@ -45,7 +45,6 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import CommandContext
-from noeta.core.loop.state import CORE
 from noeta.core.pending import (
     MODE_SIGNAL,
     Pending,
@@ -57,6 +56,7 @@ from noeta.core.pending import (
     next_mode,
 )
 from noeta.core.questions import next_question, typed_answer
+from noeta.core.records import CORE
 from noeta.core.types import Delta, Image, Usage
 from noeta.host.local import LocalApp, UnknownAgent
 

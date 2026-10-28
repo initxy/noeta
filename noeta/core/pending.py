@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
+from noeta.core import records
 from noeta.core.events import (
     Answer,
     ExtensionRecorded,
@@ -21,7 +22,6 @@ from noeta.core.events import (
     ToolFinished,
     Waiting,
 )
-from noeta.core.loop.state import CORE
 from noeta.core.types import ToolUse
 
 if TYPE_CHECKING:
@@ -159,9 +159,8 @@ def pending(events: Sequence[Recorded], task_id: str = "") -> list[Pending]:
         elif isinstance(ev, ModelReplied):
             uses = {u.id: u for u in ev.response.message.tool_uses}
             parked = {}
-        elif isinstance(ev, ExtensionRecorded) and ev.extension == CORE and ev.kind == "parked":
-            data = ev.data if isinstance(ev.data, dict) else {}
-            parked[str(data.get("call_id"))] = dict(data.get("detail") or {})
+        elif isinstance(core := records.decode(ev), records.Parked):
+            parked[str(core.call_id)] = dict(core.detail or {})
         elif isinstance(ev, Waiting):
             waiting, done = ev, set()
         elif isinstance(ev, (ModelCalled, TaskEnded)):

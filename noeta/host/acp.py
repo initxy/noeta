@@ -33,7 +33,7 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import CommandContext
-from noeta.core.loop.state import CONFIG_SIGNAL, CORE
+from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.pending import (
     MODE_NAMES,
     MODE_SIGNAL,
@@ -47,6 +47,7 @@ from noeta.core.pending import (
     pending_tree,
 )
 from noeta.core.questions import next_question, typed_answer
+from noeta.core.records import CORE
 from noeta.core.types import Delta, Image, Message, Text, ToolUse
 from noeta.host.local import LocalApp, UnknownAgent
 from noeta.host.rewind import rewind, rewind_points

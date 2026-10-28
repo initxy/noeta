@@ -14,10 +14,11 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Union
 
+from noeta.core import records
 from noeta.core.deferred import deferred_names
 from noeta.core.events import Compacted, Event, ExtensionRecorded, Recorded, Say, TaskCreated
 from noeta.core.execenv import ExecEnv
-from noeta.core.tool import Tool, ToolOutput, notice_data
+from noeta.core.tool import Tool, ToolOutput
 from noeta.core.types import Message, ModelRequest, ModelResponse, Struct, ToolUse, user
 
 if TYPE_CHECKING:
@@ -190,21 +191,24 @@ class TaskView:
             ExtensionRecorded(extension=extension, kind=kind, data=data, message=message)
         )
 
+    def _record_core(self, entry: records.CoreRecord) -> None:
+        self.pending.append(records.event(entry))
+
     def notify(self, text: str, *, kind: str | None = None, data: Any = None) -> None:
         """Tell the person ``text``; front ends show it, the model never sees
         it (a ``core`` / ``notice`` record). ``kind`` and ``data`` carry the
         same news as structured data for a front end that renders it
         (``text`` stays the plain fallback)."""
-        self.record("core", "notice", notice_data(text, kind, data))
+        self._record_core(records.Notice(text=text, notice_kind=kind, notice_data=data))
 
     def set_timer(self, name: str, at: float, text: str = "") -> None:
         """Wake the task at ``at`` (epoch seconds) once it is idle, with
         ``text`` as the next message (``TimerFired(name)`` either way); a
         timer of the same name is replaced. Durable: any worker fires it."""
-        self.record("core", "timer", {"name": name, "at": at, "text": text})
+        self._record_core(records.Timer(name=name, at=at, text=text))
 
     def clear_timer(self, name: str) -> None:
-        self.record("core", "timer_cleared", {"name": name})
+        self._record_core(records.TimerCleared(name=name))
 
     def spawn(self, agent: str, prompt: str | Message, *, config: Mapping[str, Any] | None = None,
               queue: str = "default", key: str = "") -> str:
@@ -225,8 +229,8 @@ class TaskView:
             created=TaskCreated(agent=agent, config=child_config, parent_id=self.task_id,
                                 root_id=self.state.root_id or self.task_id),
             queue=queue, first=Say(message=message)))
-        self.record("core", "spawned", {"children": [
-            {"id": child_id, "call_id": "", "background": True}]})
+        self._record_core(records.Spawned(children=[
+            {"id": child_id, "call_id": "", "background": True}]))
         return child_id
 
     def find_tool(self, name: str) -> Tool | None:

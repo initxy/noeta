@@ -32,7 +32,8 @@ from noeta.core.events import (
 )
 from noeta.core.extension import Ask, Deny, Extension, Rewrite, TaskView
 from noeta.core.loop import decide
-from noeta.core.loop.state import CORE, fold
+from noeta.core.loop.state import fold
+from noeta.core.records import CORE
 from noeta.core.runner import Runtime
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ModelResponse, Text, ToolResult, ToolUse, Usage, user

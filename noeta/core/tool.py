@@ -8,6 +8,7 @@ from typing import Any, Literal, Protocol
 
 import msgspec
 
+from noeta.core import records
 from noeta.core.execenv import ExecEnv
 from noeta.core.types import Display, Image, Struct, Text, ToolReference
 
@@ -94,26 +95,19 @@ class ToolContext:
         """Tell the person ``text``; front ends show it, the model never sees
         it (a ``core`` / ``notice`` record). ``kind`` / ``data``: the same as
         structured data for front ends that render it."""
-        self.record("core", "notice", notice_data(text, kind, data))
+        _record(self.record, records.Notice(text=text, notice_kind=kind, notice_data=data))
 
     def set_timer(self, name: str, at: float, text: str = "") -> None:
         """Wake the task at ``at`` once it is idle, ``text`` as its next
         message (``TaskView.set_timer``)."""
-        self.record("core", "timer", {"name": name, "at": at, "text": text})
+        _record(self.record, records.Timer(name=name, at=at, text=text))
 
     def clear_timer(self, name: str) -> None:
-        self.record("core", "timer_cleared", {"name": name})
+        _record(self.record, records.TimerCleared(name=name))
 
 
-def notice_data(text: str, kind: str | None = None, data: Any = None) -> dict[str, Any]:
-    """A ``core`` / ``notice`` record's data: ``text``, and for structured
-    news its ``kind`` and ``data``."""
-    out: dict[str, Any] = {"text": text}
-    if kind:
-        out["kind"] = kind
-    if data is not None:
-        out["data"] = data
-    return out
+def _record(record: Callable[[str, str, Any], None], entry: records.CoreRecord) -> None:
+    record(records.CORE, entry.kind, entry.data())
 
 
 class Tool(Protocol):

@@ -27,9 +27,9 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
-from noeta.core.events import ExtensionRecorded, InputTaken, Recorded, Say, TaskEnded, Waiting
+from noeta.core import records
+from noeta.core.events import InputTaken, Recorded, Say, TaskEnded, Waiting
 from noeta.core.extension import Extension, TaskView
-from noeta.core.loop.state import CORE
 from noeta.core.tool import Tool
 from noeta.core.types import user
 from noeta.plugins.shell.bash import SHELL, BashTool, ShellState, reduce_shell, sandbox_description
@@ -159,6 +159,5 @@ class Shell(Extension):
                 self.registry.kill_where(root, spawner_id=state.task_id)
         elif isinstance(event, Waiting) and event.on == "input" and self.ends_with_turn:
             self.registry.kill_where(root, spawner_id=state.task_id)
-        elif (isinstance(event, ExtensionRecorded) and event.extension == CORE
-              and event.kind == "turn_stopped" and state.parent_id is None):
+        elif isinstance(records.decode(event), records.TurnStopped) and state.parent_id is None:
             self.registry.kill_where(root)

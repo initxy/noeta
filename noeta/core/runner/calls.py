@@ -7,6 +7,7 @@ import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from noeta.core import records as core_records
 from noeta.core.deferred import is_deferred
 from noeta.core.events import (
     Event,
@@ -19,7 +20,6 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView
-from noeta.core.loop.state import CORE
 from noeta.core.runner import texts
 from noeta.core.store import NewTask, Post
 from noeta.core.tool import Tool, ToolContext, ToolOutput, tool_flag
@@ -196,8 +196,8 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
             queue=queue,
             inbox=[Say(message=message)],
         ))
-        records.append(ExtensionRecorded(extension=CORE, kind="spawned", data={"children": [
-            {"id": child_id, "call_id": use.id, "background": background}]}))
+        records.append(core_records.event(core_records.Spawned(children=[
+            {"id": child_id, "call_id": use.id, "background": background}])))
         return child_id
 
     async def post(body: InboxKind, task_id: str | None = None) -> None:
@@ -219,8 +219,8 @@ async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[
     if output.park is not None:
         park = output.park
         keys = park.keys or [use.id]
-        records.append(ExtensionRecorded(extension=CORE, kind="parked", data={
-            "call_id": use.id, "on": park.on, "keys": keys, "detail": park.detail}))
+        records.append(core_records.event(core_records.Parked(
+            call_id=use.id, on=park.on, keys=keys, detail=park.detail)))
         await run.append(records, creates=creates)
         return
     for ext in run.exts:

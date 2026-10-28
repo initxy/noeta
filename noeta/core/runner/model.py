@@ -7,12 +7,11 @@ from typing import TYPE_CHECKING, Any
 
 import msgspec
 
-from noeta.core import models
+from noeta.core import models, records
 from noeta.core.errors import ContextOverflow, ModelError, RequestStale, TurnDone, TurnFailed
-from noeta.core.events import ExtensionRecorded, ModelCalled, ModelReplied
+from noeta.core.events import ModelCalled, ModelReplied
 from noeta.core.extension import Reminder, TaskView
 from noeta.core.loop.request import build_request, cache_breakpoints, request_hash
-from noeta.core.loop.state import CORE
 from noeta.core.retry import complete_with_retries
 from noeta.core.runner import texts
 from noeta.core.types import (
@@ -129,7 +128,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         return await run.fail_turn(exc.reason, exc.detail)
     except TurnDone:
         await run.flush(view)
-        await run.append([ExtensionRecorded(extension=CORE, kind="turn_done")])
+        await run.append([records.event(records.TurnDone())])
         return True
     except RequestStale:
         await run.flush(view)
@@ -153,11 +152,8 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         # Hosts see "retrying" (and drop the failed attempt's deltas).
         current["attempt"] = attempt + 1
         run.partial = []
-        pending.append(asyncio.ensure_future(run.append([ExtensionRecorded(
-            extension=CORE, kind="retry",
-            data={"attempt": attempt, "delay": delay,
-                  "error": str(error)[: texts.ERROR_DETAIL_CHARS]},
-        )])))
+        pending.append(asyncio.ensure_future(run.append([records.event(records.Retry(
+            attempt=attempt, delay=delay, error=str(error)[: texts.ERROR_DETAIL_CHARS]))])))
 
     try:
         response = await complete_with_retries(run.rt.provider_for(request.model), request,

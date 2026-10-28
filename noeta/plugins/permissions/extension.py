@@ -21,10 +21,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from noeta.core import records
 from noeta.core.events import (
     Answer,
     Compacted,
-    ExtensionRecorded,
     External,
     InputTaken,
     ModelReplied,
@@ -902,9 +902,8 @@ class Permissions(Extension):
             mode = self.mode_of(view)
             view.record(NAME, "compacted", {"auto": mode == "auto", "plan": mode == "plan",
                                             "seq": recorded.seq})
-        elif isinstance(ev, ExtensionRecorded) and ev.extension == "core" and \
-                ev.kind == "parked" and isinstance(ev.data, dict):
-            self._name_plan(view, ev.data)
+        elif isinstance(parked := records.decode(ev), records.Parked):
+            self._name_plan(view, parked)
 
     def _switch(self, view: TaskView, mode: Any, seq: int) -> None:
         if not isinstance(mode, str) or mode not in p.PERMISSION_MODES:
@@ -922,14 +921,14 @@ class Permissions(Extension):
             data["plan"] = {"path": path, "pre_mode": current, "entered_seq": seq}
         view.record(NAME, "mode", data)
 
-    def _name_plan(self, view: TaskView, parked: Mapping[str, Any]) -> None:
+    def _name_plan(self, view: TaskView, parked: records.Parked) -> None:
         """The plan-name side request, when ``ExitPlanMode`` shows the plan."""
         call = next((cl.use for cl in view.state.calls
-                     if cl.use.id == parked.get("call_id")), None)
+                     if cl.use.id == parked.call_id), None)
         if call is None or call.name != pl.EXIT_PLAN_MODE or view.complete is None \
                 or view.post is None:
             return
-        questions = (parked.get("detail") or {}).get("questions") or [{}]
+        questions = (parked.detail or {}).get("questions") or [{}]
         text = str(questions[0].get("question") or "")
         complete, post = view.complete, view.post
         model = view.model or str(view.state.config.get("model") or "")

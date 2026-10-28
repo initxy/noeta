@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from noeta.core import records
 from noeta.core.deferred import TOOL_LOADED_TEXT
 from noeta.core.events import (
     Answer,
@@ -41,8 +42,6 @@ from noeta.core.types import (
 
 Reducer = Callable[[Any, str, Any], Any]
 
-#: The extension name the core itself records under (continuation notes).
-CORE = "core"
 
 #: The signal that changes a running task's config
 #: (``client.signal(task_id, CONFIG_SIGNAL, {"model": ...})``): only the
@@ -209,24 +208,7 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         state.waiting = None
         state.held_unseen = False
     elif isinstance(ev, ModelReplied):
-        resp = ev.response
-        state.model_attempts = 0
-        state.usage = state.usage + resp.usage
-        state.last_usage = resp.usage
-        state.last_stop = resp.stop_reason
-        state._add(resp.message, rec.seq)
-        if state.continuing:
-            state.answer_parts.append(resp.message.text)
-        else:
-            state.answer_parts = [resp.message.text]
-        uses = resp.message.tool_uses
-        state.continuing = resp.stop_reason == "max_tokens" and not uses
-        state.calls = [Call(use=u) for u in uses]
-        state.call_ids.update(u.id for u in uses)
-        # An answer is for a call of the batch it was asked in, never a later one.
-        state.answers = {}
-        if not state.calls and resp.stop_reason != "max_tokens":
-            _close_turn(state, rec.seq)
+        _on_model_replied(state, ev, rec.seq)
     elif isinstance(ev, ToolStarted):
         for c in state.calls:
             if c.use.id == ev.call.id:
@@ -234,33 +216,7 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
                 if ev.call != c.use:
                     c.ran = ev.call
     elif isinstance(ev, ToolFinished):
-        state.tool_calls += 1
-        for c in state.calls:
-            if c.use.id == ev.result.call_id:
-                c.result = ev.result
-        if ev.end_turn is not None:
-            state.end_turn = ev.end_turn
-        if ev.note:
-            state.notes.append(ev.note)
-        refs = [b.tool_name for b in ev.result.content if isinstance(b, ToolReference)]
-        state.loaded_tools += [n for n in dict.fromkeys(refs) if n not in state.loaded_tools]
-        if state.calls and not state.open_calls:
-            results = [c.result for c in state.calls if c.result is not None]
-            content: list[Any] = list(results)
-            if any(isinstance(b, ToolReference) for r in results for b in r.content):
-                content.append(Text(text=TOOL_LOADED_TEXT))
-            content += [Text(text=n) for n in dict.fromkeys(state.notes)]
-            state.notes = []
-            state._add(Message(role="user", content=content), rec.seq)
-            state.calls = []
-            state.held_unseen = state.held_unseen or bool(state.held)
-            for m in state.held:
-                state._add(m, rec.seq)
-            state.held = []
-            if state.end_turn is not None:
-                state.answer_parts = [state.end_turn]
-                state.end_turn = None
-                _close_turn(state, rec.seq)
+        _on_tool_finished(state, ev, rec.seq)
     elif isinstance(ev, Compacted):
         _compact(state, ev)
     elif isinstance(ev, Waiting):
@@ -269,43 +225,9 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         state.ended = ev
         state.waiting = None
     elif isinstance(ev, ExtensionRecorded):
-        if ev.extension == CORE and ev.kind == "turn_stopped":
-            state.stop_turn_requested = None
-            stopped = ev.data if isinstance(ev.data, dict) else {}
-            if stopped.get("marker"):
-                # A reply stopped mid-stream keeps what streamed; the marker
-                # (plain text) opens the person's next turn.
-                if stopped.get("partial"):
-                    state._add(Message(role="assistant",
-                                       content=[Text(text=str(stopped["partial"]))]), rec.seq)
-                state._add(Message(role="user", content=[Text(text=str(stopped["marker"]))],
-                                   origin="inline"), rec.seq)
-            _end_turn(state, rec.seq)
-        if ev.extension == CORE and ev.kind == "parked":
-            for c in state.calls:
-                if c.use.id == ev.data["call_id"]:
-                    c.parked = {k: ev.data.get(k) for k in ("on", "keys", "detail")}
-        if ev.extension == CORE and ev.kind == "spawned":
-            for child in ev.data["children"]:
-                state.spawned[child["id"]] = child
-        if ev.extension == CORE and ev.kind == "timer":
-            data = ev.data if isinstance(ev.data, dict) else {}
-            if data.get("name"):
-                state.timers[str(data["name"])] = {"at": float(data.get("at") or 0),
-                                                   "text": str(data.get("text") or ""),
-                                                   "seq": rec.seq}
-        if ev.extension == CORE and ev.kind == "timer_cleared":
-            state.timers.pop(str((ev.data or {}).get("name") or ""), None)
-        if ev.extension == CORE and ev.kind == "prompts":
-            data = ev.data if isinstance(ev.data, dict) else {}
-            state.prompt_files = {str(k): v for k, v in data.items() if isinstance(v, str)}
-        if ev.extension == CORE and ev.kind == "turn_done":
-            _end_turn(state, rec.seq)
-        if ev.extension == CORE and ev.kind == "turn_failed":
-            data = ev.data if isinstance(ev.data, dict) else {}
-            reason, detail = data.get("reason", "failed"), data.get("detail", "")
-            state.turn_error = f"{reason}: {detail}" if detail else str(reason)
-            _end_turn(state, rec.seq)
+        core = records.decode(ev)
+        if core is not None:
+            _on_core_record(state, core, rec.seq)
         reducer = reducers.get(ev.extension)
         if reducer is not None:
             state.ext[ev.extension] = reducer(state.ext.get(ev.extension), ev.kind, ev.data)
@@ -315,6 +237,90 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
             else:
                 state._add(ev.message, rec.seq)
     return state
+
+
+def _on_model_replied(state: TaskState, ev: ModelReplied, seq: int) -> None:
+    resp = ev.response
+    state.model_attempts = 0
+    state.usage = state.usage + resp.usage
+    state.last_usage = resp.usage
+    state.last_stop = resp.stop_reason
+    state._add(resp.message, seq)
+    if state.continuing:
+        state.answer_parts.append(resp.message.text)
+    else:
+        state.answer_parts = [resp.message.text]
+    uses = resp.message.tool_uses
+    state.continuing = resp.stop_reason == "max_tokens" and not uses
+    state.calls = [Call(use=u) for u in uses]
+    state.call_ids.update(u.id for u in uses)
+    # An answer is for a call of the batch it was asked in, never a later one.
+    state.answers = {}
+    if not state.calls and resp.stop_reason != "max_tokens":
+        _close_turn(state, seq)
+
+
+def _on_tool_finished(state: TaskState, ev: ToolFinished, seq: int) -> None:
+    state.tool_calls += 1
+    for c in state.calls:
+        if c.use.id == ev.result.call_id:
+            c.result = ev.result
+    if ev.end_turn is not None:
+        state.end_turn = ev.end_turn
+    if ev.note:
+        state.notes.append(ev.note)
+    refs = [b.tool_name for b in ev.result.content if isinstance(b, ToolReference)]
+    state.loaded_tools += [n for n in dict.fromkeys(refs) if n not in state.loaded_tools]
+    if state.calls and not state.open_calls:
+        results = [c.result for c in state.calls if c.result is not None]
+        content: list[Any] = list(results)
+        if any(isinstance(b, ToolReference) for r in results for b in r.content):
+            content.append(Text(text=TOOL_LOADED_TEXT))
+        content += [Text(text=n) for n in dict.fromkeys(state.notes)]
+        state.notes = []
+        state._add(Message(role="user", content=content), seq)
+        state.calls = []
+        state.held_unseen = state.held_unseen or bool(state.held)
+        for m in state.held:
+            state._add(m, seq)
+        state.held = []
+        if state.end_turn is not None:
+            state.answer_parts = [state.end_turn]
+            state.end_turn = None
+            _close_turn(state, seq)
+
+
+def _on_core_record(state: TaskState, core: records.CoreRecord, seq: int) -> None:
+    if isinstance(core, records.TurnStopped):
+        state.stop_turn_requested = None
+        if core.marker:
+            # A reply stopped mid-stream keeps what streamed; the marker
+            # (plain text) opens the person's next turn.
+            if core.partial:
+                state._add(Message(role="assistant", content=[Text(text=str(core.partial))]),
+                           seq)
+            state._add(Message(role="user", content=[Text(text=str(core.marker))],
+                               origin="inline"), seq)
+        _end_turn(state, seq)
+    elif isinstance(core, records.Parked):
+        for c in state.calls:
+            if c.use.id == core.call_id:
+                c.parked = {"on": core.on, "keys": core.keys, "detail": core.detail}
+    elif isinstance(core, records.Spawned):
+        for child in core.children:
+            state.spawned[child["id"]] = child
+    elif isinstance(core, records.Timer):
+        if core.name:
+            state.timers[core.name] = {"at": core.at, "text": core.text, "seq": seq}
+    elif isinstance(core, records.TimerCleared):
+        state.timers.pop(core.name, None)
+    elif isinstance(core, records.Prompts):
+        state.prompt_files = core.files
+    elif isinstance(core, records.TurnDone):
+        _end_turn(state, seq)
+    elif isinstance(core, records.TurnFailed):
+        state.turn_error = core.error
+        _end_turn(state, seq)
 
 
 def continued(state: TaskState,
