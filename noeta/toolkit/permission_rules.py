@@ -238,12 +238,61 @@ def _command_matches(content: str, command: str) -> bool:
     return re.fullmatch(pattern, command, flags=re.DOTALL) is not None
 
 
+#: Leading programs a deny or ask rule looks through: each runs the program
+#: named after its own flags (and, for ``env``, assignments).
+_RUNNERS = frozenset({"command", "builtin", "exec", "env", "nohup", "time", "timeout",
+                      "nice", "stdbuf"})
+#: Of their flags, those taking the next word as a value.
+_RUNNER_VALUED = {"env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+                  "nice": {"-n", "--adjustment"}, "timeout": {"-s", "--signal", "-k",
+                                                               "--kill-after"},
+                  "stdbuf": {"-i", "-o", "-e"}, "exec": {"-a"}}
+
+
+def _program_argv(argv: Sequence[str]) -> list[str]:
+    """``argv`` from the program that runs: leading assignments and the
+    :data:`_RUNNERS` in front of it (with their flags) dropped."""
+    i = 0
+    while i < len(argv):
+        word = argv[i]
+        if re.match(r"[A-Za-z_][A-Za-z0-9_]*=", word):
+            i += 1
+            continue
+        if word not in _RUNNERS or (word == "command" and argv[i + 1:i + 2] in (["-v"],
+                                                                                  ["-V"])):
+            break  # ``command -v`` only looks the name up
+        runner = word
+        i += 1
+        while i < len(argv) and argv[i].startswith("-") and argv[i] != "-":
+            if argv[i] == "--":
+                i += 1
+                break
+            i += 2 if argv[i] in _RUNNER_VALUED.get(runner, ()) else 1
+        if runner == "timeout" and i < len(argv) and re.fullmatch(r"\d+(\.\d+)?[smhd]?",
+                                                                  argv[i]):
+            i += 1
+    return list(argv[i:])
+
+
+def _normalized_parts(command: str) -> list[str]:
+    """Each subcommand as the words bash passes on (quotes and escapes
+    removed), from the program that runs."""
+    parsed = parse(command)
+    if parsed.opaque:
+        argvs = [a for a in (parse_argv(t) for t in subcommands(command)) if a]
+    else:
+        argvs = [c.argv for c in parsed.commands]
+    return [" ".join(a) for a in (_program_argv(v) for v in argvs) if a]
+
+
 def shell_rule_matches(content: str, command: str, *, every: bool) -> bool:
     """A ``Bash(content)`` rule against ``command``. ``every``: each
     subcommand must match (an allow rule), and a command whose words do not
     show all it does (a substitution, a heredoc, a redirection to or from a
     file) matches no allow rule; otherwise the whole command or any part
-    matching is enough (a deny or ask rule)."""
+    matching is enough (a deny or ask rule), each part read both as written
+    and as the words that run (``\\rm``, ``'rm'``, ``env X=1 rm`` meet a
+    rule on ``rm``)."""
     parsed = parse(command)
     texts = subcommands(command) if parsed.opaque else [c.text for c in parsed.commands]
     parts = [_strip_wrappers(p) for p in texts] or [command]
@@ -251,7 +300,7 @@ def shell_rule_matches(content: str, command: str, *, every: bool) -> bool:
         return not hides_effects(command) and all(_command_matches(content, p) for p in parts)
     if _command_matches(content, command.strip()):
         return True
-    return any(_command_matches(content, p) for p in parts)
+    return any(_command_matches(content, p) for p in [*parts, *_normalized_parts(command)])
 
 
 # ---------------------------------------------------------------- paths

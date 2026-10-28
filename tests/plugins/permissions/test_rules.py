@@ -124,6 +124,34 @@ def test_an_allow_rule_still_covers_harmless_redirections() -> None:
     assert m("Bash(rm *)", "Bash", command="rm -rf x > log")
 
 
+@pytest.mark.parametrize(("rule", "command"), [
+    ("Bash(rm *)", "\\rm -rf x"),
+    ("Bash(rm *)", "'rm' -rf x"),
+    ("Bash(rm *)", '"rm" -rf x'),
+    ("Bash(rm *)", "r\\m -rf x"),
+    ("Bash(rm *)", "command rm -rf x"),
+    ("Bash(rm *)", "env rm -rf x"),
+    ("Bash(rm *)", "env -i X=1 rm -rf x"),
+    ("Bash(rm *)", "X=1 rm -rf x"),
+    ("Bash(rm *)", "builtin exec rm -rf x"),
+    ("Bash(rm *)", "nohup time -p rm -rf x"),
+    ("Bash(rm *)", "timeout -s KILL 5 rm -rf x"),
+    ("Bash(rm *)", "ls && 'rm' -rf x"),
+    ("Bash(git push *)", "\\git push origin main"),
+    ("Bash(git push *)", "g'i't push origin main"),
+    ("Bash(git push *)", "git 'push' origin main"),
+    ("Bash(git push:*)", "command git push"),
+])
+def test_deny_and_ask_rules_see_through_quotes_and_runners(rule: str, command: str) -> None:
+    assert m(rule, "Bash", command=command)
+    assert not m(rule, "Bash", allow=True, command=command)
+
+
+def test_a_lookup_is_not_a_run() -> None:
+    assert not m("Bash(rm *)", "Bash", command="command -v rm")
+    assert not m("Bash(rm *)", "Bash", command="echo rm")
+
+
 def test_auto_mode_ignores_rules_that_run_project_scripts() -> None:
     from noeta.plugins.permissions.policy import bypasses_classifier
 

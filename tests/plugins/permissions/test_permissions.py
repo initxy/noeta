@@ -286,6 +286,31 @@ async def test_rule_precedence_deny_ask_allow(store: SqliteStore, tmp_path: Path
     assert [r["command"] for r in bash.runs] == ["make build"]
 
 
+@pytest.mark.parametrize(("mode", "command"), [
+    ("acceptEdits", "\\rm -rf x"), ("acceptEdits", "'rm' -rf x"),
+    ("bypassPermissions", "command rm -rf x"), ("bypassPermissions", "X=1 rm -rf x")])
+async def test_a_deny_rule_is_not_dodged_by_quoting(store: SqliteStore, tmp_path: Path,
+                                                    mode: str, command: str) -> None:
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": command})), reply("ok")])
+    client, tid, _ = await start(store, provider, Permissions(mode=mode, deny=["Bash(rm *)"]),
+                                 [bash], cwd=tmp_path)
+    [(text, err)] = results(await events(client, tid))
+    assert err and "Bash(rm *)" in text and not bash.runs
+
+
+@pytest.mark.parametrize("command", ["\\git push origin main", "g'i't push origin main",
+                                     "env git push origin main"])
+async def test_an_ask_rule_is_not_dodged_by_quoting(store: SqliteStore, tmp_path: Path,
+                                                    command: str) -> None:
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": command}))])
+    perms = Permissions(mode="bypassPermissions", ask=["Bash(git push *)"])
+    client, tid, _ = await start(store, provider, perms, [bash], cwd=tmp_path)
+    [detail] = asked(await events(client, tid)).values()
+    assert "Bash(git push *)" in detail["prompt"] and not bash.runs
+
+
 async def test_dont_ask_refuses_what_would_ask(store: SqliteStore, tmp_path: Path) -> None:
     write, bash = Fake("Write"), Fake("Bash")
     provider = ScriptedProvider([reply(
