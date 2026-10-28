@@ -481,10 +481,20 @@ class Permissions(Extension):
         mode = self.mode_of(view)
         scope = self._scope(view)
         ctx = r.RuleContext(root=scope.cwd, home=scope.home, cwd=scope.cwd)
-        denied = r.first_match(self.deny_rules, name, args, ctx)
+        # A file tool reaches where a symlink points: a deny or ask rule on
+        # either path applies.
+        seen = [args]
+        if name in r.READ_TOOLS or name in r.EDIT_TOOLS:
+            target = scope.absolute(_path(args) or scope.cwd)
+            real = await self._real(view, target)
+            if real != target:
+                seen.append(_with_path(args, real))
+        denied = next((m for a in seen if (m := r.first_match(self.deny_rules, name, a, ctx))
+                       is not None), None)
         if denied is not None:
             return _Decision("deny", w.DENIED_BY_RULE.format(name=name, rule=denied.text))
-        asked = r.first_match(self.ask_rules, name, args, ctx)
+        asked = next((m for a in seen if (m := r.first_match(self.ask_rules, name, a, ctx))
+                      is not None), None)
         if asked is not None:
             return self._in_mode(mode, _Decision(
                 "ask", w.ASK_RULE.format(rule=asked.text, name=name), firm=True, why="rule"),
@@ -515,9 +525,19 @@ class Permissions(Extension):
         allowed = r.first_match(allow_rules, name, args, ctx, for_allow=True) is not None
         if name in r.READ_TOOLS:
             path = _path(args) or scope.cwd
-            if scope.contains(path) or allowed or self._in_plans(scope.absolute(path)):
+            literal = scope.absolute(path)
+            target = await self._real(view, literal)
+            if target != literal:
+                # Read through a link: judged where it points (an allow rule
+                # too: "always" offers one on the target's directory).
+                real_scope = await self._real_scope(view, scope)
+                inside = scope.contains(literal) and real_scope.contains(target)
+                allowed = r.first_match(allow_rules, name, _with_path(args, target), ctx,
+                                        for_allow=True) is not None
+            else:
+                inside = scope.contains(literal)
+            if inside or allowed or self._in_plans(literal):
                 return _Decision("allow")
-            target = scope.absolute(path)
             return _Decision("ask", w.ASK_READ_OUTSIDE.format(name=name, path=target),
                              why="read", always=(r.format_rule("Read", f"//{_dir_of(target)}/**"),),
                              always_label=w.CHOICE_ALWAYS_RULE.format(
@@ -583,13 +603,20 @@ class Permissions(Extension):
                 and runs_sandboxed(sandbox, command, disable)):
             return _Decision("allow")
         here = self._shell_scope(view, scope)
-        if sc.read_only(command, here):
+        real_scope = await self._real_scope(view, scope)
+
+        async def reads_inside(part: sc.Part) -> bool:
+            # A path inside as written may be a link out of the directory.
+            return all([real_scope.contains(await self._real(view, x)) for x in part.reads])
+
+        found = sc.parts(command, here)
+        if found is not None and all(p.read_only for p in found) and all(
+                [await reads_inside(p) for p in found]):
             return _Decision("allow")
         bash_rules = [x for x in allow_rules if x.tool == "Bash" and x.content is not None]
         if any(x.tool == "Bash" and x.content is None for x in allow_rules):
             return _Decision("allow")
         edit_rules = [x for x in allow_rules if x.tool == "Edit" and x.content is not None]
-        real_scope = await self._real_scope(view, scope)
 
         async def writable(path: str) -> bool:
             real = await self._real(view, path)
@@ -601,12 +628,30 @@ class Permissions(Extension):
                        and r.path_pattern_matches(x.content or "", real, ctx)
                        for x in edit_rules)
 
+        # Every target is judged on the disk as it is before the command
+        # runs: a link an earlier part copies or moves into place (or that a
+        # part a rule lets through may make) is not there yet, so a later
+        # write (or read) under what such a part wrote is not judged here.
+        placed: list[str] = []
+        unknown = False
+
+        def under_placed(path: str, *, reading: bool = False) -> bool:
+            return (unknown and not reading) or any(
+                path == p or path.startswith(p.rstrip("/") + "/") for p in placed)
+
         open_parts: list[sc.Part] = []
-        for part in sc.shell_parts(command, here):
-            if part.read_only or any(r.shell_rule_matches(x.content or "", part.text, every=True)
-                                     for x in bash_rules):
+        for part in found if found is not None else [sc.Part(command.strip(), False)]:
+            if part.read_only and not any(under_placed(x, reading=True) for x in part.reads) \
+                    and await reads_inside(part):
                 continue
-            if part.writes is not None and all([await writable(x) for x in part.writes]):
+            if any(r.shell_rule_matches(x.content or "", part.text, every=True)
+                   for x in bash_rules):
+                unknown = True
+                continue
+            if part.writes is not None and all(
+                    [not under_placed(x) and await writable(x) for x in part.writes]):
+                if _may_place_links(part.argv):
+                    placed.extend(part.writes)
                 continue
             open_parts.append(part)
         if not open_parts:
@@ -1055,6 +1100,13 @@ def _path(args: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _with_path(args: Mapping[str, Any], path: str) -> dict[str, Any]:
+    """``args`` naming ``path`` instead of the path they name."""
+    key = next((k for k in ("file_path", "notebook_path", "path")
+                if isinstance(args.get(k), str) and args.get(k)), "path")
+    return {**args, key: path}
+
+
 def _dir_of(path: str) -> str:
     return posixpath.dirname(path).lstrip("/") or ""
 
@@ -1074,6 +1126,29 @@ def _newest_prompt(view: TaskView) -> int:
 
 def _platform() -> str:
     return {"darwin": "macos", "win32": "windows"}.get(sys.platform, sys.platform)
+
+
+#: ``cp`` flags that copy what links point to, never a link itself.
+_CP_PLAIN_FLAGS = frozenset({"--force", "--interactive", "--no-clobber", "--verbose",
+                             "--update", "--dereference"})
+
+
+def _may_place_links(argv: Sequence[str]) -> bool:
+    """A file command that may leave a symlink (or a hard link) at what it
+    writes: ``mv``, and ``cp`` unless only plain-copy flags are given."""
+    if argv[:1] == ("mv",):
+        return True
+    if argv[:1] != ("cp",):
+        return False
+    for word in argv[1:]:
+        if word == "--":
+            break
+        if word.startswith("--"):
+            if word not in _CP_PLAIN_FLAGS:
+                return True
+        elif word.startswith("-") and word != "-" and set(word[1:]) - set("finvupL"):
+            return True
+    return False
 
 
 def _shell_always(parts: Sequence[sc.Part],

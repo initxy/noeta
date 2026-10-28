@@ -202,6 +202,13 @@ All notable changes to Noeta are documented here. The format is based on
   command for wrappers, destructive file programs and interpreters. The approval card (TUI)
   and the ACP option name the rule (`Always allow Bash(git push *)`), and no "always" choice
   is offered when nothing would be remembered. Approval details carry `always_label`.
+- **A command that only reads with `git` cannot run a repository's helper programs.** It
+  runs under a `git` shell function that refuses a repository whose directory is not a
+  `.git` (a bare one committed into a clone), turns off the fsmonitor hook, hooks, pager,
+  signature programs and transports, and adds `--no-ext-diff --no-textconv`, wherever it
+  reads (`-C`, `cd`). Deny and ask rules match a command's words as they run (`\rm`,
+  `'rm'`, `env rm`); reads are judged where symlinks lead; a write under a link an earlier
+  part of the same command copies asks. Auto mode keeps exact `Bash(...)` allow rules.
 - **An untrusted project no longer configures the agent.** `noeta` read `<cwd>/.noeta/agents`
   unconditionally, so a cloned repository could replace `main` with one in
   `bypassPermissions` running a command hook. A project's `.noeta/agents`, `.noeta/prompts`,

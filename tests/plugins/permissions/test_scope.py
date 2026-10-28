@@ -31,6 +31,12 @@ S = Scope(dirs=("/proj", "/lib"), home="/home/u")
     "git -C /proj log -p", "rg -n foo src", "wc -l src/*.py", "sort -u a.txt | uniq -c",
     "git branch --list 'x*'", "git config --get user.name", "ls 2>&1 | head -2",
     "git log --format=%H -n 3 -- src", "jq -r .name package.json", "date +%Y",
+    # A leading glob where no flag of the program can do harm, a pattern flag's glob,
+    # and ``[``.
+    "ls *.py", "cat *.md", "wc -l *.py", "ls -d */", "head -n 3 *.txt", "cat *", "ls -- *",
+    "grep -rn foo --include=*.py .", "grep -rn foo --include *.py --exclude-dir=.* .",
+    "rg foo -g *.py", "rg foo --glob *.test.ts src", "rg foo --iglob=*.PY",
+    "[ -d src ]", "[ -f a.txt ] && cat a.txt", "test -d src", "du -sh *", "stat *.py",
 ])
 def test_read_only_inside(command: str) -> None:
     assert read_only(command, S)
@@ -49,7 +55,11 @@ ADVERSARIAL = [
     # Substitutions, heredocs, subshells, comments, expansions.
     "cat <<EOF\nx\nEOF", "cat <<< x", "echo $(whoami)", "cat `id`", "cat <(id)",
     "diff a >(tee x)", "echo \"$(id)\"", "(ls)", "{ ls; }", "ls # x", "cat $HOME/x",
-    "cat ${X}", "echo {a,b}", "cat *", "ls -- *", "ls ~root",
+    "cat ${X}", "echo {a,b}", "ls ~root",
+    # A leading glob may expand to a flag of a program that runs or writes.
+    "sort *", "rg x *", "uniq *", "tree *", "diff * x", "sort -- *", "rg x -g *",
+    "rg x -g *sh", "rg x -g */*.py", "rg x -g*.py", "rg x -g *.{py,sh}",
+    "cat $X*", "ls *.{py,md}", "[ -f $X ]", "[ -f a ] > x",
     # Programs that run others or write, and their flags.
     "sort -o out a", "sort --output=x a", "sort -T /tmp a", "git grep -O x", "git grep -Osh x",
     "git -c core.pager=sh log", "git --exec-path=/x log", "git --config-env=a=b log",

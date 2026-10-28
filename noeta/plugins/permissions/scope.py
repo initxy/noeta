@@ -4,14 +4,16 @@ inside the working directories, and the file commands ``acceptEdits`` lets
 through.
 
 Everything here is pure: paths are compared as written (made absolute and
-normalised); the extension resolves symlinks before it trusts a path.
+normalised); the extension resolves symlinks before it trusts a path (each
+part lists the paths it reads in :attr:`Part.reads` for that).
 
 A command is read-only only when parsing proves it
 (:mod:`noeta.toolkit.shell_syntax`): every subcommand is a program of
 :data:`READ_ONLY` whose every flag is on that program's list (an unknown
 flag makes it not read-only) and whose paths are inside the working
 directories; nothing is redirected to or from a file; nothing expands into
-words the text does not show.
+words the text does not show, but for globs whose expansion can do no harm
+(``ls *.py``, ``rg x -g *.py``: see :class:`_Spec`).
 """
 
 from __future__ import annotations
@@ -72,6 +74,9 @@ class Scope:
     dirs: tuple[str, ...]
     home: str
     here: str | None = None
+    #: Collects every path a read-only check accepted (absolute; a glob's
+    #: directory), when set.
+    seen: list[str] | None = field(default=None, compare=False, hash=False, repr=False)
 
     @property
     def cwd(self) -> str:
@@ -103,7 +108,11 @@ class _Spec:
     ``path_valued``: of those, the ones whose value is a path. Operands are
     ``paths``, ``text`` or ``pattern`` (text first, then paths, unless a
     ``pattern_flags`` flag gave the pattern). ``numeric``: ``-5`` is a
-    count. ``any_flags``: every word is plain text (``echo``)."""
+    count. ``any_flags``: every word is plain text (``echo``).
+    ``lead_glob``: no flag of the program writes, runs or reaches outside
+    the directory, so an operand may start with a glob (``ls *.py``) though
+    it may expand to a name that reads as a flag. ``glob_valued``: flags
+    whose value is a file pattern and may be an unquoted glob."""
 
     flags: frozenset[str] = frozenset()
     valued: frozenset[str] = frozenset()
@@ -112,6 +121,8 @@ class _Spec:
     pattern_flags: frozenset[str] = frozenset()
     numeric: bool = False
     any_flags: bool = False
+    lead_glob: bool = False
+    glob_valued: frozenset[str] = frozenset()
     max_operands: int | None = None
     #: A last look at the parsed flags and operands.
     check: Callable[[list[tuple[str, str | None]], list[Word]], bool] | None = None
@@ -121,9 +132,11 @@ def _set(text: str) -> frozenset[str]:
     return frozenset(text.split())
 
 
-def _spec(flags: str = "", valued: str = "", path_valued: str = "", **kw: object) -> _Spec:
-    return _Spec(flags=_set(flags), valued=_set(valued) | _set(path_valued),
-                 path_valued=_set(path_valued), **kw)  # type: ignore[arg-type]
+def _spec(flags: str = "", valued: str = "", path_valued: str = "", glob_valued: str = "",
+          **kw: object) -> _Spec:
+    return _Spec(flags=_set(flags), valued=_set(valued) | _set(path_valued) | _set(glob_valued),
+                 path_valued=_set(path_valued), glob_valued=_set(glob_valued),
+                 **kw)  # type: ignore[arg-type]
 
 
 _GREP = _spec(
@@ -134,10 +147,10 @@ _GREP = _spec(
     "--only-matching --no-messages --quiet --silent --null --null-data --text "
     "--extended-regexp --fixed-strings --basic-regexp --perl-regexp --byte-offset "
     "--initial-tab --binary-files= --label=",
-    valued="-e -m -A -B -C --regexp --max-count --after-context --before-context --context "
-           "--include --exclude --exclude-dir",
+    valued="-e -m -A -B -C --regexp --max-count --after-context --before-context --context",
+    glob_valued="--include --exclude --exclude-dir",
     path_valued="-f --file", operands="pattern", pattern_flags=_set("-e --regexp -f --file"),
-    numeric=True)
+    numeric=True, lead_glob=True)
 _RG = _spec(
     "-i -s -S -v -n -N -c -l -w -x -o -F -P -U -H -I -L -u -uu -uuu -a -z -0 -p -q -e "
     "--ignore-case --case-sensitive --smart-case --invert-match --line-number "
@@ -147,10 +160,10 @@ _RG = _spec(
     "--no-ignore-vcs --follow --text --null --pretty --quiet --files --json --vimgrep "
     "--column --stats --sort= --sortr= --color= --type-list --trim --unrestricted "
     "--no-messages --max-columns-preview --passthru --crlf --byte-offset",
-    valued="-e -g -t -T -m -A -B -C -d -M -r -j --regexp --glob --iglob --type --type-not "
+    valued="-e -t -T -m -A -B -C -d -M -r -j --regexp --type --type-not "
            "--max-count --after-context --before-context --context --max-depth --max-columns "
            "--replace --threads --max-filesize --encoding -E",
-    path_valued="-f --file --ignore-file", operands="pattern",
+    path_valued="-f --file --ignore-file", glob_valued="-g --glob --iglob", operands="pattern",
     pattern_flags=_set("-e --regexp -f --file --files --type-list"))
 
 
@@ -174,19 +187,20 @@ def _date_ok(_flags: list[tuple[str, str | None]], operands: list[Word]) -> bool
 #: ``awk`` / ``sed`` (run programs, write files).
 READ_ONLY: dict[str, _Spec] = {
     "cat": _spec("-A -b -e -E -n -s -t -T -u -v --show-all --number --number-nonblank "
-                 "--squeeze-blank --show-ends --show-tabs --show-nonprinting"),
+                 "--squeeze-blank --show-ends --show-tabs --show-nonprinting", lead_glob=True),
     "head": _spec("-q -v -z --quiet --silent --verbose --zero-terminated",
-                  valued="-n -c --lines --bytes", numeric=True),
+                  valued="-n -c --lines --bytes", numeric=True, lead_glob=True),
     "tail": _spec("-q -v -z -r --quiet --silent --verbose --zero-terminated",
-                  valued="-n -c --lines --bytes", numeric=True),
-    "wc": _spec("-c -m -l -L -w --bytes --chars --lines --words --max-line-length"),
+                  valued="-n -c --lines --bytes", numeric=True, lead_glob=True),
+    "wc": _spec("-c -m -l -L -w --bytes --chars --lines --words --max-line-length",
+                lead_glob=True),
     "ls": _spec(" ".join(f"-{c}" for c in "aAbBcCdfFgGhHiklLmnNopqQrRsStuUvxX1Z") +
                 " --all --almost-all --human-readable --si --classify --color --color= "
                 "--group-directories-first --full-time --time-style= --sort= --time= "
                 "--reverse --recursive --size --inode --directory --dereference --no-group "
                 "--numeric-uid-gid --indicator-style= --format= --quoting-style= "
                 "--literal --escape --hide= --ignore= --ignore-backups --width=",
-                valued="-I -w -T --ignore --hide --block-size"),
+                valued="-I -w -T --ignore --hide --block-size", lead_glob=True),
     "pwd": _spec("-L -P", operands="none"),
     "echo": _spec(any_flags=True, operands="text"),
     "printf": _spec(any_flags=True, operands="text"),
@@ -197,13 +211,14 @@ READ_ONLY: dict[str, _Spec] = {
     "which": _spec("-a -s", operands="text"),
     "type": _spec("-a -t -p -P -f", operands="text"),
     "file": _spec("-b -i -L -h -z -k -N -0 -r --brief --mime --mime-type --mime-encoding "
-                  "--dereference --no-dereference --uncompress --keep-going --raw"),
+                  "--dereference --no-dereference --uncompress --keep-going --raw",
+                  lead_glob=True),
     "stat": _spec("-L -t -f --dereference --terse --file-system",
-                  valued="-c --format --printf"),
+                  valued="-c --format --printf", lead_glob=True),
     "du": _spec("-a -b -c -h -k -m -s -x -L -H -l -0 --all --bytes --total --human-readable "
                 "--summarize --apparent-size --one-file-system --dereference --si "
                 "--max-depth= --threshold= --time",
-                valued="-d -t -B --max-depth --exclude --block-size"),
+                valued="-d -t -B --max-depth --exclude --block-size", lead_glob=True),
     "df": _spec("-a -h -H -i -k -l -P -T --all --human-readable --si --inodes --local "
                 "--portability --print-type --total --output="),
     "tree": _spec("-a -d -f -i -l -s -h -D -C -n -F -p -u -g -q -N -r -t -v -U -x -J -X "
@@ -406,6 +421,21 @@ def _git_operands_ok(sub: str, flags: list[tuple[str, str | None]],
 # ---------------------------------------------------------------- parsing flags
 
 
+#: A glob whose expansion, read as a flag, could only name a program by a
+#: file extension (``*.py``): no ``/`` and a literal ``.ext`` at the end.
+_EXTENSION_GLOB = re.compile(r"[^/]*[*?\]]\.[\w.-]+")
+
+
+def _glob_value_ok(spec: _Spec, word: Word) -> bool:
+    """``word`` (a :attr:`_Spec.glob_valued` flag's separate value) may
+    stay an unquoted glob: whatever it expands to stays a harmless value
+    or an operand inside the directory."""
+    if word.expands or word.brace or word.tilde:
+        return False
+    return word.plain or not word.lead_glob or spec.lead_glob or bool(
+        _EXTENSION_GLOB.fullmatch(word.text))
+
+
 def _parse_flags(spec: _Spec, words: Sequence[Word]
                  ) -> tuple[list[tuple[str, str | None]], list[Word]] | None:
     """``(flags with their values, operands)`` when every flag is on the
@@ -421,7 +451,14 @@ def _parse_flags(spec: _Spec, words: Sequence[Word]
             i += 1
             continue
         if not word.plain:
-            return None
+            # ``--include=*.py``: whatever it expands to keeps its flag.
+            name, eq, value = a.partition("=")
+            if not eq or name not in spec.glob_valued or word.expands or word.brace or (
+                    re.search(r"[*?\[]", name)):
+                return None
+            flags.append((name, value))
+            i += 1
+            continue
         if a == "--":
             ended = True
             i += 1
@@ -435,7 +472,8 @@ def _parse_flags(spec: _Spec, words: Sequence[Word]
             if name in spec.valued:
                 if not eq:
                     i += 1
-                    if i >= len(words) or not words[i].plain:
+                    if i >= len(words) or not (words[i].plain or (
+                            name in spec.glob_valued and _glob_value_ok(spec, words[i]))):
                         return None
                     value = words[i].text
                 flags.append((name, value))
@@ -457,7 +495,8 @@ def _parse_flags(spec: _Spec, words: Sequence[Word]
                 value = a[j + 1:]
                 if not value:
                     i += 1
-                    if i >= len(words) or not words[i].plain:
+                    if i >= len(words) or not (words[i].plain or (
+                            flag in spec.glob_valued and _glob_value_ok(spec, words[i]))):
                         return None
                     value = words[i].text
                 flags.append((flag, value))
@@ -484,11 +523,14 @@ class Part:
     read_only: bool
     writes: tuple[str, ...] | None = None
     argv: tuple[str, ...] = field(default=())
+    #: The paths a read-only part reads (absolute, as written).
+    reads: tuple[str, ...] = field(default=())
 
 
-def _path_ok(word: Word, scope: Scope) -> bool:
-    """``word`` names paths inside the working directories only."""
-    if word.expands or word.brace or word.lead_glob:
+def _path_ok(word: Word, scope: Scope, *, lead_glob: bool = False) -> bool:
+    """``word`` names paths inside the working directories only.
+    ``lead_glob``: a word may start with a glob (see :attr:`_Spec.lead_glob`)."""
+    if word.expands or word.brace or (word.lead_glob and not lead_glob):
         return False
     text = word.text
     if word.tilde and not (text == "~" or text.startswith("~/")):
@@ -497,6 +539,8 @@ def _path_ok(word: Word, scope: Scope) -> bool:
         text = re.split(r"[*?\[]", text, maxsplit=1)[0] or "."
         if not text.endswith("/"):
             text = posixpath.dirname(text) or "."
+    if scope.seen is not None:
+        scope.seen.append(scope.absolute(text))
     return scope.contains(text)
 
 
@@ -530,7 +574,7 @@ def _check_program(spec: _Spec, words: Sequence[Word], scope: Scope) -> bool:
             if not _text_ok(operands[0], scope):
                 return False
             paths = operands[1:]
-    return all(_path_ok(w, scope) for w in paths)
+    return all(_path_ok(w, scope, lead_glob=spec.lead_glob) for w in paths)
 
 
 #: Programs ``xargs`` may run in a read-only command: whatever words its
@@ -644,6 +688,8 @@ def _read_only_command(cmd: Command, scope: Scope) -> bool:
     if not words:
         return True
     head = words[0]
+    if head.text == "[" and not (head.expands or head.brace or head.tilde):
+        head = Word("[")  # the ``test`` builtin, not a glob
     if not head.plain or "/" in head.text or _ENV_ASSIGN.match(head.text):
         return False
     rest = words[1:]
@@ -794,13 +840,15 @@ def parts(command: str, scope: Scope) -> list[Part] | None:
         if cwds is None:
             out.append(Part(cmd.text, False, None, tuple(cmd.argv)))
             continue
-        here = [scope.at(c) for c in cwds]
+        seen: list[str] = []
+        here = [replace(scope.at(c), seen=seen) for c in cwds]
         ro = all(_read_only_command(cmd, s) for s in here)
         writes: tuple[str, ...] | None = None
         found = [_file_writes(cmd, s) for s in here]
         if found and all(f is not None for f in found):
             writes = tuple(dict.fromkeys(p for f in found for p in f or ()))
-        out.append(Part(cmd.text, ro, writes, tuple(cmd.argv)))
+        out.append(Part(cmd.text, ro, writes, tuple(cmd.argv),
+                        tuple(dict.fromkeys(seen)) if ro else ()))
         cwds = _next_cwds(cmd, cwds, scope)
         if cwds is not None and not all(scope.contains(c) for c in cwds):
             cwds = None

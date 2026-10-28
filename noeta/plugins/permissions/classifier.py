@@ -258,6 +258,9 @@ def chunks(entries: Sequence[Entry], classified: Sequence[str]) -> list[str]:
     return out
 
 
+_TAG_RE = re.compile(r"<(\s*/?\s*(?:user_noeta_md|untrusted_instructions))", re.IGNORECASE)
+
+
 def classifier_request(*, model: str, prompt: str, instructions: str, transcript: Sequence[str],
                        stage: int, fast: bool, user_name: str | None = None,
                        trusted: bool = True) -> ModelRequest:
@@ -268,7 +271,8 @@ def classifier_request(*, model: str, prompt: str, instructions: str, transcript
     identity = USER_IDENTITY.format(user=user_name or _user_name())
     head: list[Message] = []
     if instructions.strip():
-        body = "\n".join(f"  {line}" for line in instructions.splitlines())
+        # The text cannot open or close the tags it sits in.
+        body = _TAG_RE.sub(r"&lt;\1", "\n".join(f"  {line}" for line in instructions.splitlines()))
         lead, tag = (INSTRUCTIONS_PREAMBLE, "user_noeta_md") if trusted else (
             UNTRUSTED_INSTRUCTIONS_PREAMBLE, "untrusted_instructions")
         head = [Message(role="user", content=[Text(

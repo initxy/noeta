@@ -164,6 +164,111 @@ async def test_a_symlink_into_a_protected_directory_still_asks(
     assert len(bash.runs) == (0 if mode == "acceptEdits" else 1)
 
 
+@pytest.mark.parametrize("command", [
+    "cp -r dir c && cp payload c/link", "cp -r dir c; cp payload c/link/x",
+    "mv dir c && cp payload c/link", "cp -a dir/link out && sed -i s/a/b/ out",
+    "cp -r dir c && cd c && cp ../payload link", "mv dir/link l && touch l",
+    "cp -r dir c && cat c/link",
+])
+async def test_a_link_an_earlier_part_copies_is_not_written_through(
+        store: SqliteStore, tmp_path: Path, command: str) -> None:
+    """Each target is judged before anything runs: a link the same command
+    copies or moves first is not on disk yet, so a later write under it asks."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    ws = tmp_path / "ws"
+    (ws / "dir").mkdir(parents=True)
+    (ws / ".git" / "hooks").mkdir(parents=True)
+    (ws / "payload").write_text("x")
+    (ws / "dir" / "link").symlink_to(outside if "link/x" in command else outside / "f")
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": command}))])
+    client, tid, _ = await start(store, provider, Permissions(mode="acceptEdits"), [bash],
+                                 cwd=ws)
+    assert asked(await events(client, tid)) and not bash.runs
+
+
+async def test_a_link_into_git_hooks_copied_in_the_same_command_asks(
+        store: SqliteStore, tmp_path: Path) -> None:
+    (tmp_path / ".git" / "hooks").mkdir(parents=True)
+    (tmp_path / "dir").mkdir()
+    (tmp_path / "dir" / "link").symlink_to(tmp_path / ".git" / "hooks" / "pre-commit")
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply(
+        "", ("Bash", {"command": "cp -r dir c && cp payload c/link"}))])
+    client, tid, _ = await start(store, provider, Permissions(mode="acceptEdits"), [bash],
+                                 cwd=tmp_path)
+    assert asked(await events(client, tid)) and not bash.runs
+
+
+async def test_a_write_after_a_part_a_rule_lets_through_asks(store: SqliteStore,
+                                                             tmp_path: Path) -> None:
+    """What ``npm run build`` leaves behind (a link, perhaps) is unknown."""
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply(
+        "", ("Bash", {"command": "npm run build && cp payload dist/x"}))])
+    perms = Permissions(mode="acceptEdits", allow=["Bash(npm run build)"])
+    client, tid, _ = await start(store, provider, perms, [bash], cwd=tmp_path)
+    assert asked(await events(client, tid)) and not bash.runs
+
+
+async def test_ordinary_multi_part_file_commands_still_run(store: SqliteStore,
+                                                           tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("a")
+    bash = Fake("Bash")
+    commands = ["mkdir -p out && cp a.txt out/", "mkdir -p out/sub && touch out/sub/x",
+                "cp a.txt b.txt && sed -i s/a/b/ b.txt", "rm -f c.txt && cp a.txt c.txt"]
+    provider = ScriptedProvider([reply("", *(("Bash", {"command": c}) for c in commands)),
+                                 reply("ok")])
+    await start(store, provider, Permissions(mode="acceptEdits"), [bash], cwd=tmp_path)
+    assert [r["command"] for r in bash.runs] == commands
+
+
+def _linked_ssh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A workspace whose ``docs`` links to the home directory's ``.ssh``."""
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "id_rsa").write_text("secret")
+    monkeypatch.setenv("HOME", str(home))
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "README").write_text("hi")
+    (ws / "docs").symlink_to(home / ".ssh")
+    return ws
+
+
+async def test_a_read_through_a_link_out_of_the_workspace_asks(
+        store: SqliteStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ws = _linked_ssh(tmp_path, monkeypatch)
+    read, bash = Fake("Read"), Fake("Bash")
+    provider = ScriptedProvider([reply(
+        "", ("Read", {"file_path": "docs/id_rsa"}), ("Bash", {"command": "cat docs/id_rsa"}),
+        ("Bash", {"command": "cd docs && cat id_rsa"}), ("Bash", {"command": "ls docs/"}),
+        ("Read", {"file_path": "README"}), ("Bash", {"command": "cat README"}))])
+    client, tid, _ = await start(store, provider, Permissions(mode="default"), [read, bash],
+                                 cwd=ws)
+    details = asked(await events(client, tid))
+    assert len(details) == 4
+    assert any(str(tmp_path / "home" / ".ssh" / "id_rsa") in d["prompt"]
+               for d in details.values())
+    assert [r["file_path"] for r in read.runs] == ["README"]
+    assert [r["command"] for r in bash.runs] == ["cat README"]
+
+
+async def test_a_read_deny_rule_holds_through_a_link(
+        store: SqliteStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ws = _linked_ssh(tmp_path, monkeypatch)
+    read, write = Fake("Read"), Fake("Write")
+    provider = ScriptedProvider([reply(
+        "", ("Read", {"file_path": "docs/id_rsa"}), ("Write", {"file_path": "docs/config"}),
+        ("Read", {"file_path": "README"})), reply("ok")])
+    perms = Permissions(mode="bypassPermissions", deny=["Read(~/.ssh/**)", "Edit(~/.ssh/**)"])
+    client, tid, _ = await start(store, provider, perms, [read, write], cwd=ws)
+    denied = [text for text, err in results(await events(client, tid)) if err]
+    assert len(denied) == 2 and "Read(~/.ssh/**)" in denied[0] and "Edit(~/.ssh/**)" in denied[1]
+    assert [r["file_path"] for r in read.runs] == ["README"] and not write.runs
+
+
 async def test_a_directory_change_in_the_command_moves_its_paths(store: SqliteStore,
                                                                  tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
@@ -284,6 +389,31 @@ async def test_rule_precedence_deny_ask_allow(store: SqliteStore, tmp_path: Path
     [detail] = asked(evs).values()
     assert "Bash(git push *)" in detail["prompt"]
     assert [r["command"] for r in bash.runs] == ["make build"]
+
+
+@pytest.mark.parametrize(("mode", "command"), [
+    ("acceptEdits", "\\rm -rf x"), ("acceptEdits", "'rm' -rf x"),
+    ("bypassPermissions", "command rm -rf x"), ("bypassPermissions", "X=1 rm -rf x")])
+async def test_a_deny_rule_is_not_dodged_by_quoting(store: SqliteStore, tmp_path: Path,
+                                                    mode: str, command: str) -> None:
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": command})), reply("ok")])
+    client, tid, _ = await start(store, provider, Permissions(mode=mode, deny=["Bash(rm *)"]),
+                                 [bash], cwd=tmp_path)
+    [(text, err)] = results(await events(client, tid))
+    assert err and "Bash(rm *)" in text and not bash.runs
+
+
+@pytest.mark.parametrize("command", ["\\git push origin main", "g'i't push origin main",
+                                     "env git push origin main"])
+async def test_an_ask_rule_is_not_dodged_by_quoting(store: SqliteStore, tmp_path: Path,
+                                                    command: str) -> None:
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": command}))])
+    perms = Permissions(mode="bypassPermissions", ask=["Bash(git push *)"])
+    client, tid, _ = await start(store, provider, perms, [bash], cwd=tmp_path)
+    [detail] = asked(await events(client, tid)).values()
+    assert "Bash(git push *)" in detail["prompt"] and not bash.runs
 
 
 async def test_dont_ask_refuses_what_would_ask(store: SqliteStore, tmp_path: Path) -> None:
