@@ -8,17 +8,16 @@ from pathlib import Path
 import pytest
 
 from noeta import CommandContext, Runtime, parse_agent_file
-from noeta.apps import config
-from noeta.apps.config import load_settings
-from noeta.host.local import from_settings
-from noeta.core import registry
 from noeta.agents.agent_files import build_agents
+from noeta.apps import config
+from noeta.apps.config import from_settings, load_settings
+from noeta.backends.stores.sqlite import SqliteStore
+from noeta.core import registry
 from noeta.core.client import Client
 from noeta.core.commands import expand_command
 from noeta.core.events import ExtensionRecorded, ToolFinished
 from noeta.core.pending import pending
 from noeta.core.questions import answer_question
-from noeta.backends.stores.sqlite import SqliteStore
 from noeta.testing import ScriptedProvider, reply
 
 AGENT = """---

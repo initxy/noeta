@@ -45,7 +45,7 @@
 - build: `make build` (wheel and sdist into `dist/`)
 - e2e: `make e2e` — `-m live` tests against a real LLM / sandbox container; needs credentials, never part of `check`
 - eval: `make eval` — prompt-regression scenarios against a real model, compared to `evals/baseline.json`; `make eval-baseline` re-records it; needs credentials, never part of `check`
-- check: `make check` — ruff, mypy --strict, `scripts/lint-naming.py`, `lint-imports` (layering), pytest with coverage ≥ 85, `scripts/check-docs.sh`
+- check: `make check` — ruff, mypy --strict, `scripts/lint-naming.py`, `scripts/lint-layout.py` (placement), `lint-imports` (layering), pytest with coverage ≥ 85, `scripts/check-docs.sh`
 - release: tag push per `docs/releasing.md` — approval gate
 
 ## Gates
@@ -60,7 +60,7 @@
 - Prefer existing patterns in the repo, keep changes focused, and avoid unrelated refactors.
 - Architecturally, prefer deep modules: a small interface hiding a substantial implementation.
 - The interface is the test surface; don't introduce a seam without a real need to substitute the implementation.
-- Respect the layering (`CONTEXT.md`: Layers): the kernel carries no capability, and a plugin imports nothing but the kernel. `lint-imports` enforces it.
+- Put new code where `CONTEXT.md`: Where code goes says, and respect the layering (`CONTEXT.md`: Layers): the kernel carries no capability; a plugin imports only `noeta.core` and `noeta.toolkit`. `lint-imports` and `scripts/lint-layout.py` enforce it.
 - Name things for what they do, never a metaphor — in code, doc terms, and file slugs alike.
 - Run verification matched to the risk; if you can't verify, say why.
 

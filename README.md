@@ -41,7 +41,9 @@ asyncio.run(main())
 ```
 
 Run more workers on the same Postgres store (`noeta worker --store postgres://…`) to spread
-tasks across machines; serve the client API over HTTP with `noeta serve`.
+tasks across machines; serve the client API over HTTP with `noeta serve` and reach it with
+`noeta.RemoteClient`. `noeta.LocalApp` is a store, a worker and a client in one process.
+Everything an embedder needs is outside `noeta.apps`, which is the `noeta` command itself.
 
 ## Extend it
 
@@ -77,7 +79,10 @@ the built-in ones exactly like yours.
   can add context or block; `mcpServers` are started for every task. A workspace's `.mcp.json`
   servers start only once named in `enabledMcpjsonServers` (or `enableAllProjectMcpServers`).
 - **Backends** — model providers, execution environments, stores — register under
-  `noeta.providers`, `noeta.execenvs` and `noeta.stores`.
+  `noeta.providers`, `noeta.execenvs` and `noeta.stores`. A store passes the tests in
+  `noeta.testing.store_contract` (import them next to a `store` fixture).
+- **Shared plugin code** — path handling, output limits, shell command checks, the context
+  budget — is in `noeta.toolkit`, for your plugins as for the built-ins.
 
 ## Develop
 

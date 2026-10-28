@@ -32,14 +32,24 @@ the hold is released or runs out.
 
 ## Layers
 
-`noeta/core` (log, inbox, loop, runner, sqlite store, client, and every interface a plugin
-implements or uses), `noeta/plugins/<name>` (capabilities), `noeta/backends` (providers, exec
-envs, Postgres), `noeta/agents` (the built-in agent files), `noeta/apps` (CLI, TUI, ACP, HTTP
-server). Imports go downward only, plugins never import each other, backends never import each
-other (`lint-imports`, contracts in `pyproject.toml`). One plugin reaches another only through
-the kernel: a tool by its model-visible name (`TaskView.find_tool`), config a child inherits
-(`Extension.inherit`), the agents a worker can run (`TaskView.agents`). Front ends import no
-plugin either: they reach one by name, settings and the kernel's forms (questions, notices).
+Top to bottom, imports only downward: `noeta/apps` (the `noeta` command, TUI, ACP, `~/.noeta`
+config) > `noeta/agents` (agent files and the built-in agents) > `noeta/plugins/<name>`
+(capabilities) | `noeta/backends` (providers, exec envs, stores) | `noeta/host` (`LocalApp`,
+`RemoteClient`, the HTTP server) > `noeta/toolkit` (code plugins share) > `noeta/core`. `|`
+siblings never import each other, nor do two plugins or two backends (`lint-imports`). One
+plugin reaches another only through the kernel: a tool by name (`TaskView.find_tool`), config a
+child inherits (`Extension.inherit`), the agents a worker runs (`TaskView.agents`). Front ends
+import no plugin: they use names, settings and the kernel's forms (questions, notices, commands).
+The SDK is everything but `noeta/apps`.
+
+## Where code goes
+
+Ask in order, take the first yes: the kernel itself uses it -> `core`; an agent uses it in a
+task -> a plugin; several plugins (or backends) share it -> `toolkit`; it is replaceable
+infrastructure -> `backends`; it runs noeta inside a program or as a service -> `host`; it is
+an agent or the agent-file format -> `agents`; it is the `noeta` command or a front end ->
+`apps`. `scripts/lint-layout.py` (in `make check`) fails on any other top-level package and on
+a `core` module the kernel never imports, unless listed there as kernel surface with a reason.
 
 ## Registry
 
@@ -70,10 +80,10 @@ them something with `notify`; neither reaches the model as the user.
 
 ## Agent file
 
-An agent is a markdown file (`noeta/core/agent_files.py`): YAML frontmatter (`name`,
+An agent is a markdown file (`noeta/agents/agent_files.py`): YAML frontmatter (`name`,
 `description`, `model`, `plugins` as names or `name: {arguments}`, optional `tools`,
 `one_shot`) and the system prompt as body. One plugin instance per name and arguments is shared
-by every agent naming it. The built-ins are `noeta/agents/agents/*.md`.
+by every agent naming it. The built-ins are `noeta/agents/files/*.md`.
 
 ## Prompt name
 

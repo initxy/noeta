@@ -15,6 +15,17 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **Packages say what they hold** (old paths are gone, no aliases):
+  `noeta.core.shell` / `tool_helpers` / `helpers` -> `noeta.toolkit.shell` / `tools` /
+  `context` (code plugins share; the kernel never used it); `noeta.core.store.base` ->
+  `noeta.core.store`; `noeta.core.store.sqlite` -> `noeta.backends.stores.sqlite`;
+  `noeta.backends.postgres` -> `noeta.backends.stores.postgres`; `noeta.backends.execenv` ->
+  `noeta.backends.execenvs`; `noeta.apps.local` / `remote` / `server` -> `noeta.host.*`, with
+  `from_settings` in `noeta.apps.config`; `noeta.presets` -> `noeta.agents` (agent files in
+  `noeta/agents/files/`); `noeta.core.agent_files` -> `noeta.agents.agent_files`. `noeta`
+  exports `LocalApp` and `RemoteClient`. The store contract tests ship as
+  `noeta.testing.store_contract`. `scripts/lint-layout.py` (in `make check`) keeps code where
+  CONTEXT.md's "Where code goes" puts it.
 - **1.0 is a rewrite, one package `noeta`.** Tasks are append-only event logs with one writer
   (conditional appends, claims in the store), an inbox as the only way in, and one `Extension`
   interface for every capability. Includes the `noeta` command (terminal UI, `-p`, `acp`,

@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 created: 2026-10-27
 branch: v1-layout-split
 ---
@@ -12,9 +12,9 @@ Make every top-level package of `noeta/` mean one thing, so "where does this cod
 answer and a check catches the wrong one:
 
 - `noeta.core` holds only what the kernel itself uses and the interfaces plugins and front
-  ends implement or call. Today about 1,250 lines of plugin code sit there (`shell.py`,
-  `tool_helpers.py`, `helpers.py`, `models.py`) because the kernel was the only legal place for
-  code two plugins share.
+  ends implement or call. Today about 750 lines of plugin code sit there (`shell.py`,
+  `tool_helpers.py`, `helpers.py`) because the kernel was the only legal place for code two
+  plugins share.
 - The SDK is everything except `noeta.apps`: an embedder or a desktop / web front end never
   imports `noeta.apps` (today `LocalApp`, `RemoteClient` and the HTTP server live there).
 - `noeta.backends` is three kinds of replaceable infrastructure, laid out alike, and a third
@@ -39,7 +39,7 @@ Measured on `main` @e828f2e:
 | `core/shell.py` (shell command classification) | 394 | no | shell, permissions plugins |
 | `core/tool_helpers.py` (paths, errors, large output) | 243 | no | fs, shell, web, … (16 files) |
 | `core/helpers.py` (token estimate, resident budget) | 116 | no | instructions, skills, memory |
-| `core/models.py` (model catalog, prices) | 493 | only by `helpers.py` | providers, compaction, permissions, config |
+| `core/models.py` (model catalog, prices) | 493 | yes: `runner/model.py` (default output limit) | providers, compaction, permissions, config |
 | `core/store/sqlite.py` | 515 | no (registry entry point only) | — |
 
 `lint-imports` checks import direction only, so nothing stopped shared plugin code from landing
@@ -57,7 +57,7 @@ pieces an embedder needs (`local.py`, `remote.py`, `server.py`); `local.from_set
   | Package | What goes there |
   |---|---|
   | `noeta.apps` | the `noeta` command, TUI, ACP, `~/.noeta` config (`config.py`, now with `from_settings`) |
-  | `noeta.agents` | the built-in agents (was `noeta.presets`): agent files, `default_agents`, default plugin list |
+  | `noeta.agents` | the agent-file format (`agent_files`, was `noeta.core.agent_files`) and the built-in agents (was `noeta.presets`): agent files, `default_agents`, default plugin list |
   | `noeta.plugins` \| `noeta.backends` \| `noeta.host` | capabilities in a task \| replaceable infrastructure \| running noeta in a program or as a service |
   | `noeta.toolkit` | code several plugins (or backends) share, public to third-party plugin authors |
   | `noeta.core` | the kernel and every interface the layers above implement or call |
@@ -65,7 +65,10 @@ pieces an embedder needs (`local.py`, `remote.py`, `server.py`); `local.from_set
   `noeta.testing` (scripted provider, store contract) may import any SDK package, not `apps`.
 - **Moves** (old -> new; tests move to the matching `tests/` path):
   - `core/shell.py` -> `toolkit/shell.py`; `core/tool_helpers.py` -> `toolkit/tools.py`;
-    `core/helpers.py` -> `toolkit/context.py`; `core/models.py` -> `toolkit/models.py`.
+    `core/helpers.py` -> `toolkit/context.py`. `core/models.py` stays: the runner reads a
+    model's default output limit from it.
+  - `core/agent_files.py` -> `agents/agent_files.py` (found by the layout check: only
+    `agents`, `apps` and embedders use it).
   - `core/store/sqlite.py` -> `backends/stores/sqlite.py`; `backends/postgres.py` ->
     `backends/stores/postgres.py`; `backends/execenv/` -> `backends/execenvs/`. `core/store/`
     keeps `base.py` only (flattened to `core/store.py` if nothing else is left there).
@@ -86,8 +89,9 @@ pieces an embedder needs (`local.py`, `remote.py`, `server.py`); `local.from_set
 - **Check for placement** — `scripts/lint-layout.py`, run by `make check`:
   - the top-level packages of `noeta/` are exactly the set above;
   - every module in `noeta/core` is imported by another `noeta/core` module, or is listed in the
-    script's kernel-surface list with a one-line reason (today only `questions`: the question
-    form plugins ask with and front ends answer with). A new core module only plugins use
+    script's kernel-surface list with a one-line reason (`questions`: the question form plugins
+    ask with and front ends answer with; `commands`: front ends list and expand plugins' slash
+    commands). A new core module only plugins use
     fails with "move it to noeta/toolkit".
 - **import-linter**: the layers contract becomes
   `apps > agents > plugins | backends | host > toolkit > core`; the "front ends do not import
@@ -96,25 +100,25 @@ pieces an embedder needs (`local.py`, `remote.py`, `server.py`); `local.from_set
 
 ## Plan
 
-- [ ] Toolkit: move the four modules, update imports, tests (`tests/toolkit/`).
-- [ ] Backends: `stores/` (sqlite in, Postgres in), `execenvs/` rename, entry points, tests.
-- [ ] Host: `host/` with `local`, `remote`, `server`; `from_settings` to `apps/config.py`;
+- [x] Toolkit: move the three modules, update imports, tests (`tests/toolkit/`).
+- [x] Backends: `stores/` (sqlite in, Postgres in), `execenvs/` rename, entry points, tests.
+- [x] Host: `host/` with `local`, `remote`, `server`; `from_settings` to `apps/config.py`;
       `LocalApp` exported from `noeta`.
-- [ ] Agents: `presets/` -> `agents/` with `agents/files/`; tests (`tests/agents/`).
-- [ ] Testing: `noeta/testing/` package, `store_contract.py`, the repo runs it for both stores.
-- [ ] Contracts: new layers in `pyproject.toml`; `scripts/lint-layout.py` and its `make check`
+- [x] Agents: `presets/` -> `agents/` with `agents/files/`; tests (`tests/agents/`).
+- [x] Testing: `noeta/testing/` package, `store_contract.py`, the repo runs it for both stores.
+- [x] Contracts: new layers in `pyproject.toml`; `scripts/lint-layout.py` and its `make check`
       wiring; a test that the script fails on a planted core module only a plugin imports.
-- [ ] Docs: CONTEXT.md (Layers rewritten, new "Where code goes"), AGENTS.md pointer, README
+- [x] Docs: CONTEXT.md (Layers rewritten, new "Where code goes"), AGENTS.md pointer, README
       (Extend it / embedding imports), CHANGELOG (every move under Changed), docstrings naming
       old paths.
-- [ ] `make check` green unpiped; the full suite against a local Postgres; `make example`.
+- [x] `make check` green unpiped; the full suite against a local Postgres; `make example`.
 
 ## Acceptance criteria
 
 - No file under `noeta/` or `tests/` names an old module path (`grep` for each of
   `noeta.presets`, `noeta.apps.local`, `noeta.apps.remote`, `noeta.apps.server`,
   `noeta.core.store.sqlite`, `noeta.core.shell`, `noeta.core.tool_helpers`, `noeta.core.helpers`,
-  `noeta.core.models`, `noeta.backends.execenv`, `noeta.backends.postgres` finds nothing outside
+  `noeta.core.agent_files`, `noeta.backends.execenv`, `noeta.backends.postgres` finds nothing outside
   CHANGELOG).
 - `lint-imports` passes with the new contracts; `scripts/lint-layout.py` passes, and fails on a
   planted `noeta/core/x.py` imported only by a plugin.
@@ -137,3 +141,11 @@ pieces an embedder needs (`local.py`, `remote.py`, `server.py`); `local.from_set
 ## Progress log
 
 - 2026-10-27: proposed after the layout review; owner agreed to the direction, spec for review.
+- 2026-10-27: active. `core/models.py` stays in core (the runner uses it; the first measurement
+  missed `from noeta.core import models`). The layout check found `core/agent_files.py` (moved to
+  `agents`) and `core/commands.py` (kernel surface). Each step its own commit, suite 1367 -> 1370
+  (the three layout-check tests); request goldens unchanged.
+- 2026-10-27: done. `make check` green (1370 passed, 87.26 %), Postgres 1396 passed none
+  skipped, `make example` green; no old path left outside CHANGELOG; an embedding script
+  (`default_agents`, `LocalApp`, `RemoteClient`) loads no `noeta.apps` module; a store written
+  by `main`'s code reads and resumes with the new code.
