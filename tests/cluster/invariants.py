@@ -154,10 +154,12 @@ def jobs_running(tid: str, records: Sequence[Recorded]) -> list[str]:
             if not any(k in ("ended", "lost") for _s, k in marks)]
 
 
-def job_notices(records: Sequence[Recorded]) -> Counter[str]:
+def job_notices(records: Sequence[Recorded],
+                jobs: Iterable[str] | None = None) -> Counter[str]:
     """Job id -> how many notices of its end (or loss) the task took: a
-    ``<task-notification>`` naming the job with a status."""
-    jobs = set(jobs_of(records))
+    ``<task-notification>`` naming the job with a status. ``jobs``: the jobs
+    to count (default: the ones this log started)."""
+    jobs = set(jobs_of(records) if jobs is None else jobs)
     out: Counter[str] = Counter()
     for text in taken_texts(records):
         if "<task-notification>" not in text or "<status>" not in text:

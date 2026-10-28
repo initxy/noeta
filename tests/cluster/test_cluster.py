@@ -49,7 +49,7 @@ from tests.cluster.harness import (
     wait_until,
     watch_rows,
 )
-from tests.cluster.invariants import EpochWatch, jobs_of, lost_jobs_ended_late
+from tests.cluster.invariants import EpochWatch, jobs_of, lost_jobs_ended_late, taken_texts
 
 pytestmark = pytest.mark.cluster
 
@@ -260,6 +260,41 @@ async def test_retry_safe_call_runs_again_after_its_worker_dies(tmp_path: Path,
 
 
 # ------------------------------------------------------------------ one gap each
+
+
+async def test_lost_job_of_an_ended_sub_agent_reaches_the_root(tmp_path: Path,
+                                                               pg_url: str) -> None:
+    """A sub-agent starts a background job and ends; SIGKILL the worker
+    running the job while the root waits on it: the root is told the job
+    is lost (the sub-agent's log is closed) and finishes; the job is gone."""
+    cluster = Cluster(tmp_path, pg_url, workers=3, lease=LEASE)
+    await cluster.start()
+    spec = Spec(id="r00", effects=1, agent=True, child_bg=8.0)
+    faults = Faults()
+    try:
+        tid = await cluster.create(spec)
+
+        async def child_gone_job_running() -> bool:
+            tree = await cluster.tree(tid)
+            root = next(r for r in tree if r.task_id == tid)
+            return root.status == "waiting" and any(
+                r.parent_id == tid and r.status == "ended" for r in tree) \
+                and bool(await cluster.running_job_pids())
+
+        assert await wait_until(child_gone_job_running, 30), "the sub-agent's job never ran"
+        assert await kill_holder(cluster, {tid}, faults)
+        await wait_until(lambda: root_finished(cluster, tid, spec), 10 * LEASE + 6.0)
+        await asyncio.sleep(2.0)
+        outcome = await _outcome(cluster, tid, spec, faults)
+    finally:
+        await cluster.close()
+    assert_invariants(outcome)
+    assert_all_done(outcome)
+    told = [t for t in taken_texts(outcome.logs[tid])
+            if "<tool-use-id>cbg-r00</tool-use-id>" in t]
+    assert len(told) == 1 and "<status>failed</status>" in told[0], fail(outcome, told)
+    assert not any(line.startswith("r00-cbg ") for line in outcome.journal), fail(
+        outcome, ["the job of a dead worker wrote after the root was told it was lost"])
 
 
 async def _one_job(tmp_path: Path, url: str, bg: float) -> tuple[Cluster, str, Spec, int]:

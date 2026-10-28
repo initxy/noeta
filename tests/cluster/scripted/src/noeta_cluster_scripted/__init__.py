@@ -22,7 +22,10 @@ running ``lookup`` seconds (when ``lookup`` > 0), a background
 ``Bash`` that sleeps ``bg`` seconds and then journals ``<id>-bg`` (when
 ``bg`` > 0), an ``Agent`` running ``cluster-child`` (which calls ``Effect``
 once and answers), a ``ScheduleWakeup`` whose prompt is
-``CLUSTER-WAKE <id>``. Every ``CLUSTER-PING <id> <j>`` message it is sent
+``CLUSTER-WAKE <id>``. With ``child_bg`` > 0 the sub-agent also starts a
+background ``Bash`` (``child_bg`` seconds, journalling ``<id>-cbg``) and ends
+without waiting for it; the root then waits for that job's end or loss too.
+Every ``CLUSTER-PING <id> <j>`` message it is sent
 gets one ``Effect`` (token ``<id>-p<j>``); the wake-up, once it arrives, is
 stopped. The task answers ``DONE <id>`` once the job's end (or loss), the
 sub-agent's end and the wake-up have all reached it, else ``WAITING <id>``.
@@ -201,7 +204,8 @@ def root_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
                                      "description": f"cluster job {rid}"})
     agent_id = f"agt-{rid}"
     if spec.get("agent") and agent_id not in seen.issued:
-        child = json.dumps({"id": rid, "journal": journal})
+        child = json.dumps({"id": rid, "journal": journal,
+                            "bg": float(spec.get("child_bg", 0) or 0)})
         return _call(agent_id, "Agent", {"description": f"cluster child {rid}",
                                          "prompt": CHILD + child,
                                          "subagent_type": CHILD_AGENT})
@@ -225,6 +229,9 @@ def root_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
         pending.append("job")  # its end, or its loss, names the call
     if spec.get("agent") and not seen.failed(agent_id) and not seen.notified(agent_id):
         pending.append("agent")
+    if spec.get("agent") and float(spec.get("child_bg", 0) or 0) > 0 \
+            and not seen.failed(agent_id) and not seen.notified(f"cbg-{rid}"):
+        pending.append("the sub-agent's job")
     if spec.get("wake") and not seen.failed(wake_id) and not woke:
         pending.append("wake")
     if pending:
@@ -237,6 +244,12 @@ def child_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
     cid = f"ceff-{rid}"
     if cid not in seen.issued:
         return _call(cid, "Effect", {"token": f"{rid}-c"})
+    bg = float(spec.get("bg", 0) or 0)
+    if bg > 0 and f"cbg-{rid}" not in seen.issued:
+        line = shlex.quote(f"{rid}-cbg {rid} cbg-{rid}")
+        return _call(f"cbg-{rid}", "Bash", {
+            "command": f"sleep {bg}; echo {line} >> {shlex.quote(str(spec['journal']))}",
+            "run_in_background": True, "description": f"cluster child job {rid}"})
     return _say(f"CHILD-DONE {rid}")
 
 
