@@ -196,7 +196,8 @@ class Permissions(Extension):
     * ``plans_dir`` — where plan files go (default ``<noeta home>/plans``).
     * ``trusted_workspace`` / ``remember_to_project`` — "always" answers are
       also written to the project's ``.noeta/settings.local.json`` (trusted
-      workspaces only).
+      workspaces only). Only in a trusted workspace do the instruction files
+      count as the person's intent to the auto-mode classifier.
     * ``shell_allowlist`` (``{"rule": "git push *"}`` specs) and
       ``webfetch_allowed_hosts`` (``example.com`` / ``*.example.com``) —
       shorthands for ``Bash(...)`` and ``WebFetch(domain:...)`` allow rules.
@@ -742,7 +743,8 @@ class Permissions(Extension):
             nonlocal model, fast, demoted
             assert view.complete is not None
             request = c.classifier_request(model=model, prompt=prompt, instructions=instructions,
-                                           transcript=transcript, stage=n, fast=fast)
+                                           transcript=transcript, stage=n, fast=fast,
+                                           trusted=self.trusted)
             try:
                 response = await view.complete(request)
             except Exception:
@@ -752,7 +754,7 @@ class Permissions(Extension):
                 model, fast, demoted = main, False, True
                 response = await view.complete(c.classifier_request(
                     model=model, prompt=prompt, instructions=instructions,
-                    transcript=transcript, stage=n, fast=False))
+                    transcript=transcript, stage=n, fast=False, trusted=self.trusted))
             return response.message.text
 
         first = c.parse_stage1(await stage(1))
@@ -762,10 +764,11 @@ class Permissions(Extension):
 
     def _transcript(self, view: TaskView, call: ToolUse, st: PermState) -> list[str]:
         summary_at = len(view.state.compaction.lead) if view.state.compaction else None
-        entries = c.transcript_entries(view.state.messages, call.id, summary_at=summary_at)
+        entries = c.transcript_entries(view.state.messages, call.id, summary_at=summary_at,
+                                       shown=st.classified)
         if not entries or entries[-1].call_id != call.id:
             rendered = c.render_call(call)
-            entries.append(c.Entry(c._entry(call.name, rendered or ""), call.id))
+            entries.append(c.Entry(c._entry(call.name, rendered), call.id))
         return c.chunks(entries, [k for k in st.classified if k != call.id])
 
     async def _instructions(self, view: TaskView) -> str:
