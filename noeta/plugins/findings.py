@@ -34,7 +34,7 @@ DESCRIPTION = (
     "them ask for it, and then set each finding's `outcome` to what actually happened."
 )
 
-_FINDING = {
+_FINDING: dict[str, Any] = {
     "type": "object",
     "properties": {
         "file": {"type": "string",
@@ -75,6 +75,33 @@ SCHEMA: dict[str, Any] = {
 }
 
 
+def _finding_problem(f: Any) -> str | None:
+    """What makes ``f`` not fit the finding schema, else ``None``."""
+    if not isinstance(f, dict):
+        return "must be an object."
+    props = _FINDING["properties"]
+    extra = sorted(set(f) - set(props))
+    if extra:
+        return f"unknown field `{extra[0]}`."
+    for key in ("file", "summary", "failure_scenario"):
+        if not isinstance(f.get(key), str):
+            return f"`{key}` is required and must be a string."
+    line = f.get("line")
+    if line is not None and (not isinstance(line, int) or isinstance(line, bool)
+                             or abs(line) > _SAFE_INT):
+        return "`line` must be an integer."
+    for key in ("short_summary", "category"):
+        value = f.get(key)
+        if value is not None and (not isinstance(value, str)
+                                  or len(value) > props[key]["maxLength"]):
+            return f"`{key}` must be a string of at most {props[key]['maxLength']} characters."
+    for key in ("verdict", "outcome"):
+        value = f.get(key)
+        if value is not None and value not in props[key]["enum"]:
+            return f"`{key}` must be one of {', '.join(props[key]['enum'])}."
+    return None
+
+
 def _plural(n: int) -> str:
     return "finding" if n == 1 else "findings"
 
@@ -91,13 +118,14 @@ class ReportFindingsTool:
         if not isinstance(findings, list) or len(findings) > MAX_FINDINGS:
             return text_output(f"{TOOL}: `findings` must be a list of at most "
                                f"{MAX_FINDINGS} findings.", is_error=True)
-        bad = [i for i, f in enumerate(findings) if not isinstance(f, dict)
-               or not all(isinstance(f.get(k), str) for k in ("file", "summary",
-                                                                "failure_scenario"))]
-        if bad:
-            return text_output(f"{TOOL}: finding {bad[0]} needs `file`, `summary` and "
-                               "`failure_scenario`.", is_error=True)
-        level = input.get("level") if input.get("level") in _LEVELS else None
+        level = input.get("level")
+        if level is not None and level not in _LEVELS:
+            return text_output(f"{TOOL}: `level` must be one of {', '.join(_LEVELS)}.",
+                               is_error=True)
+        for i, f in enumerate(findings):
+            problem = _finding_problem(f)
+            if problem is not None:
+                return text_output(f"{TOOL}: finding {i}: {problem}", is_error=True)
         n = len(findings)
         lines = [f"Code review{f' ({level})' if level else ''}: {n} {_plural(n)}"]
         for f in findings:
