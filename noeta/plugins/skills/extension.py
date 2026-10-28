@@ -64,6 +64,7 @@ _NOTHING_RAN = (
     "re-issue the other calls in a separate response."
 )
 _SKILL_PROP_DESCRIPTION = "Name of the skill to activate, from the skill listing in your context."
+_ARGS_PROP_DESCRIPTION = "Optional arguments for the skill."
 _SKILL_NAME_MAX_LEN = 200
 
 #: The directories a workspace contributes, relative to its root.
@@ -80,7 +81,7 @@ def _skill_description() -> str:
 
 
 class SkillTool:
-    """``skill(skill)``: the same schema bytes for every task. The listing
+    """``skill(skill, args?)``: the same schema bytes for every task. The listing
     in the conversation names the skills; the tool validates against the
     live roster (a skill installed since the listing is accepted, a removed
     one is not)."""
@@ -94,7 +95,10 @@ class SkillTool:
         self.description = _skill_description()
         self.input_schema: dict[str, Any] = {
             "type": "object",
-            "properties": {"skill": {"type": "string", "description": _SKILL_PROP_DESCRIPTION}},
+            "properties": {
+                "skill": {"type": "string", "description": _SKILL_PROP_DESCRIPTION},
+                "args": {"type": "string", "description": _ARGS_PROP_DESCRIPTION},
+            },
             "required": ["skill"],
         }
 
@@ -110,14 +114,18 @@ class SkillTool:
         if desc is None or name not in menu:
             available = ", ".join(menu) if menu else "(none)"
             return text_output(f"unknown skill {name!r}; available: {available}", is_error=True)
+        args = input.get("args")
+        if args is not None and not isinstance(args, str):
+            return text_output("args must be a string", is_error=True)
         return text_output(
             f"Skill '{name}' loaded; its instructions will appear in your "
             f"context from your next step.",
-            skill_activation=_activation_data(desc, "model"),
+            skill_activation=_activation_data(desc, "model", args),
         )
 
 
-def _activation_data(desc: SkillDescription, source: str) -> dict[str, Any]:
+def _activation_data(desc: SkillDescription, source: str,
+                     args: str | None = None) -> dict[str, Any]:
     raw = desc.meta("allowed-tools")
     allowed: list[str] | None = None
     if raw is not None:
@@ -129,7 +137,8 @@ def _activation_data(desc: SkillDescription, source: str) -> dict[str, Any]:
         "dir": desc.base_dir,
         "scripts": [r for r in desc.resources if is_skill_script_resource(r)],
         "allowed_tools": allowed,
-        "text": render_activation(desc),
+        "args": args,
+        "text": render_activation(desc, args),
     }
 
 
@@ -321,10 +330,12 @@ class Skills(Extension):
             if lines:
                 self._record_listing(view, lines, first=True)
         for message in messages:
-            m = re.match(r"/([a-z0-9][a-z0-9-]*)(?:\s|$)", message.text.lstrip())
+            m = re.match(r"/([a-z0-9][a-z0-9-]*)(?:\s+|$)(.*)", message.text.lstrip(),
+                         re.DOTALL)
             desc = registry.get(m.group(1)) if m else None
-            if desc is not None and desc.name not in state.get("active", {}):
-                self._record_activation(view, _activation_data(desc, "user"))
+            if m and desc is not None and desc.name not in state.get("active", {}):
+                self._record_activation(view, _activation_data(desc, "user",
+                                                               m.group(2).strip()))
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
         data = output.meta.get("skill_activation")
@@ -415,10 +426,10 @@ class Skills(Extension):
         if not active:
             return out
         registry = await self.registry(task_env(view.env, view.state.config))
-        for name in active:
+        for name, entry in active.items():
             desc = registry.get(name)
             if desc is not None:
-                out.append(user(render_activation(desc), origin=self.origin))
+                out.append(user(render_activation(desc, entry.get("args")), origin=self.origin))
         return out
 
 

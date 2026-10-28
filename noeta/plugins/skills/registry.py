@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import posixpath
 import re
+import shlex
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -29,6 +30,7 @@ __all__ = [
     "load_registry",
     "render_activation",
     "strip_argument_placeholder",
+    "substitute_arguments",
 ]
 
 _log = logging.getLogger(__name__)
@@ -38,9 +40,7 @@ _NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 #: Render-order default when ``priority:`` is absent or unreadable.
 DEFAULT_SKILL_PRIORITY = 100
 
-#: Claude Code's argument placeholder. The ``skill`` tool takes a name and
-#: nothing else, so there is no argument channel to substitute from; lines
-#: carrying it are dropped at render.
+#: Claude Code's argument placeholder, filled by :func:`substitute_arguments`.
 ARGUMENTS_PLACEHOLDER = "$ARGUMENTS"
 
 #: Bound on one ``find`` listing of a skill directory.
@@ -235,26 +235,66 @@ def strip_argument_placeholder(text: str) -> str:
     return re.sub(r"\s{2,}", " ", text.replace(ARGUMENTS_PLACEHOLDER, "")).strip()
 
 
-def _strip_argument_lines(body: str) -> str:
-    """Drop every body line carrying ``$ARGUMENTS`` (and the blank line it
-    leaves behind)."""
-    if ARGUMENTS_PLACEHOLDER not in body:
+#: Stands in for an escaped ``\$`` while placeholders are filled.
+_ESCAPED_DOLLAR = "￿"
+
+
+def _split_arguments(args: str) -> list[str]:
+    try:
+        return shlex.split(args)
+    except ValueError:
+        return args.split()
+
+
+def substitute_arguments(body: str, args: str | None) -> str:
+    """``body`` with its argument placeholders filled the way Claude Code
+    fills them: ``$ARGUMENTS`` is the whole argument string,
+    ``$ARGUMENTS[N]`` and ``$N`` the N-th (from 0) shell-quoted word (left as
+    written when there is no such word), and ``\\$`` keeps a ``$`` literal.
+    When arguments are given but no placeholder took them, they follow the
+    body on an ``ARGUMENTS:`` line. ``None`` (no arguments passed) leaves the
+    body as written."""
+    if args is None:
         return body
-    kept: list[str] = []
-    for line in body.split("\n"):
-        if ARGUMENTS_PLACEHOLDER in line:
-            if kept and kept[-1].strip() == "":
-                kept.pop()
-            continue
-        kept.append(line)
-    return "\n".join(kept)
+    words: list[str] | None = None
+
+    def word(i: int) -> str | None:
+        nonlocal words
+        words = words if words is not None else _split_arguments(args)
+        return words[i] if i < len(words) else None
+
+    used = False
+
+    def fill(value: str) -> str:
+        nonlocal used
+        used = True
+        return value.replace("$", _ESCAPED_DOLLAR)
+
+    text = body.replace(_ESCAPED_DOLLAR, "�")
+    text = re.sub(r"(?<!\\)\\\$(?=\d|ARGUMENTS)", _ESCAPED_DOLLAR, text)
+
+    def indexed(m: re.Match[str]) -> str:
+        found = word(int(m.group(1)))
+        return m.group(0).replace("$", _ESCAPED_DOLLAR, 1) if found is None else fill(found)
+
+    def positional(m: re.Match[str]) -> str:
+        found = word(int(m.group(1)))
+        return m.group(0) if found is None else fill(found)
+
+    text = re.sub(r"\$ARGUMENTS\[(\d+)\]", indexed, text)
+    text = re.sub(r"\$(\d+)(?!\w)", positional, text)
+    text = re.sub(re.escape(ARGUMENTS_PLACEHOLDER), lambda _m: fill(args), text)
+    if not used and args:
+        text += f"\nARGUMENTS: {args}"
+    return text.replace(_ESCAPED_DOLLAR, "$")
 
 
-def render_activation(desc: SkillDescription) -> str:
-    """The text an activated skill puts in the conversation."""
+def render_activation(desc: SkillDescription, args: str | None = None) -> str:
+    """The text an activated skill puts in the conversation, its body's
+    placeholders filled from ``args`` (:func:`substitute_arguments`)."""
     base = f"Base directory for this skill: {desc.base_dir}\n\n" if desc.base_dir else ""
     return (
         f"Activated skill: {desc.name}\n\n"
         f"{strip_argument_placeholder(desc.description)}\n\n"
-        f"{base}{_strip_argument_lines(desc.body)}"
+        f"{base}{substitute_arguments(desc.body, args)}"
     )

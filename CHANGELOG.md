@@ -46,6 +46,13 @@ All notable changes to Noeta are documented here. The format is based on
   now; under 1000 ignored), else `MCP_TOOL_TIMEOUT`, else 1e8 ms, instead of 30 s; every other
   request by `MCP_TIMEOUT` (default 30 s). `noeta.plugins.mcp.results` no longer exports
   `INLINE_MAX_BYTES`.
+- **Skill arguments are filled in, not dropped.** A skill body's lines holding `$ARGUMENTS`
+  were removed. The `skill` tool now takes Claude Code's optional `args` string, and `/name
+  args` passes what follows the name; `$ARGUMENTS`, `$ARGUMENTS[N]` and `$N` (from 0) are
+  filled as Claude Code fills them (`\$` keeps a `$`), arguments no placeholder took follow
+  the body on an `ARGUMENTS:` line, and a call without `args` leaves the body as written.
+  The arguments are kept with the activation, so the body re-attached after a compaction is
+  the same (`noeta.plugins.skills.registry.substitute_arguments`).
 - `make example` ran a build uv had cached; it now installs the example plugin editable.
 - A second `registry.provider()` call for a family failed once that family's adapter module
   had been imported (the entry point named a package attribute the submodule rebound).
