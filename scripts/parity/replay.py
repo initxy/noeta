@@ -419,7 +419,6 @@ class SessionReplay:
             await asyncio.sleep(0.2)
             if step.get("interrupt") and self.replayer.stalls.is_set():
                 self.replayer.stalls.clear()
-                self.notes.append(f"step {step['name']}: turn interrupted mid-reply")
                 await app.client.cancel(task_id, "interrupted", turn_only=True)
             for p in await pending_tree(app.client, task_id):
                 if p.kind == "approval":
@@ -446,11 +445,21 @@ class SessionReplay:
             taken = [i for i, e in enumerate(events) if isinstance(e, InputTaken)]
             if taken and row.status == "waiting" and row.waiting_on == "input" and any(
                     isinstance(e, Waiting) and e.on == "input" for e in events[taken[0]:]) \
-                    and row.inbox_read_seq >= row.inbox_seq and await _agents_done(app, task_id):
+                    and row.inbox_read_seq >= row.inbox_seq and await _agents_done(app, task_id) \
+                    and not (step.get("idle") and _jobs_running(task_id)):
                 return
         self.notes.append(f"step {step['name']}: no settle within {STEP_TIMEOUT_S:.0f}s; "
                           "turn cancelled")
         await app.client.cancel(task_id, "replay timeout", turn_only=True)
+
+
+def _jobs_running(root_id: str) -> bool:
+    """A background job of the tree still runs: a step with ``idle`` is one
+    whose recording waited for the session to go quiet, its jobs' end notices
+    included."""
+    from noeta.plugins.shell.jobs import REGISTRY
+
+    return bool(REGISTRY.running(root_id))
 
 
 async def _agents_done(app: Any, task_id: str) -> bool:

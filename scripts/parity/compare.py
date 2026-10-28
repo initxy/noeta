@@ -282,10 +282,26 @@ def _by(rows: Iterable[Mapping[str, Any]], kind: str) -> dict[tuple[str, int], M
             if r.get("kind") == kind and r.get("call") and r.get("status", 200) == 200}
 
 
+def _number_interrupted(rows: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Claude Code's main-loop request the person interrupted gets the call
+    number it had in its step, as noeta's stalled request has one, so the
+    two are compared."""
+    out: list[Mapping[str, Any]] = []
+    calls: dict[str, int] = {}
+    for r in rows:
+        if r.get("kind") == "main" and r.get("call"):
+            calls[r["step"]] = max(calls.get(r["step"], 0), r["call"])
+        elif r.get("kind") == "main" and r.get("interrupted"):
+            calls[r["step"]] = calls.get(r["step"], 0) + 1
+            r = {**r, "call": calls[r["step"]]}
+        out.append(r)
+    return out
+
+
 def compare_session(name: str, cc: Mapping[str, Any], no: Mapping[str, Any],
                     cc_tools: Mapping[str, Any], no_tools: Mapping[str, Any],
                     found: Findings) -> None:
-    cc_rows = cc["requests"]
+    cc_rows = _number_interrupted(cc["requests"])
     no_rows = no["requests"]
     renames = TOOL_NAMES
     for r in no_rows:
