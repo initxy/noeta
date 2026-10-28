@@ -48,6 +48,38 @@ def _to_eol(text: str, eol: str) -> str:
     return lf if eol == "\n" else lf.replace("\n", eol)
 
 
+_LEFT_SINGLE, _RIGHT_SINGLE, _LEFT_DOUBLE, _RIGHT_DOUBLE = "\u2018", "\u2019", "\u201c", "\u201d"
+_STRAIGHTEN = str.maketrans({_LEFT_SINGLE: "'", _RIGHT_SINGLE: "'",
+                             _LEFT_DOUBLE: '"', _RIGHT_DOUBLE: '"'})
+#: What may come right before an opening quote.
+_OPENERS = frozenset(" \t\n\r([{\u2014\u2013")
+
+
+def _as_in_file(before: str, old: str) -> str | None:
+    """The file's own text for ``old`` when they differ only in curly versus
+    straight quotes (the model types straight ones), else ``None``."""
+    at = before.translate(_STRAIGHTEN).find(old.translate(_STRAIGHTEN))
+    return before[at:at + len(old)] if at >= 0 else None
+
+
+def _curl(text: str, found: str) -> str:
+    """``text``'s straight quotes curled the way the matched file text uses
+    curly ones, so a replacement keeps the file's typography."""
+    doubles = _LEFT_DOUBLE in found or _RIGHT_DOUBLE in found
+    singles = _LEFT_SINGLE in found or _RIGHT_SINGLE in found
+    out = []
+    for i, ch in enumerate(text):
+        opens = i == 0 or text[i - 1] in _OPENERS
+        if ch == '"' and doubles:
+            ch = _LEFT_DOUBLE if opens else _RIGHT_DOUBLE
+        elif ch == "'" and singles:
+            between_letters = (0 < i < len(text) - 1 and text[i - 1].isalpha()
+                               and text[i + 1].isalpha())
+            ch = _RIGHT_SINGLE if between_letters or not opens else _LEFT_SINGLE
+        out.append(ch)
+    return "".join(out)
+
+
 def _dominant_eol(text: str) -> str:
     """``"\\r\\n"`` when most of ``text``'s line endings are CRLF."""
     crlf = text.count("\r\n")
@@ -99,6 +131,8 @@ class EditTool:
             old_eol, new_eol = _to_eol(old, "\r\n"), _to_eol(new, "\r\n")
             if before.count(old_eol):
                 old, new = old_eol, new_eol
+        if old not in before and (found := _as_in_file(before, old)) is not None:
+            old, new = found, _curl(new, found)
         count = before.count(old)
         # Claude Code applies an edit over changes made since the read when
         # its permissions allow the write outright and old_string still

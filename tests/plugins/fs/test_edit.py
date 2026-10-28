@@ -184,6 +184,16 @@ async def test_an_empty_old_string_creates_a_file(h: Harness, ws: Path) -> None:
         "Give the text to replace instead.")
 
 
+async def test_straight_quotes_match_curly_ones_and_keep_the_files_style(
+        h: Harness, ws: Path) -> None:
+    (ws / "a.md").write_text("He said \u201chello\u201d and it\u2019s fine.\n")
+    await _read(h, "a.md")
+    out = await h.call(EditTool(), file_path="a.md", old_string='said "hello" and it\'s',
+                       new_string='said "bye" and it\'s')
+    assert not out.is_error, text_of(out)
+    assert (ws / "a.md").read_text() == "He said \u201cbye\u201d and it\u2019s fine.\n"
+
+
 async def test_deleting_a_line_takes_its_line_break(h: Harness, ws: Path) -> None:
     (ws / "a.py").write_text("keep\ndrop me\nkeep too\n")
     await _read(h, "a.py")
