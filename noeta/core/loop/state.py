@@ -78,7 +78,7 @@ class TaskState:
     #: Log seq that produced each entry of ``messages`` (0 for a summary).
     message_seqs: list[int] = field(default_factory=list)
     #: Every message ever added, in order, never compacted (and its log seq):
-    #: what a compaction collapsed stays readable here (``RecallHistory``).
+    #: what a compaction collapsed stays readable here (its saved transcript).
     history: list[Message] = field(default_factory=list)
     history_seqs: list[int] = field(default_factory=list)
     #: Usage of the newest model reply; ``None`` before the first one and
