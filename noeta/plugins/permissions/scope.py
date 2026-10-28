@@ -4,7 +4,8 @@ inside the working directories, and the file commands ``acceptEdits`` lets
 through.
 
 Everything here is pure: paths are compared as written (made absolute and
-normalised); the extension resolves symlinks before it trusts a path.
+normalised); the extension resolves symlinks before it trusts a path (each
+part lists the paths it reads in :attr:`Part.reads` for that).
 
 A command is read-only only when parsing proves it
 (:mod:`noeta.toolkit.shell_syntax`): every subcommand is a program of
@@ -90,6 +91,9 @@ class Scope:
     dirs: tuple[str, ...]
     home: str
     here: str | None = None
+    #: Collects every path a read-only check accepted (absolute; a glob's
+    #: directory), when set.
+    seen: list[str] | None = field(default=None, compare=False, hash=False, repr=False)
 
     @property
     def cwd(self) -> str:
@@ -536,6 +540,8 @@ class Part:
     read_only: bool
     writes: tuple[str, ...] | None = None
     argv: tuple[str, ...] = field(default=())
+    #: The paths a read-only part reads (absolute, as written).
+    reads: tuple[str, ...] = field(default=())
 
 
 def _path_ok(word: Word, scope: Scope, *, lead_glob: bool = False) -> bool:
@@ -550,6 +556,8 @@ def _path_ok(word: Word, scope: Scope, *, lead_glob: bool = False) -> bool:
         text = re.split(r"[*?\[]", text, maxsplit=1)[0] or "."
         if not text.endswith("/"):
             text = posixpath.dirname(text) or "."
+    if scope.seen is not None:
+        scope.seen.append(scope.absolute(text))
     return scope.contains(text)
 
 
@@ -849,13 +857,15 @@ def parts(command: str, scope: Scope) -> list[Part] | None:
         if cwds is None:
             out.append(Part(cmd.text, False, None, tuple(cmd.argv)))
             continue
-        here = [scope.at(c) for c in cwds]
+        seen: list[str] = []
+        here = [replace(scope.at(c), seen=seen) for c in cwds]
         ro = all(_read_only_command(cmd, s) for s in here)
         writes: tuple[str, ...] | None = None
         found = [_file_writes(cmd, s) for s in here]
         if found and all(f is not None for f in found):
             writes = tuple(dict.fromkeys(p for f in found for p in f or ()))
-        out.append(Part(cmd.text, ro, writes, tuple(cmd.argv)))
+        out.append(Part(cmd.text, ro, writes, tuple(cmd.argv),
+                        tuple(dict.fromkeys(seen)) if ro else ()))
         cwds = _next_cwds(cmd, cwds, scope)
         if cwds is not None and not all(scope.contains(c) for c in cwds):
             cwds = None

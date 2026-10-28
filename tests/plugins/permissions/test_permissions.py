@@ -168,6 +168,7 @@ async def test_a_symlink_into_a_protected_directory_still_asks(
     "cp -r dir c && cp payload c/link", "cp -r dir c; cp payload c/link/x",
     "mv dir c && cp payload c/link", "cp -a dir/link out && sed -i s/a/b/ out",
     "cp -r dir c && cd c && cp ../payload link", "mv dir/link l && touch l",
+    "cp -r dir c && cat c/link",
 ])
 async def test_a_link_an_earlier_part_copies_is_not_written_through(
         store: SqliteStore, tmp_path: Path, command: str) -> None:
@@ -221,6 +222,51 @@ async def test_ordinary_multi_part_file_commands_still_run(store: SqliteStore,
                                  reply("ok")])
     await start(store, provider, Permissions(mode="acceptEdits"), [bash], cwd=tmp_path)
     assert [r["command"] for r in bash.runs] == commands
+
+
+def _linked_ssh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A workspace whose ``docs`` links to the home directory's ``.ssh``."""
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "id_rsa").write_text("secret")
+    monkeypatch.setenv("HOME", str(home))
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "README").write_text("hi")
+    (ws / "docs").symlink_to(home / ".ssh")
+    return ws
+
+
+async def test_a_read_through_a_link_out_of_the_workspace_asks(
+        store: SqliteStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ws = _linked_ssh(tmp_path, monkeypatch)
+    read, bash = Fake("Read"), Fake("Bash")
+    provider = ScriptedProvider([reply(
+        "", ("Read", {"file_path": "docs/id_rsa"}), ("Bash", {"command": "cat docs/id_rsa"}),
+        ("Bash", {"command": "cd docs && cat id_rsa"}), ("Bash", {"command": "ls docs/"}),
+        ("Read", {"file_path": "README"}), ("Bash", {"command": "cat README"}))])
+    client, tid, _ = await start(store, provider, Permissions(mode="default"), [read, bash],
+                                 cwd=ws)
+    details = asked(await events(client, tid))
+    assert len(details) == 4
+    assert any(str(tmp_path / "home" / ".ssh" / "id_rsa") in d["prompt"]
+               for d in details.values())
+    assert [r["file_path"] for r in read.runs] == ["README"]
+    assert [r["command"] for r in bash.runs] == ["cat README"]
+
+
+async def test_a_read_deny_rule_holds_through_a_link(
+        store: SqliteStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ws = _linked_ssh(tmp_path, monkeypatch)
+    read, write = Fake("Read"), Fake("Write")
+    provider = ScriptedProvider([reply(
+        "", ("Read", {"file_path": "docs/id_rsa"}), ("Write", {"file_path": "docs/config"}),
+        ("Read", {"file_path": "README"})), reply("ok")])
+    perms = Permissions(mode="bypassPermissions", deny=["Read(~/.ssh/**)", "Edit(~/.ssh/**)"])
+    client, tid, _ = await start(store, provider, perms, [read, write], cwd=ws)
+    denied = [text for text, err in results(await events(client, tid)) if err]
+    assert len(denied) == 2 and "Read(~/.ssh/**)" in denied[0] and "Edit(~/.ssh/**)" in denied[1]
+    assert [r["file_path"] for r in read.runs] == ["README"] and not write.runs
 
 
 async def test_a_directory_change_in_the_command_moves_its_paths(store: SqliteStore,
