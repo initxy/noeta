@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+import shlex
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -64,6 +65,7 @@ __all__ = [
     "ShellEnv",
     "ShellState",
     "git_prelude",
+    "guard_root",
     "reduce_shell",
     "shell_state",
 ]
@@ -171,13 +173,12 @@ _GIT_SAFE_CONFIG = ("core.fsmonitor=", "core.hooksPath=/dev/null", "core.pager=c
                     "log.showSignature=false", "gpg.program=false",
                     "gpg.openpgp.program=false", "gpg.x509.program=false",
                     "gpg.ssh.program=false")
-#: A ``git`` function every reading command runs under: it refuses a
-#: repository whose directory is not a ``.git`` (a bare one planted in the
-#: workspace, whose config the workspace's author wrote), and runs ``git``
+#: A ``git`` function every reading command runs under: it runs ``git``
 #: with :data:`_GIT_SAFE_CONFIG` and without external diff programs or
-#: ``textconv`` filters.
+#: ``textconv`` filters, and with a guard (:data:`_GIT_GUARD`) refuses a
+#: repository planted in the workspace.
 _GIT_FUNCTION = """git() {
-  local _noeta_pre=() _noeta_sub=() _noeta_dir
+  local _noeta_pre=() _noeta_sub=() _noeta_dir _noeta_top _noeta_named
   while [ "$#" -gt 0 ]; do
     case "$1" in
       @VALUED@) [ "$#" -ge 2 ] || break; _noeta_pre+=("$1" "$2"); shift 2 ;;
@@ -185,15 +186,7 @@ _GIT_FUNCTION = """git() {
       *) break ;;
     esac
   done
-  if _noeta_dir=$(command git "${_noeta_pre[@]+"${_noeta_pre[@]}"}" -c core.fsmonitor= \\
-      rev-parse --absolute-git-dir 2>/dev/null); then
-    case "$_noeta_dir" in
-      */.git|*/.git/*) ;;
-      *) printf 'git: refused the repository at %s: not a .git directory\\n' \\
-           "$_noeta_dir" >&2; return 128 ;;
-    esac
-  fi
-  case "${1-}" in
+@GUARD@  case "${1-}" in
     diff|log|show|whatchanged) _noeta_sub=("$1" --no-ext-diff --no-textconv); shift ;;
     blame) _noeta_sub=(blame --no-textconv); shift ;;
     stash) if [ "${2-}" = show ]; then
@@ -209,13 +202,41 @@ _GIT_FUNCTION = """git() {
 }
 """.replace("@VALUED@", "|".join(_GIT_GLOBAL_VALUED)).replace(
     "@CONFIG@", " ".join(f"-c {c}" for c in _GIT_SAFE_CONFIG))
+#: The refusal of a repository whose git directory lies under the guard
+#: root (``@ROOT@``) without being a ``.git`` directory or the one a
+#: ``.git`` file at its top names: a bare repository committed into the
+#: workspace, whose config its author wrote. A clone cannot carry a
+#: ``.git`` file, so a worktree's or a separate git directory passes.
+_GIT_GUARD = """  if _noeta_dir=$(command git "${_noeta_pre[@]+"${_noeta_pre[@]}"}" -c core.fsmonitor= \\
+      rev-parse --absolute-git-dir 2>/dev/null) \\
+      && _noeta_dir=$(cd "$_noeta_dir" 2>/dev/null && pwd -P); then
+    case "$_noeta_dir/" in
+      @ROOT@/*) case "$_noeta_dir" in
+        */.git|*/.git/*) ;;
+        *) _noeta_top=$(command git "${_noeta_pre[@]+"${_noeta_pre[@]}"}" -c core.fsmonitor= \\
+             rev-parse --show-toplevel 2>/dev/null) || _noeta_top=
+          _noeta_named=
+          if [ -n "$_noeta_top" ] && [ -f "$_noeta_top/.git" ]; then
+            _noeta_named=$(cd "$(command git -C "$_noeta_top" -c core.fsmonitor= \\
+              rev-parse --absolute-git-dir 2>/dev/null)" 2>/dev/null && pwd -P)
+          fi
+          if [ "$_noeta_named" != "$_noeta_dir" ]; then
+            printf 'git: refused the repository at %s: not a .git directory\\n' \\
+              "$_noeta_dir" >&2; return 128
+          fi ;;
+      esac ;;
+    esac
+  fi
+"""
 
 
-def git_prelude(command: str) -> str:
+def git_prelude(command: str, guard_root: str = "") -> str:
     """:data:`_GIT_FUNCTION` when ``command`` runs ``git`` only to read
     (every ``git`` in it has a :data:`_GIT_READ_SUBCOMMANDS` subcommand),
     so whatever directory it reads in, a repository's config runs nothing;
-    ``""`` otherwise (a ``git commit`` keeps its hooks)."""
+    ``""`` otherwise (a ``git commit`` keeps its hooks). With
+    ``guard_root`` (a canonical directory) it also carries
+    :data:`_GIT_GUARD` for that root."""
     parsed = parse(command)
     if parsed.opaque:
         return ""
@@ -230,7 +251,17 @@ def git_prelude(command: str) -> str:
             i += 2 if argv[i] in _GIT_GLOBAL_VALUED else 1
         if i >= len(argv) or argv[i] not in _GIT_READ_SUBCOMMANDS:
             return ""
-    return _GIT_FUNCTION if found else ""
+    if not found:
+        return ""
+    guard = _GIT_GUARD.replace("@ROOT@", shlex.quote(guard_root)) if guard_root else ""
+    return _GIT_FUNCTION.replace("@GUARD@", guard)
+
+
+def guard_root(ws: Workspace, ctx: ToolContext) -> str:
+    """The root :func:`git_prelude` refuses planted repositories under: the
+    workspace, unless a person approved this command (it then runs
+    hardened, as approved)."""
+    return "" if ctx.approved else ws.root
 
 
 def _track_cwd(command: str) -> str:
@@ -408,7 +439,7 @@ class BashTool:
         # tracked.
         # A command that only reads with git runs under the hardening git
         # function instead, wherever it reads.
-        prelude = git_prelude(command) if self.hardening_rules else ""
+        prelude = git_prelude(command, guard_root(ws, ctx)) if self.hardening_rules else ""
         rule = None if prelude else matching_rule(command, self.hardening_rules)
         argv = parse_argv(command) if rule is not None and rule.harden is not None else None
         track = argv is None

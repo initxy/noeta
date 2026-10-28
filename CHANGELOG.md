@@ -203,10 +203,15 @@ All notable changes to Noeta are documented here. The format is based on
   and the ACP option name the rule (`Always allow Bash(git push *)`), and no "always" choice
   is offered when nothing would be remembered. Approval details carry `always_label`.
 - **A command that only reads with `git` cannot run a repository's helper programs.** It
-  runs under a `git` shell function that refuses a repository whose directory is not a
-  `.git` (a bare one committed into a clone), turns off the fsmonitor hook, hooks, pager,
+  runs under a `git` shell function that turns off the fsmonitor hook, hooks, pager,
   signature programs and transports, and adds `--no-ext-diff --no-textconv`, wherever it
-  reads (`-C`, `cd`). Deny and ask rules match a command's words as they run (`\rm`,
+  reads (`-C`, `cd`). Unless a person approved the command, the function also refuses a
+  repository whose git directory lies inside the workspace without being a `.git` directory
+  or the one a `.git` file names (a bare one committed into a clone); a bare repository's
+  worktree, `--separate-git-dir` and git directories outside the workspace read normally.
+  **Known limit:** a repository directory unpacked from an archive (not cloned) brings its
+  own `.git/config`, whose `filter.<driver>.clean` program `git status` and `git diff` still
+  run; git has no setting that turns every filter off. Deny and ask rules match a command's words as they run (`\rm`,
   `'rm'`, `env rm`); reads are judged where symlinks lead; a write under a link an earlier
   part of the same command copies asks. Auto mode keeps exact `Bash(...)` allow rules.
 - **An untrusted project no longer configures the agent.** `noeta` read `<cwd>/.noeta/agents`

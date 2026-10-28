@@ -79,6 +79,9 @@ class ToolContext:
     #: returned is in its conversation; ``False`` when an extension runs a
     #: tool itself.
     by_model: bool = False
+    #: A person allowed this call at its approval prompt (rather than no
+    #: extension asking).
+    approved: bool = False
     #: ``prompt(name, default)``: the task's text for a named prompt
     #: (``noeta.core.prompts``).
     prompt: Callable[[str, str], str] = field(default=lambda _name, default: default)

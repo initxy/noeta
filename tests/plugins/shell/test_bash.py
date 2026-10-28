@@ -247,7 +247,7 @@ async def test_reading_git_runs_under_the_hardening_function(ws: Path) -> None:
         assert not (await bash(h, command)).is_error
     for argv, command in zip(rec.argvs, commands, strict=True):
         assert argv[:2] == ["bash", "-c"]
-        assert argv[2].endswith(git_prelude(command) + command)
+        assert argv[2].endswith(git_prelude(command, str(ws)) + command)
         assert "git() {" in argv[2] and "-c safe.bareRepository=explicit" in argv[2]
 
 
@@ -414,6 +414,81 @@ async def test_hardened_git_still_reads_the_workspace_repository(tmp_path: Path)
         out = await bash(h, command)
         assert not out.is_error, (command, text_of(out))
     assert "planted" in text_of(await bash(h, "git log --oneline"))
+
+
+def _git(cwd: Path, *args: str) -> None:
+    genv = {"GIT_CONFIG_NOSYSTEM": "1", "HOME": str(cwd), "PATH": "/usr/bin:/bin"}
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd,
+                   env=genv, check=True, capture_output=True)
+
+
+def _seeded(tmp_path: Path) -> Path:
+    seed = tmp_path / "seed"
+    _git(tmp_path, "init", "-q", str(seed))
+    (seed / "f.txt").write_text("1\n")
+    _git(seed, "add", "f.txt")
+    _git(seed, "commit", "-qm", "seeded")
+    return seed
+
+
+_READS = ("git status --short", "git log --oneline", "git diff HEAD", "git branch",
+          "git stash list")
+
+
+async def _reads_fine(root: Path, cwd: str = ".") -> None:
+    h = Harness(env=LocalExecEnv(os.path.realpath(root)))
+    if cwd != ".":
+        assert not (await bash(h, f"cd {cwd}")).is_error
+    for command in _READS:
+        out = await bash(h, command)
+        assert not out.is_error, (command, text_of(out))
+    assert "seeded" in text_of(await bash(h, "git log --oneline"))
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+async def test_hardened_git_reads_a_worktree_of_a_bare_repository(tmp_path: Path) -> None:
+    seed = _seeded(tmp_path)
+    box = tmp_path / "box"
+    box.mkdir()
+    _git(box, "clone", "-q", "--bare", str(seed), "r.git")
+    _git(box / "r.git", "worktree", "add", "-q", "../wt")
+    # The git directory outside the workspace, then inside it.
+    await _reads_fine(box / "wt")
+    await _reads_fine(box, "wt")
+    # The ``.bare`` layout: a ``.git`` file at the top names a bare repository.
+    dot = tmp_path / "dot"
+    dot.mkdir()
+    _git(dot, "clone", "-q", "--bare", str(seed), ".bare")
+    (dot / ".git").write_text("gitdir: ./.bare\n")
+    _git(dot, "worktree", "add", "-q", "main")
+    await _reads_fine(dot, "main")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+async def test_hardened_git_reads_a_separate_git_directory(tmp_path: Path) -> None:
+    seed = _seeded(tmp_path)
+    _git(tmp_path, "clone", "-q", "--separate-git-dir", str(tmp_path / "gd"), str(seed), "ws")
+    await _reads_fine(tmp_path / "ws")
+    box = tmp_path / "box"
+    box.mkdir()
+    _git(box, "clone", "-q", "--separate-git-dir", str(box / "gd"), str(seed), "ws")
+    await _reads_fine(box, "ws")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+async def test_a_planted_bare_repository_is_refused_unless_a_person_approved(
+        tmp_path: Path) -> None:
+    ws, markers = _planted_clone(tmp_path)
+    h = Harness(env=LocalExecEnv(str(ws)))
+    out = await bash(h, "git -C sub log --oneline")
+    assert out.is_error and "not a .git directory" in text_of(out)
+    # A person approved the command: it runs, still hardened.
+    ctx = h.ctx()
+    ctx.approved = True
+    out = await BashTool().run({"command": "git -C sub diff HEAD~ HEAD"}, ctx)
+    assert not out.is_error, text_of(out)
+    assert "+2" in text_of(out)
+    assert [k for k, m in markers.items() if m.exists()] == []
 
 
 # -- the capture cap -------------------------------------------------------------

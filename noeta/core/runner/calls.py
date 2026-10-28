@@ -206,11 +206,13 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
         await run.store.post(Post(task_id=task_id or run.task_id, body=body))
 
     root = run.state.root_id or run.task_id
+    answer = run.state.answers.get(use.id)
     return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
                        state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
                        spawn=spawn, post=post, root_id=root, prompt=run.state.prompt,
                        tasks=run.store.tasks, count_tokens=run.counter(_model(run)),
-                       hold=lambda: run.rt.hold(root), by_model=True)
+                       hold=lambda: run.rt.hold(root), by_model=True,
+                       approved=answer is not None and answer.decision == "allow")
 
 
 def _model(run: TaskRun) -> str:

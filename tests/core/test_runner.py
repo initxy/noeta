@@ -30,9 +30,11 @@ class Echo:
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.approved: list[bool] = []
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         self.calls.append(input["text"])
+        self.approved.append(ctx.approved)
         ctx.record("echo", "said", input["text"])
         return text_output(f"echo: {input['text']}")
 
@@ -85,7 +87,7 @@ async def test_turn_with_a_tool_call_then_waits_for_input(store: SqliteStore) ->
 
     row = await client.get(tid)
     assert row.status == "waiting" and row.waiting_on == "input"
-    assert echo.calls == ["hi"]
+    assert echo.calls == ["hi"] and echo.approved == [False]
     types = [type(r.event).__name__ for r in await client.events(tid)]
     # The second entry records the prompt override files (none here).
     assert types == ["TaskCreated", "ExtensionRecorded", "InputTaken", "ModelCalled", "ModelReplied", "ToolStarted",
@@ -144,6 +146,7 @@ async def test_deny_and_ask_gates(store: SqliteStore) -> None:
     await client.answer(tid2, waiting.ids[0], "allow")
     await rt2.run_until_idle()
     assert echo2.calls == ["y"] and (await client.get(tid2)).waiting_on == "input"
+    assert echo2.approved == [True]  # a person allowed it at its prompt
 
 
 async def test_crash_after_tool_started_is_never_rerun(store: SqliteStore) -> None:
