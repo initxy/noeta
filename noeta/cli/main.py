@@ -5,6 +5,7 @@
     noeta acp                  serve the Agent Client Protocol on stdio (editors)
     noeta worker               run tasks from the store until stopped (multi-machine)
     noeta serve                the client API over HTTP (and workers, unless --no-worker)
+    noeta mcp ...              add, list, remove and sign in to MCP servers
 
 Model and provider come from ``--model`` / ``--provider`` or the environment
 (``NOETA_MODEL``, ``NOETA_PROVIDER``, ``NOETA_BASE_URL``, ``NOETA_API_KEY``)
@@ -21,6 +22,7 @@ import signal
 import sys
 from typing import Any
 
+from noeta.cli import mcp_command
 from noeta.cli.config import Settings, load_settings
 from noeta.core.pending import PERMISSION_MODES
 
@@ -55,6 +57,7 @@ def _parser() -> argparse.ArgumentParser:
     sv.add_argument("--no-worker", action="store_true", help="API only; workers run elsewhere")
     sub.add_parser("trust", help="load this project's plugins, agents, prompts and skills")
     sub.add_parser("plugins", help="list the plugins and where each comes from")
+    mcp_command.add_parser(sub)
     return ap
 
 
@@ -211,6 +214,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "plugins":
         _plugins(cwd)
         return
+    if args.command == "mcp":
+        sys.exit(mcp_command.run(args, cwd))
     if args.command == "acp":
         from noeta.host.acp import EditorServers, serve_stdio
         s = _settings(args)
