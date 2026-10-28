@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 
 from noeta.plugins.skills.registry import (
     SkillDescription,
@@ -165,14 +165,17 @@ def fit_menu_to_budget(
 
 
 def listing_lines(
-    registry: SkillRegistry, *, budget_tokens: int, rank: Mapping[str, float] | None = None
+    registry: SkillRegistry, *, budget_tokens: int, rank: Mapping[str, float] | None = None,
+    unlocked: Collection[str] = (),
 ) -> tuple[tuple[str, str], ...]:
     """The roster as ``(name, line)`` pairs fitted to the budget, the
     narrowest scope first (the workspace's, then the user's, then the rest,
     as Claude Code lists them), by name within one. Skills with
-    ``disable-model-invocation`` are left out."""
+    ``disable-model-invocation`` are left out, and so are skills with
+    ``paths`` not in ``unlocked``."""
     entries: list[tuple[str, str]] = []
-    for name in sorted(registry.model_invocable(), key=lambda n: (-registry.tier_of(n), n)):
+    for name in sorted(registry.model_invocable(unlocked),
+                       key=lambda n: (-registry.tier_of(n), n)):
         desc = registry.get(name)
         if desc is not None:
             entries.append((name, _menu_description(listing_summary(desc))))

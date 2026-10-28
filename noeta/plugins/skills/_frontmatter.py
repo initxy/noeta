@@ -41,6 +41,7 @@ KNOWN_KEYS: frozenset[str] = frozenset(
         "disable-model-invocation",
         "when_to_use",
         "arguments",
+        "paths",
     }
 )
 

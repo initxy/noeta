@@ -14,7 +14,7 @@ import logging
 import posixpath
 import re
 import shlex
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 
 from noeta.core.execenv import ExecEnv
@@ -31,6 +31,7 @@ __all__ = [
     "index_dir",
     "load_registry",
     "parse_list",
+    "path_patterns",
     "render_activation",
     "render_body",
     "render_command_body",
@@ -79,6 +80,10 @@ class SkillDescription:
     when_to_use: str | None = None
     #: ``arguments``: names ``$name`` fills from the argument words, in order.
     arguments: tuple[str, ...] = ()
+    #: ``paths``: the skill is offered only once a file matching one of
+    #: these patterns (gitignore-style, from the working directory) is
+    #: touched; ``()`` = always offered.
+    paths: tuple[str, ...] = ()
 
     @property
     def base_dir(self) -> str | None:
@@ -110,10 +115,16 @@ class SkillRegistry:
     def tier_of(self, name: str) -> int:
         return self._tiers.get(name, 0)
 
-    def model_invocable(self) -> tuple[str, ...]:
+    def model_invocable(self, unlocked: Collection[str] = ()) -> tuple[str, ...]:
         """Sorted names the model may activate (what the listing names and
-        the ``skill`` tool accepts)."""
-        return tuple(sorted(n for n, d in self._skills.items() if d.model_invocable))
+        the ``skill`` tool accepts): a skill with ``paths`` only once it is
+        in ``unlocked``."""
+        return tuple(sorted(n for n, d in self._skills.items()
+                            if d.model_invocable and (not d.paths or n in unlocked)))
+
+    def conditional(self) -> tuple[SkillDescription, ...]:
+        """The skills with ``paths``, by name."""
+        return tuple(d for _, d in sorted(self._skills.items()) if d.paths)
 
 
 def _parse_disabled_flag(raw: str | None, path: str) -> bool:
@@ -175,6 +186,7 @@ def parse_skill(path: str, raw: str, resources: tuple[str, ...] = ()) -> SkillDe
         resources=resources,
         when_to_use=fields.get("when_to_use") or None,
         arguments=argument_names(fields.get("arguments")),
+        paths=path_patterns(fields.get("paths")),
     )
 
 
@@ -284,6 +296,17 @@ def parse_list(raw: str | None) -> tuple[str, ...]:
         if item:
             out.append(item)
     return tuple(out)
+
+
+def path_patterns(raw: str | None) -> tuple[str, ...]:
+    """The ``paths`` frontmatter as patterns; a trailing ``/**`` is dropped
+    (a directory covers what is under it), and patterns that all match
+    everything leave the skill unconditional."""
+    patterns = [p[:-3] if p.endswith("/**") else p for p in parse_list(raw)]
+    patterns = [p for p in patterns if p]
+    if not patterns or all(p == "**" for p in patterns):
+        return ()
+    return tuple(patterns)
 
 
 def argument_names(raw: str | None) -> tuple[str, ...]:

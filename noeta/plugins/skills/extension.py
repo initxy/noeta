@@ -67,6 +67,8 @@ __all__ = [
 _log = logging.getLogger(__name__)
 
 SKILL_TOOL = "Skill"
+#: Calls whose file makes a skill with matching ``paths`` available.
+FILE_TOOLS = frozenset({"Read", "Write", "Edit", "NotebookEdit"})
 
 #: Heads the skills re-attached after a compaction.
 INVOKED_SKILLS_HEADER = (
@@ -130,7 +132,7 @@ class SkillTool:
         if len(name) > _SKILL_NAME_MAX_LEN:
             return text_output(f"skill too long (max {_SKILL_NAME_MAX_LEN})", is_error=True)
         registry = await self._owner.registry(task_env(ctx.env, {}))
-        menu = registry.model_invocable()
+        menu = registry.model_invocable(_unlocked(ctx.state.get(self._owner.name)))
         desc = registry.get(name)
         if desc is None or name not in menu:
             available = ", ".join(menu) if menu else "(none)"
@@ -299,6 +301,9 @@ class Skills(Extension):
         if kind == "activated":
             entry = {k: v for k, v in data.items() if k != "text"}
             return {**state, "active": {**state["active"], data["name"]: entry}}
+        if kind == "unlocked":
+            have = list(state.get("unlocked") or [])
+            return {**state, "unlocked": have + [n for n in data["names"] if n not in have]}
         return state
 
     @staticmethod
@@ -341,7 +346,7 @@ class Skills(Extension):
         if not state.get("listings"):
             registry = await self.registry(env)
             lines = listing_lines(registry, budget_tokens=self._budget(view),
-                                  rank=await self._rank(view))
+                                  rank=await self._rank(view), unlocked=_unlocked(state))
             if lines:
                 # Held for the first request's system turn, after the prompt.
                 view.record(self.name, "listing", {"names": [n for n, _ in lines],
@@ -390,18 +395,21 @@ class Skills(Extension):
         # ``skill`` tool, when the task started with none).
         if state.get("listings"):
             announced = self.announced(state)
-            lines = listing_lines(registry, budget_tokens=self._budget(view))
+            lines = listing_lines(registry, budget_tokens=self._budget(view),
+                                  unlocked=_unlocked(state))
             added = [(n, line) for n, line in lines if n not in announced]
             if added:
                 self._record_listing(view, added, first=False)
         else:
             lines = listing_lines(registry, budget_tokens=self._budget(view),
-                                  rank=await self._rank(view))
+                                  rank=await self._rank(view), unlocked=_unlocked(state))
             if lines:
                 self._record_listing(view, lines, first=True)
         for message in messages:
             typed = _typed_command(message.text)
             desc = registry.get(typed[0]) if typed else None
+            if desc is not None and desc.paths and desc.name not in _unlocked(state):
+                desc = None
             if typed and desc is not None and desc.name not in state.get("active", {}):
                 data = _activation_data(desc, "user", typed[1], view.cwd)
                 # The body rides in the person's turn as plain text, after
@@ -419,6 +427,8 @@ class Skills(Extension):
                             message=user(data["text"], origin="inline"))
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
+        if call.name in FILE_TOOLS and not output.is_error:
+            await self._unlock(view, call)
         data = output.meta.get("skill_activation")
         if call.name != SKILL_TOOL or output.is_error or not isinstance(data, dict):
             return output
@@ -479,6 +489,36 @@ class Skills(Extension):
             return None
         return dict(got) if got else None
 
+    async def _unlock(self, view: TaskView, call: ToolUse) -> None:
+        """Offer the skills whose ``paths`` match the file this call touched,
+        announced like a newly installed skill."""
+        path = next((call.input[k] for k in ("file_path", "notebook_path")
+                     if isinstance(call.input.get(k), str) and call.input[k]), None)
+        if path is None:
+            return
+        state = view.ext_state(self.name) or {}
+        unlocked = _unlocked(state)
+        registry = await self.registry(task_env(view.env, view.state.config))
+        waiting = [d for d in registry.conditional() if d.name not in unlocked]
+        if not waiting:
+            return
+        cwd = view.cwd or os.getcwd()
+        ctx = pr.RuleContext(root=cwd, home=os.path.expanduser("~"), cwd=cwd)
+        target = path if os.path.isabs(path) else os.path.join(cwd, path)
+        rel = os.path.relpath(os.path.normpath(target), cwd)
+        if rel.startswith(".."):
+            return
+        names = [d.name for d in waiting
+                 if any(pr.path_pattern_matches(p, target, ctx) for p in d.paths)]
+        if not names:
+            return
+        view.record(self.name, "unlocked", {"names": names})
+        lines = listing_lines(registry, budget_tokens=self._budget(view),
+                              unlocked={*unlocked, *names})
+        fresh = [(n, line) for n, line in lines if n in names and n not in self.announced(state)]
+        if fresh:
+            self._record_listing(view, fresh, first=not state.get("listings"))
+
     async def _expand(self, view: TaskView, data: dict[str, Any], call_id: str
                       ) -> dict[str, Any]:
         """``data`` with the commands of its text run (or blanked when the
@@ -530,6 +570,11 @@ class Skills(Extension):
         if view.keeps_tail is not None and state.get("listings"):
             view.record(self.name, "listing_rehold", {})
         return out
+
+
+def _unlocked(state: Any) -> frozenset[str]:
+    """The skills with ``paths`` a touched file has made available."""
+    return frozenset((state or {}).get("unlocked") or ())
 
 
 def _pre_approved(view: TaskView, call: ToolUse, active: Mapping[str, Any]) -> bool:

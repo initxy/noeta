@@ -25,7 +25,7 @@ from noeta.plugins.skills.listing import (
     listing_lines,
     short_summary,
 )
-from noeta.plugins.skills.registry import SkillDescription, SkillRegistry
+from noeta.plugins.skills.registry import SkillDescription, SkillRegistry, path_patterns
 from noeta.testing import reply
 from noeta.toolkit.tokens import estimate_tokens
 from tests.plugins.context.conftest import Harness
@@ -455,3 +455,32 @@ async def test_commands_turned_off_leave_a_marker_and_arguments_cannot_add_one(
     await h.start(shell_agent(h.work.parent, shell_commands=False), "/say !`id`")
     text = h.provider.requests[0].messages[-2].text
     assert text.endswith(f"Now: {DISABLED_MARKER} for \\! `id`\n")
+
+
+async def test_a_skill_with_paths_is_offered_once_a_matching_file_is_touched(
+        h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    write_skill(skills_dir(h), "pyfix", "Python fixes.", paths="[\"src/**\", \"*.toml\"]")
+    (h.work / "README.md").write_text("hi\n")
+    (h.work / "src").mkdir()
+    (h.work / "src" / "a.py").write_text("x = 1\n")
+    h.provider.add(reply("", ("Skill", {"skill": "pyfix"})),
+                   reply("", ("Read", {"file_path": "README.md"})),
+                   reply("", ("Read", {"file_path": str(h.work / "src" / "a.py")})),
+                   reply("", ("Skill", {"skill": "pyfix"})),
+                   reply("done"))
+    tid = await h.start(agent())
+    assert h.provider.requests[0].messages[1].text == f"{ROSTER_HEADER}\n\n- deploy: Ship."
+    refused, _readme, _src, loaded = await h.results(tid)
+    assert refused.result.is_error and "available: deploy" in refused.result.text
+    assert not loaded.result.is_error
+    [unlocked] = await h.records(tid, "skills", "unlocked")
+    assert unlocked.data == {"names": ["pyfix"]}
+    texts = [m.text for m in h.provider.requests[3].messages]
+    assert f"{ADDED_HEADER}\n\n- pyfix: Python fixes." in texts
+
+
+def test_path_patterns() -> None:
+    assert path_patterns("- src/**\n- docs/") == ("src", "docs/")
+    assert path_patterns("**") == ()
+    assert path_patterns(None) == ()
