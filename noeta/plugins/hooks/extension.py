@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -30,7 +31,7 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import Allow, Ask, Deny, Extension, Gate, Reminder, Rewrite, TaskView
-from noeta.core.tool import ToolOutput
+from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Message, Text, ToolUse, user
 from noeta.plugins.hooks.config import (
     SUBJECT,
@@ -43,8 +44,11 @@ from noeta.plugins.hooks.config import (
 from noeta.plugins.hooks.runners import (
     HookResult,
     Runner,
+    RunTool,
+    run_agent,
     run_command,
     run_http,
+    run_mcp_tool,
     run_prompt,
 )
 from noeta.toolkit.permission_rules import RuleContext, match
@@ -133,6 +137,34 @@ def _agent(view: TaskView) -> dict[str, str]:
     agent_id, kind = config.get("agent_id"), config.get("subagent_type")
     return {"agent_id": agent_id if isinstance(agent_id, str) and agent_id else view.task_id,
             "agent_type": kind if isinstance(kind, str) and kind else view.state.agent}
+
+
+def _read_only_tools(view: TaskView) -> list[Tool]:
+    """The task's read-only tools: what an agent hook may look with."""
+    names = dict.fromkeys(t.name for ext in view.extensions for t in ext.tools(view)
+                          if getattr(t, "read_only", False))
+    return [t for t in (view.find_tool(n) for n in names) if t is not None]
+
+
+def _mcp_tool(view: TaskView, hook: HookCommand) -> Tool | None:
+    """An ``mcp_tool`` hook's tool, by its model-visible name (the MCP
+    plugin's ``mcp__<server>__<tool>``, other characters made ``_``)."""
+    name = f"mcp__{hook.server}__{hook.tool}"
+    return view.find_tool(name) or view.find_tool(re.sub(r"[^A-Za-z0-9_-]", "_", name))
+
+
+def _tool_runner(view: TaskView, kind: str) -> RunTool:
+    """Runs a tool for a hook, outside the model's calls: nothing it would
+    record is kept."""
+
+    async def run(tool: Tool, input: dict[str, Any], n: int) -> ToolOutput:
+        if view.env is None:
+            raise RuntimeError("this task has no execution environment")
+        ctx = ToolContext(task_id=view.task_id, call_id=f"hook-{kind}-{n}", env=view.env,
+                          state=dict(view.state.ext), record=lambda *_a: None)
+        return await tool.run(input, ctx)
+
+    return run
 
 
 def _text(message: Message) -> str:
@@ -281,6 +313,13 @@ class Hooks(Extension):
                 return await run_http(hook, payload, self.http_transport)
             if hook.type == "prompt":
                 return await run_prompt(hook, payload, view.complete, view.model, transcript)
+            if hook.type == "agent":
+                return await run_agent(hook, payload, view.complete, view.model,
+                                       _read_only_tools(view), _tool_runner(view, "agent"),
+                                       transcript)
+            if hook.type == "mcp_tool":
+                return await run_mcp_tool(hook, payload, _mcp_tool(view, hook),
+                                          _tool_runner(view, "mcp"))
             return await self.runner(hook, payload, cwd)
         except Exception as exc:  # a broken hook is a failed hook
             log.exception("hook %r failed", hook.label)

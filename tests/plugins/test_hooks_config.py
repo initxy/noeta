@@ -31,13 +31,13 @@ def test_unknown_and_unsupported_events_and_types_are_skipped(
     parsed = parse_hooks({
         "Bogus": [{"hooks": [{"type": "command", "command": "x"}]}],
         "PostToolBatch": [{"hooks": [{"type": "command", "command": "x"}]}],
-        "Stop": [{"hooks": [{"type": "agent", "prompt": "check"},
-                            {"type": "mcp_tool", "server": "s", "tool": "t"}]}],
+        "Stop": [{"hooks": [{"type": "script", "file": "x"}]}],
+        "PermissionRequest": [{"hooks": [{"type": "agent", "prompt": "allow?"}]}],
     })
     assert parsed == {}
     text = caplog.text
     assert "unknown event 'Bogus'" in text and "does not fire PostToolBatch" in text
-    assert "'agent' hooks" in text and "'mcp_tool' hooks" in text
+    assert "'script' hooks" in text and "permission request" in text
 
 
 def test_hook_fields_and_defaults() -> None:
@@ -55,8 +55,19 @@ def test_hook_fields_and_defaults() -> None:
                            "continueOnBlock": True})
     assert prompt.timeout == PROMPT_TIMEOUT_S == 30 and prompt.model == "m2"
     assert prompt.continue_on_block
+    agent = _one("Stop", {"type": "agent", "prompt": "tests ran?", "continueOnBlock": True})
+    assert (agent.type, agent.timeout, agent.label) == ("agent", 60.0, "tests ran?")
+    assert not agent.continue_on_block  # a prompt hook's field only
+    tool = _one("PostToolUse", {"type": "mcp_tool", "server": "s", "tool": "t",
+                                "input": {"p": "${tool_input.file_path}"}})
+    assert (tool.label, tool.arguments, tool.timeout) == \
+        ("s/t", {"p": "${tool_input.file_path}"}, COMMAND_TIMEOUT_S)
+    assert tool.key != _one("PostToolUse", {"type": "mcp_tool", "server": "s",
+                                            "tool": "t"}).key
     for bad in ({"type": "command"}, {"type": "http", "url": "ftp://x"},
                 {"type": "prompt"}, {"type": "command", "command": "c", "if": "Bash("},
+                {"type": "agent"}, {"type": "mcp_tool", "server": "s"},
+                {"type": "mcp_tool", "server": "s", "tool": "t", "input": "x"},
                 {"type": "command", "command": "c", "timeout": 0},
                 {"type": "command", "command": "c", "args": "x"}):
         with pytest.raises(ValueError):

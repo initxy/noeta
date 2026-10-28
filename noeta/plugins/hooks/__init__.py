@@ -22,6 +22,12 @@ Hook types (``config.py`` has the fields and defaults):
   stdout.
 * ``prompt`` — the task's model (or ``model``) judges the hook's condition
   (``$ARGUMENTS`` is the event JSON); not ``ok`` blocks.
+* ``agent`` — like ``prompt``, but the model may first look with the
+  task's read-only tools (up to 50 calls, a minute by default) and answers
+  through a ``StructuredOutput`` tool; never on PermissionRequest.
+* ``mcp_tool`` — calls ``tool`` of the MCP ``server`` the task has, with
+  ``input`` (``${tool_input.file_path}``-style paths filled from the event);
+  its text answer is read like stdout, an error result is a failure.
 
 Exit 0 is success (stdout plain text, or a JSON object: ``continue`` /
 ``stopReason``, ``decision`` / ``reason``, ``systemMessage``,
@@ -60,7 +66,14 @@ from __future__ import annotations
 
 from noeta.plugins.hooks.config import EVENTS, HookCommand, Matcher, parse_hooks
 from noeta.plugins.hooks.extension import MAX_STOP_CONTINUATIONS, Hooks
-from noeta.plugins.hooks.runners import HookResult, run_command, run_http, run_prompt
+from noeta.plugins.hooks.runners import (
+    HookResult,
+    run_agent,
+    run_command,
+    run_http,
+    run_mcp_tool,
+    run_prompt,
+)
 
 __all__ = [
     "EVENTS",
@@ -70,7 +83,9 @@ __all__ = [
     "Hooks",
     "Matcher",
     "parse_hooks",
+    "run_agent",
     "run_command",
     "run_http",
+    "run_mcp_tool",
     "run_prompt",
 ]
