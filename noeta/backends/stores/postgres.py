@@ -79,6 +79,7 @@ from noeta.core.store import (
     OnChange,
     Patch,
     Post,
+    Snapshot,
     Status,
     TaskRow,
     hold_lost,
@@ -150,6 +151,12 @@ CREATE TABLE IF NOT EXISTS {s}.tree_holds (
     UNIQUE (root_id, worker)
 );
 CREATE INDEX IF NOT EXISTS tree_holds_until ON {s}.tree_holds (until);
+CREATE TABLE IF NOT EXISTS {s}.snapshots (
+    task_id TEXT PRIMARY KEY,
+    seq     BIGINT NOT NULL,
+    version TEXT NOT NULL,
+    data    BYTEA NOT NULL
+);
 """
 
 def _lost(conn: Conn | None, exc: BaseException) -> bool:
@@ -713,6 +720,27 @@ class PostgresStore:
         reaped = await self._tx(tx)
         self._deliver(changes)
         return reaped
+
+    async def snapshot(self, task_id: str) -> Snapshot | None:
+        async def q(conn: Conn) -> Snapshot | None:
+            cur = await conn.execute(self._q(
+                "SELECT seq, version, data FROM {s}.snapshots WHERE task_id = %s"), (task_id,))
+            row = await cur.fetchone()
+            return Snapshot(seq=int(row[0]), version=str(row[1]), data=bytes(row[2])) \
+                if row else None
+
+        return await self._tx(q, write=False)
+
+    async def put_snapshot(self, task_id: str, snapshot: Snapshot) -> None:
+        async def tx(conn: Conn) -> None:
+            await conn.execute(self._q(
+                "INSERT INTO {s}.snapshots (task_id, seq, version, data) VALUES (%s, %s, %s, %s)"
+                " ON CONFLICT (task_id) DO UPDATE SET seq = excluded.seq,"
+                " version = excluded.version, data = excluded.data"
+                " WHERE excluded.seq >= {s}.snapshots.seq"),
+                (task_id, snapshot.seq, snapshot.version, snapshot.data))
+
+        await self._tx(tx)
 
     async def release(self, claim: Claim) -> None:
         async def tx(conn: Conn) -> bool:

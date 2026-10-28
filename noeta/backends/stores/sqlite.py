@@ -32,6 +32,7 @@ from noeta.core.store import (
     OnChange,
     Patch,
     Post,
+    Snapshot,
     Status,
     TaskRow,
     hold_lost,
@@ -102,6 +103,12 @@ CREATE TABLE IF NOT EXISTS tree_holds (
     UNIQUE (root_id, worker)
 );
 CREATE INDEX IF NOT EXISTS tree_holds_until ON tree_holds (until);
+CREATE TABLE IF NOT EXISTS snapshots (
+    task_id TEXT PRIMARY KEY,
+    seq     INTEGER NOT NULL,
+    version TEXT NOT NULL,
+    data    BLOB NOT NULL
+) WITHOUT ROWID;
 """
 
 class SqliteStore:
@@ -537,6 +544,26 @@ class SqliteStore:
         then take no write lock."""
         return conn.execute("SELECT 1 FROM tree_holds WHERE until < ? LIMIT 1",
                             (time.time(),)).fetchone() is not None
+
+    async def snapshot(self, task_id: str) -> Snapshot | None:
+        def q(conn: sqlite3.Connection) -> Snapshot | None:
+            row = conn.execute("SELECT seq, version, data FROM snapshots WHERE task_id = ?",
+                               (task_id,)).fetchone()
+            return Snapshot(seq=int(row[0]), version=str(row[1]), data=bytes(row[2])) \
+                if row else None
+
+        return await self._run(q)
+
+    async def put_snapshot(self, task_id: str, snapshot: Snapshot) -> None:
+        def tx(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "INSERT INTO snapshots (task_id, seq, version, data) VALUES (?, ?, ?, ?)"
+                " ON CONFLICT (task_id) DO UPDATE SET seq = excluded.seq,"
+                " version = excluded.version, data = excluded.data"
+                " WHERE excluded.seq >= snapshots.seq",
+                (task_id, snapshot.seq, snapshot.version, snapshot.data))
+
+        await self._write(tx)
 
     async def release(self, claim: Claim) -> None:
         def tx(conn: sqlite3.Connection) -> int:

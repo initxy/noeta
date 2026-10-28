@@ -24,7 +24,7 @@ from typing import Any
 from msgspec.structs import replace
 
 from noeta.core import records as core_records
-from noeta.core import registry
+from noeta.core import registry, snapshots
 from noeta.core.agent import Agent
 from noeta.core.deferred import with_tool_search
 from noeta.core.errors import Conflict, StoreUnavailable
@@ -42,12 +42,12 @@ from noeta.core.events import (
 )
 from noeta.core.extension import Extension, TaskView, task_cwd
 from noeta.core.loop import decide
-from noeta.core.loop.state import TaskState, apply, continued, fold
+from noeta.core.loop.state import TaskState, apply, continued, fold, new_state
 from noeta.core.prompts import load_overrides
 from noeta.core.records import CORE
 from noeta.core.runner import texts
 from noeta.core.runner.runtime import Runtime
-from noeta.core.store import Claim, NewTask, Post, patch_for, pin_history
+from noeta.core.store import Claim, NewTask, Post, Snapshot, patch_for, pin_history
 from noeta.core.tool import Tool
 from noeta.core.types import Text, ToolResult, user
 
@@ -83,6 +83,10 @@ class TaskRun:
         #: An extension posted to this task's inbox with its records
         #: (``TaskView.enqueue``) since the input was last taken.
         self._enqueued = False
+        #: The newest fold snapshot known, ``(seq, data)``: what the next one
+        #: is folded from (``None``: this run writes none).
+        self._snapshot: tuple[int, bytes] | None = None
+        self._snapshotting: asyncio.Task[None] | None = None
 
     # ------------------------------------------------------------ lifecycle
 
@@ -91,6 +95,7 @@ class TaskRun:
         unsubscribe = self.store.on_change(self._on_change)
         try:
             await self.load()
+            self._snapshot_loaded()
             if self.agent is None:
                 # Releasing would hand it straight back to this worker; a task
                 # whose agent only some workers have must be routed by queue.
@@ -113,6 +118,7 @@ class TaskRun:
             keeper.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await keeper
+            await self._snapshot_written()
 
     async def _steps(self) -> None:
         """Step until the task waits or ends. A bug (an extension hook, a
@@ -186,17 +192,113 @@ class TaskRun:
         return True
 
     async def load(self) -> None:
-        """Read and fold the log (and the conversation it continues)."""
+        """Fold the log (and the conversation it continues): from the
+        task's snapshot when one of this fold's version exists, else from
+        the start."""
+        if await self._load_snapshot():
+            return
         records = await self.store.read(self.task_id)
         first = records[0].event if records else None
-        self.agent = self.rt.agents.get(getattr(first, "agent", ""))
-        if self.agent is not None:
-            self.exts = self.agent.all_extensions()
-            self.reducers = {e.name: e.reduce for e in self.exts}
+        self._use_agent(getattr(first, "agent", ""))
         initial = {e.name: e.initial_state() for e in self.exts}
-        base = await self._history(first, initial)
-        self.state = fold(records, self.reducers, initial, state=base)
-        self.state.task_id = self.task_id  # the log never names its own task
+        base = await self._history(first, initial) or new_state(initial)
+        base.task_id = self.task_id  # the log never names its own task
+        if self._snapshots_on():
+            data = snapshots.encode(base)
+            self._snapshot = (0, data) if data is not None else None
+        self.state = fold(records, self.reducers, state=base)
+
+    def _use_agent(self, name: str) -> None:
+        self.agent = self.rt.agents.get(name)
+        self.exts = self.agent.all_extensions() if self.agent is not None else []
+        self.reducers = {e.name: e.reduce for e in self.exts}
+
+    def _snapshots_on(self) -> bool:
+        return self.rt.snapshot_every > 0 and self.agent is not None \
+            and getattr(self.store, "put_snapshot", None) is not None
+
+    def _version(self) -> str:
+        assert self.agent is not None
+        return snapshots.version(self.agent.name, self.exts)
+
+    async def _load_snapshot(self) -> bool:
+        """Start from the task's snapshot and fold only the events after it;
+        ``False`` (nothing changed) when there is none of this version."""
+        get = getattr(self.store, "snapshot", None)
+        if get is None or self.rt.snapshot_every <= 0:
+            return False
+        stored: Snapshot | None = await get(self.task_id)
+        if stored is None:
+            return False
+        try:
+            state = snapshots.decode(stored.data)
+        except Exception:  # noqa: BLE001 — another fold's data: fold from the start
+            return False
+        self._use_agent(state.agent)
+        if self.agent is None or stored.version != self._version():
+            return False
+        self.state = fold(await self.store.read(self.task_id, after=stored.seq),
+                          self.reducers, state=state)
+        self._snapshot = (stored.seq, stored.data)
+        return True
+
+    def _snapshot_due(self) -> bool:
+        return self._snapshot is not None and self.state.ended is None \
+            and self.state.last_seq - self._snapshot[0] >= self.rt.snapshot_every \
+            and (self._snapshotting is None or self._snapshotting.done())
+
+    def _snapshot_loaded(self) -> None:
+        """Right after a load the state is a fold of stored events alone: a
+        due snapshot is written from it as it is."""
+        if not self._snapshot_due():
+            return
+        data = snapshots.encode(self.state)
+        if data is None:
+            self._snapshot = None
+            return
+        self._snapshot = (self.state.last_seq, data)
+        self._snapshotting = asyncio.ensure_future(self._put_snapshot(self.state.last_seq, data))
+
+    async def _snapshot_written(self) -> None:
+        """Let a snapshot being written finish (bounded) before the run
+        returns, unless the run itself is being cancelled."""
+        current = asyncio.current_task()
+        if self._snapshotting is None or self._snapshotting.done() \
+                or (current is not None and current.cancelling()):
+            return
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(self._snapshotting), self.rt.lease_seconds)
+
+    def _snapshot_later(self) -> None:
+        """After an append: write a snapshot in the background once due."""
+        if self._snapshot_due():
+            self._snapshotting = asyncio.ensure_future(self._write_snapshot())
+
+    async def _write_snapshot(self) -> None:
+        """Fold the stored events after the newest snapshot onto it (never
+        this runner's live state: the snapshot must be what a fold of the
+        stored log gives) and store the result."""
+        assert self._snapshot is not None
+        seq, data = self._snapshot
+        try:
+            state = fold(await self.store.read(self.task_id, after=seq), self.reducers,
+                         state=snapshots.decode(data))
+        except Exception:  # a snapshot is only ever an optimization
+            log.warning("task %s: could not fold a snapshot", self.task_id, exc_info=True)
+            return
+        new = snapshots.encode(state)
+        if new is None:
+            self._snapshot = None
+            return
+        self._snapshot = (state.last_seq, new)
+        await self._put_snapshot(state.last_seq, new)
+
+    async def _put_snapshot(self, seq: int, data: bytes) -> None:
+        try:
+            await self.store.put_snapshot(  # type: ignore[attr-defined]
+                self.task_id, Snapshot(seq=seq, version=self._version(), data=data))
+        except Exception as exc:  # noqa: BLE001 — the next one is written later
+            log.warning("task %s: could not store a snapshot: %s", self.task_id, exc)
 
     async def _history(self, first: Any, initial: dict[str, Any],
                        depth: int = 0) -> TaskState | None:
@@ -285,6 +387,7 @@ class TaskRun:
                 apply(self.state, rec, self.reducers)
             if cancelled:
                 raise asyncio.CancelledError()
+        self._snapshot_later()
         view = self.view()
         for rec in recs:
             for ext in self.exts:

@@ -18,6 +18,10 @@ needs it, so a hold that was reaped stays lost to its old holder. A hold's
 time running out only makes it reapable; :meth:`Store.reap_holds` releases
 it and tells the tree's tasks (``hold_lost``) in one transaction, so no task
 of the tree is claimed by another worker before that notice is in its inbox.
+
+Snapshots (optional members ``snapshot`` / ``put_snapshot``, see
+:class:`Snapshot`) keep one folded state per task so a claim need not fold
+the whole log; a store without them folds from the start.
 """
 
 from __future__ import annotations
@@ -114,6 +118,23 @@ class Appended(Struct):
 
     seq: int
     at: float
+
+
+class Snapshot(Struct):
+    """A task's folded state as of log seq ``seq`` (``noeta.core.snapshots``),
+    used only by a runner whose fold ``version`` is the same.
+
+    Optional store members, read with ``getattr``:
+
+    * ``async snapshot(task_id) -> Snapshot | None`` — the task's newest.
+    * ``async put_snapshot(task_id, snapshot) -> None`` — keep it unless the
+      task's stored one is at a later seq. Needs no claim: a snapshot is a
+      fold of a log prefix, which never changes.
+    """
+
+    seq: int
+    version: str
+    data: bytes
 
 
 class Post(Struct):

@@ -20,7 +20,7 @@ import pytest
 
 from noeta.core.errors import Conflict, UnknownTask
 from noeta.core.events import Cancel, External, Say, TaskCreated, TaskEnded, Waiting
-from noeta.core.store import HOLD_LOST, NewTask, Patch, Post, Store
+from noeta.core.store import HOLD_LOST, NewTask, Patch, Post, Snapshot, Store
 from noeta.core.types import user
 
 
@@ -339,3 +339,18 @@ async def test_an_abandoned_hold_tells_the_tree(store: Store) -> None:
     await store.unhold("a", "w1", epoch, lost=True)  # gone: nothing more
     [item] = await store.inbox("a")
     assert item.body == External(name=HOLD_LOST, data={"worker": "w1", "epoch": epoch})
+
+
+async def test_snapshots_keep_the_latest_seq(store: Store) -> None:
+    """Optional members: a store without them is skipped."""
+    get, put = getattr(store, "snapshot", None), getattr(store, "put_snapshot", None)
+    if get is None or put is None:
+        pytest.skip("the store keeps no snapshots")
+    assert await get("t1") is None
+    await put("t1", Snapshot(seq=5, version="v1", data=b"\x00five"))
+    await put("t1", Snapshot(seq=3, version="v2", data=b"three"))
+    assert await get("t1") == Snapshot(seq=5, version="v1", data=b"\x00five")
+    await put("t1", Snapshot(seq=9, version="v2", data=b"nine"))
+    await put("t2", Snapshot(seq=1, version="v1", data=b"one"))
+    assert await get("t1") == Snapshot(seq=9, version="v2", data=b"nine")
+    assert (await get("t2") or Snapshot(seq=0, version="", data=b"")).seq == 1

@@ -35,3 +35,23 @@ def pg() -> Iterator[Pg]:
     yield Pg(PG_DSN, schema)
     with psycopg.connect(PG_DSN, autocommit=True) as conn:
         conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+@pytest.fixture(autouse=True)
+def fold_snapshots_both_ways(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every task log any test loads is folded both ways and compared: from
+    the start, and from a snapshot taken at several seqs plus the events
+    after it (``tests/snapshot_check.py``). Opt out with
+    ``NOETA_TEST_NO_SNAPSHOT_CHECK=1``."""
+    if os.environ.get("NOETA_TEST_NO_SNAPSHOT_CHECK"):
+        return
+    from noeta.core.runner.task import TaskRun
+    from tests.snapshot_check import check_both_ways
+
+    original = TaskRun.load
+
+    async def load(self: TaskRun) -> None:
+        await original(self)
+        await check_both_ways(self)
+
+    monkeypatch.setattr(TaskRun, "load", load)
