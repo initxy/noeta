@@ -217,11 +217,15 @@ All notable changes to Noeta are documented here. The format is based on
   worktree, `--separate-git-dir` and git directories outside the workspace read normally.
   Deny and ask rules match a command's words as they run (`\rm`, `'rm'`, `env rm`, `git -C
   . push`); reads are judged where symlinks lead, and a recursion that follows every link it
-  meets (`grep -R`, `rg -L`, `find -L`, `du -L`, `tree -l`, `ls -LR`) asks; a write under a
+  meets (`grep -R`, `rg -L`, `find -L`, `du -L`, `tree -l`, `ls -LR`) asks, as does a glob
+  that takes in a link out of the workspace (`cat *` beside `k -> ~/.ssh/id_rsa`: the glob is
+  expanded as bash expands it and each match resolved); a write under a
   link an earlier part of the same command copies asks. Auto mode keeps exact `Bash(...)`
   allow rules. **Known limit:** a repository directory unpacked from an archive (not
   cloned) brings its own `.git/config`, whose `filter.<driver>.clean` program `git status`
-  and `git diff` still run; git has no setting that turns every filter off.
+  and `git diff` still run; git has no setting that turns every filter off. A command a
+  person approved runs hardened but without the planted-repository refusal, as Claude Code
+  runs an approved command as written.
 - **An untrusted project no longer configures the agent.** `noeta` read `<cwd>/.noeta/agents`
   unconditionally, so a cloned repository could replace `main` with one in
   `bypassPermissions` running a command hook. A project's `.noeta/agents`, `.noeta/prompts`,

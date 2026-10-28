@@ -615,3 +615,17 @@ async def test_a_glob_that_takes_in_a_link_out_of_the_workspace_asks(
     client, tid, _ = await start(store, provider, Permissions(mode="default"), [bash], cwd=ws)
     assert len(asked(await events(client, tid))) == 3
     assert [r["command"] for r in bash.runs] == ["cat *.txt"]
+
+
+async def test_a_quoted_bracket_names_a_file_and_is_checked_as_one(
+        store: SqliteStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ws = _linked_ssh(tmp_path, monkeypatch)
+    (ws / "n[1]").symlink_to(tmp_path / "home" / ".ssh" / "id_rsa")
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply(
+        "", ("Bash", {"command": "cat 'n[1]'"}), ("Bash", {"command": "cat n\\[1\\]"}),
+        ("Bash", {"command": 'cat "n[1]"'}), ("Bash", {"command": "cat README"}))])
+    client, tid, _ = await start(store, provider, Permissions(mode="default"), [bash], cwd=ws)
+    assert len(asked(await events(client, tid))) == 3
+    assert [r["command"] for r in bash.runs] == ["cat README"]
+

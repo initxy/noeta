@@ -612,9 +612,13 @@ class Permissions(Extension):
 
         async def reads_inside(part: sc.Part) -> bool:
             # A path inside as written may be a link out of the directory;
-            # a glob is judged by what it expands to.
+            # a glob is judged by what it expands to, and as written too (a
+            # quoted ``[`` names a file literally).
             for x in part.reads:
-                targets = await self._expand(view, x) if _GLOB.search(x) else [x]
+                targets: list[str] | None = [x]
+                if _GLOB.search(x):
+                    expanded = await self._expand(view, x)
+                    targets = None if expanded is None else [*expanded, x]
                 if targets is None or not all(
                         [real_scope.contains(await self._real(view, t)) for t in targets]):
                     return False

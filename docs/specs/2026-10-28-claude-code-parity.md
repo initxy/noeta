@@ -535,3 +535,8 @@ Phase 5 — front ends
   Placeholder files are empty regular files (a directory breaks pnpm, `/dev/null` is
   unreadable through the mount and fails `git add`), listed in the command's view of
   `.git/info/exclude`. Gates: make check 1893 passed (87.17%).
+- 2026-10-28: integrator fix b01b346 (a read-only glob is judged by what it expands to — `cat *`
+  beside a link out of the workspace asked nothing) and its follow-up (a quoted `[` names a
+  file: the path is checked as written too). Fourth review: mergeable (round-3 items fixed,
+  the quoted-bracket regression fixed before merge). Gates at merge: see the merge commit.
+
