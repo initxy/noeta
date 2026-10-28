@@ -1,5 +1,6 @@
-"""Permission modes, the shell and WebFetch gates, "always" rules, guards,
-``can_use_tool`` and the pending-request listing, end to end."""
+"""Claude Code's permission system end to end: modes, rules, working
+directories, protected paths, approval cards, remembered rules, noeta's
+guards and ``can_use_tool``."""
 
 from __future__ import annotations
 
@@ -11,17 +12,21 @@ from typing import Any
 import pytest
 
 from noeta.backends.stores.sqlite import SqliteStore
+from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
-from noeta.core.pending import always_option, pending, pending_tree
+from noeta.core.pending import pending, pending_tree
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.plugins.permissions import (
+    MODE_SIGNAL,
     Budget,
     MatchArg,
     Permissions,
     PreToolUseRule,
-    UntrustedProjectShellAllowlistWarning,
+    next_mode,
 )
+from noeta.plugins.subtasks import Subtasks
+from noeta.plugins.subtasks.extension import SubagentSpec
 from noeta.testing import ScriptedProvider, reply
 from tests.plugins.permissions.helpers import Fake, agent, events, runtime
 
@@ -38,54 +43,179 @@ def results(evs: list[Any]) -> list[tuple[str, bool]]:
 
 
 async def start(store: SqliteStore, provider: ScriptedProvider, perms: Permissions,
-                tools: list[Any], *, config: dict[str, Any] | None = None
-                ) -> tuple[Client, str, Any]:
+                tools: list[Any], *, cwd: Path | None = None,
+                config: dict[str, Any] | None = None) -> tuple[Client, str, Any]:
     ag = agent([perms], tools)
     rt = runtime(store, provider, ag)
     client = Client(store)
-    tid = await client.create("a", "go", config=config)
+    conf = dict(config or {})
+    if cwd is not None:
+        conf["cwd"] = str(cwd)
+    tid = await client.create("a", "go", config=conf)
     await rt.run_until_idle()
     return client, tid, rt
 
 
-# ------------------------------------------------------------------ modes
+def asked(evs: list[Any]) -> dict[str, dict[str, Any]]:
+    last = evs[-1]
+    assert isinstance(last, Waiting) and last.on == "approval", last
+    return last.detail
 
 
-async def test_default_mode_asks_for_risky_tools_only(store: SqliteStore) -> None:
+# ------------------------------------------------------------------ default mode
+
+
+async def test_default_mode_reads_freely_and_asks_to_write(store: SqliteStore,
+                                                           tmp_path: Path) -> None:
     read, write = Fake("Read"), Fake("Write")
-    provider = ScriptedProvider([reply("", ("Read", {}), ("Write", {"file_path": "x"})),
-                                 reply("done")])
-    client, tid, rt = await start(store, provider, Permissions(), [read, write])
-    last = (await events(client, tid))[-1]
-    assert isinstance(last, Waiting) and last.on == "approval"
-    [rid] = last.ids
-    assert last.detail[rid]["prompt"] == "tool 'Write' requires human approval"
+    provider = ScriptedProvider([
+        reply("", ("Read", {"file_path": "a.py"}), ("Write", {"file_path": "x.md"})),
+        reply("", ("Write", {"file_path": "y.md"})), reply("done")])
+    client, tid, rt = await start(store, provider, Permissions(mode="default"), [read, write],
+                                  cwd=tmp_path)
+    [detail] = asked(await events(client, tid)).values()
+    assert detail["title"] == "Create file" and not detail["classify"]
+    assert [c["id"] for c in detail["choices"]] == ["allow", "mode:acceptEdits", "deny"]
     assert len(read.runs) == 1 and not write.runs
     [item] = pending(await client.events(tid), tid)
-    assert (item.kind, item.tool, item.input) == ("approval", "Write", {"file_path": "x"})
-    assert item.detail["always"] == {"kind": "tool", "tool": "Write"}
-    await client.answer(tid, rid, "allow")
+    # "Yes, and switch to accept edits": the next write runs without asking.
+    await client.answer(tid, item.request_id, "allow", data={"mode": "acceptEdits"})
+    await rt.run_until_idle()
+    assert [r["file_path"] for r in write.runs] == ["x.md", "y.md"]
+
+
+async def test_read_only_commands_run_and_others_offer_a_rule(store: SqliteStore,
+                                                              tmp_path: Path) -> None:
+    bash = Fake("Bash")
+    provider = ScriptedProvider([
+        reply("", ("Bash", {"command": "git status && cat a | wc -l 2>/dev/null"}),
+              ("Bash", {"command": "npm run build --prod"})),
+        reply("", ("Bash", {"command": "npm run build --dev"})), reply("ok")])
+    client, tid, rt = await start(store, provider,
+                                  Permissions(mode="default", trusted_workspace=True), [bash],
+                                  cwd=tmp_path)
+    [detail] = asked(await events(client, tid)).values()
+    assert detail["always"] == ["Bash(npm run *)"]
+    assert [c["id"] for c in detail["choices"]] == ["allow", "always", "mode:auto", "deny"]
+    [item] = pending(await client.events(tid), tid)
+    await client.answer(tid, item.request_id, "allow", always=True)
+    await rt.run_until_idle()
+    assert len(bash.runs) == 3
+    saved = json.loads((tmp_path / ".claude" / "settings.local.json").read_text())
+    assert saved == {"permissions": {"allow": ["Bash(npm run *)"]}}
+
+
+async def test_reads_outside_ask_and_outside_writes_are_refused(store: SqliteStore,
+                                                                tmp_path: Path) -> None:
+    read, write = Fake("Read"), Fake("Write")
+    other = tmp_path.parent / "elsewhere"
+    provider = ScriptedProvider([
+        reply("", ("Read", {"file_path": str(other / "a")}),
+              ("Read", {"file_path": str(tmp_path.parent / "lib" / "b")}),
+              ("Write", {"file_path": "/etc/x"})), reply("ok")])
+    client, tid, _ = await start(store, provider, Permissions(
+        mode="acceptEdits", additional_directories=["../lib"]), [read, write], cwd=tmp_path)
+    evs = await events(client, tid)
+    assert [r["file_path"] for r in read.runs] == [str(tmp_path.parent / "lib" / "b")]
+    [(text, err)] = [x for x in results(evs) if x[1]]
+    assert err and "only writes inside the working directories" in text
+    [detail] = asked(evs).values()
+    assert detail["always"] == [f"Read(/{other}/**)"]
+
+
+@pytest.mark.parametrize("mode", ["acceptEdits", "bypassPermissions"])
+async def test_protected_paths_ask_even_when_edits_are_accepted(
+        store: SqliteStore, tmp_path: Path, mode: str) -> None:
+    write, bash = Fake("Write"), Fake("Bash")
+    provider = ScriptedProvider([reply(
+        "", ("Write", {"file_path": ".git/hooks/pre-commit"}),
+        ("Write", {"file_path": ".claude/skills/x/SKILL.md"}),
+        ("Write", {"file_path": "sub/.bashrc"}),
+        ("Bash", {"command": "cp a .noeta/agents/main.md"}))])
+    client, tid, _ = await start(store, provider, Permissions(mode=mode), [write, bash],
+                                 cwd=tmp_path)
+    details = asked(await events(client, tid))
+    expected = 3 if mode == "acceptEdits" else 2  # bypass lets the .noeta command through
+    assert len(details) == expected
+    assert [r["file_path"] for r in write.runs] == [".claude/skills/x/SKILL.md"]
+
+
+async def test_accept_edits_runs_file_commands_inside(store: SqliteStore,
+                                                      tmp_path: Path) -> None:
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply(
+        "", ("Bash", {"command": "mkdir -p out && touch out/x && ls out"}),
+        ("Bash", {"command": "rm -rf /tmp/elsewhere"}),
+        ("Bash", {"command": f"rm -r {tmp_path}"}))])
+    client, tid, _ = await start(store, provider, Permissions(mode="acceptEdits"), [bash],
+                                 cwd=tmp_path)
+    assert len(asked(await events(client, tid))) == 2
+    assert [r["command"] for r in bash.runs] == ["mkdir -p out && touch out/x && ls out"]
+
+
+async def test_always_allow_access_to_a_directory(store: SqliteStore, tmp_path: Path) -> None:
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": "rm notes/todo.md"})),
+                                 reply("", ("Bash", {"command": "rm notes/other.md"})),
+                                 reply("ok")])
+    client, tid, rt = await start(store, provider, Permissions(mode="default"), [bash],
+                                  cwd=tmp_path)
+    [detail] = asked(await events(client, tid)).values()
+    assert detail["always"] == [f"Edit(/{tmp_path}/notes/**)"]
+    assert detail["always_label"].endswith(f"{tmp_path}/notes from this project")
+    [item] = pending(await client.events(tid), tid)
+    await client.answer(tid, item.request_id, "allow", always=True)
+    await rt.run_until_idle()
+    assert len(bash.runs) == 2
+
+
+# ------------------------------------------------------------------ rules and modes
+
+
+async def test_rule_precedence_deny_ask_allow(store: SqliteStore, tmp_path: Path) -> None:
+    bash, read = Fake("Bash"), Fake("Read")
+    provider = ScriptedProvider([reply(
+        "", ("Read", {"file_path": ".env"}), ("Bash", {"command": "git push origin main"}),
+        ("Bash", {"command": "make build"}))])
+    perms = Permissions(mode="bypassPermissions", deny=["Read(./.env)"],
+                        ask=["Bash(git push *)"], allow=["Bash(make *)"])
+    client, tid, _ = await start(store, provider, perms, [bash, read], cwd=tmp_path)
+    evs = await events(client, tid)
+    [(text, err)] = [x for x in results(evs) if x[1]]
+    assert err and "Read(./.env)" in text
+    [detail] = asked(evs).values()
+    assert "Bash(git push *)" in detail["prompt"]
+    assert [r["command"] for r in bash.runs] == ["make build"]
+
+
+async def test_dont_ask_refuses_what_would_ask(store: SqliteStore, tmp_path: Path) -> None:
+    write, bash = Fake("Write"), Fake("Bash")
+    provider = ScriptedProvider([reply(
+        "", ("Write", {"file_path": "a"}), ("Bash", {"command": "ls"}),
+        ("Bash", {"command": "make"})), reply("ok")])
+    client, tid, _ = await start(store, provider, Permissions(mode="dontAsk", allow=["Write"]),
+                                 [write, bash], cwd=tmp_path)
+    evs = await events(client, tid)
+    [(text, _)] = [x for x in results(evs) if x[1]]
+    assert "don't-ask mode" in text
+    assert len(write.runs) == 1 and [r["command"] for r in bash.runs] == ["ls"]
+
+
+async def test_the_mode_signal_switches_modes(store: SqliteStore, tmp_path: Path) -> None:
+    write = Fake("Write")
+    provider = ScriptedProvider([reply("hi"), reply("", ("Write", {"file_path": "a"})),
+                                 reply("ok")])
+    client, tid, rt = await start(store, provider, Permissions(mode="default"), [write],
+                                  cwd=tmp_path)
+    await client.signal(tid, MODE_SIGNAL, {"mode": "acceptEdits"})
+    await client.send(tid, "write it")
     await rt.run_until_idle()
     assert len(write.runs) == 1
-    assert pending(await client.events(tid), tid) == []
-
-
-async def test_accept_edits_exempts_edit_and_write(store: SqliteStore) -> None:
-    write, kill = Fake("Write"), Fake("TaskStop")
-    provider = ScriptedProvider([reply("", ("Write", {}), ("TaskStop", {})), reply("ok")])
-    client, tid, _ = await start(store, provider, Permissions(mode="acceptEdits"), [write, kill])
-    last = (await events(client, tid))[-1]
-    assert isinstance(last, Waiting) and last.on == "approval" and len(last.ids) == 1
-    assert len(write.runs) == 1 and not kill.runs
-
-
-async def test_bypass_never_asks_and_a_task_can_pick_its_mode(store: SqliteStore) -> None:
-    bash = Fake("Bash")
-    provider = ScriptedProvider([reply("", ("Bash", {"command": "rm -rf / | x"})), reply("ok")])
-    client, tid, _ = await start(store, provider, Permissions(), [bash],
-                                 config={"permission_mode": "bypassPermissions"})
-    assert len(bash.runs) == 1
-    assert (await client.get(tid)).waiting_on == "input"
+    modes = [e.data["mode"] for e in await events(client, tid)
+             if isinstance(e, ExtensionRecorded) and e.kind == "mode"]
+    assert modes == ["default", "acceptEdits"]
+    assert next_mode("auto") == "bypassPermissions"
+    assert next_mode("auto", bypass=False) == "default"
 
 
 def test_bad_configuration_raises() -> None:
@@ -100,131 +230,16 @@ def test_bad_configuration_raises() -> None:
                                                                            "regex", "("))])
 
 
-# ------------------------------------------------------------------ shell gate
-
-
-async def test_shell_gate_runs_allowlisted_commands_and_asks_for_the_rest(
-        store: SqliteStore) -> None:
-    bash, monitor = Fake("Bash"), Fake("Monitor")
-    provider = ScriptedProvider([reply(
-        "", ("Bash", {"command": "git status"}), ("Bash", {"command": "npm start"}),
-        ("Bash", {"command": ""}), ("Monitor", {"command": "tail -f log"}),
-        ("Bash", {"command": "make"}))])
-    client, tid, _ = await start(store, provider, Permissions(
-        shell_allowlist=[{"program": "make"}]), [bash, monitor])
-    last = (await events(client, tid))[-1]
-    assert isinstance(last, Waiting) and len(last.ids) == 3
-    assert {d["prompt"] for d in last.detail.values()} == {
-        "tool 'Bash' call requires human approval", "tool 'Monitor' call requires human approval"}
-    assert [r["command"] for r in bash.runs] == ["git status", "make"]
-
-
-async def test_always_remembers_the_shown_rule_and_writes_the_trusted_project_file(
-        store: SqliteStore, tmp_path: Path) -> None:
-    bash = Fake("Bash")
-    provider = ScriptedProvider([reply("", ("Bash", {"command": "npm start --x"})),
-                                 reply("", ("Bash", {"command": "npm start --y"})),
-                                 reply("done")])
-    client, tid, rt = await start(store, provider, Permissions(trusted_workspace=True), [bash],
-                                  config={"cwd": str(tmp_path)})
-    [item] = pending(await client.events(tid), tid)
-    assert item.detail["always"] == {"kind": "shell", "spec": {"rule": "npm start *"}}
-    assert item.detail["always_label"] == "Bash(npm start *)"
-    assert always_option(item.detail) == "Always allow Bash(npm start *)"
-    await client.answer(tid, item.request_id, "allow", always=True)
-    await rt.run_until_idle()
-    assert [r["command"] for r in bash.runs] == ["npm start --x", "npm start --y"]
-    rules = [e for e in await events(client, tid)
-             if isinstance(e, ExtensionRecorded) and e.kind == "rule"]
-    assert len(rules) == 1
-    saved = json.loads((tmp_path / ".noeta" / "shell-allowlist.json").read_text())
-    assert saved == [{"rule": "npm start *"}]
-
-
-async def test_always_on_a_destructive_command_remembers_only_that_command(
-        store: SqliteStore, tmp_path: Path) -> None:
-    bash = Fake("Bash")
-    provider = ScriptedProvider([reply("", ("Bash", {"command": "rm -rf build"})),
-                                 reply("", ("Bash", {"command": "rm -rf /"})),
-                                 reply("done")])
-    client, tid, rt = await start(store, provider, Permissions(trusted_workspace=True), [bash],
-                                  config={"cwd": str(tmp_path)})
-    [item] = pending(await client.events(tid), tid)
-    assert item.detail["always_label"] == "Bash(rm -rf build)"
-    await client.answer(tid, item.request_id, "allow", always=True)
-    await rt.run_until_idle()
-    assert [r["command"] for r in bash.runs] == ["rm -rf build"]
-    [again] = pending(await client.events(tid), tid)
-    assert again.input == {"command": "rm -rf /"}
-    saved = json.loads((tmp_path / ".noeta" / "shell-allowlist.json").read_text())
-    assert saved == [{"rule": "rm -rf build"}]
-
-
-def test_always_option_names_the_rule_or_offers_none() -> None:
-    assert always_option({"always": None}) is None
-    assert always_option({}) == "Always allow"
-    assert always_option({"always": {"kind": "tool", "tool": "Write"},
-                          "always_label": "Write"}) == "Always allow Write"
-
-
-async def test_project_file_needs_a_trusted_workspace(store: SqliteStore,
-                                                      tmp_path: Path) -> None:
-    (tmp_path / ".noeta").mkdir()
-    (tmp_path / ".noeta" / "shell-allowlist.json").write_text('[{"program": "make"}]')
-    bash = Fake("Bash")
-    provider = ScriptedProvider([reply("", ("Bash", {"command": "make"}),
-                                       ("Bash", {"command": "pytest -q"})), reply("ok")])
-    with pytest.warns(UntrustedProjectShellAllowlistWarning):
-        client, tid, _rt = await start(store, provider, Permissions(), [bash],
-                                      config={"cwd": str(tmp_path)})
-    last = (await events(client, tid))[-1]
-    assert isinstance(last, Waiting) and len(last.ids) == 2  # file and test runner ignored
-
-    provider2 = ScriptedProvider([reply("", ("Bash", {"command": "make"}),
-                                        ("Bash", {"command": "pytest -q"})), reply("ok")])
-    bash2 = Fake("Bash")
-    client, tid, _ = await start(store, provider2, Permissions(trusted_workspace=True), [bash2],
-                                 config={"cwd": str(tmp_path)})
-    assert [r["command"] for r in bash2.runs] == ["make", "pytest -q"]
-
-
-async def test_always_without_trust_stays_in_the_task(store: SqliteStore,
-                                                      tmp_path: Path) -> None:
-    bash = Fake("Bash")
-    provider = ScriptedProvider([reply("", ("Bash", {"command": "npm start"})),
-                                 reply("", ("Bash", {"command": "npm start"})), reply("ok")])
-    client, tid, rt = await start(store, provider, Permissions(), [bash],
-                                  config={"cwd": str(tmp_path)})
-    [item] = pending(await client.events(tid), tid)
-    await client.answer(tid, item.request_id, "allow", always=True)
-    await rt.run_until_idle()
-    assert len(bash.runs) == 2
-    assert not (tmp_path / ".noeta").exists()
-
-
-async def test_disallowing_bash_removes_its_companions(store: SqliteStore) -> None:
-    tools = [Fake(n) for n in ("Bash", "Monitor", "TaskStop", "Read")]
-    provider = ScriptedProvider([reply("", ("TaskStop", {})), reply("ok")])
-    client, tid, _ = await start(store, provider, Permissions(disallowed_tools=["Bash"]), tools)
-    assert [t.name for t in provider.requests[0].tools] == ["Read"]
-    assert results(await events(client, tid)) == [("tool 'TaskStop' denied by policy", True)]
-
-
-# ------------------------------------------------------------------ web gate
-
-
-async def test_webfetch_asks_for_unlisted_hosts_and_remembers_always(
-        store: SqliteStore) -> None:
+async def test_webfetch_asks_per_host_and_remembers_it(store: SqliteStore) -> None:
     fetch = Fake("WebFetch")
     provider = ScriptedProvider([
         reply("", ("WebFetch", {"url": "https://docs.example.com/a"}),
               ("WebFetch", {"url": "https://example.com@evil.test/"})),
         reply("", ("WebFetch", {"url": "https://evil.test/again"})), reply("ok")])
     client, tid, rt = await start(store, provider, Permissions(
-        webfetch_allowed_hosts=["*.example.com"]), [fetch])
+        mode="default", webfetch_allowed_hosts=["*.example.com"]), [fetch])
     [item] = pending(await client.events(tid), tid)
-    assert item.prompt == "tool 'WebFetch' call requires human approval"
-    assert item.detail["always"] == {"kind": "host", "host": "evil.test"}
+    assert item.detail["always"] == ["WebFetch(domain:evil.test)"]
     await client.answer(tid, item.request_id, "allow", always=True)
     await rt.run_until_idle()
     assert len(fetch.runs) == 3
@@ -247,7 +262,7 @@ async def test_budget_caps_tool_calls_and_iterations(store: SqliteStore) -> None
 async def test_budget_caps_spawn_depth(store: SqliteStore) -> None:
     task = Fake("Task")
     provider = ScriptedProvider([reply("", ("Task", {})), reply("ok")])
-    client, tid, _ = await start(store, provider, Permissions(), [task],
+    client, tid, _ = await start(store, provider, Permissions(mode="default"), [task],
                                  config={"subtask_depth": 3})
     assert results(await events(client, tid)) == [("max_subtask_depth=3 reached", True)]
 
@@ -260,7 +275,6 @@ async def test_repetition_guard_asks_on_the_third_identical_call(store: SqliteSt
     [item] = pending(await client.events(tid), tid)
     assert item.prompt == ("tool 'Read' called with identical arguments 3 times in a row "
                            "(repetition threshold 3); suspected loop")
-    assert item.detail["always"] is None
 
 
 async def test_pre_tool_use_rules_tighten_and_bash_rules_cover_monitor(
@@ -277,15 +291,7 @@ async def test_pre_tool_use_rules_tighten_and_bash_rules_cover_monitor(
     assert sorted(results(await events(client, tid))) == [("no rm", True), ("ran Read", False)]
 
 
-async def test_deny_wins_over_an_ask(store: SqliteStore) -> None:
-    write = Fake("Write")
-    provider = ScriptedProvider([reply("", ("Write", {"file_path": "/etc/x"})), reply("ok")])
-    rule = PreToolUseRule("W*", "deny", MatchArg(("file_path",), "regex", "^/etc"))
-    client, tid, _ = await start(store, provider, Permissions(pre_tool_use=[rule]), [write])
-    assert results(await events(client, tid)) == [("hook rule on 'W*'", True)]
-
-
-async def test_can_use_tool_answers_approvals(store: SqliteStore) -> None:
+async def test_can_use_tool_answers_asks(store: SqliteStore) -> None:
     write = Fake("Write")
     seen: list[str] = []
 
@@ -293,18 +299,24 @@ async def test_can_use_tool_answers_approvals(store: SqliteStore) -> None:
         seen.append(tool)
         return args.get("ok") is True
 
-    provider = ScriptedProvider([reply("", ("Write", {"ok": True}), ("Write", {"ok": False})),
+    provider = ScriptedProvider([reply("", ("Write", {"file_path": "a", "ok": True}),
+                                       ("Write", {"file_path": "b", "ok": False})),
                                  reply("done")])
-    client, tid, _ = await start(store, provider, Permissions(can_use_tool=decide), [write])
+    client, tid, _ = await start(store, provider, Permissions(mode="default",
+                                                              can_use_tool=decide), [write])
     evs = await events(client, tid)
     assert sorted(results(evs)) == [("denied by human", True), ("ran Write", False)]
     autos = [e.data for e in evs if isinstance(e, ExtensionRecorded) and e.kind == "auto"]
     assert [a["decision"] for a in autos] == ["allow", "deny"]
-    assert all(a["resolver"] == "can_use_tool" for a in autos)
     assert seen == ["Write", "Write"]
 
 
-# ------------------------------------------------------------------ pending tree
+def test_disallowing_bash_removes_its_companions() -> None:
+    perms = Permissions(disallowed_tools=["Bash"])
+    assert perms.disallowed == {"Bash", "Monitor", "TaskStop"}
+
+
+# ------------------------------------------------------------------ sub-agents
 
 
 class Spawn:
@@ -326,15 +338,38 @@ async def test_a_sub_agents_approval_surfaces_at_the_root(store: SqliteStore) ->
     write = Fake("Write")
     provider = ScriptedProvider([reply("", ("Spawn", {})), reply("", ("Write", {})),
                                  reply("wrote"), reply("all done")])
-    parent = agent([Permissions(risk={"Spawn": "low"})], [Spawn()])
+    parent = agent([Permissions(mode="default", risk={"Spawn": "low"})], [Spawn()])
     child = agent([Permissions()], [write], name="child", one_shot=True)
     rt = runtime(store, provider, parent, child)
     client = Client(store)
     tid = await client.create("a", "go")
     await rt.run_until_idle()
     [item] = await pending_tree(client, tid)
-    assert item.task_id != tid and item.tool == "Write"
+    assert item.task_id != tid and item.tool == "Write" and item.agent == "child"
     await client.answer(item.task_id, item.request_id, "allow")
     await rt.run_until_idle()
     assert len(write.runs) == 1
     assert (await client.get(tid)).waiting_on == "input"
+
+
+async def test_a_child_runs_in_its_parents_mode_with_its_rules(store: SqliteStore) -> None:
+    write = Fake("Write")
+    provider = ScriptedProvider([
+        reply("", ("Write", {"file_path": "a"})),                    # parent asks
+        reply("", ("Task", {"description": "do b", "prompt": "b",
+                            "subagent_type": "child"})),            # parent delegates
+        reply("", ("Write", {"file_path": "b"})),                    # child: no ask
+        reply("wrote b"), reply("done")])
+    parent = Agent(name="a", model="m", tools=[write], extensions=(
+        Permissions(mode="default"), Subtasks([SubagentSpec(name="child", description="c")])))
+    child = Agent(name="child", model="m", tools=[write], one_shot=True,
+                  extensions=(Permissions(), Subtasks()))
+    rt = runtime(store, provider, parent, child)
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    [item] = pending(await client.events(tid), tid)
+    await client.answer(tid, item.request_id, "allow", data={"mode": "acceptEdits"})
+    await rt.run_until_idle()
+    assert await pending_tree(client, tid) == []
+    assert [r["file_path"] for r in write.runs] == ["a", "b"]

@@ -277,7 +277,8 @@ class Extension:
         """The call is about to park on ``asks`` (nobody denied it). Return
         ``Allow`` or ``Deny`` to answer in a person's place (a classifier, a
         PermissionRequest hook, an approval callback), a ``Rewrite`` to run
-        it with other input (gated again), or ``None``. Asked in extension
+        it with other input (gated again), an ``Ask`` to put to the person
+        in place of the asks, or ``None``. Asked in extension
         order; the first answer wins. A call can be gated again (after a
         restart), so an answer that cost something is recorded and reused."""
         return None

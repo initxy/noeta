@@ -53,7 +53,7 @@ async def test_an_untrusted_project_loads_no_agent_prompt_or_skill(home: Path,
     main = app.runtime.agents["main"]
     assert main.description != "replaced"
     [perms] = [e for e in main.extensions if e.name == "permissions"]
-    assert perms.mode == "default"  # type: ignore[attr-defined]
+    assert perms.mode == "auto"  # type: ignore[attr-defined]
     assert app.runtime.workspace_trusted is not None
     assert not app.runtime.workspace_trusted(str(project))
     [skills] = [e for e in main.extensions if e.name == "skills"]

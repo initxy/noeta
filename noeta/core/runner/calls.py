@@ -71,7 +71,7 @@ async def gate(run: TaskRun, view: TaskView, call: ToolUse) -> Gate:
             resolved = await ext.resolve_ask(view, call, asks)
         except Exception as exc:  # noqa: BLE001 — a failing resolver denies
             return Deny(reason=f"permission check failed: {exc}")
-        if isinstance(resolved, (Allow, Deny, Rewrite)):
+        if isinstance(resolved, (Allow, Deny, Rewrite, Ask)):
             return resolved
     return asks[0]
 

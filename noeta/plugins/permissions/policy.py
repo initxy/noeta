@@ -1,5 +1,6 @@
-"""Pure permission policy: modes, the per-tool risk table, the shell and
-WebFetch gates, and the project's remembered shell rules file.
+"""Pure permission policy: modes, which tools need permission, which allow
+rules auto mode ignores, the WebFetch host list check and the project's
+local settings file.
 
 Nothing here touches a task. :class:`~noeta.plugins.permissions.Permissions`
 combines these into one gate; hosts and tests can call them directly.
@@ -12,16 +13,8 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Literal
 
-from noeta.toolkit.permission_rules import idna, url_host
-from noeta.toolkit.shell import (
-    DEFAULT_SHELL_RULES,
-    AllowRule,
-    build_allowlist,
-    command_in_allowlist,
-    rule_from_spec,
-    rule_spec_from_command,
-    rule_spec_text,
-)
+from noeta.toolkit.permission_rules import Rule, idna, url_host
+from noeta.toolkit.shell import WRAPPER_PROGRAMS
 
 PermissionMode = Literal["default", "acceptEdits", "plan", "auto", "dontAsk",
                          "bypassPermissions"]
@@ -30,20 +23,24 @@ PermissionMode = Literal["default", "acceptEdits", "plan", "auto", "dontAsk",
 #: needs permission, ``acceptEdits`` also lets file edits in the working
 #: directories run, ``plan`` explores without changing anything, ``auto``
 #: lets a classifier model approve or block what would ask, ``dontAsk``
-#: refuses what would ask, ``bypassPermissions`` asks for nothing but deny
-#: and ask rules.
+#: refuses what would ask, ``bypassPermissions`` asks for nothing but ask
+#: rules and protected paths.
 PERMISSION_MODES: tuple[str, ...] = ("default", "acceptEdits", "plan", "auto", "dontAsk",
                                      "bypassPermissions")
+#: The order a front end's mode key (Claude Code's shift+tab) steps through;
+#: ``dontAsk`` is set only by configuration.
+MODE_CYCLE: tuple[str, ...] = ("default", "acceptEdits", "plan", "auto", "bypassPermissions")
 
 RiskLevel = Literal["low", "medium", "high"]
 
 #: The ordered risk scale; the ``max_risk`` ceiling indexes into it.
 KNOWN_RISK_LEVELS: tuple[str, ...] = ("low", "medium", "high")
 
-#: 0.6's declared ``risk_level`` of every tool, by name. 1.0 tools carry no
-#: risk field, so the table is the source; a host extends or overrides it
-#: with ``Permissions(risk=...)``. Control tools (Agent,
-#: AskUserQuestion, skill, ...) were never gated in 0.6 and are ``low``.
+#: Which tools need permission (``low``: none) where the file, shell and
+#: web checks do not decide. Claude Code's table: reading, searching,
+#: delegation and conversation tools need none; anything that changes
+#: something or reaches outside does. A tool the table does not name (an
+#: MCP tool) needs permission.
 DEFAULT_RISK: Mapping[str, str] = {
     "Read": "low",
     "Edit": "high",
@@ -51,9 +48,9 @@ DEFAULT_RISK: Mapping[str, str] = {
     "NotebookEdit": "high",
     "Bash": "high",
     "Monitor": "high",
-    "TaskStop": "high",
+    "TaskStop": "low",
     "WebFetch": "low",
-    "WebSearch": "low",
+    "WebSearch": "high",
     "memory_read": "low",
     "memory_search": "low",
     "memory_write": "medium",
@@ -67,39 +64,50 @@ DEFAULT_RISK: Mapping[str, str] = {
     "ListAgents": "low",
     "SubagentHandback": "low",
     "AskUserQuestion": "low",
+    "ExitPlanMode": "low",
     "Skill": "low",
+    "ListMcpResourcesTool": "low",
+    "ReadMcpResourceTool": "low",
+    "ScheduleWakeup": "low",
+    "ReportFindings": "low",
+    "Workflow": "low",
     "RecallHistory": "low",
+    "TodoWrite": "low",
     "structured_output": "low",
 }
 
-#: The edit tools ``acceptEdits`` exempts from the risk gate.
-EDIT_TOOL_NAMES: frozenset[str] = frozenset({"Edit", "Write", "NotebookEdit"})
-
-#: Tools whose ``command`` the shell allowlist gates (Monitor runs its script
-#: through the same gate).
-SHELL_GATED_TOOLS: frozenset[str] = frozenset({"Bash", "Monitor"})
+#: Tools auto mode lets through without the classifier (they read, or only
+#: talk to the person); every other call that needs no permission elsewhere
+#: is still classified (an ``Agent`` spawn, a sub-agent's hand-back).
+AUTO_SAFE_TOOLS: frozenset[str] = frozenset({
+    "Read", "Glob", "Grep", "LS", "NotebookRead", "ToolSearch", "Skill", "AskUserQuestion",
+    "ExitPlanMode", "ListMcpResourcesTool", "ReadMcpResourceTool", "ListAgents", "TodoWrite",
+    "TaskStop", "memory_read", "memory_search", "RecallHistory", "structured_output",
+    "ReportFindings", "ScheduleWakeup",
+})
 
 #: Tools that run or manage shell commands alongside ``Bash``; disallowing
 #: ``Bash`` removes them too.
 SHELL_COMPANION_TOOLS: frozenset[str] = frozenset({"Monitor", "TaskStop"})
 
 WEBFETCH_TOOL = "WebFetch"
+#: A shell command naming this directory asks (noeta's own config).
+CONFIG_DIR = ".noeta"
+#: Where "always" answers are kept in a trusted project (Claude Code's local
+#: settings file).
+LOCAL_SETTINGS = ".claude/settings.local.json"
+
+#: Programs whose prefix rule would let any code run (interpreters): auto
+#: mode ignores such an allow rule, as Claude Code drops rules that would
+#: bypass its classifier.
+INTERPRETERS = frozenset({"python", "python3", "node", "perl", "ruby", "php", "deno", "bun",
+                          "lua", "osascript", "eval", "exec", "source", "."})
 
 # ---------------------------------------------------------------- texts (0.6)
 
 DENIED_BY_POLICY = "tool {name!r} denied by policy"
 NOT_IN_ALLOWLIST = "tool {name!r} not in allowlist"
-NO_METADATA = (
-    "tool {name!r} has no metadata registered with PermissionGuard; fail-closed"
-)
-UNKNOWN_RISK = (
-    "tool {name!r} has unknown risk_level {risk!r}; fail-closed (known levels: {known})"
-)
 RISK_EXCEEDS = "tool {name!r} risk_level {risk!r} exceeds max {ceiling!r}"
-REQUIRES_APPROVAL = "tool {name!r} requires human approval"
-DENIED_BY_RULE = "Permission to use {name} has been denied by the rule {rule}."
-ASK_RULE = "The rule {rule} asks before {name} runs."
-CALL_REQUIRES_APPROVAL = "tool {name!r} call requires human approval"
 
 
 def check_mode(mode: str) -> PermissionMode:
@@ -108,6 +116,14 @@ def check_mode(mode: str) -> PermissionMode:
             f"Invalid permission_mode {mode!r}. Must be one of {PERMISSION_MODES}."
         )
     return mode  # type: ignore[return-value]
+
+
+def next_mode(mode: str, *, bypass: bool = True) -> str:
+    """The mode after ``mode`` in :data:`MODE_CYCLE`."""
+    cycle = [m for m in MODE_CYCLE if bypass or m != "bypassPermissions"]
+    if mode not in cycle:
+        return cycle[0]
+    return cycle[(cycle.index(mode) + 1) % len(cycle)]
 
 
 #: The keys of Claude Code's ``autoMode`` settings object.
@@ -127,16 +143,6 @@ def check_auto_mode(value: Mapping[str, Sequence[str]] | None) -> dict[str, tupl
     return out
 
 
-def mode_requires_approval(mode: str, name: str, risk: str) -> bool:
-    """The static gate: ``default`` asks for every tool whose risk is not
-    ``low``; ``acceptEdits`` the same minus Edit/Write; bypass never."""
-    if mode == "bypassPermissions":
-        return False
-    if risk == "low":
-        return False
-    return not (mode == "acceptEdits" and name in EDIT_TOOL_NAMES)
-
-
 def expand_disallowed(names: Iterable[str]) -> frozenset[str]:
     """``names`` plus, when ``Bash`` is among them, its companions."""
     out = set(names)
@@ -145,68 +151,19 @@ def expand_disallowed(names: Iterable[str]) -> frozenset[str]:
     return frozenset(out)
 
 
-# ---------------------------------------------------------------- shell gate
+def bypasses_classifier(rule: Rule) -> bool:
+    """An allow rule auto mode ignores: one that lets any shell command, any
+    interpreter or wrapper, or any sub-agent through without review."""
+    if rule.tool in ("Bash", "Monitor"):
+        if rule.content is None:
+            return True
+        words = rule.content.replace(":*", " *").split()
+        first = words[0] if words else ""
+        return first == "*" or first in INTERPRETERS or first in WRAPPER_PROGRAMS
+    return rule.tool == "Agent" and rule.content is None
 
 
-def effective_shell_rules(
-    host_specs: Sequence[Mapping[str, Any]] = (),
-    project_specs: Sequence[Mapping[str, Any]] = (),
-    remembered: Sequence[Mapping[str, Any]] = (),
-    *,
-    trusted: bool,
-    base_rules: Sequence[AllowRule] = DEFAULT_SHELL_RULES,
-) -> tuple[AllowRule, ...]:
-    """The curated rules (those that run workspace code only when the
-    workspace is trusted), the host's specs, the project file's specs (only
-    when trusted) and the rules this task remembered from "always" answers."""
-    base = tuple(r for r in base_rules if trusted or not r.runs_workspace_code)
-    specs = [*host_specs, *(project_specs if trusted else ()), *remembered]
-    return build_allowlist(specs, base_rules=base)
-
-
-def shell_call_needs_approval(input: Mapping[str, Any], rules: Sequence[AllowRule]) -> bool:
-    """A command in the allowlist runs silently; anything else, including an
-    empty or malformed command, asks."""
-    command = input.get("command")
-    if not isinstance(command, str) or not command.strip():
-        return True
-    return not command_in_allowlist(command, rules)
-
-
-PROJECT_RULES_FILE = ".noeta/shell-allowlist.json"
-
-
-def parse_project_rules(raw: bytes | str | None) -> tuple[dict[str, Any], ...]:
-    """The project file's specs; empty when absent or malformed."""
-    if raw is None:
-        return ()
-    try:
-        data = json.loads(raw)
-    except (ValueError, UnicodeDecodeError):
-        return ()
-    if not isinstance(data, list):
-        return ()
-    return tuple(dict(item) for item in data if isinstance(item, Mapping) and _valid_spec(item))
-
-
-def _valid_spec(spec: Mapping[str, Any]) -> bool:
-    try:
-        rule_from_spec(spec)
-    except ValueError:
-        return False
-    return True
-
-
-def append_project_rule(existing: Sequence[Mapping[str, Any]],
-                        spec: Mapping[str, Any]) -> str | None:
-    """The file's new text with ``spec`` appended, or ``None`` when it is
-    already there."""
-    if any(dict(e) == dict(spec) for e in existing):
-        return None
-    return json.dumps([*map(dict, existing), dict(spec)], ensure_ascii=False, indent=2) + "\n"
-
-
-# ---------------------------------------------------------------- web gate
+# ---------------------------------------------------------------- web hosts
 
 _LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$")
 
@@ -275,35 +232,29 @@ def webfetch_needs_approval(input: Mapping[str, Any], allowed: Sequence[str]) ->
     return not host_in_allowlist(url_host(url), allowed)
 
 
-# ---------------------------------------------------------------- "always"
+# ---------------------------------------------------------------- local settings
 
 
-def always_rule(name: str, input: Mapping[str, Any]) -> dict[str, Any] | None:
-    """What an "always" answer to this call remembers: a command rule
-    (:func:`~noeta.toolkit.shell.rule_spec_from_command`) for a shell
-    command, the host for a fetch, the tool otherwise; ``None`` when nothing
-    safe can be remembered (a command with shell metacharacters, a URL
-    without a host)."""
-    if name in SHELL_GATED_TOOLS:
-        command = input.get("command")
-        spec = rule_spec_from_command(command) if isinstance(command, str) else None
-        return {"kind": "shell", "spec": spec} if spec else None
-    if name == WEBFETCH_TOOL:
-        url = input.get("url")
-        host = url_host(url) if isinstance(url, str) else None
-        return {"kind": "host", "host": host} if host else None
-    return {"kind": "tool", "tool": name}
-
-
-def always_label(name: str, rule: Mapping[str, Any] | None) -> str | None:
-    """The rule an "always" answer remembers, as the person approving reads
-    it (Claude Code's rule form): ``Bash(git push *)``,
-    ``WebFetch(domain:example.com)``, ``Write``."""
-    if rule is None:
+def add_allow_rules(raw: bytes | str | None, rules: Sequence[str]) -> str | None:
+    """The local settings file's new text with ``rules`` added to
+    ``permissions.allow`` (other keys kept), or ``None`` when nothing
+    changes or the file is not a JSON object (left alone)."""
+    data: Any = {}
+    if raw:
+        try:
+            data = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            return None
+    if not isinstance(data, dict):
         return None
-    kind = rule.get("kind")
-    if kind == "shell" and isinstance(rule.get("spec"), Mapping):
-        return f"{name}({rule_spec_text(rule['spec'])})"
-    if kind == "host":
-        return f"{name}(domain:{rule.get('host')})"
-    return name
+    permissions = data.setdefault("permissions", {})
+    if not isinstance(permissions, dict):
+        return None
+    allow = permissions.setdefault("allow", [])
+    if not isinstance(allow, list):
+        return None
+    new = [x for x in rules if x not in allow]
+    if not new:
+        return None
+    allow.extend(new)
+    return json.dumps(data, ensure_ascii=False, indent=2) + "\n"

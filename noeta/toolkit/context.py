@@ -80,6 +80,12 @@ def noeta_home() -> Path:
     return Path(os.environ.get("NOETA_HOME") or Path.home() / ".noeta")
 
 
+def plans_dir() -> Path:
+    """Where plan mode keeps plan files (Claude Code's ``plans`` directory
+    in its config directory): file tools may write there."""
+    return noeta_home() / "plans"
+
+
 def _string_hash(text: str) -> int:
     """The 32-bit string hash Claude Code names long project slugs with
     (over UTF-16 code units)."""

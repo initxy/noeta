@@ -374,7 +374,7 @@ async def test_permissions_ask_about_server_tools_not_toolsearch(
         reply("done"),
     ])
     agent = Agent(name="a", model="m",
-                  extensions=[Mcp([server(deferred=True)], pool=pool), Permissions()])
+                  extensions=[Mcp([server(deferred=True)], pool=pool), Permissions(mode="default")])
     client = Client(store)
     tid = await client.create("a", "go")
     rt = runtime(store, provider, agent)
