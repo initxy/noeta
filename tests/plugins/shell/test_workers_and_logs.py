@@ -126,7 +126,7 @@ def _root_of(children: dict[str, list[Recorded]]) -> TaskView:
     async def child_tasks(task_id: str) -> list[str]:
         return [c for c in children if c.rsplit(".", 1)[0] == task_id]
 
-    async def read_log(task_id: str) -> list[Recorded]:
+    async def read_log(task_id: str, after: int = 0) -> list[Recorded]:
         return children[task_id]
 
     view.child_tasks, view.read_log = child_tasks, read_log
@@ -158,7 +158,7 @@ async def test_a_pickup_decides_what_a_crash_left_undecided() -> None:
     ext = Shell(registry=Registry())
     taken = _taken(Say(message=user("hi")), _lost())
 
-    async def read_log(_task_id: str) -> list[Recorded]:
+    async def read_log(_task_id: str, after: int = 0) -> list[Recorded]:
         return [taken]
 
     view = _view({"bg-1": _job(OTHER, hold=7)})

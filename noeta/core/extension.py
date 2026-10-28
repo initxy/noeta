@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, Union
 
 from noeta.core import records
 from noeta.core.deferred import deferred_names
@@ -136,6 +136,12 @@ class StagedChild(Struct):
     first: Say
 
 
+class ReadLog(Protocol):
+    """``TaskView.read_log``: a task's log after seq ``after`` (``Store.read``)."""
+
+    def __call__(self, task_id: str, after: int = 0) -> Awaitable[Sequence[Recorded]]: ...
+
+
 @dataclass
 class TaskView(records.CoreNotices):
     """What an extension sees: the folded task state (read only) and a way to
@@ -160,10 +166,10 @@ class TaskView(records.CoreNotices):
     #: ``await count_tokens(text)``: the provider's exact token count of one
     #: user message holding ``text`` (``None`` when it cannot count).
     count_tokens: Callable[[str], Awaitable[int | None]] | None = None
-    #: ``await read_log(task_id)``: a task's log, oldest first — what a
-    #: related task (a sub-agent, a conversation this one continues)
-    #: recorded. Read only.
-    read_log: Callable[[str], Awaitable[Sequence[Recorded]]] | None = None
+    #: ``await read_log(task_id, after=0)``: a task's log after seq
+    #: ``after``, oldest first — what a related task (a sub-agent, a
+    #: conversation this one continues) recorded. Read only.
+    read_log: ReadLog | None = None
     #: ``await child_tasks(task_id)``: the ids of a task's children.
     child_tasks: Callable[[str], Awaitable[list[str]]] | None = None
     #: The task's extensions, in the agent's order (``residents``).
