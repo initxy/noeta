@@ -6,8 +6,11 @@ repository's main checkout, else the working directory). The model writes
 and edits the files with the ordinary ``Write`` / ``Edit`` tools, as the
 memory section of the system prompt tells it. ``MEMORY.md``, the model's
 index, is read when the task starts (its first 200 lines and 25,000 bytes)
-and again after a compaction. With a ``recall_model``, each user message
-asks that model which memory files bear on it and attaches up to five.
+and again after a compaction; when the agent runs the instructions plugin
+after this one, that plugin shows it with the instruction files (Claude
+Code's place for it), reading the directory this plugin records. With a
+``recall_model``, each user message asks that model which memory files bear
+on it and attaches up to five.
 """
 
 from __future__ import annotations
@@ -25,7 +28,17 @@ from typing import Any
 from noeta.core.events import Recorded
 from noeta.core.extension import ContextPart, Extension, TaskView
 from noeta.core.types import Message, ModelRequest, SystemPart, user
-from noeta.toolkit.context import new_user_messages, noeta_home, project_dir, task_env
+from noeta.toolkit.context import (
+    MEMORY_INDEX_FILE,
+    MEMORY_INDEX_MAX_BYTES,
+    MEMORY_INDEX_MAX_LINES,
+    new_user_messages,
+    noeta_home,
+    project_dir,
+    read_memory_index,
+    task_env,
+    trim_memory_index,
+)
 
 __all__ = ["INDEX_FILE", "MEMORY_SECTION", "Memory", "load_index", "memory_dir_for"]
 
@@ -40,18 +53,22 @@ def _load(name: str) -> str:
 #: The system prompt's memory section (``memory/section``); ``{dir}`` is the
 #: memory directory.
 MEMORY_SECTION = _load("section")
+#: The section goes ahead of the agent prompt's environment section, as
+#: Claude Code places it (after the session-specific guidance).
+ENVIRONMENT_HEADING = "# Environment"
 #: The recall selector's instructions (``memory/recall``).
 RECALL_PROMPT = _load("recall")
 
-INDEX_FILE = "MEMORY.md"
-#: How much of ``MEMORY.md`` is loaded (Claude Code's limits).
-INDEX_MAX_LINES = 200
-INDEX_MAX_BYTES = 25_000
-#: The index as attached: its path, then its text.
+INDEX_FILE = MEMORY_INDEX_FILE
+INDEX_MAX_LINES = MEMORY_INDEX_MAX_LINES
+INDEX_MAX_BYTES = MEMORY_INDEX_MAX_BYTES
+#: The index as attached when the agent has no instructions plugin to show
+#: it: its path, then its text.
 INDEX_HEAD = ("Contents of {path} (your auto memory index for this project, kept across "
               "conversations):")
-INDEX_CUT = ("> Note: {name} is {size}; only part of it was loaded ({what}). Keep each index "
-             "entry to one short line and move details into the memory files.")
+#: The plugin that shows the index with the instruction files when it runs
+#: after this one.
+INSTRUCTIONS = "instructions"
 
 #: Recall: memories attached per message, the selector's output ceiling, and
 #: the bytes attached over a whole task.
@@ -70,27 +87,7 @@ _RECALL_SCHEMA = {
 
 def load_index(text: str) -> str:
     """``MEMORY.md`` within its line and byte limits, with a note when cut."""
-    trimmed = text.strip()
-    lines = trimmed.split("\n")
-    size = len(trimmed.encode("utf-8"))
-    over_lines, over_bytes = len(lines) > INDEX_MAX_LINES, size > INDEX_MAX_BYTES
-    if not over_lines and not over_bytes:
-        return trimmed
-    kept = "\n".join(lines[:INDEX_MAX_LINES])
-    if len(kept.encode("utf-8")) > INDEX_MAX_BYTES:
-        cut = kept.encode("utf-8")[:INDEX_MAX_BYTES].decode("utf-8", errors="ignore")
-        newline = cut.rfind("\n")
-        kept = cut[:newline] if newline > 0 else cut
-    shown = kept.count("\n") + 1
-    if over_lines and not over_bytes:
-        size_text = f"{len(lines)} lines (limit {INDEX_MAX_LINES})"
-    elif over_bytes and not over_lines:
-        size_text = f"{size} bytes (limit {INDEX_MAX_BYTES})"
-    else:
-        size_text = f"{len(lines)} lines and {size} bytes"
-    note = INDEX_CUT.format(name=INDEX_FILE, size=size_text,
-                            what=f"the first {shown} of {len(lines)} lines")
-    return f"{kept}\n{note}"
+    return trim_memory_index(text)
 
 
 def memory_dir_for(root: str, home: Path | None = None) -> str:
@@ -103,6 +100,14 @@ _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*(\n|\Z)", re.S)
 def _field(head: str, key: str) -> str:
     m = re.search(rf"^\s*{key}:\s*(.+?)\s*$", head, re.M)
     return m.group(1).strip().strip("'\"") if m else ""
+
+
+def _instructions_show_index(view: TaskView, name: str) -> bool:
+    """Whether the instructions plugin runs after this one: it then shows
+    ``MEMORY.md`` among the instruction files, as Claude Code does, reading
+    the directory this plugin records (its ``dir`` record)."""
+    names = [e.name for e in view.extensions]
+    return name in names and INSTRUCTIONS in names[names.index(name) + 1:]
 
 
 class Memory(Extension):
@@ -149,7 +154,7 @@ class Memory(Extension):
         if directory is None:
             return ()
         text = view.prompt("memory/section", MEMORY_SECTION).replace("{dir}", directory)
-        return (ContextPart(text=text),)
+        return (ContextPart(text=text, before=ENVIRONMENT_HEADING),)
 
     # ------------------------------------------------------------ hooks
 
@@ -162,13 +167,13 @@ class Memory(Extension):
         except OSError:
             log.warning("memory: could not create %s", directory)
         view.record(self.name, "dir", {"dir": directory})
-        index = self._index(directory)
+        index = None if _instructions_show_index(view, self.name) else self._index(directory)
         if index is not None:
             view.record(self.name, "index", {}, message=user(index, origin="system"))
 
     async def lead_resident(self, view: TaskView) -> Sequence[Message]:
         directory = self._dir(view)
-        if not self.rehang or directory is None:
+        if not self.rehang or directory is None or _instructions_show_index(view, self.name):
             return ()
         index = self._index(directory)
         return (user(index, origin="system"),) if index is not None else ()
@@ -201,14 +206,11 @@ class Memory(Extension):
 
     @staticmethod
     def _index(directory: str) -> str | None:
-        path = Path(directory) / INDEX_FILE
-        try:
-            text = path.read_text("utf-8")
-        except (OSError, UnicodeDecodeError):
+        found = read_memory_index(directory)
+        if found is None:
             return None
-        if not text.strip():
-            return None
-        return f"{INDEX_HEAD.format(path=path)}\n\n{load_index(text)}"
+        path, text = found
+        return f"{INDEX_HEAD.format(path=path)}\n\n{text}"
 
     @staticmethod
     def _manifest(directory: str, skip: set[str]) -> list[tuple[str, str]]:

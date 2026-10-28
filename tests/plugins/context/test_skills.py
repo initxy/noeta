@@ -50,7 +50,7 @@ async def test_listing_is_recorded_once_and_offers_the_skill_tool(h: Harness) ->
     tid = await h.start(a)
     first = h.provider.requests[0]
     # Held for the first request's system turn, after the prompt.
-    assert [m.text for m in first.messages] == ["go", f"{ROSTER_HEADER}\n- deploy: Ship the app."]
+    assert [m.text for m in first.messages] == ["go", f"{ROSTER_HEADER}\n\n- deploy: Ship the app."]
     assert first.messages[1].role == "system"
     assert "Skill" in [t.name for t in first.tools]
     await h.say(a, tid, "more")
@@ -133,7 +133,7 @@ async def test_new_skills_are_announced_at_the_next_message(h: Harness) -> None:
     await h.say(a, tid, "next")
     msgs = h.last_messages()
     assert msgs[-2].text == "next"
-    assert msgs[-1].text == f"{ADDED_HEADER}\n- review: Review code."
+    assert msgs[-1].text == f"{ADDED_HEADER}\n\n- review: Review code."
     assert len(await h.records(tid, "skills", "listing")) == 2
 
 
@@ -160,7 +160,7 @@ async def test_a_skill_installed_into_an_empty_task_is_announced(h: Harness) -> 
     first, second = h.provider.requests
     assert first.tools == second.tools  # the prefix does not move
     texts = [m.text for m in second.messages]
-    assert texts[-2:] == ["next", f"{ROSTER_HEADER}\n- review: Review code."]
+    assert texts[-2:] == ["next", f"{ROSTER_HEADER}\n\n- review: Review code."]
 
 
 async def test_slash_command_activates_even_a_user_only_skill(h: Harness) -> None:
@@ -185,7 +185,7 @@ async def test_preload_and_tiers(h: Harness, tmp_path: Path) -> None:
     msgs = h.provider.requests[0].messages
     assert msgs[0].text.startswith("Activated skill: lint")
     assert msgs[1].text == "go"
-    assert msgs[2].text == f"{ROSTER_HEADER}\n- deploy: Workspace deploy.\n- lint: Lint."
+    assert msgs[2].text == f"{ROSTER_HEADER}\n\n- deploy: Workspace deploy.\n- lint: Lint."
     assert (await h.records(tid, "skills", "activated"))[0].data["source"] == "preload"
 
 
@@ -202,7 +202,7 @@ async def test_untrusted_workspace_skips_its_skill_dirs(h: Harness, tmp_path: Pa
 
     await h.start(agent(dirs=[tmp_path / "borrowed"], trusted=trusted))
     assert set(seen) == {str(h.work)}
-    assert h.provider.requests[0].messages[-1].text == f"{ROSTER_HEADER}\n- borrowed: Borrowed."
+    assert h.provider.requests[0].messages[-1].text == f"{ROSTER_HEADER}\n\n- borrowed: Borrowed."
 
 
 async def test_run_skill_script_asks_and_runs_only_active_scripts(h: Harness) -> None:
@@ -259,8 +259,8 @@ async def test_rank_resolver_is_asked_once_and_shapes_the_fit(h: Harness) -> Non
     await h.start(agent(rank=rank, budget_tokens=60))
     listing = h.provider.requests[0].messages[-1].text.split("\n")
     assert asked == [1]
-    assert listing[1] == "- alpha: Very long description sentence."
-    assert listing[2] == "- beta: Very long description sentence."
+    assert listing[2] == "- alpha: Very long description sentence."
+    assert listing[3] == "- beta: Very long description sentence."
 
 
 async def test_usage_rank_counts_model_and_user_activations(h: Harness) -> None:
@@ -310,3 +310,14 @@ def test_allowed_tools_parsing() -> None:
     assert parse_allowed_tools("[Read, Bash(git:*)]") == frozenset({"Read", "Bash"})
     assert parse_allowed_tools("Read, Grep") == frozenset({"Read", "Grep"})
     assert parse_allowed_tools("{Read}") is None
+
+
+async def test_claude_code_skill_dirs_are_listed_workspace_first(
+        h: Harness, tmp_path: Path) -> None:
+    write_skill(h.work / ".claude" / "skills", "release-notes", "Draft release notes.")
+    write_skill(tmp_path / "claude-user" / "skills", "a-user-skill", "From the user.")
+    h.provider.add(reply("ok"))
+    await h.start(agent(dirs=[tmp_path / "claude-user" / "skills"]))
+    assert h.provider.requests[0].messages[-1].text == (
+        f"{ROSTER_HEADER}\n\n- release-notes: Draft release notes.\n"
+        "- a-user-skill: From the user.")

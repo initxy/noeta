@@ -17,6 +17,7 @@ win. The plugin part of ``config.toml``::
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import secrets
@@ -31,6 +32,14 @@ from noeta.agents.agent_files import (
     PluginSetting,
     parse_plugin_list,
 )
+from noeta.cli.claude_settings import (
+    ClaudeSettings,
+    apply_env,
+    managed_dir,
+    permission_arguments,
+    settings_files,
+)
+from noeta.cli.claude_settings import load as load_claude_settings
 from noeta.core import models, registry
 from noeta.core.provider import Provider
 
@@ -101,7 +110,20 @@ def device_id() -> str | None:
     return value
 
 
-def load_settings(**overrides: Any) -> Settings:
+def claude_settings(cwd: str | None) -> ClaudeSettings:
+    """Claude Code's settings files for a front end started in ``cwd``
+    (:mod:`noeta.cli.claude_settings`), the project's once it is trusted."""
+    trusted = bool(cwd) and project_trusted(str(cwd))
+    return load_claude_settings(settings_files(cwd, claude_home=CLAUDE_HOME, noeta_home=HOME,
+                                               trusted=trusted, managed=managed_dir()))
+
+
+def load_settings(*, cwd: str | None = None, **overrides: Any) -> Settings:
+    """``cwd``: where the front end runs; its Claude Code settings set
+    environment variables (applied here, before the rest is read) and the
+    model when nothing else does."""
+    claude = claude_settings(cwd)
+    apply_env(claude)
     data: dict[str, Any] = {}
     path = HOME / "config.toml"
     if path.is_file():
@@ -117,6 +139,8 @@ def load_settings(**overrides: Any) -> Settings:
     }
     data.update({k: v for k, v in env.items() if v})
     data.update({k: v for k, v in overrides.items() if v is not None})
+    if not data.get("model") and claude.model:
+        data["model"] = claude.model
     data["plugins"] = _plugin_tables(data.get("plugins", {}))
     data["add_plugins"] = _agent_tables(data.pop("agents", {}))
     known = {f for f in Settings.__dataclass_fields__}
@@ -143,6 +167,26 @@ def _agent_tables(value: Any) -> dict[str, tuple[PluginEntry, ...]]:
         out[name] = parse_plugin_list(table.get("add_plugins", []),
                                       f"config.toml [agents.{name}] add_plugins")
     return out
+
+
+def _permission_arguments(claude: ClaudeSettings) -> dict[str, Any]:
+    """The permissions plugin's arguments from the settings files, those it
+    takes; a ``defaultMode`` it does not know is left out (warned)."""
+    import inspect
+
+    try:
+        plugin = registry.load(registry.PLUGINS, "permissions")
+    except registry.UnknownName:
+        return {}
+    accepted = set(inspect.signature(plugin).parameters)
+    args = permission_arguments(claude, accepted)
+    if "mode" in args:
+        try:
+            plugin(mode=args["mode"])
+        except ValueError:
+            log.warning("settings: permission mode %r is not one noeta has; ignored",
+                        args.pop("mode"))
+    return args
 
 
 def merge_plugin_settings(*tables: Mapping[str, PluginSetting]) -> dict[str, PluginSetting]:
@@ -233,6 +277,7 @@ PROJECT_GATED_DIRS = {
     ".noeta/prompts": "prompt overrides",
     ".noeta/skills": "skills",
     ".agents/skills": "skills",
+    ".claude/skills": "skills",
 }
 
 
@@ -266,9 +311,12 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
                   own_tasks_only: bool = False, **runtime_kw: Any) -> LocalApp:
     """The default agents on the configured store, model and provider, with
     the user's plugin files (``~/.noeta/plugins``, and a trusted project's
-    ``<cwd>/.noeta/plugins``), memory (``~/.noeta/projects/<workspace>/memory``), prompt overrides
-    (``~/.noeta/prompts``), hooks and MCP servers (``~/.noeta/settings.json``,
-    and the ``.mcp.json`` servers it consents to), agent files
+    ``<cwd>/.noeta/plugins``), memory (``~/.noeta/projects/<workspace>/memory``), prompt
+    overrides (``~/.noeta/prompts``), Claude Code's settings files (env,
+    model, permissions, hooks, MCP consent; :mod:`noeta.cli.claude_settings`)
+    and instruction files (``~/.claude/CLAUDE.md``, the managed one), the
+    ``~/.claude/skills`` skills, the ``.mcp.json`` servers the settings
+    consent to, agent files
     (``~/.claude/agents``, ``~/.noeta/agents``, then ``<cwd>/.claude/agents``
     and ``<cwd>/.noeta/agents``; a later file wins a name) and the plugin
     settings of ``config.toml``; ``plugins`` (the front end's own) goes over
@@ -292,11 +340,18 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     if cwd and project_trusted(cwd):
         files += read_agent_dir(Path(cwd) / ".claude" / "agents")
         files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
+    claude = claude_settings(cwd)
+    apply_env(claude)
+    if not settings.model and claude.model:
+        settings = dataclasses.replace(settings, model=claude.model)
+    setting_files = [str(f) for f in claude.files]
     table = merge_plugin_settings(
         {"memory": {"home": str(HOME)},
-         "hooks": {"settings_files": [str(HOME / "settings.json")]},
-         "mcp": {"settings_files": [str(HOME / "settings.json")], "project": True},
-         "skills": {"trusted": project_trusted}},
+         "hooks": {"settings_files": setting_files},
+         "mcp": {"settings_files": setting_files, "project": True},
+         "skills": {"trusted": project_trusted, "dirs": [str(CLAUDE_HOME / "skills")]},
+         "instructions": {"user_dir": str(CLAUDE_HOME), "managed_dir": str(managed_dir())},
+         "permissions": _permission_arguments(claude)},
         settings.plugins, plugins or {})
     agents = default_agents(settings.model, plugins=table, add=settings.add_plugins,
                             extra_files=files)

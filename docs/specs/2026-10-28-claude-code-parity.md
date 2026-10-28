@@ -155,7 +155,7 @@ Phase 3 — behaviors around the model
 - [ ] Skills: every baseline frontmatter field (`allowed-tools` as pre-approval, `when_to_use`,
   `context: fork`, `` !`cmd` ``, `${CLAUDE_SKILL_DIR}`, `paths`), directory walk.
 - [ ] Agent files: every baseline frontmatter field; unknown fields warn.
-- [ ] Memory: `CLAUDE.md` layers, `@import`, `.claude/rules`, per-project auto memory.
+- [x] Memory: `CLAUDE.md` layers, `@import`, `.claude/rules`, per-project auto memory.
 - [ ] MCP: OAuth, headersHelper, SSE, streamable-http spelling, resources tools, elicitation via
   `noeta.core.questions`, deferred by default.
 - [ ] Sandbox for local exec (bubblewrap on Linux) with Claude Code's settings shape and domain
@@ -292,3 +292,23 @@ Phase 5 — front ends
   (tools 55, context 50, run 22, layout 15, cache 8, headers 6, side requests 5, params 4,
   system 3, compaction 1); the larger count comes from the new steps (sub-agent tool sets,
   approvals, Monitor/TaskStop, interrupt kinds), not from regressions.
+  Background sub-agents' approvals wait at the root (Claude Code denies the one call) — owner to
+  decide.
+- 2026-10-28: Claude Code's files (Phase 2/3 slice): the instructions plugin reads Claude Code's
+  layers in its order (managed, `~/.claude`, every directory from the outermost ancestor down:
+  `CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules`, `CLAUDE.local.md`; `@path` imports five
+  deep; `paths:` rules and nested files when a tool touches a file) and ends with `MEMORY.md`;
+  decision: a directory with no `CLAUDE.md` reads its `NOETA.md`, else `AGENTS.md`
+  (`parity/deviations.md`). The memory section moves before `# Environment`
+  (`ContextPart.before`). `~/.claude/settings.json`, `~/.noeta/settings.json`, trusted
+  `.claude/settings*.json` and `managed-settings.json` merge in Claude Code's precedence
+  (`noeta/cli/claude_settings.py`): env, model, hooks/MCP file lists, and the permissions
+  plugin's `mode`/`allow`/`deny`/`ask`/`additional_directories` as plain data (only arguments
+  it takes; the rule-syntax worker adds them). `.claude/skills` and `~/.claude/skills` are
+  read, workspace first. The environment turn carries the deferred tools (order 30) and the
+  agent list (order 40, moved from the first user turn); sub-agents get the deferred list
+  first and no budget notes, Explore/Plan no git snapshot. `make parity` 65 -> 51 (context
+  33/279 -> 24/147, layout 8/68 -> 4/14). Open: the skill command wrapper
+  (`<command-message>` block, plain-text skill body), instructions re-read on resume (needs a
+  resume signal from front ends), instructions/git context after compaction (compaction
+  worker), `outputStyle` read but not applied.

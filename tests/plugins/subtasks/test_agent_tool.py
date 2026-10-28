@@ -377,7 +377,7 @@ async def test_a_fork_starts_from_the_callers_conversation(store: SqliteStore) -
     assert isinstance(created, TaskCreated) and created.agent == "main"
     assert created.history_from == tid and created.config["fork"] is True
     fork_request = p.requests[2]
-    assert texts_of(fork_request)[1] == "the original task"
+    assert texts_of(fork_request)[0] == "the original task"
     assert texts_of(fork_request)[-2:] == ["you are the fork", texts.HANDBACK_REMINDER]
     assert fork_request.tools[-1].name == "SubagentHandback"
 

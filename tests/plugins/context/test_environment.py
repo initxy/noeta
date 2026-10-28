@@ -141,7 +141,8 @@ async def _no_sleep(_: float) -> None:
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 async def test_first_request_layout_and_budget_notes(tmp_path: Path) -> None:
     """The git snapshot and attribution ride in the first user turn before
-    the prompt; the environment, budget and date follow it as one system
+    the prompt; the environment, the deferred tools, budget and date follow
+    it as one system
     turn; every later prompt and tool result gets a budget note, which
     counts down the output spent in the turn."""
     from noeta.backends.stores.sqlite import SqliteStore
@@ -171,7 +172,11 @@ async def test_first_request_layout_and_budget_notes(tmp_path: Path) -> None:
             from noeta.core.tool import text_output
             return text_output("ok")
 
-    agent = Agent(name="a", model="claude-opus-5-5", tools=[Probe()],
+    class Later(Probe):
+        name = "Later"
+        deferred = True
+
+    agent = Agent(name="a", model="claude-opus-5-5", tools=[Probe(), Later()],
                   extensions=[Environment(today=lambda: "2026-10-28")])
     rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
                  env_for=lambda _s: LocalExecEnv(str(repo)), sleep=_no_sleep)
@@ -183,13 +188,15 @@ async def test_first_request_layout_and_budget_notes(tmp_path: Path) -> None:
     await store.close()
 
     first = provider.requests[0].messages
-    assert [m.role for m in first] == ["user", "user", "user", "system", "system", "system"]
+    assert [m.role for m in first] == ["user", "user", "user", *["system"] * 4]
     assert first[0].text.startswith("Here is context from the workspace")
     assert first[1].text.startswith("From here on, end the git commit messages")
     assert first[2].text == "hi"
     assert first[3].text.startswith("# Environment\n")
-    assert first[4].text == "<total_tokens>15000000 tokens left</total_tokens>"
-    assert first[5].text == "The date today is 2026-10-28."
+    assert first[4].text.startswith("The tools below are deferred")
+    assert first[4].text.endswith("before calling them:\nLater")
+    assert first[5].text == "<total_tokens>15000000 tokens left</total_tokens>"
+    assert first[6].text == "The date today is 2026-10-28."
     second = provider.requests[1].messages
     assert second[-1].role == "system"
     assert second[-1].text == "<total_tokens>14999000 tokens left</total_tokens>"

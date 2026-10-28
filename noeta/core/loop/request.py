@@ -32,7 +32,7 @@ def build_request(
     system: list[SystemPart] = [SystemPart(text=identity, cache=True)] if identity else []
     text = system_prompt
     for part in sorted(parts, key=lambda p: p.order):
-        text = f"{text}\n{part.text}" if text else part.text
+        text = _place(text, part)
     if text:
         system.append(SystemPart(text=text, cache=True))
     messages = list(state.messages)
@@ -48,6 +48,15 @@ def build_request(
         cache_after=cache_breakpoints(state),
         root_id=state.root_id or state.task_id or None,
     )
+
+
+def _place(text: str, part: ContextPart) -> str:
+    lines = text.split("\n")
+    if part.before and part.before in lines:
+        i = lines.index(part.before)
+        head, tail = "\n".join(lines[:i]), "\n".join(lines[i:])
+        return f"{head}\n{part.text}\n\n{tail}" if i else f"{part.text}\n\n{tail}"
+    return f"{text}\n{part.text}" if text else part.text
 
 
 def cache_breakpoints(state: TaskState) -> list[int]:
