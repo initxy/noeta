@@ -10,7 +10,8 @@ What a confined command may do:
 * **Write** only in the working directory, ``filesystem.allowWrite`` (plus
   ``Edit(...)`` allow rules and the additional working directories), and a
   private temporary directory (``TMPDIR``); never in ``filesystem.denyWrite``
-  or the files that change what the agent may do (:data:`PROTECTED`).
+  or the paths whose contents run or configure code later (:data:`PROTECTED`,
+  submodule git directories, the configured hooks directory).
 * **Connect** only through the filtering proxy
   (:mod:`.sandbox_proxy`), to ``network.allowedDomains``; the hosts it
   refused are reported after the command.
@@ -39,6 +40,7 @@ from pathlib import Path
 
 from noeta.backends.execenvs.sandbox_proxy import FilterProxy, Listeners, default_proxy
 from noeta.toolkit.context import noeta_home
+from noeta.toolkit.protected_paths import PROTECTED_DIRS, PROTECTED_FILES, PROTECTED_NESTED
 from noeta.toolkit.sandbox import SandboxSettings
 
 __all__ = [
@@ -61,16 +63,29 @@ DEFAULT_DENY_READ = (
 #: Inside noeta's home (otherwise unreadable: tokens, the task store), what
 #: a command may still read: spilled tool output and project memory.
 HOME_ALLOW_READ = ("tool-results", "projects")
-#: Paths under a writable directory a confined command may not change:
-#: noeta's project directory (settings, plugins, MCP servers, agents) and
-#: git's hooks and config (code that would later run outside the sandbox).
-#: A missing one is covered by an empty read-only placeholder, so it cannot
-#: be created either.
-PROTECTED = (".noeta", ".git/hooks", ".git/config")
+#: Paths under a writable directory a confined command may not change: the
+#: permissions plugin's protected directories and files (noeta's project
+#: directory, editor tasks, hook runners, shell and package-manager
+#: settings) and git's hooks and config — code that would later run outside
+#: the sandbox. A missing one is covered by an empty read-only placeholder,
+#: so it cannot be created either. ``.git`` itself stays writable (git works
+#: in the sandbox) but pinned.
+PROTECTED = (
+    *(d for d in PROTECTED_DIRS if d != ".git"),
+    *("/".join(n) for n in PROTECTED_NESTED),
+    *sorted(PROTECTED_FILES),
+    ".git/hooks", ".git/config", ".git/config.worktree",
+)
 #: Directories that stay writable but are mounted onto themselves: a mount
 #: point cannot be renamed, so what is protected inside cannot be moved
-#: away and recreated.
+#: away and recreated. Every directory between a working directory and a
+#: protected path is pinned the same way.
 PINNED = (".git",)
+#: Git config files: a missing one is covered by an empty file, which git
+#: reads as no settings (a directory there would break git). Any other
+#: missing path gets an empty directory, which git does not list (an empty
+#: file would show as untracked and fail ``git add -A``).
+_GIT_CONFIGS = ("config", "config.worktree")
 #: Loopback ports the proxies listen on inside a Linux sandbox.
 INNER_HTTP_PORT, INNER_SOCKS_PORT = 3128, 1080
 _BRIDGE = Path(__file__).with_name("sandbox_bridge.py")
@@ -158,6 +173,67 @@ def _first_missing(path: str) -> str | None:
         current = parent
 
 
+def _module_gitdirs(gitdir: str, limit: int = 256) -> list[str]:
+    """The submodules' git directories under ``gitdir/modules`` (a name may
+    hold slashes; a submodule may have its own)."""
+    found: list[str] = []
+    stack = [os.path.join(gitdir, "modules")]
+    while stack and len(found) < limit:
+        try:
+            entries = list(os.scandir(stack.pop()))
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            if os.path.isfile(os.path.join(entry.path, "HEAD")):
+                found.append(entry.path)
+                stack.append(os.path.join(entry.path, "modules"))
+            else:
+                stack.append(entry.path)
+    return found
+
+
+def _hooks_dir(project: str) -> str | None:
+    """The hooks directory git runs from for ``project`` (``core.hooksPath``
+    when set), or ``None`` when it is not a git work tree."""
+    if not os.path.lexists(os.path.join(project, ".git")):
+        return None
+    try:
+        done = subprocess.run(["git", "rev-parse", "--git-path", "hooks"], cwd=project,
+                              capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    out = done.stdout.decode("utf-8", "replace").strip()
+    if done.returncode != 0 or not out:
+        return None
+    return os.path.realpath(os.path.join(project, out))
+
+
+def _git_protected(project: str) -> list[str]:
+    """What git runs code from in ``project`` beyond :data:`PROTECTED`: each
+    submodule's config and hooks, and the configured hooks directory."""
+    out: list[str] = []
+    for module in _module_gitdirs(os.path.join(project, ".git")):
+        out += [os.path.join(module, "hooks"),
+                *(os.path.join(module, name) for name in _GIT_CONFIGS)]
+    hooks = _hooks_dir(project)
+    if hooks is not None:
+        out.append(hooks)
+    return out
+
+
+def _between(path: str, writes: Sequence[str]) -> list[str]:
+    """The real directories strictly between a writable directory and
+    ``path``, outermost first."""
+    for w in writes:
+        if path != w and _within(path, w):
+            parts = os.path.relpath(path, w).split(os.sep)[:-1]
+            dirs = [os.path.join(w, *parts[:i]) for i in range(1, len(parts) + 1)]
+            return [d for d in dirs if os.path.isdir(d) and not os.path.islink(d)]
+    return []
+
+
 def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
                writable: Sequence[str] = ()) -> Plan:
     """The paths of :class:`Plan` for a command whose working directory is
@@ -166,7 +242,14 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
     writes = [root, *_expand(settings, settings.allow_write, base), tmpdir, *writable]
     writes = [w for w in dict.fromkeys(os.path.realpath(w) for w in writes) if os.path.exists(w)]
     user_deny = [os.path.realpath(p) for p in _expand(settings, settings.deny_write, base)]
-    deny_write = list(user_deny)
+    # Placeholders go where a missing path matters: the denyWrite settings
+    # and the protected paths of the working directories (not of TMPDIR or
+    # allowWrite, which no one trusts as a project).
+    projects = [os.path.realpath(p) for p in (root, *writable)]
+    protected = [*(os.path.join(p, n) for p in projects for n in PROTECTED),
+                 *(path for p in projects for path in _git_protected(p)
+                   if any(_within(path, w) for w in writes))]
+    deny_write = [*user_deny, *protected]
     pinned: list[str] = []
     for w in writes:
         for name in PINNED:
@@ -187,19 +270,17 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
     # binding it would show it again.
     deny_write = [p for p in dict.fromkeys(deny_write)
                   if not any(_within(p, d) for d in hidden)]
-    # Placeholders go where a missing path matters: the denyWrite settings
-    # and the protected paths of the working directories (not of TMPDIR or
-    # allowWrite, which no one trusts as a project).
-    projects = [os.path.realpath(p) for p in (root, *writable)]
-    wanted = [*user_deny, *(os.path.join(p, n) for p in projects for n in PROTECTED)]
+    for path in deny_write:
+        pinned += _between(path, writes)
+    pinned = sorted(dict.fromkeys(p for p in pinned if p not in deny_write),
+                    key=lambda p: p.count("/"))
     placeholders: dict[str, bool] = {}
-    for path in wanted:
+    for path in [*user_deny, *protected]:
         missing = _first_missing(path)
         if missing is not None and path in deny_write \
                 and any(_within(missing, w) and missing != w for w in writes):
-            # A missing ``.git/config`` becomes an empty file, which git
-            # reads as no settings (a directory there would break git).
-            placeholders.setdefault(missing, missing.endswith("/.git/config"))
+            placeholders.setdefault(missing, missing == path and "/.git/" in path
+                                    and os.path.basename(path) in _GIT_CONFIGS)
     return Plan(writable=writes, deny_write=deny_write, deny_read=deny_read,
                 allow_read=allow_read, pinned=pinned, placeholders=list(placeholders.items()))
 

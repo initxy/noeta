@@ -21,6 +21,12 @@ import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 
+from noeta.toolkit.protected_paths import (
+    OPEN_SUBDIRS,
+    PROTECTED_DIRS,
+    PROTECTED_FILES,
+    PROTECTED_NESTED,
+)
 from noeta.toolkit.shell_syntax import Command, Word, harmless_redirect, parse
 
 __all__ = [
@@ -36,29 +42,6 @@ __all__ = [
     "shell_parts",
 ]
 
-#: Directories whose contents run or configure tools later (git hooks, editor
-#: tasks, agent settings): writing there asks in every mode. ``.noeta`` is
-#: protected as Claude Code protects ``.claude``: its ``skills`` and
-#: ``commands`` are exempt (not its ``agents``: an agent file names plugins
-#: and their arguments, code the next session runs). ``.claude`` stays
-#: protected though noeta never reads it: Claude Code may run in the same
-#: project.
-PROTECTED_DIRS = (".git", ".vscode", ".idea", ".claude", ".husky", ".cargo", ".devcontainer",
-                  ".yarn", ".mvn", ".noeta")
-#: Nested protected directories.
-PROTECTED_NESTED = ((".config", "git"),)
-#: Files that configure a shell, a package manager or a hook runner.
-PROTECTED_FILES = frozenset(f.lower() for f in (
-    ".gitconfig", ".gitmodules", ".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile",
-    ".zshenv", ".zlogin", ".zlogout", ".bash_login", ".bash_aliases", ".bash_logout", ".envrc",
-    ".ripgreprc", ".mcp.json", ".claude.json", ".npmrc", ".yarnrc", ".yarnrc.yml", ".pnp.cjs",
-    ".pnp.loader.mjs", ".pnpmfile.cjs", "bunfig.toml", ".bunfig.toml", ".bazelrc",
-    ".bazelversion", ".bazeliskrc", ".pre-commit-config.yaml", "lefthook.yml", ".lefthook.yml",
-    "lefthook.yaml", ".lefthook.yaml", "gradle-wrapper.properties", "maven-wrapper.properties",
-    ".devcontainer.json", "pyrightconfig.json"))
-_OPEN_SUBDIRS = {".noeta": frozenset({"skills", "commands", "worktrees"}),
-                 ".claude": frozenset({"skills", "agents", "commands", "worktrees"})}
-
 #: File commands ``acceptEdits`` runs without asking when every path they
 #: name is inside the working directories (Claude Code's list).
 FILE_COMMANDS = frozenset({"mkdir", "touch", "rm", "rmdir", "mv", "cp", "sed"})
@@ -70,7 +53,7 @@ def is_protected(path: str) -> bool:
     parts = [p.lower() for p in path.split("/") if p]
     for i, part in enumerate(parts):
         if part in PROTECTED_DIRS:
-            if i + 1 < len(parts) and parts[i + 1] in _OPEN_SUBDIRS.get(part, ()):
+            if i + 1 < len(parts) and parts[i + 1] in OPEN_SUBDIRS.get(part, ()):
                 continue
             return True
     for nested in PROTECTED_NESTED:

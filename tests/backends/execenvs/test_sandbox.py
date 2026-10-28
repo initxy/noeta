@@ -10,6 +10,7 @@ import http.server
 import os
 import shutil
 import struct
+import subprocess
 import sys
 import threading
 from collections.abc import Iterator
@@ -324,7 +325,9 @@ def test_a_worktree_git_file_is_read_only(tmp_path: Path, home: Path) -> None:
     (tmp_path / ".git").write_text("gitdir: /elsewhere\n")
     plan = sb.plan_paths(SandboxSettings(enabled=True), str(tmp_path), str(tmp_path / "t"))
     assert str(tmp_path / ".git") in plan.deny_write and plan.pinned == []
-    assert plan.placeholders == [(str(tmp_path / ".noeta"), False)]
+    held = dict(plan.placeholders)
+    assert held[str(tmp_path / ".noeta")] is False
+    assert not any(p.startswith(str(tmp_path / ".git") + "/") for p in held)
 
 
 def test_placeholders_outlive_no_command_but_the_last(tmp_path: Path, home: Path) -> None:
@@ -338,6 +341,85 @@ def test_placeholders_outlive_no_command_but_the_last(tmp_path: Path, home: Path
     assert (tmp_path / ".noeta").is_dir() and (tmp_path / ".git").is_dir()
     sb._release(second)
     assert not (tmp_path / ".noeta").exists() and not (tmp_path / ".git").exists()
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd,
+                   check=True, capture_output=True)
+
+
+def _repo_with_hooks_elsewhere(ws: Path) -> None:
+    """A repository whose code-running paths go beyond ``.git/hooks`` and
+    ``.git/config``: a submodule's git directory, hooks in ``githooks``
+    (``core.hooksPath``), editor tasks and direnv."""
+    ws.mkdir()
+    _git(ws, "init", "-q")
+    _git(ws, "config", "core.hooksPath", "githooks")
+    module = ws / ".git" / "modules" / "lib"
+    (module / "hooks").mkdir(parents=True)
+    (module / "HEAD").write_text("ref: refs/heads/main\n")
+    (module / "config").write_text("[core]\n")
+    (ws / "githooks").mkdir()
+    (ws / ".husky").mkdir()
+    (ws / ".vscode").mkdir()
+    (ws / ".vscode" / "tasks.json").write_text("{}")
+    (ws / ".envrc").write_text("")
+    (ws / "a.txt").write_text("a\n")
+    _git(ws, "add", "-A")
+    _git(ws, "commit", "-qm", "init")
+
+
+def test_the_protected_list_follows_the_permissions_and_git(tmp_path: Path, home: Path) -> None:
+    ws = tmp_path / "ws"
+    _repo_with_hooks_elsewhere(ws)
+    plan = sb.plan_paths(SandboxSettings(enabled=True), str(ws), str(tmp_path / "t"))
+    module = ws / ".git" / "modules" / "lib"
+    for path in (ws / ".envrc", ws / ".vscode", ws / ".husky", ws / "githooks",
+                 module / "config", module / "hooks", ws / ".git" / "config.worktree"):
+        assert str(path) in plan.deny_write, path
+    held = dict(plan.placeholders)
+    # Missing git config files are empty files; anything else an empty
+    # directory, which git does not list.
+    assert held[str(ws / ".git" / "config.worktree")] is True
+    assert held[str(module / "config.worktree")] is True
+    assert held[str(ws / ".pre-commit-config.yaml")] is False
+    # Every directory above a protected path is pinned: none can be renamed.
+    assert {str(ws / ".git"), str(ws / ".git" / "modules"), str(module)} <= set(plan.pinned)
+
+
+@needs_bwrap
+async def test_what_runs_outside_the_sandbox_cannot_be_written(tmp_path: Path,
+                                                               home: Path) -> None:
+    ws = tmp_path / "ws"
+    _repo_with_hooks_elsewhere(ws)
+    before = sorted(os.listdir(ws))
+    env = LocalExecEnv(str(ws), sandbox={"enabled": True})
+    for command in ("echo x >> .git/modules/lib/config",
+                    "echo x > .git/modules/lib/hooks/post-checkout",
+                    "mv .git/modules/lib .git/modules/old",
+                    "mv .git/modules .git/old",
+                    "echo '[core]' > .git/config.worktree",
+                    "echo x > githooks/pre-commit",
+                    "mv githooks old && mkdir githooks && echo x > githooks/pre-commit",
+                    "echo x > .husky/pre-commit",
+                    "echo 'repos: []' > .pre-commit-config.yaml",
+                    "echo x > .vscode/tasks.json",
+                    "echo x >> .envrc",
+                    "mkdir -p .config/git && echo x > .config/git/config"):
+        code, _, _ = await _run(env, command)
+        assert code != 0, command
+    assert sorted(os.listdir(ws)) == before
+    assert (ws / ".git" / "modules" / "lib" / "config").read_text() == "[core]\n"
+    assert os.listdir(ws / "githooks") == [] and os.listdir(ws / ".git/modules/lib/hooks") == []
+    assert (ws / ".envrc").read_text() == "" and not (ws / ".git" / "config.worktree").exists()
+    # Git still works in the sandbox, placeholders and all.
+    git = "git -c user.name=t -c user.email=t@t"
+    code, out, _ = await _run(env, f"echo b > b.txt && {git} status --porcelain && "
+                                   f"{git} add -A && {git} commit -qm b && "
+                                   f"{git} checkout -qb other && {git} checkout -q - && "
+                                   f"{git} submodule status && {git} log --oneline | wc -l")
+    assert code == 0, out
+    assert out.split() == ["??", "b.txt", "2"]
 
 
 @needs_bwrap
