@@ -7,9 +7,18 @@
                   "env": {"ROOT": "${HOME:-/tmp}"}}
     }}
 
-A server's ``timeout`` (milliseconds) bounds each of its tool calls.
-``${VAR}`` and ``${VAR:-default}`` are filled from the environment in
-``command``, ``args``, ``env``, ``url`` and ``headers``.
+``type`` is ``stdio`` (the default with a ``command``), ``http`` (also
+spelled ``streamable-http``; the default with a ``url``), ``sse`` (the
+legacy HTTP+SSE transport) or ``ws``. A server's ``timeout`` (milliseconds)
+bounds each of its tool calls; ``alwaysLoad: true`` sends its tools' schemas
+from the first request instead of deferring them. A remote server may add
+``headersHelper`` (a shell command printing a JSON object of headers when a
+connection opens), and an ``http`` / ``sse`` one an ``oauth`` block
+(``clientId``, ``callbackPort``, ``authServerMetadataUrl``, ``scopes``);
+``bareElicitationCapability: true`` is for servers that reject the
+elicitation modes. ``${VAR}`` and ``${VAR:-default}`` are filled from the
+environment in ``command``, ``args``, ``env``, ``url``, ``headers`` and
+``headersHelper``.
 
 A workspace's ``.noeta/mcp.json`` (Claude Code's ``.mcp.json``, in noeta's
 place) uses the same format, but a server in it starts
@@ -29,7 +38,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from noeta.plugins.mcp.config import McpConfigError, McpServer
+from noeta.plugins.mcp.config import McpConfigError, McpServer, OAuthSettings
 
 __all__ = ["PROJECT_FILE", "alias_for", "read_servers", "servers_from"]
 
@@ -64,31 +73,50 @@ def _call_timeout(ms: Any) -> float | None:
     return float(ms) / 1000
 
 
-def _server(name: str, spec: Any) -> McpServer | None:
+def _oauth(name: str, spec: Any) -> OAuthSettings | None:
+    if spec is None:
+        return None
+    if not isinstance(spec, Mapping):
+        raise McpConfigError(f"MCP server {name!r}: 'oauth' must be an object")
+    port = spec.get("callbackPort")
+    if port is not None and (isinstance(port, bool) or not isinstance(port, int)
+                             or not 0 < port <= 65535):
+        raise McpConfigError(f"MCP server {name!r}: oauth.callbackPort must be a port number")
+    metadata = str(spec.get("authServerMetadataUrl") or "")
+    if metadata and not metadata.startswith("https://"):
+        raise McpConfigError(f"MCP server {name!r}: authServerMetadataUrl must use https://")
+    return OAuthSettings(client_id=str(spec.get("clientId") or ""), callback_port=port,
+                         auth_server_metadata_url=metadata,
+                         scopes=str(spec.get("scopes") or ""))
+
+
+def _server(name: str, spec: Any) -> McpServer:
     if not isinstance(spec, Mapping):
         raise McpConfigError(f"MCP server {name!r}: must be an object")
     kind = spec.get("type") or ("stdio" if spec.get("command") else "http")
-    if kind == "sse":
-        log.warning("mcp: server %r uses the legacy SSE transport, which noeta does not "
-                    "speak; skipped", name)
-        return None
-    alias = alias_for(name)
-    timeout = _call_timeout(spec.get("timeout"))
+    if kind == "streamable-http":
+        kind = "http"
+    common: dict[str, Any] = {
+        "alias": alias_for(name), "call_timeout": _call_timeout(spec.get("timeout")),
+        "deferred": spec.get("alwaysLoad") is not True,
+        "bare_elicitation": spec.get("bareElicitationCapability") is True}
     if kind == "stdio":
         args = spec.get("args") or []
         if not isinstance(args, list):
             raise McpConfigError(f"MCP server {name!r}: 'args' must be a list")
-        return McpServer(alias=alias,
-                         command=[_expand(str(spec.get("command") or "")),
+        return McpServer(command=[_expand(str(spec.get("command") or "")),
                                   *(_expand(str(a)) for a in args)],
                          env=_strings(spec.get("env") or {}, f"MCP server {name!r} env"),
-                         call_timeout=timeout)
-    if kind == "http":
-        return McpServer(alias=alias, url=_expand(str(spec.get("url") or "")),
+                         **common)
+    if kind in ("http", "sse", "ws"):
+        return McpServer(type=kind, url=_expand(str(spec.get("url") or "")),
                          headers=_strings(spec.get("headers") or {},
                                           f"MCP server {name!r} headers"),
-                         call_timeout=timeout)
-    raise McpConfigError(f"MCP server {name!r}: unknown type {kind!r}")
+                         headers_helper=_expand(str(spec.get("headersHelper") or "")),
+                         oauth=_oauth(name, spec.get("oauth")) if kind != "ws" else None,
+                         **common)
+    raise McpConfigError(f"MCP server {name!r}: unknown type {kind!r} (valid types are "
+                         "stdio, sse, http (or streamable-http), ws)")
 
 
 def _read(path: Path) -> Mapping[str, Any]:
@@ -115,12 +143,9 @@ def servers_from(data: Mapping[str, Any], source: str,
         if allow is not None and not allow(name):
             continue
         try:
-            server = _server(str(name), spec)
+            out.append(_server(str(name), spec))
         except McpConfigError as exc:
             log.warning("mcp: %s: %s", source, exc)
-            continue
-        if server is not None:
-            out.append(server)
     return out
 
 

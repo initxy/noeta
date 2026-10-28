@@ -8,6 +8,12 @@ Behavior is steered by environment variables:
 * ``FAKE_LOG``: a file each received method is appended to.
 * ``FAKE_PING``: send a ``ping`` request (with a colliding id) before each
   reply.
+
+Server-to-client traffic: the ``ask`` tool sends ``elicitation/create``
+(its arguments as the params) and returns the client's answer as JSON;
+``roots`` asks ``roots/list`` and returns the answer; ``changed`` writes
+``FAKE_CHANGE_TO`` (if set) into ``FAKE_TOOLS_FILE`` and sends
+``notifications/tools/list_changed`` before its reply.
 """
 
 from __future__ import annotations
@@ -41,6 +47,16 @@ def send(obj: dict) -> None:
     sys.stdout.flush()
 
 
+def client_request(method: str, params: dict) -> dict:
+    """Ask the client something and wait for its answer."""
+    send({"jsonrpc": "2.0", "id": f"s-{method}", "method": method, "params": params})
+    for line in sys.stdin:
+        msg = json.loads(line)
+        if msg.get("id") == f"s-{method}" and "method" not in msg:
+            return msg.get("result") or {"error": msg.get("error")}
+    sys.exit(0)
+
+
 def page(items: list, cursor: str | None, key: str) -> dict:
     if not PAGE:
         return {key: items}
@@ -65,6 +81,18 @@ def handle(method: str, params: dict) -> dict:
         if name == "echo":
             return {"content": [{"type": "text", "text": f"echo: {args.get('text', '')}"}],
                     "structuredContent": {"pid": os.getpid()}}
+        if name == "ask":
+            answer = client_request("elicitation/create", args)
+            return {"content": [{"type": "text", "text": json.dumps(answer, sort_keys=True)}]}
+        if name == "roots":
+            answer = client_request("roots/list", {})
+            return {"content": [{"type": "text", "text": json.dumps(answer)}]}
+        if name == "changed":
+            if os.environ.get("FAKE_CHANGE_TO"):
+                with open(os.environ["FAKE_TOOLS_FILE"], "w") as fh:
+                    fh.write(os.environ["FAKE_CHANGE_TO"])
+            send({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+            return {"content": [{"type": "text", "text": "changed"}]}
         if name == "pid":
             return {"content": [{"type": "text", "text": str(os.getpid())}]}
         if name == "fail":

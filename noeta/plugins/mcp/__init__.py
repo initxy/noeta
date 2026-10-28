@@ -1,4 +1,5 @@
-"""MCP: tools from Model Context Protocol servers (stdio and Streamable HTTP).
+"""MCP: tools from Model Context Protocol servers (stdio, Streamable HTTP, the
+legacy HTTP+SSE pair, WebSocket), with OAuth sign-in for remote ones.
 
 ``Mcp`` is the extension; ``McpServer`` is what a host configures; prompts and
 resources are reached through the helpers in :mod:`noeta.plugins.mcp.prompts`.

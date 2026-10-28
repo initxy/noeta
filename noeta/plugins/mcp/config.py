@@ -28,9 +28,12 @@ __all__ = [
     "INJECTION_MAX_BYTES",
     "MAX_TIMEOUT_S",
     "MCP_PREFIX",
+    "TRANSPORTS",
+    "McpAuthRequired",
     "McpConfigError",
     "McpError",
     "McpServer",
+    "OAuthSettings",
     "cap_injected",
     "describe_tool",
     "make_tool_name",
@@ -40,6 +43,11 @@ __all__ = [
 ]
 
 MCP_PREFIX = "mcp__"
+
+#: The transports a server may use (Claude Code's ``type``; ``streamable-http``
+#: is read as ``http``): a local process, Streamable HTTP, the legacy
+#: HTTP+SSE pair, a WebSocket.
+TRANSPORTS = ("stdio", "http", "sse", "ws")
 
 #: initialize / list / prompts / resources budget unless ``NOETA_MCP_TIMEOUT``
 #: (milliseconds) says otherwise (Claude Code's default; its ``MCP_TIMEOUT``
@@ -106,21 +114,50 @@ class McpError(Exception):
     """A transport, protocol or timeout fault talking to a server."""
 
 
+class McpAuthRequired(McpError):
+    """A remote server answered 401 and no stored token could be renewed:
+    the person must sign in (OAuth). ``challenge`` is the response's
+    ``WWW-Authenticate`` header."""
+
+    def __init__(self, message: str, challenge: str = "") -> None:
+        super().__init__(message)
+        self.challenge = challenge
+
+
+@dataclass(frozen=True)
+class OAuthSettings:
+    """A remote server's ``oauth`` block (Claude Code's fields):
+    ``clientId`` (skip dynamic registration), ``callbackPort`` (a fixed
+    redirect port), ``authServerMetadataUrl`` (skip discovery; https only),
+    ``scopes`` (space-separated)."""
+
+    client_id: str = ""
+    callback_port: int | None = None
+    auth_server_metadata_url: str = ""
+    scopes: str = ""
+
+
 @dataclass(frozen=True)
 class McpServer:
     """One MCP server a task may use.
 
     Exactly one of ``command`` (a local stdio server: argv, never a shell
-    line) and ``url`` (a remote Streamable HTTP endpoint) is set. ``env`` is
-    laid over the scrubbed environment of a stdio server; ``headers`` are
-    sent with every HTTP request. Both are credentials: they live in this
-    host-side value only and are never recorded.
+    line) and ``url`` (a remote endpoint) is set. ``type`` is the transport
+    (:data:`TRANSPORTS`; default ``stdio`` for a command, ``http`` for a
+    url). ``env`` is laid over the scrubbed environment of a stdio server;
+    ``headers`` are sent with every request to a remote one, under the
+    headers ``headers_helper`` (a shell command printing a JSON object)
+    gives when a connection opens. All of them are credentials: they live
+    in this host-side value only and are never recorded. ``oauth`` tunes
+    the sign-in an ``http`` / ``sse`` server may ask for.
 
     ``tools`` keeps only the named raw tools (``None`` = all advertised).
     ``call_timeout`` bounds one ``tools/call`` (``None``: :func:`tool_timeout_s`).
     ``deferred`` (the default) announces the server's tools by name only:
     the model loads them with ``ToolSearch`` (``noeta.core.deferred``);
     ``False`` sends their schemas from the first request.
+    ``bare_elicitation`` declares the elicitation capability without its
+    ``form`` / ``url`` modes, for servers that reject them.
     """
 
     alias: str
@@ -131,6 +168,10 @@ class McpServer:
     tools: Sequence[str] | None = None
     call_timeout: float | None = None
     deferred: bool = True
+    type: str = ""
+    headers_helper: str = ""
+    oauth: OAuthSettings | None = None
+    bare_elicitation: bool = False
 
     def __post_init__(self) -> None:
         if not _ALIAS_RE.match(self.alias):
@@ -141,6 +182,13 @@ class McpServer:
             raise McpConfigError(
                 f"MCP server {self.alias!r} needs exactly one of command and url"
             )
+        kind = self.type or ("http" if self.url else "stdio")
+        if kind not in TRANSPORTS:
+            raise McpConfigError(f"MCP server {self.alias!r}: unknown transport {kind!r}")
+        object.__setattr__(self, "type", kind)
+        if (kind == "stdio") != bool(self.command):
+            raise McpConfigError(f"MCP server {self.alias!r}: a {kind} server needs "
+                                 + ("a command" if kind == "stdio" else "a url"))
         if self.call_timeout is not None and not self.call_timeout > 0:
             raise McpConfigError(
                 f"MCP server {self.alias!r} call_timeout must be > 0, got {self.call_timeout!r}"
@@ -148,17 +196,17 @@ class McpServer:
 
     @property
     def transport(self) -> str:
-        return "http" if self.url else "stdio"
+        return self.type
 
     def key(self) -> tuple[object, ...]:
         """The connection's identity, credentials included (memory only).
         ``tools`` and ``deferred`` filter what is offered; they do not change
         the connection."""
         if self.url:
-            return ("http", self.alias, self.url, tuple(sorted(self.headers.items())),
-                    self.call_timeout)
+            return (self.transport, self.alias, self.url, tuple(sorted(self.headers.items())),
+                    self.call_timeout, self.headers_helper, self.oauth, self.bare_elicitation)
         return ("stdio", self.alias, tuple(self.command), tuple(sorted(self.env.items())),
-                self.call_timeout)
+                self.call_timeout, self.bare_elicitation)
 
 
 def cap_injected(text: str, *, kind: str) -> str:

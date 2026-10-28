@@ -16,7 +16,12 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.runner import Runtime
 from noeta.plugins.mcp import Mcp, McpPool, McpServer
-from noeta.plugins.mcp.config import MAX_TIMEOUT_S, request_timeout_s, tool_timeout_s
+from noeta.plugins.mcp.config import (
+    MAX_TIMEOUT_S,
+    OAuthSettings,
+    request_timeout_s,
+    tool_timeout_s,
+)
 from noeta.plugins.mcp.settings import alias_for, read_servers
 from noeta.testing import ScriptedProvider, reply
 
@@ -36,14 +41,28 @@ def test_the_claude_code_format(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         "Git Hub": {"type": "http", "url": "https://x/${UNSET:-mcp}",
                     "headers": {"Authorization": "Bearer ${TOKEN}"}},
         "files": {"command": "npx", "args": ["-y", "srv", "${UNSET}"], "env": {"K": "${TOKEN}"}},
-        "old": {"type": "sse", "url": "https://x/sse"},
+        "old": {"type": "sse", "url": "https://x/sse", "headersHelper": "echo ${TOKEN}",
+                "oauth": {"clientId": "cid", "callbackPort": 8765, "scopes": "read write",
+                          "authServerMetadataUrl": "https://auth/.well-known/x"}},
+        "stream": {"type": "streamable-http", "url": "https://x/s", "alwaysLoad": True},
+        "sock": {"type": "ws", "url": "wss://x/ws", "bareElicitationCapability": True},
         "bad": {"type": "ws"},
+        "ide": {"type": "sse-ide", "url": "http://x"},
+        "plain": {"type": "http", "url": "http://x", "oauth": {"authServerMetadataUrl": "http://a"}},
         "broken": "nope",
     }})
-    http, stdio = read_servers([f])
+    http, stdio, sse, stream, ws = read_servers([f])
     assert http == McpServer(alias="git_hub", url="https://x/mcp",
                              headers={"Authorization": "Bearer t0k"})
+    assert http.transport == "http"
     assert stdio == McpServer(alias="files", command=["npx", "-y", "srv", ""], env={"K": "t0k"})
+    assert sse == McpServer(alias="old", type="sse", url="https://x/sse",
+                            headers_helper="echo t0k",
+                            oauth=OAuthSettings(client_id="cid", callback_port=8765,
+                                                scopes="read write",
+                                                auth_server_metadata_url="https://auth/.well-known/x"))
+    assert (stream.transport, stream.deferred) == ("http", False)
+    assert (ws.transport, ws.bare_elicitation, ws.oauth) == ("ws", True, None)
     assert read_servers([tmp_path / "missing.json"]) == []
     (tmp_path / "junk.json").write_text("{")
     assert read_servers([tmp_path / "junk.json"]) == []

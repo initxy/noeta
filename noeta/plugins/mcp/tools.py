@@ -1,5 +1,7 @@
-"""The tools the MCP extension offers: one per server tool, and the two
-resource tools ``ListMcpResourcesTool`` / ``ReadMcpResourceTool``.
+"""The tools the MCP extension offers: one per server tool, the two
+resource tools ``ListMcpResourcesTool`` / ``ReadMcpResourceTool``, and for a
+server that needs a sign-in, ``mcp__<alias>__authenticate`` and
+``mcp__<alias>__complete_authentication`` in place of its tools.
 
 Every one of them is deferred (``noeta.core.deferred``): the conversation
 names them, the model loads the ones it needs with ``ToolSearch`` and then
@@ -13,14 +15,18 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.plugins.mcp.config import McpError, McpServer, cap_injected
+from noeta.plugins.mcp.config import McpError, McpServer, cap_injected, make_tool_name
+from noeta.toolkit.tools import load_description
 
 __all__ = [
+    "AUTH_STUBS",
     "LIST_RESOURCES_TOOL",
     "READ_RESOURCE_TOOL",
     "ListMcpResourcesTool",
+    "McpAuthTool",
     "McpTool",
     "ReadMcpResourceTool",
+    "auth_stub_entries",
 ]
 
 LIST_RESOURCES_TOOL = "ListMcpResourcesTool"
@@ -30,6 +36,11 @@ _SCHEMA = "https://json-schema.org/draft/2020-12/schema"
 #: ``(tool, arguments, ctx) -> output``: the extension's way to reach the
 #: tool's server.
 Invoke = Callable[["McpTool", dict[str, Any], ToolContext], Awaitable[ToolOutput]]
+#: ``(tool, arguments, ctx, outcome) -> output``: a call that parked on the
+#: server's question, resumed with the person's answer.
+Resume = Callable[["McpTool", dict[str, Any], ToolContext, Any], Awaitable[ToolOutput]]
+#: ``(tool, arguments, ctx) -> output`` for a sign-in tool.
+SignInFn = Callable[["McpAuthTool", dict[str, Any], ToolContext], Awaitable[ToolOutput]]
 #: ``(ctx, servers) -> {alias: server}``: the task's configured servers.
 ServersOf = Callable[[ToolContext], Mapping[str, McpServer]]
 #: ``(ctx, server, request) -> result``: one request on a server's connection.
@@ -45,7 +56,8 @@ class McpTool:
     listed_last = True
 
     def __init__(self, *, name: str, alias: str, remote: str, description: str,
-                 input_schema: dict[str, Any], invoke: Invoke, deferred: bool = True) -> None:
+                 input_schema: dict[str, Any], invoke: Invoke, deferred: bool = True,
+                 resume: Resume | None = None) -> None:
         self.name = name
         self.alias = alias
         self.remote = remote
@@ -53,9 +65,65 @@ class McpTool:
         self.input_schema = input_schema
         self.deferred = deferred
         self._invoke = invoke
+        self._resume = resume
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         return await self._invoke(self, dict(input), ctx)
+
+    async def resume(self, input: dict[str, Any], ctx: ToolContext,
+                     outcome: Any) -> ToolOutput:
+        if self._resume is None:
+            return text_output(f"{self.name}: the call could not finish", is_error=True)
+        return await self._resume(self, dict(input), ctx, outcome)
+
+
+#: The sign-in tools, by their raw name.
+AUTH_STUBS = ("authenticate", "complete_authentication")
+_EMPTY_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object", "properties": {}, "additionalProperties": False}
+_CALLBACK_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {"callback_url": {
+        "type": "string",
+        "description": "The whole URL from the browser's address bar after authorizing, "
+                       "e.g. http://localhost:<port>/callback?code=...&state=..."}},
+    "required": ["callback_url"],
+    "additionalProperties": False}
+
+
+def auth_stub_entries(server: McpServer) -> list[dict[str, Any]]:
+    """The recorded tool entries standing in for a server that needs a
+    sign-in."""
+    names = {stub: make_tool_name(server.alias, stub) for stub in AUTH_STUBS}
+    fill = {"server": server.alias, "transport": server.transport,
+            "authenticate": names["authenticate"]}
+    return [{"name": names[stub], "remote": stub, "stub": stub,
+             "description": load_description("noeta.plugins.mcp", stub).format(**fill),
+             "input_schema": _EMPTY_SCHEMA if stub == "authenticate" else _CALLBACK_SCHEMA}
+            for stub in AUTH_STUBS]
+
+
+class McpAuthTool:
+    """``authenticate`` / ``complete_authentication`` for one server."""
+
+    read_only = False
+    clearable = False
+    listed_last = True
+
+    def __init__(self, *, name: str, alias: str, stub: str, description: str,
+                 input_schema: dict[str, Any], sign_in: SignInFn, deferred: bool = True) -> None:
+        self.name = name
+        self.alias = alias
+        self.stub = stub
+        self.description = description
+        self.input_schema = input_schema
+        self.deferred = deferred
+        self._sign_in = sign_in
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        return await self._sign_in(self, dict(input), ctx)
 
 
 def _compact(value: Any) -> str:

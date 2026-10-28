@@ -16,6 +16,13 @@ every later request, and ``DELETE``\\ s it when the connection is closed. A
 forgotten and the call fails like a dead connection, which the pool heals by
 connecting again. The id and the configured headers are credentials: sent on
 the wire only, never logged or recorded.
+
+A server may ask the client something (``roots/list``,
+``elicitation/create``) on the stream of a request of ours: the question is
+answered with a ``POST`` of its own and the stream read on
+(:meth:`McpClient.answer`). A ``401`` goes to the connection's ``auth``
+(:class:`~noeta.plugins.mcp.oauth.OAuth`): a renewed token is tried once,
+otherwise the call fails with ``McpAuthRequired``.
 """
 
 from __future__ import annotations
@@ -23,25 +30,31 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Awaitable, Callable, Mapping
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from noeta.plugins.mcp.config import DEFAULT_TIMEOUT_S, McpError
-from noeta.plugins.mcp.stdio import LINE_CAP, TOTAL_CAP, McpClient, initialize_params
+from noeta.plugins.mcp.client import McpClient, initialize_params, reply_result
+from noeta.plugins.mcp.config import DEFAULT_TIMEOUT_S, McpAuthRequired, McpError
+from noeta.plugins.mcp.stdio import LINE_CAP, TOTAL_CAP
 
-__all__ = ["CONNECTION_ID_HEADER", "HttpClient"]
+if TYPE_CHECKING:
+    from noeta.plugins.mcp.oauth import OAuth
+
+__all__ = ["CONNECTION_ID_HEADER", "PROTOCOL_HEADER", "HeadersFn", "HttpClient"]
 
 CONNECTION_ID_HEADER = "Mcp-Session-Id"
+PROTOCOL_HEADER = "MCP-Protocol-Version"
+#: Headers worked out when a connection opens (a ``headersHelper``).
+HeadersFn = Callable[[], Awaitable[dict[str, str]]]
 #: Teardown is bounded: a server that stopped answering must not hold up a
 #: retire or a shutdown.
 _DELETE_TIMEOUT_S = 5.0
 
 
-def _sse_reply(line: str, req_id: object) -> dict[str, Any] | None:
-    """The reply to ``req_id`` carried by one SSE line, or ``None``. Ids
-    compare as strings (a server may echo ``"1"`` for ``1``)."""
+def _sse_message(line: str) -> dict[str, Any] | None:
+    """The JSON-RPC message one SSE ``data:`` line carries, or ``None``."""
     line = line.strip()
     if not line.startswith("data:"):
         return None
@@ -52,13 +65,24 @@ def _sse_reply(line: str, req_id: object) -> dict[str, Any] | None:
         obj = json.loads(payload)
     except json.JSONDecodeError:
         return None
-    if not isinstance(obj, dict) or "method" in obj or str(obj.get("id")) != str(req_id):
-        return None
-    return obj
+    return obj if isinstance(obj, dict) else None
+
+
+def _is_reply(msg: dict[str, Any], req_id: object) -> bool:
+    """Ids compare as strings (a server may echo ``"1"`` for ``1``)."""
+    return "method" not in msg and str(msg.get("id")) == str(req_id)
 
 
 class _TransportFault(McpError):
     pass
+
+
+class _Refused(Exception):
+    """A 401; ``challenge`` is its ``WWW-Authenticate``."""
+
+    def __init__(self, challenge: str) -> None:
+        super().__init__(challenge)
+        self.challenge = challenge
 
 
 class HttpClient(McpClient):
@@ -68,17 +92,22 @@ class HttpClient(McpClient):
 
     def __init__(self, url: str, *, headers: Mapping[str, str] | None = None,
                  timeout: float = DEFAULT_TIMEOUT_S, total_cap: int = TOTAL_CAP,
-                 http: httpx.AsyncClient | None = None) -> None:
+                 http: httpx.AsyncClient | None = None, auth: OAuth | None = None,
+                 headers_fn: HeadersFn | None = None, bare_elicitation: bool = False) -> None:
         if not url:
             raise McpError("mcp http server url is empty")
+        super().__init__()
         self.url = url
         self.headers = dict(headers or {})
         self.timeout = timeout
         self.total_cap = total_cap
+        self.auth = auth
+        self.bare_elicitation = bare_elicitation
+        self._headers_fn = headers_fn
         self._http = http
         self._owns_http = http is None
         self.connection_id: str | None = None
-        self.broken: str | None = None
+        self.protocol_version: str | None = None
         self._next_id = 0
         self._started = False
         self._closed = False
@@ -92,7 +121,12 @@ class HttpClient(McpClient):
         if self._started:
             raise McpError("client already started")
         self._started = True
-        await self.request("initialize", initialize_params())
+        if self._headers_fn is not None:
+            self.headers = {**self.headers, **await self._headers_fn()}
+        result = await self.request("initialize", initialize_params(
+            bare_elicitation=self.bare_elicitation))
+        version = result.get("protocolVersion")
+        self.protocol_version = version if isinstance(version, str) and version else None
         if self.connection_id is not None:
             await self._post({"jsonrpc": "2.0", "method": "notifications/initialized",
                               "params": {}}, self.timeout)
@@ -106,25 +140,43 @@ class HttpClient(McpClient):
                                self.timeout if timeout is None else timeout)
         if msg is None:
             raise McpError(f"{method}: no matching JSON-RPC response in body")
-        if msg.get("error") is not None:
-            raise McpError(f"{method} error: {msg['error']}")
-        result = msg.get("result")
-        if not isinstance(result, dict):
-            raise McpError(f"{method} result is not an object")
-        return result
+        return reply_result(method, msg)
 
     async def _post(self, body: dict[str, Any], timeout: float) -> dict[str, Any] | None:
+        retried = False
+        while True:
+            sent = await self.auth.header() if self.auth is not None else None
+            try:
+                return await self._post_once(body, timeout, sent)
+            except _Refused as refused:
+                if self.auth is None:
+                    raise McpError(f"{body.get('method')} http error: 401 Unauthorized"
+                                   ) from None
+                if retried or not await self.auth.refused(sent):
+                    raise McpAuthRequired(
+                        f"{body.get('method')}: the server requires authentication",
+                        refused.challenge) from None
+                retried = True
+
+    async def _post_once(self, body: dict[str, Any], timeout: float,
+                         bearer: str | None) -> dict[str, Any] | None:
         method = body.get("method")
         held = self.connection_id
         headers = {"Content-Type": "application/json",
                    "Accept": "application/json, text/event-stream", **self.headers}
+        if bearer is not None:
+            headers["Authorization"] = bearer
         if held is not None:
             headers[CONNECTION_ID_HEADER] = held
+        if self.protocol_version is not None:
+            headers[PROTOCOL_HEADER] = self.protocol_version
         data = json.dumps(body, separators=(",", ":")).encode("utf-8")
         try:
             async with asyncio.timeout(timeout):
                 async with self._client().stream("POST", self.url, content=data,
                                                  headers=headers) as resp:
+                    if resp.status_code == 401:
+                        raise _Refused(resp.headers.get("WWW-Authenticate", ""))
                     if resp.status_code >= 400:
                         if resp.status_code == 404 and held is not None \
                                 and self.connection_id == held:
@@ -134,8 +186,8 @@ class HttpClient(McpClient):
                     assigned = resp.headers.get(CONNECTION_ID_HEADER)
                     if assigned and assigned.strip() and self.connection_id is None:
                         self.connection_id = assigned.strip()
-                    if "id" not in body:
-                        return None  # a notification: 202 and no body
+                    if "id" not in body or "method" not in body:
+                        return None  # a notification or an answer: 202 and no body
                     return await self._read_reply(resp, method, body["id"])
         except TimeoutError:
             self.broken = f"{method}: timeout waiting for server response"
@@ -165,8 +217,8 @@ class HttpClient(McpClient):
                     return obj
                 raise McpError(f"{method}: JSON-RPC response is not an object")
             for line in text.splitlines():
-                found = _sse_reply(line, req_id)
-                if found is not None:
+                found = _sse_message(line)
+                if found is not None and _is_reply(found, req_id):
                     return found
             return None
         consumed = 0
@@ -174,10 +226,21 @@ class HttpClient(McpClient):
             consumed += len(line) + 1
             if consumed > self.total_cap or len(line) > LINE_CAP:
                 raise McpError("server output exceeded total cap")
-            found = _sse_reply(line, req_id)
-            if found is not None:
+            found = _sse_message(line)
+            if found is None:
+                continue
+            if _is_reply(found, req_id):
                 return found
+            if "method" in found:
+                await self._answer_server(found)
         return None
+
+    async def _answer_server(self, msg: dict[str, Any]) -> None:
+        """Answer a request the server made on a stream of ours (and note a
+        notification)."""
+        reply = await self.answer(msg)
+        if reply is not None:
+            await self._post(reply, self.timeout)
 
     async def close(self) -> None:
         """End the session (best-effort ``DELETE``) and close an owned
