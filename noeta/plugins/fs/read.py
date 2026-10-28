@@ -190,6 +190,8 @@ class _Scan:
             self.capped = True
             return
         text, replaced = _decode_line(raw)
+        if self.total_lines == 0 and text.startswith("\ufeff"):
+            text = text[1:]  # a byte-order mark is not content (Claude Code's)
         cost = len(text.encode("utf-8")) + 8  # number column + tab + newline
         if self.window and self.served + cost > self.max_served:
             self.capped = True

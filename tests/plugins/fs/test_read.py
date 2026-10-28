@@ -105,6 +105,11 @@ async def test_read_keeps_a_long_crlf_line_whole(h: Harness, ws: Path) -> None:
     assert lines[1] == "2\tnext"
 
 
+async def test_read_hides_a_byte_order_mark(h: Harness, ws: Path) -> None:
+    (ws / "bom.txt").write_bytes(b"\xef\xbb\xbfa\nb\n")
+    assert text_of(await h.call(ReadTool(), file_path="bom.txt")) == "1\ta\n2\tb\n3\t"
+
+
 async def test_read_crlf_lines_drop_the_carriage_return(h: Harness, ws: Path) -> None:
     (ws / "crlf.txt").write_bytes(b"a\r\nb\r\n")
     assert text_of(await h.call(ReadTool(), file_path="crlf.txt")) == "1\ta\n2\tb\n3\t"
