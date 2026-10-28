@@ -22,6 +22,7 @@ from typing import Any
 from msgspec.structs import replace
 
 from noeta.core import records as core_records
+from noeta.core import registry
 from noeta.core.agent import Agent
 from noeta.core.deferred import with_tool_search
 from noeta.core.errors import Conflict, StoreUnavailable
@@ -118,8 +119,8 @@ class TaskRun:
         while True:
             try:
                 if not started:
-                    if self.state.prompt_files is None:
-                        await self._record_prompt_files()
+                    if not await self._record_start():
+                        return
                     view = self.view()
                     for ext in self.exts:
                         await ext.on_start(view)
@@ -141,7 +142,7 @@ class TaskRun:
                 if not await self.fail_turn(texts.INTERNAL_ERROR, repr(exc)):
                     return
 
-    async def _record_prompt_files(self) -> None:
+    async def _record_prompt_files(self, view: TaskView) -> None:
         """Read the prompt override files once, when the task first starts,
         and record them so every later pickup sends the same bytes."""
         env = self.env()
@@ -149,10 +150,35 @@ class TaskRun:
         trusted = self.rt.workspace_trusted
         found = await load_overrides(self.rt.prompt_dirs, env, cwd,
                                      workspace=trusted is None or (bool(cwd) and trusted(cwd)))
-        view = self.view()
         prompts = core_records.Prompts(files=found)
         view.record(CORE, prompts.kind, prompts.data())
+
+    async def _record_start(self) -> bool:
+        """At each pickup, before ``on_start``: record the prompt override
+        files when the task first starts, and the plugins it runs with then
+        and whenever a pickup finds them changed (a reload, an upgrade).
+        ``False`` (the task ended failed) when a plugin it recorded is
+        missing here: it never runs without it."""
+        view = self.view()
+        if self.state.prompt_files is None:
+            await self._record_prompt_files(view)
+        current = [registry.pin(e) for e in self.exts]
+        pinned = self.state.plugins
+        if pinned is not None:
+            missing = sorted({str(p.get("name")) for p in pinned}
+                             - {p["name"] for p in current})
+            if missing:
+                await self.flush(view)
+                await self.end("failed", self.state.last_answer,
+                               texts.PLUGIN_MISSING.format(names=", ".join(missing)))
+                return False
+            if pinned != current:
+                log.info("task %s: plugins changed since it last ran", self.task_id)
+        if pinned != current:
+            plugins = core_records.Plugins(pins=current)
+            view.record(CORE, plugins.kind, plugins.data())
         await self.flush(view)
+        return True
 
     async def load(self) -> None:
         """Read and fold the log (and the conversation it continues)."""

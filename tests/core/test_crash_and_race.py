@@ -103,7 +103,7 @@ async def _expire(store: SqliteStore, task_id: str) -> None:
     await store._run(tx)
 
 
-#: Appends in a clean run: the prompt overrides, InputTaken, then
+#: Appends in a clean run: the prompt overrides and plugins, InputTaken, then
 #: (ModelCalled, ModelReplied, ToolStarted, ToolFinished) x2, ModelCalled,
 #: ModelReplied, Waiting.
 CLEAN_APPENDS = 13

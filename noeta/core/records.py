@@ -209,12 +209,29 @@ class Prompts(Struct):
         return cls(files={str(k): v for k, v in _fields(data).items() if isinstance(v, str)})
 
 
+class Plugins(Struct):
+    """The plugins the task runs with (``registry.pin`` of each extension),
+    recorded when it first starts and again when a pickup finds them
+    changed; a worker missing one of them fails the task instead of running
+    it without."""
+
+    kind: ClassVar[str] = "plugins"
+    pins: list[dict[str, str]] = []
+
+    def data(self) -> dict[str, Any]:
+        return {"pins": self.pins}
+
+    @classmethod
+    def parse(cls, data: Any) -> Plugins:
+        return cls(pins=[p for p in _fields(data).get("pins") or [] if isinstance(p, dict)])
+
+
 CoreRecord = Union[Notice, Retry, Continue, TurnStopped, TurnFailed, TurnDone, Parked,
-                   Spawned, Timer, TimerCleared, Prompts]
+                   Spawned, Timer, TimerCleared, Prompts, Plugins]
 
 _KINDS: dict[str, Any] = {cls.kind: cls for cls in (
     Notice, Retry, Continue, TurnStopped, TurnFailed, TurnDone, Parked, Spawned, Timer,
-    TimerCleared, Prompts)}
+    TimerCleared, Prompts, Plugins)}
 
 
 def event(record: CoreRecord, *, message: Message | None = None) -> ExtensionRecorded:

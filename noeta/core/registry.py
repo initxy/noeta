@@ -14,6 +14,11 @@ name here when it needs a default (the local exec env).
 Plugins can also be plain files (:func:`load_plugin_files`): every
 ``Extension`` subclass a ``*.py`` file (or a directory's ``__init__.py``)
 defines registers under its ``name``. An installed plugin wins a name clash.
+
+:func:`pin` says which plugin an extension instance is (name, where its
+code comes from and which version, a hash of its arguments): what a task
+records when it starts, so a worker that cannot run the same plugins never
+runs the task without them.
 """
 
 from __future__ import annotations
@@ -21,10 +26,12 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import inspect
+import json
 import logging
 import sys
 import types
-from collections.abc import Iterable
+import weakref
+from collections.abc import Iterable, Mapping
 from functools import cache
 from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
@@ -46,6 +53,8 @@ __all__ = [
     "execenv",
     "load",
     "load_plugin_files",
+    "note_arguments",
+    "pin",
     "provider",
     "sources",
     "store",
@@ -74,6 +83,10 @@ _files: dict[str, tuple[str, Any]] = {}
 _broken: dict[str, str] = {}
 _loaded_paths: set[str] = set()
 _FILES_PACKAGE = "noeta_plugin_files"
+#: Where a plugin class came from: class -> (source, version).
+_origins: dict[Any, tuple[str, str]] = {}
+#: The hash of the arguments each plugin instance was made with.
+_arguments: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
 
 
 def available(group: str) -> list[str]:
@@ -104,7 +117,10 @@ def load(group: str, name: str) -> Any:
     plugins, else the class a plugin file defines)."""
     ep = _group(group).get(name)
     if ep is not None:
-        return ep.load()
+        obj = ep.load()
+        if group == PLUGINS and isinstance(obj, type) and ep.dist is not None:
+            _origins.setdefault(obj, (f"package {ep.dist.name}", ep.dist.version))
+        return obj
     if group == PLUGINS and name in _files:
         return _files[name][1]
     known = ", ".join(available(group)) or "none"
@@ -169,6 +185,7 @@ def load_plugin_files(directories: Iterable[str | Path]) -> list[str]:
             _loaded_paths.add(key)
             shown = str(path.parent if path.name == "__init__.py" else path)
             try:
+                version = _file_version(path)
                 module = _import(path)
             except Exception as exc:  # noqa: BLE001 — a user's file must not stop noeta
                 _broken[shown] = f"{type(exc).__name__}: {exc}"
@@ -188,8 +205,54 @@ def load_plugin_files(directories: Iterable[str | Path]) -> list[str]:
                     _broken[shown] = f"plugin {name!r} is already {where}"
                     continue
                 _files[name] = (shown, cls)
+                _origins[cls] = ("file", version)
                 added.append(name)
     return added
+
+
+def _file_version(path: Path) -> str:
+    """A plugin file's version: the hash of its bytes (a directory's: of
+    every ``*.py`` below it, by relative path)."""
+    digest = hashlib.sha256()
+    if path.name == "__init__.py":
+        root = path.parent
+        for file in sorted(root.rglob("*.py")):
+            if "__pycache__" not in file.parts:
+                digest.update(str(file.relative_to(root)).encode() + b"\0" + file.read_bytes())
+    else:
+        digest.update(path.read_bytes())
+    return f"sha256:{digest.hexdigest()[:16]}"
+
+
+def note_arguments(extension: Any, arguments: Mapping[str, Any]) -> None:
+    """Remember the arguments ``extension`` was made with (as written, so a
+    secret reference stays a reference), for :func:`pin`."""
+    text = json.dumps(arguments, sort_keys=True, default=_stable_text)
+    _arguments[extension] = hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def _stable_text(value: Any) -> str:
+    """A value JSON cannot show, as text that is the same in every process
+    (a function's or an object's type name, never its address)."""
+    if isinstance(value, Path):
+        return str(value)
+    named = value if callable(value) and hasattr(value, "__qualname__") else type(value)
+    return f"{getattr(named, '__module__', '')}.{named.__qualname__}"
+
+
+def pin(extension: Any) -> dict[str, str]:
+    """Which plugin ``extension`` is: its name, where its code comes from
+    (``package <dist>``, ``file``, else ``class <module.qualname>``), that
+    code's version (the distribution's, or a file's hash) and the hash of
+    its arguments (empty when they are unknown)."""
+    cls = type(extension)
+    source, version = _origins.get(cls, (f"class {cls.__module__}.{cls.__qualname__}", ""))
+    try:
+        arguments = _arguments.get(extension, "")
+    except TypeError:  # not weakly referable
+        arguments = ""
+    return {"name": str(getattr(extension, "name", "")), "source": source,
+            "version": version, "arguments": arguments}
 
 
 def provider(family: str, **kw: Any) -> Provider:

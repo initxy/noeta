@@ -82,3 +82,7 @@ MAX_TOOL_USE_CONCURRENCY = 10
 #: A model call started this many times without a recorded reply (crashes
 #: mid-call) fails the task instead of looping.
 MAX_MODEL_ATTEMPTS = 3
+
+#: A task that started with plugins this worker does not have (host-facing).
+PLUGIN_MISSING = ("plugin_missing: this task runs with {names}, which the worker that claimed "
+                  "it does not have; install them there (or run the task where they are)")

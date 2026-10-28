@@ -284,7 +284,9 @@ def build_agents(
         key = (name, _freeze(args))
         if key not in made:
             factory = registry.load(registry.PLUGINS, name)
-            made[key] = factory(**{**host_args, **args})
+            arguments = {**host_args, **args}
+            made[key] = factory(**arguments)
+            registry.note_arguments(made[key], arguments)
         return made[key]
 
     agents: list[Agent] = []

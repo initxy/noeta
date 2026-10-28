@@ -139,6 +139,9 @@ class TaskState:
     #: Prompt override files found when the task first started (name ->
     #: text, see ``noeta.core.prompts``); ``None`` until they were looked for.
     prompt_files: dict[str, str] | None = None
+    #: The plugins the task last recorded running with
+    #: (``noeta.core.registry.pin``); ``None`` until first recorded.
+    plugins: list[dict[str, str]] | None = None
 
     #: Deferred tools a ``ToolSearch`` result loaded, in load order; kept
     #: across compaction (``noeta.core.deferred``).
@@ -318,6 +321,8 @@ def _on_core_record(state: TaskState, core: records.CoreRecord, seq: int) -> Non
         state.timers.pop(core.name, None)
     elif isinstance(core, records.Prompts):
         state.prompt_files = core.files
+    elif isinstance(core, records.Plugins):
+        state.plugins = core.pins
     elif isinstance(core, records.TurnDone):
         _end_turn(state, seq)
     elif isinstance(core, records.TurnFailed):

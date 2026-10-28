@@ -74,6 +74,13 @@ installed and tested by `make check`). A plugin's registry name is its `Extensio
 plugin can also be a plain file in `~/.noeta/plugins` or a trusted project's `.noeta/plugins`
 (`registry.load_plugin_files`); an installed plugin wins a name clash.
 
+## Plugin pin
+
+A task records the plugins it runs with (`records.Plugins`: each one's `registry.pin` — name,
+source, version or file hash, arguments hash) when it first starts and whenever a pickup finds
+them changed. A worker missing a recorded plugin ends the task failed with `plugin_missing`
+instead of running it without (`noeta/core/runner/task.py`).
+
 ## Plugin setting
 
 What a host says about one plugin, by name: its arguments (`enabled: false` among them switches

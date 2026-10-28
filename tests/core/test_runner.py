@@ -90,7 +90,7 @@ async def test_turn_with_a_tool_call_then_waits_for_input(store: SqliteStore) ->
     assert echo.calls == ["hi"] and echo.approved == [False]
     types = [type(r.event).__name__ for r in await client.events(tid)]
     # The second entry records the prompt override files (none here).
-    assert types == ["TaskCreated", "ExtensionRecorded", "InputTaken", "ModelCalled", "ModelReplied", "ToolStarted",
+    assert types == ["TaskCreated", "ExtensionRecorded", "ExtensionRecorded", "InputTaken", "ModelCalled", "ModelReplied", "ToolStarted",
                      "ExtensionRecorded", "ToolFinished", "ModelCalled", "ModelReplied",
                      "Waiting"]
     second = provider.requests[1]
