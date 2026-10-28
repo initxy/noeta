@@ -58,12 +58,19 @@ import weakref
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, TypeVar
 
-import msgspec
 import psycopg
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
+from noeta.backends.stores._rows import (
+    TASK_COLUMNS,
+    encode,
+    event_decoder,
+    inbox_decoder,
+    inbox_kind,
+    task_row,
+)
 from noeta.core.errors import CommitUnknown, Conflict, StoreUnavailable, UnknownTask
-from noeta.core.events import Event, InboxItem, InboxKind, Recorded, event_type
+from noeta.core.events import Event, InboxItem, Recorded, event_type
 from noeta.core.store import (
     ChangeKind,
     Claim,
@@ -139,25 +146,6 @@ CREATE TABLE IF NOT EXISTS {s}.holds (
     until   DOUBLE PRECISION NOT NULL
 );
 """
-
-_TASK_COLUMNS = (
-    "task_id, root_id, agent, queue, status, last_seq, created_at, updated_at, parent_id, "
-    "waiting_on, ready_at, owner, owner_epoch, lease_until, inbox_seq, inbox_read_seq, end_status"
-)
-_TASK_NAMES = [n.strip() for n in _TASK_COLUMNS.split(",")]
-
-_event_decoder = msgspec.json.Decoder(Event)
-_inbox_decoder = msgspec.json.Decoder(InboxKind)
-_encode = msgspec.json.encode
-
-
-def _row(values: Sequence[Any]) -> TaskRow:
-    return TaskRow(**dict(zip(_TASK_NAMES, values, strict=True)))
-
-
-def _kind(body: InboxKind) -> str:
-    return type(body).__struct_config__.tag  # type: ignore[return-value]
-
 
 def _lost(conn: Conn | None, exc: BaseException) -> bool:
     """Whether ``exc`` means the connection is gone (not a query error)."""
@@ -409,14 +397,14 @@ class PostgresStore:
         await conn.execute(self._q(
             f"INSERT INTO {{s}}.events (task_id, seq, type, at, data)"
             f" VALUES (%s, 1, %s, {_NOW}, %s)"),
-            (task.task_id, event_type(created), _encode(created)))
+            (task.task_id, event_type(created), encode(created)))
         if task.inbox:
             await conn.execute(self._q(
                 f"INSERT INTO {{s}}.inbox (task_id, seq, kind, at, data)"
                 f" SELECT %s, s, k, {_NOW}, d"
                 " FROM unnest(%s::bigint[], %s::text[], %s::bytea[]) AS u(s, k, d)"),
                 (task.task_id, list(range(1, len(task.inbox) + 1)),
-                 [_kind(b) for b in task.inbox], [_encode(b) for b in task.inbox]))
+                 [inbox_kind(b) for b in task.inbox], [encode(b) for b in task.inbox]))
         return task.task_id, True
 
     async def _exists(self, conn: Conn, task_id: str) -> bool:
@@ -446,8 +434,8 @@ class PostgresStore:
             " ready_at = CASE WHEN status = 'waiting' THEN NULL ELSE ready_at END,"
             " status = CASE WHEN status = 'waiting' THEN 'ready' ELSE status END"
             " WHERE task_id = %(t)s"),
-            {"t": post.task_id, "seq": seq, "kind": _kind(post.body),
-             "data": _encode(post.body), "key": post.dedupe_key})
+            {"t": post.task_id, "seq": seq, "kind": inbox_kind(post.body),
+             "data": encode(post.body), "key": post.dedupe_key})
         return seq, True
 
     # ------------------------------------------------------------ Store
@@ -497,7 +485,7 @@ class PostgresStore:
                     f" SELECT %s, s, t, {_NOW}, d"
                     " FROM unnest(%s::bigint[], %s::text[], %s::bytea[]) AS u(s, t, d)"),
                     (claim.task_id, list(range(int(last_seq) + 1, seq + 1)),
-                     [event_type(e) for e in events], [_encode(e) for e in events]))
+                     [event_type(e) for e in events], [encode(e) for e in events]))
             new_status, waiting_on, ready_at, read_seq = next_row_state(patch, inbox_seq,
                                                                         read_seq)
             releasing = new_status != "running"
@@ -532,7 +520,7 @@ class PostgresStore:
             cur = await conn.execute(self._q(
                 "SELECT seq, at, data FROM {s}.events WHERE task_id = %s AND seq > %s"
                 " ORDER BY seq"), (task_id, after))
-            return [Recorded(seq=s, at=a, event=_event_decoder.decode(d))
+            return [Recorded(seq=s, at=a, event=event_decoder.decode(d))
                     for s, a, d in await cur.fetchall()]
 
         return await self._tx(q, write=False)
@@ -554,7 +542,7 @@ class PostgresStore:
             cur = await conn.execute(self._q(
                 "SELECT seq, at, data FROM {s}.inbox WHERE task_id = %s AND seq > %s"
                 " ORDER BY seq"), (task_id, after))
-            return [InboxItem(seq=s, at=a, body=_inbox_decoder.decode(d))
+            return [InboxItem(seq=s, at=a, body=inbox_decoder.decode(d))
                     for s, a, d in await cur.fetchall()]
 
         return await self._tx(q, write=False)
@@ -562,10 +550,10 @@ class PostgresStore:
     async def get(self, task_id: str) -> TaskRow | None:
         async def q(conn: Conn) -> TaskRow | None:
             cur = await conn.execute(
-                self._q(f"SELECT {_TASK_COLUMNS} FROM {{s}}.tasks WHERE task_id = %s"),
+                self._q(f"SELECT {TASK_COLUMNS} FROM {{s}}.tasks WHERE task_id = %s"),
                 (task_id,))
             row = await cur.fetchone()
-            return _row(row) if row else None
+            return task_row(row) if row else None
 
         return await self._tx(q, write=False)
 
@@ -584,14 +572,14 @@ class PostgresStore:
         if status is not None:
             where.append("status = %s")
             args.append(status)
-        sql = f"SELECT {_TASK_COLUMNS} FROM {{s}}.tasks"
+        sql = f"SELECT {TASK_COLUMNS} FROM {{s}}.tasks"
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY updated_at DESC LIMIT %s"
 
         async def q(conn: Conn) -> list[TaskRow]:
             cur = await conn.execute(self._q(sql), (*args, limit))
-            return [_row(r) for r in await cur.fetchall()]
+            return [task_row(r) for r in await cur.fetchall()]
 
         return await self._tx(q, write=False)
 

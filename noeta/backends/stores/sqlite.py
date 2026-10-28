@@ -12,12 +12,18 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, TypeVar
+from typing import TypeVar
 
-import msgspec
-
+from noeta.backends.stores._rows import (
+    TASK_COLUMNS,
+    encode,
+    event_decoder,
+    inbox_decoder,
+    inbox_kind,
+    task_row,
+)
 from noeta.core.errors import Conflict, StoreUnavailable, UnknownTask
-from noeta.core.events import Event, InboxItem, InboxKind, Recorded, event_type
+from noeta.core.events import Event, InboxItem, Recorded, event_type
 from noeta.core.store import (
     ChangeKind,
     Claim,
@@ -92,25 +98,6 @@ CREATE TABLE IF NOT EXISTS holds (
     until   REAL NOT NULL
 );
 """
-
-_TASK_COLUMNS = (
-    "task_id, root_id, agent, queue, status, last_seq, created_at, updated_at, parent_id, "
-    "waiting_on, ready_at, owner, owner_epoch, lease_until, inbox_seq, inbox_read_seq, end_status"
-)
-
-_event_decoder = msgspec.json.Decoder(Event)
-_inbox_decoder = msgspec.json.Decoder(InboxKind)
-_encode = msgspec.json.encode
-
-
-def _row(values: Sequence[Any]) -> TaskRow:
-    names = [n.strip() for n in _TASK_COLUMNS.split(",")]
-    return TaskRow(**dict(zip(names, values, strict=False)))
-
-
-def _kind(body: InboxKind) -> str:
-    return type(body).__struct_config__.tag  # type: ignore[return-value]
-
 
 class SqliteStore:
     def __init__(self, path: str, *, poll_interval: float = 0.5) -> None:
@@ -241,12 +228,12 @@ class SqliteStore:
         )
         conn.execute(
             "INSERT INTO events (task_id, seq, type, at, data) VALUES (?, 1, ?, ?, ?)",
-            (task.task_id, event_type(created), now, _encode(created)),
+            (task.task_id, event_type(created), now, encode(created)),
         )
         for i, body in enumerate(task.inbox, start=1):
             conn.execute(
                 "INSERT INTO inbox (task_id, seq, kind, at, data) VALUES (?, ?, ?, ?, ?)",
-                (task.task_id, i, _kind(body), now, _encode(body)),
+                (task.task_id, i, inbox_kind(body), now, encode(body)),
             )
         return task.task_id, True
 
@@ -269,7 +256,7 @@ class SqliteStore:
         conn.execute(
             "INSERT INTO inbox (task_id, seq, kind, at, data, dedupe_key)"
             " VALUES (?, ?, ?, ?, ?, ?)",
-            (post.task_id, seq, _kind(post.body), now, _encode(post.body), post.dedupe_key),
+            (post.task_id, seq, inbox_kind(post.body), now, encode(post.body), post.dedupe_key),
         )
         wake = status == "waiting"
         conn.execute(
@@ -321,7 +308,7 @@ class SqliteStore:
                 seq += 1
                 conn.execute(
                     "INSERT INTO events (task_id, seq, type, at, data) VALUES (?, ?, ?, ?, ?)",
-                    (claim.task_id, seq, event_type(event), now, _encode(event)),
+                    (claim.task_id, seq, event_type(event), now, encode(event)),
                 )
             new_status, waiting_on, ready_at, read_seq = next_row_state(patch, inbox_seq,
                                                                         read_seq)
@@ -366,7 +353,7 @@ class SqliteStore:
                 "SELECT seq, at, data FROM events WHERE task_id = ? AND seq > ? ORDER BY seq",
                 (task_id, after),
             ).fetchall()
-            return [Recorded(seq=s, at=a, event=_event_decoder.decode(d)) for s, a, d in rows]
+            return [Recorded(seq=s, at=a, event=event_decoder.decode(d)) for s, a, d in rows]
 
         return await self._run(q)
 
@@ -382,16 +369,16 @@ class SqliteStore:
                 "SELECT seq, at, data FROM inbox WHERE task_id = ? AND seq > ? ORDER BY seq",
                 (task_id, after),
             ).fetchall()
-            return [InboxItem(seq=s, at=a, body=_inbox_decoder.decode(d)) for s, a, d in rows]
+            return [InboxItem(seq=s, at=a, body=inbox_decoder.decode(d)) for s, a, d in rows]
 
         return await self._run(q)
 
     async def get(self, task_id: str) -> TaskRow | None:
         def q(conn: sqlite3.Connection) -> TaskRow | None:
             row = conn.execute(
-                f"SELECT {_TASK_COLUMNS} FROM tasks WHERE task_id = ?", (task_id,)
+                f"SELECT {TASK_COLUMNS} FROM tasks WHERE task_id = ?", (task_id,)
             ).fetchone()
-            return _row(row) if row else None
+            return task_row(row) if row else None
 
         return await self._run(q)
 
@@ -409,13 +396,13 @@ class SqliteStore:
         if status is not None:
             where.append("status = ?")
             args.append(status)
-        sql = f"SELECT {_TASK_COLUMNS} FROM tasks"
+        sql = f"SELECT {TASK_COLUMNS} FROM tasks"
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY updated_at DESC LIMIT ?"
 
         def q(conn: sqlite3.Connection) -> list[TaskRow]:
-            return [_row(r) for r in conn.execute(sql, (*args, limit)).fetchall()]
+            return [task_row(r) for r in conn.execute(sql, (*args, limit)).fetchall()]
 
         return await self._run(q)
 
