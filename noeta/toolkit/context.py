@@ -32,8 +32,8 @@ def new_user_messages(state: TaskState, seq: int) -> list[Message]:
     (``origin`` system / memory) and tool results are not counted."""
     out: list[Message] = []
     for message, at in zip(state.messages, state.message_seqs, strict=False):
-        if (at == seq and message.role == "user" and message.origin in (None, "human")
-                and message.text and not any(isinstance(b, ToolResult) for b in message.content)):
+        if (at == seq and message.from_person and message.text
+                and not any(isinstance(b, ToolResult) for b in message.content)):
             out.append(message)
     return out
 

@@ -54,7 +54,7 @@ from noeta.backends.execenvs.local import KILL_GRACE_S, LocalExecEnv
 from noeta.backends.execenvs.sandbox_proxy import Listeners, default_proxy
 from noeta.core.execenv import FileStat, RunResult
 from noeta.toolkit.local_env import ENV_ALLOWLIST
-from noeta.toolkit.sandbox import SandboxSettings
+from noeta.toolkit.sandbox import SandboxSettings, sandbox_settings
 
 __all__ = [
     "DEFAULT_CAPS",
@@ -360,12 +360,6 @@ _NET_LABEL, _PROXY_LABEL = "noeta.network", "noeta.proxy"
 _PROXIES: dict[str, Listeners] = {}
 
 
-def _sandbox(value: SandboxSettings | Mapping[str, object] | None) -> SandboxSettings | None:
-    if value is None or isinstance(value, SandboxSettings):
-        return value
-    return SandboxSettings.from_json(value)
-
-
 async def _gateway(docker: str, network: str) -> str:
     result = await _docker(docker, "network", "inspect", "-f",
                            "{{range .IPAM.Config}}{{.Gateway}} {{end}}", network)
@@ -427,7 +421,7 @@ async def start_container(
     variables point there), so only those hosts answer. The filesystem
     settings have no counterpart: the container sees only its mounts."""
     name = name or f"noeta-{uuid.uuid4().hex[:12]}"
-    settings = _sandbox(sandbox)
+    settings = sandbox_settings(sandbox)
     argv = ["run", "-d", "--init", "--name", name, "-w", workdir]
     mounted = False
     for mount in mounts:
@@ -498,7 +492,7 @@ async def ensure_container_proxy(name: str, sandbox: SandboxSettings | Mapping[s
     labels record. ``False`` when the container has none."""
     if name in _PROXIES:
         return True
-    settings = _sandbox(sandbox)
+    settings = sandbox_settings(sandbox)
     result = await _docker(docker, "inspect", "-f",
                            f'{{{{index .Config.Labels "{_PROXY_LABEL}"}}}}', name)
     label = result.stdout.decode().strip()

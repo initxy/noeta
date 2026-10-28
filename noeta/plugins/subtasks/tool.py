@@ -20,6 +20,7 @@ from noeta.core.events import Say
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ToolUse, user
 from noeta.plugins.subtasks import texts
+from noeta.toolkit.tools import SCHEMA_DIALECT
 
 if TYPE_CHECKING:
     from noeta.core.loop.state import TaskState
@@ -42,7 +43,7 @@ DELEGATION_TOOLS = (texts.AGENT_TOOL, texts.LEGACY_AGENT_TOOL)
 
 
 def _schema(properties: dict[str, Any], required: Sequence[str] = ()) -> dict[str, Any]:
-    out: dict[str, Any] = {"$schema": texts.JSON_SCHEMA, "type": "object",
+    out: dict[str, Any] = {"$schema": SCHEMA_DIALECT, "type": "object",
                            "properties": properties}
     if required:
         out["required"] = list(required)

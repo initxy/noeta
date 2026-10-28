@@ -376,6 +376,16 @@ class CommandSandbox(Protocol):
         ...
 
 
+def sandbox_settings(value: SandboxSettings | Mapping[str, Any] | None, *,
+                     base_dir: str = "") -> SandboxSettings | None:
+    """``value`` as settings: kept when it already is, read with
+    :meth:`SandboxSettings.from_json` (relative paths against ``base_dir``)
+    when it is a mapping."""
+    if value is None or isinstance(value, SandboxSettings):
+        return value
+    return SandboxSettings.from_json(value, base_dir=base_dir)
+
+
 def sandbox_of(env: object) -> CommandSandbox | None:
     """``env``'s sandbox when one is switched on, else ``None``."""
     sandbox = getattr(env, "sandbox", None)

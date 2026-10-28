@@ -269,7 +269,7 @@ def _owes_budget_note(messages: Sequence[Message], *, prompts: bool = True) -> b
             return False
         if m.role == "user" and any(isinstance(b, ToolResult) for b in m.content):
             return True
-        if m.role == "user" and m.origin in (None, "human"):
+        if m.from_person:
             return prompts and not is_command_message(m.text)
     return False
 

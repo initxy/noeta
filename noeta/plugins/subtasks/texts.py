@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 from functools import cache
-from importlib import resources
+
+from noeta.toolkit import tools
 
 #: The delegation tool's model-visible name, and the one it had before.
 AGENT_TOOL = "Agent"
@@ -18,15 +19,12 @@ DEFAULT_TYPE = "general-purpose"
 FORK_TYPE = "fork"
 #: ``SendMessage`` to a background sub-agent's caller.
 MAIN_ADDRESS = "main"
-JSON_SCHEMA = "https://json-schema.org/draft/2020-12/schema"
 
 
 @cache
 def load_description(name: str) -> str:
     """``descriptions/<name>.md`` without its trailing newline."""
-    text = (resources.files("noeta.plugins.subtasks").joinpath("descriptions", f"{name}.md")
-            .read_text(encoding="utf-8"))
-    return text.rstrip("\n")
+    return tools.load_description("noeta.plugins.subtasks", name)
 
 
 # ``Agent`` schema property texts.

@@ -27,7 +27,7 @@ from collections.abc import Mapping, Sequence
 from noeta.backends.execenvs.sandbox import LocalSandbox
 from noeta.core.execenv import FileStat, RunResult
 from noeta.toolkit.local_env import scrub_env
-from noeta.toolkit.sandbox import SandboxSettings
+from noeta.toolkit.sandbox import SandboxSettings, sandbox_settings
 
 __all__ = ["LocalExecEnv", "send_group_signal"]
 
@@ -170,8 +170,7 @@ class LocalExecEnv:
         self.cwd = os.path.abspath(cwd)
         self.inherit_env = tuple(inherit_env)
         self.kill_grace = kill_grace
-        settings = sandbox if isinstance(sandbox, SandboxSettings) or sandbox is None \
-            else SandboxSettings.from_json(sandbox, base_dir=self.cwd)
+        settings = sandbox_settings(sandbox, base_dir=self.cwd)
         self.sandbox: LocalSandbox | None = (
             LocalSandbox(settings, self.cwd) if settings is not None and settings.enabled
             else None)

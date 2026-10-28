@@ -35,7 +35,7 @@ def quiet_steps(messages: Sequence[Message], nudge: str) -> int:
                     or any(u.name in ASKS_USER for u in m.tool_uses):
                 break
             n += 1
-        elif m.role == "user" and m.origin in (None, "human") and m.text:
+        elif m.from_person and m.text:
             break
     return n
 

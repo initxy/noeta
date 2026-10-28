@@ -63,7 +63,7 @@ def _last_prompt(view: TaskView) -> int:
     """The log seq of the person's newest message (0 before any)."""
     st = view.state
     for message, seq in zip(reversed(st.history), reversed(st.history_seqs), strict=True):
-        if message.role == "user" and message.origin in (None, "human") and message.text:
+        if message.from_person and message.text:
             return seq
     return 0
 

@@ -52,6 +52,7 @@ from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
 from noeta.plugins.permissions.rule_specs import rule_spec_from_command, rule_spec_text
 from noeta.toolkit import permission_rules as r
+from noeta.toolkit.paths import plans_dir as default_plans_dir
 from noeta.toolkit.permission_modes import MODE_SIGNAL as MODE_SIGNAL
 from noeta.toolkit.sandbox import leaves_sandbox, runs_sandboxed, sandbox_of
 from noeta.toolkit.shell import parse_argv
@@ -269,7 +270,7 @@ class Permissions(Extension):
         self.additional_directories = tuple(_directory(d) for d in additional_directories)
         self.auto_mode = p.check_auto_mode(auto_mode)
         self.classifier_model = classifier_model
-        self.plans_dir = plans_dir or pl.plans_dir()
+        self.plans_dir = plans_dir or str(default_plans_dir())
         self.risk = {**p.DEFAULT_RISK, **dict(risk or {})}
         for name, level in [*self.risk.items(), ("<default>", default_risk)]:
             if level not in p.KNOWN_RISK_LEVELS:
@@ -1155,7 +1156,7 @@ def _new_input(view: TaskView, after: int) -> bool:
 def _newest_prompt(view: TaskView) -> int:
     return max((seq for seq, m in zip(view.state.message_seqs, view.state.messages,
                                       strict=False)
-                if m.role == "user" and m.origin in (None, "human") and seq), default=0)
+                if m.from_person and seq), default=0)
 
 
 def _platform() -> str:

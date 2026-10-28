@@ -101,6 +101,13 @@ class Message(Struct):
     def tool_uses(self) -> list[ToolUse]:
         return [b for b in self.content if isinstance(b, ToolUse)]
 
+    @property
+    def from_person(self) -> bool:
+        """A user turn the person wrote (``origin`` unset or ``human``), not
+        a notice, recalled memory or another agent. Tool results also ride
+        in user turns; callers that must exclude them check the content."""
+        return self.role == "user" and self.origin in (None, "human")
+
 
 def user(text: str, origin: Origin | None = None) -> Message:
     return Message(role="user", content=[Text(text=text)], origin=origin)

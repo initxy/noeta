@@ -91,7 +91,7 @@ class CompactionState:
 
 
 def _user_turns(state: TaskState) -> int:
-    return sum(1 for m in state.history if m.role == "user" and m.origin in (None, "human")
+    return sum(1 for m in state.history if m.from_person
                and not any(isinstance(b, ToolResult) for b in m.content))
 
 
@@ -271,7 +271,7 @@ class Compaction(Extension):
         if at < 0:
             return None
         m = state.messages[at]
-        if m.role != "user" or m.origin not in (None, "human"):
+        if not m.from_person:
             return None
         match = _COMMAND_RE.search(m.text)
         return (at, match.group(1).strip()) if match else None

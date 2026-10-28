@@ -15,7 +15,6 @@ from typing import Any
 from noeta.core.questions import ask, read_answer
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import ModelRequest, SystemPart, user
-from noeta.toolkit.paths import plans_dir as _plans_dir
 from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, tool_error
 
 __all__ = [
@@ -24,7 +23,6 @@ __all__ = [
     "plan_active_text",
     "plan_exited_text",
     "plan_name_request",
-    "plans_dir",
 ]
 
 EXIT_PLAN_MODE = "ExitPlanMode"
@@ -77,11 +75,6 @@ _ADJECTIVES = ("amber", "brisk", "calm", "dapper", "eager", "fuzzy", "gentle", "
 _NOUNS = ("acorn", "badger", "comet", "dolphin", "ember", "falcon", "garden", "harbor",
           "island", "lantern", "meadow", "nebula", "orchid", "pebble", "quill", "river",
           "sparrow", "tulip", "valley", "willow", "kettle", "biscuit", "canyon", "puffin")
-
-
-def plans_dir() -> str:
-    """Where plan files live: ``<noeta home>/plans``."""
-    return str(_plans_dir())
 
 
 def new_plan_path(directory: str, rng: random.Random | None = None) -> str:
