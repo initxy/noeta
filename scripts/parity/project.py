@@ -3,6 +3,10 @@ replaying) work in: a tiny git repo with a project instruction file, a skill
 that takes arguments, an MCP server and a data file for the compaction
 scenario.
 
+Claude Code's copy has its files in its places (``CLAUDE.md``, ``.claude/``,
+``.mcp.json``); noeta's copy (``noeta=True``) has the same files in noeta's
+own places (:data:`NOETA_PLACES`), since noeta never reads Claude Code's.
+
 The files live here as data rather than as a directory, because a checked-in
 ``CLAUDE.md`` / ``.claude/`` / ``.mcp.json`` would be picked up by whatever
 coding agent works on this repository.
@@ -76,12 +80,30 @@ HOOK_SETTINGS = {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{
 }]}]}}
 
 
+#: Claude Code's project places and noeta's for the same file (a file name,
+#: or a directory prefix ending in ``/``).
+NOETA_PLACES = (("CLAUDE.md", "NOETA.md"), (".mcp.json", ".noeta/mcp.json"),
+                (".claude/", ".noeta/"))
+#: The hook command's project variable, as each tool names it.
+NOETA_ENV = (("$CLAUDE_PROJECT_DIR", "$NOETA_PROJECT_DIR"),)
+
+
+def noeta_place(rel: str) -> str:
+    """Where noeta keeps the project file Claude Code keeps at ``rel``."""
+    for theirs, ours in NOETA_PLACES:
+        if rel == theirs or (theirs.endswith("/") and rel.startswith(theirs)):
+            return ours + rel[len(theirs):]
+    return rel
+
+
 def write_project(dest: Path, *, data: bool = False, hooks: bool = False,
-                  python: str = "python3", git_user: str = "parity") -> Path:
+                  python: str = "python3", git_user: str = "parity",
+                  noeta: bool = False) -> Path:
     """Write the project under ``dest/proj`` (committed as ``init calc``) and
     the MCP server beside it; returns the project directory. With ``data``,
     ``data.txt`` is added after the commit, untracked, as the recording had it;
-    with ``hooks``, ``.claude/settings.json`` holds :data:`HOOK_SETTINGS`."""
+    with ``hooks``, ``.claude/settings.json`` holds :data:`HOOK_SETTINGS`;
+    with ``noeta``, every file is in noeta's place (:func:`noeta_place`)."""
     dest = dest.resolve()
     proj = dest / "proj"
     files = {
@@ -93,6 +115,10 @@ def write_project(dest: Path, *, data: bool = False, hooks: bool = False,
     }
     if hooks:
         files[".claude/settings.json"] = json.dumps(HOOK_SETTINGS, indent=2) + "\n"
+    if noeta:
+        for theirs, ours in NOETA_ENV:
+            files = {rel: text.replace(theirs, ours) for rel, text in files.items()}
+        files = {noeta_place(rel): text for rel, text in files.items()}
     for rel, text in files.items():
         path = proj / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,9 +140,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--data", action="store_true", help="add data.txt (auto-compaction scenario)")
     ap.add_argument("--hooks", action="store_true", help="add a logging PreToolUse hook")
     ap.add_argument("--python", default="python3", help="interpreter .mcp.json starts the server with")
+    ap.add_argument("--noeta", action="store_true", help="put the files in noeta's places")
     args = ap.parse_args(argv)
     print(write_project(args.dest.expanduser(), data=args.data, hooks=args.hooks,
-                        python=args.python))
+                        python=args.python, noeta=args.noeta))
 
 
 if __name__ == "__main__":

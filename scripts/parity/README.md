@@ -12,7 +12,7 @@ scenario.
 | file | what it does |
 |---|---|
 | `scenarios.json` | the sessions and the steps typed into each (the single list record, distill and replay use) |
-| `project.py` | writes the scenario project (a tiny git repo with a `CLAUDE.md`, a skill, an MCP server, `data.txt`) |
+| `project.py` | writes the scenario project (a tiny git repo with a `CLAUDE.md`, a skill, an MCP server, `data.txt`); noeta's copy has the same files in its own places (`NOETA.md`, `.noeta/`) |
 | `record.py` | recording proxy between Claude Code and an upstream Messages API |
 | `drive.py` | types a session's steps into Claude Code in tmux, answers prompts with the first choice |
 | `distill.py` | recording → `parity/<version>/` (contract + `script/`) |

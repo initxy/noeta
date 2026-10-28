@@ -37,7 +37,7 @@ from typing import Any
 
 from scripts.parity import compare, facts, wire
 from scripts.parity.distill import session_prompts, step_marker
-from scripts.parity.project import write_project
+from scripts.parity.project import NOETA_PLACES, write_project
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -47,6 +47,9 @@ TOOL_NAMES = wire.TOOL_NAMES
 #: Opus 5.5 as Claude Code sends it, for noeta's model catalog.
 MODEL_ROW = {"id": MODEL, "context_window": 1_000_000, "max_output_tokens": 128_000,
              "supports_vision": True, "family": "anthropic"}
+#: A scenario's Claude Code environment knob -> noeta's name for it.
+NOETA_ENV = {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "NOETA_AUTO_COMPACT_WINDOW",
+             "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "NOETA_AUTOCOMPACT_PCT_OVERRIDE"}
 
 
 #: Side requests answered the way the recordings answered them: every
@@ -342,11 +345,16 @@ class SessionReplay:
     def prepare(self) -> None:
         if not self.proj.exists():
             write_project(self.scratch, data=bool(self.spec.get("data")),
-                          hooks=bool(self.spec.get("hooks")), python=sys.executable)
+                          hooks=bool(self.spec.get("hooks")), python=sys.executable,
+                          noeta=True)
         elif self.spec.get("data") and not (self.proj / "data.txt").exists():
             from scripts.parity.project import data_rows
             (self.proj / "data.txt").write_text(data_rows(), "utf-8")
-        self.replayer.subs = {"{PROJECT}": str(self.proj), "{HOME}": str(self.home),
+        # A recorded path to one of Claude Code's project files names the
+        # same file in noeta's place (the project was written that way).
+        places = {f"{{PROJECT}}/{theirs}": f"{self.proj}/{ours}"
+                  for theirs, ours in NOETA_PLACES}
+        self.replayer.subs = {**places, "{PROJECT}": str(self.proj), "{HOME}": str(self.home),
                               "{USER}": getpass.getuser()}
         # Claude Code was recording in a project its trust dialog accepted.
         from noeta.cli.config import trust_project
@@ -358,9 +366,9 @@ class SessionReplay:
         from noeta.core.extension import CommandContext
 
         # The session's environment knobs (Claude Code's compaction window
-        # and percentage) reach noeta's plugins the same way.
+        # and percentage) reach noeta's plugins under noeta's names.
         for key, value in (self.spec.get("env") or {}).items():
-            os.environ[key] = str(value)
+            os.environ[NOETA_ENV.get(key, key)] = str(value)
         settings = Settings(model=MODEL, provider="anthropic", base_url=endpoint.url,
                             api_key="replay", store=f"sqlite:///{self.scratch / 'tasks.db'}")
         app = from_settings(settings, cwd=str(self.proj), own_tasks_only=True,
@@ -475,9 +483,6 @@ def replay(version: str, sessions: list[str] | None, out: Path, keep: bool = Fal
     scratch_root = Path(tempfile.mkdtemp(prefix="noeta-parity-"))
     os.environ["NOETA_HOME"] = str(scratch_root / "noeta-home")
     (scratch_root / "noeta-home").mkdir()
-    # Claude Code's user directory: an empty one, never the machine's own.
-    os.environ["CLAUDE_CONFIG_DIR"] = str(scratch_root / "claude-home")
-    (scratch_root / "claude-home").mkdir()
     (scratch_root / "noeta-home" / "settings.json").write_text(
         json.dumps({"enabledMcpjsonServers": ["echo"]}), "utf-8")
     write_models_file(scratch_root / "models.json")
@@ -505,7 +510,7 @@ def replay(version: str, sessions: list[str] | None, out: Path, keep: bool = Fal
             base_script = contract_dir / "script" / f"{base}.json"
             subs += json.loads(base_script.read_text("utf-8")).get("subagents", [])
         kinds.tasks = {run.replayer.fill(s["prompt"])[:120] for s in subs}
-        saved = {k: os.environ.get(k) for k in sess.get("env") or {}}
+        saved = {k: os.environ.get(k) for k in (NOETA_ENV.get(k, k) for k in sess.get("env") or {})}
         try:
             with Endpoint(run.replayer) as ep:
                 task_ids[name] = asyncio.run(run.drive(ep, task_ids.get(base) if base else None))
