@@ -178,7 +178,7 @@ Phase 3 — behaviors around the model
   `noeta.core.questions`, deferred by default.
 - [x] Sandbox for local exec (bubblewrap on Linux) with Claude Code's settings shape and domain
   proxy.
-- [ ] Monitor `ws` under the sandbox's network rules: it connects from the worker process,
+- [x] Monitor `ws` under the sandbox's network rules: it connects from the worker process,
   outside the proxy, so it bypasses `allowedDomains`.
 
 Phase 4 — missing tools
