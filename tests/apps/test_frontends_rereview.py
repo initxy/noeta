@@ -148,7 +148,9 @@ async def test_tui_shows_and_answers_a_sub_agents_approval(tmp_path: Path) -> No
         [card] = list(app.query(ApprovalCard))
         assert "[worker]" in card.title_text
         await card.choose("allow")
-        await settle(pilot, lambda: provider.steps == [] and not app.busy)
+        # Two waits, so an intermittent stall says which side stopped.
+        await settle(pilot, lambda: provider.steps == [])
+        await settle(pilot, lambda: not app.busy)
         [child] = await app.local.client.tasks(parent_id=app.task_id)
         [echoed] = await results(app.local, child.task_id)
         assert echoed.result.text == "echoed"

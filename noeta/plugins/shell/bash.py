@@ -79,8 +79,6 @@ def reduce_shell(state: ShellState | None, kind: str, data: Any) -> ShellState:
         return base
     if kind == "started":
         jobs[job_id] = {**data, "status": "running"}
-    elif kind == "elsewhere" and job_id in jobs:
-        jobs[job_id] = {**jobs[job_id], "noted": data.get("worker")}
     elif kind in ("ended", "lost") and job_id in jobs:
         job = dict(jobs[job_id])
         job["status"] = data.get("status") or "lost"

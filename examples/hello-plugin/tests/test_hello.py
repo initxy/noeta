@@ -15,7 +15,9 @@ from noeta.core import registry
 from noeta.core.agent_files import build_agents
 from noeta.core.client import Client
 from noeta.core.commands import expand_command
-from noeta.core.events import ToolFinished
+from noeta.core.events import ExtensionRecorded, ToolFinished
+from noeta.core.pending import pending
+from noeta.core.questions import answer_question
 from noeta.core.store.sqlite import SqliteStore
 from noeta.testing import ScriptedProvider, reply
 
@@ -53,6 +55,29 @@ async def test_an_agent_file_runs_the_plugin(tmp_path: Path) -> None:
     reminders = [m.text for m in last.messages if "greeted enough" in m.text]
     assert len(reminders) == 1
     assert "greeted enough" not in " ".join(m.text for m in provider.requests[2].messages)
+    [notice] = [r.event.data["text"] for r in await client.events(tid)
+                if isinstance(r.event, ExtensionRecorded) and r.event.kind == "notice"]
+    assert notice == "hello: 3 greetings, asked the agent to stop"
+    assert all(notice not in m.text for m in last.messages)  # the model never sees it
+    await store.close()
+
+
+async def test_greet_without_a_name_asks_the_person(tmp_path: Path) -> None:
+    [agent] = build_agents([parse_agent_file(AGENT)], model="m")
+    provider = ScriptedProvider([reply("", ("Greet", {})), reply("done")])
+    store = SqliteStore(str(tmp_path / "t.db"))
+    rt = Runtime(store=store, agents={"greeter": agent}, provider_for=lambda _m: provider,
+                 env_for=lambda _s: None)  # type: ignore[arg-type,return-value]
+    client = Client(store)
+    tid = await client.create("greeter", "greet someone")
+    await rt.run_until_idle()
+    [asked] = pending(await client.events(tid), tid)
+    assert asked.detail["questions"][0]["question"] == "Who should I greet?"
+    await answer_question(client, tid, asked.request_id, "Grace")
+    await rt.run_until_idle()
+    [greeted] = [r.event.result.text for r in await client.events(tid)
+                 if isinstance(r.event, ToolFinished)]
+    assert greeted == "Hi, Grace!"
     await store.close()
 
 

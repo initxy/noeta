@@ -1,5 +1,5 @@
-"""Review fixes: a job running in another worker is reported as such (not
-lost), and job logs live in a private per-user directory."""
+"""A running job missing from this worker is lost (its worker held the tree
+while it ran), and job logs live in a private per-user directory."""
 
 from __future__ import annotations
 
@@ -32,46 +32,32 @@ def _job(worker: str, **kw: Any) -> dict[str, Any]:
     return {"job_id": "bg-1", "status": "running", "worker": worker, **kw}
 
 
-async def test_a_job_in_another_worker_is_noted_once_not_lost() -> None:
+async def test_a_running_job_missing_here_is_lost_once() -> None:
     ext = Shell(registry=Registry())
     view = _view({"bg-1": _job(OTHER)})
     await ext.on_start(view)
     [rec] = view.pending
-    assert isinstance(rec, ExtensionRecorded) and rec.kind == "elsewhere"
+    assert isinstance(rec, ExtensionRecorded) and rec.kind == "lost"
     assert rec.message is not None and rec.message.origin == "system"
-    assert rec.message.text == ("Background job bg-1 is running in another worker process; "
-                                "it cannot be read or stopped from here.")
-    state = ext.reduce(ShellState(jobs={"bg-1": _job(OTHER)}), "elsewhere", rec.data)
-    assert state.jobs["bg-1"]["status"] == "running"
+    assert rec.message.text == ("Background job bg-1 was lost: the worker process running it "
+                                "stopped, so its further output and exit status are unknown.")
+    state = ext.reduce(ShellState(jobs={"bg-1": _job(OTHER)}), "lost", rec.data)
     again = _view(state.jobs)
     await ext.on_start(again)
     assert again.pending == []
 
 
-async def test_a_job_whose_worker_is_gone_is_lost() -> None:
-    import socket
-
-    registry = Registry()
-    ext = Shell(registry=registry)
-    dead = f"{socket.gethostname()}:{2 ** 22 + 12345}"
-    for worker in (dead, registry.worker):
-        view = _view({"bg-1": _job(worker)})
-        await ext.on_start(view)
-        [rec] = view.pending
-        assert isinstance(rec, ExtensionRecorded) and rec.kind == "lost"
-
-
-async def test_the_tools_say_where_the_job_runs(tmp_path: Path) -> None:
-    registry = Registry()
-    ext = Shell(registry=registry)
-    ctx = ToolContext(task_id="t", call_id="c", env=LocalExecEnv(str(tmp_path)),
-                      state={"shell": ShellState(jobs={"bg-1": _job(OTHER)})},
-                      record=lambda *_: None, root_id="t")
-    for tool in ext.tools(_view({})):
-        if tool.name in ("BashOutput", "KillShell"):
-            out = await tool.run({"bash_id": "bg-1", "shell_id": "bg-1"}, ctx)
-            body = "".join(b.text for b in out.content if isinstance(b, Text))
-            assert out.is_error and "running in another worker process" in body, body
+async def test_the_tools_say_a_job_was_lost(tmp_path: Path) -> None:
+    ext = Shell(registry=Registry())
+    for status in ("running", "lost"):
+        ctx = ToolContext(task_id="t", call_id="c", env=LocalExecEnv(str(tmp_path)),
+                          state={"shell": ShellState(jobs={"bg-1": _job(OTHER, status=status)})},
+                          record=lambda *_: None, root_id="t")
+        for tool in ext.tools(_view({})):
+            if tool.name in ("BashOutput", "KillShell"):
+                out = await tool.run({"bash_id": "bg-1", "shell_id": "bg-1"}, ctx)
+                body = "".join(b.text for b in out.content if isinstance(b, Text))
+                assert out.is_error and "was lost" in body, body
 
 
 async def _posted(_body: Any, task_id: str | None = None) -> None:

@@ -144,6 +144,11 @@ class TaskView:
             ExtensionRecorded(extension=extension, kind=kind, data=data, message=message)
         )
 
+    def notify(self, text: str) -> None:
+        """Tell the person ``text``; front ends show it, the model never sees
+        it (a ``core`` / ``notice`` record)."""
+        self.record("core", "notice", {"text": text})
+
     def find_tool(self, name: str) -> Tool | None:
         """The tool named ``name`` that this task offers (the first extension
         offering it wins, as for the model), or ``None``. How one plugin uses

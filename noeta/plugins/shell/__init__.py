@@ -3,22 +3,13 @@ commands), and background jobs: ``run_in_background``, ``BashOutput``,
 ``KillShell`` and ``Monitor``.
 
 Jobs belong to the worker process (a process-local table keyed by the task
-tree's root, see :mod:`.jobs`). What the log keeps is what a reader needs:
-a ``started`` record in the task that launched the job (with the worker that
-runs it), an ``ended`` record when its end notice is taken, and ``lost`` for
-a job whose worker is gone (a crash or restart killed it; nothing is probed
-or killed by PID).
-
-**Background jobs pin their task tree to one worker.** A task releases its
-claim whenever it waits (for input, an approval, children), and another
-worker may pick it up next. That worker cannot read, stop or clean up a job
-running in the first one: the model is told once that the job "is running in
-another worker process; it cannot be read or stopped from here", and the job
-is stopped only by its own worker (when the root ends, is cancelled or its
-turn is stopped there). Deployments with several workers that offer
-background shells should route every task of a tree to the same worker
-(e.g. by queue, ``ctx.spawn(..., queue=...)``); there is no cross-worker job
-control.
+tree's root, see :mod:`.jobs`), so while a job runs its worker holds the task
+tree (``ToolContext.hold``): no other worker claims a task of it, and the
+next turn can read and stop the job. What the log keeps is what a reader
+needs: a ``started`` record in the task that launched the job, an ``ended``
+record when its end notice is taken, and ``lost`` for a job missing from the
+worker that picks the task up — its worker stopped and the hold ran out
+(nothing is probed or killed by PID).
 
 A job's end — and each monitor event — reaches the model as Claude Code's
 ``<task-notification>``, a system-origin message posted to the task that
@@ -40,20 +31,20 @@ from noeta.core.loop.state import CORE
 from noeta.core.tool import Tool
 from noeta.core.types import user
 from noeta.plugins.shell.bash import SHELL, BashTool, ShellState, reduce_shell
-from noeta.plugins.shell.jobs import DEFAULT_LOG_DIR, REGISTRY, Registry, worker_alive
+from noeta.plugins.shell.jobs import DEFAULT_LOG_DIR, REGISTRY, Registry
 from noeta.plugins.shell.tools import (
+    LOST_REASON,
     BackgroundBash,
     BashOutputTool,
     KillShellTool,
     MonitorTool,
 )
 
-__all__ = ["SHELL", "BashTool", "Registry", "Shell", "elsewhere_text"]
+__all__ = ["SHELL", "BashTool", "Registry", "Shell", "lost_text"]
 
 
-def elsewhere_text(job_id: str) -> str:
-    return (f"Background job {job_id} is running in another worker process; it cannot be "
-            "read or stopped from here.")
+def lost_text(job_id: str) -> str:
+    return f"Background job {job_id} was lost: {LOST_REASON}."
 
 _NOTICE = re.compile(
     r"\A<task-notification>\n<task-id>(bg-[0-9a-f]+)</task-id>\n"
@@ -113,23 +104,17 @@ class Shell(Extension):
 
     async def on_start(self, view: TaskView) -> None:
         """Settle jobs the log still shows running: ended ones get their
-        status; one running in another live worker is noted to the model
-        (once per picking worker); one whose worker is gone is lost."""
+        status; one missing from this worker's table is lost (its worker
+        held the tree while it ran, so that worker is gone)."""
         st = view.ext_state(self.name)
         jobs = st.jobs if isinstance(st, ShellState) else {}
         for job_id, job in jobs.items():
             if job.get("status") != "running":
                 continue
             live = self.registry.get(job_id)
-            owner = job.get("worker")
-            if live is None and owner and owner != self.registry.worker \
-                    and worker_alive(owner):
-                if job.get("noted") != self.registry.worker:
-                    view.record(self.name, "elsewhere",
-                                {"job_id": job_id, "worker": self.registry.worker},
-                                message=user(elsewhere_text(job_id), origin="system"))
-            elif live is None:
-                view.record(self.name, "lost", {"job_id": job_id})
+            if live is None:
+                view.record(self.name, "lost", {"job_id": job_id},
+                            message=user(lost_text(job_id), origin="system"))
             elif live.status != "running":
                 code = live.exit_code
                 status = "killed" if live.status == "killed" else (

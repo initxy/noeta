@@ -6,13 +6,17 @@ It shows the parts most plugins use:
   a user can override like any built-in tool's;
 * state folded from the task's log: each greeting is recorded, so a resumed
   task still knows who was greeted;
-* a reminder: after three greetings the model is told, once, to stop;
+* a question: ``Greet`` with no name asks the person who to greet (the
+  TUI and editors show it with no code for this plugin);
+* a reminder: after three greetings the model is told, once, to stop, and
+  the person gets a notice the model never sees;
 * a slash command (``/greet <name>``) front ends offer;
 * arguments, from an agent file (``- hello: {greeting: Hi}``) or
   ``config.toml`` (``[plugins.hello] greeting = "Hi"``).
 
 ``pyproject.toml`` registers it under the ``noeta.plugins`` entry point
-group as ``hello``; that is all noeta needs to find it.
+group as ``hello``; that is all noeta needs to find it. (Copied into
+``~/.noeta/plugins/hello.py`` it works too, without packaging.)
 """
 
 from __future__ import annotations
@@ -29,19 +33,21 @@ from noeta import (
     Tool,
     ToolContext,
     ToolOutput,
+    ask,
+    read_answer,
     text_output,
 )
 
 __all__ = ["Hello"]
 
 LIMIT = 3
+WHO = ask({"question": "Who should I greet?"})
 
 
 class Greet:
     name = "Greet"
-    description = "Greet someone by name."
-    input_schema = {"type": "object", "properties": {"name": {"type": "string"}},
-                    "required": ["name"]}
+    description = "Greet someone by name; without a name, the user is asked who."
+    input_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
     read_only = False
     clearable = False
 
@@ -51,7 +57,17 @@ class Greet:
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         who = str(input.get("name") or "").strip()
         if not who:
-            return text_output("name must not be empty", is_error=True)
+            return ToolOutput(park=WHO)  # wait for the person's answer
+        return self._greet(who, ctx)
+
+    async def resume(self, input: dict[str, Any], ctx: ToolContext, outcome: Any) -> ToolOutput:
+        answers = read_answer(outcome, WHO)
+        who = str((answers or {}).get("0", {}).get("other") or "").strip()
+        if not who:
+            return text_output("nobody to greet", is_error=True)
+        return self._greet(who, ctx)
+
+    def _greet(self, who: str, ctx: ToolContext) -> ToolOutput:
         ctx.record(self.plugin.name, "greeted", {"name": who})
         return text_output(f"{self.plugin.greeting}, {who}!")
 
@@ -81,6 +97,7 @@ class Hello(Extension):
         if len(state["greeted"]) < LIMIT or state["warned"]:
             return ()
         text = view.prompt("hello/enough", "You have greeted enough people; stop greeting.")
+        view.notify(f"hello: {len(state['greeted'])} greetings, asked the agent to stop")
         return [Reminder(text=text, kind="enough")]
 
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:

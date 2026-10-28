@@ -85,6 +85,11 @@ CREATE TABLE IF NOT EXISTS inbox (
 ) WITHOUT ROWID;
 CREATE UNIQUE INDEX IF NOT EXISTS inbox_dedupe ON inbox (task_id, dedupe_key)
     WHERE dedupe_key IS NOT NULL;
+CREATE TABLE IF NOT EXISTS holds (
+    root_id TEXT PRIMARY KEY,
+    worker  TEXT NOT NULL,
+    until   REAL NOT NULL
+);
 """
 
 _TASK_COLUMNS = (
@@ -433,8 +438,10 @@ class SqliteStore:
                 " (status = 'ready' AND (ready_at IS NULL OR ready_at <= ?))"
                 " OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= ?)"
                 " OR (status = 'running' AND lease_until < ?))"
+                " AND NOT EXISTS (SELECT 1 FROM holds h WHERE h.root_id = tasks.root_id"
+                " AND h.worker <> ? AND h.until > ?)"
                 " ORDER BY updated_at LIMIT 1",
-                (*queues, *root_ids, now, now, now),
+                (*queues, *root_ids, now, now, now, worker, now),
             ).fetchone()
             if row is None:
                 return None
@@ -463,6 +470,28 @@ class SqliteStore:
                          lease_until=until)
 
         return await self._write(tx)
+
+    async def hold(self, root_id: str, worker: str, seconds: float) -> bool:
+        def tx(conn: sqlite3.Connection) -> bool:
+            now = time.time()
+            cur = conn.execute(
+                "INSERT INTO holds (root_id, worker, until) VALUES (?, ?, ?)"
+                " ON CONFLICT (root_id) DO UPDATE SET worker = excluded.worker,"
+                " until = excluded.until WHERE holds.worker = excluded.worker"
+                " OR holds.until <= ?",
+                (root_id, worker, now + seconds, now),
+            )
+            return cur.rowcount > 0
+
+        return await self._write(tx)
+
+    async def unhold(self, root_id: str, worker: str) -> None:
+        def tx(conn: sqlite3.Connection) -> int:
+            return conn.execute("DELETE FROM holds WHERE root_id = ? AND worker = ?",
+                                (root_id, worker)).rowcount
+
+        if await self._write(tx):
+            self._notify([(root_id, "posted")])
 
     async def release(self, claim: Claim) -> None:
         def tx(conn: sqlite3.Connection) -> None:

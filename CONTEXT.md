@@ -26,7 +26,9 @@ only the task's runner reads.
 A runner claims a task from the store (`claim` / `renew` / `release`; Postgres uses
 `SKIP LOCKED`). Every append is conditional on `expected_seq` and the claim's `owner_epoch`, so a
 stale runner can never write. A tool call is logged as started before it runs; on recovery an
-unfinished call is answered "outcome unknown", never re-run.
+unfinished call is answered "outcome unknown", never re-run. What lives only in one worker
+process (a background job) holds the task tree there (`Store.hold`): other workers skip it until
+the hold is released or runs out.
 
 ## Layers
 
@@ -36,14 +38,17 @@ envs, Postgres), `noeta/presets` (the built-in agent files), `noeta/apps` (CLI, 
 server). Imports go downward only, plugins never import each other, backends never import each
 other (`lint-imports`, contracts in `pyproject.toml`). One plugin reaches another only through
 the kernel: a tool by its model-visible name (`TaskView.find_tool`), config a child inherits
-(`Extension.inherit`), the agents a worker can run (`TaskView.agents`).
+(`Extension.inherit`), the agents a worker can run (`TaskView.agents`). Front ends import no
+plugin either: they reach one by name, settings and the kernel's forms (questions, notices).
 
 ## Registry
 
 Plugins and backends are found by name through entry points (`noeta/core/registry.py`): groups
 `noeta.plugins`, `noeta.providers`, `noeta.execenvs`, `noeta.stores`. The built-ins register in
 `pyproject.toml` exactly as a third-party package would (`examples/hello-plugin` is one,
-installed and tested by `make check`). A plugin's registry name is its `Extension.name`.
+installed and tested by `make check`). A plugin's registry name is its `Extension.name`. A
+plugin can also be a plain file in `~/.noeta/plugins` or a trusted project's `.noeta/plugins`
+(`registry.load_plugin_files`); an installed plugin wins a name clash.
 
 ## Plugin setting
 
@@ -60,7 +65,8 @@ reminders, `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > As
 `after_tool`, `on_event`, `reduce`, `inherit`, `on_context_overflow`, `resident`. Every method
 is optional. Commands (`commands(ctx)` / `run_command`) are slash commands front ends list and
 expand through `noeta/core/commands.py`: a template filled with `{args}`, or text the plugin
-returns.
+returns. A tool asks the person by parking on `ask(...)` (`noeta/core/questions.py`) and tells
+them something with `notify`; neither reaches the model as the user.
 
 ## Agent file
 

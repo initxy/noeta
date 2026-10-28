@@ -40,7 +40,7 @@ lint:
 ## a third-party plugin end to end: built and installed from examples/hello-plugin
 ## (found through its entry point, nothing patched), in a throwaway environment
 example:
-	uv run --with ./examples/hello-plugin pytest -q -p no:cacheprovider examples/hello-plugin/tests
+	uv run --with-editable ./examples/hello-plugin pytest -q -p no:cacheprovider examples/hello-plugin/tests
 
 ## live tests against a real LLM backend / sandbox container (opt-in, never in check)
 e2e:

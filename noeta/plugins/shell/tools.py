@@ -33,6 +33,10 @@ MONITOR_TIMEOUT_CAP_MS = 1_800_000
 _CD_WORD = re.compile(r"(?:^|[\s;&|(])cd(?:\s|$)")
 
 NOT_AVAILABLE = "background execution is not available on this host"
+#: Why a job is gone: its worker held the task tree while the job ran, so a
+#: worker that does not have it is not the one that started it.
+LOST_REASON = ("the worker process running it stopped, so its further output and exit "
+               "status are unknown")
 
 
 def _description(name: str) -> str:
@@ -43,10 +47,8 @@ def _description(name: str) -> str:
 def _unknown(registry: Registry, ctx: ToolContext, job_id: str) -> str:
     """Why a job id is not in this worker's table."""
     job = shell_state(ctx.state).jobs.get(job_id) or {}
-    owner = job.get("worker")
-    if job.get("status") == "running" and owner and owner != registry.worker:
-        return (f"background job {job_id!r} is running in another worker process; it cannot "
-                "be read or stopped from here")
+    if job.get("status") in ("running", "lost"):
+        return f"background job {job_id!r} was lost: {LOST_REASON}"
     return f"unknown background job {job_id!r}"
 
 
@@ -143,11 +145,14 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
     run_command, tracked = command, True
     if rule is not None and rule.harden is not None and argv:
         run_command, tracked = shlex.join(rule.harden(argv)), False
+    # The job lives in this process only: keep the task tree with this
+    # worker while it runs, so the next turn can read and stop it.
+    release = await ctx.hold() if ctx.hold is not None else None
     job = await shell.registry.spawn(
         env=ctx.env, command=run_command, cwd=cwd, env_vars=shell._command_env(ctx),
         root_id=_root(ctx), spawner_id=ctx.task_id, tool_use_id=ctx.call_id,
         description=description or command, post=ctx.post,
-        monitor_timeout_ms=monitor_timeout_ms)
+        monitor_timeout_ms=monitor_timeout_ms, release=release)
     if isinstance(job, str):
         return tool_error(tool, job)
     ctx.record(SHELL, "started", {

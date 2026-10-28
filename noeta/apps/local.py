@@ -10,6 +10,7 @@ another front end or a host left in the store."""
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
@@ -25,6 +26,8 @@ from noeta.core.types import Delta
 if TYPE_CHECKING:
     from noeta.apps.config import Settings
     from noeta.core.agent_files import PluginSetting
+
+log = logging.getLogger("noeta.apps")
 
 DeltaSink = Callable[[str, Delta], None]
 
@@ -77,6 +80,9 @@ class LocalApp:
                                   poll_interval=0.2)
         self._stop = asyncio.Event()
         self._serving: asyncio.Task[None] | None = None
+        #: What the person should know about how this app was set up (a
+        #: project's plugins left unloaded); front ends show them.
+        self.notices: list[str] = []
 
     def _fan_out(self, task_id: str, delta: Delta) -> None:
         for sink in list(self._sinks):
@@ -123,7 +129,8 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
                   plugins: Mapping[str, PluginSetting] | None = None,
                   own_tasks_only: bool = False, **runtime_kw: Any) -> LocalApp:
     """The default agents on the configured store, model and provider, with
-    the user's memory (``~/.noeta/memory``), prompt overrides
+    the user's plugin files (``~/.noeta/plugins``, and a trusted project's
+    ``<cwd>/.noeta/plugins``), memory (``~/.noeta/memory``), prompt overrides
     (``~/.noeta/prompts``), hooks and MCP servers (``~/.noeta/settings.json``,
     and the ``.mcp.json`` servers it consents to), agent files
     (``~/.noeta/agents``, then ``<cwd>/.noeta/agents``) and the plugin
@@ -133,10 +140,13 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     store; ``worker`` and ``serve`` serve every task."""
     from pathlib import Path
 
-    from noeta.apps.config import HOME, merge_plugin_settings, open_store
+    from noeta.apps.config import HOME, load_plugin_files, merge_plugin_settings, open_store
     from noeta.core.agent_files import read_agent_dir
     from noeta.presets import default_agents
 
+    notices = load_plugin_files(cwd)
+    for notice in notices:
+        log.warning("%s", notice)
     files = read_agent_dir(HOME / "agents")
     if cwd:
         files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
@@ -148,7 +158,9 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     agents = default_agents(settings.model, plugins=table, add=settings.add_plugins,
                             extra_files=files)
     runtime_kw.setdefault("prompt_dirs", [str(HOME / "prompts")])
-    return LocalApp(open_store(settings.store_url), agents,
-                    settings.make_provider(), own_tasks_only=own_tasks_only,
-                    task_config={"prompts": settings.prompts} if settings.prompts else None,
-                    **runtime_kw)
+    app = LocalApp(open_store(settings.store_url), agents,
+                   settings.make_provider(), own_tasks_only=own_tasks_only,
+                   task_config={"prompts": settings.prompts} if settings.prompts else None,
+                   **runtime_kw)
+    app.notices = notices
+    return app

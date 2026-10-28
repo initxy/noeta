@@ -9,6 +9,7 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Fixed
 
+- `make example` ran a build uv had cached; it now installs the example plugin editable.
 - A second `registry.provider()` call for a family failed once that family's adapter module
   had been imported (the entry point named a package attribute the submodule rebound).
 
@@ -25,3 +26,13 @@ All notable changes to Noeta are documented here. The format is based on
   `~/.noeta/settings.json` (Claude Code's format) and the `.mcp.json` servers it consents to.
 - **Plugin slash commands** show in the TUI's `/help` and as the editor's commands over ACP;
   MCP prompts are commands.
+- **Background jobs hold their task tree.** While a job runs, no other worker claims a task of
+  its tree (`Store.hold` / `unhold`, a `holds` table, `ToolContext.hold`), so the next turn can
+  read and stop it with several workers on one store; a job whose worker is gone is reported
+  lost to the model. Third-party stores implement `hold` and `unhold`.
+- **Plugins as files.** `~/.noeta/plugins/*.py` (or a directory) is a plugin without packaging;
+  a project's `.noeta/plugins/` loads once trusted (`noeta trust`). `noeta plugins` lists where
+  each plugin comes from.
+- **Any plugin can ask the person and notify them.** `noeta.ask` / `noeta.read_answer`
+  (`noeta.core.questions`, moved from `ask_user`) and `notify` on `TaskView` / `ToolContext`;
+  front ends import no plugin. `Mcp` takes servers in Claude Code's `mcpServers` shape.

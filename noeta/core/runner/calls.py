@@ -156,10 +156,11 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
     async def post(body: InboxKind, task_id: str | None = None) -> None:
         await run.store.post(Post(task_id=task_id or run.task_id, body=body))
 
+    root = run.state.root_id or run.task_id
     return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
                        state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
-                       spawn=spawn, post=post, root_id=run.state.root_id or run.task_id,
-                       prompt=run.state.prompt)
+                       spawn=spawn, post=post, root_id=root, prompt=run.state.prompt,
+                       hold=lambda: run.rt.hold(root))
 
 
 async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[Event],
