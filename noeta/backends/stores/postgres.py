@@ -72,6 +72,7 @@ from noeta.backends.stores._rows import (
 from noeta.core.errors import CommitUnknown, Conflict, StoreUnavailable, UnknownTask
 from noeta.core.events import Event, InboxItem, Recorded, event_type
 from noeta.core.store import (
+    Appended,
     ChangeKind,
     Claim,
     NewTask,
@@ -461,10 +462,10 @@ class PostgresStore:
         patch: Patch = Patch(),
         posts: Sequence[Post] = (),
         creates: Sequence[NewTask] = (),
-    ) -> int:
+    ) -> Appended:
         changes: list[tuple[str, ChangeKind]] = []
 
-        async def tx(conn: Conn) -> int:
+        async def tx(conn: Conn) -> Appended:
             changes.clear()  # a re-run starts over
             cur = await conn.execute(self._q(
                 "SELECT status, owner_epoch, last_seq, inbox_seq, inbox_read_seq"
@@ -489,14 +490,16 @@ class PostgresStore:
             new_status, waiting_on, ready_at, read_seq = next_row_state(patch, inbox_seq,
                                                                         read_seq)
             releasing = new_status != "running"
-            await conn.execute(self._q(
+            cur = await conn.execute(self._q(
                 "UPDATE {s}.tasks SET last_seq = %s, status = %s, waiting_on = %s,"
                 " ready_at = %s, inbox_read_seq = %s, end_status = COALESCE(%s, end_status),"
                 f" updated_at = {_NOW}"
                 + (", owner = NULL, lease_until = NULL" if releasing else "")
-                + " WHERE task_id = %s"),
+                + " WHERE task_id = %s RETURNING updated_at"),
                 (seq, new_status, waiting_on,
                  ready_at, read_seq, patch.end_status, claim.task_id))
+            stamped = await cur.fetchone()
+            assert stamped is not None  # the row was locked above
             changes.append((claim.task_id, "appended"))
             for task in creates:
                 task_id, created = await self._insert_task(conn, task)
@@ -509,11 +512,11 @@ class PostgresStore:
                 if created:
                     changes.append((post.task_id, "posted"))
             await self._notify(conn, changes)
-            return seq
+            return Appended(seq=seq, at=float(stamped[0]))
 
-        seq = await self._tx(tx)
+        done = await self._tx(tx)
         self._deliver(changes)
-        return seq
+        return done
 
     async def read(self, task_id: str, after: int = 0) -> list[Recorded]:
         async def q(conn: Conn) -> list[Recorded]:

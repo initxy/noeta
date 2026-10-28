@@ -25,6 +25,7 @@ from noeta.backends.stores._rows import (
 from noeta.core.errors import Conflict, StoreUnavailable, UnknownTask
 from noeta.core.events import Event, InboxItem, Recorded, event_type
 from noeta.core.store import (
+    Appended,
     ChangeKind,
     Claim,
     NewTask,
@@ -284,10 +285,10 @@ class SqliteStore:
         patch: Patch = Patch(),
         posts: Sequence[Post] = (),
         creates: Sequence[NewTask] = (),
-    ) -> int:
+    ) -> Appended:
         changes: list[tuple[str, ChangeKind]] = []
 
-        def tx(conn: sqlite3.Connection) -> int:
+        def tx(conn: sqlite3.Connection) -> Appended:
             now = time.time()
             row = conn.execute(
                 "SELECT status, owner_epoch, last_seq, inbox_seq, inbox_read_seq"
@@ -341,11 +342,11 @@ class SqliteStore:
                     continue  # a notice for a task that does not exist is dropped
                 if created:
                     changes.append((post.task_id, "posted"))
-            return seq
+            return Appended(seq=seq, at=now)
 
-        seq = await self._write(tx)
+        done = await self._write(tx)
         self._notify(changes)
-        return seq
+        return done
 
     async def read(self, task_id: str, after: int = 0) -> list[Recorded]:
         def q(conn: sqlite3.Connection) -> list[Recorded]:

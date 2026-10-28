@@ -92,6 +92,14 @@ def next_row_state(patch: Patch, inbox_seq: int,
     return status, patch.waiting_on if status == "waiting" else None, ready_at, read
 
 
+class Appended(Struct):
+    """What an append wrote: the log's new last seq and the time the store
+    stamped on its events (``Recorded.at``)."""
+
+    seq: int
+    at: float
+
+
 class Post(Struct):
     task_id: str
     body: InboxKind
@@ -128,9 +136,10 @@ class Store(Protocol):
         patch: Patch = Patch(),
         posts: Sequence[Post] = (),
         creates: Sequence[NewTask] = (),
-    ) -> int:
+    ) -> Appended:
         """Append ``events`` after ``expected_seq`` and apply ``patch``,
-        ``posts`` and ``creates`` atomically. Returns the new last seq. Raises
+        ``posts`` and ``creates`` atomically. Returns the new last seq and
+        the time stamped on the events (what :meth:`read` returns). Raises
         ``noeta.core.errors.Conflict`` when the claim's epoch or the expected seq
         no longer holds, or the task is not running. A post to a task that
         does not exist is skipped (the rest still lands)."""

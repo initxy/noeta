@@ -248,9 +248,8 @@ class TaskRun:
                     await asyncio.shield(write)
                 except asyncio.CancelledError:
                     cancelled = True
-            write.result()
-            now = time.time()
-            recs = [Recorded(seq=base + i, at=now, event=e) for i, e in enumerate(events, 1)]
+            at = write.result().at
+            recs = [Recorded(seq=base + i, at=at, event=e) for i, e in enumerate(events, 1)]
             for rec in recs:
                 apply(self.state, rec, self.reducers)
             if cancelled:

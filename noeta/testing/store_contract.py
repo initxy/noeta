@@ -56,9 +56,17 @@ async def test_append_requires_epoch_and_expected_seq(store: Store) -> None:
     ended = TaskEnded(status="done")
     with pytest.raises(Conflict):
         await store.append(claim, [ended], expected_seq=5)
-    assert await store.append(claim, [Waiting(on="input")], expected_seq=1) == 2
+    assert (await store.append(claim, [Waiting(on="input")], expected_seq=1)).seq == 2
     with pytest.raises(Conflict):
         await store.append(claim, [ended], expected_seq=1)
+
+
+async def test_append_returns_the_time_it_stamped(store: Store) -> None:
+    await store.create(new())
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None
+    done = await store.append(claim, [Waiting(on="input")], expected_seq=1)
+    assert [(r.seq, r.at) for r in await store.read("t1", after=1)] == [(2, done.at)]
 
 
 async def test_expired_lease_is_reclaimed_and_old_owner_loses(store: Store) -> None:
@@ -70,7 +78,7 @@ async def test_expired_lease_is_reclaimed_and_old_owner_loses(store: Store) -> N
     with pytest.raises(Conflict):
         await store.append(old, [Waiting(on="input")], expected_seq=1)
     assert await store.renew(old, 30) is None
-    assert await store.append(fresh, [Waiting(on="input")], expected_seq=1) == 2
+    assert (await store.append(fresh, [Waiting(on="input")], expected_seq=1)).seq == 2
 
 
 async def test_two_racing_runners_never_both_append(store: Store) -> None:
@@ -224,11 +232,11 @@ async def test_append_skips_a_post_to_an_unknown_task(store: Store) -> None:
     await store.create(new("other"))
     claim = await store.claim("w", ["default"], 30)
     assert claim is not None and claim.task_id == "parent"
-    seq = await store.append(claim, [TaskEnded(status="cancelled")], expected_seq=1,
-                             patch=Patch(status="ended", end_status="cancelled"),
-                             posts=[Post(task_id="ghost", body=Cancel()),
-                                    Post(task_id="other", body=Cancel())])
-    assert seq == 2
+    done = await store.append(claim, [TaskEnded(status="cancelled")], expected_seq=1,
+                              patch=Patch(status="ended", end_status="cancelled"),
+                              posts=[Post(task_id="ghost", body=Cancel()),
+                                     Post(task_id="other", body=Cancel())])
+    assert done.seq == 2
     row = await store.get("parent")
     assert row is not None and row.status == "ended"
     assert len(await store.inbox("other")) == 1
