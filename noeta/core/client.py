@@ -76,7 +76,11 @@ class Client:
         history_through: int | None = None,
     ) -> str:
         """Create a task for ``agent``, optionally with its first message.
-        With ``dedupe_key`` a repeated call returns the first task's id.
+        With ``dedupe_key`` a repeated call returns the first task's id. A
+        ``task_id`` that exists is returned as it is (its ``input`` is not
+        posted), also when processes race to create it: to start a
+        conversation idempotently, create it without ``input`` and ``send``
+        each message with its own ``dedupe_key``.
         ``history_from`` starts it from another task's conversation, up to
         that task's event ``history_through`` (a fork, a rewind)."""
         tid = task_id or uuid.uuid4().hex

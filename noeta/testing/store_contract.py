@@ -49,6 +49,16 @@ async def test_create_dedupe_key_returns_first_task(store: Store) -> None:
     assert await store.get("b") is None
 
 
+async def test_create_with_a_known_task_id_returns_it_unchanged(store: Store) -> None:
+    """Creating is idempotent on the task id, also across racing processes
+    (a channel on several replicas creating one conversation's task)."""
+    results = await asyncio.gather(*(store.create(new("t1", inbox=[say(f"m{i}")]))
+                                     for i in range(4)))
+    assert sorted(results) == [("t1", False)] * 3 + [("t1", True)]
+    assert len(await store.read("t1")) == 1
+    assert len(await store.inbox("t1", after=0)) == 1  # only the creator's input
+
+
 async def test_append_requires_epoch_and_expected_seq(store: Store) -> None:
     await store.create(new())
     claim = await store.claim("w", ["default"], 30)
