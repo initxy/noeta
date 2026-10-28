@@ -249,6 +249,9 @@ class Hooks(Extension):
             for h in m.hooks:
                 if h.key in seen:
                     continue
+                if h.type == "http" and event == "SessionStart":
+                    log.info("hooks: HTTP hooks do not run on SessionStart; %s skipped", h.url)
+                    continue
                 if h.condition is not None:
                     if call is None or event not in TOOL_EVENTS:
                         log.info("hooks: %s cannot test 'if' %r; the hook does not run",

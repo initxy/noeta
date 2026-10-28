@@ -442,10 +442,12 @@ async def test_http_hook_end_to_end(tmp_path: Path) -> None:
             "hookEventName": "PreToolUse", "permissionDecision": "deny",
             "permissionDecisionReason": "the policy server says no"}})
 
-    hooks = {"PreToolUse": [{"hooks": [{"type": "http", "url": "https://policy.example/h"}]}]}
+    hooks = {"PreToolUse": [{"hooks": [{"type": "http", "url": "https://policy.example/h"}]}],
+             "SessionStart": [{"hooks": [{"type": "http", "url": "https://policy.example/s"}]}]}
     s = await Setup(tmp_path, hooks, [reply("", READ_A), reply("ok")],
                     http_transport=httpx.MockTransport(handle)).start()
     assert await s.results() == [("the policy server says no", True)]
+    assert [p["hook_event_name"] for p in seen] == ["PreToolUse"]  # none on SessionStart
     assert seen[0]["tool_name"] == "Read"
 
 
