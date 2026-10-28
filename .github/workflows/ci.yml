@@ -48,7 +48,8 @@ jobs:
           enable-cache: true
 
       - name: Install ripgrep
-        # Grep and Glob shell out to `rg`.
+        # No tool shells out to `rg` any more (search runs through Bash, and the suite does not
+        # need it); installed so a `Bash` search in a test finds what a developer machine has.
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
 
       - name: make check
