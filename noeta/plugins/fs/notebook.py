@@ -95,8 +95,16 @@ def _input_error(input: dict[str, Any], path: str) -> str | None:
     return None
 
 
+def _has_cell_ids(nb: dict[str, Any]) -> bool:
+    """Cell ids exist from nbformat 4.5 on; an older notebook gets none."""
+    major, minor = nb.get("nbformat"), nb.get("nbformat_minor")
+    if not isinstance(major, int) or not isinstance(minor, int):
+        return False
+    return major > 4 or (major == 4 and minor >= 5)
+
+
 def _apply(cells: list[Any], mode: str, index: int | None, cell_id: str | None,
-           cell_type: str | None, source: str) -> str:
+           cell_type: str | None, source: str, *, ids: bool) -> str:
     """Make the edit in ``cells``; the result line (Claude Code's: the cell
     and, for a replace or insert, the source now in it)."""
     if mode == "delete":
@@ -104,12 +112,16 @@ def _apply(cells: list[Any], mode: str, index: int | None, cell_id: str | None,
         cells.pop(index)
         return f"Deleted cell {cell_id}"
     if mode == "insert":
-        new_id = secrets.token_hex(4)
-        cell: dict[str, Any] = {"cell_type": cell_type, "id": new_id, "metadata": {},
+        at = 0 if index is None else index + 1
+        cell: dict[str, Any] = {"cell_type": cell_type, "metadata": {},
                                 "source": _source(source)}
+        # Without ids the cell is named the way Read shows it.
+        new_id = secrets.token_hex(4) if ids else f"cell-{at}"
+        if ids:
+            cell["id"] = new_id
         if cell_type == "code":
             cell.update(execution_count=None, outputs=[])
-        cells.insert(0 if index is None else index + 1, cell)
+        cells.insert(at, cell)
         return f"Inserted cell {new_id} with {source}"
     assert index is not None
     cell = cells[index]
@@ -178,7 +190,7 @@ class NotebookEditTool:
         index = found
         replaced = cells[index].get("source") if index is not None and mode != "insert" else None
         old_source = "".join(replaced) if isinstance(replaced, list) else replaced
-        done = _apply(cells, mode, index, cell_id, cell_type, source)
+        done = _apply(cells, mode, index, cell_id, cell_type, source, ids=_has_cell_ids(nb))
         body = (json.dumps(nb, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
         try:
             await env.write_bytes(resolved, body)

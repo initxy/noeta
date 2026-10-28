@@ -59,6 +59,17 @@ async def test_a_cell_can_be_named_by_its_index(h: Harness, ws: Path) -> None:
     assert text_of(out) == "NotebookEdit: no cell at index 2 in the notebook"
 
 
+async def test_a_notebook_before_4_5_gets_no_cell_ids(h: Harness, ws: Path) -> None:
+    path = ws / "old.ipynb"
+    path.write_text(json.dumps({"nbformat": 4, "nbformat_minor": 2, "metadata": {}, "cells": [
+        {"cell_type": "markdown", "metadata": {}, "source": ["# A"]}]}))
+    await h.call(ReadTool(), file_path="old.ipynb")
+    out = await h.call(NotebookEditTool(), notebook_path="old.ipynb", cell_id="cell-0",
+                       new_source="b", edit_mode="insert", cell_type="markdown")
+    assert text_of(out) == "Inserted cell cell-1 with b"
+    assert all("id" not in c for c in _cells(path))
+
+
 async def test_bad_calls(h: Harness, ws: Path) -> None:
     _nb(ws)
     await h.call(ReadTool(), file_path="a.ipynb")
