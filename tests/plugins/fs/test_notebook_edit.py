@@ -48,6 +48,17 @@ async def test_replace_insert_delete(h: Harness, ws: Path) -> None:
     assert "m1" not in [c["id"] for c in _cells(path)]
 
 
+async def test_a_cell_can_be_named_by_its_index(h: Harness, ws: Path) -> None:
+    path = _nb(ws)
+    await h.call(ReadTool(), file_path="a.ipynb")
+    tool = NotebookEditTool()
+    out = await h.call(tool, notebook_path="a.ipynb", cell_id="cell-1", new_source="# New")
+    assert not out.is_error, text_of(out)
+    assert _cells(path)[1]["source"] == ["# New"]
+    out = await h.call(tool, notebook_path="a.ipynb", cell_id="cell-2", new_source="x")
+    assert text_of(out) == "NotebookEdit: no cell at index 2 in the notebook"
+
+
 async def test_bad_calls(h: Harness, ws: Path) -> None:
     _nb(ws)
     await h.call(ReadTool(), file_path="a.ipynb")

@@ -10,6 +10,7 @@ indent.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from typing import Any
 
@@ -53,11 +54,18 @@ def _schema() -> dict[str, Any]:
     }
 
 
-def _find(cells: list[Any], cell_id: str) -> int | None:
+def _find(cells: list[Any], cell_id: str) -> int | str:
+    """The index of the cell ``cell_id`` names: its ``id``, or else the
+    ``cell-<index>`` form (Claude Code accepts it for any notebook); or why
+    there is none."""
     for i, cell in enumerate(cells):
-        if isinstance(cell, dict) and (cell.get("id") or f"cell-{i}") == cell_id:
+        if isinstance(cell, dict) and cell.get("id") == cell_id:
             return i
-    return None
+    m = re.fullmatch(r"cell-(\d+)", cell_id)
+    if m is None:
+        return f"no cell with id {cell_id!r}"
+    index = int(m.group(1))
+    return index if index < len(cells) else f"no cell at index {index} in the notebook"
 
 
 def _source(text: str) -> list[str]:
@@ -164,9 +172,10 @@ class NotebookEditTool:
         if not isinstance(cells, list):
             return tool_error(self.name, "the notebook has no cells array")
 
-        index = _find(cells, cell_id) if cell_id else None
-        if cell_id and index is None:
-            return tool_error(self.name, f"no cell with id {cell_id!r}")
+        found = _find(cells, cell_id) if cell_id else None
+        if isinstance(found, str):
+            return tool_error(self.name, found)
+        index = found
         replaced = cells[index].get("source") if index is not None and mode != "insert" else None
         old_source = "".join(replaced) if isinstance(replaced, list) else replaced
         done = _apply(cells, mode, index, cell_id, cell_type, source)
