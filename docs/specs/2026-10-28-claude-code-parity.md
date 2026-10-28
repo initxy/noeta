@@ -89,6 +89,14 @@ server/remote surfaces, which stay noeta's own.
   (localhost, dotless hosts), reversing the 2026-09-18 "refuse nothing" choice. Every baseline
   tool noeta lacks is built (`Workflow`, `ReportFindings`, `ListAgents`/`SendMessage`,
   `ScheduleWakeup`/`Cron*`, plan mode, `SubagentHandback`).
+- **Workflow scripts run in Node.js (proposal, 2026-10-28).** The model writes JavaScript, so a
+  JavaScript engine runs it. No dependency-free engine embeds in Python (the pure-Python
+  interpreters stop at ES5 without async/await; QuickJS and V8 bindings are native
+  dependencies), so the worker's `node` (18+) runs a harness as a short-lived process: a fresh
+  V8 context with only the workflow API, code generation from strings off, Node's permission
+  model where the version has it. The script is replayed against the agent results recorded in
+  the task's log (finished `agent()` calls answer from the log), which makes a run durable like
+  any other wait. Without `node` the tool refuses and starts nothing. Owner to confirm.
 - **Deviations are listed, not implied.** A model-visible difference is allowed only when the
   kernel forces it, and each one is a row in `parity/deviations.md` with its reason. Starting
   list:
@@ -165,7 +173,7 @@ Phase 4 — missing tools
 - [ ] `SendMessage` (resume a finished sub-agent from its log) and fork sub-agents, background by
   default, `<task-notification>` delivery with usage, per-call denial instead of whole-task
   failure.
-- [ ] `ScheduleWakeup`, `CronCreate/List/Delete`, `/loop` on the kernel's timers.
+- [x] `ScheduleWakeup`, `CronCreate/List/Delete`, `/loop` on the kernel's timers.
 - [ ] Worktree isolation (`EnterWorktree`/`ExitWorktree`, `isolation: worktree`).
 - [ ] Plan mode tools, `WebSearch`, `NotebookEdit`, `LSP`.
 
@@ -268,3 +276,15 @@ Phase 5 — front ends
   Claude Code's count), ReportFindings/ScheduleWakeup/Workflow/ExitPlanMode, auto mode.
   Background sub-agents' approvals wait at the root (Claude Code denies the one call) — owner to
   decide.
+- 2026-10-28: ScheduleWakeup / Cron* / `/loop`, ReportFindings, Workflow, session title and
+  `count_tokens` (Read's token ceiling). Kernel: timers (`set_timer` records; a waiting task's
+  `ready_at` is its earliest timer, an idle task fires due ones), `TaskView.spawn` for children
+  outside a tool call, notices with `kind`/`data`, a config `output_schema`, the provider's
+  `count_tokens`. The m3 replay compacts again: the summarize instruction was appended to the
+  trailing token-count system turn instead of the user message before it (not the token
+  estimate). `make parity` 65 -> 63 (gone: the three missing tools, session title,
+  count_tokens, "never compacted"; new: post-compaction layout lines m3 now reaches). Open: a
+  `/workflows` view and TaskStop for runs, nested `workflow()`, built-in workflows, the
+  `workflow-authoring` skill, worktree isolation for workflow agents, folding `noop` loop ticks
+  in front ends, `/loop` as a Skill-tool skill (it is a front-end command), Claude Code's
+  "fire only when idle" also for one-shot tasks (they end before a timer fires).

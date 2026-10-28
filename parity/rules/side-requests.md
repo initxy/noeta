@@ -82,7 +82,7 @@ Rows tagged **s1 only** were seen only for the OAuth subscriber and are not part
 |---|---|
 | side.count.1 | Endpoint `/v1/messages/count_tokens` with the token-counting beta. Body: `model` and one user message, `tools: []`, no system. |
 | side.count.2 | When: after a tool returns a large result, before the next main request: the content counted was the raw text of a 1001-line Read (~79K characters, without the line-number prefixes) (m3/0008, m3/0015). Not sent for small results. |
-| side.count.3 | Use: the exact count feeds the auto-compaction decision (see `compaction.md` compact.trigger.3). |
+| side.count.3 | Use: Read's token ceiling: once the chars/4 estimate of the window passes a quarter of the 25,000-token ceiling, the exact count decides whether the read is refused (the bundle's Read size check). In m3 it lands just before the compaction decision (`compaction.md` compact.trigger.3). |
 
 ## Quota probe (`side.quota`) — s1 only
 
