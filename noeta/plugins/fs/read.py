@@ -253,6 +253,21 @@ def _input_schema() -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class _Window:
+    """The file one text read serves and the lines asked for."""
+
+    path: str
+    resolved: str
+    display: str
+    size: int
+    mtime: float
+    offset: int
+    limit: int
+    explicit_limit: int | None
+    large: bool
+
+
 class ReadTool:
     """``Read``. ``offset`` is 1-based."""
 
@@ -307,22 +322,31 @@ class ReadTool:
         if image is not None:
             return await self._read_image(path, resolved, display, size, image, chunks)
 
+        return await self._read_text(
+            ctx, _Window(path=path, resolved=resolved, display=display, size=size,
+                         mtime=st.mtime, offset=offset, limit=limit,
+                         explicit_limit=explicit_limit, large=large), chunks)
+
+    async def _read_text(self, ctx: ToolContext, w: _Window,
+                         chunks: Callable[[], AsyncIterator[bytes]]) -> ToolOutput:
+        """A text file's window in ``cat -n`` form, within Claude Code's
+        size and token ceilings; the read is recorded."""
         # Claude Code's whole-file ceiling: a read with no ``limit`` of a file
         # over 256 KB is refused before anything is served.
-        if explicit_limit is None and size > _READ_MAX_FILE_BYTES and not large:
+        if w.explicit_limit is None and w.size > _READ_MAX_FILE_BYTES and not w.large:
             return tool_error(
                 self.name,
-                f"File content ({format_size(size)}) exceeds maximum allowed "
+                f"File content ({format_size(w.size)}) exceeds maximum allowed "
                 f"size ({format_size(_READ_MAX_FILE_BYTES)}). Use offset and "
                 "limit parameters to read specific portions of the file, or "
                 "search for specific content instead of reading the whole "
                 "file.",
             )
 
-        start = offset - 1
-        max_tokens = MAX_READ_TOKENS * (_LARGE_FACTOR if large else 1)
-        scan = _Scan(start=start, limit=limit,
-                     max_served=_READ_MAX_SERVED_BYTES * (_LARGE_FACTOR if large else 1))
+        start = w.offset - 1
+        max_tokens = MAX_READ_TOKENS * (_LARGE_FACTOR if w.large else 1)
+        scan = _Scan(start=start, limit=w.limit,
+                     max_served=_READ_MAX_SERVED_BYTES * (_LARGE_FACTOR if w.large else 1))
         try:
             async for chunk in chunks():
                 if not scan.feed(chunk):
@@ -331,12 +355,12 @@ class ReadTool:
             return tool_error(self.name, f"read failed: {exc}")
         # A NUL byte marks real binary regardless of decodability.
         if scan.has_nul:
-            return tool_error(self.name, f"{path!r} is not utf-8 text")
+            return tool_error(self.name, f"{w.path!r} is not utf-8 text")
         scan.finish()
         # Claude Code's token ceiling on what one read returns. A window the
         # scan had to stop is past it by construction.
         text = scan.window_text()
-        tokens = read_size_tokens(text, posixpath.splitext(resolved)[1].lstrip(".").lower())
+        tokens = read_size_tokens(text, posixpath.splitext(w.resolved)[1].lstrip(".").lower())
         if not scan.capped and tokens > max_tokens // 4 and ctx.count_tokens is not None:
             # Past a quarter of the ceiling the estimate is checked against
             # the provider's exact count, as Claude Code does.
@@ -346,33 +370,9 @@ class ReadTool:
 
         # Keyed by the canonical path and digesting the raw bytes of the whole
         # file, so a later mutation check compares like with like.
-        _record_read(ctx, resolved, scan.digest, st.mtime, [offset, limit])
+        _record_read(ctx, w.resolved, scan.digest, w.mtime, [w.offset, w.limit])
 
-        total = scan.total_lines
-        meta: dict[str, Any] = {"path": display, "total_lines": total}
-        if scan.bytes_replaced:
-            meta["bytes_replaced"] = True
-        if total == 0:
-            return text_output(_note("The file exists but has empty contents."), **meta)
-        if start >= total:
-            return text_output(
-                _note(
-                    f"The file has only {total} lines, fewer than the "
-                    f"requested offset {offset}. Nothing was read."
-                ),
-                **meta,
-            )
-
-        lines = list(scan.window)
-        # A final newline shows as one more, empty, numbered line.
-        if scan.ends_with_newline and start + len(lines) == total and len(lines) < limit \
-                and not scan.capped:
-            lines.append("")
-        rendered = "\n".join(f"{start + i + 1}\t{line}" for i, line in enumerate(lines))
-        shown_end = start + len(scan.window)
-        if scan.bytes_replaced:
-            rendered += "\n\n" + _note("Non-utf8 bytes were replaced with U+FFFD.")
-        return text_output(rendered, lines=[start + 1, shown_end], **meta)
+        return _render(scan, w)
 
     async def _read_image(
         self,
@@ -416,6 +416,36 @@ class ReadTool:
             meta={"path": display, "media_type": fitted.media_type,
                   "bytes": len(fitted.data)},
         )
+
+
+def _render(scan: _Scan, w: _Window) -> ToolOutput:
+    """The scanned window as numbered lines, or a note when it holds none."""
+    start = w.offset - 1
+    total = scan.total_lines
+    meta: dict[str, Any] = {"path": w.display, "total_lines": total}
+    if scan.bytes_replaced:
+        meta["bytes_replaced"] = True
+    if total == 0:
+        return text_output(_note("The file exists but has empty contents."), **meta)
+    if start >= total:
+        return text_output(
+            _note(
+                f"The file has only {total} lines, fewer than the "
+                f"requested offset {w.offset}. Nothing was read."
+            ),
+            **meta,
+        )
+
+    lines = list(scan.window)
+    # A final newline shows as one more, empty, numbered line.
+    if scan.ends_with_newline and start + len(lines) == total and len(lines) < w.limit \
+            and not scan.capped:
+        lines.append("")
+    rendered = "\n".join(f"{start + i + 1}\t{line}" for i, line in enumerate(lines))
+    shown_end = start + len(scan.window)
+    if scan.bytes_replaced:
+        rendered += "\n\n" + _note("Non-utf8 bytes were replaced with U+FFFD.")
+    return text_output(rendered, lines=[start + 1, shown_end], **meta)
 
 
 def _record_read(ctx: ToolContext, path: str, digest: str, mtime: float,
