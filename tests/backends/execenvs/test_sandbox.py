@@ -392,6 +392,73 @@ def test_the_protected_list_follows_the_permissions_and_git(tmp_path: Path, home
     assert {str(ws / ".git"), str(ws / ".git" / "modules"), str(module)} <= set(plan.pinned)
 
 
+#: What a package manager or build tool runs on its next ordinary command.
+_RUN_ON_NEXT_COMMAND = (".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs", ".pnp.cjs",
+                        ".pnp.loader.mjs", "bunfig.toml", ".bunfig.toml", ".bazelrc",
+                        ".bazelversion", ".bazeliskrc", ".cargo", ".mvn", ".yarn")
+
+
+def test_an_empty_project_gets_placeholders_for_what_runs_next(tmp_path: Path,
+                                                               home: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    held = dict(sb.plan_paths(SandboxSettings(enabled=True), str(ws),
+                              str(tmp_path / "t")).placeholders)
+    assert held == {str(ws / ".noeta"): False, str(ws / ".git"): False,
+                    **{str(ws / n): n not in (".cargo", ".mvn", ".yarn")
+                       for n in _RUN_ON_NEXT_COMMAND}}
+    # What needs a separate step of the person's gets none.
+    for name in (".envrc", ".vscode", ".devcontainer", ".idea", ".pre-commit-config.yaml",
+                 "lefthook-local.yml"):
+        assert str(ws / name) not in held
+
+
+def test_a_missing_hooks_directory_is_placeheld_whatever_its_name(tmp_path: Path,
+                                                                  home: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _git(ws, "init", "-q")
+    _git(ws, "config", "core.hooksPath", ".husky")
+    (ws / "lefthook.yml").write_text("")
+    held = dict(sb.plan_paths(SandboxSettings(enabled=True), str(ws),
+                              str(tmp_path / "t")).placeholders)
+    assert held[str(ws / ".husky")] is False
+    # With lefthook in use, its local config runs on the next commit too.
+    assert held[str(ws / "lefthook-local.yml")] is True
+
+
+@needs_bwrap
+async def test_what_a_tool_runs_next_cannot_be_created(tmp_path: Path, home: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _git(ws, "init", "-q")
+    _git(ws, "config", "core.hooksPath", ".husky")
+    (ws / "a.txt").write_text("a\n")
+    before = sorted(os.listdir(ws))
+    exclude = (ws / ".git" / "info" / "exclude").read_text()
+    env = LocalExecEnv(str(ws), sandbox={"enabled": True})
+    for command in ("mkdir -p .husky && echo x > .husky/pre-commit",
+                    "echo x > .husky/pre-commit",
+                    "echo 'node-options=--require ./x.js' > .npmrc",
+                    "echo 'yarnPath: x.js' > .yarnrc.yml", "echo x > .pnpmfile.cjs",
+                    "echo 'preload = [\"x.ts\"]' > bunfig.toml",
+                    "mkdir -p .cargo && echo x > .cargo/config.toml",
+                    "mkdir -p .mvn && echo x > .mvn/extensions.xml",
+                    "echo 'build --x' > .bazelrc", "mkdir -p .yarn/plugins"):
+        code, _, _ = await _run(env, command)
+        assert code != 0, command
+    assert sorted(os.listdir(ws)) == before
+    # The placeholders read as empty, and git neither lists nor adds them.
+    git = "git -c user.name=t -c user.email=t@t"
+    code, out, _ = await _run(env, f"cat .npmrc bunfig.toml && {git} status --porcelain && "
+                                   f"{git} add -A && {git} commit -qm a && "
+                                   f"{git} show --stat --format= HEAD")
+    assert code == 0, out
+    assert out.split()[:2] == ["??", "a.txt"] and ".npmrc" not in out, out
+    assert sorted(os.listdir(ws)) == before
+    assert (ws / ".git" / "info" / "exclude").read_text() == exclude
+
+
 @needs_bwrap
 async def test_what_runs_outside_the_sandbox_cannot_be_written(tmp_path: Path,
                                                                home: Path) -> None:

@@ -77,23 +77,41 @@ PROTECTED = (
     *sorted(PROTECTED_FILES),
     ".git/hooks", ".git/config", ".git/config.worktree",
 )
-#: The protected names a command must not create when missing: noeta's own
-#: directory and git's (hooks and config run outside the sandbox at once).
-#: The other protected names are read-only when present but get no
-#: placeholder: each placeholder is a directory the person sees appear in
-#: the project while a command runs, and those files only run after a
-#: separate step of the person's (``direnv allow``, an editor trusting the
-#: workspace, a hook runner installed in the protected hooks directory).
-PLACEHOLDERS = frozenset({".noeta", ".git/hooks", ".git/config", ".git/config.worktree"})
+#: The protected names a command must not create when missing: what is
+#: executed on the next ordinary command without a confirmation step —
+#: noeta's own directory, git's hooks and config, and the settings a
+#: package manager or build tool runs code from (``yarnPath``, npm's
+#: ``node-options``, a pnpmfile, bun's preload, cargo's and maven's
+#: extensions, bazel's flags and the bazelisk download). The other protected
+#: names are read-only when present but get no placeholder, since each runs
+#: only after a separate step of the person's (``direnv allow``, an editor
+#: trusting the workspace, installing a hook runner): a placeholder is an
+#: empty entry the person sees appear in the project while a command runs.
+#: The configured hooks directory is always placeheld, and a hook runner's
+#: other configs (:data:`HOOK_RUNNER_CONFIGS`) once it is in use.
+PLACEHOLDERS = frozenset({
+    ".noeta", ".git/hooks", ".git/config", ".git/config.worktree",
+    ".npmrc", ".yarnrc", ".yarnrc.yml", ".yarn", ".pnpmfile.cjs", ".pnp.cjs",
+    ".pnp.loader.mjs", "bunfig.toml", ".bunfig.toml", ".cargo", ".mvn", ".bazelrc",
+    ".bazelversion", ".bazeliskrc"})
+#: The :data:`PLACEHOLDERS` that are directories; the rest are files.
+_PLACEHELD_DIRS = frozenset({".noeta", ".git/hooks", ".yarn", ".cargo", ".mvn"})
+#: A hook runner's configs: when one is present the hooks run it, and a
+#: missing one (a ``-local`` override) is read on the next commit.
+HOOK_RUNNER_CONFIGS = ("lefthook.yml", ".lefthook.yml", "lefthook.yaml", ".lefthook.yaml",
+                       "lefthook-local.yml", ".lefthook-local.yml", "lefthook-local.yaml",
+                       ".lefthook-local.yaml")
 #: Directories that stay writable but are mounted onto themselves: a mount
 #: point cannot be renamed, so what is protected inside cannot be moved
 #: away and recreated. Every directory between a working directory and a
 #: protected path is pinned the same way.
 PINNED = (".git",)
 #: Git config files: a missing one is covered by an empty file, which git
-#: reads as no settings (a directory there would break git). Any other
-#: missing path gets an empty directory, which git does not list (an empty
-#: file would show as untracked and fail ``git add -A``).
+#: reads as no settings (a directory there would break git), as is a
+#: missing config file of a tool (an empty file is no settings; a directory
+#: breaks pnpm). Any other missing path gets an empty directory, which git
+#: does not list; a placeholder file at a repository's top is listed in the
+#: command's view of ``.git/info/exclude``, so git does not list it either.
 _GIT_CONFIGS = ("config", "config.worktree")
 #: Loopback ports the proxies listen on inside a Linux sandbox.
 INNER_HTTP_PORT, INNER_SOCKS_PORT = 3128, 1080
@@ -232,6 +250,35 @@ def _git_protected(project: str) -> list[str]:
     return out
 
 
+def _hook_runner_configs(project: str) -> tuple[str, ...]:
+    """:data:`HOOK_RUNNER_CONFIGS` when one of them is in ``project``."""
+    present = any(os.path.lexists(os.path.join(project, n)) for n in HOOK_RUNNER_CONFIGS)
+    return HOOK_RUNNER_CONFIGS if present else ()
+
+
+def exclude_overlays(projects: Sequence[str],
+                     placeholders: Sequence[tuple[str, bool]]) -> list[tuple[str, str]]:
+    """``(path, content)``: each project's ``.git/info/exclude`` as a
+    command sees it, listing the placeholder files at the project's top so
+    git neither lists nor adds them."""
+    out: list[tuple[str, str]] = []
+    for project in projects:
+        names = sorted(os.path.basename(path) for path, is_file in placeholders
+                       if is_file and os.path.dirname(path) == project)
+        exclude = os.path.join(project, ".git", "info", "exclude")
+        if not names or not os.path.isfile(exclude) or os.path.islink(exclude):
+            continue
+        try:
+            with open(exclude, encoding="utf-8", errors="surrogateescape") as f:
+                text = f.read()
+        except OSError:
+            continue
+        if text and not text.endswith("\n"):
+            text += "\n"
+        out.append((exclude, text + "".join(f"/{n}\n" for n in names)))
+    return out
+
+
 def _between(path: str, writes: Sequence[str]) -> list[str]:
     """The real directories strictly between a writable directory and
     ``path``, outermost first."""
@@ -255,9 +302,9 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
     # and the protected paths of the working directories (not of TMPDIR or
     # allowWrite, which no one trusts as a project).
     projects = [os.path.realpath(p) for p in (root, *writable)]
-    protected = [*(os.path.join(p, n) for p in projects for n in PROTECTED),
-                 *(path for p in projects for path in _git_protected(p)
-                   if any(_within(path, w) for w in writes))]
+    git_protected = [path for p in projects for path in _git_protected(p)
+                     if any(_within(path, w) for w in writes)]
+    protected = [*(os.path.join(p, n) for p in projects for n in PROTECTED), *git_protected]
     deny_write = [*user_deny, *protected]
     pinned: list[str] = []
     for w in writes:
@@ -284,22 +331,26 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
     pinned = sorted(dict.fromkeys(p for p in pinned if p not in deny_write),
                     key=lambda p: p.count("/"))
     placeholders: dict[str, bool] = {}
-    guarded = [os.path.join(p, n) for p in projects for n in PLACEHOLDERS]
-    guarded += [path for path in protected
-                if not any(path == os.path.join(p, n) for p in projects for n in PROTECTED)]
+    names = {os.path.join(p, n): n not in _PLACEHELD_DIRS
+             for p in projects for n in (*PLACEHOLDERS, *_hook_runner_configs(p))}
+    guarded = [*names, *git_protected]
     for path in [*user_deny, *guarded]:
         missing = _first_missing(path)
         if missing is not None and path in deny_write \
                 and any(_within(missing, w) and missing != w for w in writes):
-            placeholders.setdefault(missing, missing == path and "/.git/" in path
-                                    and os.path.basename(path) in _GIT_CONFIGS)
+            placeholders.setdefault(missing, missing == path and (
+                names.get(path, False) or "/.git/" in path
+                and os.path.basename(path) in _GIT_CONFIGS))
     return Plan(writable=writes, deny_write=deny_write, deny_read=deny_read,
                 allow_read=allow_read, pinned=pinned, placeholders=list(placeholders.items()))
 
 
 def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
-               relays: Sequence[tuple[str, int]], bridge: str) -> list[str]:
-    """The ``bwrap`` command line for ``plan``; the command follows it."""
+               relays: Sequence[tuple[str, int]], bridge: str, empty: str = "/dev/null",
+               overlays: Sequence[tuple[str, str]] = ()) -> list[str]:
+    """The ``bwrap`` command line for ``plan``; the command follows it.
+    ``empty`` is the empty file a placeholder file shows; ``overlays`` are
+    ``(source, path)`` files shown read-only over ``path``."""
     args = [bwrap, "--die-with-parent", "--new-session", "--unshare-pid", "--unshare-net",
             "--unshare-ipc", "--unshare-uts"]
     if settings.filesystem_disabled:
@@ -332,9 +383,11 @@ def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
                 args += ["--ro-bind", path, path]
         for path, is_file in plan.placeholders:
             if is_file:
-                args += ["--ro-bind", "/dev/null", path]
+                args += ["--ro-bind", empty, path]
             else:
                 args += ["--tmpfs", path, "--remount-ro", path]
+        for source, path in overlays:
+            args += ["--ro-bind", source, path]
     for path, _port in relays:
         args += ["--ro-bind", path, path]
     args += ["--ro-bind", bridge, bridge]
@@ -465,7 +518,7 @@ class LocalSandbox:
             plan = plan_paths(self.settings, self.root, self.tmpdir(), writable)
             if self.platform.startswith("linux"):
                 prepared.placeholders = _hold(plan)
-                await self._linux(prepared, plan, list(argv), cwd, work)
+                await self._linux(prepared, plan, list(argv), cwd, work, writable)
             else:
                 await self._darwin(prepared, plan, list(argv))
         except BaseException:
@@ -483,13 +536,25 @@ class LocalSandbox:
         return listeners
 
     async def _linux(self, prepared: Prepared, plan: Plan, argv: list[str], cwd: str,
-                     work: str) -> None:
+                     work: str, writable: Sequence[str]) -> None:
         listeners = await self._listeners(prepared, unix_dir=work)
         relays = [(listeners.http, INNER_HTTP_PORT), (listeners.socks, INNER_SOCKS_PORT)]
         bwrap = self._bwrap()
         assert bwrap is not None
+        empty = os.path.join(work, "empty")
+        with open(empty, "w"):
+            pass
+        os.chmod(empty, 0o444)
+        overlays: list[tuple[str, str]] = []
+        projects = [os.path.realpath(p) for p in (self.root, *writable)]
+        for i, (path, text) in enumerate(exclude_overlays(projects, prepared.placeholders)):
+            source = os.path.join(work, f"exclude-{i}")
+            with open(source, "w", encoding="utf-8", errors="surrogateescape") as f:
+                f.write(text)
+            overlays.append((source, path))
         prepared.argv = [*bwrap_args(self.settings, plan, bwrap=bwrap, cwd=cwd,
-                                     relays=relays, bridge=str(_BRIDGE)), *argv]
+                                     relays=relays, bridge=str(_BRIDGE), empty=empty,
+                                     overlays=overlays), *argv]
         prepared.env.update(_proxy_env(f"http://127.0.0.1:{INNER_HTTP_PORT}",
                                        f"socks5h://127.0.0.1:{INNER_SOCKS_PORT}"))
 

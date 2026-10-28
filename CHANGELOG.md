@@ -66,9 +66,15 @@ All notable changes to Noeta are documented here. The format is based on
   paths (`noeta.toolkit.protected_paths`: the whole `.noeta` directory, `.vscode`, `.husky`,
   `.envrc`, `.pre-commit-config.yaml`, shell and package-manager settings, ...),
   `.git/hooks`, `.git/config`, `.git/config.worktree`, each submodule's config and hooks
-  under `.git/modules`, and the hooks directory git uses (`core.hooksPath`). A missing
-  `.noeta`, `.git`, or git hook/config path cannot be created either (an empty read-only
-  placeholder covers it while the command runs); the other protected names are read-only
+  under `.git/modules`, and the hooks directory git uses (`core.hooksPath`). What is
+  executed on the next ordinary command without a confirmation step cannot be created
+  when missing either (an empty read-only placeholder covers it while the command runs):
+  `.noeta`, `.git`, git's hooks directory and config, and the settings a package manager
+  or build tool runs code from (`.npmrc`, `.yarnrc`, `.yarnrc.yml`, `.yarn`,
+  `.pnpmfile.cjs`, `.pnp.cjs`, `.pnp.loader.mjs`, `bunfig.toml`, `.bunfig.toml`, `.cargo`,
+  `.mvn`, `.bazelrc`, `.bazelversion`, `.bazeliskrc`; lefthook's configs once lefthook is
+  in use) — 16 placeholders in an empty directory. Git does not list them when the working
+  directory is a repository's top (the command's `.git/info/exclude` names the files). The other protected names are read-only
   only when present, since each runs only after a separate step of the person's (`direnv
   allow`, an editor trusting the workspace). No directory above a protected path can be
   renamed away. Git keeps working (status, add, commit,
