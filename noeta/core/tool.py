@@ -95,6 +95,15 @@ class ToolContext(CoreNotices):
     #: user message holding ``text``; ``None`` when it cannot count.
     count_tokens: Callable[[str], Awaitable[int | None]] | None = None
 
+    @property
+    def idempotency_key(self) -> str:
+        """``<task id>:<call id>``: the same for every run of this call on
+        any worker (a re-run after a crash, a late run on a worker that
+        froze). Pass it to an outside system that can drop a repeat (an HTTP
+        ``Idempotency-Key``, MCP's ``_meta``), or look the outcome up by it
+        in ``recover``."""
+        return f"{self.task_id}:{self.call_id}"
+
 
 class Tool(Protocol):
     """A tool the model can call.
@@ -111,6 +120,16 @@ class Tool(Protocol):
       tool that parks: ``outcome`` is the ``Answer`` for a question, or
       ``{child_id: ChildEnded}`` for children; ``None`` means the wait was
       withdrawn (the turn was stopped).
+    * ``retry_safe: bool = False`` — running it again changes nothing
+      outside the call (a read): a call that a crash left unfinished runs
+      again (up to :data:`MAX_ATTEMPTS` starts) instead of being answered
+      "outcome unknown".
+    * ``async recover(input, ctx) -> ToolOutput | None`` — for a call that a
+      crash left unfinished: its result, looked up by
+      ``ctx.idempotency_key`` (or got by running it again where the outside
+      system drops a repeat of that key); ``None`` when the outcome cannot
+      be told (then a ``retry_safe`` tool runs again, any other is answered
+      "outcome unknown"). Asked before ``retry_safe``.
     """
 
     name: str
@@ -128,7 +147,13 @@ class Tool(Protocol):
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput: ...
 
 
-def tool_flag(tool: Tool, name: Literal["deferred", "listed_last", "run_last"]) -> bool:
+#: Starts of a ``retry_safe`` call before a crash during it is answered
+#: "outcome unknown" anyway (a call that kills its worker is not run forever).
+MAX_ATTEMPTS = 3
+
+
+def tool_flag(tool: Tool,
+              name: Literal["deferred", "listed_last", "run_last", "retry_safe"]) -> bool:
     """One of ``tool``'s optional flags (see :class:`Tool`); ``False`` when
     the tool leaves it out."""
     return bool(getattr(tool, name, False))

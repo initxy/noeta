@@ -34,6 +34,10 @@ How a task's MCP tool set is made and kept:
   server and the call finishes. A second question in the same call, or a
   question that cannot be put to anyone, is declined. A call whose worker
   died while it waited ends "outcome unknown".
+* **Every call carries its idempotency key** in the request's ``_meta``
+  (``noeta/idempotencyKey``: the same for every run of the call), for a
+  server that can drop a repeat. A call a crash left unfinished is still
+  answered "outcome unknown": nothing says a server keeps those keys.
 """
 
 from __future__ import annotations
@@ -95,6 +99,9 @@ ScopeFn = Callable[[TaskView], Union[str, None]]
 #: A sign-in started within this long is handed out again rather than
 #: restarted.
 SIGN_IN_REUSE_S = 180.0
+
+#: The ``tools/call`` ``_meta`` key that carries ``ToolContext.idempotency_key``.
+IDEMPOTENCY_META = "noeta/idempotencyKey"
 
 
 def _as_list(servers: Servers) -> list[McpServer]:
@@ -259,7 +266,8 @@ class Mcp(Extension):
 
         async def run(c: McpClient) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
             result = await c.call_tool(tool.remote, args,
-                                       timeout=tool_timeout_s(server.call_timeout))
+                                       timeout=tool_timeout_s(server.call_timeout),
+                                       meta={IDEMPOTENCY_META: ctx.idempotency_key})
             if not c.tools_changed:
                 return result, None
             c.tools_changed = False

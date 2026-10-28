@@ -5,7 +5,9 @@
   worker after a crash makes the same choice the dead one would have.
 * ``cluster_effect`` (plugin): the ``Effect`` tool, which appends one line
   ``<token> <task_id> <call_id>`` to a journal file before it answers: the
-  observable side effect the test counts.
+  observable side effect the test counts; and ``Lookup``, a ``retry_safe``
+  tool that takes a while and writes each run (with its idempotency key) to
+  ``<journal>.lookups``, so a crash during it shows as a second run.
 * ``cluster_schedule`` (plugin): the real ``schedule`` plugin on a clock
   that runs a minute behind, so a ``ScheduleWakeup`` (clamped to at least
   60 s) fires a few seconds later instead of a minute.
@@ -15,7 +17,8 @@ The conversation script. A root task starts from::
     CLUSTER-ROOT {"id": "r07", "journal": "/x/journal", "effects": 2,
                   "bg": 1.5, "agent": true, "wake": true}
 
-and calls, one call per reply: ``Effect`` ``effects`` times, a background
+and calls, one call per reply: ``Effect`` ``effects`` times, ``Lookup``
+running ``lookup`` seconds (when ``lookup`` > 0), a background
 ``Bash`` that sleeps ``bg`` seconds and then journals ``<id>-bg`` (when
 ``bg`` > 0), an ``Agent`` running ``cluster-child`` (which calls ``Effect``
 once and answers), a ``ScheduleWakeup`` whose prompt is
@@ -84,14 +87,37 @@ class EffectTool:
         return text_output(f"did {token}")
 
 
+class LookupTool:
+    name = "Lookup"
+    description = "Look the token up (takes a while; safe to run again)."
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {"token": {"type": "string"}, "seconds": {"type": "number"}},
+        "required": ["token"],
+    }
+    read_only = True
+    clearable = False
+    retry_safe = True
+
+    def __init__(self, journal: str) -> None:
+        self.journal = journal + ".lookups"
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        token = str(input["token"])
+        journal_line(self.journal, f"{token} {ctx.idempotency_key}")
+        await asyncio.sleep(float(input.get("seconds") or 0))
+        return text_output(f"found {token}")
+
+
 class EffectPlugin(Extension):
     name = "cluster_effect"
 
     def __init__(self, *, journal: str) -> None:
         self.tool = EffectTool(journal)
+        self.lookup = LookupTool(journal)
 
     def tools(self, view: TaskView) -> list[Tool]:
-        return [self.tool]
+        return [self.tool, self.lookup]
 
 
 def fast_schedule(*, fire_after: float = 2.0) -> Extension:
@@ -163,6 +189,9 @@ def root_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
         cid = f"eff-{rid}-{i}"
         if cid not in seen.issued:
             return _call(cid, "Effect", {"token": f"{rid}-e{i}"})
+    lookup = float(spec.get("lookup", 0) or 0)
+    if lookup > 0 and f"lkp-{rid}" not in seen.issued:
+        return _call(f"lkp-{rid}", "Lookup", {"token": f"{rid}-l", "seconds": lookup})
     bg = float(spec.get("bg", 0) or 0)
     bg_id = f"bg-{rid}"
     if bg > 0 and bg_id not in seen.issued:

@@ -62,6 +62,9 @@ class Call:
     parked: dict[str, Any] | None = None
     #: The call as it ran, when an extension rewrote it (``ToolStarted``).
     ran: ToolUse | None = None
+    #: ``ToolStarted`` events of the call: more than one when a crash left
+    #: it unfinished and it ran again (``Tool.retry_safe``).
+    attempts: int = 0
 
 
 @dataclass
@@ -218,6 +221,7 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         for c in state.calls:
             if c.use.id == ev.call.id:
                 c.started = True
+                c.attempts += 1
                 if ev.call != c.use:
                     c.ran = ev.call
     elif isinstance(ev, ToolFinished):

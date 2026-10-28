@@ -21,7 +21,7 @@ from noeta.core.events import (
 from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView, child_task
 from noeta.core.runner import texts
 from noeta.core.store import NewTask, Post
-from noeta.core.tool import Tool, ToolContext, ToolOutput, tool_flag
+from noeta.core.tool import MAX_ATTEMPTS, Tool, ToolContext, ToolOutput, tool_flag
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
 
 if TYPE_CHECKING:
@@ -256,6 +256,41 @@ async def _run_one(run: TaskRun, use: ToolUse, tool: Tool) -> None:
         output = ToolOutput(content=[Text(text=f"{type(exc).__name__}: {exc}")], is_error=True)
         _drop_staged(records, creates)
     await _finish(run, use, output, records, creates)
+
+
+async def recover_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
+    """Calls a crash (or a lost claim) left started and unfinished: each
+    gets the result its tool recovers, or runs again when its tool is
+    ``retry_safe`` (and has not started :data:`MAX_ATTEMPTS` times), or is
+    answered "outcome unknown". They are not gated again: each was allowed
+    as it ran (``Call.ran``)."""
+    tools = {t.name: t for t in run.tools(run.view())}
+    again: list[tuple[ToolUse, Tool]] = []
+    for c in [c for c in run.state.calls if c.use.id in call_ids]:
+        use = c.ran or c.use
+        tool = tools.get(use.name)
+        recover = getattr(tool, "recover", None)
+        if recover is not None:
+            records: list[Event] = []
+            creates: list[NewTask] = []
+            try:
+                output = await recover(use.input, _context(run, use, records, creates))
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # a failing lookup tells nothing
+                log.exception("tool %s recover failed", use.name)
+                output = None
+            if output is not None and output.park is None:
+                await _finish(run, use, output, records, creates)
+                continue
+        if tool is not None and tool_flag(tool, "retry_safe") and c.attempts < MAX_ATTEMPTS:
+            again.append((use, tool))
+            continue
+        await run.append([run.error_result(use.id, texts.INTERRUPTED_CALL_ERROR)])
+    for group in _groups(again):
+        await run.append([ToolStarted(call=u) for u, _ in group])
+        await asyncio.gather(*(_run_one(run, u, t) for u, t in group))
+    return True
 
 
 def _outcome(run: TaskRun, parked: dict[str, Any], call_id: str) -> Any:

@@ -33,6 +33,7 @@ from typing import Any
 
 import pytest
 
+from noeta.core.events import ToolStarted
 from tests.cluster.harness import (
     Cluster,
     Faults,
@@ -77,13 +78,14 @@ def make_specs(rng: random.Random, n: int, *, bg: bool) -> dict[str, Spec]:
     for i in range(n):
         sid = f"r{i:02d}"
         spec = Spec(id=sid, effects=rng.randint(1, 3), agent=rng.random() < 0.5,
-                    wake=rng.random() < 0.5)
+                    wake=rng.random() < 0.5,
+                    lookup=round(rng.uniform(0.3, 1.0), 1) if rng.random() < 0.5 else 0.0)
         if bg and i % 2 == 0:
             spec.bg = round(rng.uniform(1.0, 3.0), 1)
         if bg and i % 4 == 0:
             # a job and nothing else: once the root waits, only the job's
             # end (or its loss) can wake it
-            spec.effects, spec.agent, spec.wake, spec.bg = 1, False, False, 4.0
+            spec.effects, spec.agent, spec.wake, spec.bg, spec.lookup = 1, False, False, 4.0, 0.0
         else:
             spec.pings = rng.choice([0, 0, 1, 2, 3])
         specs[sid] = spec
@@ -132,13 +134,15 @@ async def run_cluster(tmp_path: Path, url: str, seed: int, specs: dict[str, Spec
     print(f"seed={seed} roots={len(specs)} tasks={len(outcome.rows)} kills={faults.kills} "
           f"stops={faults.stops} targeted={faults.targeted} "
           f"interrupted={outcome.interrupted_calls()} lost_jobs={outcome.lost_jobs()} "
+          f"lookups_rerun={sum(s > 1 for s, _t in outcome.lookups().values())} "
           f"journal={len(outcome.journal)} samples={watch.samples}")
     return outcome
 
 
 def assert_invariants(outcome: Outcome) -> None:
     """The invariants no known gap excuses."""
-    problems = outcome.log_violations() + outcome.effect_violations() + outcome.watch.violations
+    problems = (outcome.log_violations() + outcome.effect_violations()
+                + outcome.lookup_violations() + outcome.watch.violations)
     assert not problems, fail(outcome, problems)
 
 
@@ -217,6 +221,41 @@ async def test_chaos_with_background_jobs(tmp_path: Path, pg_url: str) -> None:
     assert_invariants(outcome)
     assert outcome.faults.targeted > 0, fail(outcome, ["no holder was killed; rerun"])
     assert_all_done(outcome)
+
+
+async def test_retry_safe_call_runs_again_after_its_worker_dies(tmp_path: Path,
+                                                                 pg_url: str) -> None:
+    """SIGKILL the worker in the middle of a ``retry_safe`` call: the call
+    runs again elsewhere with the same idempotency key and finishes with its
+    real result, not "outcome unknown"."""
+    cluster = Cluster(tmp_path, pg_url, workers=3, lease=LEASE)
+    await cluster.start()
+    spec = Spec(id="r00", effects=1, lookup=4.0)
+    faults = Faults()
+    try:
+        tid = await cluster.create(spec)
+
+        async def looking() -> bool:
+            row = await cluster.client.get(tid)
+            records = await cluster.client.events(tid)
+            return row.status == "running" and row.owner is not None and any(
+                isinstance(r.event, ToolStarted) and r.event.call.name == "Lookup"
+                for r in records)
+
+        assert await wait_until(looking, 30), "the lookup never started"
+        row = await cluster.client.get(tid)
+        assert cluster.kill_pid(int(str(row.owner).split(":")[1]))
+        faults.kills += 1
+        await wait_until(lambda: root_finished(cluster, tid, spec), 10 * LEASE + 8.0)
+        outcome = await _outcome(cluster, tid, spec, faults)
+        runs = Path(cluster.journal + ".lookups").read_text().splitlines()
+    finally:
+        await cluster.close()
+    assert_invariants(outcome)
+    assert_all_done(outcome)
+    (starts, text), = outcome.lookups().values()
+    assert (starts, text) == (2, "found r00-l"), fail(outcome, [f"{starts} starts: {text!r}"])
+    assert len(runs) == 2 and len({line.split()[1] for line in runs}) == 1, runs
 
 
 # ------------------------------------------------------------------ one gap each

@@ -137,6 +137,7 @@ class ToolSearchTool:
 
     name = TOOL_SEARCH
     read_only = True
+    retry_safe = True
     clearable = False
     description = _SEARCH_DESCRIPTION
     input_schema: dict[str, Any] = {

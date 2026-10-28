@@ -7,7 +7,9 @@ Two rules keep this crash- and race-safe:
   runner last saw, so a runner that lost its claim stops at its next write;
 * ``ToolStarted`` is appended before a tool runs, so a runner that lost its
   claim cannot start new work, and a crash leaves an unfinished call that
-  recovery answers with "outcome unknown" instead of running it again.
+  recovery answers with "outcome unknown" instead of running it again,
+  unless its tool recovers the outcome or is safe to run again
+  (``Tool.recover`` / ``retry_safe``).
 """
 
 from __future__ import annotations
@@ -422,9 +424,9 @@ class TaskRun:
             await self.append([Waiting(on="input", detail=detail, until=due)])
             return False
         if isinstance(action, decide.Interrupted):
-            await self.append([self.error_result(i, texts.INTERRUPTED_CALL_ERROR)
-                               for i in action.call_ids])
-            return True
+            from noeta.core.runner.calls import recover_calls
+
+            return await self._guarded(recover_calls(self, action.call_ids))
         if isinstance(action, decide.MaxTurns):
             return await self.fail_turn(texts.MAX_TURNS,
                                         texts.MAX_TURNS_DETAIL.format(n=action.limit))

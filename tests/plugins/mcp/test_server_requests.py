@@ -28,7 +28,7 @@ from noeta.testing import ScriptedProvider, reply
 
 FAKE = str(Path(__file__).with_name("fake_server.py"))
 TOOLS = json.dumps([{"name": n, "inputSchema": {"type": "object"}}
-                    for n in ("ask", "roots", "changed", "echo")])
+                    for n in ("ask", "roots", "changed", "echo", "meta")])
 
 
 @pytest.fixture
@@ -225,6 +225,16 @@ async def test_a_lost_call_answers_outcome_unknown() -> None:
                       record=lambda *_: None)
     out = await tool.resume({}, ctx, Answer(request_id="c", data={"0": {"other": "x"}}))
     assert out.is_error and "outcome is unknown" in out.content[0].text  # type: ignore[union-attr]
+
+
+async def test_a_call_carries_its_idempotency_key(store: SqliteStore, pool: McpPool) -> None:
+    provider = ScriptedProvider([reply("", ("mcp__fake__meta", {})), reply("done")])
+    agent = Agent(name="a", model="m", extensions=[Mcp([server()], pool=pool)])
+    tid = await Client(store).create("a", "go")
+    await runtime(store, provider, agent).run_until_idle()
+    events = await Client(store).events(tid)
+    call_id = next(r.event.result.call_id for r in events if isinstance(r.event, ToolFinished))
+    assert json.loads(results(events)[0]) == {"noeta/idempotencyKey": f"{tid}:{call_id}"}
 
 
 async def test_roots_answer_the_tasks_workspace(store: SqliteStore, pool: McpPool,

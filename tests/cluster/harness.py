@@ -24,8 +24,9 @@ from typing import Any
 
 from noeta.core import registry
 from noeta.core.client import Client
-from noeta.core.events import Recorded, ToolFinished
+from noeta.core.events import Recorded, ToolFinished, ToolStarted
 from noeta.core.store import TaskRow
+from noeta.core.tool import MAX_ATTEMPTS
 from tests.cluster.invariants import (
     EpochWatch,
     check_journal,
@@ -90,11 +91,12 @@ class Spec:
     agent: bool = False
     wake: bool = False
     pings: int = 0
+    lookup: float = 0.0
 
     def prompt(self, journal: str) -> str:
         return "CLUSTER-ROOT " + json.dumps({
             "id": self.id, "journal": journal, "effects": self.effects, "bg": self.bg,
-            "agent": self.agent, "wake": self.wake})
+            "agent": self.agent, "wake": self.wake, "lookup": self.lookup})
 
 
 @dataclass
@@ -328,6 +330,27 @@ class Outcome:
                 out.append(f"{tid} call {call}: finished as done but journalled "
                            f"{counts[token]} times")
         return out
+
+    def lookups(self) -> dict[str, tuple[int, str]]:
+        """Each ``Lookup`` call (task:call) -> (its starts, its result)."""
+        out = {}
+        for tid, records in self.logs.items():
+            starts: Counter[str] = Counter(r.event.call.id for r in records
+                                           if isinstance(r.event, ToolStarted)
+                                           and r.event.call.name == "Lookup")
+            for r in records:
+                ev = r.event
+                if isinstance(ev, ToolFinished) and ev.result.call_id in starts:
+                    out[f"{tid}:{ev.result.call_id}"] = (starts[ev.result.call_id],
+                                                         ev.result.text)
+        return out
+
+    def lookup_violations(self) -> list[str]:
+        """A retry-safe call a crash interrupted ran again and finished with
+        its real result, unless every attempt it had was cut short."""
+        return [f"{key}: {starts} start(s) ended {text!r}"
+                for key, (starts, text) in sorted(self.lookups().items())
+                if not text.startswith("found ") and starts < MAX_ATTEMPTS]
 
     def interrupted_calls(self) -> int:
         return sum(isinstance(r.event, ToolFinished) and INTERRUPTED in r.event.result.text

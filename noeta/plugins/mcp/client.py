@@ -185,9 +185,12 @@ class McpClient:
         return await collect_pages(self.request, "tools/list", "tools")
 
     async def call_tool(self, name: str, arguments: dict[str, Any], *,
-                        timeout: float | None = None) -> dict[str, Any]:
-        return await self.request("tools/call", {"name": name, "arguments": dict(arguments)},
-                                  timeout=timeout)
+                        timeout: float | None = None,
+                        meta: dict[str, Any] | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {"name": name, "arguments": dict(arguments)}
+        if meta:
+            params["_meta"] = dict(meta)
+        return await self.request("tools/call", params, timeout=timeout)
 
     async def list_prompts(self) -> list[dict[str, Any]]:
         return await collect_pages(self.request, "prompts/list", "prompts")
