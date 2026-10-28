@@ -330,7 +330,9 @@ class Permissions(Extension):
             return replace(st, mode=mode, plan=plan, due=due, consecutive_denials=0)
         if kind == "plan_exit":
             mode = str(d.get("mode") or "default")
-            due = (*st.due, "plan_exited", *(("auto_guidance",) if mode == "auto" else ()))
+            # No auto-mode note again: Claude Code sends only the plan-exit
+            # note (r2 m1).
+            due = (*st.due, "plan_exited")
             return replace(st, mode=mode, due=due)
         if kind == "noted":
             sent = set(d.get("kinds") or ())
