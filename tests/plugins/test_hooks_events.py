@@ -26,6 +26,7 @@ from noeta.plugins.hooks import HookCommand, HookResult, Hooks
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.subtasks import SubagentSpec, Subtasks
 from noeta.testing import ScriptedProvider, reply
+from noeta.toolkit.signals import RESUMED_SIGNAL
 
 Answer = HookResult | Callable[[dict[str, Any]], HookResult]
 
@@ -360,16 +361,24 @@ async def test_permission_denied_can_allow_a_retry(tmp_path: Path) -> None:
 
 
 async def test_session_start_startup_and_resume(tmp_path: Path) -> None:
-    s = await Setup(tmp_path, {"SessionStart": hook("start", "startup|resume")},
-                    [reply("a"), reply("b"), reply("c")],
+    config = {"SessionStart": hook("start", "startup|resume")}
+    s = await Setup(tmp_path, config, [reply("a"), reply("b"), reply("c"), reply("d")],
                     answers={"start": lambda p: ok(f"source was {p['source']}")}).start()
     assert s.system_texts(0) == ["SessionStart hook (startup): source was startup"]
     await s.send("again")  # the same process: no new SessionStart
     assert [p["source"] for p in s.runner.payloads("start")] == ["startup"]
-    s.hooks._seen.clear()  # as if this process had restarted
-    await s.send("after a restart")
+    # Another worker (or a restart: a fresh plugin) picking the task up is
+    # no resume; the request is what the log says.
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Hooks(hooks=config, runner=s.runner), FileTools()])
+    await s.send("on another worker")
+    assert [p["source"] for p in s.runner.payloads("start")] == ["startup"]
+    # A front end reopening the task is.
+    await s.client.signal(s.tid, RESUMED_SIGNAL)
+    await s.runtime().run_until_idle()
+    await s.send("after a resume")
     assert [p["source"] for p in s.runner.payloads("start")] == ["startup", "resume"]
-    assert s.provider.requests[2].messages[-2].text == \
+    assert s.provider.requests[3].messages[-2].text == \
         "SessionStart hook (resume): source was resume"
 
 

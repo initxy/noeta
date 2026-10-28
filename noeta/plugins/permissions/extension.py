@@ -15,7 +15,6 @@ import re
 import shlex
 import subprocess
 import sys
-from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -56,6 +55,7 @@ from noeta.toolkit.paths import plans_dir as default_plans_dir
 from noeta.toolkit.permission_modes import MODE_SIGNAL as MODE_SIGNAL
 from noeta.toolkit.sandbox import leaves_sandbox, runs_sandboxed, sandbox_of
 from noeta.toolkit.shell import parse_argv
+from noeta.toolkit.signals import RESUMED_SIGNAL
 
 log = logging.getLogger("noeta.permissions")
 
@@ -133,6 +133,11 @@ class PermState:
     #: After a compaction, the auto-mode note waits for a prompt or a tool
     #: result newer than this seq (Claude Code's).
     guidance_after: int = 0
+    #: The server-side check was offered (on the first main auto-mode
+    #: request of the task, and again after a front end resumed it).
+    probed: bool = False
+    #: The task was compacted since it started or was last resumed.
+    compacted: bool = False
 
 
 def inherited_rules(state: Any) -> list[str]:
@@ -301,9 +306,6 @@ class Permissions(Extension):
         self._exit_plan = pl.ExitPlanModeTool()
         self._background: set[asyncio.Future[Any]] = set()
         self._template: str | None = None
-        #: Tasks this process sent the safeguards offer for, and compacted.
-        self._probed: OrderedDict[str, None] = OrderedDict()
-        self._compacted: OrderedDict[str, None] = OrderedDict()
 
     # ------------------------------------------------------------ state
 
@@ -352,8 +354,12 @@ class Permissions(Extension):
         if kind == "compacted":
             extra: tuple[str, ...] = ("auto_guidance",) if d.get("auto") else ()
             extra += ("plan_active",) if d.get("plan") else ()
-            return replace(st, due=(*st.due, *extra),
+            return replace(st, due=(*st.due, *extra), compacted=True,
                            guidance_after=int(d.get("seq") or st.guidance_after))
+        if kind == "probed":
+            return replace(st, probed=True)
+        if kind == "resumed":
+            return replace(st, probed=False, compacted=False)
         if kind == "step":
             return replace(st, steps=st.steps + 1)
         if kind == "tool_call":
@@ -888,6 +894,8 @@ class Permissions(Extension):
                 elif isinstance(body, External) and body.name == MODE_SIGNAL:
                     data = body.data if isinstance(body.data, dict) else {}
                     self._switch(view, data.get("mode"), recorded.seq)
+                elif isinstance(body, External) and body.name == RESUMED_SIGNAL:
+                    view.record(NAME, "resumed")
                 elif isinstance(body, External) and body.name == PLAN_NAME_SIGNAL:
                     name = (body.data or {}).get("name") if isinstance(body.data, dict) else None
                     if isinstance(name, str) and name:
@@ -897,8 +905,6 @@ class Permissions(Extension):
                         body.message.text.startswith(_PLAN_COMMAND_HEAD):
                     self._switch(view, "plan", recorded.seq)
         elif isinstance(ev, Compacted):
-            self._compacted[view.task_id] = None
-            _trim(self._compacted)
             mode = self.mode_of(view)
             view.record(NAME, "compacted", {"auto": mode == "auto", "plan": mode == "plan",
                                             "seq": recorded.seq})
@@ -1013,20 +1019,21 @@ class Permissions(Extension):
         plan = self._state(view).plan or {}
         if mode != "auto" and not (mode == "plan" and plan.get("pre_mode") == "auto"):
             return request
-        # Per process, as Claude Code per session: the first main request
-        # offers the server-side check (the API answers an API-key session
-        # that it does not run it), and its beta rides along until the first
-        # compaction.
+        # As Claude Code per process: the first main request offers the
+        # server-side check (the API answers an API-key session that it does
+        # not run it), and its beta rides along until the first compaction.
+        # A front end resuming the task is the new process; a worker picking
+        # it up is not (both facts are recorded: every worker sends the same
+        # bytes).
         main = view.state.parent_id is None
-        task = view.task_id
-        wanted = MAIN_AUTO_BETAS if main and task not in self._compacted else AUTO_BETAS
+        st = self._state(view)
+        wanted = MAIN_AUTO_BETAS if main and not st.compacted else AUTO_BETAS
         betas = [*request.betas, *(b for b in wanted if b not in request.betas)]
         fields = dict(request.vendor_fields)
-        if main and task not in self._probed:
+        if main and not st.probed:
             fields["safeguards"] = [{"type": "dangerous_tool_use",
                                      "classifier_context": self._context(view)}]
-            self._probed[task] = None
-            _trim(self._probed)
+            view.record(NAME, "probed")
         return msgspec.structs.replace(request, betas=betas, vendor_fields=fields)
 
     def _offered(self, name: str) -> bool:
@@ -1114,11 +1121,6 @@ class Permissions(Extension):
 
 
 # ---------------------------------------------------------------- helpers
-
-
-def _trim(d: OrderedDict[str, None]) -> None:
-    while len(d) > 4096:
-        d.popitem(last=False)
 
 
 def _keep(d: dict[str, Any]) -> dict[str, Any]:

@@ -49,6 +49,7 @@ from noeta.host.questions import next_question, typed_answer
 from noeta.host.rewind import rewind, rewind_points
 from noeta.host.usage import context_breakdown, context_text, cost_text, tree_usage
 from noeta.toolkit.permission_modes import MODE_NAMES, MODE_SIGNAL, PERMISSION_MODES, current_mode
+from noeta.toolkit.signals import RESUMED_SIGNAL
 
 log = logging.getLogger("noeta.host.acp")
 
@@ -343,6 +344,7 @@ class NoetaAcpAgent:
 
     async def load_session(self, cwd: str, session_id: str, **kw: Any) -> None:
         await self._adopt(session_id)
+        await self.app.client.signal(session_id, RESUMED_SIGNAL)
         self._cwd[session_id] = cwd
         for rec in await self.app.client.events(session_id):
             for update in self._replay(rec):

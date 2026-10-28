@@ -69,6 +69,7 @@ from noeta.host.usage import (
     tree_usage,
 )
 from noeta.toolkit.permission_modes import MODE_ALIASES, MODE_SIGNAL, PERMISSION_MODES
+from noeta.toolkit.signals import RESUMED_SIGNAL
 
 __all__ = ["HeadlessOptions", "StreamJson", "drive", "find_latest_task", "noeta_version"]
 
@@ -259,6 +260,7 @@ class StreamJson:
         if o.resume and not o.fork:
             await self.app.adopt(o.resume)
             self.task_id = o.resume
+            await self.client.signal(self.task_id, RESUMED_SIGNAL)
             changes = {k: config[k] for k in ("model", "max_turns") if k in config}
             if changes:
                 await self.client.signal(self.task_id, CONFIG_SIGNAL, changes)

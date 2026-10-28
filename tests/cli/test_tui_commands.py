@@ -20,12 +20,14 @@ from noeta.cli import mentions
 from noeta.cli.tui.app import NoetaApp
 from noeta.cli.tui.widgets import Notice, PromptInput
 from noeta.core.agent import Agent
+from noeta.core.events import External
 from noeta.core.extension import Command, CommandContext, Extension
 from noeta.core.types import Image, Text
 from noeta.host.local import LocalApp
 from noeta.plugins.checkpoints import Checkpoints
 from noeta.plugins.fs import FileTools
 from noeta.testing import ScriptedProvider, reply
+from noeta.toolkit.signals import RESUMED_SIGNAL
 
 MODEL = "claude-opus-5-5"
 
@@ -144,6 +146,9 @@ async def test_mentions_images_clear_and_resume(tmp_path: Path) -> None:
         await settle(pilot, lambda: "/resume <n>" in shown(app))
         await type_line(pilot, f"/resume {app.listed.index(first) + 1}")
         await settle(pilot, lambda: app.task_id == first)
+        # The reopened task is told it was resumed (its plugins act on it).
+        posted = await app.local.store.inbox(first)
+        assert [p.body.name for p in posted if isinstance(p.body, External)] == [RESUMED_SIGNAL]
 
 
 def test_mentions_parse_quoted_paths_and_skip_addresses(tmp_path: Path) -> None:

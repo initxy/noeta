@@ -21,6 +21,8 @@ from noeta.core.events import (
     Cancel,
     Compacted,
     ExtensionRecorded,
+    External,
+    InputTaken,
     ModelReplied,
     Recorded,
     Say,
@@ -46,6 +48,7 @@ from noeta.plugins.hooks.runners import (
     run_prompt,
 )
 from noeta.toolkit.permission_rules import RuleContext, match
+from noeta.toolkit.signals import RESUMED_SIGNAL
 
 log = logging.getLogger("noeta.hooks")
 
@@ -176,9 +179,6 @@ class Hooks(Extension):
         self._decisions: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
         #: ``once`` hooks run in a step whose records are not folded yet.
         self._ran_once: OrderedDict[tuple[str, str], bool] = OrderedDict()
-        #: Root tasks this process has started (a later pick-up elsewhere,
-        #: or after a restart, is a resume).
-        self._seen: OrderedDict[str, bool] = OrderedDict()
 
     # ------------------------------------------------------------ state
 
@@ -345,9 +345,11 @@ class Hooks(Extension):
     # ------------------------------------------------------------ start
 
     async def on_start(self, view: TaskView) -> None:
-        """SessionStart (``startup``, or ``resume`` on a pick-up this
-        process did not start) for a top-level task; SubagentStart the
-        first time a sub-agent starts. What they add reaches the model."""
+        """SessionStart (``startup``) the first time a top-level task
+        starts; SubagentStart the first time a sub-agent starts. What they
+        add reaches the model. A pick-up by another worker or after a
+        restart is not a resume: that is a front end's
+        :data:`RESUMED_SIGNAL` (:meth:`on_event`)."""
         st = self._state(view)
         if view.state.parent_id is not None:
             if st.started or "SubagentStart" not in self.matchers:
@@ -359,15 +361,19 @@ class Hooks(Extension):
                     view.notify(f"SubagentStart hook: {r.block}")
             self._context(view, "context", "SubagentStart hook", [r.context for r in reads])
             return
-        fresh = view.task_id not in self._seen
-        _remember(self._seen, view.task_id, True)
-        if "SessionStart" not in self.matchers or (st.started and not fresh):
+        if "SessionStart" not in self.matchers or st.started:
             return
-        source = "resume" if st.started else "startup"
-        if not st.started:
-            view.record(self.name, "started", {"event": "SessionStart"})
-        reads = await self._run("SessionStart", view, {"source": source, "model": view.model})
-        self._start_context(view, source, reads)
+        view.record(self.name, "started", {"event": "SessionStart"})
+        reads = await self._run("SessionStart", view, {"source": "startup", "model": view.model})
+        self._start_context(view, "startup", reads)
+
+    async def _resumed(self, view: TaskView) -> None:
+        """SessionStart (``resume``): a front end reopened a started task."""
+        if view.state.parent_id is not None or "SessionStart" not in self.matchers \
+                or not self._state(view).started:
+            return
+        reads = await self._run("SessionStart", view, {"source": "resume", "model": view.model})
+        self._start_context(view, "resume", reads)
 
     def _start_context(self, view: TaskView, source: str, reads: Sequence[_Read]) -> None:
         for r in reads:
@@ -587,6 +593,10 @@ class Hooks(Extension):
                 await self._run("SessionEnd", view, {"reason": "other"}, record=False)
         elif isinstance(event, ModelReplied):
             await self._model_stopped(view, event)
+        elif isinstance(event, InputTaken) and any(
+                isinstance(i.body, External) and i.body.name == RESUMED_SIGNAL
+                for i in event.items):
+            await self._resumed(view)
 
     def _notify(self, view: TaskView, event: Waiting) -> None:
         """Notification, in the background (side effects only)."""

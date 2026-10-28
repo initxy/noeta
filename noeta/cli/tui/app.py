@@ -58,6 +58,7 @@ from noeta.host.pending import (
 )
 from noeta.host.questions import next_question, typed_answer
 from noeta.toolkit.permission_modes import MODE_SIGNAL, current_mode, next_mode
+from noeta.toolkit.signals import RESUMED_SIGNAL
 
 log = logging.getLogger("noeta.cli.tui")
 
@@ -178,9 +179,11 @@ class NoetaApp(App[None]):
         if self.permission_mode:
             config["permission_mode"] = self.permission_mode
         tid = await self.local.client.create(self.agent, None, config=config)
-        await self.open_task(tid)
+        await self.open_task(tid, resumed=False)
 
-    async def open_task(self, task_id: str) -> None:
+    async def open_task(self, task_id: str, *, resumed: bool = True) -> None:
+        """Show and follow ``task_id``; ``resumed``: an existing task the
+        person reopens (its plugins are told)."""
         if self._follower is not None:
             self._follower.cancel()
         refused = ""
@@ -188,6 +191,8 @@ class NoetaApp(App[None]):
             await self.local.adopt(task_id)
         except UnknownAgent as exc:
             refused = str(exc)
+        if resumed and not refused:
+            await self.local.client.signal(task_id, RESUMED_SIGNAL)
         self.read_only = bool(refused)
         self.task_id = task_id
         self.calls.clear()

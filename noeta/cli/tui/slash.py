@@ -203,7 +203,7 @@ async def _rewind(app: NoetaApp, arg: str) -> None:
     done = await rewind(app.local.client, app.task_id, point,
                         conversation=what != "code", files=what != "conversation")
     if done.task_id != app.task_id:
-        await app.open_task(done.task_id)
+        await app.open_task(done.task_id, resumed=False)
         app.prefill(done.prompt)
     restored = f"; {len(done.files)} file(s) restored" if done.files else ""
     await app.say_notice(f"rewound to before prompt {n}{restored}")
