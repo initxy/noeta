@@ -140,6 +140,62 @@ async def test_protected_paths_ask_even_when_edits_are_accepted(
     assert [r["file_path"] for r in write.runs] == [".claude/skills/x/SKILL.md"]
 
 
+@pytest.mark.parametrize("mode", ["acceptEdits", "bypassPermissions"])
+async def test_a_symlink_into_a_protected_directory_still_asks(
+        store: SqliteStore, tmp_path: Path, mode: str) -> None:
+    """The tools write where a link points: a link into ``.git`` or
+    ``.noeta`` is judged by its target."""
+    (tmp_path / ".git" / "hooks").mkdir(parents=True)
+    (tmp_path / ".noeta").mkdir()
+    (tmp_path / "hooks").symlink_to(tmp_path / ".git" / "hooks")
+    (tmp_path / "conf").symlink_to(tmp_path / ".noeta")
+    write, bash = Fake("Write"), Fake("Bash")
+    provider = ScriptedProvider([reply(
+        "", ("Write", {"file_path": "hooks/pre-commit"}),
+        ("Write", {"file_path": "conf/settings.local.json"}),
+        ("Bash", {"command": "cp evil hooks/post-checkout"}),
+        ("Write", {"file_path": "plain.txt"}))])
+    client, tid, _ = await start(store, provider, Permissions(mode=mode), [write, bash],
+                                 cwd=tmp_path)
+    details = asked(await events(client, tid))
+    # Bypass mode asks only for the file tools' protected paths.
+    assert len(details) == (3 if mode == "acceptEdits" else 2)
+    assert [r["file_path"] for r in write.runs] == ["plain.txt"]
+    assert len(bash.runs) == (0 if mode == "acceptEdits" else 1)
+
+
+async def test_a_directory_change_in_the_command_moves_its_paths(store: SqliteStore,
+                                                                 tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply(
+        "", ("Bash", {"command": "cd .git && sed -i s/a/b/ config"}),
+        ("Bash", {"command": "cd src; rm ../.gitmodules"}),
+        ("Bash", {"command": "cd src && touch new.py"}))])
+    client, tid, _ = await start(store, provider, Permissions(mode="acceptEdits"), [bash],
+                                 cwd=tmp_path)
+    assert len(asked(await events(client, tid))) == 2
+    assert [r["command"] for r in bash.runs] == ["cd src && touch new.py"]
+
+
+async def test_the_shells_directory_resolves_relative_paths(tmp_path: Path) -> None:
+    """A ``cd .git`` in one call moves where the next call's paths land."""
+    from types import SimpleNamespace
+
+    from noeta.plugins.permissions import scope as sc
+
+    perms = Permissions(mode="acceptEdits")
+    scope = sc.Scope(dirs=(str(tmp_path),), home="/home/u")
+    shell = SimpleNamespace(cwd=str(tmp_path / ".git"))
+    view: Any = SimpleNamespace(ext_state=lambda name: shell if name == "shell" else None)
+    here = perms._shell_scope(view, scope)
+    assert here.cwd == str(tmp_path / ".git")
+    [part] = sc.shell_parts("sed -i s/a/b/ config", here)
+    assert part.writes == (str(tmp_path / ".git" / "config"),)
+    shell.cwd = "/etc"  # outside: the working directory stands
+    assert perms._shell_scope(view, scope).cwd == str(tmp_path)
+
+
 async def test_accept_edits_runs_file_commands_inside(store: SqliteStore,
                                                       tmp_path: Path) -> None:
     bash = Fake("Bash")

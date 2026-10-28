@@ -55,6 +55,8 @@ from noeta.toolkit.shell import rule_spec_from_command, rule_spec_text
 log = logging.getLogger("noeta.permissions")
 
 NAME = "permissions"
+#: The plugin whose ``cwd`` record says where the next shell command starts.
+SHELL_PLUGIN = "shell"
 
 #: The approval callback: ``(tool_name, input) -> bool`` (or awaitable).
 CanUseTool = Callable[[str, dict[str, Any]], "bool | Awaitable[bool]"]
@@ -454,7 +456,7 @@ class Permissions(Extension):
         if hook is not None and hook[0] == "require_approval":
             return Ask(prompt=hook[1], detail={"by": NAME, "tool": name}, firm=True)
 
-        decision = self.decide(view, call)
+        decision = await self.decide(view, call)
         if decision.kind == "allow":
             return None
         if decision.kind == "deny":
@@ -468,7 +470,7 @@ class Permissions(Extension):
             "always": rules or None, "always_label": decision.always_label,
             "choices": _choices(decision), "classify": decision.classify})
 
-    def decide(self, view: TaskView, call: ToolUse) -> _Decision:
+    async def decide(self, view: TaskView, call: ToolUse) -> _Decision:
         """Claude Code's order: deny rules, ask rules, then what the tool
         touches and the mode."""
         name, args = call.name, call.input
@@ -486,7 +488,7 @@ class Permissions(Extension):
         allow_rules = self._rules(view)
         if mode == "auto":
             allow_rules = tuple(x for x in allow_rules if not p.bypasses_classifier(x))
-        found = self._needs(view, call, mode, scope, ctx, allow_rules)
+        found = await self._needs(view, call, mode, scope, ctx, allow_rules)
         return self._in_mode(mode, found, name)
 
     def _in_mode(self, mode: str, d: _Decision, name: str) -> _Decision:
@@ -501,8 +503,8 @@ class Permissions(Extension):
             return replace(d, classify=True)
         return d
 
-    def _needs(self, view: TaskView, call: ToolUse, mode: str, scope: sc.Scope,
-               ctx: r.RuleContext, allow_rules: Sequence[r.Rule]) -> _Decision:
+    async def _needs(self, view: TaskView, call: ToolUse, mode: str, scope: sc.Scope,
+                     ctx: r.RuleContext, allow_rules: Sequence[r.Rule]) -> _Decision:
         name, args = call.name, call.input
         if name == pl.EXIT_PLAN_MODE:
             return _Decision("allow")
@@ -525,7 +527,8 @@ class Permissions(Extension):
             if not scope.contains(target) and not self._in_plans(target):
                 return _Decision("deny", w.OUTSIDE_WRITE.format(
                     name=name, dirs=", ".join(scope.dirs), path=target))
-            if sc.is_protected(target):
+            if sc.is_protected(target) or sc.is_protected(await self._real(view, target)):
+                # The tools write where a symlink points: judge that too.
                 return _Decision("ask", w.ASK_PROTECTED.format(name=name, path=target),
                                  why="protected")
             if mode == "plan":
@@ -536,7 +539,7 @@ class Permissions(Extension):
             return _Decision("ask", verb.format(name=name, path=target), why="edit",
                              mode_choice="acceptEdits")
         if name in r.SHELL_TOOLS:
-            return self._shell(view, args, mode, scope, ctx, allow_rules)
+            return await self._shell(view, args, mode, scope, ctx, allow_rules)
         if name == p.WEBFETCH_TOOL:
             if allowed:
                 return _Decision("allow")
@@ -558,9 +561,9 @@ class Permissions(Extension):
                          always_label=w.CHOICE_ALWAYS_RULE.format(rules=name),
                          mode_choice="auto")
 
-    def _shell(self, view: TaskView, args: Mapping[str, Any], mode: str,
-               scope: sc.Scope, ctx: r.RuleContext,
-               allow_rules: Sequence[r.Rule]) -> _Decision:
+    async def _shell(self, view: TaskView, args: Mapping[str, Any], mode: str,
+                     scope: sc.Scope, ctx: r.RuleContext,
+                     allow_rules: Sequence[r.Rule]) -> _Decision:
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
             return _Decision("ask", w.ASK_COMMAND, why="command")
@@ -575,35 +578,64 @@ class Permissions(Extension):
         if (sandbox is not None and sandbox.settings.auto_allow_bash and mode != "plan"
                 and runs_sandboxed(sandbox, command, disable)):
             return _Decision("allow")
-        if sc.read_only(command, scope):
+        here = self._shell_scope(view, scope)
+        if sc.read_only(command, here):
             return _Decision("allow")
         bash_rules = [x for x in allow_rules if x.tool == "Bash" and x.content is not None]
         if any(x.tool == "Bash" and x.content is None for x in allow_rules):
             return _Decision("allow")
         edit_rules = [x for x in allow_rules if x.tool == "Edit" and x.content is not None]
+        real_scope = await self._real_scope(view, scope)
 
-        def edit_allowed(path: str) -> bool:
+        async def writable(path: str) -> bool:
+            real = await self._real(view, path)
+            if path in scope.dirs or sc.is_protected(path) or sc.is_protected(real):
+                return False
             if mode in ("acceptEdits", "bypassPermissions"):
-                return scope.contains(path)
-            return any(r.path_pattern_matches(x.content or "", path, ctx) for x in edit_rules)
+                return scope.contains(path) and real_scope.contains(real)
+            return any(r.path_pattern_matches(x.content or "", path, ctx)
+                       and r.path_pattern_matches(x.content or "", real, ctx)
+                       for x in edit_rules)
 
-        open_parts: list[str] = []
-        for part in sc.shell_parts(command):
-            if sc.read_only_part(part, scope) or any(
-                    r.shell_rule_matches(x.content or "", part, every=True) for x in bash_rules):
+        open_parts: list[sc.Part] = []
+        for part in sc.shell_parts(command, here):
+            if part.read_only or any(r.shell_rule_matches(x.content or "", part.text, every=True)
+                                     for x in bash_rules):
                 continue
-            paths = sc.file_command_paths(part, scope)
-            if paths is not None and all(edit_allowed(x) and x not in scope.dirs
-                                         and not sc.is_protected(x) for x in paths):
+            if part.writes is not None and all([await writable(x) for x in part.writes]):
                 continue
             open_parts.append(part)
         if not open_parts:
             return _Decision("allow")
         if mode == "plan":
             return _Decision("ask", w.ASK_PLAN.format(name="Bash"), why="plan")
-        always, label = _shell_always(open_parts, scope)
+        always, label = _shell_always(open_parts, here)
         return _Decision("ask", w.ASK_COMMAND, why="command", always=always,
                          always_label=label, mode_choice="auto")
+
+    def _shell_scope(self, view: TaskView, scope: sc.Scope) -> sc.Scope:
+        """``scope`` at the directory the shell's next command starts in
+        (the shell plugin's ``cwd`` record)."""
+        cwd = getattr(view.ext_state(SHELL_PLUGIN), "cwd", None)
+        if isinstance(cwd, str) and cwd and posixpath.isabs(cwd):
+            cwd = posixpath.normpath(cwd)
+            if scope.contains(cwd):
+                return scope.at(cwd)
+        return scope
+
+    async def _real(self, view: TaskView, path: str) -> str:
+        """``path`` with its symlinks resolved as the task's env sees them
+        (a missing tail kept as named)."""
+        try:
+            if view.env is not None:
+                return posixpath.normpath(await view.env.realpath(path))
+            return await asyncio.to_thread(os.path.realpath, path)
+        except Exception:  # noqa: BLE001 — unresolvable: judged as written
+            return path
+
+    async def _real_scope(self, view: TaskView, scope: sc.Scope) -> sc.Scope:
+        dirs = [await self._real(view, d) for d in scope.dirs]
+        return sc.Scope(dirs=tuple(dict.fromkeys(dirs)), home=scope.home)
 
     def _in_plans(self, path: str) -> bool:
         base = posixpath.normpath(self.plans_dir)
@@ -1038,23 +1070,23 @@ def _platform() -> str:
     return {"darwin": "macos", "win32": "windows"}.get(sys.platform, sys.platform)
 
 
-def _shell_always(parts: Sequence[str], scope: sc.Scope) -> tuple[tuple[str, ...], str | None]:
+def _shell_always(parts: Sequence[sc.Part],
+                  scope: sc.Scope) -> tuple[tuple[str, ...], str | None]:
     """The rules an "always" answer to these subcommands remembers, and how
     the card says it: a file command's directory, or each command's rule."""
     dirs: list[str] = []
     for part in parts:
-        paths = sc.file_command_paths(part, scope)
-        if paths is None or not all(scope.contains(x) for x in paths):
+        if part.writes is None or not all(scope.contains(x) for x in part.writes):
             dirs = []
             break
-        dirs += [posixpath.dirname(x) if x not in scope.dirs else x for x in paths]
+        dirs += [posixpath.dirname(x) if x not in scope.dirs else x for x in part.writes]
     if dirs and len(set(dirs)) == 1:
         target = dirs[0]
         # ``//`` anchors the pattern at the filesystem root.
         return (r.format_rule("Edit", f"/{target}/**"),), w.CHOICE_ALWAYS_DIR.format(dir=target)
     rules: list[str] = []
     for part in parts:
-        spec = rule_spec_from_command(part)
+        spec = rule_spec_from_command(part.text)
         if spec is None:
             return (), None
         rules.append(r.format_rule("Bash", spec["rule"]))

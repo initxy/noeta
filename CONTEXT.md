@@ -42,7 +42,8 @@ the ways in: HTTP with `RemoteClient`, ACP) > `noeta/toolkit` (code plugins shar
 (`lint-imports`). One plugin reaches another only through the kernel: a tool by name
 (`TaskView.find_tool`), inherited config (`Extension.inherit`), runnable agents
 (`TaskView.agents`), or a record another plugin documents as read by others (the memory
-plugin's `dir`, which the instructions plugin reads to show `MEMORY.md`). Front ends import no plugin. The SDK is everything but `noeta/cli`.
+plugin's `dir`, which the instructions plugin reads to show `MEMORY.md`; the shell plugin's
+`cwd`, which the permissions plugin judges commands from). Front ends import no plugin. The SDK is everything but `noeta/cli`.
 
 ## Ways in
 
