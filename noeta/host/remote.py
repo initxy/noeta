@@ -129,6 +129,11 @@ class RemoteClient:
                     raise NoetaError(f"the watch of {task_id} kept closing without an end")
             await asyncio.sleep(min(0.2 * 2 ** (failures - 1), 5.0))
 
+    async def context(self, task_id: str) -> dict[str, Any]:
+        """What fills the task's next request (``GET /tasks/{id}/context``)."""
+        got: dict[str, Any] = await self._call("GET", f"/tasks/{task_id}/context")
+        return got
+
     async def wait(self, task_id: str, *, timeout: float | None = None) -> TaskRow:
         async def settled() -> TaskRow:
             while True:

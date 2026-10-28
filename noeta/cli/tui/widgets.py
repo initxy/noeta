@@ -165,10 +165,33 @@ class QuestionCard(Vertical):
 class PromptInput(TextArea):
     """Enter sends; ctrl+j adds a line."""
 
-    def __init__(self, on_submit: Callable[[str], Awaitable[None]]) -> None:
+    def __init__(self, on_submit: Callable[[str], Awaitable[None]],
+                 on_image: Callable[[Any, str], Awaitable[None]] | None = None) -> None:
         super().__init__(id="prompt", soft_wrap=True, compact=True,
-                         placeholder="Message noeta — / for commands, Esc to stop")
+                         placeholder="Message noeta — / for commands, @ for files, Esc to stop")
         self.on_submit_cb = on_submit
+        self.on_image = on_image
+
+    async def _on_paste(self, event: Any) -> None:
+        """A pasted path to an image file (a file dropped on the terminal)
+        attaches that image instead of its path."""
+        from pathlib import Path
+
+        from noeta.cli.mentions import image_file
+
+        raw = event.text.strip().strip("'\"")
+        if self.on_image is not None and raw and "\n" not in raw:
+            path = Path(raw).expanduser()
+            try:
+                image = image_file(path) if path.is_absolute() else None
+            except OSError:
+                image = None
+            if image is not None:
+                event.prevent_default()
+                event.stop()
+                await self.on_image(image, path.name)
+                return
+        await super()._on_paste(event)
 
     async def _on_key(self, event: Any) -> None:
         if event.key == "enter":
