@@ -244,3 +244,13 @@ async def test_a_sub_agents_job_notifies_the_root_after_it_ended(store: SqliteSt
     notice = provider.requests[-1].messages[-1]
     assert notice.text.startswith("<task-notification>")
     assert 'Background command "sleep 0.3; echo late" completed' in notice.text
+
+
+async def test_a_release_after_shutdown_does_not_touch_the_store(
+        store: SqliteStore, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    rt, _ext = _setup(store, ScriptedProvider([]), tmp_path)
+    release = await rt.hold("root")
+    await rt._drop_holds()  # the serve loop's way out
+    await store.close()
+    await release()  # a job ending after the store closed
+    assert "unhold failed" not in caplog.text

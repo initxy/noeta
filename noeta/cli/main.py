@@ -72,7 +72,8 @@ def _plugins(cwd: str) -> None:
 
 
 def _settings(args: argparse.Namespace) -> Settings:
-    s = load_settings(model=args.model, provider=args.provider, base_url=args.base_url,
+    s = load_settings(cwd=os.path.abspath(args.cwd or os.getcwd()),
+                      model=args.model, provider=args.provider, base_url=args.base_url,
                       store=args.store, effort=args.effort)
     if not s.model:
         sys.exit("noeta: no model configured (--model or NOETA_MODEL)")
@@ -205,7 +206,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "trust":
         from noeta.cli.config import trust_project
         print(f"trusted {trust_project(cwd)}: its plugins, agent files, prompt overrides "
-              "and skills load from now on")
+              "skills and Claude Code settings load from now on")
         return
     if args.command == "plugins":
         _plugins(cwd)

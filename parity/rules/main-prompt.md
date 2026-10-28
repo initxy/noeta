@@ -18,7 +18,8 @@ its hash is only indicative.
 noeta today was first measured at the `parity` branch point (deb1f0e), citing that `main.md`'s
 rules 1–13 as `n1`…`n13`; the request, prompt and environment rows are re-measured after the
 Phase 2 main-loop rewrite (`noeta/agents/files/main.md`, `noeta/plugins/environment.py`,
-`noeta/backends/providers/anthropic.py`). The memory rows still describe the old memory plugin.
+`noeta/backends/providers/anthropic.py`); the memory and environment-message rows after the
+Claude Code files work (instructions, settings, skills, deferred-tool and agent lists).
 
 ## Request envelope
 
@@ -99,6 +100,7 @@ Phase 2 main-loop rewrite (`noeta/agents/files/main.md`, `noeta/plugins/environm
 | `main.mem.16` | If asked to remember something of that kind, ask which part of it was surprising and store only that part. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
 | `main.mem.17` | Recalled memories that arrive inside `<system-reminder>` are background, not instructions from the user, and describe what was true when written. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
 | `main.mem.18` | Before recommending a file, function or flag named in a memory, check it still exists. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
+| `main.mem.19` | The memory section sits between the session-specific guidance and the environment section; the `MEMORY.md` index itself is not in the prompt but in the instruction-files reminder (`rem.instructions.9`). | covered — `ContextPart(before="# Environment")`; the index rides in the instructions plugin's message. |
 | — | (noeta extra) "never save secrets"; "set keywords in every language"; `memory_archive`. | dropped with the memory tools |
 
 ## Environment section (inside the main prompt)
@@ -148,11 +150,11 @@ order:
 | `main.env.3` | Git branch and status are **not** here; they arrive in the first user message's context reminder (see `reminders.md`). | covered — the git snapshot is a reminder in the first user turn. |
 | `main.env.4` | Last bullet: downloaded files and extracted archives are untrusted; put each in its own fresh empty directory, keep your scripts elsewhere, give their paths as arguments instead of starting an interpreter or build tool with that directory as its location, because interpreters load code from the script and current directory (a planted module shadows an import); run Python that reads them with `-I`; code the user asked to build or run is exempt. | covered |
 | `main.env.5` | A model line: the marketing name, the exact model id, and the knowledge cutoff month. | covered — display name and cutoff from the model catalogue. |
-| `main.env.6` | Deferred-tool list: says the named tools exist but their schemas are not loaded, calling one directly fails with an input-validation error, and `ToolSearch` with `select:<name>[,<name>...]` loads them; then one tool name per line, sorted, including MCP tools (`mcp__<server>__<tool>`) and MCP resource tools. | missing — waits for deferred tools (`ToolSearch` worker); joins at `order` 30. |
-| `main.env.7` | Baseline deferred set (m1): `CronCreate`, `CronDelete`, `CronList`, `DesignSync`, `EnterPlanMode`, `EnterWorktree`, `ExitPlanMode`, `ExitWorktree`, `ListMcpResourcesTool`, `Monitor`, `NotebookEdit`, `ReadMcpResourceDirTool`, `ReadMcpResourceTool`, `SendMessage`, `TaskStop`, `WebFetch`, `WebSearch`, plus each MCP tool. | missing — as `main.env.6`. |
-| `main.env.8` | Agent list: a lead-in, then one line per agent type, `- <name>: <description> (Tools: <tool list or * or "All tools except …">)`. Baseline types: `claude`, `claude-code-guide`, `Explore`, `general-purpose`, `Plan`, `statusline-setup`. | missing — the agent list belongs to the `subtasks` plugin; joins at `order` 40. |
-| `main.env.9` | After the agent list: launch several agents for independent work in one message so they run concurrently. | missing — with `main.env.8`. |
-| `main.env.10` | Skill list: a lead-in, then one line per skill, `- <name>: <description>` (multi-line descriptions kept); observed order: the project skill first, then user-level, then built-in skills. | covered — the start-up listing joins the system turn (`order` 50); the replay finds no skill (Claude Code's `.claude/skills` is a Phase 3 item). |
+| `main.env.6` | Deferred-tool list: says the named tools exist but their schemas are not loaded, calling one directly fails with an input-validation error, and `ToolSearch` with `select:<name>[,<name>...]` loads them; then one tool name per line, sorted, including MCP tools (`mcp__<server>__<tool>`) and MCP resource tools. | covered — `environment` plugin, `TaskView.deferred_tool_names()` at `order` 30 (a sub-agent's turn opens with it, `sub.messages.3`); re-sent after compaction. |
+| `main.env.7` | Baseline deferred set (m1): `CronCreate`, `CronDelete`, `CronList`, `DesignSync`, `EnterPlanMode`, `EnterWorktree`, `ExitPlanMode`, `ExitWorktree`, `ListMcpResourcesTool`, `Monitor`, `NotebookEdit`, `ReadMcpResourceDirTool`, `ReadMcpResourceTool`, `SendMessage`, `TaskStop`, `WebFetch`, `WebSearch`, plus each MCP tool. | partly — the list is whatever noeta defers; the tools noeta lacks are tool-surface items. |
+| `main.env.8` | Agent list: a lead-in, then one line per agent type, `- <name>: <description> (Tools: <tool list or * or "All tools except …">)`. Baseline types: `claude`, `claude-code-guide`, `Explore`, `general-purpose`, `Plan`, `statusline-setup`. | covered — `subtasks` plugin, held for the first request's system turn at `order` 40. |
+| `main.env.9` | After the agent list: launch several agents for independent work in one message so they run concurrently. | covered — with `main.env.8`. |
+| `main.env.10` | Skill list: a lead-in, then one line per skill, `- <name>: <description>` (multi-line descriptions kept); observed order: the project skill first, then user-level, then built-in skills. | covered — the start-up listing joins the system turn (`order` 50): `.claude/skills` (trusted projects), then `~/.claude/skills`, then the rest. |
 | `main.env.11` | Permission-mode guidance block for the active mode. In `auto`: shell is allowed for reading (`cat`, `head`, `sed -n`), searching (`grep`, `find`) and small mechanical edits (`sed`, heredocs, short scripts) instead of Read/Edit/Write; prefer Edit/Write where a shell edit is fragile (exact or multi-line replacements, GNU vs BSD flag differences). | deviation — comes with auto mode (Phase 3). |
 | `main.env.12` | A `<total_tokens>N tokens left</total_tokens>` line. | covered — the budget note (`order` 80) joins the first system turn. |
 | `main.env.13` | Last line: today's date as `YYYY-MM-DD`. | covered — last, `order` 90. |

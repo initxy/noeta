@@ -88,7 +88,11 @@ def instruction(prompt: str, extra: str = "") -> str:
 
 
 def _host_injected(message: Message) -> bool:
-    return message.role == "user" and message.origin in ("system", "memory")
+    """A reminder or a system turn: the instruction goes to the user message
+    before it, and it stays where it is (Claude Code leaves the trailing
+    token-count system turn after the instruction)."""
+    return message.role == "system" or (message.role == "user"
+                                        and message.origin in ("system", "memory"))
 
 
 def summary_request(main: ModelRequest, history: Sequence[Message], text: str, *,

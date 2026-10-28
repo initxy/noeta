@@ -18,7 +18,7 @@ from noeta.core.events import ChildEnded, External, InputTaken, ModelReplied, Re
 from noeta.core.extension import Deny, Extension, Gate, Reminder, Rewrite, TaskView
 from noeta.core.loop.state import TaskState
 from noeta.core.tool import Tool, ToolContext
-from noeta.core.types import Message, ModelRequest, ToolUse, user
+from noeta.core.types import Message, ModelRequest, ToolUse, system_message, user
 from noeta.plugins.subtasks import texts
 from noeta.plugins.subtasks.tool import (
     DELEGATION_TOOLS,
@@ -31,6 +31,7 @@ from noeta.plugins.subtasks.tool import (
     batch_refusal,
     handback_sender,
 )
+from noeta.toolkit.notices import NOTICE_GUARD, escape
 
 log = logging.getLogger("noeta.plugins.subtasks")
 
@@ -40,6 +41,9 @@ ALL_AGENTS = "*"
 #: Code's was alongside the third), and the inbox signal carrying it.
 PROGRESS_AT_CALL = 3
 PROGRESS_SIGNAL = "subtasks.progress"
+#: The agent list's place in the first request's joined system turn
+#: (``Reminder.order``): after the environment and the deferred tools.
+AGENT_LIST_ORDER = 40
 
 
 @dataclass(frozen=True)
@@ -84,19 +88,15 @@ def _tools_column(agent: Any) -> str:
     return "*"
 
 
-def _escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
 def task_notification(*, agent_id: str, call_id: str, status: str, summary: str,
                       result: str, ended: ChildEnded, duration_ms: int) -> str:
     """A finished agent's ``<task-notification>``, behind the not-the-user guard."""
     usage = ended.last_usage
     tokens = usage.input + usage.output if usage is not None else 0
-    return (f"{texts.NOTICE_GUARD}\n\n<task-notification>\n<task-id>{agent_id}</task-id>\n"
+    return (f"{NOTICE_GUARD}\n\n<task-notification>\n<task-id>{agent_id}</task-id>\n"
             f"<tool-use-id>{call_id}</tool-use-id>\n<status>{status}</status>\n"
-            f"<summary>{_escape(summary)}</summary>\n<note>{texts.NOTICE_NOTE}</note>\n"
-            f"<result>{_escape(result)}\n</result>\n"
+            f"<summary>{escape(summary)}</summary>\n<note>{texts.NOTICE_NOTE}</note>\n"
+            f"<result>{escape(result)}\n</result>\n"
             f"<usage><subagent_tokens>{tokens}</subagent_tokens><tool_uses>{ended.tool_calls}"
             f"</tool_uses><duration_ms>{duration_ms}</duration_ms></usage>\n"
             "</task-notification>")
@@ -158,7 +158,7 @@ class Subtasks(Extension):
 
     def initial_state(self) -> Any:
         return {"agents": {}, "tasks": {}, "handbacks": {}, "pending": {}, "noticed": [],
-                "reminded": False, "listed": False}
+                "reminded": False, "listed": False, "held_list": None}
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         st = {**self.initial_state(), **(state or {})}
@@ -181,7 +181,10 @@ class Subtasks(Extension):
         if kind == "handback_reminder":
             return {**st, "reminded": True}
         if kind == "agent_list":
-            return {**st, "listed": True}
+            held = data.get("text") if isinstance(data, dict) else None
+            return {**st, "listed": True, "held_list": held}
+        if kind == "agent_list_sent":
+            return {**st, "held_list": None}
         return st
 
     def _state(self, state: TaskState) -> dict[str, Any]:
@@ -324,9 +327,15 @@ class Subtasks(Extension):
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         st = self._state(view.state)
+        out: list[Reminder] = []
         if TYPE_KEY in view.state.config and not st["reminded"]:
-            return [Reminder(text=texts.HANDBACK_REMINDER, kind="handback_reminder")]
-        return ()
+            out.append(Reminder(text=texts.HANDBACK_REMINDER, kind="handback_reminder"))
+        if st["held_list"]:
+            # The first request: the agent list joins the environment's
+            # system turn, after the deferred tools.
+            out.append(Reminder(text=st["held_list"], kind="agent_list_sent", data={},
+                                role="system", order=AGENT_LIST_ORDER))
+        return out
 
     # ------------------------------------------------------------ events
 
@@ -341,13 +350,14 @@ class Subtasks(Extension):
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
         text = self.agent_list(view)
-        return [user(text, origin="system")] if text else []
+        return [system_message(text)] if text else []
 
     async def on_start(self, view: TaskView) -> None:
         st = self._state(view.state)
         text = self.agent_list(view)
         if text and not st["listed"]:
-            view.record(self.name, "agent_list", message=user(text, origin="system"))
+            # Held for the first request's system turn (``reminders``).
+            view.record(self.name, "agent_list", {"text": text})
         # Ends taken before a crash whose notice was never recorded.
         done = set(st["noticed"]) | set(st["pending"])
         for task_id in st["tasks"]:

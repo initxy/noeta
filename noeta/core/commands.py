@@ -9,11 +9,12 @@ run is logged and left out; its failure never stops the front end.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 
 from noeta.core.agent import Agent
 from noeta.core.extension import Command, CommandContext, Extension
 
-__all__ = ["expand_command", "list_commands", "parse_command"]
+__all__ = ["expand_command", "expand_with", "list_commands", "parse_command"]
 
 log = logging.getLogger("noeta.commands")
 
@@ -28,9 +29,14 @@ def parse_command(text: str) -> tuple[str, str] | None:
 
 
 async def _owned(agent: Agent, ctx: CommandContext) -> list[tuple[Extension, Command]]:
+    return await _offered(agent.all_extensions(), ctx)
+
+
+async def _offered(extensions: Sequence[Extension], ctx: CommandContext
+                   ) -> list[tuple[Extension, Command]]:
     out: list[tuple[Extension, Command]] = []
     seen: set[str] = set()
-    for ext in agent.all_extensions():
+    for ext in extensions:
         try:
             commands = await ext.commands(ctx)
         except Exception:
@@ -52,11 +58,18 @@ async def expand_command(agent: Agent, ctx: CommandContext, text: str) -> str | 
     """The message ``text`` (``/name args``) stands for, or ``None`` when no
     extension of ``agent`` offers ``name``. Raises what ``run_command``
     raises."""
+    return await expand_with(agent.all_extensions(), ctx, text)
+
+
+async def expand_with(extensions: Sequence[Extension], ctx: CommandContext,
+                      text: str) -> str | None:
+    """:func:`expand_command` over a task's extensions (``TaskView``): what a
+    plugin that replays a typed command later (a scheduled prompt) uses."""
     parsed = parse_command(text)
     if parsed is None:
         return None
     name, args = parsed
-    for ext, c in await _owned(agent, ctx):
+    for ext, c in await _offered(extensions, ctx):
         if c.name == name:
             if c.template:
                 return c.template.replace("{args}", args).strip()

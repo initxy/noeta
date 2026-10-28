@@ -70,6 +70,8 @@ FAMILY = "anthropic"
 _API_VERSION_DEFAULT = "2023-06-01"
 _API_KEY_ENV = "ANTHROPIC_API_KEY"
 _MESSAGES_ENDPOINT = "/v1/messages"
+_COUNT_TOKENS_ENDPOINT = "/v1/messages/count_tokens?beta=true"
+_COUNT_TOKENS_BETA = "token-counting-2024-11-01"
 
 #: Anthropic's per-request cap on ``cache_control`` breakpoints.
 _MAX_CACHE_BREAKPOINTS = 4
@@ -205,6 +207,28 @@ class AnthropicProvider:
             # mid-iteration, stay transient so the retry helper applies.
             raise transport_error(exc) from exc
         return parse_message(accumulator.message_payload(), request.model)
+
+    async def count_tokens(self, model: str, text: str) -> int | None:
+        """The exact input-token count of one user message holding ``text``
+        (``/v1/messages/count_tokens``, as Claude Code measures a large tool
+        result); ``None`` when the endpoint gives no count."""
+        if not text:
+            return 0
+        body = {"model": model, "messages": [{"role": "user", "content": text}], "tools": []}
+        betas = [b for b in self._client.headers.get("anthropic-beta", "").split(",") if b]
+        try:
+            response = await self._client.post(
+                _COUNT_TOKENS_ENDPOINT, json=body,
+                headers={"anthropic-beta": ",".join([*betas, _COUNT_TOKENS_BETA])})
+        except httpx.RequestError:
+            return None
+        if response.is_error:
+            return None
+        try:
+            count = response.json().get("input_tokens")
+        except ValueError:
+            return None
+        return count if isinstance(count, int) else None
 
     # ------------------------------------------------------------------
     # Outbound translation

@@ -101,6 +101,18 @@ def test_instruction_goes_into_the_last_user_message() -> None:
         (128_000, "medium", None, None)
 
 
+def test_a_trailing_system_turn_stays_after_the_instruction() -> None:
+    from noeta.core.types import system_message
+
+    history = [user("read it", origin="human"), system_message("<total_tokens>9</total_tokens>")]
+    req = summary.summary_request(_main(), history, "SUMMARIZE")
+    # Claude Code (m3/0009): the prompt and the instruction share the user
+    # message; the token-count system turn follows unchanged.
+    assert [b.text for b in req.messages[0].content] == [  # type: ignore[union-attr]
+        "read it", "SUMMARIZE"]
+    assert req.messages[0].origin == "human" and req.messages[1].role == "system"
+
+
 def test_after_a_reply_the_instruction_is_a_new_message() -> None:
     history = [user("go"), Message(role="assistant", content=[Text(text="done")])]
     req = summary.summary_request(_main(), history, "SUMMARIZE", max_tokens=64_000)

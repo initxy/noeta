@@ -73,10 +73,17 @@ server/remote surfaces, which stay noeta's own.
   cache-breakpoint positions, permission modes and rule syntax, hook events and their
   input/output fields, skill/agent frontmatter fields. noeta's request for the same scenario is
   checked against it.
-- **Claude Code's files are first-class inputs.** noeta reads `CLAUDE.md` (with `@import` and
-  the directory walk), `.claude/settings*.json`, `.claude/skills`, `.claude/agents`,
-  `.claude/rules`, `.mcp.json` and `~/.claude/*` with Claude Code's meaning, alongside `.noeta/`,
-  behind the same workspace trust gate. A Claude Code project works in noeta unchanged.
+- **noeta's own files, Claude Code's mechanisms (owner, 2026-10-28; replaces "Claude Code's files
+  are first-class inputs").** Running a Claude Code project unchanged is not a goal. noeta reads
+  only its own places — `~/.noeta/` and the project's `.noeta/`, instructions in `NOETA.md`
+  (plus the cross-tool `AGENTS.md`) — never `~/.claude/`, `.claude/`, `CLAUDE.md` or `.mcp.json`
+  implicitly, so the two tools never pick up each other's hooks, env or instructions. The
+  mechanisms and formats inside are Claude Code's: instruction layering, `@import`,
+  path-scoped rules, settings with allow/deny/ask/hooks/env, skill and agent directories,
+  saved workflows.
+- **Contract vs implementation (owner, 2026-10-28).** What the model or the user sees (tool
+  interfaces, script language, file formats, behaviour) matches Claude Code; how it is executed
+  may differ wherever noeta's way is better.
 - **Headless protocol parity.** `noeta -p` speaks Claude Code's `stream-json` input/output and
   control-request protocol, so clients written against Claude Code's SDK drive noeta (locally or
   through the server). This is the server-friendly surface's main door; noeta's own HTTP API
@@ -89,6 +96,14 @@ server/remote surfaces, which stay noeta's own.
   (localhost, dotless hosts), reversing the 2026-09-18 "refuse nothing" choice. Every baseline
   tool noeta lacks is built (`Workflow`, `ReportFindings`, `ListAgents`/`SendMessage`,
   `ScheduleWakeup`/`Cron*`, plan mode, `SubagentHandback`).
+- **Workflow scripts run in Node.js (proposal, 2026-10-28).** The model writes JavaScript, so a
+  JavaScript engine runs it. No dependency-free engine embeds in Python (the pure-Python
+  interpreters stop at ES5 without async/await; QuickJS and V8 bindings are native
+  dependencies), so the worker's `node` (18+) runs a harness as a short-lived process: a fresh
+  V8 context with only the workflow API, code generation from strings off, Node's permission
+  model where the version has it. The script is replayed against the agent results recorded in
+  the task's log (finished `agent()` calls answer from the log), which makes a run durable like
+  any other wait. Without `node` the tool refuses and starts nothing. Owner to confirm.
 - **Deviations are listed, not implied.** A model-visible difference is allowed only when the
   kernel forces it, and each one is a row in `parity/deviations.md` with its reason. Starting
   list:
@@ -155,7 +170,7 @@ Phase 3 — behaviors around the model
 - [ ] Skills: every baseline frontmatter field (`allowed-tools` as pre-approval, `when_to_use`,
   `context: fork`, `` !`cmd` ``, `${CLAUDE_SKILL_DIR}`, `paths`), directory walk.
 - [ ] Agent files: every baseline frontmatter field; unknown fields warn.
-- [ ] Memory: `CLAUDE.md` layers, `@import`, `.claude/rules`, per-project auto memory.
+- [x] Memory: `CLAUDE.md` layers, `@import`, `.claude/rules`, per-project auto memory.
 - [ ] MCP: OAuth, headersHelper, SSE, streamable-http spelling, resources tools, elicitation via
   `noeta.core.questions`, deferred by default.
 - [ ] Sandbox for local exec (bubblewrap on Linux) with Claude Code's settings shape and domain
@@ -165,7 +180,7 @@ Phase 4 — missing tools
 - [ ] `SendMessage` (resume a finished sub-agent from its log) and fork sub-agents, background by
   default, `<task-notification>` delivery with usage, per-call denial instead of whole-task
   failure.
-- [ ] `ScheduleWakeup`, `CronCreate/List/Delete`, `/loop` on the kernel's timers.
+- [x] `ScheduleWakeup`, `CronCreate/List/Delete`, `/loop` on the kernel's timers.
 - [ ] Worktree isolation (`EnterWorktree`/`ExitWorktree`, `isolation: worktree`).
 - [ ] Plan mode tools, `WebSearch`, `NotebookEdit`, `LSP`.
 
@@ -181,7 +196,6 @@ Phase 5 — front ends
 ## Acceptance criteria
 
 - `make parity` passes on the baseline scenarios: no mismatch outside `parity/deviations.md`.
-- A Claude Code project (CLAUDE.md, `.claude/`, `.mcp.json`) runs in noeta with no edits.
 - A client written for Claude Code's headless `stream-json` protocol drives `noeta -p`.
 - `make eval` shows no regression; the benchmark is run once at the end against Claude Code on
   the same sample.
@@ -292,3 +306,35 @@ Phase 5 — front ends
   (tools 55, context 50, run 22, layout 15, cache 8, headers 6, side requests 5, params 4,
   system 3, compaction 1); the larger count comes from the new steps (sub-agent tool sets,
   approvals, Monitor/TaskStop, interrupt kinds), not from regressions.
+  Background sub-agents' approvals wait at the root (Claude Code denies the one call) — owner to
+  decide.
+- 2026-10-28: Claude Code's files (Phase 2/3 slice): the instructions plugin reads Claude Code's
+  layers in its order (managed, `~/.claude`, every directory from the outermost ancestor down:
+  `CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules`, `CLAUDE.local.md`; `@path` imports five
+  deep; `paths:` rules and nested files when a tool touches a file) and ends with `MEMORY.md`;
+  decision: a directory with no `CLAUDE.md` reads its `NOETA.md`, else `AGENTS.md`
+  (`parity/deviations.md`). The memory section moves before `# Environment`
+  (`ContextPart.before`). `~/.claude/settings.json`, `~/.noeta/settings.json`, trusted
+  `.claude/settings*.json` and `managed-settings.json` merge in Claude Code's precedence
+  (`noeta/cli/claude_settings.py`): env, model, hooks/MCP file lists, and the permissions
+  plugin's `mode`/`allow`/`deny`/`ask`/`additional_directories` as plain data (only arguments
+  it takes; the rule-syntax worker adds them). `.claude/skills` and `~/.claude/skills` are
+  read, workspace first. The environment turn carries the deferred tools (order 30) and the
+  agent list (order 40, moved from the first user turn); sub-agents get the deferred list
+  first and no budget notes, Explore/Plan no git snapshot. `make parity` 65 -> 51 (context
+  33/279 -> 24/147, layout 8/68 -> 4/14). Open: the skill command wrapper
+  (`<command-message>` block, plain-text skill body), instructions re-read on resume (needs a
+  resume signal from front ends), instructions/git context after compaction (compaction
+  worker), `outputStyle` read but not applied.
+- 2026-10-28: ScheduleWakeup / Cron* / `/loop`, ReportFindings, Workflow, session title and
+  `count_tokens` (Read's token ceiling). Kernel: timers (`set_timer` records; a waiting task's
+  `ready_at` is its earliest timer, an idle task fires due ones), `TaskView.spawn` for children
+  outside a tool call, notices with `kind`/`data`, a config `output_schema`, the provider's
+  `count_tokens`. The m3 replay compacts again: the summarize instruction was appended to the
+  trailing token-count system turn instead of the user message before it (not the token
+  estimate). `make parity` 65 -> 63 (gone: the three missing tools, session title,
+  count_tokens, "never compacted"; new: post-compaction layout lines m3 now reaches). Open: a
+  `/workflows` view and TaskStop for runs, nested `workflow()`, built-in workflows, the
+  `workflow-authoring` skill, worktree isolation for workflow agents, folding `noop` loop ticks
+  in front ends, `/loop` as a Skill-tool skill (it is a front-end command), Claude Code's
+  "fire only when idle" also for one-shot tasks (they end before a timer fires).

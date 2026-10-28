@@ -75,6 +75,7 @@ LISTING_ORDER = 50
 #: The directories a workspace contributes, relative to its root.
 WORKSPACE_SKILLS_DIR = ".noeta/skills"
 WORKSPACE_AGENTS_SKILLS_DIR = ".agents/skills"
+WORKSPACE_CLAUDE_SKILLS_DIR = ".claude/skills"
 
 Rank = Callable[[TaskView], "Mapping[str, float] | Awaitable[Mapping[str, float]] | None"]
 Enforcement = Literal["off", "approval", "deny"]
@@ -158,8 +159,9 @@ class Skills(Extension):
       (``builtin_skills_dirs`` + ``extra_skill_dirs``, e.g. ``~/.claude/skills``).
     * ``global_agents_dir`` / ``global_dir`` — the user's ``~/.agents/skills`` /
       ``~/.noeta/skills`` tiers (``None`` = none, the 0.6 default).
-    * ``workspace`` — mount the workspace tiers ``<cwd>/.agents/skills`` and
-      ``<cwd>/.noeta/skills`` (repo-derived, so they pass ``trusted``).
+    * ``workspace`` — mount the workspace tiers ``<cwd>/.claude/skills``,
+      ``<cwd>/.agents/skills`` and ``<cwd>/.noeta/skills`` (repo-derived, so
+      they pass ``trusted``).
     * ``skills_dir`` — replaces the workspace tiers with this one directory
       (relative to the workspace), not trust-gated (0.6 ``skills_dir``).
     * ``trusted`` — ``trusted(workspace_path) -> bool`` gate for the
@@ -232,10 +234,11 @@ class Skills(Extension):
         if self.skills_dir is not None:
             out.append((os.path.join(cwd, self.skills_dir), 4))
         elif self.workspace:
-            gated = [os.path.join(cwd, WORKSPACE_AGENTS_SKILLS_DIR),
+            gated = [os.path.join(cwd, WORKSPACE_CLAUDE_SKILLS_DIR),
+                     os.path.join(cwd, WORKSPACE_AGENTS_SKILLS_DIR),
                      os.path.join(cwd, WORKSPACE_SKILLS_DIR)]
             if self.trusted is None or self.trusted(cwd):
-                out += [(gated[0], 3), (gated[1], 4)]
+                out += [(gated[0], 3), (gated[1], 3), (gated[2], 4)]
             else:
                 _log.warning("workspace %s is not trusted; skipping its skill directories: %s",
                              cwd, ", ".join(gated))

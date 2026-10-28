@@ -46,6 +46,17 @@ async def test_the_prompt_names_the_directory_and_it_exists(h: Harness, tmp_path
     assert [m.text for m in h.provider.requests[0].messages] == ["go"]
 
 
+async def test_the_section_goes_before_the_environment_section(
+        h: Harness, tmp_path: Path) -> None:
+    a = Agent(name="a", model="m", extensions=[Memory(home=str(tmp_path / "home"))],
+              system_prompt="# Guidance\n - one\n\n# Environment\n - here")
+    h.provider.add(reply("ok"))
+    await h.start(a)
+    prompt = h.provider.requests[0].system[-1].text
+    assert prompt.startswith("# Guidance\n - one\n\n# Memory\n")
+    assert prompt.endswith("\n\n# Environment\n - here")
+
+
 async def test_a_repository_shares_one_memory_across_worktrees(
         h: Harness, tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-q", str(h.work)], check=True)
