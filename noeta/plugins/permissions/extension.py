@@ -20,6 +20,7 @@ from noeta.core.tool import ToolOutput
 from noeta.core.types import ModelRequest, ToolUse
 from noeta.plugins.permissions import guards as g
 from noeta.plugins.permissions import policy as p
+from noeta.plugins.permissions import rules as r
 
 log = logging.getLogger("noeta.permissions")
 
@@ -79,6 +80,12 @@ class PermState:
     project: tuple[dict[str, Any], ...] | None = None
 
 
+def _directory(entry: object) -> str:
+    if not isinstance(entry, str) or not entry.strip():
+        raise ValueError(f"additional_directories entries must be non-empty paths; got {entry!r}")
+    return entry.strip()
+
+
 def inherited_rules(state: Any) -> list[dict[str, Any]]:
     """A task's remembered rules, its own and those it inherited: what a
     child it spawns starts with (``config["permission_rules"]``)."""
@@ -95,12 +102,32 @@ class Permissions(Extension):
     and the ``can_use_tool`` auto-resolver — combined so any deny wins, then
     the first ask.
 
-    Constructor arguments (what 0.6 spread over ``Options`` / ``HostConfig``):
+    Constructor arguments. The first group is Claude Code's ``permissions``
+    settings object as plain data (a host reading ``.claude/settings*.json``
+    passes ``defaultMode`` as ``mode``, ``additionalDirectories`` as
+    ``additional_directories`` and ``autoMode`` as ``auto_mode``; the rule
+    lists of every settings file concatenated):
 
-    * ``mode`` — ``"default"`` (ask for every tool whose risk is not low),
-      ``"acceptEdits"`` (the same, Edit/Write exempt) or
-      ``"bypassPermissions"`` (never ask; no shell or web gate). A task can
-      override it with ``config["permission_mode"]``.
+    * ``mode`` — the starting permission mode, one of
+      :data:`policy.PERMISSION_MODES`. A task can override it with
+      ``config["permission_mode"]``.
+    * ``allow`` / ``deny`` / ``ask`` — rule strings
+      (:mod:`noeta.plugins.permissions.rules`: ``Bash(git push *)``,
+      ``Read(./.env)``, ``WebFetch(domain:example.com)``, ``mcp__server``).
+      A deny rule wins over everything, then an ask rule (which no mode
+      skips), then an allow rule.
+    * ``additional_directories`` — directories beyond the working directory
+      that file tools may read and edit as if they were inside it
+      (absolute, ``~/...``, or relative to the working directory).
+    * ``auto_mode`` — Claude Code's ``autoMode`` object for the auto-mode
+      classifier: ``allow``, ``soft_deny``, ``hard_deny`` and
+      ``environment``, each a list of plain-language lines.
+    * ``disable_bypass_mode`` — refuse ``bypassPermissions`` (Claude Code's
+      ``disableBypassPermissionsMode``).
+
+    The rest are noeta's own (what 0.6 spread over ``Options`` /
+    ``HostConfig``):
+
     * ``risk`` — per-tool risk overrides over :data:`policy.DEFAULT_RISK`;
       ``default_risk`` is the risk of a tool the table does not name (MCP
       tools: ``high``, as in 0.6). ``max_risk`` denies tools above it.
@@ -143,6 +170,12 @@ class Permissions(Extension):
         self,
         *,
         mode: str = "default",
+        allow: Sequence[str] = (),
+        deny: Sequence[str] = (),
+        ask: Sequence[str] = (),
+        additional_directories: Sequence[str] = (),
+        auto_mode: Mapping[str, Sequence[str]] | None = None,
+        disable_bypass_mode: bool = False,
         risk: Mapping[str, str] | None = None,
         default_risk: str = "high",
         max_risk: str | None = None,
@@ -162,6 +195,14 @@ class Permissions(Extension):
         can_use_tool: CanUseTool | None = None,
     ) -> None:
         self.mode = p.check_mode(mode)
+        self.disable_bypass = bool(disable_bypass_mode)
+        if self.disable_bypass and self.mode == "bypassPermissions":
+            raise ValueError("mode 'bypassPermissions' is disabled (disable_bypass_mode)")
+        self.allow_rules = r.parse_rules(allow, "allow")
+        self.deny_rules = r.parse_rules(deny, "deny")
+        self.ask_rules = r.parse_rules(ask, "ask")
+        self.additional_directories = tuple(_directory(d) for d in additional_directories)
+        self.auto_mode = p.check_auto_mode(auto_mode)
         self.risk = {**p.DEFAULT_RISK, **dict(risk or {})}
         for name, level in [*self.risk.items(), ("<default>", default_risk)]:
             if level not in p.KNOWN_RISK_LEVELS:
@@ -304,12 +345,23 @@ class Permissions(Extension):
                 p.KNOWN_RISK_LEVELS.index(risk) > p.KNOWN_RISK_LEVELS.index(self.max_risk)):
             return Deny(reason=p.RISK_EXCEEDS.format(name=name, risk=risk, ceiling=self.max_risk))
 
+        root = self._root(view)
+        ctx = r.RuleContext(root=root, home=os.path.expanduser("~"), cwd=root)
+        denied = r.first_match(self.deny_rules, name, call.input, ctx)
+        if denied is not None:
+            return Deny(reason=p.DENIED_BY_RULE.format(name=name, rule=denied.text))
         denies: list[str] = []
         asks: list[str] = []
+        asked = r.first_match(self.ask_rules, name, call.input, ctx)
+        if asked is not None:
+            asks.append(p.ASK_RULE.format(name=name, rule=asked.text))
         config_ask = await self._config_ask(view, call)
         if config_ask is not None:
             asks.append(config_ask)
         permission_ask = await self._permission_ask(view, st, call, risk)
+        if permission_ask is not None and r.first_match(self.allow_rules, name, call.input,
+                                                         ctx, for_allow=True) is not None:
+            permission_ask = None
         if permission_ask is not None:
             asks.append(permission_ask)
         if self.repetition.threshold > 0:

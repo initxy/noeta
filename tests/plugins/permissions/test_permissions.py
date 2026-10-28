@@ -90,7 +90,7 @@ async def test_bypass_never_asks_and_a_task_can_pick_its_mode(store: SqliteStore
 
 def test_bad_configuration_raises() -> None:
     with pytest.raises(ValueError, match="permission_mode"):
-        Permissions(mode="plan")
+        Permissions(mode="planning")
     with pytest.raises(ValueError, match="ambiguous"):
         Permissions(budget=Budget(max_iterations=2), max_turns=3)
     with pytest.raises(ValueError, match=r"hostname|scheme"):

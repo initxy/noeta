@@ -23,11 +23,17 @@ from noeta.toolkit.shell import (
     rule_spec_text,
 )
 
-PermissionMode = Literal["default", "acceptEdits", "bypassPermissions"]
+PermissionMode = Literal["default", "acceptEdits", "plan", "auto", "dontAsk",
+                         "bypassPermissions"]
 
-#: Legal permission modes, in widening-trust order (a host's picker shows
-#: them in this order). There is no plan mode.
-PERMISSION_MODES: tuple[str, ...] = ("default", "acceptEdits", "bypassPermissions")
+#: Claude Code's permission modes: ``default`` asks before anything that
+#: needs permission, ``acceptEdits`` also lets file edits in the working
+#: directories run, ``plan`` explores without changing anything, ``auto``
+#: lets a classifier model approve or block what would ask, ``dontAsk``
+#: refuses what would ask, ``bypassPermissions`` asks for nothing but deny
+#: and ask rules.
+PERMISSION_MODES: tuple[str, ...] = ("default", "acceptEdits", "plan", "auto", "dontAsk",
+                                     "bypassPermissions")
 
 RiskLevel = Literal["low", "medium", "high"]
 
@@ -91,6 +97,8 @@ UNKNOWN_RISK = (
 )
 RISK_EXCEEDS = "tool {name!r} risk_level {risk!r} exceeds max {ceiling!r}"
 REQUIRES_APPROVAL = "tool {name!r} requires human approval"
+DENIED_BY_RULE = "Permission to use {name} has been denied by the rule {rule}."
+ASK_RULE = "The rule {rule} asks before {name} runs."
 CALL_REQUIRES_APPROVAL = "tool {name!r} call requires human approval"
 
 
@@ -100,6 +108,23 @@ def check_mode(mode: str) -> PermissionMode:
             f"Invalid permission_mode {mode!r}. Must be one of {PERMISSION_MODES}."
         )
     return mode  # type: ignore[return-value]
+
+
+#: The keys of Claude Code's ``autoMode`` settings object.
+AUTO_MODE_KEYS: tuple[str, ...] = ("allow", "soft_deny", "hard_deny", "environment")
+
+
+def check_auto_mode(value: Mapping[str, Sequence[str]] | None) -> dict[str, tuple[str, ...]]:
+    """``autoMode`` as ``{key: lines}`` with every key present; an unknown
+    key or a line that is not a string raises."""
+    out: dict[str, tuple[str, ...]] = {k: () for k in AUTO_MODE_KEYS}
+    for key, lines in (value or {}).items():
+        if key not in AUTO_MODE_KEYS:
+            raise ValueError(f"auto_mode: unknown key {key!r}; known: {AUTO_MODE_KEYS}")
+        if isinstance(lines, str) or not all(isinstance(x, str) for x in lines):
+            raise ValueError(f"auto_mode.{key} must be a list of strings")
+        out[key] = tuple(x.strip() for x in lines if x.strip())
+    return out
 
 
 def mode_requires_approval(mode: str, name: str, risk: str) -> bool:
