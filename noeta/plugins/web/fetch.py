@@ -44,7 +44,7 @@ _MAX_URL_BYTES = 512
 #: The rendered page cap: the digest model's reading budget and the
 #: raw-render fallback's inline ceiling.
 INLINE_PAGE_MAX_CHARS = 100_000
-_MAX_REDIRECT_HOPS = 5
+_MAX_REDIRECT_HOPS = 10
 CACHE_TTL_SECONDS = 900.0
 CACHE_MAX_ENTRIES = 16
 #: Claude Code's ``maxResultSizeChars`` for WebFetch.
@@ -139,10 +139,47 @@ def unsupported_scheme_refusal(url: str) -> str | None:
 class CrossHostRedirect(RuntimeError):
     """A redirect that leaves the requested host: surfaced, never followed."""
 
-    def __init__(self, url: str, location: str) -> None:
+    def __init__(self, url: str, location: str, status: int = 302) -> None:
         super().__init__(f"{url} redirects to a different host: {location}")
         self.url = url
         self.location = location
+        self.status = status
+
+
+#: Longest redirect target relayed to the model, and the longest host name
+#: that can be fetched (a DNS name's limit).
+_MAX_RELAYED_URL_CHARS = 1000
+_MAX_HOST_CHARS = 255
+
+
+def redirect_report(redirect: CrossHostRedirect, prompt: str, offset: int) -> str:
+    """What the model is told of a redirect to another host: where from and
+    to, the status, and the call that would fetch the target."""
+    try:
+        target = httpx.URL(redirect.location)
+        fetchable = target.scheme in _FETCH_SCHEMES and bool(target.host)
+    except Exception:  # noqa: BLE001 - an unusable target is reported as such
+        fetchable = False
+    location = collapse_whitespace(redirect.location)
+    lines = [f"Not fetched: {redirect.url} redirects to another host.",
+             f"Status: {redirect.status} {status_phrase(redirect.status)}"]
+    if not fetchable:
+        lines.append("Target: withheld, the server's Location header is not an http(s) URL. "
+                     "It cannot be fetched from here; report the redirect.")
+        return "\n".join(lines)
+    shown = location[:_MAX_RELAYED_URL_CHARS]
+    cut = len(location) - len(shown)
+    lines.append(f"Target (the server's Location header, unverified): {shown}"
+                 + (f" [{cut} more characters left out]" if cut else ""))
+    if cut or len(target.host) > _MAX_HOST_CHARS:
+        lines.append("That target cannot be fetched from here (too long to relay, or not a "
+                     "valid host name); report the redirect.")
+        return "\n".join(lines)
+    call = f'To fetch it, call WebFetch again with:\n  url: "{shown}"\n  prompt: "{prompt}"'
+    if offset > 0:
+        call += f"\n  offset: {offset}"
+    lines.append(call)
+    return "\n".join(lines)
 
 
 class HttpStatus(RuntimeError):
@@ -179,17 +216,25 @@ class FetchTransport(Protocol):
 
 
 def _same_origin(a: str, b: str) -> bool:
+    """Whether a redirect from ``a`` to ``b`` stays on the site: the same
+    scheme and port, the same host up to a leading ``www.``, and no
+    credentials in the target."""
     ua, ub = httpx.URL(a), httpx.URL(b)
     defaults = {"http": 80, "https": 443}
 
     def _port(u: httpx.URL) -> int | None:
         return u.port if u.port is not None else defaults.get(u.scheme)
 
-    return (ua.scheme, ua.host, _port(ua)) == (ub.scheme, ub.host, _port(ub))
+    def _site(host: str) -> str:
+        return host.removeprefix("www.")
+
+    if ub.userinfo:
+        return False
+    return (ua.scheme, _site(ua.host), _port(ua)) == (ub.scheme, _site(ub.host), _port(ub))
 
 
 class HttpFetchTransport:
-    """Fetch over httpx: same-origin redirects followed (5 hops), the body
+    """Fetch over httpx: same-site redirects followed (10 hops), the body
     streamed and refused past ``max_bytes``."""
 
     def __init__(self, *, timeout: float = 10.0,
@@ -211,7 +256,7 @@ class HttpFetchTransport:
                     if resp.is_redirect:
                         target = str(httpx.URL(current).join(resp.headers.get("location", "")))
                         if not _same_origin(target, current):
-                            raise CrossHostRedirect(current, target)
+                            raise CrossHostRedirect(current, target, resp.status_code)
                         current = target
                         continue
                     if not resp.is_success:
@@ -233,6 +278,11 @@ class HttpFetchTransport:
         finally:
             if self.client is None:
                 await client.aclose()
+
+
+def _offset(input: dict[str, Any]) -> int:
+    raw = input.get("offset")
+    return raw if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0 else 0
 
 
 def _schema() -> dict[str, Any]:
@@ -296,13 +346,8 @@ class WebFetchTool:
             try:
                 fetched = await self.transport.fetch(url)
             except CrossHostRedirect as redirect:
-                location = collapse_whitespace(truncate_bytes(redirect.location, _MAX_URL_BYTES))
-                return text_output(
-                    f"{truncate_bytes(url, _MAX_URL_BYTES)} redirects to a "
-                    f"different host: {location}\n"
-                    "The redirect was not followed and nothing was "
-                    "fetched. Fetch that URL if it is what you need.",
-                    redirect=location)
+                return text_output(redirect_report(redirect, prompt, _offset(input)),
+                                   redirect=redirect.location[:_MAX_RELAYED_URL_CHARS])
             except HttpStatus as status:
                 return text_output(http_status_report(status), url=url,
                                    status=status.status)
@@ -316,9 +361,7 @@ class WebFetchTool:
                     "try another source", is_error=True)
             cache.put(url, title, markdown)
 
-        raw_offset = input.get("offset")
-        start = raw_offset if isinstance(raw_offset, int) and not isinstance(
-            raw_offset, bool) and raw_offset > 0 else 0
+        start = _offset(input)
         total = len(markdown)
         if start >= total > 0:
             return text_output(f"offset {start} is past the end of the page ({total} "

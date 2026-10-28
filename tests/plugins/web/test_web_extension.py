@@ -101,9 +101,10 @@ async def test_fetch_errors_redirects_and_refusals(tmp_path: Path) -> None:
     redirect = WebFetchTool(FakeFetch(CrossHostRedirect("https://a.com", "https://b.com/x")))
     out = await redirect.run({"url": "https://a.com", "prompt": "p"}, ctx)
     assert not out.is_error
-    assert text(out) == ("https://a.com redirects to a different host: "
-                         "https://b.com/x\nThe redirect was not followed and nothing was "
-                         "fetched. Fetch that URL if it is what you need.")
+    assert text(out) == (
+        "Not fetched: https://a.com redirects to another host.\nStatus: 302 Found\n"
+        "Target (the server's Location header, unverified): https://b.com/x\n"
+        'To fetch it, call WebFetch again with:\n  url: "https://b.com/x"\n  prompt: "p"')
     failed = WebFetchTool(FakeFetch(RuntimeError("HTTP 403")))
     out = await failed.run({"url": "https://a.com", "prompt": "p"}, ctx)
     assert out.is_error and text(out) == "WebFetch failed: HTTP 403"
@@ -202,6 +203,40 @@ async def test_an_http_error_status_is_a_report_not_a_failure(tmp_path: Path) ->
     busy = await tool.run({"url": "https://site.com/busy", "prompt": "p"}, _ctx(tmp_path))
     assert not busy.is_error
     assert "HTTP 503 Service Unavailable" in text(busy) and "Retry-After: 30" in text(busy)
+
+
+async def test_a_redirect_report_names_its_status_and_the_call_to_make(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "example.com":
+            return httpx.Response(301, headers={"location": "https://www.example.com/a"})
+        if request.url.host == "www.example.com":
+            return httpx.Response(200, headers={"content-type": "text/plain"}, content=b"ok")
+        return httpx.Response(302, headers={"location": "https://other.org/x"})
+
+    tool = _mock_fetch(handler)
+    same = await tool.run({"url": "https://example.com/a", "prompt": "p"}, _ctx(tmp_path))
+    assert text(same) == "ok"  # adding or dropping www. is the same site
+    out = await tool.run({"url": "https://a.com/start", "prompt": "the price", "offset": 7},
+                         _ctx(tmp_path))
+    assert not out.is_error
+    body = text(out)
+    assert "https://a.com/start" in body and "https://other.org/x" in body
+    assert "302 Found" in body
+    assert 'url: "https://other.org/x"' in body and 'prompt: "the price"' in body
+    assert "offset: 7" in body
+
+
+async def test_redirects_are_followed_ten_times_on_one_site() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        n = int(request.url.path.strip("/") or 0)
+        if n < 10:
+            return httpx.Response(302, headers={"location": f"/{n + 1}"})
+        return httpx.Response(200, headers={"content-type": "text/plain"}, content=b"end")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    assert str(await HttpFetchTransport(client=client).fetch("https://s.com/0")) == "end"
+    with pytest.raises(RuntimeError, match="too many redirects"):
+        await HttpFetchTransport(client=client).fetch("https://s.com/-1")
 
 
 class FakeSearch:
