@@ -26,12 +26,13 @@ import logging
 import os
 import secrets
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from noeta.agents.agent_files import (
+    AgentFile,
     PluginEntry,
     PluginSetting,
     parse_plugin_list,
@@ -42,7 +43,7 @@ from noeta.cli.settings_files import (
     apply_env,
     managed_dir,
     permission_arguments,
-    settings_files,
+    settings_layers,
 )
 from noeta.cli.settings_files import load as load_file_settings
 from noeta.core import models, registry
@@ -145,19 +146,24 @@ def server_token(*, create: bool = False) -> str | None:
     return value
 
 
-def file_settings(cwd: str | None) -> FileSettings:
+def file_settings(cwd: str | None, *, sources: Collection[str] | None = None,
+                  flag: Path | None = None) -> FileSettings:
     """The settings files for a front end started in ``cwd``
-    (:mod:`noeta.cli.settings_files`), the project's once it is trusted."""
+    (:mod:`noeta.cli.settings_files`), the project's once it is trusted;
+    ``sources`` and ``flag`` are ``--setting-sources`` and ``--settings``."""
     trusted = bool(cwd) and project_trusted(str(cwd))
-    return load_file_settings(settings_files(cwd, noeta_home=HOME, trusted=trusted,
-                                             managed=managed_dir()))
+    layers = settings_layers(cwd, noeta_home=HOME, trusted=trusted, managed=managed_dir(),
+                             sources=sources, flag=flag)
+    return load_file_settings([p for p, _ in layers], [k for _, k in layers])
 
 
-def load_settings(*, cwd: str | None = None, **overrides: Any) -> Settings:
+def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = None,
+                  flag: Path | None = None, **overrides: Any) -> Settings:
     """``cwd``: where the front end runs; its settings files set
     environment variables (applied here, before the rest is read) and the
-    model when nothing else does."""
-    found = file_settings(cwd)
+    model when nothing else does. ``sources`` / ``flag``: as
+    :func:`file_settings`."""
+    found = file_settings(cwd, sources=sources, flag=flag)
     apply_env(found)
     data: dict[str, Any] = {}
     path = HOME / "config.toml"
@@ -386,6 +392,9 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
                   plugins: Mapping[str, PluginSetting] | None = None,
                   permissions: Mapping[str, Any] | None = None,
                   own_tasks_only: bool = False, with_channels: bool = False,
+                  setting_sources: Collection[str] | None = None,
+                  flag_settings: Path | None = None,
+                  agent_files: Sequence[AgentFile] = (),
                   **runtime_kw: Any) -> LocalApp:
     """The default agents on the configured store, model and provider, with
     the user's plugin files (``~/.noeta/plugins``, and a trusted project's
@@ -404,7 +413,12 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     (``-p``, ``acp``, the TUI) pass ``own_tasks_only`` so their worker never
     picks up another process's task from the shared store; ``worker`` and
     ``serve`` serve every task and pass ``with_channels`` to run the
-    channels ``config.toml`` enables."""
+    channels ``config.toml`` enables. ``setting_sources`` / ``flag_settings``
+    (``--setting-sources`` / ``--settings``) choose the settings layers
+    (:func:`file_settings`); a left-out ``user`` source also skips
+    ``~/.noeta/agents``, a left-out ``project`` source the project's agents
+    and its ``.noeta/mcp.json``. ``agent_files`` (``--agents``) come last
+    and win a name."""
     from noeta.agents import default_agents
     from noeta.agents.agent_files import read_agent_dir
     from noeta.host.local import LocalApp
@@ -416,10 +430,14 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         notices.append(unknown)
     for notice in notices:
         log.warning("%s", notice)
-    found = file_settings(cwd)
+    found = file_settings(cwd, sources=setting_sources, flag=flag_settings)
     apply_env(found)
     if not settings.model and found.model:
         settings = dataclasses.replace(settings, model=found.model)
+
+    def source(name: str) -> bool:
+        return setting_sources is None or name in setting_sources
+
     setting_files = [str(f) for f in found.files]
     permission_args = _permission_arguments(found)
     for key, value in (permissions or {}).items():
@@ -439,7 +457,8 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     base = merge_plugin_settings(
         {"memory": {"home": str(HOME)},
          "hooks": {"settings_files": setting_files},
-         "mcp": {"settings_files": setting_files, "project": project_trusted},
+         "mcp": {"settings_files": setting_files,
+                 "project": project_trusted if source("project") else False},
          "skills": {"trusted": project_trusted, "global_dir": str(HOME / "skills")},
          "instructions": {"user_dir": str(HOME), "managed_dir": str(managed_dir())},
          "permissions": permission_args, "fs": {"write_roots": write_roots}})
@@ -452,9 +471,11 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         claude, found_notices = claude_plugins(cwd)
         notices.extend(n for n in found_notices if n not in notices)
         files = [a for p in claude for a in p.agents if a.name not in BUILTIN_AGENTS]
-        files += read_agent_dir(HOME / "agents")
-        if cwd and project_trusted(cwd):
+        if source("user"):
+            files += read_agent_dir(HOME / "agents")
+        if cwd and project_trusted(cwd) and source("project"):
             files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
+        files += agent_files
         from_plugins, plugin_notices = plugin_settings(claude)
         notices.extend(n for n in plugin_notices if n not in notices)
         table = merge_plugin_settings(base, from_plugins, settings.plugins, plugins or {})

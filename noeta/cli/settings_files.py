@@ -9,6 +9,9 @@ The files, lowest precedence first:
    trusted (``noeta trust``), as everything that changes what an agent may do;
 4. the machine's managed ``managed-settings.json`` (:func:`managed_dir`).
 
+A headless run's ``--settings`` adds a layer just below the managed one, and
+``--setting-sources`` picks which of 1 to 3 are read (:func:`settings_layers`).
+
 A key a later file sets wins (``model``, ``outputStyle``, each ``env``
 variable, ``permissions.defaultMode``); permission rule lists and
 ``additionalDirectories`` add up across files, without repeats; the
@@ -23,6 +26,7 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -65,16 +69,40 @@ class FileSettings:
     sandbox_permissions: dict[str, Any] = field(default_factory=dict)
 
 
-def settings_files(cwd: str | None, *, noeta_home: Path, trusted: bool,
-                   managed: Path | None = None) -> list[Path]:
+#: Claude Code's ``--setting-sources`` names.
+SETTING_SOURCES = ("user", "project", "local")
+
+
+def settings_layers(cwd: str | None, *, noeta_home: Path, trusted: bool,
+                    managed: Path | None = None, sources: Collection[str] | None = None,
+                    flag: Path | None = None) -> list[tuple[Path, str]]:
     """The settings files for a front end started in ``cwd``, lowest
-    precedence first; the project's only when ``trusted``."""
-    files = [noeta_home / "settings.json"]
+    precedence first, each with whose it is (``user`` / ``project`` /
+    ``managed``); the project's only when ``trusted``. ``sources``
+    (``--setting-sources``) keeps only those of the user / project / local
+    files (``None``: all); ``flag`` (``--settings``, given by the person
+    running noeta, so a ``user`` layer) goes after them, below the managed
+    file, which is always read."""
+    layers: list[tuple[Path, str]] = []
+    if sources is None or "user" in sources:
+        layers.append((noeta_home / "settings.json", "user"))
     if cwd and trusted:
         project = Path(cwd).expanduser() / ".noeta"
-        files += [project / "settings.json", project / "settings.local.json"]
-    files.append((managed or managed_dir()) / "managed-settings.json")
-    return files
+        if sources is None or "project" in sources:
+            layers.append((project / "settings.json", "project"))
+        if sources is None or "local" in sources:
+            layers.append((project / "settings.local.json", "project"))
+    if flag is not None:
+        layers.append((flag, "user"))
+    layers.append(((managed or managed_dir()) / "managed-settings.json", "managed"))
+    return layers
+
+
+def settings_files(cwd: str | None, *, noeta_home: Path, trusted: bool,
+                   managed: Path | None = None) -> list[Path]:
+    """The paths of :func:`settings_layers` (every source, no flag layer)."""
+    return [path for path, _ in settings_layers(cwd, noeta_home=noeta_home, trusted=trusted,
+                                                managed=managed)]
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -169,17 +197,20 @@ def merge_sandbox(layers: list[tuple[dict[str, Any], str]]) -> dict[str, Any]:
     return out
 
 
-def load(files: list[Path]) -> FileSettings:
+def load(files: list[Path], kinds: list[str] | None = None) -> FileSettings:
     """Read and merge ``files`` (lowest precedence first, as
     :func:`settings_files` lists them: the user's first, managed last, a
-    project's in between)."""
+    project's in between); ``kinds`` says whose each is when the list is
+    not that one (:func:`settings_layers`)."""
     out = FileSettings(files=list(files))
+    if kinds is None:
+        kinds = ["user" if i == 0 else "managed" if i == len(files) - 1 else "project"
+                 for i in range(len(files))]
     lists: dict[str, list[str]] = {k: [] for k in (*RULE_LISTS, "additionalDirectories")}
     widening: dict[str, list[str]] = {"allow": [], "additionalDirectories": []}
     sandboxes: list[tuple[dict[str, Any], str]] = []
-    for index, path in enumerate(files):
+    for path, kind in zip(files, kinds, strict=True):
         data = _read(path)
-        kind = "user" if index == 0 else "managed" if index == len(files) - 1 else "project"
         if isinstance(data.get("sandbox"), dict):
             sandboxes.append((data["sandbox"], kind))
         env = data.get("env")

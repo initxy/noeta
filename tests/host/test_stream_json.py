@@ -85,11 +85,12 @@ def test_the_sdk_command_line_over_stdin(tmp_path: Path, monkeypatch: pytest.Mon
     with pytest.raises(SystemExit) as done:
         cli.main(["--output-format", "stream-json", "--verbose", "--system-prompt", "",
                   "--model", MODEL, "--permission-mode", "default", "--max-turns", "5",
-                  "--setting-sources=", "--input-format", "stream-json", "--cwd", str(tmp_path)])
+                  "--setting-sources=", "--betas", "x", "--input-format", "stream-json",
+                  "--cwd", str(tmp_path)])
     assert done.value.code == 0
     captured = capsys.readouterr()
     out = [json.loads(x) for x in captured.out.splitlines()]
-    assert "--setting-sources is accepted for compatibility and ignored" in captured.err
+    assert "--betas is accepted for compatibility and ignored" in captured.err
     init = out[0]
     assert (init["type"], init["subtype"]) == ("system", "init")
     task_id = init["session_id"]
