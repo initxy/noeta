@@ -12,7 +12,9 @@ holding no worker, and runs on one laptop or many machines without changing the 
 uv tool install 'noeta[tui,images]'    # images: shrink large images as Claude Code does
 export NOETA_MODEL=claude-sonnet-4-6 NOETA_API_KEY=sk-ant-...
 noeta                             # full-screen terminal UI
-noeta -p "fix the failing test"   # one prompt, print the answer
+noeta -p "fix the failing test"   # one prompt, print the answer (Claude Code's headless flags)
+noeta --input-format stream-json --output-format stream-json --verbose
+                                  # Claude Code's SDK protocol: give an Agent SDK this as its CLI
 noeta acp                         # an Agent Client Protocol agent for Zed and other editors
 ```
 

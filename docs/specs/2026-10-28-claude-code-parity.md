@@ -187,13 +187,13 @@ Phase 4 — missing tools
 - [ ] Plan mode tools, `WebSearch`, `NotebookEdit`, `LSP`.
 
 Phase 5 — front ends
-- [ ] `noeta -p`: `stream-json` in/out, control requests, `--resume`, `--max-turns`, permission
+- [x] `noeta -p`: `stream-json` in/out, control requests, `--resume`, `--max-turns`, permission
   prompt tool, structured output.
-- [ ] TUI slash commands with mechanisms (`/compact`, `/model`, `/rewind`, `/context`, `/cost`,
+- [x] TUI slash commands with mechanisms (`/compact`, `/model`, `/rewind`, `/context`, `/cost`,
   `/memory`, `/config`), `@` mentions, pasted images; plugin commands may run locally.
 - [ ] ACP: real diffs, mode and model switching, plan updates. HTTP: command list, pending
   questions, agent/model list.
-- [ ] Rewind with file checkpoints; session fork.
+- [x] Rewind with file checkpoints; session fork.
 
 ## Acceptance criteria
 
@@ -386,3 +386,25 @@ Phase 5 — front ends
   read. The parity replay writes noeta's copy of the scenario project in noeta's places and
   maps recorded paths to them; `CLAUDE_CONFIG_DIR` isolation dropped. `make parity` 42 → 42;
   the model-visible names are rows in `parity/deviations.md`.
+- 2026-10-28: Phase 5 front ends. `noeta -p` / `noeta --input-format stream-json` speak
+  Claude Code's headless protocol (`noeta/host/stream_json.py`, shapes from the 2.1.312
+  bundle's SDK schemas and the Python `claude-agent-sdk` 0.2.126 parser); the real Python SDK
+  (`query()`, `ClaudeSDKClient` with `can_use_tool`, `set_model`, `set_permission_mode`,
+  `get_context_usage`, `rewind_files`) drives noeta against a fake Messages endpoint. Same
+  protocol over HTTP (`WS /stream-json`, one-way `POST /stream-json`), plus `/commands`,
+  `/agents`, `/models`, `/usage`, `/context`, `/rewind`, `/openapi.json`. Rewind:
+  `checkpoints` plugin + `noeta.host.rewind` (fork = `history_from/through`; fixed: a fork of
+  a fork lost the first link's history). TUI `/model` `/context` `/cost` `/memory` `/config`
+  `/rewind` (Esc Esc) `/clear` `/resume <n>`, `@` mentions, pasted images, local plugin
+  commands; ACP `/model` `/context` `/cost` `/rewind`. Kernel: `config` signal, `max_turns`,
+  `Runtime.preview`, `Command.local`, non-interrupting callback deny. Choices: prompts sent
+  while one is open wait for its result (one `result` each, as Claude Code queues them);
+  headless without a prompt host refuses asks and goes on (was: exit 2); `--json` removed (the
+  bench adapter reads the `result`). Open: SDK hook callbacks (`initialize.hooks`) are
+  ignored with a warning; `--permission-prompt-tool <mcp tool>` (only `stdio`); `can_use_tool`
+  `updatedInput` is applied only to AskUserQuestion answers; `--mcp-config` / `--settings` /
+  `--agents` / `--setting-sources` accepted and ignored; ACP diffs, plan updates and
+  `set_session_model`; an ACP conversation rewind opens a new session the editor loads.
+  Model-visible text added: the `@`-mention attachment, `Permission to use {name} was
+  denied.`, and the headless refusal (the gate's prompt). `make eval` not run (needs
+  credentials).

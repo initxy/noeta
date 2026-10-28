@@ -48,8 +48,9 @@ plugin's `dir`, which the instructions plugin reads to show `MEMORY.md`). Front 
 
 One API, the client (`noeta/core/client.py`): create, send, answer, cancel, read and watch
 events. HTTP (`noeta/host/http.py`, `noeta serve`) is that API on the wire; ACP
-(`noeta/host/acp.py`) translates the protocol editors speak into it. A new outside protocol is
-another translation in `host`, never a second API.
+(`noeta/host/acp.py`) translates the protocol editors speak into it, and
+`noeta/host/stream_json.py` Claude Code's headless protocol (`noeta -p`, the server's
+`/stream-json`). A new outside protocol is another translation in `host`, never a second API.
 
 ## Where code goes
 
