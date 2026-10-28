@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
     from noeta.host.local import LocalApp
     from noeta.host.remote import RemoteClient
+    from noeta.toolkit.function_tool import function_tool
 
 #: Public name -> the module that defines it.
 _EXPORTS = {
@@ -50,6 +51,7 @@ _EXPORTS = {
     "ToolOutput": "noeta.core.tool",
     "ask": "noeta.core.questions",
     "default_agents": "noeta.agents",
+    "function_tool": "noeta.toolkit.function_tool",
     "parse_agent_file": "noeta.agents.agent_files",
     "provider": "noeta.core.registry",
     "read_agent_dir": "noeta.agents.agent_files",
@@ -76,6 +78,7 @@ __all__ = [
     "ask",
     "connect",
     "default_agents",
+    "function_tool",
     "parse_agent_file",
     "provider",
     "read_agent_dir",
