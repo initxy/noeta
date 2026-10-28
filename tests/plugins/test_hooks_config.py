@@ -30,13 +30,13 @@ def test_unknown_and_unsupported_events_and_types_are_skipped(
     caplog.set_level(logging.WARNING, "noeta.hooks")
     parsed = parse_hooks({
         "Bogus": [{"hooks": [{"type": "command", "command": "x"}]}],
-        "PostToolBatch": [{"hooks": [{"type": "command", "command": "x"}]}],
+        "PreModelSwitch": [{"hooks": [{"type": "command", "command": "x"}]}],
         "Stop": [{"hooks": [{"type": "script", "file": "x"}]}],
         "PermissionRequest": [{"hooks": [{"type": "agent", "prompt": "allow?"}]}],
     })
     assert parsed == {}
     text = caplog.text
-    assert "unknown event 'Bogus'" in text and "does not fire PostToolBatch" in text
+    assert "unknown event 'Bogus'" in text and "does not fire PreModelSwitch" in text
     assert "'script' hooks" in text and "permission request" in text
 
 

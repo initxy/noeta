@@ -58,8 +58,14 @@ Events:
   message (at most :data:`MAX_STOP_CONTINUATIONS` times in a row).
 * ``PreCompact`` / ``PostCompact`` — stdout adds summary instructions / is
   shown to the person; a PreCompact block skips the compaction.
-* ``Notification`` (waiting on an approval or a question) and
-  ``SessionEnd`` — side effects only.
+* ``PostToolBatch`` — once every call of a reply has its result, before
+  the next model call: added context (or a block's reason) reaches the model.
+* ``PostModelSwitch`` — after a front end switched the model; added context
+  reaches the model.
+* ``Notification`` (waiting on an approval or a question), ``SessionEnd``,
+  ``StopFailure`` (a turn ended on a failed model call; ``error`` is Claude
+  Code's kind) and ``CwdChanged`` (a command left the shell elsewhere) —
+  side effects only.
 """
 
 from __future__ import annotations

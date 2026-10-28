@@ -25,16 +25,16 @@ log = logging.getLogger("noeta.hooks")
 
 #: The events noeta fires, with Claude Code's names.
 EVENTS = (
-    "PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop",
-    "SubagentStart", "SubagentStop", "SessionStart", "SessionEnd", "PreCompact",
-    "PostCompact", "PermissionRequest", "PermissionDenied", "Notification",
+    "PreToolUse", "PostToolUse", "PostToolUseFailure", "PostToolBatch", "UserPromptSubmit",
+    "Stop", "StopFailure", "SubagentStart", "SubagentStop", "SessionStart", "SessionEnd",
+    "PreCompact", "PostCompact", "PostModelSwitch", "PermissionRequest", "PermissionDenied",
+    "Notification", "CwdChanged",
 )
 #: Claude Code's other events: configured ones are skipped with a warning.
 UNSUPPORTED_EVENTS = (
-    "PostToolBatch", "UserPromptExpansion", "StopFailure", "PreModelSwitch",
-    "PostModelSwitch", "Setup", "TeammateIdle", "TaskCreated", "TaskCompleted",
-    "Elicitation", "ElicitationResult", "ConfigChange", "WorktreeCreate", "WorktreeRemove",
-    "InstructionsLoaded", "CwdChanged", "FileChanged", "DirectoryAdded", "MessageDisplay",
+    "UserPromptExpansion", "PreModelSwitch", "Setup", "TeammateIdle", "TaskCreated",
+    "TaskCompleted", "Elicitation", "ElicitationResult", "ConfigChange", "WorktreeCreate",
+    "WorktreeRemove", "InstructionsLoaded", "FileChanged", "DirectoryAdded", "MessageDisplay",
 )
 #: Events about one tool call (where ``if`` applies).
 TOOL_EVENTS = frozenset({"PreToolUse", "PostToolUse", "PostToolUseFailure",
@@ -45,7 +45,8 @@ SUBJECT = {
     **{e: "tool_name" for e in TOOL_EVENTS},
     "SessionStart": "source", "SessionEnd": "reason", "PreCompact": "trigger",
     "PostCompact": "trigger", "Notification": "notification_type",
-    "SubagentStart": "agent_type", "SubagentStop": "agent_type",
+    "SubagentStart": "agent_type", "SubagentStop": "agent_type", "StopFailure": "error",
+    "PostModelSwitch": "to_model",
 }
 #: Old tool names a matcher may use, both ways.
 _ALIASES = {"Task": "Agent", "Agent": "Task"}

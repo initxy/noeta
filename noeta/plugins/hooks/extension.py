@@ -31,8 +31,9 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import Allow, Ask, Deny, Extension, Gate, Reminder, Rewrite, TaskView
+from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.tool import Tool, ToolContext, ToolOutput
-from noeta.core.types import Message, Text, ToolUse, user
+from noeta.core.types import Message, Text, ToolResult, ToolUse, user
 from noeta.plugins.hooks.config import (
     SUBJECT,
     TOOL_EVENTS,
@@ -67,6 +68,8 @@ RETRY_NOTE = ("A PermissionDenied hook says the denied {tool} call may be retrie
 _KEEP = 256
 #: The plugin whose folded ``mode`` is the task's permission mode.
 PERMISSIONS_PLUGIN = "permissions"
+#: The plugin whose ``cwd`` record says the shell changed directory.
+SHELL_PLUGIN = "shell"
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,12 @@ class _State:
     #: PermissionRequest answers by call id: ``{"behavior", "input",
     #: "message"}`` (``behavior`` ``None``: no hook decided).
     permission: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    #: Seq of the newest batch of tool results PostToolBatch has seen.
+    batched_through: int = 0
+    #: The shell's working directory as CwdChanged last reported it.
+    cwd: str | None = None
+    #: The model as PostModelSwitch last reported it.
+    model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -137,6 +146,31 @@ def _agent(view: TaskView) -> dict[str, str]:
     agent_id, kind = config.get("agent_id"), config.get("subagent_type")
     return {"agent_id": agent_id if isinstance(agent_id, str) and agent_id else view.task_id,
             "agent_type": kind if isinstance(kind, str) and kind else view.state.agent}
+
+
+#: Turn failures that are a model call's (Claude Code's StopFailure fires on
+#: API errors, not on hooks or limits).
+_MODEL_FAILURES = frozenset({"llm_error", "llm_empty_response", "llm_truncated",
+                             "context_overflow"})
+_FAILURE_KINDS = (
+    (r"\b(401|403)\b|auth|api.?key", "authentication_failed"),
+    (r"\b429\b|rate.?limit", "rate_limit"),
+    (r"\b529\b|overloaded", "overloaded"),
+    (r"\b404\b|model.*not.*found|not_found", "model_not_found"),
+    (r"\b(400|413|422)\b|invalid", "invalid_request"),
+    (r"\b5\d\d\b|server", "server_error"),
+)
+
+
+def _failure_kind(reason: str, detail: str) -> str:
+    """A failed model call as Claude Code's StopFailure ``error`` kind."""
+    if reason == "llm_truncated":
+        return "max_output_tokens"
+    if reason == "context_overflow":
+        return "invalid_request"
+    text = detail.lower()
+    return next((kind for pattern, kind in _FAILURE_KINDS if re.search(pattern, text)),
+                "unknown")
 
 
 def _read_only_tools(view: TaskView) -> list[Tool]:
@@ -231,6 +265,12 @@ class Hooks(Extension):
             return replace(st, compact_seen=int(data.get("through") or 0))
         if kind == "once":
             return replace(st, once=st.once | {str(data.get("key"))})
+        if kind == "batched":
+            return replace(st, batched_through=int(data.get("through") or 0))
+        if kind == "cwd_seen":
+            return replace(st, cwd=str(data.get("cwd") or "") or None)
+        if kind == "model_seen":
+            return replace(st, model=str(data.get("model") or "") or None)
         if kind == "permission":
             decided = dict(st.permission)
             decided[str(data.get("call_id"))] = {k: v for k, v in data.items() if k != "call_id"}
@@ -391,6 +431,8 @@ class Hooks(Extension):
         restart is not a resume: that is a front end's
         :data:`RESUMED_SIGNAL` (:meth:`on_event`)."""
         st = self._state(view)
+        if "PostModelSwitch" in self.matchers and st.model is None:
+            view.record(self.name, "model_seen", {"model": view.model})
         if view.state.parent_id is not None:
             if st.started or "SubagentStart" not in self.matchers:
                 return
@@ -441,7 +483,37 @@ class Hooks(Extension):
             out.extend(Reminder(text=f"SessionStart hook (compact): {t}", kind="context")
                        for t in (r.context or r.text for r in reads) if t)
         out.extend(await self._prompt_submit(view))
+        out.extend(await self._tool_batch(view))
         return out
+
+    async def _tool_batch(self, view: TaskView) -> list[Reminder]:
+        """PostToolBatch: once every call of the newest reply has its
+        result, before the model sees them. What a hook adds (or blocks
+        with) reaches the model; ``continue: false`` ends the turn."""
+        if "PostToolBatch" not in self.matchers or not view.state.steps_in_turn:
+            return []
+        state = view.state
+        at = next((i for i in range(len(state.messages) - 1, -1, -1)
+                   if state.messages[i].role == "assistant"), None)
+        if at is None or not state.messages[at].tool_uses:
+            return []
+        results = {b.call_id: b for m in state.messages[at + 1:] if m.role == "user"
+                   for b in m.content if isinstance(b, ToolResult)}
+        uses = state.messages[at].tool_uses
+        through = state.message_seqs[at] if at < len(state.message_seqs) else 0
+        if through <= self._state(view).batched_through or \
+                any(u.id not in results for u in uses):
+            return []
+        view.record(self.name, "batched", {"through": through})
+        reads = await self._run("PostToolBatch", view, {"tool_calls": [
+            {"tool_name": u.name, "tool_input": u.input, "tool_use_id": u.id,
+             "tool_response": results[u.id].text} for u in uses]})
+        for r in reads:
+            if r.stop is not None:
+                raise TurnFailed("stopped_by_hook", r.stop or "a PostToolBatch hook stopped "
+                                                              "the turn")
+        return [Reminder(text=f"PostToolBatch hook: {t}", kind="context")
+                for r in reads for t in (r.block, r.context) if t]
 
     async def _prompt_submit(self, view: TaskView) -> list[Reminder]:
         if "UserPromptSubmit" not in self.matchers or view.state.steps_in_turn:
@@ -623,15 +695,68 @@ class Hooks(Extension):
         elif isinstance(event, ExtensionRecorded):
             if event.extension == "permissions" and event.kind == "classified":
                 await self._denied(view, event.data)
+            elif event.extension == SHELL_PLUGIN and event.kind == "cwd":
+                await self._cwd_changed(view, event.data)
+            elif event.extension == "core" and event.kind == "turn_failed":
+                data = event.data if isinstance(event.data, dict) else {}
+                await self._stop_failure(view, str(data.get("reason") or ""),
+                                         str(data.get("detail") or ""))
         elif isinstance(event, TaskEnded):
+            if event.status == "failed":
+                reason, _, detail = event.error.partition(": ")
+                await self._stop_failure(view, reason, detail)
             if view.state.parent_id is None and "SessionEnd" in self.matchers:
                 await self._run("SessionEnd", view, {"reason": "other"}, record=False)
         elif isinstance(event, ModelReplied):
             await self._model_stopped(view, event)
-        elif isinstance(event, InputTaken) and any(
-                isinstance(i.body, External) and i.body.name == RESUMED_SIGNAL
-                for i in event.items):
-            await self._resumed(view)
+        elif isinstance(event, InputTaken):
+            signals = [i.body for i in event.items if isinstance(i.body, External)]
+            if any(b.name == CONFIG_SIGNAL and isinstance(b.data, dict) and b.data.get("model")
+                   for b in signals):
+                await self._model_switched(view, event)
+            if any(b.name == RESUMED_SIGNAL for b in signals):
+                await self._resumed(view)
+
+    async def _cwd_changed(self, view: TaskView, data: Any) -> None:
+        """CwdChanged, when a command left the shell in another directory
+        (the shell plugin's ``cwd`` record; empty: back at the start)."""
+        if "CwdChanged" not in self.matchers or not isinstance(data, dict):
+            return
+        new = str(data.get("cwd") or "") or self._cwd(view) or ""
+        old = self._state(view).cwd or self._cwd(view) or ""
+        if new == old:
+            return
+        view.record(self.name, "cwd_seen", {"cwd": new})
+        await self._run("CwdChanged", view, {"old_cwd": old, "new_cwd": new})
+
+    async def _stop_failure(self, view: TaskView, reason: str, detail: str) -> None:
+        """StopFailure, when a turn ends on a model call that failed (not a
+        hook or a limit): side effects only, its answer is not read."""
+        if "StopFailure" not in self.matchers or reason not in _MODEL_FAILURES \
+                or view.state.parent_id is not None:
+            return
+        last = next((_text(m) for m in reversed(view.state.messages)
+                     if m.role == "assistant"), "")
+        payload: dict[str, Any] = {"error": _failure_kind(reason, detail),
+                                   "error_details": detail or reason}
+        if last:
+            payload["last_assistant_message"] = last
+        await self._run("StopFailure", view, payload, record=False)
+
+    async def _model_switched(self, view: TaskView, event: InputTaken) -> None:
+        """PostModelSwitch, after a front end switched the task's model:
+        what a hook adds reaches the model with its next request."""
+        to = next(str(i.body.data["model"]) for i in event.items
+                  if isinstance(i.body, External) and i.body.name == CONFIG_SIGNAL
+                  and isinstance(i.body.data, dict) and i.body.data.get("model"))
+        if "PostModelSwitch" not in self.matchers:
+            return
+        before = self._state(view).model
+        view.record(self.name, "model_seen", {"model": to})
+        reads = await self._run("PostModelSwitch", view, {
+            "from_model": before or None, "to_model": to, "requested_model": to,
+            "source": "sdk"})
+        self._context(view, "context", "PostModelSwitch hook", [r.context for r in reads])
 
     def _notify(self, view: TaskView, event: Waiting) -> None:
         """Notification, in the background (side effects only)."""
