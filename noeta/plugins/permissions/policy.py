@@ -51,11 +51,6 @@ DEFAULT_RISK: Mapping[str, str] = {
     "TaskStop": "low",
     "WebFetch": "low",
     "WebSearch": "high",
-    "memory_read": "low",
-    "memory_search": "low",
-    "memory_write": "medium",
-    "memory_archive": "medium",
-    "open_app": "low",
     "run_skill_script": "high",
     "ToolSearch": "low",
     "Task": "low",
@@ -71,8 +66,6 @@ DEFAULT_RISK: Mapping[str, str] = {
     "ScheduleWakeup": "low",
     "ReportFindings": "low",
     "Workflow": "low",
-    "RecallHistory": "low",
-    "TodoWrite": "low",
     "structured_output": "low",
 }
 
@@ -81,9 +74,8 @@ DEFAULT_RISK: Mapping[str, str] = {
 #: is still classified (an ``Agent`` spawn, a sub-agent's hand-back).
 AUTO_SAFE_TOOLS: frozenset[str] = frozenset({
     "Read", "Glob", "Grep", "LS", "NotebookRead", "ToolSearch", "Skill", "AskUserQuestion",
-    "ExitPlanMode", "ListMcpResourcesTool", "ReadMcpResourceTool", "ListAgents", "TodoWrite",
-    "TaskStop", "memory_read", "memory_search", "RecallHistory", "structured_output",
-    "ReportFindings", "ScheduleWakeup",
+    "ExitPlanMode", "ListMcpResourcesTool", "ReadMcpResourceTool", "ListAgents", "TaskStop",
+    "structured_output", "ReportFindings", "ScheduleWakeup",
 })
 
 #: Tools that run or manage shell commands alongside ``Bash``; disallowing

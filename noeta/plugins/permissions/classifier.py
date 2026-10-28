@@ -63,7 +63,7 @@ ENTRY_CHARS = 20_000
 #: Tools whose calls the transcript leaves out (reads, in-project edits,
 #: harness tools that change nothing outside the conversation).
 SKIPPED_TOOLS = frozenset({"Read", "Glob", "Grep", "LS", "NotebookRead", "Edit", "Write",
-                           "NotebookEdit", "MultiEdit", "ToolSearch", "TodoWrite"})
+                           "NotebookEdit", "MultiEdit", "ToolSearch"})
 
 INSTRUCTIONS_PREAMBLE = (
     "Below is the user's project and personal instructions file (NOETA.md), as context "
