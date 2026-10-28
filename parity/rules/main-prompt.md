@@ -15,67 +15,67 @@ restated in our own words; see `README.md` for the no-copy rule and the id schem
 The billing header's suffix after the version (`.0cd`, `.261`, ...) changes between requests;
 its hash is only indicative.
 
-noeta today is measured against `noeta/agents/files/main.md` (rules 1–13 there, cited `n1`…`n13`),
-`noeta/plugins/memory/descriptions/memory-policy.md`, `noeta/plugins/environment.py`,
-`noeta/plugins/skills/`, `noeta/plugins/subtasks/` and `noeta/backends/providers/anthropic.py`
-at the `parity` branch point (deb1f0e).
+noeta today was first measured at the `parity` branch point (deb1f0e), citing that `main.md`'s
+rules 1–13 as `n1`…`n13`; the request, prompt and environment rows are re-measured after the
+Phase 2 main-loop rewrite (`noeta/agents/files/main.md`, `noeta/plugins/environment.py`,
+`noeta/backends/providers/anthropic.py`). The memory rows still describe the old memory plugin.
 
 ## Request envelope
 
 | id | rule | noeta today |
 |---|---|---|
-| `main.req.1` | `system` is three text blocks, in order: a billing header line (version, entry point; a sub-agent adds a sub-agent flag), a one-line product identity, then the main prompt. | contradicts — noeta sends the agent file body as its only system text; no identity line. Billing header is Anthropic-internal: n/a. |
-| `main.req.2` | The identity line and the main prompt each carry an ephemeral cache mark; the billing line carries none. | contradicts — noeta stamps cached `SystemPart`s, the last tool and the last two recorded message blocks (up to 4 marks). |
-| `main.req.3` | The third and last cache mark sits on the last content block of the last message of the request, whatever kind it is (often a `role: "system"` message). Three marks in total. | contradicts — noeta anchors on the last *recorded* block, never on a volatile tail. |
+| `main.req.1` | `system` is three text blocks, in order: a billing header line (version, entry point; a sub-agent adds a sub-agent flag), a one-line product identity, then the main prompt. | covered — identity block (`Agent.identity`) then the main prompt; no billing header (`parity/deviations.md`). |
+| `main.req.2` | The identity line and the main prompt each carry an ephemeral cache mark; the billing line carries none. | covered — both system blocks cached; the identity sits at `system[0]` (no billing block). |
+| `main.req.3` | The third and last cache mark sits on the last content block of the last message of the request, whatever kind it is (often a `role: "system"` message). Three marks in total. | covered — one message mark, on the last block of the last message (`cache_breakpoints`). |
 | `main.req.4` | Cache TTL for the API-key baseline is the default (5 minutes); the subscriber variant uses 1 hour on all marks. | covered (default TTL) |
-| `main.req.5` | Request settings: `max_tokens` 128000, adaptive thinking with summarized display, `output_config.effort` = `medium`, streaming on, a context-management edit that clears old thinking but keeps all of it (`keep: all`). | missing — noeta sends no default effort/thinking/context-management; `max_tokens` comes from the model catalog. |
-| `main.req.6` | Messages may contain `role: "system"` entries (environment, budgets, notices) interleaved with user/assistant turns; they are not merged into user turns. | contradicts — noeta delivers system-origin text as user-role content. |
+| `main.req.5` | Request settings: `max_tokens` 128000, adaptive thinking with summarized display, `output_config.effort` = `medium`, streaming on, a context-management edit that clears old thinking but keeps all of it (`keep: all`). | covered — Anthropic adapter: catalogue `max_tokens`, adaptive thinking with `display: updates`, effort `medium` unless set, `clear_thinking_20251015` `keep: all`. |
+| `main.req.6` | Messages may contain `role: "system"` entries (environment, budgets, notices) interleaved with user/assistant turns; they are not merged into user turns. | covered — `Message.role="system"` turns (`Reminder.role="system"`); adjacent ones joined. |
 | `main.req.7` | The tool list is sent with every main-loop request; deferred tools are present only as names (see `tools/ToolSearch.md`, `tools/DeferredToolPlaceholder.md`). | see tool checklists |
 
 ## Opening (before the first heading)
 
 | id | rule | noeta today |
 |---|---|---|
-| `main.open.1` | The prompt opens by casting the model as an agent that works with the user toward the user's goals and uses its own judgment on the way. | contradicts — noeta opens with "top-level coding assistant inside one workspace … coordinating subordinate agents"; narrower framing, extra claims. |
-| `main.open.2` | Security scope, marked important: help with authorized security testing, defensive work, CTFs and teaching. | missing |
-| `main.open.3` | Refuse destructive techniques, denial of service, mass targeting, supply-chain compromise, and evasion of detection for malicious ends. | missing |
-| `main.open.4` | Dual-use security tooling (command-and-control frameworks, credential testing, exploit development) needs a clear authorization context such as a pentest engagement, a CTF, research or defence. | missing |
+| `main.open.1` | The prompt opens by casting the model as an agent that works with the user toward the user's goals and uses its own judgment on the way. | covered |
+| `main.open.2` | Security scope, marked important: help with authorized security testing, defensive work, CTFs and teaching. | covered |
+| `main.open.3` | Refuse destructive techniques, denial of service, mass targeting, supply-chain compromise, and evasion of detection for malicious ends. | covered |
+| `main.open.4` | Dual-use security tooling (command-and-control frameworks, credential testing, exploit development) needs a clear authorization context such as a pentest engagement, a CTF, research or defence. | covered |
 
 ## Harness section
 
 | id | rule | noeta today |
 |---|---|---|
-| `main.harness.1` | Text written outside tool calls is shown to the user as GitHub-flavoured markdown in a terminal. | missing |
-| `main.harness.2` | Every tool runs under a permission mode the user picked; a denied call means the user said no, so change approach instead of repeating the same call. | covered — n6 (denial = feedback, don't retry the same call); the user-selected mode is not stated. |
-| `main.harness.3` | The system can send updates, reminders or rule changes in mid-conversation system turns; these come from the system, unlike tool results. | missing — noeta never explains its system-origin messages or `<system-reminder>`. |
-| `main.harness.4` | Hooks can intercept tool calls; what a hook returns is to be treated as feedback from the user. | missing |
-| `main.harness.5` | Prefer a dedicated file or search tool over a shell command when one fits. | covered — n6 |
-| `main.harness.6` | Independent tool calls may go in parallel in one response. | covered — n10 (stronger: "make all independent calls in parallel") |
-| `main.harness.7` | Point at code as `file_path:line_number`, because the front end makes it clickable. | covered — n8 (`path:line` "when useful"); the clickable reason is missing. |
+| `main.harness.1` | Text written outside tool calls is shown to the user as GitHub-flavoured markdown in a terminal. | covered (front end left unnamed: noeta has several) |
+| `main.harness.2` | Every tool runs under a permission mode the user picked; a denied call means the user said no, so change approach instead of repeating the same call. | covered |
+| `main.harness.3` | The system can send updates, reminders or rule changes in mid-conversation system turns; these come from the system, unlike tool results. | covered |
+| `main.harness.4` | Hooks can intercept tool calls; what a hook returns is to be treated as feedback from the user. | covered |
+| `main.harness.5` | Prefer a dedicated file or search tool over a shell command when one fits. | covered |
+| `main.harness.6` | Independent tool calls may go in parallel in one response. | covered |
+| `main.harness.7` | Point at code as `file_path:line_number`, because the front end makes it clickable. | covered |
 
 ## Code, people, risk
 
 | id | rule | noeta today |
 |---|---|---|
-| `main.style.1` | New code follows the surrounding code: same comment density, naming and idioms. | covered — n2 (style/conventions); n2 also restricts comments to constraints, which goes further than "match the density". |
-| `main.pron.1` | When a person's pronouns are unknown, refer to them with they/them. | missing |
-| `main.pron.2` | Never infer pronouns from a name. | missing |
-| `main.pron.3` | The pronoun rule covers every user-visible text, visible thinking included. | missing |
-| `main.risk.1` | Before an action that is hard to undo or reaches outside the machine, ask first, unless the user durably authorized it or said to go ahead without asking. | covered — n4 |
-| `main.risk.2` | An approval given in one context does not carry over to another. | missing |
-| `main.risk.3` | Sending content to an external service counts as publishing it; it may be cached or indexed even after deletion. | missing |
-| `main.risk.4` | Look at a target before deleting or overwriting it. | covered — n5 (n5 adds "stop if you did not create it"). |
-| `main.report.1` | Report outcomes truthfully: failing tests are reported with their output. | covered — n3 (without "with the output"). |
-| `main.report.2` | A skipped step is reported as skipped. | covered — n3 |
-| `main.report.3` | Work that is finished and verified is stated plainly, without hedging. | missing |
+| `main.style.1` | New code follows the surrounding code: same comment density, naming and idioms. | covered |
+| `main.pron.1` | When a person's pronouns are unknown, refer to them with they/them. | covered |
+| `main.pron.2` | Never infer pronouns from a name. | covered |
+| `main.pron.3` | The pronoun rule covers every user-visible text, visible thinking included. | covered |
+| `main.risk.1` | Before an action that is hard to undo or reaches outside the machine, ask first, unless the user durably authorized it or said to go ahead without asking. | covered |
+| `main.risk.2` | An approval given in one context does not carry over to another. | covered |
+| `main.risk.3` | Sending content to an external service counts as publishing it; it may be cached or indexed even after deletion. | covered |
+| `main.risk.4` | Look at a target before deleting or overwriting it. | covered |
+| `main.report.1` | Report outcomes truthfully: failing tests are reported with their output. | covered |
+| `main.report.2` | A skipped step is reported as skipped. | covered |
+| `main.report.3` | Work that is finished and verified is stated plainly, without hedging. | covered |
 
 ## Session-specific guidance
 
 | id | rule | noeta today |
 |---|---|---|
-| `main.session.1` | When the user must run a command themselves (an interactive login, say), suggest they type it after a `!` prefix, which runs it in the session and puts its output into the conversation. | missing — no `!` shell passthrough is advertised. |
-| `main.session.2` | A user message of the form `/<skill-name>` means: invoke that skill through the `Skill` tool. | contradicts — noeta's skill tool is lower-case `skill`; slash handling is not stated in the prompt. |
-| `main.session.3` | Only skills listed in the user-invocable skill list may be invoked that way; never guess a skill name. | missing |
+| `main.session.1` | When the user must run a command themselves (an interactive login, say), suggest they type it after a `!` prefix, which runs it in the session and puts its output into the conversation. | deviation — no `!` passthrough in any noeta front end yet (`parity/deviations.md`). |
+| `main.session.2` | A user message of the form `/<skill-name>` means: invoke that skill through the `Skill` tool. | covered (names the `Skill` tool) |
+| `main.session.3` | Only skills listed in the user-invocable skill list may be invoked that way; never guess a skill name. | covered |
 
 ## Memory section
 
@@ -105,19 +105,19 @@ at the `parity` branch point (deb1f0e).
 
 | id | rule | noeta today |
 |---|---|---|
-| `main.envp.1` | States the newest model family and the exact model ids of its members (Fable, Opus, Sonnet, Haiku of the 5 family), and tells the model to default to the latest, most capable models when building AI apps. | missing |
-| `main.envp.2` | Lists where Claude Code is available (terminal CLI, desktop app, web, IDE extensions). | n/a — product fact about Claude Code; noeta's equivalent would list its own front ends. |
+| `main.envp.1` | States the newest model family and the exact model ids of its members (Fable, Opus, Sonnet, Haiku of the 5 family), and tells the model to default to the latest, most capable models when building AI apps. | covered |
+| `main.envp.2` | Lists where Claude Code is available (terminal CLI, desktop app, web, IDE extensions). | covered with noeta's own front ends (`parity/deviations.md`). |
 | `main.envp.3` | Explains fast mode: same large model with faster output, toggled with `/fast`. | n/a — no fast mode. |
 
 ## Context management and closing
 
 | id | rule | noeta today |
 |---|---|---|
-| `main.ctx.1` | When the conversation gets long, earlier context is summarized and the summary plus the unsummarized remainder carry into the next window, so the model should keep working rather than finish early or stop to hand over. | missing |
-| `main.act.1` | With enough information to act, act. | covered — n9 |
-| `main.act.2` | Do not re-derive facts already established, re-open a decision the user already made, or narrate options you will not take. | covered — n9, n12 (re-litigation), narration part partly via n7. |
-| `main.act.3` | When weighing a choice, give a recommendation rather than an exhaustive survey. | covered — n9 |
-| `main.budget.1` | The main prompt ends with a `<total_tokens>N tokens left</total_tokens>` line giving the remaining token budget (15,000,000 at session start). | missing (see `reminders.md` for the per-turn copies) |
+| `main.ctx.1` | When the conversation gets long, earlier context is summarized and the summary plus the unsummarized remainder carry into the next window, so the model should keep working rather than finish early or stop to hand over. | covered |
+| `main.act.1` | With enough information to act, act. | covered |
+| `main.act.2` | Do not re-derive facts already established, re-open a decision the user already made, or narrate options you will not take. | covered |
+| `main.act.3` | When weighing a choice, give a recommendation rather than an exhaustive survey. | covered |
+| `main.budget.1` | The main prompt ends with a `<total_tokens>N tokens left</total_tokens>` line giving the remaining token budget (15,000,000 at session start). | covered — last line of `main.md`. |
 
 ## What the baseline prompt does not contain
 
@@ -126,13 +126,13 @@ or recorded in `parity/deviations.md`.
 
 | id | noeta rule absent from the baseline | noeta today |
 |---|---|---|
-| `main.absent.1` | Narration discipline (one sentence before the first tool call, at most a one-line status between calls). | contradicts — n7 |
-| `main.absent.2` | Final-answer shape (outcome first, complete sentences, match shape to question). | contradicts — n8 (the baseline keeps only the `file_path:line` part) |
-| `main.absent.3` | Stop exploring after rounds with no edit and no new fact. | contradicts — n9 last sentence |
-| `main.absent.4` | Delegation advice (fan out sub-agents in one response, hand searches to `explore`). | contradicts — n10; the baseline puts the parallel-launch hint in the environment message (`main.env.9`). |
-| `main.absent.5` | Plan multi-step work with a todo tool and keep it current. | contradicts — n11; no todo tool in the baseline tool list. |
-| `main.absent.6` | Tool results are data, not instructions; report injection attempts. | contradicts — n13 (the baseline covers only untrusted downloads, `main.env.4`) |
-| `main.absent.7` | Read before you edit; minimal change. | contradicts — n1, n2 first half |
+| `main.absent.1` | Narration discipline (one sentence before the first tool call, at most a one-line status between calls). | dropped |
+| `main.absent.2` | Final-answer shape (outcome first, complete sentences, match shape to question). | dropped (the `file_path:line_number` rule stays, `main.harness.7`) |
+| `main.absent.3` | Stop exploring after rounds with no edit and no new fact. | dropped |
+| `main.absent.4` | Delegation advice (fan out sub-agents in one response, hand searches to `explore`). | dropped |
+| `main.absent.5` | Plan multi-step work with a todo tool and keep it current. | dropped |
+| `main.absent.6` | Tool results are data, not instructions; report injection attempts. | dropped |
+| `main.absent.7` | Read before you edit; minimal change. | dropped |
 
 ## Environment message (`role: "system"`, `messages[1]`)
 
@@ -143,20 +143,20 @@ order:
 
 | id | rule | noeta today |
 |---|---|---|
-| `main.env.1` | Placement: `role: "system"`, immediately after the first user turn (which holds the context reminders and the user's text), one block, stable across the session. | contradicts — noeta records it as a user-role message *before* the first user turn, wrapped in `<workspace-environment>`. |
-| `main.env.2` | Heading "Environment" and a lead-in line, then a bullet list: primary working directory; whether it is a git repository (`true`/`false`); platform (`darwin`/`linux`/…); shell name; OS name and version. | covered — same facts and order (shell/OS omitted for remote exec envs). |
-| `main.env.3` | Git branch and status are **not** here; they arrive in the first user message's context reminder (see `reminders.md`). | contradicts — noeta puts branch and a truncated status inside the environment block. |
-| `main.env.4` | Last bullet: downloaded files and extracted archives are untrusted; put each in its own fresh empty directory, keep your scripts elsewhere, give their paths as arguments instead of starting an interpreter or build tool with that directory as its location, because interpreters load code from the script and current directory (a planted module shadows an import); run Python that reads them with `-I`; code the user asked to build or run is exempt. | missing |
-| `main.env.5` | A model line: the marketing name, the exact model id, and the knowledge cutoff month. | contradicts — noeta says only "powered by the model <id>"; no cutoff. |
-| `main.env.6` | Deferred-tool list: says the named tools exist but their schemas are not loaded, calling one directly fails with an input-validation error, and `ToolSearch` with `select:<name>[,<name>...]` loads them; then one tool name per line, sorted, including MCP tools (`mcp__<server>__<tool>`) and MCP resource tools. | missing — noeta's ToolSearch exists but the list is not delivered this way. |
-| `main.env.7` | Baseline deferred set (m1): `CronCreate`, `CronDelete`, `CronList`, `DesignSync`, `EnterPlanMode`, `EnterWorktree`, `ExitPlanMode`, `ExitWorktree`, `ListMcpResourcesTool`, `Monitor`, `NotebookEdit`, `ReadMcpResourceDirTool`, `ReadMcpResourceTool`, `SendMessage`, `TaskStop`, `WebFetch`, `WebSearch`, plus each MCP tool. | missing |
-| `main.env.8` | Agent list: a lead-in, then one line per agent type, `- <name>: <description> (Tools: <tool list or * or "All tools except …">)`. Baseline types: `claude`, `claude-code-guide`, `Explore`, `general-purpose`, `Plan`, `statusline-setup`. | contradicts — noeta lists agents inside the `Task` tool description; names `explore`/`plan` are lower-case; no tools column. |
-| `main.env.9` | After the agent list: launch several agents for independent work in one message so they run concurrently. | covered — but in n10 and the Task description, not here. |
-| `main.env.10` | Skill list: a lead-in, then one line per skill, `- <name>: <description>` (multi-line descriptions kept); observed order: the project skill first, then user-level, then built-in skills. | contradicts — noeta delivers a separate user-role listing message with its own budget; content shape similar. |
-| `main.env.11` | Permission-mode guidance block for the active mode. In `auto`: shell is allowed for reading (`cat`, `head`, `sed -n`), searching (`grep`, `find`) and small mechanical edits (`sed`, heredocs, short scripts) instead of Read/Edit/Write; prefer Edit/Write where a shell edit is fragile (exact or multi-line replacements, GNU vs BSD flag differences). | missing — noeta has no per-mode guidance. |
-| `main.env.12` | A `<total_tokens>N tokens left</total_tokens>` line. | missing |
-| `main.env.13` | Last line: today's date as `YYYY-MM-DD`. | covered — noeta has the date (inside its block, earlier). |
-| `main.env.14` | The working-directory note of noeta ("paths resolve relative to the primary working directory") has no baseline counterpart. | contradicts — extra line in noeta. |
+| `main.env.1` | Placement: `role: "system"`, immediately after the first user turn (which holds the context reminders and the user's text), one block, stable across the session. | covered — `environment` plugin: a system turn after the first prompt, recorded once. |
+| `main.env.2` | Heading "Environment" and a lead-in line, then a bullet list: primary working directory; whether it is a git repository (`true`/`false`); platform (`darwin`/`linux`/…); shell name; OS name and version. | covered (shell/OS omitted for remote exec envs) |
+| `main.env.3` | Git branch and status are **not** here; they arrive in the first user message's context reminder (see `reminders.md`). | covered — the git snapshot is a reminder in the first user turn. |
+| `main.env.4` | Last bullet: downloaded files and extracted archives are untrusted; put each in its own fresh empty directory, keep your scripts elsewhere, give their paths as arguments instead of starting an interpreter or build tool with that directory as its location, because interpreters load code from the script and current directory (a planted module shadows an import); run Python that reads them with `-I`; code the user asked to build or run is exempt. | covered |
+| `main.env.5` | A model line: the marketing name, the exact model id, and the knowledge cutoff month. | covered — display name and cutoff from the model catalogue. |
+| `main.env.6` | Deferred-tool list: says the named tools exist but their schemas are not loaded, calling one directly fails with an input-validation error, and `ToolSearch` with `select:<name>[,<name>...]` loads them; then one tool name per line, sorted, including MCP tools (`mcp__<server>__<tool>`) and MCP resource tools. | missing — waits for deferred tools (`ToolSearch` worker); joins at `order` 30. |
+| `main.env.7` | Baseline deferred set (m1): `CronCreate`, `CronDelete`, `CronList`, `DesignSync`, `EnterPlanMode`, `EnterWorktree`, `ExitPlanMode`, `ExitWorktree`, `ListMcpResourcesTool`, `Monitor`, `NotebookEdit`, `ReadMcpResourceDirTool`, `ReadMcpResourceTool`, `SendMessage`, `TaskStop`, `WebFetch`, `WebSearch`, plus each MCP tool. | missing — as `main.env.6`. |
+| `main.env.8` | Agent list: a lead-in, then one line per agent type, `- <name>: <description> (Tools: <tool list or * or "All tools except …">)`. Baseline types: `claude`, `claude-code-guide`, `Explore`, `general-purpose`, `Plan`, `statusline-setup`. | missing — the agent list belongs to the `subtasks` plugin; joins at `order` 40. |
+| `main.env.9` | After the agent list: launch several agents for independent work in one message so they run concurrently. | missing — with `main.env.8`. |
+| `main.env.10` | Skill list: a lead-in, then one line per skill, `- <name>: <description>` (multi-line descriptions kept); observed order: the project skill first, then user-level, then built-in skills. | covered — the start-up listing joins the system turn (`order` 50); the replay finds no skill (Claude Code's `.claude/skills` is a Phase 3 item). |
+| `main.env.11` | Permission-mode guidance block for the active mode. In `auto`: shell is allowed for reading (`cat`, `head`, `sed -n`), searching (`grep`, `find`) and small mechanical edits (`sed`, heredocs, short scripts) instead of Read/Edit/Write; prefer Edit/Write where a shell edit is fragile (exact or multi-line replacements, GNU vs BSD flag differences). | deviation — comes with auto mode (Phase 3). |
+| `main.env.12` | A `<total_tokens>N tokens left</total_tokens>` line. | covered — the budget note (`order` 80) joins the first system turn. |
+| `main.env.13` | Last line: today's date as `YYYY-MM-DD`. | covered — last, `order` 90. |
+| `main.env.14` | The working-directory note of noeta ("paths resolve relative to the primary working directory") has no baseline counterpart. | covered — the extra line is gone. |
 
 ## Variants (not baseline)
 
