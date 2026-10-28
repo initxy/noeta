@@ -258,3 +258,13 @@ Phase 5 — front ends
   in the report 39 -> 24 (all 156 -> 145); what is left there belongs to the request-shape, tool-surface and
   deferred-tool work. Open: `SendMessage.notify_when_idle`, the transcript `output_file`,
   agent-file `skills`/`mcpServers`/`hooks`/`memory`/`initialPrompt` (kept, not applied).
+- 2026-10-28: Phase 2 first wave merged (request shape + main prompt, tool surface with deferred
+  tools/ToolSearch, sub-agents with Agent/SubagentHandback/SendMessage/ListAgents, compaction +
+  Claude Code-style memory). `make parity` 156 → 65; make check 1374 passed; make e2e 7 passed;
+  evals: `grep_over_shell_search` became `search_through_shell` (the baseline has no Grep),
+  new baseline 0.987 (old 0.952). Open: deferred-tool names in the environment message, skill
+  list from `.claude/skills` (Phase 3), background-event wording, side requests (session title,
+  plan name, count_tokens), m3 no longer compacts under replay (noeta's token estimate below
+  Claude Code's count), ReportFindings/ScheduleWakeup/Workflow/ExitPlanMode, auto mode.
+  Background sub-agents' approvals wait at the root (Claude Code denies the one call) — owner to
+  decide.
