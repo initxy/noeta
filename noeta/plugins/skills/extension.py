@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 import msgspec
 
+from noeta.core.commands import command_message, parse_command_message
 from noeta.core.events import Recorded
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import (
@@ -37,6 +38,7 @@ from noeta.plugins.skills.registry import (
     SkillRegistry,
     load_registry,
     render_activation,
+    render_command_body,
 )
 from noeta.plugins.skills.script import (
     SKILL_SCRIPT_TOOL_NAME,
@@ -129,6 +131,16 @@ class SkillTool:
             f"context from your next step.",
             skill_activation=_activation_data(desc, "model", args),
         )
+
+
+def _typed_command(text: str) -> tuple[str, str] | None:
+    """``(name, args)`` of a slash command the person typed: the command's
+    tags a front end sends, or the bare ``/<name> <args>``."""
+    tagged = parse_command_message(text)
+    if tagged is not None:
+        return tagged[0], tagged[1].strip()
+    m = re.match(r"/([a-z0-9][a-z0-9-]*)(?:\s+|$)(.*)", text.lstrip(), re.DOTALL)
+    return (m.group(1), m.group(2).strip()) if m else None
 
 
 def _activation_data(desc: SkillDescription, source: str,
@@ -292,7 +304,7 @@ class Skills(Extension):
                 name = fields.get("name")
                 if name and re.fullmatch(r"[a-z0-9][a-z0-9-]*", name):
                     found[name] = fields.get("description", "")
-        return [Command(name=n, description=d, template=f"/{n} {{args}}")
+        return [Command(name=n, description=d, template=command_message(n, "{args}"))
                 for n, d in sorted(found.items())]
 
     async def on_start(self, view: TaskView) -> None:
@@ -351,12 +363,15 @@ class Skills(Extension):
             if lines:
                 self._record_listing(view, lines, first=True)
         for message in messages:
-            m = re.match(r"/([a-z0-9][a-z0-9-]*)(?:\s+|$)(.*)", message.text.lstrip(),
-                         re.DOTALL)
-            desc = registry.get(m.group(1)) if m else None
-            if m and desc is not None and desc.name not in state.get("active", {}):
-                self._record_activation(view, _activation_data(desc, "user",
-                                                               m.group(2).strip()))
+            typed = _typed_command(message.text)
+            desc = registry.get(typed[0]) if typed else None
+            if typed and desc is not None and desc.name not in state.get("active", {}):
+                data = _activation_data(desc, "user", typed[1])
+                # The body rides in the person's turn as plain text, after
+                # the command's tags (Claude Code's slash-command shape).
+                data["text"] = render_command_body(desc, typed[1])
+                view.record(self.name, "activated", data,
+                            message=user(data["text"], origin="command"))
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
         data = output.meta.get("skill_activation")

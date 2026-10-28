@@ -170,9 +170,30 @@ async def test_slash_command_activates_even_a_user_only_skill(h: Harness) -> Non
     tid = await h.start(agent(), "/hidden please")
     msgs = h.provider.requests[0].messages
     assert msgs[0].text == "/hidden please"
-    assert msgs[1].text.startswith("Activated skill: hidden") and "Secret steps." in msgs[1].text
+    assert msgs[1].origin == "command"
+    assert msgs[1].text.startswith("Base directory for this skill: ")
+    assert msgs[1].text.endswith("Secret steps.\n\nARGUMENTS: please")
     [act] = await h.records(tid, "skills", "activated")
     assert act.data["source"] == "user"
+
+
+async def test_a_command_in_its_tags_puts_the_body_in_the_persons_turn(h: Harness) -> None:
+    from noeta.backends.providers.anthropic import AnthropicProvider
+    from noeta.core.commands import expand_with
+    from noeta.core.extension import CommandContext
+
+    d = write_skill(skills_dir(h), "notes", "Release notes.", body="Notes for $ARGUMENTS.\n")
+    skills = Skills()
+    text = await expand_with([skills], CommandContext(cwd=str(h.work)), "/notes v0.2")
+    assert text == ("<command-message>notes</command-message>\n<command-name>/notes"
+                    "</command-name>\n<command-args>v0.2</command-args>")
+    h.provider.add(reply("ok"))
+    await h.start(Agent(name="a", model="m", extensions=[FileTools(), skills]), text)
+    request = h.provider.requests[0]
+    assert request.messages[1].text == f"Base directory for this skill: {d}\n\nNotes for v0.2.\n"
+    wire = AnthropicProvider(api_key="k").build_body(request)["messages"]
+    # The tags and the body share the person's turn, both plain.
+    assert [b["text"] for b in wire[0]["content"]] == [text, request.messages[1].text]
 
 
 async def test_preload_and_tiers(h: Harness, tmp_path: Path) -> None:

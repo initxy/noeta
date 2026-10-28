@@ -26,6 +26,7 @@ from datetime import datetime
 from typing import Any
 
 from noeta.core import models
+from noeta.core.commands import is_command_message
 from noeta.core.execenv import ExecEnv, is_local
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.types import Message, ToolResult, system_message, user
@@ -254,15 +255,18 @@ DATE_CHANGED_REMINDER = (
 
 
 def _owes_budget_note(messages: Sequence[Message]) -> bool:
-    """Whether a prompt or a tool result came in since the last budget note."""
+    """Whether a prompt or a tool result came in since the last budget note;
+    a typed slash command is not a prompt here (Claude Code sends none after
+    one)."""
     for m in reversed(messages):
         if m.role == "assistant":
             return False
         if m.role == "system" and "<total_tokens>" in m.text:
             return False
-        if m.role == "user" and (m.origin in (None, "human")
-                                 or any(isinstance(b, ToolResult) for b in m.content)):
+        if m.role == "user" and any(isinstance(b, ToolResult) for b in m.content):
             return True
+        if m.role == "user" and m.origin in (None, "human"):
+            return not is_command_message(m.text)
     return False
 
 

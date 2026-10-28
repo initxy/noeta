@@ -9,12 +9,21 @@ run is logged and left out; its failure never stops the front end.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 
 from noeta.core.agent import Agent
 from noeta.core.extension import Command, CommandContext, Extension
 
-__all__ = ["expand_command", "expand_with", "list_commands", "parse_command"]
+__all__ = [
+    "command_message",
+    "expand_command",
+    "expand_with",
+    "is_command_message",
+    "list_commands",
+    "parse_command",
+    "parse_command_message",
+]
 
 log = logging.getLogger("noeta.commands")
 
@@ -26,6 +35,33 @@ def parse_command(text: str) -> tuple[str, str] | None:
     name, _, args = text[1:].partition(" ")
     name = name.strip()
     return (name, args.strip()) if name else None
+
+
+#: The tags a typed slash command reaches the model in (Claude Code's).
+_COMMAND_OPENERS = ("<command-message>", "<command-name>", "<local-command-caveat>")
+_COMMAND_MESSAGE_RE = re.compile(
+    r"\A<command-message>([^<]*)</command-message>\n<command-name>/([^<]*)</command-name>"
+    r"\n<command-args>([\s\S]*?)</command-args>")
+
+
+def command_message(name: str, args: str) -> str:
+    """How a command that sends a prompt (a skill) shows in the person's
+    turn: Claude Code's ``<command-message>`` / ``<command-name>`` /
+    ``<command-args>`` tags."""
+    return (f"<command-message>{name}</command-message>\n<command-name>/{name}</command-name>\n"
+            f"<command-args>{args}</command-args>")
+
+
+def parse_command_message(text: str) -> tuple[str, str] | None:
+    """``(name, args)`` of a :func:`command_message`; ``None`` for other text."""
+    m = _COMMAND_MESSAGE_RE.match(text)
+    return (m.group(2), m.group(3)) if m else None
+
+
+def is_command_message(text: str) -> bool:
+    """Whether ``text`` is a typed slash command as Claude Code's tags carry
+    it (a prompt command or a local one), not something the person wrote."""
+    return text.lstrip().startswith(_COMMAND_OPENERS)
 
 
 async def _owned(agent: Agent, ctx: CommandContext) -> list[tuple[Extension, Command]]:
