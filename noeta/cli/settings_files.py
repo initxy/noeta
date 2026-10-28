@@ -188,6 +188,9 @@ def load(files: list[Path]) -> FileSettings:
                     values.append(value)
         if isinstance(perms.get("defaultMode"), str):
             out.permissions["defaultMode"] = perms["defaultMode"]
+        if perms.get("disableBypassPermissionsMode") == "disable":
+            # Any file may switch the mode off; none switches it back on.
+            out.permissions["disableBypassPermissionsMode"] = "disable"
     out.permissions.update({k: v for k, v in lists.items() if v})
     out.sandbox = merge_sandbox(sandboxes)
     return out
@@ -201,16 +204,23 @@ def apply_env(settings: FileSettings) -> None:
 
 def permission_arguments(settings: FileSettings, accepted: set[str]) -> dict[str, Any]:
     """The permissions plugin's arguments the settings give, as plain data:
-    ``mode`` (``defaultMode``), ``allow`` / ``deny`` / ``ask`` (rule strings)
-    and ``additional_directories``; only those the plugin takes
+    ``mode`` (``defaultMode``), ``allow`` / ``deny`` / ``ask`` (rule strings),
+    ``additional_directories`` and ``disable_bypass_mode``
+    (``disableBypassPermissionsMode: "disable"``); only those the plugin takes
     (``accepted``, its argument names)."""
     perms = settings.permissions
     args: dict[str, Any] = {k: list(perms[k]) for k in RULE_LISTS if k in perms}
     if "additionalDirectories" in perms:
         args["additional_directories"] = [str(Path(d).expanduser())
                                           for d in perms["additionalDirectories"]]
+    if perms.get("disableBypassPermissionsMode") == "disable":
+        args["disable_bypass_mode"] = True
     if "defaultMode" in perms:
-        args["mode"] = perms["defaultMode"]
+        if perms["defaultMode"] == "bypassPermissions" and args.get("disable_bypass_mode"):
+            log.warning("settings: defaultMode bypassPermissions is disabled "
+                        "(disableBypassPermissionsMode); ignored")
+        else:
+            args["mode"] = perms["defaultMode"]
     dropped = sorted(k for k in args if k not in accepted)
     if dropped:
         log.warning("settings: the permissions plugin takes no %s yet; ignored",

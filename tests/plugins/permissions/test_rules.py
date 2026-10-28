@@ -123,3 +123,16 @@ def test_an_allow_rule_still_covers_harmless_redirections() -> None:
     # Deny and ask rules still match whatever the command hides.
     assert m("Bash(rm *)", "Bash", command="rm -rf x > log")
 
+
+def test_auto_mode_ignores_rules_that_run_project_scripts() -> None:
+    from noeta.plugins.permissions.policy import bypasses_classifier
+
+    def drops(text: str) -> bool:
+        return bypasses_classifier(parse_rule(text))
+
+    for text in ("Bash(npm run *)", "Bash(npm run build)", "Bash(npm *)", "Bash(make)",
+                 "Bash(make test)", "Bash(uv run *)", "Bash(uv:*)", "Bash(yarn run x)",
+                 "Bash(npx *)", "Bash(python3 *)", "Bash(sh *)", "Bash"):
+        assert drops(text), text
+    for text in ("Bash(npm test *)", "Bash(uv sync)", "Bash(git status)", "Bash(makedirs x)"):
+        assert not drops(text), text

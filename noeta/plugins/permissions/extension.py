@@ -11,6 +11,7 @@ import inspect
 import logging
 import os
 import posixpath
+import shlex
 import sys
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -50,7 +51,7 @@ from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
 from noeta.toolkit import permission_rules as r
 from noeta.toolkit.sandbox import leaves_sandbox, runs_sandboxed, sandbox_of
-from noeta.toolkit.shell import rule_spec_from_command, rule_spec_text
+from noeta.toolkit.shell import parse_argv, rule_spec_from_command, rule_spec_text
 
 log = logging.getLogger("noeta.permissions")
 
@@ -186,7 +187,8 @@ class Permissions(Extension):
       classifier: ``allow``, ``soft_deny``, ``hard_deny`` and
       ``environment``, each a list of plain-language lines.
     * ``disable_bypass_mode`` — refuse ``bypassPermissions`` (Claude Code's
-      ``disableBypassPermissionsMode``).
+      ``disableBypassPermissionsMode``): as the starting mode, from a task's
+      config (an agent file's ``permissionMode``) and as a switch.
 
     The rest are noeta's own:
 
@@ -383,7 +385,8 @@ class Permissions(Extension):
         if st.mode is not None:
             return st.mode
         mode = view.state.config.get("permission_mode")
-        if isinstance(mode, str) and mode in p.PERMISSION_MODES:
+        if isinstance(mode, str) and mode in p.PERMISSION_MODES and not (
+                mode == "bypassPermissions" and self.disable_bypass):
             return mode
         return self.mode
 
@@ -1089,14 +1092,38 @@ def _shell_always(parts: Sequence[sc.Part],
         return (r.format_rule("Edit", f"/{target}/**"),), w.CHOICE_ALWAYS_DIR.format(dir=target)
     rules: list[str] = []
     for part in parts:
-        spec = rule_spec_from_command(part.text)
+        spec = _remembered_rule(part.text)
         if spec is None:
             return (), None
-        rules.append(r.format_rule("Bash", spec["rule"]))
+        rules.append(r.format_rule("Bash", spec))
     shown = ", ".join(x[5:-1] for x in rules)
     label = (w.CHOICE_ALWAYS_COMMANDS.format(rules=f"{shown} commands", dir=scope.cwd)
              if len(rules) > 1 else w.CHOICE_ALWAYS_RULE.format(rules=f"{shown}"))
     return tuple(dict.fromkeys(rules)), label
+
+
+#: Programs whose arguments can run code or write anywhere (a script, an
+#: ``-exec``, a ``w`` command): an "always" answer remembers the exact
+#: command, never a prefix.
+_EXACT_RULE_PROGRAMS = frozenset({"awk", "gawk", "mawk", "nawk", "sed", "gsed", "find", "perl",
+                                  "make", "gmake", "npx", "bunx", "uvx", "ssh", "tar", "rsync"})
+
+
+def _remembered_rule(command: str) -> str | None:
+    """What an "always" answer to ``command`` remembers: Claude Code's
+    seeded rule (``git push *``, ``ls *``), narrowed to the exact command
+    when a flag comes before any subcommand (``git -c x=y log``) or the
+    program's arguments can run code (``awk``, ``sed``, ``find``)."""
+    spec = rule_spec_from_command(command)
+    if spec is None:
+        return None
+    rule = str(spec["rule"])
+    argv = parse_argv(command) or []
+    if not rule.endswith(" *") or not argv:
+        return rule
+    if argv[0] in _EXACT_RULE_PROGRAMS or (len(argv) > 1 and argv[1].startswith("-")):
+        return shlex.join(argv)
+    return rule
 
 
 def _choices(d: _Decision) -> list[dict[str, str]]:

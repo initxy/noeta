@@ -196,6 +196,48 @@ async def test_the_shells_directory_resolves_relative_paths(tmp_path: Path) -> N
     assert perms._shell_scope(view, scope).cwd == str(tmp_path)
 
 
+async def test_disabled_bypass_mode_holds_against_a_task_config(store: SqliteStore,
+                                                                 tmp_path: Path) -> None:
+    write = Fake("Write")
+    provider = ScriptedProvider([reply("", ("Write", {"file_path": "a"})), reply("ok")])
+    perms = Permissions(mode="default", disable_bypass_mode=True)
+    client, tid, _ = await start(store, provider, perms, [write], cwd=tmp_path,
+                                 config={"permission_mode": "bypassPermissions"})
+    assert asked(await events(client, tid)) and not write.runs
+    modes = [e.data["mode"] for e in await events(client, tid)
+             if isinstance(e, ExtensionRecorded) and e.kind == "mode"]
+    assert modes == ["default"]
+
+
+def test_settings_files_can_disable_bypass_mode(tmp_path: Path) -> None:
+    from noeta.cli.settings_files import load, permission_arguments
+
+    user, project = tmp_path / "user.json", tmp_path / "project.json"
+    user.write_text(json.dumps({"permissions": {"disableBypassPermissionsMode": "disable"}}))
+    project.write_text(json.dumps({"permissions": {"defaultMode": "bypassPermissions",
+                                                   "disableBypassPermissionsMode": "enable"}}))
+    args = permission_arguments(load([user, project]), {"mode", "disable_bypass_mode"})
+    assert args == {"disable_bypass_mode": True}
+    Permissions(**args)
+
+
+@pytest.mark.parametrize(("command", "rule"), [
+    ("git -c core.pager=sh log", "Bash(git -c core.pager=sh log)"),
+    ("git push origin main", "Bash(git push *)"),
+    ("awk NR==1 a", "Bash(awk NR==1 a)"),
+    ("find . -name x", "Bash(find . -name x)"),
+    ("sed -n 1p a", "Bash(sed -n 1p a)"),
+    ("npm run build", "Bash(npm run *)"),
+])
+def test_always_remembers_no_more_than_the_command_shows(command: str, rule: str) -> None:
+    from noeta.plugins.permissions import scope as sc
+    from noeta.plugins.permissions.extension import _shell_always
+
+    scope = sc.Scope(dirs=("/proj",), home="/home/u")
+    always, _label = _shell_always(sc.shell_parts(command, scope), scope)
+    assert always == (rule,)
+
+
 async def test_accept_edits_runs_file_commands_inside(store: SqliteStore,
                                                       tmp_path: Path) -> None:
     bash = Fake("Bash")
