@@ -380,8 +380,8 @@ class WebFetchTool:
         start = _offset(input)
         total = len(markdown)
         if start >= total > 0:
-            return text_output(f"offset {start} is past the end of the page ({total} "
-                               "characters).", is_error=True)
+            return text_output(f"Nothing is left to read from offset {start}: the page's text "
+                               f"is {total} characters long.", url=url, chars=total)
         end = min(total, start + INLINE_PAGE_MAX_CHARS)
         page = markdown[start:end]
         more = (f"\n\n(The page continues: this covers characters {start}-{end} of {total}. "

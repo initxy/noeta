@@ -51,6 +51,7 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | `tool.WebFetch.r.1` | success | only the small model's answer text (`Example Domain`), no header, no URL/title lines, no source warning | covered |
 | `tool.WebFetch.r.3` | error status (4xx/5xx) | not an error result: the status and its reason phrase, a `Retry-After` line when the server sent a numeric one, that the body was not read, and to use a signed-in tool (`gh`, an MCP fetch tool) for a page behind a sign-in (2.1.312 bundle) | covered |
 | `tool.WebFetch.r.4` | redirect to another host | not an error result: the original URL, the status and its reason phrase, the target from the `Location` header (marked unverified, cut at 1,000 characters), and the exact call to make next (`url`, `prompt`, and `offset` when one was given); a target that is not http(s), was cut, or has a host name over 255 characters is reported as not fetchable. A redirect that stays on the site (same scheme and port, host equal up to a leading `www.`, no credentials) is followed, at most 10 times (2.1.312 bundle) | covered |
+| `tool.WebFetch.r.5` | `offset` at or past the end | not an error result: nothing is left from that offset, and the page text's length (2.1.312 bundle) | covered |
 | `tool.WebFetch.r.2` | cache marker | in `s1` the result block carried `cache_control` with a 1-hour TTL (OAuth only, not baseline) | n/a (baseline uses no 1-hour TTL here) |
 
 ## Variants

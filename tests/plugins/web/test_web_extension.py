@@ -142,7 +142,7 @@ async def test_long_pages_are_capped_and_announced(tmp_path: Path) -> None:
     assert text(rest) == "summary" and len(pages[1]) == 20_000
     past = await tool.run({"url": "https://a.com", "prompt": "p", "offset": 200_000},
                           _ctx(tmp_path))
-    assert past.is_error
+    assert not past.is_error and text(past).startswith("Nothing is left to read")
 
 
 def test_https_upgrade_spares_loopback() -> None:
@@ -248,6 +248,14 @@ async def test_long_or_credentialed_urls_are_invalid(tmp_path: Path) -> None:
         out = await tool.run({"url": url, "prompt": "p"}, _ctx(tmp_path))
         assert out.is_error and text(out) == "Invalid URL", url
     assert fetch.urls == []
+
+
+async def test_an_offset_past_the_end_is_said_not_failed(tmp_path: Path) -> None:
+    tool = WebFetchTool(FakeFetch("x" * 50, "text/plain"))
+    out = await tool.run({"url": "https://a.com", "prompt": "p", "offset": 60},
+                         _ctx(tmp_path))
+    assert not out.is_error
+    assert text(out) == "Nothing is left to read from offset 60: the page's text is 50 characters long."
 
 
 class FakeSearch:
