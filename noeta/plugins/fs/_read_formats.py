@@ -126,14 +126,29 @@ async def read_pdf(
     as a document block instead; noeta has no document block, so it is
     rendered page by page like a ``pages`` read.
     """
-
-    def err(message: str) -> ToolOutput:
-        return tool_error(tool_name, message)
-
     total = await _page_count(env, path)
+    span = _page_span(pages, total)
+    if isinstance(span, str):
+        return tool_error(tool_name, span)
+    images = await _render_pages(env, path, *span)
+    if isinstance(images, str):
+        return tool_error(tool_name, images)
+    count = len(images)
+    text = (
+        f"PDF pages extracted: {count} page(s) from {display} ({format_size(size)})"
+    )
+    return ToolOutput(
+        content=[Text(text=text), *images],
+        meta={"path": display, "pages": count},
+    )
+
+
+def _page_span(pages: Any, total: int | None) -> tuple[int, int | None] | str:
+    """The first and last page to render (``None``: to the end), or why
+    the request cannot be served."""
     if pages is None:
         if total is not None and total > PDF_MAX_PAGES_WHOLE:
-            return err(
+            return (
                 f"This PDF has {total} pages, which is too many to read at "
                 "once. Use the pages parameter to read specific page ranges "
                 '(e.g., pages: "1-5"). Maximum '
@@ -144,7 +159,7 @@ async def read_pdf(
         spec = str(pages)
         parsed = _parse_pages(spec)
         if parsed is None:
-            return err(
+            return (
                 f'Invalid pages parameter: "{spec}". Give one page ("3") or '
                 'one range ("1-5"), not a list. To read several pages or '
                 "ranges, read each one separately. Pages are 1-indexed."
@@ -152,26 +167,32 @@ async def read_pdf(
         first, last = parsed
         span = PDF_MAX_PAGES_PER_READ + 1 if last is None else last - first + 1
         if span > PDF_MAX_PAGES_PER_READ:
-            return err(
+            return (
                 f'Page range "{spec}" exceeds maximum of '
                 f"{PDF_MAX_PAGES_PER_READ} pages per request. Please use a "
                 "smaller range."
             )
         if total is not None and first > total:
-            return err(
+            return (
                 f'Page range "{spec}" is outside the document (PDF has '
                 f"{total} pages). Use a range within 1-{total}."
             )
     if total is not None:
         last = total if last is None else min(last, total)
+    return first, last
 
+
+async def _render_pages(env: ExecEnv, path: str, first: int,
+                        last: int | None) -> list[Image] | str:
+    """Pages ``first`` to ``last`` as JPEG images (``pdftoppm`` in a scratch
+    directory), or why they could not be made."""
     cwd = posixpath.dirname(path)
     made = await _run(env, ["mktemp", "-d"], cwd)
     if made is None:
-        return err("read failed: could not make a directory for the pages")
+        return "read failed: could not make a directory for the pages"
     out_dir = made.stdout.decode("utf-8", "replace").strip()
     if made.exit_code != 0 or not posixpath.isabs(out_dir):
-        return err("read failed: could not make a directory for the pages")
+        return "read failed: could not make a directory for the pages"
     try:
         argv = ["pdftoppm", "-jpeg", "-r", "100", "-f", str(first)]
         if last is not None:
@@ -179,7 +200,7 @@ async def read_pdf(
         argv += [path, posixpath.join(out_dir, "page")]
         outcome = await _run(env, argv, cwd)
         if outcome is None or outcome.exit_code == 127:
-            return err(
+            return (
                 "pdftoppm is not installed. Install poppler-utils (e.g. `brew "
                 "install poppler` or `apt-get install poppler-utils`) to "
                 "enable PDF page rendering."
@@ -187,11 +208,11 @@ async def read_pdf(
         if outcome.exit_code != 0:
             stderr = outcome.stderr.decode("utf-8", "replace").strip()
             if "Incorrect password" in stderr:
-                return err(
+                return (
                     "PDF is password-protected. Please provide an unprotected "
                     "version."
                 )
-            return err(f"Could not render PDF: {stderr or 'pdftoppm failed'}")
+            return f"Could not render PDF: {stderr or 'pdftoppm failed'}"
         listing = await _run(env, ["ls", "-1", out_dir], cwd)
         names = (
             sorted(
@@ -203,8 +224,8 @@ async def read_pdf(
             else []
         )
         if not names:
-            return err("pdftoppm produced no output pages. The PDF may be invalid.")
-        images = [
+            return "pdftoppm produced no output pages. The PDF may be invalid."
+        return [
             Image(
                 media_type="image/jpeg",
                 data=await env.read_bytes(posixpath.join(out_dir, name)),
@@ -213,15 +234,6 @@ async def read_pdf(
         ]
     finally:
         await _run(env, ["rm", "-rf", out_dir], cwd)
-
-    count = len(images)
-    text = (
-        f"PDF pages extracted: {count} page(s) from {display} ({format_size(size)})"
-    )
-    return ToolOutput(
-        content=[Text(text=text), *images],
-        meta={"path": display, "pages": count},
-    )
 
 
 # ---------------------------------------------------------------------------
