@@ -61,6 +61,8 @@ HANDBACK_TOOL = "SubagentHandback"
 RETRY_NOTE = ("A PermissionDenied hook says the denied {tool} call may be retried, "
               "if it is still needed.")
 _KEEP = 256
+#: The plugin whose folded ``mode`` is the task's permission mode.
+PERMISSIONS_PLUGIN = "permissions"
 
 
 @dataclass(frozen=True)
@@ -81,8 +83,6 @@ class _State:
     #: PermissionRequest answers by call id: ``{"behavior", "input",
     #: "message"}`` (``behavior`` ``None``: no hook decided).
     permission: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
-    #: The permission mode, as the permissions plugin last recorded it.
-    mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -197,8 +197,6 @@ class Hooks(Extension):
             return replace(st, compact_trigger=str(data.get("trigger") or "auto"))
         if kind == "compact_seen":
             return replace(st, compact_seen=int(data.get("through") or 0))
-        if kind == "mode":
-            return replace(st, mode=str(data.get("mode") or "") or None)
         if kind == "once":
             return replace(st, once=st.once | {str(data.get("key"))})
         if kind == "permission":
@@ -230,7 +228,9 @@ class Hooks(Extension):
         """Claude Code's common input fields, then the event's own. The root
         task stands for Claude Code's conversation id."""
         st = view.state
-        mode = self._state(view).mode or st.config.get("permission_mode")
+        # The permissions plugin's current mode (its folded ``mode``).
+        mode = getattr(view.ext_state(PERMISSIONS_PLUGIN), "mode", None) \
+            or st.config.get("permission_mode")
         out: dict[str, Any] = {
             "session_id": st.root_id or st.task_id, "transcript_path": "",
             "cwd": self._cwd(view) or "", "permission_mode": mode if isinstance(mode, str)
@@ -584,9 +584,6 @@ class Hooks(Extension):
         elif isinstance(event, ExtensionRecorded):
             if event.extension == "permissions" and event.kind == "classified":
                 await self._denied(view, event.data)
-            elif event.extension == "permissions" and event.kind in ("mode", "plan_exit") \
-                    and isinstance(event.data, dict):
-                view.record(self.name, "mode", {"mode": event.data.get("mode")})
         elif isinstance(event, TaskEnded):
             if view.state.parent_id is None and "SessionEnd" in self.matchers:
                 await self._run("SessionEnd", view, {"reason": "other"}, record=False)

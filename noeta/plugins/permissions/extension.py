@@ -50,6 +50,7 @@ from noeta.plugins.permissions import policy as p
 from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
 from noeta.plugins.permissions.rule_specs import rule_spec_from_command, rule_spec_text
+from noeta.toolkit import permission_modes as pm
 from noeta.toolkit import permission_rules as r
 from noeta.toolkit.paths import plans_dir as default_plans_dir
 from noeta.toolkit.permission_modes import MODE_SIGNAL as MODE_SIGNAL
@@ -138,6 +139,8 @@ class PermState:
     probed: bool = False
     #: The task was compacted since it started or was last resumed.
     compacted: bool = False
+    #: The mode vocabulary last published for front ends (``modes`` record).
+    offered: dict[str, Any] | None = None
 
 
 def inherited_rules(state: Any) -> list[str]:
@@ -264,6 +267,9 @@ class Permissions(Extension):
     ) -> None:
         self.mode = p.check_mode(mode)
         self.disable_bypass = bool(disable_bypass_mode)
+        #: What front ends offer for this task (published on start).
+        self._modes = pm.Modes().without("bypassPermissions") if self.disable_bypass \
+            else pm.Modes()
         if self.disable_bypass and self.mode == "bypassPermissions":
             raise ValueError("mode 'bypassPermissions' is disabled (disable_bypass_mode)")
         extra_allow = [f"Bash({rule_spec_text(s)})" for s in shell_allowlist]
@@ -358,6 +364,8 @@ class Permissions(Extension):
                            guidance_after=int(d.get("seq") or st.guidance_after))
         if kind == "probed":
             return replace(st, probed=True)
+        if kind == pm.MODES_KIND:
+            return replace(st, offered=dict(d))
         if kind == "resumed":
             return replace(st, probed=False, compacted=False)
         if kind == "step":
@@ -872,8 +880,12 @@ class Permissions(Extension):
     # ------------------------------------------------------------ events
 
     async def on_start(self, view: TaskView) -> None:
-        if self._state(view).mode is None:
+        st = self._state(view)
+        if st.mode is None:
             view.record(NAME, "mode", {"mode": self.mode_of(view)})
+        offered = pm.modes_record(self._modes)
+        if st.offered != offered:
+            view.record(NAME, pm.MODES_KIND, offered)
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         ev = recorded.event

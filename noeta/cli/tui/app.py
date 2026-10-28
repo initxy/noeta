@@ -58,7 +58,13 @@ from noeta.host.pending import (
 )
 from noeta.host.questions import next_question, typed_answer
 from noeta.host.usage import tree_usage
-from noeta.toolkit.permission_modes import MODE_SIGNAL, current_mode, next_mode
+from noeta.toolkit.permission_modes import (
+    MODE_SIGNAL,
+    Modes,
+    current_mode,
+    next_mode,
+    published_modes,
+)
 from noeta.toolkit.signals import RESUMED_SIGNAL
 
 log = logging.getLogger("noeta.cli.tui")
@@ -113,6 +119,8 @@ class NoetaApp(App[None]):
         self.permission_mode = permission_mode
         #: The task's permission mode, as its permissions plugin recorded it.
         self.mode = ""
+        #: The modes the task's permissions plugin offers (its ``modes`` record).
+        self.modes = Modes()
         self.task_id = ""
         self.calls: dict[str, ToolCall] = {}
         self.stream: MarkdownStream | None = None
@@ -361,7 +369,7 @@ class NoetaApp(App[None]):
         """Step to the next permission mode (Claude Code's shift+tab)."""
         if not self.task_id or self.read_only:
             return
-        mode = next_mode(self.mode or self.permission_mode or "auto")
+        mode = next_mode(self.mode or self.permission_mode or "auto", self.modes.cycle)
         await self.local.client.signal(self.task_id, MODE_SIGNAL, {"mode": mode})
         self.mode = mode
         self.update_status()
@@ -535,6 +543,9 @@ class NoetaApp(App[None]):
             mode = current_mode([rec])
             if mode:
                 self.mode = mode
+            offered = published_modes([rec])
+            if offered is not None and offered.cycle:
+                self.modes = offered
             # The core's own records by type: a plugin may record the same
             # kind names (the hooks plugin's "retry") for something else.
             core = records.decode(ev)
