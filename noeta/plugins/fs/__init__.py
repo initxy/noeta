@@ -1,4 +1,4 @@
-"""The file tools as one extension: Read, Write and Edit, the
+"""The file tools as one extension: Read, Write, Edit and NotebookEdit, the
 fold of what they record (the files the model has read), and Claude Code's
 reminder when one of those files changed on disk since.
 
@@ -18,11 +18,12 @@ from noeta.core.events import Compacted, Recorded
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.tool import Tool
 from noeta.plugins.fs.edit import EditTool
+from noeta.plugins.fs.notebook import NotebookEditTool
 from noeta.plugins.fs.read import ReadTool
 from noeta.plugins.fs.state import FS, KIND_CHANGED, KIND_FORGET_RANGES, FsState, reduce_fs
 from noeta.plugins.fs.write import WriteTool
 
-__all__ = ["EditTool", "FileTools", "ReadTool", "WriteTool"]
+__all__ = ["EditTool", "FileTools", "NotebookEditTool", "ReadTool", "WriteTool"]
 
 
 #: How many of the most recently read files the turn-start check looks at.
@@ -37,13 +38,13 @@ FILE_CHANGED_REMINDER = (
 )
 
 _BY_NAME: dict[str, type[Tool]] = {
-    "Read": ReadTool, "Write": WriteTool, "Edit": EditTool,
+    "Read": ReadTool, "Write": WriteTool, "Edit": EditTool, "NotebookEdit": NotebookEditTool,
 }
 
 
 class FileTools(Extension):
     """``tools``: which file tools to offer, by name or as tool objects
-    (default: all three, in the order Read, Write, Edit)."""
+    (default: all four, in the order Read, Write, Edit, NotebookEdit)."""
 
     name = FS
 

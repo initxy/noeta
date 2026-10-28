@@ -42,6 +42,7 @@ DEFAULT_RISK: Mapping[str, str] = {
     "Read": "low",
     "Edit": "high",
     "Write": "high",
+    "NotebookEdit": "high",
     "Bash": "high",
     "Monitor": "high",
     "TaskStop": "high",
@@ -62,7 +63,7 @@ DEFAULT_RISK: Mapping[str, str] = {
 }
 
 #: The edit tools ``acceptEdits`` exempts from the risk gate.
-EDIT_TOOL_NAMES: frozenset[str] = frozenset({"Edit", "Write"})
+EDIT_TOOL_NAMES: frozenset[str] = frozenset({"Edit", "Write", "NotebookEdit"})
 
 #: Tools whose ``command`` the shell allowlist gates (Monitor runs its script
 #: through the same gate).
