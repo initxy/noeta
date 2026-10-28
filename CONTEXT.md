@@ -36,7 +36,8 @@ folds from the task's snapshot (`noeta/core/snapshots.py`) when one of its fold 
 
 The only way into a task: `Say`, `Cancel`, `Answer`, `ChildEnded`, `TimerFired`, `External`,
 each idempotent on an optional `dedupe_key`. Front ends, parents, timers and plugins all post;
-only the task's runner reads.
+only the task's runner reads. A task never ends over an item it has not taken (the store
+refuses the end, `InboxUnread`; the runner takes it and decides again).
 
 ## One writer
 

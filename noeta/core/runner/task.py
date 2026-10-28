@@ -27,7 +27,7 @@ from noeta.core import records as core_records
 from noeta.core import registry, snapshots
 from noeta.core.agent import Agent
 from noeta.core.deferred import with_tool_search
-from noeta.core.errors import Conflict, StoreUnavailable
+from noeta.core.errors import Conflict, InboxUnread, StoreUnavailable
 from noeta.core.events import (
     Cancel,
     ChildEnded,
@@ -519,8 +519,8 @@ class TaskRun:
         if isinstance(action, decide.Idle):
             return False
         if isinstance(action, decide.End):
-            await self.end(action.status, action.answer, action.error)
-            return False
+            return not await self.end(action.status, action.answer, action.error,
+                                      decide_again=True)
         if isinstance(action, decide.WaitInput):
             detail: dict[str, Any] = {"answer": self.state.last_answer}
             if self.state.turn_error:
@@ -648,20 +648,34 @@ class TaskRun:
             Post(task_id=k, body=Cancel(reason=cancel_reason))
             for k in children if self.state.children.get(k) is None])
 
-    async def end(self, status: str, answer: str = "", error: str = "") -> None:
-        # Children die with their parent.
-        posts: list[Post] = [Post(task_id=c, body=Cancel(reason=f"parent task {status}"))
-                             for c in self.state.live_children()]
-        if self.state.parent_id:
-            posts.append(Post(
-                task_id=self.state.parent_id,
-                body=ChildEnded(child_id=self.task_id, status=status,  # type: ignore[arg-type]
-                                answer=answer, error=error, last_usage=self.state.last_usage,
-                                tool_calls=self.state.tool_calls),
-                dedupe_key=f"child:{self.task_id}",
-            ))
-        await self.append([TaskEnded(status=status, answer=answer, error=error)],  # type: ignore[arg-type]
-                          posts=posts)
+    async def end(self, status: str, answer: str = "", error: str = "",
+                  *, decide_again: bool = False) -> bool:
+        """End the task, unless its inbox got something it has not taken:
+        the end never lands over an unread message (a ``hold_lost`` there
+        would otherwise be heard by no one). The input is taken first; with
+        ``decide_again`` that returns ``False`` so the caller decides anew,
+        otherwise (an end that stands whatever arrived) it ends after it."""
+        while True:
+            # Children die with their parent.
+            posts: list[Post] = [Post(task_id=c, body=Cancel(reason=f"parent task {status}"))
+                                 for c in self.state.live_children()]
+            if self.state.parent_id:
+                posts.append(Post(
+                    task_id=self.state.parent_id,
+                    body=ChildEnded(child_id=self.task_id, status=status,  # type: ignore[arg-type]
+                                    answer=answer, error=error,
+                                    last_usage=self.state.last_usage,
+                                    tool_calls=self.state.tool_calls),
+                    dedupe_key=f"child:{self.task_id}",
+                ))
+            try:
+                await self.append([TaskEnded(status=status, answer=answer, error=error)],  # type: ignore[arg-type]
+                                  posts=posts)
+                return True
+            except InboxUnread:
+                await self._take_input()
+                if decide_again:
+                    return False
 
     async def fail_turn(self, reason: str, detail: str = "") -> bool:
         """A turn that cannot go on. A one-shot task ends failed; an

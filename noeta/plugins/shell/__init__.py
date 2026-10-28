@@ -248,7 +248,7 @@ class Shell(Extension):
                 if isinstance(ev, ExtensionRecorded) and ev.extension == self.name:
                     st = reduce_shell(st, ev.kind, ev.data)
             if not ended or st is None:
-                continue  # a live task hears ``hold_lost`` itself
+                continue  # a live task hears ``hold_lost`` itself: it cannot end unread
             for job_id, job in st.jobs.items():
                 if job.get("status") == "running" and (job.get("worker"), job.get("hold")) in lost:
                     view.enqueue(Say(message=user(lost_notice(job_id, job), origin="system"),

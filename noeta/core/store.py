@@ -8,7 +8,8 @@ transaction:
 * ``post`` is idempotent on ``dedupe_key`` and wakes a waiting task (unless
   ``Post.wake`` is off: then it is read when something else wakes it), and
   a runner that goes to wait while unread inbox items exist is made ready
-  instead — so no message is ever left unseen.
+  instead, and one that ends over them is refused (``InboxUnread``) — so no
+  message is ever left unseen.
 
 Leases (``lease_until``) only decide when a silent runner's task may be
 claimed by someone else. A wrong guess costs a retry, never a double write.
@@ -41,6 +42,7 @@ from typing import Literal, Protocol
 
 from msgspec.structs import replace
 
+from noeta.core.errors import InboxUnread
 from noeta.core.events import (
     DEFAULT_TENANT,
     Event,
@@ -116,9 +118,13 @@ def next_row_state(patch: Patch, inbox_seq: int,
     """The row's ``(status, waiting_on, ready_at, inbox_read_seq)`` after an
     append with ``patch``, given its current ``inbox_seq`` and
     ``inbox_read_seq``: a task going to wait while unread inbox items exist
-    is made ready instead, so no message is left unseen."""
+    is made ready instead, and one ending over them raises ``InboxUnread``
+    (posts in the same append are not counted), so no message is left
+    unseen."""
     read = patch.inbox_read_seq if patch.inbox_read_seq is not None else read_seq
     status: Status = patch.status
+    if status == "ended" and inbox_seq > read:
+        raise InboxUnread(f"inbox at {inbox_seq}, read through {read}")
     ready_at = patch.ready_at
     if status == "waiting" and inbox_seq > read:
         status, ready_at = "ready", None
@@ -209,7 +215,9 @@ class Store(Protocol):
         ``posts`` and ``creates`` atomically. Returns the new last seq and
         the time stamped on the events (what :meth:`read` returns). Raises
         ``noeta.core.errors.Conflict`` when the claim's epoch or the expected seq
-        no longer holds, or the task is not running. A post to a task that
+        no longer holds, or the task is not running; ``InboxUnread`` (a
+        ``Conflict``) when the append ends the task and its inbox holds items
+        past ``patch.inbox_read_seq`` (see :func:`next_row_state`). A post to a task that
         does not exist is skipped (the rest still lands)."""
         ...
 

@@ -19,6 +19,12 @@ class CommitUnknown(Conflict):
     if its claim were lost, and whoever runs the task next reads the log."""
 
 
+class InboxUnread(Conflict):
+    """An append that ends the task found inbox items its runner has not
+    taken: a task never ends over a message it did not read. The runner
+    takes them and decides again."""
+
+
 class StoreUnavailable(NoetaError):
     """The store could not be reached, or its connection dropped before a
     write committed. Nothing was written; the call may be made again."""
