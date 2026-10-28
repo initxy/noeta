@@ -56,10 +56,10 @@ async def test_listing_is_recorded_once_and_offers_the_skill_tool(h: Harness) ->
     assert len(await h.records(tid, "skills", "listing")) == 1
 
 
-async def test_no_skills_means_no_tool_and_no_listing(h: Harness) -> None:
+async def test_no_skills_means_no_listing_but_the_tool_stays(h: Harness) -> None:
     h.provider.add(reply("ok"))
     tid = await h.start(agent())
-    assert "Skill" not in [t.name for t in h.provider.requests[0].tools]
+    assert "Skill" in [t.name for t in h.provider.requests[0].tools]
     assert await h.records(tid, "skills") == []
 
 
@@ -157,10 +157,9 @@ async def test_a_skill_installed_into_an_empty_task_is_announced(h: Harness) -> 
     h.provider.add(reply("", ("Install", {})), reply("ok"))
     await h.start(a)
     first, second = h.provider.requests
-    assert "Skill" not in [t.name for t in first.tools]
+    assert first.tools == second.tools  # the prefix does not move
     texts = [m.text for m in second.messages]
     assert texts[-2:] == ["next", f"{ROSTER_HEADER}\n- review: Review code."]
-    assert "Skill" in [t.name for t in second.tools]
 
 
 async def test_slash_command_activates_even_a_user_only_skill(h: Harness) -> None:

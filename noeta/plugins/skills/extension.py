@@ -245,10 +245,9 @@ class Skills(Extension):
     # ------------------------------------------------------------ hooks
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
-        state = view.ext_state(self.name) or {}
-        tools: list[Tool] = []
-        if any(listing["names"] for listing in state.get("listings", [])):
-            tools.append(self._skill_tool)
+        # Offered even with no skill listed, as Claude Code does: the prefix
+        # does not move when the first skill is installed.
+        tools: list[Tool] = [self._skill_tool]
         if self.scripts:
             tools.append(self._script_tool)
         return tools
