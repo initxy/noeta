@@ -18,7 +18,8 @@ from typing import Any
 import acp
 from acp import schema
 
-from noeta.core.commands import expand_command, list_commands, parse_command
+from noeta.core import models
+from noeta.core.commands import list_commands, parse_command, run_typed
 from noeta.core.events import (
     ExtensionRecorded,
     InputTaken,
@@ -32,7 +33,7 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import CommandContext
-from noeta.core.loop.state import CORE
+from noeta.core.loop.state import CONFIG_SIGNAL, CORE
 from noeta.core.pending import (
     MODE_NAMES,
     MODE_SIGNAL,
@@ -48,6 +49,8 @@ from noeta.core.pending import (
 from noeta.core.questions import next_question, typed_answer
 from noeta.core.types import Delta, Image, Message, Text, ToolUse
 from noeta.host.local import LocalApp, UnknownAgent
+from noeta.host.rewind import rewind, rewind_points
+from noeta.host.usage import context_breakdown, context_text, cost_text, tree_usage
 
 log = logging.getLogger("noeta.host.acp")
 
@@ -240,6 +243,16 @@ class EditorServers:
         self.by_task[task_id] = table
 
 
+#: Commands the adapter answers itself (name, hint, description).
+HOST_COMMANDS = (
+    ("model", "[name]", "Show or switch the model"),
+    ("context", "", "What fills the next request"),
+    ("cost", "", "Tokens and cost of this session and its sub-agents"),
+    ("rewind", "[n] [both|conversation|code]",
+     "Go back to before a prompt: files here, the conversation in a new session"),
+)
+
+
 class NoetaAcpAgent:
     """The ACP agent side. ``agent`` names the noeta agent each session runs."""
 
@@ -315,19 +328,20 @@ class NoetaAcpAgent:
         if agent is None or self.conn is None:
             return
         try:
-            commands = await list_commands(agent, self._command_context(session_id))
-            if not commands:
-                return
+            commands = [(c.name, c.argument_hint, c.description or c.name)
+                        for c in await list_commands(agent, self._command_context(session_id))]
+            own = {name for name, _h, _d in commands}
+            commands += [c for c in HOST_COMMANDS if c[0] not in own]
             await self.conn.session_update(
                 session_id=session_id, update=schema.AvailableCommandsUpdate(
                     session_update="available_commands_update",
                     available_commands=[
                         schema.AvailableCommand(
-                            name=c.name, description=c.description or c.name,
+                            name=name, description=description,
                             input=schema.AvailableCommandInput(
-                                root=schema.UnstructuredCommandInput(hint=c.argument_hint))
-                            if c.argument_hint else None)
-                        for c in commands]))
+                                root=schema.UnstructuredCommandInput(hint=hint))
+                            if hint else None)
+                        for name, hint, description in commands]))
         except Exception:
             log.exception("acp: announcing the commands of %s failed", session_id)
 
@@ -395,15 +409,19 @@ class NoetaAcpAgent:
                 agent = self.app.runtime.agents.get(self.agent)
                 if agent is not None and parse_command(text) is not None:
                     try:
-                        expanded = await expand_command(
-                            agent, self._command_context(session_id), text)
+                        typed = await run_typed(agent.all_extensions(),
+                                                self._command_context(session_id), text)
+                        shown = typed.text if typed is not None and typed.local else None
+                        if typed is None:
+                            shown = await self._host_command(session_id, text)
                     except Exception as exc:  # noqa: BLE001 — shown to the user
-                        failed = f"{text.split()[0]} failed: {exc}"
+                        shown = f"{text.split()[0]} failed: {exc}"
+                    if shown is not None:
                         await self.conn.session_update(
-                            session_id=session_id, update=acp.update_agent_message_text(failed))
+                            session_id=session_id, update=acp.update_agent_message_text(shown))
                         return schema.PromptResponse(stop_reason="end_turn")
-                    if expanded is not None:
-                        message = Message(role="user", content=[Text(text=expanded)],
+                    if typed is not None:
+                        message = Message(role="user", content=[Text(text=typed.text)],
                                           origin="human")
                 turn.seq = await client.send(session_id, message)
             pumping = asyncio.create_task(self._pump(session_id, turn.out))
@@ -418,6 +436,44 @@ class NoetaAcpAgent:
             turn.done = True
             unsubscribe()
         return schema.PromptResponse(stop_reason=stop)  # type: ignore[arg-type]
+
+    async def _host_command(self, session_id: str, text: str) -> str | None:
+        """The adapter's own commands (:data:`HOST_COMMANDS`): the text to
+        show, or ``None`` when ``text`` is not one of them."""
+        parsed = parse_command(text)
+        name, arg = parsed if parsed is not None else ("", "")
+        client = self.app.client
+        if name == "model":
+            if not arg:
+                return f"model: {self.model or '(the agent default)'}"
+            real = models.resolve_alias(arg)
+            await client.signal(session_id, CONFIG_SIGNAL, {"model": real})
+            return f"model set to {real} from the next request on"
+        if name == "cost":
+            return cost_text(await tree_usage(client, session_id))
+        if name == "context":
+            preview = await self.app.runtime.preview(session_id)
+            return context_text(context_breakdown(preview)) if preview is not None \
+                else "this session's agent is not one this editor adapter runs"
+        if name != "rewind":
+            return None
+        points = await rewind_points(client, session_id)
+        words = arg.split()
+        if not words or not words[0].isdigit() or not 1 <= int(words[0]) <= len(points):
+            return "Rewind to before a prompt with /rewind <n> [both|conversation|code]:\n" + \
+                "\n".join(f"{n}. {p.text.splitlines()[0][:80] if p.text else ''}"
+                          + (f" ({len(p.files)} file(s) changed since)" if p.files else "")
+                          for n, p in enumerate(points, 1))
+        what = words[1] if len(words) > 1 else "both"
+        done = await rewind(client, session_id, points[int(words[0]) - 1],
+                            conversation=what in ("both", "conversation"),
+                            files=what in ("both", "code"))
+        lines = [f"restored {len(done.files)} file(s)"] if done.files else []
+        if done.task_id != session_id:
+            await self._adopt(done.task_id)
+            lines.append(f"the conversation before that prompt goes on in session "
+                         f"{done.task_id}; load it to continue (the prompt was: {done.prompt})")
+        return "; ".join(lines) or "nothing to restore"
 
     async def _pump(self, session_id: str, out: asyncio.Queue[Any]) -> None:
         while True:

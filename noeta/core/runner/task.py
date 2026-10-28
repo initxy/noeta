@@ -48,6 +48,11 @@ from noeta.core.types import Text, ToolResult, user
 log = logging.getLogger("noeta.core.runner")
 
 
+#: Continued conversations followed back from a task (``history_from``)
+#: before the rest of the chain is ignored.
+MAX_HISTORY_DEPTH = 64
+
+
 class LostClaim(Exception):
     pass
 
@@ -76,7 +81,7 @@ class TaskRun:
         keeper = asyncio.create_task(self._keep_claim())
         unsubscribe = self.store.on_change(self._on_change)
         try:
-            await self._load()
+            await self.load()
             if self.agent is None:
                 # Releasing would hand it straight back to this worker; a task
                 # whose agent only some workers have must be routed by queue.
@@ -145,7 +150,8 @@ class TaskRun:
         view.record(CORE, "prompts", found)
         await self.flush(view)
 
-    async def _load(self) -> None:
+    async def load(self) -> None:
+        """Read and fold the log (and the conversation it continues)."""
         records = await self.store.read(self.task_id)
         first = records[0].event if records else None
         self.agent = self.rt.agents.get(getattr(first, "agent", ""))
@@ -153,14 +159,24 @@ class TaskRun:
             self.exts = self.agent.all_extensions()
             self.reducers = {e.name: e.reduce for e in self.exts}
         initial = {e.name: e.initial_state() for e in self.exts}
-        base = None
-        if isinstance(first, TaskCreated) and first.history_from:
-            source = await self.store.read(first.history_from)
-            through = first.history_through
-            base = continued(fold([r for r in source if through is None or r.seq <= through],
-                                  self.reducers, initial))
+        base = await self._history(first, initial)
         self.state = fold(records, self.reducers, initial, state=base)
         self.state.task_id = self.task_id  # the log never names its own task
+
+    async def _history(self, first: Any, initial: dict[str, Any],
+                       depth: int = 0) -> TaskState | None:
+        """The conversation a task created with ``history_from`` starts
+        from: its source's log up to ``history_through``, itself folded on
+        the conversation that source continued (a fork of a fork, a resumed
+        sub-agent resumed again)."""
+        if not isinstance(first, TaskCreated) or not first.history_from \
+                or depth > MAX_HISTORY_DEPTH:
+            return None
+        source = await self.store.read(first.history_from)
+        through = first.history_through
+        base = await self._history(source[0].event if source else None, initial, depth + 1)
+        return continued(fold([r for r in source if through is None or r.seq <= through],
+                              self.reducers, initial, state=base))
 
     async def _keep_claim(self) -> None:
         interval = max(self.rt.lease_seconds / 3, 0.05)
@@ -357,6 +373,9 @@ class TaskRun:
             await self.append([self.error_result(i, texts.INTERRUPTED_CALL_ERROR)
                                for i in action.call_ids])
             return True
+        if isinstance(action, decide.MaxTurns):
+            return await self.fail_turn(texts.MAX_TURNS,
+                                        texts.MAX_TURNS_DETAIL.format(n=action.limit))
         if isinstance(action, decide.StopTurn):
             await self._stop_turn(action.call_ids)
             return True

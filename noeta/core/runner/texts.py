@@ -22,6 +22,9 @@ REJECTED_MARKER = "[Request interrupted by user for tool use]\n"
 #: Opens the person's next turn after they stopped a reply mid-stream, after
 #: the part of the reply that streamed (Claude Code's marker, verbatim).
 INTERRUPTED_MARKER = "[Request interrupted by user]\n"
+#: A call a permission callback refused without stopping the turn (an
+#: ``Answer`` whose data says ``"interrupt": false``) and gave no reason for.
+DENIED_BY_CALLBACK = "Permission to use {name} was denied."
 UNKNOWN_TOOL = "No tool named {name!r} is available in this task; use one of the offered tools."
 DEFERRED_NOT_LOADED = (
     "InputValidationError: {name} is a deferred tool whose schema is not loaded. Load it with "
@@ -58,6 +61,10 @@ LLM_ERROR = "llm_error"
 LLM_EMPTY_RESPONSE = "llm_empty_response"
 LLM_TRUNCATED = "llm_truncated"
 CONTEXT_OVERFLOW = "context_overflow"
+#: The turn reached ``config["max_turns"]`` model calls (Claude Code's
+#: ``--max-turns``); the detail says how many.
+MAX_TURNS = "max_turns"
+MAX_TURNS_DETAIL = "Reached maximum number of turns ({n})"
 #: A bug in the runner, an extension hook or a provider adapter.
 INTERNAL_ERROR = "internal_error"
 #: An unattended task (``config["unattended"]``, e.g. a background sub-agent)

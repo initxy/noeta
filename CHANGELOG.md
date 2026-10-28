@@ -93,8 +93,49 @@ All notable changes to Noeta are documented here. The format is based on
   `~/.noeta/settings.json` (user), `.noeta/mcp.json` (project) and
   `.noeta/settings.local.json` (local). `McpPool(http=...)` routes remote MCP connections
   and sign-ins through the host's `httpx.AsyncClient`.
+- **`noeta -p` is Claude Code's headless mode.** `-p` is a flag and the prompt positional (or
+  stdin); `--output-format text|json|stream-json`, `--input-format stream-json`,
+  `--include-partial-messages`, `--replay-user-messages`, `--max-turns`, `--max-budget-usd`,
+  `--json-schema`, `--allowedTools` / `--disallowedTools` / `--tools` / `--add-dir`,
+  `--permission-prompt-tool stdio`, `-c` / `-r` / `--fork-session` / `--session-id`, `-v`;
+  flags an Agent SDK passes that noeta does not use are accepted and named on stderr.
+  Without `--permission-prompt-tool stdio` anything that would ask is refused and the turn
+  goes on (it used to exit 2). `--json` is gone; use `--output-format stream-json --verbose`.
+
+### Added
+
+- **Claude Code's headless protocol** (`noeta.host.stream_json`): the stream-json messages
+  (`system`/`init`, `assistant`, tool-result `user`, `stream_event`, `result` with usage, cost,
+  durations, turns, permission denials and `structured_output`; the root task's id is the
+  `session_id`) and control requests (`initialize`, `interrupt`, `set_permission_mode`,
+  `set_model`, `rewind_files`, `get_context_usage`, `get_session_cost`, `can_use_tool` to the
+  client), so a program written for Claude Code's Agent SDK drives `noeta` (checked with the
+  Python SDK). The HTTP server speaks it too: `WS /stream-json` and one-way
+  `POST /stream-json`.
+- **Rewind with file checkpoints.** The `checkpoints` plugin (main and general-purpose
+  agents) records a file's content before `Edit`, `Write` or `NotebookEdit` changes it;
+  `noeta.host.rewind` goes back to before a prompt — a new task continuing the log up to it,
+  the files restored, or both — from the TUI (`/rewind`, Esc Esc), ACP, HTTP
+  (`/tasks/{id}/rewind`) and the headless `rewind_files`.
+- **TUI commands with mechanisms**: `/model` (switches the running task's model), `/context`,
+  `/cost`, `/memory`, `/config`, `/rewind`, `/clear`, `/resume <n>`; `@path` attaches a file,
+  directory or image; a pasted image path or Ctrl+V attaches an image. ACP answers `/model`,
+  `/context`, `/cost`, `/rewind`.
+- **HTTP**: `/commands`, `/agents`, `/models`, `/tasks/{id}/usage`, `/tasks/{id}/context`,
+  `/tasks/{id}/rewind`, `/openapi.json`; `POST /tasks` takes `history_from` /
+  `history_through`. `websockets` joins the `server` extra.
+- **Kernel**: the `config` signal changes a running task's `model`, `effort` or `max_turns`
+  (`CONFIG_SIGNAL`); `config["max_turns"]` fails a turn after that many model calls
+  (`max_turns`); `Client.create(history_from=, history_through=)`; `Runtime.preview` (the
+  next request, unrecorded); `Command.local` and `run_typed` (a plugin command whose output
+  is shown, not sent); an `Answer` deny with `"interrupt": false` gives the model an error
+  result and lets the turn go on.
 
 ### Fixed
+
+- **A fork of a fork keeps the whole conversation.** A task continuing another
+  (`history_from`) folded only that task's own log, so a second rewind, or a sub-agent
+  resumed twice through `SendMessage`, lost everything before the first continuation.
 
 - **An "always" shell approval no longer widens to the program and its first argument.**
   Approving `rm -rf build` used to let `rm -rf /` run unasked (and wrote that rule to a

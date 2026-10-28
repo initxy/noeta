@@ -121,3 +121,24 @@ async def test_a_declined_call_stops_the_turn(store: SqliteStore) -> None:
     last = body["messages"][-1]["content"]
     assert [b["type"] for b in last] == ["tool_result", "text", "text"]
     assert last[1]["text"] == REJECTED_MARKER and last[2]["text"] == "next"
+
+
+async def test_a_callback_deny_that_does_not_interrupt_lets_the_turn_go_on(
+        store: SqliteStore) -> None:
+    """Claude Code's SDK permission callback: a deny without ``interrupt``
+    is an error result the model reads, and the turn goes on."""
+    tool = Fake("T")
+    provider = ScriptedProvider([reply("", ("T", {})), reply("", ("T", {})), reply("after")])
+    rt = runtime(store, provider, agent([Fixed("p", Ask(prompt="?"))], [tool]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    [rid] = [e for e in await events(client, tid) if isinstance(e, Waiting)][-1].ids
+    await client.answer(tid, rid, "deny", data={"message": "not in CI", "interrupt": False})
+    await rt.run_until_idle()
+    [rid2] = [e for e in await events(client, tid) if isinstance(e, Waiting)][-1].ids
+    await client.answer(tid, rid2, "deny", data={"interrupt": False})
+    await rt.run_until_idle()
+    assert not tool.runs and len(provider.requests) == 3
+    results = [e.result.text for e in await events(client, tid) if isinstance(e, ToolFinished)]
+    assert results == ["not in CI", "Permission to use T was denied."]

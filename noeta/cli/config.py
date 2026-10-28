@@ -317,6 +317,7 @@ def load_plugin_files(cwd: str | None) -> list[str]:
 
 def from_settings(settings: Settings, *, cwd: str | None = None,
                   plugins: Mapping[str, PluginSetting] | None = None,
+                  permissions: Mapping[str, Any] | None = None,
                   own_tasks_only: bool = False, **runtime_kw: Any) -> LocalApp:
     """The default agents on the configured store, model and provider, with
     the user's plugin files (``~/.noeta/plugins``, and a trusted project's
@@ -328,7 +329,9 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     settings consent to, agent files (``~/.noeta/agents``, then
     ``<cwd>/.noeta/agents``; a later file wins a name) and the plugin
     settings of ``config.toml``; ``plugins`` (the front end's own) goes over
-    those. A project's :data:`PROJECT_GATED_DIRS` load only once it is
+    those. ``permissions``: the permissions plugin's arguments from the
+    command line (``--allowedTools`` …); rule lists and directories are added
+    to the settings files' own. A project's :data:`PROJECT_GATED_DIRS` load only once it is
     trusted; each one skipped is a notice in ``app.notices``. Front ends
     (``-p``, ``acp``, the TUI) pass ``own_tasks_only`` so their worker never
     picks up another process's task from the shared store; ``worker`` and
@@ -353,6 +356,11 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         settings = dataclasses.replace(settings, model=found.model)
     setting_files = [str(f) for f in found.files]
     permission_args = _permission_arguments(found)
+    for key, value in (permissions or {}).items():
+        if key in ("allow", "deny", "ask", "additional_directories"):
+            permission_args[key] = [*permission_args.get(key, ()), *value]
+        else:
+            permission_args[key] = value
     if cwd and project_trusted(cwd):
         permission_args["trusted_workspace"] = True
     # The file tools may write in the additional directories too.

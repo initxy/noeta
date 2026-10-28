@@ -10,6 +10,7 @@ plugins:
   - web
   - mcp
   - fs
+  - checkpoints
   - skills
   - instructions
   - environment

@@ -6,6 +6,7 @@ plugins:
   - hooks
   - shell
   - fs
+  - checkpoints
   - skills
   - memory
   - instructions

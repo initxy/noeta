@@ -14,7 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary,pool]>=3.2"]
-server = ["starlette>=0.40", "uvicorn>=0.30"]
+server = ["starlette>=0.40", "uvicorn>=0.30", "websockets>=12"]
 tui = ["textual>=8.0"]
 acp = ["agent-client-protocol>=0.12,<0.13"]
 images = ["pillow>=10.4"]
@@ -26,6 +26,7 @@ noeta = "noeta.cli.main:main"
 # would (noeta/core/registry.py).
 [project.entry-points."noeta.plugins"]
 ask_user = "noeta.plugins.ask_user:AskUser"
+checkpoints = "noeta.plugins.checkpoints:Checkpoints"
 compaction = "noeta.plugins.compaction:Compaction"
 environment = "noeta.plugins.environment:Environment"
 findings = "noeta.plugins.findings:Findings"

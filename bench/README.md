@@ -12,7 +12,7 @@ ships a `pi` installed agent, and this adapter is modelled on that `pi.py`
 
 | File | Role |
 |------|------|
-| `harbor_adapter.py` | `Noeta(BaseInstalledAgent)` — installs and invokes `noeta -p --json` inside harbor's sandbox. Modelled on harbor's own `pi.py`. |
+| `harbor_adapter.py` | `Noeta(BaseInstalledAgent)` — installs and invokes `noeta -p --output-format stream-json` inside harbor's sandbox. Modelled on harbor's own `pi.py`. |
 | `run_benchmark.sh` | One command per run mode; sources `.env` and sets sandbox plumbing, so a run is just `NOETA_MODEL` + `NOETA_EFFORT`. |
 | `summarize.py` | Turns a job into a score: pass / fail / error, both denominators, per-difficulty split. |
 | `datasets/` | Local copies of the public datasets (gitignored; harbor re-downloads on demand). |
@@ -38,12 +38,13 @@ reaching its model through a gateway rather than a passthrough provider:
    `NOETA_WHEEL` at it; the adapter uploads that wheel into the container and
    `pip install`s it. With `NOETA_WHEEL` unset it falls back to installing
    `NOETA_SPEC` (default `noeta`) from the configured index.
-2. **Run** — invoke `noeta -p "<instruction>" --json --cwd "$(pwd)" --model <id>`,
+2. **Run** — invoke `noeta -p "<instruction>" --output-format stream-json --verbose
+   --cwd "$(pwd)" --model <id>`,
    forwarding `NOETA_PROVIDER` / `NOETA_BASE_URL` / `NOETA_API_KEY` (or the 0.6
    `LLM_BASE_URL` / `LLM_API_KEY`) into the container. `noeta -p`
    drives the `main` agent autonomously (`bypassPermissions`, `write_mode=
-   apply`) to a terminal and prints one JSON line.
-3. **Parse** — read token usage from that JSON into the trial context.
+   apply`) to a terminal and streams Claude Code's headless messages.
+3. **Parse** — read token usage from the final `result` message into the trial context.
 
 The model defaults to `opus4.8`; harbor's `-m` overrides it. Unlike `pi`, the
 `-m` string is **not** split on `/` — Noeta model ids can contain a slash and

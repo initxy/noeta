@@ -35,13 +35,18 @@ class Client:
         config: dict[str, Any] | None = None,
         queue: str = "default",
         dedupe_key: str | None = None,
+        history_from: str | None = None,
+        history_through: int | None = None,
     ) -> str:
         """Create a task for ``agent``, optionally with its first message.
-        With ``dedupe_key`` a repeated call returns the first task's id."""
+        With ``dedupe_key`` a repeated call returns the first task's id.
+        ``history_from`` starts it from another task's conversation, up to
+        that task's event ``history_through`` (a fork, a rewind)."""
         tid = task_id or uuid.uuid4().hex
         task = NewTask(
             task_id=tid,
-            created=TaskCreated(agent=agent, config=dict(config or {}), root_id=tid),
+            created=TaskCreated(agent=agent, config=dict(config or {}), root_id=tid,
+                                history_from=history_from, history_through=history_through),
             queue=queue,
             dedupe_key=dedupe_key,
             inbox=[Say(message=_message(input))] if input is not None else [],

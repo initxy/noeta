@@ -14,7 +14,7 @@ from noeta.core.agent import Agent
 from noeta.core.execenv import ExecEnv
 from noeta.core.provider import Provider
 from noeta.core.store import Claim, Store
-from noeta.core.types import Delta
+from noeta.core.types import Delta, ModelRequest
 
 if TYPE_CHECKING:
     from noeta.core.loop.state import TaskState
@@ -147,6 +147,22 @@ class Runtime:
             return False
         await self.run_claim(claim)
         return True
+
+    async def preview(self, task_id: str) -> ModelRequest | None:
+        """The request the task's next model call would start from (its
+        log folded, system prompt, tools and messages; no reminder or
+        ``before_model`` is run and nothing is recorded), for a front end
+        that shows what fills the context. ``None`` when this runtime does
+        not have the task's agent."""
+        from noeta.core.runner.model import build_model_request
+        from noeta.core.runner.task import TaskRun
+
+        run = TaskRun(self, Claim(task_id=task_id, worker=self.worker, epoch=0,
+                                  lease_until=0.0))
+        await run.load()
+        if run.agent is None:
+            return None
+        return build_model_request(run, final=False)
 
     def serve_root(self, root_id: str) -> None:
         """Add a task tree to ``roots`` (when this runtime is scoped) and
