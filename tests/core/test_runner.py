@@ -233,3 +233,21 @@ async def test_cancel_during_a_write_keeps_the_runner_in_step(store: SqliteStore
         await task
     assert run.state.last_seq == (await client.get(tid)).last_seq
     await run.append([ExtensionRecorded(extension="x", kind="k2")])
+
+
+async def test_extensions_see_the_time_the_store_stamped(store: SqliteStore) -> None:
+    seen: list[tuple[int, float]] = []
+
+    class Watch(Extension):
+        name = "watch"
+
+        async def on_event(self, view: TaskView, recorded: Any) -> None:
+            seen.append((recorded.seq, recorded.at))
+
+    provider = ScriptedProvider([reply("done")])
+    rt = runtime(store, provider, Agent(name="a", model="m", extensions=[Watch()]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    stored = {r.seq: r.at for r in await client.events(tid)}
+    assert seen and all(stored[seq] == at for seq, at in seen)

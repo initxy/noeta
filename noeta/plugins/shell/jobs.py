@@ -11,11 +11,23 @@ it, and stopping the job (``TaskStop``) is cancelling the env's run (which
 kills its process group). A finished command's file ends with a blank line
 and ``[exited with code N]``.
 
-When a job ends — or a monitor emits an event — the notice goes to the task
-that started it while that task is live, else to the root, as a
-system-origin message behind the not-the-user guard, posted with
-``when="now"``: it lands after the running
-batch's tool results, and wakes an idle task into a turn.
+A monitor's events go to the task that started the job while that task is
+live, else to the root, as system-origin messages behind the not-the-user
+guard, posted with ``when="now"``: they land after the running batch's tool
+results, and wake an idle task into a turn. A job's end goes the same way as
+``External(JOB_ENDED)`` (its status and notice, posted once, before the job
+gives its hold back): the task's runner records it ended and tells the model,
+unless the log already says the job was lost (``noeta.plugins.shell``).
+
+A job lives as long as its worker's hold on the task tree
+(``ToolContext.hold``): when the hold is lost (reaped after the worker was
+silent too long, or the worker stopping) the job is killed and its end never
+posted; the tree is told by ``hold_lost`` instead. A job also dies when its
+worker cannot kill it (killed itself, or frozen): a guard runs beside the
+command, in its process group, and kills the group once the worker stops
+re-creating the job's ``.alive`` file (it does while its hold is fresh) or,
+on this machine, once the worker's process is gone. The guard needs only
+``sh`` tools, so it works the same in a container or a sandbox.
 
 Job logs live in a private directory per user inside the env: by default
 ``$XDG_RUNTIME_DIR`` (local env) or the temp directory, under
@@ -42,8 +54,9 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from noeta.core.events import Say
+from noeta.core.events import External, Say
 from noeta.core.execenv import ExecEnv
+from noeta.core.holds import TreeHold
 from noeta.core.types import user
 from noeta.plugins.shell.notices import (
     MonitorStream,
@@ -74,9 +87,32 @@ MONITOR_POLL_S = 0.1
 DEFAULT_LOG_DIR = ""
 #: Tasks remembered as ended (their notices go to the root) at most.
 ENDED_KEEP = 4096
+#: How often a job's guard looks at its worker.
+GUARD_TICK_S = 0.5
 
-#: This worker process, recorded with each job (for people reading the log).
+#: Runs beside a job, in its process group: exits with the job, kills the
+#: group once the worker is gone. ``$1`` the job's shell (its pid), ``$2``
+#: the worker's pid on this machine (empty: none to watch), ``$3`` the
+#: ``.alive`` file the worker re-creates, ``$4`` ticks it has to do so
+#: (0: no file to watch).
+_GUARD = r"""
+n=0
+while sleep "$5"; do
+  kill -0 "$1" 2>/dev/null || exit 0
+  if [ -n "$2" ] && ! kill -0 "$2" 2>/dev/null; then kill -KILL 0; fi
+  if [ "$4" -gt 0 ]; then
+    n=$((n + 1))
+    if [ "$n" -ge "$4" ]; then n=0; rm "$3" 2>/dev/null || kill -KILL 0; fi
+  fi
+done
+"""
+
+#: This worker process, recorded with a job that has no hold (no runner:
+#: a test, a host running tools itself); a held job records its hold's worker.
 WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
+#: The ``External`` a job's end is posted as: ``data = {"job_id", "status",
+#: "exit_code", "notice"}`` (``notice`` is ``None`` for a job stopped quietly).
+JOB_ENDED = "shell_job_ended"
 
 #: Makes (or checks) the log directory: ``$1`` an explicit directory, else
 #: ``${2:-/tmp}/noeta-background-<uid>``. Prints the directory.
@@ -111,6 +147,15 @@ class Job:
     err_path: str | None
     post: Post
     release: Release | None = None
+    #: The worker's hold on the tree, while the job runs.
+    tree: TreeHold | None = None
+    #: The worker recorded with the job (its hold's).
+    worker: str = WORKER_ID
+    #: Its hold was lost: it was killed and its end is never posted.
+    fenced: bool = False
+    #: The file the worker re-creates while the job may live (its guard
+    #: kills the job once it stays gone).
+    alive_path: str = ""
     status: str = "running"  # running | exited | killed
     exit_code: int | None = None
     #: Output bytes a monitor has already turned into events.
@@ -131,6 +176,12 @@ class Job:
     outbox: asyncio.Queue[str | None] = field(default_factory=asyncio.Queue)
 
 
+def _touch(paths: Sequence[str]) -> None:
+    for path in paths:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+        os.close(fd)
+
+
 def _label(text: str) -> str:
     return " ".join(text.split())
 
@@ -149,6 +200,7 @@ class Registry:
         self.ended: set[str] = set()
         self._retiring: set[asyncio.Task[None]] = set()
         self._dirs: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+        self._keeper: asyncio.Task[None] | None = None
 
     def mark_ended(self, task_id: str, root_id: str) -> None:
         """``task_id`` ended: remembered only while its tree has jobs here
@@ -200,13 +252,15 @@ class Registry:
     async def spawn(self, *, env: ExecEnv, command: str, cwd: str, env_vars: Mapping[str, str],
                     root_id: str, spawner_id: str, tool_use_id: str, description: str,
                     post: Post, monitor_timeout_ms: float | None = None,
-                    release: Release | None = None,
+                    release: Release | None = None, tree: TreeHold | None = None,
                     argv: Sequence[str] | None = None,
                     ws: tuple[str, list[str]] | None = None,
                     ws_resolve: Callable[[str, int], Awaitable[str]] | None = None,
                     ) -> Job | str:
         """Start a job, or return the refusal text. ``release`` is awaited
-        once the job has ended (or was refused). ``argv``: what runs instead
+        once the job has ended and its end is posted (or it was refused);
+        ``tree`` is the hold it gives back, whose loss kills the job.
+        ``argv``: what runs instead
         of ``bash -c command`` (the command wrapped in a sandbox); the log
         redirection stays outside it. A monitor with ``ws`` streams that
         WebSocket's messages instead of running ``command``, connecting where
@@ -215,7 +269,7 @@ class Registry:
                                 root_id=root_id, spawner_id=spawner_id,
                                 tool_use_id=tool_use_id, description=description, post=post,
                                 monitor_timeout_ms=monitor_timeout_ms, release=release,
-                                argv=argv, ws=ws, ws_resolve=ws_resolve)
+                                tree=tree, argv=argv, ws=ws, ws_resolve=ws_resolve)
         if isinstance(job, str) and release is not None:
             await release()
         return job
@@ -223,7 +277,8 @@ class Registry:
     async def _spawn(self, *, env: ExecEnv, command: str, cwd: str, env_vars: Mapping[str, str],
                      root_id: str, spawner_id: str, tool_use_id: str, description: str,
                      post: Post, monitor_timeout_ms: float | None,
-                     release: Release | None, argv: Sequence[str] | None,
+                     release: Release | None, tree: TreeHold | None,
+                     argv: Sequence[str] | None,
                      ws: tuple[str, list[str]] | None = None,
                      ws_resolve: Callable[[str, int], Awaitable[str]] | None = None,
                      ) -> Job | str:
@@ -238,14 +293,17 @@ class Registry:
             return f"background jobs are unavailable: {exc}"
         out = posixpath.join(log_dir, f"{job_id}.output")
         err = posixpath.join(log_dir, f"{job_id}.err") if monitor_timeout_ms else None
+        alive = posixpath.join(log_dir, f"{job_id}.alive") if tree is not None else ""
         made = await env.run(
             ["sh", "-c", 'umask 077 && for f; do : > "$f" || exit 1; done', "sh",
-             *[p for p in (out, err) if p]], timeout=10)
+             *[p for p in (out, err, alive) if p]], timeout=10)
         if made.exit_code != 0:
             return "background jobs are unavailable: could not create the job's log file"
         job = Job(job_id=job_id, root_id=root_id, spawner_id=spawner_id, command=command,
                   description=_label(description or command), tool_use_id=tool_use_id,
-                  env=env, out_path=out, err_path=err, post=post, release=release, ws=ws)
+                  env=env, out_path=out, err_path=err, post=post, release=release, ws=ws,
+                  tree=tree, worker=tree.worker if tree is not None else self.worker,
+                  alive_path=alive)
         if monitor_timeout_ms is not None:
             job.monitor = MonitorStream(sink=lambda text, _note: self._event(job, text),
                                         stop=lambda: self._stop_quietly(job))
@@ -256,15 +314,58 @@ class Registry:
                                                     resolve=ws_resolve))
         else:
             redirect = f"2>{shlex.quote(err)}" if err is not None else "2>&1"
-            script = f"exec >{shlex.quote(out)} {redirect}\n" + (
-                'exec "$@"' if argv is not None else command)
-            run = ["bash", "-c", script] + (["bash", *argv] if argv is not None else [])
+            # The command runs as the shell's own process (``exec``), so the
+            # guard is no job of its: a ``wait`` in it never waits for that.
+            script = (f"exec >{shlex.quote(out)} {redirect}\n"
+                      f"{self._guard(job)} </dev/null >/dev/null 2>&1 &\n"
+                      'exec "$@"')
+            run = ["bash", "-c", script, "bash", *(argv or ["bash", "-c", command])]
             job.proc = asyncio.ensure_future(env.run(run, cwd=cwd,
                                                      env=dict(env_vars), timeout=None,
                                                      output_cap=4096))
         job.task = asyncio.create_task(self._run(job, monitor_timeout_ms))
         job.sender = asyncio.create_task(self._send(job))
+        if tree is not None:
+            tree.on_lost(lambda: self._fence(job))
+            if self._keeper is None or self._keeper.done():
+                self._keeper = asyncio.create_task(self._keep_alive())
         return job
+
+    def _guard(self, job: Job) -> str:
+        """The guard's command line for ``job`` (see :data:`_GUARD`)."""
+        worker_pid = str(os.getpid()) if is_local(job.env) else ""
+        ticks = 0
+        if job.tree is not None:
+            # The worker re-creates the file three times per period; the
+            # period is half the hold's time, so a frozen worker's jobs are
+            # dead about when its hold may be reaped.
+            ticks = max(2, round(job.tree.seconds / 2 / GUARD_TICK_S))
+        return shlex.join(["sh", "-c", _GUARD, "sh", "$$", worker_pid, job.alive_path,
+                           str(ticks), str(GUARD_TICK_S)]).replace("'$$'", "$$")
+
+    async def _keep_alive(self) -> None:
+        """Re-create the ``.alive`` file of every running job whose hold is
+        fresh, three times per guard period, until no such job is left."""
+        while True:
+            jobs = [j for root in self.jobs.values() for j in root.values()
+                    if j.status == "running" and j.tree is not None and j.alive_path]
+            if not jobs:
+                return
+            by_env: dict[int, list[Job]] = {}
+            for job in jobs:
+                assert job.tree is not None
+                if job.tree.fresh() and not job.fenced:
+                    by_env.setdefault(id(job.env), []).append(job)
+            for group in by_env.values():
+                paths = [j.alive_path for j in group]
+                with contextlib.suppress(Exception):
+                    if is_local(group[0].env):
+                        await asyncio.to_thread(_touch, paths)
+                    else:
+                        await group[0].env.run(
+                            ["sh", "-c", 'for f; do : > "$f"; done', "sh", *paths], timeout=10)
+            period = min(j.tree.seconds for j in jobs if j.tree is not None) / 2
+            await asyncio.sleep(max(period / 3, GUARD_TICK_S / 2))
 
     async def _run(self, job: Job, monitor_timeout_ms: float | None) -> None:
         tail: asyncio.Task[None] | None = None
@@ -291,25 +392,43 @@ class Registry:
                 tail.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await tail
+            notice: str | None = None
             try:
-                await self._finish(job)
+                notice = await self._finish(job)
             finally:
-                job.done.set()
                 job.outbox.put_nowait(None)
-                if job.release is not None:
+                if job.sender is not None:
                     with contextlib.suppress(Exception):
-                        await job.release()
+                        await job.sender  # the monitor's events come first
+                try:
+                    # Posted before the hold is given back: a worker that
+                    # claims the tree next finds the end in the inbox.
+                    await self._post_end(job, notice)
+                finally:
+                    job.done.set()
+                    if job.release is not None:
+                        with contextlib.suppress(Exception):
+                            await job.release()
 
-    async def _finish(self, job: Job) -> None:
+    async def _post_end(self, job: Job, notice: str | None) -> None:
+        if job.fenced:
+            return  # its hold is gone: the tree was told it is lost
+        data = {"job_id": job.job_id, "status": self._status(job), "exit_code": job.exit_code,
+                "notice": f"{NOTICE_GUARD}\n\n{notice}" if notice is not None else None}
+        try:
+            await job.post(External(name=JOB_ENDED, data=data), task_id=self._target(job),
+                           dedupe_key=f"{JOB_ENDED}:{job.job_id}")
+        except Exception as exc:  # noqa: BLE001 - its hold runs out and the tree is told
+            log.warning("background job %s: its end was not posted: %s", job.job_id, exc)
+
+    async def _finish(self, job: Job) -> str | None:
         if job.monitor is not None:
             await self._read_new(job)  # the last lines before the exit
         elif job.status == "exited":
             with contextlib.suppress(Exception):
                 await job.env.run(["sh", "-c", 'printf "\n[exited with code %s]\n" "$1" >> "$2"',
                                    "sh", str(job.exit_code), job.out_path], timeout=10)
-        notice = await self._end_notice(job)
-        if notice is not None:
-            job.outbox.put_nowait(notice)
+        return await self._end_notice(job)
 
     # ------------------------------------------------------------ control
 
@@ -325,6 +444,12 @@ class Registry:
         return "killing"
 
     def _stop_quietly(self, job: Job) -> None:
+        self.kill(job, quiet=True)
+
+    def _fence(self, job: Job) -> None:
+        """The job's hold is lost: the log will call it lost, so it stops
+        and tells nothing more."""
+        job.fenced = True
         self.kill(job, quiet=True)
 
     def kill_where(self, root_id: str, *, spawner_id: str | None = None) -> None:
@@ -349,7 +474,7 @@ class Registry:
         for job in jobs:
             await job.done.wait()
         for job in jobs:
-            paths = [p for p in (job.out_path, job.err_path) if p]
+            paths = [p for p in (job.out_path, job.err_path, job.alive_path) if p]
             with contextlib.suppress(Exception):
                 await job.env.run(["rm", "-f", *paths], timeout=10)
             self.ended.discard(job.spawner_id)
@@ -368,6 +493,8 @@ class Registry:
             text = await job.outbox.get()
             if text is None:
                 return
+            if job.fenced:
+                continue
             try:
                 await job.post(Say(message=user(f"{NOTICE_GUARD}\n\n{text}", origin="system"),
                                    when="now"),
@@ -418,11 +545,17 @@ class Registry:
             return ""
         return data.decode("utf-8", errors="replace")
 
+    @staticmethod
+    def _status(job: Job) -> str:
+        """``completed`` / ``failed`` / ``killed``, as the notice says."""
+        if job.status == "killed":
+            return "killed"
+        ok = job.exit_code in NORMAL_CLOSES if job.ws is not None else job.exit_code == 0
+        return "completed" if ok else "failed"
+
     async def _end_notice(self, job: Job) -> str | None:
-        killed = job.status == "killed"
-        code = None if killed else job.exit_code
-        ok = code in NORMAL_CLOSES if job.ws is not None else code == 0
-        status = "killed" if killed else ("completed" if ok else "failed")
+        status = self._status(job)
+        code = None if status == "killed" else job.exit_code
         stream = job.monitor
         if stream is None:
             if job.quiet:

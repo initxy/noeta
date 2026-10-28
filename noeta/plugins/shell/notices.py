@@ -16,6 +16,7 @@ __all__ = [
     "MonitorStream",
     "event_body",
     "format_duration",
+    "lost_summary",
     "monitor_end_summary",
     "monitor_event",
     "monitor_expired_note",
@@ -54,6 +55,13 @@ def shell_end_summary(description: str, status: str, exit_code: int | None) -> s
         code = f" with exit code {exit_code}" if exit_code is not None else ""
         return f'Background command "{description}" failed{code}'
     return f'Background command "{description}" was stopped'
+
+
+def lost_summary(description: str, *, monitor: bool, reason: str) -> str:
+    """A job whose worker is gone: neither its end nor its exit status is
+    known (sent with status ``failed``)."""
+    what = "Monitor" if monitor else "Background command"
+    return f'{what} "{description}" was lost: {reason}'
 
 
 def monitor_end_summary(description: str, status: str, exit_code: int | None, *,

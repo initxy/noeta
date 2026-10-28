@@ -3,22 +3,23 @@
 Root tasks run a scripted conversation (``noeta_cluster_scripted``): tool
 calls with a journalled side effect, background ``Bash`` jobs, sub-agents,
 ``ScheduleWakeup`` timers, and messages sent while they run. Worker processes
-(``worker.py``, ``noeta worker`` with a short lease) are SIGKILLed and
-respawned, or SIGSTOPped past their lease and resumed. Afterwards:
+(``noeta worker --lease 1``) are SIGKILLed and respawned, or SIGSTOPped
+past their lease and resumed. Afterwards:
 
 * every task finishes its script within the deadline;
 * no side-effect token is journalled twice, and a call the log shows
   finished was journalled exactly once;
 * every message sent is taken by its task exactly once;
-* every background job ends in the log as ended or lost, never missing;
+* every background job ends in the log as ended or lost, never missing,
+  and the model is told so exactly once;
 * the log invariants of :mod:`tests.cluster.invariants` hold.
 
 Run with ``make cluster`` (``NOETA_CLUSTER_SEED`` replays a run;
-``NOETA_CLUSTER_TASKS`` / ``NOETA_CLUSTER_SECONDS`` size it). Scenarios a
-known multi-machine gap breaks are ``xfail(strict=True, raises=Gap)``: the
-gap's own check raises :class:`Gap`, any other broken invariant still fails
-the test, and fixing the gap turns the xfail into an error until the marker
-is removed.
+``NOETA_CLUSTER_TASKS`` / ``NOETA_CLUSTER_SECONDS`` size it). A scenario a
+known multi-machine gap breaks is marked ``xfail(strict=True, raises=Gap)``:
+the gap's own check raises :class:`Gap`, any other broken invariant still
+fails the test, and fixing the gap turns the xfail into an error until the
+marker is removed.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ import os
 import random
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -38,6 +40,7 @@ from tests.cluster.harness import (
     Spec,
     chaos,
     collect,
+    kill_all,
     kill_holder,
     root_finished,
     seed_from_env,
@@ -45,7 +48,7 @@ from tests.cluster.harness import (
     wait_until,
     watch_rows,
 )
-from tests.cluster.invariants import EpochWatch, jobs_of, lost_then_notified
+from tests.cluster.invariants import EpochWatch, jobs_of, lost_jobs_ended_late
 
 pytestmark = pytest.mark.cluster
 
@@ -56,18 +59,8 @@ LEASE = 1.0
 
 
 class Gap(AssertionError):
-    """A known multi-machine gap (``docs/specs/2026-10-28-open-source-release.md``,
-    phase 2) showed up: the expected failure of an xfail scenario."""
-
-
-HOLD_GAP = ("phase 2 'hold epochs, hold reaper, hold_lost': a waiting root's background job "
-            "is lost silently when its holding worker dies (nothing wakes the root)")
-ORPHAN_GAP = ("phase 2 'background processes die with their worker': a dead worker's job "
-              "process keeps running and writes after the log says lost")
-END_GAP = ("phase 2 'hold epochs, hold reaper': a background job that finished is recorded "
-           "lost when a worker other than its holder takes its end notice")
-FENCE_GAP = ("phase 2 'hold epochs': a hold taken over from a frozen worker is not fenced; "
-             "the job it still runs reports its end after the log said lost")
+    """A known multi-machine gap showed up: the expected failure of an xfail
+    scenario."""
 
 
 def fail(outcome: Outcome, problems: list[str]) -> str:
@@ -99,7 +92,7 @@ def make_specs(rng: random.Random, n: int, *, bg: bool) -> dict[str, Spec]:
 
 async def run_cluster(tmp_path: Path, url: str, seed: int, specs: dict[str, Spec], *,
                       seconds: float, targets: set[str] | None = None,
-                      workers: int = 3, drain: float = DRAIN) -> Outcome:
+                      workers: int = 3, drain: float = DRAIN, faulty: Any = chaos) -> Outcome:
     """Create the roots, run the faults and the pings for ``seconds``, then
     let the workers drain until every root is done or ``DRAIN`` passes."""
     rng = random.Random(seed)
@@ -113,7 +106,7 @@ async def run_cluster(tmp_path: Path, url: str, seed: int, specs: dict[str, Spec
         plan = [(rng.uniform(0, seconds), roots[sid], spec, j)
                 for sid, spec in specs.items() for j in range(spec.pings)]
         if seconds > 0:
-            await asyncio.gather(chaos(cluster, rng, seconds, faults, targets=target_ids),
+            await asyncio.gather(faulty(cluster, rng, seconds, faults, targets=target_ids),
                                  send_pings(cluster, rng, seconds, plan))
         else:
             await send_pings(cluster, rng, 0, plan)
@@ -169,6 +162,19 @@ async def test_chaos_tools_agents_timers_messages(tmp_path: Path, pg_url: str) -
     assert_all_done(outcome)
 
 
+async def test_timers_and_sub_agents_outlive_every_worker(tmp_path: Path, pg_url: str) -> None:
+    """Every worker is killed at once, again and again, while roots wait on
+    wake-ups and sub-agents: a timer or a child never belongs to the process
+    that set or started it, so every root still finishes."""
+    seed = seed_from_env()
+    specs = {f"r{i:02d}": Spec(id=f"r{i:02d}", effects=1, agent=True, wake=True)
+             for i in range(8)}
+    outcome = await run_cluster(tmp_path, pg_url, seed, specs, seconds=12, faulty=kill_all)
+    assert outcome.faults.kills >= 9, fail(outcome, ["too few faults to mean anything"])
+    assert_invariants(outcome)
+    assert_all_done(outcome)
+
+
 async def test_background_jobs_one_worker(tmp_path: Path, pg_url: str) -> None:
     """The background-job script itself, on one worker with no faults:
     every job ends, and its end reaches its root."""
@@ -184,26 +190,22 @@ async def test_background_jobs_one_worker(tmp_path: Path, pg_url: str) -> None:
     assert not not_ended, fail(outcome, not_ended)
 
 
-@pytest.mark.xfail(strict=True, raises=Gap, reason=END_GAP)
 async def test_background_job_end_taken_by_another_worker(tmp_path: Path, pg_url: str) -> None:
-    """No faults, several workers: a job that finished is never called lost.
-    (Today the holder releases the tree as the job ends, so whichever worker
-    takes the end notice and does not have the job records it lost first.)"""
+    """No faults, several workers: a job that finished is never called lost,
+    whichever worker takes its end (it is posted before the hold is given
+    back)."""
     seed = seed_from_env()
     specs = {f"r{i:02d}": Spec(id=f"r{i:02d}", effects=1, bg=1.0) for i in range(16)}
     outcome = await run_cluster(tmp_path, pg_url, seed, specs, seconds=0, workers=5)
     assert_invariants(outcome)
     assert_all_done(outcome)
-    twice = [f"{tid}: {p}" for tid, records in outcome.logs.items()
-             for p in lost_then_notified(records)]
-    if twice:
-        raise Gap(fail(outcome, twice))
+    assert outcome.lost_jobs() == 0, fail(outcome, ["a job that finished was called lost"])
 
 
-@pytest.mark.xfail(strict=True, raises=Gap, reason=HOLD_GAP)
 async def test_chaos_with_background_jobs(tmp_path: Path, pg_url: str) -> None:
     """The chaos run with background jobs, some faults aimed at the worker
-    holding a waiting root's job: such a root never hears of its job."""
+    holding a waiting root's job: such a root still hears of its job (the
+    hold is reaped and ``hold_lost`` wakes it)."""
     seed = seed_from_env()
     specs = make_specs(random.Random(seed), TASKS, bg=True)
     targets = {s for s, spec in specs.items() if spec.bg and not spec.pings
@@ -214,7 +216,7 @@ async def test_chaos_with_background_jobs(tmp_path: Path, pg_url: str) -> None:
                                 targets=targets, drain=30)
     assert_invariants(outcome)
     assert outcome.faults.targeted > 0, fail(outcome, ["no holder was killed; rerun"])
-    assert_all_done(outcome, error=Gap)
+    assert_all_done(outcome)
 
 
 # ------------------------------------------------------------------ one gap each
@@ -243,7 +245,6 @@ async def _outcome(cluster: Cluster, tid: str, spec: Spec, faults: Faults) -> Ou
                          pings={spec.id: spec.pings}, watch=EpochWatch(), faults=faults)
 
 
-@pytest.mark.xfail(strict=True, raises=Gap, reason=HOLD_GAP)
 async def test_holder_killed_while_root_waits(tmp_path: Path, pg_url: str) -> None:
     """SIGKILL the worker holding a waiting root's job, send nothing else:
     the root must still learn the job is lost and finish."""
@@ -256,10 +257,10 @@ async def test_holder_killed_while_root_waits(tmp_path: Path, pg_url: str) -> No
     finally:
         await cluster.close()
     assert_invariants(outcome)
-    assert_all_done(outcome, error=Gap)
+    assert_all_done(outcome)
+    assert outcome.lost_jobs() == 1, fail(outcome, ["the job was not recorded lost"])
 
 
-@pytest.mark.xfail(strict=True, raises=Gap, reason=ORPHAN_GAP)
 async def test_killed_holder_job_stops_writing(tmp_path: Path, pg_url: str) -> None:
     """SIGKILL the holder, then a message wakes the root on another worker,
     which records the job lost. The job's process must be gone too: its
@@ -278,11 +279,10 @@ async def test_killed_holder_job_stops_writing(tmp_path: Path, pg_url: str) -> N
     assert_invariants(outcome)
     assert_all_done(outcome)
     assert outcome.lost_jobs() == 1, fail(outcome, ["the job was not recorded lost"])
-    if any(line.startswith("r00-bg ") for line in outcome.journal):
-        raise Gap(fail(outcome, ["the job of a dead worker wrote after the log said lost"]))
+    assert not any(line.startswith("r00-bg ") for line in outcome.journal), fail(
+        outcome, ["the job of a dead worker wrote after the log said lost"])
 
 
-@pytest.mark.xfail(strict=True, raises=Gap, reason=FENCE_GAP)
 async def test_frozen_holder_job_not_reported_twice(tmp_path: Path, pg_url: str) -> None:
     """SIGSTOP the holder past its hold, wake the root with a message (the
     job is recorded lost elsewhere), then SIGCONT: the job's end must not
@@ -311,6 +311,7 @@ async def test_frozen_holder_job_not_reported_twice(tmp_path: Path, pg_url: str)
         await cluster.close()
     assert_invariants(outcome)
     assert_all_done(outcome)
-    twice = lost_then_notified(outcome.logs[tid])
-    if twice:
-        raise Gap(fail(outcome, twice))
+    late = lost_jobs_ended_late(outcome.logs[tid])
+    assert not late, fail(outcome, late)
+    assert not any(line.startswith("r00-bg ") for line in outcome.journal), fail(
+        outcome, ["the job of a frozen worker wrote after the log said lost"])

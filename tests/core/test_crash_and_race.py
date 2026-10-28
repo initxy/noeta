@@ -15,7 +15,7 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import Event, ToolFinished, ToolStarted
 from noeta.core.runner import INTERRUPTED_CALL_ERROR, Runtime
-from noeta.core.store import Claim, NewTask, Patch, Post
+from noeta.core.store import Appended, Claim, NewTask, Patch, Post
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolResult, ToolUse, Usage
 
@@ -35,15 +35,15 @@ class CrashingStore(SqliteStore):
 
     async def append(self, claim: Claim, events: Sequence[Event], *, expected_seq: int,
                      patch: Patch = Patch(), posts: Sequence[Post] = (),
-                     creates: Sequence[NewTask] = ()) -> int:
+                     creates: Sequence[NewTask] = ()) -> Appended:
         self.appends += 1
         if self.appends == self.crash_at and not self.after_commit:
             raise Crash()
-        seq = await super().append(claim, events, expected_seq=expected_seq, patch=patch,
+        done = await super().append(claim, events, expected_seq=expected_seq, patch=patch,
                                    posts=posts, creates=creates)
         if self.appends == self.crash_at:
             raise Crash()
-        return seq
+        return done
 
 
 class Journal:

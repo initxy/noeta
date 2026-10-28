@@ -130,7 +130,7 @@ async def test_drop_before_commit_is_rerun_once(pg: Any, monkeypatch: Any) -> No
         await original(conn, changes)
 
     monkeypatch.setattr(store, "_notify", drop_first)
-    assert await store.append(claim, [Waiting(on="input")], expected_seq=1) == 2
+    assert (await store.append(claim, [Waiting(on="input")], expected_seq=1)).seq == 2
     assert calls == 2 and len(await store.read("t1")) == 2
     await store.close()
 
@@ -155,7 +155,7 @@ async def test_drop_during_commit_raises_and_leaves_nothing(pg: Any, monkeypatch
     # Here the COMMIT never reached the server, so nothing landed; and the
     # store has a working connection again for the next call.
     assert len(await store.read("t1")) == 1
-    assert await store.append(claim, [Waiting(on="input")], expected_seq=1) == 2
+    assert (await store.append(claim, [Waiting(on="input")], expected_seq=1)).seq == 2
     await store.close()
 
 

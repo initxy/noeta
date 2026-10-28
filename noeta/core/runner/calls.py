@@ -232,7 +232,7 @@ async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[
                                               is_error=output.is_error), meta=meta,
                             end_turn=output.end_turn)
     await run.append([*records, *view.pending, finished],
-                     creates=[*creates, *run.staged(view)])
+                     creates=[*creates, *run.staged(view)], posts=run.enqueued(view))
 
 
 def _drop_staged(records: list[Event], creates: list[NewTask]) -> None:
