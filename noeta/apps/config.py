@@ -17,12 +17,13 @@ win. The plugin part of ``config.toml``::
 
 from __future__ import annotations
 
+import logging
 import os
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from noeta.core import registry
 from noeta.core.agent_files import (
@@ -31,6 +32,11 @@ from noeta.core.agent_files import (
     parse_plugin_list,
 )
 from noeta.core.provider import Provider
+
+if TYPE_CHECKING:
+    from noeta.host.local import LocalApp
+
+log = logging.getLogger("noeta.apps")
 
 HOME = Path(os.environ.get("NOETA_HOME") or Path.home() / ".noeta")
 
@@ -204,3 +210,42 @@ def load_plugin_files(cwd: str | None) -> list[str]:
                                f"(run `noeta trust` in {project} to load its plugins)")
     registry.load_plugin_files(dirs)
     return notices
+
+
+def from_settings(settings: Settings, *, cwd: str | None = None,
+                  plugins: Mapping[str, PluginSetting] | None = None,
+                  own_tasks_only: bool = False, **runtime_kw: Any) -> LocalApp:
+    """The default agents on the configured store, model and provider, with
+    the user's plugin files (``~/.noeta/plugins``, and a trusted project's
+    ``<cwd>/.noeta/plugins``), memory (``~/.noeta/memory``), prompt overrides
+    (``~/.noeta/prompts``), hooks and MCP servers (``~/.noeta/settings.json``,
+    and the ``.mcp.json`` servers it consents to), agent files
+    (``~/.noeta/agents``, then ``<cwd>/.noeta/agents``) and the plugin
+    settings of ``config.toml``; ``plugins`` (the front end's own) goes over
+    those. Front ends (``-p``, ``acp``, the TUI) pass ``own_tasks_only`` so
+    their worker never picks up another process's task from the shared
+    store; ``worker`` and ``serve`` serve every task."""
+    from noeta.core.agent_files import read_agent_dir
+    from noeta.host.local import LocalApp
+    from noeta.presets import default_agents
+
+    notices = load_plugin_files(cwd)
+    for notice in notices:
+        log.warning("%s", notice)
+    files = read_agent_dir(HOME / "agents")
+    if cwd:
+        files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
+    table = merge_plugin_settings(
+        {"memory": {"root": str(HOME / "memory")},
+         "hooks": {"settings_files": [str(HOME / "settings.json")]},
+         "mcp": {"settings_files": [str(HOME / "settings.json")], "project": True}},
+        settings.plugins, plugins or {})
+    agents = default_agents(settings.model, plugins=table, add=settings.add_plugins,
+                            extra_files=files)
+    runtime_kw.setdefault("prompt_dirs", [str(HOME / "prompts")])
+    app = LocalApp(open_store(settings.store_url), agents,
+                   settings.make_provider(), own_tasks_only=own_tasks_only,
+                   task_config={"prompts": settings.prompts} if settings.prompts else None,
+                   **runtime_kw)
+    app.notices = notices
+    return app

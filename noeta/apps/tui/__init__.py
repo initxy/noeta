@@ -17,11 +17,11 @@ def run_tui(settings: Settings, *, cwd: str, resume: str | None = None,
     if server:
         import os
 
-        from noeta.apps.remote import RemoteApp
+        from noeta.host.remote import RemoteApp
 
         backend = RemoteApp(server, token=os.environ.get("NOETA_SERVER_TOKEN"))
     else:
-        from noeta.apps.local import from_settings
+        from noeta.apps.config import from_settings
 
         backend = from_settings(settings, cwd=cwd, own_tasks_only=True)
     NoetaApp(backend, agent=agent, model=settings.model, cwd=cwd, resume=resume,

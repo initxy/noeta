@@ -10,7 +10,7 @@ import pytest
 from noeta import CommandContext, Runtime, parse_agent_file
 from noeta.apps import config
 from noeta.apps.config import load_settings
-from noeta.apps.local import from_settings
+from noeta.host.local import from_settings
 from noeta.core import registry
 from noeta.core.agent_files import build_agents
 from noeta.core.client import Client

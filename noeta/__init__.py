@@ -12,7 +12,6 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from noeta.apps.remote import RemoteClient
     from noeta.core.agent import Agent
     from noeta.core.agent_files import parse_agent_file, read_agent_dir
     from noeta.core.client import Client
@@ -28,6 +27,8 @@ if TYPE_CHECKING:
     from noeta.core.registry import provider, store
     from noeta.core.runner import Runtime
     from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
+    from noeta.host.local import LocalApp
+    from noeta.host.remote import RemoteClient
     from noeta.presets import default_agents
 
 #: Public name -> the module that defines it.
@@ -38,7 +39,9 @@ _EXPORTS = {
     "CommandContext": "noeta.core.extension",
     "ContextPart": "noeta.core.extension",
     "Extension": "noeta.core.extension",
+    "LocalApp": "noeta.host.local",
     "Reminder": "noeta.core.extension",
+    "RemoteClient": "noeta.host.remote",
     "Runtime": "noeta.core.runner",
     "TaskView": "noeta.core.extension",
     "Tool": "noeta.core.tool",
@@ -61,7 +64,9 @@ __all__ = [
     "CommandContext",
     "ContextPart",
     "Extension",
+    "LocalApp",
     "Reminder",
+    "RemoteClient",
     "Runtime",
     "TaskView",
     "Tool",
@@ -98,7 +103,7 @@ def connect(url: str, *, token: str | None = None, **kw: Any) -> Client | Remote
 
     Extra keywords go to the client's constructor."""
     if url.startswith(("http://", "https://")):
-        from noeta.apps.remote import RemoteClient
+        from noeta.host.remote import RemoteClient
 
         return RemoteClient(url, token=token, **kw)
     from noeta.core.client import Client

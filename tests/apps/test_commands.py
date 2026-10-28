@@ -12,11 +12,11 @@ import pytest
 from acp import schema
 
 from noeta.apps.acp import NoetaAcpAgent
-from noeta.apps.local import LocalApp
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.commands import expand_command, list_commands, parse_command
 from noeta.core.extension import Command, CommandContext, Extension
+from noeta.host.local import LocalApp
 from noeta.plugins.mcp import Mcp, McpPool, McpServer
 from noeta.plugins.skills import Skills
 from noeta.testing import ScriptedProvider, reply
