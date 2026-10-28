@@ -127,6 +127,25 @@ async def test_delegation_parks_until_the_child_ends(store: SqliteStore) -> None
     assert (await client.get(tid)).waiting_on == "input"
 
 
+async def test_a_sub_agent_ends_after_its_turn_without_one_shot(store: SqliteStore) -> None:
+    # A Claude Code agent file has no one_shot; its sub-agent used to wait
+    # for a next message that never comes, and the parent waited forever.
+    provider = ScriptedProvider([
+        reply("", ("Delegate", {"prompt": "count to 3"})),
+        reply("1 2 3"),
+        reply("the child counted"),
+    ])
+    rt = runtime(store, provider, Agent(name="a", model="m", tools=[Delegate()]),
+                 Agent(name="worker", model="m"))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    assert (child.status, child.end_status) == ("ended", "done")
+    parent = await client.get(tid)
+    assert (parent.status, parent.waiting_on) == ("waiting", "input")  # the main agent talks on
+
+
 async def test_cancel_cascades_to_live_children(store: SqliteStore) -> None:
     provider = ScriptedProvider([reply("", ("Delegate", {"prompt": "slow", "queue": "kids"}))])
     parent_rt = runtime(store, provider, Agent(name="a", model="m", tools=[Delegate()]))

@@ -25,8 +25,8 @@ class Agent:
     tools: Sequence[Tool] = ()
     effort: Effort | None = None
     max_tokens: int | None = None
-    #: End the task when the first turn ends (subagents, one-shot jobs)
-    #: instead of waiting for the next message.
+    #: End the task when the first turn ends (a one-shot job) instead of
+    #: waiting for the next message. A sub-agent's task always ends so.
     one_shot: bool = False
     output_schema: dict[str, Any] | None = None
     #: Model calls allowed in one turn before the turn fails.

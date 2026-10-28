@@ -22,6 +22,10 @@ All notable changes to Noeta are documented here. The format is based on
   `.noeta/skills` and `.agents/skills` now load only after `noeta trust`, like its
   `.noeta/plugins`; each one skipped is a notice. `Runtime.workspace_trusted` gates the
   workspace's prompt overrides (`None`, the default, trusts every workspace).
+- **A sub-agent ends after its turn**, like Claude Code's, whatever its agent file says. An
+  agent file without `one_shot: true` (every Claude Code agent file) used to leave its
+  sub-agent waiting for input and its foreground parent waiting forever. The main agent
+  stays conversational.
 - `make example` ran a build uv had cached; it now installs the example plugin editable.
 - A second `registry.provider()` call for a family failed once that family's adapter module
   had been imported (the entry point named a package attribute the submodule rebound).
