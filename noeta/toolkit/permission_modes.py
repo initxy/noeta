@@ -28,6 +28,8 @@ MODE_NAMES: dict[str, str] = {
     "bypassPermissions": "Bypass permissions (ask for nothing)",
 }
 MODE_SIGNAL = "permission_mode"
+#: Claude Code's mode names noeta takes as another name for its own.
+MODE_ALIASES: dict[str, str] = {"manual": "default"}
 
 
 def current_mode(events: Sequence[Recorded]) -> str | None:

@@ -68,7 +68,7 @@ from noeta.host.usage import (
     cost_text,
     tree_usage,
 )
-from noeta.toolkit.permission_modes import MODE_SIGNAL, PERMISSION_MODES
+from noeta.toolkit.permission_modes import MODE_ALIASES, MODE_SIGNAL, PERMISSION_MODES
 
 __all__ = ["HeadlessOptions", "StreamJson", "drive", "find_latest_task", "noeta_version"]
 
@@ -76,8 +76,6 @@ log = logging.getLogger("noeta.host.stream_json")
 
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
 
-#: Claude Code's mode names noeta takes as another name for its own.
-MODE_ALIASES = {"manual": "default"}
 
 
 def noeta_version() -> str:

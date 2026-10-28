@@ -26,7 +26,7 @@ from typing import Any
 
 from noeta.cli import mcp_command
 from noeta.cli.config import Settings, load_settings
-from noeta.toolkit.permission_modes import PERMISSION_MODES
+from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
 SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "mcp")
 
@@ -35,7 +35,7 @@ def _common(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--model")
     ap.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"))
     ap.add_argument("--permission-mode", default=None,
-                    choices=(*PERMISSION_MODES, "manual"),
+                    choices=(*PERMISSION_MODES, *MODE_ALIASES),
                     help="the starting permission mode (default: auto)")
     ap.add_argument("--provider", choices=("anthropic", "openai_compat", "openai_responses"))
     ap.add_argument("--base-url")
@@ -221,8 +221,8 @@ def _front(argv: list[str]) -> None:
         print(f"{noeta_version()} (noeta)")
         return
     cwd = os.path.abspath(args.cwd or os.getcwd())
-    if args.permission_mode == "manual":
-        args.permission_mode = "default"
+    if args.permission_mode in MODE_ALIASES:
+        args.permission_mode = MODE_ALIASES[args.permission_mode]
     if headless.headless(args):
         s = _settings(args)
         if args.system_prompt_file:
