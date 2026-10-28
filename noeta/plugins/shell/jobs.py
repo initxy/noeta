@@ -245,7 +245,10 @@ class Registry:
         return None
 
     def running(self, root_id: str) -> list[Job]:
-        return [j for j in self.jobs.get(root_id, {}).values() if j.status == "running"]
+        """The root's jobs whose end is not yet told: a job whose command
+        has exited counts until its end is posted, so whoever waits for the
+        tree's jobs to finish sees that end in the inbox once they have."""
+        return [j for j in self.jobs.get(root_id, {}).values() if not j.done.is_set()]
 
     # ------------------------------------------------------------ launch
 

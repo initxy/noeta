@@ -170,6 +170,29 @@ async def test_a_planted_log_directory_is_refused(
     assert list(elsewhere.iterdir()) == []
 
 
+async def test_a_job_counts_as_running_until_its_end_is_posted(tmp_path: Path) -> None:
+    # Whoever waits for a tree's jobs to finish (a front end before its next
+    # prompt) must find the end in the inbox once none runs: a job whose
+    # command exited but whose end is not posted yet still counts.
+    entered, posting = asyncio.Event(), asyncio.Event()
+
+    async def slow_post(_body: Any, task_id: str | None = None, **_kw: Any) -> None:
+        entered.set()
+        await posting.wait()
+
+    registry = Registry(log_dir=str(tmp_path / "logs"))
+    job = await registry.spawn(env=LocalExecEnv(str(tmp_path)), command="true",
+                               cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r",
+                               tool_use_id="c", description="", post=slow_post)
+    assert isinstance(job, Job)
+    await asyncio.wait_for(entered.wait(), 10)
+    assert job.status == "exited"
+    assert registry.running("r") == [job]
+    posting.set()
+    await asyncio.wait_for(job.done.wait(), 10)
+    assert registry.running("r") == []
+
+
 async def test_a_loose_existing_directory_is_tightened(tmp_path: Path) -> None:
     logs = tmp_path / "logs"
     logs.mkdir(mode=0o755)
