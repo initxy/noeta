@@ -343,16 +343,20 @@ def compare_session(name: str, cc: Mapping[str, Any], no: Mapping[str, Any],
             continue
         _compare_pair(a, b, where, found)
 
-    # sub-agents: first call of each
+    # sub-agents: call by call, in order
     for kind in sorted({r["kind"] for r in cc_rows if r["kind"].startswith("subagent:")}):
-        a = next(r for r in cc_rows if r["kind"] == kind)
-        b = next((r for r in no_rows if r.get("kind") == kind), None)
-        where = f"{name}/{a['step']}"
-        if b is None:
-            found.add("subagent", f"{kind}: noeta made no such sub-agent call", where)
+        a_calls = [r for r in cc_rows if r["kind"] == kind and r.get("status", 200) == 200]
+        b_calls = [r for r in no_rows if r.get("kind") == kind]
+        if not b_calls:
+            found.add("subagent", f"{kind}: noeta made no such sub-agent call",
+                      f"{name}/{a_calls[0]['step']}")
             continue
-        _compare_pair(a, b, where, found,
-                      prefix=f"{kind}: ")
+        for i, (a, b) in enumerate(zip(a_calls, b_calls, strict=False)):
+            where = f"{name}/{a['step']}" + (f"#{i + 1}" if i else "")
+            _compare_pair(a, b, where, found, prefix=f"{kind}: ")
+        if len(a_calls) != len(b_calls):
+            found.add("subagent", f"{kind}: Claude Code made {len(a_calls)} calls, noeta "
+                                  f"{len(b_calls)}", f"{name}/{a_calls[0]['step']}")
 
     # compaction
     cc_comp = [r for r in cc_rows if r["kind"] == "compaction" and r.get("status") == 200]
