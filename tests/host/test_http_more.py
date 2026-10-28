@@ -185,6 +185,9 @@ async def test_requests_cannot_bypass_permissions_or_leave_the_directory(
         refused = await http.post(f"/tasks/{task_id}/signals", json={
             "name": "permission_mode", "data": {"mode": "bypassPermissions"}})
         assert refused.status_code == 403
+        refused = await http.post(f"/tasks/{task_id}/answers", json={
+            "request_id": "r1", "decision": "allow", "data": {"mode": "bypassPermissions"}})
+        assert refused.status_code == 403
     async with websockets.connect(f"ws://{host}/stream-json?token=secret&model={MODEL}") as ws:
         await ws.recv()
         await ws.send(json.dumps({"type": "control_request", "request_id": "r1", "request": {

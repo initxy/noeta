@@ -158,6 +158,13 @@ class _GuardedClient:
             kw["config"] = self.check_config(kw["config"])
         return await self._client.create(*args, **kw)
 
+    async def answer(self, task_id: str, request_id: str, decision: Any = None,
+                     **kw: Any) -> Any:
+        data = kw.get("data")
+        if isinstance(data, Mapping):
+            self._mode(data.get("mode"))
+        return await self._client.answer(task_id, request_id, decision, **kw)
+
     async def signal(self, task_id: str, name: str, data: Any = None, **kw: Any) -> Any:
         if name == MODE_SIGNAL and isinstance(data, Mapping):
             self._mode(data.get("mode"))
@@ -299,7 +306,7 @@ def create_app(client: Client, *, token: str | None = None,
 
     async def answer(request: Request) -> Response:
         body = await request.json()
-        seq = await client.answer(request.path_params["task_id"], body["request_id"],
+        seq = await guarded.answer(request.path_params["task_id"], body["request_id"],
                                   body.get("decision"), always=bool(body.get("always")),
                                   data=body.get("data"))
         return _json({"ok": True, "inbox_seq": seq})
