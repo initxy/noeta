@@ -18,7 +18,7 @@ from typing import Any
 import acp
 from acp import schema
 
-from noeta.core import models
+from noeta.core import models, records
 from noeta.core.commands import list_commands, parse_command, run_typed
 from noeta.core.events import (
     ExtensionRecorded,
@@ -34,8 +34,8 @@ from noeta.core.events import (
 )
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
-from noeta.core.records import CORE
 from noeta.core.types import Delta, Image, Message, Text, ToolUse
+from noeta.host.feed import failure_text, tool_title
 from noeta.host.local import LocalApp, UnknownAgent
 from noeta.host.pending import (
     Pending,
@@ -61,14 +61,6 @@ TOOL_KINDS: dict[str, str] = {
 }
 #: Characters of a tool result shown in the editor.
 RESULT_PREVIEW_CHARS = 4000
-
-
-def tool_title(call: ToolUse) -> str:
-    i = call.input
-    target = i.get("file_path") or i.get("path") or i.get("command") or i.get("pattern") \
-        or i.get("url") or i.get("query") or i.get("description") or ""
-    target = str(target).splitlines()[0][:120] if target else ""
-    return f"{call.name} {target}".strip()
 
 
 def _locations(call: ToolUse) -> list[schema.ToolCallLocation] | None:
@@ -516,21 +508,17 @@ class NoetaAcpAgent:
                 out.put_nowait(schema.CurrentModeUpdate(
                     session_update="current_mode_update",
                     current_mode_id=current_mode([rec]) or ""))
-            elif isinstance(ev, ExtensionRecorded) and ev.extension == CORE:
-                if ev.kind == "retry":
-                    turn.retried(int((ev.data or {}).get("attempt") or 1))
-                elif ev.kind == "turn_failed":
-                    data = ev.data if isinstance(ev.data, dict) else {}
-                    reason = ": ".join(str(x) for x in (data.get("reason"), data.get("detail"))
-                                       if x)
+            elif isinstance(ev, ExtensionRecorded) and (core := records.decode(ev)) is not None:
+                if isinstance(core, records.Retry):
+                    turn.retried(int(core.attempt or 1))
+                elif isinstance(core, records.TurnFailed):
+                    reason = failure_text(ev.data)
                     out.put_nowait(acp.update_agent_message_text(f"\n\n[turn failed: {reason}]"))
-                elif ev.kind == "turn_stopped":
+                elif isinstance(core, records.TurnStopped):
                     return "cancelled"
-                elif ev.kind == "notice":
-                    data = ev.data if isinstance(ev.data, dict) else {}
-                    text = str(data.get("text") or "")
+                elif isinstance(core, records.Notice):
                     # Structured news (a review's findings) goes as markdown.
-                    shown = text if data.get("kind") else f"[{text}]"
+                    shown = core.text if core.notice_kind else f"[{core.text}]"
                     out.put_nowait(acp.update_agent_message_text(f"\n\n{shown}\n\n"))
             elif isinstance(ev, Waiting):
                 if ev.on == "approval":

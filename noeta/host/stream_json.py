@@ -36,7 +36,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from noeta.core import models
+from noeta.core import models, records
 from noeta.core.client import ClientAPI
 from noeta.core.commands import list_commands, run_typed
 from noeta.core.events import (
@@ -55,7 +55,6 @@ from noeta.core.events import (
 )
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
-from noeta.core.records import CORE
 from noeta.core.types import Delta, Image, Message, Text, Thinking, ToolUse, Usage
 from noeta.host.pending import Pending, card_title, pending_tree
 from noeta.host.pending import follow_tree as _follow_tree
@@ -670,15 +669,15 @@ class StreamJson:
 
     def _recorded(self, ev: ExtensionRecorded) -> None:
         data = ev.data if isinstance(ev.data, dict) else {}
-        if ev.extension == CORE and ev.kind == "spawned":
-            for child in data.get("children") or []:
+        core = records.decode(ev)
+        if isinstance(core, records.Spawned):
+            for child in core.children:
                 self._put(self._message(type="system", subtype="task_started",
                                         task_id=child.get("id"), description=child.get("id"),
                                         tool_use_id=child.get("call_id") or None,
                                         task_type="local_agent"))
-        elif ev.extension == CORE and ev.kind == "notice":
-            self._put(self._message(type="system", subtype="informational",
-                                    content=str(data.get("text") or "")))
+        elif isinstance(core, records.Notice):
+            self._put(self._message(type="system", subtype="informational", content=core.text))
         elif ev.extension == "permissions" and ev.kind == "mode" and data.get("mode"):
             self._put(self._message(type="system", subtype="status", status=None,
                                     permissionMode=data["mode"]))

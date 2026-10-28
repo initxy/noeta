@@ -47,6 +47,7 @@ from noeta.core.events import (
 from noeta.core.extension import CommandContext
 from noeta.core.records import CORE
 from noeta.core.types import Delta, Image, Usage
+from noeta.host.feed import failure_text
 from noeta.host.local import LocalApp, UnknownAgent
 from noeta.host.pending import (
     Pending,
@@ -537,8 +538,8 @@ class NoetaApp(App[None]):
                 self._set_question("", "", {})
                 await transcript.mount(Notice("stopped"))
             elif ev.kind == "turn_failed":
-                reason = ": ".join(str(x) for x in (data.get("reason"), data.get("detail")) if x)
-                await transcript.mount(Notice(f"turn failed: {reason}", classes="-error"))
+                await transcript.mount(Notice(f"turn failed: {failure_text(data)}",
+                                              classes="-error"))
             elif ev.kind == "notice" and ev.extension == CORE:
                 text = str(data.get("text") or "")
                 # Structured news (a review's findings) reads as a list.
