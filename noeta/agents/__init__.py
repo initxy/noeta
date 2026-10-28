@@ -63,11 +63,12 @@ def default_agents(
     add: Mapping[str, Sequence[PluginEntry]] | None = None,
     extensions: Sequence[Extension] = (),
     extra_files: Iterable[AgentFile] = (),
+    made: dict[Any, Extension] | None = None,
     **main_kw: Any,
 ) -> list[Agent]:
     """``main`` and the three sub-agents (and ``extra_files``' agents).
 
-    ``plugins`` and ``add`` are :func:`~noeta.agents.agent_files.build_agents`'s:
+    ``plugins``, ``add`` and ``made`` are :func:`~noeta.agents.agent_files.build_agents`'s:
     per plugin name its arguments, a ready instance, or ``False``. The
     plugins in :data:`OFF_UNLESS_SET` (memory, MCP) stay off until
     ``plugins`` has a setting for them. ``main_kw`` replaces fields of
@@ -76,7 +77,7 @@ def default_agents(
     settings.update(plugins or {})
     agents = build_agents([*builtin_agent_files(), *extra_files], model=model,
                           plugins=settings, default_plugins=DEFAULT_PLUGINS, add=add,
-                          extensions=extensions)
+                          extensions=extensions, made=made)
     if main_kw:
         agents = [dataclasses.replace(a, **main_kw) if a.name == "main" else a for a in agents]
     return agents

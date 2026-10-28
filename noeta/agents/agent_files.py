@@ -235,6 +235,10 @@ def _freeze(value: Any) -> Any:
         return tuple(sorted((k, _freeze(v)) for k, v in value.items()))
     if isinstance(value, (list, tuple)):
         return tuple(_freeze(v) for v in value)
+    try:
+        hash(value)
+    except TypeError:
+        return ("object", id(value))
     return value
 
 
@@ -297,6 +301,7 @@ def build_agents(
     default_plugins: Sequence[PluginEntry] = (),
     add: Mapping[str, Sequence[PluginEntry]] | None = None,
     extensions: Sequence[Extension] = (),
+    made: dict[Any, Extension] | None = None,
 ) -> list[Agent]:
     """The agents of ``files`` (a later file replaces an earlier one of the
     same name).
@@ -308,22 +313,24 @@ def build_agents(
     (``"*"``: every agent), after the file's own; a plugin an agent already
     has is not added twice. A plugin is made once per set of arguments and
     shared by every agent that names it with those arguments. ``extensions``
-    are added after every agent's own."""
+    are added after every agent's own. ``made`` keeps the plugins made, so a
+    later build with it reuses each one whose code and arguments are the same
+    (a reload keeps what the unchanged plugins hold in memory)."""
     by_name: dict[str, AgentFile] = {}
     for f in files:
         by_name[f.name] = f
     settings = {name: _setting(name, v) for name, v in (plugins or {}).items()}
     add = add or {}
-    made: dict[tuple[str, Any], Extension] = {}
+    made = {} if made is None else made
 
     def plugin(name: str, args: Mapping[str, Any]) -> Extension:
         _on, host_args, instance = settings.get(name, (True, {}, None))
         if not args and instance is not None:
             return instance
-        key = (name, _freeze(args))
+        factory = registry.load(registry.PLUGINS, name)
+        arguments = {**host_args, **args}
+        key = (name, factory, _freeze(arguments))
         if key not in made:
-            factory = registry.load(registry.PLUGINS, name)
-            arguments = {**host_args, **args}
             made[key] = factory(**resolve_secrets(arguments, f"plugin {name!r}"))
             registry.note_arguments(made[key], arguments)
         return made[key]

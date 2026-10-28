@@ -47,6 +47,7 @@ from noeta.core.provider import Provider
 from noeta.toolkit.sandbox import SandboxSettings
 
 if TYPE_CHECKING:
+    from noeta.core.agent import Agent
     from noeta.core.loop.state import TaskState
     from noeta.host.local import LocalApp
 
@@ -373,9 +374,6 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         notices.append(unknown)
     for notice in notices:
         log.warning("%s", notice)
-    files = read_agent_dir(HOME / "agents")
-    if cwd and project_trusted(cwd):
-        files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
     found = file_settings(cwd)
     apply_env(found)
     if not settings.model and found.model:
@@ -400,10 +398,21 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
          "instructions": {"user_dir": str(HOME), "managed_dir": str(managed_dir())},
          "permissions": permission_args, "fs": {"write_roots": write_roots}},
         settings.plugins, plugins or {})
-    add = {agent: tuple(entries) for agent, entries in settings.add_plugins.items()}
-    for agent, names in registry.added_by_files().items():
-        add[agent] = (*add.get(agent, ()), *((name, {}) for name in names))
-    agents = default_agents(settings.model, plugins=table, add=add, extra_files=files)
+    made: dict[Any, Any] = {}
+    model, add_plugins = settings.model, settings.add_plugins
+
+    def make_agents() -> list[Agent]:
+        """The agents from the agent files and plugins found now; a plugin
+        whose code and arguments did not change is the one made before."""
+        files = read_agent_dir(HOME / "agents")
+        if cwd and project_trusted(cwd):
+            files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
+        add = {agent: tuple(entries) for agent, entries in add_plugins.items()}
+        for agent, names in registry.added_by_files().items():
+            add[agent] = (*add.get(agent, ()), *((name, {}) for name in names))
+        return default_agents(model, plugins=table, add=add, extra_files=files, made=made)
+
+    agents = make_agents()
     sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
                                             base_dir=str(cwd or os.getcwd()))
     if sandbox.enabled:
