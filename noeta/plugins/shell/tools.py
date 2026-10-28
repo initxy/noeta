@@ -5,14 +5,24 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections.abc import Awaitable, Callable
 from importlib import resources
 from typing import Any
+from urllib.parse import urlsplit
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.plugins.shell.bash import SCHEMA_DIALECT, SHELL, BashTool, confine, shell_state
+from noeta.plugins.shell.bash import (
+    SCHEMA_DIALECT,
+    SHELL,
+    BashTool,
+    confine,
+    sandbox_required,
+    shell_state,
+)
 from noeta.plugins.shell.jobs import Job, Registry
 from noeta.plugins.shell.notices import format_duration
 from noeta.plugins.shell.websocket import parse_ws
+from noeta.toolkit.sandbox import domain_allowed, resolve_allowed, sandbox_of
 from noeta.toolkit.shell import matching_rule, parse_argv
 from noeta.toolkit.tools import Workspace, require_str, tool_error
 
@@ -105,6 +115,31 @@ class BackgroundBash(BashTool):
         return text_output(text, job_id=job.job_id)
 
 
+def _ws_policy(env: Any, url: str) -> Callable[[str, int], Awaitable[str]] | str | None:
+    """How a ``Monitor`` WebSocket, which the worker opens itself, keeps to
+    the sandbox's network rules while commands run confined: the resolver
+    that connects only to an allowed host at a checked address, a refusal,
+    or ``None`` (no sandbox in force)."""
+    sandbox = sandbox_of(env)
+    if sandbox is None:
+        return None
+    reason = sandbox.unavailable()
+    if reason is not None:
+        return sandbox_required(reason) if sandbox.settings.fail_if_unavailable else None
+    s = sandbox.settings
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    port = parts.port or (443 if parts.scheme == "wss" else 80)
+    if not domain_allowed(host, port, s.allowed_domains, s.denied_domains):
+        return (f"the sandbox does not allow connecting to {host}:{port}; add it to "
+                "sandbox.network.allowedDomains to watch this socket")
+
+    async def resolve(name: str, number: int) -> str:
+        return await resolve_allowed(name, number, s.allowed_domains, s.denied_domains)
+
+    return resolve
+
+
 async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: str,
                  description: str, monitor_timeout_ms: float | None = None,
                  disable: Any = False,
@@ -118,11 +153,15 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
     if ctx.post is None:
         return tool_error(tool, NOT_AVAILABLE)
     if ws is not None:
+        resolve = _ws_policy(ctx.env, ws[0])
+        if isinstance(resolve, str):
+            return tool_error(tool, resolve)
         release = await ctx.hold() if ctx.hold is not None else None
         job = await shell.registry.spawn(
             env=ctx.env, command=command, cwd="", env_vars={}, root_id=_root(ctx),
             spawner_id=ctx.task_id, tool_use_id=ctx.call_id, description=description,
-            post=ctx.post, monitor_timeout_ms=monitor_timeout_ms, release=release, ws=ws)
+            post=ctx.post, monitor_timeout_ms=monitor_timeout_ms, release=release, ws=ws,
+            ws_resolve=resolve)
         if isinstance(job, str):
             return tool_error(tool, job)
         ctx.record(SHELL, "started", {

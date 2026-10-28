@@ -19,7 +19,7 @@ import os
 import re
 import ssl
 import struct
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -160,11 +160,14 @@ async def _stream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
         kind, parts = None, []
 
 
-async def run_ws(url: str, protocols: Sequence[str], emit: Callable[[str], None]) -> WsExit:
+async def run_ws(url: str, protocols: Sequence[str], emit: Callable[[str], None], *,
+                 resolve: Callable[[str, int], Awaitable[str]] | None = None) -> WsExit:
     """Stream ``url``'s messages to ``emit`` (one call per text message, a
     ``[binary frame, N bytes]`` line per binary one) until the socket
     closes; an error is emitted before the end. Cancelling closes the
-    socket."""
+    socket. ``resolve`` gives the address to connect to for the URL's host
+    and port (the sandbox's checked one), raising :class:`PermissionError`
+    to refuse it."""
     parts = urlsplit(url)
     secure = parts.scheme == "wss"
     host = parts.hostname or ""
@@ -173,8 +176,11 @@ async def run_ws(url: str, protocols: Sequence[str], emit: Callable[[str], None]
     host_header = parts.netloc.rpartition("@")[2]
     writer: asyncio.StreamWriter | None = None
     try:
+        address = await asyncio.wait_for(resolve(host, port), HANDSHAKE_TIMEOUT_S) \
+            if resolve is not None else host
         reader, opened = await asyncio.wait_for(asyncio.open_connection(
-            host, port, ssl=ssl.create_default_context() if secure else None,
+            address, port, ssl=ssl.create_default_context() if secure else None,
+            server_hostname=host if secure else None,
             limit=_MAX_HEADER_BYTES), HANDSHAKE_TIMEOUT_S)
         writer = opened
         await asyncio.wait_for(_handshake(reader, opened, host_header, target, protocols),

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from noeta.core.tool import ToolContext
 from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.shell.websocket import parse_ws, run_ws
 from tests.plugins.shell.test_background_tools import Harness, text
@@ -142,3 +143,47 @@ async def test_monitor_streams_a_websocket(tmp_path: Path,
                         "<event>deploy started</event>\n</task-notification>")
     assert "<status>completed</status>" in texts[-1]
     assert 'Monitor "deploy events" socket closed (code 1000)' in texts[-1]
+
+
+async def test_monitor_keeps_to_the_sandbox_network_rules(
+        tmp_path: Path, server: Callable[[Script], Awaitable[str]]) -> None:
+    from noeta.toolkit.sandbox import SandboxSettings
+    from tests.plugins.shell.test_sandbox import FakeSandbox
+
+    connected: list[bool] = []
+
+    async def script(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        connected.append(True)
+        writer.write(frame(0x1, b"through") + frame(0x8, struct.pack("!H", 1000)))
+        await writer.drain()
+        await read_client_frame(reader)
+
+    url = await server(script)
+    port = url.split(":")[2].split("/")[0]
+    registry = Registry(log_dir=str(tmp_path / "logs"))
+    work = tmp_path / "work"
+    work.mkdir()
+    allowed: list[str] = []
+
+    class Sandboxed(Harness):
+        def ctx(self, task_id: str = "task", root_id: str = "task") -> ToolContext:
+            ctx = super().ctx(task_id, root_id)
+            ctx.env.sandbox = FakeSandbox(SandboxSettings(  # type: ignore[attr-defined]
+                enabled=True, allowed_domains=tuple(allowed)))
+            return ctx
+
+    h = Sandboxed(work, registry, Shell(registry=registry))
+    # Not in allowedDomains: refused before any connection.
+    refused = await h.call("Monitor", ws={"url": url}, description="d", timeout_ms=60_000)
+    assert refused.is_error and "allowedDomains" in text(refused)
+    # Allowed by a wildcard, but the name resolves to this machine.
+    allowed.append("*")
+    out = await h.call("Monitor", ws={"url": f"ws://0x7f000001:{port}/"}, description="d",
+                       timeout_ms=60_000)
+    await h.settle(out.meta["job_id"])
+    assert "resolves to 127.0.0.1 (a loopback address)" in h.posts[-1][1]
+    assert not connected
+    allowed[:] = [f"127.0.0.1:{port}"]
+    out = await h.call("Monitor", ws={"url": url}, description="d", timeout_ms=60_000)
+    await h.settle(out.meta["job_id"])
+    assert connected and "<event>through</event>" in "".join(t for _, t in h.posts[1:])
