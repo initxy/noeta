@@ -334,6 +334,9 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Fixed
 
+- **A command missing its optional dependency says which extra to install.** `noeta serve`,
+  `noeta acp`, the terminal UI, a Postgres `--store` and the other extras' imports exit with
+  `pip install 'noeta[<extra>]'` instead of a `ModuleNotFoundError` traceback.
 - **A fork of a fork keeps the whole conversation.** A task continuing another
   (`history_from`) folded only that task's own log, so a second rewind, or a sub-agent
   resumed twice through `SendMessage`, lost everything before the first continuation.
