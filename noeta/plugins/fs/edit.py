@@ -10,6 +10,7 @@ The result is one line naming the file (Claude Code's); the diff rides in
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput
@@ -80,6 +81,53 @@ def _curl(text: str, found: str) -> str:
     return "".join(out)
 
 
+_ESCAPE = re.compile(r"(\\\\)|\\u([0-9a-fA-F]{4})")
+_NON_ASCII = re.compile(r"[\u0080-\uffff]")
+_HAS_ESCAPE = re.compile(r"\\u[0-9a-fA-F]{4}")
+
+
+def _unescape(text: str) -> str:
+    """``\\uXXXX`` escapes turned into their characters (an escaped
+    backslash stays as it is)."""
+    return _ESCAPE.sub(lambda m: m.group(1) or chr(int(m.group(2), 16)), text)
+
+
+def _escaped_in_file(before: str, old: str) -> tuple[str, dict[str, str]] | None:
+    """The file's own text for ``old`` when the file spells ``old``'s
+    non-ASCII characters as ``\\uXXXX`` escapes, with the hex spelling the
+    file uses for each character."""
+    pattern = "".join(
+        "\\\\u" + "".join(f"[{d}{d.upper()}]" if d.isalpha() else d
+                          for d in f"{ord(ch):04x}")
+        if ord(ch) >= 0x80 else re.escape(ch)
+        for ch in old)
+    m = re.search(pattern, before)
+    if m is None:
+        return None
+    found, spelled, at = m.group(0), {}, 0
+    for ch in old:
+        if ord(ch) >= 0x80:
+            spelled[ch] = found[at + 2:at + 6]
+            at += 6
+        else:
+            at += 1
+    return found, spelled
+
+
+def _escape_like(text: str, spelled: dict[str, str]) -> str:
+    """``text``'s non-ASCII characters as ``\\uXXXX``, in the hex case the
+    file uses."""
+    upper = sum(c.isupper() for h in spelled.values() for c in h)
+    lower = sum(c.islower() for h in spelled.values() for c in h)
+
+    def one(m: re.Match[str]) -> str:
+        ch = m.group(0)
+        hexa = spelled.get(ch) or f"{ord(ch):04x}"
+        return "\\u" + (hexa.upper() if upper > lower and ch not in spelled else hexa)
+
+    return _NON_ASCII.sub(one, text)
+
+
 def _dominant_eol(text: str) -> str:
     """``"\\r\\n"`` when most of ``text``'s line endings are CRLF."""
     crlf = text.count("\r\n")
@@ -131,8 +179,19 @@ class EditTool:
             old_eol, new_eol = _to_eol(old, "\r\n"), _to_eol(new, "\r\n")
             if before.count(old_eol):
                 old, new = old_eol, new_eol
+        tried_escapes = False
         if old not in before and (found := _as_in_file(before, old)) is not None:
             old, new = found, _curl(new, found)
+        elif old not in before and _HAS_ESCAPE.search(old):
+            # The model wrote \uXXXX escapes for characters the file holds.
+            tried_escapes = True
+            if (plain := _unescape(old)) != old and plain in before:
+                old, new = plain, _unescape(new)
+        elif old not in before and _NON_ASCII.search(old):
+            # The model wrote characters the file spells as \uXXXX escapes.
+            tried_escapes = True
+            if (spelled := _escaped_in_file(before, old)) is not None:
+                old, new = spelled[0], _escape_like(new, spelled[1])
         count = before.count(old)
         # Claude Code applies an edit over changes made since the read when
         # its permissions allow the write outright and old_string still
@@ -140,7 +199,11 @@ class EditTool:
         if stale and (approved or count == 0 or (count > 1 and not replace_all)):
             return stale_error(self.name, "editing")
         if count == 0:
-            return tool_error(self.name, f"String to replace not found in file.\nString: {old}")
+            hint = ("\n(Edit also tried \\uXXXX escapes and the characters they stand for, "
+                    "both ways; neither matched, so the difference is elsewhere in old_string. "
+                    "Read the file again and copy the exact text.)" if tried_escapes else "")
+            return tool_error(
+                self.name, f"String to replace not found in file.\nString: {old}{hint}")
         if count > 1 and not replace_all:
             return tool_error(
                 self.name,

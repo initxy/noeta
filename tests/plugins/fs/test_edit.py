@@ -194,6 +194,25 @@ async def test_straight_quotes_match_curly_ones_and_keep_the_files_style(
     assert (ws / "a.md").read_text() == "He said \u201cbye\u201d and it\u2019s fine.\n"
 
 
+async def test_unicode_escapes_and_their_characters_match_both_ways(
+        h: Harness, ws: Path) -> None:
+    (ws / "a.json").write_text('{"name": "caf\\u00E9", "city": "Z\u00fcrich"}\n')
+    await _read(h, "a.json")
+    # The file spells é as an escape; the model wrote the character.
+    out = await h.call(EditTool(), file_path="a.json", old_string='"caf\u00e9"',
+                       new_string='"na\u00efve caf\u00e9"')
+    assert not out.is_error, text_of(out)
+    # The file holds ü; the model wrote the escape.
+    out = await h.call(EditTool(), file_path="a.json", old_string='"Z\\u00fcrich"',
+                       new_string='"M\\u00fcnchen"')
+    assert not out.is_error, text_of(out)
+    assert (ws / "a.json").read_text() == (
+        '{"name": "na\\u00EFve caf\\u00E9", "city": "M\u00fcnchen"}\n')
+    out = await h.call(EditTool(), file_path="a.json", old_string="\u00e9t\u00e9",
+                       new_string="x")
+    assert text_of(out).endswith("Read the file again and copy the exact text.)")
+
+
 async def test_deleting_a_line_takes_its_line_break(h: Harness, ws: Path) -> None:
     (ws / "a.py").write_text("keep\ndrop me\nkeep too\n")
     await _read(h, "a.py")
