@@ -249,3 +249,12 @@ Phase 5 — front ends
   read; malformed tool calls still retried by the transient policy, not once.
 - 2026-10-28: Phase 1 merged (8f52fc5, make check 1444 passed). Owner decisions: drop noeta-only
   tools and prompt rules, WebFetch as Claude Code, build every missing baseline tool.
+- 2026-10-28: sub-agents (Phase 2/4 slice): `Agent` with Claude Code's schema, background only;
+  `SubagentHandback`, agent-message and task-notification placed as m1 0036/0037 show;
+  `SendMessage` (resume = a new task with `TaskCreated.history_from`), `ListAgents`, forks,
+  worktree isolation, progress label; built-ins Explore/Plan/general-purpose; Claude Code's
+  agent-file fields. Kernel: `ToolOutput.end_turn`, one-shot tasks wait for live children,
+  `history_from`, `Agent.denied_tools`, origin `agent`, `ChildEnded` usage. Sub-agent lines
+  in the report 39 -> 24 (all 156 -> 145); what is left there belongs to the request-shape, tool-surface and
+  deferred-tool work. Open: `SendMessage.notify_when_idle`, the transcript `output_file`,
+  agent-file `skills`/`mcpServers`/`hooks`/`memory`/`initialPrompt` (kept, not applied).
