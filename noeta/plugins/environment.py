@@ -50,6 +50,8 @@ PROJECT_URL = "https://github.com/initxy/noeta"
 #: Places of this plugin's notes in the joined system turn (``Reminder.order``):
 #: the environment first, the budget and the date last.
 ORDER_ENVIRONMENT = 0
+#: After a compaction the environment comes after the lists (Claude Code's).
+ORDER_ENVIRONMENT_AFTER_COMPACTION = 60
 ORDER_DEFERRED = 30
 #: A sub-agent's environment turn opens with its deferred tools.
 ORDER_DEFERRED_SUBAGENT = -10
@@ -311,7 +313,12 @@ class Environment(Extension):
         if kind in ("git", "attribution"):
             return {**state, kind: data.get("text")}
         if kind == "sent":
-            return {**state, "held": False}
+            return {**state, "held": False, "skip_date": False}
+        if kind == "rehold":
+            # A compaction: the environment, the deferred tools and (unless
+            # it already follows the summary) the date go out again.
+            return {**state, "held": True, "compacted": True,
+                    "skip_date": not data.get("date", True)}
         if kind == "deferred":
             return {**state, "deferred": list(data.get("names") or [])}
         if kind == "date":
@@ -349,9 +356,11 @@ class Environment(Extension):
             return ()
         out: list[Reminder] = []
         if st.get("held"):
-            # The first request: the environment follows the first prompt.
+            # The first request (or the first after a compaction): the
+            # environment follows the prompt.
             out.append(Reminder(text=st["text"], kind="sent", data={}, role="system",
-                                order=ORDER_ENVIRONMENT))
+                                order=ORDER_ENVIRONMENT_AFTER_COMPACTION
+                                if st.get("compacted") else ORDER_ENVIRONMENT))
             # The deferred tools the first request offers, named once; the
             # list does not change for the rest of the conversation.
             names = view.deferred_tool_names()
@@ -359,8 +368,9 @@ class Environment(Extension):
                 order = ORDER_DEFERRED_SUBAGENT if view.state.parent_id else ORDER_DEFERRED
                 out.append(Reminder(text=deferred_list(names), kind="deferred",
                                     data={"names": names}, role="system", order=order))
-            out.append(Reminder(text=date_line(st["date"]), kind="date",
-                                data={"date": st["date"]}, role="system", order=ORDER_DATE))
+            if not st.get("skip_date"):
+                out.append(Reminder(text=date_line(st["date"]), kind="date",
+                                    data={"date": st["date"]}, role="system", order=ORDER_DATE))
         elif self.date_change and not view.state.steps_in_turn and st.get("date"):
             today = self.today()
             if st["date"] != today:
@@ -378,21 +388,30 @@ class Environment(Extension):
                                 role="system", order=ORDER_BUDGET))
         return out
 
-    async def resident(self, view: TaskView) -> Sequence[Message]:
-        """After a compaction: the git snapshot and attribution note taken at
-        the start, then the environment with the deferred tools and the date
-        it last gave."""
+    async def lead_resident(self, view: TaskView) -> Sequence[Message]:
+        """Ahead of a compaction's summary, as Claude Code rebuilds it: the
+        git snapshot taken at the start, then the attribution note, or, when
+        messages stay after the summary, the date (a system turn, which
+        follows the summary) and the note after those messages
+        (``resident``). The environment and the deferred tools go out again
+        with the next request."""
         st = view.ext_state(self.name)
-        if not isinstance(st, dict):
+        if view.keeps_tail is None or not isinstance(st, dict):
             return ()
-        out = [user(st[k], origin="system") for k in ("git", "attribution")
-               if isinstance(st.get(k), str)]
-        text = st.get("text")
-        if isinstance(text, str):
-            parts = [text]
-            if st.get("deferred"):
-                parts.append(deferred_list(st["deferred"]))
-            if st.get("date"):
-                parts.append(date_line(st["date"]))
-            out.append(system_message("\n\n".join(parts)))
+        out = [user(st["git"], origin="system")] if isinstance(st.get("git"), str) else []
+        if not view.keeps_tail and isinstance(st.get("attribution"), str):
+            out.append(user(st["attribution"], origin="system"))
+        date = view.keeps_tail and bool(st.get("date"))
+        if date:
+            out.append(system_message(date_line(st["date"])))
+        if isinstance(st.get("text"), str):
+            view.record(self.name, "rehold", {"date": not date})
         return out
+
+    async def resident(self, view: TaskView) -> Sequence[Message]:
+        """After the messages a compaction keeps: the attribution note."""
+        st = view.ext_state(self.name)
+        if not view.keeps_tail or not isinstance(st, dict) \
+                or not isinstance(st.get("attribution"), str):
+            return ()
+        return [user(st["attribution"], origin="system")]

@@ -266,6 +266,9 @@ class Skills(Extension):
         state = state or self.initial_state()
         if kind == "listing":
             return {**state, "listings": [*state["listings"], data]}
+        if kind == "listing_rehold":
+            return {**state, "listings": [{**listing, "held": True}
+                                          for listing in state["listings"]]}
         if kind == "listing_sent":
             return {**state, "listings": [{k: v for k, v in listing.items() if k != "held"}
                                           for listing in state["listings"]]}
@@ -440,7 +443,8 @@ class Skills(Extension):
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
         """After a compaction: the skills invoked before it, in one message
-        that says not to run them again, then the whole listing so far."""
+        that says not to run them again; the whole listing so far goes out
+        again with the next request, in the environment's system turn."""
         if not self.rehang:
             return ()
         state = view.ext_state(self.name) or {}
@@ -456,9 +460,8 @@ class Skills(Extension):
                                  f"\n\n{render_activation(desc, entry.get('args'))}")
             if len(parts) > 1:
                 out.append(user("\n\n".join(parts), origin=self.origin))
-        lines = [line for listing in state.get("listings", []) for line in listing["lines"]]
-        if lines:
-            out.append(user(render_listing(True, lines), origin=self.origin))
+        if view.keeps_tail is not None and state.get("listings"):
+            view.record(self.name, "listing_rehold", {})
         return out
 
 

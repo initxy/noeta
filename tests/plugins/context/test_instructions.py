@@ -226,8 +226,8 @@ class MakeRoom(Extension):
 
     async def on_context_overflow(self, view: TaskView) -> bool:
         view.compacted(Compacted(summary="(summary)", through=view.state.last_seq,
-                                 lead=await view.residents(lead=True),
-                                 after=await view.residents()))
+                                 lead=await view.residents(lead=True, keeps_tail=False),
+                                 after=await view.residents(keeps_tail=False)))
         return True
 
 
@@ -248,7 +248,7 @@ async def test_residents_rehang_after_a_compaction(h: Harness, tmp_path: Path) -
     await h.say(a, tid, "next")
     texts = [m.text for m in h.last_messages()]
     # Ahead of the summary: the instructions with the memory index; after
-    # it: the invoked skill, then the listing.
+    # it: the invoked skill, then the listing, given again in a system turn.
     assert texts[0].startswith(PREAMBLE)
     assert texts[0].endswith("- [Note](note.md) — a note")
     assert texts[1] == "(summary)"

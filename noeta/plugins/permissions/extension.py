@@ -41,7 +41,7 @@ from noeta.core.extension import (
 )
 from noeta.core.pending import MODE_SIGNAL as _MODE_SIGNAL
 from noeta.core.tool import Tool, ToolOutput
-from noeta.core.types import ModelRequest, ToolUse
+from noeta.core.types import ModelRequest, ToolResult, ToolUse
 from noeta.plugins.permissions import classifier as c
 from noeta.plugins.permissions import guards as g
 from noeta.plugins.permissions import plan as pl
@@ -121,6 +121,9 @@ class PermState:
     due: tuple[str, ...] = ()
     #: The seq of the newest prompt the plan-mode text was sent for.
     plan_noted: int = 0
+    #: After a compaction, the auto-mode note waits for a prompt or a tool
+    #: result newer than this seq (Claude Code's).
+    guidance_after: int = 0
 
 
 def inherited_rules(state: Any) -> list[str]:
@@ -336,7 +339,8 @@ class Permissions(Extension):
         if kind == "compacted":
             extra: tuple[str, ...] = ("auto_guidance",) if d.get("auto") else ()
             extra += ("plan_active",) if d.get("plan") else ()
-            return replace(st, due=(*st.due, *extra))
+            return replace(st, due=(*st.due, *extra),
+                           guidance_after=int(d.get("seq") or st.guidance_after))
         if kind == "step":
             return replace(st, steps=st.steps + 1)
         if kind == "tool_call":
@@ -766,7 +770,8 @@ class Permissions(Extension):
             self._compacted[view.task_id] = None
             _trim(self._compacted)
             mode = self.mode_of(view)
-            view.record(NAME, "compacted", {"auto": mode == "auto", "plan": mode == "plan"})
+            view.record(NAME, "compacted", {"auto": mode == "auto", "plan": mode == "plan",
+                                            "seq": recorded.seq})
         elif isinstance(ev, ExtensionRecorded) and ev.extension == "core" and \
                 ev.kind == "parked" and isinstance(ev.data, dict):
             self._name_plan(view, ev.data)
@@ -952,14 +957,15 @@ class Permissions(Extension):
             out.append(Reminder(text=pl.plan_exited_text(st.plan["path"]), kind="plan_exited",
                                 role="system", order=ORDER_PLAN))
             sent.append("plan_exited")
-        first = not any(m.role == "assistant" for m in view.state.messages)
-        if mode == "auto" and ("auto_guidance" in st.due or first) and \
-                view.state.parent_id is None:
+        first = not any(m.role == "assistant" for m in view.state.history)
+        guidance = "auto_guidance" in st.due and _new_input(view, st.guidance_after)
+        if mode == "auto" and (guidance or first) and view.state.parent_id is None:
             out.append(Reminder(text=w.AUTO_MODE_GUIDANCE, kind="auto_guidance", role="system",
                                 order=ORDER_AUTO))
             sent.append("auto_guidance")
         stale = [k for k in st.due if k not in sent and (
-            (k == "auto_guidance" and mode != "auto") or (k == "plan_active" and mode != "plan"))]
+            (k == "auto_guidance" and (mode != "auto" or view.state.parent_id is not None))
+            or (k == "plan_active" and mode != "plan"))]
         if sent or stale or plan_noted != st.plan_noted:
             view.record(NAME, "noted", {"kinds": [*sent, *stale], "plan_noted": plan_noted})
         return out
@@ -998,6 +1004,13 @@ def _path(args: Mapping[str, Any]) -> str | None:
 
 def _dir_of(path: str) -> str:
     return posixpath.dirname(path).lstrip("/") or ""
+
+
+def _new_input(view: TaskView, after: int) -> bool:
+    """Whether a prompt or a tool result came in after log seq ``after``."""
+    return any(seq > after and m.role == "user" and (
+        m.origin in (None, "human") or any(isinstance(b, ToolResult) for b in m.content))
+        for seq, m in zip(view.state.message_seqs, view.state.messages, strict=False))
 
 
 def _newest_prompt(view: TaskView) -> int:

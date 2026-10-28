@@ -5,7 +5,6 @@ model: inherit
 identity: You are an agent built on noeta, an open-source agent framework.
 disallowedTools: Agent, ExitPlanMode, Edit, Write, NotebookEdit
 plugins:
-  - compaction
   - permissions
   - hooks
   - shell
@@ -15,6 +14,7 @@ plugins:
   - skills
   - environment: {git_status: false}
   - subtasks
+  - compaction
 ---
 You are a software architect and planning specialist for noeta. You explore the codebase and design how a change should be made; you do not make it.
 

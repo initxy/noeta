@@ -21,7 +21,7 @@ from noeta.core.events import Compacted, ExtensionRecorded, Waiting
 from noeta.core.extension import Deny, Extension, TaskView
 from noeta.core.types import Message, ModelRequest, ModelResponse, ToolUse, Usage
 from noeta.plugins.compaction import Compaction
-from noeta.plugins.compaction.extension import THRASHING_REASON, command_text
+from noeta.plugins.compaction.extension import command_text
 from noeta.plugins.compaction.summary import (
     CONTINUE_NOTE,
     HEAD_DROPPED_NOTE,
@@ -107,13 +107,16 @@ async def test_auto_compaction_keeps_the_tipping_results(store: SqliteStore) -> 
     await assert_rebuilds(store, a, tid)
 
 
-async def test_over_before_the_results_summarizes_everything(store: SqliteStore) -> None:
+async def test_the_first_reply_after_a_compaction_is_summarized_with_it(
+        store: SqliteStore) -> None:
     a = agent()
-    model = Model([call(), call(), big_call(), big_call(), answer("done")])
+    model = Model([call(), big_call(), big_call(), answer("done")])
     client, tid = await run(store, a, model)
-    first, *_ = await compactions(client, tid)
-    assert KEPT_NOTE not in first.summary
-    after = next(r for r in model.requests if r.messages[0].text.startswith(SUMMARY_PREAMBLE))
+    first, second = await compactions(client, tid)
+    # The first keeps the newest reply; the second comes right after the
+    # first post-compaction request and summarizes everything.
+    assert KEPT_NOTE in first.summary and KEPT_NOTE not in second.summary
+    after = next(r for r in model.requests if r.messages[0].text == second.summary)
     assert all(m.role == "user" for m in after.messages)
     await assert_rebuilds(store, a, tid)
 
@@ -122,21 +125,24 @@ async def test_the_request_after_a_compaction_is_sent_as_it_is(store: SqliteStor
     a = agent()
     model = Model([big_call(), big_call(), big_call(), answer("done")])
     client, tid = await run(store, a, model)
-    # Every reply reports 10K tokens: each request after the first is
-    # compacted, but never twice in a row without a request in between.
-    assert len(await compactions(client, tid)) == 3
+    # Every reply reports 10K tokens. With nothing before the first reply to
+    # summarize the second request goes as it is; after that each request
+    # but the one right after a compaction is compacted first.
+    assert len(await compactions(client, tid)) == 2
     assert len(model.requests) == 4
     await assert_rebuilds(store, a, tid)
 
 
-async def test_rapid_refills_stop_auto_compaction(store: SqliteStore) -> None:
+async def test_a_context_that_keeps_refilling_keeps_being_compacted(
+        store: SqliteStore) -> None:
     a = agent()
-    model = Model([big_call() for _ in range(8)])
+    model = Model([call(), *(big_call() for _ in range(7)), answer("done")])
     client, tid = await run(store, a, model)
-    assert len(await compactions(client, tid)) == 4
+    # As Claude Code: every refill is compacted (the reply right after a
+    # compaction makes the next one summarize everything), the turn goes on.
+    assert len(await compactions(client, tid)) >= 4
     last = (await events(client, tid))[-1]
-    assert isinstance(last, Waiting)
-    assert last.detail["turn_failed"].startswith(f"{THRASHING_REASON}: ")
+    assert isinstance(last, Waiting) and last.detail == {"answer": "done"}
 
 
 async def test_overflow_compacts_and_retries(store: SqliteStore) -> None:
@@ -198,7 +204,7 @@ async def test_a_later_summary_carries_the_earlier_one(store: SqliteStore) -> No
     done = await compactions(client, tid)
     assert len(done) >= 2
     second = model.summarize_requests[1]
-    assert second.messages[0].origin is None
+    assert second.messages[0].origin == "inline"
     assert second.messages[0].text == done[0].summary
     await assert_rebuilds(store, a, tid)
 
@@ -258,8 +264,10 @@ async def test_compact_command(store: SqliteStore) -> None:
     await client.send(tid, "and now?")
     await runtime(store, a, model).run_until_idle()
     texts = [m.text for m in model.requests[-1].messages]
-    assert texts[0] == compacted.summary
-    assert "<command-name>/compact</command-name>" in texts[1] and texts[-1] == "and now?"
+    # The summary, the newest reply kept after it, the command, the prompt.
+    assert texts[0] == compacted.summary and KEPT_NOTE in compacted.summary
+    assert texts[1] == "done"
+    assert "<command-name>/compact</command-name>" in texts[2] and texts[-1] == "and now?"
     await assert_rebuilds(store, a, tid)
 
 
@@ -281,16 +289,6 @@ async def test_compaction_model_gets_its_own_output_ceiling(store: SqliteStore) 
     summ = model.summarize_requests[0]
     assert summ.model == "claude-haiku-4-5" and summ.max_tokens == 64_000
     assert all(r.model == "m" for r in model.requests)
-
-
-def test_rapid_refill_count() -> None:
-    ext = Compaction()
-    st = ext.initial_state()
-    for turn in (3, 3, 4, 5):
-        st = ext.reduce(st, "compacted", {"turn": turn})
-    assert (st.compactions, st.rapid) == (4, 3)
-    st = ext.reduce(st, "compacted", {"turn": 9})
-    assert st.rapid == 0
 
 
 class _BeforeCompact(Extension):

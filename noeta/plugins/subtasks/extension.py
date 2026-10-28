@@ -18,7 +18,7 @@ from noeta.core.events import ChildEnded, External, InputTaken, ModelReplied, Re
 from noeta.core.extension import Deny, Extension, Gate, Reminder, Rewrite, TaskView
 from noeta.core.loop.state import TaskState
 from noeta.core.tool import Tool, ToolContext
-from noeta.core.types import Message, ModelRequest, ToolUse, system_message, user
+from noeta.core.types import Message, ModelRequest, ToolUse, user
 from noeta.plugins.subtasks import texts
 from noeta.plugins.subtasks.tool import (
     DELEGATION_TOOLS,
@@ -352,8 +352,12 @@ class Subtasks(Extension):
         return "\n".join([texts.AGENT_LIST_HEAD, *lines, "", texts.AGENT_LIST_TAIL])
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
+        """After a compaction the agent list goes out again with the next
+        request, in the environment's system turn."""
         text = None if view.state.parent_id else self.agent_list(view)
-        return [system_message(text)] if text else []
+        if text and view.keeps_tail is not None:
+            view.record(self.name, "agent_list", {"text": text})
+        return ()
 
     async def on_start(self, view: TaskView) -> None:
         st = self._state(view.state)

@@ -4,12 +4,15 @@
 Before every model request (mid-turn included) the context is measured as
 the newest reply's reported usage plus an estimate of what was appended
 since. At the threshold (``window.py``) the conversation is summarized by
-the main request itself with the summarize instruction appended. When the
-context was under the threshold before the newest tool results, that reply
-and its results are kept verbatim after the summary; otherwise everything
-is summarized. After the summary come the project instructions (ahead of
-it), then the kept messages, then the files read recently, the invoked
-skills, the listings and the environment.
+the main request itself with the summarize instruction appended. The newest
+reply and what followed it are kept verbatim after the summary, unless that
+reply answered the first request after the previous compaction (then
+everything is summarized); with nothing before the newest reply worth a
+summary, an automatic compaction waits. The project instructions and the
+workspace context go ahead of the summary (a manual compaction puts them
+after the kept messages instead), then come the kept messages, then the
+files read recently and the invoked skills; the listings and the
+environment are given again with the next request.
 
 Everything a step sends is a pure function of the folded log, so a runner
 that restarts mid-step sends the same bytes: a compaction is the core
@@ -28,11 +31,10 @@ from typing import Any, Literal
 
 import msgspec
 
-from noeta.core.errors import ContextOverflow, ModelError, TurnDone, TurnFailed
+from noeta.core.errors import ContextOverflow, ModelError, RequestStale, TurnDone, TurnFailed
 from noeta.core.events import Compacted
 from noeta.core.execenv import is_local
 from noeta.core.extension import Command, CommandContext, Deny, Extension, TaskView
-from noeta.core.loop.request import cache_breakpoints
 from noeta.core.loop.state import TaskState
 from noeta.core.models import model_limits
 from noeta.core.tool import Tool, ToolContext
@@ -51,17 +53,6 @@ from noeta.plugins.compaction.window import (
 from noeta.toolkit.context import noeta_home, project_dir, simulated_state
 
 log = logging.getLogger("noeta.compaction")
-
-#: A compaction within this many user turns of the previous one is a rapid
-#: refill; more than this many rapid refills in a row stop auto-compaction.
-RAPID_REFILL_TURNS = 3
-RAPID_REFILL_LIMIT = 3
-THRASHING_REASON = "compaction_thrashing"
-THRASHING_DETAIL = (
-    "the context filled up again within {turns} turns of the previous compaction, "
-    "{limit} times in a row; a file or tool output is probably too large for the context "
-    "window. Read it in smaller pieces, or start a new task."
-)
 
 #: The ``/compact`` command and the text it puts in the conversation.
 COMMAND = "compact"
@@ -89,10 +80,8 @@ def command_text(args: str) -> str:
 @dataclass(frozen=True)
 class CompactionState:
     compactions: int = 0
-    #: User turns when the last compaction happened.
-    last_turn: int | None = None
-    #: Rapid refills in a row, the last compaction included.
-    rapid: int = 0
+    #: Replies the last compaction kept after its summary.
+    kept_replies: int = 0
 
 
 def _user_turns(state: TaskState) -> int:
@@ -165,10 +154,8 @@ class Compaction(Extension):
         st = state if isinstance(state, CompactionState) else CompactionState()
         if kind != "compacted" or not isinstance(data, Mapping):
             return st
-        turn = int(data.get("turn") or 0)
-        rapid = st.rapid + 1 if st.last_turn is not None \
-            and turn - st.last_turn < RAPID_REFILL_TURNS else 0
-        return CompactionState(compactions=st.compactions + 1, last_turn=turn, rapid=rapid)
+        return CompactionState(compactions=st.compactions + 1,
+                               kept_replies=int(data.get("kept_replies") or 0))
 
     def _ext(self, state: TaskState) -> CompactionState:
         ext = state.ext.get(self.name)
@@ -204,13 +191,12 @@ class Compaction(Extension):
         self._remember(view.task_id, request)
         state = view.state
         n = len(state.messages)
-        extras = list(request.messages[n:])
         command = self._command(state)
         if command is not None:
             at, args = command
             if view.complete is not None:
-                window = self._window(request.model)
-                cut = self._cut(state, request, at, window)
+                cut = self._cut(state, at, manual=True)
+                assert cut is not None
                 extra = await self._instructions(view, "manual", args) \
                     if self._through(state, cut) is not None else None
                 if extra is not None:
@@ -226,21 +212,17 @@ class Compaction(Extension):
         tokens, _ = self._tokens(state, request, n)
         if tokens < window.threshold:
             return request
-        cut = self._cut(state, request, n, window)
-        if self._through(state, cut) is None:
+        cut = self._cut(state, n, manual=False)
+        if cut is None or self._through(state, cut) is None:
             return request
-        ext = self._ext(state)
-        if ext.last_turn is not None and _user_turns(state) - ext.last_turn \
-                < RAPID_REFILL_TURNS and ext.rapid >= RAPID_REFILL_LIMIT:
-            raise TurnFailed(THRASHING_REASON, THRASHING_DETAIL.format(
-                turns=RAPID_REFILL_TURNS, limit=RAPID_REFILL_LIMIT))
         extra = await self._instructions(view, "auto", "")
         if extra is None:
             return request
-        new = await self._compact(view, state, request, cut, reason="auto", estimated=tokens,
-                                  extra=extra)
-        return msgspec.structs.replace(request, messages=[*new.messages, *extras],
-                                       cache_after=cache_breakpoints(new))
+        await self._compact(view, state, request, cut, reason="auto", estimated=tokens,
+                            extra=extra)
+        # Every extension builds the request again from the compacted
+        # conversation (betas and notes that depend on it included).
+        raise RequestStale()
 
     async def on_context_overflow(self, view: TaskView) -> bool:
         request = self._last.pop(view.task_id, None)
@@ -292,17 +274,19 @@ class Compaction(Extension):
         since = messages_tokens(messages[last + 1:])
         return max(prefix + messages_tokens(messages), before + since), before
 
-    def _cut(self, state: TaskState, request: ModelRequest, n: int, window: Window) -> int:
-        """How many leading messages the summary covers: all ``n``, or, when
-        the context was under the threshold before the newest reply's tool
-        results, everything before that reply."""
+    def _cut(self, state: TaskState, n: int, *, manual: bool) -> int | None:
+        """How many leading messages the summary covers: everything before
+        the newest reply, which stays with what followed it (Claude Code's);
+        all ``n`` when that reply answered the first request after the
+        previous compaction. With no earlier reply to summarize, an
+        automatic compaction waits (``None``) and a manual one takes all."""
         last = _last_reply(state.messages[:n])
-        if last <= 0 or not state.messages[last].tool_uses:
+        if last < 0 or not any(m.role == "assistant" for m in state.messages[:last]):
+            return n if manual or last < 0 else None
+        replies = sum(1 for m in state.messages[:n] if m.role == "assistant")
+        if state.compaction is not None and replies == self._ext(state).kept_replies + 1:
             return n
-        if any(m.role == "assistant" for m in state.messages[last + 1:n]):
-            return n
-        _, before = self._tokens(state, request, n)
-        return last if before < window.threshold else n
+        return last
 
     @staticmethod
     def _through(state: TaskState, cut: int) -> int | None:
@@ -341,11 +325,14 @@ class Compaction(Extension):
         assert through is not None
         to_summarize = list(request.messages[:cut])
         note, usage, head_dropped = await self._summarize(view, request, to_summarize, extra)
-        kept = any(m.role == "assistant" for m in state.messages[cut:])
+        kept_replies = sum(1 for m in state.messages[cut:] if m.role == "assistant")
+        kept = kept_replies > 0
         text = summary.summary_message(
             note, tools=summary.tools_used(to_summarize), transcript=self._transcript(view, state),
             head_dropped=head_dropped, kept=kept)
-        lead = list(await view.residents(lead=True))
+        manual = reason == "manual"
+        tail = kept and not manual
+        lead = list(await view.residents(lead=True, keeps_tail=tail))
         after: list[Message] = []
         read_tool = (self.read_tool or view.find_tool("Read")) if self.restore else None
         if read_tool is not None and view.env is not None:
@@ -356,11 +343,21 @@ class Compaction(Extension):
             after.extend(restored)
             for ext_name, kind, data in records:
                 view.record(ext_name, kind, data)
-        after.extend(await view.residents())
-        view.compacted(Compacted(summary=text, through=through, lead=lead, after=after,
-                                 usage=usage))
+        after.extend(await view.residents(keeps_tail=tail))
+        if manual:
+            # Claude Code gives it all again with the next prompt, after the
+            # command: nothing goes ahead of the summary.
+            lead_turn, after_summary, after = [], [], [*lead, *after]
+        else:
+            # A system turn cannot sit inside the summary's user turn: it
+            # follows the summary.
+            lead_turn = [m for m in lead if m.role != "system"]
+            after_summary = [m for m in lead if m.role == "system"]
+        view.compacted(Compacted(summary=text, through=through, lead=lead_turn,
+                                 kept=after_summary, after=after, usage=usage))
         view.record(self.name, "compacted", {"reason": reason, "through": through,
-                                             "estimated": estimated, "turn": _user_turns(state)})
+                                             "estimated": estimated, "turn": _user_turns(state),
+                                             "kept_replies": kept_replies})
         log.info("task %s: compacted through seq %s (%s)", view.task_id, through, reason)
         return simulated_state(view, {self.name: self.reduce})
 

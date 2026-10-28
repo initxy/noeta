@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 import msgspec
 
 from noeta.core import models
-from noeta.core.errors import ContextOverflow, ModelError, TurnDone, TurnFailed
+from noeta.core.errors import ContextOverflow, ModelError, RequestStale, TurnDone, TurnFailed
 from noeta.core.events import ExtensionRecorded, ModelCalled, ModelReplied
 from noeta.core.extension import Reminder, TaskView
 from noeta.core.loop.request import build_request, cache_breakpoints, request_hash
@@ -128,6 +128,9 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         await run.flush(view)
         await run.append([ExtensionRecorded(extension=CORE, kind="turn_done")])
         return True
+    except RequestStale:
+        await run.flush(view)
+        return True  # the next boundary builds the request from the new state
     await run.append([ModelCalled(model=request.model, request_hash=request_hash(request),
                                   attempt=run.state.model_attempts + 1)])
 

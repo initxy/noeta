@@ -4,7 +4,6 @@ description: 'General-purpose agent for researching complex questions, searching
 model: inherit
 identity: You are an agent built on noeta, an open-source agent framework.
 plugins:
-  - compaction
   - permissions
   - hooks
   - shell
@@ -15,6 +14,7 @@ plugins:
   - instructions
   - environment
   - subtasks: {agents: ["*"]}
+  - compaction
 ---
 You are an agent for noeta. Using the tools you have, carry the task you were given all the way through: no gold-plating, and nothing left half done. When you are done, report briefly what you did and what you found; your caller passes it on to the user, so give only what matters.
 
