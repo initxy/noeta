@@ -31,6 +31,7 @@ from noeta.core.events import (
     Recorded,
     TaskCreated,
     TaskEnded,
+    TimerFired,
     ToolFinished,
     Waiting,
 )
@@ -251,7 +252,31 @@ class TaskRun:
                         post=self.post_self, extensions=self.exts, model=model,
                         agents=self.rt.agents,
                         allowed_tools=self.agent.allowed_tools if self.agent else None,
-                        denied_tools=self.agent.denied_tools if self.agent else ())
+                        denied_tools=self.agent.denied_tools if self.agent else (),
+                        count_tokens=self.counter(model))
+
+    def counter(self, model: str) -> Any:
+        """``count_tokens(text)`` against ``model``'s provider, or ``None``
+        when the provider cannot count."""
+        if not model:
+            return None
+        try:
+            provider = self.rt.provider_for(model)
+        except Exception:  # noqa: BLE001 — no provider, no exact count
+            return None
+        count = getattr(provider, "count_tokens", None)
+        if count is None:
+            return None
+
+        async def counted(text: str) -> int | None:
+            try:
+                result: int | None = await count(model, text)
+            except Exception:  # an estimate stands in for a failed count
+                log.debug("count_tokens failed", exc_info=True)
+                return None
+            return result
+
+        return counted
 
     async def post_self(self, body: Any, dedupe_key: str | None = None) -> None:
         """Post to this task's own inbox (extensions: ``TaskView.post``)."""
@@ -273,9 +298,10 @@ class TaskRun:
                                            sleep=self.rt.sleep)
 
     async def flush(self, view: TaskView) -> None:
-        if view.pending:
+        if view.pending or view.creates:
             events, view.pending = list(view.pending), []
-            await self.append(events)
+            creates, view.creates = list(view.creates), []
+            await self.append(events, creates=creates)
 
     def tools(self, view: TaskView) -> list[Tool]:
         allowed = self.agent.allowed_tools if self.agent is not None else None
@@ -317,8 +343,9 @@ class TaskRun:
             detail: dict[str, Any] = {"answer": self.state.last_answer}
             if self.state.turn_error:
                 detail = {"turn_failed": self.state.turn_error}
-            await self.append([Waiting(on="input", detail=detail)],
-                              patch=Patch(status="waiting", waiting_on="input",
+            due = self.next_timer()
+            await self.append([Waiting(on="input", detail=detail, until=due)],
+                              patch=Patch(status="waiting", waiting_on="input", ready_at=due,
                                           inbox_read_seq=self.state.inbox_read))
             return False
         if isinstance(action, decide.Interrupted):
@@ -372,9 +399,27 @@ class TaskRun:
             self._step = None
 
     async def _take_input(self) -> None:
+        await self._fire_timers()
         items = await self.store.inbox(self.task_id, after=self.state.inbox_read)
         if items:
             await self.append([InputTaken(items=items, through=items[-1].seq)])
+
+    async def _fire_timers(self) -> None:
+        """Post the due timers to the inbox while the task is idle (a turn
+        in progress keeps them for later). The dedupe key makes a crash
+        between post and take harmless."""
+        st = self.state
+        if st.turn_open or st.calls or st.ended is not None or not st.timers:
+            return
+        now = time.time()
+        for name, timer in sorted(st.timers.items(), key=lambda kv: kv[1]["at"]):
+            if timer["at"] <= now:
+                await self.store.post(Post(task_id=self.task_id, body=TimerFired(name=name),
+                                           dedupe_key=f"timer:{name}:{timer['at']}"))
+
+    def next_timer(self) -> float | None:
+        """When the earliest timer is due, or ``None`` without timers."""
+        return min((t["at"] for t in self.state.timers.values()), default=None)
 
     async def _stop_turn(self, call_ids: Sequence[str]) -> None:
         await self._close_calls(call_ids, texts.STOPPED_CALL_ERROR,

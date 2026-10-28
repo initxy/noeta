@@ -169,8 +169,12 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
     return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
                        state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
                        spawn=spawn, post=post, root_id=root, prompt=run.state.prompt,
-                       tasks=run.store.tasks,
+                       tasks=run.store.tasks, count_tokens=run.counter(_model(run)),
                        hold=lambda: run.rt.hold(root), by_model=True)
+
+
+def _model(run: TaskRun) -> str:
+    return str(run.state.config.get("model") or (run.agent.model if run.agent else ""))
 
 
 async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[Event],

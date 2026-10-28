@@ -83,10 +83,34 @@ class ToolContext:
     #: (``noeta.core.prompts``).
     prompt: Callable[[str, str], str] = field(default=lambda _name, default: default)
 
-    def notify(self, text: str) -> None:
+    #: ``await count_tokens(text)``: the provider's exact token count of one
+    #: user message holding ``text``; ``None`` when it cannot count.
+    count_tokens: Callable[[str], Awaitable[int | None]] | None = None
+
+    def notify(self, text: str, *, kind: str | None = None, data: Any = None) -> None:
         """Tell the person ``text``; front ends show it, the model never sees
-        it (a ``core`` / ``notice`` record)."""
-        self.record("core", "notice", {"text": text})
+        it (a ``core`` / ``notice`` record). ``kind`` / ``data``: the same as
+        structured data for front ends that render it."""
+        self.record("core", "notice", notice_data(text, kind, data))
+
+    def set_timer(self, name: str, at: float, text: str = "") -> None:
+        """Wake the task at ``at`` once it is idle, ``text`` as its next
+        message (``TaskView.set_timer``)."""
+        self.record("core", "timer", {"name": name, "at": at, "text": text})
+
+    def clear_timer(self, name: str) -> None:
+        self.record("core", "timer_cleared", {"name": name})
+
+
+def notice_data(text: str, kind: str | None = None, data: Any = None) -> dict[str, Any]:
+    """A ``core`` / ``notice`` record's data: ``text``, and for structured
+    news its ``kind`` and ``data``."""
+    out: dict[str, Any] = {"text": text}
+    if kind:
+        out["kind"] = kind
+    if data is not None:
+        out["data"] = data
+    return out
 
 
 class Tool(Protocol):
