@@ -95,13 +95,13 @@ def test_common_input_fields() -> None:
     child = TaskView(state=TaskState(task_id="r.c1.1", agent="Explore", parent_id="r",
                                      root_id="r", config={"cwd": "/w",
                                                           "permission_mode": "plan"}))
-    payload = hooks._payload("PreToolUse", child, {"tool_name": "Read"})
+    payload = hooks._d.payload("PreToolUse", child, {"tool_name": "Read"})
     assert payload == {
         "session_id": "r", "transcript_path": "", "cwd": "/w", "permission_mode": "plan",
         "hook_event_name": "PreToolUse", "task_id": "r.c1.1", "agent_id": "r.c1.1",
         "agent_type": "Explore", "tool_name": "Read"}
     root = TaskView(state=TaskState(task_id="r", agent="main"))
-    payload = hooks._payload("Stop", root, {})
+    payload = hooks._d.payload("Stop", root, {})
     assert payload["session_id"] == "r" and payload["permission_mode"] == "default"
     assert "agent_id" not in payload and "agent_type" not in payload
 
