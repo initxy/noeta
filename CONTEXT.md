@@ -94,17 +94,19 @@ by every agent naming it. The built-ins are `noeta/agents/files/*.md`.
 
 ## Prompt name
 
-Every model-facing text has a name: `system/<agent>`, `tool/<Tool>`, `<plugin>/<key>`,
-`reminder/<key>`. The owning code holds the default; overrides (host prompt dirs <
+Every model-facing text has a name: `system/<agent>`, `identity/<agent>`, `tool/<Tool>`,
+`<plugin>/<key>`, `reminder/<key>`. The owning code holds the default; overrides (host prompt dirs <
 `<cwd>/.noeta/prompts` < task config `prompts`) are recorded when the task first starts, so a
 resumed task sends the same bytes (`noeta/core/prompts.py`).
 
 ## Reminder
 
 Text for the model that is not the user speaking. A plugin returns `Reminder`s from
-`reminders(view)`, called before every model call; the runner records them as `system`-origin
-messages and puts them in that request. Text fixed at task start (environment, instructions,
-skill listing) is recorded in `on_start`; what must wake a waiting task goes through the inbox.
+`reminders(view)`, called before every model call; the runner records them and puts them in
+that request: `role="user"` ones as `system`-origin text in the user's turn, then `role="system"`
+ones as system turns by `order` (adapters join adjacent system turns, as Claude Code sends its
+environment and budget notes). Text fixed at task start is captured in `on_start`; what must
+wake a waiting task goes through the inbox.
 
 ## Park
 

@@ -17,7 +17,16 @@ import msgspec
 
 from noeta.core.events import Recorded
 from noeta.core.execenv import ExecEnv
-from noeta.core.extension import Ask, Command, CommandContext, Deny, Extension, Gate, TaskView
+from noeta.core.extension import (
+    Ask,
+    Command,
+    CommandContext,
+    Deny,
+    Extension,
+    Gate,
+    Reminder,
+    TaskView,
+)
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ToolUse, user
 from noeta.plugins.skills import _frontmatter
@@ -66,6 +75,9 @@ _NOTHING_RAN = (
 _SKILL_PROP_DESCRIPTION = "Name of the skill to activate, from the skill listing in your context."
 _ARGS_PROP_DESCRIPTION = "Optional arguments for the skill."
 _SKILL_NAME_MAX_LEN = 200
+#: The listing's place in the joined system turn (``Reminder.order``): after
+#: the environment, deferred tools and agents, before the budget and date.
+LISTING_ORDER = 50
 
 #: The directories a workspace contributes, relative to its root.
 WORKSPACE_SKILLS_DIR = ".noeta/skills"
@@ -249,6 +261,9 @@ class Skills(Extension):
         state = state or self.initial_state()
         if kind == "listing":
             return {**state, "listings": [*state["listings"], data]}
+        if kind == "listing_sent":
+            return {**state, "listings": [{k: v for k, v in listing.items() if k != "held"}
+                                          for listing in state["listings"]]}
         if kind == "activated":
             entry = {k: v for k, v in data.items() if k != "text"}
             return {**state, "active": {**state["active"], data["name"]: entry}}
@@ -297,7 +312,10 @@ class Skills(Extension):
             lines = listing_lines(registry, budget_tokens=self._budget(view),
                                   rank=await self._rank(view))
             if lines:
-                self._record_listing(view, lines, first=True)
+                # Held for the first request's system turn, after the prompt.
+                view.record(self.name, "listing", {"names": [n for n, _ in lines],
+                                                   "lines": [t for _, t in lines],
+                                                   "held": True})
         pending = [n for n in self.preload if n not in state.get("active", {})]
         if pending:
             registry = registry or await self.registry(env)
@@ -307,6 +325,17 @@ class Skills(Extension):
                     _log.warning("skills: preload %r is not an indexed skill; skipped", name)
                     continue
                 self._record_activation(view, _activation_data(desc, "preload"))
+
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        """The listing taken at start, in the environment's system turn
+        (Claude Code's place for it)."""
+        state = view.ext_state(self.name) or {}
+        held = [line for listing in state.get("listings", []) if listing.get("held")
+                for line in listing["lines"]]
+        if not held:
+            return ()
+        return (Reminder(text=render_listing(True, held), kind="listing_sent", data={},
+                         role="system", order=LISTING_ORDER),)
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         messages = new_user_messages(view.state, recorded.seq)

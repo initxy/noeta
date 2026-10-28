@@ -30,8 +30,11 @@ async def test_root_file_is_recorded_once_before_the_first_message(h: Harness) -
     tid = await h.start(a)
     first = h.provider.requests[0].messages
     assert first[0].origin == "system"
-    assert first[0].text == '<workspace-instructions source="AGENTS.md">\nUse tabs.\n\n' \
-                            "</workspace-instructions>"
+    assert first[0].text == (
+        "Below are instructions from the codebase and the user. Follow them: they override "
+        "your default behavior and must be followed exactly as written.\n\n"
+        f"{h.work / 'AGENTS.md'} (project instructions, part of the repository):\n\n"
+        "Use tabs.\n")
     assert first[1].text == "go"
     await h.say(a, tid, "more")
     assert len(await h.records(tid, "instructions")) == 1
@@ -72,8 +75,8 @@ async def test_a_read_brings_nested_files_after_its_result(h: Harness) -> None:
     msgs = h.provider.requests[1].messages
     # user goal, assistant Read, result, then the two files in order
     assert isinstance(msgs[2].content[0], ToolResult)
-    assert msgs[3].text.startswith('<workspace-instructions source="src/AGENTS.md">')
-    assert msgs[4].text.startswith('<workspace-instructions source="src/pkg/NOETA.md">')
+    assert f"{h.work / 'src' / 'AGENTS.md'} (project instructions" in msgs[3].text
+    assert f"{h.work / 'src' / 'pkg' / 'NOETA.md'} (project instructions" in msgs[4].text
     assert "pkg rules" in msgs[4].text
 
 
@@ -132,5 +135,5 @@ async def test_residents_rehang_after_a_compaction(h: Harness, tmp_path: Path) -
     assert texts[1].startswith("The following skills are available")
     assert texts[2].startswith("Activated skill: deploy")
     assert texts[3].startswith("Long-term memory index.")
-    assert texts[4].startswith('<workspace-instructions source="AGENTS.md">')
+    assert texts[4].startswith("Below are instructions from the codebase")
     assert len(texts) == 5

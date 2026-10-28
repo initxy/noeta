@@ -2,8 +2,9 @@
 ``CLAUDE.md``, and the nested ones a ``Read`` walks past.
 
 The root file is read through the task's ExecEnv when a runner picks the task
-up and recorded once, before the first message, wrapped as
-``<workspace-instructions source="NOETA.md">``. A successful ``Read`` of a file
+up and recorded once, before the first message, as Claude Code shows a
+``CLAUDE.md``: a line saying these instructions override default behavior,
+then the file's absolute path and kind, then its text. A successful ``Read`` of a file
 inside the workspace walks the directories between the root and the file
 (shallowest first); each directory's first non-empty candidate is recorded
 once, right after the read's results, under its workspace-relative path.
@@ -31,8 +32,11 @@ __all__ = ["DEFAULT_INSTRUCTIONS_FILENAMES", "Instructions", "render_instruction
 DEFAULT_INSTRUCTIONS_FILENAMES = ("NOETA.md", "AGENTS.md", "CLAUDE.md")
 
 
-def render_instructions(source: str, text: str) -> str:
-    return f'<workspace-instructions source="{source}">\n{text}\n</workspace-instructions>'
+def render_instructions(path: str, text: str) -> str:
+    """``path`` is the file's absolute path."""
+    return ("Below are instructions from the codebase and the user. Follow them: they "
+            "override your default behavior and must be followed exactly as written.\n\n"
+            f"{path} (project instructions, part of the repository):\n\n{text}")
 
 
 async def _read_one(env: ExecEnv, path: str) -> str | None:
@@ -86,9 +90,9 @@ class Instructions(Extension):
                     "root": state["root"] or kind == "root"}
         return state
 
-    def _record(self, view: TaskView, kind: str, name: str, text: str) -> None:
+    def _record(self, view: TaskView, kind: str, name: str, path: str, text: str) -> None:
         view.record(self.name, kind, {"name": name},
-                    message=user(render_instructions(name, text), origin=self.origin))
+                    message=user(render_instructions(path, text), origin=self.origin))
 
     async def on_start(self, view: TaskView) -> None:
         state = view.ext_state(self.name) or {}
@@ -100,7 +104,7 @@ class Instructions(Extension):
             path = candidate if posixpath.isabs(candidate) else posixpath.join(env.cwd, candidate)
             text = await _read_one(env, path)
             if text is not None:
-                self._record(view, "root", posixpath.basename(path), text)
+                self._record(view, "root", posixpath.basename(path), path, text)
                 return
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
@@ -132,9 +136,10 @@ class Instructions(Extension):
             if any(n in active for n in names):
                 continue
             for filename, name in zip(self.filenames, names, strict=True):
-                text = await _read_one(env, posixpath.join(directory, filename))
+                path = posixpath.join(directory, filename)
+                text = await _read_one(env, path)
                 if text is not None:
-                    self._record(view, "file", name, text)
+                    self._record(view, "file", name, path, text)
                     active.add(name)
                     break
 
@@ -148,7 +153,7 @@ class Instructions(Extension):
             path = source if posixpath.isabs(source) else posixpath.join(env.cwd, source)
             text = await _read_one(env, path)
             if text is not None:
-                out.append(user(render_instructions(name, text), origin=self.origin))
+                out.append(user(render_instructions(path, text), origin=self.origin))
         return out
 
 

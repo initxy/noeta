@@ -54,9 +54,9 @@ async def test_default_agents_residents_follow_every_summary(
     assert len(after) > 3
     for request in after:
         texts = [m.text for m in request.messages]
-        assert texts[1].startswith('<workspace-instructions source="AGENTS.md">'), texts[:3]
-        assert texts[2].startswith("<workspace-environment>")
-        assert sum("<workspace-instructions" in t for t in texts) == 1
+        assert texts[1].startswith("Below are instructions from the codebase"), texts[:3]
+        assert texts[2].startswith("# Environment")
+        assert sum("(project instructions, part of" in t for t in texts) == 1
     pairs = await rebuilt(store, main, tid)
     assert pairs and all(live == again for live, again in pairs), pairs
 

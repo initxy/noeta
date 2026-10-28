@@ -65,6 +65,24 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **The main loop sends what Claude Code 2.1.312 sends an API-key user.** The system prompt is
+  two cached blocks: an identity line (`Agent.identity`, agent-file `identity:`, prompt name
+  `identity/<agent>`) and the main prompt, rewritten to Claude Code's rules and section order
+  in our own words (noeta-only rules dropped, `parity/rules/main-prompt.md`). The project
+  instructions, a git snapshot and a commit/PR attribution note ride in the first user turn;
+  the environment (with the model's name and knowledge cutoff), the skill listing and the date
+  follow it as a mid-conversation system turn (`Message.role="system"`, `Reminder.role` and
+  `Reminder.order`; the Anthropic adapter joins adjacent ones, the OpenAI adapters send them as
+  framed system messages). A `<total_tokens>` budget note follows every prompt and tool result,
+  and five tool-only steps in a row earn one nudge to update the user (`quiet_nudge` plugin).
+  The Anthropic adapter sends Claude Code's beta set, adaptive thinking with summarized
+  updates, `context_management` keeping old thinking, effort `medium` by default,
+  `metadata.user_id` (a random device id kept in `~/.noeta/device_id`, the task tree's id),
+  three cache marks (no tool mark; one message mark, on the last message), single-text turns
+  as bare strings, and a message sent mid-turn inside the tool results' turn.
+  `AnthropicProvider(system_turns=False)` is for an endpoint without system turns.
+  `ContextPart.cache` is gone (the prompt is one cached block). Accepted differences are listed
+  in `parity/deviations.md`.
 - **Packages say what they hold** (old paths are gone, no aliases):
   `noeta.core.shell` / `tool_helpers` / `helpers` -> `noeta.toolkit.shell` / `tools` /
   `context` (code plugins share; the kernel never used it); `noeta.core.store.base` ->

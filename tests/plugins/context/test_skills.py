@@ -49,8 +49,9 @@ async def test_listing_is_recorded_once_and_offers_the_skill_tool(h: Harness) ->
     h.provider.add(reply("ok"), reply("again"))
     tid = await h.start(a)
     first = h.provider.requests[0]
-    assert first.messages[0].text == f"{ROSTER_HEADER}\n- deploy: Ship the app."
-    assert first.messages[0].origin == "system"
+    # Held for the first request's system turn, after the prompt.
+    assert [m.text for m in first.messages] == ["go", f"{ROSTER_HEADER}\n- deploy: Ship the app."]
+    assert first.messages[1].role == "system"
     assert [t.name for t in first.tools][-1] == "skill"
     await h.say(a, tid, "more")
     assert len(await h.records(tid, "skills", "listing")) == 1
@@ -85,7 +86,7 @@ async def test_a_slash_command_fills_the_skill_from_what_follows_it(h: Harness) 
     a = agent()
     h.provider.add(reply("ok"), reply("ok"))
     tid = await h.start(a, "/notes v0.2 'last week'")
-    assert h.provider.requests[0].messages[-1].text.endswith("Notes for v0.2 since last week.\n")
+    assert h.provider.requests[0].messages[-2].text.endswith("Notes for v0.2 since last week.\n")
     await h.say(a, tid, "/plain fast please")
     assert h.provider.requests[1].messages[-1].text.endswith(
         "Do it.\n\nARGUMENTS: fast please")
@@ -187,9 +188,9 @@ async def test_preload_and_tiers(h: Harness, tmp_path: Path) -> None:
     h.provider.add(reply("ok"))
     tid = await h.start(agent(global_dir=user_dir, preload=["lint"]))
     msgs = h.provider.requests[0].messages
-    assert msgs[0].text == f"{ROSTER_HEADER}\n- deploy: Workspace deploy.\n- lint: Lint."
-    assert msgs[1].text.startswith("Activated skill: lint")
-    assert msgs[2].text == "go"
+    assert msgs[0].text.startswith("Activated skill: lint")
+    assert msgs[1].text == "go"
+    assert msgs[2].text == f"{ROSTER_HEADER}\n- deploy: Workspace deploy.\n- lint: Lint."
     assert (await h.records(tid, "skills", "activated"))[0].data["source"] == "preload"
 
 
@@ -206,7 +207,7 @@ async def test_untrusted_workspace_skips_its_skill_dirs(h: Harness, tmp_path: Pa
 
     await h.start(agent(dirs=[tmp_path / "borrowed"], trusted=trusted))
     assert set(seen) == {str(h.work)}
-    assert h.provider.requests[0].messages[0].text == f"{ROSTER_HEADER}\n- borrowed: Borrowed."
+    assert h.provider.requests[0].messages[-1].text == f"{ROSTER_HEADER}\n- borrowed: Borrowed."
 
 
 async def test_run_skill_script_asks_and_runs_only_active_scripts(h: Harness) -> None:
@@ -261,7 +262,7 @@ async def test_rank_resolver_is_asked_once_and_shapes_the_fit(h: Harness) -> Non
 
     h.provider.add(reply("ok"))
     await h.start(agent(rank=rank, budget_tokens=60))
-    listing = h.provider.requests[0].messages[0].text.split("\n")
+    listing = h.provider.requests[0].messages[-1].text.split("\n")
     assert asked == [1]
     assert listing[1] == "- alpha: Very long description sentence."
     assert listing[2] == "- beta: Very long description sentence."

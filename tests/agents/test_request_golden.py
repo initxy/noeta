@@ -51,7 +51,7 @@ class Router:
         self.requests: list[tuple[str, ModelRequest]] = []
 
     async def complete(self, request: ModelRequest, on_delta: Any = None) -> ModelResponse:
-        who = "child" if request.system[0].text.startswith("You are a read-only scout") else "main"
+        who = "child" if request.system[-1].text.startswith("You are a read-only scout") else "main"
         self.requests.append((who, request))
         script = self.child if who == "child" else self.main
         assert script, f"{who} script ran out"
@@ -121,7 +121,7 @@ async def test_default_agent_requests_match_golden(tmp_path: Path,
     assert not main and not child
 
     adapters = {
-        "anthropic": AnthropicProvider(api_key="x"),
+        "anthropic": AnthropicProvider(api_key="x", device_id="d" * 64),
         "openai_compat": OpenAICompatProvider(api_key="x", base_url="http://x"),
         "openai_responses": OpenAIResponsesProvider(api_key="x", base_url="http://x"),
     }
