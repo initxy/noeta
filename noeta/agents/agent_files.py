@@ -22,8 +22,11 @@ and whose body is its system prompt — Claude Code's agent file format, plus
     You are a search agent...
 
 Claude Code's other fields (``skills``, ``mcpServers``, ``hooks``, ``memory``,
-``isolation``, ``background``, ``initialPrompt``, ``color``, ...) are read
-and kept in ``extra``; a field neither knows is logged as a warning.
+``isolation``, ``background``, ``initialPrompt``, ``color``, ...) are kept in
+``extra``; ``skills``, ``mcpServers``, ``hooks``, ``memory`` and
+``autoCompactWindow`` become arguments of the plugins that do them
+(:func:`plugin_overlays`). A field noeta does not act on is logged once per
+file.
 
 A plugin name is an entry point of ``noeta.plugins`` (``noeta.core.registry``),
 so a third-party plugin is used exactly like a built-in one. A file without
@@ -55,6 +58,7 @@ __all__ = [
     "build_agents",
     "parse_agent_file",
     "parse_plugin_list",
+    "plugin_overlays",
     "read_agent_dir",
     "resolve_secrets",
 ]
@@ -68,11 +72,19 @@ DEFAULT_IDENTITY = "You are noeta, an open-source coding agent."
 #: Model names that mean "the host's model".
 _INHERIT = frozenset({"", "inherit"})
 #: Claude Code fields kept in ``AgentFile.extra``, and whether noeta acts on
-#: them (one it does not act on yet is logged when a file sets it).
-_KEPT = {"isolation": True, "color": True, "background": False, "skills": False,
-         "mcpServers": False, "hooks": False, "memory": False, "initialPrompt": False,
-         "autoCompactWindow": False, "cacheTtl": False, "observer": False,
+#: them (one it does not act on is logged once per file). ``skills``,
+#: ``mcpServers``, ``hooks``, ``memory`` and ``autoCompactWindow`` become
+#: arguments of the plugin that does it (:func:`plugin_overlays`);
+#: ``initialPrompt`` is read by the host that creates a top-level task;
+#: ``background`` is how every noeta sub-agent runs.
+_KEPT = {"isolation": True, "color": True, "background": True, "skills": True,
+         "mcpServers": True, "hooks": True, "memory": True, "initialPrompt": True,
+         "autoCompactWindow": True, "cacheTtl": False, "observer": False,
          "observerMessage": False, "observeSubagents": False}
+#: Claude Code's agent memory scopes.
+MEMORY_SCOPES = ("user", "project", "local")
+#: (file, field) pairs already warned about: a reload does not repeat them.
+_WARNED: set[tuple[str, str]] = set()
 
 PluginEntry = tuple[str, Mapping[str, Any]]
 #: The host's setting of one plugin: its arguments, a ready instance, or on/off.
@@ -139,6 +151,89 @@ def parse_plugin_list(value: Any, source: str = "") -> tuple[PluginEntry, ...]:
     return tuple(out)
 
 
+def _check_claude_code_fields(data: Mapping[str, Any], source: str) -> None:
+    """Claude Code's fields noeta applies, checked for their shapes."""
+    if "skills" in data:
+        _names(data["skills"], "skills", source)
+    servers = data.get("mcpServers")
+    if servers is not None and not (isinstance(servers, list) and all(
+            isinstance(s, str) or (isinstance(s, dict) and s
+                                   and all(isinstance(v, dict) for v in s.values()))
+            for s in servers)):
+        raise AgentFileError(f"{source}: 'mcpServers' must list server names or "
+                             "'name: {config}' entries")
+    if data.get("hooks") is not None and not isinstance(data["hooks"], dict):
+        raise AgentFileError(f"{source}: 'hooks' must be a hooks object")
+    if data.get("memory") is not None and data["memory"] not in MEMORY_SCOPES:
+        raise AgentFileError(f"{source}: 'memory' must be one of {', '.join(MEMORY_SCOPES)}")
+    if data.get("initialPrompt") is not None and not isinstance(data["initialPrompt"], str):
+        raise AgentFileError(f"{source}: 'initialPrompt' must be a string")
+    if data.get("autoCompactWindow") is not None:
+        _tokens(data["autoCompactWindow"], source)
+
+
+def _tokens(value: Any, source: str) -> int:
+    """A token count: a whole number, or a string such as ``"200k"`` / ``"1m"``."""
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    if isinstance(value, str):
+        m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([kKmM]?)\s*", value)
+        if m:
+            n = float(m[1]) * {"": 1, "k": 1_000, "m": 1_000_000}[m[2].lower()]
+            if n >= 1:
+                return int(n)
+    raise AgentFileError(f"{source}: 'autoCompactWindow' must be a positive token count")
+
+
+def plugin_overlays(f: AgentFile) -> list[PluginEntry]:
+    """What the file's Claude Code fields ask of plugins, as arguments laid
+    over that plugin's (the plugin is added when the agent lacks it):
+    ``skills`` preloaded by the skills plugin, ``mcpServers`` added to the
+    MCP plugin's servers (a bare name refers to a server configured
+    elsewhere: it only needs the plugin), ``hooks`` added to the hooks
+    plugin's while this agent runs, ``memory`` an agent memory directory in
+    that scope, ``autoCompactWindow`` the compaction window."""
+    x = f.extra
+    out: list[PluginEntry] = []
+    if x.get("skills"):
+        out.append(("skills", {"preload": list(_names(x["skills"], "skills", f.source))}))
+    if x.get("mcpServers"):
+        inline: dict[str, Any] = {}
+        for item in x["mcpServers"]:
+            if isinstance(item, dict):
+                inline.update(item)
+        out.append(("mcp", {"agent_servers": inline} if inline else {}))
+    if x.get("hooks"):
+        out.append(("hooks", {"hooks": dict(x["hooks"])}))
+    if x.get("memory"):
+        out.append(("memory", {"agent_scope": x["memory"], "agent_name": f.name}))
+    if x.get("autoCompactWindow") is not None:
+        out.append(("compaction", {"auto_compact_window": _tokens(x["autoCompactWindow"],
+                                                                 f.source)}))
+    return out
+
+
+def _lay_over(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str, Any]:
+    """``overlay`` laid over ``base``, adding rather than replacing: lists
+    join, mappings join key by key (lists under one key join too), anything
+    else is replaced."""
+    out = dict(base)
+    for key, value in overlay.items():
+        old = out.get(key)
+        if isinstance(old, Mapping) and isinstance(value, Mapping):
+            merged = dict(old)
+            for k, v in value.items():
+                prev = merged.get(k)
+                merged[k] = [*prev, *v] if isinstance(prev, list) and isinstance(v, list) \
+                    else v
+            out[key] = merged
+        elif isinstance(old, (list, tuple)) and isinstance(value, (list, tuple)):
+            out[key] = list(dict.fromkeys([*old, *value]))
+        else:
+            out[key] = value
+    return out
+
+
 def parse_agent_file(text: str, *, source: str = "", default_name: str = "") -> AgentFile:
     """Read one agent file. The body after the frontmatter is the system
     prompt, unchanged."""
@@ -190,11 +285,15 @@ def parse_agent_file(text: str, *, source: str = "", default_name: str = "") -> 
                                   or max_turns < 1):
         raise AgentFileError(f"{source}: 'maxTurns' must be a positive whole number")
     names = None if tools is None else _names(tools, "tools", source)
+    _check_claude_code_fields(data, source)
     for key in data:
+        if (source, key) in _WARNED or _KEPT.get(key, False):
+            continue
+        _WARNED.add((source, key))
         if key not in _KEPT:
             log.warning("%s: unknown agent file field %r is ignored", source, key)
-        elif not _KEPT[key]:
-            log.warning("%s: agent file field %r is not applied by noeta yet", source, key)
+        else:
+            log.warning("%s: agent file field %r is not applied by noeta", source, key)
     return AgentFile(
         name=name.strip(),
         prompt=body,
@@ -323,12 +422,16 @@ def build_agents(
     add = add or {}
     made = {} if made is None else made
 
-    def plugin(name: str, args: Mapping[str, Any]) -> Extension:
+    def plugin(name: str, args: Mapping[str, Any],
+               overlay: Mapping[str, Any] | None = None) -> Extension:
         _on, host_args, instance = settings.get(name, (True, {}, None))
         if not args and instance is not None:
+            if overlay:
+                log.warning("plugin %r is given as a ready instance; an agent file's fields "
+                            "for it are not applied", name)
             return instance
         factory = registry.load(registry.PLUGINS, name)
-        arguments = {**host_args, **args}
+        arguments = _lay_over({**host_args, **args}, overlay or {})
         key = (name, factory, _freeze(arguments))
         if key not in made:
             made[key] = factory(**resolve_secrets(arguments, f"plugin {name!r}"))
@@ -343,7 +446,21 @@ def build_agents(
             if name not in names:
                 names.add(name)
                 entries.append((name, args))
-        exts = [plugin(name, args) for name, args in entries
+        overlays: dict[str, dict[str, Any]] = {}
+        for name, args in plugin_overlays(f):
+            overlays[name] = _lay_over(overlays.get(name, {}), args)
+            if not settings.get(name, (True,))[0]:
+                if (f.source, f"plugin:{name}") not in _WARNED:
+                    _WARNED.add((f.source, f"plugin:{name}"))
+                    log.warning("%s: the %s plugin is off here; the agent file's fields for "
+                                "it are not applied", f.source or f.name, name)
+            elif name not in names:
+                names.add(name)
+                # Before compaction, which stays last (it reuses the request).
+                at = len(entries) - 1 if entries and entries[-1][0] == "compaction" \
+                    else len(entries)
+                entries.insert(at, (name, {}))
+        exts = [plugin(name, args, overlays.get(name)) for name, args in entries
                 if settings.get(name, (True,))[0]
                 and not (f.omit_instructions and name == "instructions")]
         agents.append(Agent(

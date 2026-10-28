@@ -57,6 +57,9 @@ ENVIRONMENT_HEADING = "# Environment"
 #: The recall selector's instructions (``memory/recall``).
 RECALL_PROMPT = _load("recall")
 
+#: Claude Code's agent memory scopes (an agent file's ``memory``).
+AGENT_SCOPES = ("user", "project", "local")
+
 INDEX_FILE = MEMORY_INDEX_FILE
 INDEX_MAX_LINES = MEMORY_INDEX_MAX_LINES
 INDEX_MAX_BYTES = MEMORY_INDEX_MAX_BYTES
@@ -117,14 +120,25 @@ class Memory(Extension):
     * ``recall_model`` — the model asked, on each user message, which memory
       files to attach (off when unset).
     * ``rehang`` — read ``MEMORY.md`` again after a compaction.
+    * ``agent_scope`` / ``agent_name`` — an agent file's ``memory`` field
+      (Claude Code's agent memory): the directory is the agent's own,
+      ``<home>/agent-memory/<agent>/`` (``user``),
+      ``<cwd>/.noeta/agent-memory/<agent>/`` (``project``) or
+      ``<cwd>/.noeta/agent-memory-local/<agent>/`` (``local``).
     """
 
     name = "memory"
 
     def __init__(self, *, home: str | None = None, directory: str | None = None,
-                 recall_model: str | None = None, rehang: bool = True) -> None:
+                 recall_model: str | None = None, rehang: bool = True,
+                 agent_scope: str | None = None, agent_name: str | None = None) -> None:
+        if agent_scope is not None and (agent_scope not in AGENT_SCOPES or not agent_name):
+            raise ValueError(f"Memory: agent_scope is one of {', '.join(AGENT_SCOPES)}, "
+                             "with an agent_name")
         self.home = Path(home).expanduser() if home else None
         self.directory = directory
+        self.agent_scope = agent_scope
+        self.agent_name = agent_name
         self.recall_model = recall_model
         self.rehang = rehang
 
@@ -159,7 +173,8 @@ class Memory(Extension):
     async def on_start(self, view: TaskView) -> None:
         if self._dir(view) is not None:
             return
-        directory = self.directory or memory_dir_for(await self._workspace(view), self.home)
+        directory = self.directory or self._agent_dir(view) \
+            or memory_dir_for(await self._workspace(view), self.home)
         try:
             Path(directory).mkdir(parents=True, exist_ok=True)
         except OSError:
@@ -185,6 +200,16 @@ class Memory(Extension):
             await self._recall(view, directory, "\n\n".join(m.text for m in messages))
 
     # ------------------------------------------------------------ helpers
+
+    def _agent_dir(self, view: TaskView) -> str | None:
+        if self.agent_scope is None or self.agent_name is None:
+            return None
+        if self.agent_scope == "user":
+            base = self.home or noeta_home()
+            return str(base / "agent-memory" / self.agent_name) + "/"
+        cwd = view.cwd or task_env(view.env, view.state.config).cwd
+        folder = "agent-memory" if self.agent_scope == "project" else "agent-memory-local"
+        return posixpath.join(cwd, ".noeta", folder, self.agent_name) + "/"
 
     async def _workspace(self, view: TaskView) -> str:
         """The repository's main checkout when the working directory is in

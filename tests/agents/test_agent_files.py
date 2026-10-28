@@ -145,9 +145,10 @@ def test_claude_code_fields_map_onto_the_agent(caplog: pytest.LogCaptureFixture)
     assert f.permission_mode == "acceptEdits" and f.max_turns == 7 and f.omit_instructions
     assert f.extra == {"isolation": "worktree", "skills": ["a"], "flavour": "x"}
     logged = caplog.text
-    assert "'flavour' is ignored" in logged and "'skills' is not applied" in logged
+    assert "'flavour' is ignored" in logged and "'skills'" not in logged
     assert "isolation" not in logged
-    [agent] = build_agents([f], model="host", default_plugins=[("instructions", {})])
+    [agent] = build_agents([f], model="host", plugins={"skills": False},
+                           default_plugins=[("instructions", {})])
     assert agent.model == "claude-haiku-5-5" and agent.denied_tools == ("Write",)
     assert agent.step_budget == 7 and agent.extensions == ()
     assert agent.permission_mode == "acceptEdits" and not agent.inherit_model
@@ -171,5 +172,68 @@ def test_tools_star_and_inherit() -> None:
     "---\nname: a\npermissionMode: [x]\n---\n",
 ])
 def test_bad_claude_code_fields(text: str) -> None:
+    with pytest.raises(AgentFileError):
+        parse_agent_file(text)
+
+
+def test_claude_code_fields_become_plugin_arguments(caplog: pytest.LogCaptureFixture) -> None:
+    from noeta.agents.agent_files import plugin_overlays
+
+    f = parse_agent_file(
+        "---\nname: rev\nskills: a, b\nmemory: project\nautoCompactWindow: 120k\n"
+        "mcpServers:\n  - github\n  - local: {command: srv}\n"
+        "hooks: {Stop: [{hooks: [{type: command, command: 'true'}]}]}\n"
+        "initialPrompt: Start here.\nbackground: true\ncacheTtl: 1h\n---\nP\n",
+        source="overlay-rev.md")
+    assert plugin_overlays(f) == [
+        ("skills", {"preload": ["a", "b"]}),
+        ("mcp", {"agent_servers": {"local": {"command": "srv"}}}),
+        ("hooks", {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "true"}]}]}}),
+        ("memory", {"agent_scope": "project", "agent_name": "rev"}),
+        ("compaction", {"auto_compact_window": 120_000}),
+    ]
+    assert "'cacheTtl' is not applied" in caplog.text
+    assert "initialPrompt" not in caplog.text and "background" not in caplog.text
+    caplog.clear()
+    parse_agent_file("---\nname: rev\ncacheTtl: 1h\n---\nP\n", source="overlay-rev.md")
+    assert "cacheTtl" not in caplog.text  # once per file
+
+
+def test_overlays_add_to_the_hosts_arguments_and_the_plugin() -> None:
+    host_hooks = {"Stop": [{"hooks": [{"type": "command", "command": "host"}]}]}
+    f = parse_agent_file(
+        "---\nname: rev\nskills: [a]\n"
+        "hooks: {Stop: [{hooks: [{type: command, command: own}]}]}\n---\nP\n")
+    [agent] = build_agents([f], model="m", plugins={"hooks": {"hooks": host_hooks}},
+                           default_plugins=[("hooks", {}), ("compaction", {})])
+    assert [e.name for e in agent.extensions] == ["hooks", "skills", "compaction"]
+    hooks = agent.extensions[0]
+    assert [h.command for m in hooks.matchers["Stop"]  # type: ignore[attr-defined]
+            for h in m.hooks] == ["host", "own"]
+    assert agent.extensions[1].preload == ["a"]  # type: ignore[attr-defined]
+    [off] = build_agents([f], model="m", plugins={"skills": False},
+                         default_plugins=[("hooks", {})])
+    assert [e.name for e in off.extensions] == ["hooks"]
+
+
+def test_agent_mcp_servers_come_first() -> None:
+    from noeta.plugins.mcp import Mcp
+
+    f = parse_agent_file("---\nname: rev\nmcpServers:\n  - local: {command: own}\n---\nP\n")
+    [agent] = build_agents([f], model="m", plugins={"mcp": {"servers": {
+        "local": {"command": "host"}, "other": {"command": "x"}}}}, default_plugins=[])
+    [mcp] = agent.extensions
+    assert isinstance(mcp, Mcp)
+    assert [(s.alias, s.command) for s in mcp._agent_servers] == [("local", ["own"])]
+
+
+@pytest.mark.parametrize("text", [
+    "---\nname: a\nmemory: team\n---\n",
+    "---\nname: a\nmcpServers: x\n---\n",
+    "---\nname: a\nhooks: [x]\n---\n",
+    "---\nname: a\ninitialPrompt: [x]\n---\n",
+    "---\nname: a\nautoCompactWindow: lots\n---\n",
+])
+def test_bad_applied_fields(text: str) -> None:
     with pytest.raises(AgentFileError):
         parse_agent_file(text)
