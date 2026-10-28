@@ -57,10 +57,6 @@ def test_limits() -> None:
     assert isinstance(validate_questions({"questions": [q()]}), list)
     assert validate_questions({"questions": []}) == "questions must contain 1-4 items"
     assert validate_questions({"questions": [q()] * 5}) == "questions must contain 1-4 items"
-    assert validate_questions({"questions": [q(header="x" * 13)]}) == \
-        "header too long (max 12 chars)"
-    assert validate_questions({"questions": [q(question="x" * 501)]}) == \
-        "question too long (max 500)"
     assert validate_questions({"questions": [q(multiSelect="yes")]}) == \
         "multiSelect must be a boolean"
     no_multi = {k: v for k, v in q().items() if k != "multiSelect"}
@@ -74,12 +70,17 @@ def test_limits() -> None:
         "options must contain 2-4 items"
     dup = [{"label": "a", "description": "d"}] * 2
     assert validate_questions({"questions": [q(options=dup)]}) == "duplicate option label: 'a'"
-    long = [{"label": "x" * 81, "description": "d"}, {"label": "b", "description": "d"}]
-    assert validate_questions({"questions": [q(options=long)]}) == \
-        "option label too long (max 80)"
-    desc = [{"label": "a", "description": "x" * 301}, {"label": "b", "description": "d"}]
-    assert validate_questions({"questions": [q(options=desc)]}) == \
-        "option description too long (max 300)"
+    assert validate_questions({"questions": [q(options=[{"label": "a"}, *one])]}) == \
+        "each option needs a description string"
+
+
+def test_lengths_are_guidance_not_limits() -> None:
+    # The 12-character header and the 1-5 word label are what the schema
+    # asks for; a longer one is still shown, not refused.
+    long = [{"label": "x" * 81, "description": ""}, {"label": "b", "description": "x" * 301}]
+    [one] = validate_questions({"questions": [
+        q(header="x" * 13, question="x" * 501, options=long)]})
+    assert one["header"] == "x" * 13 and one["options"][0]["label"] == "x" * 81
 
 
 async def test_a_question_parks_and_the_answer_becomes_the_result(store: SqliteStore) -> None:

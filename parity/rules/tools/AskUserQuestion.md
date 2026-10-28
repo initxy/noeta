@@ -20,10 +20,10 @@ position 2 of 13 in the baseline list. noeta's counterpart is `AskUserQuestion`
 | id | name | type | required | enum / default / limits | noeta today |
 |---|---|---|---|---|---|
 | `tool.AskUserQuestion.p.questions` | `questions` | array of object | yes | 1–4 items | covered |
-| `tool.AskUserQuestion.p.questions.question` | `questions[].question` | string | yes | the complete, specific question ending with `?`; phrased for several answers when `multiSelect` | covered (noeta also caps 500 chars) |
+| `tool.AskUserQuestion.p.questions.question` | `questions[].question` | string | yes | the complete, specific question ending with `?`; phrased for several answers when `multiSelect` | covered |
 | `tool.AskUserQuestion.p.questions.header` | `questions[].header` | string | yes | chip label, at most 12 chars (e.g. "Auth method") | covered |
 | `tool.AskUserQuestion.p.questions.options` | `questions[].options` | array of object | yes | 2–4 items, distinct and mutually exclusive unless `multiSelect`; no "Other" option (added automatically) | covered |
-| `tool.AskUserQuestion.p.options.label` | `options[].label` | string | yes | 1–5 words, what the user sees and picks | covered (no 1–5 words guidance in schema; noeta caps 80 chars) |
+| `tool.AskUserQuestion.p.options.label` | `options[].label` | string | yes | 1–5 words, what the user sees and picks | covered |
 | `tool.AskUserQuestion.p.options.description` | `options[].description` | string | yes | what choosing it means; trade-offs | covered |
 | `tool.AskUserQuestion.p.options.preview` | `options[].preview` | string | no | content shown when the option is focused (mockup, code, comparison) | covered |
 | `tool.AskUserQuestion.p.questions.multiSelect` | `questions[].multiSelect` | boolean | yes | default false; true when choices are not exclusive | covered |

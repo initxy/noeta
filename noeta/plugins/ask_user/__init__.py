@@ -51,11 +51,6 @@ _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MAX_QUESTIONS = 4
 _MIN_OPTIONS = 2
 _MAX_OPTIONS = 4
-_MAX_QUESTION_TEXT_LEN = 500
-_MAX_HEADER_LEN = 12
-_MAX_OPTION_LABEL_LEN = 80
-_MAX_OPTION_DESCRIPTION_LEN = 300
-_MAX_PREVIEW_LEN = 20_000
 
 WITHDRAWN_ERROR = "Question withdrawn by user (no answer provided)."
 #: A question with one option (or none) has nothing to decide; the model is
@@ -199,23 +194,19 @@ def _options(raw: Any) -> tuple[list[dict[str, Any]], str | None]:
         if not isinstance(item, dict):
             return [], "each option must be an object"
         label = item.get("label")
-        if not isinstance(label, str) or not label:
-            return [], "each option needs a non-empty string label"
-        if len(label) > _MAX_OPTION_LABEL_LEN:
-            return [], f"option label too long (max {_MAX_OPTION_LABEL_LEN})"
+        if not isinstance(label, str):
+            return [], "each option needs a label string"
         if label in seen:
             return [], f"duplicate option label: {label!r}"
         seen.add(label)
         description = item.get("description")
-        if not isinstance(description, str) or not description:
-            return [], "each option needs a non-empty string description"
-        if len(description) > _MAX_OPTION_DESCRIPTION_LEN:
-            return [], f"option description too long (max {_MAX_OPTION_DESCRIPTION_LEN})"
+        if not isinstance(description, str):
+            return [], "each option needs a description string"
         option = {"label": label, "description": description}
         preview = item.get("preview")
         if preview is not None:
-            if not isinstance(preview, str) or len(preview) > _MAX_PREVIEW_LEN:
-                return [], f"option preview must be a string of at most {_MAX_PREVIEW_LEN} chars"
+            if not isinstance(preview, str):
+                return [], "option preview must be a string"
             option["preview"] = preview
         out.append(option)
     return out, None
@@ -239,17 +230,13 @@ def validate_questions(arguments: Any) -> list[dict[str, Any]] | str:
         if not isinstance(item, dict):
             return "each question must be an object"
         question = item.get("question")
-        if not isinstance(question, str) or not question:
-            return "each question needs a non-empty question string"
+        if not isinstance(question, str):
+            return "each question needs a question string"
         if any(q["question"] == question for q in questions):
             return f"two questions have the same text: {question!r}; each question must differ"
-        if len(question) > _MAX_QUESTION_TEXT_LEN:
-            return f"question too long (max {_MAX_QUESTION_TEXT_LEN})"
         header = item.get("header")
-        if not isinstance(header, str) or not header:
-            return "each question needs a non-empty header"
-        if len(header) > _MAX_HEADER_LEN:
-            return f"header too long (max {_MAX_HEADER_LEN} chars)"
+        if not isinstance(header, str):
+            return "each question needs a header string"
         multi = item.get("multiSelect", False)
         if not isinstance(multi, bool):
             return "multiSelect must be a boolean"
