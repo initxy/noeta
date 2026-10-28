@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Union
 
 from noeta.core import records
 from noeta.core.deferred import deferred_names
@@ -297,6 +297,11 @@ GatePhase = Literal["model", "user"]
 
 class Extension:
     name: str = ""
+    #: The agents a plugin *file* (``~/.noeta/plugins``, a trusted project's
+    #: ``.noeta/plugins``) joins by itself when found (``"*"``: every agent),
+    #: after the agent's own plugins; an installed package's is ignored, and
+    #: ``enabled = false`` in the host's setting still turns it off.
+    add_to: ClassVar[tuple[str, ...]] = ()
 
     def initial_state(self) -> Any:
         return None

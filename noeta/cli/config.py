@@ -400,8 +400,10 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
          "instructions": {"user_dir": str(HOME), "managed_dir": str(managed_dir())},
          "permissions": permission_args, "fs": {"write_roots": write_roots}},
         settings.plugins, plugins or {})
-    agents = default_agents(settings.model, plugins=table, add=settings.add_plugins,
-                            extra_files=files)
+    add = {agent: tuple(entries) for agent, entries in settings.add_plugins.items()}
+    for agent, names in registry.added_by_files().items():
+        add[agent] = (*add.get(agent, ()), *((name, {}) for name in names))
+    agents = default_agents(settings.model, plugins=table, add=add, extra_files=files)
     sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
                                             base_dir=str(cwd or os.getcwd()))
     if sandbox.enabled:

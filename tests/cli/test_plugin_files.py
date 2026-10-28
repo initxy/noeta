@@ -149,3 +149,32 @@ def test_the_example_plugin_works_as_a_plain_directory(home: Path) -> None:
                     ignore=shutil.ignore_patterns("__pycache__"))
     assert registry.load_plugin_files([home / "plugins"]) == ["hello"]
     assert registry.load(registry.PLUGINS, "hello")(greeting="Yo").greeting == "Yo"
+
+
+def _write_joining(path: Path, name: str, add_to: str) -> None:
+    _write(path, name)
+    path.write_text(path.read_text().replace(f'    name = "{name}"\n',
+                                             f'    name = "{name}"\n    add_to = {add_to}\n'))
+
+
+async def test_a_file_plugin_with_add_to_joins_its_agents_by_itself(home: Path,
+                                                                     tmp_path: Path) -> None:
+    (home / "config.toml").write_text(
+        f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n')
+    _write_joining(home / "plugins" / "solo.py", "solo", '("main",)')
+    _write_joining(home / "plugins" / "everywhere.py", "everywhere", '("*",)')
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    names = {a: [e.name for e in agent.extensions] for a, agent in app.runtime.agents.items()}
+    assert names["main"][-2:] == ["solo", "everywhere"]
+    assert "solo" not in names["Explore"] and "everywhere" in names["Explore"]
+    await app.store.close()
+
+
+async def test_enabled_false_still_wins_over_add_to(home: Path, tmp_path: Path) -> None:
+    (home / "config.toml").write_text(
+        f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n'
+        '[plugins.solo]\nenabled = false\n')
+    _write_joining(home / "plugins" / "solo.py", "solo", '("main",)')
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    assert all(e.name != "solo" for e in app.runtime.agents["main"].extensions)
+    await app.store.close()

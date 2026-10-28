@@ -72,7 +72,8 @@ Plugins and backends are found by name through entry points (`noeta/core/registr
 `pyproject.toml` exactly as a third-party package would (`examples/hello-plugin` is one,
 installed and tested by `make check`). A plugin's registry name is its `Extension.name`. A
 plugin can also be a plain file in `~/.noeta/plugins` or a trusted project's `.noeta/plugins`
-(`registry.load_plugin_files`); an installed plugin wins a name clash.
+(`registry.load_plugin_files`); an installed plugin wins a name clash. Such a file joins the
+agents its `Extension.add_to` names by itself (an installed package's `add_to` is ignored).
 
 ## Plugin pin
 

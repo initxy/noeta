@@ -48,6 +48,7 @@ __all__ = [
     "PROVIDERS",
     "STORES",
     "UnknownName",
+    "added_by_files",
     "available",
     "broken_plugin_files",
     "execenv",
@@ -110,6 +111,16 @@ def sources(group: str) -> dict[str, str]:
 def broken_plugin_files() -> dict[str, str]:
     """Plugin files that could not be used: path -> why."""
     return dict(_broken)
+
+
+def added_by_files() -> dict[str, list[str]]:
+    """Per agent name (``"*"``: every agent), the plugin files that join it
+    by themselves (``Extension.add_to``)."""
+    out: dict[str, list[str]] = {}
+    for name, (_path, cls) in sorted(_files.items()):
+        for agent in getattr(cls, "add_to", ()) or ():
+            out.setdefault(str(agent), []).append(name)
+    return out
 
 
 def load(group: str, name: str) -> Any:
