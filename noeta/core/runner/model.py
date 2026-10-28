@@ -117,10 +117,13 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     view = run.view()
     request = _request(run, final=final)
     try:
+        # The reminders first, as Claude Code adds its notes before it
+        # decides to compact: the hooks see the request that would go.
+        request = await _remind(run, request)
+        view = run.view()
         for ext in run.exts:
             request = await ext.before_model(view, request)
         await run.flush(view)
-        request = await _remind(run, request)
     except TurnFailed as exc:
         await run.flush(view)
         return await run.fail_turn(exc.reason, exc.detail)

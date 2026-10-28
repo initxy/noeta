@@ -434,9 +434,14 @@ def _compact(state: TaskState, ev: Compacted) -> None:
     # Plain text in the user's channel: the summary carries its own framing
     # line and must not read as a host reminder, nor count as a prompt.
     summary = Message(role="user", content=[Text(text=ev.summary)], origin="inline")
-    state.messages = [*ev.lead, summary, *ev.kept, *tail, *ev.after]
-    state.message_seqs = [0] * (len(ev.lead) + 1 + len(ev.kept)) + tail_seqs \
-        + [0] * len(ev.after)
+    # What is re-attached joins the kept messages' last turn: ahead of the
+    # system turns (per-request notes) they end with.
+    k = len(tail)
+    while k and tail[k - 1].role == "system":
+        k -= 1
+    state.messages = [*ev.lead, summary, *ev.kept, *tail[:k], *ev.after, *tail[k:]]
+    state.message_seqs = [0] * (len(ev.lead) + 1 + len(ev.kept)) + tail_seqs[:k] \
+        + [0] * len(ev.after) + tail_seqs[k:]
     state.compaction = ev
     state.last_usage = None
     # A compaction-and-retry is not a crash loop.
