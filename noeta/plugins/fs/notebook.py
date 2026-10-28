@@ -166,6 +166,8 @@ class NotebookEditTool:
         index = _find(cells, cell_id) if cell_id else None
         if cell_id and index is None:
             return tool_error(self.name, f"no cell with id {cell_id!r}")
+        replaced = cells[index].get("source") if index is not None and mode != "insert" else None
+        old_source = "".join(replaced) if isinstance(replaced, list) else replaced
         done = _apply(cells, mode, index, cell_id, cell_type, source)
         body = (json.dumps(nb, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
         try:
@@ -173,4 +175,5 @@ class NotebookEditTool:
         except OSError as exc:
             return tool_error(self.name, f"write failed: {exc}")
         await record_written(ctx, resolved, body)
-        return text_output(f"{done} in {resolved}.", path=ws.relative(resolved), mode=mode)
+        return text_output(f"{done} in {resolved}.", path=ws.relative(resolved), mode=mode,
+                           old_source=old_source)

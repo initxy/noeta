@@ -66,3 +66,17 @@ def test_schema_and_deferral() -> None:
     tool = NotebookEditTool()
     assert tool.deferred and tool.input_schema["required"] == ["notebook_path", "new_source"]
     assert tool.input_schema["additionalProperties"] is False
+
+
+async def test_the_result_carries_the_cell_source_it_replaced(h: Harness, ws: Path) -> None:
+    _nb(ws)
+    await h.call(ReadTool(), file_path="a.ipynb")
+    tool = NotebookEditTool()
+    out = await h.call(tool, notebook_path="a.ipynb", cell_id="c1", new_source="y")
+    assert out.meta["old_source"] == "x = 1\nx"
+    out = await h.call(tool, notebook_path="a.ipynb", new_source="z", edit_mode="insert",
+                       cell_type="code")
+    assert out.meta["old_source"] is None
+    out = await h.call(tool, notebook_path="a.ipynb", cell_id="m1", new_source="",
+                       edit_mode="delete")
+    assert out.meta["old_source"] == "# Title"

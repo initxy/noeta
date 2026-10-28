@@ -38,6 +38,8 @@ from noeta.host._acp_updates import RESULT_PREVIEW_CHARS as RESULT_PREVIEW_CHARS
 from noeta.host._acp_updates import TOOL_KINDS as TOOL_KINDS
 from noeta.host._acp_updates import (
     PromptTurn,
+    SessionLog,
+    change_content,
     finish_update,
     prompt_message,
     question_ids,
@@ -127,6 +129,7 @@ class NoetaAcpAgent:
         self._asked: set[tuple[str, str]] = set()
         #: Each session's working directory, for plugin commands.
         self._cwd: dict[str, str] = {}
+        self._logs: dict[str, SessionLog] = {}
         self._background: set[asyncio.Task[None]] = set()
 
     def on_connect(self, conn: Any) -> None:
@@ -213,17 +216,22 @@ class NoetaAcpAgent:
         await self._adopt(session_id)
         await self.app.client.signal(session_id, RESUMED_SIGNAL)
         self._cwd[session_id] = cwd
+        log = self._logs[session_id] = SessionLog()
         for rec in await self.app.client.events(session_id):
-            for update in self._replay(rec):
+            for update in self._replay(rec, log):
                 await self.conn.session_update(session_id=session_id, update=update)
         await self._announce_commands(session_id)
 
-    def _replay(self, rec: Recorded) -> list[Any]:
+    def _log(self, session_id: str) -> SessionLog:
+        return self._logs.setdefault(session_id, SessionLog())
+
+    def _replay(self, rec: Recorded, log: SessionLog) -> list[Any]:
         ev = rec.event
+        call = log.note(rec)
         if isinstance(ev, ModelReplied):
             return start_updates(ev, streamed_text=False)
         if isinstance(ev, ToolFinished):
-            return [finish_update(ev)]
+            return [finish_update(ev, call)]
         if hasattr(ev, "items"):
             return [acp.update_user_message_text(i.body.message.text)
                     for i in ev.items if isinstance(i.body, Say)]
@@ -349,12 +357,14 @@ class NoetaAcpAgent:
         prompt's message (the inbox seq ``send`` returned); everything
         before it (the previous turn's tail, unrelated input) is skipped."""
         out = turn.out
+        log = self._log(session_id)
         async for rec in follow_tree(self.app.client, session_id, after):
             if isinstance(rec, list):  # what sub-agents wait on the user for
                 if await self._child_requests(session_id, rec, out):
                     return "end_turn"
                 continue
             ev = rec.event
+            call = log.note(rec)
             if turn.input_seq is None:
                 if isinstance(ev, InputTaken) and any(i.seq == turn.seq for i in ev.items):
                     turn.start(rec.seq)
@@ -370,7 +380,7 @@ class NoetaAcpAgent:
             elif isinstance(ev, ToolStarted):
                 out.put_nowait(acp.update_tool_call(ev.call.id, status="in_progress"))
             elif isinstance(ev, ToolFinished):
-                out.put_nowait(finish_update(ev))
+                out.put_nowait(finish_update(ev, call))
             elif isinstance(ev, ExtensionRecorded) and ev.extension == "permissions" \
                     and current_mode([rec]):
                 out.put_nowait(schema.CurrentModeUpdate(
@@ -433,20 +443,26 @@ class NoetaAcpAgent:
     async def _ask_permissions(self, session_id: str, waiting: Waiting) -> None:
         for p in pending(await self.app.client.events(session_id), session_id):
             if p.kind == "approval" and p.request_id in waiting.ids:
+                call = self._log(session_id).calls.get(p.request_id)
                 await self._ask_one(session_id, session_id, p.request_id,
                                     card_title(p, session_id), choices(p.detail),
-                                    card_prompt(p))
+                                    card_prompt(p),
+                                    change_content(call) if call is not None else None)
 
     async def _ask_one(self, session_id: str, task_id: str, call_id: str, title: str,
-                       options: list[dict[str, str]], prompt: str = "") -> None:
+                       options: list[dict[str, str]], prompt: str = "",
+                       change: list[Any] | None = None) -> None:
         kinds = {"allow": "allow_once", "always": "allow_always", "deny": "reject_once"}
-        body: list[Any] | None = [acp.tool_content(acp.text_block(prompt))] if prompt else None
+        # The card's content replaces the call's: the diff stays on it.
+        body: list[Any] = [*(change or ()),
+                           *([acp.tool_content(acp.text_block(prompt))] if prompt else ())]
         resp = await self.conn.request_permission(
             session_id=session_id, options=[
                 schema.PermissionOption(option_id=o["id"], name=o["label"],
                                         kind=kinds.get(o["id"], "allow_once"))  # type: ignore[arg-type]
                 for o in options],
-            tool_call=schema.ToolCallUpdate(tool_call_id=call_id, title=title, content=body))
+            tool_call=schema.ToolCallUpdate(tool_call_id=call_id, title=title,
+                                            content=body or None))
         chosen = getattr(resp.outcome, "option_id", None)
         known = {o["id"] for o in options}
         await answer_choice(self.app.client, task_id, call_id,
