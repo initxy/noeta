@@ -9,9 +9,27 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **noeta reads only its own places, with Claude Code's mechanisms.** `~/.claude/`,
+  `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json` and `CLAUDE_CONFIG_DIR` are no
+  longer read, so the two tools never pick up each other's hooks, env or instructions.
+  Instructions are `NOETA.md` in Claude Code's layering: the managed `NOETA.md` and
+  `.noeta/rules` (`/etc/noeta`; macOS `/Library/Application Support/Noeta`, Windows
+  `C:\Program Files\Noeta`), the user's `~/.noeta/NOETA.md` and `~/.noeta/rules/`, then per
+  directory `NOETA.md`, `.noeta/NOETA.md`, `.noeta/rules/` and `NOETA.local.md` (`AGENTS.md`
+  where a directory has neither project file). Settings are `~/.noeta/settings.json`, a
+  trusted project's `.noeta/settings.json` and `.noeta/settings.local.json`, and the managed
+  `managed-settings.json` (same directory), in Claude Code's format and precedence
+  (`noeta.cli.claude_settings` -> `noeta.cli.settings_files`, `ClaudeSettings` ->
+  `FileSettings`). Skills come from `.noeta/skills`, `.agents/skills` and `~/.noeta/skills`;
+  agent files from `~/.noeta/agents` and `.noeta/agents`; project MCP servers from
+  `.noeta/mcp.json` (same format and consent keys); isolated agents' worktrees go under
+  `.noeta/worktrees/`. Claude Code's environment knobs carry noeta's prefix:
+  `NOETA_AUTO_COMPACT_WINDOW`, `NOETA_AUTOCOMPACT_PCT_OVERRIDE`, `NOETA_MCP_TIMEOUT`,
+  `NOETA_MCP_TOOL_TIMEOUT`, `NOETA_MAX_MCP_OUTPUT_TOKENS`. Texts the model sees name
+  `NOETA.md` and `.noeta/` where they mean noeta's files (`parity/deviations.md`).
 - **Compaction works as Claude Code's.** It fires at Claude Code's threshold (the window, less
   `min(output ceiling, 20K)`, less 13K; `auto_compact_window` / `auto_compact_percent` or
-  `CLAUDE_CODE_AUTO_COMPACT_WINDOW` / `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` lower it), checked
+  `NOETA_AUTO_COMPACT_WINDOW` / `NOETA_AUTOCOMPACT_PCT_OVERRIDE` lower it), checked
   before every request. The summary is asked of the main request itself, with the
   instruction (nine sections, `<analysis>` then `<summary>`) appended to its last user
   message; a failed call is retried once with a 64K output ceiling. When the context was
@@ -67,11 +85,11 @@ All notable changes to Noeta are documented here. The format is based on
   (`noeta.host.local.default_spill_root`) and the `noeta` command (TUI, `-p`, ACP, `serve`,
   `worker`) to `~/.noeta/tool-results`; one directory per task below it.
 - **MCP results and timeouts follow Claude Code.** A result is held to 25,000 tokens
-  (`MAX_MCP_OUTPUT_TOKENS`; four characters a token, 1,600 an image) instead of 1 MiB: images
+  (`NOETA_MAX_MCP_OUTPUT_TOKENS`; four characters a token, 1,600 an image) instead of 1 MiB: images
   past it are left out with a note, text past it is cut to a marked head and saved.
   A tool call is bounded by the server's `timeout` (milliseconds, read from settings files
-  now; under 1000 ignored), else `MCP_TOOL_TIMEOUT`, else 1e8 ms, instead of 30 s; every other
-  request by `MCP_TIMEOUT` (default 30 s). `noeta.plugins.mcp.results` no longer exports
+  now; under 1000 ignored), else `NOETA_MCP_TOOL_TIMEOUT`, else 1e8 ms, instead of 30 s; every
+  other request by `NOETA_MCP_TIMEOUT` (default 30 s). `noeta.plugins.mcp.results` no longer exports
   `INLINE_MAX_BYTES`.
 - **Skill arguments are filled in, not dropped.** A skill body's lines holding `$ARGUMENTS`
   were removed. The `skill` tool now takes Claude Code's optional `args` string, and `/name
@@ -131,7 +149,8 @@ All notable changes to Noeta are documented here. The format is based on
   `enabled = false`) and `[agents.<name>] add_plugins`; `default_agents` takes `plugins=` and
   `add=` instead of one keyword per built-in plugin.
 - **MCP servers from settings.** The terminal front ends start the `mcpServers` of
-  `~/.noeta/settings.json` (Claude Code's format) and the `.mcp.json` servers it consents to.
+  `~/.noeta/settings.json` (Claude Code's format) and the `.noeta/mcp.json` servers it
+  consents to.
 - **Plugin slash commands** show in the TUI's `/help` and as the editor's commands over ACP;
   MCP prompts are commands.
 - **Background jobs hold their task tree.** While a job runs, no other worker claims a task of

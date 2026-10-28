@@ -377,3 +377,12 @@ Phase 5 — front ends
   yields (an endless loop after an `await`) with no way to stop it, so once script code can run
   the engine only evaluates; such a loop ends when the context closes. Saved workflows now come
   only from `.noeta/workflows/` and `~/.noeta/workflows/`.
+- 2026-10-28: Own places, per the owner's decision: instructions are `NOETA.md` in Claude
+  Code's layering (managed `/etc/noeta`, user `~/.noeta`, per directory `NOETA.md`,
+  `.noeta/NOETA.md`, `.noeta/rules`, `NOETA.local.md`, `AGENTS.md` as the fallback); settings
+  `~/.noeta/settings.json`, trusted `.noeta/settings*.json`, managed `managed-settings.json`;
+  skills, agents, MCP (`.noeta/mcp.json`) and worktrees under `.noeta/`; the env knobs
+  `NOETA_`-prefixed. Nothing under `~/.claude`, `.claude/`, `CLAUDE.md` or `.mcp.json` is
+  read. The parity replay writes noeta's copy of the scenario project in noeta's places and
+  maps recorded paths to them; `CLAUDE_CONFIG_DIR` isolation dropped. `make parity` 42 → 42;
+  the model-visible names are rows in `parity/deviations.md`.

@@ -78,6 +78,15 @@ it off), a ready `Extension`, or on/off. One table at every level (`build_agents
 plugin merge key by key. `add` (`[agents.<name>] add_plugins`, `"*"` for all) appends plugins
 to an agent without copying its file. The built-in agents keep memory and MCP off until set.
 
+## Config places
+
+noeta reads only its own places: `~/.noeta/` (`NOETA_HOME`), a project's `.noeta/` (most of it
+only once trusted), `NOETA.md` and the cross-tool `AGENTS.md`, and the machine's managed
+directory (`/etc/noeta`). The mechanisms and formats inside are Claude Code's (instruction
+layering, settings, skills, agents, `.noeta/mcp.json`); its own places (`~/.claude/`,
+`.claude/`, `CLAUDE.md`, `.mcp.json`, `CLAUDE_*` variables) are never read
+(`noeta/cli/settings_files.py`, `noeta/plugins/instructions/files.py`).
+
 ## Extension
 
 The one capability-plugin interface (`noeta/core/extension.py`): tools, context parts, commands,
