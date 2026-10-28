@@ -42,6 +42,7 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | `tool.WebFetch.5` | A redirect to another host is not followed; it is reported so the model can call again with the new URL. | covered |
 | `tool.WebFetch.6` | Responses are cached for 15 minutes per URL. | covered |
 | `tool.WebFetch.7` | The description does not mention `WebSearch`. | covered |
+| `tool.WebFetch.8` | A URL over 2,000 characters, or carrying a user name or password, is refused as invalid before anything is fetched; a fetch gives up after 60 s and refuses a body over 10 MB (2.1.312 bundle). | covered |
 
 ## Result shape
 

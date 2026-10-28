@@ -239,6 +239,17 @@ async def test_redirects_are_followed_ten_times_on_one_site() -> None:
         await HttpFetchTransport(client=client).fetch("https://s.com/-1")
 
 
+async def test_long_or_credentialed_urls_are_invalid(tmp_path: Path) -> None:
+    transport = HttpFetchTransport()
+    assert transport.timeout == 60.0 and transport.max_bytes == 10 * 1024 * 1024
+    fetch = FakeFetch()
+    tool = WebFetchTool(fetch)
+    for url in ("https://e.com/" + "a" * 2000, "https://user:pw@e.com/"):
+        out = await tool.run({"url": url, "prompt": "p"}, _ctx(tmp_path))
+        assert out.is_error and text(out) == "Invalid URL", url
+    assert fetch.urls == []
+
+
 class FakeSearch:
     def __init__(self, results: list[SearchResult]) -> None:
         self.results = results

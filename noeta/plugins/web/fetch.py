@@ -45,6 +45,8 @@ _MAX_URL_BYTES = 512
 #: raw-render fallback's inline ceiling.
 INLINE_PAGE_MAX_CHARS = 100_000
 _MAX_REDIRECT_HOPS = 10
+#: The longest URL fetched.
+MAX_URL_CHARS = 2000
 CACHE_TTL_SECONDS = 900.0
 CACHE_MAX_ENTRIES = 16
 #: Claude Code's ``maxResultSizeChars`` for WebFetch.
@@ -237,10 +239,10 @@ class HttpFetchTransport:
     """Fetch over httpx: same-site redirects followed (10 hops), the body
     streamed and refused past ``max_bytes``."""
 
-    def __init__(self, *, timeout: float = 10.0,
+    def __init__(self, *, timeout: float = 60.0,
                  user_agent: str = "noeta-webfetch/0.1 (+https://github.com/noeta)",
                  client: httpx.AsyncClient | None = None,
-                 max_bytes: int = 5 * 1024 * 1024) -> None:
+                 max_bytes: int = 10 * 1024 * 1024) -> None:
         self.timeout = timeout
         self.user_agent = user_agent
         self.client = client
@@ -278,6 +280,18 @@ class HttpFetchTransport:
         finally:
             if self.client is None:
                 await client.aclose()
+
+
+def _valid_url(url: str) -> bool:
+    """Claude Code's bounds on a URL: at most :data:`MAX_URL_CHARS`
+    characters, and no user name or password in it."""
+    if len(url) > MAX_URL_CHARS:
+        return False
+    try:
+        parts = urlsplit(url)
+        return parts.username is None and parts.password is None
+    except ValueError:
+        return False
 
 
 def _offset(input: dict[str, Any]) -> int:
@@ -334,6 +348,8 @@ class WebFetchTool:
             return text_output(
                 "WebFetch requires a non-empty 'prompt' — the question to "
                 "answer against the fetched page", is_error=True)
+        if not _valid_url(url):
+            return text_output("Invalid URL", is_error=True)
         url = upgrade_to_https(url)
         refusal = unsupported_scheme_refusal(url)
         if refusal is not None:
