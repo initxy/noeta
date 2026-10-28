@@ -220,7 +220,7 @@ async def test_cancel_during_a_write_keeps_the_runner_in_step(store: SqliteStore
     from noeta.core.runner import TaskRun
 
     run = TaskRun(rt, claim)
-    await run._load()
+    await run.load()
     from noeta.core.events import ExtensionRecorded
 
     task = asyncio.create_task(run.append([ExtensionRecorded(extension="x", kind="k")]))

@@ -78,7 +78,7 @@ class TaskRun:
         keeper = asyncio.create_task(self._keep_claim())
         unsubscribe = self.store.on_change(self._on_change)
         try:
-            await self._load()
+            await self.load()
             if self.agent is None:
                 # Releasing would hand it straight back to this worker; a task
                 # whose agent only some workers have must be routed by queue.
@@ -147,7 +147,8 @@ class TaskRun:
         view.record(CORE, "prompts", found)
         await self.flush(view)
 
-    async def _load(self) -> None:
+    async def load(self) -> None:
+        """Read and fold the log (and the conversation it continues)."""
         records = await self.store.read(self.task_id)
         first = records[0].event if records else None
         self.agent = self.rt.agents.get(getattr(first, "agent", ""))

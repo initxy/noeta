@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from noeta.core.runner.task import TaskRun
 
 
-def _request(run: TaskRun, *, final: bool) -> ModelRequest:
+def build_model_request(run: TaskRun, *, final: bool) -> ModelRequest:
     agent = run.agent
     assert agent is not None
     view = run.view()
@@ -115,7 +115,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     if run.state.model_attempts >= texts.MAX_MODEL_ATTEMPTS:
         return await run.fail_turn(texts.LLM_ERROR, "the model call kept being interrupted")
     view = run.view()
-    request = _request(run, final=final)
+    request = build_model_request(run, final=final)
     try:
         for ext in run.exts:
             request = await ext.before_model(view, request)
