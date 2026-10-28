@@ -184,7 +184,7 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
     # The job lives in this process only: keep the task tree with this
     # worker while it runs, so the next turn can read and stop it.
     held = await ctx.hold() if ctx.hold is not None else None
-    release = held
+    release_job: Callable[[], Awaitable[None]] | None = held
     if confined is not None:
         sandbox_done = confined
 
@@ -193,13 +193,13 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
             if held is not None:
                 await held()
 
-        release = release_all
+        release_job = release_all
     job = await shell.registry.spawn(
         env=ctx.env, command=run_command, cwd=cwd,
         env_vars={**shell._command_env(ctx), **(confined.env if confined else {})},
         root_id=_root(ctx), spawner_id=ctx.task_id, tool_use_id=ctx.call_id,
         description=description or command, post=ctx.post,
-        monitor_timeout_ms=monitor_timeout_ms, release=release,
+        monitor_timeout_ms=monitor_timeout_ms, release=release_job,
         argv=confined.argv if confined else None)
     if isinstance(job, str):
         return tool_error(tool, job)

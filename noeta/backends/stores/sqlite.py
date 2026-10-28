@@ -34,6 +34,7 @@ from noeta.core.store import (
     Post,
     Status,
     TaskRow,
+    hold_lost,
     next_row_state,
 )
 
@@ -93,11 +94,14 @@ CREATE TABLE IF NOT EXISTS inbox (
 ) WITHOUT ROWID;
 CREATE UNIQUE INDEX IF NOT EXISTS inbox_dedupe ON inbox (task_id, dedupe_key)
     WHERE dedupe_key IS NOT NULL;
-CREATE TABLE IF NOT EXISTS holds (
-    root_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS tree_holds (
+    epoch   INTEGER PRIMARY KEY AUTOINCREMENT,
+    root_id TEXT NOT NULL,
     worker  TEXT NOT NULL,
-    until   REAL NOT NULL
+    until   REAL NOT NULL,
+    UNIQUE (root_id, worker)
 );
+CREATE INDEX IF NOT EXISTS tree_holds_until ON tree_holds (until);
 """
 
 class SqliteStore:
@@ -424,10 +428,10 @@ class SqliteStore:
                 " (status = 'ready' AND (ready_at IS NULL OR ready_at <= ?))"
                 " OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= ?)"
                 " OR (status = 'running' AND lease_until < ?))"
-                " AND NOT EXISTS (SELECT 1 FROM holds h WHERE h.root_id = tasks.root_id"
-                " AND h.worker <> ? AND h.until > ?)"
+                " AND NOT EXISTS (SELECT 1 FROM tree_holds h WHERE h.root_id = tasks.root_id"
+                " AND h.worker <> ?)"
                 " ORDER BY updated_at LIMIT 1",
-                (*queues, *root_ids, now, now, now, worker, now),
+                (*queues, *root_ids, now, now, now, worker),
             ).fetchone()
             if row is None:
                 return None
@@ -458,27 +462,81 @@ class SqliteStore:
 
         return await self._write(tx)
 
-    async def hold(self, root_id: str, worker: str, seconds: float) -> bool:
-        def tx(conn: sqlite3.Connection) -> bool:
-            now = time.time()
-            cur = conn.execute(
-                "INSERT INTO holds (root_id, worker, until) VALUES (?, ?, ?)"
-                " ON CONFLICT (root_id) DO UPDATE SET worker = excluded.worker,"
-                " until = excluded.until WHERE holds.worker = excluded.worker"
-                " OR holds.until <= ?",
-                (root_id, worker, now + seconds, now),
-            )
-            return cur.rowcount > 0
+    async def hold(self, root_id: str, worker: str, seconds: float,
+                   *, epoch: int | None = None) -> int | None:
+        def tx(conn: sqlite3.Connection) -> int | None:
+            until = time.time() + seconds
+            if epoch is not None:
+                cur = conn.execute(
+                    "UPDATE tree_holds SET until = ? WHERE epoch = ? AND root_id = ?"
+                    " AND worker = ?", (until, epoch, root_id, worker))
+                return epoch if cur.rowcount else None
+            row = conn.execute(
+                "SELECT epoch FROM tree_holds WHERE root_id = ? AND worker = ?",
+                (root_id, worker)).fetchone()
+            if row is not None:
+                conn.execute("UPDATE tree_holds SET until = ? WHERE epoch = ?", (until, row[0]))
+                return int(row[0])
+            cur = conn.execute("INSERT INTO tree_holds (root_id, worker, until) VALUES (?, ?, ?)",
+                               (root_id, worker, until))
+            return int(cur.lastrowid or 0)
 
         return await self._write(tx)
 
-    async def unhold(self, root_id: str, worker: str) -> None:
-        def tx(conn: sqlite3.Connection) -> int:
-            return conn.execute("DELETE FROM holds WHERE root_id = ? AND worker = ?",
-                                (root_id, worker)).rowcount
+    def _lost_posts(self, conn: sqlite3.Connection, root_id: str, worker: str, epoch: int,
+                    now: float, changes: list[tuple[str, ChangeKind]]) -> None:
+        """Post ``hold_lost`` to every unended task of the tree."""
+        tasks = conn.execute("SELECT task_id FROM tasks WHERE root_id = ? AND status <> 'ended'",
+                             (root_id,)).fetchall()
+        for (task_id,) in tasks:
+            _, created = self._insert_post(conn, hold_lost(str(task_id), worker, epoch), now)
+            if created:
+                changes.append((str(task_id), "posted"))
 
-        if await self._write(tx):
-            self._notify([(root_id, "released")])
+    async def unhold(self, root_id: str, worker: str, epoch: int,
+                     *, lost: bool = False) -> None:
+        changes: list[tuple[str, ChangeKind]] = []
+
+        def tx(conn: sqlite3.Connection) -> None:
+            cur = conn.execute(
+                "DELETE FROM tree_holds WHERE epoch = ? AND root_id = ? AND worker = ?",
+                (epoch, root_id, worker))
+            if not cur.rowcount:
+                return
+            changes.append((root_id, "released"))
+            if lost:
+                self._lost_posts(conn, root_id, worker, epoch, time.time(), changes)
+
+        changes.clear()
+        await self._write(tx)
+        self._notify(changes)
+
+    async def reap_holds(self) -> int:
+        changes: list[tuple[str, ChangeKind]] = []
+
+        def tx(conn: sqlite3.Connection) -> int:
+            changes.clear()
+            now = time.time()
+            gone = conn.execute("SELECT epoch, root_id, worker FROM tree_holds WHERE until < ?",
+                                (now,)).fetchall()
+            for epoch, root_id, worker in gone:
+                conn.execute("DELETE FROM tree_holds WHERE epoch = ?", (epoch,))
+                changes.append((str(root_id), "released"))
+                self._lost_posts(conn, str(root_id), str(worker), int(epoch), now, changes)
+            return len(gone)
+
+        if not await self._run(self._any_expired):
+            return 0
+        reaped = await self._write(tx)
+        self._notify(changes)
+        return reaped
+
+    @staticmethod
+    def _any_expired(conn: sqlite3.Connection) -> bool:
+        """A read before the write: most rounds find nothing to reap and
+        then take no write lock."""
+        return conn.execute("SELECT 1 FROM tree_holds WHERE until < ? LIMIT 1",
+                            (time.time(),)).fetchone() is not None
 
     async def release(self, claim: Claim) -> None:
         def tx(conn: sqlite3.Connection) -> int:

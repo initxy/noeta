@@ -81,6 +81,7 @@ from noeta.core.store import (
     Post,
     Status,
     TaskRow,
+    hold_lost,
     next_row_state,
 )
 
@@ -141,11 +142,14 @@ CREATE TABLE IF NOT EXISTS {s}.inbox (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS inbox_dedupe ON {s}.inbox (task_id, dedupe_key)
     WHERE dedupe_key IS NOT NULL;
-CREATE TABLE IF NOT EXISTS {s}.holds (
-    root_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS {s}.tree_holds (
+    epoch   BIGSERIAL PRIMARY KEY,
+    root_id TEXT NOT NULL,
     worker  TEXT NOT NULL,
-    until   DOUBLE PRECISION NOT NULL
+    until   DOUBLE PRECISION NOT NULL,
+    UNIQUE (root_id, worker)
 );
+CREATE INDEX IF NOT EXISTS tree_holds_until ON {s}.tree_holds (until);
 """
 
 def _lost(conn: Conn | None, exc: BaseException) -> bool:
@@ -601,8 +605,8 @@ class PostgresStore:
                 f" (status = 'ready' AND (ready_at IS NULL OR ready_at <= {_NOW}))"
                 f" OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= {_NOW})"
                 f" OR (status = 'running' AND lease_until < {_NOW}))"
-                " AND NOT EXISTS (SELECT 1 FROM {s}.holds h WHERE h.root_id = k.root_id"
-                f" AND h.worker <> %(w)s AND h.until > {_NOW})"
+                " AND NOT EXISTS (SELECT 1 FROM {s}.tree_holds h WHERE h.root_id = k.root_id"
+                " AND h.worker <> %(w)s)"
                 " ORDER BY updated_at LIMIT 1 FOR UPDATE OF k SKIP LOCKED)"
                 " UPDATE {s}.tasks t SET status = 'running', owner = %(w)s,"
                 f" owner_epoch = t.owner_epoch + 1, lease_until = {_NOW} + %(ls)s,"
@@ -633,29 +637,82 @@ class PostgresStore:
 
         return await self._tx(tx)
 
-    async def hold(self, root_id: str, worker: str, seconds: float) -> bool:
-        async def tx(conn: Conn) -> bool:
-            cur = await conn.execute(self._q(
-                "INSERT INTO {s}.holds (root_id, worker, until)"
-                f" VALUES (%(r)s, %(w)s, {_NOW} + %(ls)s)"
-                " ON CONFLICT (root_id) DO UPDATE SET worker = excluded.worker,"
-                " until = excluded.until WHERE {s}.holds.worker = excluded.worker"
-                f" OR {{s}}.holds.until <= {_NOW}"),
-                {"r": root_id, "w": worker, "ls": seconds})
-            return cur.rowcount > 0
+    async def hold(self, root_id: str, worker: str, seconds: float,
+                   *, epoch: int | None = None) -> int | None:
+        async def tx(conn: Conn) -> int | None:
+            if epoch is not None:
+                cur = await conn.execute(self._q(
+                    f"UPDATE {{s}}.tree_holds SET until = {_NOW} + %s WHERE epoch = %s"
+                    " AND root_id = %s AND worker = %s RETURNING epoch"),
+                    (seconds, epoch, root_id, worker))
+            else:
+                cur = await conn.execute(self._q(
+                    "INSERT INTO {s}.tree_holds (root_id, worker, until)"
+                    f" VALUES (%s, %s, {_NOW} + %s) ON CONFLICT (root_id, worker)"
+                    " DO UPDATE SET until = excluded.until RETURNING epoch"),
+                    (root_id, worker, seconds))
+            row = await cur.fetchone()
+            return int(row[0]) if row else None
 
         return await self._tx(tx)
 
-    async def unhold(self, root_id: str, worker: str) -> None:
-        async def tx(conn: Conn) -> bool:
-            cur = await conn.execute(self._q(
-                "DELETE FROM {s}.holds WHERE root_id = %s AND worker = %s"), (root_id, worker))
-            if cur.rowcount:
-                await self._notify(conn, [(root_id, "released")])
-            return cur.rowcount > 0
+    async def _lost_posts(self, conn: Conn, root_id: str, worker: str, epoch: int,
+                          changes: list[tuple[str, ChangeKind]]) -> None:
+        """Post ``hold_lost`` to every unended task of the tree."""
+        cur = await conn.execute(self._q(
+            "SELECT task_id FROM {s}.tasks WHERE root_id = %s AND status <> 'ended'"
+            " ORDER BY task_id"), (root_id,))
+        for (task_id,) in await cur.fetchall():
+            _, created = await self._insert_post(conn, hold_lost(str(task_id), worker, epoch))
+            if created:
+                changes.append((str(task_id), "posted"))
 
-        if await self._tx(tx):
-            self._deliver([(root_id, "released")])
+    async def unhold(self, root_id: str, worker: str, epoch: int,
+                     *, lost: bool = False) -> None:
+        changes: list[tuple[str, ChangeKind]] = []
+
+        async def tx(conn: Conn) -> None:
+            changes.clear()  # a re-run starts over
+            cur = await conn.execute(self._q(
+                "DELETE FROM {s}.tree_holds WHERE epoch = %s AND root_id = %s AND worker = %s"),
+                (epoch, root_id, worker))
+            if not cur.rowcount:
+                return
+            changes.append((root_id, "released"))
+            if lost:
+                await self._lost_posts(conn, root_id, worker, epoch, changes)
+            await self._notify(conn, changes)
+
+        await self._tx(tx)
+        self._deliver(changes)
+
+    async def reap_holds(self) -> int:
+        changes: list[tuple[str, ChangeKind]] = []
+
+        async def expired(conn: Conn) -> bool:
+            cur = await conn.execute(self._q(
+                f"SELECT 1 FROM {{s}}.tree_holds WHERE until < {_NOW} LIMIT 1"))
+            return await cur.fetchone() is not None
+
+        async def tx(conn: Conn) -> int:
+            changes.clear()  # a re-run starts over
+            cur = await conn.execute(self._q(
+                "DELETE FROM {s}.tree_holds WHERE epoch IN (SELECT epoch FROM {s}.tree_holds"
+                f" WHERE until < {_NOW} ORDER BY epoch FOR UPDATE SKIP LOCKED)"
+                " RETURNING epoch, root_id, worker"))
+            gone = sorted(await cur.fetchall())
+            for epoch, root_id, worker in gone:
+                changes.append((str(root_id), "released"))
+                await self._lost_posts(conn, str(root_id), str(worker), int(epoch), changes)
+            await self._notify(conn, changes)
+            return len(gone)
+
+        # Most rounds find nothing to reap: a read, then no write at all.
+        if not await self._tx(expired, write=False):
+            return 0
+        reaped = await self._tx(tx)
+        self._deliver(changes)
+        return reaped
 
     async def release(self, claim: Claim) -> None:
         async def tx(conn: Conn) -> bool:

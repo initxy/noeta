@@ -19,8 +19,8 @@ import asyncio
 import pytest
 
 from noeta.core.errors import Conflict, UnknownTask
-from noeta.core.events import Cancel, Say, TaskCreated, TaskEnded, Waiting
-from noeta.core.store import NewTask, Patch, Post, Store
+from noeta.core.events import Cancel, External, Say, TaskCreated, TaskEnded, Waiting
+from noeta.core.store import HOLD_LOST, NewTask, Patch, Post, Store
 from noeta.core.types import user
 
 
@@ -208,12 +208,13 @@ async def test_a_release_is_reported_only_when_it_changed_a_row(store: Store) ->
     await store.create(new())
     claim = await store.claim("w", ["default"], 30)
     assert claim is not None
-    assert await store.hold("t1", "w", 30)
+    epoch = await store.hold("t1", "w", 30)
+    assert epoch is not None
     seen: list[tuple[str, str]] = []
     unsubscribe = store.on_change(lambda t, k: seen.append((t, k)))
-    await store.unhold("t1", "w2")  # not w2's hold
-    await store.unhold("t1", "w")
-    await store.unhold("t1", "w")  # already gone
+    await store.unhold("t1", "w2", epoch)  # not w2's hold
+    await store.unhold("t1", "w", epoch)
+    await store.unhold("t1", "w", epoch)  # already gone
     await store.release(claim)
     await store.release(claim)  # already given back
     unsubscribe()
@@ -258,14 +259,15 @@ async def test_append_skips_a_post_to_an_unknown_task(store: Store) -> None:
     assert len(await store.inbox("other")) == 1
 
 
-async def test_a_held_tree_is_claimed_only_by_its_worker(store: Store) -> None:
+async def test_a_held_tree_is_claimed_only_by_its_holders(store: Store) -> None:
     await store.create(new("root"))
     await store.create(NewTask(task_id="root.child",
                                created=TaskCreated(agent="a", parent_id="root", root_id="root")))
     await store.create(new("other"))
-    assert await store.hold("root", "w1", 30)
-    assert await store.hold("root", "w1", 30)  # renewing
-    assert not await store.hold("root", "w2", 30)
+    epoch = await store.hold("root", "w1", 30)
+    assert epoch is not None
+    assert await store.hold("root", "w1", 30, epoch=epoch) == epoch  # renewing
+    assert await store.hold("root", "w1", 30) == epoch  # holding again: the same hold
     claim = await store.claim("w2", ["default"], 30)
     assert claim is not None and claim.task_id == "other"
     assert await store.claim("w2", ["default"], 30) is None
@@ -273,18 +275,57 @@ async def test_a_held_tree_is_claimed_only_by_its_worker(store: Store) -> None:
     assert got == {"root", "root.child"}
 
 
-async def test_a_released_or_expired_hold_frees_the_tree(store: Store) -> None:
+async def test_an_expired_hold_blocks_claims_until_it_is_reaped(store: Store) -> None:
+    await store.create(new("root"))
+    root = await store.claim("w1", ["default"], 30)
+    assert root is not None
+    await store.append(root, [Waiting(on="input")], expected_seq=1,
+                       patch=Patch(status="waiting", waiting_on="input"))
+    await store.create(NewTask(task_id="root.child",
+                               created=TaskCreated(agent="a", parent_id="root", root_id="root")))
+    epoch = await store.hold("root", "w1", 0.05)
+    assert epoch is not None
+    await asyncio.sleep(0.15)
+    # Run out but not reaped: still held (nobody has told the tree yet).
+    assert await store.claim("w2", ["default"], 30) is None
+    seen: list[tuple[str, str]] = []
+    unsubscribe = store.on_change(lambda t, k: seen.append((t, k)))
+    assert await store.reap_holds() == 1
+    assert await store.reap_holds() == 0
+    unsubscribe()
+    assert {("root", "released"), ("root", "posted"), ("root.child", "posted")} <= set(seen)
+    # The holder lost it: renewing fails, a fresh hold gets a new epoch.
+    assert await store.hold("root", "w1", 30, epoch=epoch) is None
+    lost = External(name=HOLD_LOST, data={"worker": "w1", "epoch": epoch})
+    assert [i.body for i in await store.inbox("root")] == [lost]
+    assert [i.body for i in await store.inbox("root.child")] == [lost]
+    row = await store.get("root")
+    assert row is not None and row.status == "ready"
+    got = {c.task_id for c in [await store.claim("w2", ["default"], 30) for _ in range(2)] if c}
+    assert got == {"root", "root.child"}
+    again = await store.hold("root", "w1", 30)
+    assert again is not None and again != epoch
+
+
+async def test_a_released_hold_frees_the_tree(store: Store) -> None:
     await store.create(new("a"))
-    await store.create(new("b"))
-    assert await store.hold("a", "w1", 30)
-    await store.unhold("a", "w2")  # not w2's hold: no change
+    epoch = await store.hold("a", "w1", 30)
+    assert epoch is not None
+    await store.unhold("a", "w2", epoch)  # not w2's hold: no change
+    await store.unhold("a", "w1", epoch + 1)  # not this hold
     assert await store.claim("w2", ["default"], 30, roots=["a"]) is None
-    await store.unhold("a", "w1")
+    await store.unhold("a", "w1", epoch)
+    assert await store.hold("a", "w1", 30, epoch=epoch) is None
+    assert await store.inbox("a") == []  # released, not lost
     claim = await store.claim("w2", ["default"], 30, roots=["a"])
     assert claim is not None and claim.task_id == "a"
-    assert await store.hold("b", "w1", 0.05)
-    await asyncio.sleep(0.15)
-    assert await store.hold("b", "w2", 30)  # w1's hold ran out: w2 may take it over
-    assert await store.claim("w1", ["default"], 30, roots=["b"]) is None
-    claim = await store.claim("w2", ["default"], 30, roots=["b"])
-    assert claim is not None and claim.task_id == "b"
+
+
+async def test_an_abandoned_hold_tells_the_tree(store: Store) -> None:
+    await store.create(new("a"))
+    epoch = await store.hold("a", "w1", 30)
+    assert epoch is not None
+    await store.unhold("a", "w1", epoch, lost=True)
+    await store.unhold("a", "w1", epoch, lost=True)  # gone: nothing more
+    [item] = await store.inbox("a")
+    assert item.body == External(name=HOLD_LOST, data={"worker": "w1", "epoch": epoch})

@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol
 import msgspec
 
 from noeta.core.execenv import ExecEnv
+from noeta.core.holds import Release
 from noeta.core.records import CoreNotices
 from noeta.core.types import Display, Image, Struct, Text, ToolReference
 
@@ -69,8 +70,9 @@ class ToolContext(CoreNotices):
     root_id: str = ""
     #: ``await hold()`` keeps this task tree with this worker until the
     #: returned release is awaited (``Runtime.hold``): for what lives only in
-    #: this process, e.g. a background job.
-    hold: Callable[[], Awaitable[Callable[[], Awaitable[None]]]] | None = None
+    #: this process, e.g. a background job. The release's ``tree`` is the
+    #: hold: its worker and epoch, and ``on_lost`` to stop with it.
+    hold: Callable[[], Awaitable[Release]] | None = None
     #: ``await tasks(parent_id=..., status=..., limit=...)``: rows of the
     #: store's task table (``Store.tasks``), e.g. to list other tasks a
     #: message could go to.

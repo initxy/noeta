@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import socket
+import time
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from noeta.core.agent import Agent
 from noeta.core.execenv import ExecEnv
+from noeta.core.holds import Release, TreeHold
 from noeta.core.provider import Provider
 from noeta.core.store import Claim, Store
 from noeta.core.types import Delta, ModelRequest
@@ -24,6 +27,12 @@ log = logging.getLogger("noeta.core.runner")
 ProviderFor = Callable[[str], Provider]
 EnvFor = Callable[["TaskState"], ExecEnv]
 OnDelta = Callable[[str, Delta], None]
+
+
+def _worker_id() -> str:
+    """``host:pid:random``: one name for this worker process in claims,
+    holds and the records of what it runs (a background job)."""
+    return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:6]}"
 
 
 def _default_env(state: TaskState) -> ExecEnv:
@@ -40,7 +49,7 @@ class Runtime:
     agents: dict[str, Agent]
     provider_for: ProviderFor
     env_for: EnvFor = _default_env
-    worker: str = field(default_factory=lambda: f"w-{uuid.uuid4().hex[:8]}")
+    worker: str = field(default_factory=_worker_id)
     queues: Sequence[str] = ("default",)
     lease_seconds: float = 30.0
     poll_interval: float = 0.5
@@ -61,8 +70,8 @@ class Runtime:
     #: adds each task it creates or resumes); ``None`` serves every task.
     roots: set[str] | None = None
     _wake: asyncio.Event | None = field(default=None, init=False, repr=False)
-    #: Holders per held tree root (:meth:`hold`).
-    _holds: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    #: This worker's holds, by tree root (:meth:`hold`).
+    _holds: dict[str, TreeHold] = field(default_factory=dict, init=False, repr=False)
     _renewer: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
 
     @property
@@ -71,15 +80,21 @@ class Runtime:
         go back to the others after this."""
         return 2 * self.lease_seconds
 
-    async def hold(self, root_id: str) -> Callable[[], Awaitable[None]]:
+    async def hold(self, root_id: str) -> Release:
         """Keep the tree of ``root_id`` with this worker (no other worker
         claims its tasks) until the returned release is awaited; holds are
-        counted, renewed while this runtime lives, and run out once it is
-        gone. For what lives only in this process, e.g. a background job."""
-        count = self._holds.get(root_id, 0)
-        self._holds[root_id] = count + 1
-        if count == 0:
-            await self.store.hold(root_id, self.worker, self.hold_seconds)
+        counted and renewed while this runtime lives. For what lives only in
+        this process, e.g. a background job: it registers
+        ``release.tree.on_lost`` to stop when the hold is gone (reaped after
+        this worker was silent too long, or this runtime stopping)."""
+        tree = self._holds.get(root_id)
+        if tree is None or tree.lost:
+            epoch = await self.store.hold(root_id, self.worker, self.hold_seconds)
+            assert epoch is not None  # taking a hold always succeeds
+            tree = TreeHold(root_id=root_id, worker=self.worker, epoch=epoch,
+                            seconds=self.hold_seconds)
+            self._holds[root_id] = tree
+        tree.count += 1
         if self._renewer is None or self._renewer.done():
             self._renewer = asyncio.create_task(self._renew_holds())
         released = False
@@ -89,33 +104,53 @@ class Runtime:
             if released:
                 return
             released = True
-            if root_id not in self._holds:
-                return  # dropped on the way out (_drop_holds), store maybe closed
-            left = self._holds[root_id] - 1
-            if left > 0:
-                self._holds[root_id] = left
+            tree.count -= 1
+            if tree.count > 0 or self._holds.get(root_id) is not tree:
                 return
             self._holds.pop(root_id, None)
+            if tree.lost:
+                return
             try:
-                await self.store.unhold(root_id, self.worker)
-            except Exception as exc:  # noqa: BLE001 — the hold runs out by itself
+                await self.store.unhold(root_id, self.worker, tree.epoch)
+            except Exception as exc:  # noqa: BLE001 — the hold runs out and is reaped
                 log.warning("tree %s: unhold failed: %s", root_id, exc)
 
-        return release
+        return Release(tree, release)
 
     async def _renew_holds(self) -> None:
         while self._holds:
             # Real time, never ``self.sleep`` (tests replace that with no
             # wait): a hold must outlive the worker by wall-clock seconds.
             await asyncio.sleep(self.lease_seconds / 3)
-            for root_id in list(self._holds):
+            for tree in list(self._holds.values()):
                 try:
-                    if not await self.store.hold(root_id, self.worker, self.hold_seconds):
-                        log.warning("tree %s: hold taken over by another worker", root_id)
+                    kept = await self.store.hold(tree.root_id, self.worker, self.hold_seconds,
+                                                 epoch=tree.epoch)
                 except Exception as exc:  # noqa: BLE001 — retried on the next round
-                    log.warning("tree %s: renewing the hold failed: %s", root_id, exc)
+                    log.warning("tree %s: renewing the hold failed: %s", tree.root_id, exc)
+                    continue
+                if kept is None:
+                    log.warning("tree %s: hold %s was reaped; stopping what it held",
+                                tree.root_id, tree.epoch)
+                    if self._holds.get(tree.root_id) is tree:
+                        self._holds.pop(tree.root_id)
+                    tree.mark_lost()
+                else:
+                    tree.renewed = time.monotonic()
+
+    async def _reap(self) -> None:
+        """Reap the holds of silent workers (``Store.reap_holds``): every
+        claim looks first, so no tree stays held by a dead worker."""
+        try:
+            reaped = await self.store.reap_holds()
+        except Exception as exc:  # noqa: BLE001 — the next round tries again
+            log.warning("reaping holds failed: %s", exc)
+            return
+        if reaped:
+            log.info("reaped %d hold(s) of silent workers", reaped)
 
     async def _claim_once(self) -> Claim | None:
+        await self._reap()
         roots = sorted(self.roots) if self.roots is not None else None
         return await self.store.claim(self.worker, self.queues, self.lease_seconds,
                                       roots=roots)
@@ -220,14 +255,16 @@ class Runtime:
             await self._drop_holds()
 
     async def _drop_holds(self) -> None:
-        """On the way out: what this process held dies with it, so the trees
-        go back to the other workers at once."""
+        """On the way out: what this process held dies with it, and the
+        trees are told so (``hold_lost``) and go back to the other workers
+        at once."""
         if self._renewer is not None:
             self._renewer.cancel()
             self._renewer = None
-        for root_id in list(self._holds):
-            self._holds.pop(root_id, None)
+        for tree in list(self._holds.values()):
+            self._holds.pop(tree.root_id, None)
+            tree.mark_lost()
             try:
-                await self.store.unhold(root_id, self.worker)
-            except Exception as exc:  # noqa: BLE001 — the hold runs out by itself
-                log.warning("tree %s: unhold failed: %s", root_id, exc)
+                await self.store.unhold(tree.root_id, self.worker, tree.epoch, lost=True)
+            except Exception as exc:  # noqa: BLE001 — the hold runs out and is reaped
+                log.warning("tree %s: unhold failed: %s", tree.root_id, exc)

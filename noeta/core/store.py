@@ -11,6 +11,13 @@ transaction:
 
 Leases (``lease_until``) only decide when a silent runner's task may be
 claimed by someone else. A wrong guess costs a retry, never a double write.
+
+Holds (:meth:`Store.hold`) keep a task tree with the worker that runs
+something only it has (a background job). A hold carries an epoch: renewing
+needs it, so a hold that was reaped stays lost to its old holder. A hold's
+time running out only makes it reapable; :meth:`Store.reap_holds` releases
+it and tells the tree's tasks (``hold_lost``) in one transaction, so no task
+of the tree is claimed by another worker before that notice is in its inbox.
 """
 
 from __future__ import annotations
@@ -20,7 +27,16 @@ from typing import Literal, Protocol
 
 from msgspec.structs import replace
 
-from noeta.core.events import Event, InboxItem, InboxKind, Recorded, TaskCreated, TaskEnded, Waiting
+from noeta.core.events import (
+    Event,
+    External,
+    InboxItem,
+    InboxKind,
+    Recorded,
+    TaskCreated,
+    TaskEnded,
+    Waiting,
+)
 from noeta.core.types import Struct
 
 Status = Literal["ready", "running", "waiting", "ended"]
@@ -106,6 +122,14 @@ class Post(Struct):
     dedupe_key: str | None = None
 
 
+def hold_lost(task_id: str, worker: str, epoch: int) -> Post:
+    """The post that tells a task of the tree that hold ``epoch`` of
+    ``worker`` is gone."""
+    return Post(task_id=task_id, body=External(name=HOLD_LOST,
+                                               data={"worker": worker, "epoch": epoch}),
+                dedupe_key=f"{HOLD_LOST}:{epoch}")
+
+
 class NewTask(Struct):
     task_id: str
     created: TaskCreated
@@ -115,6 +139,11 @@ class NewTask(Struct):
     #: Items to put in the new task's inbox in the same transaction.
     inbox: list[InboxKind] = []
 
+
+#: The ``External`` a reaped (or abandoned) hold posts to each unended task of
+#: its tree: ``data = {"worker": ..., "epoch": ...}``, the hold that is gone
+#: and with it what that worker ran for the tree.
+HOLD_LOST = "hold_lost"
 
 #: ``released``: a claim or hold was given back, so the task (tree) may be
 #: claimable again.
@@ -182,15 +211,32 @@ class Store(Protocol):
         """Extend the lease; ``None`` when the claim was lost."""
         ...
 
-    async def hold(self, root_id: str, worker: str, seconds: float) -> bool:
-        """Keep the task tree of ``root_id`` with ``worker`` for ``seconds``:
-        until then ``claim`` by any other worker skips every task of the
-        tree. Renewing is holding again. ``False`` (nothing changed) while
-        another worker's hold on the tree has not run out."""
+    async def hold(self, root_id: str, worker: str, seconds: float,
+                   *, epoch: int | None = None) -> int | None:
+        """Keep the task tree of ``root_id`` with ``worker``: until the hold
+        is released or reaped, ``claim`` by any other worker skips every task
+        of the tree (several workers may hold one tree). ``seconds`` is how
+        long it lasts without renewal before it may be reaped.
+
+        Without ``epoch`` it takes the hold (or extends the one ``worker``
+        already has) and returns its epoch, never reused by another hold.
+        With ``epoch`` it renews that hold: ``None`` when it is gone
+        (released, or reaped while its worker was silent)."""
         ...
 
-    async def unhold(self, root_id: str, worker: str) -> None:
-        """Drop ``worker``'s hold on the tree; a no-op without one."""
+    async def unhold(self, root_id: str, worker: str, epoch: int,
+                     *, lost: bool = False) -> None:
+        """Release that hold; a no-op once it is gone. ``lost``: what it
+        held is gone too (its worker is stopping), so ``hold_lost`` is
+        posted as :meth:`reap_holds` does."""
+        ...
+
+    async def reap_holds(self) -> int:
+        """Release every hold whose time ran out (its worker died, froze or
+        lost the store) and, in the same transaction, post
+        ``External(HOLD_LOST, {"worker", "epoch"})`` to each unended task of
+        its tree (dedupe key ``hold_lost:<epoch>``), which wakes a waiting
+        one. Returns how many holds were reaped. Every worker runs it."""
         ...
 
     async def release(self, claim: Claim) -> None:
