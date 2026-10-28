@@ -205,8 +205,11 @@ class TaskView:
         """Stage a child task outside a tool call (a background
         orchestration): created with the records this hook leaves, and
         tracked like any child (its ``ChildEnded`` arrives in the inbox).
-        ``key`` names the child; the same key gives the same child id."""
-        child_id = f"{self.task_id}.{key or len(self.creates) + 1}"
+        ``key`` names the child; the same key gives the same child id.
+        Without one the id is new for every spawn of this task (the log
+        position it is staged at, and its place among this hook's)."""
+        child_id = f"{self.task_id}.{key}" if key \
+            else f"{self.task_id}.s{self.state.last_seq}.{len(self.creates) + 1}"
         message = user(prompt) if isinstance(prompt, str) else prompt
         child_config = dict(config or {})
         for ext in self.extensions:

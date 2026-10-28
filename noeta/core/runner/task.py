@@ -324,10 +324,14 @@ class TaskRun:
     async def flush(self, view: TaskView) -> None:
         if view.pending or view.creates:
             events, view.pending = list(view.pending), []
-            staged, view.creates = list(view.creates), []
-            await self.append(events, creates=[
-                NewTask(task_id=c.task_id, created=c.created, queue=c.queue, inbox=[c.first])
-                for c in staged])
+            await self.append(events, creates=self.staged(view))
+
+    @staticmethod
+    def staged(view: TaskView) -> list[NewTask]:
+        """The children ``view.spawn`` staged, taken out of the view."""
+        staged, view.creates = list(view.creates), []
+        return [NewTask(task_id=c.task_id, created=c.created, queue=c.queue, inbox=[c.first])
+                for c in staged]
 
     def tools(self, view: TaskView) -> list[Tool]:
         allowed = self.agent.allowed_tools if self.agent is not None else None

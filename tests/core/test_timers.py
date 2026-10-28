@@ -148,3 +148,42 @@ async def test_an_extension_spawns_a_tracked_child(store: SqliteStore) -> None:
     assert [e.answer for e in fan.ended] == ["child done"]
     row = await client.get(tid)
     assert row is not None and row.status == "ended"  # it waited for its child
+
+
+class TwoSpawns(Extension):
+    """Spawns a child without a key from ``on_event`` on each of the first
+    two replies, and one from ``after_tool``."""
+
+    name = "two"
+
+    def __init__(self) -> None:
+        self.spawned: list[str] = []
+
+    async def on_event(self, view: TaskView, recorded: Recorded) -> None:
+        from noeta.core.events import ModelReplied
+
+        if isinstance(recorded.event, ModelReplied) and not view.state.parent_id \
+                and len(self.spawned) < 3:
+            self.spawned.append(view.spawn("worker", "do it"))
+
+    async def after_tool(self, view: TaskView, use: Any, output: ToolOutput) -> ToolOutput:
+        if not view.state.parent_id:
+            self.spawned.append(view.spawn("worker", "after the tool"))
+        return output
+
+
+async def test_spawns_without_a_key_each_create_their_own_child(store: SqliteStore) -> None:
+    provider = ScriptedProvider([reply("", ("Later", {"in": 3600})), reply("parent done"),
+                                 reply("child done"), reply("child done"),
+                                 reply("child done")])
+    ext = TwoSpawns()
+    rt = runtime(store, provider, Agent(name="a", model="m", tools=[Later()], extensions=[ext],
+                                        one_shot=True),
+                 Agent(name="worker", model="m"))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    assert len(ext.spawned) == 3 and len(set(ext.spawned)) == 3
+    children = await client.tasks(parent_id=tid)
+    assert sorted(c.task_id for c in children) == sorted(ext.spawned)
+    assert all(c.end_status == "done" for c in children)
