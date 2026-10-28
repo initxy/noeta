@@ -104,19 +104,19 @@ Phase 0 — measure
 - [x] Replay endpoint + runner + comparator; `make parity` prints every mismatch per scenario and
   step; record the first mismatch report in this spec.
 - [ ] Re-record the steps the 2.1.312 recording lost (see the 2026-10-28 Phase 0 log entry).
-- [ ] Rule checklists `parity/rules/*.md` (our words) for the main prompt, each tool description,
+- [x] Rule checklists `parity/rules/*.md` (our words) for the main prompt, each tool description,
   each reminder, the compaction prompt and the auto-mode classifier.
 
 Phase 1 — P0 fixes (needed regardless of parity)
-- [ ] Remembered shell approvals keep the full argv (or a Claude Code-style explicit prefix
+- [x] Remembered shell approvals keep the full argv (or a Claude Code-style explicit prefix
   shown on the card), never program + first arg.
-- [ ] Workspace trust gates `.noeta/agents`, `.noeta/prompts`, `.noeta/skills` like
+- [x] Workspace trust gates `.noeta/agents`, `.noeta/prompts`, `.noeta/skills` like
   `.noeta/plugins`.
-- [ ] Agent files default to one-shot as sub-agents.
-- [ ] Image size checked on the base64 size, downscaled to Claude Code's limits.
-- [ ] Every built-in host sets a spill directory.
-- [ ] MCP result cap and per-server timeout as Claude Code; `$ARGUMENTS` substitution.
-- [ ] Model catalog: Claude 5.5 family and Fable; unknown models announced, not silently 128K.
+- [x] Agent files default to one-shot as sub-agents.
+- [x] Image size checked on the base64 size, downscaled to Claude Code's limits.
+- [x] Every built-in host sets a spill directory.
+- [x] MCP result cap and per-server timeout as Claude Code; `$ARGUMENTS` substitution.
+- [x] Model catalog: Claude 5.5 family and Fable; unknown models announced, not silently 128K.
 
 Phase 2 — what the model sees
 - [ ] Tool set and order as the baseline: `Agent` (alias `Task`), deferred tools + `ToolSearch`
@@ -235,3 +235,7 @@ Phase 5 — front ends
   m2's approval prompts were not logged; every auto-mode classifier stage-1 call
   (`max_tokens` 64) got a 400 from the gateway, so stage 1 is unobserved; the sessions shared
   one project directory, so m2–m4 started from m1's end state.
+- 2026-10-28: Phase 1 done in 9 commits (one per item plus the retry comment); `make check`
+  1429 passed, 87.31 %. Open: Claude Code's per-model image limits (2576 px / 4784 tokens on
+  the 5.5 family) not applied, the 2000 px default is; skill `arguments` names (`$name`) not
+  read; malformed tool calls still retried by the transient policy, not once.

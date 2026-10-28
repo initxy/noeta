@@ -57,7 +57,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (home / "plugins").mkdir(parents=True)
     monkeypatch.setattr(config, "HOME", home)
     (home / "config.toml").write_text(
-        f'model = "m"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n'
+        f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n'
         '[plugins.waver]\nword = "yo"\n[agents.main]\nadd_plugins = ["waver"]\n')
     return home
 
@@ -121,7 +121,7 @@ async def test_an_untrusted_project_is_a_notice(home: Path, tmp_path: Path) -> N
     project = tmp_path / "repo"
     (project / ".noeta" / "plugins").mkdir(parents=True)
     (home / "config.toml").write_text(
-        f'model = "m"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n')
+        f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n')
     app = from_settings(load_settings(), cwd=str(project))
     [notice] = app.notices
     assert "not trusted" in notice and "noeta trust" in notice

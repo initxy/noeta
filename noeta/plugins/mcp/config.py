@@ -14,6 +14,7 @@ of the server's tools. ``mcp__`` is a reserved prefix.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -22,8 +23,10 @@ from noeta.toolkit.tools import truncate_bytes
 
 __all__ = [
     "DEFAULT_TIMEOUT_S",
+    "DEFAULT_TOOL_TIMEOUT_S",
     "DESCRIPTION_MAX_BYTES",
     "INJECTION_MAX_BYTES",
+    "MAX_TIMEOUT_S",
     "MCP_PREFIX",
     "McpConfigError",
     "McpError",
@@ -32,13 +35,50 @@ __all__ = [
     "describe_tool",
     "make_tool_name",
     "map_server_names",
+    "request_timeout_s",
+    "tool_timeout_s",
 ]
 
 MCP_PREFIX = "mcp__"
 
-#: initialize / list / prompts / resources budget, and ``tools/call``'s
-#: unless the server sets its own ``call_timeout``.
+#: initialize / list / prompts / resources budget unless ``MCP_TIMEOUT``
+#: (milliseconds) says otherwise (Claude Code's default and variable).
 DEFAULT_TIMEOUT_S = 30.0
+
+#: ``tools/call``'s budget when neither the server (``call_timeout``, or
+#: ``timeout`` in milliseconds in a settings file) nor ``MCP_TOOL_TIMEOUT``
+#: sets one: Claude Code's 1e8 ms, in effect no limit.
+DEFAULT_TOOL_TIMEOUT_S = 100_000.0
+
+#: The longest timeout Claude Code accepts (a 32-bit millisecond count).
+MAX_TIMEOUT_S = 2_147_483.647
+
+
+def _env_ms(name: str) -> float | None:
+    raw = os.environ.get(name, "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def request_timeout_s() -> float:
+    """The budget of every MCP request but ``tools/call``."""
+    ms = _env_ms("MCP_TIMEOUT")
+    return min(ms / 1000, MAX_TIMEOUT_S) if ms is not None else DEFAULT_TIMEOUT_S
+
+
+def tool_timeout_s(server_timeout: float | None) -> float:
+    """One ``tools/call``'s budget: the server's own, else
+    ``MCP_TOOL_TIMEOUT`` (milliseconds), else the default; between 1 s and
+    :data:`MAX_TIMEOUT_S`."""
+    if server_timeout is not None:
+        seconds = server_timeout
+    else:
+        ms = _env_ms("MCP_TOOL_TIMEOUT")
+        seconds = ms / 1000 if ms is not None else DEFAULT_TOOL_TIMEOUT_S
+    return min(max(seconds, 1.0), MAX_TIMEOUT_S)
 
 #: Cap on a server-written tool description. It rides the tool list on every
 #: request for the rest of the task, so an essay is paid for forever.
@@ -76,7 +116,7 @@ class McpServer:
     host-side value only and are never recorded.
 
     ``tools`` keeps only the named raw tools (``None`` = all advertised).
-    ``call_timeout`` bounds one ``tools/call`` (``None`` = 30 s).
+    ``call_timeout`` bounds one ``tools/call`` (``None``: :func:`tool_timeout_s`).
     ``deferred`` keeps the server's schemas out of every request: its tools
     are reached through ``ToolSearch`` / ``McpCall``.
     """

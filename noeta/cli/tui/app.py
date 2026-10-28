@@ -43,7 +43,7 @@ from noeta.core.events import (
 )
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CORE
-from noeta.core.pending import Pending, follow_tree
+from noeta.core.pending import Pending, always_option, follow_tree
 from noeta.core.questions import next_question, typed_answer
 from noeta.core.types import Delta, Usage
 from noeta.host.local import LocalApp, UnknownAgent
@@ -312,7 +312,8 @@ class NoetaApp(App[None]):
                     await self.decide(call_id, decision, always, task_id=task_id)
 
                 await transcript.mount(ApprovalCard(
-                    p.request_id, f"[{who}] {p.tool}", p.prompt, decide))
+                    p.request_id, f"[{who}] {p.tool}", p.prompt, decide,
+                    always_option(p.detail)))
             else:
                 self.waiting_for = f"{who} waits for your answer"
                 self._set_question(p.request_id, p.task_id, p.detail)
@@ -460,8 +461,10 @@ class NoetaApp(App[None]):
                     if asked is not None:
                         asked.set_state("waiting")
                     title = tool_title(asked.call) if asked is not None else call_id
-                    prompt = str((ev.detail.get(call_id) or {}).get("prompt") or "")
-                    await transcript.mount(ApprovalCard(call_id, title, prompt, self.decide))
+                    detail = ev.detail.get(call_id) or {}
+                    prompt = str(detail.get("prompt") or "")
+                    await transcript.mount(ApprovalCard(call_id, title, prompt, self.decide,
+                                                        always_option(detail)))
             elif ev.on == "question":
                 questions = [k for k, v in ev.detail.items()
                              if isinstance(v, dict) and v.get("on") == "question"]

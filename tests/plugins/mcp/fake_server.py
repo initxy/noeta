@@ -29,7 +29,10 @@ TOOLS = json.loads(os.environ.get("FAKE_TOOLS") or "null") or [
 PAGE = int(os.environ.get("FAKE_PAGE") or 0)
 LOG = os.environ.get("FAKE_LOG")
 PING = bool(os.environ.get("FAKE_PING"))
-PNG = base64.b64encode(b"\x89PNG\r\n\x1a\nfake").decode()
+AUDIO = base64.b64encode(b"\x89PNG\r\n\x1a\nfake").decode()
+#: A 1 x 1 grey PNG.
+PNG = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNoAAAAggCBd81ytgAAAABJ"
+       "RU5ErkJggg==")
 
 
 def send(obj: dict) -> None:
@@ -65,7 +68,7 @@ def handle(method: str, params: dict) -> dict:
             return {"content": [{"type": "text", "text": "it broke"}], "isError": True}
         if name == "image":
             return {"content": [{"type": "image", "mimeType": "image/png", "data": PNG},
-                                {"type": "audio", "mimeType": "audio/wav", "data": PNG}]}
+                                {"type": "audio", "mimeType": "audio/wav", "data": AUDIO}]}
         if name == "sleep":
             time.sleep(float(args.get("seconds", 5)))
             return {"content": []}

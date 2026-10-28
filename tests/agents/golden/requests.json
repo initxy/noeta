@@ -1,23 +1,23 @@
 {
  "hashes": [
-  "main 767ba8fa623e722e",
-  "main 0ecd1433c2570af1",
-  "main 59c6826867fb5d23",
-  "child 3dab91518fffe8c4",
-  "child 146c1c18aad87dcd",
-  "main 05d56ee5dc270323",
-  "main 2360e9df0cad689b",
-  "main 0d0357165a4f068d",
-  "main 001539680a37ed0a",
-  "main 76d49ad551929c20",
-  "main 465ecee0d5d65c54",
-  "main b3b95d8255c578de",
-  "main 5299622f4690a182",
-  "main fbaac33bc34b839d",
-  "main a0d8da683b2ead4d",
-  "main 0803e59d8cdec18a",
-  "main 20defda606d4293b",
-  "main 80bf611154b591ec"
+  "main 8ee5d94a3f740a1e",
+  "main 0baa12afc376e6c6",
+  "main f2a3212394dff64b",
+  "child 8103417ff108da23",
+  "child 1445ee3ab898ee08",
+  "main 0c7fcf31ff035eed",
+  "main 02f1b8f8662097d2",
+  "main d8e3e6172a212199",
+  "main 05878ab477453aa2",
+  "main 97b8c49753b3254c",
+  "main 17705aa709a83700",
+  "main c3ae16cc3cebb81e",
+  "main bd6b77d8d87345ba",
+  "main 0936ed0a4b19288d",
+  "main fdf1a5ddd1438c48",
+  "main 40f2d47180cad472",
+  "main 03fee77d9c327f3f",
+  "main c8963abb63fe0e0c"
  ],
  "last": {
   "child": {
@@ -350,9 +350,13 @@
       "cache_control": {
        "type": "ephemeral"
       },
-      "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing; its instructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
+      "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing, with its arguments, if any, in `args` (what follows `/<name>`); its\ninstructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
       "input_schema": {
        "properties": {
+        "args": {
+         "description": "Optional arguments for the skill.",
+         "type": "string"
+        },
         "skill": {
          "description": "Name of the skill to activate, from the skill listing in your context.",
          "type": "string"
@@ -697,10 +701,14 @@
      },
      {
       "function": {
-       "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing; its instructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
+       "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing, with its arguments, if any, in `args` (what follows `/<name>`); its\ninstructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
        "name": "skill",
        "parameters": {
         "properties": {
+         "args": {
+          "description": "Optional arguments for the skill.",
+          "type": "string"
+         },
          "skill": {
           "description": "Name of the skill to activate, from the skill listing in your context.",
           "type": "string"
@@ -1056,10 +1064,14 @@
       "type": "function"
      },
      {
-      "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing; its instructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
+      "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing, with its arguments, if any, in `args` (what follows `/<name>`); its\ninstructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
       "name": "skill",
       "parameters": {
        "properties": {
+        "args": {
+         "description": "Optional arguments for the skill.",
+         "type": "string"
+        },
         "skill": {
          "description": "Name of the skill to activate, from the skill listing in your context.",
          "type": "string"
@@ -1805,9 +1817,13 @@
       "name": "Glob"
      },
      {
-      "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing; its instructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
+      "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing, with its arguments, if any, in `args` (what follows `/<name>`); its\ninstructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
       "input_schema": {
        "properties": {
+        "args": {
+         "description": "Optional arguments for the skill.",
+         "type": "string"
+        },
         "skill": {
          "description": "Name of the skill to activate, from the skill listing in your context.",
          "type": "string"
@@ -2722,10 +2738,14 @@
      },
      {
       "function": {
-       "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing; its instructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
+       "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing, with its arguments, if any, in `args` (what follows `/<name>`); its\ninstructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
        "name": "skill",
        "parameters": {
         "properties": {
+         "args": {
+          "description": "Optional arguments for the skill.",
+          "type": "string"
+         },
          "skill": {
           "description": "Name of the skill to activate, from the skill listing in your context.",
           "type": "string"
@@ -3616,10 +3636,14 @@
       "type": "function"
      },
      {
-      "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing; its instructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
+      "description": "Activate a named skill so its instructions load into the current task.\n\n## What it does\n\nA single call activates ONE skill, chosen by the `skill` parameter from the\nskill listing, with its arguments, if any, in `args` (what follows `/<name>`); its\ninstructions are in your context from your next step. A\nlisting line may be shortened to save context —\nthe skill behind it is complete, and activating it loads everything.\n\nMake it the only tool call in its response. Batched with other tool calls,\nthose calls run but the skill is not loaded.\n\n## When to use\n\n- The task matches an available skill — activate it BEFORE producing other output\n  about the task, so its guidance is in force while you work.\n- The user references a skill by name or types `/<name>`.\n\n## When NOT to use\n\n- The skill you want is not in the listing — never guess or invent a name; pick\n  only from the listed ones.\n- A skill is already active — do not re-activate it.\n- No listed skill covers the task — just proceed without one.",
       "name": "skill",
       "parameters": {
        "properties": {
+        "args": {
+         "description": "Optional arguments for the skill.",
+         "type": "string"
+        },
         "skill": {
          "description": "Name of the skill to activate, from the skill listing in your context.",
          "type": "string"

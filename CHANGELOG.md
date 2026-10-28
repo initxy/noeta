@@ -9,6 +9,56 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Fixed
 
+- **An "always" shell approval no longer widens to the program and its first argument.**
+  Approving `rm -rf build` used to let `rm -rf /` run unasked (and wrote that rule to a
+  trusted project's `.noeta/shell-allowlist.json`). The remembered rule is now Claude Code's
+  `Bash(...)` form, seeded as Claude Code seeds it (`git push *`, `ls *`), and the exact
+  command for wrappers, destructive file programs and interpreters. The approval card (TUI)
+  and the ACP option name the rule (`Always allow Bash(git push *)`), and no "always" choice
+  is offered when nothing would be remembered. Approval details carry `always_label`.
+- **An untrusted project no longer configures the agent.** `noeta` read `<cwd>/.noeta/agents`
+  unconditionally, so a cloned repository could replace `main` with one in
+  `bypassPermissions` running a command hook. A project's `.noeta/agents`, `.noeta/prompts`,
+  `.noeta/skills` and `.agents/skills` now load only after `noeta trust`, like its
+  `.noeta/plugins`; each one skipped is a notice. `Runtime.workspace_trusted` gates the
+  workspace's prompt overrides (`None`, the default, trusts every workspace).
+- **A sub-agent ends after its turn**, like Claude Code's, whatever its agent file says. An
+  agent file without `one_shot: true` (every Claude Code agent file) used to leave its
+  sub-agent waiting for input and its foreground parent waiting forever. The main agent
+  stays conversational.
+- **An image that the API would refuse no longer enters the history.** `Read` compared raw bytes
+  with 5 MB, so a 4–5 MB image (over 5 MB once base64 encoded) failed every later request of
+  the task. Images from `Read` and MCP results now go through `noeta.toolkit.images.fit_image`
+  with Claude Code's limits: shrunk into 2000 x 2000 px and 3.75 MB raw with Pillow (the new
+  `images` extra), else passed only when already within 5 MB of base64 and 8000 px a side, and
+  refused with a reason otherwise. A scaled image's result says how coordinates map back.
+  `Read`'s image file ceiling is now 128 MB (`IMAGE_MAX_BYTES`); `noeta.plugins.mcp.results`
+  no longer exports `IMAGE_MAX_BYTES`.
+- **Long tool output is saved, as the tools promise.** No built-in host set
+  `Runtime.spill_root`, so Bash, Grep, WebFetch and MCP output past the inline limit was cut
+  instead of saved to a file. `LocalApp` now defaults it to `<tmp>/noeta-<uid>/tool-results`
+  (`noeta.host.local.default_spill_root`) and the `noeta` command (TUI, `-p`, ACP, `serve`,
+  `worker`) to `~/.noeta/tool-results`; one directory per task below it.
+- **MCP results and timeouts follow Claude Code.** A result is held to 25,000 tokens
+  (`MAX_MCP_OUTPUT_TOKENS`; four characters a token, 1,600 an image) instead of 1 MiB: images
+  past it are left out with a note, text past it is cut to a marked head and saved.
+  A tool call is bounded by the server's `timeout` (milliseconds, read from settings files
+  now; under 1000 ignored), else `MCP_TOOL_TIMEOUT`, else 1e8 ms, instead of 30 s; every other
+  request by `MCP_TIMEOUT` (default 30 s). `noeta.plugins.mcp.results` no longer exports
+  `INLINE_MAX_BYTES`.
+- **Skill arguments are filled in, not dropped.** A skill body's lines holding `$ARGUMENTS`
+  were removed. The `skill` tool now takes Claude Code's optional `args` string, and `/name
+  args` passes what follows the name; `$ARGUMENTS`, `$ARGUMENTS[N]` and `$N` (from 0) are
+  filled as Claude Code fills them (`\$` keeps a `$`), arguments no placeholder took follow
+  the body on an `ARGUMENTS:` line, and a call without `args` leaves the body as written.
+  The arguments are kept with the activation, so the body re-attached after a compaction is
+  the same (`noeta.plugins.skills.registry.substitute_arguments`).
+- **Model catalog: the Claude 5.5 family and Fable 5.1.** `claude-opus-5-5`,
+  `claude-sonnet-5-5`, `claude-haiku-5-5` and `claude-fable-5-1` are catalogued with Claude
+  Code 2.1.312's windows, output caps and prices, and the aliases follow Claude Code
+  (`opus` / `sonnet` / `haiku` -> the 5.5 family, new `fable` -> Fable 5.1). An uncatalogued
+  model is now a notice the `noeta` command shows (`noeta.core.models.unknown_model_notice`),
+  not only a log line.
 - `make example` ran a build uv had cached; it now installs the example plugin editable.
 - A second `registry.provider()` call for a family failed once that family's adapter module
   had been imported (the entry point named a package attribute the submodule rebound).

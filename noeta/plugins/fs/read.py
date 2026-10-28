@@ -9,6 +9,7 @@ for ``Edit`` / ``Write``'s read-first check.
 
 from __future__ import annotations
 
+import asyncio
 import codecs
 import hashlib
 import posixpath
@@ -27,6 +28,7 @@ from noeta.plugins.fs._read_formats import (
     too_many_tokens,
 )
 from noeta.plugins.fs.state import FS, KIND_READ
+from noeta.toolkit.images import ImageTooLarge, fit_image
 from noeta.toolkit.tools import (
     Workspace,
     format_size,
@@ -55,9 +57,9 @@ _SNIFF_BYTES = 16
 #: characters of up to four UTF-8 bytes each, plus a trailing ``\r``.
 _LINE_KEEP_BYTES = _MAX_LINE_CHARS * 4 + 1
 
-#: Single-image inline ceiling. There is no image library to downscale with,
-#: so a larger image fails asking the model to crop or resize it.
-IMAGE_MAX_BYTES = 5 * 1024 * 1024
+#: Largest image file read at all (Claude Code's); what is read is then made
+#: to fit a request by :func:`noeta.toolkit.images.fit_image`.
+IMAGE_MAX_BYTES = 128 * 1024 * 1024
 
 #: Leading magic bytes -> (human label, media type). Detection is by content,
 #: not extension, so a mis-named image is still caught. WebP (a RIFF
@@ -350,8 +352,8 @@ class ReadTool:
     ) -> ToolOutput:
         label, media_type = image
         too_big = (
-            f"over the {IMAGE_MAX_BYTES // 1024 // 1024}MB inline limit — "
-            "crop/resize it smaller before reading"
+            f"over the {IMAGE_MAX_BYTES // 1024 // 1024}MB image read limit — "
+            "resize it or export a smaller copy, then read that"
         )
         if size > IMAGE_MAX_BYTES:
             return tool_error(self.name, f"{path!r} is a {label} of {size} bytes, {too_big}")
@@ -367,13 +369,19 @@ class ReadTool:
                     )
         except OSError as exc:
             return tool_error(self.name, f"read failed: {exc}")
-        raw = bytes(buf)
+        try:
+            fitted = await asyncio.to_thread(fit_image, bytes(buf), media_type)
+        except ImageTooLarge as exc:
+            return tool_error(self.name, f"{path!r} is a {label} that cannot be sent: {exc}")
+        text = f"Read image {display} ({fitted.media_type}, {len(fitted.data)} bytes)"
+        note = fitted.note()
         return ToolOutput(
             content=[
-                Text(text=f"Read image {display} ({media_type}, {len(raw)} bytes)"),
-                Image(media_type=media_type, data=raw),
+                Text(text=f"{text}\n{note}" if note else text),
+                Image(media_type=fitted.media_type, data=fitted.data),
             ],
-            meta={"path": display, "media_type": media_type, "bytes": len(raw)},
+            meta={"path": display, "media_type": fitted.media_type,
+                  "bytes": len(fitted.data)},
         )
 
 

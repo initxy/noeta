@@ -7,6 +7,7 @@
                   "env": {"ROOT": "${HOME:-/tmp}"}}
     }}
 
+A server's ``timeout`` (milliseconds) bounds each of its tool calls.
 ``${VAR}`` and ``${VAR:-default}`` are filled from the environment in
 ``command``, ``args``, ``env``, ``url`` and ``headers``.
 
@@ -54,6 +55,14 @@ def _strings(value: Any, what: str) -> dict[str, str]:
     return {str(k): _expand(str(v)) for k, v in value.items()}
 
 
+def _call_timeout(ms: Any) -> float | None:
+    """A server's ``timeout`` (milliseconds) in seconds; as in Claude Code,
+    one under 1000 ms (or not a number) is ignored."""
+    if isinstance(ms, bool) or not isinstance(ms, (int, float)) or ms < 1000:
+        return None
+    return float(ms) / 1000
+
+
 def _server(name: str, spec: Any) -> McpServer | None:
     if not isinstance(spec, Mapping):
         raise McpConfigError(f"MCP server {name!r}: must be an object")
@@ -63,6 +72,7 @@ def _server(name: str, spec: Any) -> McpServer | None:
                     "speak; skipped", name)
         return None
     alias = alias_for(name)
+    timeout = _call_timeout(spec.get("timeout"))
     if kind == "stdio":
         args = spec.get("args") or []
         if not isinstance(args, list):
@@ -70,11 +80,13 @@ def _server(name: str, spec: Any) -> McpServer | None:
         return McpServer(alias=alias,
                          command=[_expand(str(spec.get("command") or "")),
                                   *(_expand(str(a)) for a in args)],
-                         env=_strings(spec.get("env") or {}, f"MCP server {name!r} env"))
+                         env=_strings(spec.get("env") or {}, f"MCP server {name!r} env"),
+                         call_timeout=timeout)
     if kind == "http":
         return McpServer(alias=alias, url=_expand(str(spec.get("url") or "")),
                          headers=_strings(spec.get("headers") or {},
-                                          f"MCP server {name!r} headers"))
+                                          f"MCP server {name!r} headers"),
+                         call_timeout=timeout)
     raise McpConfigError(f"MCP server {name!r}: unknown type {kind!r}")
 
 

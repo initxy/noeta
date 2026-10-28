@@ -45,12 +45,16 @@ class Runtime:
     lease_seconds: float = 30.0
     poll_interval: float = 0.5
     concurrency: int = 8
-    #: Directory for tool outputs too large to return inline.
+    #: Directory for tool outputs too large to return inline; ``None`` cuts
+    #: them instead (built-in hosts always set one).
     spill_root: str | None = None
     #: Host directories of prompt override files (``noeta.core.prompts``),
     #: e.g. ``~/.noeta/prompts``; the task's ``<cwd>/.noeta/prompts`` is
-    #: always read too.
+    #: read too when :attr:`workspace_trusted` allows it.
     prompt_dirs: Sequence[str] = ()
+    #: ``workspace_trusted(cwd)``: may a task's workspace change what the
+    #: model is told (its ``.noeta/prompts``)? ``None`` trusts every workspace.
+    workspace_trusted: Callable[[str], bool] | None = None
     on_delta: OnDelta | None = None
     sleep: Callable[[float], Any] = asyncio.sleep
     #: Serve only the task trees whose root ids are in this set (a front end

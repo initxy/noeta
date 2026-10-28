@@ -330,7 +330,8 @@ class Permissions(Extension):
         if always is not None and st.asked.get(call.id) != always:
             view.record(NAME, "asked", {"call_id": call.id, "always": always})
         return Ask(prompt=asks[0], detail={"by": NAME, "tool": name, "reason": asks[0],
-                                           "always": always})
+                                           "always": always,
+                                           "always_label": p.always_label(name, always)})
 
     # ------------------------------------------------------------ parts
 

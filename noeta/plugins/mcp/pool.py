@@ -32,7 +32,7 @@ from typing import TypeVar
 
 import httpx
 
-from noeta.plugins.mcp.config import DEFAULT_TIMEOUT_S, McpError, McpServer
+from noeta.plugins.mcp.config import McpError, McpServer, request_timeout_s
 from noeta.plugins.mcp.http_client import HttpClient
 from noeta.plugins.mcp.stdio import McpClient, StdioClient
 
@@ -49,8 +49,9 @@ def connect(server: McpServer, *, http: httpx.AsyncClient | None = None) -> McpC
     """A new (not yet started) client for ``server``."""
     if server.url:
         return HttpClient(server.url, headers=dict(server.headers), http=http,
-                          timeout=DEFAULT_TIMEOUT_S)
-    return StdioClient(list(server.command), env=dict(server.env), timeout=DEFAULT_TIMEOUT_S)
+                          timeout=request_timeout_s())
+    return StdioClient(list(server.command), env=dict(server.env),
+                       timeout=request_timeout_s())
 
 
 @dataclass

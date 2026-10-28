@@ -73,6 +73,26 @@ async def test_overrides_layer_and_are_fixed_at_start(tmp_path: Path) -> None:
     await store.close()
 
 
+async def test_an_untrusted_workspace_changes_no_prompt(tmp_path: Path) -> None:
+    work, host = tmp_path / "w", tmp_path / "host"
+    (work / ".noeta" / "prompts" / "tool").mkdir(parents=True)
+    (work / ".noeta" / "prompts" / "tool" / "Read.md").write_text("workspace read\n")
+    (host / "tool").mkdir(parents=True)
+    (host / "tool" / "Glob.md").write_text("host glob\n")
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("ok")])
+    rt = _runtime(store, provider, work, host)
+    seen: list[str] = []
+    rt.workspace_trusted = lambda cwd: bool(seen.append(cwd))
+    await Client(store).create("a", "hi", config={"cwd": str(work)})
+    await rt.run_until_idle()
+    tools = {t.name: t.description for t in provider.requests[0].tools}
+    assert tools["Glob"] == "host glob\n"
+    assert tools["Read"] != "workspace read\n"
+    assert seen == [str(work)]
+    await store.close()
+
+
 async def test_no_override_files_leave_the_defaults(tmp_path: Path) -> None:
     work = tmp_path / "w"
     work.mkdir()

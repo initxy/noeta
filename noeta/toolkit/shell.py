@@ -19,9 +19,11 @@ from typing import Any
 
 __all__ = [
     "DEFAULT_SHELL_RULES",
+    "EXACT_ONLY_PROGRAMS",
     "LONG_SLEEP_S",
     "SHELL_EXPANSION_CHARS",
     "SHELL_META_CHARS",
+    "WRAPPER_PROGRAMS",
     "AllowRule",
     "ShellMode",
     "build_allowlist",
@@ -33,6 +35,7 @@ __all__ = [
     "parse_argv",
     "rule_from_spec",
     "rule_spec_from_command",
+    "rule_spec_text",
     "subcommands",
 ]
 
@@ -167,9 +170,20 @@ def _trivial_validate(_: list[str]) -> bool:
 
 
 def rule_from_spec(spec: Mapping[str, Any]) -> AllowRule:
-    """An operator rule (``{"program": "npm", "subcommand": "start"}``,
-    subcommand optional) accepting any tail args — looser than the curated
-    validators on purpose: it means "this program may run"."""
+    """An allowlist rule from its spec, in one of two shapes.
+
+    * ``{"rule": "git push *"}`` — Claude Code's ``Bash(...)`` rule content:
+      words ending in `` *`` match a command starting with those words,
+      anything else matches exactly that command (compared as argv).
+    * ``{"program": "npm", "subcommand": "start"}`` (subcommand optional) — an
+      operator rule accepting any tail args, looser than the curated validators
+      on purpose: it means "this program may run".
+    """
+    text = spec.get("rule")
+    if text is not None:
+        if not isinstance(text, str):
+            raise ValueError(f"shell allowlist 'rule' must be a string: {spec!r}")
+        return _rule_from_text(text)
     program = spec.get("program")
     if not isinstance(program, str) or not program:
         raise ValueError(f"shell allowlist rule needs a non-empty string 'program': {spec!r}")
@@ -184,6 +198,19 @@ def rule_from_spec(spec: Mapping[str, Any]) -> AllowRule:
     return AllowRule(program, subcommand, _trivial_validate, label)
 
 
+def _rule_from_text(text: str) -> AllowRule:
+    prefix = text.endswith(" *")
+    words = parse_argv(text[:-2] if prefix else text)
+    if not words:
+        raise ValueError(f"shell allowlist rule names no command: {text!r}")
+    rest = words[1:]
+
+    def validate(tail: list[str]) -> bool:
+        return tail[: len(rest)] == rest if prefix else tail == rest
+
+    return AllowRule(words[0], None, validate, text)
+
+
 def build_allowlist(
     extra_specs: Sequence[Mapping[str, Any]] = (),
     *,
@@ -193,19 +220,57 @@ def build_allowlist(
     return tuple(base_rules) + tuple(rule_from_spec(s) for s in extra_specs)
 
 
+#: Programs that run another command (Claude Code's list): a prefix rule on
+#: one would allow whatever it wraps.
+WRAPPER_PROGRAMS = frozenset({
+    "sh", "bash", "zsh", "fish", "csh", "tcsh", "ksh", "dash", "cmd", "powershell", "pwsh",
+    "env", "xargs", "command", "builtin", "noglob", "nice", "stdbuf", "nohup", "timeout",
+    "time", "watch", "ionice", "chrt", "setsid", "taskset", "strace", "ltrace", "script",
+    "flock", "unshare", "nsenter", "sudo", "doas", "pkexec", "su", "runuser",
+})
+
+#: Programs that delete or overwrite the paths they are given (Claude Code
+#: backs a prefix rule on these with a protected-path check noeta lacks) and
+#: interpreters, whose ``-c`` / ``-e`` runs any code: an approval of one is
+#: remembered as the exact command.
+EXACT_ONLY_PROGRAMS = frozenset({
+    "rm", "rmdir", "mv", "cp", "dd", "ln", "chmod", "chown", "chgrp", "truncate", "shred",
+    "python", "python3", "node", "perl", "ruby", "php", "deno", "bun", "lua", "osascript",
+})
+
+_WORD_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
+
+
 def rule_spec_from_command(command: str) -> dict[str, str] | None:
-    """A rememberable spec for an approved command: program + first arg
-    (``npm start`` -> ``{"program": "npm", "subcommand": "start"}``), or
-    ``None`` for a command with metacharacters or unbalanced quotes."""
-    if has_shell_meta(command):
+    """What an "always" approval of ``command`` remembers, seeded the way
+    Claude Code seeds its rule: ``program subcommand *`` when the second word
+    is a plain subcommand (``git push origin x`` -> ``git push *``), else
+    ``program *`` for a plain program name (``ls -la`` -> ``ls *``), else the
+    exact command. A wrapper (``sudo``, ``bash``, ...), a destructive file
+    program (``rm``, ``mv``, ...) or a leading ``VAR=value`` gets the exact
+    command. ``None`` for a command with metacharacters, unquoted expansions
+    or unbalanced quotes, which no rule matches."""
+    if has_shell_meta(command) or has_unquoted_expansion(command):
         return None
     argv = parse_argv(command)
     if not argv:
         return None
-    spec: dict[str, str] = {"program": argv[0]}
-    if len(argv) >= 2:
-        spec["subcommand"] = argv[1]
-    return spec
+    program = argv[0]
+    if (program in WRAPPER_PROGRAMS or program in EXACT_ONLY_PROGRAMS
+            or not _WORD_RE.match(program)):
+        return {"rule": shlex.join(argv)}
+    if len(argv) >= 2 and _WORD_RE.match(argv[1]):
+        return {"rule": f"{shlex.join(argv[:2])} *"}
+    return {"rule": f"{program} *"}
+
+
+def rule_spec_text(spec: Mapping[str, Any]) -> str:
+    """How a rule spec reads to a person: ``git push *``, ``rm -rf build``."""
+    text = spec.get("rule")
+    if isinstance(text, str):
+        return text
+    words = [w for w in (spec.get("program"), spec.get("subcommand")) if isinstance(w, str)]
+    return f"{shlex.join(words)} *"
 
 
 # ---------------------------------------------------------------------------

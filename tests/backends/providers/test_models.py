@@ -159,9 +159,32 @@ def test_aliases_cover_opus_sonnet_haiku() -> None:
 
 
 def test_aliases_point_at_the_current_generation() -> None:
-    assert ALIASES["opus"] == "claude-opus-5"
-    assert ALIASES["sonnet"] == "claude-sonnet-5"
-    assert ALIASES["haiku"] == "claude-haiku-4-5"
+    # Claude Code 2.1.312's aliases.
+    assert ALIASES == {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5",
+                       "haiku": "claude-haiku-5-5", "fable": "claude-fable-5-1"}
+
+
+@pytest.mark.parametrize(("model", "output", "prices"), [
+    ("claude-opus-5-5", 128_000, (4.0, 20.0, 0.20, 5.0)),
+    ("claude-sonnet-5-5", 128_000, (2.0, 10.0, 0.10, 2.5)),
+    ("claude-haiku-5-5", 128_000, (0.10, 0.50, 0.01, 0.125)),
+    ("claude-fable-5-1", 64_000, (10.0, 50.0, 0.25, 12.5)),
+])
+def test_the_5_5_family_and_fable_as_claude_code_catalogs_them(
+        model: str, output: int, prices: tuple[float, ...]) -> None:
+    spec = spec_for(model)
+    assert (spec.context_window, spec.max_output_tokens) == (1_000_000, output)
+    assert (spec.input_price_per_mtok, spec.output_price_per_mtok,
+            spec.cache_read_price_per_mtok, spec.cache_write_price_per_mtok) == prices
+    assert spec.is_reasoning and spec.supports_vision
+    assert model_family(model) == "anthropic"
+
+
+def test_an_unknown_model_is_announced() -> None:
+    assert models.unknown_model_notice("sonnet") is None
+    notice = models.unknown_model_notice("my-gateway-model")
+    assert notice is not None
+    assert "'my-gateway-model'" in notice and "128,000 tokens" in notice
 
 
 def test_superseded_rows_stay_addressable_by_full_id() -> None:

@@ -3,7 +3,8 @@ Activate a named skill so its instructions load into the current task.
 ## What it does
 
 A single call activates ONE skill, chosen by the `skill` parameter from the
-skill listing; its instructions are in your context from your next step. A
+skill listing, with its arguments, if any, in `args` (what follows `/<name>`); its
+instructions are in your context from your next step. A
 listing line may be shortened to save context —
 the skill behind it is complete, and activating it loads everything.
 

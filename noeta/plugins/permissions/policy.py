@@ -18,7 +18,9 @@ from noeta.toolkit.shell import (
     AllowRule,
     build_allowlist,
     command_in_allowlist,
+    rule_from_spec,
     rule_spec_from_command,
+    rule_spec_text,
 )
 
 PermissionMode = Literal["default", "acceptEdits", "bypassPermissions"]
@@ -160,18 +162,22 @@ def parse_project_rules(raw: bytes | str | None) -> tuple[dict[str, Any], ...]:
         return ()
     if not isinstance(data, list):
         return ()
-    return tuple(
-        dict(item) for item in data
-        if isinstance(item, Mapping) and isinstance(item.get("program"), str) and item["program"]
-    )
+    return tuple(dict(item) for item in data if isinstance(item, Mapping) and _valid_spec(item))
+
+
+def _valid_spec(spec: Mapping[str, Any]) -> bool:
+    try:
+        rule_from_spec(spec)
+    except ValueError:
+        return False
+    return True
 
 
 def append_project_rule(existing: Sequence[Mapping[str, Any]],
                         spec: Mapping[str, Any]) -> str | None:
-    """The file's new text with ``spec`` appended (deduplicated by program +
-    subcommand), or ``None`` when it is already there."""
-    key = (spec.get("program"), spec.get("subcommand"))
-    if any((e.get("program"), e.get("subcommand")) == key for e in existing):
+    """The file's new text with ``spec`` appended, or ``None`` when it is
+    already there."""
+    if any(dict(e) == dict(spec) for e in existing):
         return None
     return json.dumps([*map(dict, existing), dict(spec)], ensure_ascii=False, indent=2) + "\n"
 
@@ -269,10 +275,11 @@ def webfetch_needs_approval(input: Mapping[str, Any], allowed: Sequence[str]) ->
 
 
 def always_rule(name: str, input: Mapping[str, Any]) -> dict[str, Any] | None:
-    """What an "always" answer to this call remembers: a program + first
-    argument rule for a shell command, the host for a fetch, the tool
-    otherwise; ``None`` when nothing safe can be remembered (a command with
-    shell metacharacters, a URL without a host)."""
+    """What an "always" answer to this call remembers: a command rule
+    (:func:`~noeta.toolkit.shell.rule_spec_from_command`) for a shell
+    command, the host for a fetch, the tool otherwise; ``None`` when nothing
+    safe can be remembered (a command with shell metacharacters, a URL
+    without a host)."""
     if name in SHELL_GATED_TOOLS:
         command = input.get("command")
         spec = rule_spec_from_command(command) if isinstance(command, str) else None
@@ -282,3 +289,17 @@ def always_rule(name: str, input: Mapping[str, Any]) -> dict[str, Any] | None:
         host = url_host(url) if isinstance(url, str) else None
         return {"kind": "host", "host": host} if host else None
     return {"kind": "tool", "tool": name}
+
+
+def always_label(name: str, rule: Mapping[str, Any] | None) -> str | None:
+    """The rule an "always" answer remembers, as the person approving reads
+    it (Claude Code's rule form): ``Bash(git push *)``,
+    ``WebFetch(domain:example.com)``, ``Write``."""
+    if rule is None:
+        return None
+    kind = rule.get("kind")
+    if kind == "shell" and isinstance(rule.get("spec"), Mapping):
+        return f"{name}({rule_spec_text(rule['spec'])})"
+    if kind == "host":
+        return f"{name}(domain:{rule.get('host')})"
+    return name

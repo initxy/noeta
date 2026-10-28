@@ -36,9 +36,10 @@ class Pending:
     question; ``noeta.plugins.ask_user.answer_question`` validates first).
 
     ``detail``: for an approval, what the gate said (``prompt``, ``reason``,
-    and ``always`` — the rule an "always" answer would remember, or
-    ``None``); for a question, ``{"questions": [...]}`` as the tool
-    normalised them (each with its ``id``)."""
+    ``always`` — the rule an "always" answer would remember, or ``None`` —
+    and ``always_label``, that rule as a person reads it); for a question,
+    ``{"questions": [...]}`` as the tool normalised them (each with its
+    ``id``)."""
 
     task_id: str
     request_id: str
@@ -49,6 +50,19 @@ class Pending:
     detail: dict[str, Any] = field(default_factory=dict)
     #: The agent of the task that asks (a sub-agent's name, for showing).
     agent: str = ""
+
+
+def always_option(detail: dict[str, Any]) -> str | None:
+    """What an approval's "always" choice says it remembers: ``Always allow
+    Bash(git push *)`` when the gate named its rule, a bare ``Always allow``
+    when the gate said nothing about one, ``None`` when the gate said nothing
+    would be remembered (no "always" choice to offer)."""
+    label = detail.get("always_label")
+    if isinstance(label, str) and label:
+        return f"Always allow {label}"
+    if "always" in detail and detail["always"] is None:
+        return None
+    return "Always allow"
 
 
 def pending(events: Sequence[Recorded], task_id: str = "") -> list[Pending]:

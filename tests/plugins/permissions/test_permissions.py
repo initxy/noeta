@@ -13,7 +13,7 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
-from noeta.core.pending import pending, pending_tree
+from noeta.core.pending import always_option, pending, pending_tree
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.plugins.permissions import (
     Budget,
@@ -119,7 +119,7 @@ async def test_shell_gate_runs_allowlisted_commands_and_asks_for_the_rest(
     assert [r["command"] for r in bash.runs] == ["git status", "make"]
 
 
-async def test_always_remembers_the_program_and_writes_the_trusted_project_file(
+async def test_always_remembers_the_shown_rule_and_writes_the_trusted_project_file(
         store: SqliteStore, tmp_path: Path) -> None:
     bash = Fake("Bash")
     provider = ScriptedProvider([reply("", ("Bash", {"command": "npm start --x"})),
@@ -128,8 +128,9 @@ async def test_always_remembers_the_program_and_writes_the_trusted_project_file(
     client, tid, rt = await start(store, provider, Permissions(trusted_workspace=True), [bash],
                                   config={"cwd": str(tmp_path)})
     [item] = pending(await client.events(tid), tid)
-    assert item.detail["always"] == {"kind": "shell",
-                                     "spec": {"program": "npm", "subcommand": "start"}}
+    assert item.detail["always"] == {"kind": "shell", "spec": {"rule": "npm start *"}}
+    assert item.detail["always_label"] == "Bash(npm start *)"
+    assert always_option(item.detail) == "Always allow Bash(npm start *)"
     await client.answer(tid, item.request_id, "allow", always=True)
     await rt.run_until_idle()
     assert [r["command"] for r in bash.runs] == ["npm start --x", "npm start --y"]
@@ -137,7 +138,33 @@ async def test_always_remembers_the_program_and_writes_the_trusted_project_file(
              if isinstance(e, ExtensionRecorded) and e.kind == "rule"]
     assert len(rules) == 1
     saved = json.loads((tmp_path / ".noeta" / "shell-allowlist.json").read_text())
-    assert saved == [{"program": "npm", "subcommand": "start"}]
+    assert saved == [{"rule": "npm start *"}]
+
+
+async def test_always_on_a_destructive_command_remembers_only_that_command(
+        store: SqliteStore, tmp_path: Path) -> None:
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": "rm -rf build"})),
+                                 reply("", ("Bash", {"command": "rm -rf /"})),
+                                 reply("done")])
+    client, tid, rt = await start(store, provider, Permissions(trusted_workspace=True), [bash],
+                                  config={"cwd": str(tmp_path)})
+    [item] = pending(await client.events(tid), tid)
+    assert item.detail["always_label"] == "Bash(rm -rf build)"
+    await client.answer(tid, item.request_id, "allow", always=True)
+    await rt.run_until_idle()
+    assert [r["command"] for r in bash.runs] == ["rm -rf build"]
+    [again] = pending(await client.events(tid), tid)
+    assert again.input == {"command": "rm -rf /"}
+    saved = json.loads((tmp_path / ".noeta" / "shell-allowlist.json").read_text())
+    assert saved == [{"rule": "rm -rf build"}]
+
+
+def test_always_option_names_the_rule_or_offers_none() -> None:
+    assert always_option({"always": None}) is None
+    assert always_option({}) == "Always allow"
+    assert always_option({"always": {"kind": "tool", "tool": "Write"},
+                          "always_label": "Write"}) == "Always allow Write"
 
 
 async def test_project_file_needs_a_trusted_workspace(store: SqliteStore,

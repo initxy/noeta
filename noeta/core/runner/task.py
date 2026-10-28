@@ -132,7 +132,9 @@ class TaskRun:
         and record them so every later pickup sends the same bytes."""
         env = self.env()
         cwd = str(self.state.config.get("cwd") or getattr(env, "cwd", "") or "")
-        found = await load_overrides(self.rt.prompt_dirs, env, cwd)
+        trusted = self.rt.workspace_trusted
+        found = await load_overrides(self.rt.prompt_dirs, env, cwd,
+                                     workspace=trusted is None or (bool(cwd) and trusted(cwd)))
         view = self.view()
         view.record(CORE, "prompts", found)
         await self.flush(view)
@@ -227,6 +229,14 @@ class TaskRun:
                     log.exception("extension %s on_event failed", ext.name)
         await self.flush(view)
 
+    @property
+    def one_shot(self) -> bool:
+        """The task ends when its turn ends: a one-shot agent, or any
+        sub-agent (its parent waits for it to end, whatever its agent file
+        says)."""
+        assert self.agent is not None
+        return self.agent.one_shot or self.state.parent_id is not None
+
     def view(self) -> TaskView:
         model = str(self.state.config.get("model") or (self.agent.model if self.agent else ""))
         return TaskView(state=self.state, complete=self.complete, env=self.env(),
@@ -286,7 +296,7 @@ class TaskRun:
 
         await self._take_input()
         assert self.agent is not None
-        action = decide.next_action(self.state, one_shot=self.agent.one_shot,
+        action = decide.next_action(self.state, one_shot=self.one_shot,
                                     max_steps=self.agent.max_steps_per_turn)
         if isinstance(action, decide.Idle):
             return False
@@ -405,7 +415,7 @@ class TaskRun:
         interactive one keeps its conversation and waits for the next
         message (0.6's ``turn_failed``)."""
         assert self.agent is not None
-        if self.agent.one_shot:
+        if self.one_shot:
             error = f"{reason}: {detail}" if detail else reason
             await self.end("failed", self.state.last_answer, error)
             return False

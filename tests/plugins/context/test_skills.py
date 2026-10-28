@@ -66,7 +66,7 @@ async def test_no_skills_means_no_tool_and_no_listing(h: Harness) -> None:
 async def test_activation_records_the_body_after_the_result(h: Harness) -> None:
     d = write_skill(skills_dir(h), "deploy", "Ship $ARGUMENTS now.",
                     body="Step one.\n\nScope: $ARGUMENTS\nStep two.\n")
-    h.provider.add(reply("", ("skill", {"skill": "deploy"})), reply("done"))
+    h.provider.add(reply("", ("skill", {"skill": "deploy", "args": "prod eu"})), reply("done"))
     tid = await h.start(agent())
     [result] = await h.results(tid)
     assert result.result.text == ("Skill 'deploy' loaded; its instructions will appear in "
@@ -74,9 +74,21 @@ async def test_activation_records_the_body_after_the_result(h: Harness) -> None:
     msgs = h.provider.requests[1].messages
     body = msgs[-1]
     assert body.text == (f"Activated skill: deploy\n\nShip now.\n\nBase directory for this "
-                         f"skill: {d}\n\nStep one.\nStep two.\n")
+                         f"skill: {d}\n\nStep one.\n\nScope: prod eu\nStep two.\n")
     [act] = await h.records(tid, "skills", "activated")
-    assert act.data["source"] == "model"
+    assert act.data["source"] == "model" and act.data["args"] == "prod eu"
+
+
+async def test_a_slash_command_fills_the_skill_from_what_follows_it(h: Harness) -> None:
+    write_skill(skills_dir(h), "notes", "Release notes.", body="Notes for $0 since $1.\n")
+    write_skill(skills_dir(h), "plain", "No placeholder.", body="Do it.\n")
+    a = agent()
+    h.provider.add(reply("ok"), reply("ok"))
+    tid = await h.start(a, "/notes v0.2 'last week'")
+    assert h.provider.requests[0].messages[-1].text.endswith("Notes for v0.2 since last week.\n")
+    await h.say(a, tid, "/plain fast please")
+    assert h.provider.requests[1].messages[-1].text.endswith(
+        "Do it.\n\nARGUMENTS: fast please")
 
 
 async def test_unknown_and_disabled_skills_are_refused(h: Harness) -> None:
