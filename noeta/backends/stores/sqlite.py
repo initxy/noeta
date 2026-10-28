@@ -27,6 +27,7 @@ from noeta.core.store import (
     Post,
     Status,
     TaskRow,
+    next_row_state,
 )
 
 T = TypeVar("T")
@@ -322,11 +323,8 @@ class SqliteStore:
                     "INSERT INTO events (task_id, seq, type, at, data) VALUES (?, ?, ?, ?, ?)",
                     (claim.task_id, seq, event_type(event), now, _encode(event)),
                 )
-            read_seq = patch.inbox_read_seq if patch.inbox_read_seq is not None else read_seq
-            new_status: Status = patch.status
-            ready_at = patch.ready_at
-            if new_status == "waiting" and inbox_seq > read_seq:
-                new_status, ready_at = "ready", None
+            new_status, waiting_on, ready_at, read_seq = next_row_state(patch, inbox_seq,
+                                                                        read_seq)
             releasing = new_status != "running"
             conn.execute(
                 "UPDATE tasks SET last_seq = ?, status = ?, waiting_on = ?, ready_at = ?,"
@@ -336,7 +334,7 @@ class SqliteStore:
                 (
                     seq,
                     new_status,
-                    patch.waiting_on if new_status == "waiting" else None,
+                    waiting_on,
                     ready_at,
                     read_seq,
                     patch.end_status,

@@ -20,7 +20,7 @@ from typing import Literal, Protocol
 
 from msgspec.structs import replace
 
-from noeta.core.events import Event, InboxItem, InboxKind, Recorded, TaskCreated
+from noeta.core.events import Event, InboxItem, InboxKind, Recorded, TaskCreated, TaskEnded, Waiting
 from noeta.core.types import Struct
 
 Status = Literal["ready", "running", "waiting", "ended"]
@@ -63,6 +63,33 @@ class Patch(Struct):
     ready_at: float | None = None
     inbox_read_seq: int | None = None
     end_status: str | None = None
+
+
+def patch_for(events: Sequence[Event], inbox_read: int) -> Patch:
+    """The row change ``events`` imply: a ``Waiting`` makes the task wait on
+    what it names until its ``until``, a ``TaskEnded`` ends it, anything else
+    keeps it running. A releasing change records ``inbox_read`` as read."""
+    for event in reversed(events):
+        if isinstance(event, TaskEnded):
+            return Patch(status="ended", end_status=event.status, inbox_read_seq=inbox_read)
+        if isinstance(event, Waiting):
+            return Patch(status="waiting", waiting_on=event.on, ready_at=event.until,
+                         inbox_read_seq=inbox_read)
+    return Patch()
+
+
+def next_row_state(patch: Patch, inbox_seq: int,
+                   read_seq: int) -> tuple[Status, str | None, float | None, int]:
+    """The row's ``(status, waiting_on, ready_at, inbox_read_seq)`` after an
+    append with ``patch``, given its current ``inbox_seq`` and
+    ``inbox_read_seq``: a task going to wait while unread inbox items exist
+    is made ready instead, so no message is left unseen."""
+    read = patch.inbox_read_seq if patch.inbox_read_seq is not None else read_seq
+    status: Status = patch.status
+    ready_at = patch.ready_at
+    if status == "waiting" and inbox_seq > read:
+        status, ready_at = "ready", None
+    return status, patch.waiting_on if status == "waiting" else None, ready_at, read
 
 
 class Post(Struct):

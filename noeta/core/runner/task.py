@@ -43,7 +43,7 @@ from noeta.core.loop.state import CORE, TaskState, apply, continued, fold
 from noeta.core.prompts import load_overrides
 from noeta.core.runner import texts
 from noeta.core.runner.runtime import Runtime
-from noeta.core.store import Claim, NewTask, Patch, Post, pin_history
+from noeta.core.store import Claim, NewTask, Post, patch_for, pin_history
 from noeta.core.tool import Tool
 from noeta.core.types import Text, ToolResult, user
 
@@ -226,7 +226,6 @@ class TaskRun:
         self,
         events: Sequence[Event],
         *,
-        patch: Patch = Patch(),
         posts: Sequence[Post] = (),
         creates: Sequence[Any] = (),
     ) -> None:
@@ -236,6 +235,7 @@ class TaskRun:
                    for c in creates]
         async with self._write_lock:
             base = self.state.last_seq
+            patch = patch_for(events, self.state.inbox_read)
             write = asyncio.ensure_future(self.store.append(
                 self.claim, events, expected_seq=base, patch=patch, posts=posts, creates=creates))
             cancelled = False
@@ -383,9 +383,7 @@ class TaskRun:
             if self.state.turn_error:
                 detail = {"turn_failed": self.state.turn_error}
             due = self.next_timer()
-            await self.append([Waiting(on="input", detail=detail, until=due)],
-                              patch=Patch(status="waiting", waiting_on="input", ready_at=due,
-                                          inbox_read_seq=self.state.inbox_read))
+            await self.append([Waiting(on="input", detail=detail, until=due)])
             return False
         if isinstance(action, decide.Interrupted):
             await self.append([self.error_result(i, texts.INTERRUPTED_CALL_ERROR)
@@ -406,9 +404,7 @@ class TaskRun:
                                  "on": (c.parked or {}).get("on")}
                       for c in self.state.open_calls if c.parked}
             await self.append([Waiting(on=action.on, ids=action.ids,  # type: ignore[arg-type]
-                                       detail=parked)],
-                              patch=Patch(status="waiting", waiting_on=action.on,
-                                          inbox_read_seq=self.state.inbox_read))
+                                       detail=parked)])
             return False
         if isinstance(action, decide.ResumeCalls):
             from noeta.core.runner.calls import resume_calls
@@ -512,8 +508,6 @@ class TaskRun:
                 dedupe_key=f"child:{self.task_id}",
             ))
         await self.append([TaskEnded(status=status, answer=answer, error=error)],  # type: ignore[arg-type]
-                          patch=Patch(status="ended", end_status=status,
-                                      inbox_read_seq=self.state.inbox_read),
                           posts=posts)
 
     async def fail_turn(self, reason: str, detail: str = "") -> bool:

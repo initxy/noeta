@@ -73,6 +73,7 @@ from noeta.core.store import (
     Post,
     Status,
     TaskRow,
+    next_row_state,
 )
 
 T = TypeVar("T")
@@ -497,11 +498,8 @@ class PostgresStore:
                     " FROM unnest(%s::bigint[], %s::text[], %s::bytea[]) AS u(s, t, d)"),
                     (claim.task_id, list(range(int(last_seq) + 1, seq + 1)),
                      [event_type(e) for e in events], [_encode(e) for e in events]))
-            read_seq = patch.inbox_read_seq if patch.inbox_read_seq is not None else read_seq
-            new_status: Status = patch.status
-            ready_at = patch.ready_at
-            if new_status == "waiting" and inbox_seq > read_seq:
-                new_status, ready_at = "ready", None
+            new_status, waiting_on, ready_at, read_seq = next_row_state(patch, inbox_seq,
+                                                                        read_seq)
             releasing = new_status != "running"
             await conn.execute(self._q(
                 "UPDATE {s}.tasks SET last_seq = %s, status = %s, waiting_on = %s,"
@@ -509,7 +507,7 @@ class PostgresStore:
                 f" updated_at = {_NOW}"
                 + (", owner = NULL, lease_until = NULL" if releasing else "")
                 + " WHERE task_id = %s"),
-                (seq, new_status, patch.waiting_on if new_status == "waiting" else None,
+                (seq, new_status, waiting_on,
                  ready_at, read_seq, patch.end_status, claim.task_id))
             changes.append((claim.task_id, "appended"))
             for task in creates:

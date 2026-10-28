@@ -21,7 +21,7 @@ from noeta.core.events import (
 from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView
 from noeta.core.loop.state import CORE
 from noeta.core.runner import texts
-from noeta.core.store import NewTask, Patch, Post
+from noeta.core.store import NewTask, Post
 from noeta.core.tool import Tool, ToolContext, ToolOutput, tool_flag
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
 
@@ -170,8 +170,6 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
         await run.append(
             [Waiting(on="approval", ids=list(asks),
                      detail={k: {"prompt": a.prompt, **a.detail} for k, a in asks.items()})],
-            patch=Patch(status="waiting", waiting_on="approval",
-                        inbox_read_seq=run.state.inbox_read),
         )
         return False
     return True
