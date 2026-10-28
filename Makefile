@@ -7,10 +7,11 @@
 #   make example    the example plugin, installed as its own package, and its tests
 #   make e2e        live tests: real LLM / real container (needs credentials)
 #   make eval       prompt-regression eval vs evals/baseline.json (needs credentials)
+#   make parity     replay Claude Code's recorded scenarios against noeta, report every difference
 #   make build      wheel + sdist into dist/
 
 .DEFAULT_GOAL := help
-.PHONY: help install check test lint example e2e eval eval-baseline build
+.PHONY: help install check test lint example e2e eval eval-baseline parity build
 
 help:
 	@echo "noeta"
@@ -23,6 +24,7 @@ help:
 	@echo "  make e2e        live tests: real LLM / real container (needs credentials)"
 	@echo "  make eval       prompt-regression eval vs evals/baseline.json (needs credentials)"
 	@echo "  make eval-baseline  9-trial run, then rewrite evals/baseline.json"
+	@echo "  make parity     replay Claude Code's recorded scenarios, write parity/report.md"
 	@echo "  make build      wheel + sdist into dist/"
 
 install:
@@ -55,6 +57,11 @@ eval:
 ## rewrite evals/baseline.json from a 9-trial run (a steadier mean than eval's 3)
 eval-baseline:
 	uv run python -m evals --trials 9 --write-baseline
+
+## noeta replayed through Claude Code's recorded scenarios (scripts/parity/README.md),
+## offline; writes parity/report.md and exits 1 while any mismatch is left (never in check)
+parity:
+	uv run python -m scripts.parity.replay
 
 build:
 	uv build

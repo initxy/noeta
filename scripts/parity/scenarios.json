@@ -1,0 +1,56 @@
+{
+  "model": "claude-opus-5-5",
+  "sessions": {
+    "m1": {
+      "about": "auto mode (the default): the main tour, an interrupt, plan mode, /compact",
+      "steps": [
+        {"name": "warmup", "say": "hi"},
+        {"name": "edit", "say": "Read src/calc.py, make div raise ValueError on a zero divisor, add tests/test_calc.py with pytest tests for add and div, and run them."},
+        {"name": "search", "say": "Find every python file in the repo and search them for function definitions; list file:line for each."},
+        {"name": "bg", "say": "Run 'sleep 25; echo bg-done' in the background, and tell me when it has finished."},
+        {"name": "mcp", "say": "Use the echo MCP server: echo the text 'ping', and also read its resource echo://readme."},
+        {"name": "web", "say": "Fetch https://example.com and tell me the page title."},
+        {"name": "agent", "say": "Use a subagent to count the lines in every python file in this repo and report the totals."},
+        {"name": "skill", "say": "/release-notes v0.1"},
+        {"name": "todo", "say": "Plan this as a short task list first, then do it: add a mul function to calc.py with a test, and update CLAUDE.md to mention it."},
+        {"name": "ask", "say": "Ask me which of two docstring styles (Google or NumPy) to use for calc.py before changing anything.", "wait": 60, "answer": "first-option", "then": [["Enter", 30]]},
+        {"name": "interrupt", "say": "Write a 200-line module src/stats.py with many small statistics helpers and docstrings.", "wait": 12, "interrupt": true, "then": [["Escape", 5]]},
+        {"name": "after-interrupt", "say": "Never mind that, just tell me how many functions calc.py has."},
+        {"name": "plan", "say": "/plan add structured logging to calc.py", "wait": 120, "then": [["Escape", 3]]},
+        {"name": "compact", "say": "/compact"},
+        {"name": "after-compact", "say": "What have we done so far in this session? One short paragraph."}
+      ]
+    },
+    "m2": {
+      "about": "default permission mode: approval prompts, each answered with the first choice",
+      "cc_args": ["--permission-mode", "default"],
+      "permission_mode": "default",
+      "steps": [
+        {"name": "approve", "say": "Create notes/todo.md with three bullet points about improving calc.py, then run git status."},
+        {"name": "approve2", "say": "Delete notes/todo.md with rm."}
+      ]
+    },
+    "m3": {
+      "about": "auto-compaction on a small window (100K x 30%)",
+      "env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "100000", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "30"},
+      "noeta_plugins_why": "noeta has no percent override: its window is set so that it triggers near the same ~30K tokens (window - 20K output reserve - 13K margin)",
+      "noeta_plugins": {"compaction": {"auto_compact_window": 63000}},
+      "data": true,
+      "steps": [
+        {"name": "r1", "say": "Read data.txt lines 1-1000 with the Read tool and tell me how many rows contain the word gamma three or more times."},
+        {"name": "r2", "say": "Now read data.txt lines 1000-2000 with the Read tool and do the same count."},
+        {"name": "r3", "say": "Now read data.txt lines 2000-3000 with the Read tool and do the same count."},
+        {"name": "r4", "say": "Now read data.txt lines 3000-4000 with the Read tool and do the same count, then give the grand total."},
+        {"name": "after", "say": "What were the four counts?"}
+      ]
+    },
+    "m4": {
+      "about": "--continue: the m1 session resumed in a new process",
+      "resume": "m1",
+      "cc_args": ["--continue"],
+      "steps": [
+        {"name": "resume", "say": "Continue: remind me what the last thing you did was."}
+      ]
+    }
+  }
+}

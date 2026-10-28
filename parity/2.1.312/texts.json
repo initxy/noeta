@@ -1,0 +1,365 @@
+{
+ "<command-message>": {
+  "shas": {
+   "14cdd181a8": 127
+  },
+  "varies": false
+ },
+ "<command-name>": {
+  "shas": {
+   "2cb99709ec": 135,
+   "7e5161b7d7": 162
+  },
+  "varies": false
+ },
+ "<conversation>": {
+  "shas": {
+   "33dcc8e00f": 1031
+  },
+  "varies": false
+ },
+ "<local-command-caveat>": {
+  "shas": {
+   "19cf21a5f4": 218
+  },
+  "varies": false
+ },
+ "<local-command-stdout>": {
+  "shas": {
+   "6f870d42a3": 93,
+   "a6747d3300": 62,
+   "cfcefd9233": 63
+  },
+  "varies": false
+ },
+ "<session>": {
+  "shas": {
+   "48c9057a60": 155,
+   "4baf907454": 112,
+   "f8f03d640f": 136
+  },
+  "varies": false
+ },
+ "<system-reminder>/<tools-used-before-summary>": {
+  "len": [
+   109,
+   10294
+  ],
+  "varies": true
+ },
+ "<task-notification>": {
+  "shas": {
+   "0236432778": 882,
+   "6ded5ae67a": 398
+  },
+  "varies": false
+ },
+ "<total_tokens>": {
+  "len": [
+   49,
+   49
+  ],
+  "varies": true
+ },
+ "<transcript>": {
+  "shas": {
+   "7b1ff485cb": 13
+  },
+  "varies": false
+ },
+ "activity-summary-instruction": {
+  "shas": {
+   "a606a25f8b": 508
+  },
+  "varies": false
+ },
+ "agent-identity": {
+  "shas": {
+   "0d7062851d": 62
+  },
+  "varies": false
+ },
+ "agent-list": {
+  "shas": {
+   "f0298aae99": 2703
+  },
+  "varies": false
+ },
+ "agent-message": {
+  "shas": {
+   "a02c82d199": 2116
+  },
+  "varies": false
+ },
+ "auto-mode": {
+  "shas": {
+   "3ae37a6aa6": 479
+  },
+  "varies": false
+ },
+ "background-event": {
+  "shas": {
+   "a1aa171c75": 492
+  },
+  "varies": false
+ },
+ "billing-header": {
+  "len": [
+   70,
+   91
+  ],
+  "varies": true
+ },
+ "classifier-instruction": {
+  "shas": {
+   "6ac77994fd": 404
+  },
+  "varies": false
+ },
+ "classifier-instructions-intro": {
+  "shas": {
+   "8f206f9261": 898,
+   "9854db6935": 984
+  },
+  "varies": false
+ },
+ "classifier-prompt": {
+  "shas": {
+   "5b0f7e3f3f": 140239,
+   "712af5431a": 140834
+  },
+  "varies": false
+ },
+ "classifier-session": {
+  "shas": {
+   "32aa7c1c4b": 248
+  },
+  "varies": false
+ },
+ "compact-instruction": {
+  "shas": {
+   "63e2bfb4de": 6361
+  },
+  "varies": false
+ },
+ "compact-kept-note": {
+  "shas": {
+   "4963486f16": 221
+  },
+  "varies": false
+ },
+ "compact-summary": {
+  "shas": {
+   "3a400c3c72": 151
+  },
+  "varies": false
+ },
+ "compact-transcript-note": {
+  "shas": {
+   "9bedb949a8": 543,
+   "aefed60742": 543
+  },
+  "varies": false
+ },
+ "date": {
+  "shas": {
+   "74d25ffcc4": 27
+  },
+  "varies": false
+ },
+ "deferred-tools": {
+  "shas": {
+   "94034d3ebb": 339,
+   "a7fbc1639d": 486,
+   "d06421e9fd": 485
+  },
+  "varies": false
+ },
+ "environment": {
+  "shas": {
+   "2aef3188e7": 1140,
+   "db14a8dd10": 693
+  },
+  "varies": false
+ },
+ "explore-prompt": {
+  "shas": {
+   "9489434d8c": 3212
+  },
+  "varies": false
+ },
+ "identity": {
+  "shas": {
+   "2719b7a469": 57
+  },
+  "varies": false
+ },
+ "interrupted": {
+  "shas": {
+   "ba5d0b52e3": 30
+  },
+  "varies": false
+ },
+ "main-prompt": {
+  "shas": {
+   "0a2cb3e845": 4725,
+   "d005524d03": 4725,
+   "d019d465fa": 4725
+  },
+  "varies": false
+ },
+ "mid-turn-message": {
+  "shas": {
+   "d3a645614e": 308
+  },
+  "varies": false
+ },
+ "model-identity": {
+  "shas": {
+   "12e0371339": 124
+  },
+  "varies": false
+ },
+ "p:021fb596": {
+  "len": [
+   32,
+   619
+  ],
+  "varies": true
+ },
+ "p:634768da": {
+  "shas": {
+   "246a553bd3": 79043,
+   "d22a04099c": 79081
+  },
+  "varies": false
+ },
+ "p:dabd3aff": {
+  "shas": {
+   "422afa19be": 14
+  },
+  "varies": false
+ },
+ "plan-mode": {
+  "shas": {
+   "52ecd8ee7a": 4908
+  },
+  "varies": false
+ },
+ "plan-mode-exit": {
+  "shas": {
+   "9c2cbc6763": 222
+  },
+  "varies": false
+ },
+ "plan-name-prompt": {
+  "shas": {
+   "1cd16696e5": 380
+  },
+  "varies": false
+ },
+ "post-compact-file": {
+  "shas": {
+   "322c1d39b0": 674,
+   "72412ac46a": 431,
+   "7f87720391": 883
+  },
+  "varies": false
+ },
+ "post-compact-skills": {
+  "shas": {
+   "69120784a1": 754
+  },
+  "varies": false
+ },
+ "reminder/attribution": {
+  "shas": {
+   "c7c4204072": 579,
+   "e291f933f8": 580
+  },
+  "varies": false
+ },
+ "reminder/background-event": {
+  "shas": {
+   "f93a5554e9": 510
+  },
+  "varies": false
+ },
+ "reminder/context": {
+  "shas": {
+   "0d09c10688": 592,
+   "29c4aa9e01": 653,
+   "455d4d6459": 654,
+   "92c9db42cf": 641
+  },
+  "varies": false
+ },
+ "reminder/handback-how": {
+  "shas": {
+   "924634f52a": 419
+  },
+  "varies": false
+ },
+ "reminder/instructions": {
+  "shas": {
+   "0fb1169754": 588,
+   "a984c93168": 504
+  },
+  "varies": false
+ },
+ "reminder/instructions-changed": {
+  "shas": {
+   "f60ca57c7c": 577
+  },
+  "varies": false
+ },
+ "silence-nudge": {
+  "shas": {
+   "67664dc704": 139
+  },
+  "varies": false
+ },
+ "skill-body": {
+  "shas": {
+   "13a48efe74": 203,
+   "2c26bcc189": 204
+  },
+  "varies": false
+ },
+ "skill-list": {
+  "shas": {
+   "48dfd61acf": 6277
+  },
+  "varies": false
+ },
+ "task": {
+  "shas": {
+   "c7aae694f1": 359
+  },
+  "varies": false
+ },
+ "title-instruction": {
+  "shas": {
+   "30704b4d05": 178
+  },
+  "varies": false
+ },
+ "title-prompt": {
+  "shas": {
+   "765b5ba2fa": 3059
+  },
+  "varies": false
+ },
+ "tool-loaded": {
+  "shas": {
+   "b66c12e172": 12
+  },
+  "varies": false
+ },
+ "webfetch-page": {
+  "shas": {
+   "27772964f2": 779
+  },
+  "varies": false
+ }
+}

@@ -1,0 +1,157 @@
+{
+ "session": "m4",
+ "about": "--continue: the m1 session resumed in a new process",
+ "requests": [
+  {
+   "n": 1,
+   "kind": "main",
+   "step": "resume",
+   "status": 200,
+   "call": 1,
+   "params": {
+    "keys": [
+     "context_management",
+     "max_tokens",
+     "messages",
+     "metadata",
+     "output_config",
+     "safeguards",
+     "stream",
+     "system",
+     "thinking",
+     "tools"
+    ],
+    "max_tokens": 128000,
+    "thinking": {
+     "type": "adaptive",
+     "display": "updates"
+    },
+    "context_management": {
+     "edits": [
+      {
+       "type": "clear_thinking_20251015",
+       "keep": "all"
+      }
+     ]
+    },
+    "output_config": {
+     "effort": "medium"
+    },
+    "stream": true,
+    "metadata": {
+     "user_id": {
+      "json": {
+       "account_uuid": "str",
+       "device_id": "str",
+       "session_id": "str"
+      }
+     }
+    },
+    "safeguards": [
+     {
+      "type": "dangerous_tool_use",
+      "classifier_context": [
+       "artifact_consent_holdback",
+       "auto_mode",
+       "case_insensitive_paths",
+       "classify_all_shell",
+       "git_state",
+       "home_dir",
+       "is_remote_mode",
+       "live_cwd",
+       "permission_mode",
+       "platform",
+       "restricted",
+       "rule_roots",
+       "rules",
+       "trusted_directories",
+       "user_identity",
+       "v"
+      ]
+     }
+    ]
+   },
+   "headers": {
+    "betas": [
+     "advanced-tool-use-2025-11-20",
+     "afk-mode-2026-01-31",
+     "claude-code-20250219",
+     "context-management-2025-06-27",
+     "dangerous-tool-use-2026-09-03",
+     "effort-2025-11-24",
+     "interleaved-thinking-2025-05-14",
+     "mid-conversation-tool-changes-2026-07-01",
+     "per-turn-control-2026-07-01",
+     "thinking-display-updates-2026-08-18",
+     "thinking-token-count-2026-05-13"
+    ],
+    "anthropic-version": "2023-06-01",
+    "names": [
+     "accept",
+     "anthropic-beta",
+     "anthropic-dangerous-direct-browser-access",
+     "anthropic-version",
+     "authorization",
+     "content-type",
+     "user-agent",
+     "x-app",
+     "x-claude-code-session-id"
+    ]
+   },
+   "system": [
+    {
+     "kind": "billing-header",
+     "len": 70,
+     "sha": "56aee28dc2"
+    },
+    {
+     "kind": "identity",
+     "len": 57,
+     "sha": "2719b7a469",
+     "cache": "*"
+    },
+    {
+     "kind": "main-prompt",
+     "len": 5918,
+     "sha": "0e130fe48f",
+     "cache": "*"
+    }
+   ],
+   "toolset": "f081763dae10",
+   "messages": [
+    "user(str): text:compact-summary+<system-reminder>/<tools-used-before-summary>+compact-transcript-note+compact-kept-note",
+    "system: ",
+    "assistant: tool_use:Bash",
+    "user: tool_result:error | text:reminder/attribution | text:interrupted | text:<local-command-caveat> | text:<command-name> | text:<local-command-stdout> | text:prompt",
+    "system(str): text:plan-mode+<total_tokens>+post-compact-file+post-compact-file+post-compact-file+plan-mode+post-compact-skills+skill-body+deferred-tools+agent-list+skill-list+environment+model-identity+<total_tokens>+date",
+    "assistant: text | tool_use:Write | tool_use:ToolSearch",
+    "user: tool_result | tool_result[tool_reference] | text:tool-loaded",
+    "system(str): text:<total_tokens>",
+    "assistant: tool_use:Edit",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: tool_use:ExitPlanMode",
+    "user: tool_result",
+    "system(str): text:plan-mode-exit+auto-mode+<total_tokens>",
+    "assistant: tool_use:Write",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: tool_use:Write",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: tool_use:Edit",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: tool_use:Bash",
+    "user: tool_result",
+    "system(str): text:<total_tokens>",
+    "assistant: tool_use:Bash",
+    "user: tool_result",
+    "system(str): text:silence-nudge+<total_tokens>",
+    "assistant: text",
+    "user: text:reminder/instructions-changed | text:prompt | text:prompt",
+    "system: text:<total_tokens>+<total_tokens>*"
+   ]
+  }
+ ]
+}

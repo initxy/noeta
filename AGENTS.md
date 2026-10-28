@@ -45,6 +45,7 @@
 - build: `make build` (wheel and sdist into `dist/`)
 - e2e: `make e2e` — `-m live` tests against a real LLM / sandbox container; needs credentials, never part of `check`
 - eval: `make eval` — prompt-regression scenarios against a real model, compared to `evals/baseline.json`; `make eval-baseline` re-records it; needs credentials, never part of `check`
+- parity: `make parity` — noeta replayed offline through Claude Code's recorded scenarios, every request difference in `parity/report.md` (`scripts/parity/README.md`); never part of `check`
 - check: `make check` — ruff, mypy --strict, `scripts/lint-naming.py`, `scripts/lint-layout.py` (placement), `lint-imports` (layering), pytest with coverage ≥ 85, `scripts/check-docs.sh`
 - release: tag push per `docs/releasing.md` — approval gate
 

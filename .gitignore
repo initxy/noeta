@@ -56,3 +56,7 @@ evals/results/
 bench/jobs/
 bench/datasets/
 bench/logs/
+
+# make parity output (the replay capture and the report it writes)
+parity/out/
+parity/report.md
