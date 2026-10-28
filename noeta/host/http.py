@@ -2,7 +2,8 @@
 service can drive tasks on another machine. Events stream as server-sent
 events; when this process also runs workers, live model output streams too.
 
-    POST /tasks                       {agent, input?, config?, queue?, dedupe_key?} -> {task_id}
+    POST /tasks                       {agent, input?, config?, queue?, dedupe_key?,
+                                      history_from?, history_through?} -> {task_id}
     GET  /tasks?parent_id=&status=&limit=
     GET  /tasks/{id}
     GET  /tasks/{id}/events?after=N
@@ -89,7 +90,8 @@ def create_app(client: Client, *, token: str | None = None,
         body = await request.json()
         task_id = await client.create(
             body["agent"], _input(body.get("input")), config=body.get("config"),
-            queue=body.get("queue", "default"), dedupe_key=body.get("dedupe_key"))
+            queue=body.get("queue", "default"), dedupe_key=body.get("dedupe_key"),
+            history_from=body.get("history_from"), history_through=body.get("history_through"))
         return _json({"task_id": task_id}, 201)
 
     async def list_tasks(request: Request) -> Response:

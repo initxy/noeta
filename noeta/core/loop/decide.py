@@ -32,6 +32,13 @@ class FinalReport(Struct, tag="final_report"):
     report of where the work stands."""
 
 
+class MaxTurns(Struct, tag="max_turns"):
+    """The turn made ``config["max_turns"]`` model calls and would make
+    another: it fails with ``max_turns``."""
+
+    limit: int
+
+
 class StopTurn(Struct, tag="stop_turn"):
     """Someone stopped the turn: open calls get a "stopped" result and the
     task waits for the next message."""
@@ -67,7 +74,7 @@ class Idle(Struct, tag="idle"):
 
 
 Action = Union[
-    CallModel, Continue, RunCalls, ResumeCalls, Interrupted, FinalReport, StopTurn,
+    CallModel, Continue, RunCalls, ResumeCalls, Interrupted, FinalReport, MaxTurns, StopTurn,
     WaitParked, WaitInput, End, Idle,
 ]
 
@@ -101,6 +108,10 @@ def next_action(state: TaskState, *, one_shot: bool, max_steps: int) -> Action:
         last = state.messages[-1] if state.messages else None
         if state.last_stop == "max_tokens" and last is not None and last.role == "assistant":
             return Continue()
+        limit = state.config.get("max_turns")
+        if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 \
+                and state.steps_in_turn >= limit:
+            return MaxTurns(limit=limit)
         return CallModel()
     if one_shot and state.messages:
         live = state.live_children()

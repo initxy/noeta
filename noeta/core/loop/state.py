@@ -44,6 +44,13 @@ Reducer = Callable[[Any, str, Any], Any]
 #: The extension name the core itself records under (continuation notes).
 CORE = "core"
 
+#: The signal that changes a running task's config
+#: (``client.signal(task_id, CONFIG_SIGNAL, {"model": ...})``): only the
+#: :data:`CHANGEABLE_CONFIG` keys, from the next model call on; a ``None``
+#: value removes the key.
+CONFIG_SIGNAL = "config"
+CHANGEABLE_CONFIG = ("model", "effort", "max_turns")
+
 
 @dataclass
 class Call:
@@ -356,11 +363,26 @@ def _take(state: TaskState, ev: InputTaken, seq: int) -> None:
             state.children[body.child_id] = body
         else:
             state.signals.append(body)
+            if isinstance(body, External) and body.name == CONFIG_SIGNAL:
+                _configure(state, body.data)
             timer = state.timers.pop(body.name, None) if isinstance(body, TimerFired) else None
             if timer and timer["text"]:
                 _say(state, user(timer["text"]), seq)
     if said_now and state.stop_turn_requested is not None:
         state.reopen_after_stop = True
+
+
+def _configure(state: TaskState, data: Any) -> None:
+    if not isinstance(data, dict):
+        return
+    config = dict(state.config)
+    for key in CHANGEABLE_CONFIG:
+        if key in data:
+            if data[key] is None:
+                config.pop(key, None)
+            else:
+                config[key] = data[key]
+    state.config = config
 
 
 def _say(state: TaskState, message: Message, seq: int, *, now: bool = False) -> bool:

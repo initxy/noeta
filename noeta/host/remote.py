@@ -44,9 +44,11 @@ class RemoteClient:
 
     async def create(self, agent: str, input: Input | None = None, *,
                      task_id: str | None = None, config: dict[str, Any] | None = None,
-                     queue: str = "default", dedupe_key: str | None = None) -> str:
+                     queue: str = "default", dedupe_key: str | None = None,
+                     history_from: str | None = None, history_through: int | None = None) -> str:
         body = {"agent": agent, "input": _body(input), "config": config or {}, "queue": queue,
-                "dedupe_key": dedupe_key}
+                "dedupe_key": dedupe_key, "history_from": history_from,
+                "history_through": history_through}
         return str((await self._call("POST", "/tasks", json=body))["task_id"])
 
     async def send(self, task_id: str, input: Input, *,

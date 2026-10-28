@@ -55,6 +55,10 @@ LLM_ERROR = "llm_error"
 LLM_EMPTY_RESPONSE = "llm_empty_response"
 LLM_TRUNCATED = "llm_truncated"
 CONTEXT_OVERFLOW = "context_overflow"
+#: The turn reached ``config["max_turns"]`` model calls (Claude Code's
+#: ``--max-turns``); the detail says how many.
+MAX_TURNS = "max_turns"
+MAX_TURNS_DETAIL = "Reached maximum number of turns ({n})"
 #: A bug in the runner, an extension hook or a provider adapter.
 INTERNAL_ERROR = "internal_error"
 #: An unattended task (``config["unattended"]``, e.g. a background sub-agent)

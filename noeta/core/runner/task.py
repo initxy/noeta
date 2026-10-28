@@ -354,6 +354,9 @@ class TaskRun:
             await self.append([self.error_result(i, texts.INTERRUPTED_CALL_ERROR)
                                for i in action.call_ids])
             return True
+        if isinstance(action, decide.MaxTurns):
+            return await self.fail_turn(texts.MAX_TURNS,
+                                        texts.MAX_TURNS_DETAIL.format(n=action.limit))
         if isinstance(action, decide.StopTurn):
             await self._stop_turn(action.call_ids)
             return True
