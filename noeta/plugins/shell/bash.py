@@ -20,6 +20,8 @@ background jobs; without them this tool refuses them.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import posixpath
 import re
 import shlex
@@ -29,7 +31,9 @@ from typing import Any
 
 from noeta.core.execenv import RunResult
 from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.types import Image, Text
 from noeta.plugins.shell.hardening import DEFAULT_SHELL_RULES, HardeningRule, hardened_argv
+from noeta.toolkit.images import ImageTooLarge, fit_image
 from noeta.toolkit.sandbox import (
     CommandSandbox,
     PreparedCommand,
@@ -181,6 +185,34 @@ def exit_fails(command: str, exit_code: int) -> bool:
             i += 2 if argv[i] in ("-C", "-c") else 1
         return i >= len(argv) or argv[i] not in _GIT_EXIT_ONE_ANSWERS
     return name not in _EXIT_ONE_ANSWERS
+
+
+_IMAGE_URI = re.compile(r"data:image/[a-z0-9.+_-]+;base64,(.+)", re.IGNORECASE | re.DOTALL)
+_IMAGE_MAGIC = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"),
+                (b"GIF87a", "image/gif"), (b"GIF89a", "image/gif"))
+
+
+def output_image(body: str) -> Image | None:
+    """An image a command printed as one ``data:image/...;base64,`` URI
+    (Claude Code shows such output as the picture), typed by its bytes and
+    fitted to the size limits; ``None`` for anything else."""
+    match = _IMAGE_URI.fullmatch(body.strip())
+    if match is None:
+        return None
+    try:
+        raw = base64.b64decode("".join(match.group(1).split()), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    media = next((m for magic, m in _IMAGE_MAGIC if raw.startswith(magic)), None)
+    if media is None and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        media = "image/webp"
+    if media is None:
+        return None
+    try:
+        fitted = fit_image(raw, media)
+    except ImageTooLarge:
+        return None
+    return Image(media_type=fitted.media_type, data=fitted.data)
 
 
 def _blocked_sleep(described: str) -> str:
@@ -508,7 +540,10 @@ class BashTool:
             meta["timed_out"] = True
         ran_ok = not result.timed_out and result.exit_code == 0
         failed = result.timed_out or exit_fails(command, result.exit_code)
-        if not failed and not body:
+        image = None if failed or notice else output_image(body)
+        if image is not None:
+            body = ""
+        if not failed and not body and image is None:
             body = NO_OUTPUT
         # Only the root task's shell keeps a directory, and only one a
         # command ended in successfully.
@@ -525,7 +560,10 @@ class BashTool:
             meta["cwd"] = final
         if refused:
             block = violations_block(refused)
-            body = block if body == NO_OUTPUT else f"{body}\n{block}"
+            body = block if body in (NO_OUTPUT, "") else f"{body}\n{block}"
+        if image is not None:
+            return ToolOutput(content=[image, *([Text(text=body)] if body else [])],
+                              meta=meta, block_list=True)
         body = await limit_output(body, SHELL_OUTPUT_LIMIT, ctx)
         if result.timed_out:
             return error_output(f"Command timed out after {timeout_s}s", body, **meta)
