@@ -28,6 +28,7 @@ from noeta.core.extension import Extension, TaskView
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, user
 from noeta.plugins.workflow.engine import Engine, EngineMissing, Replay
+from noeta.toolkit.context import noeta_home
 from noeta.toolkit.notices import NOTICE_GUARD, escape
 from noeta.toolkit.tools import SCHEMA_DIALECT, load_description
 
@@ -41,6 +42,8 @@ MAX_SCRIPT_CHARS = 524_288
 MAX_AGENTS = 1000
 #: The agent type agent() starts when the script names none.
 DEFAULT_AGENT = "general-purpose"
+#: Saved workflows in the project; the user's are under ``<home>/workflows``.
+PROJECT_WORKFLOWS = ".noeta/workflows"
 #: Parent config a workflow agent copies, as a sub-agent does.
 INHERIT = ("cwd", "model", "effort", "permission_mode")
 
@@ -90,15 +93,17 @@ def _validate(value: Any, schema: Mapping[str, Any]) -> bool:
 class Orchestration(Extension):
     """Offers ``Workflow``. Constructor: ``engine`` (tests), ``default_agent``
     (the type agent() runs; default ``general-purpose``, else the task's
-    own agent), ``max_running`` per run."""
+    own agent), ``max_running`` per run, ``home`` (noeta's config directory,
+    holding the user's saved workflows; default ``~/.noeta``)."""
 
     name = NAME
 
     def __init__(self, *, engine: Engine | None = None, default_agent: str = DEFAULT_AGENT,
-                 max_running: int | None = None) -> None:
+                 max_running: int | None = None, home: str | None = None) -> None:
         self.engine = engine or Engine()
         self.default_agent = default_agent
         self.max_running = max_running or default_max_running()
+        self.home = Path(home) if home else None
 
     # ------------------------------------------------------------ state
 
@@ -308,8 +313,8 @@ class WorkflowTool:
                 "description, phases }` (a pure literal, nothing computed), then the body "
                 "using agent() / parallel() / pipeline() / phase().")},
             "name": {"type": "string", "description": (
-                "The name of a saved workflow (in .claude/workflows/ or .noeta/workflows/ as "
-                "<name>.js), which supplies the script.")},
+                "The name of a saved workflow (in the project's .noeta/workflows/ or "
+                "~/.noeta/workflows/ as <name>.js), which supplies the script.")},
             "description": {"type": "string", "description": (
                 "Ignored: the description lives in the script's `meta`.")},
             "title": {"type": "string", "description": (
@@ -348,11 +353,16 @@ class WorkflowTool:
             if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
                 return text_output(f"{TOOL}: {name!r} is not a workflow name.", is_error=True)
             cwd = str(self.view.state.config.get("cwd") or ctx.env.cwd)
-            for base in (".claude/workflows", ".noeta/workflows"):
-                try:
-                    return (await ctx.env.read_bytes(f"{cwd}/{base}/{name}.js")).decode("utf-8")
-                except (OSError, UnicodeDecodeError):
-                    continue
+            try:
+                return (await ctx.env.read_bytes(f"{cwd}/{PROJECT_WORKFLOWS}/{name}.js")
+                        ).decode("utf-8")
+            except (OSError, UnicodeDecodeError):
+                pass
+            try:
+                return (self.ext.home or noeta_home()).joinpath(
+                    "workflows", f"{name}.js").read_text("utf-8")
+            except (OSError, UnicodeDecodeError):
+                pass
             return text_output(f"{TOOL}: no saved workflow is named {name!r}.", is_error=True)
         script = input.get("script")
         if isinstance(script, str) and script.strip():

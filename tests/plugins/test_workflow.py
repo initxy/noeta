@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
@@ -76,12 +77,38 @@ class Model:
         return self.main.pop(0)
 
 
-def runtime(store: SqliteStore, model: Model, ext: Orchestration) -> Runtime:
+def runtime(store: SqliteStore, model: Model, ext: Orchestration,
+            env: Any = None) -> Runtime:
     main = Agent(name="main", model="m", extensions=[ext])
     worker = Agent(name="general-purpose", model="m", description="worker")
     return Runtime(store=store, agents={"main": main, "general-purpose": worker},
-                   provider_for=lambda _m: model, env_for=lambda _s: None,  # type: ignore[arg-type,return-value]
+                   provider_for=lambda _m: model, env_for=lambda _s: env,
                    sleep=_no_sleep)
+
+
+async def test_saved_workflows_come_from_noetas_own_places(store: SqliteStore,
+                                                           tmp_path: Path) -> None:
+    work, home = tmp_path / "work", tmp_path / "home"
+    for path, name in [(work / ".noeta/workflows", "project"), (home / "workflows", "user"),
+                       (work / ".claude/workflows", "claude")]:
+        path.mkdir(parents=True)
+        (path / f"{name}.js").write_text(
+            f"export const meta = {{name: '{name}-wf', description: 'd'}}\nreturn 1\n")
+    client = Client(store)
+    texts = {}
+    for name in ["project", "user", "claude"]:
+        model = Model(reply("", ("Workflow", {"name": name})), *[reply("ok")] * 3)
+        rt = runtime(store, model, Orchestration(engine=Engine(), home=str(home)),
+                     env=LocalExecEnv(str(work)))
+        tid = await client.create("main", "go")
+        await rt.run_until_idle()
+        [result] = [e for e in (r.event for r in await client.events(tid))
+                    if isinstance(e, ToolFinished)]
+        texts[name] = (result.result.is_error, result.result.text)
+    assert texts["project"][1].startswith('Workflow "project-wf" started')
+    assert texts["user"][1].startswith('Workflow "user-wf" started')
+    # Claude Code's directory is not one of noeta's places.
+    assert texts["claude"] == (True, "Workflow: no saved workflow is named 'claude'.")
 
 
 async def test_a_workflow_runs_its_agents_and_notifies_its_end(store: SqliteStore) -> None:

@@ -21,7 +21,7 @@ child task).
 | id | name | type | required | enum / default / limits | noeta today |
 |---|---|---|---|---|---|
 | `tool.Workflow.p.script` | `script` | string | no | maxLength 524288; must start with `export const meta = { name, description, phases }` as a pure literal, then a body using `agent()`, `parallel()`, `pipeline()`, `phase()` | covered |
-| `tool.Workflow.p.name` | `name` | string | no | name of a predefined workflow (built-in or `.claude/workflows/`) | covered — `.claude/workflows/<name>.js` or `.noeta/workflows/<name>.js`; no built-in workflows |
+| `tool.Workflow.p.name` | `name` | string | no | name of a predefined workflow (built-in or `.claude/workflows/`) | covered — the project's `.noeta/workflows/<name>.js`, then `~/.noeta/workflows/<name>.js` (noeta reads only its own places, never `.claude/`); no built-in workflows |
 | `tool.Workflow.p.description` | `description` | string | no | ignored; the description lives in `meta` | covered |
 | `tool.Workflow.p.title` | `title` | string | no | ignored; the title lives in `meta` | covered |
 | `tool.Workflow.p.args` | `args` | any (no type) | no | exposed to the script as global `args` verbatim; arrays/objects passed as JSON values, never as a JSON-encoded string | covered |
