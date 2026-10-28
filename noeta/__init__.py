@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from noeta.agents import default_agents
+    from noeta.agents.agent_files import parse_agent_file, read_agent_dir
     from noeta.core.agent import Agent
-    from noeta.core.agent_files import parse_agent_file, read_agent_dir
     from noeta.core.client import Client
     from noeta.core.extension import (
         Command,
@@ -49,9 +49,9 @@ _EXPORTS = {
     "ToolOutput": "noeta.core.tool",
     "ask": "noeta.core.questions",
     "default_agents": "noeta.agents",
-    "parse_agent_file": "noeta.core.agent_files",
+    "parse_agent_file": "noeta.agents.agent_files",
     "provider": "noeta.core.registry",
-    "read_agent_dir": "noeta.core.agent_files",
+    "read_agent_dir": "noeta.agents.agent_files",
     "read_answer": "noeta.core.questions",
     "store": "noeta.core.registry",
     "text_output": "noeta.core.tool",

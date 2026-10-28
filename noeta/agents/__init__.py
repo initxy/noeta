@@ -16,14 +16,14 @@ from collections.abc import Iterable, Mapping, Sequence
 from importlib import resources
 from typing import Any
 
-from noeta.core.agent import Agent
-from noeta.core.agent_files import (
+from noeta.agents.agent_files import (
     AgentFile,
     PluginEntry,
     PluginSetting,
     build_agents,
     parse_agent_file,
 )
+from noeta.core.agent import Agent
 from noeta.core.extension import Extension
 
 __all__ = [
@@ -66,7 +66,7 @@ def default_agents(
 ) -> list[Agent]:
     """``main`` and the three sub-agents (and ``extra_files``' agents).
 
-    ``plugins`` and ``add`` are :func:`~noeta.core.agent_files.build_agents`'s:
+    ``plugins`` and ``add`` are :func:`~noeta.agents.agent_files.build_agents`'s:
     per plugin name its arguments, a ready instance, or ``False``. The
     plugins in :data:`OFF_UNLESS_SET` (memory, MCP) stay off until
     ``plugins`` has a setting for them. ``main_kw`` replaces fields of

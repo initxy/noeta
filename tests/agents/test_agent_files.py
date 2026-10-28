@@ -9,13 +9,13 @@ from typing import Any
 
 import pytest
 
-from noeta.core import registry
-from noeta.core.agent_files import (
+from noeta.agents.agent_files import (
     AgentFileError,
     build_agents,
     parse_agent_file,
     read_agent_dir,
 )
+from noeta.core import registry
 from noeta.core.extension import Extension
 
 FULL = """---

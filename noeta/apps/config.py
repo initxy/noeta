@@ -25,12 +25,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from noeta.core import registry
-from noeta.core.agent_files import (
+from noeta.agents.agent_files import (
     PluginEntry,
     PluginSetting,
     parse_plugin_list,
 )
+from noeta.core import registry
 from noeta.core.provider import Provider
 
 if TYPE_CHECKING:
@@ -226,7 +226,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     their worker never picks up another process's task from the shared
     store; ``worker`` and ``serve`` serve every task."""
     from noeta.agents import default_agents
-    from noeta.core.agent_files import read_agent_dir
+    from noeta.agents.agent_files import read_agent_dir
     from noeta.host.local import LocalApp
 
     notices = load_plugin_files(cwd)

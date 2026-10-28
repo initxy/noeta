@@ -12,7 +12,7 @@ from noeta.apps import config
 from noeta.apps.config import load_settings
 from noeta.host.local import from_settings
 from noeta.core import registry
-from noeta.core.agent_files import build_agents
+from noeta.agents.agent_files import build_agents
 from noeta.core.client import Client
 from noeta.core.commands import expand_command
 from noeta.core.events import ExtensionRecorded, ToolFinished

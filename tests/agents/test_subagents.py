@@ -6,8 +6,8 @@ from __future__ import annotations
 from typing import Any
 
 from noeta.agents import builtin_agent_files, default_agents
+from noeta.agents.agent_files import parse_agent_file
 from noeta.core.agent import Agent
-from noeta.core.agent_files import parse_agent_file
 from noeta.core.extension import TaskView
 from noeta.core.loop.state import TaskState
 from noeta.plugins.mcp import Mcp
