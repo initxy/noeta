@@ -89,14 +89,16 @@ server/remote surfaces, which stay noeta's own.
   (localhost, dotless hosts), reversing the 2026-09-18 "refuse nothing" choice. Every baseline
   tool noeta lacks is built (`Workflow`, `ReportFindings`, `ListAgents`/`SendMessage`,
   `ScheduleWakeup`/`Cron*`, plan mode, `SubagentHandback`).
-- **Workflow scripts run in Node.js (proposal, 2026-10-28).** The model writes JavaScript, so a
-  JavaScript engine runs it. No dependency-free engine embeds in Python (the pure-Python
-  interpreters stop at ES5 without async/await; QuickJS and V8 bindings are native
-  dependencies), so the worker's `node` (18+) runs a harness as a short-lived process: a fresh
-  V8 context with only the workflow API, code generation from strings off, Node's permission
-  model where the version has it. The script is replayed against the agent results recorded in
-  the task's log (finished `agent()` calls answer from the log), which makes a run durable like
-  any other wait. Without `node` the tool refuses and starts nothing. Owner to confirm.
+- **Workflow scripts run in an embedded V8 (mini-racer), no system Node (owner, 2026-10-28;
+  replaces the Node.js proposal).** The model writes JavaScript (Claude Code's contract), and
+  JavaScript in a capability-free engine is the safe choice. `mini-racer` is a regular
+  dependency (prebuilt wheels for linux/mac/win, x86_64 and arm64, musl included): every check
+  and replay gets a fresh V8 context holding only the workflow API, with no module loader,
+  process, network or files, code generation from strings off, the clock and randomness
+  throwing, a time limit and a heap limit. The script is replayed against the agent results
+  recorded in the task's log (finished `agent()` calls answer from the log), which makes a run
+  durable like any other wait. Where mini-racer cannot load, the tool says so and starts
+  nothing.
 - **Deviations are listed, not implied.** A model-visible difference is allowed only when the
   kernel forces it, and each one is a row in `parity/deviations.md` with its reason. Starting
   list:
@@ -332,3 +334,9 @@ Phase 5 — front ends
   `workflow-authoring` skill, worktree isolation for workflow agents, folding `noop` loop ticks
   in front ends, `/loop` as a Skill-tool skill (it is a front-end command), Claude Code's
   "fire only when idle" also for one-shot tasks (they end before a timer fires).
+- 2026-10-28: Workflow scripts moved from the worker's `node` to an embedded V8 (`mini-racer`)
+  per the owner: a fresh context per replay, 30 s and 256 MiB per replay, evaluated in a
+  thread. Friction: mini-racer queues a Python-side function call behind a script that never
+  yields (an endless loop after an `await`) with no way to stop it, so once script code can run
+  the engine only evaluates; such a loop ends when the context closes. Saved workflows now come
+  only from `.noeta/workflows/` and `~/.noeta/workflows/`.

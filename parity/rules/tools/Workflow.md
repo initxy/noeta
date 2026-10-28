@@ -11,7 +11,7 @@ Claude Code 2.1.312 · baseline `m1` · rules in our words (see `../README.md`).
 
 Runs a JavaScript orchestration script that fans out many sub-agents deterministically, in
 the background. Always loaded; position 11 of 13 in the baseline list. Never called in the
-recordings. noeta: `noeta/plugins/workflow` (the script replayed by Node.js, each `agent()` a
+recordings. noeta: `noeta/plugins/workflow` (the script replayed in an embedded V8, each `agent()` a
 child task).
 
 ## Parameters
