@@ -235,7 +235,7 @@ class BrokenWatchClient:
 
 
 async def test_server_ends_the_stream_when_the_follower_fails() -> None:
-    app = create_app(BrokenWatchClient())  # type: ignore[arg-type]
+    app = create_app(BrokenWatchClient(), auth=False)  # type: ignore[arg-type]
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://x") as http:
         resp = await asyncio.wait_for(http.get("/tasks/t/watch"), 5)

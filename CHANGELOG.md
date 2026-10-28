@@ -133,8 +133,14 @@ All notable changes to Noeta are documented here. The format is based on
   flags an Agent SDK passes that noeta does not use are accepted and named on stderr.
   Without `--permission-prompt-tool stdio` anything that would ask is refused and the turn
   goes on (it used to exit 2). `--json` is gone; use `--output-format stream-json --verbose`.
+- **`create_app` requires a bearer token**, as `noeta serve` does: without `token=` it
+  raises unless the host passes `auth=False`.
 
 ### Added
+
+- **Front ends run on one API, in process or against a server** (`noeta.host.app.AppAPI`):
+  ACP and stream-json no longer reach into a local `Runtime`; `noeta acp --server URL`
+  drives a `noeta serve` server's tasks. New `POST /commands/run`.
 
 - **Claude Code's headless protocol** (`noeta.host.stream_json`): the stream-json messages
   (`system`/`init`, `assistant`, tool-result `user`, `stream_event`, `result` with usage, cost,

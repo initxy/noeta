@@ -38,8 +38,8 @@ events; when this process also runs workers, live model output streams too.
     POST /stream-json                 the same, one-way: the request body's JSON lines in,
                                       the reply's JSON lines out; permission prompts refused
 
-A bearer token is required when one is configured (``NOETA_SERVER_TOKEN``;
-``?token=`` for a WebSocket from a browser). A request from a web page of
+A bearer token is required (``NOETA_SERVER_TOKEN``; ``?token=`` for a
+WebSocket from a browser) unless the host turns auth off. A request from a web page of
 another origin is refused, and so is one whose ``Host`` is not in
 ``allowed_hosts`` (DNS rebinding). No request starts or switches a task into
 ``bypassPermissions`` unless ``allow_bypass``, or runs it outside ``cwd`` and
@@ -251,7 +251,7 @@ def _hostname(value: str) -> str:
     return value.rpartition(":")[0] if value.count(":") == 1 else value
 
 
-def create_app(client: Client, *, token: str | None = None,
+def create_app(client: Client, *, token: str | None = None, auth: bool = True,
                deltas: Any = None, agents: Mapping[str, Agent] | None = None,
                app: Any = None, allowed_hosts: Sequence[str] | None = None,
                origins: Sequence[str] = (), allow_bypass: bool = False,
@@ -261,11 +261,17 @@ def create_app(client: Client, *, token: str | None = None,
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
     (``/context``) and serves new stream-json conversations' trees.
 
+    Every request needs the bearer ``token``; serving without one takes
+    ``auth=False`` (a loopback-only development server).
+
     ``allowed_hosts``: the ``Host`` names served (any when ``None``);
     ``origins``: web origins (``https://host:port``) allowed besides the
     server's own; ``allow_bypass``: requests may ask for
     ``bypassPermissions``; ``cwd``: tasks a request creates run in it or
     below it, or below one of ``roots`` (anywhere when ``None``)."""
+    if auth and not token:
+        raise ValueError("create_app needs a bearer token; pass auth=False to serve "
+                         "every request without one")
     agents = agents if agents is not None else getattr(getattr(app, "runtime", None),
                                                        "agents", None)
     guarded = _GuardedClient(client, allow_bypass=allow_bypass, cwd=cwd, roots=roots)
@@ -276,7 +282,7 @@ def create_app(client: Client, *, token: str | None = None,
     allowed_origins = {o.rstrip("/").lower() for o in origins}
 
     def authorized(headers: Any, query: Any) -> bool:
-        if not token:
+        if not auth:
             return True
         got = headers.get("authorization", "").removeprefix("Bearer ").strip() \
             or query.get("token", "")
