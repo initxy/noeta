@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -18,6 +18,7 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.errors import ContextOverflow, Transient
 from noeta.core.events import Compacted, ExtensionRecorded, Waiting
+from noeta.core.extension import Deny, Extension, TaskView
 from noeta.core.types import Message, ModelRequest, ModelResponse, ToolUse, Usage
 from noeta.plugins.compaction import Compaction
 from noeta.plugins.compaction.extension import THRASHING_REASON, command_text
@@ -290,3 +291,45 @@ def test_rapid_refill_count() -> None:
     assert (st.compactions, st.rapid) == (4, 3)
     st = ext.reduce(st, "compacted", {"turn": 9})
     assert st.rapid == 0
+
+
+class _BeforeCompact(Extension):
+    """Answers ``before_compact`` with ``verdict`` and remembers each ask."""
+
+    name = "before_compact_probe"
+
+    def __init__(self, verdict: str | Deny | None) -> None:
+        self.verdict = verdict
+        self.asked: list[tuple[str, str]] = []
+
+    async def before_compact(self, view: TaskView, trigger: Literal["manual", "auto"],
+                             instructions: str) -> str | Deny | None:
+        self.asked.append((trigger, instructions))
+        return self.verdict
+
+
+async def test_an_extension_adds_summary_instructions(store: SqliteStore) -> None:
+    probe = _BeforeCompact("Keep every file path.")
+    a = agent(auto_compact_window=None, extensions=[probe])
+    model = Model([call(), answer("done")])
+    client, tid = await run(store, a, model)
+    await client.send(tid, command_text("keep the probe ids"))
+    await runtime(store, a, model).run_until_idle()
+    assert probe.asked == [("manual", "keep the probe ids")]
+    instruction = model.summarize_requests[0].messages[-1].text
+    assert "keep the probe ids\n\nKeep every file path." in instruction
+
+
+async def test_an_extension_can_refuse_a_compaction(store: SqliteStore) -> None:
+    probe = _BeforeCompact(Deny(reason="not now"))
+    a = agent(extensions=[probe])
+    model = Model([*(call() for _ in range(12)), answer("done")])
+    client, tid = await run(store, a, model)
+    assert not await compactions(client, tid) and not model.summarize_requests
+    assert probe.asked and all(t == "auto" for t, _ in probe.asked)
+    await client.send(tid, command_text(""))
+    await runtime(store, a, model).run_until_idle()
+    assert not await compactions(client, tid)
+    notices = [e.data["text"] for e in await events(client, tid)
+               if isinstance(e, ExtensionRecorded) and e.kind == "notice"]
+    assert notices[-1] == "Compaction skipped: not now"
