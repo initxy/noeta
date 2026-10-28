@@ -124,7 +124,8 @@ class WriteTool:
         before_text = ""
         if st is not None:
             if st.is_dir:
-                return tool_error(self.name, f"not a file: {path!r}")
+                return tool_error(self.name, f"{path} is a directory. To create a file in it, "
+                                             "put the file's name at the end of file_path.")
             try:
                 existing = await env.read_bytes(resolved)
             except OSError as exc:

@@ -79,6 +79,13 @@ async def test_a_write_of_noeta_md_has_the_file_state_note(h: Harness, ws: Path)
                             "back)")
 
 
+async def test_write_onto_a_directory_says_to_name_the_file(h: Harness, ws: Path) -> None:
+    (ws / "pkg").mkdir()
+    out = await h.call(WriteTool(), file_path="pkg", content="x")
+    assert text_of(out) == ("Write: pkg is a directory. To create a file in it, put the file's "
+                            "name at the end of file_path.")
+
+
 async def test_write_existing_path_after_read_overwrites(h: Harness, ws: Path) -> None:
     (ws / "exists.txt").write_text("old\n")
     await _read(h, "exists.txt")
@@ -184,13 +191,6 @@ async def test_write_inside_sub_dir(h: Harness, ws: Path) -> None:
     out = await h.call(WriteTool(), file_path="sub/x.txt", content="x")
     assert not out.is_error
     assert text_of(out) == f"File created successfully at: {ws / 'sub' / 'x.txt'} (what you wrote is the file's current state; no need to Read it back)"
-
-
-async def test_write_onto_a_directory_rejected(h: Harness, ws: Path) -> None:
-    (ws / "sub").mkdir()
-    out = await h.call(WriteTool(), file_path="sub", content="x")
-    assert out.is_error
-    assert text_of(out) == "Write: not a file: 'sub'"
 
 
 async def test_write_over_a_binary_file_after_read_is_rejected(h: Harness, ws: Path) -> None:
