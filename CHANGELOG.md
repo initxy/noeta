@@ -34,6 +34,11 @@ All notable changes to Noeta are documented here. The format is based on
   refused with a reason otherwise. A scaled image's result says how coordinates map back.
   `Read`'s image file ceiling is now 128 MB (`IMAGE_MAX_BYTES`); `noeta.plugins.mcp.results`
   no longer exports `IMAGE_MAX_BYTES`.
+- **Long tool output is saved, as the tools promise.** No built-in host set
+  `Runtime.spill_root`, so Bash, Grep, WebFetch and MCP output past the inline limit was cut
+  instead of saved to a file. `LocalApp` now defaults it to `<tmp>/noeta-<uid>/tool-results`
+  (`noeta.host.local.default_spill_root`) and the `noeta` command (TUI, `-p`, ACP, `serve`,
+  `worker`) to `~/.noeta/tool-results`; one directory per task below it.
 - `make example` ran a build uv had cached; it now installs the example plugin editable.
 - A second `registry.provider()` call for a family failed once that family's adapter module
   had been imported (the entry point named a package attribute the submodule rebound).

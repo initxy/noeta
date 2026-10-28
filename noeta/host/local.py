@@ -10,6 +10,8 @@ another front end or a host left in the store."""
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -23,6 +25,14 @@ from noeta.core.store import Store
 from noeta.core.types import Delta
 
 DeltaSink = Callable[[str, Delta], None]
+
+
+def default_spill_root() -> str:
+    """Where a tool's output too long to return inline is saved (one
+    directory per task below it) when the host names no other place: the
+    model gets a preview and the path, as the tools' descriptions promise."""
+    user = getattr(os, "getuid", lambda: "user")()
+    return os.path.join(tempfile.gettempdir(), f"noeta-{user}", "tool-results")
 
 
 class UnknownAgent(NoetaError):
@@ -66,6 +76,7 @@ class LocalApp:
         self._sinks: list[DeltaSink] = []
         if own_tasks_only:
             runtime_kw.setdefault("roots", set())
+        runtime_kw.setdefault("spill_root", default_spill_root())
         self.runtime = Runtime(store=store, agents={a.name: a for a in agents},
                                provider_for=provider_for,  # type: ignore[arg-type]
                                on_delta=self._fan_out, poll_interval=0.2, **runtime_kw)

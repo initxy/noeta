@@ -45,7 +45,8 @@ class Runtime:
     lease_seconds: float = 30.0
     poll_interval: float = 0.5
     concurrency: int = 8
-    #: Directory for tool outputs too large to return inline.
+    #: Directory for tool outputs too large to return inline; ``None`` cuts
+    #: them instead (built-in hosts always set one).
     spill_root: str | None = None
     #: Host directories of prompt override files (``noeta.core.prompts``),
     #: e.g. ``~/.noeta/prompts``; the task's ``<cwd>/.noeta/prompts`` is

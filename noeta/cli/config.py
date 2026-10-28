@@ -272,6 +272,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
                             extra_files=files)
     runtime_kw.setdefault("prompt_dirs", [str(HOME / "prompts")])
     runtime_kw.setdefault("workspace_trusted", project_trusted)
+    runtime_kw.setdefault("spill_root", str(HOME / "tool-results"))
     app = LocalApp(open_store(settings.store_url), agents,
                    settings.make_provider(), own_tasks_only=own_tasks_only,
                    task_config={"prompts": settings.prompts} if settings.prompts else None,
