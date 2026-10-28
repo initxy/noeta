@@ -27,6 +27,8 @@ class _Store:
 class _App:
     runtime = _Runtime()
     store = _Store()
+    channels: tuple[Any, ...] = ()
+    client = None
 
 
 @pytest.mark.parametrize(("argv", "lease"), [([], None), (["--lease", "1.5"], 1.5)])
