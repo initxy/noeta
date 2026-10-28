@@ -13,23 +13,23 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Literal
 
+from noeta.core.pending import MODE_CYCLE as _CYCLE
+from noeta.core.pending import PERMISSION_MODES as _MODES
 from noeta.toolkit.permission_rules import Rule, idna, url_host
 from noeta.toolkit.shell import WRAPPER_PROGRAMS
 
 PermissionMode = Literal["default", "acceptEdits", "plan", "auto", "dontAsk",
                          "bypassPermissions"]
 
-#: Claude Code's permission modes: ``default`` asks before anything that
-#: needs permission, ``acceptEdits`` also lets file edits in the working
-#: directories run, ``plan`` explores without changing anything, ``auto``
-#: lets a classifier model approve or block what would ask, ``dontAsk``
-#: refuses what would ask, ``bypassPermissions`` asks for nothing but ask
-#: rules and protected paths.
-PERMISSION_MODES: tuple[str, ...] = ("default", "acceptEdits", "plan", "auto", "dontAsk",
-                                     "bypassPermissions")
-#: The order a front end's mode key (Claude Code's shift+tab) steps through;
-#: ``dontAsk`` is set only by configuration.
-MODE_CYCLE: tuple[str, ...] = ("default", "acceptEdits", "plan", "auto", "bypassPermissions")
+#: Claude Code's permission modes and the mode key's order (their home is
+#: ``noeta.core.pending``, which front ends read): ``default`` asks before
+#: anything that needs permission, ``acceptEdits`` also lets file edits in
+#: the working directories run, ``plan`` explores without changing anything,
+#: ``auto`` lets a classifier model approve or block what would ask,
+#: ``dontAsk`` refuses what would ask, ``bypassPermissions`` asks only for
+#: ask rules and protected paths.
+PERMISSION_MODES = _MODES
+MODE_CYCLE = _CYCLE
 
 RiskLevel = Literal["low", "medium", "high"]
 
@@ -93,9 +93,9 @@ SHELL_COMPANION_TOOLS: frozenset[str] = frozenset({"Monitor", "TaskStop"})
 WEBFETCH_TOOL = "WebFetch"
 #: A shell command naming this directory asks (noeta's own config).
 CONFIG_DIR = ".noeta"
-#: Where "always" answers are kept in a trusted project (Claude Code's local
-#: settings file).
-LOCAL_SETTINGS = ".claude/settings.local.json"
+#: Where "always" answers are kept in a trusted project (noeta's place for
+#: Claude Code's local settings file, in its format).
+LOCAL_SETTINGS = ".noeta/settings.local.json"
 
 #: Programs whose prefix rule would let any code run (interpreters): auto
 #: mode ignores such an allow rule, as Claude Code drops rules that would

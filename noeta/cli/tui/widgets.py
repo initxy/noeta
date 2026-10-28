@@ -12,7 +12,7 @@ from rich.syntax import Syntax
 from rich.text import Text as RichText
 from textual import on
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical
 from textual.widgets import Button, Collapsible, Markdown, Static, TextArea
 
 from noeta.core.types import ToolUse
@@ -77,22 +77,24 @@ class ToolCall(Collapsible):
                 self.collapsed = False
 
 
-Decide = Callable[[str, str, bool], Awaitable[None]]
+#: ``decide(call_id, choice_id)``.
+Decide = Callable[[str, str], Awaitable[None]]
 
 
 class ApprovalCard(Vertical):
-    """Asks before a tool runs: allow once, always, or deny (y / a / n).
-    ``always`` is the "always" choice's text, naming the rule it remembers
-    (:func:`noeta.core.pending.always_option`); ``None`` offers none."""
+    """Asks before a tool runs, with Claude Code's choices
+    (:func:`noeta.core.pending.choices`: Yes, don't ask again, switch mode,
+    No), picked by number, or y / a / n for yes / always / no."""
 
     DEFAULT_CLASSES = "approval"
-    BINDINGS = [("y", "choose('allow')", "Allow"), ("a", "choose('always')", "Always"),
-                ("n", "choose('deny')", "Deny")]
+    BINDINGS = [("y", "choose('allow')", "Yes"), ("a", "choose('always')", "Always"),
+                ("n", "choose('deny')", "No"),
+                *((str(n), f"pick({n})", "") for n in range(1, 10))]
 
     def __init__(self, call_id: str, title: str, prompt: str, decide: Decide,
-                 always: str | None = "Always allow") -> None:
+                 options: list[dict[str, str]]) -> None:
         super().__init__()
-        self.always = always
+        self.options = options
         self.call_id = call_id
         self.title_text = title
         self.prompt = prompt
@@ -100,34 +102,39 @@ class ApprovalCard(Vertical):
         self.done = False
 
     def compose(self) -> ComposeResult:
-        yield Static(f"[b]Allow?[/b] {escape(self.title_text)}")
+        yield Static(f"[b]{escape(self.title_text)}[/b]")
         if self.prompt and self.prompt != self.title_text:
             yield Static(self.prompt, classes="approval-prompt")
-        with Horizontal(classes="approval-buttons"):
-            yield Button("Allow (y)", id="allow", variant="success", compact=True)
-            if self.always is not None:
-                yield Button(f"{escape(self.always)} (a)", id="always", compact=True)
-            yield Button("Deny (n)", id="deny", variant="error", compact=True)
+        yield Static("Do you want to proceed?", classes="approval-prompt")
+        with Vertical(classes="approval-buttons"):
+            for n, option in enumerate(self.options, 1):
+                variant = {"allow": "success", "deny": "error"}.get(option["id"], "default")
+                yield Button(f"{n}. {escape(option['label'])}", id=f"option-{n}",
+                             variant=variant, compact=True)  # type: ignore[arg-type]
 
     def on_mount(self) -> None:
-        self.query_one("#allow", Button).focus()
+        self.query_one("#option-1", Button).focus()
 
     async def action_choose(self, choice: str) -> None:
         await self.choose(choice)
 
+    async def action_pick(self, n: int) -> None:
+        if 1 <= n <= len(self.options):
+            await self.choose(self.options[n - 1]["id"])
+
     async def choose(self, choice: str) -> None:
-        if self.done or (choice == "always" and self.always is None):
+        picked = next((o for o in self.options if o["id"] == choice), None)
+        if self.done or picked is None:
             return
         self.done = True
-        await self.decide(self.call_id, "deny" if choice == "deny" else "allow",
-                          choice == "always")
+        await self.decide(self.call_id, choice)
         self.remove_children(".approval-buttons")
-        shown = {"allow": "allowed", "deny": "denied"}.get(choice) or (self.always or "")
-        await self.mount(Static(escape(shown), classes="approval-result"))
+        await self.mount(Static(escape(picked["label"]), classes="approval-result"))
 
     @on(Button.Pressed)
     async def _pressed(self, event: Button.Pressed) -> None:
-        await self.choose(event.button.id or "deny")
+        n = int((event.button.id or "option-0").rsplit("-", 1)[1])
+        await self.action_pick(n)
 
 
 class QuestionCard(Vertical):

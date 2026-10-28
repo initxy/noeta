@@ -101,7 +101,7 @@ async def test_read_only_commands_run_and_others_offer_a_rule(store: SqliteStore
     await client.answer(tid, item.request_id, "allow", always=True)
     await rt.run_until_idle()
     assert len(bash.runs) == 3
-    saved = json.loads((tmp_path / ".claude" / "settings.local.json").read_text())
+    saved = json.loads((tmp_path / ".noeta" / "settings.local.json").read_text())
     assert saved == {"permissions": {"allow": ["Bash(npm run *)"]}}
 
 

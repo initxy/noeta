@@ -237,7 +237,7 @@ async def test_acp_puts_a_sub_agents_approval_to_the_editor(tmp_path: Path) -> N
     sid = (await agent.new_session(cwd=str(tmp_path))).session_id
     resp = await asyncio.wait_for(agent.prompt(sid, text_block("go")), 15)
     assert resp.stop_reason == "end_turn"
-    assert editor.asked == ["[worker] may the worker echo?"]
+    assert editor.asked == ["Echo · from the worker agent"]
     assert editor.texts()[-1] == "final"
     await app.stop()
 

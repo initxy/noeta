@@ -146,7 +146,7 @@ async def test_tui_shows_and_answers_a_sub_agents_approval(tmp_path: Path) -> No
         await pilot.press(*"go", "enter")
         await settle(pilot, lambda: len(app.query(ApprovalCard)) == 1)
         [card] = list(app.query(ApprovalCard))
-        assert "[worker]" in card.title_text
+        assert card.title_text == "Echo · from the worker agent"
         await card.choose("allow")
         # Two waits, so an intermittent stall says which side stopped.
         await settle(pilot, lambda: provider.steps == [])

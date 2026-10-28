@@ -43,7 +43,16 @@ from noeta.core.events import (
 )
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CORE
-from noeta.core.pending import Pending, always_option, follow_tree
+from noeta.core.pending import (
+    MODE_SIGNAL,
+    Pending,
+    answer_choice,
+    card_title,
+    choices,
+    current_mode,
+    follow_tree,
+    next_mode,
+)
 from noeta.core.questions import next_question, typed_answer
 from noeta.core.types import Delta, Usage
 from noeta.host.local import LocalApp, UnknownAgent
@@ -52,7 +61,8 @@ log = logging.getLogger("noeta.cli.tui")
 
 HELP = """\
 **Commands**  `/new` new task · `/resume` pick a task · `/stop` stop the turn · `/exit` quit
-**Keys**  Enter send · Ctrl+J new line · Esc stop the turn · Ctrl+B side panel · y/a/n approvals
+**Keys**  Enter send · Ctrl+J new line · Esc stop the turn · Ctrl+B side panel ·
+Shift+Tab permission mode · 1-9 or y/a/n approvals
 """
 
 
@@ -69,6 +79,7 @@ class NoetaApp(App[None]):
     BINDINGS = [
         Binding("escape", "stop_turn", "Stop", show=False),
         Binding("ctrl+b", "toggle_side", "Side panel", show=False),
+        Binding("shift+tab", "cycle_mode", "Mode", show=False, priority=True),
         Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
     ]
 
@@ -81,6 +92,8 @@ class NoetaApp(App[None]):
         self.cwd = cwd
         self.resume = resume
         self.permission_mode = permission_mode
+        #: The task's permission mode, as its permissions plugin recorded it.
+        self.mode = ""
         self.task_id = ""
         self.calls: dict[str, ToolCall] = {}
         self.stream: MarkdownStream | None = None
@@ -264,12 +277,19 @@ class NoetaApp(App[None]):
         side = self.query_one("#side")
         side.display = not side.display
 
-    async def decide(self, call_id: str, decision: str, always: bool, *,
-                     task_id: str = "") -> None:
+    async def decide(self, call_id: str, choice: str, *, task_id: str = "") -> None:
         self.waiting_for = ""
-        await self.local.client.answer(task_id or self.task_id, call_id,
-                                       decision, always=always)  # type: ignore[arg-type]
+        await answer_choice(self.local.client, task_id or self.task_id, call_id, choice)
         self.query_one(PromptInput).focus()
+
+    async def action_cycle_mode(self) -> None:
+        """Step to the next permission mode (Claude Code's shift+tab)."""
+        if not self.task_id or self.read_only:
+            return
+        mode = next_mode(self.mode or self.permission_mode or "auto")
+        await self.local.client.signal(self.task_id, MODE_SIGNAL, {"mode": mode})
+        self.mode = mode
+        self.update_status()
 
     def _set_question(self, call_id: str, task_id: str, detail: dict[str, Any]) -> None:
         self.waiting_question = call_id
@@ -307,13 +327,13 @@ class NoetaApp(App[None]):
             if p.kind == "approval":
                 self.waiting_for = f"{who} waits for your approval (y/a/n)"
 
-                async def decide(call_id: str, decision: str, always: bool,
+                async def decide(call_id: str, choice: str,
                                  task_id: str = p.task_id) -> None:
-                    await self.decide(call_id, decision, always, task_id=task_id)
+                    await self.decide(call_id, choice, task_id=task_id)
 
                 await transcript.mount(ApprovalCard(
-                    p.request_id, f"[{who}] {p.tool}", p.prompt, decide,
-                    always_option(p.detail)))
+                    p.request_id, card_title(p, self.task_id), p.prompt, decide,
+                    choices(p.detail)))
             else:
                 self.waiting_for = f"{who} waits for your answer"
                 self._set_question(p.request_id, p.task_id, p.detail)
@@ -437,6 +457,9 @@ class NoetaApp(App[None]):
                 finished.set_result(ev.result.text, is_error=ev.result.is_error, diff=diff)
         elif isinstance(ev, ExtensionRecorded):
             data = ev.data if isinstance(ev.data, dict) else {}
+            mode = current_mode([rec])
+            if mode:
+                self.mode = mode
             if ev.kind == "retry":
                 await self._retried(int(data.get("attempt") or 1))
                 await transcript.mount(Notice(f"retrying (attempt {data.get('attempt')}): "
@@ -460,11 +483,14 @@ class NoetaApp(App[None]):
                     asked = self.calls.get(call_id)
                     if asked is not None:
                         asked.set_state("waiting")
-                    title = tool_title(asked.call) if asked is not None else call_id
                     detail = ev.detail.get(call_id) or {}
+                    title = str(detail.get("title") or "") or (
+                        tool_title(asked.call) if asked is not None else call_id)
                     prompt = str(detail.get("prompt") or "")
+                    if asked is not None and title != tool_title(asked.call):
+                        prompt = f"{tool_title(asked.call)}\n{prompt}".strip()
                     await transcript.mount(ApprovalCard(call_id, title, prompt, self.decide,
-                                                        always_option(detail)))
+                                                        choices(detail)))
             elif ev.on == "question":
                 questions = [k for k, v in ev.detail.items()
                              if isinstance(v, dict) and v.get("on") == "question"]
@@ -495,7 +521,8 @@ class NoetaApp(App[None]):
         state = self.waiting_for or ("working… (Esc to stop)" if self.busy else "ready")
         width = max(self.size.width - len(self.model) - len(state) - 30, 12)
         self.query_one("#status", Static).update(RichText(
-            f"{state} · {self.model} · context {used}{cost} · {_short_path(self.cwd, width)}"))
+            f"{state} · {self.model} · {self.mode or self.permission_mode or 'auto'} mode "
+            f"(shift+tab) · context {used}{cost} · {_short_path(self.cwd, width)}"))
 
     @work(exclusive=True, group="side", exit_on_error=False)
     async def _refresh_side(self) -> None:

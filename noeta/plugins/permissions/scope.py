@@ -27,8 +27,9 @@ __all__ = [
 ]
 
 #: Directories whose contents run or configure tools later (git hooks, editor
-#: tasks, agent settings): writing there asks in every mode. ``.claude``'s
-#: ``skills``, ``agents`` and ``commands`` are exempt, as in Claude Code.
+#: tasks, agent settings): writing there asks in every mode. ``.noeta`` is
+#: protected as Claude Code protects ``.claude``: its ``skills``, ``agents``
+#: and ``commands`` are exempt.
 PROTECTED_DIRS = (".git", ".vscode", ".idea", ".claude", ".husky", ".cargo", ".devcontainer",
                   ".yarn", ".mvn", ".noeta")
 #: Nested protected directories.
@@ -42,7 +43,7 @@ PROTECTED_FILES = frozenset(f.lower() for f in (
     ".bazelversion", ".bazeliskrc", ".pre-commit-config.yaml", "lefthook.yml", ".lefthook.yml",
     "lefthook.yaml", ".lefthook.yaml", "gradle-wrapper.properties", "maven-wrapper.properties",
     ".devcontainer.json", "pyrightconfig.json"))
-_CLAUDE_OPEN = frozenset({"skills", "agents", "commands", "worktrees"})
+_OPEN_SUBDIRS = frozenset({"skills", "agents", "commands", "worktrees"})
 
 #: File commands ``acceptEdits`` runs without asking when every path they
 #: name is inside the working directories (Claude Code's list).
@@ -58,7 +59,8 @@ def is_protected(path: str) -> bool:
     parts = [p.lower() for p in path.split("/") if p]
     for i, part in enumerate(parts):
         if part in PROTECTED_DIRS:
-            if part == ".claude" and i + 1 < len(parts) and parts[i + 1] in _CLAUDE_OPEN:
+            if part in (".noeta", ".claude") and i + 1 < len(parts) and \
+                    parts[i + 1] in _OPEN_SUBDIRS:
                 continue
             return True
     for nested in PROTECTED_NESTED:

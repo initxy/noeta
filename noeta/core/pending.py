@@ -52,6 +52,84 @@ class Pending:
     agent: str = ""
 
 
+#: Claude Code's permission modes (the permissions plugin's), how front ends
+#: name them, the order a front end's mode key steps through (``dontAsk``
+#: is set only by configuration), and the signal that switches the mode
+#: (``client.signal(task_id, MODE_SIGNAL, {"mode": ...})``).
+PERMISSION_MODES: tuple[str, ...] = ("default", "acceptEdits", "plan", "auto", "dontAsk",
+                                     "bypassPermissions")
+MODE_CYCLE: tuple[str, ...] = ("default", "acceptEdits", "plan", "auto", "bypassPermissions")
+MODE_NAMES: dict[str, str] = {
+    "default": "Default (ask before changes)",
+    "acceptEdits": "Accept edits",
+    "plan": "Plan (explore, change nothing)",
+    "auto": "Auto (a classifier screens what would ask)",
+    "dontAsk": "Don't ask (refuse what would ask)",
+    "bypassPermissions": "Bypass permissions (ask for nothing)",
+}
+MODE_SIGNAL = "permission_mode"
+
+
+def current_mode(events: Sequence[Recorded]) -> str | None:
+    """The task's permission mode, as its permissions plugin last recorded
+    it (``None`` before it has)."""
+    mode = None
+    for rec in events:
+        ev = rec.event
+        if isinstance(ev, ExtensionRecorded) and ev.extension == "permissions" \
+                and ev.kind in ("mode", "plan_exit") and isinstance(ev.data, dict):
+            mode = str(ev.data.get("mode") or "") or mode
+    return mode
+
+
+def next_mode(mode: str | None) -> str:
+    """The mode after ``mode`` in :data:`MODE_CYCLE`."""
+    if mode not in MODE_CYCLE:
+        return MODE_CYCLE[0]
+    return MODE_CYCLE[(MODE_CYCLE.index(mode) + 1) % len(MODE_CYCLE)]
+
+
+def choices(detail: dict[str, Any]) -> list[dict[str, str]]:
+    """An approval's options, Claude Code's card: ``Yes``, the "don't ask
+    again" rule, a mode switch, ``No``. Each is ``{"id", "label"}``; answer
+    with :func:`answer_choice`. A gate that names no choices gets yes /
+    always (when it offers one) / no."""
+    given = detail.get("choices")
+    if isinstance(given, list) and given:
+        return [{"id": str(c.get("id")), "label": str(c.get("label"))}
+                for c in given if isinstance(c, dict)]
+    out = [{"id": "allow", "label": "Yes"}]
+    always = always_option(detail)
+    if always is not None:
+        out.append({"id": "always", "label": always})
+    out.append({"id": "deny", "label": "No"})
+    return out
+
+
+def card_title(item: Pending, root_task_id: str = "") -> str:
+    """What the card is about (``Bash command``), and which sub-agent asks
+    (``· from the Explore agent``) when it is not the root."""
+    title = str(item.detail.get("title") or item.tool or "Tool call")
+    if root_task_id and item.task_id != root_task_id and item.agent:
+        title += f" · from the {item.agent} agent"
+    return title
+
+
+async def answer_choice(client: Any, task_id: str, request_id: str, choice: str,
+                        message: str = "") -> None:
+    """Answer an approval with one of its :func:`choices` (``message``: what
+    the person said when declining)."""
+    if choice == "deny":
+        await client.answer(task_id, request_id, "deny",
+                            data={"message": message} if message else None)
+    elif choice == "always":
+        await client.answer(task_id, request_id, "allow", always=True)
+    elif choice.startswith("mode:"):
+        await client.answer(task_id, request_id, "allow", data={"mode": choice[5:]})
+    else:
+        await client.answer(task_id, request_id, "allow")
+
+
 def always_option(detail: dict[str, Any]) -> str | None:
     """What an approval's "always" choice says it remembers: ``Always allow
     Bash(git push *)`` when the gate named its rule, a bare ``Always allow``

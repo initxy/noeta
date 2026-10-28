@@ -88,3 +88,16 @@ async def test_approval_with_a_key(tmp_path: Path) -> None:
         await settle(pilot, app, lambda: not app.busy and len(app.query(AssistantMessage)) == 1)
         [call] = list(app.query(ToolCall))
         assert call.state == "done"
+
+
+async def test_shift_tab_cycles_the_permission_mode(tmp_path: Path) -> None:
+    from noeta.core.events import External
+    from noeta.plugins.permissions import Permissions
+
+    app = make_app(tmp_path, ScriptedProvider([]), Permissions(mode="default"))
+    async with app.run_test(size=(140, 30)) as pilot:
+        await settle(pilot, app, lambda: app.task_id != "")
+        await pilot.press("shift+tab")
+        await settle(pilot, app, lambda: app.mode == "acceptEdits")
+        inbox = [i.body for i in await app.local.store.inbox(app.task_id)]
+        assert External(name="permission_mode", data={"mode": "acceptEdits"}) in inbox

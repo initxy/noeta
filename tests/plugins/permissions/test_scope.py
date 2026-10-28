@@ -40,7 +40,8 @@ def test_file_command_paths() -> None:
     ("/proj/.git/config", True), ("/proj/.vscode/tasks.json", True),
     ("/proj/.claude/settings.json", True), ("/proj/.claude/skills/x/SKILL.md", False),
     ("/proj/.envrc", True), ("/proj/sub/.bashrc", True), ("/proj/src/a.py", False),
-    ("/home/u/.config/git/config", True), ("/proj/.noeta/agents/main.md", True),
+    ("/home/u/.config/git/config", True), ("/proj/.noeta/agents/main.md", False),
+    ("/proj/.noeta/settings.json", True),
     ("/proj/.pre-commit-config.yaml", True),
 ])
 def test_protected_paths(path: str, protected: bool) -> None:

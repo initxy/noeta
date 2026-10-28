@@ -82,7 +82,7 @@ async def test_prompt_streams_tools_and_asks(tmp_path: Path) -> None:
     assert "agent_message_chunk" in k
     statuses = [u.status for u in editor.updates if u.session_update == "tool_call_update"]
     assert statuses[-1] == "completed"
-    assert editor.options == [["Allow", "Always allow", "Deny"]]
+    assert editor.options == [["Yes", "Always allow", "No"]]
     await app.stop()
 
 
@@ -99,8 +99,8 @@ class AskNamingRule(Extension):
 
 
 @pytest.mark.parametrize(("label", "shown"), [
-    ("git push *", ["Allow", "Always allow Bash(git push *)", "Deny"]),
-    (None, ["Allow", "Deny"]),
+    ("git push *", ["Yes", "Always allow Bash(git push *)", "No"]),
+    (None, ["Yes", "No"]),
 ])
 async def test_permission_options_name_the_remembered_rule(
         tmp_path: Path, label: str | None, shown: list[str]) -> None:
@@ -115,4 +115,30 @@ async def test_permission_options_name_the_remembered_rule(
     session = await acp_agent.new_session(cwd=str(tmp_path))
     await acp_agent.prompt(session.session_id, [schema.TextContentBlock(type="text", text="go")])
     assert editor.options == [shown]
+    await app.stop()
+
+
+async def test_permission_modes_are_session_modes(tmp_path: Path) -> None:
+    from noeta.plugins.permissions import Permissions
+
+    provider = ScriptedProvider([reply("", ("Write", {"file_path": "x"})), reply("done")])
+    write = Echo()
+    write.name = "Write"
+    agent = Agent(name="main", model="m", tools=[write],
+                  extensions=[Permissions(mode="default")])
+    app = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], provider,
+                   env_for=lambda _s: None)
+    acp_agent = NoetaAcpAgent(app)
+    editor = FakeEditor(choice="mode:acceptEdits")
+    acp_agent.on_connect(editor)
+    await acp_agent.initialize(protocol_version=1)
+    session = await acp_agent.new_session(cwd=str(tmp_path))
+    assert session.modes is not None and session.modes.current_mode_id == "default"
+    assert "auto" in [m.id for m in session.modes.available_modes]
+    await acp_agent.prompt(session.session_id, [schema.TextContentBlock(type="text", text="go")])
+    assert editor.options[0][1].startswith("Yes, and switch to accept edits")
+    modes = [u.current_mode_id for u in editor.updates
+             if u.session_update == "current_mode_update"]
+    assert modes == ["acceptEdits"]
+    await acp_agent.set_session_mode(session_id=session.session_id, mode_id="plan")
     await app.stop()

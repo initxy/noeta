@@ -38,6 +38,7 @@ from noeta.core.extension import (
     Reminder,
     TaskView,
 )
+from noeta.core.pending import MODE_SIGNAL as _MODE_SIGNAL
 from noeta.core.tool import Tool, ToolOutput
 from noeta.core.types import ModelRequest, ToolUse
 from noeta.plugins.permissions import classifier as c
@@ -64,7 +65,7 @@ _KEEP = 256
 #: Task config key a child reads its parent's remembered rules from.
 INHERITED_RULES_KEY = "permission_rules"
 #: The signal front ends post to switch the mode (``Client.signal``).
-MODE_SIGNAL = "permission_mode"
+MODE_SIGNAL = _MODE_SIGNAL
 #: The signal the plan-name side request answers with.
 PLAN_NAME_SIGNAL = "plan_name"
 #: Claude Code's denial limits before auto mode falls back to asking.
@@ -87,7 +88,7 @@ _PLAN_COMMAND_HEAD = "<command-name>/plan</command-name>"
 
 class UntrustedProjectShellAllowlistWarning(UserWarning):
     """Kept for hosts that filter it; the project allowlist file is gone
-    (Claude Code keeps remembered rules in ``.claude/settings.local.json``)."""
+    (Claude Code keeps remembered rules in ``.noeta/settings.local.json``)."""
 
 
 @dataclass(frozen=True)
@@ -187,7 +188,7 @@ class Permissions(Extension):
       model; a failing classifier model falls back to the task's).
     * ``plans_dir`` — where plan files go (default ``<noeta home>/plans``).
     * ``trusted_workspace`` / ``remember_to_project`` — "always" answers are
-      also written to the project's ``.claude/settings.local.json`` (trusted
+      also written to the project's ``.noeta/settings.local.json`` (trusted
       workspaces only).
     * ``shell_allowlist`` (``{"rule": "git push *"}`` specs) and
       ``webfetch_allowed_hosts`` (``example.com`` / ``*.example.com``) —

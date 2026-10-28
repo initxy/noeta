@@ -6,11 +6,15 @@ events; when this process also runs workers, live model output streams too.
     GET  /tasks?parent_id=&status=&limit=
     GET  /tasks/{id}
     GET  /tasks/{id}/events?after=N
+    GET  /tasks/{id}/pending          approvals and questions waiting on a person, sub-agents'
+                                      included: task_id, request_id, kind, tool, agent, title
+                                      ("Bash command · from the Explore agent"), choices
     GET  /tasks/{id}/watch?after=N    text/event-stream: "event" (a recorded event) and
                                       "delta" (live output) messages
     POST /tasks/{id}/messages         {input, when?, dedupe_key?} — a "/name args" text
                                       runs the task agent's slash command of that name
-    POST /tasks/{id}/answers          {request_id, decision?, always?, data?}
+    POST /tasks/{id}/answers          {request_id, decision?, always?, data?} — data
+                                      {"mode": m} picks a card's mode choice
     POST /tasks/{id}/signals          {name, data?, dedupe_key?} — a signal a plugin reads
                                       (``permission_mode`` {mode}: switch the permission mode)
     POST /tasks/{id}/cancel           {reason?, turn_only?}
@@ -23,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import hmac
 import logging
 from collections.abc import AsyncIterator, Mapping
@@ -39,6 +44,7 @@ from noeta.core.client import Client
 from noeta.core.commands import expand_command
 from noeta.core.errors import UnknownTask
 from noeta.core.extension import CommandContext
+from noeta.core.pending import card_title, choices, pending_tree
 from noeta.core.types import Delta, Message
 
 _enc = msgspec.json.Encoder()
@@ -98,6 +104,17 @@ def create_app(client: Client, *, token: str | None = None,
     async def events(request: Request) -> Response:
         after = int(request.query_params.get("after", "0"))
         return _json(await client.events(request.path_params["task_id"], after))
+
+    async def pending(request: Request) -> Response:
+        task_id = request.path_params["task_id"]
+        out = []
+        for item in await pending_tree(client, task_id):
+            row = dataclasses.asdict(item)
+            row["title"] = card_title(item, task_id)
+            if item.kind == "approval":
+                row["choices"] = choices(item.detail)
+            out.append(row)
+        return _json(out)
 
     async def send(request: Request) -> Response:
         body = await request.json()
@@ -187,6 +204,7 @@ def create_app(client: Client, *, token: str | None = None,
         Route("/tasks", guard(list_tasks), methods=["GET"]),
         Route("/tasks/{task_id}", guard(get_task), methods=["GET"]),
         Route("/tasks/{task_id}/events", guard(events), methods=["GET"]),
+        Route("/tasks/{task_id}/pending", guard(pending), methods=["GET"]),
         Route("/tasks/{task_id}/watch", guard(watch), methods=["GET"]),
         Route("/tasks/{task_id}/messages", guard(send), methods=["POST"]),
         Route("/tasks/{task_id}/answers", guard(answer), methods=["POST"]),

@@ -90,6 +90,25 @@ async def test_round_trip_with_approval(served: tuple[str, ScriptedProvider]) ->
     await client.close()
 
 
+async def test_pending_lists_the_card(served: tuple[str, ScriptedProvider]) -> None:
+    url, provider = served
+    provider.add(reply("", ("Read", {"file_path": "x"})), reply("ok"))
+    client = RemoteClient(url, token="secret")
+    tid = await client.create("main", "look")
+    async with httpx.AsyncClient(base_url=url,
+                                 headers={"authorization": "Bearer secret"}) as http:
+        for _ in range(200):
+            rows = (await http.get(f"/tasks/{tid}/pending")).json()
+            if rows:
+                break
+            await asyncio.sleep(0.02)
+    [row] = rows
+    assert row["kind"] == "approval" and row["title"] == "Read"
+    assert [c["id"] for c in row["choices"]] == ["allow", "always", "deny"]
+    await client.cancel(tid)
+    await client.close()
+
+
 async def test_token_is_required(served: tuple[str, ScriptedProvider]) -> None:
     url, _ = served
     async with httpx.AsyncClient(base_url=url) as http:

@@ -33,7 +33,18 @@ from noeta.core.events import (
 )
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CORE
-from noeta.core.pending import Pending, always_option, follow_tree, pending_tree
+from noeta.core.pending import (
+    MODE_NAMES,
+    MODE_SIGNAL,
+    PERMISSION_MODES,
+    Pending,
+    answer_choice,
+    card_title,
+    choices,
+    current_mode,
+    follow_tree,
+    pending_tree,
+)
 from noeta.core.questions import next_question, typed_answer
 from noeta.core.types import Delta, Image, Message, Text, ToolUse
 from noeta.host.local import LocalApp, UnknownAgent
@@ -272,11 +283,28 @@ class NoetaAcpAgent:
             self.servers.add(task_id, mcp_servers)
         await self.app.client.wait(task_id, timeout=30)
         self._cwd[task_id] = cwd
+        modes = await self._modes(task_id)
         # After the response, so the editor knows the session it names.
         announce = asyncio.create_task(self._announce_commands(task_id))
         self._background.add(announce)
         announce.add_done_callback(self._background.discard)
-        return schema.NewSessionResponse(session_id=task_id)
+        return schema.NewSessionResponse(session_id=task_id, modes=modes)
+
+    async def _modes(self, task_id: str) -> schema.SessionModeState | None:
+        """The permission modes, as ACP session modes (none when the agent
+        records no mode: it has no permissions plugin)."""
+        mode = current_mode(await self.app.client.events(task_id))
+        if mode is None:
+            return None
+        return schema.SessionModeState(current_mode_id=mode, available_modes=[
+            schema.SessionMode(id=m, name=MODE_NAMES[m]) for m in PERMISSION_MODES])
+
+    async def set_session_mode(self, session_id: str, mode_id: str,
+                               **kw: Any) -> schema.SetSessionModeResponse:
+        if mode_id not in PERMISSION_MODES:
+            raise acp.RequestError(-32602, f"unknown mode {mode_id!r}")
+        await self.app.client.signal(session_id, MODE_SIGNAL, {"mode": mode_id})
+        return schema.SetSessionModeResponse()
 
     def _command_context(self, session_id: str) -> CommandContext:
         return CommandContext(cwd=self._cwd.get(session_id) or os.getcwd(), task_id=session_id)
@@ -429,6 +457,11 @@ class NoetaAcpAgent:
                 out.put_nowait(acp.update_tool_call(ev.call.id, status="in_progress"))
             elif isinstance(ev, ToolFinished):
                 out.put_nowait(finish_update(ev))
+            elif isinstance(ev, ExtensionRecorded) and ev.extension == "permissions" \
+                    and current_mode([rec]):
+                out.put_nowait(schema.CurrentModeUpdate(
+                    session_update="current_mode_update",
+                    current_mode_id=current_mode([rec]) or ""))
             elif isinstance(ev, ExtensionRecorded) and ev.extension == CORE:
                 if ev.kind == "retry":
                     turn.retried(int((ev.data or {}).get("attempt") or 1))
@@ -481,31 +514,28 @@ class NoetaAcpAgent:
             self._asked.add((p.task_id, p.request_id))
             await out.join()
             await self._ask_one(session_id, p.task_id, p.request_id,
-                                f"[{p.agent or 'sub-agent'}] {p.prompt or p.tool or p.request_id}",
-                                always_option(p.detail))
+                                card_title(p, session_id), choices(p.detail))
         return False
 
     async def _ask_permissions(self, session_id: str, waiting: Waiting) -> None:
         for call_id in waiting.ids:
             detail = waiting.detail.get(call_id) or {}
-            await self._ask_one(session_id, session_id, call_id,
-                                str(detail.get("prompt") or call_id), always_option(detail))
+            title = str(detail.get("title") or detail.get("prompt") or call_id)
+            await self._ask_one(session_id, session_id, call_id, title, choices(detail))
 
     async def _ask_one(self, session_id: str, task_id: str, call_id: str, title: str,
-                       always: str | None = "Always allow") -> None:
-        options = [schema.PermissionOption(option_id="allow", name="Allow", kind="allow_once")]
-        if always is not None:
-            options.append(schema.PermissionOption(option_id="always", name=always,
-                                                   kind="allow_always"))
-        options.append(schema.PermissionOption(option_id="deny", name="Deny", kind="reject_once"))
+                       options: list[dict[str, str]]) -> None:
+        kinds = {"allow": "allow_once", "always": "allow_always", "deny": "reject_once"}
         resp = await self.conn.request_permission(
-            session_id=session_id, options=options,
+            session_id=session_id, options=[
+                schema.PermissionOption(option_id=o["id"], name=o["label"],
+                                        kind=kinds.get(o["id"], "allow_once"))  # type: ignore[arg-type]
+                for o in options],
             tool_call=schema.ToolCallUpdate(tool_call_id=call_id, title=title))
         chosen = getattr(resp.outcome, "option_id", None)
-        if chosen in ("allow", "always"):
-            await self.app.client.answer(task_id, call_id, "allow", always=chosen == "always")
-        else:
-            await self.app.client.answer(task_id, call_id, "deny")
+        known = {o["id"] for o in options}
+        await answer_choice(self.app.client, task_id, call_id,
+                            chosen if chosen in known else "deny")
 
 
 async def serve_stdio(app: LocalApp, *, agent: str = "main", model: str = "",

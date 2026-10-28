@@ -22,6 +22,7 @@ import sys
 from typing import Any
 
 from noeta.cli.config import Settings, load_settings
+from noeta.core.pending import PERMISSION_MODES
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -31,8 +32,8 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--model")
     ap.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"))
     ap.add_argument("--permission-mode", default=None,
-                    choices=("default", "acceptEdits", "bypassPermissions"),
-                    help="ask before risky tools (default), let edits through, or never ask")
+                    choices=PERMISSION_MODES,
+                    help="the starting permission mode (default: auto)")
     ap.add_argument("--provider", choices=("anthropic", "openai_compat", "openai_responses"))
     ap.add_argument("--base-url")
     ap.add_argument("--store", help="sqlite:///path or postgres://... (default ~/.noeta/tasks.db)")
