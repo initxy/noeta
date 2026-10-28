@@ -57,6 +57,7 @@ the newest conversation in this directory, `noeta -r` lists them. A project's ow
 | `acp` | `noeta acp`: an Agent Client Protocol agent for Zed and other editors |
 | `server` | `noeta serve`: the HTTP / WebSocket API |
 | `postgres` | a Postgres store, for many workers |
+| `keyring` | `{keyring:service/user}` secret references in plugin settings |
 
 Install several at once: `'noeta[tui,images,acp,server,postgres] @ git+…'`.
 
