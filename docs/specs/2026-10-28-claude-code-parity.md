@@ -175,7 +175,7 @@ Phase 3 — behaviors around the model
 - [x] Memory: `CLAUDE.md` layers, `@import`, `.claude/rules`, per-project auto memory.
 - [ ] MCP: OAuth, headersHelper, SSE, streamable-http spelling, resources tools, elicitation via
   `noeta.core.questions`, deferred by default.
-- [ ] Sandbox for local exec (bubblewrap on Linux) with Claude Code's settings shape and domain
+- [x] Sandbox for local exec (bubblewrap on Linux) with Claude Code's settings shape and domain
   proxy.
 
 Phase 4 — missing tools
@@ -386,3 +386,26 @@ Phase 5 — front ends
   read. The parity replay writes noeta's copy of the scenario project in noeta's places and
   maps recorded paths to them; `CLAUDE_CONFIG_DIR` isolation dropped. `make parity` 42 → 42;
   the model-visible names are rows in `parity/deviations.md`.
+- 2026-10-28: Phase 3 sandbox. `LocalExecEnv(sandbox=...)` with Claude Code's `sandbox`
+  object (merged across settings files: lists add up, a project tightens but never loosens,
+  `bwrapPath` managed-only; `Edit` allow / `Read` deny / `WebFetch(domain:)` allow rules and
+  `additionalDirectories` feed it). Linux: bwrap (own net/pid/ipc/uts namespaces,
+  `--ro-bind / /`, writable working dir + `allowWrite` + private `$TMPDIR`, `.noeta` config and
+  `.git/hooks`/`.git/config` read-only, credential stores and noeta's home hidden) behind a
+  stdlib bridge that relays loopback proxy ports to per-command Unix sockets and execs the
+  command under seccomp (no `AF_UNIX`, no new user namespaces). macOS: a generated Seatbelt
+  profile (unit-tested only — no Mac here). Network: a per-command HTTP+SOCKS5 filter in a
+  daemon thread; refusals reach the model as `<sandbox_violations>`. Bash/background/Monitor
+  confined unless excluded or `dangerouslyDisableSandbox` (asked about whatever the allow
+  rules say); `autoAllowBashIfSandboxed`; `failIfUnavailable` refuses; Bash's description
+  gains a sandbox section only while the sandbox is on and can start
+  (`parity/rules/tools/Bash.md` `tool.Bash.s.*`). Containers: `start_container` locked down
+  by default (no network, read-only root, reduced caps, no-new-privileges, pids limit);
+  `sandbox=` maps `allowedDomains` onto an internal Docker network whose only exit is the
+  filter on its gateway. Tested on Linux (bwrap 0.6.1, Docker): writes outside fail, a
+  non-allowed host is refused, an allowed one is reached via the proxy, direct connections
+  fail, Unix sockets and `unshare -U` refused. Deviations: no mid-command prompt for unknown
+  hosts, `mask` credentials act as `deny`, no `/sandbox` command. Open: `allowed_domains`
+  Bash parameter (auto mode), the platform notes of Claude Code's sandbox section, violation
+  notes for background jobs, git commits from a sandboxed linked worktree (its `.git` lives
+  in the main repository, outside the writable set), macOS run on a real Mac.
