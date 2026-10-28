@@ -35,7 +35,8 @@ unfinished call is answered "outcome unknown", never re-run, unless its tool loo
 up (`Tool.recover`, by `ToolContext.idempotency_key`) or is `retry_safe`. What lives only in one worker
 process (a background job) holds the task tree there (`Store.hold`): other workers skip it until
 the hold is released, or reaped once it ran out (every worker reaps), which posts `hold_lost` to
-the tree's tasks; a hold's epoch fences its old holder.
+the tree's tasks, waking them (a worker stopping on purpose posts it without waking: the task
+hears with its next message); a hold's epoch fences its old holder.
 
 ## Layers
 

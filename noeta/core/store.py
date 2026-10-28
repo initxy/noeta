@@ -5,8 +5,9 @@ transaction:
 
 * ``append`` succeeds only for the claim's epoch and the expected last seq, so
   a task's log has one writer however many runners think they own it.
-* ``post`` is idempotent on ``dedupe_key`` and wakes a waiting task, and a
-  runner that goes to wait while unread inbox items exist is made ready
+* ``post`` is idempotent on ``dedupe_key`` and wakes a waiting task (unless
+  ``Post.wake`` is off: then it is read when something else wakes it), and
+  a runner that goes to wait while unread inbox items exist is made ready
   instead — so no message is ever left unseen.
 
 Leases (``lease_until``) only decide when a silent runner's task may be
@@ -141,14 +142,17 @@ class Post(Struct):
     task_id: str
     body: InboxKind
     dedupe_key: str | None = None
+    #: Make a waiting task ready. Off: the item waits in the inbox for the
+    #: task's next wake (news that needs no turn of its own).
+    wake: bool = True
 
 
-def hold_lost(task_id: str, worker: str, epoch: int) -> Post:
+def hold_lost(task_id: str, worker: str, epoch: int, *, wake: bool = True) -> Post:
     """The post that tells a task of the tree that hold ``epoch`` of
-    ``worker`` is gone."""
+    ``worker`` is gone (``wake``: see :class:`Post`)."""
     return Post(task_id=task_id, body=External(name=HOLD_LOST,
                                                data={"worker": worker, "epoch": epoch}),
-                dedupe_key=f"{HOLD_LOST}:{epoch}")
+                dedupe_key=f"{HOLD_LOST}:{epoch}", wake=wake)
 
 
 class NewTask(Struct):
@@ -248,8 +252,11 @@ class Store(Protocol):
     async def unhold(self, root_id: str, worker: str, epoch: int,
                      *, lost: bool = False) -> None:
         """Release that hold; a no-op once it is gone. ``lost``: what it
-        held is gone too (its worker is stopping), so ``hold_lost`` is
-        posted as :meth:`reap_holds` does."""
+        held is gone too (its worker is stopping on purpose), so
+        ``hold_lost`` is posted as :meth:`reap_holds` does, but without
+        waking a waiting task: the task hears of it with whatever wakes it
+        next (as Claude Code, closed, kills its background shells and says
+        nothing until the person writes again)."""
         ...
 
     async def reap_holds(self) -> int:

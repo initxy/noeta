@@ -443,11 +443,11 @@ class PostgresStore:
             "WITH ins AS (INSERT INTO {s}.inbox (task_id, seq, kind, at, data, dedupe_key)"
             f" VALUES (%(t)s, %(seq)s, %(kind)s, {_NOW}, %(data)s, %(key)s))"
             f" UPDATE {{s}}.tasks SET inbox_seq = %(seq)s, updated_at = {_NOW},"
-            " ready_at = CASE WHEN status = 'waiting' THEN NULL ELSE ready_at END,"
-            " status = CASE WHEN status = 'waiting' THEN 'ready' ELSE status END"
+            " ready_at = CASE WHEN status = 'waiting' AND %(wake)s THEN NULL ELSE ready_at END,"
+            " status = CASE WHEN status = 'waiting' AND %(wake)s THEN 'ready' ELSE status END"
             " WHERE task_id = %(t)s"),
             {"t": post.task_id, "seq": seq, "kind": inbox_kind(post.body),
-             "data": encode(post.body), "key": post.dedupe_key})
+             "data": encode(post.body), "key": post.dedupe_key, "wake": post.wake})
         return seq, True
 
     # ------------------------------------------------------------ Store
@@ -664,13 +664,14 @@ class PostgresStore:
         return await self._tx(tx)
 
     async def _lost_posts(self, conn: Conn, root_id: str, worker: str, epoch: int,
-                          changes: list[tuple[str, ChangeKind]]) -> None:
+                          changes: list[tuple[str, ChangeKind]], *, wake: bool = True) -> None:
         """Post ``hold_lost`` to every unended task of the tree."""
         cur = await conn.execute(self._q(
             "SELECT task_id FROM {s}.tasks WHERE root_id = %s AND status <> 'ended'"
             " ORDER BY task_id"), (root_id,))
         for (task_id,) in await cur.fetchall():
-            _, created = await self._insert_post(conn, hold_lost(str(task_id), worker, epoch))
+            _, created = await self._insert_post(conn, hold_lost(str(task_id), worker, epoch,
+                                                                     wake=wake))
             if created:
                 changes.append((str(task_id), "posted"))
 
@@ -687,7 +688,7 @@ class PostgresStore:
                 return
             changes.append((root_id, "released"))
             if lost:
-                await self._lost_posts(conn, root_id, worker, epoch, changes)
+                await self._lost_posts(conn, root_id, worker, epoch, changes, wake=False)
             await self._notify(conn, changes)
 
         await self._tx(tx)

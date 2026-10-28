@@ -270,7 +270,7 @@ class SqliteStore:
             " VALUES (?, ?, ?, ?, ?, ?)",
             (post.task_id, seq, inbox_kind(post.body), now, encode(post.body), post.dedupe_key),
         )
-        wake = status == "waiting"
+        wake = status == "waiting" and post.wake
         conn.execute(
             "UPDATE tasks SET inbox_seq = ?, updated_at = ?"
             + (", status = 'ready', ready_at = NULL" if wake else "")
@@ -491,12 +491,14 @@ class SqliteStore:
         return await self._write(tx)
 
     def _lost_posts(self, conn: sqlite3.Connection, root_id: str, worker: str, epoch: int,
-                    now: float, changes: list[tuple[str, ChangeKind]]) -> None:
+                    now: float, changes: list[tuple[str, ChangeKind]],
+                    *, wake: bool = True) -> None:
         """Post ``hold_lost`` to every unended task of the tree."""
         tasks = conn.execute("SELECT task_id FROM tasks WHERE root_id = ? AND status <> 'ended'",
                              (root_id,)).fetchall()
         for (task_id,) in tasks:
-            _, created = self._insert_post(conn, hold_lost(str(task_id), worker, epoch), now)
+            _, created = self._insert_post(conn, hold_lost(str(task_id), worker, epoch,
+                                                         wake=wake), now)
             if created:
                 changes.append((str(task_id), "posted"))
 
@@ -512,7 +514,8 @@ class SqliteStore:
                 return
             changes.append((root_id, "released"))
             if lost:
-                self._lost_posts(conn, root_id, worker, epoch, time.time(), changes)
+                self._lost_posts(conn, root_id, worker, epoch, time.time(), changes,
+                                 wake=False)
 
         changes.clear()
         await self._write(tx)
