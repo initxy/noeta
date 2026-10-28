@@ -91,6 +91,9 @@ SESSION_RULE_REL_DIRS: tuple[tuple[str, ...], ...] = (
 #: (the root task's id goes out as ``session_id``).
 SESSION_ALLOWED_IN: tuple[tuple[tuple[str, ...], frozenset[str]], ...] = (
     (("noeta", "plugins", "hooks"), frozenset({"SessionStart", "SessionEnd", "session_id"})),
+    # Claude Code's headless protocol: its messages' field and a control request.
+    (("noeta", "host", "stream_json.py"),
+     frozenset({"session_id", "get_session_cost", "_on_get_session_cost"})),
 )
 
 

@@ -1,12 +1,11 @@
 """Regressions from the re-review (front ends): a typed answer to the real
 AskUserQuestion is accepted, sub-agents' approvals and questions reach the
-TUI and ``noeta -p`` (which exits instead of hanging), a task whose agent
-this front end lacks opens read-only, and ``-p --json`` tags each fragment
-with its model call and attempt."""
+TUI and ``noeta -p`` (which refuses them, as Claude Code's headless mode does), a task whose agent
+this front end lacks opens read-only, and ``-p`` streams partial messages
+without a failed attempt's fragments."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -124,18 +123,23 @@ async def test_tui_answers_the_real_ask_user_with_a_label(tmp_path: Path) -> Non
 # ------------------------------------------------------------ P1-2 sub-agent requests
 
 
-async def test_print_mode_exits_when_a_sub_agent_waits_for_approval(
+def test_print_mode_refuses_a_sub_agents_approval_and_goes_on(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    provider = ScriptedProvider([reply("", ("Task", {})), reply("", ("Echo", {}))])
+    """Headless, nobody answers permission prompts (no ``--permission-prompt-tool
+    stdio``): a sub-agent's ask is refused, as Claude Code refuses it, and the
+    run goes on to its answer."""
+    provider = ScriptedProvider([reply("", ("Task", {})), reply("", ("Echo", {})),
+                                 reply("child gave up"), reply("final")])
     agents = main_and_worker(AskEcho())
-    monkeypatch.setattr(cli, "_app", lambda s, cwd=None, **kw: local(tmp_path, provider, *agents, **kw))
-    code = await asyncio.wait_for(cli._print_mode(
-        cli.Settings(model="m"), "go", cwd=str(tmp_path), as_json=False,
-        permission_mode=None), 10)
-    assert code == 2
-    err = capsys.readouterr().err
-    assert "'worker'" in err and "may the worker echo?" in err
+    monkeypatch.setattr(cli, "_app", lambda s, cwd=None, **kw: local(tmp_path, provider, *agents))
+    with pytest.raises(SystemExit) as done:
+        cli.main(["-p", "--output-format", "json", "go", "--model", "m",
+                  "--cwd", str(tmp_path)])
+    result = json.loads(capsys.readouterr().out)
+    assert done.value.code == 0 and result["result"] == "final"
+    [denied] = result["permission_denials"]
+    assert denied["tool_name"] == "Echo"
 
 
 async def test_tui_shows_and_answers_a_sub_agents_approval(tmp_path: Path) -> None:
@@ -222,22 +226,28 @@ class RetryOnce:
         return reply("good answer")
 
 
-async def test_print_json_tags_fragments_with_their_attempt(
+def test_partial_messages_drop_a_failed_attempt(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     agents = [Agent(name="main", model=MODEL)]
-    monkeypatch.setattr(cli, "_app", lambda s, cwd=None, **kw: local(tmp_path, RetryOnce(), *agents, **kw))
-    code = await cli._print_mode(cli.Settings(model="m"), "go", cwd=str(tmp_path),
-                                 as_json=True, permission_mode=None)
-    assert code == 0
+    monkeypatch.setattr(cli, "_app", lambda s, cwd=None, **kw: local(tmp_path, RetryOnce(),
+                                                                     *agents))
+    with pytest.raises(SystemExit) as done:
+        cli.main(["-p", "--output-format", "stream-json", "--verbose",
+                  "--include-partial-messages", "go", "--model", "m", "--cwd", str(tmp_path)])
+    assert done.value.code == 0
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
-    deltas = [x for x in lines if "delta" in x]
-    assert [(d["text"], d["attempt"]) for d in deltas] == [("broken par", 1), ("good answer", 2)]
-    assert deltas[0]["call"] == deltas[1]["call"] > 0
-    assert lines[-1]["answer"] == "good answer"
+    events = [x["event"] for x in lines if x["type"] == "stream_event"]
+    texts = [e["delta"]["text"] for e in events if e["type"] == "content_block_delta"]
+    assert texts == ["broken par", "good answer"]
+    starts = [i for i, e in enumerate(events) if e["type"] == "message_start"]
+    assert len(starts) == 2 and events[starts[1] - 1]["type"] == "message_stop"
+    [assistant] = [x for x in lines if x["type"] == "assistant"]
+    assert assistant["message"]["content"] == [{"type": "text", "text": "good answer"}]
+    assert lines[-1]["type"] == "result" and lines[-1]["result"] == "good answer"
 
 
-async def test_print_mode_waits_for_background_agents_and_surfaces_their_approvals(
+def test_print_mode_waits_for_background_agents(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from noeta.plugins.subtasks import SubagentSpec, Subtasks
@@ -252,19 +262,8 @@ async def test_print_mode_waits_for_background_agents_and_surfaces_their_approva
         reply("", ("SubagentHandback", {"message": "the report"})),
         reply("final from the report")])
     monkeypatch.setattr(cli, "_app",
-                        lambda s, cwd=None, **kw: local(tmp_path, provider, *agents, **kw))
-    code = await asyncio.wait_for(cli._print_mode(
-        cli.Settings(model="m"), "go", cwd=str(tmp_path), as_json=False,
-        permission_mode=None), 10)
-    assert code == 0
+                        lambda s, cwd=None, **kw: local(tmp_path, provider, *agents))
+    with pytest.raises(SystemExit) as done:
+        cli.main(["-p", "go", "--model", "m", "--cwd", str(tmp_path)])
+    assert done.value.code == 0
     assert capsys.readouterr().out.strip() == "final from the report"
-    provider = ScriptedProvider([
-        reply("", ("Agent", {"description": "d", "prompt": "sub job"})),
-        reply("launched"), reply("", ("Echo", {}))])
-    agents[1] = Agent(name="worker", model=MODEL, tools=[Echo()],
-                      extensions=[Subtasks(progress_labels=False), AskEcho()])
-    (tmp_path / "t.db").unlink()
-    code = await asyncio.wait_for(cli._print_mode(
-        cli.Settings(model="m"), "go", cwd=str(tmp_path), as_json=False,
-        permission_mode=None), 10)
-    assert code == 2 and "may the worker echo?" in capsys.readouterr().err
