@@ -33,7 +33,7 @@ from noeta.core.events import (
 )
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CORE
-from noeta.core.pending import Pending, follow_tree, pending_tree
+from noeta.core.pending import Pending, always_option, follow_tree, pending_tree
 from noeta.core.questions import next_question, typed_answer
 from noeta.core.types import Delta, Image, Message, Text, ToolUse
 from noeta.host.local import LocalApp, UnknownAgent
@@ -481,21 +481,23 @@ class NoetaAcpAgent:
             self._asked.add((p.task_id, p.request_id))
             await out.join()
             await self._ask_one(session_id, p.task_id, p.request_id,
-                                f"[{p.agent or 'sub-agent'}] {p.prompt or p.tool or p.request_id}")
+                                f"[{p.agent or 'sub-agent'}] {p.prompt or p.tool or p.request_id}",
+                                always_option(p.detail))
         return False
 
     async def _ask_permissions(self, session_id: str, waiting: Waiting) -> None:
         for call_id in waiting.ids:
             detail = waiting.detail.get(call_id) or {}
             await self._ask_one(session_id, session_id, call_id,
-                                str(detail.get("prompt") or call_id))
+                                str(detail.get("prompt") or call_id), always_option(detail))
 
-    async def _ask_one(self, session_id: str, task_id: str, call_id: str, title: str) -> None:
-        options = [
-            schema.PermissionOption(option_id="allow", name="Allow", kind="allow_once"),
-            schema.PermissionOption(option_id="always", name="Always allow", kind="allow_always"),
-            schema.PermissionOption(option_id="deny", name="Deny", kind="reject_once"),
-        ]
+    async def _ask_one(self, session_id: str, task_id: str, call_id: str, title: str,
+                       always: str | None = "Always allow") -> None:
+        options = [schema.PermissionOption(option_id="allow", name="Allow", kind="allow_once")]
+        if always is not None:
+            options.append(schema.PermissionOption(option_id="always", name=always,
+                                                   kind="allow_always"))
+        options.append(schema.PermissionOption(option_id="deny", name="Deny", kind="reject_once"))
         resp = await self.conn.request_permission(
             session_id=session_id, options=options,
             tool_call=schema.ToolCallUpdate(tool_call_id=call_id, title=title))

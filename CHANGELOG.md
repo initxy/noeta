@@ -9,6 +9,13 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Fixed
 
+- **An "always" shell approval no longer widens to the program and its first argument.**
+  Approving `rm -rf build` used to let `rm -rf /` run unasked (and wrote that rule to a
+  trusted project's `.noeta/shell-allowlist.json`). The remembered rule is now Claude Code's
+  `Bash(...)` form, seeded as Claude Code seeds it (`git push *`, `ls *`), and the exact
+  command for wrappers, destructive file programs and interpreters. The approval card (TUI)
+  and the ACP option name the rule (`Always allow Bash(git push *)`), and no "always" choice
+  is offered when nothing would be remembered. Approval details carry `always_label`.
 - `make example` ran a build uv had cached; it now installs the example plugin editable.
 - A second `registry.provider()` call for a family failed once that family's adapter module
   had been imported (the entry point named a package attribute the submodule rebound).

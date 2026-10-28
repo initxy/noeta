@@ -44,6 +44,7 @@ class FakeEditor:
     def __init__(self, choice: str = "allow") -> None:
         self.updates: list[Any] = []
         self.asked: list[str] = []
+        self.options: list[list[str]] = []
         self.choice = choice
 
     async def session_update(self, session_id: str, update: Any, **kw: Any) -> None:
@@ -52,6 +53,7 @@ class FakeEditor:
     async def request_permission(self, session_id: str, tool_call: Any, options: Any,
                                  **kw: Any) -> Any:
         self.asked.append(tool_call.title)
+        self.options.append([o.name for o in options])
         return schema.RequestPermissionResponse(
             outcome=schema.AllowedOutcome(outcome="selected", option_id=self.choice))
 
@@ -80,4 +82,37 @@ async def test_prompt_streams_tools_and_asks(tmp_path: Path) -> None:
     assert "agent_message_chunk" in k
     statuses = [u.status for u in editor.updates if u.session_update == "tool_call_update"]
     assert statuses[-1] == "completed"
+    assert editor.options == [["Allow", "Always allow", "Deny"]]
+    await app.stop()
+
+
+class AskNamingRule(Extension):
+    name = "ask"
+
+    def __init__(self, label: str | None) -> None:
+        self.label = label
+
+    async def before_tool(self, view: TaskView, call: ToolUse) -> Any:
+        always = {"kind": "shell", "spec": {"rule": self.label}} if self.label else None
+        return Ask(prompt="run it?", detail={"always": always,
+                                             "always_label": self.label and f"Bash({self.label})"})
+
+
+@pytest.mark.parametrize(("label", "shown"), [
+    ("git push *", ["Allow", "Always allow Bash(git push *)", "Deny"]),
+    (None, ["Allow", "Deny"]),
+])
+async def test_permission_options_name_the_remembered_rule(
+        tmp_path: Path, label: str | None, shown: list[str]) -> None:
+    provider = ScriptedProvider([reply("", ("Read", {"file_path": "a.py"})), reply("done")])
+    agent = Agent(name="main", model="m", tools=[Echo()], extensions=[AskNamingRule(label)])
+    app = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], provider,
+                   env_for=lambda _s: None)
+    acp_agent = NoetaAcpAgent(app)
+    editor = FakeEditor()
+    acp_agent.on_connect(editor)
+    await acp_agent.initialize(protocol_version=1)
+    session = await acp_agent.new_session(cwd=str(tmp_path))
+    await acp_agent.prompt(session.session_id, [schema.TextContentBlock(type="text", text="go")])
+    assert editor.options == [shown]
     await app.stop()

@@ -81,14 +81,18 @@ Decide = Callable[[str, str, bool], Awaitable[None]]
 
 
 class ApprovalCard(Vertical):
-    """Asks before a tool runs: allow once, always, or deny (y / a / n)."""
+    """Asks before a tool runs: allow once, always, or deny (y / a / n).
+    ``always`` is the "always" choice's text, naming the rule it remembers
+    (:func:`noeta.core.pending.always_option`); ``None`` offers none."""
 
     DEFAULT_CLASSES = "approval"
     BINDINGS = [("y", "choose('allow')", "Allow"), ("a", "choose('always')", "Always"),
                 ("n", "choose('deny')", "Deny")]
 
-    def __init__(self, call_id: str, title: str, prompt: str, decide: Decide) -> None:
+    def __init__(self, call_id: str, title: str, prompt: str, decide: Decide,
+                 always: str | None = "Always allow") -> None:
         super().__init__()
+        self.always = always
         self.call_id = call_id
         self.title_text = title
         self.prompt = prompt
@@ -101,7 +105,8 @@ class ApprovalCard(Vertical):
             yield Static(self.prompt, classes="approval-prompt")
         with Horizontal(classes="approval-buttons"):
             yield Button("Allow (y)", id="allow", variant="success", compact=True)
-            yield Button("Always (a)", id="always", compact=True)
+            if self.always is not None:
+                yield Button(f"{escape(self.always)} (a)", id="always", compact=True)
             yield Button("Deny (n)", id="deny", variant="error", compact=True)
 
     def on_mount(self) -> None:
@@ -111,14 +116,14 @@ class ApprovalCard(Vertical):
         await self.choose(choice)
 
     async def choose(self, choice: str) -> None:
-        if self.done:
+        if self.done or (choice == "always" and self.always is None):
             return
         self.done = True
         await self.decide(self.call_id, "deny" if choice == "deny" else "allow",
                           choice == "always")
         self.remove_children(".approval-buttons")
-        await self.mount(Static({"allow": "allowed", "always": "always allowed",
-                                 "deny": "denied"}[choice], classes="approval-result"))
+        shown = {"allow": "allowed", "deny": "denied"}.get(choice) or (self.always or "")
+        await self.mount(Static(escape(shown), classes="approval-result"))
 
     @on(Button.Pressed)
     async def _pressed(self, event: Button.Pressed) -> None:
