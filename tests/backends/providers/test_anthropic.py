@@ -723,3 +723,19 @@ async def test_timeout_maps_to_transient() -> None:
         await _provider().complete(_req())
 
 
+@respx.mock
+async def test_count_tokens_posts_one_user_message_with_the_counting_beta() -> None:
+    import json
+
+    route = respx.post(f"{BASE_URL}/v1/messages/count_tokens").mock(
+        return_value=httpx.Response(200, json={"input_tokens": 19_771}))
+    assert await _provider().count_tokens("claude-opus-5-5", "file text") == 19_771
+    sent = route.calls.last.request
+    assert json.loads(sent.content) == {"model": "claude-opus-5-5", "tools": [],
+                                        "messages": [{"role": "user", "content": "file text"}]}
+    assert sent.url.params["beta"] == "true"
+    assert "token-counting-2024-11-01" in sent.headers["anthropic-beta"].split(",")
+    route.mock(return_value=httpx.Response(404, json={}))
+    assert await _provider().count_tokens("claude-opus-5-5", "x") is None
+
+
