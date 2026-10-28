@@ -193,9 +193,7 @@ def root_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
         return _call(stop_id, "ScheduleWakeup", {"stop": True})
     pending = []
     if bg > 0 and not seen.failed(bg_id) and not seen.notified(bg_id):
-        job = re.search(r"with ID (\w+)", seen.results.get(bg_id, ("", False))[0])
-        if job is None or f"Background job {job.group(1)} was lost" not in seen.text:
-            pending.append("job")
+        pending.append("job")  # its end, or its loss, names the call
     if spec.get("agent") and not seen.failed(agent_id) and not seen.notified(agent_id):
         pending.append("agent")
     if spec.get("wake") and not seen.failed(wake_id) and not woke:

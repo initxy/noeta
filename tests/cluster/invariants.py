@@ -120,9 +120,13 @@ def jobs_of(records: Iterable[Recorded]) -> dict[str, list[tuple[int, str]]]:
 
 
 def check_jobs(tid: str, records: Sequence[Recorded]) -> list[str]:
-    """A background job is started once and settled (ended or lost) at most
-    once, never both."""
+    """A background job is started once, settled (ended or lost) at most
+    once, never both, and the model is told how it ended at most once (a
+    job called lost never reports an end after)."""
     out = []
+    for job, n in job_notices(records).items():
+        if n > 1:
+            out.append(f"{tid}: job {job} told to the model {n} times")
     for job, marks in jobs_of(records).items():
         kinds = [k for _s, k in marks]
         ends = [k for k in kinds if k in ("ended", "lost")]
@@ -141,23 +145,37 @@ def jobs_running(tid: str, records: Sequence[Recorded]) -> list[str]:
             if not any(k in ("ended", "lost") for _s, k in marks)]
 
 
-def lost_then_notified(records: Sequence[Recorded]) -> list[str]:
-    """Jobs the log calls lost whose end notice later reached the task anyway
-    (the job was alive all along: the model was told two stories)."""
-    lost = {job: seq for job, marks in jobs_of(records).items()
-            for seq, kind in marks if kind == "lost"}
-    out = []
-    for r in records:
-        if not isinstance(r.event, InputTaken):
+def job_notices(records: Sequence[Recorded]) -> Counter[str]:
+    """Job id -> how many notices of its end (or loss) the task took: a
+    ``<task-notification>`` naming the job with a status."""
+    jobs = set(jobs_of(records))
+    out: Counter[str] = Counter()
+    for text in taken_texts(records):
+        if "<task-notification>" not in text or "<status>" not in text:
             continue
-        for item in r.event.items:
-            body = item.body
-            if not isinstance(body, Say):
-                continue
-            for job, seq in lost.items():
-                if r.seq > seq and f"<task-id>{job}</task-id>" in body.message.text:
-                    out.append(f"job {job}: lost at seq {seq}, its end notice taken at {r.seq}")
+        for job in jobs:
+            if f"<task-id>{job}</task-id>" in text:
+                out[job] += 1
     return out
+
+
+def jobs_untold(tid: str, records: Sequence[Recorded]) -> list[str]:
+    """Jobs settled in the log whose end (or loss) the model never heard."""
+    told = job_notices(records)
+    return [f"{tid}: job {job} {[k for _s, k in marks]} but the model was never told"
+            for job, marks in jobs_of(records).items()
+            if any(k in ("ended", "lost") for _s, k in marks) and told[job] == 0]
+
+
+def lost_jobs_ended_late(records: Sequence[Recorded]) -> list[str]:
+    """Jobs the log calls lost whose end notice reached the task anyway (the
+    job was alive all along: the model was told two stories)."""
+    lost = {job for job, marks in jobs_of(records).items()
+            for _seq, kind in marks if kind == "lost"}
+    return [f"job {job}: lost, and its end ({status}) reached the task too"
+            for text in taken_texts(records) for job in lost
+            if f"<task-id>{job}</task-id>" in text
+            for status in ("completed", "killed") if f"<status>{status}</status>" in text]
 
 
 def taken_texts(records: Iterable[Recorded]) -> list[str]:

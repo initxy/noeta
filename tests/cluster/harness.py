@@ -1,8 +1,8 @@
 """Worker processes on one store, faults, and the run's outcome.
 
-The test drives noeta only from outside: worker processes started like
-``noeta worker`` (``worker.py``), a :class:`~noeta.core.client.Client` on the
-same store to create tasks, send messages and read logs, and signals.
+The test drives noeta only from outside: worker processes started as
+``noeta worker --lease``, a :class:`~noeta.core.client.Client` on the same
+store to create tasks, send messages and read logs, and signals.
 """
 
 from __future__ import annotations
@@ -33,12 +33,14 @@ from tests.cluster.invariants import (
     child_ends,
     jobs_of,
     jobs_running,
+    jobs_untold,
     last_reply,
     taken_texts,
     timers_taken,
 )
 
-WORKER = str(Path(__file__).parent / "worker.py")
+#: The ``noeta`` command of the environment the test runs in.
+NOETA = str(Path(sys.executable).parent / "noeta")
 MODEL = "cluster-scripted"
 ROOT_AGENT = "cluster"
 CHILD_AGENT = "cluster-child"
@@ -142,8 +144,7 @@ class Cluster:
         self.spawned += 1
         log = open(self.logs / f"worker-{self.spawned}.log", "wb")
         with log:
-            return subprocess.Popen([sys.executable, WORKER, self.url, str(self.work),
-                                     str(self.lease)],
+            return subprocess.Popen([NOETA, "worker", "--lease", str(self.lease)],
                                     cwd=self.work, env=self.env, stdout=log, stderr=log)
 
     async def start(self) -> None:
@@ -228,7 +229,7 @@ class Cluster:
 
     async def running_job_pids(self) -> list[tuple[str, int]]:
         """``(root id, worker pid)`` of every background job some root's log
-        shows running, from the job's ``worker`` (``host:pid``)."""
+        shows running, from the job's ``worker`` (``host:pid:random``)."""
         out = []
         for row in await self.rows():
             if row.parent_id is not None:
@@ -241,7 +242,7 @@ class Cluster:
                     data = getattr(r.event, "data", None)
                     if isinstance(data, dict) and data.get("job_id") == job \
                             and "worker" in data:
-                        out.append((row.task_id, int(str(data["worker"]).rsplit(":", 1)[1])))
+                        out.append((row.task_id, int(str(data["worker"]).split(":")[1])))
         return out
 
 
@@ -290,6 +291,7 @@ class Outcome:
                            f"{child_ends(records)[child.task_id]} times")
         for task in (r.task_id for r in self.rows if r.root_id == tid):
             out += jobs_running(task, self.logs[task])
+            out += jobs_untold(task, self.logs[task])
         spec = self.specs[sid]
         if spec.wake and "schedule.wakeup" not in timers_taken(records) \
                 and not self.interrupted(tid, f"wake-{sid}"):
@@ -439,6 +441,19 @@ async def chaos(cluster: Cluster, rng: random.Random, seconds: float, faults: Fa
             faults.log.append(f"{now:.1f} stop worker {i}")
     for pid in paused:
         cluster.resume(pid)
+
+
+async def kill_all(cluster: Cluster, rng: random.Random, seconds: float, faults: Faults, *,
+                   targets: set[str] | None = None) -> None:
+    """For ``seconds``: every 1.5-3 s SIGKILL every worker at once (each
+    respawned), so no worker lives to finish what another started."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        await asyncio.sleep(rng.uniform(1.5, 3.0))
+        for i in range(len(cluster.procs)):
+            cluster.kill(i)
+            faults.kills += 1
+        faults.log.append(f"{time.monotonic():.1f} kill every worker")
 
 
 async def kill_holder(cluster: Cluster, targets: set[str], faults: Faults) -> bool:
