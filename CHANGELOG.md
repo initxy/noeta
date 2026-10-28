@@ -136,6 +136,18 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Added
 
+- **The rest of Claude Code's deferred tools and frontmatter.** `EnterPlanMode` (asks the
+  person outside auto mode), `EnterWorktree` / `ExitWorktree` (the shell moves into a worktree
+  under `.noeta/worktrees/`), `ReadMcpResourceDirTool`; `WebSearch` takes `allowed_domains`,
+  `blocked_domains` and a required `mode` (its `count` is gone). Skills read `when_to_use`,
+  named `arguments`, `${NOETA_SKILL_DIR}`, `` !`cmd` ``, `paths` and `context: fork`, and
+  `allowed-tools` pre-approves. Agent files apply `skills`, `mcpServers`, `hooks`, `memory`,
+  `autoCompactWindow` and `initialPrompt`, and warn about unknown fields. Hooks gain the `agent`
+  and `mcp_tool` types and the PostToolBatch, StopFailure, PostModelSwitch and CwdChanged
+  events. `noeta -p` applies `--settings`, `--setting-sources`, `--mcp-config`,
+  `--strict-mcp-config` and `--agents`, and a `can_use_tool` answer's `updatedInput` for every
+  tool. MCP and Agent results reach Anthropic models as a block list
+  (`ToolOutput.block_list`); a reply with unparseable tool-call arguments is retried once.
 - **Claude Code's headless protocol** (`noeta.host.stream_json`): the stream-json messages
   (`system`/`init`, `assistant`, tool-result `user`, `stream_event`, `result` with usage, cost,
   durations, turns, permission denials and `structured_output`; the root task's id is the

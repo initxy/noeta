@@ -35,7 +35,7 @@ in the baseline list; also present for sub-agents. noeta's counterpart is `ToolS
 | `tool.ToolSearch.7` | Query form `select:A,B,C` fetches exactly those tools by name. | covered |
 | `tool.ToolSearch.8` | Query form of plain keywords does a keyword search returning up to `max_results` best matches. | covered |
 | `tool.ToolSearch.9` | Query form `+word rest` requires `word` in the tool name and ranks by the remaining terms. | covered |
-| `tool.ToolSearch.10` | The deferred set is not only MCP tools: built-in tools such as `WebFetch`, `WebSearch`, `NotebookEdit`, `Monitor`, `TaskStop`, `SendMessage`, the plan-mode, worktree and cron tools, and the MCP resource tools are deferred in the baseline (see `main-prompt.md` for the list). | covered for `WebFetch`, `WebSearch`, `NotebookEdit`, `Monitor`, `TaskStop` and the MCP tools; the plan-mode, worktree, cron and `SendMessage` tools are not built yet |
+| `tool.ToolSearch.10` | The deferred set is not only MCP tools: built-in tools such as `WebFetch`, `WebSearch`, `NotebookEdit`, `Monitor`, `TaskStop`, `SendMessage`, the plan-mode, worktree and cron tools, and the MCP resource tools are deferred in the baseline (see `main-prompt.md` for the list). | covered (`DesignSync` left out, `parity/deviations.md`) |
 
 ## Result shape
 
