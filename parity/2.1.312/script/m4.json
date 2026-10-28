@@ -1,0 +1,23 @@
+{
+ "session": "m4",
+ "steps": [
+  {
+   "name": "resume",
+   "say": "Continue: remind me what the last thing you did was.",
+   "turns": [
+    {
+     "content": [
+      {
+       "type": "text",
+       "text": "The last thing I did was implement the approved \"structured logging\" plan:\n\n1. **`src/calc.py`** — added `import logging`, a module-level `logger = logging.getLogger(__name__)` with a `NullHandler`, DEBUG entry/exit logs in `add`, `mul`, and `div` (lazy `%s` formatting plus an `extra` dict of fields), and an `ERROR` log on `div`'s zero-divisor path before it raises `ValueError`.\n2. **`tests/test_calc.py`** — added `test_add_logs_debug` and `test_div_by_zero_logs_error` using `caplog`.\n3. **`CLAUDE.md`** — extended the `src/calc.py` bullet to mention DEBUG logging and the `div` ERROR.\n\nThen I verified: `9 passed in 0.06s`; an unconfigured import of `add(2, 3)` printed just `5` with no log noise; and with `basicConfig(level=DEBUG)` the `div(1, 0)` run emitted `DEBUG:src.calc:div(1, 0)` then `ERROR:src.calc:division by zero` before the traceback.\n\nNothing has been committed. Still open, if you want them: fixing `CLAUDE.md`'s stale `python -m pytest` command (needs `.venv/bin/python` here) and committing the changes."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "n": 1
+    }
+   ]
+  }
+ ],
+ "subagents": [],
+ "compactions": []
+}
