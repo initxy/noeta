@@ -133,10 +133,25 @@ async def test_read_not_a_file(h: Harness, ws: Path) -> None:
     assert text_of(out) == "Read: not a file: 'adir'"
 
 
-async def test_read_missing_file(h: Harness) -> None:
+async def test_read_missing_file(h: Harness, ws: Path) -> None:
     out = await h.call(ReadTool(), file_path="nope.txt")
     assert out.is_error
-    assert text_of(out) == "Read: not a file: 'nope.txt'"
+    assert text_of(out) == f"Read: No file at that path (the working directory is {ws})."
+
+
+async def test_read_missing_file_suggests_another_extension(h: Harness, ws: Path) -> None:
+    (ws / "app.ts").write_text("x\n")
+    out = await h.call(ReadTool(), file_path="app.js")
+    assert text_of(out) == (
+        f"Read: No file at that path (the working directory is {ws}). Did you mean app.ts?")
+
+
+async def test_read_missing_file_suggests_the_path_inside_the_workspace(
+        h: Harness, ws: Path) -> None:
+    (ws / "src").mkdir()
+    (ws / "src" / "m.py").write_text("x\n")
+    out = await h.call(ReadTool(), file_path=str(ws.parent / "src" / "m.py"))
+    assert text_of(out).endswith(f"Did you mean {ws / 'src' / 'm.py'}?")
 
 
 async def test_read_reaches_outside_the_workspace(h: Harness, ws: Path) -> None:

@@ -22,6 +22,7 @@ from typing import Any
 from noeta.core.execenv import ExecEnv
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Image, Text
+from noeta.plugins.fs._missing import missing_file_message
 from noeta.plugins.fs._read_formats import (
     MAX_READ_TOKENS,
     read_notebook,
@@ -276,7 +277,9 @@ class ReadTool:
         ws = await Workspace.of(env)
         resolved = await ws.canonical(path)
         st = await env.stat(resolved)
-        if st is None or st.is_dir:
+        if st is None:
+            return tool_error(self.name, await missing_file_message(ws, resolved))
+        if st.is_dir:
             return tool_error(self.name, f"not a file: {path!r}")
         display = ws.relative(resolved)
         offset = _positive_int(input.get("offset")) or 1
