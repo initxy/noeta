@@ -324,3 +324,10 @@ def test_a_continuation_keeps_finished_runs_only() -> None:
     st = ext.reduce(st, "run", {"run_id": "r2"})
     st = ext.reduce(st, "ended", {"run_id": "r2", "status": "done"})
     assert list(ext.continue_state(st)["runs"]) == ["r2"]
+
+
+def test_a_run_keeps_two_to_sixteen_agents_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.plugins import workflow
+    for cpus, want in [(1, 2), (3, 2), (8, 6), (64, 16)]:
+        monkeypatch.setattr(workflow.os, "cpu_count", lambda c=cpus: c)
+        assert workflow.default_max_running() == want

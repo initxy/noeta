@@ -47,8 +47,8 @@ SCHEMA_NOTE = ("\n\nYou are a step of a workflow script: your final reply is par
 
 
 def default_max_running() -> int:
-    """Agents one run keeps running at once: min(16, CPUs - 2), at least 1."""
-    return max(1, min(16, (os.cpu_count() or 4) - 2))
+    """Agents one run keeps running at once: CPUs - 2, between 2 and 16."""
+    return min(16, max(2, (os.cpu_count() or 4) - 2))
 
 
 class Sink(Protocol):
