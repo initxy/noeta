@@ -87,8 +87,11 @@ files = ["noeta"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-ra -m 'not live' --import-mode=importlib"
-markers = ["live: needs a real model backend; opt in with -m live"]
+addopts = "-ra -m 'not live and not cluster' --import-mode=importlib"
+markers = [
+    "live: needs a real model backend; opt in with -m live",
+    "cluster: worker processes on Postgres under faults; run with make cluster",
+]
 
 [tool.coverage.run]
 source = ["noeta"]
