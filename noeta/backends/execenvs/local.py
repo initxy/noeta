@@ -7,8 +7,11 @@ group is what reaps backgrounded grandchildren (``bash -c "server & wait"``)
 that a single-PID kill would orphan. Captured output is bounded while it is
 read, so a command printing hundreds of MB is never buffered whole.
 
-The spawned process is **not** sandboxed: it can do anything the host user
-can. File operations run in ``asyncio.to_thread``.
+A spawned process can do anything the host user can, unless the env was given
+sandbox settings (``sandbox=``, Claude Code's ``sandbox`` object): then
+``env.sandbox`` is a :class:`~noeta.backends.execenvs.sandbox.LocalSandbox`
+the ``Bash`` tool runs its commands through (:mod:`noeta.toolkit.sandbox`).
+File operations run in ``asyncio.to_thread``.
 """
 
 from __future__ import annotations
@@ -21,7 +24,9 @@ import stat as _st
 import tempfile
 from collections.abc import Mapping, Sequence
 
+from noeta.backends.execenvs.sandbox import LocalSandbox
 from noeta.core.execenv import ENV_ALLOWLIST, FileStat, RunResult, scrub_env
+from noeta.toolkit.sandbox import SandboxSettings
 
 __all__ = ["ENV_ALLOWLIST", "LocalExecEnv", "scrub_env", "send_group_signal"]
 
@@ -145,6 +150,9 @@ class LocalExecEnv:
     ``cwd`` is the workspace directory relative paths resolve against.
     ``inherit_env`` names host variables commands inherit past
     :data:`ENV_ALLOWLIST`. ``kill_grace`` is the SIGTERM -> SIGKILL window.
+    ``sandbox`` — Claude Code's ``sandbox`` settings (a mapping, or
+    :class:`SandboxSettings`); when they enable it, :attr:`sandbox` confines
+    the commands the shell tools run.
     """
 
     #: Commands run on this machine (``noeta.core.execenv.is_local``).
@@ -156,10 +164,16 @@ class LocalExecEnv:
         *,
         inherit_env: Sequence[str] = (),
         kill_grace: float = KILL_GRACE_S,
+        sandbox: SandboxSettings | Mapping[str, object] | None = None,
     ) -> None:
         self.cwd = os.path.abspath(cwd)
         self.inherit_env = tuple(inherit_env)
         self.kill_grace = kill_grace
+        settings = sandbox if isinstance(sandbox, SandboxSettings) or sandbox is None \
+            else SandboxSettings.from_json(sandbox, base_dir=self.cwd)
+        self.sandbox: LocalSandbox | None = (
+            LocalSandbox(settings, self.cwd) if settings is not None and settings.enabled
+            else None)
 
     def _abs(self, path: str) -> str:
         return path if os.path.isabs(path) else os.path.join(self.cwd, path)
