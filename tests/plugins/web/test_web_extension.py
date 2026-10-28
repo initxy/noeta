@@ -291,14 +291,23 @@ async def test_search_results_and_counts(tmp_path: Path) -> None:
     fake = FakeSearch([SearchResult("T", "https://u", "snip"), SearchResult("", "https://v", "")])
     tool = WebSearchTool(fake)
     out = await tool.run({"query": "q", "mode": "extended"}, _ctx(tmp_path))
-    assert text(out) == "1. [T](https://u)\n   snip\n\n2. [https://v](https://v)"
+    assert text(out) == (
+        'Web search results for query: "q"\n\n'
+        'Links: [{"title": "T", "url": "https://u"}, {"title": "https://v", "url": "https://v"}]'
+        "\n\n1. [T](https://u)\n   snip\n\n2. [https://v](https://v)\n\n"
+        "Reminder: cite the sources above in your reply, as Markdown links.")
     await tool.run({"query": "q", "mode": "standard"}, _ctx(tmp_path))
     assert [c for _, c in fake.calls] == [10, 5]
     assert tool.input_schema["required"] == ["query", "mode"]
     assert "count" not in tool.input_schema["properties"]
     none = await WebSearchTool(FakeSearch([])).run({"query": "zz"}, _ctx(tmp_path))
-    assert text(none) == "No results were found for 'zz'. Try different search terms."
+    assert not none.is_error
+    assert text(none) == 'Web search results for query: "zz"\n\nNo links found.'
     assert text(await tool.run({}, _ctx(tmp_path))) == "WebSearch requires a non-empty 'query'"
+    both = await tool.run({"query": "q", "allowed_domains": ["a.com"],
+                           "blocked_domains": ["b.com"]}, _ctx(tmp_path))
+    assert both.is_error and text(both) == (
+        "WebSearch takes allowed_domains or blocked_domains, not both in one search")
 
 
 async def test_tavily_transport() -> None:
@@ -325,16 +334,19 @@ async def test_domain_filters_and_mode_reach_tavily_and_the_hits(tmp_path: Path)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     tool = WebSearchTool(HttpSearchTransport("k", client=client))
-    out = await tool.run({"query": "q", "mode": "extended", "allowed_domains": ["a.com"],
-                          "blocked_domains": ["evil.a.com"]}, _ctx(tmp_path))
+    out = await tool.run({"query": "q", "mode": "extended", "allowed_domains": ["a.com"]},
+                         _ctx(tmp_path))
     assert sent[0]["include_domains"] == ["a.com"] and sent[0]["search_depth"] == "advanced"
-    assert sent[0]["exclude_domains"] == ["evil.a.com"]
-    assert text(out) == "1. [a](https://docs.a.com/x)"
+    assert "https://docs.a.com/x" in text(out) and "https://b.com/y" not in text(out)
+    out = await tool.run({"query": "q", "mode": "extended", "blocked_domains": ["evil.a.com"]},
+                         _ctx(tmp_path))
+    assert sent[1]["exclude_domains"] == ["evil.a.com"]
+    assert "https://b.com/y" in text(out) and "evil" not in text(out)
     # A transport without the keywords still gets its hits filtered.
     plain = WebSearchTool(FakeSearch([SearchResult("x", "https://b.com", "")]))
     out = await plain.run({"query": "q", "mode": "standard", "blocked_domains": ["b.com"]},
                           _ctx(tmp_path))
-    assert "No results" in text(out)
+    assert "No links found." in text(out)
     await client.aclose()
 
 

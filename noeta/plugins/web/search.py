@@ -1,5 +1,6 @@
-"""``WebSearch``: ranked hits as a Markdown list, through the Tavily Search
-API as in 0.6. Every result opens with the provenance line.
+"""``WebSearch``: ranked hits through the Tavily Search API as in 0.6, in
+Claude Code's result shape: the query, the hits' titles and URLs as a JSON
+list, then each hit with its snippet, and a reminder to cite the sources.
 
 Claude Code's parameters: ``allowed_domains`` / ``blocked_domains`` filter
 the hits (passed to a transport that takes them, and applied to what comes
@@ -9,6 +10,7 @@ back either way) and ``mode`` picks a quick search or a thorough one.
 from __future__ import annotations
 
 import inspect
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib import resources
@@ -36,6 +38,8 @@ EXTENDED_COUNT = 10
 MODES = ("standard", "extended")
 #: Claude Code's ``maxResultSizeChars`` for WebSearch.
 WEBSEARCH_RESULT_LIMIT = 100_000
+#: The line closing every result that has hits.
+CITE_REMINDER = "Reminder: cite the sources above in your reply, as Markdown links."
 
 
 @dataclass(frozen=True)
@@ -168,6 +172,9 @@ class WebSearchTool:
             return text_output("WebSearch requires a non-empty 'query'", is_error=True)
         allowed, blocked = _domains(input.get("allowed_domains")), \
             _domains(input.get("blocked_domains"))
+        if allowed and blocked:
+            return text_output("WebSearch takes allowed_domains or blocked_domains, not both "
+                               "in one search", is_error=True)
         extended = input.get("mode") == "extended"
         count = EXTENDED_COUNT if extended else DEFAULT_COUNT
         try:
@@ -181,10 +188,12 @@ class WebSearchTool:
             return text_output(f"WebSearch failed: {exc}", is_error=True)
         results = [r for r in results if (not allowed or _host_in(r.url, allowed))
                    and not _host_in(r.url, blocked)]
+        header = f'Web search results for query: "{query}"\n\n'
         if not results:
-            return text_output(f"No results were found for {query!r}. "
-                               "Try different search terms.", hits=0)
-        body = results_to_markdown(results)
+            return text_output(header + "No links found.", hits=0)
+        links = json.dumps([{"title": r.title.strip() or r.url.strip(), "url": r.url.strip()}
+                            for r in results], ensure_ascii=False)
+        body = f"{header}Links: {links}\n\n{results_to_markdown(results)}"
         if len(body) > _INLINE_RESULT_MAX_CHARS:
             total = len(body)
             body = body[:_INLINE_RESULT_MAX_CHARS] + (
@@ -192,4 +201,4 @@ class WebSearchTool:
                 f"{_INLINE_RESULT_MAX_CHARS} of {total} characters. Refine "
                 "the query.)")
         text = await limit_output(body, WEBSEARCH_RESULT_LIMIT, ctx)
-        return text_output(text, hits=len(results))
+        return text_output(f"{text}\n\n{CITE_REMINDER}", hits=len(results))
