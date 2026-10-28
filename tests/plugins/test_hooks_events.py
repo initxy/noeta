@@ -204,6 +204,28 @@ async def test_pre_tool_use_rewrites_once_and_adds_context(tmp_path: Path) -> No
     assert second[-1].origin == "system"
 
 
+async def test_a_rewrite_is_recorded_so_another_worker_does_not_ask_again(
+        tmp_path: Path) -> None:
+    """The hook's verdict on its own rewrite is in the log: the worker that
+    picks the call up after its approval does not ask the hook about it."""
+    config = {"PreToolUse": hook("pre")}
+    rewrite = specific("PreToolUse", permissionDecision="ask",
+                       updatedInput={"file_path": "b.txt"})
+    s = await Setup(tmp_path, config, [reply("", READ_A), reply("ok")],
+                    answers={"pre": rewrite}).start()
+    last = (await s.events())[-1]
+    assert isinstance(last, Waiting) and last.on == "approval"
+    assert len(s.runner.payloads("pre")) == 1
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Hooks(hooks=config, runner=s.runner), FileTools()])
+    await s.client.answer(s.tid, last.ids[0], "allow")
+    await s.runtime().run_until_idle()
+    [(text, is_error)] = await s.results()
+    assert not is_error and "other" in text
+    # Asked once more about the model's own call, never about its rewrite.
+    assert [p["tool_input"] for p in s.runner.payloads("pre")] == [{"file_path": "a.txt"}] * 2
+
+
 async def test_if_condition_and_once(tmp_path: Path) -> None:
     hooks = {"PreToolUse": [{"hooks": [
         {"type": "command", "command": "only-b", "if": "Read(b.txt)"},

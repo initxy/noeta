@@ -11,7 +11,7 @@ from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import httpx
 import msgspec
@@ -175,10 +175,6 @@ class Hooks(Extension):
         #: again, and the hook is not asked about its own rewrite.
         self._rewrites: OrderedDict[tuple[str, str], tuple[dict[str, Any], Gate | None]] = \
             OrderedDict()
-        #: PermissionRequest answers not yet folded into the task's state.
-        self._decisions: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
-        #: ``once`` hooks run in a step whose records are not folded yet.
-        self._ran_once: OrderedDict[tuple[str, str], bool] = OrderedDict()
 
     # ------------------------------------------------------------ state
 
@@ -214,8 +210,15 @@ class Hooks(Extension):
         return st
 
     def _state(self, view: TaskView) -> _State:
-        st = view.ext_state(self.name)
-        return st if isinstance(st, _State) else _State()
+        """This plugin's state, with what it recorded on ``view`` and the
+        runner has not folded yet (a ``once`` hook run, a PermissionRequest
+        answer earlier in the same step)."""
+        found = view.ext_state(self.name)
+        st: _State = found if isinstance(found, _State) else _State()
+        for ev in view.pending:
+            if isinstance(ev, ExtensionRecorded) and ev.extension == self.name:
+                st = cast(_State, self.reduce(st, ev.kind, ev.data))
+        return st
 
     # ------------------------------------------------------------ running
 
@@ -265,7 +268,7 @@ class Hooks(Extension):
                     ctx = RuleContext(root=cwd, home=os.path.expanduser("~"), cwd=cwd)
                     if not match(h.condition, call.name, call.input, ctx):
                         continue
-                if h.once and (h.key in done or (view.task_id, h.key) in self._ran_once):
+                if h.once and h.key in done:
                     continue
                 seen.add(h.key)
                 out.append(h)
@@ -301,10 +304,8 @@ class Hooks(Extension):
         full = self._payload(event, view, payload)
         cwd = self._cwd(view)
         for h in hooks:
-            if h.once:
-                _remember(self._ran_once, (view.task_id, h.key), True)
-                if record:
-                    view.record(self.name, "once", {"key": h.key})
+            if h.once and record:
+                view.record(self.name, "once", {"key": h.key})
         for h in hooks:
             if h.background:
                 self._spawn(self._one(h, full, cwd, view, transcript))
@@ -483,11 +484,9 @@ class Hooks(Extension):
         gated again is not asked about twice."""
         if "PermissionRequest" not in self.matchers:
             return None
-        decided = self._state(view).permission.get(call.id) \
-            or self._decisions.get((view.task_id, call.id))
+        decided = self._state(view).permission.get(call.id)
         if decided is None:
             decided = await self._permission_request(view, call)
-            _remember(self._decisions, (view.task_id, call.id), decided)
             view.record(self.name, "permission", {"call_id": call.id, **decided})
             if decided.get("behavior") == "deny" and decided.get("interrupt"):
                 await self._stop_turn(view, "")
