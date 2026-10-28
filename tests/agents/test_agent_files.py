@@ -185,10 +185,11 @@ def test_claude_code_fields_become_plugin_arguments(caplog: pytest.LogCaptureFix
         "hooks: {Stop: [{hooks: [{type: command, command: 'true'}]}]}\n"
         "initialPrompt: Start here.\nbackground: true\ncacheTtl: 1h\n---\nP\n",
         source="overlay-rev.md")
+    stop = {"hooks": [{"type": "command", "command": "true"}]}
     assert plugin_overlays(f) == [
         ("skills", {"preload": ["a", "b"]}),
         ("mcp", {"agent_servers": {"local": {"command": "srv"}}}),
-        ("hooks", {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "true"}]}]}}),
+        ("hooks", {"hooks": {"Stop": [stop], "SubagentStop": [stop]}}),
         ("memory", {"agent_scope": "project", "agent_name": "rev"}),
         ("compaction", {"auto_compact_window": 120_000}),
     ]

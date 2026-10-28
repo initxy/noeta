@@ -204,7 +204,13 @@ def plugin_overlays(f: AgentFile) -> list[PluginEntry]:
                 inline.update(item)
         out.append(("mcp", {"agent_servers": inline} if inline else {}))
     if x.get("hooks"):
-        out.append(("hooks", {"hooks": dict(x["hooks"])}))
+        hooks = dict(x["hooks"])
+        if isinstance(hooks.get("Stop"), list):
+            # The agent's own Stop hooks are its SubagentStop when it runs
+            # as a sub-agent (Claude Code converts them); a main agent
+            # never fires SubagentStop, a sub-agent never Stop.
+            hooks["SubagentStop"] = [*(hooks.get("SubagentStop") or []), *hooks["Stop"]]
+        out.append(("hooks", {"hooks": hooks}))
     if x.get("memory"):
         out.append(("memory", {"agent_scope": x["memory"], "agent_name": f.name}))
     if x.get("autoCompactWindow") is not None:
