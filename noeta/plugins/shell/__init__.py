@@ -21,6 +21,7 @@ of the task that started it ends.
 
 from __future__ import annotations
 
+import copy
 import re
 from collections.abc import Sequence
 from typing import Any
@@ -30,9 +31,10 @@ from noeta.core.extension import Extension, TaskView
 from noeta.core.loop.state import CORE
 from noeta.core.tool import Tool
 from noeta.core.types import user
-from noeta.plugins.shell.bash import SHELL, BashTool, ShellState, reduce_shell
+from noeta.plugins.shell.bash import SHELL, BashTool, ShellState, reduce_shell, sandbox_description
 from noeta.plugins.shell.jobs import DEFAULT_LOG_DIR, REGISTRY, Registry
 from noeta.plugins.shell.tools import LOST_REASON, BackgroundBash, MonitorTool, TaskStopTool
+from noeta.toolkit.sandbox import sandbox_of
 
 __all__ = ["SHELL", "BashTool", "Registry", "Shell", "lost_text"]
 
@@ -73,6 +75,9 @@ class Shell(Extension):
             registry = Registry(max_jobs=max_jobs or 8, log_dir=log_dir or DEFAULT_LOG_DIR)
         self.registry = registry if registry is not None else REGISTRY
         self.ends_with_turn = background_ends_with_turn
+        #: The tool list with ``Bash`` describing the sandbox, per settings
+        #: and working directory.
+        self._sandboxed: dict[tuple[Any, str], list[Tool]] = {}
         if not background:
             self._tools: list[Tool] = [BashTool(**(bash or {}))]
             return
@@ -89,7 +94,16 @@ class Shell(Extension):
         return reduce_shell(state, kind, data)
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
-        return self._tools
+        sandbox = sandbox_of(view.env)
+        if sandbox is None or sandbox.unavailable() is not None:
+            return self._tools
+        root = str(getattr(view.env, "cwd", "") or "")
+        key = (sandbox.settings, root)
+        if key not in self._sandboxed:
+            bash = copy.copy(self._tools[0])
+            bash.description = sandbox_description(bash.description, sandbox, root)
+            self._sandboxed[key] = [bash, *self._tools[1:]]
+        return self._sandboxed[key]
 
     # ------------------------------------------------------------ lifecycle
 

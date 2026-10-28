@@ -37,7 +37,7 @@ import socket
 import string
 import tempfile
 import weakref
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -193,13 +193,17 @@ class Registry:
     async def spawn(self, *, env: ExecEnv, command: str, cwd: str, env_vars: Mapping[str, str],
                     root_id: str, spawner_id: str, tool_use_id: str, description: str,
                     post: Post, monitor_timeout_ms: float | None = None,
-                    release: Release | None = None) -> Job | str:
+                    release: Release | None = None,
+                    argv: Sequence[str] | None = None) -> Job | str:
         """Start a job, or return the refusal text. ``release`` is awaited
-        once the job has ended (or was refused)."""
+        once the job has ended (or was refused). ``argv``: what runs instead
+        of ``bash -c command`` (the command wrapped in a sandbox); the log
+        redirection stays outside it."""
         job = await self._spawn(env=env, command=command, cwd=cwd, env_vars=env_vars,
                                 root_id=root_id, spawner_id=spawner_id,
                                 tool_use_id=tool_use_id, description=description, post=post,
-                                monitor_timeout_ms=monitor_timeout_ms, release=release)
+                                monitor_timeout_ms=monitor_timeout_ms, release=release,
+                                argv=argv)
         if isinstance(job, str) and release is not None:
             await release()
         return job
@@ -207,7 +211,7 @@ class Registry:
     async def _spawn(self, *, env: ExecEnv, command: str, cwd: str, env_vars: Mapping[str, str],
                      root_id: str, spawner_id: str, tool_use_id: str, description: str,
                      post: Post, monitor_timeout_ms: float | None,
-                     release: Release | None) -> Job | str:
+                     release: Release | None, argv: Sequence[str] | None) -> Job | str:
         running = len(self.running(root_id))
         if running >= self.max_jobs:
             return (f"too many background jobs ({running}/{self.max_jobs}); stop one with "
@@ -232,8 +236,10 @@ class Registry:
                                         stop=lambda: self._stop_quietly(job))
         self.jobs.setdefault(root_id, {})[job_id] = job
         redirect = f"2>{shlex.quote(err)}" if err is not None else "2>&1"
-        script = f"exec >{shlex.quote(out)} {redirect}\n{command}"
-        job.proc = asyncio.ensure_future(env.run(["bash", "-c", script], cwd=cwd,
+        script = f"exec >{shlex.quote(out)} {redirect}\n" + (
+            'exec "$@"' if argv is not None else command)
+        run = ["bash", "-c", script] + (["bash", *argv] if argv is not None else [])
+        job.proc = asyncio.ensure_future(env.run(run, cwd=cwd,
                                                  env=dict(env_vars), timeout=None,
                                                  output_cap=4096))
         job.task = asyncio.create_task(self._run(job, monitor_timeout_ms))

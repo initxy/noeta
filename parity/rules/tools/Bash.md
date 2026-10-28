@@ -29,7 +29,7 @@ property carries its own `description`.
 | `tool.Bash.p.timeout` | `timeout` | number | no | milliseconds; property text names the 600000 ceiling for a foreground command | covered |
 | `tool.Bash.p.description` | `description` | string | no | see `tool.Bash.12`-`tool.Bash.15` for what it must say | covered |
 | `tool.Bash.p.run_in_background` | `run_in_background` | boolean | no | true detaches the command | covered |
-| `tool.Bash.p.dangerouslyDisableSandbox` | `dangerouslyDisableSandbox` | boolean | no | true asks to run outside the sandbox | covered in the schema; no effect until the local sandbox (spec Phase 3) |
+| `tool.Bash.p.dangerouslyDisableSandbox` | `dangerouslyDisableSandbox` | boolean | no | true asks to run outside the sandbox | covered: with the sandbox on, the command leaves it after an approval (`tool.Bash.s.6`) |
 | `tool.Bash.p.schema` | (schema shape) | - | - | `$schema` 2020-12, `additionalProperties: false`, a `description` on each property | covered |
 
 ## Rules
@@ -78,3 +78,23 @@ Observed in `m1`, `m2`, `m3`, `s1`.
 
 - `m2` (default permission mode) adds `tool.Bash.21`'s "avoid `cat`/`head`/..." line; schema is
   identical. `s1` (OAuth) is identical to `m1`.
+
+## Sandbox variant
+
+Not recorded (the baseline runs with `sandbox.enabled` unset); taken from the 2.1.312 bundle.
+With `sandbox.enabled` and a sandbox that can start, the description gains a sandbox section
+(noeta: `noeta/plugins/shell/descriptions/shell_sandbox*.md`).
+
+| id | rule | noeta today |
+|---|---|---|
+| `tool.Bash.s.1` | The section states what the sandbox allows: where commands may write, which hosts they may reach, and that denied connections are reported in a `<sandbox_violations>` block. | covered |
+| `tool.Bash.s.2` | Default to running inside the sandbox; set `dangerouslyDisableSandbox: true` only when the user explicitly asks, or a command just failed with evidence the sandbox caused it (commands fail for many other reasons). | covered |
+| `tool.Bash.s.3` | Evidence: "Operation not permitted" on file or network operations, access denied outside allowed directories, connection failures to hosts not allowed, Unix socket errors. | covered |
+| `tool.Bash.s.4` | On that evidence, retry at once with `dangerouslyDisableSandbox: true` without asking (it goes through the permission gate), and briefly explain the likely restriction and how the user can change the sandbox settings. | covered (points at the settings' `sandbox` section, see `parity/deviations.md`) |
+| `tool.Bash.s.5` | A denial on a credential, file or host the task does not involve: tell the user rather than retrying outside. Each unsandboxed run is decided on its own. Never suggest adding sensitive paths to the allowlist. | covered |
+| `tool.Bash.s.6` | Leaving the sandbox goes through the permission gate even when an allow rule matches (a prompt, or the classifier in auto mode). | covered (`noeta/plugins/permissions`) |
+| `tool.Bash.s.7` | With `allowUnsandboxedCommands: false` the parameter is said to be disabled, and a sandbox failure is reported to the user instead. | covered |
+| `tool.Bash.s.8` | Temporary files go under `$TMPDIR`. | covered |
+| `tool.Bash.s.9` | `autoAllowBashIfSandboxed` (default true): a command that runs sandboxed needs no approval. | covered (not in plan mode) |
+| `tool.Bash.s.10` | An `allowed_domains` parameter widens the network for one sandboxed command (auto mode). | missing |
+| `tool.Bash.s.11` | Platform notes (macOS `open`/`osascript`, Windows localhost and TLS, git repositories made in the sandbox, `pytest` cache). | missing |

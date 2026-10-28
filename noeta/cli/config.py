@@ -41,9 +41,12 @@ from noeta.cli.settings_files import (
 )
 from noeta.cli.settings_files import load as load_file_settings
 from noeta.core import models, registry
+from noeta.core.execenv import ExecEnv
 from noeta.core.provider import Provider
+from noeta.toolkit.sandbox import SandboxSettings
 
 if TYPE_CHECKING:
+    from noeta.core.loop.state import TaskState
     from noeta.host.local import LocalApp
 
 log = logging.getLogger("noeta.cli")
@@ -185,6 +188,16 @@ def _permission_arguments(found: FileSettings) -> dict[str, Any]:
             log.warning("settings: permission mode %r is not one noeta has; ignored",
                         args.pop("mode"))
     return args
+
+
+def sandboxed_env_for(sandbox: SandboxSettings) -> Any:
+    """The runtime's ``env_for``: each task's local env on its ``cwd``, with
+    the settings' sandbox."""
+    def env_for(state: TaskState) -> ExecEnv:
+        cwd = str(state.config.get("cwd") or os.getcwd())
+        return registry.execenv("local", cwd, sandbox=sandbox)
+
+    return env_for
 
 
 def merge_plugin_settings(*tables: Mapping[str, PluginSetting]) -> dict[str, PluginSetting]:
@@ -355,6 +368,19 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         settings.plugins, plugins or {})
     agents = default_agents(settings.model, plugins=table, add=settings.add_plugins,
                             extra_files=files)
+    sandbox = SandboxSettings.from_settings(found.sandbox, found.permissions,
+                                            base_dir=str(cwd or os.getcwd()))
+    if sandbox.enabled:
+        runtime_kw.setdefault("env_for", sandboxed_env_for(sandbox))
+        probe = registry.execenv("local", str(cwd or os.getcwd()), sandbox=sandbox)
+        reason = getattr(getattr(probe, "sandbox", None), "unavailable", lambda: None)()
+        if reason is not None:
+            notice = (f"sandbox.enabled is set but the sandbox cannot start: {reason}. "
+                      + ("Commands that would run in it are refused (failIfUnavailable)."
+                         if sandbox.fail_if_unavailable else
+                         "Commands run without it."))
+            log.warning("%s", notice)
+            notices.append(notice)
     runtime_kw.setdefault("prompt_dirs", [str(HOME / "prompts")])
     runtime_kw.setdefault("workspace_trusted", project_trusted)
     runtime_kw.setdefault("spill_root", str(HOME / "tool-results"))

@@ -7,8 +7,12 @@ the directory it left the shell in, tracked with an EXIT trap and recorded as
 ``shell`` / ``cwd``. A command that ends outside the workspace sends the next
 one back to the root. Past 30,000 characters the output is
 saved under ``ctx.spill_dir`` with a preview inline, or cut to its start and
-end when there is no spill directory. The process is **not** sandboxed:
-trusted workspaces only.
+end when there is no spill directory. When the env carries a sandbox
+(``noeta.toolkit.sandbox``) a command runs confined unless the settings
+exclude it or the call leaves it (``dangerouslyDisableSandbox``, which the
+permissions plugin asks about); the hosts the sandbox refused follow the
+output in a ``<sandbox_violations>`` block. Without one the process can do
+anything the host user can: trusted workspaces only.
 
 Background commands (``run_in_background``) need the ``Shell`` extension's
 background jobs; without them this tool refuses them.
@@ -18,12 +22,19 @@ from __future__ import annotations
 
 import posixpath
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
 from noeta.core.execenv import RunResult
 from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.toolkit.sandbox import (
+    CommandSandbox,
+    PreparedCommand,
+    belongs_in_sandbox,
+    sandbox_of,
+    violations_block,
+)
 from noeta.toolkit.shell import (
     DEFAULT_SHELL_RULES,
     AllowRule,
@@ -192,6 +203,59 @@ _DESCRIPTION_FIELD = (
     "- tar -xzf release.tgz -C out -> \"Unpack the release archive into the out folder\"")
 
 
+def sandbox_required(reason: str) -> str:
+    return (f"the sandbox is required (sandbox.failIfUnavailable) but cannot start: {reason}. "
+            "The command was not run, and running it outside the sandbox "
+            "(dangerouslyDisableSandbox) is refused too.")
+
+
+async def confine(env: Any, command: str, disable: Any, argv: list[str], cwd: str,
+                  writable: Sequence[str] = ()) -> PreparedCommand | str | None:
+    """``argv`` made ready to run in the env's sandbox when ``command``
+    belongs there; ``None`` to run it as it is; a refusal when it belongs
+    there, the sandbox cannot start and the settings require it."""
+    sandbox = sandbox_of(env)
+    if sandbox is None or not belongs_in_sandbox(sandbox, command):  # excluded
+        return None
+    reason = sandbox.unavailable()
+    if reason is not None:
+        return sandbox_required(reason) if sandbox.settings.fail_if_unavailable else None
+    if not belongs_in_sandbox(sandbox, command, disable):
+        return None
+    return await sandbox.prepare(argv, cwd=cwd, writable=writable)
+
+
+def _listing(paths: Sequence[str], limit: int = 8) -> str:
+    shown = ", ".join(f"`{p}`" for p in paths[:limit])
+    return shown + (f" and {len(paths) - limit} more" if len(paths) > limit else "")
+
+
+def sandbox_description(base: str, sandbox: CommandSandbox, root: str) -> str:
+    """``Bash``'s description with the sandbox section for ``sandbox``."""
+    s = sandbox.settings
+    if s.filesystem_disabled:
+        filesystem = "not confined: commands read and write as you do."
+    else:
+        writable = [root, *(s.resolve(p, root) for p in s.allow_write)]
+        filesystem = (f"writes are allowed only in {_listing(writable)} and `$TMPDIR`; "
+                      "everything else is read-only. Credential stores (SSH and GPG keys, "
+                      "cloud sign-ins)" + (f", {_listing(list(s.deny_read))}" if s.deny_read
+                                           else "") + " cannot be read.")
+    if s.http_proxy_port or s.socks_proxy_port:
+        network = "connections go through the user's proxy."
+    elif s.allowed_domains:
+        network = (f"only these hosts can be reached: {_listing(list(s.allowed_domains), 20)}."
+                   )
+    else:
+        network = "no host can be reached."
+    escape = load_description("noeta.plugins.shell", "shell_sandbox_escape"
+                              if s.allow_unsandboxed else "shell_sandbox_no_escape")
+    section = load_description("noeta.plugins.shell", "shell_sandbox")
+    section = (section.replace("{filesystem}", filesystem).replace("{network}", network)
+               .replace("{escape}", escape))
+    return f"{base}\n\n{section}"
+
+
 def _input_schema() -> dict[str, Any]:
     return {
         "$schema": SCHEMA_DIALECT,
@@ -267,13 +331,22 @@ class BashTool:
         else:
             exec_argv = ["bash", "-c", _track_cwd(command)]
 
-        result = await env.run(
-            exec_argv,
-            cwd=cwd,
-            env=self._command_env(ctx),
-            timeout=float(timeout_s),
-            output_cap=self.output_cap,
-        )
+        confined = await confine(env, command, input.get("dangerouslyDisableSandbox"),
+                                 exec_argv, cwd)
+        if isinstance(confined, str):
+            return tool_error(self.name, confined)
+        try:
+            result = await env.run(
+                confined.argv if confined else exec_argv,
+                cwd=cwd,
+                env={**self._command_env(ctx), **(confined.env if confined else {})},
+                timeout=float(timeout_s),
+                output_cap=self.output_cap,
+            )
+        finally:
+            refused = confined.violations() if confined else []
+            if confined:
+                await confined.close()
         stdout, stderr = result.stdout, result.stderr
         final, left = cwd, False
         if track:
@@ -309,6 +382,9 @@ class BashTool:
         if final != cwd or moved_back:
             ctx.record(SHELL, "cwd", {"cwd": final})
             meta["cwd"] = final
+        if refused:
+            block = violations_block(refused)
+            body = block if body == NO_OUTPUT else f"{body}\n{block}"
         body = await limit_output(body, SHELL_OUTPUT_LIMIT, ctx)
         if result.timed_out:
             return error_output(f"Command timed out after {timeout_s}s", body, **meta)

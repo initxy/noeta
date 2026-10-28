@@ -50,6 +50,7 @@ ASK_PLAN = "{name} would change things while in plan mode"
 ASK_RULE = "The rule {rule} asks before {name} runs"
 ASK_TOOL = "{name} needs your approval"
 ASK_FETCH = "{name} wants to fetch {host}"
+ASK_UNSANDBOXED = "{name} wants to run this command outside the sandbox"
 DENIAL_LIMIT_CONSECUTIVE = ("{n} actions in a row were blocked by the auto-mode classifier; "
                             "look over the conversation before letting it go on. Latest "
                             "blocked action: {reason}")

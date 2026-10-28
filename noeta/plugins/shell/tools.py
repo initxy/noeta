@@ -9,7 +9,7 @@ from importlib import resources
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.plugins.shell.bash import SCHEMA_DIALECT, SHELL, BashTool, shell_state
+from noeta.plugins.shell.bash import SCHEMA_DIALECT, SHELL, BashTool, confine, shell_state
 from noeta.plugins.shell.jobs import Job, Registry
 from noeta.plugins.shell.notices import format_duration
 from noeta.toolkit.shell import matching_rule, parse_argv
@@ -90,7 +90,8 @@ class BackgroundBash(BashTool):
             return tool_error(self.name, "requires non-empty 'command'")
         description = input.get("description")
         started = await launch(self, ctx, command, self.name,
-                               description if isinstance(description, str) else "")
+                               description if isinstance(description, str) else "",
+                               disable=input.get("dangerouslyDisableSandbox"))
         if isinstance(started, ToolOutput):
             return started
         job, cwd, tracked = started
@@ -105,10 +106,11 @@ class BackgroundBash(BashTool):
 
 async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: str,
                  description: str, monitor_timeout_ms: float | None = None,
-                 ) -> ToolOutput | tuple[Job, str, bool]:
+                 disable: Any = False) -> ToolOutput | tuple[Job, str, bool]:
     """Start ``command`` the way ``Bash`` would run it (same directory,
-    variables and hardening), as a job. Returns the job, its directory and
-    whether the command runs as written (so a ``cd`` in it matters)."""
+    variables, hardening and sandbox), as a job. Returns the job, its
+    directory and whether the command runs as written (so a ``cd`` in it
+    matters)."""
     if ctx.post is None:
         return tool_error(tool, NOT_AVAILABLE)
     ws = await Workspace.of(ctx.env)
@@ -118,14 +120,29 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
     run_command, tracked = command, True
     if rule is not None and rule.harden is not None and argv:
         run_command, tracked = shlex.join(rule.harden(argv)), False
+    confined = await confine(ctx.env, command, disable, ["bash", "-c", run_command], cwd)
+    if isinstance(confined, str):
+        return tool_error(tool, confined)
     # The job lives in this process only: keep the task tree with this
     # worker while it runs, so the next turn can read and stop it.
-    release = await ctx.hold() if ctx.hold is not None else None
+    held = await ctx.hold() if ctx.hold is not None else None
+    release = held
+    if confined is not None:
+        sandbox_done = confined
+
+        async def release_all() -> None:
+            await sandbox_done.close()
+            if held is not None:
+                await held()
+
+        release = release_all
     job = await shell.registry.spawn(
-        env=ctx.env, command=run_command, cwd=cwd, env_vars=shell._command_env(ctx),
+        env=ctx.env, command=run_command, cwd=cwd,
+        env_vars={**shell._command_env(ctx), **(confined.env if confined else {})},
         root_id=_root(ctx), spawner_id=ctx.task_id, tool_use_id=ctx.call_id,
         description=description or command, post=ctx.post,
-        monitor_timeout_ms=monitor_timeout_ms, release=release)
+        monitor_timeout_ms=monitor_timeout_ms, release=release,
+        argv=confined.argv if confined else None)
     if isinstance(job, str):
         return tool_error(tool, job)
     ctx.record(SHELL, "started", {

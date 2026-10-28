@@ -164,3 +164,36 @@ def test_claude_codes_own_places_are_never_read(
     assert exts["instructions"].user_dir == str(home)  # type: ignore[attr-defined]
     tiers = exts["skills"].tiers(str(project))  # type: ignore[attr-defined]
     assert tiers and not any(".claude" in d for d, _tier in tiers)
+
+
+def test_sandbox_settings_merge_and_reach_the_env(home: Path) -> None:
+    """``sandbox`` lists add up; a project may tighten the sandbox, never
+    loosen it; the front end's tasks get a local env with it."""
+    from noeta.cli.settings_files import merge_sandbox
+    from noeta.core.loop.state import TaskState
+
+    merged = merge_sandbox([
+        ({"enabled": True, "allowUnsandboxedCommands": True, "bwrapPath": "/u/bwrap",
+          "network": {"allowedDomains": ["a.com"], "allowLocalBinding": True}}, "user"),
+        ({"enabled": False, "allowUnsandboxedCommands": False, "allowNestedUserNamespaces": True,
+          "filesystem": {"disabled": True, "denyRead": ["x"]},
+          "network": {"allowedDomains": ["b.com", "a.com"]}}, "project"),
+        ({"bwrapPath": "/m/bwrap", "excludedCommands": ["docker *"]}, "managed")])
+    assert merged == {
+        "enabled": True, "allowUnsandboxedCommands": False, "bwrapPath": "/m/bwrap",
+        "network": {"allowedDomains": ["a.com", "b.com"], "allowLocalBinding": True},
+        "filesystem": {"denyRead": ["x"]}, "excludedCommands": ["docker *"]}
+    assert merge_sandbox([({"bwrapPath": "/u/bwrap"}, "user")]) == {}
+    assert merge_sandbox([({"enabled": True}, "project")]) == {"enabled": True}
+
+    project = home / "proj"
+    project.mkdir()
+    (home / "settings.json").write_text(json.dumps({
+        "sandbox": {"enabled": True, "network": {"allowedDomains": ["a.com"]}},
+        "permissions": {"allow": ["WebFetch(domain:b.com)"]}}))
+    found = config.file_settings(str(project))
+    assert found.sandbox == {"enabled": True, "network": {"allowedDomains": ["a.com"]}}
+    app = from_settings(load_settings(api_key="k", model="m"), cwd=str(project))
+    env = app.runtime.env_for(TaskState(task_id="t", config={"cwd": str(project)}))
+    sandbox = getattr(env, "sandbox", None)
+    assert sandbox is not None and sandbox.settings.allowed_domains == ("a.com", "b.com")

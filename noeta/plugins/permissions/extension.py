@@ -49,6 +49,7 @@ from noeta.plugins.permissions import policy as p
 from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
 from noeta.toolkit import permission_rules as r
+from noeta.toolkit.sandbox import leaves_sandbox, runs_sandboxed, sandbox_of
 from noeta.toolkit.shell import rule_spec_from_command, rule_spec_text
 
 log = logging.getLogger("noeta.permissions")
@@ -560,6 +561,14 @@ class Permissions(Extension):
         if p.CONFIG_DIR in command and mode != "bypassPermissions":
             return _Decision("ask", w.ASK_PROTECTED.format(name="Bash", path=p.CONFIG_DIR),
                              why="protected")
+        sandbox = sandbox_of(view.env)
+        disable = args.get("dangerouslyDisableSandbox")
+        if leaves_sandbox(sandbox, command, disable):
+            # Leaving the sandbox is asked about whatever the allow rules say.
+            return _Decision("ask", w.ASK_UNSANDBOXED.format(name="Bash"), why="sandbox")
+        if (sandbox is not None and sandbox.settings.auto_allow_bash and mode != "plan"
+                and runs_sandboxed(sandbox, command, disable)):
+            return _Decision("allow")
         if sc.read_only(command, scope):
             return _Decision("allow")
         bash_rules = [x for x in allow_rules if x.tool == "Bash" and x.content is not None]

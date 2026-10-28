@@ -11,7 +11,8 @@ The files, lowest precedence first:
 
 A key a later file sets wins (``model``, ``outputStyle``, each ``env``
 variable, ``permissions.defaultMode``); permission rule lists and
-``additionalDirectories`` add up across files, without repeats. Hooks and
+``additionalDirectories`` add up across files, without repeats; the
+``sandbox`` object merges as :func:`merge_sandbox` says. Hooks and
 MCP consent (``enabledMcpjsonServers``) are read from the same files by the
 hooks and MCP plugins, which take the file list.
 """
@@ -56,6 +57,8 @@ class FileSettings:
     #: ``Tool(spec)`` strings, unparsed), ``defaultMode`` and
     #: ``additionalDirectories``.
     permissions: dict[str, Any] = field(default_factory=dict)
+    #: The ``sandbox`` object, merged (:func:`merge_sandbox`).
+    sandbox: dict[str, Any] = field(default_factory=dict)
 
 
 def settings_files(cwd: str | None, *, noeta_home: Path, trusted: bool,
@@ -84,11 +87,90 @@ def _read(path: Path) -> dict[str, Any]:
     return data
 
 
+#: ``sandbox`` lists that add up across files, by their path in the object.
+SANDBOX_LISTS = (("excludedCommands",), ("filesystem", "allowWrite"),
+                 ("filesystem", "denyWrite"), ("filesystem", "denyRead"),
+                 ("filesystem", "allowRead"), ("network", "allowedDomains"),
+                 ("network", "deniedDomains"), ("network", "allowUnixSockets"),
+                 ("credentials", "files"), ("credentials", "envVars"))
+#: ``sandbox`` switches a project's files may turn only one way, as in Claude
+#: Code: a cloned repository can tighten its sandbox, never loosen it.
+SANDBOX_PROJECT_ONLY = {("enabled",): True, ("allowUnsandboxedCommands",): False,
+                        ("autoAllowBashIfSandboxed",): False,
+                        ("failIfUnavailable",): True}
+#: ``sandbox`` keys a project's files never set.
+SANDBOX_NOT_FROM_PROJECT = (("allowNestedUserNamespaces",), ("enableWeakerNestedSandbox",),
+                            ("filesystem", "disabled"), ("network", "allowAllUnixSockets"),
+                            ("network", "allowLocalBinding"), ("network", "httpProxyPort"),
+                            ("network", "socksProxyPort"), ("bwrapPath",))
+
+
+def _get(data: dict[str, Any], key: tuple[str, ...]) -> Any:
+    for part in key[:-1]:
+        inner = data.get(part)
+        data = inner if isinstance(inner, dict) else {}
+    return data.get(key[-1])
+
+
+def _put(data: dict[str, Any], key: tuple[str, ...], value: Any) -> None:
+    for part in key[:-1]:
+        data = data.setdefault(part, {})
+    data[key[-1]] = value
+
+
+def _leaves(data: dict[str, Any], prefix: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
+    out: list[tuple[str, ...]] = []
+    for key, value in data.items():
+        if isinstance(value, dict):
+            out += _leaves(value, (*prefix, key))
+        else:
+            out.append((*prefix, key))
+    return out
+
+
+def merge_sandbox(layers: list[tuple[dict[str, Any], str]]) -> dict[str, Any]:
+    """Claude Code's ``sandbox`` objects merged, lowest precedence first;
+    each comes with where it is from (``user``, ``project``, ``managed``). Lists add up; a later
+    switch wins, except that a project's file may only tighten
+    (:data:`SANDBOX_PROJECT_ONLY`) and never sets the keys that loosen the
+    machine's protection (:data:`SANDBOX_NOT_FROM_PROJECT`); ``bwrapPath``
+    comes from managed settings only."""
+    out: dict[str, Any] = {}
+    for data, kind in layers:
+        if not isinstance(data, dict):
+            continue
+        project, managed = kind == "project", kind == "managed"
+        for key in _leaves(data):
+            value = _get(data, key)
+            if key in SANDBOX_LISTS:
+                if isinstance(value, list):
+                    have = _get(out, key) or []
+                    _put(out, key, have + [v for v in value if v not in have])
+                continue
+            if key == ("bwrapPath",) and not managed:
+                continue
+            if project and key in SANDBOX_NOT_FROM_PROJECT:
+                continue
+            if project and key in SANDBOX_PROJECT_ONLY and value != SANDBOX_PROJECT_ONLY[key] \
+                    and _get(out, key) is not None:
+                continue
+            _put(out, key, value)
+    return out
+
+
 def load(files: list[Path]) -> FileSettings:
+    """Read and merge ``files`` (lowest precedence first, as
+    :func:`settings_files` lists them: the user's first, managed last, a
+    project's in between)."""
     out = FileSettings(files=list(files))
     lists: dict[str, list[str]] = {k: [] for k in (*RULE_LISTS, "additionalDirectories")}
-    for path in files:
+    sandboxes: list[tuple[dict[str, Any], str]] = []
+    for index, path in enumerate(files):
         data = _read(path)
+        if isinstance(data.get("sandbox"), dict):
+            kind = "user" if index == 0 else "managed" if index == len(files) - 1 \
+                else "project"
+            sandboxes.append((data["sandbox"], kind))
         env = data.get("env")
         if isinstance(env, dict):
             out.env.update({str(k): str(v) for k, v in env.items()
@@ -107,6 +189,7 @@ def load(files: list[Path]) -> FileSettings:
         if isinstance(perms.get("defaultMode"), str):
             out.permissions["defaultMode"] = perms["defaultMode"]
     out.permissions.update({k: v for k, v in lists.items() if v})
+    out.sandbox = merge_sandbox(sandboxes)
     return out
 
 

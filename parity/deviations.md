@@ -23,6 +23,14 @@ A row without an id is a difference the replay cannot see.
 | | "Always" answers in a trusted project are kept in `.noeta/settings.local.json` (Claude Code's format), and `.noeta/` is protected the way Claude Code protects `.claude/`. | noeta reads and writes only its own places (owner, 2026-10-28). |
 | | Plan files live in `<noeta home>/plans/`. | noeta's own config directory. |
 
+## Sandbox
+
+| id | difference | reason |
+|---|---|---|
+| | A sandboxed command's connection to a host outside `sandbox.network.allowedDomains` is refused and listed in `<sandbox_violations>`; nobody is asked mid-command (Claude Code prompts unless `strictAllowlist`). | The network filter answers while the command runs; asking would need the task to park inside a running tool call. The model retries with `dangerouslyDisableSandbox`, which is asked about. |
+| | `credentials` entries in `mask` mode act as `deny` (the file is hidden, the variable unset) on every platform. | Claude Code substitutes sentinels and swaps them at the proxy only on Linux, and only for HTTPS with TLS termination; noeta's proxy does not terminate TLS. |
+| | The sandbox section of `Bash`'s description sends the user to the `sandbox` section of their settings, not to a `/sandbox` command. | noeta has no `/sandbox` command yet. |
+
 ## Tools
 
 | id | difference | reason |
