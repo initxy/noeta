@@ -199,13 +199,14 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
     tenant = run.state.tenant
 
     async def post(body: InboxKind, task_id: str | None = None,
-                   dedupe_key: str | None = None) -> None:
+                   dedupe_key: str | None = None, forward_if_ended: bool = False) -> None:
         target = task_id or run.task_id
         if target != run.task_id:
             row = await run.store.get(target)
             if row is None or row.tenant != tenant:
                 raise UnknownTask(target)  # another tenant's task is not there for it
-        await run.store.post(Post(task_id=target, body=body, dedupe_key=dedupe_key))
+        await run.store.post(Post(task_id=target, body=body, dedupe_key=dedupe_key,
+                                  forward_if_ended=forward_if_ended))
 
     async def tasks(**kw: Any) -> list[Any]:
         return list(await run.store.tasks(**{**kw, "tenant": tenant}))
