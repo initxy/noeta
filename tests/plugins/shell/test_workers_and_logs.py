@@ -15,7 +15,15 @@ from typing import Any
 import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
-from noeta.core.events import ExtensionRecorded, External, InboxItem, InputTaken, Recorded, Say
+from noeta.core.events import (
+    ExtensionRecorded,
+    External,
+    InboxItem,
+    InputTaken,
+    Recorded,
+    Say,
+    TaskEnded,
+)
 from noeta.core.extension import TaskView
 from noeta.core.holds import TreeHold
 from noeta.core.loop.state import TaskState
@@ -101,6 +109,49 @@ async def test_a_quiet_end_is_recorded_without_a_notice() -> None:
     [rec] = view.pending
     assert isinstance(rec, ExtensionRecorded) and rec.kind == "ended"
     assert view.enqueued == []
+
+
+def _sub_agent_log(*, ended: bool, epoch: int = 7) -> list[Recorded]:
+    started = ExtensionRecorded(extension="shell", kind="started", data=_job(
+        OTHER, hold=epoch, tool_use_id="toolu_9", description="crunch"))
+    out = [Recorded(seq=2, at=0.0, event=started)]
+    if ended:
+        out.append(Recorded(seq=3, at=0.0, event=TaskEnded(status="done")))
+    return out
+
+
+def _root_of(children: dict[str, list[Recorded]]) -> TaskView:
+    view = _view({})
+
+    async def child_tasks(task_id: str) -> list[str]:
+        return [c for c in children if c.rsplit(".", 1)[0] == task_id]
+
+    async def read_log(task_id: str) -> list[Recorded]:
+        return children[task_id]
+
+    view.child_tasks, view.read_log = child_tasks, read_log
+    return view
+
+
+async def test_the_root_tells_the_loss_of_a_job_whose_sub_agent_ended() -> None:
+    ext = Shell(registry=Registry())
+    view = _root_of({"t.a": _sub_agent_log(ended=True), "t.a.b": [],
+                     "t.c": _sub_agent_log(ended=False)})
+    await ext.on_event(view, _taken(_lost()))
+    [text] = _told(view)
+    assert "<tool-use-id>toolu_9</tool-use-id>" in text and "<status>failed</status>" in text
+    assert view.pending == []  # nothing of the root's own changes
+
+
+async def test_only_the_lost_hold_and_only_the_root() -> None:
+    ext = Shell(registry=Registry())
+    other_hold = _root_of({"t.a": _sub_agent_log(ended=True, epoch=8)})
+    await ext.on_event(other_hold, _taken(_lost()))
+    assert other_hold.enqueued == []
+    child = _root_of({"t.a": _sub_agent_log(ended=True)})
+    child.state.parent_id = "p"
+    await ext.on_event(child, _taken(_lost()))
+    assert child.enqueued == []
 
 
 async def test_a_pickup_decides_what_a_crash_left_undecided() -> None:

@@ -229,6 +229,7 @@ class WebFetchTool:
 
     name = "WebFetch"
     read_only = True
+    retry_safe = True
     clearable = True
     deferred = True
 

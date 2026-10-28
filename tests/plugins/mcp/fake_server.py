@@ -93,6 +93,8 @@ def handle(method: str, params: dict) -> dict:
                     fh.write(os.environ["FAKE_CHANGE_TO"])
             send({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
             return {"content": [{"type": "text", "text": "changed"}]}
+        if name == "meta":
+            return {"content": [{"type": "text", "text": json.dumps(params.get("_meta"))}]}
         if name == "pid":
             return {"content": [{"type": "text", "text": str(os.getpid())}]}
         if name == "fail":

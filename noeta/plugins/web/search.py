@@ -134,6 +134,7 @@ class HttpSearchTransport:
 class WebSearchTool:
     name = "WebSearch"
     read_only = True
+    retry_safe = True
     clearable = True
     deferred = True
 

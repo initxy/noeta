@@ -290,3 +290,29 @@ async def test_a_job_that_ended_is_never_lost_on_another_worker(store: SqliteSto
     assert job["status"] == "completed"
     told = provider.requests[2].messages[-1]
     assert told.origin == "system" and "completed (exit code 0)</summary>" in told.text
+
+
+async def test_a_worker_stopping_tells_the_job_loss_with_the_next_message(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """Closing a front end kills its jobs (as Claude Code does on exit) but
+    starts no turn: the waiting task hears of the loss along with the
+    person's next message."""
+    provider = ScriptedProvider([reply("", _bg("sleep 30")), reply("started it"),
+                                 reply("answered")])
+    rt, ext = _setup(store, provider, tmp_path)
+    client = Client(store)
+    tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
+    await rt.run_until_idle()
+    await rt._drop_holds()  # the serve loop's way out
+    after_close = Runtime(store=store, agents=rt.agents, provider_for=rt.provider_for,
+                          sleep=_no_sleep)
+    await after_close.run_until_idle()
+    row = await client.get(tid)
+    assert row is not None and row.status == "waiting" and len(provider.requests) == 2
+    await client.send(tid, "what happened?")
+    await after_close.run_until_idle()
+    assert len(provider.requests) == 3
+    *_, said, notice = provider.requests[2].messages
+    assert said.text == "what happened?"
+    assert notice.origin == "system" and "<status>failed</status>" in notice.text
+    assert [j["status"] for j in (await _jobs(client, tid, ext)).values()] == ["lost"]

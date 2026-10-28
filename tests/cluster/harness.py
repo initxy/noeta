@@ -24,13 +24,15 @@ from typing import Any
 
 from noeta.core import registry
 from noeta.core.client import Client
-from noeta.core.events import Recorded, ToolFinished
+from noeta.core.events import InputTaken, Recorded, TimerFired, ToolFinished, ToolStarted
 from noeta.core.store import TaskRow
+from noeta.core.tool import MAX_ATTEMPTS
 from tests.cluster.invariants import (
     EpochWatch,
     check_journal,
     check_log,
     child_ends,
+    job_notices,
     jobs_of,
     jobs_running,
     jobs_untold,
@@ -45,6 +47,9 @@ MODEL = "cluster-scripted"
 ROOT_AGENT = "cluster"
 CHILD_AGENT = "cluster-child"
 INTERRUPTED = "outcome is unknown"
+#: Workers write fold snapshots this often, so claims under faults start
+#: from them (the runs' logs are a few dozen events).
+SNAPSHOT_EVERY = 5
 
 ROOT_FILE = """---
 name: cluster
@@ -68,6 +73,7 @@ name: cluster-child
 description: The cluster test's sub-agent; calls Effect once.
 model: inherit
 plugins:
+  - shell
   - cluster_effect:
       journal: {journal}
 ---
@@ -90,11 +96,15 @@ class Spec:
     agent: bool = False
     wake: bool = False
     pings: int = 0
+    lookup: float = 0.0
+    child_bg: float = 0.0
+    cron: int = 0
 
     def prompt(self, journal: str) -> str:
         return "CLUSTER-ROOT " + json.dumps({
             "id": self.id, "journal": journal, "effects": self.effects, "bg": self.bg,
-            "agent": self.agent, "wake": self.wake})
+            "agent": self.agent, "wake": self.wake, "lookup": self.lookup,
+            "child_bg": self.child_bg, "cron": self.cron})
 
 
 @dataclass
@@ -144,7 +154,8 @@ class Cluster:
         self.spawned += 1
         log = open(self.logs / f"worker-{self.spawned}.log", "wb")
         with log:
-            return subprocess.Popen([NOETA, "worker", "--lease", str(self.lease)],
+            return subprocess.Popen([NOETA, "worker", "--lease", str(self.lease),
+                                     "--snapshot-every", str(SNAPSHOT_EVERY)],
                                     cwd=self.work, env=self.env, stdout=log, stderr=log)
 
     async def start(self) -> None:
@@ -228,12 +239,10 @@ class Cluster:
         return path.read_text().splitlines() if path.exists() else []
 
     async def running_job_pids(self) -> list[tuple[str, int]]:
-        """``(root id, worker pid)`` of every background job some root's log
+        """``(root id, worker pid)`` of every background job some task's log
         shows running, from the job's ``worker`` (``host:pid:random``)."""
         out = []
         for row in await self.rows():
-            if row.parent_id is not None:
-                continue
             records = await self.client.events(row.task_id)
             for job, marks in jobs_of(records).items():
                 if [k for _s, k in marks] != ["started"]:
@@ -242,7 +251,7 @@ class Cluster:
                     data = getattr(r.event, "data", None)
                     if isinstance(data, dict) and data.get("job_id") == job \
                             and "worker" in data:
-                        out.append((row.task_id, int(str(data["worker"]).split(":")[1])))
+                        out.append((row.root_id, int(str(data["worker"]).split(":")[1])))
         return out
 
 
@@ -263,6 +272,8 @@ class Outcome:
     watch: EpochWatch
     faults: Faults
     worker_logs: Path
+    #: Tasks the workers left a fold snapshot of.
+    snapshots: int = 0
 
     def settled(self, row: TaskRow) -> bool:
         return row.status in ("waiting", "ended") and row.inbox_read_seq == row.inbox_seq
@@ -289,13 +300,46 @@ class Outcome:
             elif child_ends(records)[child.task_id] != 1:
                 out.append(f"child {child.task_id} of {sid}: its end taken "
                            f"{child_ends(records)[child.task_id]} times")
-        for task in (r.task_id for r in self.rows if r.root_id == tid):
-            out += jobs_running(task, self.logs[task])
-            out += jobs_untold(task, self.logs[task])
+        tree = [r for r in self.rows if r.root_id == tid]
+        told = job_notices(records, [j for r in tree for j in jobs_of(self.logs[r.task_id])])
+        for row in tree:
+            if row.task_id != tid and row.status == "ended":
+                # Its log stays as it was when it ended: the root hears of its jobs.
+                out += [f"{row.task_id}: job {job} of an ended sub-agent: the root was told "
+                        f"{told[job]} times" for job in jobs_of(self.logs[row.task_id])
+                        if told[job] != 1]
+                continue
+            out += jobs_running(row.task_id, self.logs[row.task_id])
+            out += jobs_untold(row.task_id, self.logs[row.task_id])
         spec = self.specs[sid]
         if spec.wake and "schedule.wakeup" not in timers_taken(records) \
                 and not self.interrupted(tid, f"wake-{sid}"):
             out.append(f"root {sid}: its wake-up never fired")
+        if spec.cron:
+            out += self.cron_problems(sid)
+        return out
+
+    def cron_problems(self, sid: str) -> list[str]:
+        """The cron job fired at least ``cron`` times, and never once its
+        deletion is in the log (unless creating it had an unknown outcome,
+        which leaves no job)."""
+        tid, spec = self.roots[sid], self.specs[sid]
+        records = self.logs[tid]
+        if self.interrupted(tid, f"cron-{sid}"):
+            return []
+        deleted = next((r.seq for r in records if isinstance(r.event, ToolFinished)
+                        and r.event.result.call_id.startswith(f"cdel-{sid}-")
+                        and not r.event.result.is_error), None)
+        fires = [r.seq for r in records if isinstance(r.event, InputTaken)
+                 for i in r.event.items if isinstance(i.body, TimerFired)
+                 and i.body.name.startswith("schedule.job:")]
+        out = []
+        if deleted is None:
+            out.append(f"root {sid}: its cron job was never deleted")
+        elif any(seq > deleted for seq in fires):
+            out.append(f"root {sid}: its cron job fired after it was deleted (seq {deleted})")
+        if len(fires) < spec.cron:
+            out.append(f"root {sid}: its cron job fired {len(fires)} times, not {spec.cron}")
         return out
 
     def interrupted(self, tid: str, call_id: str) -> bool:
@@ -328,6 +372,27 @@ class Outcome:
                 out.append(f"{tid} call {call}: finished as done but journalled "
                            f"{counts[token]} times")
         return out
+
+    def lookups(self) -> dict[str, tuple[int, str]]:
+        """Each ``Lookup`` call (task:call) -> (its starts, its result)."""
+        out = {}
+        for tid, records in self.logs.items():
+            starts: Counter[str] = Counter(r.event.call.id for r in records
+                                           if isinstance(r.event, ToolStarted)
+                                           and r.event.call.name == "Lookup")
+            for r in records:
+                ev = r.event
+                if isinstance(ev, ToolFinished) and ev.result.call_id in starts:
+                    out[f"{tid}:{ev.result.call_id}"] = (starts[ev.result.call_id],
+                                                         ev.result.text)
+        return out
+
+    def lookup_violations(self) -> list[str]:
+        """A retry-safe call a crash interrupted ran again and finished with
+        its real result, unless every attempt it had was cut short."""
+        return [f"{key}: {starts} start(s) ended {text!r}"
+                for key, (starts, text) in sorted(self.lookups().items())
+                if not text.startswith("found ") and starts < MAX_ATTEMPTS]
 
     def interrupted_calls(self) -> int:
         return sum(isinstance(r.event, ToolFinished) and INTERRUPTED in r.event.result.text
@@ -380,9 +445,10 @@ async def collect(cluster: Cluster, *, seed: int, specs: dict[str, Spec],
                   faults: Faults) -> Outcome:
     rows = await cluster.rows()
     logs = {r.task_id: await cluster.client.events(r.task_id) for r in rows}
+    snapshots = [await cluster.store.snapshot(r.task_id) for r in rows]
     return Outcome(seed=seed, specs=specs, roots=roots, pings=pings, rows=rows, logs=logs,
                    journal=cluster.journal_lines(), watch=watch, faults=faults,
-                   worker_logs=cluster.logs)
+                   worker_logs=cluster.logs, snapshots=sum(s is not None for s in snapshots))
 
 
 async def watch_rows(cluster: Cluster, watch: EpochWatch, stop: asyncio.Event) -> None:

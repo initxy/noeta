@@ -259,6 +259,7 @@ class ReadTool:
     name = "Read"
     description = load_description("noeta.plugins.fs", "read")
     read_only = True
+    retry_safe = True
     clearable = True
     input_schema: dict[str, Any]
 

@@ -32,6 +32,7 @@ from noeta.core.store import (
     OnChange,
     Patch,
     Post,
+    Snapshot,
     Status,
     TaskRow,
     hold_lost,
@@ -102,6 +103,12 @@ CREATE TABLE IF NOT EXISTS tree_holds (
     UNIQUE (root_id, worker)
 );
 CREATE INDEX IF NOT EXISTS tree_holds_until ON tree_holds (until);
+CREATE TABLE IF NOT EXISTS snapshots (
+    task_id TEXT PRIMARY KEY,
+    seq     INTEGER NOT NULL,
+    version TEXT NOT NULL,
+    data    BLOB NOT NULL
+) WITHOUT ROWID;
 """
 
 #: Columns added after a table was first created: (table, column, definition).
@@ -294,7 +301,7 @@ class SqliteStore:
             " VALUES (?, ?, ?, ?, ?, ?)",
             (post.task_id, seq, inbox_kind(post.body), now, encode(post.body), post.dedupe_key),
         )
-        wake = status == "waiting"
+        wake = status == "waiting" and post.wake
         conn.execute(
             "UPDATE tasks SET inbox_seq = ?, updated_at = ?"
             + (", status = 'ready', ready_at = NULL" if wake else "")
@@ -544,12 +551,14 @@ class SqliteStore:
         return await self._write(tx)
 
     def _lost_posts(self, conn: sqlite3.Connection, root_id: str, worker: str, epoch: int,
-                    now: float, changes: list[tuple[str, ChangeKind]]) -> None:
+                    now: float, changes: list[tuple[str, ChangeKind]],
+                    *, wake: bool = True) -> None:
         """Post ``hold_lost`` to every unended task of the tree."""
         tasks = conn.execute("SELECT task_id FROM tasks WHERE root_id = ? AND status <> 'ended'",
                              (root_id,)).fetchall()
         for (task_id,) in tasks:
-            _, created = self._insert_post(conn, hold_lost(str(task_id), worker, epoch), now)
+            _, created = self._insert_post(conn, hold_lost(str(task_id), worker, epoch,
+                                                         wake=wake), now)
             if created:
                 changes.append((str(task_id), "posted"))
 
@@ -565,7 +574,8 @@ class SqliteStore:
                 return
             changes.append((root_id, "released"))
             if lost:
-                self._lost_posts(conn, root_id, worker, epoch, time.time(), changes)
+                self._lost_posts(conn, root_id, worker, epoch, time.time(), changes,
+                                 wake=False)
 
         changes.clear()
         await self._write(tx)
@@ -597,6 +607,26 @@ class SqliteStore:
         then take no write lock."""
         return conn.execute("SELECT 1 FROM tree_holds WHERE until < ? LIMIT 1",
                             (time.time(),)).fetchone() is not None
+
+    async def snapshot(self, task_id: str) -> Snapshot | None:
+        def q(conn: sqlite3.Connection) -> Snapshot | None:
+            row = conn.execute("SELECT seq, version, data FROM snapshots WHERE task_id = ?",
+                               (task_id,)).fetchone()
+            return Snapshot(seq=int(row[0]), version=str(row[1]), data=bytes(row[2])) \
+                if row else None
+
+        return await self._run(q)
+
+    async def put_snapshot(self, task_id: str, snapshot: Snapshot) -> None:
+        def tx(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "INSERT INTO snapshots (task_id, seq, version, data) VALUES (?, ?, ?, ?)"
+                " ON CONFLICT (task_id) DO UPDATE SET seq = excluded.seq,"
+                " version = excluded.version, data = excluded.data"
+                " WHERE excluded.seq >= snapshots.seq",
+                (task_id, snapshot.seq, snapshot.version, snapshot.data))
+
+        await self._write(tx)
 
     async def release(self, claim: Claim) -> None:
         def tx(conn: sqlite3.Connection) -> int:

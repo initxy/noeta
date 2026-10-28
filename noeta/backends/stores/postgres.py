@@ -85,6 +85,7 @@ from noeta.core.store import (
     OnChange,
     Patch,
     Post,
+    Snapshot,
     Status,
     TaskRow,
     hold_lost,
@@ -158,6 +159,12 @@ CREATE TABLE IF NOT EXISTS {s}.tree_holds (
     UNIQUE (root_id, worker)
 );
 CREATE INDEX IF NOT EXISTS tree_holds_until ON {s}.tree_holds (until);
+CREATE TABLE IF NOT EXISTS {s}.snapshots (
+    task_id TEXT PRIMARY KEY,
+    seq     BIGINT NOT NULL,
+    version TEXT NOT NULL,
+    data    BYTEA NOT NULL
+);
 """
 
 #: Bytes of one delta notification's payload (Postgres refuses 8000 and up).
@@ -553,11 +560,11 @@ class PostgresStore:
             "WITH ins AS (INSERT INTO {s}.inbox (task_id, seq, kind, at, data, dedupe_key)"
             f" VALUES (%(t)s, %(seq)s, %(kind)s, {_NOW}, %(data)s, %(key)s))"
             f" UPDATE {{s}}.tasks SET inbox_seq = %(seq)s, updated_at = {_NOW},"
-            " ready_at = CASE WHEN status = 'waiting' THEN NULL ELSE ready_at END,"
-            " status = CASE WHEN status = 'waiting' THEN 'ready' ELSE status END"
+            " ready_at = CASE WHEN status = 'waiting' AND %(wake)s THEN NULL ELSE ready_at END,"
+            " status = CASE WHEN status = 'waiting' AND %(wake)s THEN 'ready' ELSE status END"
             " WHERE task_id = %(t)s"),
             {"t": post.task_id, "seq": seq, "kind": inbox_kind(post.body),
-             "data": encode(post.body), "key": post.dedupe_key})
+             "data": encode(post.body), "key": post.dedupe_key, "wake": post.wake})
         return seq, True
 
     # ------------------------------------------------------------ Store
@@ -822,13 +829,14 @@ class PostgresStore:
         return await self._tx(tx)
 
     async def _lost_posts(self, conn: Conn, root_id: str, worker: str, epoch: int,
-                          changes: list[tuple[str, ChangeKind]]) -> None:
+                          changes: list[tuple[str, ChangeKind]], *, wake: bool = True) -> None:
         """Post ``hold_lost`` to every unended task of the tree."""
         cur = await conn.execute(self._q(
             "SELECT task_id FROM {s}.tasks WHERE root_id = %s AND status <> 'ended'"
             " ORDER BY task_id"), (root_id,))
         for (task_id,) in await cur.fetchall():
-            _, created = await self._insert_post(conn, hold_lost(str(task_id), worker, epoch))
+            _, created = await self._insert_post(conn, hold_lost(str(task_id), worker, epoch,
+                                                                     wake=wake))
             if created:
                 changes.append((str(task_id), "posted"))
 
@@ -845,7 +853,7 @@ class PostgresStore:
                 return
             changes.append((root_id, "released"))
             if lost:
-                await self._lost_posts(conn, root_id, worker, epoch, changes)
+                await self._lost_posts(conn, root_id, worker, epoch, changes, wake=False)
             await self._notify(conn, changes)
 
         await self._tx(tx)
@@ -878,6 +886,27 @@ class PostgresStore:
         reaped = await self._tx(tx)
         self._deliver(changes)
         return reaped
+
+    async def snapshot(self, task_id: str) -> Snapshot | None:
+        async def q(conn: Conn) -> Snapshot | None:
+            cur = await conn.execute(self._q(
+                "SELECT seq, version, data FROM {s}.snapshots WHERE task_id = %s"), (task_id,))
+            row = await cur.fetchone()
+            return Snapshot(seq=int(row[0]), version=str(row[1]), data=bytes(row[2])) \
+                if row else None
+
+        return await self._tx(q, write=False)
+
+    async def put_snapshot(self, task_id: str, snapshot: Snapshot) -> None:
+        async def tx(conn: Conn) -> None:
+            await conn.execute(self._q(
+                "INSERT INTO {s}.snapshots (task_id, seq, version, data) VALUES (%s, %s, %s, %s)"
+                " ON CONFLICT (task_id) DO UPDATE SET seq = excluded.seq,"
+                " version = excluded.version, data = excluded.data"
+                " WHERE excluded.seq >= {s}.snapshots.seq"),
+                (task_id, snapshot.seq, snapshot.version, snapshot.data))
+
+        await self._tx(tx)
 
     async def release(self, claim: Claim) -> None:
         async def tx(conn: Conn) -> bool:

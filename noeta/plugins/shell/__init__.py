@@ -17,9 +17,12 @@ end that arrives after its job was called lost is dropped.
 A job's end, its loss, and each monitor event reach the model as Claude
 Code's ``<task-notification>``, a system-origin message in the task that
 started it (the root once that task has ended), opening a turn if the task
-is idle. Stopping the root's turn, cancelling or ending the root kills every
-job of the tree without a notice; with ``background_ends_with_turn`` a job
-also dies, silently, when the turn of the task that started it ends.
+is idle. The log of a task that ended keeps its jobs as they were then: the
+root is told of their end, or, when ``hold_lost`` names the hold one ran
+under, of its loss (one notice per job either way, by its dedupe key).
+Stopping the root's turn, cancelling or ending the root kills every job of
+the tree without a notice; with ``background_ends_with_turn`` a job also
+dies, silently, when the turn of the task that started it ends.
 """
 
 from __future__ import annotations
@@ -30,7 +33,16 @@ from dataclasses import replace
 from typing import Any
 
 from noeta.core import records
-from noeta.core.events import External, InboxItem, InputTaken, Recorded, Say, TaskEnded, Waiting
+from noeta.core.events import (
+    ExtensionRecorded,
+    External,
+    InboxItem,
+    InputTaken,
+    Recorded,
+    Say,
+    TaskEnded,
+    Waiting,
+)
 from noeta.core.extension import Extension, TaskView
 from noeta.core.store import HOLD_LOST
 from noeta.core.tool import Tool
@@ -184,12 +196,46 @@ class Shell(Extension):
                     view.enqueue(Say(message=user(lost_notice(job_id, job), origin="system"),
                                      when="now"), dedupe_key=_notice_key(job_id))
 
+    async def _tell_lost_of_ended(self, view: TaskView, items: Sequence[InboxItem]) -> None:
+        """The root learns that a hold is gone: jobs that ran under it for
+        a task of the tree that has ended (which no longer hears anything)
+        are lost, and the root says so in its place. A job whose end
+        already reached the root keeps that story: both notices share the
+        job's dedupe key."""
+        lost = [(i.body.data.get("worker"), i.body.data.get("epoch")) for i in items
+                if isinstance(i.body, External) and i.body.name == HOLD_LOST
+                and isinstance(i.body.data, Mapping)]
+        if not lost or view.state.parent_id is not None or view.child_tasks is None \
+                or view.read_log is None:
+            return
+        todo, seen = await view.child_tasks(view.task_id), set()
+        while todo:
+            task_id = todo.pop()
+            if task_id in seen:
+                continue
+            seen.add(task_id)
+            todo += await view.child_tasks(task_id)
+            st: ShellState | None = None
+            ended = False
+            for r in await view.read_log(task_id):
+                ev = r.event
+                ended = ended or isinstance(ev, TaskEnded)
+                if isinstance(ev, ExtensionRecorded) and ev.extension == self.name:
+                    st = reduce_shell(st, ev.kind, ev.data)
+            if not ended or st is None:
+                continue  # a live task hears ``hold_lost`` itself
+            for job_id, job in st.jobs.items():
+                if job.get("status") == "running" and (job.get("worker"), job.get("hold")) in lost:
+                    view.enqueue(Say(message=user(lost_notice(job_id, job), origin="system"),
+                                     when="now"), dedupe_key=_notice_key(job_id))
+
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         event = recorded.event
         state = view.state
         root = state.root_id or state.task_id
         if isinstance(event, InputTaken):
             self._decide(view, event.items)
+            await self._tell_lost_of_ended(view, event.items)
         elif isinstance(event, TaskEnded):
             self.registry.mark_ended(state.task_id, root)
             if state.parent_id is None:

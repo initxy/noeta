@@ -21,8 +21,10 @@ class RunCalls(Struct, tag="run_calls"):
 
 
 class Interrupted(Struct, tag="interrupted"):
-    """Calls that started but never finished (a crash or lost claim): they
-    get an "outcome unknown" result and are never run again."""
+    """Calls that started but never finished (a crash or lost claim): each
+    tool recovers its result (``Tool.recover``) or runs again
+    (``Tool.retry_safe``); any other gets an "outcome unknown" result and is
+    never run again."""
 
     call_ids: list[str]
 

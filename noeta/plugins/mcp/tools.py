@@ -137,6 +137,7 @@ def _compact(value: Any) -> str:
 class ListMcpResourcesTool:
     name = LIST_RESOURCES_TOOL
     read_only = True
+    retry_safe = True
     clearable = True
     deferred = True
     description = """
@@ -184,6 +185,7 @@ Parameters:
 class ReadMcpResourceTool:
     name = READ_RESOURCE_TOOL
     read_only = True
+    retry_safe = True
     clearable = True
     deferred = True
     description = """

@@ -33,6 +33,7 @@ from typing import Any
 
 import pytest
 
+from noeta.core.events import ToolStarted
 from tests.cluster.harness import (
     Cluster,
     Faults,
@@ -48,7 +49,7 @@ from tests.cluster.harness import (
     wait_until,
     watch_rows,
 )
-from tests.cluster.invariants import EpochWatch, jobs_of, lost_jobs_ended_late
+from tests.cluster.invariants import EpochWatch, jobs_of, lost_jobs_ended_late, taken_texts
 
 pytestmark = pytest.mark.cluster
 
@@ -56,6 +57,8 @@ TASKS = int(os.environ.get("NOETA_CLUSTER_TASKS", "24"))
 SECONDS = float(os.environ.get("NOETA_CLUSTER_SECONDS", "20"))
 DRAIN = float(os.environ.get("NOETA_CLUSTER_DRAIN", "90"))
 LEASE = 1.0
+#: Faults in the cron scenario last past the jobs' second firing.
+CRON_SECONDS = 70.0
 
 
 class Gap(AssertionError):
@@ -77,13 +80,14 @@ def make_specs(rng: random.Random, n: int, *, bg: bool) -> dict[str, Spec]:
     for i in range(n):
         sid = f"r{i:02d}"
         spec = Spec(id=sid, effects=rng.randint(1, 3), agent=rng.random() < 0.5,
-                    wake=rng.random() < 0.5)
+                    wake=rng.random() < 0.5,
+                    lookup=round(rng.uniform(0.3, 1.0), 1) if rng.random() < 0.5 else 0.0)
         if bg and i % 2 == 0:
             spec.bg = round(rng.uniform(1.0, 3.0), 1)
         if bg and i % 4 == 0:
             # a job and nothing else: once the root waits, only the job's
             # end (or its loss) can wake it
-            spec.effects, spec.agent, spec.wake, spec.bg = 1, False, False, 4.0
+            spec.effects, spec.agent, spec.wake, spec.bg, spec.lookup = 1, False, False, 4.0, 0.0
         else:
             spec.pings = rng.choice([0, 0, 1, 2, 3])
         specs[sid] = spec
@@ -92,11 +96,12 @@ def make_specs(rng: random.Random, n: int, *, bg: bool) -> dict[str, Spec]:
 
 async def run_cluster(tmp_path: Path, url: str, seed: int, specs: dict[str, Spec], *,
                       seconds: float, targets: set[str] | None = None,
-                      workers: int = 3, drain: float = DRAIN, faulty: Any = chaos) -> Outcome:
+                      workers: int = 3, drain: float = DRAIN, faulty: Any = chaos,
+                      fire_after: float = 2.0) -> Outcome:
     """Create the roots, run the faults and the pings for ``seconds``, then
     let the workers drain until every root is done or ``DRAIN`` passes."""
     rng = random.Random(seed)
-    cluster = Cluster(tmp_path, url, workers=workers, lease=LEASE)
+    cluster = Cluster(tmp_path, url, workers=workers, lease=LEASE, fire_after=fire_after)
     faults, watch, stop = Faults(), EpochWatch(), asyncio.Event()
     await cluster.start()
     watcher = asyncio.create_task(watch_rows(cluster, watch, stop))
@@ -132,13 +137,16 @@ async def run_cluster(tmp_path: Path, url: str, seed: int, specs: dict[str, Spec
     print(f"seed={seed} roots={len(specs)} tasks={len(outcome.rows)} kills={faults.kills} "
           f"stops={faults.stops} targeted={faults.targeted} "
           f"interrupted={outcome.interrupted_calls()} lost_jobs={outcome.lost_jobs()} "
+          f"lookups_rerun={sum(s > 1 for s, _t in outcome.lookups().values())} "
+          f"snapshots={outcome.snapshots} "
           f"journal={len(outcome.journal)} samples={watch.samples}")
     return outcome
 
 
 def assert_invariants(outcome: Outcome) -> None:
     """The invariants no known gap excuses."""
-    problems = outcome.log_violations() + outcome.effect_violations() + outcome.watch.violations
+    problems = (outcome.log_violations() + outcome.effect_violations()
+                + outcome.lookup_violations() + outcome.watch.violations)
     assert not problems, fail(outcome, problems)
 
 
@@ -171,6 +179,25 @@ async def test_timers_and_sub_agents_outlive_every_worker(tmp_path: Path, pg_url
              for i in range(8)}
     outcome = await run_cluster(tmp_path, pg_url, seed, specs, seconds=12, faulty=kill_all)
     assert outcome.faults.kills >= 9, fail(outcome, ["too few faults to mean anything"])
+    assert_invariants(outcome)
+    assert_all_done(outcome)
+
+
+async def test_cron_jobs_outlive_every_worker(tmp_path: Path, pg_url: str) -> None:
+    """Recurring ``CronCreate`` jobs (every minute) under a minute of
+    SIGKILL / SIGSTOP. The clock runs ten minutes behind, so a job's first
+    firing is due at once; it then fires every real minute. Each root
+    deletes its job after one or two firings: every job fires that often,
+    is deleted, and never fires once its deletion is in the log (the
+    one-firing roots are a minute past their deletion by the end)."""
+    seed = seed_from_env()
+    rng = random.Random(seed)
+    specs = {f"r{i:02d}": Spec(id=f"r{i:02d}", effects=1, cron=[1, 2][i] if i < 2
+                               else rng.choice([1, 2]), pings=rng.choice([0, 1]))
+             for i in range(8)}
+    outcome = await run_cluster(tmp_path, pg_url, seed, specs, seconds=CRON_SECONDS,
+                                fire_after=-540.0)
+    assert outcome.faults.kills >= 3, fail(outcome, ["too few faults to mean anything"])
     assert_invariants(outcome)
     assert_all_done(outcome)
 
@@ -219,7 +246,77 @@ async def test_chaos_with_background_jobs(tmp_path: Path, pg_url: str) -> None:
     assert_all_done(outcome)
 
 
+async def test_retry_safe_call_runs_again_after_its_worker_dies(tmp_path: Path,
+                                                                 pg_url: str) -> None:
+    """SIGKILL the worker in the middle of a ``retry_safe`` call: the call
+    runs again elsewhere with the same idempotency key and finishes with its
+    real result, not "outcome unknown"."""
+    cluster = Cluster(tmp_path, pg_url, workers=3, lease=LEASE)
+    await cluster.start()
+    spec = Spec(id="r00", effects=1, lookup=4.0)
+    faults = Faults()
+    try:
+        tid = await cluster.create(spec)
+
+        async def looking() -> bool:
+            row = await cluster.client.get(tid)
+            records = await cluster.client.events(tid)
+            return row.status == "running" and row.owner is not None and any(
+                isinstance(r.event, ToolStarted) and r.event.call.name == "Lookup"
+                for r in records)
+
+        assert await wait_until(looking, 30), "the lookup never started"
+        row = await cluster.client.get(tid)
+        assert cluster.kill_pid(int(str(row.owner).split(":")[1]))
+        faults.kills += 1
+        await wait_until(lambda: root_finished(cluster, tid, spec), 10 * LEASE + 8.0)
+        outcome = await _outcome(cluster, tid, spec, faults)
+        runs = Path(cluster.journal + ".lookups").read_text().splitlines()
+    finally:
+        await cluster.close()
+    assert_invariants(outcome)
+    assert_all_done(outcome)
+    (starts, text), = outcome.lookups().values()
+    assert (starts, text) == (2, "found r00-l"), fail(outcome, [f"{starts} starts: {text!r}"])
+    assert len(runs) == 2 and len({line.split()[1] for line in runs}) == 1, runs
+
+
 # ------------------------------------------------------------------ one gap each
+
+
+async def test_lost_job_of_an_ended_sub_agent_reaches_the_root(tmp_path: Path,
+                                                               pg_url: str) -> None:
+    """A sub-agent starts a background job and ends; SIGKILL the worker
+    running the job while the root waits on it: the root is told the job
+    is lost (the sub-agent's log is closed) and finishes; the job is gone."""
+    cluster = Cluster(tmp_path, pg_url, workers=3, lease=LEASE)
+    await cluster.start()
+    spec = Spec(id="r00", effects=1, agent=True, child_bg=8.0)
+    faults = Faults()
+    try:
+        tid = await cluster.create(spec)
+
+        async def child_gone_job_running() -> bool:
+            tree = await cluster.tree(tid)
+            root = next(r for r in tree if r.task_id == tid)
+            return root.status == "waiting" and any(
+                r.parent_id == tid and r.status == "ended" for r in tree) \
+                and bool(await cluster.running_job_pids())
+
+        assert await wait_until(child_gone_job_running, 30), "the sub-agent's job never ran"
+        assert await kill_holder(cluster, {tid}, faults)
+        await wait_until(lambda: root_finished(cluster, tid, spec), 10 * LEASE + 6.0)
+        await asyncio.sleep(2.0)
+        outcome = await _outcome(cluster, tid, spec, faults)
+    finally:
+        await cluster.close()
+    assert_invariants(outcome)
+    assert_all_done(outcome)
+    told = [t for t in taken_texts(outcome.logs[tid])
+            if "<tool-use-id>cbg-r00</tool-use-id>" in t]
+    assert len(told) == 1 and "<status>failed</status>" in told[0], fail(outcome, told)
+    assert not any(line.startswith("r00-cbg ") for line in outcome.journal), fail(
+        outcome, ["the job of a dead worker wrote after the root was told it was lost"])
 
 
 async def _one_job(tmp_path: Path, url: str, bg: float) -> tuple[Cluster, str, Spec, int]:

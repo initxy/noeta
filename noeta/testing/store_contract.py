@@ -20,7 +20,7 @@ import pytest
 
 from noeta.core.errors import Conflict, UnknownTask
 from noeta.core.events import DEFAULT_TENANT, Cancel, External, Say, TaskCreated, TaskEnded, Waiting
-from noeta.core.store import HOLD_LOST, NewTask, Patch, Post, Store
+from noeta.core.store import HOLD_LOST, NewTask, Patch, Post, Snapshot, Store
 from noeta.core.types import user
 
 
@@ -380,11 +380,47 @@ async def test_a_released_hold_frees_the_tree(store: Store) -> None:
     assert claim is not None and claim.task_id == "a"
 
 
-async def test_an_abandoned_hold_tells_the_tree(store: Store) -> None:
+async def test_an_abandoned_hold_tells_the_tree_without_waking_it(store: Store) -> None:
     await store.create(new("a"))
+    claim = await store.claim("w1", ["default"], 30)
+    assert claim is not None
+    await store.append(claim, [Waiting(on="input")], expected_seq=1,
+                       patch=Patch(status="waiting", waiting_on="input", ready_at=10**12))
     epoch = await store.hold("a", "w1", 30)
     assert epoch is not None
     await store.unhold("a", "w1", epoch, lost=True)
     await store.unhold("a", "w1", epoch, lost=True)  # gone: nothing more
     [item] = await store.inbox("a")
     assert item.body == External(name=HOLD_LOST, data={"worker": "w1", "epoch": epoch})
+    row = await store.get("a")
+    assert row is not None and (row.status, row.ready_at) == ("waiting", 10**12)
+    await store.post(Post(task_id="a", body=say("hi")))  # the next message wakes it
+    row = await store.get("a")
+    assert row is not None and row.status == "ready" and row.inbox_seq == 2
+
+
+async def test_a_post_that_does_not_wake(store: Store) -> None:
+    await store.create(new("a"))
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None
+    await store.append(claim, [Waiting(on="input")], expected_seq=1,
+                       patch=Patch(status="waiting", waiting_on="input"))
+    await store.post(Post(task_id="a", body=say("later"), wake=False))
+    row = await store.get("a")
+    assert row is not None and row.status == "waiting" and row.inbox_seq == 1
+    assert await store.claim("w", ["default"], 30) is None
+
+
+async def test_snapshots_keep_the_latest_seq(store: Store) -> None:
+    """Optional members: a store without them is skipped."""
+    get, put = getattr(store, "snapshot", None), getattr(store, "put_snapshot", None)
+    if get is None or put is None:
+        pytest.skip("the store keeps no snapshots")
+    assert await get("t1") is None
+    await put("t1", Snapshot(seq=5, version="v1", data=b"\x00five"))
+    await put("t1", Snapshot(seq=3, version="v2", data=b"three"))
+    assert await get("t1") == Snapshot(seq=5, version="v1", data=b"\x00five")
+    await put("t1", Snapshot(seq=9, version="v2", data=b"nine"))
+    await put("t2", Snapshot(seq=1, version="v1", data=b"one"))
+    assert await get("t1") == Snapshot(seq=9, version="v2", data=b"nine")
+    assert (await get("t2") or Snapshot(seq=0, version="", data=b"")).seq == 1

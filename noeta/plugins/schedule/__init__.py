@@ -296,6 +296,7 @@ class CronListTool(_Base):
     description = load_description("noeta.plugins.schedule", "cron_list")
     deferred = True
     read_only = True
+    retry_safe = True
     input_schema = _object({})
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:

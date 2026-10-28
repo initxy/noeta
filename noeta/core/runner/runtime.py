@@ -81,6 +81,10 @@ class Runtime:
     #: passes its own.
     output_ceiling: Callable[[str], int] = catalog_output_ceiling
     sleep: Callable[[float], Any] = asyncio.sleep
+    #: Write a task's fold snapshot (``noeta.core.snapshots``) once its log
+    #: is this many events past the newest one, so a claim folds at most
+    #: about this many; ``0`` never reads or writes snapshots.
+    snapshot_every: int = 100
     #: Serve only the task trees whose root ids are in this set (a front end
     #: adds each task it creates or resumes); ``None`` serves every task.
     roots: set[str] | None = None

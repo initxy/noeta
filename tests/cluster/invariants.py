@@ -33,8 +33,12 @@ from noeta.core.events import (
     ToolStarted,
 )
 from noeta.core.store import TaskRow
+from noeta.core.tool import MAX_ATTEMPTS
 
 SHELL = "shell"
+#: The scripted tools that are ``retry_safe``: a crash during one starts it
+#: again (up to ``MAX_ATTEMPTS`` times).
+RETRY_SAFE = frozenset({"Lookup"})
 
 
 def check_log(row: TaskRow, records: Sequence[Recorded], *, settled: bool) -> list[str]:
@@ -60,6 +64,7 @@ def check_log(row: TaskRow, records: Sequence[Recorded], *, settled: bool) -> li
     called = False
     use_ids: Counter[str] = Counter()
     started: dict[str, int] = {}
+    starts: Counter[str] = Counter()
     finished: Counter[str] = Counter()
     ended_at: int | None = None
     for r in records:
@@ -81,9 +86,13 @@ def check_log(row: TaskRow, records: Sequence[Recorded], *, settled: bool) -> li
             called = False
             use_ids.update(u.id for u in ev.response.message.tool_uses)
         elif isinstance(ev, ToolStarted):
-            if ev.call.id in started:
+            starts[ev.call.id] += 1
+            if ev.call.id in started and (ev.call.name not in RETRY_SAFE
+                                          or starts[ev.call.id] > MAX_ATTEMPTS):
                 bad(r.seq, f"call {ev.call.id} started again (first at {started[ev.call.id]})")
-            started[ev.call.id] = r.seq
+            if finished[ev.call.id]:
+                bad(r.seq, f"call {ev.call.id} started after it finished")
+            started.setdefault(ev.call.id, r.seq)
         elif isinstance(ev, ToolFinished):
             finished[ev.result.call_id] += 1
         elif isinstance(ev, TaskEnded):
@@ -145,10 +154,12 @@ def jobs_running(tid: str, records: Sequence[Recorded]) -> list[str]:
             if not any(k in ("ended", "lost") for _s, k in marks)]
 
 
-def job_notices(records: Sequence[Recorded]) -> Counter[str]:
+def job_notices(records: Sequence[Recorded],
+                jobs: Iterable[str] | None = None) -> Counter[str]:
     """Job id -> how many notices of its end (or loss) the task took: a
-    ``<task-notification>`` naming the job with a status."""
-    jobs = set(jobs_of(records))
+    ``<task-notification>`` naming the job with a status. ``jobs``: the jobs
+    to count (default: the ones this log started)."""
+    jobs = set(jobs_of(records) if jobs is None else jobs)
     out: Counter[str] = Counter()
     for text in taken_texts(records):
         if "<task-notification>" not in text or "<status>" not in text:

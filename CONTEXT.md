@@ -29,7 +29,8 @@ Ten event types (`noeta/core/events.py`). Plugin state is never a new event type
 `ExtensionRecorded(extension, kind, data, message?)` and folds it in its own `reduce`. The core's
 own entries use the same event under `extension="core"`, one typed payload per kind
 (`noeta/core/records.py`), which the kernel writes and folds them through. The loop
-state is a pure fold of the log; the model request is a pure function of that state.
+state is a pure fold of the log; the model request is a pure function of that state. A claim
+folds from the task's snapshot (`noeta/core/snapshots.py`) when one of its fold version exists.
 
 ## Inbox
 
@@ -42,10 +43,12 @@ only the task's runner reads.
 A runner claims a task from the store (`claim` / `renew` / `release`; Postgres uses
 `SKIP LOCKED`). Every append is conditional on `expected_seq` and the claim's `owner_epoch`, so a
 stale runner can never write. A tool call is logged as started before it runs; on recovery an
-unfinished call is answered "outcome unknown", never re-run. What lives only in one worker
+unfinished call is answered "outcome unknown", never re-run, unless its tool looks the outcome
+up (`Tool.recover`, by `ToolContext.idempotency_key`) or is `retry_safe`. What lives only in one worker
 process (a background job) holds the task tree there (`Store.hold`): other workers skip it until
 the hold is released, or reaped once it ran out (every worker reaps), which posts `hold_lost` to
-the tree's tasks; a hold's epoch fences its old holder.
+the tree's tasks, waking them (a worker stopping on purpose posts it without waking: the task
+hears with its next message); a hold's epoch fences its old holder.
 
 ## Layers
 

@@ -33,12 +33,19 @@ How a task's MCP tool set is made and kept:
   answers the question it was turned into; the answer goes back to the
   server and the call finishes. A second question in the same call, or a
   question that cannot be put to anyone, is declined. A call whose worker
-  died while it waited ends "outcome unknown".
+  died (or lost its hold on the tree) while it waited ends "outcome
+  unknown" as soon as another worker picks the task up: the reaped hold
+  wakes it, and the call is answered in the person's place.
+* **Every call carries its idempotency key** in the request's ``_meta``
+  (``noeta/idempotencyKey``: the same for every run of the call), for a
+  server that can drop a repeat. A call a crash left unfinished is still
+  answered "outcome unknown": nothing says a server keeps those keys.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import inspect
 import logging
 import time
@@ -47,7 +54,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Union
 
-from noeta.core.events import Recorded, TaskEnded, Waiting
+from noeta.core.events import Answer, Recorded, TaskEnded, Waiting
 from noeta.core.extension import (
     Command,
     CommandContext,
@@ -96,6 +103,9 @@ ScopeFn = Callable[[TaskView], Union[str, None]]
 #: A sign-in started within this long is handed out again rather than
 #: restarted.
 SIGN_IN_REUSE_S = 180.0
+
+#: The ``tools/call`` ``_meta`` key that carries ``ToolContext.idempotency_key``.
+IDEMPOTENCY_META = "noeta/idempotencyKey"
 
 
 def _as_list(servers: Servers) -> list[McpServer]:
@@ -268,7 +278,8 @@ class Mcp(Extension):
 
         async def run(c: McpClient) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
             result = await c.call_tool(tool.remote, args,
-                                       timeout=tool_timeout_s(server.call_timeout))
+                                       timeout=tool_timeout_s(server.call_timeout),
+                                       meta={IDEMPOTENCY_META: ctx.idempotency_key})
             if not c.tools_changed:
                 return result, None
             c.tools_changed = False
@@ -305,8 +316,11 @@ class Mcp(Extension):
                     continue
                 park = ask(*elicitation_questions(tool.alias, params))
                 release = await ctx.hold() if ctx.hold is not None else None
-                self._parked[(ctx.task_id, ctx.call_id)] = _Parked(call, params, answer,
-                                                                    park, release)
+                key = (ctx.task_id, ctx.call_id)
+                self._parked[key] = _Parked(call, params, answer, park, release)
+                if release is not None:
+                    # The hold is gone: so is the call, wherever the task goes.
+                    release.tree.on_lost(functools.partial(self._drop_parked, key))
                 return ToolOutput(park=park)
         except asyncio.CancelledError:
             job.cancel()
@@ -323,14 +337,31 @@ class Mcp(Extension):
             self._record_server(ctx, _server_entry(server, listed))
         return await render_result(result, ctx)
 
+    def _drop_parked(self, key: tuple[str, str]) -> None:
+        parked = self._parked.pop(key, None)
+        if parked is not None and parked.call.job is not None:
+            parked.call.job.cancel()
+
+    def _answer_lost_calls(self, view: TaskView) -> None:
+        """Parked calls of this task that this process does not run (their
+        worker died or let go of them) are answered in the person's place,
+        so they end "outcome unknown" now instead of whenever someone
+        answers a question no server waits for any more."""
+        mine = {t.name for t in self.tools(view) if isinstance(t, McpTool)}
+        for c in view.state.open_calls:
+            use = c.ran or c.use
+            if (c.parked or {}).get("on") == "question" and use.name in mine \
+                    and use.id not in view.state.answers \
+                    and (view.task_id, use.id) not in self._parked:
+                view.enqueue(Answer(request_id=use.id), dedupe_key=f"mcp:lost:{use.id}")
+
     async def _resume(self, tool: McpTool, args: dict[str, Any], ctx: ToolContext,
                       outcome: Any) -> ToolOutput:
         parked = self._parked.pop((ctx.task_id, ctx.call_id), None)
         if parked is None:
             return text_output(
-                f"{tool.name}: the MCP server's question was answered after the call was lost "
-                "(the worker running it stopped); the call's outcome is unknown.",
-                is_error=True)
+                f"{tool.name}: the worker running this call stopped while the MCP server "
+                "waited for the user's answer; the call's outcome is unknown.", is_error=True)
         try:
             if not parked.answer.done():
                 parked.answer.set_result(elicitation_result(parked.params, outcome,
@@ -449,6 +480,7 @@ class Mcp(Extension):
     # ------------------------------------------------------------ lifecycle
 
     async def on_start(self, view: TaskView) -> None:
+        self._answer_lost_calls(view)
         if not await self._resolve(view):
             return
         st = view.ext_state(self.name) or {}

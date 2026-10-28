@@ -28,7 +28,7 @@ from noeta.testing import ScriptedProvider, reply
 
 FAKE = str(Path(__file__).with_name("fake_server.py"))
 TOOLS = json.dumps([{"name": n, "inputSchema": {"type": "object"}}
-                    for n in ("ask", "roots", "changed", "echo")])
+                    for n in ("ask", "roots", "changed", "echo", "meta")])
 
 
 @pytest.fixture
@@ -215,6 +215,39 @@ async def test_an_ended_task_lets_go_of_its_parked_call(
     assert parked.call.job is not None and parked.call.job.cancelled()
 
 
+async def test_a_dead_workers_parked_call_ends_without_an_answer(
+        store: SqliteStore, pool: McpPool) -> None:
+    """The worker holding a call parked on a server's question dies: the
+    reaped hold wakes the task on another worker, which ends the call
+    "outcome unknown" at once instead of waiting for an answer that has no
+    call to go to."""
+    provider = ScriptedProvider([reply("", ("mcp__fake__ask", {"message": "ok?"})),
+                                 reply("carried on")])
+    first = Mcp([server()], pool=pool)
+    dead = runtime(store, provider, Agent(name="a", model="m", extensions=[first]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await dead.run_until_idle()
+    assert (await client.get(tid)).waiting_on == "question"  # type: ignore[union-attr]
+    assert dead._renewer is not None
+    dead._renewer.cancel()  # the worker dies: its hold is never renewed again
+
+    def expire(conn: Any) -> None:
+        conn.execute("UPDATE tree_holds SET until = 0")
+
+    await store._run(expire)
+    other = runtime(store, provider, Agent(name="a", model="m",
+                                           extensions=[Mcp([server()], pool=pool)]))
+    await other.run_until_idle()
+    out = results(await client.events(tid))
+    assert len(out) == 1 and "outcome is unknown" in out[0]
+    row = await client.get(tid)
+    assert row is not None and row.waiting_on == "input"
+    for parked in first._parked.values():
+        if parked.call.job is not None:
+            parked.call.job.cancel()
+
+
 async def test_a_lost_call_answers_outcome_unknown() -> None:
     """The worker that ran the call is gone (a restart): its answer has no
     call to go to."""
@@ -225,6 +258,16 @@ async def test_a_lost_call_answers_outcome_unknown() -> None:
                       record=lambda *_: None)
     out = await tool.resume({}, ctx, Answer(request_id="c", data={"0": {"other": "x"}}))
     assert out.is_error and "outcome is unknown" in out.content[0].text  # type: ignore[union-attr]
+
+
+async def test_a_call_carries_its_idempotency_key(store: SqliteStore, pool: McpPool) -> None:
+    provider = ScriptedProvider([reply("", ("mcp__fake__meta", {})), reply("done")])
+    agent = Agent(name="a", model="m", extensions=[Mcp([server()], pool=pool)])
+    tid = await Client(store).create("a", "go")
+    await runtime(store, provider, agent).run_until_idle()
+    events = await Client(store).events(tid)
+    call_id = next(r.event.result.call_id for r in events if isinstance(r.event, ToolFinished))
+    assert json.loads(results(events)[0]) == {"noeta/idempotencyKey": f"{tid}:{call_id}"}
 
 
 async def test_roots_answer_the_tasks_workspace(store: SqliteStore, pool: McpPool,

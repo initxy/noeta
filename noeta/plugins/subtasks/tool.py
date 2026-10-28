@@ -314,6 +314,7 @@ class ListAgentsTool:
     name = texts.LIST_TOOL
     description = texts.load_description("list_agents")
     read_only = True
+    retry_safe = True
     clearable = True
     input_schema = _schema({
         "channel": {"description": texts.LIST_FILTER_PROP, "type": "string", "maxLength": 256},
