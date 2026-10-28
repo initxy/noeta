@@ -160,7 +160,7 @@ class EditTool:
 
         return ToolOutput(
             content=[Text(text=mutation_result(resolved, created=False, stale=stale,
-                                               in_view=in_view))],
+                                               in_view=in_view, every=replace_all))],
             meta={
                 "path": rel,
                 "diff": diff,

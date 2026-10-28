@@ -136,13 +136,18 @@ STALE_EDIT_NOTE = (
 
 
 def mutation_result(path: str, *, created: bool, stale: bool = False,
-                    in_view: bool = True) -> str:
+                    in_view: bool = True, every: bool = False) -> str:
     """The one-line result of a successful ``Edit`` or ``Write`` (absolute
     path). The file-state note follows only when the model holds the whole
     file as it now is (``in_view``); an edit over changes made since the
-    read says so instead (Claude Code's rules)."""
-    head = (f"File created successfully at: {path}" if created
-            else f"The file {path} has been updated successfully.")
+    read says so instead (Claude Code's rules). ``every``: a ``replace_all``
+    edit, whose line says every occurrence was replaced."""
+    if created:
+        head = f"File created successfully at: {path}"
+    elif every:
+        head = f"The file {path} has been updated: every occurrence was replaced."
+    else:
+        head = f"The file {path} has been updated successfully."
     if stale:
         return f"{head} {STALE_EDIT_NOTE}"
     if not in_view:

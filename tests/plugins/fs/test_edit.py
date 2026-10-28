@@ -87,6 +87,17 @@ async def test_an_edit_without_the_whole_file_in_view_has_no_note(h: Harness, ws
     assert text_of(out).endswith("no need to Read it back)")
 
 
+async def test_a_replace_all_result_says_every_occurrence_was_replaced(
+        h: Harness, ws: Path) -> None:
+    (ws / "a.txt").write_text("x x\n")
+    await _read(h, "a.txt")
+    out = await h.call(EditTool(), file_path="a.txt", old_string="x", new_string="y",
+                       replace_all=True)
+    assert text_of(out) == (
+        f"The file {ws / 'a.txt'} has been updated: every occurrence was replaced. "
+        "(what you wrote is the file's current state; no need to Read it back)")
+
+
 async def test_consecutive_edits_chain_without_a_reread(h: Harness, ws: Path) -> None:
     (ws / "a.py").write_text("one\ntwo\n")
     await _read(h, "a.py")
@@ -205,7 +216,7 @@ async def test_edit_replace_all_replaces_every_match(h: Harness, ws: Path) -> No
         EditTool(), file_path="a.py", old_string="foo", new_string="bar", replace_all=True
     )
     assert not out.is_error
-    assert text_of(out).startswith(f"The file {ws / 'a.py'} has been updated successfully.")
+    assert text_of(out).startswith(f"The file {ws / 'a.py'} has been updated: every ")
     assert target.read_text() == "bar\nbar\nbar\n"
     assert out.meta["diff"].count("+bar") == 3
     assert out.meta["diff"].count("-foo") == 3
