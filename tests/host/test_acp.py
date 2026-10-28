@@ -143,5 +143,9 @@ async def test_permission_modes_are_session_modes(tmp_path: Path) -> None:
     modes = [u.current_mode_id for u in editor.updates
              if u.session_update == "current_mode_update"]
     assert modes == ["acceptEdits"]
+    # The mode config option follows the switch too.
+    options = [{o.id: o.current_value for o in u.config_options} for u in editor.updates
+               if u.session_update == "config_option_update"]
+    assert options[-1]["mode"] == "acceptEdits"
     await acp_agent.set_session_mode(session_id=session.session_id, mode_id="plan")
     await app.stop()
