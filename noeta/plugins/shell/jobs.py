@@ -1,5 +1,7 @@
 """The process-local table of background jobs (``Bash`` with
-``run_in_background`` and ``Monitor``).
+``run_in_background`` and ``Monitor``), and of foreground ``Bash`` commands,
+which run as jobs the call waits for so that one whose timeout runs out can
+be moved to the background (it then takes its hold on the tree).
 
 A job belongs to the worker process that started it and to the task tree's
 root: the table is keyed by root task, the cap counts a root's running jobs,
@@ -158,6 +160,12 @@ class Job:
     alive_path: str = ""
     status: str = "running"  # running | exited | killed
     exit_code: int | None = None
+    #: A ``Bash`` command waited on in the foreground: it ends without a
+    #: notice and leaves its files to the call (:meth:`Registry.discard`),
+    #: until :meth:`Registry.to_background` moves it to the background.
+    foreground: bool = False
+    #: Where a foreground command's shell writes its final directory (fd 3).
+    cwd_path: str = ""
     #: Output bytes a monitor has already turned into events.
     tailed: int = 0
     decoder: Any = field(
@@ -259,8 +267,9 @@ class Registry:
                     argv: Sequence[str] | None = None,
                     ws: tuple[str, list[str]] | None = None,
                     ws_resolve: Callable[[str, int], Awaitable[str]] | None = None,
-                    ) -> Job | str:
-        """Start a job, or return the refusal text. ``release`` is awaited
+                    foreground: bool = False) -> Job | str:
+        """Start a job, or return the refusal text. A ``foreground`` job
+        (:attr:`Job.foreground`) also gets a file its fd 3 writes to. ``release`` is awaited
         once the job has ended and its end is posted (or it was refused);
         ``tree`` is the hold it gives back, whose loss kills the job.
         ``argv``: what runs instead
@@ -272,7 +281,8 @@ class Registry:
                                 root_id=root_id, spawner_id=spawner_id,
                                 tool_use_id=tool_use_id, description=description, post=post,
                                 monitor_timeout_ms=monitor_timeout_ms, release=release,
-                                tree=tree, argv=argv, ws=ws, ws_resolve=ws_resolve)
+                                tree=tree, argv=argv, ws=ws, ws_resolve=ws_resolve,
+                                foreground=foreground)
         if isinstance(job, str) and release is not None:
             await release()
         return job
@@ -284,7 +294,7 @@ class Registry:
                      argv: Sequence[str] | None,
                      ws: tuple[str, list[str]] | None = None,
                      ws_resolve: Callable[[str, int], Awaitable[str]] | None = None,
-                     ) -> Job | str:
+                     foreground: bool = False) -> Job | str:
         running = len(self.running(root_id))
         if running >= self.max_jobs:
             return (f"too many background jobs ({running}/{self.max_jobs}); stop one with "
@@ -297,16 +307,17 @@ class Registry:
         out = posixpath.join(log_dir, f"{job_id}.output")
         err = posixpath.join(log_dir, f"{job_id}.err") if monitor_timeout_ms else None
         alive = posixpath.join(log_dir, f"{job_id}.alive") if tree is not None else ""
+        cwd_file = posixpath.join(log_dir, f"{job_id}.cwd") if foreground else ""
         made = await env.run(
             ["sh", "-c", 'umask 077 && for f; do : > "$f" || exit 1; done', "sh",
-             *[p for p in (out, err, alive) if p]], timeout=10)
+             *[p for p in (out, err, alive, cwd_file) if p]], timeout=10)
         if made.exit_code != 0:
             return "background jobs are unavailable: could not create the job's log file"
         job = Job(job_id=job_id, root_id=root_id, spawner_id=spawner_id, command=command,
                   description=_label(description or command), tool_use_id=tool_use_id,
                   env=env, out_path=out, err_path=err, post=post, release=release, ws=ws,
                   tree=tree, worker=tree.worker if tree is not None else self.worker,
-                  alive_path=alive)
+                  alive_path=alive, foreground=foreground, cwd_path=cwd_file)
         if monitor_timeout_ms is not None:
             job.monitor = MonitorStream(sink=lambda text, _note: self._event(job, text),
                                         stop=lambda: self._stop_quietly(job))
@@ -317,10 +328,12 @@ class Registry:
                                                     resolve=ws_resolve))
         else:
             redirect = f"2>{shlex.quote(err)}" if err is not None else "2>&1"
+            if cwd_file:
+                redirect += f" 3>{shlex.quote(cwd_file)}"
             # The command runs as the shell's own process (``exec``), so the
             # guard is no job of its: a ``wait`` in it never waits for that.
             script = (f"exec >{shlex.quote(out)} {redirect}\n"
-                      f"{self._guard(job)} </dev/null >/dev/null 2>&1 &\n"
+                      f"{self._guard(job)} </dev/null >/dev/null 2>&1 3>&- &\n"
                       'exec "$@"')
             run = ["bash", "-c", script, "bash", *(argv or ["bash", "-c", command])]
             job.proc = asyncio.ensure_future(env.run(run, cwd=cwd,
@@ -395,23 +408,31 @@ class Registry:
                 tail.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await tail
-            notice: str | None = None
-            try:
-                notice = await self._finish(job)
-            finally:
+            if job.foreground:
+                # The call waiting for it reports the end itself.
                 job.outbox.put_nowait(None)
-                if job.sender is not None:
+                job.done.set()
+            else:
+                await self._end(job)
+
+    async def _end(self, job: Job) -> None:
+        notice: str | None = None
+        try:
+            notice = await self._finish(job)
+        finally:
+            job.outbox.put_nowait(None)
+            if job.sender is not None:
+                with contextlib.suppress(Exception):
+                    await job.sender  # the monitor's events come first
+            try:
+                # Posted before the hold is given back: a worker that
+                # claims the tree next finds the end in the inbox.
+                await self._post_end(job, notice)
+            finally:
+                job.done.set()
+                if job.release is not None:
                     with contextlib.suppress(Exception):
-                        await job.sender  # the monitor's events come first
-                try:
-                    # Posted before the hold is given back: a worker that
-                    # claims the tree next finds the end in the inbox.
-                    await self._post_end(job, notice)
-                finally:
-                    job.done.set()
-                    if job.release is not None:
-                        with contextlib.suppress(Exception):
-                            await job.release()
+                        await job.release()
 
     async def _post_end(self, job: Job, notice: str | None) -> None:
         if job.fenced:
@@ -446,6 +467,38 @@ class Registry:
             job.proc.cancel()
         return "killing"
 
+    def to_background(self, job: Job, release: Release | None) -> bool:
+        """Move a foreground job to the background: from now on its end is
+        told like any job's and ``release`` runs once it is posted. False
+        when the command has already ended (the caller reports it)."""
+        if not job.foreground or job.proc is None or job.proc.done():
+            return False
+        job.foreground = False
+        job.release = release
+        return True
+
+    def hold_with(self, job: Job, tree: TreeHold) -> None:
+        """A job moved to the background lives by ``tree`` from now on."""
+        job.tree, job.worker = tree, tree.worker
+        tree.on_lost(lambda: self._fence(job))
+
+    async def discard(self, job: Job) -> None:
+        """Forget a foreground job once it is done, with its files."""
+        await job.done.wait()
+        if self.jobs.get(job.root_id, {}).get(job.job_id) is job:
+            del self.jobs[job.root_id][job.job_id]
+            if not self.jobs[job.root_id]:
+                self.jobs.pop(job.root_id, None)
+        paths = [p for p in (job.out_path, job.err_path, job.alive_path, job.cwd_path) if p]
+        with contextlib.suppress(Exception):
+            await job.env.run(["rm", "-f", *paths], timeout=10)
+
+    def discard_later(self, job: Job) -> None:
+        """:meth:`discard` without waiting for it."""
+        task = asyncio.create_task(self.discard(job))
+        self._retiring.add(task)
+        task.add_done_callback(self._retiring.discard)
+
     def _stop_quietly(self, job: Job) -> None:
         self.kill(job, quiet=True)
 
@@ -477,7 +530,8 @@ class Registry:
         for job in jobs:
             await job.done.wait()
         for job in jobs:
-            paths = [p for p in (job.out_path, job.err_path, job.alive_path) if p]
+            paths = [p for p in (job.out_path, job.err_path, job.alive_path, job.cwd_path)
+                     if p]
             with contextlib.suppress(Exception):
                 await job.env.run(["rm", "-f", *paths], timeout=10)
             self.ended.discard(job.spawner_id)

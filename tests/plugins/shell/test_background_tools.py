@@ -249,3 +249,49 @@ async def test_a_background_reading_git_is_hardened_too(tmp_path: Path) -> None:
         out = await bg.call("Bash", command=command, run_in_background=True)
         await bg.settle(out.meta["job_id"])
     assert [k for k, m in markers.items() if m.exists()] == []
+
+
+# -- a foreground command past its timeout -----------------------------------
+
+
+async def test_a_foreground_command_ends_quietly_and_leaves_nothing(h: Harness) -> None:
+    (h.tmp / "sub").mkdir()
+    out = await h.call("Bash", command="cd sub && echo hi && echo err >&2")
+    assert not out.is_error and text(out) == "hi\nerr"
+    assert out.meta["cwd"] == str(h.tmp / "sub")
+    assert [r[:2] for r in h.records] == [("shell", "cwd")]
+    failed = await h.call("Bash", command="echo no; exit 4")
+    assert failed.is_error and text(failed) == "Exit code 4\nno"
+    await asyncio.sleep(0.05)
+    assert h.posts == [] and h.registry.jobs == {}
+    assert list((h.tmp.parent / "logs").iterdir()) == []
+
+
+async def test_a_timeout_moves_the_command_to_the_background(h: Harness) -> None:
+    out = await h.call("Bash", command="echo started; sleep 2; echo done", timeout=1000)
+    assert not out.is_error
+    job_id = out.meta["job_id"]
+    path = str(h.tmp.parent / "logs" / f"{job_id}.output")
+    first, _, rest = text(out).partition("\n")
+    assert first == "started"
+    assert rest.startswith(
+        "The command was still running when its 1s timeout ran out, so it was moved to the "
+        f"background with ID {job_id}; its output goes on into {path}.")
+    assert "printed nothing" not in rest
+    assert [r[:2] for r in h.records] == [("shell", "started")]
+    await h.settle(job_id)
+    assert len(h.posts) == 1 and "<status>completed</status>" in h.posts[0][1]
+    assert Path(path).read_text() == "started\ndone\n\n[exited with code 0]\n"
+
+
+async def test_a_silent_moved_command_says_it_printed_nothing(h: Harness) -> None:
+    out = await h.call("Bash", command="true; sleep 2", timeout=1000)
+    assert text(out).startswith("The command was still running")
+    assert "It had printed nothing yet" in text(out)
+    await h.settle(out.meta["job_id"])
+
+
+async def test_a_command_starting_with_sleep_is_killed_at_its_timeout(h: Harness) -> None:
+    out = await h.call("Bash", command="sleep 3; echo late", timeout=1000)
+    assert out.is_error and text(out).startswith("Command timed out after 1s")
+    assert h.records == [] and h.registry.jobs == {}

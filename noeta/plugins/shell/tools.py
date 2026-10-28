@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import shlex
 from collections.abc import Awaitable, Callable
@@ -10,8 +11,10 @@ from importlib import resources
 from typing import Any
 from urllib.parse import urlsplit
 
+from noeta.core.execenv import RunResult
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.plugins.shell.bash import (
+    _CWD_MARK,
     SCHEMA_DIALECT,
     SHELL,
     BashTool,
@@ -26,6 +29,7 @@ from noeta.plugins.shell.jobs import Job, Registry
 from noeta.plugins.shell.notices import format_duration
 from noeta.plugins.shell.websocket import parse_ws
 from noeta.toolkit.sandbox import domain_allowed, resolve_allowed, sandbox_of
+from noeta.toolkit.shell_syntax import parse
 from noeta.toolkit.tools import Workspace, require_str, tool_error
 
 #: Claude Code's ``Monitor`` deadline bounds.
@@ -85,9 +89,59 @@ def _root(ctx: ToolContext) -> str:
     return ctx.root_id or ctx.task_id
 
 
+def _first_word(command: str) -> str:
+    parsed = parse(command)
+    if parsed.opaque or not parsed.commands or not parsed.commands[0].argv:
+        return command.split()[0] if command.split() else ""
+    return parsed.commands[0].argv[0]
+
+
+def _track_cwd_fd(script: str) -> str:
+    """``script`` with an EXIT trap writing the shell's final directory to
+    fd 3 (quietly, if fd 3 did not reach it)."""
+    return f"exec 2>&1\ntrap '{{ pwd -P >&3; }} 2>/dev/null' EXIT\n{script}"
+
+
+def _output_so_far(data: bytes, truncated: bool) -> str:
+    """The tail of a moved command's output: a line cut by the window is
+    dropped."""
+    text = data.decode("utf-8", errors="replace")
+    if truncated and "\n" in text:
+        text = text[text.index("\n") + 1:]
+    return text.strip("\n")
+
+
+def moved_to_background(job_id: str, out_path: str, timeout_s: int, *,
+                        printed: bool, ends_with_turn: bool) -> str:
+    """The result of a foreground command its timeout moved to the
+    background."""
+    text = (f"The command was still running when its {timeout_s}s timeout ran out, so it "
+            f"was moved to the background with ID {job_id}; its output goes on into "
+            f"{out_path}. ")
+    if ends_with_turn:
+        text += ("You are notified if it ends while you are still working, but it is "
+                 "stopped when you give your final response: if you need its result, wait "
+                 "for it before you finish. ")
+    else:
+        text += "You will be notified when it ends. "
+    text += ("It is still running, so do not start it again; stop it with TaskStop if you no "
+             "longer need it. Read that file for its output so far.")
+    if not printed:
+        text += (" It had printed nothing yet: a program that buffers its output, or a pipe "
+                 "into one such as tail, can leave the file empty until it ends.")
+    return text
+
+
+#: How much of a moved command's output its result shows (Claude Code's).
+MOVED_OUTPUT_BYTES = 2_000
+
+
 class BackgroundBash(BashTool):
     """``Bash``; with ``run_in_background`` the command starts as a job of
-    the process-local registry and the call returns at once."""
+    the process-local registry and the call returns at once. A foreground
+    command runs as a job too (unless it starts with ``sleep``): it is
+    waited for, and if its timeout runs out it is moved to the background
+    instead of killed, as Claude Code does."""
 
     def __init__(self, registry: Registry, *, ends_with_turn: bool = False,
                  **kwargs: Any) -> None:
@@ -115,6 +169,108 @@ class BackgroundBash(BashTool):
             text += ("\n" + f"Session cwd remains {cwd}; directory changes made by "
                      "the backgrounded command do not apply to subsequent commands.")
         return text_output(text, job_id=job.job_id)
+
+    async def _execute(self, ctx: ToolContext, *, command: str, script: str,
+                       hardened: list[str] | None, cwd: str, timeout_s: int, disable: Any,
+                       description: str) -> tuple[RunResult, list[str]] | ToolOutput:
+        if ctx.post is None or _first_word(command) == "sleep":
+            return await super()._execute(
+                ctx, command=command, script=script, hardened=hardened, cwd=cwd,
+                timeout_s=timeout_s, disable=disable, description=description)
+        if hardened is not None:
+            argv = ["bash", "-c", 'exec "$@"', "bash", *hardened]
+        else:
+            argv = ["bash", "-c", _track_cwd_fd(script)]
+        confined = await confine(ctx.env, command, disable, argv, cwd)
+        if isinstance(confined, str):
+            return tool_error(self.name, confined)
+        job = await self.registry.spawn(
+            env=ctx.env, command=script if hardened is None else shlex.join(hardened),
+            cwd=cwd, env_vars={**self._command_env(ctx), **(confined.env if confined else {})},
+            root_id=_root(ctx), spawner_id=ctx.task_id, tool_use_id=ctx.call_id,
+            description=description or command, post=ctx.post,
+            argv=confined.argv if confined else argv, foreground=True)
+        if isinstance(job, str):  # no job slot: run it the plain way
+            if confined is not None:
+                await confined.close()
+            return await super()._execute(
+                ctx, command=command, script=script, hardened=hardened, cwd=cwd,
+                timeout_s=timeout_s, disable=disable, description=description)
+        assert job.proc is not None
+        try:
+            await asyncio.wait({job.proc}, timeout=float(timeout_s))
+        except asyncio.CancelledError:
+            self.registry.kill(job, quiet=True)
+            self.registry.discard_later(job)
+            if confined is not None:
+                await asyncio.shield(confined.close())
+            raise
+        hold = asyncio.ensure_future(ctx.hold()) if ctx.hold is not None else None
+
+        async def release() -> None:
+            if confined is not None:
+                await confined.close()
+            if hold is not None:
+                await (await hold)()
+
+        if self.registry.to_background(job, release):
+            return await self._moved(ctx, job, command, cwd, timeout_s, hold,
+                                     tracked=hardened is None)
+        if hold is not None:
+            hold.cancel()
+        try:
+            return await self._foreground_result(job), (
+                confined.violations() if confined else [])
+        finally:
+            if confined is not None:
+                await confined.close()
+            await self.registry.discard(job)
+
+    async def _foreground_result(self, job: Job) -> RunResult:
+        """What a job waited for in the foreground printed (its last
+        ``output_cap`` bytes), with its final directory on the marker
+        line."""
+        await job.done.wait()
+        env = job.env
+        st = await env.stat(job.out_path)
+        size = st.size if st is not None else 0
+        take = min(size, self.output_cap)
+        data = await env.read_range(job.out_path, size - take, take) if take else b""
+        where = b""
+        if job.cwd_path:
+            cst = await env.stat(job.cwd_path)
+            if cst is not None and cst.size:
+                where = (await env.read_range(job.cwd_path, 0, cst.size)).strip()
+        if where:
+            data += b"\n" + _CWD_MARK.encode() + where + b"\n"
+        killed = job.status == "killed"
+        return RunResult(exit_code=job.exit_code if job.exit_code is not None else -1,
+                         stdout=data, stdout_truncated=size > take, timed_out=killed)
+
+    async def _moved(self, ctx: ToolContext, job: Job, command: str, cwd: str,
+                     timeout_s: int, hold: asyncio.Future[Any] | None, *,
+                     tracked: bool) -> ToolOutput:
+        if hold is not None:
+            self.registry.hold_with(job, (await hold).tree)
+        ctx.record(SHELL, "started", {
+            "job_id": job.job_id, "command": command, "description": job.description,
+            "tool_use_id": ctx.call_id, "monitor": False, "output_file": job.out_path,
+            **_holder(job)})
+        try:
+            st = await job.env.stat(job.out_path)
+            size = st.size if st is not None else 0
+            take = min(size, MOVED_OUTPUT_BYTES)
+            data = await job.env.read_range(job.out_path, size - take, take) if take else b""
+        except OSError:
+            size, data = 0, b""
+        so_far = _output_so_far(data, size > len(data))
+        text = moved_to_background(job.job_id, job.out_path, timeout_s, printed=size > 0,
+                                   ends_with_turn=self.ends_with_turn)
+        if tracked and _CD_WORD.search(command):
+            text += ("\n" + f"Session cwd remains {cwd}; directory changes made by "
+                     "the backgrounded command do not apply to subsequent commands.")
+        return text_output(f"{so_far}\n{text}" if so_far else text, job_id=job.job_id,
+                           timed_out_after_ms=timeout_s * 1000)
 
 
 def _ws_policy(env: Any, url: str) -> Callable[[str, int], Awaitable[str]] | str | None:
