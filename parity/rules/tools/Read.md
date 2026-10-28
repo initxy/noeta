@@ -31,7 +31,7 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | id | rule | noeta today |
 |---|---|---|
 | `tool.Read.1` | `file_path` must be absolute. | covered (stated; relative paths still accepted) |
-| `tool.Read.2` | Without `limit`, at most 2000 lines are returned. | covered |
+| `tool.Read.2` | Without `limit`, at most 2000 lines are returned. | covered (as in Claude Code's own reader, the runtime applies no line count: see `tool.Read.12`) |
 | `tool.Read.3` | When the needed part is known, read only that part; this matters most for large files. | covered |
 | `tool.Read.4` | Output is in `cat -n` style with numbering starting at 1. | covered (but see `tool.Read.r.1` for the exact form) |
 | `tool.Read.5` | Images (PNG, JPG and similar) are shown to the model visually. | covered |
@@ -40,7 +40,21 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | `tool.Read.8` | Reading a directory, a path that does not exist, or a zero-length file yields an error or a reminder rather than file content. | covered |
 | `tool.Read.9` | Do not re-read a file just edited to check it: a failed `Edit`/`Write` errors, and the harness tracks file state. | covered |
 | `tool.Read.10` | The description names no byte or token cap; the over-limit escape is `allow_large`. | covered |
-| `tool.Read.11` | The description says nothing about long-line truncation. | covered (not stated; lines past 2000 characters are still cut) |
+| `tool.Read.11` | The description says nothing about long-line truncation. | covered (no line is cut, as in Claude Code) |
+
+## Runtime behaviour (2.1.312 bundle)
+
+Not in the description; read from the bundle's `Read` implementation.
+
+| id | rule | noeta today |
+|---|---|---|
+| `tool.Read.12` | Without `limit` the whole file is read (no line count); a file over 256 KB is refused unless `allow_large`. No line is cut short. | covered |
+| `tool.Read.13` | A read with no offset (or offset 1), no `limit` and no `pages` whose content is over 25000 tokens returns the leading lines that fit (85% of the proportional share, shrunk until it fits; leading characters when lines are too long) and, after the result, a note with the next `offset`/`limit` and the `allow_large` escape; the read counts as a partial view. With `offset`/`limit` it is an error. Past a quarter of the cap the estimate is checked with `count_tokens`. | covered |
+| `tool.Read.14` | Re-reading with the same `offset` and `limit` (as given) a file whose mtime has not moved answers with a short unchanged note; not after a partial view or an `Edit`/`Write`; notebooks too. | covered |
+| `tool.Read.15` | A missing file: the working directory, plus one guess (the path re-rooted inside the working directory, or the same name with another extension). | covered |
+| `tool.Read.16` | Binary extensions (archives, executables, office, media, fonts, databases, ...) are refused before opening, except png/jpg/jpeg/gif/webp/pdf; device and `/proc` files are refused. | covered |
+| `tool.Read.17` | Images by extension; content is sniffed only without one; an image extension over other bytes is an error. The result is the image alone. PDFs by extension: empty, headerless or over 100 MB refused. | covered (a whole short PDF comes back as page images, `deviations.md`) |
+| `tool.Read.18` | An empty file or an offset past the end (lines counted with a final newline starting one more) answers with a warning instead of content; a leading byte-order mark is not shown. | covered (plain text, not `<system-reminder>`, `deviations.md`) |
 
 ## Result shape
 
