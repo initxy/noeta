@@ -155,3 +155,52 @@ def register_models_file(path: str) -> None:
 def open_store(url: str) -> Any:
     """``sqlite:///path`` or ``postgres://…`` → a store."""
     return registry.store(url)
+
+
+#: The projects whose ``.noeta/plugins`` may load: ``{"projects": [path, ...]}``,
+#: written by ``noeta trust``.
+TRUST_FILE = "trusted.json"
+
+
+def trusted_projects() -> list[str]:
+    import json
+
+    path = HOME / TRUST_FILE
+    if not path.is_file():
+        return []
+    data = json.loads(path.read_text("utf-8"))
+    projects = data.get("projects", []) if isinstance(data, dict) else []
+    return [str(Path(p).expanduser().resolve()) for p in projects if isinstance(p, str)]
+
+
+def trust_project(directory: str) -> str:
+    """Add ``directory`` to the trusted projects; returns it resolved."""
+    import json
+
+    resolved = str(Path(directory).expanduser().resolve())
+    projects = trusted_projects()
+    if resolved not in projects:
+        projects.append(resolved)
+        HOME.mkdir(parents=True, exist_ok=True)
+        (HOME / TRUST_FILE).write_text(json.dumps({"projects": projects}, indent=2) + "\n",
+                                       "utf-8")
+    return resolved
+
+
+def load_plugin_files(cwd: str | None) -> list[str]:
+    """Load the plugin files of ``~/.noeta/plugins`` and, for a trusted
+    project, ``<cwd>/.noeta/plugins``. Returns notices for the person: a
+    project's plugin directory left alone because it is not trusted."""
+    dirs = [HOME / "plugins"]
+    notices = []
+    if cwd:
+        project = Path(cwd).expanduser().resolve()
+        local = project / ".noeta" / "plugins"
+        if local.is_dir():
+            if str(project) in trusted_projects():
+                dirs.append(local)
+            else:
+                notices.append(f"{local} was not loaded: this project is not trusted "
+                               f"(run `noeta trust` in {project} to load its plugins)")
+    registry.load_plugin_files(dirs)
+    return notices

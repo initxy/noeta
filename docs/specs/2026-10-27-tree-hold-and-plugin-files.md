@@ -49,9 +49,10 @@ ask the person a question or tell them something, and front ends depend on no pl
   up to one hold (60 s by default) before another worker takes it.
 - **Plugin files.** `~/.noeta/plugins/` holds `*.py` files and directories with `__init__.py`
   (one level). Each `Extension` subclass defined there with a `name` registers under it. A
-  project's `.noeta/plugins/` loads only when the project directory is listed in `config.toml`
-  `trusted_projects` (`noeta trust` adds the current one); otherwise a notice says it was
-  skipped. An installed package wins a name clash (the file is skipped with a warning). A file
+  project's `.noeta/plugins/` loads only when the project directory is listed in
+  `~/.noeta/trusted.json` (`noeta trust` adds the current one; a file noeta writes, as Claude
+  Code keeps trust in `~/.claude.json`, since `config.toml` is the user's to edit); otherwise a
+  notice says it was skipped. An installed package wins a name clash (the file is skipped with a warning). A file
   that fails to import is remembered, and an agent naming its plugin fails with that error.
   Files load once per process. Each worker loads its own home directory; packages remain the way
   to deploy plugins to many machines. `noeta plugins` lists every plugin and where it comes from.
@@ -71,7 +72,7 @@ ask the person a question or tell them something, and front ends depend on no pl
 - [x] Tree hold: `holds` table, `hold` / `unhold` and the claim filter in SQLite and Postgres
       (contract tests, Postgres run locally), `Runtime` renewal, `ToolContext.hold`
 - [x] Shell jobs hold their root; the lost rule on start; two-runtime tests
-- [ ] Plugin files: registry sources, `trusted_projects`, `noeta trust`, `noeta plugins`
+- [x] Plugin files: registry sources, `trusted.json`, `noeta trust`, `noeta plugins`
 - [ ] `noeta/core/questions.py`, `ask_user` on it, `TaskView.notify`, MCP servers as data,
       the apps ↛ plugins contract
 - [ ] The example plugin asks a question and sends a notice
@@ -101,3 +102,8 @@ ask the person a question or tell them something, and front ends depend on no pl
   local postgres:16 container (40 + 28). Friction: the renewal loop first used `Runtime.sleep`,
   which tests replace with a no-op, and spun; it now sleeps in real time. A lost job now tells
   the model (it was a silent record).
+- 2026-10-27: step 3 done (plugin files, `noeta trust`, `noeta plugins`); `make check` 1360
+  passed. One run failed `test_tui_shows_and_answers_a_sub_agents_approval` (also seen on main
+  after the merge): the wait after allowing a sub-agent's approval ran its full 20 s, so it is a
+  stall, not a tight timeout. 24 concurrent single runs and 6 `-n 8` runs of `tests/apps` did not
+  reproduce it; its wait is now split so the next failure says which side stopped.

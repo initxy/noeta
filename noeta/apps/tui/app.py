@@ -171,6 +171,8 @@ class NoetaApp(App[None]):
         transcript = self.query_one("#transcript")
         await transcript.remove_children()
         await transcript.mount(Notice(f"noeta · task {task_id[:8]} · /help for commands"))
+        for notice in getattr(self.local, "notices", ()):
+            await transcript.mount(Notice(notice))
         if refused:
             await transcript.mount(Notice(f"read-only: {refused}. Its history is shown; "
                                           "/new starts a task here.", classes="-error"))

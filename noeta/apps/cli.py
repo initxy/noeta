@@ -52,7 +52,22 @@ def _parser() -> argparse.ArgumentParser:
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8642)
     sv.add_argument("--no-worker", action="store_true", help="API only; workers run elsewhere")
+    sub.add_parser("trust", help="load this project's .noeta/plugins from now on")
+    sub.add_parser("plugins", help="list the plugins and where each comes from")
     return ap
+
+
+def _plugins(cwd: str) -> None:
+    from noeta.apps.config import load_plugin_files
+    from noeta.core import registry
+
+    notices = load_plugin_files(cwd)
+    for name, source in registry.sources(registry.PLUGINS).items():
+        print(f"{name}\t{source}")
+    for path, why in registry.broken_plugin_files().items():
+        print(f"(failed) {path}: {why}", file=sys.stderr)
+    for notice in notices:
+        print(notice, file=sys.stderr)
 
 
 def _settings(args: argparse.Namespace) -> Settings:
@@ -93,6 +108,8 @@ async def _print_mode(s: Settings, prompt: str, *, cwd: str, as_json: bool,
     from noeta.core.types import Usage
 
     async with _app(s, cwd=cwd, own_tasks_only=True) as app:
+        for notice in app.notices:
+            print(f"noeta: {notice}", file=sys.stderr)
         config: dict[str, Any] = {"cwd": cwd, "model": s.model}
         if s.effort:
             config["effort"] = s.effort
@@ -177,6 +194,13 @@ async def _worker(s: Settings, queues: list[str], concurrency: int) -> None:
 def main(argv: list[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     cwd = os.path.abspath(args.cwd or os.getcwd())
+    if args.command == "trust":
+        from noeta.apps.config import trust_project
+        print(f"trusted {trust_project(cwd)}: its .noeta/plugins load from now on")
+        return
+    if args.command == "plugins":
+        _plugins(cwd)
+        return
     if args.command == "acp":
         from noeta.apps.acp import EditorServers, serve_stdio
         s = _settings(args)
