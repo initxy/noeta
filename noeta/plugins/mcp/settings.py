@@ -11,7 +11,8 @@ A server's ``timeout`` (milliseconds) bounds each of its tool calls.
 ``${VAR}`` and ``${VAR:-default}`` are filled from the environment in
 ``command``, ``args``, ``env``, ``url`` and ``headers``.
 
-A workspace's ``.mcp.json`` uses the same format, but a server in it starts
+A workspace's ``.noeta/mcp.json`` (Claude Code's ``.mcp.json``, in noeta's
+place) uses the same format, but a server in it starts
 only with the user's consent, given in a settings file with Claude Code's
 keys: ``enableAllProjectMcpServers: true``, or the server's name in
 ``enabledMcpjsonServers`` (and not in ``disabledMcpjsonServers``). A cloned
@@ -35,7 +36,7 @@ __all__ = ["PROJECT_FILE", "alias_for", "read_servers", "servers_from"]
 log = logging.getLogger("noeta.mcp")
 
 #: A workspace's MCP servers, relative to its directory.
-PROJECT_FILE = ".mcp.json"
+PROJECT_FILE = ".noeta/mcp.json"
 
 _VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
@@ -125,7 +126,7 @@ def servers_from(data: Mapping[str, Any], source: str,
 
 def read_servers(settings_files: Sequence[str | Path],
                  project_dirs: Iterable[str] = ()) -> list[McpServer]:
-    """The servers of ``project_dirs``' ``.mcp.json`` the settings consent
+    """The servers of ``project_dirs``' ``.noeta/mcp.json`` the settings consent
     to, then those of ``settings_files``; the first of an alias wins."""
     settings = [_read(Path(f).expanduser()) for f in settings_files]
     enable_all = any(s.get("enableAllProjectMcpServers") is True for s in settings)

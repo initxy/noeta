@@ -29,7 +29,8 @@ __all__ = [
 #: Directories whose contents run or configure tools later (git hooks, editor
 #: tasks, agent settings): writing there asks in every mode. ``.noeta`` is
 #: protected as Claude Code protects ``.claude``: its ``skills``, ``agents``
-#: and ``commands`` are exempt.
+#: and ``commands`` are exempt. ``.claude`` stays protected though noeta never
+#: reads it: Claude Code may run in the same project.
 PROTECTED_DIRS = (".git", ".vscode", ".idea", ".claude", ".husky", ".cargo", ".devcontainer",
                   ".yarn", ".mvn", ".noeta")
 #: Nested protected directories.

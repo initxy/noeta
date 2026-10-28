@@ -111,11 +111,11 @@ class Compaction(Extension):
     since they shape the request bytes):
 
     - ``auto_compact_window``: cap, in tokens, on the window the threshold
-      derives from; default ``$CLAUDE_CODE_AUTO_COMPACT_WINDOW``, else the
+      derives from; default ``$NOETA_AUTO_COMPACT_WINDOW``, else the
       model's window.
     - ``auto_compact_percent``: fire at this percentage of the effective
       window when that is lower than the default threshold; default
-      ``$CLAUDE_AUTOCOMPACT_PCT_OVERRIDE``.
+      ``$NOETA_AUTOCOMPACT_PCT_OVERRIDE``.
     - ``auto``: compact automatically (``/compact`` works either way).
     - ``compaction_model``: another model for the summarize call only.
     - ``restore_files`` / ``read_tool``: re-read recently used files after

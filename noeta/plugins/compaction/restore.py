@@ -26,7 +26,7 @@ POST_COMPACT_TOKEN_BUDGET = 50_000
 READ_TOOL = "Read"
 _FILE_TOOLS = (READ_TOOL, "Edit", "Write")
 #: Carried by the instructions resident; restoring them would repeat it.
-_INSTRUCTION_FILE_NAMES = frozenset({"NOETA.md", "AGENTS.md", "CLAUDE.md"})
+_INSTRUCTION_FILE_NAMES = frozenset({"NOETA.md", "NOETA.local.md", "AGENTS.md"})
 
 
 def _touched(message: Message, succeeded: set[str]) -> list[tuple[str, str]]:

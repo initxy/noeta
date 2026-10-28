@@ -463,7 +463,7 @@ async def test_worktree_isolation(store: SqliteStore, tmp_path: Path) -> None:
     await rt.run_until_idle()
     [child] = await client.tasks(parent_id=tid)
     cwd = (await events(client, child.task_id))[0].config["cwd"]
-    assert cwd.startswith(str(repo / ".claude" / "worktrees" / "agent-"))
+    assert cwd.startswith(str(repo / ".noeta" / "worktrees" / "agent-"))
     assert not Path(cwd).exists()  # unchanged, so removed again
 
 

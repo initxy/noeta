@@ -10,15 +10,14 @@ from pathlib import Path
 import pytest
 
 from noeta.cli import config
-from noeta.cli.claude_settings import permission_arguments
 from noeta.cli.config import from_settings, load_settings, merge_plugin_settings
+from noeta.cli.settings_files import permission_arguments
 from noeta.plugins.web import Web
 
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(config, "HOME", tmp_path)
-    monkeypatch.setattr(config, "CLAUDE_HOME", tmp_path / "claude")
     monkeypatch.setattr(config, "managed_dir", lambda: tmp_path / "managed")
     for var in ("NOETA_MODEL", "NOETA_PROVIDER", "NOETA_STORE"):
         monkeypatch.delenv(var, raising=False)
@@ -74,40 +73,38 @@ def test_from_settings_applies_the_tables(home: Path) -> None:
     [memory] = [e for e in agents["main"].extensions if e.name == "memory"]
     # The front end's root, with config.toml's arguments laid over it.
     assert str(memory.home) == str(home) and memory.recall_model == "small"  # type: ignore[attr-defined]
-    # MCP is on: its servers come from settings.json and consented .mcp.json.
+    # MCP is on: its servers come from settings.json and consented .noeta/mcp.json.
     [mcp] = [e for e in agents["main"].extensions if e.name == "mcp"]
     assert mcp._settings_files == (  # type: ignore[attr-defined]
-        str(home / "claude" / "settings.json"), str(home / "settings.json"),
-        str(home / "managed" / "managed-settings.json"))
+        str(home / "settings.json"), str(home / "managed" / "managed-settings.json"))
 
 
-def test_claude_code_settings_layer_in_its_precedence(
+def test_settings_files_layer_in_claude_codes_precedence(
         home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = home / "proj"
-    (project / ".claude").mkdir(parents=True)
-    (home / "claude").mkdir()
+    (project / ".noeta").mkdir(parents=True)
     (home / "managed").mkdir()
     monkeypatch.setenv("PARITY_A", "unset")
     monkeypatch.setenv("PARITY_B", "unset")
-    (home / "claude" / "settings.json").write_text(json.dumps({
+    (home / "settings.json").write_text(json.dumps({
         "model": "user-model", "env": {"PARITY_A": "user", "PARITY_B": "user"},
         "permissions": {"allow": ["Bash(make:*)"], "defaultMode": "acceptEdits"}}))
-    (project / ".claude" / "settings.json").write_text(json.dumps({
+    (project / ".noeta" / "settings.json").write_text(json.dumps({
         "env": {"PARITY_A": "project"},
         "permissions": {"allow": ["Read", "Bash(make:*)"], "deny": ["WebFetch"],
                         "additionalDirectories": ["~/shared"]}}))
-    (project / ".claude" / "settings.local.json").write_text(json.dumps({
+    (project / ".noeta" / "settings.local.json").write_text(json.dumps({
         "permissions": {"ask": ["Bash(npm publish:*)"], "defaultMode": "bypassPermissions"}}))
     (home / "managed" / "managed-settings.json").write_text(json.dumps({
         "permissions": {"deny": ["Bash(curl:*)"]}}))
     # Untrusted: the project's files are not read.
-    claude = config.claude_settings(str(project))
-    assert claude.permissions == {"allow": ["Bash(make:*)"], "deny": ["Bash(curl:*)"],
-                                  "defaultMode": "acceptEdits"}
+    found = config.file_settings(str(project))
+    assert found.permissions == {"allow": ["Bash(make:*)"], "deny": ["Bash(curl:*)"],
+                                 "defaultMode": "acceptEdits"}
     config.trust_project(str(project))
-    claude = config.claude_settings(str(project))
-    assert claude.env == {"PARITY_A": "project", "PARITY_B": "user"}
-    assert claude.permissions == {
+    found = config.file_settings(str(project))
+    assert found.env == {"PARITY_A": "project", "PARITY_B": "user"}
+    assert found.permissions == {
         "allow": ["Bash(make:*)", "Read"], "deny": ["WebFetch", "Bash(curl:*)"],
         "ask": ["Bash(npm publish:*)"], "additionalDirectories": ["~/shared"],
         "defaultMode": "bypassPermissions"}
@@ -115,10 +112,55 @@ def test_claude_code_settings_layer_in_its_precedence(
     assert s.model == "user-model"
     assert os.environ["PARITY_A"] == "project" and os.environ["PARITY_B"] == "user"
     # The permissions plugin gets plain data, only the arguments it takes.
-    assert permission_arguments(claude, {"mode", "allow"}) == {
+    assert permission_arguments(found, {"mode", "allow"}) == {
         "mode": "bypassPermissions", "allow": ["Bash(make:*)", "Read"]}
     app = from_settings(s, cwd=str(project))
     exts = {e.name: e for e in app.runtime.agents["main"].extensions}
     assert exts["permissions"].mode == "bypassPermissions"  # type: ignore[attr-defined]
-    assert exts["instructions"].user_dir == str(home / "claude")  # type: ignore[attr-defined]
+    assert exts["instructions"].user_dir == str(home)  # type: ignore[attr-defined]
     assert exts["hooks"] is not None
+
+
+def test_claude_codes_own_places_are_never_read(
+        home: Path, tmp_path_factory: pytest.TempPathFactory,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """noeta reads only its own places: a trusted project's ``.claude/``,
+    ``CLAUDE.md`` and ``.mcp.json`` and the user's ``~/.claude/`` are left
+    alone, even with consent to every project MCP server."""
+    from noeta.plugins.mcp.settings import read_servers
+
+    user_home = tmp_path_factory.mktemp("user")
+    monkeypatch.setenv("HOME", str(user_home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(user_home / ".claude"))
+    monkeypatch.setenv("PARITY_C", "unset")
+    front = "---\nname: {0}\ndescription: {0}\n---\nbody\n"
+    project = home / "proj"
+    for root in (user_home / ".claude", project / ".claude"):
+        (root / "agents").mkdir(parents=True)
+        (root / "agents" / "cc-agent.md").write_text(front.format("cc-agent"))
+        (root / "skills" / "cc-skill").mkdir(parents=True)
+        (root / "skills" / "cc-skill" / "SKILL.md").write_text(front.format("cc-skill"))
+        (root / "settings.json").write_text(json.dumps({
+            "model": "cc-model", "env": {"PARITY_C": "claude"},
+            "permissions": {"deny": ["Read"]}}))
+        (root / "CLAUDE.md").write_text("claude instructions\n")
+    (project / "CLAUDE.md").write_text("claude instructions\n")
+    (project / ".mcp.json").write_text(json.dumps(
+        {"mcpServers": {"cc": {"command": "cc-server"}}}))
+    (project / ".noeta").mkdir()
+    (project / ".noeta" / "settings.json").write_text(json.dumps(
+        {"enableAllProjectMcpServers": True}))
+    config.trust_project(str(project))
+
+    found = config.file_settings(str(project))
+    assert not any(".claude" in str(f) for f in found.files)
+    assert found.model is None and found.env == {} and found.permissions == {}
+    assert read_servers([str(f) for f in found.files], [str(project)]) == []
+    app = from_settings(load_settings(cwd=str(project), api_key="k", model="m"),
+                        cwd=str(project))
+    assert os.environ["PARITY_C"] == "unset"
+    assert "cc-agent" not in app.runtime.agents
+    exts = {e.name: e for e in app.runtime.agents["main"].extensions}
+    assert exts["instructions"].user_dir == str(home)  # type: ignore[attr-defined]
+    tiers = exts["skills"].tiers(str(project))  # type: ignore[attr-defined]
+    assert tiers and not any(".claude" in d for d, _tier in tiers)

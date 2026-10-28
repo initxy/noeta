@@ -56,11 +56,11 @@ async def test_edit_output_is_exact(h: Harness, ws: Path) -> None:
     assert text_of(out) == f"The file {ws / 'a.txt'} has been updated successfully. (what you wrote is the file's current state; no need to Read it back)"
 
 
-async def test_an_edit_of_claude_md_has_no_file_state_note(h: Harness, ws: Path) -> None:
-    (ws / "CLAUDE.md").write_text("a\n")
-    await _read(h, "CLAUDE.md")
-    out = await h.call(EditTool(), file_path="CLAUDE.md", old_string="a", new_string="b")
-    assert text_of(out) == f"The file {ws / 'CLAUDE.md'} has been updated successfully."
+async def test_an_edit_of_noeta_md_has_no_file_state_note(h: Harness, ws: Path) -> None:
+    (ws / "NOETA.md").write_text("a\n")
+    await _read(h, "NOETA.md")
+    out = await h.call(EditTool(), file_path="NOETA.md", old_string="a", new_string="b")
+    assert text_of(out) == f"The file {ws / 'NOETA.md'} has been updated successfully."
 
 
 async def test_consecutive_edits_chain_without_a_reread(h: Harness, ws: Path) -> None:

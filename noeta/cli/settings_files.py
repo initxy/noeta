@@ -1,14 +1,13 @@
-"""Claude Code's settings files, read with Claude Code's meaning next to
-noeta's own ``~/.noeta/settings.json``.
+"""noeta's settings files, in Claude Code's format and precedence. Claude
+Code's own (``~/.claude``, ``.claude/``) are never read.
 
 The files, lowest precedence first:
 
-1. ``~/.claude/settings.json`` (the user's Claude Code settings);
-2. ``~/.noeta/settings.json`` (noeta's, at the same level, over it);
-3. ``<project>/.claude/settings.json`` and
-4. ``<project>/.claude/settings.local.json`` — only once the project is
+1. ``~/.noeta/settings.json`` (the user's);
+2. ``<project>/.noeta/settings.json`` and
+3. ``<project>/.noeta/settings.local.json`` — only once the project is
    trusted (``noeta trust``), as everything that changes what an agent may do;
-5. the machine's managed ``managed-settings.json``.
+4. the machine's managed ``managed-settings.json`` (:func:`managed_dir`).
 
 A key a later file sets wins (``model``, ``outputStyle``, each ``env``
 variable, ``permissions.defaultMode``); permission rule lists and
@@ -29,10 +28,12 @@ from typing import Any
 
 log = logging.getLogger("noeta.cli")
 
-#: Where Claude Code keeps a machine's managed settings and instructions.
-MANAGED_DIRS = {"darwin": "/Library/Application Support/ClaudeCode",
-                "win32": r"C:\Program Files\ClaudeCode"}
-DEFAULT_MANAGED_DIR = "/etc/claude-code"
+#: Where a machine's managed settings (``managed-settings.json``) and
+#: instructions (``NOETA.md``, ``.noeta/rules``) live: Claude Code's places
+#: under noeta's name.
+MANAGED_DIRS = {"darwin": "/Library/Application Support/Noeta",
+                "win32": r"C:\Program Files\Noeta"}
+DEFAULT_MANAGED_DIR = "/etc/noeta"
 #: Permission rule lists and their keys in the permissions plugin's
 #: arguments.
 RULE_LISTS = ("allow", "deny", "ask")
@@ -43,7 +44,7 @@ def managed_dir() -> Path:
 
 
 @dataclass
-class ClaudeSettings:
+class FileSettings:
     """What the settings files say, merged."""
 
     #: The files read, lowest precedence first (missing ones included).
@@ -57,13 +58,13 @@ class ClaudeSettings:
     permissions: dict[str, Any] = field(default_factory=dict)
 
 
-def settings_files(cwd: str | None, *, claude_home: Path, noeta_home: Path,
-                   trusted: bool, managed: Path | None = None) -> list[Path]:
+def settings_files(cwd: str | None, *, noeta_home: Path, trusted: bool,
+                   managed: Path | None = None) -> list[Path]:
     """The settings files for a front end started in ``cwd``, lowest
     precedence first; the project's only when ``trusted``."""
-    files = [claude_home / "settings.json", noeta_home / "settings.json"]
+    files = [noeta_home / "settings.json"]
     if cwd and trusted:
-        project = Path(cwd).expanduser() / ".claude"
+        project = Path(cwd).expanduser() / ".noeta"
         files += [project / "settings.json", project / "settings.local.json"]
     files.append((managed or managed_dir()) / "managed-settings.json")
     return files
@@ -83,8 +84,8 @@ def _read(path: Path) -> dict[str, Any]:
     return data
 
 
-def load(files: list[Path]) -> ClaudeSettings:
-    out = ClaudeSettings(files=list(files))
+def load(files: list[Path]) -> FileSettings:
+    out = FileSettings(files=list(files))
     lists: dict[str, list[str]] = {k: [] for k in (*RULE_LISTS, "additionalDirectories")}
     for path in files:
         data = _read(path)
@@ -109,13 +110,13 @@ def load(files: list[Path]) -> ClaudeSettings:
     return out
 
 
-def apply_env(settings: ClaudeSettings) -> None:
+def apply_env(settings: FileSettings) -> None:
     """Set the settings' ``env`` in this process, as Claude Code does: a
     provider, a tool and a hook started from here all see it."""
     os.environ.update(settings.env)
 
 
-def permission_arguments(settings: ClaudeSettings, accepted: set[str]) -> dict[str, Any]:
+def permission_arguments(settings: FileSettings, accepted: set[str]) -> dict[str, Any]:
     """The permissions plugin's arguments the settings give, as plain data:
     ``mode`` (``defaultMode``), ``allow`` / ``deny`` / ``ask`` (rule strings)
     and ``additional_directories``; only those the plugin takes

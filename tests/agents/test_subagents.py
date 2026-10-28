@@ -67,7 +67,7 @@ def test_extension_sets_and_sharing() -> None:
     assert common | {"instructions"} <= names["general-purpose"]
     for name in ("Explore", "Plan"):
         assert common <= names[name]
-        assert "instructions" not in names[name]  # Claude Code sends them no CLAUDE.md
+        assert "instructions" not in names[name]  # Claude Code sends them no instruction files
     assert "memory" not in names["main"]  # memory is off until set
     shells = {id(e) for a in agents.values() for e in a.extensions if e.name == "shell"}
     assert len(shells) == 1

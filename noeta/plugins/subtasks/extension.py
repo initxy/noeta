@@ -227,7 +227,7 @@ class Subtasks(Extension):
         root = top.stdout.decode().strip()
         base = (await env.run(["git", "rev-parse", "HEAD"], cwd=root)).stdout.decode().strip()
         name = "agent-" + re.sub(r"[^A-Za-z0-9_-]", "", ctx.call_id)[-16:]
-        path, branch = f"{root}/.claude/worktrees/{name}", f"worktree-{name}"
+        path, branch = f"{root}/.noeta/worktrees/{name}", f"worktree-{name}"
         made = await env.run(["git", "worktree", "add", "-b", branch, path, "HEAD"], cwd=root)
         if made.exit_code != 0:
             reason = made.stderr.decode(errors="replace").strip() or "git worktree add failed"

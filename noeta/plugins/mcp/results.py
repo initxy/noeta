@@ -7,11 +7,12 @@ anything the model cannot see inline (audio, a resource link, a binary
 resource, an unusable image) becomes a one-line description. A result with
 only ``structuredContent`` is that JSON as text.
 
-A result is held to Claude Code's budget, ``MAX_MCP_OUTPUT_TOKENS`` (25,000
-tokens; four characters a token, an image 1,600): images that do not fit are
-left out, and text over what is left is cut to a marked head (the full text is
-saved under the spill directory when there is one). ``isError: true`` is an
-error result.
+A result is held to Claude Code's budget (25,000 tokens, or
+``NOETA_MAX_MCP_OUTPUT_TOKENS``, its ``MAX_MCP_OUTPUT_TOKENS``; four
+characters a token, an image 1,600): images that do not fit are left out,
+and text over what is left is cut to a marked head (the full text is saved
+under the spill directory when there is one). ``isError: true`` is an error
+result.
 """
 
 from __future__ import annotations
@@ -39,10 +40,10 @@ _INLINE_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/
 
 
 def max_output_tokens() -> int:
-    """``MAX_MCP_OUTPUT_TOKENS`` when it is a positive number, else the
+    """``NOETA_MAX_MCP_OUTPUT_TOKENS`` when it is a positive number, else the
     default."""
     try:
-        value = int(os.environ.get("MAX_MCP_OUTPUT_TOKENS", ""))
+        value = int(os.environ.get("NOETA_MAX_MCP_OUTPUT_TOKENS", ""))
     except ValueError:
         return DEFAULT_MAX_OUTPUT_TOKENS
     return value if value > 0 else DEFAULT_MAX_OUTPUT_TOKENS
@@ -149,7 +150,7 @@ async def render_result(result: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         full = "\n".join(b.text for b in blocks if isinstance(b, Text))
         saved = await _save(ctx, ".txt", full.encode("utf-8"))
         note = (f"[output truncated: over the {limit} token limit for an MCP result "
-                f"(MAX_MCP_OUTPUT_TOKENS); the server returned {text_len} characters, what "
+                f"(NOETA_MAX_MCP_OUTPUT_TOKENS); the server returned {text_len} characters, what "
                 f"follows is the first {budget}. Use the server's pagination or filtering to "
                 "get the rest; without them, tell the user the result is incomplete"
                 + (f"; the full text is in {saved}" if saved else "") + "]")

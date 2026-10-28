@@ -33,8 +33,9 @@ def test_threshold_is_claude_codes() -> None:
 
 
 def test_window_cap_and_percent_override() -> None:
-    # Claude Code with CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000 and
-    # CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=30: min(30 % of 80K, 80K - 13K).
+    # Claude Code with a 100,000-token window cap and a 30 % override
+    # (NOETA_AUTO_COMPACT_WINDOW, NOETA_AUTOCOMPACT_PCT_OVERRIDE here):
+    # min(30 % of 80K, 80K - 13K).
     w = derive_window("claude-opus-5-5", auto_compact_window=100_000, auto_compact_percent=30)
     assert (w.context_window, w.effective, w.threshold) == (100_000, 80_000, 24_000)
     # A percentage above the default threshold does not raise it.

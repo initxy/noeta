@@ -201,7 +201,7 @@ def test_transcript_rendering_and_chunks() -> None:
     request = c.classifier_request(model="m", prompt="P", instructions="be nice",
                                    transcript=chunks, stage=1, fast=True, user_name="ann")
     assert request.cache_after == [0] and request.cache_blocks == [(1, 3), (1, 4)]
-    assert "<user_claude_md>\n  be nice\n</user_claude_md>" in request.messages[0].text
+    assert "<user_noeta_md>\n  be nice\n</user_noeta_md>" in request.messages[0].text
     assert "`ann`" in request.system[1].text
 
 

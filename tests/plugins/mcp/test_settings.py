@@ -1,4 +1,4 @@
-"""MCP servers from settings files and a workspace's ``.mcp.json``: Claude
+"""MCP servers from settings files and a workspace's ``.noeta/mcp.json``: Claude
 Code's format, environment expansion, consent for workspace servers."""
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ FAKE = str(Path(__file__).with_name("fake_server.py"))
 
 
 def write(path: Path, data: Any) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data))
     return str(path)
 
@@ -61,27 +62,27 @@ def test_a_server_timeout_in_milliseconds(tmp_path: Path) -> None:
 
 def test_timeouts_follow_claude_codes_defaults_and_variables(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MCP_TIMEOUT", raising=False)
-    monkeypatch.delenv("MCP_TOOL_TIMEOUT", raising=False)
+    monkeypatch.delenv("NOETA_MCP_TIMEOUT", raising=False)
+    monkeypatch.delenv("NOETA_MCP_TOOL_TIMEOUT", raising=False)
     assert request_timeout_s() == 30.0
     assert tool_timeout_s(None) == 100_000.0  # 1e8 ms: no practical limit
     assert tool_timeout_s(5.0) == 5.0 and tool_timeout_s(0.2) == 1.0
-    monkeypatch.setenv("MCP_TIMEOUT", "60000")
-    monkeypatch.setenv("MCP_TOOL_TIMEOUT", "90000")
+    monkeypatch.setenv("NOETA_MCP_TIMEOUT", "60000")
+    monkeypatch.setenv("NOETA_MCP_TOOL_TIMEOUT", "90000")
     assert request_timeout_s() == 60.0
     assert tool_timeout_s(None) == 90.0
     assert tool_timeout_s(5.0) == 5.0  # the server's own wins
-    monkeypatch.setenv("MCP_TOOL_TIMEOUT", "1e20")
+    monkeypatch.setenv("NOETA_MCP_TOOL_TIMEOUT", "1e20")
     assert tool_timeout_s(None) == MAX_TIMEOUT_S
-    monkeypatch.setenv("MCP_TIMEOUT", "junk")
+    monkeypatch.setenv("NOETA_MCP_TIMEOUT", "junk")
     assert request_timeout_s() == 30.0
 
 
 def test_workspace_servers_need_consent(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
-    write(ws / ".mcp.json", {"mcpServers": {"a": {"command": "a"}, "b": {"command": "b"},
-                                            "user": {"command": "from-ws"}}})
+    write(ws / ".noeta" / "mcp.json", {"mcpServers": {
+        "a": {"command": "a"}, "b": {"command": "b"}, "user": {"command": "from-ws"}}})
     settings = tmp_path / "s.json"
     write(settings, {"mcpServers": {"user": {"command": "from-user"}}})
     assert [s.alias for s in read_servers([settings], [str(ws)])] == ["user"]
@@ -104,7 +105,7 @@ async def store(tmp_path: Path) -> AsyncIterator[SqliteStore]:
 async def test_a_task_gets_the_settings_servers(store: SqliteStore, tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
-    write(ws / ".mcp.json", {"mcpServers": {"proj": {"command": sys.executable,
+    write(ws / ".noeta" / "mcp.json", {"mcpServers": {"proj": {"command": sys.executable,
                                                      "args": [FAKE]}}})
     settings = write(tmp_path / "s.json", {
         "mcpServers": {"fake": {"command": sys.executable, "args": [FAKE]}},

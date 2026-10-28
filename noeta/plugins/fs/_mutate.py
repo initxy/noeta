@@ -93,11 +93,11 @@ FILE_STATE_NOTE = "(what you wrote is the file's current state; no need to Read 
 
 def mutation_result(path: str, *, created: bool) -> str:
     """The one-line result of a successful ``Edit`` or ``Write`` (absolute
-    path). A ``CLAUDE.md`` gets no note: its text reaches the model as
+    path). A ``NOETA.md`` gets no note: its text reaches the model as
     project instructions, not as the file it wrote."""
     head = (f"File created successfully at: {path}" if created
             else f"The file {path} has been updated successfully.")
-    if posixpath.basename(path) == "CLAUDE.md":
+    if posixpath.basename(path) == "NOETA.md":
         return head
     return f"{head} {FILE_STATE_NOTE}"
 

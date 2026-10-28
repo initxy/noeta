@@ -59,7 +59,7 @@ async def test_a_text_over_25000_tokens_is_cut_to_a_marked_head_and_saved(
                               ctx(tmp_path))
     note, cut = texts(out)
     assert note.startswith("[output truncated: over the 25000 token limit for an MCP result "
-                           "(MAX_MCP_OUTPUT_TOKENS); the server returned 100005 characters, "
+                           "(NOETA_MAX_MCP_OUTPUT_TOKENS); the server returned 100005 characters, "
                            "what follows is the first 100000.")
     saved = note.rsplit("the full text is in ", 1)[1].rstrip("]")
     assert cut == "x" * 100_000 and Path(saved).read_text() == text
@@ -71,7 +71,7 @@ async def test_a_text_over_25000_tokens_is_cut_to_a_marked_head_and_saved(
 
 async def test_the_budget_follows_max_mcp_output_tokens(tmp_path: Path,
                                                         monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MAX_MCP_OUTPUT_TOKENS", "2000")
+    monkeypatch.setenv("NOETA_MAX_MCP_OUTPUT_TOKENS", "2000")
     real = base64.b64encode(png(2, 2)).decode()
     out = await render_result({"content": [
         {"type": "text", "text": "y" * 2000},
@@ -84,5 +84,5 @@ async def test_the_budget_follows_max_mcp_output_tokens(tmp_path: Path,
     assert note.startswith("[output truncated: over the 2000 token limit")
     assert left_out == "[1 image(s) left out: over the tool output limit]"
     assert ys.startswith("yyy")
-    monkeypatch.setenv("MAX_MCP_OUTPUT_TOKENS", "nonsense")
+    monkeypatch.setenv("NOETA_MAX_MCP_OUTPUT_TOKENS", "nonsense")
     assert max_output_tokens() == 25_000

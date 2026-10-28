@@ -1,17 +1,19 @@
-"""The ``Instructions`` extension: Claude Code's instruction files, in its
-order and places.
+"""The ``Instructions`` extension: Claude Code's instruction-file layering,
+in its order, over noeta's own files (``NOETA.md`` where Claude Code reads
+``CLAUDE.md``, ``.noeta/`` where it reads ``.claude/``; Claude Code's files
+are never read).
 
 When a runner first picks the task up it reads, in this order, and records
 as one message before the first prompt (a line saying these instructions
 override default behavior, then each file's absolute path and kind, then
 its text):
 
-1. the machine's managed ``CLAUDE.md`` and ``.claude/rules`` (``managed_dir``);
-2. the user's ``CLAUDE.md`` and ``rules/`` (``user_dir``, ``~/.claude``);
+1. the machine's managed ``NOETA.md`` and ``.noeta/rules`` (``managed_dir``);
+2. the user's ``NOETA.md`` and ``rules/`` (``user_dir``, ``~/.noeta``);
 3. for every directory from the outermost ancestor of the working directory
-   down to it: ``CLAUDE.md`` and ``.claude/CLAUDE.md`` (or, in a directory
-   with neither, its first ``NOETA.md`` / ``AGENTS.md``), the rules under
-   ``.claude/rules``, then ``CLAUDE.local.md``;
+   down to it: ``NOETA.md`` and ``.noeta/NOETA.md`` (or, in a directory
+   with neither, its ``AGENTS.md``), the rules under ``.noeta/rules``, then
+   ``NOETA.local.md``;
 4. the auto memory index (``MEMORY.md``) when the agent runs the memory
    plugin before this one: that plugin records the directory, this one
    reads the index from it.
@@ -43,6 +45,7 @@ from noeta.plugins.instructions.files import (
     MANAGED,
     MEMORY,
     PROJECT,
+    PROJECT_FILES,
     RULES_DIR,
     USER,
     InstructionFile,
@@ -55,7 +58,7 @@ from noeta.toolkit.tools import path_within
 __all__ = ["DEFAULT_INSTRUCTIONS_FILENAMES", "Instructions", "render_file",
            "render_instructions"]
 
-#: Read in a directory with no ``CLAUDE.md`` / ``.claude/CLAUDE.md``.
+#: Read in a directory with no ``NOETA.md`` / ``.noeta/NOETA.md``.
 DEFAULT_INSTRUCTIONS_FILENAMES = FALLBACK_FILES
 
 PREAMBLE = ("Below are instructions from the codebase and the user. Follow them: they "
@@ -97,12 +100,12 @@ class Instructions(Extension):
     * ``discovery`` — show the files that apply to a file a tool touches
       (``instructions_discovery``).
     * ``filenames`` — read, the first non-blank one, in a directory with no
-      ``CLAUDE.md`` / ``.claude/CLAUDE.md``.
-    * ``user_dir`` — Claude Code's user directory (``~/.claude``): its
-      ``CLAUDE.md`` and ``rules/``; ``None`` reads none.
-    * ``managed_dir`` — the machine's managed directory (``CLAUDE.md`` and
-      ``.claude/rules``); ``None`` reads none.
-    * ``local`` — read ``CLAUDE.local.md`` files.
+      ``NOETA.md`` / ``.noeta/NOETA.md``.
+    * ``user_dir`` — the user's directory (``~/.noeta``): its ``NOETA.md``
+      and ``rules/``; ``None`` reads none.
+    * ``managed_dir`` — the machine's managed directory (``NOETA.md`` and
+      ``.noeta/rules``); ``None`` reads none.
+    * ``local`` — read ``NOETA.local.md`` files.
     * ``walk`` — read the working directory's ancestors too, not only it.
     * ``rehang`` — put the files (read again) ahead of a compaction's
       summary (``lead_resident``).
@@ -177,10 +180,10 @@ class Instructions(Extension):
     async def _start_files(self, reader: Reader, cwd: str) -> list[InstructionFile]:
         out: list[InstructionFile] = []
         if self.managed_dir:
-            out += await reader.file(posixpath.join(self.managed_dir, "CLAUDE.md"), MANAGED)
+            out += await reader.file(posixpath.join(self.managed_dir, PROJECT_FILES[0]), MANAGED)
             out += await reader.rules(posixpath.join(self.managed_dir, RULES_DIR), MANAGED)
         if self.user_dir:
-            out += await reader.file(posixpath.join(self.user_dir, "CLAUDE.md"), USER)
+            out += await reader.file(posixpath.join(self.user_dir, PROJECT_FILES[0]), USER)
             out += await reader.rules(posixpath.join(self.user_dir, "rules"), USER)
         if self.file is not None:
             path = self.file if posixpath.isabs(self.file) else posixpath.join(cwd, self.file)

@@ -18,4 +18,4 @@ Agents run in the background: the call returns at once and you are notified when
 
 The user does not see the agent's report; pass on what matters. To continue an agent with its context intact, use SendMessage with its id; a new Agent call starts from scratch (except a fork).
 
-An agent type's model, effort and tools come from its definition (the frontmatter of an agent file in `.claude/agents/` or `.noeta/agents/`). `isolation: "worktree"` gives the agent its own git worktree, removed again when the agent left it unchanged.
+An agent type's model, effort and tools come from its definition (the frontmatter of an agent file in `.noeta/agents/`). `isolation: "worktree"` gives the agent its own git worktree, removed again when the agent left it unchanged.

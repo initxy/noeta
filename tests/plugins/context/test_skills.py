@@ -312,12 +312,13 @@ def test_allowed_tools_parsing() -> None:
     assert parse_allowed_tools("{Read}") is None
 
 
-async def test_claude_code_skill_dirs_are_listed_workspace_first(
+async def test_skill_dirs_are_listed_workspace_first_never_claude_codes(
         h: Harness, tmp_path: Path) -> None:
-    write_skill(h.work / ".claude" / "skills", "release-notes", "Draft release notes.")
-    write_skill(tmp_path / "claude-user" / "skills", "a-user-skill", "From the user.")
+    write_skill(h.work / ".noeta" / "skills", "release-notes", "Draft release notes.")
+    write_skill(h.work / ".claude" / "skills", "cc-skill", "Never listed.")
+    write_skill(tmp_path / "noeta-user" / "skills", "a-user-skill", "From the user.")
     h.provider.add(reply("ok"))
-    await h.start(agent(dirs=[tmp_path / "claude-user" / "skills"]))
+    await h.start(agent(dirs=[tmp_path / "noeta-user" / "skills"]))
     assert h.provider.requests[0].messages[-1].text == (
         f"{ROSTER_HEADER}\n\n- release-notes: Draft release notes.\n"
         "- a-user-skill: From the user.")

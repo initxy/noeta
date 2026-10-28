@@ -1,6 +1,7 @@
-"""Instruction files: Claude Code's ``CLAUDE.md`` layers (managed, user,
-project and local, with ``@path`` imports and ``.claude/rules``), noeta's
-``NOETA.md`` / ``AGENTS.md``, and the auto memory index."""
+"""Instruction files: Claude Code's layers in noeta's places (``NOETA.md``:
+managed, user, project and local, with ``@path`` imports and
+``.noeta/rules``), the cross-vendor ``AGENTS.md``, and the auto memory
+index."""
 
 from noeta.plugins.instructions.extension import (
     DEFAULT_INSTRUCTIONS_FILENAMES,

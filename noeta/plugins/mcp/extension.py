@@ -91,7 +91,7 @@ class Mcp(Extension):
 
     ``settings_files``: settings files whose ``mcpServers`` are added, in
     Claude Code's format (:mod:`noeta.plugins.mcp.settings`), read on the
-    worker each pick-up; with ``project`` also the task's ``<cwd>/.mcp.json``
+    worker each pick-up; with ``project`` also the task's ``<cwd>/.noeta/mcp.json``
     servers those settings consent to. ``servers`` wins over both on an alias.
     """
 

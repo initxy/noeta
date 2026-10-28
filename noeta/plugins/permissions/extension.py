@@ -158,7 +158,7 @@ class _Decision:
 
 class Permissions(Extension):
     """Constructor arguments. The first group is Claude Code's ``permissions``
-    settings object as plain data (a host reading ``.claude/settings*.json``
+    settings object as plain data (a host reading ``.noeta/settings*.json``
     passes ``defaultMode`` as ``mode``, ``additionalDirectories`` as
     ``additional_directories`` and ``autoMode`` as ``auto_mode``; the rule
     lists of every settings file concatenated):

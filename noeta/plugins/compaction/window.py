@@ -2,10 +2,10 @@
 Code derives it.
 
 The effective window is the model's window (or the ``auto_compact_window``
-cap, Claude Code's ``CLAUDE_CODE_AUTO_COMPACT_WINDOW``) less
+cap, ``NOETA_AUTO_COMPACT_WINDOW``: Claude Code's knob, noeta's name) less
 ``min(output ceiling, 20_000)`` held back for the summary. The threshold is
 13,000 tokens under that, or ``auto_compact_percent`` of the effective
-window (``CLAUDE_AUTOCOMPACT_PCT_OVERRIDE``) when that is lower. An
+window (``NOETA_AUTOCOMPACT_PCT_OVERRIDE``) when that is lower. An
 uncatalogued model gets the catalog's conservative 128K / 16,384 pair,
 never "compaction off".
 """
@@ -21,9 +21,10 @@ from noeta.core.models import model_limits, resolve_alias
 OUTPUT_RESERVE_MAX_TOKENS = 20_000
 #: How far under the effective window auto-compaction fires.
 AUTOCOMPACT_BUFFER_TOKENS = 13_000
-#: Claude Code's environment knobs, read when the plugin is not given one.
-WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
-PERCENT_ENV = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"
+#: Claude Code's environment knobs under noeta's prefix, read when the plugin
+#: is not given one.
+WINDOW_ENV = "NOETA_AUTO_COMPACT_WINDOW"
+PERCENT_ENV = "NOETA_AUTOCOMPACT_PCT_OVERRIDE"
 
 
 @dataclass(frozen=True)

@@ -41,13 +41,14 @@ __all__ = [
 
 MCP_PREFIX = "mcp__"
 
-#: initialize / list / prompts / resources budget unless ``MCP_TIMEOUT``
-#: (milliseconds) says otherwise (Claude Code's default and variable).
+#: initialize / list / prompts / resources budget unless ``NOETA_MCP_TIMEOUT``
+#: (milliseconds) says otherwise (Claude Code's default; its ``MCP_TIMEOUT``
+#: under noeta's prefix).
 DEFAULT_TIMEOUT_S = 30.0
 
 #: ``tools/call``'s budget when neither the server (``call_timeout``, or
-#: ``timeout`` in milliseconds in a settings file) nor ``MCP_TOOL_TIMEOUT``
-#: sets one: Claude Code's 1e8 ms, in effect no limit.
+#: ``timeout`` in milliseconds in a settings file) nor
+#: ``NOETA_MCP_TOOL_TIMEOUT`` sets one: Claude Code's 1e8 ms, in effect no limit.
 DEFAULT_TOOL_TIMEOUT_S = 100_000.0
 
 #: The longest timeout Claude Code accepts (a 32-bit millisecond count).
@@ -65,18 +66,18 @@ def _env_ms(name: str) -> float | None:
 
 def request_timeout_s() -> float:
     """The budget of every MCP request but ``tools/call``."""
-    ms = _env_ms("MCP_TIMEOUT")
+    ms = _env_ms("NOETA_MCP_TIMEOUT")
     return min(ms / 1000, MAX_TIMEOUT_S) if ms is not None else DEFAULT_TIMEOUT_S
 
 
 def tool_timeout_s(server_timeout: float | None) -> float:
     """One ``tools/call``'s budget: the server's own, else
-    ``MCP_TOOL_TIMEOUT`` (milliseconds), else the default; between 1 s and
+    ``NOETA_MCP_TOOL_TIMEOUT`` (milliseconds), else the default; between 1 s and
     :data:`MAX_TIMEOUT_S`."""
     if server_timeout is not None:
         seconds = server_timeout
     else:
-        ms = _env_ms("MCP_TOOL_TIMEOUT")
+        ms = _env_ms("NOETA_MCP_TOOL_TIMEOUT")
         seconds = ms / 1000 if ms is not None else DEFAULT_TOOL_TIMEOUT_S
     return min(max(seconds, 1.0), MAX_TIMEOUT_S)
 

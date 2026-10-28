@@ -1,7 +1,8 @@
-"""Finding and reading instruction files the way Claude Code does.
+"""Finding and reading instruction files the way Claude Code does, in
+noeta's own places.
 
-An instruction file is a ``CLAUDE.md`` (or ``.claude/CLAUDE.md``,
-``CLAUDE.local.md``, a rule under ``.claude/rules``, an imported file) read
+An instruction file is a ``NOETA.md`` (or ``.noeta/NOETA.md``,
+``NOETA.local.md``, a rule under ``.noeta/rules``, an imported file) read
 whole. Its text is trimmed, a leading YAML frontmatter is cut (a rule's
 ``paths:`` globs come from it) and HTML comments outside code are dropped.
 ``@path`` mentions outside code import that file right after the one naming
@@ -39,14 +40,15 @@ PROJECT = "project"
 LOCAL = "local"
 MEMORY = "memory"
 
-#: Claude Code's project files, read in each directory from the outermost
-#: ancestor of the working directory down to it.
-PROJECT_FILES = ("CLAUDE.md", ".claude/CLAUDE.md")
-LOCAL_FILE = "CLAUDE.local.md"
-RULES_DIR = ".claude/rules"
+#: The project files (Claude Code's ``CLAUDE.md`` and ``.claude/CLAUDE.md``
+#: in noeta's places), read in each directory from the outermost ancestor of
+#: the working directory down to it. Claude Code's own files are never read.
+PROJECT_FILES = ("NOETA.md", ".noeta/NOETA.md")
+LOCAL_FILE = "NOETA.local.md"
+RULES_DIR = ".noeta/rules"
 #: Read in a directory that has none of :data:`PROJECT_FILES`, the first
-#: non-blank one only: noeta's own file, then the cross-vendor convention.
-FALLBACK_FILES = ("NOETA.md", "AGENTS.md")
+#: non-blank one only: the cross-vendor convention.
+FALLBACK_FILES = ("AGENTS.md",)
 #: An imported file at this depth is not read (the file a directory names is
 #: depth 0), as in Claude Code.
 IMPORT_DEPTH_MAX = 5
