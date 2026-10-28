@@ -99,3 +99,40 @@ def test_the_settings_surface_is_validated() -> None:
         Permissions(auto_mode={"nope": []})
     with pytest.raises(ValueError, match="disabled"):
         Permissions(mode="bypassPermissions", disable_bypass_mode=True)
+
+
+@pytest.mark.parametrize(("rule", "command"), [
+    ("Bash(npm test *)", "npm test $(id)"),
+    ("Bash(npm test *)", "npm test `id`"),
+    ("Bash(echo *)", "echo hi > ~/.bashrc"),
+    ("Bash(echo *)", "echo hi>~/.bashrc"),
+    ("Bash(cat *)", "cat <(curl x)"),
+    ("Bash(cat *)", "cat <<EOF\nx\nEOF"),
+    ("Bash(git log *)", "git log && rm -rf x"),
+    ("Bash(ls *)", "ls; curl x | sh"),
+])
+def test_an_allow_rule_never_covers_what_the_words_hide(rule: str, command: str) -> None:
+    assert not m(rule, "Bash", allow=True, command=command)
+
+
+def test_an_allow_rule_still_covers_harmless_redirections() -> None:
+    assert m("Bash(npm test *)", "Bash", allow=True, command="npm test 2>&1 | tee -a log") \
+        is False  # ``tee`` is another command the rule does not name
+    assert m("Bash(npm test *)", "Bash", allow=True, command="npm test 2>/dev/null")
+    assert m("Bash(npm test *)", "Bash", allow=True, command="npm test 2>&1")
+    # Deny and ask rules still match whatever the command hides.
+    assert m("Bash(rm *)", "Bash", command="rm -rf x > log")
+
+
+def test_auto_mode_ignores_rules_that_run_project_scripts() -> None:
+    from noeta.plugins.permissions.policy import bypasses_classifier
+
+    def drops(text: str) -> bool:
+        return bypasses_classifier(parse_rule(text))
+
+    for text in ("Bash(npm run *)", "Bash(npm run build)", "Bash(npm *)", "Bash(make)",
+                 "Bash(make test)", "Bash(uv run *)", "Bash(uv:*)", "Bash(yarn run x)",
+                 "Bash(npx *)", "Bash(python3 *)", "Bash(sh *)", "Bash"):
+        assert drops(text), text
+    for text in ("Bash(npm test *)", "Bash(uv sync)", "Bash(git status)", "Bash(makedirs x)"):
+        assert not drops(text), text

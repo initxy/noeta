@@ -5,7 +5,8 @@
   (a ``*`` anywhere matches any text; a `` *`` at the end also matches the
   bare prefix) and the older ``Bash(npm run:*)`` match by prefix. A compound
   command (``a && b | c``) is judged per subcommand: a deny or ask rule
-  matching any part applies, an allow rule must cover every part.
+  matching any part applies, an allow rule must cover every part and never
+  covers a substitution or a redirection to a file (``npm test $(id)``).
 * ``Read(path)`` / ``Edit(path)`` take gitignore-style patterns: ``//abs``
   is an absolute path, ``~/p`` is under the home directory, ``/p`` and
   ``p`` / ``./p`` are relative to the project root (a pattern with no ``/``
@@ -34,6 +35,7 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from noeta.toolkit.shell import parse_argv, subcommands
+from noeta.toolkit.shell_syntax import hides_effects, parse
 
 __all__ = [
     "EDIT_TOOLS",
@@ -238,11 +240,15 @@ def _command_matches(content: str, command: str) -> bool:
 
 def shell_rule_matches(content: str, command: str, *, every: bool) -> bool:
     """A ``Bash(content)`` rule against ``command``. ``every``: each
-    subcommand must match (an allow rule); otherwise the whole command or
-    any part matching is enough (a deny or ask rule)."""
-    parts = [_strip_wrappers(p) for p in subcommands(command)] or [command]
+    subcommand must match (an allow rule), and a command whose words do not
+    show all it does (a substitution, a heredoc, a redirection to or from a
+    file) matches no allow rule; otherwise the whole command or any part
+    matching is enough (a deny or ask rule)."""
+    parsed = parse(command)
+    texts = subcommands(command) if parsed.opaque else [c.text for c in parsed.commands]
+    parts = [_strip_wrappers(p) for p in texts] or [command]
     if every:
-        return all(_command_matches(content, p) for p in parts)
+        return not hides_effects(command) and all(_command_matches(content, p) for p in parts)
     if _command_matches(content, command.strip()):
         return True
     return any(_command_matches(content, p) for p in parts)

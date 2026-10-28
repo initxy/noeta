@@ -395,7 +395,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     table = merge_plugin_settings(
         {"memory": {"home": str(HOME)},
          "hooks": {"settings_files": setting_files},
-         "mcp": {"settings_files": setting_files, "project": True},
+         "mcp": {"settings_files": setting_files, "project": project_trusted},
          "skills": {"trusted": project_trusted, "global_dir": str(HOME / "skills")},
          "instructions": {"user_dir": str(HOME), "managed_dir": str(managed_dir())},
          "permissions": permission_args, "fs": {"write_roots": write_roots}},

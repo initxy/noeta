@@ -51,11 +51,6 @@ DEFAULT_RISK: Mapping[str, str] = {
     "TaskStop": "low",
     "WebFetch": "low",
     "WebSearch": "high",
-    "memory_read": "low",
-    "memory_search": "low",
-    "memory_write": "medium",
-    "memory_archive": "medium",
-    "open_app": "low",
     "run_skill_script": "high",
     "ToolSearch": "low",
     "Task": "low",
@@ -71,8 +66,6 @@ DEFAULT_RISK: Mapping[str, str] = {
     "ScheduleWakeup": "low",
     "ReportFindings": "low",
     "Workflow": "low",
-    "RecallHistory": "low",
-    "TodoWrite": "low",
     "structured_output": "low",
 }
 
@@ -81,9 +74,8 @@ DEFAULT_RISK: Mapping[str, str] = {
 #: is still classified (an ``Agent`` spawn, a sub-agent's hand-back).
 AUTO_SAFE_TOOLS: frozenset[str] = frozenset({
     "Read", "Glob", "Grep", "LS", "NotebookRead", "ToolSearch", "Skill", "AskUserQuestion",
-    "ExitPlanMode", "ListMcpResourcesTool", "ReadMcpResourceTool", "ListAgents", "TodoWrite",
-    "TaskStop", "memory_read", "memory_search", "RecallHistory", "structured_output",
-    "ReportFindings", "ScheduleWakeup",
+    "ExitPlanMode", "ListMcpResourcesTool", "ReadMcpResourceTool", "ListAgents", "TaskStop",
+    "structured_output", "ReportFindings", "ScheduleWakeup",
 })
 
 #: Tools that run or manage shell commands alongside ``Bash``; disallowing
@@ -100,8 +92,13 @@ LOCAL_SETTINGS = ".noeta/settings.local.json"
 #: Programs whose prefix rule would let any code run (interpreters): auto
 #: mode ignores such an allow rule, as Claude Code drops rules that would
 #: bypass its classifier.
-INTERPRETERS = frozenset({"python", "python3", "node", "perl", "ruby", "php", "deno", "bun",
-                          "lua", "osascript", "eval", "exec", "source", "."})
+INTERPRETERS = frozenset({"python", "python2", "python3", "node", "perl", "ruby", "php", "deno",
+                          "bun", "tsx", "lua", "osascript", "eval", "exec", "source", ".",
+                          "npx", "bunx", "uvx", "ssh"})
+#: Commands that run a script the project defines (Claude Code's list, with
+#: ``uv run`` and ``make``): a rule covering one is ignored in auto mode too.
+SCRIPT_RUNNERS = (("npm", "run"), ("yarn", "run"), ("pnpm", "run"), ("bun", "run"),
+                  ("uv", "run"), ("make",), ("gmake",))
 
 # ---------------------------------------------------------------- texts (0.6)
 
@@ -159,7 +156,15 @@ def bypasses_classifier(rule: Rule) -> bool:
             return True
         words = rule.content.replace(":*", " *").split()
         first = words[0] if words else ""
-        return first == "*" or first in INTERPRETERS or first in WRAPPER_PROGRAMS
+        if first == "*" or first in INTERPRETERS or first in WRAPPER_PROGRAMS:
+            return True
+        fixed = [w for w in words if "*" not in w]
+        open_ended = len(fixed) < len(words)
+        for runner in SCRIPT_RUNNERS:
+            n = min(len(fixed), len(runner))
+            if tuple(fixed[:n]) == runner[:n] and (n == len(runner) or open_ended):
+                return True
+        return False
     return rule.tool == "Agent" and rule.content is None
 
 

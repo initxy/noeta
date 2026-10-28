@@ -103,15 +103,52 @@ def test_workspace_servers_need_consent(tmp_path: Path) -> None:
     write(ws / ".noeta" / "mcp.json", {"mcpServers": {
         "a": {"command": "a"}, "b": {"command": "b"}, "user": {"command": "from-ws"}}})
     settings = tmp_path / "s.json"
+    local = ws / ".noeta" / "settings.local.json"
     write(settings, {"mcpServers": {"user": {"command": "from-user"}}})
     assert [s.alias for s in read_servers([settings], [str(ws)])] == ["user"]
-    write(settings, {"mcpServers": {"user": {"command": "from-user"}},
-                     "enabledMcpjsonServers": ["b", "user"]})
-    got = read_servers([settings], [str(ws)])
+    write(local, {"enabledMcpjsonServers": ["b", "user"]})
+    got = read_servers([settings, local], [str(ws)])
     assert [(s.alias, s.command[0]) for s in got] == [
         ("b", "b"), ("user", "from-ws"), ("user", "from-user")]  # the first of an alias wins
-    write(settings, {"enableAllProjectMcpServers": True, "disabledMcpjsonServers": ["a"]})
-    assert [s.alias for s in read_servers([settings], [str(ws)])] == ["b", "user"]
+    write(local, {"enableAllProjectMcpServers": True})
+    write(settings, {"disabledMcpjsonServers": ["a"]})
+    assert [s.alias for s in read_servers([settings, local], [str(ws)])] == ["b", "user"]
+
+
+def test_consent_is_per_project(tmp_path: Path) -> None:
+    """Consent in the user's settings, or in another project's, starts no
+    server of a cloned repository that reuses the name."""
+    clone, other = tmp_path / "clone", tmp_path / "other"
+    write(clone / ".noeta" / "mcp.json", {"mcpServers": {"github": {"command": "evil"}}})
+    user = write(tmp_path / "user.json", {"enabledMcpjsonServers": ["github"],
+                                          "enableAllProjectMcpServers": True})
+    elsewhere = write(other / ".noeta" / "settings.local.json",
+                      {"enabledMcpjsonServers": ["github"]})
+    assert read_servers([user, elsewhere], [str(clone)]) == []
+
+
+async def test_an_untrusted_workspace_starts_no_server(store: SqliteStore,
+                                                       tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    write(ws / ".noeta" / "mcp.json", {"mcpServers": {"proj": {"command": "never-run"}}})
+    local = write(ws / ".noeta" / "settings.local.json", {"enableAllProjectMcpServers": True})
+    asked: list[str] = []
+
+    def trusted(directory: str) -> bool:
+        asked.append(directory)
+        return False
+
+    provider = ScriptedProvider([reply("done")])
+    agent = Agent(name="a", model="m", extensions=[
+        Mcp(settings_files=[local], project=trusted, pool=McpPool())])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 env_for=lambda _s: None)  # type: ignore[arg-type,return-value]
+    tid = await Client(store).create("a", "go", config={"cwd": str(ws)})
+    await rt.run_until_idle()
+    assert asked == [str(ws)]
+    recorded = [(r.event.kind, r.event.data) for r in await Client(store).events(tid)
+                if getattr(r.event, "extension", "") == "mcp"]
+    assert "proj" not in repr(recorded)
 
 
 @pytest.fixture
@@ -127,13 +164,13 @@ async def test_a_task_gets_the_settings_servers(store: SqliteStore, tmp_path: Pa
     write(ws / ".noeta" / "mcp.json", {"mcpServers": {"proj": {"command": sys.executable,
                                                      "args": [FAKE]}}})
     settings = write(tmp_path / "s.json", {
-        "mcpServers": {"fake": {"command": sys.executable, "args": [FAKE]}},
-        "enabledMcpjsonServers": ["proj"]})
+        "mcpServers": {"fake": {"command": sys.executable, "args": [FAKE]}}})
+    local = write(ws / ".noeta" / "settings.local.json", {"enabledMcpjsonServers": ["proj"]})
     pool = McpPool()
     provider = ScriptedProvider([reply("done")])
     given = McpServer(alias="fake", command=[sys.executable, FAKE], env={"GIVEN": "1"})
     agent = Agent(name="a", model="m", extensions=[
-        Mcp([given], settings_files=[settings], project=True, pool=pool)])
+        Mcp([given], settings_files=[settings, local], project=True, pool=pool)])
     rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
                  env_for=lambda _s: None)  # type: ignore[arg-type,return-value]
     try:
