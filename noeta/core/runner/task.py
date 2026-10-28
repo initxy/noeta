@@ -435,8 +435,9 @@ class TaskRun:
 
     async def _fire_timers(self) -> None:
         """Post the due timers to the inbox while the task is idle (a turn
-        in progress keeps them for later). The dedupe key makes a crash
-        between post and take harmless."""
+        in progress keeps them for later). The dedupe key, the record that
+        set the timer, makes a crash between post and take harmless and
+        lets a timer set again for the same name and time fire again."""
         st = self.state
         if st.turn_open or st.calls or st.ended is not None or not st.timers:
             return
@@ -444,7 +445,7 @@ class TaskRun:
         for name, timer in sorted(st.timers.items(), key=lambda kv: kv[1]["at"]):
             if timer["at"] <= now:
                 await self.store.post(Post(task_id=self.task_id, body=TimerFired(name=name),
-                                           dedupe_key=f"timer:{name}:{timer['at']}"))
+                                           dedupe_key=f"timer:{name}:{timer['seq']}"))
 
     def next_timer(self) -> float | None:
         """When the earliest timer is due, or ``None`` without timers."""

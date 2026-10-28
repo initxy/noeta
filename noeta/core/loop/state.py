@@ -129,8 +129,9 @@ class TaskState:
     children: dict[str, ChildEnded | None] = field(default_factory=dict)
     signals: list[TimerFired | External] = field(default_factory=list)
     #: Timers set and not yet fired or cleared, by name: ``{"at": epoch
-    #: seconds, "text": message or ""}``. A due timer fires while the task is
-    #: idle; its text arrives as a message, as if sent for the next turn.
+    #: seconds, "text": message or "", "seq": the log seq that set it}``. A
+    #: due timer fires while the task is idle; its text arrives as a
+    #: message, as if sent for the next turn.
     timers: dict[str, dict[str, Any]] = field(default_factory=dict)
     waiting: Waiting | None = None
     ended: TaskEnded | None = None
@@ -292,7 +293,8 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
             data = ev.data if isinstance(ev.data, dict) else {}
             if data.get("name"):
                 state.timers[str(data["name"])] = {"at": float(data.get("at") or 0),
-                                                   "text": str(data.get("text") or "")}
+                                                   "text": str(data.get("text") or ""),
+                                                   "seq": rec.seq}
         if ev.extension == CORE and ev.kind == "timer_cleared":
             state.timers.pop(str((ev.data or {}).get("name") or ""), None)
         if ev.extension == CORE and ev.kind == "prompts":

@@ -4,6 +4,7 @@ message. An extension may stage a child outside a tool call."""
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -85,6 +86,35 @@ async def test_a_future_timer_sets_ready_at_and_fires_once_due(store: SqliteStor
     assert len(provider.requests) == 3
     row = await client.get(tid)
     assert row is not None and row.ready_at == waiting.until
+
+
+class Fixed:
+    """Sets the timer ``again`` for one fixed, past time."""
+
+    name = "Fixed"
+    description = "Come back at a fixed time."
+    input_schema = {"type": "object"}
+    read_only = False
+    clearable = False
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        ctx.set_timer("again", 1000.0, "tick")
+        return text_output("scheduled")
+
+
+async def test_a_timer_set_again_for_the_same_time_fires_again(store: SqliteStore) -> None:
+    provider = ScriptedProvider([reply("", ("Fixed", {})), reply("set"),
+                                 reply("", ("Fixed", {})), reply("set again"),
+                                 reply("done")])
+    rt = runtime(store, provider, Agent(name="a", model="m", tools=[Fixed()]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await asyncio.wait_for(rt.run_until_idle(), 5)
+    events = [r.event for r in await client.events(tid)]
+    fired = [i.body for e in events if isinstance(e, InputTaken) for i in e.items
+             if isinstance(i.body, TimerFired)]
+    assert fired == [TimerFired(name="again"), TimerFired(name="again")]
+    assert len(provider.requests) == 5
 
 
 class Fanout(Extension):
