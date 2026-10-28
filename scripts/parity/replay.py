@@ -356,9 +356,13 @@ class SessionReplay:
                   for theirs, ours in NOETA_PLACES}
         self.replayer.subs = {**places, "{PROJECT}": str(self.proj), "{HOME}": str(self.home),
                               "{USER}": getpass.getuser()}
-        # Claude Code was recording in a project its trust dialog accepted.
+        # Claude Code was recording in a project its trust dialog accepted,
+        # with the project's MCP server consented to for that project.
         from noeta.cli.config import trust_project
         trust_project(str(self.proj))
+        (self.proj / ".noeta").mkdir(exist_ok=True)
+        (self.proj / ".noeta" / "settings.local.json").write_text(
+            json.dumps({"enabledMcpjsonServers": ["echo"]}), "utf-8")
 
     async def drive(self, endpoint: Endpoint, task_id: str | None) -> str | None:
         from noeta.cli.config import Settings, from_settings
@@ -492,8 +496,6 @@ def replay(version: str, sessions: list[str] | None, out: Path, keep: bool = Fal
     scratch_root = Path(tempfile.mkdtemp(prefix="noeta-parity-"))
     os.environ["NOETA_HOME"] = str(scratch_root / "noeta-home")
     (scratch_root / "noeta-home").mkdir()
-    (scratch_root / "noeta-home" / "settings.json").write_text(
-        json.dumps({"enabledMcpjsonServers": ["echo"]}), "utf-8")
     write_models_file(scratch_root / "models.json")
     from noeta.cli.config import register_models_file
     register_models_file(str(scratch_root / "models.json"))
