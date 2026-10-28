@@ -38,6 +38,23 @@ CHANGES = ("The worktree {path} was not removed: it has {what}. Confirm with the
            "call again with discard_changes: true to remove it anyway, or use action \"keep\".")
 
 
+def name_problem(name: Any) -> str | None:
+    """Why ``name`` cannot name a new worktree, else ``None``."""
+    if not isinstance(name, str):
+        return "the name must be a string"
+    if len(name) > MAX_NAME:
+        return f"the name is {len(name)} characters long; at most {MAX_NAME} are allowed"
+    for segment in name.split("/"):
+        if segment in (".", ".."):
+            return f"the name {name!r} may not have a \".\" or \"..\" segment"
+        if segment.lower().rstrip(".") == ".git":
+            return f"the name {name!r} may not have a segment {segment!r}: git reserves it"
+    if not _NAME.match(name):
+        return (f"the name {name!r} may hold only letters, digits, dots, underscores and "
+                "dashes, in non-empty \"/\"-joined segments")
+    return None
+
+
 def _worktree(ctx: ToolContext) -> dict[str, Any] | None:
     st = ctx.state.get(SHELL)
     tree = getattr(st, "worktree", None)
@@ -90,11 +107,10 @@ class EnterWorktreeTool:
                                          "with ExitWorktree first")
         if name is None:
             name = secrets.token_hex(4)
-        if not isinstance(name, str) or len(name) > MAX_NAME or not _NAME.match(name) \
-                or ".." in name.split("/"):
-            return tool_error(self.name, "the name may hold only letters, digits, dots, "
-                                         "underscores and dashes, in \"/\"-joined segments, "
-                                         "at most 64 characters")
+        problem = name_problem(name)
+        if problem is not None:
+            return tool_error(self.name, problem)
+        assert isinstance(name, str)
         target = posixpath.join(top, WORKTREES, name)
         branch = f"worktree-{name.replace('/', '-')}"
         code, _ = await _git(ctx, ["rev-parse", "--verify", "--quiet", "origin/HEAD"], top)

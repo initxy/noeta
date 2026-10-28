@@ -102,7 +102,7 @@ async def test_keep_and_entering_an_existing_worktree(repo: Path, tmp_path: Path
 
 async def test_bad_names_and_no_repository(tmp_path: Path, repo: Path) -> None:
     s = Driver(repo)
-    for bad in ("../up", "a b", "x" * 65):
+    for bad in ("../up", "a b", "x" * 65, "a/./b", "a/.git", "x/.GIT.", "a//b"):
         err, _ = await s.call(EnterWorktreeTool(), {"name": bad})
         assert err
     plain = tmp_path / "plain"
