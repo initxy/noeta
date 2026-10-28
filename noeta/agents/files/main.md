@@ -17,6 +17,7 @@ plugins:
       inherit_config: [cwd, model, effort, permission_mode]
   - ask_user
   - web
+  - schedule
   - mcp
 ---
 

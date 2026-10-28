@@ -1,24 +1,24 @@
 {
  "hashes": [
-  "main 72c143755f28c8b7",
-  "main 1ae21de8303cfce7",
-  "main 37b19cf9109b1908",
-  "main 7c2eefaa58eecd15",
+  "main cfb6651ec682116e",
+  "main 57917a69005cbd39",
+  "main 66c99ba915a20eac",
+  "main bacb071898826fee",
   "child 7533d2a08ac29869",
   "child b4fd98f1fde5d8a9",
-  "main 4582f75528d23f24",
-  "main 941f70da18dd21a8",
-  "main 49921a3d43947e3a",
-  "main c3d69120b81adec2",
-  "main 12671952424bec83",
-  "main fe97f7b17f72eec9",
-  "main aea88a9b1ee0991f",
-  "main 9bbd439aa36d3141",
-  "main 93484f9524605f18",
-  "main b166f740192ccead",
-  "main d83c502857ed019c",
-  "main 4950c66860472fcd",
-  "main 1537d079bd2730ae"
+  "main 7e6370fc1ebc48c3",
+  "main f58ec586de18a871",
+  "main 19d372d1b84f4056",
+  "main 305424141efd6dc7",
+  "main d83b952835f24986",
+  "main de9f98fc559ade2f",
+  "main d18a27891b2ee470",
+  "main c7723883d68441b0",
+  "main 9f4641d95c7158a2",
+  "main 73be20017040b6d2",
+  "main b4c31210a8bb8279",
+  "main 3808e07a678a272a",
+  "main e0a1cedfb0076d0f"
  ],
  "last": {
   "child": {
@@ -1622,6 +1622,37 @@
       "name": "Read"
      },
      {
+      "description": "Set when the next iteration of a self-paced `/loop` runs. Use it only in `/loop` dynamic mode: the user started `/loop` with no interval, so you decide the pace of the iterations.\n\nBackground work the harness tracks (a sub-agent, a background command, a monitor) wakes you by itself when it finishes, so never schedule short wake-ups to poll it; schedule one long fallback instead (1200 s or more), in case that work stalls or never reports. Work outside the harness (a CI run, a deploy, a remote queue) is the exception: wait about as long as that state takes to change.\n\nEach turn, pass the same `/loop` input back as `prompt`; that is what makes the next wake-up run the task again. A loop the user started with no prompt at all (an autonomous loop) passes the literal sentinel `<<autonomous-loop-dynamic>>` instead, which is expanded into the loop's instructions when the wake-up fires. `<<autonomous-loop>>` is the sentinel of loops driven by CronCreate; never pass it here. To end the loop, call this tool with `stop: true` and no other field: it ends at once and nothing fires again.\n\n## Choosing delaySeconds\n\nThis session's prompt cache lives 5 minutes. A wake-up after more than 300 seconds reads the whole conversation again without the cache, which is slower and costs more. So:\n- 60–270 s keeps the cache warm: right while actively polling outside state the harness cannot report, such as a CI run, a deploy or a remote queue.\n- 300–3600 s accepts one cache miss: right when nothing can change sooner, when waiting on something slow, when idle, or as the long fallback while something else is the real wake signal.\n\nNever pick exactly 300 s: it pays the cache miss without buying a long wait. Go down to 270 s to stay cached, or up to 1200 s or more so one miss buys a long wait. Think in cache windows, not round minutes.\n\nIdle iterations with nothing specific to watch default to 1200–1800 s (20–30 minutes): the loop still checks back, the cache is not rebuilt a dozen times an hour for nothing, and the user can interrupt whenever they want you sooner.\n\nSize the wait to what you are waiting for: a CI run that takes about 8 minutes is better checked twice at about 270 s than eight times at 60 s.\n\nThe runtime clamps the delay to [60, 3600]; you do not need to.\n\n## reason\n\nOne short, specific sentence on the delay you chose (\"watching the CI run\", not \"waiting\"). The user reads it to follow your pace, so make it concrete.\n\n## noop\n\n`noop: true` when you checked and nothing changed (\"still waiting\", \"no change\"); `noop: false` when something worth keeping happened: you edited a file, posted a message, moved the work forward or found something. Consecutive `noop: true` iterations are folded together in the user's view and counted as a streak. Leave `noop` out when stopping.",
+      "input_schema": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "additionalProperties": false,
+       "properties": {
+        "delaySeconds": {
+         "description": "Seconds from now until the wake-up; the runtime clamps it to [60, 3600]. Required unless `stop` is true.",
+         "type": "number"
+        },
+        "noop": {
+         "description": "true: nothing changed (you checked and have nothing to report). false: something worth keeping happened (a file edited, a message posted, progress made, a finding). Consecutive true iterations are folded together in the user's view. Required unless `stop` is true.",
+         "type": "boolean"
+        },
+        "prompt": {
+         "description": "The /loop input the wake-up fires. Pass the same /loop input back verbatim every turn, so the next firing runs the loop again. An autonomous /loop (no user prompt) passes the literal `<<autonomous-loop-dynamic>>` instead (not `<<autonomous-loop>>`, which belongs to CronCreate loops). Required unless `stop` is true.",
+         "type": "string"
+        },
+        "reason": {
+         "description": "One short, specific sentence on why this delay; shown to the user. Required unless `stop` is true.",
+         "type": "string"
+        },
+        "stop": {
+         "description": "true ends the self-paced loop now instead of scheduling a wake-up; every other field is then ignored and nothing fires again.",
+         "type": "boolean"
+        }
+       },
+       "type": "object"
+      },
+      "name": "ScheduleWakeup"
+     },
+     {
       "description": "Runs a skill inside the conversation.\n\nA skill is a packaged set of instructions that the user or the project set up for one kind of task, such as release steps, a review checklist or a repository's workflow. The available skills are listed one line each in a message in this conversation.\n\n- When a listed skill covers the task, call this tool before anything else: its instructions then take the place of your usual approach for this turn.\n- Some skills run in a sub-agent and return the finished result instead of loading instructions. One that runs in the background answers with only an agent name; its outcome arrives later in a task notification, so do not wait for it or call the skill again meanwhile.\n- When the user names a skill or types `/<name>` (a slash command), they are asking you to run it.\n- `skill` is the exact listed name, without a leading slash. A plugin's skill is named `plugin:skill`.\n- A skill scoped to a directory has a path prefix (`apps/web:deploy`). When a scoped and an unscoped skill share a name, take the one whose directory contains the files you are working on, the deepest first, and otherwise the unscoped one.\n- Only listed names, or names the user typed, are valid.\n- Built-in commands such as `/help` or `/clear` are not skills.\n- If a `<command-name>` block is already in the current turn, that skill is already loaded: follow it instead of calling this tool again.",
       "input_schema": {
        "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2459,6 +2490,40 @@
         "required": [
          "file_path"
         ],
+        "type": "object"
+       }
+      },
+      "type": "function"
+     },
+     {
+      "function": {
+       "description": "Set when the next iteration of a self-paced `/loop` runs. Use it only in `/loop` dynamic mode: the user started `/loop` with no interval, so you decide the pace of the iterations.\n\nBackground work the harness tracks (a sub-agent, a background command, a monitor) wakes you by itself when it finishes, so never schedule short wake-ups to poll it; schedule one long fallback instead (1200 s or more), in case that work stalls or never reports. Work outside the harness (a CI run, a deploy, a remote queue) is the exception: wait about as long as that state takes to change.\n\nEach turn, pass the same `/loop` input back as `prompt`; that is what makes the next wake-up run the task again. A loop the user started with no prompt at all (an autonomous loop) passes the literal sentinel `<<autonomous-loop-dynamic>>` instead, which is expanded into the loop's instructions when the wake-up fires. `<<autonomous-loop>>` is the sentinel of loops driven by CronCreate; never pass it here. To end the loop, call this tool with `stop: true` and no other field: it ends at once and nothing fires again.\n\n## Choosing delaySeconds\n\nThis session's prompt cache lives 5 minutes. A wake-up after more than 300 seconds reads the whole conversation again without the cache, which is slower and costs more. So:\n- 60–270 s keeps the cache warm: right while actively polling outside state the harness cannot report, such as a CI run, a deploy or a remote queue.\n- 300–3600 s accepts one cache miss: right when nothing can change sooner, when waiting on something slow, when idle, or as the long fallback while something else is the real wake signal.\n\nNever pick exactly 300 s: it pays the cache miss without buying a long wait. Go down to 270 s to stay cached, or up to 1200 s or more so one miss buys a long wait. Think in cache windows, not round minutes.\n\nIdle iterations with nothing specific to watch default to 1200–1800 s (20–30 minutes): the loop still checks back, the cache is not rebuilt a dozen times an hour for nothing, and the user can interrupt whenever they want you sooner.\n\nSize the wait to what you are waiting for: a CI run that takes about 8 minutes is better checked twice at about 270 s than eight times at 60 s.\n\nThe runtime clamps the delay to [60, 3600]; you do not need to.\n\n## reason\n\nOne short, specific sentence on the delay you chose (\"watching the CI run\", not \"waiting\"). The user reads it to follow your pace, so make it concrete.\n\n## noop\n\n`noop: true` when you checked and nothing changed (\"still waiting\", \"no change\"); `noop: false` when something worth keeping happened: you edited a file, posted a message, moved the work forward or found something. Consecutive `noop: true` iterations are folded together in the user's view and counted as a streak. Leave `noop` out when stopping.",
+       "name": "ScheduleWakeup",
+       "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+         "delaySeconds": {
+          "description": "Seconds from now until the wake-up; the runtime clamps it to [60, 3600]. Required unless `stop` is true.",
+          "type": "number"
+         },
+         "noop": {
+          "description": "true: nothing changed (you checked and have nothing to report). false: something worth keeping happened (a file edited, a message posted, progress made, a finding). Consecutive true iterations are folded together in the user's view. Required unless `stop` is true.",
+          "type": "boolean"
+         },
+         "prompt": {
+          "description": "The /loop input the wake-up fires. Pass the same /loop input back verbatim every turn, so the next firing runs the loop again. An autonomous /loop (no user prompt) passes the literal `<<autonomous-loop-dynamic>>` instead (not `<<autonomous-loop>>`, which belongs to CronCreate loops). Required unless `stop` is true.",
+          "type": "string"
+         },
+         "reason": {
+          "description": "One short, specific sentence on why this delay; shown to the user. Required unless `stop` is true.",
+          "type": "string"
+         },
+         "stop": {
+          "description": "true ends the self-paced loop now instead of scheduling a wake-up; every other field is then ignored and nothing fires again.",
+          "type": "boolean"
+         }
+        },
         "type": "object"
        }
       },
@@ -3497,6 +3562,38 @@
        "required": [
         "file_path"
        ],
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Set when the next iteration of a self-paced `/loop` runs. Use it only in `/loop` dynamic mode: the user started `/loop` with no interval, so you decide the pace of the iterations.\n\nBackground work the harness tracks (a sub-agent, a background command, a monitor) wakes you by itself when it finishes, so never schedule short wake-ups to poll it; schedule one long fallback instead (1200 s or more), in case that work stalls or never reports. Work outside the harness (a CI run, a deploy, a remote queue) is the exception: wait about as long as that state takes to change.\n\nEach turn, pass the same `/loop` input back as `prompt`; that is what makes the next wake-up run the task again. A loop the user started with no prompt at all (an autonomous loop) passes the literal sentinel `<<autonomous-loop-dynamic>>` instead, which is expanded into the loop's instructions when the wake-up fires. `<<autonomous-loop>>` is the sentinel of loops driven by CronCreate; never pass it here. To end the loop, call this tool with `stop: true` and no other field: it ends at once and nothing fires again.\n\n## Choosing delaySeconds\n\nThis session's prompt cache lives 5 minutes. A wake-up after more than 300 seconds reads the whole conversation again without the cache, which is slower and costs more. So:\n- 60–270 s keeps the cache warm: right while actively polling outside state the harness cannot report, such as a CI run, a deploy or a remote queue.\n- 300–3600 s accepts one cache miss: right when nothing can change sooner, when waiting on something slow, when idle, or as the long fallback while something else is the real wake signal.\n\nNever pick exactly 300 s: it pays the cache miss without buying a long wait. Go down to 270 s to stay cached, or up to 1200 s or more so one miss buys a long wait. Think in cache windows, not round minutes.\n\nIdle iterations with nothing specific to watch default to 1200–1800 s (20–30 minutes): the loop still checks back, the cache is not rebuilt a dozen times an hour for nothing, and the user can interrupt whenever they want you sooner.\n\nSize the wait to what you are waiting for: a CI run that takes about 8 minutes is better checked twice at about 270 s than eight times at 60 s.\n\nThe runtime clamps the delay to [60, 3600]; you do not need to.\n\n## reason\n\nOne short, specific sentence on the delay you chose (\"watching the CI run\", not \"waiting\"). The user reads it to follow your pace, so make it concrete.\n\n## noop\n\n`noop: true` when you checked and nothing changed (\"still waiting\", \"no change\"); `noop: false` when something worth keeping happened: you edited a file, posted a message, moved the work forward or found something. Consecutive `noop: true` iterations are folded together in the user's view and counted as a streak. Leave `noop` out when stopping.",
+      "name": "ScheduleWakeup",
+      "parameters": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "additionalProperties": false,
+       "properties": {
+        "delaySeconds": {
+         "description": "Seconds from now until the wake-up; the runtime clamps it to [60, 3600]. Required unless `stop` is true.",
+         "type": "number"
+        },
+        "noop": {
+         "description": "true: nothing changed (you checked and have nothing to report). false: something worth keeping happened (a file edited, a message posted, progress made, a finding). Consecutive true iterations are folded together in the user's view. Required unless `stop` is true.",
+         "type": "boolean"
+        },
+        "prompt": {
+         "description": "The /loop input the wake-up fires. Pass the same /loop input back verbatim every turn, so the next firing runs the loop again. An autonomous /loop (no user prompt) passes the literal `<<autonomous-loop-dynamic>>` instead (not `<<autonomous-loop>>`, which belongs to CronCreate loops). Required unless `stop` is true.",
+         "type": "string"
+        },
+        "reason": {
+         "description": "One short, specific sentence on why this delay; shown to the user. Required unless `stop` is true.",
+         "type": "string"
+        },
+        "stop": {
+         "description": "true ends the self-paced loop now instead of scheduling a wake-up; every other field is then ignored and nothing fires again.",
+         "type": "boolean"
+        }
+       },
        "type": "object"
       },
       "type": "function"
