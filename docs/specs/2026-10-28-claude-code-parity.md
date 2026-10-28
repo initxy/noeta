@@ -160,9 +160,9 @@ Phase 2 — what the model sees
   shrink on window overflow, mid-turn injection on by default in every front end.
 
 Phase 3 — behaviors around the model
-- [ ] Permission modes (default, acceptEdits, plan, dontAsk, auto, bypassPermissions) and one
+- [x] Permission modes (default, acceptEdits, plan, dontAsk, auto, bypassPermissions) and one
   `Tool(spec)` allow/deny/ask rule syntax; read scope and sensitive-path list; protected paths.
-- [ ] Auto mode classifier as Claude Code runs it for API-key users: a client-side two-stage
+- [x] Auto mode classifier as Claude Code runs it for API-key users: a client-side two-stage
   call per tool use, the same classifier context, thresholds (consecutive/total denials fall
   back to asking); `auto` becomes the default mode.
 - [ ] Hooks: all baseline events, command/prompt/agent/http types, `allow`/`updatedInput`/
@@ -338,3 +338,34 @@ Phase 5 — front ends
   `workflow-authoring` skill, worktree isolation for workflow agents, folding `noop` loop ticks
   in front ends, `/loop` as a Skill-tool skill (it is a front-end command), Claude Code's
   "fire only when idle" also for one-shot tasks (they end before a timer fires).
+- 2026-10-28: Phase 3 permissions (branch of the permissions worker, merged parity @c5b58fe).
+  Kernel: `Allow(approve)` / firm `Ask` / `Extension.resolve_ask` (may also return an `Ask`),
+  a declined call stops the turn with the `[Request interrupted by user for tool use]` marker
+  (r2 m2), `ModelRequest` stop sequences, per-block breakpoints, betas, vendor fields,
+  `thinking=None`, `Client.signal`. Permissions: six modes, `auto` by default; deny > ask (firm)
+  > allow rules (`noeta/toolkit/permission_rules.py`, shared with hook `if`); working
+  directories + `additional_directories`, reads outside ask, writes outside refused (fs fence,
+  deviation row); Claude Code's protected paths, `.noeta` protected as `.claude`; read-only
+  shell commands run without asking; acceptEdits file commands; cards with Claude Code's
+  choices (don't ask again for rules / a directory, switch to auto or accept edits), "always"
+  to `.noeta/settings.local.json` in trusted projects. Auto mode as recorded for an API-key
+  user (r2): `claude-sonnet-5` first (64 tokens, thinking off, `</block>`), stage 2 (8192)
+  only when stage 1 does not allow, fallback to the task's model with +2048 and no thinking;
+  transcript chunks and caching as recorded; block → error with reason; no verdict → held
+  back, not a judgment; 3 consecutive / 20 total blocks fall back to asking; safeguards on the
+  first main request per process, dangerous-tool-use beta until the first compaction,
+  afk-mode on every auto request. Classifier prompt in our words: 96,537 bytes
+  (`texts/auto_mode_classifier.md`; Claude Code's 140,239 chars), every rule of the checklist.
+  Plan mode: `/plan`, `ExitPlanMode` (deferred, main agent) as a question with Claude Code's
+  choices, plan file in `<noeta home>/plans`, plan-mode / plan-exited notes, plan-name side
+  request. Hooks (sub-worker): 14 events, command/http/prompt types, Claude Code's fields,
+  600 s / 30 s timeouts, PreToolUse allow/deny/ask/updatedInput, PermissionRequest via
+  `resolve_ask`, PermissionDenied on classifier blocks, `Extension.before_compact`. Front ends:
+  shift+tab mode cycle and choices in the TUI, ACP session modes, HTTP `pending` and
+  `signals`; sub-agent cards say which agent asks (r2 m2 card 004). `make parity` on the
+  merged contract 66 → 42 (run 63 → 14 occurrences: no more approvals Claude Code did not
+  ask; side requests 14 → 0; the 5 auto-mode deviation ids removed). Open: compaction requests
+  lack the dangerous-tool-use / fallback-credit betas; Claude Code re-sends the auto-mode note
+  standalone after compaction (noeta's rides in the rebuilt environment message); hook
+  `agent` / `mcp_tool` types; sensitive-file read list (unverified for Read in the bundle);
+  `make eval` not run (needs credentials) — the main request now carries the auto-mode note.
