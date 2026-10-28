@@ -164,10 +164,20 @@ async def test_read_reaches_outside_the_workspace(h: Harness, ws: Path) -> None:
 
 
 async def test_read_binary_rejected(h: Harness, ws: Path) -> None:
-    (ws / "blob.bin").write_bytes(b"\x00\x01\x02")
-    out = await h.call(ReadTool(), file_path="blob.bin")
+    (ws / "blob.xyz").write_bytes(b"\x00\x01\x02")
+    out = await h.call(ReadTool(), file_path="blob.xyz")
     assert out.is_error
-    assert text_of(out) == "Read: 'blob.bin' is not utf-8 text"
+    assert text_of(out) == "Read: 'blob.xyz' is not utf-8 text"
+
+
+@pytest.mark.parametrize("name", ["blob.bin", "Archive.ZIP", "lib.so", "data.sqlite", "x.pyc"])
+async def test_read_refuses_a_binary_extension_unopened(h: Harness, ws: Path, name: str) -> None:
+    # Claude Code refuses these by name, before looking at the file at all.
+    out = await h.call(ReadTool(), file_path=name)
+    ext = name[name.rindex("."):].lower()
+    assert text_of(out) == (
+        f"Read: Read does not open binary files, and a {ext} file is one. Open it with a "
+        "skill made for the format, or with a shell command or script that understands it.")
 
 
 async def test_read_stray_invalid_bytes_decoded_leniently(h: Harness, ws: Path) -> None:
@@ -193,9 +203,9 @@ async def test_read_image_surfaces_for_vision(h: Harness, ws: Path) -> None:
     assert h.records == []  # images are not recorded for read-first
 
 
-async def test_read_image_detected_by_content_not_extension(h: Harness, ws: Path) -> None:
-    (ws / "shot.dat").write_bytes(_PNG)
-    out = await h.call(ReadTool(), file_path="shot.dat")
+async def test_read_image_without_extension_detected_by_content(h: Harness, ws: Path) -> None:
+    (ws / "shot").write_bytes(_PNG)
+    out = await h.call(ReadTool(), file_path="shot")
     assert images_of(out)
 
 

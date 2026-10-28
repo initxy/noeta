@@ -41,7 +41,7 @@ from noeta.toolkit.tools import (
     tool_error,
 )
 
-__all__ = ["FILE_UNCHANGED", "IMAGE_MAX_BYTES", "ReadTool"]
+__all__ = ["BINARY_EXTENSIONS", "FILE_UNCHANGED", "IMAGE_MAX_BYTES", "ReadTool"]
 
 #: The answer to a repeated read of an unchanged range.
 FILE_UNCHANGED = (
@@ -77,6 +77,25 @@ _IMAGE_MAGIC: tuple[tuple[bytes, str, str], ...] = (
     (b"GIF87a", "GIF image", "image/gif"),
     (b"GIF89a", "GIF image", "image/gif"),
 )
+
+
+#: Extensions Read refuses unopened (Claude Code's list), less the image and
+#: PDF kinds it shows.
+BINARY_EXTENSIONS = frozenset({
+    ".bmp", ".ico", ".tiff", ".tif", ".heic", ".heif", ".avif",
+    ".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv", ".flv", ".m4v", ".mpeg", ".mpg",
+    ".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".wma", ".aiff", ".opus",
+    ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar", ".xz", ".z", ".tgz", ".iso", ".zst", ".lz4",
+    ".whl", ".exe", ".dll", ".so", ".dylib", ".bin", ".o", ".a", ".obj", ".lib", ".app",
+    ".msi", ".deb", ".rpm", ".dmg", ".apk",
+    ".doc", ".docx", ".docm", ".dotx", ".dotm", ".xls", ".xlsx", ".xlsm", ".xlsb", ".xltx",
+    ".xltm", ".ppt", ".pptx", ".pptm", ".ppsx", ".ppsm", ".potx", ".potm", ".odt", ".ods",
+    ".odp", ".numbers", ".epub", ".ttf", ".otf", ".woff", ".woff2", ".eot",
+    ".pyc", ".pyo", ".class", ".jar", ".war", ".ear", ".node", ".wasm", ".rlib",
+    ".sqlite", ".sqlite3", ".db", ".mdb", ".idx", ".parquet", ".feather", ".npy", ".npz",
+    ".pickle", ".psd", ".ai", ".eps", ".sketch", ".fig", ".xd", ".blend", ".3ds", ".max",
+    ".swf", ".fla", ".lockb", ".dat", ".data",
+})
 
 
 def detect_image(raw: bytes) -> tuple[str, str] | None:
@@ -276,6 +295,13 @@ class ReadTool:
         env = ctx.env
         ws = await Workspace.of(env)
         resolved = await ws.canonical(path)
+        ext = posixpath.splitext(path)[1].lower()
+        if ext in BINARY_EXTENSIONS:
+            return tool_error(
+                self.name,
+                f"Read does not open binary files, and a {ext} file is one. Open it with a "
+                "skill made for the format, or with a shell command or script that "
+                "understands it.")
         st = await env.stat(resolved)
         if st is None:
             return tool_error(self.name, await missing_file_message(ws, resolved))
