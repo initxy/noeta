@@ -129,7 +129,7 @@ class StagedChild(Struct):
 
 
 @dataclass
-class TaskView:
+class TaskView(records.CoreNotices):
     """What an extension sees: the folded task state (read only) and a way to
     record its own entries. Records made during a hook are appended by the
     runner right after the hook returns."""
@@ -191,24 +191,6 @@ class TaskView:
             ExtensionRecorded(extension=extension, kind=kind, data=data, message=message)
         )
 
-    def _record_core(self, entry: records.CoreRecord) -> None:
-        self.pending.append(records.event(entry))
-
-    def notify(self, text: str, *, kind: str | None = None, data: Any = None) -> None:
-        """Tell the person ``text``; front ends show it, the model never sees
-        it (a ``core`` / ``notice`` record). ``kind`` and ``data`` carry the
-        same news as structured data for a front end that renders it
-        (``text`` stays the plain fallback)."""
-        self._record_core(records.Notice(text=text, notice_kind=kind, notice_data=data))
-
-    def set_timer(self, name: str, at: float, text: str = "") -> None:
-        """Wake the task at ``at`` (epoch seconds) once it is idle, with
-        ``text`` as the next message (``TimerFired(name)`` either way); a
-        timer of the same name is replaced. Durable: any worker fires it."""
-        self._record_core(records.Timer(name=name, at=at, text=text))
-
-    def clear_timer(self, name: str) -> None:
-        self._record_core(records.TimerCleared(name=name))
 
     def spawn(self, agent: str, prompt: str | Message, *, config: Mapping[str, Any] | None = None,
               queue: str = "default", key: str = "") -> str:
@@ -221,13 +203,9 @@ class TaskView:
         child_id = f"{self.task_id}.{key}" if key \
             else f"{self.task_id}.s{self.state.last_seq}.{len(self.creates) + 1}"
         message = user(prompt) if isinstance(prompt, str) else prompt
-        child_config = dict(config or {})
-        for ext in self.extensions:
-            child_config.update(ext.inherit(self.state))
         self.creates.append(StagedChild(
             task_id=child_id,
-            created=TaskCreated(agent=agent, config=child_config, parent_id=self.task_id,
-                                root_id=self.state.root_id or self.task_id),
+            created=child_task(self.task_id, self.state, self.extensions, agent, config),
             queue=queue, first=Say(message=message)))
         self._record_core(records.Spawned(children=[
             {"id": child_id, "call_id": "", "background": True}]))
@@ -278,6 +256,19 @@ class TaskView:
         finally:
             self.keeps_tail = None
         return out
+
+
+def child_task(task_id: str, state: TaskState, extensions: Sequence[Extension], agent: str,
+               config: Mapping[str, Any] | None, *, history_from: str | None = None,
+               history_through: int | None = None) -> TaskCreated:
+    """The ``TaskCreated`` of a child the task ``task_id`` stages: ``config``
+    with what every extension passes on (``Extension.inherit``) laid over it."""
+    child_config = dict(config or {})
+    for ext in extensions:
+        child_config.update(ext.inherit(state))
+    return TaskCreated(agent=agent, config=child_config, parent_id=task_id,
+                       root_id=state.root_id or task_id, history_from=history_from,
+                       history_through=history_through)
 
 
 GatePhase = Literal["model", "user"]

@@ -10,7 +10,8 @@ ends read ``notice``, ``retry``, ``turn_failed``, ``turn_stopped`` and
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Union
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, ClassVar, Union
 
 from noeta.core.events import Event, ExtensionRecorded
 from noeta.core.types import Message, Struct
@@ -228,3 +229,31 @@ def decode(ev: Event) -> CoreRecord | None:
         return None
     cls = _KINDS.get(ev.kind)
     return cls.parse(ev.data) if cls is not None else None
+
+
+class CoreNotices:
+    """``notify``, ``set_timer`` and ``clear_timer`` for whatever has
+    ``record(extension, kind, data)``: a tool's context and an extension's
+    view record the same core entries."""
+
+    if TYPE_CHECKING:
+        record: Callable[..., None]
+
+    def notify(self, text: str, *, kind: str | None = None, data: Any = None) -> None:
+        """Tell the person ``text``; front ends show it, the model never sees
+        it (a ``core`` / ``notice`` record). ``kind`` and ``data`` carry the
+        same news as structured data for a front end that renders it
+        (``text`` stays the plain fallback)."""
+        self._record_core(Notice(text=text, notice_kind=kind, notice_data=data))
+
+    def set_timer(self, name: str, at: float, text: str = "") -> None:
+        """Wake the task at ``at`` (epoch seconds) once it is idle, with
+        ``text`` as the next message (``TimerFired(name)`` either way); a
+        timer of the same name is replaced. Durable: any worker fires it."""
+        self._record_core(Timer(name=name, at=at, text=text))
+
+    def clear_timer(self, name: str) -> None:
+        self._record_core(TimerCleared(name=name))
+
+    def _record_core(self, entry: CoreRecord) -> None:
+        self.record(CORE, entry.kind, entry.data())

@@ -8,8 +8,8 @@ from typing import Any, Literal, Protocol
 
 import msgspec
 
-from noeta.core import records
 from noeta.core.execenv import ExecEnv
+from noeta.core.records import CoreNotices
 from noeta.core.types import Display, Image, Struct, Text, ToolReference
 
 
@@ -44,7 +44,7 @@ def text_output(text: str, *, is_error: bool = False, **meta: Any) -> ToolOutput
 
 
 @dataclass
-class ToolContext:
+class ToolContext(CoreNotices):
     task_id: str
     call_id: str
     env: ExecEnv
@@ -90,24 +90,6 @@ class ToolContext:
     #: ``await count_tokens(text)``: the provider's exact token count of one
     #: user message holding ``text``; ``None`` when it cannot count.
     count_tokens: Callable[[str], Awaitable[int | None]] | None = None
-
-    def notify(self, text: str, *, kind: str | None = None, data: Any = None) -> None:
-        """Tell the person ``text``; front ends show it, the model never sees
-        it (a ``core`` / ``notice`` record). ``kind`` / ``data``: the same as
-        structured data for front ends that render it."""
-        _record(self.record, records.Notice(text=text, notice_kind=kind, notice_data=data))
-
-    def set_timer(self, name: str, at: float, text: str = "") -> None:
-        """Wake the task at ``at`` once it is idle, ``text`` as its next
-        message (``TaskView.set_timer``)."""
-        _record(self.record, records.Timer(name=name, at=at, text=text))
-
-    def clear_timer(self, name: str) -> None:
-        _record(self.record, records.TimerCleared(name=name))
-
-
-def _record(record: Callable[[str, str, Any], None], entry: records.CoreRecord) -> None:
-    record(records.CORE, entry.kind, entry.data())
 
 
 class Tool(Protocol):

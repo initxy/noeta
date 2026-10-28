@@ -14,12 +14,11 @@ from noeta.core.events import (
     ExtensionRecorded,
     InboxKind,
     Say,
-    TaskCreated,
     ToolFinished,
     ToolStarted,
     Waiting,
 )
-from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView
+from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView, child_task
 from noeta.core.runner import texts
 from noeta.core.store import NewTask, Post
 from noeta.core.tool import Tool, ToolContext, ToolOutput, tool_flag
@@ -185,14 +184,10 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
               history_from: str | None = None, history_through: int | None = None) -> str:
         child_id = f"{run.task_id}.{use.id}.{len(creates) + 1}"
         message = user(prompt) if isinstance(prompt, str) else prompt
-        child_config = dict(config or {})
-        for ext in run.exts:
-            child_config.update(ext.inherit(run.state))
         creates.append(NewTask(
             task_id=child_id,
-            created=TaskCreated(agent=agent, config=child_config, parent_id=run.task_id,
-                                root_id=run.state.root_id or run.task_id,
-                                history_from=history_from, history_through=history_through),
+            created=child_task(run.task_id, run.state, run.exts, agent, config,
+                               history_from=history_from, history_through=history_through),
             queue=queue,
             inbox=[Say(message=message)],
         ))
