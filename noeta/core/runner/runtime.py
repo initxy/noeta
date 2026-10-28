@@ -89,7 +89,9 @@ class Runtime:
             if released:
                 return
             released = True
-            left = self._holds.get(root_id, 0) - 1
+            if root_id not in self._holds:
+                return  # dropped on the way out (_drop_holds), store maybe closed
+            left = self._holds[root_id] - 1
             if left > 0:
                 self._holds[root_id] = left
                 return
