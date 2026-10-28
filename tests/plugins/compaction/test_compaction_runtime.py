@@ -216,8 +216,9 @@ async def test_layout_after_a_compaction(store: SqliteStore, tmp_path: Path) -> 
     client, tid = await run(store, a, model, env_for=lambda _s: LocalExecEnv(str(work)))
     (compacted, *_) = await compactions(client, tid)
     # Ahead of the summary: the project instructions, read again.
-    assert [m.text for m in compacted.lead] == [
-        '<workspace-instructions source="AGENTS.md">\nRULE: say hi\n</workspace-instructions>']
+    [lead] = [m.text for m in compacted.lead]
+    assert lead.startswith("Below are instructions from the codebase") and \
+        lead.endswith("(project instructions, part of the repository):\n\nRULE: say hi")
     # After the kept messages: the files read before, as a Read call.
     assert compacted.after[0].text.startswith(
         f'The Read tool was called with this input: {{"file_path":"{target}"}}\nIt returned:')
@@ -230,7 +231,7 @@ async def test_layout_after_a_compaction(store: SqliteStore, tmp_path: Path) -> 
     after = next(r for r in model.requests if any(
         m.text.startswith(SUMMARY_PREAMBLE) for m in r.messages))
     texts = [m.text for m in after.messages]
-    assert texts[0].startswith("<workspace-instructions") and \
+    assert texts[0].startswith("Below are instructions from the codebase") and \
         texts[1].startswith(SUMMARY_PREAMBLE)
     assert texts.index(compacted.after[0].text) > 2  # after the kept reply and results
     await assert_rebuilds(store, a, tid)
