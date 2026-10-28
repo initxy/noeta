@@ -140,8 +140,11 @@ async def test_a_task_continues_another_tasks_conversation(store: SqliteStore) -
     assert texts == ["task one", "and now this"]
     assert [m.role for m in request.messages] == ["user", "assistant", "user", "assistant", "user"]
     [child] = await client.tasks(parent_id=tid)
-    end = (await events(client, child.task_id))[-1]
+    child_events = await events(client, child.task_id)
+    end = child_events[-1]
     assert isinstance(end, TaskEnded) and end.answer == "second answer"
+    # A spawn without a cutoff is pinned to the source's log as it stood.
+    assert child_events[0].history_through == (await client.get(old)).last_seq
 
 
 async def test_a_fork_answers_the_calls_its_source_still_had_open(store: SqliteStore) -> None:
@@ -174,3 +177,30 @@ async def test_denied_tools_are_never_offered(store: SqliteStore) -> None:
     await client.create("a", "go")
     await rt.run_until_idle()
     assert [t.name for t in p.requests[0].tools] == ["Probe"]
+
+
+async def test_a_fork_keeps_the_history_it_was_created_with(store: SqliteStore) -> None:
+    src_p = ScriptedProvider([reply("r1"), reply("r2"), reply("r3")])
+    fork_p = ScriptedProvider([reply("f1"), reply("f2")])
+    rt = runtime(store, {"m": src_p, "c": fork_p},
+                 Agent(name="a", model="m"), Agent(name="b", model="c"))
+    client = Client(store)
+    src = await client.create("a", "one")
+    await rt.run_until_idle()
+    pinned = (await client.get(src)).last_seq
+    fork = await client.create("b", history_from=src)
+    first = (await events(client, fork))[0]
+    assert first.history_through == pinned
+    await client.send(src, "two")
+    await rt.run_until_idle()
+    await client.send(fork, "fork says")
+    await rt.run_until_idle()
+    texts = [m.text for m in fork_p.requests[0].messages if m.text]
+    assert texts == ["one", "r1", "fork says"]
+    # The source grows again; the fork's next request still extends its own.
+    await client.send(src, "three")
+    await rt.run_until_idle()
+    await client.send(fork, "again")
+    await rt.run_until_idle()
+    before, after = fork_p.requests
+    assert after.messages[:len(before.messages)] == before.messages

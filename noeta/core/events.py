@@ -81,8 +81,11 @@ class InboxItem(Struct):
 
 class TaskCreated(Struct, tag="TaskCreated", tag_field="type"):
     """``history_from`` starts the task from another task's conversation:
-    that task's log up to ``history_through`` (all of it when unset) is
-    folded first, so the task continues it (a resumed or forked sub-agent)."""
+    that task's log up to ``history_through`` is folded first, so the task
+    continues it (a resumed or forked sub-agent). Creating a task pins an
+    unset ``history_through`` to the source's last seq at that moment
+    (``noeta.core.store.pin_history``); only logs written before that read
+    the whole source."""
 
     agent: str
     config: dict[str, Any] = msgspec.field(default_factory=dict)

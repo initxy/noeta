@@ -19,6 +19,8 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
+from msgspec.structs import replace
+
 from noeta.core.agent import Agent
 from noeta.core.deferred import with_tool_search
 from noeta.core.errors import Conflict, StoreUnavailable
@@ -41,7 +43,7 @@ from noeta.core.loop.state import CORE, TaskState, apply, continued, fold
 from noeta.core.prompts import load_overrides
 from noeta.core.runner import texts
 from noeta.core.runner.runtime import Runtime
-from noeta.core.store import Claim, NewTask, Patch, Post
+from noeta.core.store import Claim, NewTask, Patch, Post, pin_history
 from noeta.core.tool import Tool
 from noeta.core.types import Text, ToolResult, user
 
@@ -229,6 +231,8 @@ class TaskRun:
     ) -> None:
         if self._lost:
             raise LostClaim()
+        creates = [replace(c, created=await pin_history(self.store, c.created))
+                   for c in creates]
         async with self._write_lock:
             base = self.state.last_seq
             write = asyncio.ensure_future(self.store.append(
