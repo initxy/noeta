@@ -402,7 +402,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         settings.plugins, plugins or {})
     agents = default_agents(settings.model, plugins=table, add=settings.add_plugins,
                             extra_files=files)
-    sandbox = SandboxSettings.from_settings(found.sandbox, found.permissions,
+    sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
                                             base_dir=str(cwd or os.getcwd()))
     if sandbox.enabled:
         runtime_kw.setdefault("env_for", sandboxed_env_for(sandbox))

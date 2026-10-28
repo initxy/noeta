@@ -68,7 +68,10 @@ All notable changes to Noeta are documented here. The format is based on
   `excludedCommands`, `allowUnsandboxedCommands`, `autoAllowBashIfSandboxed` (default on),
   `failIfUnavailable`, `credentials` (`mask` acts as `deny`), `httpProxyPort` /
   `socksProxyPort`, `enableWeakerNestedSandbox`, `filesystem.disabled` and `bwrapPath` are
-  honoured, and a project's settings may tighten the sandbox but never loosen it.
+  honoured, and a project's settings may tighten the sandbox but never loosen it: its
+  `excludedCommands`, `allowWrite`, `allowRead`, `allowedDomains`, `allowUnixSockets`, the
+  loosening switches, and its permission allow rules and `additionalDirectories` never reach
+  the sandbox (only the user's and managed settings widen it).
   `dangerouslyDisableSandbox: true` runs a command outside after an approval that allow
   rules do not skip. `Bash`'s description gains a sandbox section while the sandbox is on.
   Without bwrap (or namespaces) front ends say why and commands run unconfined, or are

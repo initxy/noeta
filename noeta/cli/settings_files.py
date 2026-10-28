@@ -59,6 +59,10 @@ class FileSettings:
     permissions: dict[str, Any] = field(default_factory=dict)
     #: The ``sandbox`` object, merged (:func:`merge_sandbox`).
     sandbox: dict[str, Any] = field(default_factory=dict)
+    #: The permissions that feed the sandbox: ``deny`` rules from every
+    #: file, but ``allow`` rules and ``additionalDirectories`` (which widen
+    #: it) not from a project's files.
+    sandbox_permissions: dict[str, Any] = field(default_factory=dict)
 
 
 def settings_files(cwd: str | None, *, noeta_home: Path, trusted: bool,
@@ -98,11 +102,16 @@ SANDBOX_LISTS = (("excludedCommands",), ("filesystem", "allowWrite"),
 SANDBOX_PROJECT_ONLY = {("enabled",): True, ("allowUnsandboxedCommands",): False,
                         ("autoAllowBashIfSandboxed",): False,
                         ("failIfUnavailable",): True}
-#: ``sandbox`` keys a project's files never set.
+#: ``sandbox`` keys a project's files never set: the switches and the lists
+#: that would open the sandbox up (more commands outside it, more paths to
+#: write or read, more hosts or sockets to reach).
 SANDBOX_NOT_FROM_PROJECT = (("allowNestedUserNamespaces",), ("enableWeakerNestedSandbox",),
                             ("filesystem", "disabled"), ("network", "allowAllUnixSockets"),
                             ("network", "allowLocalBinding"), ("network", "httpProxyPort"),
-                            ("network", "socksProxyPort"), ("bwrapPath",))
+                            ("network", "socksProxyPort"), ("bwrapPath",),
+                            ("excludedCommands",), ("filesystem", "allowWrite"),
+                            ("filesystem", "allowRead"), ("network", "allowedDomains"),
+                            ("network", "allowUnixSockets"))
 
 
 def _get(data: dict[str, Any], key: tuple[str, ...]) -> Any:
@@ -132,9 +141,9 @@ def merge_sandbox(layers: list[tuple[dict[str, Any], str]]) -> dict[str, Any]:
     """Claude Code's ``sandbox`` objects merged, lowest precedence first;
     each comes with where it is from (``user``, ``project``, ``managed``). Lists add up; a later
     switch wins, except that a project's file may only tighten
-    (:data:`SANDBOX_PROJECT_ONLY`) and never sets the keys that loosen the
-    machine's protection (:data:`SANDBOX_NOT_FROM_PROJECT`); ``bwrapPath``
-    comes from managed settings only."""
+    (:data:`SANDBOX_PROJECT_ONLY`) and never sets the keys or lists that
+    loosen it (:data:`SANDBOX_NOT_FROM_PROJECT`); ``bwrapPath`` comes from
+    managed settings only."""
     out: dict[str, Any] = {}
     for data, kind in layers:
         if not isinstance(data, dict):
@@ -142,14 +151,16 @@ def merge_sandbox(layers: list[tuple[dict[str, Any], str]]) -> dict[str, Any]:
         project, managed = kind == "project", kind == "managed"
         for key in _leaves(data):
             value = _get(data, key)
+            if project and key in SANDBOX_NOT_FROM_PROJECT:
+                log.warning("settings: a project's sandbox.%s would loosen the sandbox; "
+                            "ignored (set it in ~/.noeta/settings.json)", ".".join(key))
+                continue
             if key in SANDBOX_LISTS:
                 if isinstance(value, list):
                     have = _get(out, key) or []
                     _put(out, key, have + [v for v in value if v not in have])
                 continue
             if key == ("bwrapPath",) and not managed:
-                continue
-            if project and key in SANDBOX_NOT_FROM_PROJECT:
                 continue
             if project and key in SANDBOX_PROJECT_ONLY and value != SANDBOX_PROJECT_ONLY[key] \
                     and _get(out, key) is not None:
@@ -164,12 +175,12 @@ def load(files: list[Path]) -> FileSettings:
     project's in between)."""
     out = FileSettings(files=list(files))
     lists: dict[str, list[str]] = {k: [] for k in (*RULE_LISTS, "additionalDirectories")}
+    widening: dict[str, list[str]] = {"allow": [], "additionalDirectories": []}
     sandboxes: list[tuple[dict[str, Any], str]] = []
     for index, path in enumerate(files):
         data = _read(path)
+        kind = "user" if index == 0 else "managed" if index == len(files) - 1 else "project"
         if isinstance(data.get("sandbox"), dict):
-            kind = "user" if index == 0 else "managed" if index == len(files) - 1 \
-                else "project"
             sandboxes.append((data["sandbox"], kind))
         env = data.get("env")
         if isinstance(env, dict):
@@ -186,10 +197,14 @@ def load(files: list[Path]) -> FileSettings:
             for value in perms.get(key) or []:
                 if isinstance(value, str) and value not in values:
                     values.append(value)
+                if key in widening and kind != "project" and isinstance(value, str):
+                    widening[key].append(value)
         if isinstance(perms.get("defaultMode"), str):
             out.permissions["defaultMode"] = perms["defaultMode"]
     out.permissions.update({k: v for k, v in lists.items() if v})
     out.sandbox = merge_sandbox(sandboxes)
+    out.sandbox_permissions = {**({"deny": lists["deny"]} if lists["deny"] else {}),
+                               **{k: v for k, v in widening.items() if v}}
     return out
 
 
