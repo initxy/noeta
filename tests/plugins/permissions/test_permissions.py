@@ -71,8 +71,8 @@ async def test_default_mode_asks_for_risky_tools_only(store: SqliteStore) -> Non
 
 
 async def test_accept_edits_exempts_edit_and_write(store: SqliteStore) -> None:
-    write, kill = Fake("Write"), Fake("KillShell")
-    provider = ScriptedProvider([reply("", ("Write", {}), ("KillShell", {})), reply("ok")])
+    write, kill = Fake("Write"), Fake("TaskStop")
+    provider = ScriptedProvider([reply("", ("Write", {}), ("TaskStop", {})), reply("ok")])
     client, tid, _ = await start(store, provider, Permissions(mode="acceptEdits"), [write, kill])
     last = (await events(client, tid))[-1]
     assert isinstance(last, Waiting) and last.on == "approval" and len(last.ids) == 1
@@ -203,11 +203,11 @@ async def test_always_without_trust_stays_in_the_task(store: SqliteStore,
 
 
 async def test_disallowing_bash_removes_its_companions(store: SqliteStore) -> None:
-    tools = [Fake(n) for n in ("Bash", "Monitor", "BashOutput", "KillShell", "Read")]
-    provider = ScriptedProvider([reply("", ("BashOutput", {})), reply("ok")])
+    tools = [Fake(n) for n in ("Bash", "Monitor", "TaskStop", "Read")]
+    provider = ScriptedProvider([reply("", ("TaskStop", {})), reply("ok")])
     client, tid, _ = await start(store, provider, Permissions(disallowed_tools=["Bash"]), tools)
     assert [t.name for t in provider.requests[0].tools] == ["Read"]
-    assert results(await events(client, tid)) == [("tool 'BashOutput' denied by policy", True)]
+    assert results(await events(client, tid)) == [("tool 'TaskStop' denied by policy", True)]
 
 
 # ------------------------------------------------------------------ web gate

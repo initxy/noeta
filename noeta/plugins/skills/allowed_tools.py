@@ -48,9 +48,8 @@ RECOGNIZED_TOOL_NAMES: frozenset[str] = frozenset(
         "Edit",
         "Write",
         "Bash",
-        "BashOutput",
-        "KillShell",
         "Monitor",
+        "TaskStop",
         # web
         "WebFetch",
         "WebSearch",

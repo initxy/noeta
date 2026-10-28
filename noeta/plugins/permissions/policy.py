@@ -46,8 +46,7 @@ DEFAULT_RISK: Mapping[str, str] = {
     "Write": "high",
     "Bash": "high",
     "Monitor": "high",
-    "BashOutput": "low",
-    "KillShell": "high",
+    "TaskStop": "high",
     "WebFetch": "low",
     "WebSearch": "low",
     "memory_read": "low",
@@ -75,7 +74,7 @@ SHELL_GATED_TOOLS: frozenset[str] = frozenset({"Bash", "Monitor"})
 
 #: Tools that run or manage shell commands alongside ``Bash``; disallowing
 #: ``Bash`` removes them too.
-SHELL_COMPANION_TOOLS: frozenset[str] = frozenset({"Monitor", "BashOutput", "KillShell"})
+SHELL_COMPANION_TOOLS: frozenset[str] = frozenset({"Monitor", "TaskStop"})
 
 WEBFETCH_TOOL = "WebFetch"
 

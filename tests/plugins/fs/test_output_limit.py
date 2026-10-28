@@ -144,17 +144,6 @@ async def test_glob_cuts_past_50000_chars_without_spill_dir(h: Harness, ws: Path
 # ---------------------------------------------------------------------------
 
 _EXPECTED_SCHEMAS: dict[str, dict[str, Any]] = {
-    "Bash": {
-        "additionalProperties": False,
-        "properties": {
-            "command": {"type": "string"},
-            "description": {"type": "string"},
-            "run_in_background": {"type": "boolean"},
-            "timeout": {"type": "number"},
-        },
-        "required": ["command"],
-        "type": "object",
-    },
     "Edit": {
         "additionalProperties": False,
         "properties": {
@@ -230,7 +219,8 @@ _TOOLS: dict[str, tuple[Any, str]] = {
 def test_tool_names_and_schemas_match_0_6() -> None:
     for name, (tool, _) in _TOOLS.items():
         assert tool.name == name
-        assert tool.input_schema == _EXPECTED_SCHEMAS[name], name
+        if name != "Bash":  # its schema is checked in tests/plugins/shell
+            assert tool.input_schema == _EXPECTED_SCHEMAS[name], name
 
 
 def test_descriptions_are_the_md_files_minus_trailing_newlines() -> None:

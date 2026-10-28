@@ -1,9 +1,11 @@
-"""The background-shell tools driven directly: launch texts, BashOutput,
-KillShell, Monitor events and expiry, the job cap, and where notices go."""
+"""The background-shell tools driven directly: launch texts, the output
+file, TaskStop, Monitor events and expiry, the job cap, and where notices
+go."""
 
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -59,6 +61,10 @@ class Harness:
         await asyncio.wait_for(job.sender, 10)
 
 
+async def stop(h: Harness, job_id: str) -> ToolOutput:
+    return await h.tool("TaskStop").run({"task_id": job_id}, h.ctx())
+
+
 def text(out: ToolOutput) -> str:
     return "".join(b.text for b in out.content if isinstance(b, Text))
 
@@ -75,15 +81,19 @@ async def test_background_launch_and_end_notice(h: Harness) -> None:
     out = await h.call("Bash", command="echo hi; exit 3", run_in_background=True)
     assert not out.is_error
     job_id = out.meta["job_id"]
-    assert text(out) == (
-        f"Command running in background with ID: {job_id}. You will be notified when it "
-        "completes. To check interim output, use BashOutput on that ID.")
+    assert re.fullmatch(r"[a-z0-9]{9}", job_id)
+    path = str(h.tmp.parent / "logs" / f"{job_id}.output")
+    assert text(out).startswith(
+        f"Started in the background with ID {job_id}; its output is written to {path}. "
+        "You will be notified when it finishes")
     assert h.records[0][:2] == ("shell", "started")
     await h.settle(job_id)
     assert h.posts == [("task", (
         f"<task-notification>\n<task-id>{job_id}</task-id>\n<tool-use-id>call_1</tool-use-id>"
+        f"\n<output-file>{path}</output-file>"
         "\n<status>failed</status>\n<summary>Background command \"echo hi; exit 3\" failed "
-        "with exit code 3</summary>\n</task-notification>\nLast output:\nhi"))]
+        "with exit code 3</summary>\n</task-notification>"))]
+    assert Path(path).read_text() == "hi\n\n[exited with code 3]\n"
 
 
 async def test_ends_with_turn_wording_and_cd_note(tmp_path: Path) -> None:
@@ -92,7 +102,7 @@ async def test_ends_with_turn_wording_and_cd_note(tmp_path: Path) -> None:
                 Shell(registry=registry, background_ends_with_turn=True))
     out = await h.call("Bash", command="cd /; true", run_in_background=True,
                        description="go root")
-    assert "it is terminated when you give your final response" in text(out)
+    assert "it is stopped when you give your final response" in text(out)
     assert text(out).endswith(
         "\n" + f"Session cwd remains {tmp_path}; directory changes made by the backgrounded "
         "command do not apply to subsequent commands.")
@@ -105,49 +115,31 @@ async def test_a_leading_sleep_is_fine_in_the_background_only(h: Harness) -> Non
     assert fg.is_error and "Blocked: standalone sleep 30." in text(fg)
     bg = await h.call("Bash", command="sleep 30", run_in_background=True)
     assert not bg.is_error
-    await h.call("KillShell", shell_id=bg.meta["job_id"])
+    res = await stop(h, bg.meta["job_id"])
+    assert not res.is_error, text(res)
     await h.settle(bg.meta["job_id"])
 
 
-async def test_bash_output_returns_only_new_output(h: Harness) -> None:
-    out = await h.call("Bash", command="echo one; echo two", run_in_background=True)
+async def test_task_stop_stops_a_job_and_its_end_is_noticed(h: Harness) -> None:
+    out = await h.call("Bash", command="echo keep; sleep 5", run_in_background=True)
     job_id = out.meta["job_id"]
-    first = await h.call("BashOutput", bash_id=job_id, block=True, timeout=5000)
-    assert text(first) == "status: exited (exit code 0)\none\ntwo\n"
-    again = await h.call("BashOutput", bash_id=job_id)
-    assert text(again) == "status: exited (exit code 0)\n(no new output)"
-    await h.settle(job_id)
-
-
-async def test_bash_output_filter_wait_timeout_and_errors(h: Harness) -> None:
-    out = await h.call("Bash", command="echo keep; echo drop; sleep 5", run_in_background=True)
-    job_id = out.meta["job_id"]
-    polled = await h.call("BashOutput", bash_id=job_id, block=True, timeout=300,
-                          filter="^keep")
-    assert text(polled) == "status: running (still running after waiting 0.3s)\nkeep"
-    assert text(await h.call("BashOutput", bash_id="bg-nope")) == (
-        "BashOutput: unknown background job 'bg-nope'")
-    assert text(await h.call("BashOutput", bash_id=job_id, filter="(")).startswith(
-        "BashOutput: invalid 'filter' regex:")
-    assert text(await h.call("BashOutput")) == "BashOutput: requires a non-empty 'bash_id'"
-    killed = await h.call("KillShell", shell_id=job_id)
-    assert text(killed) == f"Shell {job_id} is being terminated (killing)"
+    assert text(await stop(h, "nope12345")) == (
+        "TaskStop: unknown background job 'nope12345'")
+    assert text(await h.call("TaskStop")) == "TaskStop: requires a non-empty 'task_id'"
+    stopped = await stop(h, job_id)
+    assert text(stopped) == f"Stopped task {job_id} (echo keep; sleep 5)"
     await h.settle(job_id)
     assert "<status>killed</status>" in h.posts[-1][1]
-    assert 'Background command "echo keep; echo drop; sleep 5" was stopped' in h.posts[-1][1]
-    again = await h.call("KillShell", shell_id=job_id)
-    assert text(again) == f"Shell {job_id} is being terminated (killed)"
+    assert 'Background command "echo keep; sleep 5" was stopped' in h.posts[-1][1]
+    again = await h.call("TaskStop", shell_id=job_id)
+    assert again.is_error and text(again) == f"TaskStop: task {job_id} is not running (killed)"
 
 
-async def test_poll_reports_dropped_output(tmp_path: Path) -> None:
-    registry = Registry(log_dir=str(tmp_path / "logs"), output_cap=10)
-    h = Harness(tmp_path, registry, Shell(registry=registry))
-    out = await h.call("Bash", command="printf 0123456789abcdef", run_in_background=True)
-    polled = await h.call("BashOutput", bash_id=out.meta["job_id"], block=True)
-    assert text(polled) == (
-        "status: exited (exit code 0)\n[6 bytes of older output dropped (buffer overflow)]"
-        "\n6789abcdef")
-    await h.settle(out.meta["job_id"])
+def test_monitor_and_task_stop_are_deferred(h: Harness) -> None:
+    assert getattr(h.tool("Monitor"), "deferred", False)
+    assert getattr(h.tool("TaskStop"), "deferred", False)
+    assert not getattr(h.tool("Bash"), "deferred", False)
+    assert [t.name for t in h.ext._tools] == ["Bash", "Monitor", "TaskStop"]
 
 
 async def test_the_job_cap_refuses_a_ninth_job(tmp_path: Path) -> None:
@@ -155,13 +147,13 @@ async def test_the_job_cap_refuses_a_ninth_job(tmp_path: Path) -> None:
     h = Harness(tmp_path, registry, Shell(registry=registry))
     first = await h.call("Bash", command="sleep 5", run_in_background=True)
     second = await h.call("Bash", command="true", run_in_background=True)
-    assert text(second) == ("Bash: too many background jobs (1/1); kill one with "
-                            "KillShell first")
+    assert text(second) == ("Bash: too many background jobs (1/1); stop one with "
+                            "TaskStop first")
     # Another root has its own allowance.
     other = await h.call("Bash", task_id="r2", root_id="r2", command="true",
                          run_in_background=True)
     assert not other.is_error
-    await h.call("KillShell", shell_id=first.meta["job_id"])
+    await stop(h, first.meta["job_id"])
     for out in (first, other):
         await h.settle(out.meta["job_id"])
 
@@ -170,7 +162,7 @@ async def test_monitor_streams_lines_then_reports_the_end(h: Harness) -> None:
     out = await h.call("Monitor", command="echo a; echo b; sleep 0.6; echo oops >&2",
                        description="watch", timeout_ms=60_000)
     job_id = out.meta["job_id"]
-    assert text(out).startswith(f"Monitor started (task {job_id}, expires in 1m unless")
+    assert text(out).startswith(f"Monitor started with ID {job_id}; it expires in 1m unless")
     await h.settle(job_id)
     texts = [t for _, t in h.posts]
     assert texts[0] == (f"<task-notification>\n<task-id>{job_id}</task-id>\n"

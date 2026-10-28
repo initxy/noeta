@@ -43,7 +43,7 @@ log = logging.getLogger("noeta.host.acp")
 #: Tool name → ACP tool kind (what an editor shows next to the call).
 TOOL_KINDS: dict[str, str] = {
     "Read": "read", "Edit": "edit", "Write": "edit", "Bash": "execute",
-    "BashOutput": "execute", "KillShell": "execute", "Monitor": "execute",
+    "TaskStop": "execute", "Monitor": "execute",
     "Grep": "search", "Glob": "search", "ToolSearch": "search",
     "WebFetch": "fetch", "WebSearch": "fetch", "Task": "think",
 }

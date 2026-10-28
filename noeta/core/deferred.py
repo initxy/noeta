@@ -32,6 +32,7 @@ __all__ = [
     "deferred_names",
     "is_deferred",
     "request_tools",
+    "with_tool_search",
 ]
 
 TOOL_SEARCH = "ToolSearch"
@@ -81,6 +82,16 @@ def deferred_names(tools: Iterable[Tool]) -> list[str]:
     """The names of the deferred tools among ``tools``, sorted: what the
     conversation announces (``TaskView.deferred_tool_names``)."""
     return sorted({t.name for t in tools if is_deferred(t)})
+
+
+def with_tool_search(tools: Sequence[Tool]) -> list[Tool]:
+    """``tools`` plus ``ToolSearch`` when any of them is deferred (and none
+    is already called so): the tools a task offers."""
+    out = list(tools)
+    deferred = {t.name: t for t in out if is_deferred(t)}
+    if deferred and all(t.name != TOOL_SEARCH for t in out):
+        out.append(ToolSearchTool(deferred))
+    return out
 
 
 def placeholder_spec() -> ToolSpec:

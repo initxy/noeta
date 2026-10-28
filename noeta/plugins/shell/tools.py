@@ -1,27 +1,20 @@
 """``Bash`` with ``run_in_background``, and the tools around background jobs:
-``BashOutput``, ``KillShell`` and ``Monitor``. Texts and limits are 0.6's
-(Claude Code's), byte for byte."""
+``Monitor`` and ``TaskStop``, both deferred. Limits are Claude Code's."""
 
 from __future__ import annotations
 
-import asyncio
 import re
 import shlex
 from importlib import resources
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.plugins.shell.bash import SHELL, BashTool, shell_state
+from noeta.plugins.shell.bash import SCHEMA_DIALECT, SHELL, BashTool, shell_state
 from noeta.plugins.shell.jobs import Job, Registry
 from noeta.plugins.shell.notices import format_duration
 from noeta.toolkit.shell import matching_rule, parse_argv
 from noeta.toolkit.tools import Workspace, require_str, tool_error
 
-#: Claude Code's inline cap on a poll's new output.
-SHELL_INLINE_MAX_CHARS = 30_000
-#: The wait bounds of Claude Code's ``TaskOutput`` (default 30 s, max 10 min).
-DEFAULT_WAIT_TIMEOUT_MS = 30_000
-MAX_WAIT_TIMEOUT_MS = 600_000
 #: Claude Code's ``Monitor`` deadline bounds.
 DEFAULT_MONITOR_TIMEOUT_MS = 300_000
 MIN_MONITOR_TIMEOUT_MS = 1_000
@@ -52,41 +45,20 @@ def _unknown(registry: Registry, ctx: ToolContext, job_id: str) -> str:
     return f"unknown background job {job_id!r}"
 
 
-def background_started(job_id: str, *, ends_with_turn: bool) -> str:
-    """The launch result: Claude Code's background-command wording."""
+def background_started(job_id: str, out_path: str, *, ends_with_turn: bool) -> str:
+    """The launch result: the ID, the output file, and how the end is
+    reported."""
+    text = (f"Started in the background with ID {job_id}; its output is written to "
+            f"{out_path}. ")
     if ends_with_turn:
-        return (
-            f"Command running in background with ID: {job_id}. If it exits "
-            "while you are still working you will be notified, but it is "
-            "terminated when you give your final response and no notification "
-            "can follow that — so do not end your turn to wait for it; if you "
-            "need its result, wait for it before giving your final response. "
-            "To check interim output, use BashOutput on that ID."
-        )
-    return (
-        f"Command running in background with ID: {job_id}. You will be "
-        "notified when it completes. To check interim output, use BashOutput "
-        "on that ID."
-    )
-
-
-def elide_middle(value: str, max_chars: int) -> str:
-    if len(value) <= max_chars:
-        return value
-    dropped = len(value) - max_chars
-    half = max_chars // 2
-    return (f"{value[:half]}\n... [{dropped} chars truncated] ...\n"
-            f"{value[len(value) - (max_chars - half):]}")
-
-
-def _js_number(value: float) -> str:
-    return str(int(value)) if value.is_integer() else repr(value)
-
-
-def _wait_timeout_s(raw: Any) -> float:
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw < 0:
-        return DEFAULT_WAIT_TIMEOUT_MS / 1000
-    return min(float(raw), MAX_WAIT_TIMEOUT_MS) / 1000
+        return text + (
+            "You are notified if it ends while you are still working, but it is stopped "
+            "when you give your final response and nothing can follow that: if you need "
+            "its result, wait for it before you finish.")
+    return text + (
+        "You will be notified when it finishes, so do not poll it or sleep waiting for it. "
+        "Read the file only if the user asks how it is going or you need a line from it "
+        "(a server's ready line, a port) before you can continue.")
 
 
 def _monitor_timeout_ms(raw: Any) -> float:
@@ -122,7 +94,8 @@ class BackgroundBash(BashTool):
         if isinstance(started, ToolOutput):
             return started
         job, cwd, tracked = started
-        text = background_started(job.job_id, ends_with_turn=self.ends_with_turn)
+        text = background_started(job.job_id, job.out_path,
+                                  ends_with_turn=self.ends_with_turn)
         if tracked and _CD_WORD.search(command):
             # Claude Code's note for a backgrounded ``cd``.
             text += ("\n" + f"Session cwd remains {cwd}; directory changes made by "
@@ -162,101 +135,46 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
     return job, cwd, tracked
 
 
-class BashOutputTool:
-    """``BashOutput``: the output a job produced since the last check."""
+class TaskStopTool:
+    """``TaskStop``: stop a background job; its end comes as the usual
+    notice. Deferred."""
 
-    name = "BashOutput"
-    read_only = False
-    clearable = True
-
-    def __init__(self, registry: Registry) -> None:
-        self.registry = registry
-        self.description = _description("shell_poll")
-        self.input_schema: dict[str, Any] = {
-            "type": "object",
-            "properties": {
-                "bash_id": {"type": "string"},
-                # optional per-line regex filter on the new output
-                "filter": {"type": "string"},
-                # wait for the job to end before answering
-                "block": {"type": "boolean"},
-                # how long ``block`` waits, in milliseconds (max 600000)
-                "timeout": {"type": "number"},
-            },
-            "required": ["bash_id"],
-            "additionalProperties": False,
-        }
-
-    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
-        job_id = require_str(input, "bash_id")
-        if job_id is None:
-            return tool_error(self.name, "requires a non-empty 'bash_id'")
-        line_filter = input.get("filter")
-        filter_re: re.Pattern[str] | None = None
-        if line_filter is not None:
-            if not isinstance(line_filter, str):
-                return tool_error(self.name, "'filter' must be a string")
-            try:
-                filter_re = re.compile(line_filter)
-            except re.error as exc:
-                return tool_error(self.name, f"invalid 'filter' regex: {exc}")
-        job = self.registry.find(_root(ctx), job_id)
-        if job is None:
-            return tool_error(self.name, _unknown(self.registry, ctx, job_id))
-        waited = ""
-        if input.get("block"):
-            try:
-                await asyncio.wait_for(job.done.wait(), _wait_timeout_s(input.get("timeout")))
-                waited = "done"
-            except TimeoutError:
-                waited = "timeout"
-        new_output, dropped = await self.registry.poll(job)
-        status = job.status
-        status_line = f"status: {status}"
-        if status in ("exited", "killed") and job.exit_code is not None:
-            status_line += f" (exit code {job.exit_code})"
-        if filter_re is not None and new_output:
-            new_output = "\n".join(
-                line for line in new_output.splitlines() if filter_re.search(line))
-        if waited == "timeout" and status == "running":
-            status_line += (f" (still running after waiting "
-                            f"{_js_number(_wait_timeout_s(input.get('timeout')))}s)")
-        parts = [status_line]
-        if dropped:
-            parts.append(f"[{dropped} bytes of older output dropped (buffer overflow)]")
-        if new_output:
-            parts.append(elide_middle(new_output, SHELL_INLINE_MAX_CHARS))
-        else:
-            parts.append("(no new output)")
-        return text_output("\n".join(parts), status=status)
-
-
-class KillShellTool:
-    """``KillShell``: stop a job; its end comes as the usual notice."""
-
-    name = "KillShell"
+    name = "TaskStop"
     read_only = False
     clearable = False
+    deferred = True
+    description = (
+        "Stops a background task (a Bash command started with `run_in_background`, or a "
+        "Monitor) by its ID.\n\n"
+        "- `task_id` is the ID the launch result gave\n"
+        "- The result says whether the task was stopped\n"
+        "- Use it to end a long-running task you no longer need")
+    input_schema: dict[str, Any] = {
+        "$schema": SCHEMA_DIALECT,
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string",
+                        "description": "ID of the background task to stop."},
+            "shell_id": {"type": "string",
+                         "description": "Older name for task_id; use task_id."},
+        },
+        "additionalProperties": False,
+    }
 
     def __init__(self, registry: Registry) -> None:
         self.registry = registry
-        self.description = _description("shell_kill")
-        self.input_schema: dict[str, Any] = {
-            "type": "object",
-            "properties": {"shell_id": {"type": "string"}},
-            "required": ["shell_id"],
-            "additionalProperties": False,
-        }
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
-        job_id = require_str(input, "shell_id")
+        job_id = require_str(input, "task_id") or require_str(input, "shell_id")
         if job_id is None:
-            return tool_error(self.name, "requires a non-empty 'shell_id'")
+            return tool_error(self.name, "requires a non-empty 'task_id'")
         job = self.registry.find(_root(ctx), job_id)
         if job is None:
             return tool_error(self.name, _unknown(self.registry, ctx, job_id))
-        status = self.registry.kill(job)
-        return text_output(f"Shell {job_id} is being terminated ({status})")
+        if job.status != "running":
+            return tool_error(self.name, f"task {job_id} is not running ({job.status})")
+        self.registry.kill(job)
+        return text_output(f"Stopped task {job_id} ({job.description})", job_id=job_id)
 
 
 class MonitorTool:
@@ -266,37 +184,34 @@ class MonitorTool:
     name = "Monitor"
     read_only = False
     clearable = False
+    deferred = True
 
     def __init__(self, shell: BackgroundBash) -> None:
         self.shell = shell
         self.description = _description("monitor")
         self.input_schema: dict[str, Any] = {
+            "$schema": SCHEMA_DIALECT,
             "type": "object",
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": (
-                        "Shell command or script. Each stdout line is an "
-                        "event; exit ends the watch."
-                    ),
+                    "description": ("The script to run. Every line it prints on stdout is "
+                                    "an event; its exit ends the watch."),
                 },
                 "description": {
                     "type": "string",
-                    "description": (
-                        "Short human-readable description of what you are "
-                        "monitoring (shown in notifications)."
-                    ),
+                    "description": ("A short, specific label for what is watched; shown "
+                                    "with every notification."),
                 },
                 "timeout_ms": {
                     "type": "number",
                     "default": DEFAULT_MONITOR_TIMEOUT_MS,
                     "minimum": MIN_MONITOR_TIMEOUT_MS,
                     "maximum": MAX_MONITOR_TIMEOUT_MS,
-                    "description": (
-                        "Kill the monitor after this deadline. Default "
-                        "300000ms. Deadlines above 1800000ms are capped to "
-                        "1800000ms. You are notified at expiry and can re-arm."
-                    ),
+                    "description": ("When to stop the monitor, in milliseconds (default "
+                                    "300000; anything above 1800000 counts as 1800000). "
+                                    "You get a notice when it expires and may start it "
+                                    "again."),
                 },
             },
             "required": ["description", "timeout_ms"],
@@ -317,12 +232,11 @@ class MonitorTool:
             return started
         job = started[0]
         output = (
-            f"Monitor started (task {job.job_id}, expires in "
-            f"{format_duration(timeout_ms)} unless the source ends first; you "
-            "get one notice at expiry — re-arm if you still need the watch). "
-            "You will be notified on each event. Keep working — do not poll or "
-            "sleep. Events may arrive while you are waiting for the user — an "
-            "event is not their reply."
+            f"Monitor started with ID {job.job_id}; it expires in "
+            f"{format_duration(timeout_ms)} unless the script ends first, with one notice "
+            "at expiry (start it again if you still need it). Each event reaches you as a "
+            "notification: keep working, do not poll or sleep. An event that arrives while "
+            "you wait for the user is not their reply."
         )
         if self.shell.ends_with_turn:
             output += (

@@ -1,10 +1,11 @@
 """``Bash``: run a command through ``bash -c`` in the foreground.
 
 Every command gets a bounded timeout, a scrubbed environment (the env
-backend's job), a per-stream capture cap that keeps the tail, and the
-directory the previous command left the shell in — tracked with an EXIT trap
-and recorded as ``shell`` / ``cwd``. A command that leaves the workspace
-sends the next one back to the root. Past 30,000 characters the output is
+backend's job), stdout and stderr merged in the order printed, a capture cap
+that keeps the tail, and — in a root task, after a command that succeeds —
+the directory it left the shell in, tracked with an EXIT trap and recorded as
+``shell`` / ``cwd``. A command that ends outside the workspace sends the next
+one back to the root. Past 30,000 characters the output is
 saved under ``ctx.spill_dir`` with a preview inline, or cut to its start and
 end when there is no spill directory. The process is **not** sandboxed:
 trusted workspaces only.
@@ -30,6 +31,7 @@ from noeta.toolkit.shell import (
     matching_rule,
     parse_argv,
 )
+from noeta.toolkit.tools import SCHEMA_DIALECT as SCHEMA_DIALECT
 from noeta.toolkit.tools import (
     Workspace,
     error_output,
@@ -43,6 +45,8 @@ __all__ = [
     "DEFAULT_SHELL_OUTPUT_CAP",
     "DEFAULT_SHELL_TIMEOUT_S",
     "MAX_SHELL_TIMEOUT_MS",
+    "NO_OUTPUT",
+    "SCHEMA_DIALECT",
     "SHELL",
     "BashTool",
     "ShellEnv",
@@ -102,6 +106,8 @@ MAX_SHELL_TIMEOUT_MS = 600_000
 DEFAULT_SHELL_OUTPUT_CAP = 256 * 1024
 #: Claude Code's ``maxResultSizeChars`` for Bash.
 SHELL_OUTPUT_LIMIT = 30_000
+#: The result of a command that succeeds and prints nothing.
+NO_OUTPUT = "(Bash completed with no output)"
 
 #: ``ctx -> variables`` a host adds to this call's command on top of the
 #: scrubbed environment. Asked per command; never recorded.
@@ -139,7 +145,8 @@ def _track_cwd(command: str) -> str:
     """``command`` with an EXIT trap printing the shell's final directory, so
     it is reported however the command ends short of a kill (``exit N``
     included) and the exit status is untouched."""
-    return f"trap 'printf \"\\n%s%s\\n\" \"{_CWD_MARK}\" \"$(pwd -P)\"' EXIT\n{command}"
+    return (f"exec 2>&1\ntrap 'printf \"\\n%s%s\\n\" \"{_CWD_MARK}\" \"$(pwd -P)\"' EXIT\n"
+            f"{command}")
 
 
 def _split_cwd(stream: bytes) -> tuple[bytes, str | None]:
@@ -156,44 +163,52 @@ def _split_cwd(stream: bytes) -> tuple[bytes, str | None]:
 
 
 def _render_streams(stdout: bytes, stderr: bytes) -> str:
-    """stdout, then stderr under a label only when both carry content."""
-    out_text = stdout.decode("utf-8", errors="replace").rstrip("\n")
-    err_text = stderr.decode("utf-8", errors="replace").rstrip("\n")
-    if out_text and err_text:
-        return f"{out_text}\nstderr:\n{err_text}"
-    return out_text or err_text
+    """The merged output (stderr is redirected into stdout; anything left on
+    stderr follows), trailing newlines trimmed."""
+    text = (stdout + stderr).decode("utf-8", errors="replace")
+    return text.rstrip("\n")
 
 
 def _capture_notice(result: RunResult, output_cap: int) -> str:
     """Name a stream whose HEAD the capture cap dropped, or ``""``."""
-    streams = [
-        name
-        for name, dropped in (
-            ("stdout", result.stdout_truncated),
-            ("stderr", result.stderr_truncated),
-        )
-        if dropped
-    ]
-    if not streams:
+    if not (result.stdout_truncated or result.stderr_truncated):
         return ""
     size = f"{output_cap // 1024} KB" if output_cap >= 1024 else f"{output_cap} bytes"
-    return (
-        f"[earlier output dropped: only the last {size} of "
-        f"{' and '.join(streams)} was captured]"
-    )
+    return f"[earlier output dropped: only the last {size} was captured]"
 
+
+
+_DESCRIPTION_FIELD = (
+    "What the command does, in plain words and the active voice, for a user who reads "
+    "this without seeing the command: do not repeat the command, its flags or its paths, "
+    "and do not use the words \"complex\" or \"risk\".\n\n"
+    "A simple command gets about 5-10 words:\n"
+    "- pytest -q -> \"Run the test suite\"\n"
+    "- git log -5 -> \"Show the five latest commits\"\n"
+    "- make build -> \"Build the package\"\n\n"
+    "A pipeline or an unusual flag gets enough context to be understood:\n"
+    "- du -sh * | sort -h | tail -3 -> \"Show which three folders here use the most disk\"\n"
+    "- docker ps -q | xargs docker stop -> \"Stop every running container\"\n"
+    "- tar -xzf release.tgz -C out -> \"Unpack the release archive into the out folder\"")
 
 
 def _input_schema() -> dict[str, Any]:
     return {
+        "$schema": SCHEMA_DIALECT,
         "type": "object",
         "properties": {
-            "command": {"type": "string"},
-            # per-call wall-clock cap in milliseconds (ceiling 600000)
-            "timeout": {"type": "number"},
-            # UI hint only; does not affect execution
-            "description": {"type": "string"},
-            "run_in_background": {"type": "boolean"},
+            "command": {"type": "string", "description": "The command line to run."},
+            "timeout": {"type": "number",
+                        "description": ("Time limit in milliseconds; at most 600000 for a "
+                                        "command run in the foreground.")},
+            "description": {"type": "string", "description": _DESCRIPTION_FIELD},
+            "run_in_background": {"type": "boolean",
+                                  "description": ("Run it detached and get its ID at once; "
+                                                  "you are told when it ends.")},
+            "dangerouslyDisableSandbox": {
+                "type": "boolean",
+                "description": ("Ask to run this command outside the sandbox; only when the "
+                                "sandbox is what makes it fail.")},
         },
         "required": ["command"],
         "additionalProperties": False,
@@ -248,7 +263,7 @@ class BashTool:
         argv = parse_argv(command) if rule is not None and rule.harden is not None else None
         track = argv is None
         if rule is not None and rule.harden is not None and argv:
-            exec_argv = rule.harden(argv)
+            exec_argv = ["bash", "-c", 'exec 2>&1; exec "$@"', "bash", *rule.harden(argv)]
         else:
             exec_argv = ["bash", "-c", _track_cwd(command)]
 
@@ -260,7 +275,7 @@ class BashTool:
             output_cap=self.output_cap,
         )
         stdout, stderr = result.stdout, result.stderr
-        final = cwd
+        final, left = cwd, False
         if track:
             stdout, reported = _split_cwd(stdout)
             if reported is None:  # the command sent its stdout to stderr
@@ -269,7 +284,7 @@ class BashTool:
                 if path_within(reported, ws.root):
                     final = reported
                 else:
-                    final, moved_back = ws.root, True
+                    final, left = ws.root, True
 
         body = _render_streams(stdout, stderr)
         notice = _capture_notice(result, self.output_cap)
@@ -278,12 +293,18 @@ class BashTool:
         meta: dict[str, Any] = {"exit_code": result.exit_code}
         if result.timed_out:
             meta["timed_out"] = True
-        if not result.timed_out and result.exit_code == 0 and not body:
-            body = "(no output)"
+        ran_ok = not result.timed_out and result.exit_code == 0
+        if ran_ok and not body:
+            body = NO_OUTPUT
+        # Only the root task's shell keeps a directory, and only one a
+        # command ended in successfully.
+        if not ran_ok or (ctx.root_id and ctx.root_id != ctx.task_id):
+            final, left = cwd, False
+        moved_back = moved_back or left
         if moved_back:
             # Claude Code's note when a command left the project.
             note = f"Shell cwd was reset to {ws.root}"
-            kept = body.strip() if body != "(no output)" else ""
+            kept = body.strip() if body != NO_OUTPUT else ""
             body = f"{kept}\n{note}" if kept else note
         if final != cwd or moved_back:
             ctx.record(SHELL, "cwd", {"cwd": final})

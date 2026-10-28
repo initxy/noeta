@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from noeta.core.agent import Agent
-from noeta.core.deferred import TOOL_SEARCH, ToolSearchTool, is_deferred
+from noeta.core.deferred import with_tool_search
 from noeta.core.errors import Conflict, StoreUnavailable
 from noeta.core.events import (
     Cancel,
@@ -280,10 +280,7 @@ class TaskRun:
                 if t.name not in seen:
                     seen.add(t.name)
                     tools.append(t)
-        deferred = {t.name: t for t in tools if is_deferred(t)}
-        if deferred and TOOL_SEARCH not in seen:
-            tools.append(ToolSearchTool(deferred))
-        return tools
+        return with_tool_search(tools)
 
     @staticmethod
     def error_result(call_id: str, text: str) -> ToolFinished:
