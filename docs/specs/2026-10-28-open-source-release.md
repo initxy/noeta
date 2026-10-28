@@ -81,20 +81,16 @@ servers and runs on many machines.
 - [x] F1a HTTP answers guarded against `bypassPermissions` (eed83d2).
 
 ### Phase 1 — structure (branch `os-structure`)
-- [ ] Structural series S1–S40 from the architecture audit, one commit each, check green after each.
-- [ ] Behavior series F1b–F16 from the architecture audit, each with a test that fails before.
-- [ ] CONTEXT.md / lint-layout updated for the moved kernel surface.
+- [x] Structural series S1–S40 from the architecture audit, one commit each, check green after each (skips and partial items with reasons in the Progress log).
+- [x] Behavior series F1b–F16 from the architecture audit, each with a test that fails before (F9, F13 not done; reasons in the Progress log).
+- [x] CONTEXT.md / lint-layout updated for the moved kernel surface.
 
 ### Phase 2 — multi-machine (branch `os-cluster`)
 - [x] Hold epochs, hold reaper, `hold_lost` notice; one process id; background processes die with their worker.
-- [ ] Idempotency key, `retry_safe`, `recover` (D5).
-- [ ] Fold snapshots (D7) with a both-ways test.
-- [x] Tenants (D4).
-- [x] ACP and stream-json reach a remote server through the client; live deltas across machines; `create_app` auth on by default.
 - [x] Idempotency key, `retry_safe`, `recover` (D5).
 - [x] Fold snapshots (D7) with a both-ways test.
-- [ ] Tenants (D4).
-- [ ] ACP and stream-json reach a remote server through the client; live deltas across machines; `create_app` auth on by default.
+- [x] Tenants (D4).
+- [x] ACP and stream-json reach a remote server through the client; live deltas across machines; `create_app` auth on by default.
 - [x] Cluster test: Postgres, ≥3 worker processes, tool calls + background commands + sub-agents + timers + mid-run messages, random SIGKILL/SIGSTOP; every task terminal, no duplicate side effects, no lost messages. Runs from `make cluster` and in CI.
 
 ### Phase 3 — extensibility (branch `os-plugins`)
@@ -103,7 +99,8 @@ servers and runs on many machines.
 - [x] `docs/extending.md` with the comparison table and the do-not-build reasons.
 
 ### Phase 4 — parity leftovers (branch `os-parity`)
-- [x] Close the open Plan items of `2026-10-28-claude-code-parity.md`; `make parity` 0; `make eval` ≥ baseline; `make e2e` green (three items stay open with reasons in that spec's Decisions).
+- [x] Close the open Plan items of `2026-10-28-claude-code-parity.md`; `make parity` 0; `make eval` ≥ baseline; `make e2e` green.
+- [ ] The three parity Plan items left open by the first pass: per-tool behavior pass, `SendMessage` `notify_when_idle` and its transcript file, ACP diffs / plan updates / model switching; an interrupted reply keeps a finished thinking block.
 
 ### Phase 5 — open-source face (branch `os-docs`)
 - [x] README five-minute start with a real model; docs: architecture, extending, server/cluster.
