@@ -77,7 +77,8 @@ built-ins register in `pyproject.toml` exactly as a third-party package would
 is its `Extension.name`. A plugin (or channel) can also be a plain file in `~/.noeta/plugins` or
 a trusted project's `.noeta/plugins` (`registry.load_plugin_files`); an installed plugin wins a
 name clash. Such a file joins the agents its `Extension.add_to` names by itself (an installed
-package's `add_to` is ignored).
+package's `add_to` is ignored). `noeta plugin add <git-url>@<commit>` installs one there pinned
+(also from a Claude Code `marketplace.json`, only read), running nothing from it.
 
 ## Plugin pin
 

@@ -7,6 +7,7 @@
     noeta acp                  serve the Agent Client Protocol on stdio (editors)
     noeta worker               run tasks from the store until stopped (multi-machine)
     noeta serve                the client API over HTTP (and workers, unless --no-worker)
+    noeta plugin ...           install (pinned), list and remove plugins
     noeta mcp ...              add, list, remove and sign in to MCP servers
 
 Model and provider come from ``--model`` / ``--provider`` or the environment
@@ -24,11 +25,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from noeta.cli import mcp_command
+from noeta.cli import mcp_command, plugin_command
 from noeta.cli.config import Settings, load_settings
 from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
-SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "mcp")
+SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp")
 
 
 def _common(ap: argparse.ArgumentParser) -> None:
@@ -69,6 +70,7 @@ def _parser() -> argparse.ArgumentParser:
                     help="a directory besides the server's own tasks may run in")
     sub.add_parser("trust", help="load this project's plugins, agents, prompts and skills")
     sub.add_parser("plugins", help="list the plugins and where each comes from")
+    plugin_command.add_parser(sub)
     mcp_command.add_parser(sub)
     return ap
 
@@ -199,6 +201,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "plugins":
         _plugins(cwd)
         return
+    if args.command == "plugin":
+        sys.exit(plugin_command.run(args, cwd))
     if args.command == "mcp":
         sys.exit(mcp_command.run(args, cwd))
     if args.command == "acp":
