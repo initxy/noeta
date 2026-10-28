@@ -197,6 +197,19 @@ async def test_a_pasted_redirect_and_a_wrong_state(home: Path) -> None:
     assert store_for(SERVER).load()["tokens"]["access_token"] == "a1"
 
 
+async def test_the_callback_page_escapes_what_it_shows(home: Path) -> None:
+    sign_in = SignIn(SERVER, store_for(SERVER), http=http_for(AuthServer()), timeout=5)
+    url = await sign_in.start()
+    state = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))["state"]
+    evil = urllib.parse.quote("<script>alert(1)</script>")
+    async with httpx.AsyncClient() as client:
+        page = await client.get(f"{sign_in.redirect_uri}?error={evil}&state={state}")
+    assert page.status_code == 400
+    assert "<script>" not in page.text and "&lt;script&gt;alert(1)&lt;/script&gt;" in page.text
+    with pytest.raises(McpError):
+        await sign_in.finish()
+
+
 async def test_a_refusal_and_a_timeout(home: Path) -> None:
     auth = AuthServer()
     http = http_for(auth)
