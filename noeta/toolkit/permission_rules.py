@@ -247,6 +247,10 @@ _RUNNER_VALUED = {"env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-strin
                   "nice": {"-n", "--adjustment"}, "timeout": {"-s", "--signal", "-k",
                                                                "--kill-after"},
                   "stdbuf": {"-i", "-o", "-e"}, "exec": {"-a"}}
+#: ``git``'s options before its subcommand that take the next word as a
+#: value; the others (``--no-pager``, ``-P``, ``--git-dir=x``) are one word.
+_GIT_GLOBAL_VALUED = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace",
+                                "--config-env", "--super-prefix", "--attr-source"})
 
 
 def _program_argv(argv: Sequence[str]) -> list[str]:
@@ -271,6 +275,12 @@ def _program_argv(argv: Sequence[str]) -> list[str]:
         if runner == "timeout" and i < len(argv) and re.fullmatch(r"\d+(\.\d+)?[smhd]?",
                                                                   argv[i]):
             i += 1
+    if argv[i:i + 1] == ["git"]:
+        # ``git -C . push`` runs ``git push``.
+        j = i + 1
+        while j < len(argv) and argv[j].startswith("-") and argv[j] != "--":
+            j += 2 if argv[j] in _GIT_GLOBAL_VALUED else 1
+        return ["git", *argv[j:]]
     return list(argv[i:])
 
 

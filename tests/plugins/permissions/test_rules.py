@@ -141,6 +141,10 @@ def test_an_allow_rule_still_covers_harmless_redirections() -> None:
     ("Bash(git push *)", "g'i't push origin main"),
     ("Bash(git push *)", "git 'push' origin main"),
     ("Bash(git push:*)", "command git push"),
+    ("Bash(git push *)", "git -C . push origin main"),
+    ("Bash(git push *)", "git -c core.x=y --no-pager -P push origin main"),
+    ("Bash(git push *)", "git --git-dir=.git --work-tree . push origin main"),
+    ("Bash(git push *)", "env git -C sub --namespace n push origin main"),
 ])
 def test_deny_and_ask_rules_see_through_quotes_and_runners(rule: str, command: str) -> None:
     assert m(rule, "Bash", command=command)
