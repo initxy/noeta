@@ -103,6 +103,8 @@ async def test_exit_plan_mode_outside_plan_mode_and_keep_planning(store: SqliteS
     await rt.run_until_idle()
     finished = [e for e in await events(client, tid) if isinstance(e, ToolFinished)][-1]
     assert finished.result.is_error and "not on" in finished.result.text
+    # It says how to plan, and that an approved plan means carrying on.
+    assert "EnterPlanMode" in finished.result.text and "approved" in finished.result.text
 
 
 def test_plan_name_parsing() -> None:

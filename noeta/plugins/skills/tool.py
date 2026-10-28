@@ -18,6 +18,8 @@ from noeta.toolkit.context import task_env
 from noeta.toolkit.tools import SCHEMA_DIALECT
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from noeta.plugins.skills.extension import Skills
 
 SKILL_TOOL = "Skill"
@@ -25,7 +27,20 @@ SKILL_TOOL = "Skill"
 _SKILL_PROP_DESCRIPTION = ("The skill's name exactly as the skill listing gives it, without "
                            "a leading slash; never a guessed name.")
 _ARGS_PROP_DESCRIPTION = "Optional text passed to the skill."
-_SKILL_NAME_MAX_LEN = 200
+#: A ``disable-model-invocation`` skill called through the tool.
+USER_ONLY_SKILL = (
+    "The skill {name} is marked disable-model-invocation: only the user can start it, so "
+    "the Skill tool will not run it. Ask the user to type /{name} themselves, and do not "
+    "carry out its steps by other means.")
+
+
+def skill_name(raw: Any) -> str | None:
+    """The name a ``Skill`` call asks for: trimmed, without a leading ``/``
+    (the model often writes the slash command); ``None`` when empty."""
+    if not isinstance(raw, str):
+        return None
+    name = raw.strip()
+    return (name[1:] if name.startswith("/") else name) or None
 
 
 def _skill_description() -> str:
@@ -58,17 +73,19 @@ class SkillTool:
         }
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
-        name = input.get("skill")
-        if not isinstance(name, str) or not name:
-            return text_output("skill must be a non-empty string", is_error=True)
-        if len(name) > _SKILL_NAME_MAX_LEN:
-            return text_output(f"skill too long (max {_SKILL_NAME_MAX_LEN})", is_error=True)
+        raw = input.get("skill")
+        name = skill_name(raw)
+        if name is None:
+            return text_output(f"Not a skill name: {raw!r}", is_error=True)
         registry = await self._owner.registry(task_env(ctx.env, {}))
         menu = registry.model_invocable(unlocked_skills(ctx.state.get(self._owner.name)))
         desc = registry.get(name)
+        if desc is not None and not desc.model_invocable:
+            return text_output(USER_ONLY_SKILL.format(name=name), is_error=True)
         if desc is None or name not in menu:
-            available = ", ".join(menu) if menu else "(none)"
-            return text_output(f"unknown skill {name!r}; available: {available}", is_error=True)
+            near = closest_name(name, menu)
+            hint = f" Did you mean {near}?" if near is not None else ""
+            return text_output(f"There is no skill named {name}.{hint}", is_error=True)
         args = input.get("args")
         if args is not None and not isinstance(args, str):
             return text_output("args must be a string", is_error=True)
@@ -77,6 +94,26 @@ class SkillTool:
             f"context from your next step.",
             skill_activation=activation_data(desc, "model", args, ctx.env.cwd),
         )
+
+
+def closest_name(name: str, names: Sequence[str], max_distance: int = 2) -> str | None:
+    """The name in ``names`` nearest to ``name`` by edit distance, if within
+    ``max_distance`` (first in order on a tie)."""
+    best: tuple[int, str] | None = None
+    for candidate in names:
+        d = _edit_distance(name, candidate)
+        if d <= max_distance and (best is None or d < best[0]):
+            best = (d, candidate)
+    return best[1] if best else None
+
+
+def _edit_distance(a: str, b: str) -> int:
+    row = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        prev, row[0] = row[0], i
+        for j, cb in enumerate(b, 1):
+            prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (ca != cb))
+    return row[-1]
 
 
 def activation_data(desc: SkillDescription, source: str,

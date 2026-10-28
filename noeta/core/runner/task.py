@@ -49,7 +49,7 @@ from noeta.core.runner import texts
 from noeta.core.runner.runtime import Runtime
 from noeta.core.store import Claim, NewTask, Post, Snapshot, patch_for, pin_history
 from noeta.core.tool import Tool
-from noeta.core.types import Text, ToolResult, user
+from noeta.core.types import Text, Thinking, ToolResult, user
 
 log = logging.getLogger("noeta.core.runner")
 
@@ -77,9 +77,10 @@ class TaskRun:
         self._lost = False
         self._write_lock = asyncio.Lock()
         self._env: Any = None
-        #: The text the model call in flight has streamed so far (what an
-        #: interrupted reply keeps).
+        #: The text the model call in flight has streamed so far, and the
+        #: reasoning blocks it finished (what an interrupted reply keeps).
         self.partial: list[str] = []
+        self.thinking: list[Thinking] = []
         #: An extension posted to this task's inbox with its records
         #: (``TaskView.enqueue``) since the input was last taken.
         self._enqueued = False
@@ -470,13 +471,25 @@ class TaskRun:
     async def flush(self, view: TaskView) -> None:
         if view.pending or view.creates or view.enqueued:
             events, view.pending = list(view.pending), []
-            await self.append(events, creates=self.staged(view), posts=self.enqueued(view))
+            await self.append(events, creates=self.staged(view),
+                              posts=await self.enqueued(view))
 
-    def enqueued(self, view: TaskView) -> list[Post]:
-        """The posts to itself ``view.enqueue`` staged, taken out of the view."""
+    async def enqueued(self, view: TaskView) -> list[Post]:
+        """The posts ``view.enqueue`` staged, taken out of the view; one to a
+        task that is not of this task's tenant is dropped."""
         staged, view.enqueued = list(view.enqueued), []
-        self._enqueued = self._enqueued or bool(staged)
-        return [Post(task_id=self.task_id, body=body, dedupe_key=key) for body, key in staged]
+        posts: list[Post] = []
+        for body, key, target in staged:
+            if target is not None and target != self.task_id:
+                row = await self.store.get(target)
+                if row is None or row.tenant != self.state.tenant:
+                    log.warning("task %s: post to unknown task %s dropped", self.task_id, target)
+                    continue
+            else:
+                target = self.task_id
+                self._enqueued = True
+            posts.append(Post(task_id=target, body=body, dedupe_key=key))
+        return posts
 
     @staticmethod
     def staged(view: TaskView) -> list[NewTask]:
@@ -617,11 +630,13 @@ class TaskRun:
     async def _stop_turn(self, call_ids: Sequence[str]) -> None:
         stopped = core_records.TurnStopped()
         if not call_ids and self.state.model_attempts:
-            # Stopped while the reply streamed: the streamed text stays in
-            # the conversation and the marker opens the person's next turn.
-            stopped = core_records.TurnStopped(partial="".join(self.partial),
-                                          marker=texts.INTERRUPTED_MARKER)
-        self.partial = []
+            # Stopped while the reply streamed: the streamed text and the
+            # reasoning finished before it stay in the conversation, and the
+            # marker opens the person's next turn.
+            stopped = core_records.TurnStopped(
+                partial="".join(self.partial), marker=texts.INTERRUPTED_MARKER,
+                thinking=list(self.thinking) or None)
+        self.partial, self.thinking = [], []
         await self._close_calls(call_ids, texts.STOPPED_CALL_ERROR, core_records.event(stopped),
                                 "the parent's turn was stopped")
 

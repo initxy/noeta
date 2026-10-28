@@ -33,6 +33,13 @@ from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
 SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp", "token")
 
+#: The top-level modules each optional extra installs (``pyproject.toml``).
+EXTRA_MODULES = {
+    "uvicorn": "server", "starlette": "server", "websockets": "server",
+    "textual": "tui", "acp": "acp", "psycopg": "postgres", "psycopg_pool": "postgres",
+    "PIL": "images", "keyring": "keyring",
+}
+
 
 def _common(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--model")
@@ -218,8 +225,33 @@ async def _worker(s: Settings, queues: list[str], concurrency: int,
     await app.store.close()
 
 
+def missing_extra(exc: BaseException) -> str | None:
+    """The extra whose module ``exc`` (or an exception it was raised from)
+    failed to import, or ``None`` when it is not an extra's module."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, ModuleNotFoundError) and cur.name:
+            extra = EXTRA_MODULES.get(cur.name.split(".", 1)[0])
+            if extra is not None:
+                return extra
+        cur = cur.__cause__ or cur.__context__
+    return None
+
+
 def main(argv: list[str] | None = None) -> None:
-    argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        _main(list(sys.argv[1:] if argv is None else argv))
+    except ImportError as exc:
+        extra = missing_extra(exc)
+        if extra is None:
+            raise
+        sys.exit(f"noeta: this needs the {extra} extra, which is not installed: "
+                 f"pip install 'noeta[{extra}]'")
+
+
+def _main(argv: list[str]) -> None:
     if not _subcommand(argv):
         _front(argv)
         return
@@ -296,10 +328,8 @@ def _front(argv: list[str]) -> None:
                    setting_sources=layers["sources"], flag_settings=layers["flag"],
                    agent_files=agent_files)
         sys.exit(asyncio.run(headless.run(app, s, args, cwd=cwd)))
-    try:
-        from noeta.cli.tui import run_tui
-    except ImportError:
-        sys.exit("noeta: the terminal UI needs the tui extra: pip install 'noeta[tui]'")
+    from noeta.cli.tui import run_tui
+
     run_tui(_settings(args), cwd=cwd, resume=args.resume, server=args.server,
             permission_mode=args.permission_mode)
 

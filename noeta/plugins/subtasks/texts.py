@@ -61,28 +61,34 @@ SEND_MESSAGE_PROP = (
     "it is about: a reader may see only that line at first."
 )
 SEND_SUMMARY_PROP = "A 5-10 word label for this send in your own transcript; it is not sent"
+SEND_NOTIFY_PROP = (
+    "Main conversation only: have another open session (from ListAgents) report back once, "
+    "the next time its turn ends with nothing waiting, or when it ends. With a message, the "
+    "message and the request go together; without one, only the request goes, and that "
+    "session's model never sees it."
+)
 LIST_FILTER_PROP = "Not available here; leave it out."
 
 # Refusals.
-NOTHING_RAN = "Nothing in this response ran: {reason}"
 EMPTY_PROMPT = "'prompt' is empty. Re-issue the call with the task the agent should carry out."
 MISSING_FIELDS = (
-    "Nothing in this response ran: every Agent call needs string 'description' and 'prompt' "
-    "arguments. Re-issue them with both set."
+    "An Agent call needs string 'description' and 'prompt' arguments. Re-issue it with both "
+    "set."
 )
 BAD_CHOICE = "'{field}' must be one of {choices}, got {value!r}."
 EXCLUSIVE = (
     "Nothing in this response ran: Agent cannot share a response with {name}. Re-issue the "
     "other calls in a separate response."
 )
-SPAWN_DENIED = (
-    "No agent was started: {reason}. None of this response's Agent calls ran; use one of the "
-    "available agent types, or do the work yourself."
+SPAWN_DENIED = "No agent was started: {reason}"
+UNKNOWN_AGENT = "there is no agent type {name!r}. Available agent types: {available}."
+AMBIGUOUS_AGENT = "agent type {name!r} could mean {matches}. Use the exact name."
+DEPTH_REACHED = (
+    "agents may nest only {n} levels deep, and this one is at depth {depth}. Do this task "
+    "yourself with your own tools instead of starting another agent."
 )
-UNKNOWN_AGENT = "there is no agent type {name!r} (available: {available})"
-DEPTH_REACHED = "agents may nest only {n} levels deep"
-FORK_IN_FORK = "a fork cannot start another fork"
-NO_REMOTE = "remote isolation is not available here; leave 'isolation' out or use \"worktree\""
+FORK_IN_FORK = "a fork cannot start another fork."
+NO_REMOTE = "remote isolation is not available here; leave 'isolation' out or use \"worktree\"."
 MAX_FANOUT = 16
 FANOUT_TOO_BIG = (
     "{n} Agent calls in one response is over the limit of {limit}. None were started; "
@@ -115,6 +121,12 @@ LAUNCHED = (
 LAUNCHED_FORK = (
     "\nA fork works on what it inherited; after launching it you know nothing about what it "
     "finds until its report arrives."
+)
+LAUNCHED_OUTPUT_FILE = (
+    "\noutput_file: {path}\n"
+    "Leave this file alone (no Read, cat or tail): it is the agent's entire conversation as "
+    "JSONL and would swamp your context. Asked how the agent is doing, say it is still "
+    "running; its completion notice will reach you."
 )
 
 # Child side.
@@ -200,8 +212,60 @@ RESUMED = (
 UNKNOWN_RECIPIENT = (
     "No agent or task named {to!r}. Use an id from ListAgents or from an Agent launch result."
 )
+NO_BROADCAST = 'There is no broadcast: to: "*" names no one. Send one message per recipient.'
 NO_CALLER = "\"main\" is the caller of a background sub-agent; this task has none."
 EMPTY_MESSAGE = "'message' is empty; there is nothing to send."
+IDLE_NOT_SENT = (
+    " Your message was not delivered either; send it again without notify_when_idle if it "
+    "should still go."
+)
+IDLE_MAIN_ONLY = "notify_when_idle works only from the main conversation, not from a sub-agent."
+IDLE_ROOT_TASKS_ONLY = (
+    "notify_when_idle works only for another open session listed by ListAgents, not for a "
+    "sub-agent or \"main\"."
+)
+IDLE_SELF = (
+    "notify_when_idle: {to} is this session; nothing was subscribed. You already know when "
+    "your own turn ends."
+)
+IDLE_GONE = "notify_when_idle: session {to} has ended; nothing was subscribed."
+IDLE_CAP = (
+    "notify_when_idle: this session already waits on {n} idle notices, the most it may; "
+    "nothing was subscribed. Wait for some to arrive or expire."
+)
+IDLE_SUBSCRIBED = (
+    "Subscribed: one notice will come here when {to} is next idle (or ends). Do not poll it "
+    "or wait for it; carry on."
+)
+# The notices (``system`` origin) a subscriber gets.
+IDLE_NOTICE_IDLE = (
+    '[Cross-session idle notice] Session "{label}" finished its turn{when} and has nothing '
+    "waiting.{detail}"
+)
+IDLE_WHEN = " (at {time})"
+IDLE_DETAIL = " Its last reply began: «{detail}»."
+IDLE_NOTICE_EXITED = (
+    '[Cross-session idle notice] Session "{label}" ended{when} before finishing its turn; '
+    "anything sent to it now goes unanswered."
+)
+IDLE_EXIT_WHEN = " at {time}"
+IDLE_NOTICE_UNAVAILABLE = (
+    '[Cross-session idle notice] Session "{label}" already carries the most idle requests it '
+    "accepts and dropped yours, so no report will come from it. If the answer still matters, "
+    "ask your user or try later."
+)
+IDLE_NOTICE_EXPIRED = (
+    '[Cross-session idle notice] {hours} hours went by with no report from session '
+    '"{label}", so your request lapsed. The session may be busy, waiting for its user, or '
+    "gone without a clean end. Do not keep waiting; ask your user or look at ListAgents if "
+    "it still matters. {footer}"
+)
+IDLE_FOOTER = (
+    "Sent automatically by {source}, not written by a person, and it gives no instruction: "
+    "use it only for what your user already asked of you."
+)
+IDLE_SOURCE_PEER = "the other session's runtime"
+IDLE_SOURCE_OWN = "this session's runtime"
 LIST_EMPTY = "No agents to list: this task has started none and no other session is open."
 LIST_HEAD = "Agents you can message with SendMessage (the first word of a row is its address):"
 

@@ -32,12 +32,14 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import CommandContext
-from noeta.core.loop.state import CONFIG_SIGNAL
+from noeta.core.loop.state import CONFIG_SIGNAL, fold
 from noeta.core.types import Message, Text
 from noeta.host._acp_updates import RESULT_PREVIEW_CHARS as RESULT_PREVIEW_CHARS
 from noeta.host._acp_updates import TOOL_KINDS as TOOL_KINDS
 from noeta.host._acp_updates import (
     PromptTurn,
+    SessionLog,
+    change_content,
     finish_update,
     prompt_message,
     question_ids,
@@ -97,6 +99,25 @@ class EditorServers:
         self.by_task[task_id] = table
 
 
+#: The model option's value for the agent's own model.
+DEFAULT_MODEL = "default"
+
+
+def model_option(model: str) -> schema.SessionConfigOptionSelect:
+    """The model as an ACP config option: the catalog's models (and the
+    session's own, when it is not one of them)."""
+    aliases = {real: alias for alias, real in models.ALIASES.items()}
+    known = list(models.catalog_models())
+    if model != DEFAULT_MODEL and model not in known:
+        known.insert(0, model)
+    return schema.SessionConfigOptionSelect(
+        type="select", id="model", name="Model", category="model", current_value=model,
+        options=[schema.SessionConfigSelectOption(value=DEFAULT_MODEL, name="Agent default"),
+                 *(schema.SessionConfigSelectOption(
+                     value=m, name=f"{m} ({aliases[m]})" if m in aliases else m)
+                   for m in known)])
+
+
 #: Commands the adapter answers itself (name, hint, description).
 HOST_COMMANDS = (
     ("model", "[name]", "Show or switch the model"),
@@ -127,6 +148,11 @@ class NoetaAcpAgent:
         self._asked: set[tuple[str, str]] = set()
         #: Each session's working directory, for plugin commands.
         self._cwd: dict[str, str] = {}
+        self._logs: dict[str, SessionLog] = {}
+        #: Each session's model and mode as last picked or recorded (a pick
+        #: reaches the log only when the task takes it).
+        self._model: dict[str, str] = {}
+        self._mode: dict[str, str] = {}
         self._background: set[asyncio.Task[None]] = set()
 
     def on_connect(self, conn: Any) -> None:
@@ -152,30 +178,73 @@ class NoetaAcpAgent:
             self.servers.add(task_id, mcp_servers)
         await self.app.client.wait(task_id, timeout=30)
         self._cwd[task_id] = cwd
-        modes = await self._modes(task_id)
+        modes, options = await self._config(task_id)
         # After the response, so the editor knows the session it names.
         announce = asyncio.create_task(self._announce_commands(task_id))
         self._background.add(announce)
         announce.add_done_callback(self._background.discard)
-        return schema.NewSessionResponse(session_id=task_id, modes=modes)
+        return schema.NewSessionResponse(session_id=task_id, modes=modes,
+                                         config_options=options)
 
-    async def _modes(self, task_id: str) -> schema.SessionModeState | None:
-        """The permission modes, as ACP session modes (none when the agent
-        records no mode: it has no permissions plugin)."""
+    async def _config(self, task_id: str) -> tuple[schema.SessionModeState | None,
+                                                   list[Any]]:
+        """The permission modes as ACP session modes (none when the agent
+        records no mode: it has no permissions plugin), and the session's
+        config options: the model, and the mode again (an editor that
+        shows config options prefers them to modes)."""
         events = await self.app.client.events(task_id)
-        mode = current_mode(events)
+        if task_id not in self._model:
+            st = fold(events, {})
+            called = [r.event.model for r in events if isinstance(r.event, ModelCalled)]
+            self._model[task_id] = str(st.config.get("model") or "") \
+                or (called[-1] if called else DEFAULT_MODEL)
+        options: list[Any] = [model_option(self._model[task_id])]
+        mode = self._mode.get(task_id) or current_mode(events)
         if mode is None:
-            return None
+            return None, options
         offered = published_modes(events) or Modes()
+        named = [(m, offered.names.get(m, m)) for m in offered.modes]
+        options.append(schema.SessionConfigOptionSelect(
+            type="select", id="mode", name="Mode", category="mode", current_value=mode,
+            options=[schema.SessionConfigSelectOption(value=m, name=n) for m, n in named]))
         return schema.SessionModeState(current_mode_id=mode, available_modes=[
-            schema.SessionMode(id=m, name=offered.names.get(m, m)) for m in offered.modes])
+            schema.SessionMode(id=m, name=n) for m, n in named]), options
+
+    async def _config_changed(self, session_id: str) -> Any:
+        _modes, options = await self._config(session_id)
+        return schema.ConfigOptionUpdate(session_update="config_option_update",
+                                         config_options=options)
 
     async def set_session_mode(self, session_id: str, mode_id: str,
                                **kw: Any) -> schema.SetSessionModeResponse:
+        await self._switch_mode(session_id, mode_id)
+        return schema.SetSessionModeResponse()
+
+    async def _switch_mode(self, session_id: str, mode_id: str) -> None:
         if mode_id not in PERMISSION_MODES:
             raise acp.RequestError(-32602, f"unknown mode {mode_id!r}")
         await self.app.client.signal(session_id, MODE_SIGNAL, {"mode": mode_id})
-        return schema.SetSessionModeResponse()
+        self._mode[session_id] = mode_id
+
+    async def _switch_model(self, session_id: str, model: str) -> str:
+        """Switch the session's model from its next request on (``default``:
+        back to the agent's own); the model now picked."""
+        real = models.resolve_alias(model)
+        await self.app.client.signal(session_id, CONFIG_SIGNAL,
+                                     {"model": None if real == DEFAULT_MODEL else real})
+        self._model[session_id] = real
+        return real
+
+    async def set_config_option(self, config_id: str, session_id: str, value: str | bool,
+                                **kw: Any) -> schema.SetSessionConfigOptionResponse:
+        if not isinstance(value, str) or config_id not in ("model", "mode"):
+            raise acp.RequestError(-32602, f"no config option {config_id!r} takes {value!r}")
+        if config_id == "model":
+            await self._switch_model(session_id, value)
+        else:
+            await self._switch_mode(session_id, value)
+        _modes, options = await self._config(session_id)
+        return schema.SetSessionConfigOptionResponse(config_options=options)
 
     def _command_context(self, session_id: str) -> CommandContext:
         return CommandContext(cwd=self._cwd.get(session_id) or os.getcwd(), task_id=session_id)
@@ -209,21 +278,44 @@ class NoetaAcpAgent:
         except UnknownAgent as exc:
             raise acp.RequestError(-32602, str(exc)) from exc
 
-    async def load_session(self, cwd: str, session_id: str, **kw: Any) -> None:
+    async def load_session(self, cwd: str, session_id: str,
+                           **kw: Any) -> schema.LoadSessionResponse:
         await self._adopt(session_id)
         await self.app.client.signal(session_id, RESUMED_SIGNAL)
         self._cwd[session_id] = cwd
+        log = self._logs[session_id] = SessionLog(cwd)
         for rec in await self.app.client.events(session_id):
-            for update in self._replay(rec):
+            for update in self._replay(rec, log):
                 await self.conn.session_update(session_id=session_id, update=update)
+        plan = log.plan_update(always=True)
+        if plan is not None:
+            await self.conn.session_update(session_id=session_id, update=plan)
         await self._announce_commands(session_id)
+        modes, options = await self._config(session_id)
+        return schema.LoadSessionResponse(modes=modes, config_options=options)
 
-    def _replay(self, rec: Recorded) -> list[Any]:
+    def _log(self, session_id: str) -> SessionLog:
+        log = self._logs.get(session_id)
+        if log is None:
+            log = self._logs[session_id] = SessionLog(self._cwd.get(session_id) or os.getcwd())
+        return log
+
+    async def _catch_up(self, session_id: str, upto: int) -> None:
+        """Take in what the session recorded up to ``upto`` that this adapter
+        has not followed (a mode switched between prompts)."""
+        log = self._log(session_id)
+        if log.seq < upto:
+            for rec in await self.app.client.events(session_id, after=log.seq):
+                if rec.seq <= upto:
+                    log.note(rec)
+
+    def _replay(self, rec: Recorded, log: SessionLog) -> list[Any]:
         ev = rec.event
+        call = log.note(rec)
         if isinstance(ev, ModelReplied):
             return start_updates(ev, streamed_text=False)
         if isinstance(ev, ToolFinished):
-            return [finish_update(ev)]
+            return [finish_update(ev, call)]
         if hasattr(ev, "items"):
             return [acp.update_user_message_text(i.body.message.text)
                     for i in ev.items if isinstance(i.body, Say)]
@@ -244,6 +336,7 @@ class NoetaAcpAgent:
         await self._adopt(session_id)
         row = await client.get(session_id)
         after = row.last_seq
+        await self._catch_up(session_id, after)
         asked = [p for p in await pending_tree(client, session_id) if p.kind == "question"]
         turn = PromptTurn(session_id)
         unsubscribe = self.app.deltas(turn.on_delta)
@@ -303,9 +396,12 @@ class NoetaAcpAgent:
         client = self.app.client
         if name == "model":
             if not arg:
-                return f"model: {self.model or '(the agent default)'}"
-            real = models.resolve_alias(arg)
-            await client.signal(session_id, CONFIG_SIGNAL, {"model": real})
+                await self._config(session_id)
+                shown = self._model[session_id]
+                return f"model: {'(the agent default)' if shown == DEFAULT_MODEL else shown}"
+            real = await self._switch_model(session_id, arg)
+            await self.conn.session_update(session_id=session_id,
+                                           update=await self._config_changed(session_id))
             return f"model set to {real} from the next request on"
         if name == "cost":
             return cost_text(await tree_usage(client, session_id))
@@ -349,12 +445,14 @@ class NoetaAcpAgent:
         prompt's message (the inbox seq ``send`` returned); everything
         before it (the previous turn's tail, unrelated input) is skipped."""
         out = turn.out
+        log = self._log(session_id)
         async for rec in follow_tree(self.app.client, session_id, after):
             if isinstance(rec, list):  # what sub-agents wait on the user for
                 if await self._child_requests(session_id, rec, out):
                     return "end_turn"
                 continue
             ev = rec.event
+            call = log.note(rec)
             if turn.input_seq is None:
                 if isinstance(ev, InputTaken) and any(i.seq == turn.seq for i in ev.items):
                     turn.start(rec.seq)
@@ -370,12 +468,15 @@ class NoetaAcpAgent:
             elif isinstance(ev, ToolStarted):
                 out.put_nowait(acp.update_tool_call(ev.call.id, status="in_progress"))
             elif isinstance(ev, ToolFinished):
-                out.put_nowait(finish_update(ev))
+                out.put_nowait(finish_update(ev, call))
+                if (plan := log.plan_update()) is not None:
+                    out.put_nowait(plan)
             elif isinstance(ev, ExtensionRecorded) and ev.extension == "permissions" \
-                    and current_mode([rec]):
+                    and (mode := current_mode([rec])):
+                self._mode[session_id] = mode
                 out.put_nowait(schema.CurrentModeUpdate(
-                    session_update="current_mode_update",
-                    current_mode_id=current_mode([rec]) or ""))
+                    session_update="current_mode_update", current_mode_id=mode))
+                out.put_nowait(await self._config_changed(session_id))
             elif isinstance(ev, ExtensionRecorded) and (core := records.decode(ev)) is not None:
                 if isinstance(core, records.Retry):
                     turn.retried(int(core.attempt or 1))
@@ -433,20 +534,26 @@ class NoetaAcpAgent:
     async def _ask_permissions(self, session_id: str, waiting: Waiting) -> None:
         for p in pending(await self.app.client.events(session_id), session_id):
             if p.kind == "approval" and p.request_id in waiting.ids:
+                call = self._log(session_id).calls.get(p.request_id)
                 await self._ask_one(session_id, session_id, p.request_id,
                                     card_title(p, session_id), choices(p.detail),
-                                    card_prompt(p))
+                                    card_prompt(p),
+                                    change_content(call) if call is not None else None)
 
     async def _ask_one(self, session_id: str, task_id: str, call_id: str, title: str,
-                       options: list[dict[str, str]], prompt: str = "") -> None:
+                       options: list[dict[str, str]], prompt: str = "",
+                       change: list[Any] | None = None) -> None:
         kinds = {"allow": "allow_once", "always": "allow_always", "deny": "reject_once"}
-        body: list[Any] | None = [acp.tool_content(acp.text_block(prompt))] if prompt else None
+        # The card's content replaces the call's: the diff stays on it.
+        body: list[Any] = [*(change or ()),
+                           *([acp.tool_content(acp.text_block(prompt))] if prompt else ())]
         resp = await self.conn.request_permission(
             session_id=session_id, options=[
                 schema.PermissionOption(option_id=o["id"], name=o["label"],
                                         kind=kinds.get(o["id"], "allow_once"))  # type: ignore[arg-type]
                 for o in options],
-            tool_call=schema.ToolCallUpdate(tool_call_id=call_id, title=title, content=body))
+            tool_call=schema.ToolCallUpdate(tool_call_id=call_id, title=title,
+                                            content=body or None))
         chosen = getattr(resp.outcome, "option_id", None)
         known = {o["id"] for o in options}
         await answer_choice(self.app.client, task_id, call_id,

@@ -11,7 +11,11 @@ Kinds:
 - ``read`` — ``{"path", "digest", "mtime", "range"?}``: the model has seen
   ``path`` whose raw bytes hash (sha256 hex) to ``digest``; ``range``
   (``[offset, limit]``) is set by ``Read`` and is what an unchanged re-read
-  of the same range is answered from. ``Edit`` and ``Write``
+  of the same range is answered from; ``partial`` marks a read cut to fit
+  the token ceiling, which counts as not read for ``Edit`` / ``Write`` and is
+  never answered as unchanged; ``whole: false`` marks a view that was not
+  the whole file (a window, or an edit made without the file in view), which
+  takes the file-state note off ``Edit``'s result. ``Edit`` and ``Write``
   refuse to change a file without an entry whose digest still matches the
   bytes on disk. A successful write records the new digest, so consecutive
   edits chain without a re-read.
@@ -20,6 +24,9 @@ Kinds:
   change.
 - ``forget_ranges`` — a compaction dropped the earlier results: no re-read is
   answered from them.
+- ``notice`` — ``{"text"}``: a note for the model to get after this call's
+  result (a cut read's paging hint); ``notice_sent`` (the reminder that
+  carried it) clears it.
 
 An unknown kind or malformed data leaves the state unchanged.
 """
@@ -37,6 +44,8 @@ __all__ = [
     "FS",
     "KIND_CHANGED",
     "KIND_FORGET_RANGES",
+    "KIND_NOTICE",
+    "KIND_NOTICE_SENT",
     "KIND_READ",
     "FileRead",
     "FsState",
@@ -49,6 +58,8 @@ FS = "fs"
 KIND_READ = "read"
 KIND_CHANGED = "changed"
 KIND_FORGET_RANGES = "forget_ranges"
+KIND_NOTICE = "notice"
+KIND_NOTICE_SENT = "notice_sent"
 
 
 class FileRead(Struct):
@@ -56,6 +67,11 @@ class FileRead(Struct):
     mtime: float = 0.0
     #: ``[offset, limit]`` of the ``Read`` that recorded this, if one did.
     range: list[int] | None = None
+    #: The read was cut to fit the token ceiling: the model saw only part.
+    partial: bool = False
+    #: The model had the whole file in view (a read from the top to the end,
+    #: or what it wrote itself over such a view).
+    whole: bool = True
 
 
 class FsState(Struct):
@@ -64,6 +80,8 @@ class FsState(Struct):
     reads: dict[str, FileRead] = msgspec.field(default_factory=dict)
     #: Path -> the digest the model was last told the file changed to.
     noticed: dict[str, str] = msgspec.field(default_factory=dict)
+    #: Notes waiting to reach the model after the results they belong to.
+    notices: list[str] = msgspec.field(default_factory=list)
 
     def digest(self, path: str) -> str | None:
         entry = self.reads.get(path)
@@ -88,8 +106,20 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
             lines = None
         reads = dict(base.reads)
         reads.pop(path, None)
-        reads[path] = FileRead(digest=digest, mtime=float(mtime), range=lines)
+        reads[path] = FileRead(digest=digest, mtime=float(mtime), range=lines,
+                               partial=data.get("partial") is True,
+                               whole=data.get("whole") is not False)
         return msgspec.structs.replace(base, reads=reads)
+    if kind in (KIND_NOTICE, KIND_NOTICE_SENT):
+        text = data.get("text")
+        if not isinstance(text, str):
+            return base
+        notices = list(base.notices)
+        if kind == KIND_NOTICE:
+            notices.append(text)
+        elif text in notices:
+            notices.remove(text)
+        return msgspec.structs.replace(base, notices=notices)
     if kind == KIND_FORGET_RANGES:
         return msgspec.structs.replace(base, reads={
             p: msgspec.structs.replace(r, range=None) for p, r in base.reads.items()})

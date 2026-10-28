@@ -20,6 +20,8 @@ background jobs; without them this tool refuses them.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import posixpath
 import re
 import shlex
@@ -29,7 +31,9 @@ from typing import Any
 
 from noeta.core.execenv import RunResult
 from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.types import Image, Text
 from noeta.plugins.shell.hardening import DEFAULT_SHELL_RULES, HardeningRule, hardened_argv
+from noeta.toolkit.images import ImageTooLarge, fit_image
 from noeta.toolkit.sandbox import (
     CommandSandbox,
     PreparedCommand,
@@ -144,6 +148,71 @@ def resolve_timeout(raw: Any, default_s: int) -> int:
         return default_s
     ms = min(int(raw), MAX_SHELL_TIMEOUT_MS)
     return max(1, ms // 1000)
+
+
+#: Commands whose exit status 1 is an answer, not a failure (no match, a
+#: difference, a false condition): Claude Code's table. Status 2 and up
+#: still fail.
+_EXIT_ONE_ANSWERS = frozenset({"grep", "rg", "egrep", "fgrep", "find", "diff", "test", "["})
+#: ``git`` subcommands read the same way.
+_GIT_EXIT_ONE_ANSWERS = frozenset({"diff", "grep"})
+#: Where a command line is split into its last command when it cannot be
+#: parsed.
+_COMMAND_SEPARATOR = re.compile(r"&&|\|\||[;|\n]")
+
+
+def _last_command(command: str) -> list[str]:
+    """The words of the command line's last command (what decides its exit
+    status), by the parser when it can read the line, else by splitting on
+    the control operators."""
+    parsed = parse(command)
+    if not parsed.opaque:
+        return parsed.commands[-1].argv if parsed.commands else []
+    return _COMMAND_SEPARATOR.split(command)[-1].split()
+
+
+def exit_fails(command: str, exit_code: int) -> bool:
+    """Whether ``exit_code`` makes ``command`` an error result."""
+    if exit_code == 0:
+        return False
+    if exit_code != 1:
+        return True
+    argv = _last_command(command)
+    name = argv[0] if argv else ""
+    if name == "git":
+        i = 1
+        while i < len(argv) and argv[i].startswith("-"):
+            i += 2 if argv[i] in ("-C", "-c") else 1
+        return i >= len(argv) or argv[i] not in _GIT_EXIT_ONE_ANSWERS
+    return name not in _EXIT_ONE_ANSWERS
+
+
+_IMAGE_URI = re.compile(r"data:image/[a-z0-9.+_-]+;base64,(.+)", re.IGNORECASE | re.DOTALL)
+_IMAGE_MAGIC = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"),
+                (b"GIF87a", "image/gif"), (b"GIF89a", "image/gif"))
+
+
+def output_image(body: str) -> Image | None:
+    """An image a command printed as one ``data:image/...;base64,`` URI
+    (Claude Code shows such output as the picture), typed by its bytes and
+    fitted to the size limits; ``None`` for anything else."""
+    match = _IMAGE_URI.fullmatch(body.strip())
+    if match is None:
+        return None
+    try:
+        raw = base64.b64decode("".join(match.group(1).split()), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    media = next((m for magic, m in _IMAGE_MAGIC if raw.startswith(magic)), None)
+    if media is None and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        media = "image/webp"
+    if media is None:
+        return None
+    try:
+        fitted = fit_image(raw, media)
+    except ImageTooLarge:
+        return None
+    return Image(media_type=fitted.media_type, data=fitted.data)
 
 
 def _blocked_sleep(described: str) -> str:
@@ -442,27 +511,14 @@ class BashTool:
         prelude = git_prelude(command, guard_root(ws, ctx)) if self.hardening_rules else ""
         hardened = None if prelude else hardened_argv(command, self.hardening_rules)
         track = hardened is None
-        if hardened is not None:
-            exec_argv = ["bash", "-c", 'exec 2>&1; exec "$@"', "bash", *hardened]
-        else:
-            exec_argv = ["bash", "-c", _track_cwd(prelude + command)]
-
-        confined = await confine(env, command, input.get("dangerouslyDisableSandbox"),
-                                 exec_argv, cwd)
-        if isinstance(confined, str):
-            return tool_error(self.name, confined)
-        try:
-            result = await env.run(
-                confined.argv if confined else exec_argv,
-                cwd=cwd,
-                env={**self._command_env(ctx), **(confined.env if confined else {})},
-                timeout=float(timeout_s),
-                output_cap=self.output_cap,
-            )
-        finally:
-            refused = confined.violations() if confined else []
-            if confined:
-                await confined.close()
+        description = input.get("description")
+        ran = await self._execute(
+            ctx, command=command, script=prelude + command, hardened=hardened, cwd=cwd,
+            timeout_s=timeout_s, disable=input.get("dangerouslyDisableSandbox"),
+            description=description if isinstance(description, str) else "")
+        if isinstance(ran, ToolOutput):
+            return ran
+        result, refused = ran
         stdout, stderr = result.stdout, result.stderr
         final, left = cwd, False
         if track:
@@ -483,7 +539,11 @@ class BashTool:
         if result.timed_out:
             meta["timed_out"] = True
         ran_ok = not result.timed_out and result.exit_code == 0
-        if ran_ok and not body:
+        failed = result.timed_out or exit_fails(command, result.exit_code)
+        image = None if failed or notice else output_image(body)
+        if image is not None:
+            body = ""
+        if not failed and not body and image is None:
             body = NO_OUTPUT
         # Only the root task's shell keeps a directory, and only one a
         # command ended in successfully.
@@ -500,13 +560,45 @@ class BashTool:
             meta["cwd"] = final
         if refused:
             block = violations_block(refused)
-            body = block if body == NO_OUTPUT else f"{body}\n{block}"
+            body = block if body in (NO_OUTPUT, "") else f"{body}\n{block}"
+        if image is not None:
+            return ToolOutput(content=[image, *([Text(text=body)] if body else [])],
+                              meta=meta, block_list=True)
         body = await limit_output(body, SHELL_OUTPUT_LIMIT, ctx)
         if result.timed_out:
             return error_output(f"Command timed out after {timeout_s}s", body, **meta)
-        if result.exit_code != 0:
+        if failed:
             return error_output(f"Exit code {result.exit_code}", body, **meta)
         return text_output(body, **meta)
+
+    async def _execute(self, ctx: ToolContext, *, command: str, script: str,
+                       hardened: list[str] | None, cwd: str, timeout_s: int, disable: Any,
+                       description: str) -> tuple[RunResult, list[str]] | ToolOutput:
+        """Run the command (``script`` through ``bash -c``, tracked; or the
+        ``hardened`` argv) and return what it printed with the hosts the
+        sandbox refused, or the call's result when it ends some other way.
+        A tracked command's final directory follows its output on a marker
+        line (:func:`_split_cwd`)."""
+        if hardened is not None:
+            exec_argv = ["bash", "-c", 'exec 2>&1; exec "$@"', "bash", *hardened]
+        else:
+            exec_argv = ["bash", "-c", _track_cwd(script)]
+        confined = await confine(ctx.env, command, disable, exec_argv, cwd)
+        if isinstance(confined, str):
+            return tool_error(self.name, confined)
+        try:
+            result = await ctx.env.run(
+                confined.argv if confined else exec_argv,
+                cwd=cwd,
+                env={**self._command_env(ctx), **(confined.env if confined else {})},
+                timeout=float(timeout_s),
+                output_cap=self.output_cap,
+            )
+        finally:
+            refused = confined.violations() if confined else []
+            if confined:
+                await confined.close()
+        return result, refused
 
     async def _start_cwd(self, ws: Workspace, ctx: ToolContext) -> tuple[str, bool]:
         """Where this command starts, and whether the recorded directory had

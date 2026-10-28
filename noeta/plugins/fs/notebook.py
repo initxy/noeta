@@ -10,6 +10,7 @@ indent.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from typing import Any
 
@@ -53,11 +54,18 @@ def _schema() -> dict[str, Any]:
     }
 
 
-def _find(cells: list[Any], cell_id: str) -> int | None:
+def _find(cells: list[Any], cell_id: str) -> int | str:
+    """The index of the cell ``cell_id`` names: its ``id``, or else the
+    ``cell-<index>`` form (Claude Code accepts it for any notebook); or why
+    there is none."""
     for i, cell in enumerate(cells):
-        if isinstance(cell, dict) and (cell.get("id") or f"cell-{i}") == cell_id:
+        if isinstance(cell, dict) and cell.get("id") == cell_id:
             return i
-    return None
+    m = re.fullmatch(r"cell-(\d+)", cell_id)
+    if m is None:
+        return f"no cell with id {cell_id!r}"
+    index = int(m.group(1))
+    return index if index < len(cells) else f"no cell at index {index} in the notebook"
 
 
 def _source(text: str) -> list[str]:
@@ -87,21 +95,34 @@ def _input_error(input: dict[str, Any], path: str) -> str | None:
     return None
 
 
+def _has_cell_ids(nb: dict[str, Any]) -> bool:
+    """Cell ids exist from nbformat 4.5 on; an older notebook gets none."""
+    major, minor = nb.get("nbformat"), nb.get("nbformat_minor")
+    if not isinstance(major, int) or not isinstance(minor, int):
+        return False
+    return major > 4 or (major == 4 and minor >= 5)
+
+
 def _apply(cells: list[Any], mode: str, index: int | None, cell_id: str | None,
-           cell_type: str | None, source: str) -> str:
-    """Make the edit in ``cells``; what was done."""
+           cell_type: str | None, source: str, *, ids: bool) -> str:
+    """Make the edit in ``cells``; the result line (Claude Code's: the cell
+    and, for a replace or insert, the source now in it)."""
     if mode == "delete":
         assert index is not None
         cells.pop(index)
         return f"Deleted cell {cell_id}"
     if mode == "insert":
-        new_id = secrets.token_hex(4)
-        cell: dict[str, Any] = {"cell_type": cell_type, "id": new_id, "metadata": {},
+        at = 0 if index is None else index + 1
+        cell: dict[str, Any] = {"cell_type": cell_type, "metadata": {},
                                 "source": _source(source)}
+        # Without ids the cell is named the way Read shows it.
+        new_id = secrets.token_hex(4) if ids else f"cell-{at}"
+        if ids:
+            cell["id"] = new_id
         if cell_type == "code":
             cell.update(execution_count=None, outputs=[])
-        cells.insert(0 if index is None else index + 1, cell)
-        return f"Inserted cell {new_id}"
+        cells.insert(at, cell)
+        return f"Inserted cell {new_id} with {source}"
     assert index is not None
     cell = cells[index]
     cell["source"] = _source(source)
@@ -113,7 +134,7 @@ def _apply(cells: list[Any], mode: str, index: int | None, cell_id: str | None,
     if cell.get("cell_type") == "code":
         cell["execution_count"] = None
         cell["outputs"] = []
-    return f"Updated cell {cell_id}"
+    return f"Updated cell {cell_id} with {source}"
 
 
 class NotebookEditTool:
@@ -163,14 +184,17 @@ class NotebookEditTool:
         if not isinstance(cells, list):
             return tool_error(self.name, "the notebook has no cells array")
 
-        index = _find(cells, cell_id) if cell_id else None
-        if cell_id and index is None:
-            return tool_error(self.name, f"no cell with id {cell_id!r}")
-        done = _apply(cells, mode, index, cell_id, cell_type, source)
+        found = _find(cells, cell_id) if cell_id else None
+        if isinstance(found, str):
+            return tool_error(self.name, found)
+        index = found
+        replaced = cells[index].get("source") if index is not None and mode != "insert" else None
+        old_source = "".join(replaced) if isinstance(replaced, list) else replaced
+        done = _apply(cells, mode, index, cell_id, cell_type, source, ids=_has_cell_ids(nb))
         body = (json.dumps(nb, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
         try:
             await env.write_bytes(resolved, body)
         except OSError as exc:
             return tool_error(self.name, f"write failed: {exc}")
         await record_written(ctx, resolved, body)
-        return text_output(f"{done} in {resolved}.", path=ws.relative(resolved), mode=mode)
+        return text_output(done, path=ws.relative(resolved), mode=mode, old_source=old_source)

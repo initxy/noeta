@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ASK_USER_QUESTION_TOOL",
+    "SINGLE_OPTION_ERROR",
     "WITHDRAWN_ERROR",
     "AnswerValidationError",
     "AskUser",
@@ -50,13 +51,16 @@ _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MAX_QUESTIONS = 4
 _MIN_OPTIONS = 2
 _MAX_OPTIONS = 4
-_MAX_QUESTION_TEXT_LEN = 500
-_MAX_HEADER_LEN = 12
-_MAX_OPTION_LABEL_LEN = 80
-_MAX_OPTION_DESCRIPTION_LEN = 300
-_MAX_PREVIEW_LEN = 20_000
 
 WITHDRAWN_ERROR = "Question withdrawn by user (no answer provided)."
+#: A question with one option (or none) has nothing to decide; the model is
+#: steered to go ahead with that path instead of padding the list.
+SINGLE_OPTION_ERROR = (
+    "This call was refused and none of it reached the user: a question offered fewer than "
+    "2 options, and a question needs at least two answers to be a choice. If only one "
+    "approach makes sense, adopt it, say which, and keep working instead of asking or "
+    "inventing alternatives. The call's questions that had 2-4 distinct options can go in a "
+    "new call on their own.")
 #: Leads the result of a call whose posted answer did not fit the questions.
 INVALID_ANSWER_ERROR = "The user's answer could not be used: {error}"
 
@@ -190,23 +194,19 @@ def _options(raw: Any) -> tuple[list[dict[str, Any]], str | None]:
         if not isinstance(item, dict):
             return [], "each option must be an object"
         label = item.get("label")
-        if not isinstance(label, str) or not label:
-            return [], "each option needs a non-empty string label"
-        if len(label) > _MAX_OPTION_LABEL_LEN:
-            return [], f"option label too long (max {_MAX_OPTION_LABEL_LEN})"
+        if not isinstance(label, str):
+            return [], "each option needs a label string"
         if label in seen:
             return [], f"duplicate option label: {label!r}"
         seen.add(label)
         description = item.get("description")
-        if not isinstance(description, str) or not description:
-            return [], "each option needs a non-empty string description"
-        if len(description) > _MAX_OPTION_DESCRIPTION_LEN:
-            return [], f"option description too long (max {_MAX_OPTION_DESCRIPTION_LEN})"
+        if not isinstance(description, str):
+            return [], "each option needs a description string"
         option = {"label": label, "description": description}
         preview = item.get("preview")
         if preview is not None:
-            if not isinstance(preview, str) or len(preview) > _MAX_PREVIEW_LEN:
-                return [], f"option preview must be a string of at most {_MAX_PREVIEW_LEN} chars"
+            if not isinstance(preview, str):
+                return [], "option preview must be a string"
             option["preview"] = preview
         out.append(option)
     return out, None
@@ -222,20 +222,21 @@ def validate_questions(arguments: Any) -> list[dict[str, Any]] | str:
         return "questions must be a list"
     if not 1 <= len(raw) <= _MAX_QUESTIONS:
         return f"questions must contain 1-{_MAX_QUESTIONS} items"
+    if any(isinstance(item, dict) and isinstance(item.get("options"), list)
+           and len(item["options"]) < _MIN_OPTIONS for item in raw):
+        return SINGLE_OPTION_ERROR
     questions: list[dict[str, Any]] = []
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             return "each question must be an object"
         question = item.get("question")
-        if not isinstance(question, str) or not question:
-            return "each question needs a non-empty question string"
-        if len(question) > _MAX_QUESTION_TEXT_LEN:
-            return f"question too long (max {_MAX_QUESTION_TEXT_LEN})"
+        if not isinstance(question, str):
+            return "each question needs a question string"
+        if any(q["question"] == question for q in questions):
+            return f"two questions have the same text: {question!r}; each question must differ"
         header = item.get("header")
-        if not isinstance(header, str) or not header:
-            return "each question needs a non-empty header"
-        if len(header) > _MAX_HEADER_LEN:
-            return f"header too long (max {_MAX_HEADER_LEN} chars)"
+        if not isinstance(header, str):
+            return "each question needs a header string"
         multi = item.get("multiSelect", False)
         if not isinstance(multi, bool):
             return "multiSelect must be a boolean"
@@ -266,22 +267,33 @@ def validate_answer(call_input: dict[str, Any], data: Any) -> dict[str, dict[str
 
 def render_answers(questions: list[dict[str, Any]], answers: dict[str, dict[str, Any]]) -> str:
     """The result the model reads: each question with what the user chose
-    (labels, then any typed text), a chosen option's preview after it."""
+    (labels, then any typed text), a chosen option's preview after it.
+    When some answer is the user's own text rather than listed options, the
+    closing line tells the model to read it as written: it may ask for
+    something other than a choice."""
     parts: list[str] = []
+    only_options = True
     for q in questions:
         answer = answers.get(q["id"]) or {}
         chosen = list(answer.get("selected") or [])
         other = answer.get("other")
         if isinstance(other, str) and other.strip():
             chosen.append(other.strip())
+        labels = {o["label"] for o in q["options"]}
+        if not all(c in labels for c in chosen) or (len(chosen) > 1 and not q["multiSelect"]):
+            only_options = False
         part = f'"{q["question"]}"="{", ".join(chosen)}"'
         previews = [o["preview"] for o in q["options"]
                     if o.get("preview") and o["label"] in (answer.get("selected") or [])]
         if previews:
             part += " selected preview:\n" + "\n".join(previews)
         parts.append(part)
-    return ("The user answered your questions: " + ", ".join(parts)
-            + ". Go on with these answers in mind.")
+    if only_options:
+        return ("The user answered your questions: " + ", ".join(parts)
+                + ". Go on with these answers in mind.")
+    return ("The user replied: " + ", ".join(parts) + ". What they wrote may ask for "
+            "clarification, for changes, or for you to stop: read it closely and do what "
+            "it actually says.")
 
 
 class AskUserQuestionTool:

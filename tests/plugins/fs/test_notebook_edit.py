@@ -31,21 +31,43 @@ async def test_replace_insert_delete(h: Harness, ws: Path) -> None:
     assert refused.is_error and "Read it first" in text_of(refused)
     await h.call(ReadTool(), file_path="a.ipynb")
     out = await h.call(tool, notebook_path="a.ipynb", cell_id="c1", new_source="y = 2\ny")
-    assert text_of(out) == f"Updated cell c1 in {path}."
+    assert text_of(out) == "Updated cell c1 with y = 2\ny"
     [code, _md] = _cells(path)
     assert code["source"] == ["y = 2\n", "y"] and code["outputs"] == []
     assert code["execution_count"] is None
     out = await h.call(tool, notebook_path="a.ipynb", cell_id="c1", new_source="note",
                        edit_mode="insert", cell_type="markdown")
-    assert text_of(out).startswith("Inserted cell ")
+    assert text_of(out).startswith("Inserted cell ") and text_of(out).endswith(" with note")
     assert [c["cell_type"] for c in _cells(path)] == ["code", "markdown", "markdown"]
     first = await h.call(tool, notebook_path="a.ipynb", new_source="import os",
                          edit_mode="insert", cell_type="code")
     assert not first.is_error and _cells(path)[0]["source"] == ["import os"]
     gone = await h.call(tool, notebook_path="a.ipynb", cell_id="m1", new_source="",
                         edit_mode="delete")
-    assert text_of(gone) == f"Deleted cell m1 in {path}."
+    assert text_of(gone) == "Deleted cell m1"
     assert "m1" not in [c["id"] for c in _cells(path)]
+
+
+async def test_a_cell_can_be_named_by_its_index(h: Harness, ws: Path) -> None:
+    path = _nb(ws)
+    await h.call(ReadTool(), file_path="a.ipynb")
+    tool = NotebookEditTool()
+    out = await h.call(tool, notebook_path="a.ipynb", cell_id="cell-1", new_source="# New")
+    assert not out.is_error, text_of(out)
+    assert _cells(path)[1]["source"] == ["# New"]
+    out = await h.call(tool, notebook_path="a.ipynb", cell_id="cell-2", new_source="x")
+    assert text_of(out) == "NotebookEdit: no cell at index 2 in the notebook"
+
+
+async def test_a_notebook_before_4_5_gets_no_cell_ids(h: Harness, ws: Path) -> None:
+    path = ws / "old.ipynb"
+    path.write_text(json.dumps({"nbformat": 4, "nbformat_minor": 2, "metadata": {}, "cells": [
+        {"cell_type": "markdown", "metadata": {}, "source": ["# A"]}]}))
+    await h.call(ReadTool(), file_path="old.ipynb")
+    out = await h.call(NotebookEditTool(), notebook_path="old.ipynb", cell_id="cell-0",
+                       new_source="b", edit_mode="insert", cell_type="markdown")
+    assert text_of(out) == "Inserted cell cell-1 with b"
+    assert all("id" not in c for c in _cells(path))
 
 
 async def test_bad_calls(h: Harness, ws: Path) -> None:
@@ -66,3 +88,17 @@ def test_schema_and_deferral() -> None:
     tool = NotebookEditTool()
     assert tool.deferred and tool.input_schema["required"] == ["notebook_path", "new_source"]
     assert tool.input_schema["additionalProperties"] is False
+
+
+async def test_the_result_carries_the_cell_source_it_replaced(h: Harness, ws: Path) -> None:
+    _nb(ws)
+    await h.call(ReadTool(), file_path="a.ipynb")
+    tool = NotebookEditTool()
+    out = await h.call(tool, notebook_path="a.ipynb", cell_id="c1", new_source="y")
+    assert out.meta["old_source"] == "x = 1\nx"
+    out = await h.call(tool, notebook_path="a.ipynb", new_source="z", edit_mode="insert",
+                       cell_type="code")
+    assert out.meta["old_source"] is None
+    out = await h.call(tool, notebook_path="a.ipynb", cell_id="m1", new_source="",
+                       edit_mode="delete")
+    assert out.meta["old_source"] == "# Title"

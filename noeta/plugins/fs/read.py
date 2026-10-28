@@ -13,16 +13,18 @@ short note instead of the content again (Claude Code's dedupe).
 from __future__ import annotations
 
 import asyncio
-import codecs
 import hashlib
+import math
 import posixpath
+import re
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from noeta.core.execenv import ExecEnv
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.core.types import Image, Text
+from noeta.core.types import Image
+from noeta.plugins.fs._missing import missing_file_message
 from noeta.plugins.fs._read_formats import (
     MAX_READ_TOKENS,
     read_notebook,
@@ -30,7 +32,7 @@ from noeta.plugins.fs._read_formats import (
     read_size_tokens,
     too_many_tokens,
 )
-from noeta.plugins.fs.state import FS, KIND_READ, current_fs_state
+from noeta.plugins.fs.state import FS, KIND_NOTICE, KIND_READ, current_fs_state
 from noeta.toolkit.images import ImageTooLarge, fit_image
 from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
@@ -41,7 +43,7 @@ from noeta.toolkit.tools import (
     tool_error,
 )
 
-__all__ = ["FILE_UNCHANGED", "IMAGE_MAX_BYTES", "ReadTool"]
+__all__ = ["BINARY_EXTENSIONS", "FILE_UNCHANGED", "IMAGE_MAX_BYTES", "ReadTool"]
 
 #: The answer to a repeated read of an unchanged range.
 FILE_UNCHANGED = (
@@ -51,11 +53,9 @@ FILE_UNCHANGED = (
 _LARGE_FACTOR = 8
 _JS_MAX_SAFE = 9007199254740991
 
-
-_DEFAULT_READ_LIMIT = 2000  # lines
-#: Per-line visible-char cap: a minified file can be one multi-MB line.
-_MAX_LINE_CHARS = 2000
-_LINE_TRUNC_MARKER = " … [line truncated]"
+#: Without ``limit`` every line is read (Claude Code's reader sets no line
+#: count of its own); the size and token ceilings bound the window instead.
+_ALL_LINES = _JS_MAX_SAFE
 
 #: Claude Code's whole-file ceiling for a read without ``limit`` (256 KB).
 _READ_MAX_FILE_BYTES = 262_144
@@ -65,23 +65,61 @@ _READ_MAX_FILE_BYTES = 262_144
 _READ_MAX_SERVED_BYTES = MAX_READ_TOKENS * 4 * 4
 _READ_CHUNK_BYTES = 1024 * 1024
 _SNIFF_BYTES = 16
-#: Bytes of one line kept while streaming: enough for ``_MAX_LINE_CHARS``
-#: characters of up to four UTF-8 bytes each, plus a trailing ``\r``.
-_LINE_KEEP_BYTES = _MAX_LINE_CHARS * 4 + 1
 
 #: Largest image file read at all (Claude Code's); what is read is then made
 #: to fit a request by :func:`noeta.toolkit.images.fit_image`.
 IMAGE_MAX_BYTES = 128 * 1024 * 1024
 
-#: Leading magic bytes -> (human label, media type). Detection is by content,
-#: not extension, so a mis-named image is still caught. WebP (a RIFF
-#: container with a ``WEBP`` fourcc at offset 8) is checked separately.
+#: Extensions read as images (Claude Code's); a file without an extension is
+#: an image when its content says so.
+_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+#: Leading magic bytes -> (human label, media type), which confirm an image
+#: extension and name the format. WebP (a RIFF container with a ``WEBP``
+#: fourcc at offset 8) is checked separately.
 _IMAGE_MAGIC: tuple[tuple[bytes, str, str], ...] = (
     (b"\x89PNG\r\n\x1a\n", "PNG image", "image/png"),
     (b"\xff\xd8\xff", "JPEG image", "image/jpeg"),
     (b"GIF87a", "GIF image", "image/gif"),
     (b"GIF89a", "GIF image", "image/gif"),
 )
+
+
+#: Extensions Read refuses unopened (Claude Code's list), less the image and
+#: PDF kinds it shows.
+BINARY_EXTENSIONS = frozenset({
+    ".bmp", ".ico", ".tiff", ".tif", ".heic", ".heif", ".avif",
+    ".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv", ".flv", ".m4v", ".mpeg", ".mpg",
+    ".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".wma", ".aiff", ".opus",
+    ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar", ".xz", ".z", ".tgz", ".iso", ".zst", ".lz4",
+    ".whl", ".exe", ".dll", ".so", ".dylib", ".bin", ".o", ".a", ".obj", ".lib", ".app",
+    ".msi", ".deb", ".rpm", ".dmg", ".apk",
+    ".doc", ".docx", ".docm", ".dotx", ".dotm", ".xls", ".xlsx", ".xlsm", ".xlsb", ".xltx",
+    ".xltm", ".ppt", ".pptx", ".pptm", ".ppsx", ".ppsm", ".potx", ".potm", ".odt", ".ods",
+    ".odp", ".numbers", ".epub", ".ttf", ".otf", ".woff", ".woff2", ".eot",
+    ".pyc", ".pyo", ".class", ".jar", ".war", ".ear", ".node", ".wasm", ".rlib",
+    ".sqlite", ".sqlite3", ".db", ".mdb", ".idx", ".parquet", ".feather", ".npy", ".npz",
+    ".pickle", ".psd", ".ai", ".eps", ".sketch", ".fig", ".xd", ".blend", ".3ds", ".max",
+    ".swf", ".fla", ".lockb", ".dat", ".data",
+})
+
+
+#: Device and process files Read refuses (Claude Code's): they never end, block
+#: on input, or hand out another process's secrets.
+_DEVICE_FILES = frozenset({
+    "/dev/zero", "/dev/random", "/dev/urandom", "/dev/full", "/dev/stdin", "/dev/tty",
+    "/dev/console", "/proc/kmsg", "/dev/stdout", "/dev/stderr", "/dev/fd/0", "/dev/fd/1",
+    "/dev/fd/2",
+})
+_DEVICE_PATTERN = re.compile(
+    r"^/dev/(?:pts/(?:\d+|ptmx)|ptmx|tty[^/]*)$"
+    r"|^/proc/[^/]+/fd/[012]$"
+    r"|^/proc/[^/]+/(?:environ|cmdline|auxv|maps|smaps|smaps_rollup|numa_maps|pagemap|mem"
+    r"|stat|statm|status|syscall|stack)$")
+
+
+def is_device_file(path: str) -> bool:
+    return path in _DEVICE_FILES or _DEVICE_PATTERN.match(path) is not None
 
 
 def detect_image(raw: bytes) -> tuple[str, str] | None:
@@ -101,25 +139,15 @@ def _note(text: str) -> str:
     return f"({text})"
 
 
-def _decode_line(raw: bytes, clipped: bool) -> tuple[str, bool]:
-    """One line's display text (a trailing ``\\r`` dropped, a long line
-    clipped) and whether invalid UTF-8 was replaced. A clipped line may end
-    mid-character; the incremental decoder holds that partial back."""
+def _decode_line(raw: bytes) -> tuple[str, bool]:
+    """One line's text (a trailing ``\\r`` dropped) and whether invalid
+    UTF-8 was replaced. A line is never cut short (Claude Code's)."""
     if raw.endswith(b"\r"):
         raw = raw[:-1]
     try:
-        text = codecs.getincrementaldecoder("utf-8")("strict").decode(
-            raw, final=not clipped
-        )
-        replaced = False
+        return raw.decode("utf-8"), False
     except UnicodeDecodeError:
-        text = codecs.getincrementaldecoder("utf-8")("replace").decode(
-            raw, final=not clipped
-        )
-        replaced = True
-    if clipped or len(text) > _MAX_LINE_CHARS:
-        return text[:_MAX_LINE_CHARS] + _LINE_TRUNC_MARKER, replaced
-    return text, replaced
+        return raw.decode("utf-8", "replace"), True
 
 
 @dataclass
@@ -157,8 +185,13 @@ class _Scan:
     def _take(self, line_no: int) -> bool:
         return self.start <= line_no < self.start + self.limit and not self.capped
 
-    def _finish_line(self, raw: bytes, clipped: bool) -> None:
-        text, replaced = _decode_line(raw, clipped)
+    def _finish_line(self, raw: bytes, over: bool) -> None:
+        if over:  # one line past the bound: the window cannot be served
+            self.capped = True
+            return
+        text, replaced = _decode_line(raw)
+        if self.total_lines == 0 and text.startswith("\ufeff"):
+            text = text[1:]  # a byte-order mark is not content (Claude Code's)
         cost = len(text.encode("utf-8")) + 8  # number column + tab + newline
         if self.window and self.served + cost > self.max_served:
             self.capped = True
@@ -179,13 +212,13 @@ class _Scan:
         while pos < n:
             nl = chunk.find(b"\n", pos)
             stop = n if nl < 0 else nl
-            if self._take(self.total_lines) and len(self._cur) < _LINE_KEEP_BYTES:
-                self._cur += chunk[pos : min(stop, pos + _LINE_KEEP_BYTES - len(self._cur))]
+            if self._take(self.total_lines) and len(self._cur) <= self.max_served:
+                self._cur += chunk[pos : min(stop, pos + self.max_served + 1 - len(self._cur))]
             self._cur_len += stop - pos
             if nl < 0:
                 break
             if self._take(self.total_lines):
-                self._finish_line(bytes(self._cur), self._cur_len > _LINE_KEEP_BYTES)
+                self._finish_line(bytes(self._cur), self._cur_len > self.max_served)
             self.total_lines += 1
             self._cur.clear()
             self._cur_len = 0
@@ -195,7 +228,7 @@ class _Scan:
     def finish(self) -> None:
         if self._cur_len:
             if self._take(self.total_lines):
-                self._finish_line(bytes(self._cur), self._cur_len > _LINE_KEEP_BYTES)
+                self._finish_line(bytes(self._cur), self._cur_len > self.max_served)
             self.total_lines += 1
             self._cur.clear()
             self._cur_len = 0
@@ -287,17 +320,34 @@ class ReadTool:
             return tool_error(self.name, "requires non-empty 'file_path'")
         env = ctx.env
         ws = await Workspace.of(env)
+        given = posixpath.normpath(posixpath.join(ws.root, path))
+        if is_device_file(given):
+            return tool_error(
+                self.name, f"Read does not read device or process files, and {path} is one.")
         resolved = await ws.canonical(path)
+        if is_device_file(resolved):
+            return tool_error(
+                self.name, f"Read does not read device or process files, and {path} is one.")
+        ext = posixpath.splitext(path)[1].lower()
+        if ext in BINARY_EXTENSIONS:
+            return tool_error(
+                self.name,
+                f"Read does not open binary files, and a {ext} file is one. Open it with a "
+                "skill made for the format, or with a shell command or script that "
+                "understands it.")
         st = await env.stat(resolved)
-        if st is None or st.is_dir:
+        if st is None:
+            return tool_error(self.name, await missing_file_message(ws, resolved))
+        if st.is_dir:
             return tool_error(self.name, f"not a file: {path!r}")
         display = ws.relative(resolved)
         offset = _positive_int(input.get("offset")) or 1
         explicit_limit = _positive_int(input.get("limit"))
-        limit = explicit_limit or _DEFAULT_READ_LIMIT
+        limit = explicit_limit or _ALL_LINES
         large = input.get("allow_large") is True
         seen = current_fs_state(ctx.state).reads.get(resolved)
-        if ctx.by_model and seen is not None and seen.range == [offset, limit] \
+        asked = [offset, explicit_limit or 0]
+        if ctx.by_model and seen is not None and not seen.partial and seen.range == asked \
                 and seen.mtime == st.mtime and not input.get("pages"):
             return text_output(FILE_UNCHANGED, path=display, unchanged=True)
         size = st.size
@@ -308,7 +358,7 @@ class ReadTool:
         except OSError as exc:
             return tool_error(self.name, f"read failed: {exc}")
 
-        if head.startswith(b"%PDF-"):
+        if ext == ".pdf" or (ext == "" and head.startswith(b"%PDF-")):
             return await read_pdf(self.name, env, resolved, display, size, input.get("pages"))
 
         if posixpath.splitext(resolved)[1] == ".ipynb":
@@ -316,12 +366,22 @@ class ReadTool:
                 raw_nb = b"".join([c async for c in chunks()])
             except OSError as exc:
                 return tool_error(self.name, f"read failed: {exc}")
-            _record_read(ctx, resolved, hashlib.sha256(raw_nb).hexdigest(), st.mtime)
-            return read_notebook(self.name, raw_nb, display)
+            notebook = read_notebook(self.name, raw_nb, display)
+            if not notebook.is_error:
+                _record_read(ctx, resolved, hashlib.sha256(raw_nb).hexdigest(), st.mtime,
+                             asked, whole=offset <= 1 and explicit_limit is None)
+            return notebook
 
         image = detect_image(head)
-        if image is not None:
-            return await self._read_image(path, resolved, display, size, image, chunks)
+        ext = posixpath.splitext(resolved)[1].lower()
+        if ext in _IMAGE_EXTENSIONS and image is None:
+            return tool_error(
+                self.name,
+                f"{display} has an image extension, but its bytes are not a PNG, JPEG, GIF or "
+                "WebP image (often a saved error or login page). Check it with `file`, or "
+                "look at it as text through Bash (`head -c 500`).")
+        if image is not None and (ext in _IMAGE_EXTENSIONS or ext == ""):
+            return await self._read_image(ctx, path, display, size, image, chunks)
 
         return await self._read_text(
             ctx, _Window(path=path, resolved=resolved, display=display, size=size,
@@ -366,19 +426,53 @@ class ReadTool:
             # Past a quarter of the ceiling the estimate is checked against
             # the provider's exact count, as Claude Code does.
             tokens = await ctx.count_tokens(text) or tokens
+        if not scan.capped and tokens > max_tokens and w.offset <= 1 and w.explicit_limit is None:
+            return self._first_page(ctx, w, scan, text, tokens, max_tokens)
         if scan.capped or tokens > max_tokens:
             return tool_error(self.name, too_many_tokens(tokens, max_tokens))
 
         # Keyed by the canonical path and digesting the raw bytes of the whole
         # file, so a later mutation check compares like with like.
-        _record_read(ctx, w.resolved, scan.digest, w.mtime, [w.offset, w.limit])
+        whole = w.offset <= 1 and (w.explicit_limit is None
+                                   or len(scan.window) < w.explicit_limit)
+        _record_read(ctx, w.resolved, scan.digest, w.mtime, [w.offset, w.explicit_limit or 0],
+                     whole=whole)
 
         return _render(scan, w)
 
+    def _first_page(self, ctx: ToolContext, w: _Window, scan: _Scan, text: str,
+                    tokens: int, cap: int) -> ToolOutput:
+        """A whole-file read past the token ceiling: Claude Code returns the
+        first part that fits and tells the model, after the result, how to
+        page on. The read counts as partial (not read, for a later write)."""
+        page, by_chars = _first_part(text, tokens, cap)
+        shown = page.count("\n") + 1
+        total = scan.total_lines + (1 if scan.ends_with_newline else 0)
+        hint = (" Even with allow_large it does not fit." if w.large else
+                " allow_large: true returns more of it; use that only when every part matters "
+                "or the user wants the file entire.")
+        head = (f"[Partial view, cut to fit the read limit: {w.resolved}")
+        size = f"({tokens} tokens; the cap is {cap})"
+        if not by_chars and shown < total:
+            banner = (f"{head} shows lines 1-{shown} of {total} {size}. For the next part call "
+                      f"Read with offset={shown + 1} limit={shown}, or search the file for the "
+                      f"section you need.{hint} What you need may lie past "
+                      "this part; check before relying on it alone.]")
+        else:
+            banner = (f"{head} shows its first {len(page)} of {len(text)} characters {size}; "
+                      "its lines are too long to page by line. Search the file for the section "
+                      f"you need, or page through it with Read's offset and limit.{hint} What you "
+                      "need may lie past this excerpt; check before relying on it alone.]")
+        _record_read(ctx, w.resolved, scan.digest, w.mtime, [1, shown], partial=True)
+        ctx.record(FS, KIND_NOTICE, {"text": banner})
+        rendered = "\n".join(f"{i}\t{line}" for i, line in enumerate(page.split("\n"), 1))
+        return text_output(rendered, path=w.display, total_lines=scan.total_lines,
+                           lines=[1, shown], truncated=True)
+
     async def _read_image(
         self,
+        ctx: ToolContext,
         path: str,
-        resolved: str,
         display: str,
         size: int,
         image: tuple[str, str],
@@ -407,13 +501,13 @@ class ReadTool:
             fitted = await asyncio.to_thread(fit_image, bytes(buf), media_type)
         except ImageTooLarge as exc:
             return tool_error(self.name, f"{path!r} is a {label} that cannot be sent: {exc}")
-        text = f"Read image {display} ({fitted.media_type}, {len(fitted.data)} bytes)"
+        # Claude Code's result is the image alone; how its pixels map back to
+        # the file (when it was scaled) follows as a note.
         note = fitted.note()
+        if note:
+            ctx.record(FS, KIND_NOTICE, {"text": f"{display}: {note}"})
         return ToolOutput(
-            content=[
-                Text(text=f"{text}\n{note}" if note else text),
-                Image(media_type=fitted.media_type, data=fitted.data),
-            ],
+            content=[Image(media_type=fitted.media_type, data=fitted.data)],
             meta={"path": display, "media_type": fitted.media_type,
                   "bytes": len(fitted.data)},
         )
@@ -427,13 +521,13 @@ def _render(scan: _Scan, w: _Window) -> ToolOutput:
     if scan.bytes_replaced:
         meta["bytes_replaced"] = True
     if total == 0:
-        return text_output(_note("The file exists but has empty contents."), **meta)
-    if start >= total:
+        return text_output("Warning: the file is there but holds no content.", **meta)
+    # Claude Code counts a final newline as starting one more, empty, line.
+    lines_counted = total + (1 if scan.ends_with_newline else 0)
+    if start >= lines_counted:
         return text_output(
-            _note(
-                f"The file has only {total} lines, fewer than the "
-                f"requested offset {w.offset}. Nothing was read."
-            ),
+            f"Warning: offset {w.offset} is past the end of the file, which has "
+            f"{lines_counted} lines.",
             **meta,
         )
 
@@ -449,9 +543,43 @@ def _render(scan: _Scan, w: _Window) -> ToolOutput:
     return text_output(rendered, lines=[start + 1, shown_end], **meta)
 
 
+def _first_part(text: str, tokens: int, cap: int) -> tuple[str, bool]:
+    """The leading whole lines of ``text`` that fit ``cap`` tokens (Claude
+    Code's sizing: 85% of the proportional share, shrunk until it fits), or
+    its leading characters when not even one line fits; and whether it was
+    cut by characters."""
+    lines = text.split("\n")
+    per_token = max(0.5, len(text) / max(1, tokens))
+
+    def fits(part: str) -> bool:
+        return len(part) / per_token <= cap
+
+    count = max(1, min(len(lines), math.floor(len(lines) * cap / max(1, tokens) * 0.85)))
+    page = "\n".join(lines[:count])
+    for _ in range(6):
+        if fits(page) or count <= 1:
+            break
+        count = max(1, math.floor(count * 0.7))
+        page = "\n".join(lines[:count])
+    if fits(page) and page.strip():
+        return page, False
+    size = max(1, math.floor(cap * per_token * 0.85))
+    for _ in range(6):
+        page = text[:size]
+        if fits(page):
+            break
+        size = max(1, math.floor(size * 0.7))
+    return page, True
+
+
 def _record_read(ctx: ToolContext, path: str, digest: str, mtime: float,
-                 lines: list[int] | None = None) -> None:
+                 lines: list[int] | None = None, *, partial: bool = False,
+                 whole: bool = True) -> None:
     data: dict[str, Any] = {"path": path, "digest": digest, "mtime": mtime}
     if lines is not None:
         data["range"] = lines
+    if partial:
+        data["partial"] = True
+    if not whole or partial:
+        data["whole"] = False
     ctx.record(FS, KIND_READ, data)

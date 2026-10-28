@@ -53,19 +53,19 @@ async def test_read_empty_file_warns(h: Harness, ws: Path) -> None:
     (ws / "empty.txt").write_text("")
     out = await h.call(ReadTool(), file_path="empty.txt")
     assert not out.is_error
-    text = text_of(out)
-    assert text == "(The file exists but has empty contents.)"
-    assert "<system-reminder" not in text
+    assert text_of(out) == "Warning: the file is there but holds no content."
 
 
 async def test_read_offset_past_end_warns_with_line_count(h: Harness, ws: Path) -> None:
+    # Lines are counted as Claude Code counts them: a final newline starts
+    # one more (empty) line.
     (ws / "short.txt").write_text("one\ntwo\n")
     out = await h.call(ReadTool(), file_path="short.txt", offset=10)
     assert not out.is_error
     assert text_of(out) == (
-        "(The file has only 2 lines, fewer than the requested offset 10. "
-        "Nothing was read.)"
-    )
+        "Warning: offset 10 is past the end of the file, which has 3 lines.")
+    last = await h.call(ReadTool(), file_path="short.txt", offset=3)
+    assert text_of(last) == "3\t"
 
 
 async def test_read_refuses_a_window_past_the_token_ceiling(h: Harness, ws: Path) -> None:
@@ -82,25 +82,32 @@ async def test_read_medium_file_fits_in_full(h: Harness, ws: Path) -> None:
     assert text_of(out).endswith("\n1500\tline 1499\n1501\t")
 
 
-async def test_read_default_limit_is_2000_lines(h: Harness, ws: Path) -> None:
+async def test_read_without_limit_returns_every_line_that_fits(h: Harness, ws: Path) -> None:
+    # Claude Code's reader applies no line count of its own: without ``limit``
+    # the whole file comes back, bounded only by the size and token ceilings.
     (ws / "long.txt").write_text("".join(f"{i}\n" for i in range(2500)))
     text = text_of(await h.call(ReadTool(), file_path="long.txt"))
-    assert text.endswith("\n2000\t1999")
+    assert text.endswith("\n2500\t2499\n2501\t")
 
 
-async def test_read_clips_overlong_line(h: Harness, ws: Path) -> None:
+async def test_read_keeps_a_long_line_whole(h: Harness, ws: Path) -> None:
+    # Claude Code cuts no line short; only the size and token ceilings apply.
     (ws / "wide.txt").write_text("x" * 5000 + "\nshort\n")
     lines = text_of(await h.call(ReadTool(), file_path="wide.txt")).splitlines()
-    assert lines[0].endswith("… [line truncated]")
-    assert len(lines[0]) < 2200
+    assert lines[0] == "1\t" + "x" * 5000
     assert lines[1] == "2\tshort"
 
 
-async def test_read_clips_overlong_line_crlf(h: Harness, ws: Path) -> None:
+async def test_read_keeps_a_long_crlf_line_whole(h: Harness, ws: Path) -> None:
     (ws / "wide.txt").write_bytes(b"y" * 5000 + b"\r\nnext\r\n")
     lines = text_of(await h.call(ReadTool(), file_path="wide.txt")).splitlines()
-    assert "… [line truncated]" in lines[0]
+    assert lines[0] == "1\t" + "y" * 5000
     assert lines[1] == "2\tnext"
+
+
+async def test_read_hides_a_byte_order_mark(h: Harness, ws: Path) -> None:
+    (ws / "bom.txt").write_bytes(b"\xef\xbb\xbfa\nb\n")
+    assert text_of(await h.call(ReadTool(), file_path="bom.txt")) == "1\ta\n2\tb\n3\t"
 
 
 async def test_read_crlf_lines_drop_the_carriage_return(h: Harness, ws: Path) -> None:
@@ -131,10 +138,33 @@ async def test_read_not_a_file(h: Harness, ws: Path) -> None:
     assert text_of(out) == "Read: not a file: 'adir'"
 
 
-async def test_read_missing_file(h: Harness) -> None:
+async def test_read_missing_file(h: Harness, ws: Path) -> None:
     out = await h.call(ReadTool(), file_path="nope.txt")
     assert out.is_error
-    assert text_of(out) == "Read: not a file: 'nope.txt'"
+    assert text_of(out) == f"Read: No file at that path (the working directory is {ws})."
+
+
+async def test_read_missing_file_suggests_another_extension(h: Harness, ws: Path) -> None:
+    (ws / "app.ts").write_text("x\n")
+    out = await h.call(ReadTool(), file_path="app.js")
+    assert text_of(out) == (
+        f"Read: No file at that path (the working directory is {ws}). Did you mean app.ts?")
+
+
+async def test_read_missing_file_suggests_the_path_inside_the_workspace(
+        h: Harness, ws: Path) -> None:
+    (ws / "src").mkdir()
+    (ws / "src" / "m.py").write_text("x\n")
+    out = await h.call(ReadTool(), file_path=str(ws.parent / "src" / "m.py"))
+    assert text_of(out).endswith(f"Did you mean {ws / 'src' / 'm.py'}?")
+
+
+@pytest.mark.parametrize("path", ["/dev/zero", "/dev/stdin", "/dev/tty", "/dev/pts/3",
+                                  "/proc/self/environ", "/proc/12/fd/1", "/proc/self/mem"])
+async def test_read_refuses_device_and_process_files(h: Harness, path: str) -> None:
+    out = await h.call(ReadTool(), file_path=path)
+    assert out.is_error
+    assert text_of(out) == f"Read: Read does not read device or process files, and {path} is one."
 
 
 async def test_read_reaches_outside_the_workspace(h: Harness, ws: Path) -> None:
@@ -147,10 +177,20 @@ async def test_read_reaches_outside_the_workspace(h: Harness, ws: Path) -> None:
 
 
 async def test_read_binary_rejected(h: Harness, ws: Path) -> None:
-    (ws / "blob.bin").write_bytes(b"\x00\x01\x02")
-    out = await h.call(ReadTool(), file_path="blob.bin")
+    (ws / "blob.xyz").write_bytes(b"\x00\x01\x02")
+    out = await h.call(ReadTool(), file_path="blob.xyz")
     assert out.is_error
-    assert text_of(out) == "Read: 'blob.bin' is not utf-8 text"
+    assert text_of(out) == "Read: 'blob.xyz' is not utf-8 text"
+
+
+@pytest.mark.parametrize("name", ["blob.bin", "Archive.ZIP", "lib.so", "data.sqlite", "x.pyc"])
+async def test_read_refuses_a_binary_extension_unopened(h: Harness, ws: Path, name: str) -> None:
+    # Claude Code refuses these by name, before looking at the file at all.
+    out = await h.call(ReadTool(), file_path=name)
+    ext = name[name.rindex("."):].lower()
+    assert text_of(out) == (
+        f"Read: Read does not open binary files, and a {ext} file is one. Open it with a "
+        "skill made for the format, or with a shell command or script that understands it.")
 
 
 async def test_read_stray_invalid_bytes_decoded_leniently(h: Harness, ws: Path) -> None:
@@ -172,14 +212,28 @@ async def test_read_image_surfaces_for_vision(h: Harness, ws: Path) -> None:
     [img] = images_of(out)
     assert img.media_type == "image/png"
     assert img.data == _PNG
-    assert text_of(out) == f"Read image shot.png (image/png, {len(_PNG)} bytes)"
+    # Claude Code's result is the image alone.
+    assert out.content == [img]
     assert h.records == []  # images are not recorded for read-first
 
 
-async def test_read_image_detected_by_content_not_extension(h: Harness, ws: Path) -> None:
-    (ws / "shot.dat").write_bytes(_PNG)
-    out = await h.call(ReadTool(), file_path="shot.dat")
+async def test_read_image_without_extension_detected_by_content(h: Harness, ws: Path) -> None:
+    (ws / "shot").write_bytes(_PNG)
+    out = await h.call(ReadTool(), file_path="shot")
     assert images_of(out)
+
+
+async def test_read_image_kind_follows_the_extension(h: Harness, ws: Path) -> None:
+    # Claude Code goes by the extension; content is sniffed only without one.
+    (ws / "fake.png").write_text("<html>login</html>\n")
+    out = await h.call(ReadTool(), file_path="fake.png")
+    assert out.is_error
+    assert text_of(out) == (
+        "Read: fake.png has an image extension, but its bytes are not a PNG, JPEG, GIF or "
+        "WebP image (often a saved error or login page). Check it with `file`, or look at "
+        "it as text through Bash (`head -c 500`).")
+    (ws / "pic.txt").write_bytes(_PNG)
+    assert not images_of(await h.call(ReadTool(), file_path="pic.txt"))
 
 
 async def test_read_other_image_kinds(h: Harness, ws: Path) -> None:
@@ -209,7 +263,10 @@ async def test_read_shrinks_a_large_image_to_claude_codes_box(h: Harness, ws: Pa
     out = await h.call(ReadTool(), file_path="big.png")
     [img] = images_of(out)
     assert image_dimensions(img.data) == (2000, 500)
-    assert "scaled from 4000x1000 to 2000x500 px; multiply coordinates by 2.00" in text_of(out)
+    assert out.content == [img]
+    # How the pixels map back to the file follows the result as a note.
+    [note] = [d["text"] for e, k, d in h.records if (e, k) == (FS, "notice")]
+    assert "scaled from 4000x1000 to 2000x500 px; multiply coordinates by 2.00" in note
 
 
 async def test_an_image_that_cannot_be_sent_never_reaches_the_history(
@@ -315,6 +372,50 @@ async def test_read_refuses_more_than_25000_tokens(h: Harness, ws: Path) -> None
     assert not ok.is_error
 
 
+async def test_a_whole_read_past_the_token_cap_returns_the_first_page(
+        h: Harness, ws: Path) -> None:
+    # Claude Code pages a whole-file read instead of refusing it: the lines
+    # that fit come back, and a note after the result says how to go on.
+    body = "".join(f"{i:05d} " + "y" * 143 + "\n" for i in range(1700))  # 255 KB
+    (ws / "wide.txt").write_text(body)
+    out = await h.call(ReadTool(), file_path="wide.txt")
+    assert not out.is_error
+    lines = text_of(out).split("\n")
+    assert lines[0] == "1\t00000 " + "y" * 143
+    shown = len(lines)
+    assert 400 < shown < 600 and lines[-1].startswith(f"{shown}\t")
+    notes = [d["text"] for e, k, d in h.records if (e, k) == (FS, "notice")]
+    assert notes == [
+        f"[Partial view, cut to fit the read limit: {ws / 'wide.txt'} shows lines 1-{shown} "
+        f"of 1701 (63750 tokens; the cap is 25000). For the next part call Read with "
+        f"offset={shown + 1} limit={shown}, or search the file for the section you need. "
+        "allow_large: true returns more of it; use that only when every part matters or the "
+        "user wants the file entire. What you need may lie past this part; check before "
+        "relying on it alone.]"]
+    assert h.fs.reads[str(ws / "wide.txt")].partial
+    # A window asked for explicitly is still refused, as before.
+    assert (await h.call(ReadTool(), file_path="wide.txt", limit=1000)).is_error
+
+
+async def test_a_page_of_one_long_line_is_cut_by_characters(h: Harness, ws: Path) -> None:
+    (ws / "min.js").write_text("z" * 200_000)
+    out = await h.call(ReadTool(), file_path="min.js")
+    assert not out.is_error
+    assert text_of(out).startswith("1\tzzz") and len(text_of(out)) < 100_000
+    [note] = [d["text"] for e, k, d in h.records if (e, k) == (FS, "notice")]
+    assert "lines are too long to page by line" in note
+
+
+async def test_a_cut_read_does_not_count_as_read_for_an_edit(h: Harness, ws: Path) -> None:
+    from noeta.plugins.fs import EditTool
+    h.approved = True  # asked about: the read-first check holds
+    (ws / "wide.txt").write_text("".join("y" * 150 + "\n" for _ in range(1700)))
+    await h.call(ReadTool(), file_path="wide.txt")
+    out = await h.call(EditTool(), file_path="wide.txt", old_string="y\n", new_string="z\n",
+                       replace_all=True)
+    assert out.is_error and "has not been read yet" in text_of(out)
+
+
 async def test_read_checks_a_large_window_with_the_exact_count(h: Harness, ws: Path) -> None:
     (ws / "wide.txt").write_text(("y" * 150 + "\n") * 3000)
     counted: list[int] = []
@@ -343,13 +444,14 @@ async def test_read_json_counts_two_chars_per_token(h: Harness, ws: Path) -> Non
     assert not (await h.call(ReadTool(), file_path="d.txt", limit=600)).is_error
 
 
-async def test_read_clips_a_huge_single_line_without_buffering_it(ws: Path) -> None:
+async def test_read_refuses_a_huge_single_line_without_buffering_it(ws: Path) -> None:
     h = Harness(env=_NoWholeReads(str(ws)))
     (ws / "min.js").write_bytes(b"x" * (8 * 1024 * 1024) + b"\nnext\n")
     out = await h.call(ReadTool(), file_path="min.js", limit=2)
-    lines = text_of(out).splitlines()
-    assert lines[0].endswith("… [line truncated]")
-    assert lines[1] == "2\tnext"
+    assert out.is_error
+    assert "exceeds maximum allowed tokens" in text_of(out)
+    ok = await h.call(ReadTool(), file_path="min.js", offset=2, limit=1)
+    assert text_of(ok) == "2\tnext"
 
 
 async def test_read_numbering_splits_on_newline_only(h: Harness, ws: Path) -> None:
@@ -376,6 +478,36 @@ async def test_an_unchanged_range_is_not_sent_twice(h: Harness, ws: Path) -> Non
     target.write_text("one\ntwo\nthree\n")
     os.utime(target, (1, 1))
     assert await read(limit=1) == "1\tone"
+
+
+async def test_an_unchanged_range_must_repeat_the_same_arguments(h: Harness, ws: Path) -> None:
+    # Claude Code compares the arguments as given: no limit and limit=2000 differ.
+    (ws / "a.txt").write_text("one\ntwo\n")
+    tool = ReadTool()
+
+    async def read(**input: Any) -> str:
+        ctx = h.ctx()
+        ctx.by_model = True
+        return text_of(await tool.run({"file_path": "a.txt", **input}, ctx))
+
+    assert (await read()).startswith("1\tone")
+    assert (await read(limit=2000)).startswith("1\tone")
+    assert (await read(limit=2000)).startswith("File unchanged")
+
+
+async def test_an_unchanged_notebook_is_not_sent_twice(h: Harness, ws: Path) -> None:
+    (ws / "n.ipynb").write_text(
+        '{"cells": [{"id": "a", "cell_type": "code", "source": "x = 1", "outputs": []}],'
+        ' "metadata": {}, "nbformat": 4, "nbformat_minor": 5}')
+    tool = ReadTool()
+
+    async def read() -> str:
+        ctx = h.ctx()
+        ctx.by_model = True
+        return text_of(await tool.run({"file_path": "n.ipynb"}, ctx))
+
+    assert (await read()).startswith('<cell id="a">')
+    assert (await read()).startswith("File unchanged")
 
 
 def test_a_compaction_forgets_read_ranges() -> None:

@@ -9,10 +9,11 @@ only ``structuredContent`` is that JSON as text.
 
 A result is held to Claude Code's budget (25,000 tokens, or
 ``NOETA_MAX_MCP_OUTPUT_TOKENS``, its ``MAX_MCP_OUTPUT_TOKENS``; four
-characters a token, an image 1,600): images that do not fit are left out,
-and text over what is left is cut to a marked head (the full text is saved
-under the spill directory when there is one). ``isError: true`` is an error
-result.
+characters a token, an image 1,600). A text-only result over it is saved
+under the spill directory and the model gets only where, its size and format,
+and how to read it; with images, or nowhere to save, images that do not fit
+are left out and the text is cut to its head, marked at the end.
+``isError: true`` is an error result.
 """
 
 from __future__ import annotations
@@ -109,6 +110,21 @@ async def _save(ctx: ToolContext, suffix: str, data: bytes) -> str | None:
     return path
 
 
+def _saved_note(path: str, full: str, limit: int, *, as_json: bool) -> str:
+    """The whole result when it was too large and saved instead of shown."""
+    lines = full.count("\n") + 1
+    size = f"{len(full):,} characters" + (f" in {lines:,} lines" if lines > 1 else "")
+    how = ("Query it with jq, or slice it with python if a value is too long for one line."
+           if as_json else
+           "Read it in parts with Read's offset and limit, or search it with grep (jq if "
+           "it is JSON); lines too long to page by line can be cut by character position.")
+    return (f"The result ({size}) is over the {limit}-token limit for an MCP result "
+            f"(NOETA_MAX_MCP_OUTPUT_TOKENS), so it was saved to {path} instead of shown. "
+            f"Format: {'JSON' if as_json else 'plain text'}.\n{how}\n"
+            "To summarize or analyze it, read all of it first, in order, and say which part "
+            "you read if you could not read it all.")
+
+
 async def render_result(result: dict[str, Any], ctx: ToolContext) -> ToolOutput:
     is_error = bool(result.get("isError"))
     content = result.get("content")
@@ -130,7 +146,8 @@ async def render_result(result: dict[str, Any], ctx: ToolContext) -> ToolOutput:
             if image is not None and line:
                 blocks.append(Text(text=line))
     structured = result.get("structuredContent")
-    if structured is not None and not blocks:
+    from_structured = structured is not None and not blocks
+    if from_structured:
         # Only a structured result: its JSON is the text.
         blocks.append(Text(text=json.dumps(structured, ensure_ascii=False, sort_keys=True)))
     limit = max_output_tokens()
@@ -148,21 +165,25 @@ async def render_result(result: dict[str, Any], ctx: ToolContext) -> ToolOutput:
     text_len = sum(len(b.text) for b in blocks if isinstance(b, Text))
     if text_len > budget:
         full = "\n".join(b.text for b in blocks if isinstance(b, Text))
-        saved = await _save(ctx, ".txt", full.encode("utf-8"))
-        note = (f"[output truncated: over the {limit} token limit for an MCP result "
-                f"(NOETA_MAX_MCP_OUTPUT_TOKENS); the server returned {text_len} characters, what "
-                f"follows is the first {budget}. Use the server's pagination or filtering to "
-                "get the rest; without them, tell the user the result is incomplete"
-                + (f"; the full text is in {saved}" if saved else "") + "]")
-        cut: list[Text | Image] = [Text(text=note)]
-        left = budget
-        for b in blocks:
-            if isinstance(b, Image):
-                cut.append(b)
-            elif left > 0:
-                cut.append(Text(text=b.text[:left]))
-                left -= len(b.text)
-        blocks = cut
+        saved = None if images else await _save(ctx, ".txt", full.encode("utf-8"))
+        if saved is not None:
+            blocks = [Text(text=_saved_note(saved, full, limit, as_json=from_structured))]
+        else:
+            cut: list[Text | Image] = []
+            left = budget
+            for b in blocks:
+                if isinstance(b, Image):
+                    cut.append(b)
+                elif left > 0:
+                    cut.append(Text(text=b.text[:left]))
+                    left -= len(b.text)
+            cut.append(Text(text=(
+                f"[output truncated: over the {limit} token limit for an MCP result "
+                f"(NOETA_MAX_MCP_OUTPUT_TOKENS); the server returned {text_len} characters and "
+                f"only the first {budget} are shown above. Use the server's pagination or "
+                "filtering to get the rest; without them, tell the user the result is "
+                "incomplete]")))
+            blocks = cut
     return ToolOutput(content=list(blocks), is_error=is_error, block_list=True,
                       meta={"non_text_blocks": non_text,
                             "images": sum(isinstance(b, Image) for b in blocks),

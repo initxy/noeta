@@ -33,10 +33,20 @@ from noeta.core.events import (
 from noeta.core.extension import Ask, Deny, Extension, Rewrite, TaskView
 from noeta.core.loop import decide
 from noeta.core.loop.state import fold
-from noeta.core.records import CORE
+from noeta.core.records import CORE, TurnStopped
 from noeta.core.runner import Runtime
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
-from noeta.core.types import Message, ModelResponse, Text, ToolResult, ToolUse, Usage, user
+from noeta.core.types import (
+    Delta,
+    Message,
+    ModelResponse,
+    Text,
+    Thinking,
+    ToolResult,
+    ToolUse,
+    Usage,
+    user,
+)
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -672,3 +682,57 @@ async def test_a_reply_stopped_mid_stream_keeps_its_text_and_marks_the_next_turn
     wire = AnthropicProvider(api_key="k").build_body(provider.requests[1])["messages"]
     assert [b["text"] for b in wire[-1]["content"]] == [
         "[Request interrupted by user]\n", "never mind: how many functions?"]
+
+
+class _StallsAfterThinking(_Stalls):
+    """Finishes a signed thinking block (and an empty one), streams some
+    text, then starts a thinking block it never finishes."""
+
+    async def complete(self, request: Any, on_delta: Any = None) -> ModelResponse:
+        self.requests.append(request)
+        if len(self.requests) > 1:
+            return await self.after.complete(request, on_delta)
+        on_delta(Delta(kind="thinking", text="Plan the answer."))
+        on_delta(Delta(kind="block", block=Thinking(text="Plan the answer.", signature="sig",
+                                                    family="anthropic")))
+        on_delta(Delta(kind="block", block=Thinking(text="", signature="", family="anthropic")))
+        on_delta(Delta(kind="text", text="Floating point "))
+        on_delta(Delta(kind="thinking", text="half a thought"))
+        self.stalled.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+async def test_a_reply_stopped_mid_stream_keeps_the_thinking_it_finished(
+        store: SqliteStore) -> None:
+    from noeta.backends.providers.anthropic import AnthropicProvider
+
+    provider = _StallsAfterThinking(ScriptedProvider([reply("3 functions")]))
+    seen: list[str] = []
+    rt = runtime(store, provider, Agent(name="a", model="m"),
+                 on_delta=lambda _tid, d: seen.append(d.kind))
+    client = Client(store)
+    tid = await client.create("a", "explain at length")
+    running = asyncio.create_task(rt.run_until_idle())
+    await asyncio.wait_for(provider.stalled.wait(), 5)
+    await client.cancel(tid, "interrupted", turn_only=True)
+    await asyncio.wait_for(running, 5)
+    await client.send(tid, "never mind")
+    await rt.run_until_idle()
+    wire = AnthropicProvider(api_key="k").build_body(provider.requests[1])["messages"]
+    assert wire[-2] == {"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "Plan the answer.", "signature": "sig"},
+        {"type": "text", "text": "Floating point "}]}
+    # A finished block is the runner's, never a front end's.
+    assert "block" not in seen
+
+
+def test_a_stop_recorded_before_thinking_was_kept_folds_to_its_text() -> None:
+    recs, _ = _running_call()
+    old = ExtensionRecorded(extension=CORE, kind="turn_stopped",
+                            data={"partial": "Floating", "marker": "[stopped]\n"})
+    st = fold([*recs[:2], _rec(3, old)], {})
+    assert [(m.role, m.content) for m in st.messages[-2:]] == [
+        ("assistant", [Text(text="Floating")]), ("user", [Text(text="[stopped]\n")])]
+    kept = TurnStopped(partial="x", marker="m", thinking=[Thinking(text="t", signature="s")])
+    assert TurnStopped.parse(kept.data()) == kept

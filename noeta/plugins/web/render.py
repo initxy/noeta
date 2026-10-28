@@ -84,10 +84,14 @@ class FetchedPage(str):
     server sent none)."""
 
     content_type: str
+    #: The body's bytes when it is not text (:func:`check_text_media`).
+    raw: bytes | None
 
-    def __new__(cls, text: str, content_type: str = "") -> FetchedPage:
+    def __new__(cls, text: str, content_type: str = "",
+                raw: bytes | None = None) -> FetchedPage:
         page = super().__new__(cls, text)
         page.content_type = content_type
+        page.raw = raw
         return page
 
 

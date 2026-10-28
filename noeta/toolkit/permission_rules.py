@@ -185,6 +185,7 @@ def match(rule: Rule, name: str, input: Mapping[str, Any], ctx: RuleContext, *,
         skill = input.get("skill") or input.get("name")
         if not isinstance(skill, str):
             return False
+        skill = skill.strip().removeprefix("/")
         args = input.get("args")
         full = f"{skill} {args}".strip() if isinstance(args, str) else skill
         return _command_matches(rule.content, skill) or _command_matches(rule.content, full)

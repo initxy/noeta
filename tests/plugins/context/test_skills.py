@@ -107,8 +107,49 @@ async def test_unknown_and_disabled_skills_are_refused(h: Harness) -> None:
     tid = await h.start(agent())
     first, second = await h.results(tid)
     assert first.result.is_error
-    assert first.result.text == "unknown skill 'hidden'; available: deploy"
-    assert second.result.text == "skill must be a non-empty string"
+    # A user-only skill is named as such, with the way to start it.
+    assert first.result.text.startswith("The skill hidden is marked disable-model-invocation")
+    assert "/hidden" in first.result.text
+    assert second.result.text == "Not a skill name: ''"
+
+
+async def test_an_unknown_skill_suggests_a_near_name_not_the_whole_list(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    write_skill(skills_dir(h), "review", "Review.")
+    h.provider.add(reply("", ("Skill", {"skill": "deplyo"})), reply("", ("Skill", {"skill": "x"})),
+                   reply("done"))
+    tid = await h.start(agent())
+    first, second = await h.results(tid)
+    assert first.result.is_error and second.result.is_error
+    assert first.result.text == "There is no skill named deplyo. Did you mean deploy?"
+    assert second.result.text == "There is no skill named x."
+
+
+async def test_calling_an_active_skill_again_follows_it_again(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.", body="Scope: $ARGUMENTS\n")
+    h.provider.add(reply("", ("Skill", {"skill": "deploy", "args": "eu"})),
+                   reply("", ("Skill", {"skill": "deploy", "args": "eu"})),
+                   reply("", ("Skill", {"skill": "deploy", "args": "us"})),
+                   reply("done"))
+    tid = await h.start(agent())
+    same = h.provider.requests[2].messages[-1].text
+    assert "deploy" in same and "Arguments: eu" in same and "Scope:" not in same
+    changed = h.provider.requests[3].messages[-1].text
+    assert changed.startswith("(/deploy called again") and changed.endswith("Scope: us\n")
+    acts = await h.records(tid, "skills", "activated")
+    assert [a.data["args"] for a in acts] == ["eu", "us"]
+
+
+async def test_a_leading_slash_and_spaces_around_the_name_are_ignored(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    h.provider.add(reply("", ("Skill", {"skill": " /deploy "})), reply("", ("Skill", {"skill": " "})),
+                   reply("done"))
+    tid = await h.start(agent())
+    first, second = await h.results(tid)
+    assert not first.result.is_error
+    [act] = await h.records(tid, "skills", "activated")
+    assert act.data["name"] == "deploy"
+    assert second.result.is_error
 
 
 async def test_skill_may_share_a_reply_with_other_calls(h: Harness) -> None:
@@ -473,7 +514,7 @@ async def test_a_skill_with_paths_is_offered_once_a_matching_file_is_touched(
     tid = await h.start(agent())
     assert h.provider.requests[0].messages[1].text == f"{ROSTER_HEADER}\n\n- deploy: Ship."
     refused, _readme, _src, loaded = await h.results(tid)
-    assert refused.result.is_error and "available: deploy" in refused.result.text
+    assert refused.result.is_error and "no skill named pyfix" in refused.result.text
     assert not loaded.result.is_error
     [unlocked] = await h.records(tid, "skills", "unlocked")
     assert unlocked.data == {"names": ["pyfix"]}

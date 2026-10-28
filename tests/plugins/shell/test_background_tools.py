@@ -5,6 +5,7 @@ go."""
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -118,8 +119,8 @@ async def test_ends_with_turn_wording_and_cd_note(tmp_path: Path) -> None:
                        description="go root")
     assert "it is stopped when you give your final response" in text(out)
     assert text(out).endswith(
-        "\n" + f"Session cwd remains {tmp_path}; directory changes made by the backgrounded "
-        "command do not apply to subsequent commands.")
+        "\n" + f"The shell's directory stays {tmp_path}: a cd inside a background command does "
+        "not carry over to later commands.")
     await h.settle(out.meta["job_id"])
     assert 'Background command "go root" completed (exit code 0)' in h.posts[0][1]
 
@@ -137,16 +138,24 @@ async def test_a_leading_sleep_is_fine_in_the_background_only(h: Harness) -> Non
 async def test_task_stop_stops_a_job_and_its_end_is_noticed(h: Harness) -> None:
     out = await h.call("Bash", command="echo keep; sleep 5", run_in_background=True)
     job_id = out.meta["job_id"]
-    assert text(await stop(h, "nope12345")) == (
-        "TaskStop: unknown background job 'nope12345'")
+    assert text(await stop(h, "nope12345")) == "TaskStop: No task found with ID: nope12345"
     assert text(await h.call("TaskStop")) == "TaskStop: requires a non-empty 'task_id'"
     stopped = await stop(h, job_id)
-    assert text(stopped) == f"Stopped task {job_id} (echo keep; sleep 5)"
+    assert not stopped.is_error
+    assert json.loads(text(stopped)) == {
+        "message": f"Successfully stopped task: {job_id} (echo keep; sleep 5)",
+        "task_id": job_id, "task_type": "local_bash", "command": "echo keep; sleep 5"}
     await h.settle(job_id)
     assert "<status>killed</status>" in h.posts[-1][1]
     assert 'Background command "echo keep; sleep 5" was stopped' in h.posts[-1][1]
     again = await h.call("TaskStop", shell_id=job_id)
-    assert again.is_error and text(again) == f"TaskStop: task {job_id} is not running (killed)"
+    assert again.is_error and text(again) == (
+        f"TaskStop: Task {job_id} is not running (status: killed)")
+    done = await h.call("Bash", command="true", run_in_background=True)
+    await h.settle(done.meta["job_id"])
+    finished = await stop(h, done.meta["job_id"])
+    assert text(finished) == (
+        f"TaskStop: Task {done.meta['job_id']} is not running (status: completed)")
 
 
 def test_monitor_and_task_stop_are_deferred(h: Harness) -> None:
@@ -250,3 +259,49 @@ async def test_a_background_reading_git_is_hardened_too(tmp_path: Path) -> None:
         out = await bg.call("Bash", command=command, run_in_background=True)
         await bg.settle(out.meta["job_id"])
     assert [k for k, m in markers.items() if m.exists()] == []
+
+
+# -- a foreground command past its timeout -----------------------------------
+
+
+async def test_a_foreground_command_ends_quietly_and_leaves_nothing(h: Harness) -> None:
+    (h.tmp / "sub").mkdir()
+    out = await h.call("Bash", command="cd sub && echo hi && echo err >&2")
+    assert not out.is_error and text(out) == "hi\nerr"
+    assert out.meta["cwd"] == str(h.tmp / "sub")
+    assert [r[:2] for r in h.records] == [("shell", "cwd")]
+    failed = await h.call("Bash", command="echo no; exit 4")
+    assert failed.is_error and text(failed) == "Exit code 4\nno"
+    await asyncio.sleep(0.05)
+    assert h.posts == [] and h.registry.jobs == {}
+    assert list((h.tmp.parent / "logs").iterdir()) == []
+
+
+async def test_a_timeout_moves_the_command_to_the_background(h: Harness) -> None:
+    out = await h.call("Bash", command="echo started; sleep 2; echo done", timeout=1000)
+    assert not out.is_error
+    job_id = out.meta["job_id"]
+    path = str(h.tmp.parent / "logs" / f"{job_id}.output")
+    first, _, rest = text(out).partition("\n")
+    assert first == "started"
+    assert rest.startswith(
+        "The command was still running when its 1s timeout ran out, so it was moved to the "
+        f"background with ID {job_id}; its output goes on into {path}.")
+    assert "printed nothing" not in rest
+    assert [r[:2] for r in h.records] == [("shell", "started")]
+    await h.settle(job_id)
+    assert len(h.posts) == 1 and "<status>completed</status>" in h.posts[0][1]
+    assert Path(path).read_text() == "started\ndone\n\n[exited with code 0]\n"
+
+
+async def test_a_silent_moved_command_says_it_printed_nothing(h: Harness) -> None:
+    out = await h.call("Bash", command="true; sleep 2", timeout=1000)
+    assert text(out).startswith("The command was still running")
+    assert "It had printed nothing yet" in text(out)
+    await h.settle(out.meta["job_id"])
+
+
+async def test_a_command_starting_with_sleep_is_killed_at_its_timeout(h: Harness) -> None:
+    out = await h.call("Bash", command="sleep 3; echo late", timeout=1000)
+    assert out.is_error and text(out).startswith("Command timed out after 1s")
+    assert h.records == [] and h.registry.jobs == {}

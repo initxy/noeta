@@ -1,4 +1,4 @@
-Searches the web and returns the hits as a Markdown list: each a numbered `[title](url)` line with a short snippet.
+Searches the web and returns the hits: their titles and URLs as a JSON list, then each as a numbered `[title](url)` line with a short snippet.
 
 - Use it for current information or for what you do not know; then read a promising page with WebFetch.
 - The current month is given in the conversation: use it when a search is about recent events.

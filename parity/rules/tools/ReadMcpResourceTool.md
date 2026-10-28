@@ -39,6 +39,8 @@ JSON Schema 2020-12, `additionalProperties: false`.
 |---|---|---|---|
 | `tool.ReadMcpResourceTool.r.1` | text resource | the server's `resources/read` result as one compact JSON string: `{"contents":[{"uri":...,"text":...}]}` (no spaces, fields as the server sent them) | covered |
 
+| `tool.ReadMcpResourceTool.r.2` | binary resource (`blob`) | the bytes are saved to a local file; the entry keeps its other fields, loses `blob`, and gains `blobSavedTo` (the path) and a `text` naming the server, the URI, the MIME type, the size and the path; when it cannot be saved, a `text` saying so (2.1.312 bundle) | covered |
+
 ## Variants
 
 None: `s1` sends the same text and schema.

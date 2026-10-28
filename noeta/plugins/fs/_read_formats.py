@@ -24,6 +24,7 @@ from noeta.toolkit.tools import format_size, tool_error
 __all__ = [
     "MAX_READ_TOKENS",
     "NOTEBOOK_MAX_BYTES",
+    "PDF_MAX_BYTES",
     "PDF_MAX_PAGES_PER_READ",
     "PDF_MAX_PAGES_WHOLE",
     "read_notebook",
@@ -40,6 +41,8 @@ MAX_READ_TOKENS = 25000
 PDF_MAX_PAGES_PER_READ = 20
 #: A PDF with more pages than this must be read with ``pages`` (Claude Code: 10).
 PDF_MAX_PAGES_WHOLE = 10
+#: Largest PDF whose pages ``Read`` renders (Claude Code: 100 MB).
+PDF_MAX_BYTES = 104_857_600
 #: Largest notebook ``Read`` opens (Claude Code: 100 MB).
 NOTEBOOK_MAX_BYTES = 104_857_600
 #: Characters of cell output past which a cell's outputs are replaced by a
@@ -126,6 +129,15 @@ async def read_pdf(
     as a document block instead; noeta has no document block, so it is
     rendered page by page like a ``pages`` read.
     """
+    if size == 0:
+        return tool_error(tool_name, f"The PDF {display} has no content (0 bytes).")
+    if size > PDF_MAX_BYTES:
+        return tool_error(tool_name, f"The PDF {display} is over the "
+                                     f"{format_size(PDF_MAX_BYTES)} that page rendering accepts.")
+    head = await env.read_range(path, 0, 5)
+    if head != b"%PDF-":
+        return tool_error(tool_name,
+                          f"{display} does not start with a %PDF- header, so it is not a PDF.")
     total = await _page_count(env, path)
     span = _page_span(pages, total)
     if isinstance(span, str):

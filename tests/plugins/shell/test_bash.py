@@ -56,6 +56,49 @@ async def test_nonzero_exit_leads_with_the_code(h: Harness) -> None:
     assert bare.is_error and text_of(bare) == "Exit code 4"
 
 
+@pytest.mark.parametrize("command", [
+    "grep nothing-here marker.txt", "cd . && rg nothing-here marker.txt",
+    "find . -name marker.txt -exec false {} +", "diff <(echo a) <(echo b)",
+    "test -f absent", "[ -f absent ]",
+    "git -C . diff --quiet --no-index marker.txt /dev/null",
+    "egrep nothing-here marker.txt", "fgrep nothing-here marker.txt",
+])
+async def test_exit_one_of_a_search_or_compare_is_not_an_error(
+        h: Harness, ws: Path, command: str) -> None:
+    (ws / "marker.txt").write_text("x\n")
+    out = await bash(h, command)
+    assert out.meta["exit_code"] == 1
+    assert not out.is_error
+    assert "Exit code" not in text_of(out)
+
+
+async def test_exit_two_of_grep_and_one_elsewhere_stay_errors(h: Harness) -> None:
+    out = await bash(h, "grep x /no/such/file")
+    assert out.is_error and text_of(out).startswith("Exit code 2\n")
+    piped = await bash(h, "grep nothing-here /dev/null | cat; false")
+    assert piped.is_error and text_of(piped) == "Exit code 1"
+
+
+_PNG_1X1 = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9"
+            "awAAAABJRU5ErkJggg==")
+
+
+async def test_an_image_data_uri_comes_back_as_an_image(h: Harness) -> None:
+    from noeta.core.types import Image
+    out = await bash(h, f"echo; echo 'data:image/jpeg;base64,{_PNG_1X1}'")
+    assert not out.is_error
+    [block] = out.content
+    assert isinstance(block, Image) and block.media_type == "image/png"
+    assert block.data.startswith(b"\x89PNG")
+
+
+async def test_a_broken_or_failing_image_uri_stays_text(h: Harness) -> None:
+    out = await bash(h, "echo 'data:image/png;base64,@@@'")
+    assert text_of(out) == "data:image/png;base64,@@@"
+    failed = await bash(h, f"echo 'data:image/png;base64,{_PNG_1X1}'; exit 3")
+    assert failed.is_error and text_of(failed).startswith("Exit code 3\ndata:image/png")
+
+
 async def test_stdout_and_stderr_merge_in_print_order(h: Harness) -> None:
     both = await bash(h, "sh -c 'echo err 1>&2; echo out; echo err2 1>&2'")
     assert text_of(both) == "err\nout\nerr2"

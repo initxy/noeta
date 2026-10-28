@@ -12,25 +12,38 @@ from typing import Any
 import msgspec
 
 from noeta.core import models
-from noeta.core.events import ChildEnded, External, InputTaken, ModelReplied, Recorded, Say
+from noeta.core.events import (
+    ChildEnded,
+    External,
+    InputTaken,
+    ModelReplied,
+    Recorded,
+    Say,
+    TaskEnded,
+    Waiting,
+)
 from noeta.core.extension import Deny, Extension, Gate, Reminder, Rewrite, TaskView
 from noeta.core.loop.state import TaskState
 from noeta.core.tool import Tool, ToolContext
 from noeta.core.types import Message, ModelRequest, ToolUse, user
-from noeta.plugins.subtasks import texts
+from noeta.plugins.subtasks import idle, texts
 from noeta.plugins.subtasks.roster import Roster, SubagentSpec, check_roster
 from noeta.plugins.subtasks.roster import agent_list as listing
 from noeta.plugins.subtasks.tool import (
+    AGENT_ID_KEY,
     DELEGATION_TOOLS,
     DEPTH_KEY,
     HANDBACK_KEY,
+    TRANSCRIPT_KEY,
     TYPE_KEY,
     AgentTool,
     HandbackTool,
     ListAgentsTool,
     SendMessageTool,
     batch_refusal,
+    call_refusal,
     handback_sender,
+    transcript_file,
 )
 from noeta.plugins.subtasks.worktree import close_worktree
 from noeta.toolkit import notices
@@ -52,13 +65,16 @@ AGENT_LIST_ORDER = 40
 
 
 def task_notification(*, agent_id: str, call_id: str, status: str, summary: str,
-                      result: str, ended: ChildEnded, duration_ms: int) -> str:
+                      result: str, ended: ChildEnded, duration_ms: int,
+                      output_file: str = "") -> str:
     """A finished agent's ``<task-notification>``, behind the not-the-user guard."""
     usage = ended.last_usage
     tokens = usage.input + usage.output if usage is not None else 0
+    fields = [("task-id", agent_id), ("tool-use-id", call_id)]
+    if output_file:
+        fields.append(("output-file", escape(output_file)))
     element = notices.task_notification(
-        (("task-id", agent_id), ("tool-use-id", call_id), ("status", status),
-         ("summary", escape(summary))),
+        (*fields, ("status", status), ("summary", escape(summary))),
         body=(f"\n<note>{texts.NOTICE_NOTE}</note>\n<result>{escape(result)}\n</result>\n"
               f"<usage><subagent_tokens>{tokens}</subagent_tokens><tool_uses>"
               f"{ended.tool_calls}</tool_uses><duration_ms>{duration_ms}</duration_ms></usage>"))
@@ -108,6 +124,9 @@ class Subtasks(Extension):
         self.roster = check_roster(roster)
         self.progress_labels = progress_labels
         self._labels: set[asyncio.Task[None]] = set()
+        #: Per task: what of its conversation this process last wrote to its
+        #: transcript (a new process writes it whole once).
+        self._transcribed: dict[str, tuple[int, int]] = {}
         self.agents = tuple(agents)
         self._roster = Roster(self.roster, self.agents)
         self.max_depth = max_depth
@@ -121,7 +140,7 @@ class Subtasks(Extension):
 
     def initial_state(self) -> Any:
         return {"agents": {}, "tasks": {}, "handbacks": {}, "pending": {}, "noticed": [],
-                "reminded": False, "listed": False, "held_list": None}
+                "reminded": False, "listed": False, "held_list": None, **idle.initial()}
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         st = {**self.initial_state(), **(state or {})}
@@ -148,7 +167,7 @@ class Subtasks(Extension):
             return {**st, "listed": True, "held_list": held}
         if kind == "agent_list_sent":
             return {**st, "held_list": None}
-        return st
+        return idle.reduce(st, kind, data) or st
 
     def _state(self, state: TaskState) -> dict[str, Any]:
         st = state.ext.get(self.name)
@@ -157,6 +176,10 @@ class Subtasks(Extension):
     def agents_of(self, state: TaskState) -> dict[str, dict[str, Any]]:
         """The agents this task launched, by agent id (the newest task of each)."""
         return dict(self._state(state)["agents"])
+
+    def idle_waits(self, state: TaskState) -> dict[str, dict[str, Any]]:
+        """The sessions this task waits to hear are idle, by task id."""
+        return dict(self._state(state)["waits"])
 
     def running(self, state: TaskState) -> list[str]:
         """Agent ids whose newest task has not ended."""
@@ -199,15 +222,19 @@ class Subtasks(Extension):
         return out
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
-        """``Task`` is the old name of ``Agent``; checks that look at the
-        whole reply refuse a bad batch before any of it runs."""
+        """``Task`` is the old name of ``Agent``; a bad Agent call is refused
+        by itself, and limits on the whole reply before any of it runs."""
         roster = self.roster_for(view)
         if not roster:
             return None
         if call.name == texts.LEGACY_AGENT_TOOL:
             return Rewrite(name=texts.AGENT_TOOL, input=call.input)
+        if call.name in DELEGATION_TOOLS:
+            refused = call_refusal(self, view.state, call, roster)
+            if refused is not None:
+                return Deny(reason=refused)
         calls = [c.use for c in view.state.calls] or [call]
-        refusal = batch_refusal(self, view.state, calls, roster)
+        refusal = batch_refusal(self, view.state, calls)
         if refusal is None:
             return None
         text, every_call = refusal
@@ -281,7 +308,14 @@ class Subtasks(Extension):
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         ev = recorded.event
+        if view.state.config.get(TRANSCRIPT_KEY):
+            await self._transcribe(view, ended=isinstance(ev, TaskEnded))
         st = self._state(view.state)
+        if isinstance(ev, InputTaken):
+            idle.on_input(self.name, view, st, ev.items)
+        elif not isinstance(ev, (Waiting, TaskEnded)):
+            # A turn that just closed with nothing queued: the task is idle.
+            idle.settle(self.name, view, st["holds"], at=recorded.at)
         if isinstance(ev, InputTaken):
             handbacks = dict(st["handbacks"])
             for item in ev.items:
@@ -302,6 +336,25 @@ class Subtasks(Extension):
             for task_id, data in st["pending"].items():
                 if st["tasks"].get(task_id) in seen:
                     self._deliver(view, task_id, data["text"])
+
+    async def _transcribe(self, view: TaskView, *, ended: bool) -> None:
+        """Rewrite this agent's transcript file from its conversation when the
+        conversation changed: a projection of the log, so a crash or another
+        worker loses nothing (the next write is whole)."""
+        state, env = view.state, view.env
+        mark = (len(state.messages), state.message_seqs[-1] if state.message_seqs else 0)
+        if env is not None and self._transcribed.get(state.task_id) != mark:
+            agent_id = str(state.config.get(AGENT_ID_KEY) or state.task_id)
+            path = transcript_file(str(state.config[TRANSCRIPT_KEY]), agent_id)
+            lines = [msgspec.json.encode({"type": m.role, "message": m}) + b"\n"
+                     for m in state.messages]
+            try:
+                await env.write_bytes(path, b"".join(lines))
+                self._transcribed[state.task_id] = mark
+            except OSError:
+                log.debug("transcript %s not written", path, exc_info=True)
+        if ended:
+            self._transcribed.pop(state.task_id, None)
 
     def _deliver(self, view: TaskView, task_id: str, text: str) -> None:
         tools_used = texts.TOOLS_BEFORE_SUMMARY.format(tool=texts.HANDBACK_TOOL)
@@ -348,7 +401,7 @@ class Subtasks(Extension):
         duration = int(max(0.0, (at - launched) * 1000)) if at and launched else 0
         text = task_notification(agent_id=agent_id, call_id=agent.get("call_id", ""),
                                  status=status, summary=summary, result=result, ended=ended,
-                                 duration_ms=duration)
+                                 duration_ms=duration, output_file=agent.get("output_file") or "")
         if handed_back:
             if handbacks.get(agent_id) == "seen":
                 self._deliver(view, ended.child_id, text)

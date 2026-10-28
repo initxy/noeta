@@ -152,10 +152,14 @@ async def test_reasoning_summary_deltas_are_thinking_and_final_keeps_signature()
         name = "response.reasoning_summary_text.delta"
         return (name, {"type": name, "item_id": "rs_1", "output_index": 0, "delta": fragment})
 
+    done = "response.output_item.done"
     _mock(
         [
             summary("step one"),
             summary("step two"),
+            (done, {"type": done, "output_index": 0, "item": final["output"][0]}),
+            (done, {"type": done, "output_index": 2,
+                    "item": {"type": "reasoning", "summary": []}}),
             text_delta("final ", 1),
             text_delta("answer", 1),
             completed(final),
@@ -163,10 +167,14 @@ async def test_reasoning_summary_deltas_are_thinking_and_final_keeps_signature()
     )
     recorder = DeltaRecorder()
     response = await make_provider().complete(basic_request(), recorder)
-    # Interleaved blocks stay apart by output_index.
+    # Interleaved blocks stay apart by output_index; a finished reasoning
+    # item is handed over whole only with the ciphertext that replays it.
+    block = Thinking(text="step one\nstep two", signature=enc, family="openai_responses")
+    assert [d.block for d in recorder.deltas if d.kind == "block"] == [block]
     assert recorder.as_tuples == [
         ("thinking", "step one", 0),
         ("thinking", "step two", 0),
+        ("block", "", 0),
         ("text", "final ", 1),
         ("text", "answer", 1),
     ]

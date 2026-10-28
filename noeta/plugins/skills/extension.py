@@ -58,6 +58,7 @@ from noeta.plugins.skills.tool import (
     SKILL_TOOL,
     SkillTool,
     activation_data,
+    skill_name,
     unlocked_skills,
 )
 from noeta.toolkit import permission_rules as pr
@@ -78,6 +79,13 @@ AGENT_TOOL = "Agent"
 DEFAULT_FORK_AGENT = "general-purpose"
 #: The forked agent's ``description``.
 FORK_DESCRIPTION = "Run the {name} skill"
+#: A skill called again while its unchanged instructions are in the
+#: conversation; a changed one (other arguments, other command output)
+#: gets the whole text after the second note.
+REINVOKED_SAME = ("The /{name} skill was loaded earlier in this conversation and its "
+                  "instructions have not changed; this is a new call, so follow them again now.")
+REINVOKED_CHANGED = ("(/{name} called again: its instructions were loaded earlier; the "
+                     "arguments or command output below are new.)")
 #: Calls whose file makes a skill with matching ``paths`` available.
 FILE_TOOLS = frozenset({"Read", "Write", "Edit", "NotebookEdit"})
 
@@ -369,12 +377,23 @@ class Skills(Extension):
         data = output.meta.get("skill_activation")
         if call.name != SKILL_TOOL or output.is_error or not isinstance(data, dict):
             return output
-        if data["name"] not in (view.ext_state(self.name) or {}).get("active", {}):
-            try:
-                data = await self._expand(view, data, call.id)
-            except InlineCommandError as exc:
-                return text_output(str(exc), is_error=True)
+        prior = ((view.ext_state(self.name) or {}).get("active") or {}).get(data["name"])
+        try:
+            data = await self._expand(view, data, call.id)
+        except InlineCommandError as exc:
+            return text_output(str(exc), is_error=True)
+        if prior is None:
             self._record_activation(view, data)
+        elif (prior.get("args"), prior.get("rendered")) == (data.get("args"),
+                                                              data.get("rendered")):
+            # The same instructions are already in the conversation: a short
+            # note instead of the body again.
+            args = f" Arguments: {data['args']}" if data.get("args") else ""
+            view.record(self.name, "reinvoked", {"name": data["name"]}, message=user(
+                REINVOKED_SAME.format(name=data["name"]) + args, origin=self.origin))
+        else:
+            self._record_activation(view, {**data, "text": REINVOKED_CHANGED.format(
+                name=data["name"]) + "\n\n" + data["text"]})
         meta = {k: v for k, v in output.meta.items() if k != "skill_activation"}
         meta["skill"] = data["name"]
         return msgspec.structs.replace(output, meta=meta)
@@ -415,8 +434,8 @@ class Skills(Extension):
         of the skill's ``agent`` type gets the rendered body as its prompt
         and its result comes back as any agent's does. Without an ``Agent``
         tool the skill loads inline."""
-        name, args = call.input.get("skill"), call.input.get("args")
-        if not isinstance(name, str) or (args is not None and not isinstance(args, str)):
+        name, args = skill_name(call.input.get("skill")), call.input.get("args")
+        if name is None or (args is not None and not isinstance(args, str)):
             return None
         state = view.ext_state(self.name) or {}
         registry = await self.registry(task_env(view.env, view.state.config))

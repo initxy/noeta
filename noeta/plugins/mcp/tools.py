@@ -10,13 +10,17 @@ calls them directly. Server tools are listed after the built-in tools.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+import mimetypes
+import posixpath
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.plugins.mcp.config import McpError, McpServer, cap_injected, make_tool_name
-from noeta.toolkit.tools import load_description
+from noeta.toolkit.tools import format_size, load_description, spill_path
 
 __all__ = [
     "AUTH_STUBS",
@@ -224,7 +228,38 @@ Parameters:
             result = await self._use(ctx, server, lambda c: c.read_resource(uri))
         except McpError as exc:
             return text_output(f"{READ_RESOURCE_TOOL}: {exc}", is_error=True)
+        if isinstance(result, dict) and isinstance(result.get("contents"), list):
+            result = {**result, "contents": [
+                await _save_blob(ctx, server.alias, entry, i) if isinstance(entry, dict)
+                and isinstance(entry.get("blob"), str) else entry
+                for i, entry in enumerate(result["contents"])]}
         return text_output(cap_injected(_compact(result), kind="resource"))
+
+
+async def _save_blob(ctx: ToolContext, alias: str, entry: dict[str, Any],
+                     index: int) -> dict[str, Any]:
+    """A binary resource entry with its bytes saved under the spill
+    directory (for ``Read``) in place of the base64 (Claude Code's shape)."""
+    mime = entry.get("mimeType") if isinstance(entry.get("mimeType"), str) else None
+    out = {k: v for k, v in entry.items() if k != "blob"}
+    try:
+        raw = base64.b64decode(entry["blob"], validate=True)
+    except (binascii.Error, ValueError):
+        return {**out, "text": "Binary content could not be saved: it is not valid base64"}
+    if not ctx.spill_dir:
+        return {**out, "text": f"Binary content ({mime or 'unknown type'}, "
+                               f"{format_size(len(raw))}) could not be saved: this host "
+                               "keeps no files for tool output"}
+    ext = (mimetypes.guess_extension(mime) if mime else None) or ".bin"
+    base = posixpath.splitext(spill_path(ctx.spill_dir, ctx.task_id, ctx.call_id))[0]
+    path = f"{base}-resource-{index}{ext}"
+    try:
+        await ctx.env.write_bytes(path, raw)
+    except OSError as exc:
+        return {**out, "text": f"The binary data was not saved ({exc}); it is not available here."}
+    return {**out, "blobSavedTo": path,
+            "text": f"[Resource from {alias} at {entry.get('uri')}] Binary content "
+                    f"({mime or 'unknown type'}, {format_size(len(raw))}) saved to {path}"}
 
 
 class ReadMcpResourceDirTool:

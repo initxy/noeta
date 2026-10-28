@@ -170,6 +170,31 @@ async def test_tui_drops_a_failed_attempts_output(tmp_path: Path) -> None:
         assert [w.source for w in app.query(AssistantMessage)] == ["good answer"]
 
 
+async def test_tui_is_not_left_busy_when_the_turn_ends_before_the_send_returns(
+        tmp_path: Path) -> None:
+    """Under load the task can take the message, reply and wait again before
+    ``client.send`` returns; the front end must not mark itself busy after
+    the turn it sent was already shown ending."""
+    app = tui(tmp_path, ScriptedProvider([reply("done already")]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        client = app.local.client
+        send = client.send
+
+        async def slow_send(task_id: str, *args: Any, **kw: Any) -> Any:
+            out = await send(task_id, *args, **kw)
+            for _ in range(400):  # until the follower has shown the turn end
+                await asyncio.sleep(0.05)
+                if app.query(AssistantMessage) and not app.busy:
+                    break
+            return out
+
+        client.send = slow_send  # type: ignore[method-assign]
+        await pilot.press(*"go", "enter")
+        await settle(pilot, lambda: len(app.query(AssistantMessage)) >= 1)
+        await pilot.pause(0.3)
+        assert not app.busy
+
+
 async def test_tui_shows_only_the_cores_retries(tmp_path: Path) -> None:
     """A plugin's record named like a core one (the hooks plugin's
     ``retry``) is not shown as the model being retried."""

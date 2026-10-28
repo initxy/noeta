@@ -100,11 +100,31 @@ class WorkflowTool:
                     "workflows", f"{name}.js").read_text("utf-8")
             except (OSError, UnicodeDecodeError):
                 pass
-            return text_output(f"{TOOL}: no saved workflow is named {name!r}.", is_error=True)
+            known = await self._saved_names(ctx)
+            return text_output(f"{TOOL}: no saved workflow is named {name!r}. Saved "
+                               f"workflows: {', '.join(known) or '(none)'}.", is_error=True)
         script = input.get("script")
         if isinstance(script, str) and script.strip():
             return script
         return text_output(f"{TOOL}: give `script`, `scriptPath` or `name`.", is_error=True)
+
+    async def _saved_names(self, ctx: ToolContext) -> list[str]:
+        """The saved workflows' names, the project's then the user's."""
+        names: list[str] = []
+        try:
+            out = await ctx.env.run(["ls", "-1", f"{self.view.cwd}/{PROJECT_WORKFLOWS}"],
+                                    timeout=5, output_cap=1 << 16)
+            if out.exit_code == 0:
+                names += out.stdout.decode("utf-8", "replace").split("\n")
+        except (OSError, FileNotFoundError):
+            pass
+        try:
+            names += [p.name for p in (self.ext.home or noeta_home()).joinpath(
+                "workflows").iterdir()]
+        except OSError:
+            pass
+        seen = [n[:-3] for n in names if n.endswith(".js") and len(n) > 3]
+        return list(dict.fromkeys(seen))
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         script = await self._script(input, ctx)

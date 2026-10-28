@@ -33,6 +33,7 @@ How Claude Code presents a tool that an MCP server advertises. noeta equivalent:
 
 | id | case | shape | noeta today |
 |---|---|---|---|
+| `tool.mcp.r.2` | over the output budget (25,000 tokens, `MAX_MCP_OUTPUT_TOKENS`) | a result without images is saved to a file and replaced by one text: its size in characters (and lines), the file's path, its format (plain text, or JSON for structured content), how to read it in parts or query it, and to read all of it before summarizing; with images, or when it cannot be saved, the text is cut to the budget, images that do not fit are left out with a note, and a closing note says the output was truncated and to page or filter on the server (2.1.312 bundle) | covered (the budget is estimated at four characters a token; Claude Code asks the API for an exact count between half and four times the budget) |
 | `tool.mcp.r.1` | text result | the server's `content` array passed through as the `tool_result` content blocks: `[{"type":"text","text":"echo: ping"}]`; no wrapper text, no server label | covered |
 
 ## Variants

@@ -32,6 +32,34 @@ def _touch(path: Path, text: str) -> None:
     os.utime(path, (st.st_atime, st.st_mtime + 5))  # a clearly newer mtime
 
 
+async def test_a_cut_reads_paging_note_follows_its_result_once(tmp_path: Path) -> None:
+    work = tmp_path / "w"
+    work.mkdir()
+    big = work / "big.txt"
+    big.write_text("".join("y" * 150 + "\n" for _ in range(1700)))
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([
+        reply("", ("Read", {"file_path": str(big)})),
+        reply("", ("Read", {"file_path": str(big), "offset": 2, "limit": 1})),
+        reply("done"),
+    ])
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m", extensions=[FileTools()])},
+                 provider_for=lambda _m: provider, env_for=lambda _s: LocalExecEnv(str(work)),
+                 sleep=_no_sleep)
+    client = Client(store)
+    await client.create("a", "read it")
+    await rt.run_until_idle()
+
+    def paging(request: ModelRequest) -> list[str]:
+        return [m.text for m in request.messages
+                if m.origin == "system" and m.text.startswith("[Partial view")]
+
+    assert paging(provider.requests[0]) == []
+    assert len(paging(provider.requests[1])) == 1
+    assert len(paging(provider.requests[2])) == 1  # the same note, not a second one
+    await store.close()
+
+
 async def test_told_once_per_change(tmp_path: Path) -> None:
     work = tmp_path / "w"
     work.mkdir()

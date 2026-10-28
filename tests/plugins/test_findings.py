@@ -45,3 +45,17 @@ async def test_no_findings_and_malformed_ones() -> None:
     assert out.content[0].text == "Recorded no findings."  # type: ignore[union-attr]
     bad = await ReportFindingsTool().run({"findings": [{"file": "a.py"}]}, _ctx(records))
     assert bad.is_error
+
+
+async def test_values_outside_the_schema_are_refused() -> None:
+    ok = {"file": "a.py", "summary": "s", "failure_scenario": "f"}
+    for call in ({"level": "huge", "findings": [ok]},
+                 {"findings": [{**ok, "short_summary": "x" * 61}]},
+                 {"findings": [{**ok, "category": "x" * 41}]},
+                 {"findings": [{**ok, "verdict": "MAYBE"}]},
+                 {"findings": [{**ok, "outcome": "done"}]},
+                 {"findings": [{**ok, "line": "3"}]},
+                 {"findings": [{**ok, "severity": "high"}]}):
+        records: list[tuple[str, str, Any]] = []
+        out = await ReportFindingsTool().run(call, _ctx(records))
+        assert out.is_error and records == [], call

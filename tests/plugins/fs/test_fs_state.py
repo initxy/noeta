@@ -91,7 +91,7 @@ def _fresh(h: Harness) -> Harness:
     for ext, kind, data in h.records:
         if ext == FS:
             state = reduce_fs(state, kind, data)
-    fresh = Harness(env=LocalExecEnv(h.env.cwd))
+    fresh = Harness(env=LocalExecEnv(h.env.cwd), approved=h.approved)
     if state is not None:
         fresh.state[FS] = state
     return fresh
@@ -120,6 +120,7 @@ async def test_an_edit_vouches_for_the_next_one_after_a_restart(h: Harness, ws: 
 
 
 async def test_a_change_since_the_recorded_read_needs_a_read(h: Harness, ws: Path) -> None:
+    h.approved = True
     _setup(ws)
     await h.call(ReadTool(), file_path="a.py")
     (ws / "a.py").write_text("x = 1\ny = 2\nz = 3\n")
@@ -129,6 +130,7 @@ async def test_a_change_since_the_recorded_read_needs_a_read(h: Harness, ws: Pat
 
 
 async def test_never_read_is_refused(h: Harness, ws: Path) -> None:
+    h.approved = True
     _setup(ws)
     out = await h.call(EditTool(), file_path="a.py", old_string="x = 1", new_string="x = 10")
     assert "File has not been read yet" in text_of(out)
@@ -137,6 +139,7 @@ async def test_never_read_is_refused(h: Harness, ws: Path) -> None:
 async def test_dropped_records_vouch_for_nothing(h: Harness, ws: Path) -> None:
     # Entries the runner does not fold (a sealed / rewound stretch) leave
     # nothing behind.
+    h.approved = True
     _setup(ws)
     await h.call(ReadTool(), file_path="a.py")
     h.records.clear()

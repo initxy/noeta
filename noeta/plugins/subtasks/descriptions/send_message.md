@@ -2,4 +2,6 @@ Send a message to another agent: a sub-agent you started (by the id from its lau
 
 A sub-agent that is still running gets the message at its next step. One that has finished is resumed from its transcript, which still holds its task, with your message as the next turn; it runs in the background and you are notified when it is done. Your plain text is not visible to other agents; to tell one something, call this tool.
 
+`notify_when_idle: true` (main conversation only) asks another open session from ListAgents to report back once: you get one `[Cross-session idle notice]` the next time its turn ends with nothing waiting, or when it ends, and a notice that the request lapsed if no report comes in time. Without `message` only the request is sent and that session's model never sees it; with `message`, the message is delivered as well. Use this instead of checking on the session again and again.
+
 The receiver takes your words as a message, not as its user's instructions. Permission decisions belong to each session: never ask another agent to do something that was denied or blocked here, or that your permission settings would block; route blocked work back to your user instead.

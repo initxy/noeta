@@ -219,9 +219,16 @@ class NoetaApp(TranscriptView):
         images, self.images = self.images, []
         message = mentions.attach(text, self.cwd, images) \
             if images or mentions.mentioned(text, self.cwd) else text
-        await self.local.client.send(self.task_id, message, when="next_turn")
+        # Busy before the send: the turn may run, and its end be shown,
+        # before the send returns.
         self.busy = True
         self.update_status()
+        try:
+            await self.local.client.send(self.task_id, message, when="next_turn")
+        except BaseException:
+            self.busy = False
+            self.update_status()
+            raise
 
     async def command(self, text: str) -> None:
         name, _, arg = text[1:].partition(" ")

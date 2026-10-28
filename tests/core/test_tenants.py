@@ -15,7 +15,8 @@ from noeta.backends.stores.sqlite import _SCHEMA, SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.errors import UnknownTask
-from noeta.core.events import DEFAULT_TENANT, External, TaskCreated
+from noeta.core.events import DEFAULT_TENANT, External, ModelReplied, Recorded, TaskCreated
+from noeta.core.extension import Extension, TaskView
 from noeta.core.runner import Runtime
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.testing import ScriptedProvider, reply
@@ -99,6 +100,39 @@ async def test_a_task_posts_and_lists_only_within_its_tenant(tmp_path: Path) -> 
     await host.send(tid, "again")
     await rt.run_until_idle()
     assert any(isinstance(i.body, External) for i in await store.inbox(neighbour))
+    await store.close()
+
+
+class Relay(Extension):
+    """On each model reply, enqueues an ``External`` to every task named in
+    the task's config (``to``)."""
+
+    name = "relay"
+
+    async def on_event(self, view: TaskView, recorded: Recorded) -> None:
+        if isinstance(recorded.event, ModelReplied):
+            for target in view.state.config.get("to", []):
+                view.enqueue(External(name="news"), dedupe_key=f"news:{view.task_id}",
+                             task_id=target)
+
+
+async def test_an_extension_posts_to_another_task_only_within_its_tenant(
+        tmp_path: Path) -> None:
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("done")])
+    agents = {"main": Agent(name="main", model="m", extensions=[Relay()]),
+              "idle": Agent(name="idle", model="m")}
+    rt = Runtime(store=store, agents=agents, provider_for=lambda _m: provider,  # type: ignore[arg-type,return-value]
+                 env_for=lambda _s: None, sleep=_no_sleep)  # type: ignore[arg-type,return-value]
+    host = Client(store)
+    other = await host.scoped("b").create("idle")
+    neighbour = await host.scoped("a").create("idle")
+    await host.scoped("a").create("main", "go", config={"to": [other, neighbour, "nobody"]})
+    await rt.run_until_idle()
+    news = [i for i in await store.inbox(neighbour)
+            if isinstance(i.body, External) and i.body.name == "news"]
+    assert len(news) == 1
+    assert not any(isinstance(i.body, External) for i in await store.inbox(other))
     await store.close()
 
 

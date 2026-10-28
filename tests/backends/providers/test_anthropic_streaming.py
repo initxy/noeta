@@ -325,9 +325,11 @@ async def test_thinking_stream_emits_thinking_deltas_and_silent_signature() -> N
             _message_delta("end_turn"),
         ]
     )
+    finished = Thinking(text="let me think", signature="sig-abc", family="anthropic")
     assert deltas == [
         Delta(kind="thinking", text="let me ", index=0),
         Delta(kind="thinking", text="think", index=0),
+        Delta(kind="block", index=0, block=finished),
         Delta(kind="text", text="answer", index=1),
     ]
     assert response.message.content == [
@@ -348,11 +350,32 @@ async def test_redacted_thinking_block_rides_content_block_start_whole() -> None
             _message_delta("end_turn"),
         ]
     )
-    assert deltas == []
+    assert deltas == [Delta(kind="block", index=0, block=Thinking(
+        text="", data="ENCRYPTED", family="anthropic"))]
     assert response.message.content == [
         Thinking(text="", data="ENCRYPTED", family="anthropic"),
         Text(text="ok"),
     ]
+
+
+@respx.mock
+async def test_only_a_finished_thinking_block_with_content_is_handed_over_whole() -> None:
+    deltas, _ = await _run(
+        [
+            _message_start(),
+            _block_start(0, {"type": "thinking", "thinking": "", "signature": ""}),
+            _block_delta(0, {"type": "signature_delta", "signature": ""}),
+            _block_stop(0),
+            _block_start(1, {"type": "thinking", "thinking": "", "signature": ""}),
+            _block_delta(1, {"type": "thinking_delta", "thinking": "still going"}),
+            _block_start(2, {"type": "text", "text": ""}),
+            _block_delta(2, {"type": "text_delta", "text": "ok"}),
+            _block_stop(2),
+            _message_delta("end_turn"),
+        ]
+    )
+    # The empty block and the one that never ended are not handed over.
+    assert [d.kind for d in deltas] == ["thinking", "text"]
 
 
 # ---------------------------------------------------------------------------

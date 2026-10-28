@@ -5,6 +5,7 @@ worktrees and the refusals."""
 
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -267,7 +268,8 @@ async def test_send_message_refusals_and_other_tasks(store: SqliteStore) -> None
     p = ScriptedProvider([
         reply("", ("SendMessage", {"to": "nobody", "message": "hi"}),
               ("SendMessage", {"to": "main", "message": "hi"}),
-              ("SendMessage", {"to": "x", "message": " "})),
+              ("SendMessage", {"to": "x", "message": " "}),
+              ("SendMessage", {"to": "*", "message": "all of you"})),
         reply("ok")])
     rt = runtime(store, {"p": p, "o": other_p}, parent(),
                  Agent(name="other", model="o"))
@@ -279,14 +281,14 @@ async def test_send_message_refusals_and_other_tasks(store: SqliteStore) -> None
     await rt.run_until_idle()
     assert await results(client, tid) == [
         (texts.UNKNOWN_RECIPIENT.format(to="nobody"), True), (texts.NO_CALLER, True),
-        (texts.EMPTY_MESSAGE, True)]
+        (texts.EMPTY_MESSAGE, True), (texts.NO_BROADCAST, True)]
     p.add(reply("", ("SendMessage", {"to": other, "message": "ping"}), ("ListAgents", {})),
           reply("done"))
     await client.send(tid, "ping the other one")
     await rt.run_until_idle()
     out = await results(client, tid)
-    assert out[3] == (texts.SENT.format(to=other), False)
-    assert out[4][0].startswith(texts.LIST_HEAD) and f"- {other} — session" in out[4][0]
+    assert out[4] == (texts.SENT.format(to=other), False)
+    assert out[5][0].startswith(texts.LIST_HEAD) and f"- {other} — session" in out[5][0]
     got = other_p.requests[-1].messages[-1]
     assert got.origin == "agent" and '<cross-session-message from="' in got.text
 
@@ -307,7 +309,7 @@ async def test_list_agents_shows_launched_agents(store: SqliteStore) -> None:
 async def test_refusals(store: SqliteStore) -> None:
     probe = Probe()
     p = ScriptedProvider([
-        reply("", agent("  ")),
+        reply("", agent("  "), ("Probe", {}), agent("fine", "scout")),
         reply("", agent("x", model="gpt")),
         reply("", agent("x", "nobody"), ("Probe", {})),
         reply("", agent("x", isolation="remote")),
@@ -318,15 +320,17 @@ async def test_refusals(store: SqliteStore) -> None:
     tid = await client.create("main", "go")
     await rt.run_until_idle()
     out = await results(client, tid)
-    assert out[0] == (texts.NOTHING_RAN.format(reason=texts.EMPTY_PROMPT), True)
-    assert out[1] == (texts.NOTHING_RAN.format(reason=texts.BAD_CHOICE.format(
-        field="model", choices="sonnet, opus, haiku, fable", value="gpt")), True)
+    # A bad Agent call is refused by itself: the reply's other calls run.
+    assert out[0] == (texts.EMPTY_PROMPT, True)
+    assert out[1] == ("seen", False) and out[2][0].startswith("The agent was launched")
+    assert out[3] == (texts.BAD_CHOICE.format(
+        field="model", choices="sonnet, opus, haiku, fable", value="gpt"), True)
     unknown = texts.SPAWN_DENIED.format(reason=texts.UNKNOWN_AGENT.format(
         name="nobody", available="fork, general-purpose, scout"))
-    assert out[2:4] == [(unknown, True), ("seen", False)]
-    assert out[4] == (texts.SPAWN_DENIED.format(reason=texts.NO_REMOTE), True)
-    assert out[5] == (texts.MISSING_FIELDS, True)
-    assert await client.tasks(parent_id=tid) == []
+    assert out[4:6] == [(unknown, True), ("seen", False)]
+    assert out[6] == (texts.SPAWN_DENIED.format(reason=texts.NO_REMOTE), True)
+    assert out[7] == (texts.MISSING_FIELDS, True)
+    assert len(await client.tasks(parent_id=tid)) == 1
 
 
 async def test_depth_cap_and_fan_out(store: SqliteStore) -> None:
@@ -339,7 +343,7 @@ async def test_depth_cap_and_fan_out(store: SqliteStore) -> None:
     tid = await client.create("main", "go", config={"subtask_depth": 3})
     await rt.run_until_idle()
     [(depth, _)] = await results(client, tid)
-    assert depth == texts.SPAWN_DENIED.format(reason=texts.DEPTH_REACHED.format(n=3))
+    assert depth == texts.SPAWN_DENIED.format(reason=texts.DEPTH_REACHED.format(depth=3, n=3))
     tid = await client.create("main", "go")
     await rt.run_until_idle()
     await client.send(tid, "more")
@@ -513,3 +517,49 @@ async def test_a_sub_agent_hears_of_agent_types_with_its_second_request(
 
     first, second = c.requests
     assert not listed(first) and listed(second)
+
+
+async def test_a_background_agent_keeps_its_transcript_file(store: SqliteStore,
+                                                            tmp_path: Path) -> None:
+    p = ScriptedProvider([reply("", agent("count to 3")), reply("launched"),
+                          reply("it says 1 2 3"), reply("ok")])
+    c = ScriptedProvider([reply("", ("Probe", {})), handback("1 2 3")])
+    spill = tmp_path / "spill"
+    rt = Runtime(store=store, agents={"main": parent(), "worker": worker()},
+                 provider_for=lambda m: {"p": p, "c": c}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(tmp_path)), spill_root=str(spill))
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    path = spill / tid / "tasks" / f"{child.task_id}.output"
+    [(ack, _)] = await results(client, tid)
+    assert ack.endswith(texts.LAUNCHED_OUTPUT_FILE.format(path=path))
+    lines = [json.loads(line) for line in path.read_text().splitlines()]
+    assert lines[0] == {"type": "user", "message": {
+        "role": "user", "content": [{"type": "text", "text": "count to 3"}]}}
+    called = [line["message"]["content"][0] for line in lines if line["type"] == "assistant"]
+    assert [b["name"] for b in called] == ["Probe", "SubagentHandback"]
+    await client.send(tid, "thanks")
+    await rt.run_until_idle()
+    notice = p.requests[3].messages[-2].text
+    assert (f"<tool-use-id>{p.requests[1].messages[-2].tool_uses[0].id}</tool-use-id>\n"
+            f"<output-file>{path}</output-file>\n<status>completed</status>") in notice
+
+
+async def test_an_agent_type_matches_loosely_when_only_one_fits(store: SqliteStore) -> None:
+    roster = [*ROSTER, SubagentSpec(name="code-review", description="Reviews.", agent="worker"),
+              SubagentSpec(name="code_review", description="Also reviews.", agent="worker")]
+    p = ScriptedProvider([reply("", agent("a", "Scout"), agent("b", "General Purpose"),
+                                agent("c", "Code Review")), reply("ok")])
+    main = Agent(name="main", model="p", extensions=[Subtasks(roster, queue="kids")])
+    rt = runtime(store, {"p": p}, main, worker())
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    kinds = sorted([(await events(client, r.task_id))[0].config["subagent_type"]
+                    for r in await client.tasks(parent_id=tid)])
+    assert kinds == ["general-purpose", "scout"]
+    ambiguous = texts.SPAWN_DENIED.format(reason=texts.AMBIGUOUS_AGENT.format(
+        name="Code Review", matches="code-review or code_review"))
+    assert (ambiguous, True) in await results(client, tid)

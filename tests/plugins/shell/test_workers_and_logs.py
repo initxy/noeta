@@ -63,8 +63,9 @@ def _ended(notice: str | None = "<task-notification>done</task-notification>") -
 
 def _told(view: TaskView) -> list[str]:
     out = []
-    for body, key in view.enqueued:
+    for body, key, target in view.enqueued:
         assert isinstance(body, Say) and body.when == "now" and key == "shell:notice:bg-1"
+        assert target is None
         assert body.message.origin == "system"
         out.append(body.message.text)
     return out
