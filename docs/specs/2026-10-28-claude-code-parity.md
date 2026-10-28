@@ -515,3 +515,23 @@ Phase 5 — front ends
   in the permissions plugin in a parallel change. Gates before round 2: make check 1774 passed (87.02%), make
   parity 0 (7 accepted deviations), make eval 0.962 vs 0.987 (within tolerance; one
   `delegate_parallel_review` trial chose to review itself), make e2e 7 passed.
+- 2026-10-28: third review: round-2 fixes verified (make check 1860 passed, 87.15%; parity
+  0); new P1 (the read-only git guard refused bare-repository worktrees and
+  `--separate-git-dir` in every mode), P2 (missing package-manager configs creatable in the
+  sandbox; a missing `core.hooksPath=.husky` left unplaceheld), P2 (`grep -R`, `rg -L`,
+  `find -L`, `du -L`, `tree -l`, `ls -LR` read-only). Fixes: the guard refuses only a git
+  directory inside the workspace that is neither `.git` nor named by a top-level `.git`
+  file, and not for a command a person approved (`ToolContext.approved`; it still runs
+  hardened); link-following recursion asks; `file *` asks; deny/ask rules drop git's
+  global options; the `filter.<driver>.clean` limit of unpacked repositories is in the
+  changelog. Placeholder decision: a missing path gets one when it is executed on the next
+  ordinary command without a confirmation step — `.noeta`, `.git` hooks/config, the
+  configured hooks directory whatever its name, `.npmrc`, `.yarnrc`, `.yarnrc.yml`, `.yarn`,
+  `.pnpmfile.cjs`, `.pnp.cjs`, `.pnp.loader.mjs`, `bunfig.toml`, `.bunfig.toml`, `.cargo`,
+  `.mvn`, `.bazelrc`, `.bazelversion`, `.bazeliskrc`, and lefthook's configs once lefthook
+  is in use (16 in an empty directory); `.envrc`, `.vscode`, `.devcontainer`, `.idea`,
+  `.pre-commit-config.yaml` get none (each needs a separate step of the person's); gradle
+  and maven wrapper properties get none (`gradlew`/`mvnw` themselves are unprotected).
+  Placeholder files are empty regular files (a directory breaks pnpm, `/dev/null` is
+  unreadable through the mount and fails `git add`), listed in the command's view of
+  `.git/info/exclude`. Gates: make check 1893 passed (87.17%).

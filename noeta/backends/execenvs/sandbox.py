@@ -339,8 +339,8 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
         if missing is not None and path in deny_write \
                 and any(_within(missing, w) and missing != w for w in writes):
             placeholders.setdefault(missing, missing == path and (
-                names.get(path, False) or "/.git/" in path
-                and os.path.basename(path) in _GIT_CONFIGS))
+                names.get(path, False) or ("/.git/" in path
+                                           and os.path.basename(path) in _GIT_CONFIGS)))
     return Plan(writable=writes, deny_write=deny_write, deny_read=deny_read,
                 allow_read=allow_read, pinned=pinned, placeholders=list(placeholders.items()))
 

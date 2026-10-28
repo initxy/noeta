@@ -207,8 +207,8 @@ _GIT_FUNCTION = """git() {
 #: ``.git`` file at its top names: a bare repository committed into the
 #: workspace, whose config its author wrote. A clone cannot carry a
 #: ``.git`` file, so a worktree's or a separate git directory passes.
-_GIT_GUARD = """  if _noeta_dir=$(command git "${_noeta_pre[@]+"${_noeta_pre[@]}"}" -c core.fsmonitor= \\
-      rev-parse --absolute-git-dir 2>/dev/null) \\
+_GIT_GUARD = """  if _noeta_dir=$(command git "${_noeta_pre[@]+"${_noeta_pre[@]}"}" \\
+      -c core.fsmonitor= rev-parse --absolute-git-dir 2>/dev/null) \\
       && _noeta_dir=$(cd "$_noeta_dir" 2>/dev/null && pwd -P); then
     case "$_noeta_dir/" in
       @ROOT@/*) case "$_noeta_dir" in
