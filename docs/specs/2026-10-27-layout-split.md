@@ -1,5 +1,5 @@
 ---
-status: done
+status: active
 created: 2026-10-27
 branch: v1-layout-split
 ---
@@ -145,7 +145,7 @@ pieces an embedder needs (`local.py`, `remote.py`, `server.py`); `local.from_set
   missed `from noeta.core import models`). The layout check found `core/agent_files.py` (moved to
   `agents`) and `core/commands.py` (kernel surface). Each step its own commit, suite 1367 -> 1370
   (the three layout-check tests); request goldens unchanged.
-- 2026-10-27: done. `make check` green (1370 passed, 87.26 %), Postgres 1396 passed none
+- 2026-10-27: all Plan items done (archiving is a separate gc). `make check` green (1370 passed, 87.26 %), Postgres 1396 passed none
   skipped, `make example` green; no old path left outside CHANGELOG; an embedding script
   (`default_agents`, `LocalApp`, `RemoteClient`) loads no `noeta.apps` module; a store written
   by `main`'s code reads and resumes with the new code.
