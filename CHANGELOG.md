@@ -51,6 +51,30 @@ All notable changes to Noeta are documented here. The format is based on
   `MEMORY.md` is loaded at the start (200 lines / 25,000 bytes) and after a compaction.
   With `recall_model`, each user message attaches up to five memories that model picks.
   The plugin's arguments are now `home`, `directory`, `recall_model`, `rehang`.
+- **A sandbox for local commands, with Claude Code's `sandbox` settings.** With
+  `sandbox.enabled` in a settings file, `Bash` (foreground, background and `Monitor`) runs
+  each command confined: bubblewrap on Linux (own network, PID, IPC namespaces; a seccomp
+  filter refusing Unix sockets and new user namespaces unless `allowAllUnixSockets` /
+  `allowNestedUserNamespaces`), Seatbelt on macOS. Commands write only in the working
+  directory, `filesystem.allowWrite` and a private `$TMPDIR` (never `denyWrite`, `.noeta`
+  config, `.git/hooks`, `.git/config`), read everything but `denyRead`, credential stores
+  and noeta's home, and reach only `network.allowedDomains` through a filtering HTTP/SOCKS
+  proxy; refused hosts follow the output in `<sandbox_violations>`. `Edit` allow rules,
+  `additionalDirectories`, `Read` deny rules and `WebFetch(domain:)` allow rules feed it;
+  `excludedCommands`, `allowUnsandboxedCommands`, `autoAllowBashIfSandboxed` (default on),
+  `failIfUnavailable`, `credentials` (`mask` acts as `deny`), `httpProxyPort` /
+  `socksProxyPort`, `enableWeakerNestedSandbox`, `filesystem.disabled` and `bwrapPath` are
+  honoured, and a project's settings may tighten the sandbox but never loosen it.
+  `dangerouslyDisableSandbox: true` runs a command outside after an approval that allow
+  rules do not skip. `Bash`'s description gains a sandbox section while the sandbox is on.
+  Without bwrap (or namespaces) front ends say why and commands run unconfined, or are
+  refused with `failIfUnavailable`. API: `LocalExecEnv(sandbox=...)`, `env.sandbox`,
+  `noeta.toolkit.sandbox`.
+- **`start_container` is locked down by default:** no network, a read-only root with tmpfs
+  scratch, a reduced capability set, `no-new-privileges` and a 1024-process limit (each an
+  argument: `network`, `read_only`, `caps`, `pids_limit`, plus `memory` / `cpus`). Its
+  `sandbox=` maps `network.allowedDomains` onto an internal Docker network whose only way
+  out is noeta's filtering proxy (`ensure_container_proxy` serves it again after a restart).
 
 ### Fixed
 
