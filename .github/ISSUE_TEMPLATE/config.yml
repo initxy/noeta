@@ -1,5 +1,5 @@
-blank_issues_enabled: false
+blank_issues_enabled: true
 contact_links:
-  - name: Questions & help
-    url: https://github.com/initxy/noeta/discussions
-    about: For usage questions, ideas, and general help, start a Discussion instead of opening an issue.
+  - name: Report a security vulnerability
+    url: https://github.com/initxy/noeta/security/advisories/new
+    about: Report vulnerabilities privately, never in a public issue (see SECURITY.md).

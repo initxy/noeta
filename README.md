@@ -1,27 +1,67 @@
-# Noeta
+# noeta
 
-**Durable AI agents for Python.** Every task is an append-only event log with exactly one
-writer, so an agent survives crashes without re-running a tool, waits days for a person while
-holding no worker, and runs on one laptop or many machines without changing the agent.
+**An open-source Claude Code that runs on servers.** The model sees what Claude Code shows it —
+the same tools, prompts' rules, reminders and request shape (prompt text in our own words) — and
+reads Claude Code's formats for settings, hooks, skills, agents, MCP servers and plugins. Under
+it, every task is an append-only event log with exactly one writer, so a task survives a crash
+without re-running a tool, waits days for a person while holding no worker, and runs on one
+laptop or many machines unchanged.
 
-> 1.0 is in development on `main`. The last 0.x release is `v0.6.42`.
+> 1.0 is in development and not on PyPI yet; install it from the repository. (The 0.x releases
+> were the separate `noeta-runtime` / `noeta-sdk` packages.)
 
-## Use it
+## Five-minute start
+
+You need Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv tool install 'noeta[tui,images]'    # images: shrink large images as Claude Code does
-export NOETA_MODEL=claude-sonnet-4-6 NOETA_API_KEY=sk-ant-...
-noeta                             # full-screen terminal UI
-noeta -p "fix the failing test"   # one prompt, print the answer (Claude Code's headless flags)
-noeta --input-format stream-json --output-format stream-json --verbose
-                                  # Claude Code's SDK protocol: give an Agent SDK this as its CLI
-noeta acp                         # an Agent Client Protocol agent for Zed and other editors
+uv tool install 'noeta[tui,images] @ git+https://github.com/initxy/noeta'
+# or from a checkout:  git clone https://github.com/initxy/noeta && uv tool install './noeta[tui,images]'
 ```
 
-Settings come from `NOETA_*` variables or `~/.noeta/config.toml`; tasks live in
-`~/.noeta/tasks.db` unless `--store` names another SQLite file or a Postgres URL.
+Pick a model and a provider. With an Anthropic API key:
 
-## Embed it
+```bash
+export NOETA_MODEL=claude-sonnet-5-5 NOETA_API_KEY=sk-ant-...   # or ANTHROPIC_API_KEY
+```
+
+With an OpenAI-compatible endpoint (vLLM, a gateway, DeepSeek, …), name the provider and the
+base URL. For `openai_compat` the base URL ends in `/v1` (noeta appends `/chat/completions`);
+for `anthropic` it is the host only (noeta appends `/v1/messages`); for `openai_responses` it is
+the whole `…/v1/responses` URL:
+
+```bash
+export NOETA_PROVIDER=openai_compat NOETA_BASE_URL=https://llm.example.com/v1
+export NOETA_MODEL=deepseek-chat NOETA_API_KEY=...
+```
+
+The same settings are flags (`--model`, `--provider`, `--base-url`) or keys in
+`~/.noeta/config.toml` (`model`, `provider`, `base_url`, `api_key`). Then:
+
+```bash
+noeta                                    # full-screen terminal UI in the current directory
+noeta -p "what does this repository do?" # one prompt, print the answer (Claude Code's -p)
+noeta -p --output-format stream-json --input-format stream-json --verbose
+                                         # Claude Code's SDK protocol: point an Agent SDK at it
+```
+
+A model noeta has no catalog entry for runs with a warning (default limits);
+`NOETA_MODELS_FILE` describes more. Tasks are kept in `~/.noeta/tasks.db`; `noeta -c` continues
+the newest conversation in this directory, `noeta -r` lists them. A project's own
+`.noeta/` settings, agents, skills and plugins load only after `noeta trust`.
+
+| Extra | For |
+|---|---|
+| `tui` | the terminal UI (`noeta` without `-p`) |
+| `images` | shrinking large images the way Claude Code does (Pillow) |
+| `acp` | `noeta acp`: an Agent Client Protocol agent for Zed and other editors |
+| `server` | `noeta serve`: the HTTP / WebSocket API |
+| `postgres` | a Postgres store, for many workers |
+| `keyring` | `{keyring:service/user}` secret references in plugin settings |
+
+Install several at once: `'noeta[tui,images,acp,server,postgres] @ git+…'`.
+
+## Embed it in Python
 
 ```python
 import asyncio
@@ -30,8 +70,8 @@ from noeta.core.events import ModelReplied
 
 async def main() -> None:
     store = noeta.store("sqlite:///tasks.db")
-    agents = {a.name: a for a in noeta.default_agents("claude-sonnet-4-6")}
-    model = noeta.provider("anthropic", api_key="sk-ant-...")
+    agents = {a.name: a for a in noeta.default_agents("claude-sonnet-5-5")}
+    model = noeta.provider("anthropic", api_key="sk-ant-...")   # base_url=... for a gateway
     runtime = noeta.Runtime(store=store, agents=agents, provider_for=lambda _name: model)
     client = noeta.Client(store)
     task = await client.create("main", "What does this repository do?", config={"cwd": "."})
@@ -42,66 +82,46 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Run more workers on the same Postgres store (`noeta worker --store postgres://…`) to spread
-tasks across machines; serve the client API over HTTP with `noeta serve` and reach it with
-`noeta.RemoteClient`. `noeta.LocalApp` is a store, a worker and a client in one process.
-Deploying many workers, tokens and tenants: [docs/server.md](docs/server.md).
-Everything an embedder needs is outside `noeta.cli`, which is the `noeta` command itself.
+`noeta.LocalApp` is a store, a worker and a client in one process; `noeta.connect(url)` gives a
+client for a store URL or a `noeta serve` server. Everything an embedder needs is outside
+`noeta.cli`, which is the `noeta` command itself.
+
+## Serve it on many machines
+
+One Postgres store, any number of workers, an HTTP API in front:
+
+```bash
+export NOETA_STORE=postgres://noeta:...@db.internal/noeta
+noeta worker --concurrency 16             # on every worker machine
+noeta serve --no-worker --host 0.0.0.0    # the API; bearer token required
+noeta --server http://api.internal:8642   # the TUI against it (also: noeta acp --server URL)
+```
+
+A worker that dies leaves nothing behind: another claims its tasks where their logs stop.
+Workspaces, tokens and tenants: [docs/server.md](docs/server.md).
 
 ## Extend it
 
-Everything outside the small kernel is a plugin, found by name through Python entry points —
-the built-in ones exactly like yours.
+Everything outside the small kernel is a plugin behind one `Extension` interface, found by name
+through Python entry points or as a single file in `~/.noeta/plugins/` — the built-in ones
+exactly like yours. Agents are markdown files in Claude Code's format, prompts have names you
+can override, and Claude Code plugin directories load from noeta's own places. How to write and
+ship each kind, and how it compares with pi, DeepSeek Harness and Claude Code:
+[docs/extending.md](docs/extending.md).
 
-- **Plugins** subclass `noeta.Extension`: tools, system-prompt parts, reminders, slash
-  commands, gates on tool calls, hooks on events, state folded from the task's log. Register one
-  under the `noeta.plugins` entry point group, or drop the file in `~/.noeta/plugins/` (a
-  project's `.noeta/plugins/`, like its `.noeta/agents`, `prompts` and `skills`, loads after
-  `noeta trust`), and name it in an agent file or `config.toml`. A tool can ask the person
-  (`noeta.ask`) and tell them things (`notify`); the terminal UI and editors show both. `examples/hello-plugin` is a complete one.
-- **Plugin settings** live in `~/.noeta/config.toml`:
+## Privacy
 
-  ```toml
-  [plugins.shell]
-  background = true          # a plugin's arguments
-  [plugins.web]
-  enabled = false            # off for every agent
-  [agents.main]
-  add_plugins = ["hello"]    # add one without copying the agent file
-  ```
+noeta sends nothing anywhere except requests to the model provider you configure: no
+telemetry, no log upload, no update check. Tools reach out only when the model calls them
+(`WebFetch`, `WebSearch`, MCP servers, your commands), under the permission rules you set.
 
-- **Agents** are markdown files: YAML frontmatter (`name`, `description`, `model`, `plugins`,
-  optional `tools`) and the system prompt as body. Drop one in `~/.noeta/agents/` or
-  `.noeta/agents/`; a Claude Code agent file works as it is once copied there.
-- **Prompts** have names (`system/main`, `tool/Read`, `reminder/file_changed`, …). A file
-  `.noeta/prompts/tool/Read.md` replaces that text, `tool/Read.append.md` adds to it; so do
-  `~/.noeta/prompts/`, a task's `prompts` config, and `--system-prompt` /
-  `--append-system-prompt`. A task keeps the texts it started with.
-- **Instructions, settings, hooks and MCP servers** use Claude Code's mechanisms and formats in
-  noeta's own places; noeta never reads `~/.claude/`, `.claude/`, `CLAUDE.md` or `.mcp.json`.
-  Instructions are `NOETA.md` (user `~/.noeta/NOETA.md` and `~/.noeta/rules/`; per directory
-  `NOETA.md`, `.noeta/NOETA.md`, `.noeta/rules/`, `NOETA.local.md`; `AGENTS.md` where a
-  directory has no `NOETA.md`). Settings are `~/.noeta/settings.json`, then a trusted
-  project's `.noeta/settings.json` and `.noeta/settings.local.json`, then the machine's
-  `/etc/noeta/managed-settings.json`: permissions, `env`, `model`, and hooks, which run
-  commands on `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` and `Notification` and
-  can add context or block; `mcpServers` are started for every task. A project's
-  `.noeta/mcp.json` servers start only once named in `enabledMcpjsonServers` (or
-  `enableAllProjectMcpServers`).
-- **Backends** — model providers, execution environments, stores — register under
-  `noeta.providers`, `noeta.execenvs` and `noeta.stores`. A store passes the tests in
-  `noeta.testing.store_contract` (import them next to a `store` fixture).
-- **Shared plugin code** — path handling, output limits, shell command checks, the context
-  budget — is in `noeta.toolkit`, for your plugins as for the built-ins.
+## Docs
 
-## Develop
-
-```bash
-make install   # uv sync with every extra
-make check     # every gate CI runs
-```
-
-`AGENTS.md` is the working agreement; `CONTEXT.md` holds the domain vocabulary and the layers.
+- [docs/architecture.md](docs/architecture.md) — the kernel, plugins, layers, ways in, many machines
+- [docs/extending.md](docs/extending.md) — writing and shipping plugins
+- [docs/server.md](docs/server.md) — workers, workspaces, tokens and tenants
+- [CONTEXT.md](CONTEXT.md) — the vocabulary; [docs/adr/](docs/adr/index.md) — the decisions and why
+- [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md)
 
 ## License
 

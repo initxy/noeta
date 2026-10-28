@@ -374,7 +374,7 @@ def _secret(kind: str, ref: str, where: str) -> str:
         return found
     service, _, account = ref.partition("/")
     try:
-        import keyring  # type: ignore[import-not-found]
+        import keyring  # type: ignore[import-not-found, unused-ignore]
     except ImportError:
         raise ValueError(f"{where}: {{keyring:{ref}}} needs the keyring package") from None
     secret = keyring.get_password(service, account)
