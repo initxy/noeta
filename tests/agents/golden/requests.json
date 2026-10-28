@@ -1,23 +1,23 @@
 {
  "hashes": [
-  "main 9102442daf794d0f",
-  "main 67f9626e8660be82",
-  "main 1489b6d88067d6aa",
-  "child 4fa7dbc30221ddf8",
-  "child 63c26e7dca3db52b",
-  "main 4a1a5fa60c160093",
-  "main ef0c411f94825b2c",
-  "main f45b92346dd2af91",
-  "main 9269a73ec7d924ae",
-  "main f98ebff5ba2036c2",
-  "main 604e2e6acfb263b2",
-  "main e7f8c15c01f8948a",
-  "main 1885ac7c4631ec63",
-  "main 77c7651728f77d07",
-  "main f5022331a95b1a78",
-  "main 638b7e05e8a532ef",
-  "main b8800421f34734f6",
-  "main ae0f9891cf1facc8"
+  "main ba72ac861469a7c2",
+  "main b3e1e4ed9a368184",
+  "main 581cd72894bb3248",
+  "child 5ed4f665cd5584a2",
+  "child 36e5f13c61665259",
+  "main c51d7003f55d0f37",
+  "main a4f4e4f51ad2986b",
+  "main eb2cafe93f2ce65f",
+  "main 14f5c290963bde1d",
+  "main 42b22ef054f5ec87",
+  "main ce1b98e01c09f35c",
+  "main 3093cc2bd153fc8e",
+  "main f33f76273e60f3f3",
+  "main 5751d725a9834bab",
+  "main d909fca8306a058a",
+  "main cd30c5685fca5e8a",
+  "main 67d5fc1aaa303a6d",
+  "main e845bbd258222a7c"
  ],
  "last": {
   "child": {
@@ -205,29 +205,6 @@
        "type": "object"
       },
       "name": "ToolSearch"
-     },
-     {
-      "description": "Fetches a URL, converts the page to Markdown, and answers `prompt` against it — returning the answer, not the raw page.\n\n- `http(s)` URLs only. A logged-in URL answers 401/403 (or is unreachable) and the call fails with the cause named — don't retry those.\n- HTTP is upgraded to HTTPS. Cross-host redirects are returned to you rather than followed; call again with the redirect URL.\n- Fetched pages are cached for 15 minutes per URL, so a follow-up `prompt` about the same page is cheap.\n- To search the web rather than fetch a known page, use `WebSearch`.",
-      "input_schema": {
-       "additionalProperties": false,
-       "properties": {
-        "prompt": {
-         "description": "The prompt to run on the fetched content",
-         "type": "string"
-        },
-        "url": {
-         "description": "The URL to fetch content from",
-         "format": "uri",
-         "type": "string"
-        }
-       },
-       "required": [
-        "url",
-        "prompt"
-       ],
-       "type": "object"
-      },
-      "name": "WebFetch"
      },
      {
       "defer_loading": true,
@@ -430,32 +407,6 @@
         "required": [
          "query",
          "max_results"
-        ],
-        "type": "object"
-       }
-      },
-      "type": "function"
-     },
-     {
-      "function": {
-       "description": "Fetches a URL, converts the page to Markdown, and answers `prompt` against it — returning the answer, not the raw page.\n\n- `http(s)` URLs only. A logged-in URL answers 401/403 (or is unreachable) and the call fails with the cause named — don't retry those.\n- HTTP is upgraded to HTTPS. Cross-host redirects are returned to you rather than followed; call again with the redirect URL.\n- Fetched pages are cached for 15 minutes per URL, so a follow-up `prompt` about the same page is cheap.\n- To search the web rather than fetch a known page, use `WebSearch`.",
-       "name": "WebFetch",
-       "parameters": {
-        "additionalProperties": false,
-        "properties": {
-         "prompt": {
-          "description": "The prompt to run on the fetched content",
-          "type": "string"
-         },
-         "url": {
-          "description": "The URL to fetch content from",
-          "format": "uri",
-          "type": "string"
-         }
-        },
-        "required": [
-         "url",
-         "prompt"
         ],
         "type": "object"
        }
@@ -687,30 +638,6 @@
        "required": [
         "query",
         "max_results"
-       ],
-       "type": "object"
-      },
-      "type": "function"
-     },
-     {
-      "description": "Fetches a URL, converts the page to Markdown, and answers `prompt` against it — returning the answer, not the raw page.\n\n- `http(s)` URLs only. A logged-in URL answers 401/403 (or is unreachable) and the call fails with the cause named — don't retry those.\n- HTTP is upgraded to HTTPS. Cross-host redirects are returned to you rather than followed; call again with the redirect URL.\n- Fetched pages are cached for 15 minutes per URL, so a follow-up `prompt` about the same page is cheap.\n- To search the web rather than fetch a known page, use `WebSearch`.",
-      "name": "WebFetch",
-      "parameters": {
-       "additionalProperties": false,
-       "properties": {
-        "prompt": {
-         "description": "The prompt to run on the fetched content",
-         "type": "string"
-        },
-        "url": {
-         "description": "The URL to fetch content from",
-         "format": "uri",
-         "type": "string"
-        }
-       },
-       "required": [
-        "url",
-        "prompt"
        ],
        "type": "object"
       },
@@ -1199,28 +1126,82 @@
     },
     "tools": [
      {
-      "description": "Use this tool only when you are blocked on a decision that is genuinely the user's to make: one you cannot resolve from the request, the code, or sensible defaults.\n\n- Presents 1–4 questions at once. Each question has the complete `question` text (ending with a question mark), a very short `header` chip (max 12 chars, e.g. \"Auth method\"), 2–4 `options` (each `{label, description}` — concise label, trade-off in the description), and `multiSelect` (true when several answers may be picked together).\n- Do not add an \"Other\" option — the user can always type a custom answer; it is provided automatically.\n- If you recommend an option, put it first and append \"(Recommended)\" to its label.\n- The user's selections are returned so you can proceed.\n\nWhen NOT to use: a reasonable default exists (make it, state the assumption, keep working); \"should I proceed?\" / \"is this right?\" check-ins; facts you can verify yourself in the codebase.",
+      "description": "Asks the user one to four multiple-choice questions and waits for the answers. Use it only when going on depends on a choice that is the user's to make and that the request, the code or a sensible default cannot settle.\n\n- The user can always answer \"Other\" and type their own text instead of a listed option.\n- `multiSelect: true` lets the user pick several options for one question.\n- If you recommend an option, list it first and end its label with \"(Recommended)\".\n- Keep it for decisions whose answer changes what you do next. When a choice has a conventional default, or the fact can be checked in the code, take the obvious option, say which, and continue.\n- The user may see only the question dialog, not your earlier messages or tool results: make each question stand on its own, say briefly what it depends on, and name the things you ask about.\n- To enter plan mode, use EnterPlanMode, not this tool. In plan mode, use this tool to clarify requirements or to choose between approaches before the plan is final; never to ask whether the plan is ready or whether to go ahead, and never mention \"the plan\" in a question: the user cannot see it until ExitPlanMode.\n\nPreviews:\n- Give an option a `preview` to compare concrete things: ASCII mockups of a UI, variants of code, of a diagram or of a configuration.\n- A preview is shown as Markdown in a monospace box and may span several lines; when any option has one, the dialog puts the options on the left and the focused option's preview on the right.\n- Do not use previews for simple preference questions, and use them only on single-select questions.",
       "input_schema": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "additionalProperties": false,
        "properties": {
+        "annotations": {
+         "additionalProperties": {
+          "additionalProperties": false,
+          "properties": {
+           "notes": {
+            "description": "Notes the user added to this question.",
+            "type": "string"
+           },
+           "preview": {
+            "description": "The preview of the option the user chose.",
+            "type": "string"
+           }
+          },
+          "type": "object"
+         },
+         "description": "Per question text, what the user added: the chosen option's preview and their notes. Filled in by the front end.",
+         "propertyNames": {
+          "type": "string"
+         },
+         "type": "object"
+        },
+        "answers": {
+         "additionalProperties": {
+          "type": "string"
+         },
+         "description": "Filled in with the user's answers by the front end; leave it out.",
+         "propertyNames": {
+          "type": "string"
+         },
+         "type": "object"
+        },
+        "metadata": {
+         "additionalProperties": false,
+         "description": "Statistics only; not shown to the user.",
+         "properties": {
+          "source": {
+           "description": "Where the question comes from, for statistics only (for example \"remember\"); never shown.",
+           "type": "string"
+          }
+         },
+         "type": "object"
+        },
         "questions": {
+         "description": "The questions to ask (1-4).",
          "items": {
+          "additionalProperties": false,
           "properties": {
            "header": {
-            "description": "Very short chip label (max 12 chars), e.g. 'Auth method'.",
+            "description": "A very short label shown as a chip, at most 12 characters, such as \"Database\" or \"Scope\".",
             "type": "string"
            },
            "multiSelect": {
-            "description": "Allow selecting several options.",
+            "default": false,
+            "description": "Let the user pick several options; set it when the choices do not exclude each other.",
             "type": "boolean"
            },
            "options": {
-            "description": "Distinct choices. An 'Other' free-text option is always added automatically.",
+            "description": "2-4 distinct choices, mutually exclusive unless multiSelect is set. Do not add an \"Other\" choice: one is always added.",
             "items": {
+             "additionalProperties": false,
              "properties": {
               "description": {
+               "description": "What choosing this means: its effect and trade-offs.",
                "type": "string"
               },
               "label": {
+               "description": "What the user sees and picks: 1-5 words that name the choice.",
+               "type": "string"
+              },
+              "preview": {
+               "description": "Optional content shown while this option is focused: a UI mockup, a code snippet, a diagram or a config example to compare side by side.",
                "type": "string"
               }
              },
@@ -1235,7 +1216,7 @@
             "type": "array"
            },
            "question": {
-            "description": "The complete question, ending with a question mark.",
+            "description": "The whole question, specific and ending with a question mark. With multiSelect, word it so that several answers fit.",
             "type": "string"
            }
           },
@@ -1484,29 +1465,6 @@
        "type": "object"
       },
       "name": "ToolSearch"
-     },
-     {
-      "description": "Fetches a URL, converts the page to Markdown, and answers `prompt` against it — returning the answer, not the raw page.\n\n- `http(s)` URLs only. A logged-in URL answers 401/403 (or is unreachable) and the call fails with the cause named — don't retry those.\n- HTTP is upgraded to HTTPS. Cross-host redirects are returned to you rather than followed; call again with the redirect URL.\n- Fetched pages are cached for 15 minutes per URL, so a follow-up `prompt` about the same page is cheap.\n- To search the web rather than fetch a known page, use `WebSearch`.",
-      "input_schema": {
-       "additionalProperties": false,
-       "properties": {
-        "prompt": {
-         "description": "The prompt to run on the fetched content",
-         "type": "string"
-        },
-        "url": {
-         "description": "The URL to fetch content from",
-         "format": "uri",
-         "type": "string"
-        }
-       },
-       "required": [
-        "url",
-        "prompt"
-       ],
-       "type": "object"
-      },
-      "name": "WebFetch"
      },
      {
       "description": "Writes a file, replacing it if it already exists.\n\n- Use it to create a file, or to replace one you have read in full.\n- Overwriting an existing file that you have not read in this conversation fails.\n- To change part of a file, use Edit.",
@@ -1991,29 +1949,83 @@
     "tools": [
      {
       "function": {
-       "description": "Use this tool only when you are blocked on a decision that is genuinely the user's to make: one you cannot resolve from the request, the code, or sensible defaults.\n\n- Presents 1–4 questions at once. Each question has the complete `question` text (ending with a question mark), a very short `header` chip (max 12 chars, e.g. \"Auth method\"), 2–4 `options` (each `{label, description}` — concise label, trade-off in the description), and `multiSelect` (true when several answers may be picked together).\n- Do not add an \"Other\" option — the user can always type a custom answer; it is provided automatically.\n- If you recommend an option, put it first and append \"(Recommended)\" to its label.\n- The user's selections are returned so you can proceed.\n\nWhen NOT to use: a reasonable default exists (make it, state the assumption, keep working); \"should I proceed?\" / \"is this right?\" check-ins; facts you can verify yourself in the codebase.",
+       "description": "Asks the user one to four multiple-choice questions and waits for the answers. Use it only when going on depends on a choice that is the user's to make and that the request, the code or a sensible default cannot settle.\n\n- The user can always answer \"Other\" and type their own text instead of a listed option.\n- `multiSelect: true` lets the user pick several options for one question.\n- If you recommend an option, list it first and end its label with \"(Recommended)\".\n- Keep it for decisions whose answer changes what you do next. When a choice has a conventional default, or the fact can be checked in the code, take the obvious option, say which, and continue.\n- The user may see only the question dialog, not your earlier messages or tool results: make each question stand on its own, say briefly what it depends on, and name the things you ask about.\n- To enter plan mode, use EnterPlanMode, not this tool. In plan mode, use this tool to clarify requirements or to choose between approaches before the plan is final; never to ask whether the plan is ready or whether to go ahead, and never mention \"the plan\" in a question: the user cannot see it until ExitPlanMode.\n\nPreviews:\n- Give an option a `preview` to compare concrete things: ASCII mockups of a UI, variants of code, of a diagram or of a configuration.\n- A preview is shown as Markdown in a monospace box and may span several lines; when any option has one, the dialog puts the options on the left and the focused option's preview on the right.\n- Do not use previews for simple preference questions, and use them only on single-select questions.",
        "name": "AskUserQuestion",
        "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
+         "annotations": {
+          "additionalProperties": {
+           "additionalProperties": false,
+           "properties": {
+            "notes": {
+             "description": "Notes the user added to this question.",
+             "type": "string"
+            },
+            "preview": {
+             "description": "The preview of the option the user chose.",
+             "type": "string"
+            }
+           },
+           "type": "object"
+          },
+          "description": "Per question text, what the user added: the chosen option's preview and their notes. Filled in by the front end.",
+          "propertyNames": {
+           "type": "string"
+          },
+          "type": "object"
+         },
+         "answers": {
+          "additionalProperties": {
+           "type": "string"
+          },
+          "description": "Filled in with the user's answers by the front end; leave it out.",
+          "propertyNames": {
+           "type": "string"
+          },
+          "type": "object"
+         },
+         "metadata": {
+          "additionalProperties": false,
+          "description": "Statistics only; not shown to the user.",
+          "properties": {
+           "source": {
+            "description": "Where the question comes from, for statistics only (for example \"remember\"); never shown.",
+            "type": "string"
+           }
+          },
+          "type": "object"
+         },
          "questions": {
+          "description": "The questions to ask (1-4).",
           "items": {
+           "additionalProperties": false,
            "properties": {
             "header": {
-             "description": "Very short chip label (max 12 chars), e.g. 'Auth method'.",
+             "description": "A very short label shown as a chip, at most 12 characters, such as \"Database\" or \"Scope\".",
              "type": "string"
             },
             "multiSelect": {
-             "description": "Allow selecting several options.",
+             "default": false,
+             "description": "Let the user pick several options; set it when the choices do not exclude each other.",
              "type": "boolean"
             },
             "options": {
-             "description": "Distinct choices. An 'Other' free-text option is always added automatically.",
+             "description": "2-4 distinct choices, mutually exclusive unless multiSelect is set. Do not add an \"Other\" choice: one is always added.",
              "items": {
+              "additionalProperties": false,
               "properties": {
                "description": {
+                "description": "What choosing this means: its effect and trade-offs.",
                 "type": "string"
                },
                "label": {
+                "description": "What the user sees and picks: 1-5 words that name the choice.",
+                "type": "string"
+               },
+               "preview": {
+                "description": "Optional content shown while this option is focused: a UI mockup, a code snippet, a diagram or a config example to compare side by side.",
                 "type": "string"
                }
               },
@@ -2028,7 +2040,7 @@
              "type": "array"
             },
             "question": {
-             "description": "The complete question, ending with a question mark.",
+             "description": "The whole question, specific and ending with a question mark. With multiSelect, word it so that several answers fit.",
              "type": "string"
             }
            },
@@ -2294,32 +2306,6 @@
         "required": [
          "query",
          "max_results"
-        ],
-        "type": "object"
-       }
-      },
-      "type": "function"
-     },
-     {
-      "function": {
-       "description": "Fetches a URL, converts the page to Markdown, and answers `prompt` against it — returning the answer, not the raw page.\n\n- `http(s)` URLs only. A logged-in URL answers 401/403 (or is unreachable) and the call fails with the cause named — don't retry those.\n- HTTP is upgraded to HTTPS. Cross-host redirects are returned to you rather than followed; call again with the redirect URL.\n- Fetched pages are cached for 15 minutes per URL, so a follow-up `prompt` about the same page is cheap.\n- To search the web rather than fetch a known page, use `WebSearch`.",
-       "name": "WebFetch",
-       "parameters": {
-        "additionalProperties": false,
-        "properties": {
-         "prompt": {
-          "description": "The prompt to run on the fetched content",
-          "type": "string"
-         },
-         "url": {
-          "description": "The URL to fetch content from",
-          "format": "uri",
-          "type": "string"
-         }
-        },
-        "required": [
-         "url",
-         "prompt"
         ],
         "type": "object"
        }
@@ -2800,29 +2786,83 @@
     "store": false,
     "tools": [
      {
-      "description": "Use this tool only when you are blocked on a decision that is genuinely the user's to make: one you cannot resolve from the request, the code, or sensible defaults.\n\n- Presents 1–4 questions at once. Each question has the complete `question` text (ending with a question mark), a very short `header` chip (max 12 chars, e.g. \"Auth method\"), 2–4 `options` (each `{label, description}` — concise label, trade-off in the description), and `multiSelect` (true when several answers may be picked together).\n- Do not add an \"Other\" option — the user can always type a custom answer; it is provided automatically.\n- If you recommend an option, put it first and append \"(Recommended)\" to its label.\n- The user's selections are returned so you can proceed.\n\nWhen NOT to use: a reasonable default exists (make it, state the assumption, keep working); \"should I proceed?\" / \"is this right?\" check-ins; facts you can verify yourself in the codebase.",
+      "description": "Asks the user one to four multiple-choice questions and waits for the answers. Use it only when going on depends on a choice that is the user's to make and that the request, the code or a sensible default cannot settle.\n\n- The user can always answer \"Other\" and type their own text instead of a listed option.\n- `multiSelect: true` lets the user pick several options for one question.\n- If you recommend an option, list it first and end its label with \"(Recommended)\".\n- Keep it for decisions whose answer changes what you do next. When a choice has a conventional default, or the fact can be checked in the code, take the obvious option, say which, and continue.\n- The user may see only the question dialog, not your earlier messages or tool results: make each question stand on its own, say briefly what it depends on, and name the things you ask about.\n- To enter plan mode, use EnterPlanMode, not this tool. In plan mode, use this tool to clarify requirements or to choose between approaches before the plan is final; never to ask whether the plan is ready or whether to go ahead, and never mention \"the plan\" in a question: the user cannot see it until ExitPlanMode.\n\nPreviews:\n- Give an option a `preview` to compare concrete things: ASCII mockups of a UI, variants of code, of a diagram or of a configuration.\n- A preview is shown as Markdown in a monospace box and may span several lines; when any option has one, the dialog puts the options on the left and the focused option's preview on the right.\n- Do not use previews for simple preference questions, and use them only on single-select questions.",
       "name": "AskUserQuestion",
       "parameters": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "additionalProperties": false,
        "properties": {
+        "annotations": {
+         "additionalProperties": {
+          "additionalProperties": false,
+          "properties": {
+           "notes": {
+            "description": "Notes the user added to this question.",
+            "type": "string"
+           },
+           "preview": {
+            "description": "The preview of the option the user chose.",
+            "type": "string"
+           }
+          },
+          "type": "object"
+         },
+         "description": "Per question text, what the user added: the chosen option's preview and their notes. Filled in by the front end.",
+         "propertyNames": {
+          "type": "string"
+         },
+         "type": "object"
+        },
+        "answers": {
+         "additionalProperties": {
+          "type": "string"
+         },
+         "description": "Filled in with the user's answers by the front end; leave it out.",
+         "propertyNames": {
+          "type": "string"
+         },
+         "type": "object"
+        },
+        "metadata": {
+         "additionalProperties": false,
+         "description": "Statistics only; not shown to the user.",
+         "properties": {
+          "source": {
+           "description": "Where the question comes from, for statistics only (for example \"remember\"); never shown.",
+           "type": "string"
+          }
+         },
+         "type": "object"
+        },
         "questions": {
+         "description": "The questions to ask (1-4).",
          "items": {
+          "additionalProperties": false,
           "properties": {
            "header": {
-            "description": "Very short chip label (max 12 chars), e.g. 'Auth method'.",
+            "description": "A very short label shown as a chip, at most 12 characters, such as \"Database\" or \"Scope\".",
             "type": "string"
            },
            "multiSelect": {
-            "description": "Allow selecting several options.",
+            "default": false,
+            "description": "Let the user pick several options; set it when the choices do not exclude each other.",
             "type": "boolean"
            },
            "options": {
-            "description": "Distinct choices. An 'Other' free-text option is always added automatically.",
+            "description": "2-4 distinct choices, mutually exclusive unless multiSelect is set. Do not add an \"Other\" choice: one is always added.",
             "items": {
+             "additionalProperties": false,
              "properties": {
               "description": {
+               "description": "What choosing this means: its effect and trade-offs.",
                "type": "string"
               },
               "label": {
+               "description": "What the user sees and picks: 1-5 words that name the choice.",
+               "type": "string"
+              },
+              "preview": {
+               "description": "Optional content shown while this option is focused: a UI mockup, a code snippet, a diagram or a config example to compare side by side.",
                "type": "string"
               }
              },
@@ -2837,7 +2877,7 @@
             "type": "array"
            },
            "question": {
-            "description": "The complete question, ending with a question mark.",
+            "description": "The whole question, specific and ending with a question mark. With multiSelect, word it so that several answers fit.",
             "type": "string"
            }
           },
@@ -3089,30 +3129,6 @@
        "required": [
         "query",
         "max_results"
-       ],
-       "type": "object"
-      },
-      "type": "function"
-     },
-     {
-      "description": "Fetches a URL, converts the page to Markdown, and answers `prompt` against it — returning the answer, not the raw page.\n\n- `http(s)` URLs only. A logged-in URL answers 401/403 (or is unreachable) and the call fails with the cause named — don't retry those.\n- HTTP is upgraded to HTTPS. Cross-host redirects are returned to you rather than followed; call again with the redirect URL.\n- Fetched pages are cached for 15 minutes per URL, so a follow-up `prompt` about the same page is cheap.\n- To search the web rather than fetch a known page, use `WebSearch`.",
-      "name": "WebFetch",
-      "parameters": {
-       "additionalProperties": false,
-       "properties": {
-        "prompt": {
-         "description": "The prompt to run on the fetched content",
-         "type": "string"
-        },
-        "url": {
-         "description": "The URL to fetch content from",
-         "format": "uri",
-         "type": "string"
-        }
-       },
-       "required": [
-        "url",
-        "prompt"
        ],
        "type": "object"
       },

@@ -79,5 +79,5 @@ async def test_the_tool_takes_a_plain_string_for_one_question(tmp_path: Path) ->
     await rt.run_until_idle()
     [done] = [r.event for r in await client.events(tid) if isinstance(r.event, ToolFinished)]
     assert not done.result.is_error
-    assert '"other": "sqlite"' in done.result.text
+    assert done.result.text.startswith('The user answered your questions: "Which db?"="sqlite"')
     await store.close()
