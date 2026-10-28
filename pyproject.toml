@@ -26,6 +26,7 @@ noeta = "noeta.cli.main:main"
 # would (noeta/core/registry.py).
 [project.entry-points."noeta.plugins"]
 ask_user = "noeta.plugins.ask_user:AskUser"
+checkpoints = "noeta.plugins.checkpoints:Checkpoints"
 compaction = "noeta.plugins.compaction:Compaction"
 environment = "noeta.plugins.environment:Environment"
 findings = "noeta.plugins.findings:Findings"
