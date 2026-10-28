@@ -127,8 +127,7 @@ server/remote surfaces, which stay noeta's own.
     change with server confinement rules, left for later).
   - `WebSearch` needs a search backend key (Claude Code uses Anthropic's server tool, only an
     Anthropic key reaches it); the replay sets a placeholder key to list it.
-  - An interrupted reply keeps its text, not a thinking block it finished (the kernel records
-    the partial reply as text); one reply's results go back in call order (Claude Code answered
+  - One reply's results go back in call order (Claude Code answered
     a `ToolSearch` before an earlier background `Bash`); no empty `output_config` system turn
     after a compaction (noeta sends effort top-level every call).
   - Skills: a `` !`cmd` `` the permission checks would ask about stops the skill from loading
@@ -157,9 +156,25 @@ server/remote surfaces, which stay noeta's own.
     stream-json command line, not the TUI or the server's `/stream-json`; `--mcp-config` takes
     several values, so a positional prompt right after it reads as a config (the SDK passes
     one); `--permission-prompt-tool <mcp tool>` stays `stdio`-only.
-  - Left open (outside this pass, the items stay unticked): the per-tool behavior pass of
-    Phase 2, `SendMessage.notify_when_idle` and the transcript `output_file`, ACP diffs / plan
-    updates / `set_session_model`.
+- **Intended differences left by the per-tool behavior pass (2026-10-28, branch
+  `os-parity2`).** Rows in `parity/deviations.md`; the rest of each tool's runtime behavior
+  follows the 2.1.312 bundle (`parity/rules/tools/*.md` runtime rows).
+  - File tools: `Edit` / `Write` skip the read-first check for a write nobody had to approve,
+    as Claude Code, but refuse after a person approved rather than before the prompt and keep
+    no per-model gate (the tools see only `ToolContext.approved`); "changed since the read" is
+    by content, not modification time; a short PDF comes back as page images; `Read`'s
+    empty-file / past-the-end warnings are plain text (a tool result never carries
+    `<system-reminder>`).
+  - Shell and web: a timed-out `Bash` is killed, not moved to the background, on a host with
+    no background jobs; the 256 KB capture cap stays (no `BASH_MAX_OUTPUT_LENGTH`); `WebFetch`
+    without a digest model returns the rendered page.
+  - Sub-agents: the transcript `output_file` is a projection of the child's log under the
+    host's spill directory; `notify_when_idle` targets another open root task of the store,
+    one subscription per session, the notice naming it by task id.
+  - ACP: model switching is a `model` session config option (`set_config_option`; the
+    `agent-client-protocol` 0.12.1 schema has no `session/set_model`), the mode a second one
+    beside `modes`; the editor's plan is plan mode's plan file (the baseline has no task-list
+    tool).
 
 ## Plan
 
@@ -193,7 +208,7 @@ Phase 1 — P0 fixes (needed regardless of parity)
 Phase 2 — what the model sees
 - [x] Tool set and order as the baseline: `Agent` (alias `Task`), deferred tools + `ToolSearch`
   (`select:` syntax), retired tools removed, Glob/Grep handled as the native build does.
-- [ ] Each tool's schema and behavior per contract (Read paging on token cap, file-unchanged
+- [x] Each tool's schema and behavior per contract (Read paging on token cap, file-unchanged
   dedupe, Edit on externally changed files, notebook, WebFetch paging/PDF/4xx, Bash
   timeout-to-background, read-only command table, Monitor modes, TaskStop).
 - [x] System prompt sections per checklist, including the `<system-reminder>` explanation.
@@ -229,7 +244,7 @@ Phase 3 — behaviors around the model
   outside the proxy, so it bypasses `allowedDomains`.
 
 Phase 4 — missing tools
-- [ ] `SendMessage` (resume a finished sub-agent from its log) and fork sub-agents, background by
+- [x] `SendMessage` (resume a finished sub-agent from its log) and fork sub-agents, background by
   default, `<task-notification>` delivery with usage, per-call denial instead of whole-task
   failure.
 - [x] `ScheduleWakeup`, `CronCreate/List/Delete`, `/loop` on the kernel's timers.
@@ -241,7 +256,7 @@ Phase 5 — front ends
   prompt tool, structured output.
 - [x] TUI slash commands with mechanisms (`/compact`, `/model`, `/rewind`, `/context`, `/cost`,
   `/memory`, `/config`), `@` mentions, pasted images; plugin commands may run locally.
-- [ ] ACP: real diffs, mode and model switching, plan updates. HTTP: command list, pending
+- [x] ACP: real diffs, mode and model switching, plan updates. HTTP: command list, pending
   questions, agent/model list.
 - [x] Rewind with file checkpoints; session fork.
 - [x] Rewind restores sub-agents' file changes; the restore notice reaches the task the front
@@ -603,3 +618,34 @@ Phase 5 — front ends
   `parity/deviations.md`); make check 1985 passed (87.74%); make eval 1.000 vs 0.987 baseline
   (3 trials, two `delegate_parallel_review` trials hit the 240 s timeout but scored); make
   e2e 7 passed.
+- 2026-10-28: the open Plan items on `os-parity2` (from `os-structure` d06c6cf6), one commit
+  per behavior with a test failing before it. Per-tool pass against the 2.1.312 bundle:
+  `Read` (whole file without `limit`, no line cut, a whole-file read past 25,000 tokens pages
+  instead of refusing, unchanged-file answer needs the same arguments, images by extension,
+  PDFs by extension, binary / device files refused, missing file guesses a path), `Edit` /
+  `Write` / `NotebookEdit` (read-first skipped for unapproved writes, edits over unambiguous
+  disk changes, quote and `\uXXXX` matching, empty `old_string` creates, 1 GB cap, Claude
+  Code's results), `Bash` (exit 1 of search commands not an error, timeout moves the command
+  to the background, `data:image` output), `TaskStop`, `WebFetch` (status results, redirect
+  report, URL limits, 60 s / 10 MB, binary bodies saved), `WebSearch`, MCP (over-budget
+  results saved and pointed to, blobs saved), `AskUserQuestion`, `ToolSearch` ranking and
+  `select:`, `Skill`, `ReportFindings`, `Workflow`, plan-mode and worktree tools, `Agent` (a
+  bad call refused alone, loose `subagent_type`), `SendMessage` (no broadcast,
+  `notify_when_idle` with idle / ended / dropped / 12-hour-expired notices on inbox posts and a
+  kernel timer, `TaskView.enqueue(task_id=)`), the sub-agent transcript `output_file`; ACP
+  diffs (Edit / Write / NotebookEdit old and new text, already on the approval card), plan
+  updates from plan mode's plan file, model and mode as session config options and a loaded
+  session advertising them; an interrupted reply keeps the thinking blocks it finished
+  (`Delta(kind="block")`, `TurnStopped.thinking`; deviation `ef73947b` `f0d24fcf` gone);
+  extras-dependent commands name `pip install 'noeta[<extra>]'`; the TUI is busy from the
+  moment it sends (the "UI did not settle" flake: a fast turn's end was shown before the send
+  returned; 20 runs of the four TUI files under `-n 8` green). Texts that followed Claude
+  Code's sentences too closely were reworded in one commit. Helpers could not write their own
+  worktrees (the harness pinned them to the integrator's), so their work came back as patch
+  series applied and checked commit by commit. make check green after every commit
+  (2157 passed (88.14%) at the end); `make parity` 0 (11 accepted deviations); make eval 1.000 vs
+  0.987; make e2e 7 passed; make cluster 12/12. Left: AskUserQuestion still needs every question
+  answered (Claude Code allows unanswered ones and per-question notes); MCP idle timeouts;
+  WebFetch's raw-markdown answer for known documentation sites; Bash's note that a command
+  changed a file the model read; MCP tokens estimated, not counted; UTF-16 files refused; the
+  sub-agent transcript is rewritten whole on each change (cost grows with the conversation).
