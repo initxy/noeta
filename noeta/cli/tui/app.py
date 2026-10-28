@@ -449,7 +449,10 @@ class NoetaApp(App[None]):
                 reason = ": ".join(str(x) for x in (data.get("reason"), data.get("detail")) if x)
                 await transcript.mount(Notice(f"turn failed: {reason}", classes="-error"))
             elif ev.kind == "notice" and ev.extension == CORE:
-                await transcript.mount(Notice(str(data.get("text") or "")))
+                text = str(data.get("text") or "")
+                # Structured news (a review's findings) reads as a list.
+                await transcript.mount(Markdown(text, classes="notice") if data.get("kind")
+                                       else Notice(text))
         elif isinstance(ev, Waiting):
             await self._end_stream()
             self.waiting_for = {"approval": "waiting for your approval (y/a/n)",

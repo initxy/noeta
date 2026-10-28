@@ -18,6 +18,7 @@ plugins:
   - ask_user
   - web
   - schedule
+  - findings
   - mcp
 ---
 
