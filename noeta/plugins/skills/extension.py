@@ -18,6 +18,7 @@ import msgspec
 from noeta.core.events import Recorded
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import (
+    Allow,
     Ask,
     Command,
     CommandContext,
@@ -30,7 +31,7 @@ from noeta.core.extension import (
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ToolUse, user
 from noeta.plugins.skills import _frontmatter
-from noeta.plugins.skills.allowed_tools import resolve_skill_allowed_tools
+from noeta.plugins.skills.allowed_tools import allow_rule_texts, resolve_skill_allowed_tools
 from noeta.plugins.skills.listing import listing_lines, render_listing
 from noeta.plugins.skills.registry import (
     SkillDescription,
@@ -38,12 +39,14 @@ from noeta.plugins.skills.registry import (
     load_registry,
     render_activation,
     render_command_body,
+    substitute_variables,
 )
 from noeta.plugins.skills.script import (
     SKILL_SCRIPT_TOOL_NAME,
     RunSkillScriptTool,
     is_skill_script_resource,
 )
+from noeta.toolkit import permission_rules as pr
 from noeta.toolkit.commands import command_message, parse_command_message
 from noeta.toolkit.context import new_user_messages, task_env
 from noeta.toolkit.tokens import resident_budget
@@ -153,12 +156,15 @@ def _activation_data(desc: SkillDescription, source: str,
     if raw is not None:
         [(_, grant)] = resolve_skill_allowed_tools(((desc.name, raw),))
         allowed = sorted(grant)
+    rules = [substitute_variables(r, desc.base_dir, cwd)
+             for r in allow_rule_texts(raw)] if raw is not None else []
     return {
         "name": desc.name,
         "source": source,
         "dir": desc.base_dir,
         "scripts": [r for r in desc.resources if is_skill_script_resource(r)],
         "allowed_tools": allowed,
+        "allow_rules": rules,
         "args": args,
         "text": render_activation(desc, args, cwd),
     }
@@ -404,7 +410,10 @@ class Skills(Extension):
         active: dict[str, Any] = state.get("active") or {}
         if call.name == SKILL_SCRIPT_TOOL_NAME and self.scripts:
             return _script_gate(call, active)
-        return self._allowed_tools_gate(call.name, active)
+        restricted = self._allowed_tools_gate(call.name, active)
+        if restricted is None and _pre_approved(view, call, active):
+            return Allow(approve=True)
+        return restricted
 
     # ------------------------------------------------------------ helpers
 
@@ -474,6 +483,27 @@ class Skills(Extension):
         if view.keeps_tail is not None and state.get("listings"):
             view.record(self.name, "listing_rehold", {})
         return out
+
+
+def _pre_approved(view: TaskView, call: ToolUse, active: Mapping[str, Any]) -> bool:
+    """Whether an active skill's ``allowed-tools`` covers this call: while
+    the skill is in the conversation its tools run without asking (Claude
+    Code's pre-approval). A deny, or an ask rule, still stands."""
+    texts = [t for entry in active.values() for t in entry.get("allow_rules") or ()]
+    if not texts:
+        return False
+    if "*" in texts:
+        return True
+    cwd = view.cwd or os.getcwd()
+    ctx = pr.RuleContext(root=cwd, home=os.path.expanduser("~"), cwd=cwd)
+    for text in texts:
+        try:
+            rule = pr.parse_rule(text)
+        except ValueError:
+            continue
+        if pr.match(rule, call.name, call.input, ctx, for_allow=True):
+            return True
+    return False
 
 
 def _script_gate(call: ToolUse, active: Mapping[str, Any]) -> Gate:

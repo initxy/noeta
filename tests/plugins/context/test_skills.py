@@ -10,9 +10,11 @@ from typing import Any
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import Waiting
+from noeta.core.extension import Ask, Extension, Gate, TaskView
+from noeta.core.types import ToolUse
 from noeta.plugins.fs import FileTools
 from noeta.plugins.skills import Skills, UsageRank
-from noeta.plugins.skills.allowed_tools import parse_allowed_tools
+from noeta.plugins.skills.allowed_tools import allow_rule_texts, parse_allowed_tools
 from noeta.plugins.skills.listing import (
     ADDED_HEADER,
     ROSTER_HEADER,
@@ -371,3 +373,37 @@ async def test_directory_variables_name_the_skill_and_the_project(h: Harness) ->
     await h.start(agent())
     assert h.provider.requests[1].messages[-1].text.endswith(
         f"Run {d}/go.sh in {h.work}; also {d}.\n")
+
+
+class _AsksForWrites(Extension):
+    """Stands in for a permission layer that asks before every write."""
+
+    name = "asks"
+
+    async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
+        return Ask(prompt="write?") if call.name == "Write" else None
+
+
+async def test_allowed_tools_run_without_asking_while_the_skill_is_active(h: Harness) -> None:
+    d = write_skill(skills_dir(h), "notes", "Notes.",
+                    **{"allowed-tools": "Write(/out/**) Bash(${NOETA_SKILL_DIR}/run.sh)"})
+    a = Agent(name="a", model="m", extensions=[FileTools(), Skills(), _AsksForWrites()])
+    inside, outside = str(h.work / "out" / "n.md"), str(h.work / "n.md")
+    h.provider.add(reply("", ("Skill", {"skill": "notes"})),
+                   reply("", ("Write", {"file_path": inside, "content": "x"})),
+                   reply("", ("Write", {"file_path": outside, "content": "x"})),
+                   reply("done"))
+    tid = await h.start(a)
+    parked = [r.event for r in await h.events(tid) if isinstance(r.event, Waiting)]
+    # Inside the rule the write runs; outside it, it asks.
+    assert len(parked) == 1
+    assert (h.work / "out" / "n.md").exists() and not (h.work / "n.md").exists()
+    [act] = await h.records(tid, "skills", "activated")
+    assert act.data["allow_rules"] == ["Write(/out/**)", f"Bash({d}/run.sh)"]
+
+
+def test_allow_rule_texts() -> None:
+    assert allow_rule_texts("Bash(git add:*), Read Edit") == ("Bash(git add:*)", "Read", "Edit")
+    assert allow_rule_texts("[Read, 'Bash(npm run test)']") == ("Read", "Bash(npm run test)")
+    assert allow_rule_texts("- Read\n- Bash(ls -la)") == ("Read", "Bash(ls -la)")
+    assert allow_rule_texts("Read *") == ("*",)
