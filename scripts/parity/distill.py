@@ -61,11 +61,12 @@ def find_step(texts: list[str], steps: list[dict[str, Any]], kinds: facts.Kinds)
 
 
 class Paths:
-    """Rewrites the recording machine's paths into placeholders."""
+    """Rewrites the recording machine's paths and user name into placeholders."""
 
     def __init__(self) -> None:
         self.project: str | None = None
         self.home: str | None = None
+        self.user: re.Pattern[str] | None = None
 
     def learn(self, body: Mapping[str, Any]) -> None:
         if self.project:
@@ -76,6 +77,8 @@ class Paths:
                 self.project = m.group(1)
                 h = _HOME.match(self.project)
                 self.home = h.group(1) if h else None
+                if self.home:
+                    self.user = re.compile(rf"\b{re.escape(self.home.rsplit('/', 1)[1])}\b")
                 return
 
     def scrub(self, value: Any) -> Any:
@@ -84,6 +87,8 @@ class Paths:
                 value = value.replace(self.project, "{PROJECT}")
             if self.home:
                 value = value.replace(self.home, "{HOME}")
+            if self.user:
+                value = self.user.sub("{USER}", value)
             return value
         if isinstance(value, list):
             return [self.scrub(v) for v in value]
@@ -110,6 +115,17 @@ def _catalog_add(catalog: dict[str, Any], found: dict[str, dict[str, int]]) -> N
         if len(row["shas"]) > 4:  # a text with run-specific detail: keep only its size range
             lens = list(row["shas"].values())
             catalog[kind] = {"varies": True, "len": [min(lens), max(lens)]}
+
+
+def read_cards(rec_dir: Path) -> list[dict[str, str]]:
+    """The cards the driver answered (``drive.py`` saves each to
+    ``<session>.cards/``): step and key only, not the card's text."""
+    out = []
+    for f in sorted(rec_dir.with_name(rec_dir.name + ".cards").glob("*.txt")):
+        m = re.match(r"# step (\S+); answered with (\S+)", f.read_text("utf-8"))
+        if m:
+            out.append({"step": m.group(1), "key": m.group(2)})
+    return out
 
 
 def session_prompts(sessions: Mapping[str, Any], name: str) -> list[str]:
@@ -178,6 +194,10 @@ def distill_session(name: str, spec: Mapping[str, Any], rec_dir: Path,
         _catalog_add(catalog, found_texts)
 
         msg = wire.parse_response(rec.get("response") or "") if ok else None
+        if kind == "auto-mode-classifier":
+            said = "".join(b.get("text", "") for b in (msg or {}).get("content") or [])
+            row["verdict"] = ("block" if "<block>yes" in said else
+                              "allow" if "<block>no" in said else None)
         if msg is None:
             continue
         turn = paths.scrub(wire.script_turn(msg))
@@ -193,7 +213,13 @@ def distill_session(name: str, spec: Mapping[str, Any], rec_dir: Path,
             sub["turns"].append(turn)
         elif kind == "compaction":
             compactions.append({"step": sname, **turn})
-    contract = {"session": name, "about": spec.get("about", ""), "requests": requests}
+    contract = {"session": name, "about": spec.get("about", ""), "requests": requests,
+                "cards": read_cards(rec_dir)}
+    missing = [s["name"] for s in script_steps if not s["turns"] and s["say"] != "/compact"
+               and not any(r["step"] == s["name"] and r["kind"] == "main" for r in requests)]
+    if missing:
+        contract["steps_without_main_calls"] = missing
+        print(f"distill: {name}: no main-loop call recorded for step(s) {', '.join(missing)}")
     script = {"session": name, "steps": script_steps, "subagents": list(subagents.values()),
               "compactions": compactions}
     return contract, script

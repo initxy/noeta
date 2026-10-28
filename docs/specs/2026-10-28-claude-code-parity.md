@@ -111,7 +111,7 @@ Phase 0 — measure
   Claude Code's text.
 - [x] Replay endpoint + runner + comparator; `make parity` prints every mismatch per scenario and
   step; record the first mismatch report in this spec.
-- [ ] Re-record the steps the 2.1.312 recording lost (see the 2026-10-28 Phase 0 log entry).
+- [x] Re-record the steps the 2.1.312 recording lost (see the 2026-10-28 Phase 0 log entry).
 - [x] Rule checklists `parity/rules/*.md` (our words) for the main prompt, each tool description,
   each reminder, the compaction prompt and the auto-mode classifier.
 
@@ -268,3 +268,25 @@ Phase 5 — front ends
   Claude Code's count), ReportFindings/ScheduleWakeup/Workflow/ExitPlanMode, auto mode.
   Background sub-agents' approvals wait at the root (Claude Code denies the one call) — owner to
   decide.
+- 2026-10-28: re-recorded 2.1.312 as `~/cc-recordings/2.1.312-r2/` (the first recording kept)
+  and re-distilled `parity/2.1.312` from it. `drive.py session` now gives each session a fresh
+  project and config, types only when Claude Code is idle (no request in flight per the
+  proxy's `.live`, no spinner, the turn's "done" line), saves and answers each card (keys per
+  step in `scenarios.json`), dismisses Claude Code's own notices, interrupts only once reply
+  text shows, clears text left in the input box, and marks every step that went wrong
+  (`!!!` in `<session>.marks`, also checked by distill). Root cause of the stage-1 400s: the
+  classifier's first stage sends `thinking: {type: disabled}`, which the gateway turns into a
+  DeepSeek reasoning setting DeepSeek rejects; DeepSeek was also taking minutes per call, so
+  r2 used `gateway/seed-evolving`, which accepts the request as sent (`record.py
+  --drop-disabled-thinking` stays for DeepSeek). New: m2 (approve, "don't ask again" for
+  `python3 *`, deny via Escape, a sub-agent's approval), m5 (a project `PreToolUse` hook,
+  a failing Read, background Bash + Monitor, TaskStop, `rm -rf .git` in the project).
+  Classifier block path, as recorded: Claude Code's model first asked for confirmation; once
+  confirmed, stage 1 (`max_tokens` 64) answered block, stage 2 (`max_tokens` 8192 here, 2112
+  in the first recording) allowed it, and the command ran — a stage-1 block escalates to stage
+  2, and a block at both stages is still unrecorded. An Escape while a tool call's input is
+  still streaming withdraws the prompt into the input box instead of interrupting (kept
+  outside the contract in `2.1.312-r2-attempts/`). Report after re-recording: 169 mismatches
+  (tools 55, context 50, run 22, layout 15, cache 8, headers 6, side requests 5, params 4,
+  system 3, compaction 1); the larger count comes from the new steps (sub-agent tool sets,
+  approvals, Monitor/TaskStop, interrupt kinds), not from regressions.
