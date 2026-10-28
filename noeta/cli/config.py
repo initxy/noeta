@@ -17,6 +17,7 @@ win. The plugin part of ``config.toml``::
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import logging
 import os
@@ -108,6 +109,31 @@ def device_id() -> str | None:
         path.write_text(value + "\n", "utf-8")
     except OSError:
         return None
+    return value
+
+
+def server_token(*, create: bool = False) -> str | None:
+    """The bearer token of ``noeta serve``: ``NOETA_SERVER_TOKEN``, else the
+    one kept in ``~/.noeta/server-token`` (owner-only), made when
+    ``create`` and missing."""
+    if os.environ.get("NOETA_SERVER_TOKEN"):
+        return os.environ["NOETA_SERVER_TOKEN"]
+    path = HOME / "server-token"
+    try:
+        text = path.read_text("utf-8").strip()
+        if text:
+            return text
+    except OSError:
+        pass
+    if not create:
+        return None
+    value = secrets.token_urlsafe(32)
+    HOME.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(FileNotFoundError):
+        path.unlink()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(value + "\n")
     return value
 
 

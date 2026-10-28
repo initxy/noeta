@@ -59,6 +59,12 @@ def _parser() -> argparse.ArgumentParser:
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8642)
     sv.add_argument("--no-worker", action="store_true", help="API only; workers run elsewhere")
+    sv.add_argument("--no-token", action="store_true",
+                    help="serve a loopback address without a bearer token")
+    sv.add_argument("--allow-origin", action="append", default=[], metavar="ORIGIN",
+                    help="a web origin (https://host:port) whose pages may call the API")
+    sv.add_argument("--allow-bypass-permissions", action="store_true",
+                    help="let requests start or switch tasks into bypassPermissions")
     sub.add_parser("trust", help="load this project's plugins, agents, prompts and skills")
     sub.add_parser("plugins", help="list the plugins and where each comes from")
     mcp_command.add_parser(sub)
@@ -132,17 +138,26 @@ def _app(s: Settings, **kw: Any) -> Any:
     return from_settings(s, **kw)
 
 
-async def _serve(s: Settings, host: str, port: int, with_worker: bool) -> None:
+async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     import uvicorn
 
-    from noeta.host.http import create_app
+    from noeta.cli.config import HOME, server_token
+    from noeta.host.http import LOOPBACK_HOSTS, create_app
 
-    app = _app(s)
+    host, with_worker = args.host, not args.no_worker
+    token = None if args.no_token else server_token(create=True)
+    if token is not None and not os.environ.get("NOETA_SERVER_TOKEN"):
+        print(f"noeta: bearer token in {HOME / 'server-token'}: {token}", file=sys.stderr)
+    app = _app(s, cwd=cwd)
     if with_worker:
         await app.start()
-    api = create_app(app.client, token=os.environ.get("NOETA_SERVER_TOKEN") or None,
+    api = create_app(app.client, token=token,
                      deltas=app.deltas if with_worker else None, agents=app.runtime.agents,
-                     app=app if with_worker else None)
+                     app=app if with_worker else None,
+                     allowed_hosts=LOOPBACK_HOSTS if host in LOOPBACK_HOSTS else None,
+                     origins=args.allow_origin,
+                     allow_bypass=args.allow_bypass_permissions, cwd=cwd)
+    port = args.port
     try:
         await uvicorn.Server(uvicorn.Config(api, host=host, port=port)).serve()
     finally:
@@ -188,9 +203,9 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(_worker(_settings(args), args.queue or ["default"], args.concurrency))
         return
     if args.command == "serve":
-        if args.host not in ("127.0.0.1", "localhost") and not os.environ.get("NOETA_SERVER_TOKEN"):
-            sys.exit("noeta: set NOETA_SERVER_TOKEN before serving on a non-local address")
-        asyncio.run(_serve(_settings(args), args.host, args.port, not args.no_worker))
+        if args.no_token and args.host not in ("127.0.0.1", "localhost", "::1"):
+            sys.exit("noeta: --no-token serves only a loopback address")
+        asyncio.run(_serve(_settings(args), args, cwd))
         return
 
 

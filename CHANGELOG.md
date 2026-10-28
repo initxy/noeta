@@ -125,6 +125,13 @@ All notable changes to Noeta are documented here. The format is based on
 - **HTTP**: `/commands`, `/agents`, `/models`, `/tasks/{id}/usage`, `/tasks/{id}/context`,
   `/tasks/{id}/rewind`, `/openapi.json`; `POST /tasks` takes `history_from` /
   `history_through`. `websockets` joins the `server` extra.
+- **`noeta serve` always asks for a bearer token**: `NOETA_SERVER_TOKEN`, else one made
+  once in `~/.noeta/server-token` (owner-only, printed at start, read by `noeta --server`);
+  `--no-token` drops it on a loopback address only. A request from another web origin
+  (`--allow-origin` adds one) or with a `Host` other than a loopback name on a loopback
+  address is refused, and no request creates or switches a task into `bypassPermissions`
+  (`--allow-bypass-permissions`) or runs one outside the server's directory
+  (`create_app(allowed_hosts=, origins=, allow_bypass=, cwd=)`).
 - **Kernel**: the `config` signal changes a running task's `model`, `effort` or `max_turns`
   (`CONFIG_SIGNAL`); `config["max_turns"]` fails a turn after that many model calls
   (`max_turns`); `Client.create(history_from=, history_through=)`; `Runtime.preview` (the
