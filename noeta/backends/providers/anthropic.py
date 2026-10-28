@@ -56,6 +56,7 @@ from noeta.core.types import (
     ModelResponse,
     Text,
     Thinking,
+    ToolReference,
     ToolResult,
     ToolUse,
 )
@@ -268,6 +269,7 @@ class AnthropicProvider:
                     "name": tool.name,
                     "description": tool.description,
                     "input_schema": tool.input_schema,
+                    **({"defer_loading": True} if tool.defer_loading else {}),
                 }
                 for tool in request.tools
             ]
@@ -449,6 +451,9 @@ def _tool_result_content(block: ToolResult, vision: bool) -> Any:
     images and a vision-capable model it is an array: one text block, then one
     base64 image block per image. A catalogued non-vision model gets the string
     plus a note, so it does not act as if the tool returned only text."""
+    refs = [b for b in block.content if isinstance(b, ToolReference)]
+    if refs:
+        return [{"type": "tool_reference", "tool_name": r.tool_name} for r in refs]
     text = tool_result_text(block)
     images = tool_result_images(block)
     if not images:

@@ -76,14 +76,14 @@ async def test_user_prompt_submit_can_block_the_turn(tmp_path: Path) -> None:
 
 async def test_pre_tool_use_blocks_matching_calls_only(tmp_path: Path) -> None:
     hooks = {"PreToolUse": _hook("echo 'reads are off today' >&2; exit 2", matcher="Read|Glob")}
-    steps = [reply("", ("Read", {"file_path": "a.txt"}), ("Grep", {"pattern": "hello"})),
+    steps = [reply("", ("Read", {"file_path": "a.txt"}), ("Write", {"file_path": "b.txt", "content": "x"})),
              reply("done")]
     _provider, client, tid = await _run(tmp_path, hooks, steps)
     results = {r.event.result.call_id: r.event.result for r in await client.events(tid)
                if isinstance(r.event, ToolFinished)}
-    read, grep = results.values()
+    read, write = results.values()
     assert read.is_error and "reads are off today" in read.content[0].text  # type: ignore[union-attr]
-    assert not grep.is_error
+    assert not write.is_error
 
 
 async def test_pre_tool_use_json_can_ask(tmp_path: Path) -> None:

@@ -106,7 +106,7 @@ class Permissions(Extension):
       tools: ``high``, as in 0.6). ``max_risk`` denies tools above it.
     * ``allowed_tools`` / ``disallowed_tools`` — filter the offered tools by
       name (removed from the request, and denied if called anyway).
-      Disallowing ``Bash`` also removes Monitor, BashOutput and KillShell.
+      Disallowing ``Bash`` also removes Monitor and TaskStop.
     * ``shell_allowlist`` — extra ``{"program", "subcommand"?}`` specs that
       run without asking, on top of the curated rules.
     * ``trusted_workspace`` — honour the project's

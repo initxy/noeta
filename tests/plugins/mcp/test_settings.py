@@ -117,9 +117,14 @@ async def test_a_task_gets_the_settings_servers(store: SqliteStore, tmp_path: Pa
     rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
                  env_for=lambda _s: None)  # type: ignore[arg-type,return-value]
     try:
-        await Client(store).create("a", "go", config={"cwd": str(ws)})
+        tid = await Client(store).create("a", "go", config={"cwd": str(ws)})
         await rt.run_until_idle()
     finally:
         await pool.close()
-    names = {t.name for t in provider.requests[0].tools}
+    # Server tools are deferred: named for ToolSearch, not sent yet.
+    assert [t.name for t in provider.requests[0].tools] == [
+        "DeferredToolPlaceholder", "ToolSearch"]
+    st = (await Client(store).events(tid))
+    listed = [r.event for r in st if getattr(r.event, "kind", "") == "listed"][-1]
+    names = {t["name"] for srv in listed.data["servers"] for t in srv["tools"]}
     assert {"mcp__fake__echo", "mcp__proj__echo"} <= names

@@ -49,15 +49,15 @@ async def test_nonzero_exit_leads_with_the_code(h: Harness) -> None:
     assert bare.is_error and text_of(bare) == "Exit code 4"
 
 
-async def test_stderr_labeled_only_when_both_streams(h: Harness) -> None:
-    both = await bash(h, "sh -c 'echo out; echo err 1>&2'")
-    assert text_of(both) == "out\nstderr:\nerr"
+async def test_stdout_and_stderr_merge_in_print_order(h: Harness) -> None:
+    both = await bash(h, "sh -c 'echo err 1>&2; echo out; echo err2 1>&2'")
+    assert text_of(both) == "err\nout\nerr2"
     only_err = await bash(h, "sh -c 'echo lone-err 1>&2'")
     assert text_of(only_err) == "lone-err"
 
 
 async def test_empty_output_is_marked(h: Harness) -> None:
-    assert text_of(await bash(h, "true")) == "(no output)"
+    assert text_of(await bash(h, "true")) == "(Bash completed with no output)"
 
 
 async def test_runs_in_the_workspace(h: Harness, ws: Path) -> None:
@@ -134,7 +134,7 @@ async def test_a_short_sleep_still_runs(h: Harness) -> None:
 
 async def test_the_directory_persists_between_commands(h: Harness) -> None:
     first = await bash(h, "mkdir -p sub/deeper && cd sub")
-    assert not first.is_error and text_of(first) == "(no output)"
+    assert not first.is_error and text_of(first) == "(Bash completed with no output)"
     assert text_of(await bash(h, "pwd")).strip() == str(h.root / "sub")
     await bash(h, "cd deeper")
     assert text_of(await bash(h, "pwd")).strip() == str(h.root / "sub" / "deeper")
@@ -195,10 +195,17 @@ async def test_a_recorded_directory_outside_the_workspace_is_given_up(
     assert text_of(out) == f"{h.root}\nShell cwd was reset to {h.root}"
 
 
-async def test_a_failing_command_keeps_the_new_directory(h: Harness) -> None:
+async def test_a_failing_command_does_not_move_the_shell(h: Harness) -> None:
     out = await bash(h, "mkdir sub && cd sub && exit 2")
     assert out.is_error and text_of(out) == "Exit code 2"
-    assert h.shell.cwd == str(h.root / "sub")
+    assert h.shell.cwd is None
+
+
+async def test_a_sub_agent_shell_never_moves(h: Harness) -> None:
+    ctx = h.ctx("c/1")
+    ctx.root_id = "root"
+    out = await BashTool().run({"command": "mkdir sub && cd sub"}, ctx)
+    assert not out.is_error and "cwd" not in out.meta and h.records == []
 
 
 # -- git hardening --------------------------------------------------------------
@@ -230,7 +237,9 @@ async def test_allowlisted_git_runs_with_hardening_flags(ws: Path) -> None:
     h = Harness(env=rec)
     for command in ("git status --short", "git diff --stat -- a", "git log -p"):
         assert not (await bash(h, command)).is_error
-    assert rec.argvs == [
+    wrapper = ["bash", "-c", 'exec 2>&1; exec "$@"', "bash"]
+    assert all(argv[:4] == wrapper for argv in rec.argvs)
+    assert [argv[4:] for argv in rec.argvs] == [
         ["git", "-c", "core.fsmonitor=", "status", "--short"],
         [
             "git", "-c", "core.fsmonitor=", "diff", "--no-ext-diff",
@@ -303,18 +312,18 @@ async def test_capture_cap_names_the_dropped_head(h: Harness) -> None:
     out = await bash(h, "python3 -c \"print('A'*4000)\"", BashTool(output_cap=1024))
     assert not out.is_error
     lines = text_of(out).splitlines()
-    assert lines[0] == "[earlier output dropped: only the last 1 KB of stdout was captured]"
+    assert lines[0] == "[earlier output dropped: only the last 1 KB was captured]"
     # The tail is what survives (the directory marker the trap prints is
     # captured too, and stripped before display).
     assert set(lines[1]) == {"A"} and len(lines) == 2
 
 
-async def test_capture_cap_names_both_streams_and_small_caps(h: Harness) -> None:
+async def test_capture_cap_with_a_small_cap(h: Harness) -> None:
     out = await bash(
         h, "printf 'x%.0s' $(seq 1 50); printf 'y%.0s' $(seq 1 50) >&2", BashTool(output_cap=10)
     )
     assert text_of(out).splitlines()[0] == (
-        "[earlier output dropped: only the last 10 bytes of stdout and stderr was captured]"
+        "[earlier output dropped: only the last 10 bytes was captured]"
     )
 
 
@@ -400,17 +409,13 @@ def test_flags_and_schema() -> None:
     tool = BashTool()
     assert tool.name == "Bash"
     assert tool.read_only is False and tool.clearable is True
-    assert tool.input_schema == {
-        "type": "object",
-        "properties": {
-            "command": {"type": "string"},
-            "timeout": {"type": "number"},
-            "description": {"type": "string"},
-            "run_in_background": {"type": "boolean"},
-        },
-        "required": ["command"],
-        "additionalProperties": False,
-    }
+    schema = tool.input_schema
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert schema["required"] == ["command"] and schema["additionalProperties"] is False
+    assert {k: v["type"] for k, v in schema["properties"].items()} == {
+        "command": "string", "timeout": "number", "description": "string",
+        "run_in_background": "boolean", "dangerouslyDisableSandbox": "boolean"}
+    assert all(v["description"] for v in schema["properties"].values())
     assert tool.input_schema is not BashTool().input_schema
 
 

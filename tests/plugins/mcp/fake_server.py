@@ -25,6 +25,7 @@ TOOLS = json.loads(os.environ.get("FAKE_TOOLS") or "null") or [
     {"name": "image", "description": "Returns a picture.", "inputSchema": {"type": "object"}},
     {"name": "sleep", "description": "Sleeps.", "inputSchema": {"type": "object"}},
     {"name": "die", "description": "Exits the server.", "inputSchema": {"type": "object"}},
+    {"name": "pid", "description": "The server's process id.", "inputSchema": {"type": "object"}},
 ]
 PAGE = int(os.environ.get("FAKE_PAGE") or 0)
 LOG = os.environ.get("FAKE_LOG")
@@ -64,6 +65,8 @@ def handle(method: str, params: dict) -> dict:
         if name == "echo":
             return {"content": [{"type": "text", "text": f"echo: {args.get('text', '')}"}],
                     "structuredContent": {"pid": os.getpid()}}
+        if name == "pid":
+            return {"content": [{"type": "text", "text": str(os.getpid())}]}
         if name == "fail":
             return {"content": [{"type": "text", "text": "it broke"}], "isError": True}
         if name == "image":

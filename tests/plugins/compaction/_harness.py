@@ -11,6 +11,7 @@ from typing import Any
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
+from noeta.core.deferred import with_tool_search
 from noeta.core.events import ModelCalled
 from noeta.core.extension import TaskView
 from noeta.core.loop.request import build_request, request_hash
@@ -153,7 +154,7 @@ async def rebuilt(store: SqliteStore, agent: Agent, tid: str) -> list[tuple[str,
                     tools.append(t)
         request = build_request(
             state, model=agent.model, system_prompt=agent.system_prompt, identity=agent.identity,
-            parts=[p for e in exts for p in e.context(view)], tools=tools,
+            parts=[p for e in exts for p in e.context(view)], tools=with_tool_search(tools),
             effort=agent.effort, max_tokens=agent.max_tokens or _output_ceiling(agent.model),
             output_schema=agent.output_schema)
         for e in exts:

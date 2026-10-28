@@ -1,8 +1,13 @@
-Use this tool only when you are blocked on a decision that is genuinely the user's to make: one you cannot resolve from the request, the code, or sensible defaults.
+Asks the user one to four multiple-choice questions and waits for the answers. Use it only when going on depends on a choice that is the user's to make and that the request, the code or a sensible default cannot settle.
 
-- Presents 1–4 questions at once. Each question has the complete `question` text (ending with a question mark), a very short `header` chip (max 12 chars, e.g. "Auth method"), 2–4 `options` (each `{label, description}` — concise label, trade-off in the description), and `multiSelect` (true when several answers may be picked together).
-- Do not add an "Other" option — the user can always type a custom answer; it is provided automatically.
-- If you recommend an option, put it first and append "(Recommended)" to its label.
-- The user's selections are returned so you can proceed.
+- The user can always answer "Other" and type their own text instead of a listed option.
+- `multiSelect: true` lets the user pick several options for one question.
+- If you recommend an option, list it first and end its label with "(Recommended)".
+- Keep it for decisions whose answer changes what you do next. When a choice has a conventional default, or the fact can be checked in the code, take the obvious option, say which, and continue.
+- The user may see only the question dialog, not your earlier messages or tool results: make each question stand on its own, say briefly what it depends on, and name the things you ask about.
+- To enter plan mode, use EnterPlanMode, not this tool. In plan mode, use this tool to clarify requirements or to choose between approaches before the plan is final; never to ask whether the plan is ready or whether to go ahead, and never mention "the plan" in a question: the user cannot see it until ExitPlanMode.
 
-When NOT to use: a reasonable default exists (make it, state the assumption, keep working); "should I proceed?" / "is this right?" check-ins; facts you can verify yourself in the codebase.
+Previews:
+- Give an option a `preview` to compare concrete things: ASCII mockups of a UI, variants of code, of a diagram or of a configuration.
+- A preview is shown as Markdown in a monospace box and may span several lines; when any option has one, the dialog puts the options on the left and the focused option's preview on the right.
+- Do not use previews for simple preference questions, and use them only on single-select questions.

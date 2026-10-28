@@ -1,6 +1,8 @@
-Fetches a URL, converts the page to Markdown, and answers `prompt` against it — returning the answer, not the raw page.
+Fetches a URL, turns the page into Markdown and answers `prompt` about it with a small, fast model: you get the answer, not the page.
 
-- `http(s)` URLs only. A logged-in URL answers 401/403 (or is unreachable) and the call fails with the cause named — don't retry those.
-- HTTP is upgraded to HTTPS. Cross-host redirects are returned to you rather than followed; call again with the redirect URL.
-- Fetched pages are cached for 15 minutes per URL, so a follow-up `prompt` about the same page is cheap.
-- To search the web rather than fetch a known page, use `WebSearch`.
+- Pages behind a login, or otherwise private, fail. For those use an MCP tool that has access, or `gh` for GitHub.
+- `localhost` and host names without a dot cannot be fetched; reach a local server with `curl` through Bash.
+- `http` URLs are fetched over `https`.
+- A redirect to a different host is not followed: the result names the new URL, and you call again with it.
+- Pages are cached per URL for 15 minutes, so asking again about the same page is cheap.
+- A page too long for one call is answered from the part that fits, and the result gives the `offset` to continue from.

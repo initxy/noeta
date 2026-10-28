@@ -151,7 +151,10 @@ def schema_diff(a: Any, b: Any, path: str) -> list[str]:
         return [] if a == b else [f"{path}: Claude Code {_short(a)}, noeta {_short(b)}"]
     out = []
     for k in sorted((set(a) | set(b)) - _SKIP_SCHEMA_KEYS):
-        if a.get(k) != b.get(k):
+        if k == "additionalProperties" and isinstance(a.get(k), Mapping) \
+                and isinstance(b.get(k), Mapping):
+            out += schema_diff(a[k], b[k], f"{path}{{*}}")  # a schema: our own wording
+        elif a.get(k) != b.get(k):
             out.append(f"{path} {k}: Claude Code {_short(a.get(k))}, noeta {_short(b.get(k))}")
     pa, pb = a.get("properties") or {}, b.get("properties") or {}
     missing = [k for k in pa if k not in pb]

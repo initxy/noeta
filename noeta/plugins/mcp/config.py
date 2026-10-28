@@ -85,7 +85,7 @@ def tool_timeout_s(server_timeout: float | None) -> float:
 DESCRIPTION_MAX_BYTES = 1024
 
 #: Cap on server-written text that enters the conversation unasked (a
-#: prompt, a resource, a ToolSearch listing): it then sits in the history for
+#: prompt, a resource, a resource listing): it then sits in the history for
 #: the rest of the task.
 INJECTION_MAX_BYTES = 64 * 1024
 
@@ -117,8 +117,9 @@ class McpServer:
 
     ``tools`` keeps only the named raw tools (``None`` = all advertised).
     ``call_timeout`` bounds one ``tools/call`` (``None``: :func:`tool_timeout_s`).
-    ``deferred`` keeps the server's schemas out of every request: its tools
-    are reached through ``ToolSearch`` / ``McpCall``.
+    ``deferred`` (the default) announces the server's tools by name only:
+    the model loads them with ``ToolSearch`` (``noeta.core.deferred``);
+    ``False`` sends their schemas from the first request.
     """
 
     alias: str
@@ -128,7 +129,7 @@ class McpServer:
     headers: Mapping[str, str] = field(default_factory=dict)
     tools: Sequence[str] | None = None
     call_timeout: float | None = None
-    deferred: bool = False
+    deferred: bool = True
 
     def __post_init__(self) -> None:
         if not _ALIAS_RE.match(self.alias):
@@ -170,18 +171,16 @@ def cap_injected(text: str, *, kind: str) -> str:
     )
 
 
-def describe_tool(alias: str, description: object) -> str:
-    """The model-facing description of one server tool: whose words they
-    are first (a server sentence like "always call this first" must not read
-    as harness documentation), then the server's text, capped."""
+def describe_tool(description: object) -> str:
+    """The model-facing description of one server tool: the server's own
+    text, unprefixed, capped."""
     text = description if isinstance(description, str) else ""
     if len(text.encode("utf-8")) > DESCRIPTION_MAX_BYTES:
         text = (
             truncate_bytes(text, DESCRIPTION_MAX_BYTES)
             + f"\n[truncated: description exceeded {DESCRIPTION_MAX_BYTES} bytes]"
         )
-    prefix = f"[MCP server {alias!r}]"
-    return f"{prefix} {text}" if text else prefix
+    return text
 
 
 def make_tool_name(alias: str, raw: object, *, disambiguate: bool = False) -> str:

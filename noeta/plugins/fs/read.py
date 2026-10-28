@@ -3,8 +3,11 @@
 A read is observation, not mutation, so paths are not fenced: a relative path
 is anchored on the workspace, an absolute one is read where it points. Every
 failure is an error result, never an exception. Each text or notebook read is
-recorded (``fs`` / ``read``: canonical path, sha256 of the whole file, mtime)
-for ``Edit`` / ``Write``'s read-first check.
+recorded (``fs`` / ``read``: canonical path, sha256 of the whole file, mtime,
+and the line range) for ``Edit`` / ``Write``'s read-first check and for the
+unchanged-file answer: reading the same range of a file whose mtime has not
+moved since, with that earlier result still in the conversation, returns a
+short note instead of the content again (Claude Code's dedupe).
 """
 
 from __future__ import annotations
@@ -27,9 +30,10 @@ from noeta.plugins.fs._read_formats import (
     read_pdf,
     too_many_tokens,
 )
-from noeta.plugins.fs.state import FS, KIND_READ
+from noeta.plugins.fs.state import FS, KIND_READ, current_fs_state
 from noeta.toolkit.images import ImageTooLarge, fit_image
 from noeta.toolkit.tools import (
+    SCHEMA_DIALECT,
     Workspace,
     format_size,
     load_description,
@@ -37,7 +41,15 @@ from noeta.toolkit.tools import (
     tool_error,
 )
 
-__all__ = ["IMAGE_MAX_BYTES", "ReadTool"]
+__all__ = ["FILE_UNCHANGED", "IMAGE_MAX_BYTES", "ReadTool"]
+
+#: The answer to a repeated read of an unchanged range.
+FILE_UNCHANGED = (
+    "File unchanged since you last read this range: the earlier Read result in this "
+    "conversation is still current, so use it rather than reading the file again.")
+#: ``allow_large`` raises the token ceiling this many times (to 200K tokens).
+_LARGE_FACTOR = 8
+_JS_MAX_SAFE = 9007199254740991
 
 
 _DEFAULT_READ_LIMIT = 2000  # lines
@@ -115,19 +127,22 @@ class _Scan:
     """One streaming pass over a file: hash every byte, count lines, keep only
     the lines ``[start, start + limit)`` that fit the served-bytes bound.
 
-    Lines split on ``\\n`` only — the boundary ``rg`` and ``Grep`` use — so a
+    Lines split on ``\\n`` only — the boundary ``rg`` uses — so a
     form feed or U+2028 inside a line never shifts the numbering. A trailing
     segment without ``\\n`` is the last line. A NUL byte stops the scan (the
     file is binary)."""
 
     start: int
     limit: int
+    max_served: int = _READ_MAX_SERVED_BYTES
     hasher: Any = field(default_factory=hashlib.sha256)
     window: list[str] = field(default_factory=list)
     served: int = 0
     capped: bool = False
     bytes_replaced: bool = False
     has_nul: bool = False
+    #: The file's last byte is a newline (Read then shows a final empty line).
+    ends_with_newline: bool = False
     total_lines: int = 0  # completed lines so far; final after ``finish``
     _cur: bytearray = field(default_factory=bytearray)
     _cur_len: int = 0
@@ -145,7 +160,7 @@ class _Scan:
     def _finish_line(self, raw: bytes, clipped: bool) -> None:
         text, replaced = _decode_line(raw, clipped)
         cost = len(text.encode("utf-8")) + 8  # number column + tab + newline
-        if self.window and self.served + cost > _READ_MAX_SERVED_BYTES:
+        if self.window and self.served + cost > self.max_served:
             self.capped = True
             return
         self.window.append(text)
@@ -158,6 +173,8 @@ class _Scan:
             self.has_nul = True
             return False
         self.hasher.update(chunk)
+        if chunk:
+            self.ends_with_newline = chunk.endswith(b"\n")
         pos, n = 0, len(chunk)
         while pos < n:
             nl = chunk.find(b"\n", pos)
@@ -209,12 +226,27 @@ def _positive_int(value: Any) -> int | None:
 
 def _input_schema() -> dict[str, Any]:
     return {
+        "$schema": SCHEMA_DIALECT,
         "type": "object",
         "properties": {
-            "file_path": {"type": "string"},
-            "offset": {"type": "integer", "minimum": 1},
-            "limit": {"type": "integer", "minimum": 1},
-            "pages": {"type": "string"},
+            "file_path": {"type": "string",
+                          "description": "Absolute path of the file to read."},
+            "offset": {"type": "integer", "minimum": 0, "maximum": _JS_MAX_SAFE,
+                       "description": ("Line number to start from (the first line is 1). "
+                                       "Give it only when the file is too large to read "
+                                       "at once.")},
+            "limit": {"type": "integer", "exclusiveMinimum": 0, "maximum": _JS_MAX_SAFE,
+                      "description": ("How many lines to read. Give it only when the file "
+                                      "is too large to read at once.")},
+            "pages": {"type": "string",
+                      "description": ('Pages of a PDF to read, such as "1-5", "3" or "10-20". '
+                                      "PDF files only; at most 20 pages per call.")},
+            "allow_large": {"type": "boolean",
+                            "description": (
+                                "Read a file or line range past the usual size limits, up to "
+                                "what fits in your context. Only when you need all of it or "
+                                "the user asked for the whole file; otherwise read it in "
+                                "parts or search it.")},
         },
         "required": ["file_path"],
         "additionalProperties": False,
@@ -247,6 +279,11 @@ class ReadTool:
         offset = _positive_int(input.get("offset")) or 1
         explicit_limit = _positive_int(input.get("limit"))
         limit = explicit_limit or _DEFAULT_READ_LIMIT
+        large = input.get("allow_large") is True
+        seen = current_fs_state(ctx.state).reads.get(resolved)
+        if ctx.by_model and seen is not None and seen.range == [offset, limit] \
+                and seen.mtime == st.mtime and not input.get("pages"):
+            return text_output(FILE_UNCHANGED, path=display, unchanged=True)
         size = st.size
         chunks = _chunks(env, resolved)
 
@@ -272,7 +309,7 @@ class ReadTool:
 
         # Claude Code's whole-file ceiling: a read with no ``limit`` of a file
         # over 256 KB is refused before anything is served.
-        if explicit_limit is None and size > _READ_MAX_FILE_BYTES:
+        if explicit_limit is None and size > _READ_MAX_FILE_BYTES and not large:
             return tool_error(
                 self.name,
                 f"File content ({format_size(size)}) exceeds maximum allowed "
@@ -283,7 +320,9 @@ class ReadTool:
             )
 
         start = offset - 1
-        scan = _Scan(start=start, limit=limit)
+        max_tokens = MAX_READ_TOKENS * (_LARGE_FACTOR if large else 1)
+        scan = _Scan(start=start, limit=limit,
+                     max_served=_READ_MAX_SERVED_BYTES * (_LARGE_FACTOR if large else 1))
         try:
             async for chunk in chunks():
                 if not scan.feed(chunk):
@@ -299,12 +338,12 @@ class ReadTool:
         tokens = estimate_tokens(
             scan.window_text(), posixpath.splitext(resolved)[1].lstrip(".").lower()
         )
-        if scan.capped or tokens > MAX_READ_TOKENS:
-            return tool_error(self.name, too_many_tokens(tokens))
+        if scan.capped or tokens > max_tokens:
+            return tool_error(self.name, too_many_tokens(tokens, max_tokens))
 
         # Keyed by the canonical path and digesting the raw bytes of the whole
         # file, so a later mutation check compares like with like.
-        _record_read(ctx, resolved, scan.digest, st.mtime)
+        _record_read(ctx, resolved, scan.digest, st.mtime, [offset, limit])
 
         total = scan.total_lines
         meta: dict[str, Any] = {"path": display, "total_lines": total}
@@ -321,25 +360,16 @@ class ReadTool:
                 **meta,
             )
 
-        rendered = "\n".join(
-            f"{start + i + 1:>6}\t{line}" for i, line in enumerate(scan.window)
-        )
+        lines = list(scan.window)
+        # A final newline shows as one more, empty, numbered line.
+        if scan.ends_with_newline and start + len(lines) == total and len(lines) < limit \
+                and not scan.capped:
+            lines.append("")
+        rendered = "\n".join(f"{start + i + 1}\t{line}" for i, line in enumerate(lines))
         shown_end = start + len(scan.window)
-        notes: list[str] = []
         if scan.bytes_replaced:
-            notes.append(_note("Non-utf8 bytes were replaced with U+FFFD."))
-        if shown_end < total or start > 0:
-            notes.append(
-                _note(
-                    f"Showing lines {start + 1}-{shown_end} of {total} "
-                    f"total lines. Use offset={shown_end + 1} to continue "
-                    "reading."
-                )
-            )
-        output = rendered
-        if notes:
-            output = output + "\n\n" + "\n".join(notes)
-        return text_output(output, lines=[start + 1, shown_end], **meta)
+            rendered += "\n\n" + _note("Non-utf8 bytes were replaced with U+FFFD.")
+        return text_output(rendered, lines=[start + 1, shown_end], **meta)
 
     async def _read_image(
         self,
@@ -385,5 +415,9 @@ class ReadTool:
         )
 
 
-def _record_read(ctx: ToolContext, path: str, digest: str, mtime: float) -> None:
-    ctx.record(FS, KIND_READ, {"path": path, "digest": digest, "mtime": mtime})
+def _record_read(ctx: ToolContext, path: str, digest: str, mtime: float,
+                 lines: list[int] | None = None) -> None:
+    data: dict[str, Any] = {"path": path, "digest": digest, "mtime": mtime}
+    if lines is not None:
+        data["range"] = lines
+    ctx.record(FS, KIND_READ, data)

@@ -19,7 +19,7 @@ loaded for the rest of the conversation, across compaction (`m1/0059`) and `--co
 (`m4/0001`).
 
 noeta equivalent: `noeta/plugins/web/fetch.py`, description `noeta/plugins/web/webfetch.md`.
-noeta sends it as an ordinary always-loaded tool.
+noeta defers it the same way.
 
 ## Parameters
 
@@ -29,25 +29,25 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 |---|---|---|---|---|---|
 | `tool.WebFetch.p.url` | `url` | string, `format: uri` | yes | the URL to fetch | covered |
 | `tool.WebFetch.p.prompt` | `prompt` | string | yes | what to ask about the fetched content | covered |
-| `tool.WebFetch.p.offset` | `offset` | integer | no | minimum 0, maximum 2^53-1; character position in the page text to resume from, taken from the previous result, for pages too long for one call | missing (noeta cuts the page at 100000 characters and cannot page on) |
+| `tool.WebFetch.p.offset` | `offset` | integer | no | minimum 0, maximum 2^53-1; character position in the page text to resume from, taken from the previous result, for pages too long for one call | covered |
 
 ## Rules
 
 | id | rule | noeta today |
 |---|---|---|
 | `tool.WebFetch.1` | Fetches the URL, converts it to Markdown and answers `prompt` with a small fast model. | covered |
-| `tool.WebFetch.2` | Authenticated or private URLs fail; for those use an authenticated MCP tool or `gh`. | covered for the failure; the MCP/`gh` alternative is missing |
-| `tool.WebFetch.3` | `localhost` and any hostname without a dot fail; for a local server use `curl` through Bash. | contradicts: noeta fetches loopback/dotless hosts (owner decision 2026-09-18 not to refuse addresses; needs a recorded deviation or a reversal) |
-| `tool.WebFetch.4` | `http` is upgraded to `https`. | covered (noeta exempts loopback) |
+| `tool.WebFetch.2` | Authenticated or private URLs fail; for those use an authenticated MCP tool or `gh`. | covered |
+| `tool.WebFetch.3` | `localhost` and any hostname without a dot fail; for a local server use `curl` through Bash. | covered |
+| `tool.WebFetch.4` | `http` is upgraded to `https`. | covered (loopback IP addresses exempt) |
 | `tool.WebFetch.5` | A redirect to another host is not followed; it is reported so the model can call again with the new URL. | covered |
 | `tool.WebFetch.6` | Responses are cached for 15 minutes per URL. | covered |
-| `tool.WebFetch.7` | The description does not mention `WebSearch`. | contradicts: noeta adds a `WebSearch` pointer (extra rule) |
+| `tool.WebFetch.7` | The description does not mention `WebSearch`. | covered |
 
 ## Result shape
 
 | id | case | shape | noeta today |
 |---|---|---|---|
-| `tool.WebFetch.r.1` | success | only the small model's answer text (`Example Domain`), no header, no URL/title lines, no source warning | contradicts: noeta prefixes a "Source: external web content" line plus `Title:` and `URL:` lines |
+| `tool.WebFetch.r.1` | success | only the small model's answer text (`Example Domain`), no header, no URL/title lines, no source warning | covered |
 | `tool.WebFetch.r.2` | cache marker | in `s1` the result block carried `cache_control` with a 1-hour TTL (OAuth only, not baseline) | n/a (baseline uses no 1-hour TTL here) |
 
 ## Variants

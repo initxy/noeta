@@ -16,8 +16,7 @@ it with `ToolSearch` (`select:mcp__echo__echo,ListMcpResourcesTool,ReadMcpResour
 `ListAgents` and `Read`, and stays loaded across compaction and `--continue`. Not called in any
 recording, so no result shape was observed.
 
-noeta equivalent: none. noeta turns MCP resources into `@` mentions
-(`noeta/plugins/mcp/prompts.py`) and offers no resource tool.
+noeta equivalent: `ListMcpResourcesTool` in `noeta/plugins/mcp/tools.py`.
 
 ## Parameters
 
@@ -25,16 +24,16 @@ JSON Schema 2020-12, `additionalProperties: false`; no `required` list.
 
 | id | name | type | required | enum / default / limits | noeta today |
 |---|---|---|---|---|---|
-| `tool.ListMcpResourcesTool.p.server` | `server` | string | no | name of one server to list; omitted means every server | missing |
+| `tool.ListMcpResourcesTool.p.server` | `server` | string | no | name of one server to list; omitted means every server | covered |
 
 ## Rules
 
 | id | rule | noeta today |
 |---|---|---|
-| `tool.ListMcpResourcesTool.1` | Lists the resources available from the configured MCP servers. | missing |
-| `tool.ListMcpResourcesTool.2` | Each listed resource carries all standard MCP resource fields plus a `server` field naming its server. | missing |
-| `tool.ListMcpResourcesTool.3` | Without `server`, resources from all servers are returned. | missing |
-| `tool.ListMcpResourcesTool.4` | The description restates the parameter in a `Parameters:` list (marked optional) and starts and ends with a blank line. | missing |
+| `tool.ListMcpResourcesTool.1` | Lists the resources available from the configured MCP servers. | covered |
+| `tool.ListMcpResourcesTool.2` | Each listed resource carries all standard MCP resource fields plus a `server` field naming its server. | covered |
+| `tool.ListMcpResourcesTool.3` | Without `server`, resources from all servers are returned. | covered |
+| `tool.ListMcpResourcesTool.4` | The description restates the parameter in a `Parameters:` list (marked optional) and starts and ends with a blank line. | covered |
 
 ## Result shape
 

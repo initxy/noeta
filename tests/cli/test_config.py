@@ -25,18 +25,18 @@ def test_plugin_and_agent_tables(home: Path) -> None:
         'model = "m"\n'
         '[plugins.shell]\nbackground = true\n'
         '[plugins.web]\nenabled = false\n'
-        '[agents.main]\nadd_plugins = ["structured_output", {todo = {}}]\n'
+        '[agents.main]\nadd_plugins = ["structured_output", {hooks = {}}]\n'
         '[agents."*"]\nadd_plugins = ["ask_user"]\n')
     s = load_settings()
     assert s.plugins == {"shell": {"background": True}, "web": {"enabled": False}}
-    assert s.add_plugins == {"main": (("structured_output", {}), ("todo", {})),
+    assert s.add_plugins == {"main": (("structured_output", {}), ("hooks", {})),
                              "*": (("ask_user", {}),)}
 
 
 @pytest.mark.parametrize("text", [
     "[plugins]\nweb = 1\n",
     "[agents.main]\nplugins = []\n",
-    "[agents.main]\nadd_plugins = \"todo\"\n",
+    "[agents.main]\nadd_plugins = \"hooks\"\n",
 ])
 def test_bad_tables(home: Path, text: str) -> None:
     (home / "config.toml").write_text(text)
@@ -60,12 +60,12 @@ def test_from_settings_applies_the_tables(home: Path) -> None:
         f'store = "sqlite:///{home / "t.db"}"\n'
         '[plugins.web]\nenabled = false\n'
         '[plugins.memory]\nrecall_model = "small"\n'
-        '[agents.Explore]\nadd_plugins = ["todo"]\n')
+        '[agents.Explore]\nadd_plugins = ["ask_user"]\n')
     app = from_settings(load_settings(), cwd=str(home))
     agents = app.runtime.agents
     names = {n: {e.name for e in a.extensions} for n, a in agents.items()}
     assert "web" not in names["main"] and "web" not in names["general-purpose"]
-    assert "todo" in names["Explore"]
+    assert "ask_user" in names["Explore"]
     [memory] = [e for e in agents["main"].extensions if e.name == "memory"]
     # The front end's root, with config.toml's arguments laid over it.
     assert str(memory.home) == str(home) and memory.recall_model == "small"  # type: ignore[attr-defined]

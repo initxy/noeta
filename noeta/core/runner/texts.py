@@ -11,6 +11,9 @@ STOPPED_CALL_ERROR = "interrupted: a human stop landed during this batch"
 TURN_FAILED_CALL_ERROR = "not run: the turn failed: "
 DENIED_BY_HUMAN = "denied by human"
 UNKNOWN_TOOL = "No tool named {name!r} is available in this task; use one of the offered tools."
+DEFERRED_NOT_LOADED = (
+    "InputValidationError: {name} is a deferred tool whose schema is not loaded. Load it with "
+    "ToolSearch (query \"select:{name}\"), then call it again.")
 
 #: Output-limit recovery, copied from Claude Code (2.1.300).
 OUTPUT_LIMIT_RESUME_NUDGE = (

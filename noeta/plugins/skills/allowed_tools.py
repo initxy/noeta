@@ -11,7 +11,7 @@ surface adopted the Claude Code names natively (see ``CONTEXT.md``,
 mount or it is nothing. Recognition is per name — an entry outside the set is
 dropped from the grant while the rest of the declaration stands — because
 degrading the whole declaration punished every real Claude Code skill that
-happened to name ``WebFetch`` or ``TodoWrite``.
+happened to name ``WebFetch`` or ``Monitor``.
 """
 
 from __future__ import annotations
@@ -43,35 +43,31 @@ RECOGNIZED_TOOL_NAMES: frozenset[str] = frozenset(
     {
         # fs
         "Read",
-        "Glob",
-        "Grep",
         "Edit",
         "Write",
+        "NotebookEdit",
         "Bash",
-        "BashOutput",
-        "KillShell",
         "Monitor",
+        "TaskStop",
         # web
         "WebFetch",
         "WebSearch",
         # control tools
-        "TodoWrite",
         "AskUserQuestion",
         "Agent",
         "Task",
         "SendMessage",
         "ListAgents",
         "SubagentHandback",
-        "skill",
+        "Skill",
+        "ToolSearch",
+        # mcp
+        "ListMcpResourcesTool",
+        "ReadMcpResourceTool",
         # skills
         "run_skill_script",
         # app
         "open_app",
-        # memory
-        "memory_write",
-        "memory_read",
-        "memory_search",
-        "memory_archive",
         # browser
         "browser_navigate",
         "browser_click",

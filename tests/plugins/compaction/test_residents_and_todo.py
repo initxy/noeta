@@ -1,5 +1,5 @@
 """Resident content comes back inside the compaction (so the request sent
-equals the one rebuilt from the log), the todo reminder keeps working after
+equals the one rebuilt from the log), a plugin's reminder keeps working after
 a compaction, and a file too large to restore is not recorded as read."""
 
 from __future__ import annotations
@@ -13,11 +13,11 @@ from noeta.agents import default_agents
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
+from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.types import Message
 from noeta.plugins.compaction import Compaction
 from noeta.plugins.compaction.summary import SUMMARY_PREAMBLE
 from noeta.plugins.permissions import Permissions
-from noeta.plugins.todo import Todo
 
 from ._harness import Model, Probe, answer, call, rebuilt, run
 
@@ -40,12 +40,12 @@ async def test_default_agents_residents_follow_every_summary(
     work = tmp_path / "work"
     work.mkdir()
     (work / "AGENTS.md").write_text("RULE: always say hi")
-    # main's prompt and tools take ~10K tokens: a 45K cap leaves the same
+    # main's prompt and tools take ~5K tokens: a 40K cap leaves the same
     # few-thousand-token working window the other compaction tests use.
     [main, *_] = default_agents(
         "m", tools=[Probe(size=2000)], plugins={
             "permissions": Permissions(mode="bypassPermissions"),
-            "compaction": Compaction(auto_compact_window=45_000)})
+            "compaction": Compaction(auto_compact_window=36_000)})
     model = Model([*(call() for _ in range(40)), answer("done")])
     _client, tid = await run(store, main, model, env_for=lambda _s: LocalExecEnv(str(work)))
     assert len(model.summarize_requests) >= 2
@@ -65,16 +65,27 @@ class Small(Probe):
     name = "Small"
 
 
-async def test_todo_reminder_survives_a_compaction(store: SqliteStore) -> None:
+class Nudge(Extension):
+    """A reminder every tenth step of a turn."""
+
+    name = "nudge"
+
+    async def reminders(self, view: TaskView) -> list[Reminder]:
+        steps = view.state.steps_in_turn
+        return [Reminder(text=f"Nudge {steps}: keep going.")] if steps and steps % 10 == 0 \
+            else []
+
+
+async def test_a_reminder_survives_a_compaction(store: SqliteStore) -> None:
     a = Agent(name="a", model="m", tools=[Probe(size=2000), Small(size=10)],
-              extensions=(Compaction(auto_compact_window=SMALL), Todo()))
+              extensions=(Compaction(auto_compact_window=32_000), Nudge()))
     model = Model([*(call() for _ in range(8)), *(call("Small") for _ in range(14)),
                    answer("done")])
     await run(store, a, model)
     assert model.summarize_requests
     reminded = [r for r in model.requests
-                if any(m.origin == "system" and "TodoWrite" in m.text for m in r.messages)]
-    assert any(_summarized(r.messages) for r in reminded), "no todo reminder after it"
+                if any(m.origin == "system" and "Nudge" in m.text for m in r.messages)]
+    assert any(_summarized(r.messages) for r in reminded), "no reminder after it"
     # No rebuild check here: the harness folds the step's own reminders in
     # before calling before_model, which the live step had not recorded yet,
     # so right at the threshold its decision can differ.

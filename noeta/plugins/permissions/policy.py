@@ -36,18 +36,16 @@ KNOWN_RISK_LEVELS: tuple[str, ...] = ("low", "medium", "high")
 
 #: 0.6's declared ``risk_level`` of every tool, by name. 1.0 tools carry no
 #: risk field, so the table is the source; a host extends or overrides it
-#: with ``Permissions(risk=...)``. Control tools (Task, TodoWrite,
+#: with ``Permissions(risk=...)``. Control tools (Agent,
 #: AskUserQuestion, skill, ...) were never gated in 0.6 and are ``low``.
 DEFAULT_RISK: Mapping[str, str] = {
     "Read": "low",
-    "Glob": "low",
-    "Grep": "low",
     "Edit": "high",
     "Write": "high",
+    "NotebookEdit": "high",
     "Bash": "high",
     "Monitor": "high",
-    "BashOutput": "low",
-    "KillShell": "high",
+    "TaskStop": "high",
     "WebFetch": "low",
     "WebSearch": "low",
     "memory_read": "low",
@@ -57,22 +55,19 @@ DEFAULT_RISK: Mapping[str, str] = {
     "open_app": "low",
     "run_skill_script": "high",
     "ToolSearch": "low",
-    "McpCall": "low",
     "Task": "low",
     "Agent": "low",
     "SendMessage": "low",
     "ListAgents": "low",
     "SubagentHandback": "low",
-    "TodoWrite": "low",
     "AskUserQuestion": "low",
-    "skill": "low",
     "Skill": "low",
     "RecallHistory": "low",
     "structured_output": "low",
 }
 
 #: The edit tools ``acceptEdits`` exempts from the risk gate.
-EDIT_TOOL_NAMES: frozenset[str] = frozenset({"Edit", "Write"})
+EDIT_TOOL_NAMES: frozenset[str] = frozenset({"Edit", "Write", "NotebookEdit"})
 
 #: Tools whose ``command`` the shell allowlist gates (Monitor runs its script
 #: through the same gate).
@@ -80,7 +75,7 @@ SHELL_GATED_TOOLS: frozenset[str] = frozenset({"Bash", "Monitor"})
 
 #: Tools that run or manage shell commands alongside ``Bash``; disallowing
 #: ``Bash`` removes them too.
-SHELL_COMPANION_TOOLS: frozenset[str] = frozenset({"Monitor", "BashOutput", "KillShell"})
+SHELL_COMPANION_TOOLS: frozenset[str] = frozenset({"Monitor", "TaskStop"})
 
 WEBFETCH_TOOL = "WebFetch"
 

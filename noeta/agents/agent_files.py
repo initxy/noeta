@@ -8,7 +8,7 @@ and whose body is its system prompt — Claude Code's agent file format, plus
     model: inherit                # inherit, an alias (sonnet, opus, haiku, fable) or a model id
     plugins:                      # the extensions, in order: a name, or name: {arguments}
       - compaction
-      - fs
+      - fs: {tools: [Read]}
       - instructions
     tools: Read, Bash             # optional: offer only these tools ("*": all)
     disallowedTools: Edit, Write  # optional: never offer these

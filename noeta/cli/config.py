@@ -10,7 +10,7 @@ win. The plugin part of ``config.toml``::
     [plugins.my_plugin]        # a third-party plugin's arguments
 
     [agents.main]
-    add_plugins = ["my_plugin", {todo = {}}]   # after the agent file's own
+    add_plugins = ["my_plugin", {hooks = {}}]  # after the agent file's own
     [agents."*"]               # every agent
     add_plugins = []
 """

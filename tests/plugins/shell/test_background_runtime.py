@@ -76,9 +76,9 @@ async def test_an_end_notice_wakes_the_idle_task(store: SqliteStore, tmp_path: P
     await rt.run_until_idle()
     notice = provider.requests[2].messages[-1]
     assert notice.origin == "system"
-    assert notice.text.startswith("<task-notification>\n<task-id>bg-")
-    assert notice.text.endswith("completed (exit code 0)</summary>\n</task-notification>"
-                                "\nLast output:\ndone-here")
+    assert notice.text.startswith("<task-notification>\n<task-id>")
+    assert "<output-file>" in notice.text
+    assert notice.text.endswith("completed (exit code 0)</summary>\n</task-notification>")
     [job] = (await _jobs(client, tid, ext)).values()
     assert job["status"] == "completed" and job["command"] == "sleep 0.3; echo done-here"
     assert (await client.get(tid)).waiting_on == "input"
@@ -135,7 +135,7 @@ async def test_jobs_end_with_the_turn_when_configured(store: SqliteStore,
     await rt.run_until_idle()
     [result] = [r.event.result for r in await client.events(tid)
                 if isinstance(r.event, ToolFinished)]
-    assert "terminated when you give your final response" in result.text
+    assert "stopped when you give your final response" in result.text
     [job] = ext.registry.jobs[tid].values()
     await asyncio.wait_for(job.done.wait(), 10)
     assert job.status == "killed" and job.quiet
@@ -242,4 +242,5 @@ async def test_a_sub_agents_job_notifies_the_root_after_it_ended(store: SqliteSt
     await _settle(shells)
     await rt.run_until_idle()
     notice = provider.requests[-1].messages[-1]
-    assert notice.text.startswith("<task-notification>") and notice.text.endswith("late")
+    assert notice.text.startswith("<task-notification>")
+    assert 'Background command "sleep 0.3; echo late" completed' in notice.text

@@ -3,8 +3,7 @@
 Skipped when ``docker`` is unavailable or no suitable image is present. The
 image comes from ``NOETA_TEST_CONTAINER_IMAGE``, else the first local one of
 ``python:3.12-slim``, ``debian:bookworm-slim``, ``postgres:16`` (any image
-with sh, GNU coreutils, util-linux ``setsid`` and bash works). Grep/Glob run
-when the host's ``rg`` can be copied in.
+with sh, GNU coreutils, util-linux ``setsid`` and bash works).
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ from noeta.backends.execenvs.container import (
 from noeta.core.execenv import ExecEnv
 from noeta.core.tool import ToolContext
 from noeta.core.types import Text
-from noeta.plugins.fs import EditTool, GlobTool, GrepTool, ReadTool, WriteTool
+from noeta.plugins.fs import EditTool, ReadTool, WriteTool
 from noeta.plugins.fs.state import FS, reduce_fs
 from noeta.plugins.shell import BashTool
 
@@ -249,26 +248,6 @@ async def test_file_and_shell_tools_run_in_the_container(env: ContainerExecEnv) 
     assert not out.is_error, text(out)
     out = await BashTool().run({"command": "cat notes.txt && cd /tmp && pwd"}, ctx())
     assert "gamma" in text(out) and "/tmp" in text(out)
-
-
-async def test_grep_and_glob_need_rg_in_the_container(
-        env: ContainerExecEnv, container: str) -> None:
-    ctx = Ctx(env)
-    has_rg = (await env.run(["sh", "-c", "command -v rg"])).exit_code == 0
-    if not has_rg:
-        out = await GrepTool().run({"pattern": "x"}, ctx())
-        assert out.is_error and "ripgrep (rg) is required" in text(out)
-        host_rg = shutil.which("rg")
-        if host_rg is None:
-            pytest.skip("no rg on the host to copy into the container")
-        _docker("cp", host_rg, f"{container}:/usr/local/bin/rg")
-        if (await env.run(["rg", "--version"])).exit_code != 0:
-            pytest.skip("the host's rg does not run in this image")
-    await env.write_bytes("src/a.py", b"def needle():\n    pass\n")
-    out = await GrepTool().run({"pattern": "needle"}, ctx())
-    assert "a.py" in text(out), text(out)
-    out = await GlobTool().run({"pattern": "**/*.py"}, ctx())
-    assert "a.py" in text(out), text(out)
 
 
 # ---------------------------------------------------------------- provisioning

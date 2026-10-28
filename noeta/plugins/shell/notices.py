@@ -26,13 +26,14 @@ def _escape(text: str) -> str:
 
 
 def task_notification(*, task_id: str, summary: str, tool_use_id: str = "", status: str = "",
-                      body: str = "", trailing: str = "") -> str:
+                      body: str = "", trailing: str = "", output_file: str = "") -> str:
     """Claude Code's ``<task-notification>`` element: one child per non-empty
     field in its order, ``body`` before the closing tag, ``trailing`` after."""
     out = "<task-notification>"
     for tag, value in (
         ("task-id", task_id),
         ("tool-use-id", tool_use_id),
+        ("output-file", output_file),
         ("status", status),
         ("summary", _escape(summary)),
     ):
@@ -257,7 +258,7 @@ class MonitorStream:
         if self._suppressed > 0:
             self._sink(
                 f"[{self._suppressed} events suppressed — output rate too high. "
-                "Consider using KillShell to restart this monitor with a more "
+                "Consider stopping this monitor with TaskStop and restarting it with a more "
                 "selective filter.]",
                 True,
             )

@@ -117,8 +117,8 @@ async def test_tui_answers_the_real_ask_user_with_a_label(tmp_path: Path) -> Non
         await settle(pilot, lambda: provider.steps == [] and not app.busy)
         [done] = await results(app.local, app.task_id)
         assert not done.result.is_error
-        assert json.loads(done.result.text)["answers"] == {
-            "0": {"selected": ["SQLite"], "other": None}}
+        assert done.result.text.startswith("The user answered your questions: ")
+        assert '="SQLite"' in done.result.text
 
 
 # ------------------------------------------------------------ P1-2 sub-agent requests

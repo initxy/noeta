@@ -44,10 +44,9 @@ from noeta.plugins.skills.script import (
     is_skill_script_resource,
 )
 from noeta.toolkit.context import new_user_messages, resident_budget, task_env
+from noeta.toolkit.tools import SCHEMA_DIALECT
 
 __all__ = [
-    "CONTROL_TOOLS",
-    "SKILL_NOT_ALONE",
     "SKILL_TOOL",
     "SkillTool",
     "Skills",
@@ -55,12 +54,7 @@ __all__ = [
 
 _log = logging.getLogger(__name__)
 
-SKILL_TOOL = "skill"
-
-#: Tools that, like ``skill``, decide the shape of the response they are in:
-#: ``skill`` beside one of them refuses the whole response.
-CONTROL_TOOLS: frozenset[str] = frozenset({"skill", "Agent", "Task", "TodoWrite",
-                                                "AskUserQuestion"})
+SKILL_TOOL = "Skill"
 
 #: Heads the skills re-attached after a compaction.
 INVOKED_SKILLS_HEADER = (
@@ -70,19 +64,9 @@ INVOKED_SKILLS_HEADER = (
     "belongs to that earlier moment, not to the user's current message."
 )
 
-SKILL_NOT_ALONE = (
-    "Skill not loaded: skill must be the only tool call in its response, "
-    "because its instructions arrive with the step after it. The other tool "
-    "calls in this response did run - their results are here. Call skill by "
-    "itself now if you still need it."
-)
-_NOTHING_RAN = (
-    "Nothing in this response ran: skill must be called on its "
-    "own, once per response. Call skill by itself first, then "
-    "re-issue the other calls in a separate response."
-)
-_SKILL_PROP_DESCRIPTION = "Name of the skill to activate, from the skill listing in your context."
-_ARGS_PROP_DESCRIPTION = "Optional arguments for the skill."
+_SKILL_PROP_DESCRIPTION = ("The skill's name exactly as the skill listing gives it, without "
+                           "a leading slash; never a guessed name.")
+_ARGS_PROP_DESCRIPTION = "Optional text passed to the skill."
 _SKILL_NAME_MAX_LEN = 200
 #: The listing's place in the joined system turn (``Reminder.order``): after
 #: the environment, deferred tools and agents, before the budget and date.
@@ -102,7 +86,7 @@ def _skill_description() -> str:
 
 
 class SkillTool:
-    """``skill(skill, args?)``: the same schema bytes for every task. The listing
+    """``Skill(skill, args?)``: the same schema bytes for every task. The listing
     in the conversation names the skills; the tool validates against the
     live roster (a skill installed since the listing is accepted, a removed
     one is not)."""
@@ -115,12 +99,14 @@ class SkillTool:
         self._owner = owner
         self.description = _skill_description()
         self.input_schema: dict[str, Any] = {
+            "$schema": SCHEMA_DIALECT,
             "type": "object",
             "properties": {
                 "skill": {"type": "string", "description": _SKILL_PROP_DESCRIPTION},
                 "args": {"type": "string", "description": _ARGS_PROP_DESCRIPTION},
             },
             "required": ["skill"],
+            "additionalProperties": False,
         }
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
@@ -189,7 +175,6 @@ class Skills(Extension):
     * ``scripts`` — offer ``run_skill_script`` (0.6 ``allow_skill_scripts``).
     * ``tool_enforcement`` — ``allowed-tools`` of active skills: ``off``,
       ``approval`` (ask) or ``deny`` (0.6 ``skill_tool_enforcement``).
-    * ``control_tools`` — tool names ``skill`` may not share a response with.
     * ``rehang`` — put the listing and active skills right after a
       compaction's summary (``resident``; ADR-036 re-hang).
     * ``origin`` — origin of recorded listing / skill text (``"system"``).
@@ -211,7 +196,6 @@ class Skills(Extension):
         preload: Sequence[str] = (),
         scripts: bool = False,
         tool_enforcement: Enforcement = "off",
-        control_tools: frozenset[str] = CONTROL_TOOLS,
         rehang: bool = True,
         origin: Literal["system"] | None = "system",
     ) -> None:
@@ -231,7 +215,6 @@ class Skills(Extension):
         self.preload = list(preload)
         self.scripts = scripts
         self.tool_enforcement = tool_enforcement
-        self.control_tools = control_tools
         self.rehang = rehang
         self.origin = origin
         self._skill_tool = SkillTool(self)
@@ -285,10 +268,9 @@ class Skills(Extension):
     # ------------------------------------------------------------ hooks
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
-        state = view.ext_state(self.name) or {}
-        tools: list[Tool] = []
-        if any(listing["names"] for listing in state.get("listings", [])):
-            tools.append(self._skill_tool)
+        # Offered even with no skill listed, as Claude Code does: the prefix
+        # does not move when the first skill is installed.
+        tools: list[Tool] = [self._skill_tool]
         if self.scripts:
             tools.append(self._script_tool)
         return tools
@@ -386,16 +368,6 @@ class Skills(Extension):
         return msgspec.structs.replace(output, meta=meta)
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
-        calls = [c.use for c in view.state.calls]
-        skill_calls = [c for c in calls if c.name == SKILL_TOOL]
-        if skill_calls:
-            others = [c for c in calls if c.name != SKILL_TOOL]
-            if len(skill_calls) == 1 and others and not any(
-                    o.name in self.control_tools for o in others):
-                if call.name == SKILL_TOOL:
-                    return Deny(reason=SKILL_NOT_ALONE)
-            elif len(skill_calls) != 1 or others:
-                return Deny(reason=_NOTHING_RAN)
         if call.name == SKILL_TOOL:
             return None
         state = view.ext_state(self.name) or {}

@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from noeta.core.agent import Agent
+from noeta.core.deferred import with_tool_search
 from noeta.core.errors import Conflict, StoreUnavailable
 from noeta.core.events import (
     Cancel,
@@ -288,7 +289,7 @@ class TaskRun:
                 if t.name not in seen:
                     seen.add(t.name)
                     tools.append(t)
-        return tools
+        return with_tool_search(tools)
 
     @staticmethod
     def error_result(call_id: str, text: str) -> ToolFinished:

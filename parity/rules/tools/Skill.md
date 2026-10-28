@@ -19,9 +19,9 @@ position 9 of 13 in the baseline list; also present for sub-agents. noeta's coun
 
 | id | name | type | required | enum / default / limits | noeta today |
 |---|---|---|---|---|---|
-| — | tool name | — | — | `Skill` | contradicts — noeta names it `skill` |
-| `tool.Skill.p.skill` | `skill` | string | yes | a name from the skill listing; never guessed | covered (noeta caps it at 200 chars) |
-| `tool.Skill.p.args` | `args` | string | no | free text passed through to the skill | missing |
+| — | tool name | — | — | `Skill` | covered |
+| `tool.Skill.p.skill` | `skill` | string | yes | a name from the skill listing; never guessed | covered |
+| `tool.Skill.p.args` | `args` | string | no | free text passed through to the skill | covered |
 
 ## Rules
 
@@ -30,16 +30,15 @@ position 9 of 13 in the baseline list; also present for sub-agents. noeta's coun
 | `tool.Skill.1` | A skill is a packaged instruction set the user or project set up for one kind of task (deploy steps, review checklist, repo workflow). | covered |
 | `tool.Skill.2` | Available skills are listed, one line each, in a message in the conversation (the `role: "system"` message), not in the tool definition. | covered |
 | `tool.Skill.3` | When a listed skill covers the task, call this tool first; its instructions then replace the default approach for the turn. | covered |
-| `tool.Skill.4` | Some skills run in a sub-agent and return the finished result instead of loading instructions. | missing (no `context: fork`) |
-| `tool.Skill.5` | A skill that runs in the background answers with just an agent name; the outcome comes later in a task notification, and the model neither waits on it nor calls the skill again in the meantime. | missing |
+| `tool.Skill.4` | Some skills run in a sub-agent and return the finished result instead of loading instructions. | covered in the description; no `context: fork` yet |
+| `tool.Skill.5` | A skill that runs in the background answers with just an agent name; the outcome comes later in a task notification, and the model neither waits on it nor calls the skill again in the meantime. | covered in the description; no background skills yet |
 | `tool.Skill.6` | A user naming a skill, or typing `/<name>` ("slash command"), is a request to invoke it. | covered |
-| `tool.Skill.7` | `skill` is the exact listed name without a leading slash. | covered (slash not mentioned) |
-| `tool.Skill.8` | Plugin skills are addressed as `plugin:skill`. | missing |
-| `tool.Skill.9` | Skills scoped to a directory carry a path prefix (`apps/web:deploy`); when a scoped and an unscoped skill share a name, choose the scope that contains the files in hand, the deepest match first, falling back to the unscoped one. | missing |
+| `tool.Skill.7` | `skill` is the exact listed name without a leading slash. | covered |
+| `tool.Skill.8` | Plugin skills are addressed as `plugin:skill`. | covered in the description; plugin skills are not named so yet |
+| `tool.Skill.9` | Skills scoped to a directory carry a path prefix (`apps/web:deploy`); when a scoped and an unscoped skill share a name, choose the scope that contains the files in hand, the deepest match first, falling back to the unscoped one. | covered in the description; scoped names are not built yet |
 | `tool.Skill.10` | Only listed names, or names the user typed explicitly, are valid. | covered |
-| `tool.Skill.11` | Built-in CLI commands (`/help`, `/clear`, …) are not skills. | missing |
-| `tool.Skill.12` | If a `<command-name>` block is already in the current turn, the skill is already loaded: follow it, do not call the tool again. | missing (noeta says "do not re-activate", no `<command-name>` signal) |
-| — | noeta-only: the call must be alone in its response, otherwise it is not loaded. | contradicts — the baseline sets no such restriction |
+| `tool.Skill.11` | Built-in CLI commands (`/help`, `/clear`, …) are not skills. | covered |
+| `tool.Skill.12` | If a `<command-name>` block is already in the current turn, the skill is already loaded: follow it, do not call the tool again. | covered |
 | — | noeta-only: a listing line may be shortened; activating loads the whole skill. | n/a (true of the baseline too, just unstated) |
 
 ## Result shape

@@ -1,9 +1,8 @@
-"""AskUserQuestion: 0.6's schema and limits, must-be-alone, park and answer,
+"""AskUserQuestion: schema and limits, park and answer, the prose result,
 withdrawal on stop, and how stale or invalid answers are handled."""
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -15,7 +14,7 @@ from noeta.core.client import Client
 from noeta.core.events import ToolFinished
 from noeta.core.pending import pending
 from noeta.plugins.ask_user import (
-    ALONE_ERROR,
+    INPUT_SCHEMA,
     AnswerValidationError,
     AskUser,
     answer_question,
@@ -62,7 +61,10 @@ def test_limits() -> None:
     assert validate_questions({"questions": [q(question="x" * 501)]}) == \
         "question too long (max 500)"
     assert validate_questions({"questions": [q(multiSelect="yes")]}) == \
-        "each question needs a boolean multiSelect"
+        "multiSelect must be a boolean"
+    no_multi = {k: v for k, v in q().items() if k != "multiSelect"}
+    [default] = validate_questions({"questions": [no_multi]})
+    assert default["multiSelect"] is False
     one = [{"label": "a", "description": "d"}]
     assert validate_questions({"questions": [q(options=one)]}) == \
         "options must contain 2-4 items"
@@ -92,23 +94,39 @@ async def test_a_question_parks_and_the_answer_becomes_the_result(store: SqliteS
     await rt.run_until_idle()
     [result] = finished(await events(client, tid))
     assert not result.is_error
-    assert json.loads(result.text) == {"question_id": item.request_id, "answers": {
-        "0": {"selected": ["API key"], "other": None}}}
-    # 0.6's key order: sorted, nested maps too.
-    assert result.text == ('{"answers": {"0": {"other": null, "selected": ["API key"]}}, '
-                           f'"question_id": "{item.request_id}"}}')
+    assert result.text == ('The user answered your questions: "Which auth?"="API key". '
+                           "Go on with these answers in mind.")
     assert (await client.get(tid)).waiting_on == "input"
 
 
-async def test_must_be_called_alone(store: SqliteStore) -> None:
+async def test_it_may_share_a_reply_with_other_calls(store: SqliteStore) -> None:
     read = Fake("Read")
-    provider = ScriptedProvider([reply("", ("Read", {}),
-                                       ("AskUserQuestion", {"questions": [q()]})),
+    preview = [{"label": "A", "description": "d", "preview": "+--+\n|a |"},
+               {"label": "B", "description": "d"}]
+    provider = ScriptedProvider([reply("", ("Read", {}), ("AskUserQuestion", {"questions": [
+                                     q(), q(question="Layout?", header="UI", options=preview)]})),
                                  reply("ok")])
-    client, tid, _ = await start(store, provider, [read])
-    results = finished(await events(client, tid))
-    assert [(r.text, r.is_error) for r in results] == [(ALONE_ERROR, True)] * 2
-    assert not read.runs
+    client, tid, rt = await start(store, provider, [read])
+    assert read.runs and (await client.get(tid)).waiting_on == "question"
+    [item] = pending(await client.events(tid), tid)
+    await answer_question(client, tid, item.request_id, {
+        "0": {"other": "Passkeys"}, "1": {"selected": ["A"]}})
+    await rt.run_until_idle()
+    result = finished(await events(client, tid))[-1]
+    assert result.text == ('The user answered your questions: "Which auth?"="Passkeys", '
+                           '"Layout?"="A" selected preview:\n+--+\n|a |. '
+                           "Go on with these answers in mind.")
+
+
+def test_schema_shape() -> None:
+    assert INPUT_SCHEMA["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert INPUT_SCHEMA["additionalProperties"] is False
+    item = INPUT_SCHEMA["properties"]["questions"]["items"]
+    assert item["additionalProperties"] is False
+    assert item["properties"]["multiSelect"]["default"] is False
+    option = item["properties"]["options"]["items"]
+    assert option["additionalProperties"] is False and "preview" in option["properties"]
+    assert {"answers", "annotations", "metadata"} <= set(INPUT_SCHEMA["properties"])
 
 
 async def test_invalid_arguments_are_an_error_result(store: SqliteStore) -> None:
@@ -136,12 +154,11 @@ async def test_an_invalid_posted_answer_ends_the_question_with_an_error(
 async def test_stopping_withdraws_the_question(store: SqliteStore) -> None:
     provider = ScriptedProvider([reply("", ("AskUserQuestion", {"questions": [q()]}))])
     client, tid, rt = await start(store, provider)
-    [item] = pending(await client.events(tid), tid)
+    [_item] = pending(await client.events(tid), tid)
     await client.cancel(tid, turn_only=True)
     await rt.run_until_idle()
     [result] = finished(await events(client, tid))
     assert result.is_error
-    assert result.text == ("Question withdrawn by user (no answer provided).\n"
-                           f'{{"question_id": "{item.request_id}", "withdrawn": true}}')
+    assert result.text == "Question withdrawn by user (no answer provided)."
     assert (await client.get(tid)).waiting_on == "input"
     assert len(provider.requests) == 1  # no model turn after the withdrawal

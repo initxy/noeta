@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import json
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +21,11 @@ def ctx(tmp_path: Path, spill: bool = True) -> ToolContext:
                        spill_dir=str(tmp_path / "spill") if spill else None)
 
 
-async def test_blocks_are_rendered_in_order(tmp_path: Path) -> None:
+def texts(out: Any) -> list[str]:
+    return [b.text for b in out.content if not isinstance(b, Image)]
+
+
+async def test_blocks_pass_through_in_order(tmp_path: Path) -> None:
     real = base64.b64encode(png(2, 2)).decode()
     raw = base64.b64encode(b"png").decode()
     result: dict[str, Any] = {"content": [
@@ -32,22 +35,21 @@ async def test_blocks_are_rendered_in_order(tmp_path: Path) -> None:
         {"type": "image", "mimeType": "image/png", "data": real},
         {"type": "image", "mimeType": "image/tiff", "data": raw},
         {"type": "image", "mimeType": "image/png", "data": "!!"},
-        {"type": "image", "mimeType": "image/png", "data": raw},
     ], "structuredContent": {"k": 1}}
     out = await render_result(result, ctx(tmp_path))
-    body = json.loads(out.content[0].text)  # type: ignore[union-attr]
-    assert body["text"].startswith(
-        "a\nembedded\n[resource link: y <file:///y> (text/plain)]\n"
-        "[image (image/tiff, 3 bytes): type not shown inline]\n"
-        "[image (image/png): data is not valid base64, not shown]\n"
-        "[image (image/png, 3 bytes): not shown: ")
-    assert body == {
-        "text": body["text"],
-        "non_text_blocks": 6,
-        "structured_content": {"k": 1},
-    }
-    assert [type(b) for b in out.content[1:]] == [Image]
-    assert not out.is_error
+    assert [type(b).__name__ for b in out.content] == ["Text", "Text", "Text", "Image", "Text",
+                                                       "Text"]
+    assert texts(out) == [
+        "a", "embedded", "[resource link: y <file:///y> (text/plain)]",
+        "[image (image/tiff, 3 bytes): type not shown inline]",
+        "[image (image/png): data is not valid base64, not shown]"]
+    assert not out.is_error and out.meta["structured"] is True
+
+
+async def test_a_structured_only_result_is_its_json(tmp_path: Path) -> None:
+    out = await render_result({"content": [], "structuredContent": {"b": 1, "a": 2}},
+                              ctx(tmp_path))
+    assert texts(out) == ['{"a": 2, "b": 1}']
 
 
 async def test_a_text_over_25000_tokens_is_cut_to_a_marked_head_and_saved(
@@ -55,17 +57,16 @@ async def test_a_text_over_25000_tokens_is_cut_to_a_marked_head_and_saved(
     text = "x" * 100_005  # 25,000 tokens are 100,000 characters
     out = await render_result({"content": [{"type": "text", "text": text}], "isError": True},
                               ctx(tmp_path))
-    body = json.loads(out.content[0].text)  # type: ignore[union-attr]
-    head, cut = body["text"].split("\n", 1)
-    assert head.startswith("[output truncated: over the 25000 token limit for an MCP result "
+    note, cut = texts(out)
+    assert note.startswith("[output truncated: over the 25000 token limit for an MCP result "
                            "(MAX_MCP_OUTPUT_TOKENS); the server returned 100005 characters, "
                            "what follows is the first 100000.")
-    assert cut == "x" * 100_000
-    assert Path(body["text_saved_to"]).read_text() == text
+    saved = note.rsplit("the full text is in ", 1)[1].rstrip("]")
+    assert cut == "x" * 100_000 and Path(saved).read_text() == text
     assert out.is_error
     fits = await render_result({"content": [{"type": "text", "text": "x" * 100_000}]},
                                ctx(tmp_path))
-    assert json.loads(fits.content[0].text)["text"] == "x" * 100_000  # type: ignore[union-attr]
+    assert texts(fits) == ["x" * 100_000]
 
 
 async def test_the_budget_follows_max_mcp_output_tokens(tmp_path: Path,
@@ -77,17 +78,11 @@ async def test_the_budget_follows_max_mcp_output_tokens(tmp_path: Path,
         {"type": "image", "mimeType": "image/png", "data": real},
         {"type": "image", "mimeType": "image/png", "data": real},
     ]}, ctx(tmp_path))
-    body = json.loads(out.content[0].text)  # type: ignore[union-attr]
     # One image (1,600 tokens) fits in 2,000; the text gets the 400 tokens left.
-    assert [type(b) for b in out.content[1:]] == [Image]
-    assert body["text"].startswith("[output truncated: over the 2000 token limit")
-    assert "\n[1 image(s) left out: over the tool output limit]\nyyy" in body["text"]
+    assert sum(isinstance(b, Image) for b in out.content) == 1
+    note, left_out, ys = texts(out)
+    assert note.startswith("[output truncated: over the 2000 token limit")
+    assert left_out == "[1 image(s) left out: over the tool output limit]"
+    assert ys.startswith("yyy")
     monkeypatch.setenv("MAX_MCP_OUTPUT_TOKENS", "nonsense")
     assert max_output_tokens() == 25_000
-
-
-async def test_a_huge_structured_result_is_saved_not_inlined(tmp_path: Path) -> None:
-    big = {"rows": ["y" * 1000] * 60}
-    out = await render_result({"content": [], "structuredContent": big}, ctx(tmp_path, False))
-    body = json.loads(out.content[0].text)  # type: ignore[union-attr]
-    assert "structured_content" not in body and body["structured_content_bytes"] > 50_000

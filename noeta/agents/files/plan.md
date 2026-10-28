@@ -10,7 +10,7 @@ plugins:
   - shell
   - web
   - mcp
-  - fs
+  - fs: {tools: [Read]}
   - skills
   - environment
   - subtasks

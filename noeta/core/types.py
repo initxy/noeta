@@ -55,9 +55,16 @@ class ToolUse(Struct, tag="tool_use", tag_field="type"):
     input: dict[str, Any]
 
 
+class ToolReference(Struct, tag="tool_reference", tag_field="type"):
+    """A tool result naming a deferred tool whose schema is now loaded
+    (``noeta.core.deferred``): from the next request on, the tool is sent."""
+
+    tool_name: str
+
+
 class ToolResult(Struct, tag="tool_result", tag_field="type"):
     call_id: str
-    content: list[Text | Image]
+    content: list[Text | Image | ToolReference]
     is_error: bool = False
 
     @property
@@ -110,6 +117,9 @@ class ToolSpec(Struct):
     name: str
     description: str
     input_schema: dict[str, Any]
+    #: A deferred tool (sent once loaded, see ``noeta.core.deferred``); the
+    #: adapter marks it so the vendor keeps it out of the cached prefix.
+    defer_loading: bool = False
 
 
 class SystemPart(Struct):

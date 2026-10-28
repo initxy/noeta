@@ -20,10 +20,10 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 
 | id | name | type | required | enum / default / limits | noeta today |
 |---|---|---|---|---|---|
-| `tool.Edit.p.file_path` | `file_path` | string | yes | absolute path of the file to change | contradicts: relative paths accepted and advertised |
+| `tool.Edit.p.file_path` | `file_path` | string | yes | absolute path of the file to change | covered (stated; relative paths still accepted) |
 | `tool.Edit.p.old_string` | `old_string` | string | yes | text to replace | covered (noeta also rejects an empty string) |
 | `tool.Edit.p.new_string` | `new_string` | string | yes | replacement; must differ from `old_string` | covered |
-| `tool.Edit.p.replace_all` | `replace_all` | boolean | no | default `false` (schema `default: false`); replace every occurrence | covered in behaviour; schema has no `default` and no property text |
+| `tool.Edit.p.replace_all` | `replace_all` | boolean | no | default `false` (schema `default: false`); replace every occurrence | covered |
 
 ## Rules
 
@@ -35,14 +35,14 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | `tool.Edit.4` | Strip `Read`'s line prefix (line number and tab) before matching. | covered |
 | `tool.Edit.5` | `replace_all: true` replaces every occurrence. | covered |
 | `tool.Edit.6` | Observed: an `Edit` succeeded on files the model had only seen through a Bash `cat` in the same conversation (`m1/0042`, `m1/0066`), i.e. a shell read satisfies the read-first check. | contradicts: noeta requires a `Read` tool call |
-| `tool.Edit.7` | The description says nothing about outside-workspace paths, diffs or snippets. | contradicts: noeta adds workspace-authorization and diff-artifact text (extra rules) |
+| `tool.Edit.7` | The description says nothing about outside-workspace paths, diffs or snippets. | covered |
 
 ## Result shape
 
 | id | case | shape | noeta today |
 |---|---|---|---|
-| `tool.Edit.r.1` | success | one line: the file (absolute path) was updated successfully, followed by a parenthesised note that the file state is current in context and need not be read back. No snippet, no diff. | contradicts: noeta returns a relative path plus a `cat -n` snippet of the edited region |
-| `tool.Edit.r.2` | success on the project `CLAUDE.md` | the same line **without** the "file state is current" note (`m1/0066`) | missing |
+| `tool.Edit.r.1` | success | one line: the file (absolute path) was updated successfully, followed by a parenthesised note that the file state is current in context and need not be read back. No snippet, no diff. | covered |
+| `tool.Edit.r.2` | success on the project `CLAUDE.md` | the same line **without** the "file state is current" note (`m1/0066`) | covered |
 | `tool.Edit.r.3` | two edits of one file in one turn | each call gets its own identical success line | covered |
 
 ## Variants

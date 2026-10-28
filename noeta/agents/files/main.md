@@ -15,7 +15,6 @@ plugins:
   - subtasks:
       agents: ["*"]
       inherit_config: [cwd, model, effort, permission_mode]
-  - todo
   - ask_user
   - web
   - mcp

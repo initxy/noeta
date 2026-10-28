@@ -54,8 +54,8 @@ async def test_the_tools_say_a_job_was_lost(tmp_path: Path) -> None:
                           state={"shell": ShellState(jobs={"bg-1": _job(OTHER, status=status)})},
                           record=lambda *_: None, root_id="t")
         for tool in ext.tools(_view({})):
-            if tool.name in ("BashOutput", "KillShell"):
-                out = await tool.run({"bash_id": "bg-1", "shell_id": "bg-1"}, ctx)
+            if tool.name == "TaskStop":
+                out = await tool.run({"task_id": "bg-1"}, ctx)
                 body = "".join(b.text for b in out.content if isinstance(b, Text))
                 assert out.is_error and "was lost" in body, body
 
@@ -83,7 +83,7 @@ async def test_logs_go_to_a_private_per_user_directory(
     assert Path(job.out_path).parent == logs
     assert stat.S_IMODE(logs.stat().st_mode) == 0o700
     assert stat.S_IMODE(Path(job.out_path).stat().st_mode) == 0o600
-    assert Path(job.out_path).read_text() == "secret\n"
+    assert Path(job.out_path).read_text() == "secret\n\n[exited with code 0]\n"
 
 
 async def test_a_planted_log_directory_is_refused(

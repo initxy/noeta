@@ -10,8 +10,8 @@ Claude Code 2.1.312 · baseline `m1` · rules in our words (see `../README.md`).
 ## Purpose
 
 Loads the schemas of deferred tools so they become callable. Always loaded; position 10 of 13
-in the baseline list; also present for sub-agents. noeta's counterpart is `ToolSearch` in
-`noeta/plugins/mcp/tools.py` (plus `McpCall`), offered only when an MCP server is deferred.
+in the baseline list; also present for sub-agents. noeta's counterpart is `ToolSearchTool` in
+`noeta/core/deferred.py`, added by the runner whenever a task offers a deferred tool.
 
 ## Parameters
 
@@ -19,24 +19,23 @@ in the baseline list; also present for sub-agents. noeta's counterpart is `ToolS
 
 | id | name | type | required | enum / default / limits | noeta today |
 |---|---|---|---|---|---|
-| `tool.ToolSearch.p.query` | `query` | string | yes | `select:<name>[,<name>...]` for exact selection, otherwise keywords | covered (no `select:` syntax) |
-| `tool.ToolSearch.p.max_results` | `max_results` | number | yes (in `required`, yet documented with default 5) | default 5 | missing — fixed at 5, not a parameter |
+| `tool.ToolSearch.p.query` | `query` | string | yes | `select:<name>[,<name>...]` for exact selection, otherwise keywords | covered |
+| `tool.ToolSearch.p.max_results` | `max_results` | number | yes (in `required`, yet documented with default 5) | default 5 | covered |
 
 ## Rules
 
 | id | rule | noeta today |
 |---|---|---|
 | `tool.ToolSearch.1` | Its job is to fetch full schemas of deferred tools so they can be called. | covered |
-| `tool.ToolSearch.2` | Deferred tools are announced by name only, in a message in the conversation (the `role: "system"` message lists them; see `main-prompt.md`). | contradicts — noeta never lists them; the model must search blind or send an empty query |
+| `tool.ToolSearch.2` | Deferred tools are announced by name only, in a message in the conversation (the `role: "system"` message lists them; see `main-prompt.md`). | covered (`TaskView.deferred_tool_names()` gives the list the environment message names) |
 | `tool.ToolSearch.3` | Until fetched a deferred tool has no schema and cannot be invoked. | covered |
 | `tool.ToolSearch.4` | The query is matched against the deferred-tool list and the matched tools' complete schemas are returned. | covered |
-| `tool.ToolSearch.5` | Once fetched, a tool is callable directly by its own name, exactly like the tools defined up front. | contradicts — noeta routes the call through `McpCall(tool, arguments)` |
-| `tool.ToolSearch.6` | Documented result format: each match as one `<function>{"description","name","parameters"}</function>` line inside a `<functions>` block — the same encoding as the up-front tool list. (Wire result differs; see r.1.) | contradicts — noeta returns a JSON array of `{name, description, input_schema}` |
-| `tool.ToolSearch.7` | Query form `select:A,B,C` fetches exactly those tools by name. | missing (noeta takes one exact name) |
-| `tool.ToolSearch.8` | Query form of plain keywords does a keyword search returning up to `max_results` best matches. | covered (cap fixed at 5) |
-| `tool.ToolSearch.9` | Query form `+word rest` requires `word` in the tool name and ranks by the remaining terms. | missing |
-| `tool.ToolSearch.10` | The deferred set is not only MCP tools: built-in tools such as `WebFetch`, `WebSearch`, `NotebookEdit`, `Monitor`, `TaskStop`, `SendMessage`, the plan-mode, worktree and cron tools, and the MCP resource tools are deferred in the baseline (see `main-prompt.md` for the list). | contradicts — only MCP servers marked deferred |
-| — | noeta-only: an empty query lists every deferred tool with a one-line description. | n/a (baseline lists names up front instead) |
+| `tool.ToolSearch.5` | Once fetched, a tool is callable directly by its own name, exactly like the tools defined up front. | covered |
+| `tool.ToolSearch.6` | Documented result format: each match as one `<function>{"description","name","parameters"}</function>` line inside a `<functions>` block — the same encoding as the up-front tool list. (Wire result differs; see r.1.) | covered |
+| `tool.ToolSearch.7` | Query form `select:A,B,C` fetches exactly those tools by name. | covered |
+| `tool.ToolSearch.8` | Query form of plain keywords does a keyword search returning up to `max_results` best matches. | covered |
+| `tool.ToolSearch.9` | Query form `+word rest` requires `word` in the tool name and ranks by the remaining terms. | covered |
+| `tool.ToolSearch.10` | The deferred set is not only MCP tools: built-in tools such as `WebFetch`, `WebSearch`, `NotebookEdit`, `Monitor`, `TaskStop`, `SendMessage`, the plan-mode, worktree and cron tools, and the MCP resource tools are deferred in the baseline (see `main-prompt.md` for the list). | covered for `WebFetch`, `WebSearch`, `NotebookEdit`, `Monitor`, `TaskStop` and the MCP tools; the plan-mode, worktree, cron and `SendMessage` tools are not built yet |
 
 ## Result shape
 

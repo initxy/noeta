@@ -9,7 +9,7 @@ from typing import Any, Literal, Protocol
 import msgspec
 
 from noeta.core.execenv import ExecEnv
-from noeta.core.types import Display, Image, Struct, Text
+from noeta.core.types import Display, Image, Struct, Text, ToolReference
 
 
 class Park(Struct):
@@ -25,7 +25,7 @@ class Park(Struct):
 
 
 class ToolOutput(Struct):
-    content: list[Text | Image] = msgspec.field(default_factory=list)
+    content: list[Text | Image | ToolReference] = msgspec.field(default_factory=list)
     is_error: bool = False
     #: Recorded with the result for front ends and extensions; never sent to
     #: the model.
@@ -75,6 +75,10 @@ class ToolContext:
     #: message could go to.
     tasks: Callable[..., Awaitable[list[Any]]] | None = None
     extras: dict[str, Any] = field(default_factory=dict)
+    #: The model made this call (the runner's calls), so what earlier calls
+    #: returned is in its conversation; ``False`` when an extension runs a
+    #: tool itself.
+    by_model: bool = False
     #: ``prompt(name, default)``: the task's text for a named prompt
     #: (``noeta.core.prompts``).
     prompt: Callable[[str, str], str] = field(default=lambda _name, default: default)
