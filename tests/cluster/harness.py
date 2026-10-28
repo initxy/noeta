@@ -56,6 +56,8 @@ name: cluster
 description: The cluster test's root agent.
 model: inherit
 plugins:
+  - cluster_crash:
+      arm: {arm}
   - shell
   - cluster_effect:
       journal: {journal}
@@ -127,10 +129,13 @@ class Cluster:
         self.work = base / "work"
         self.logs = base / "logs"
         self.journal = str(base / "journal")
+        #: Write an ``External`` name here to have the root's worker die
+        #: right after taking one (``cluster_crash``).
+        self.arm = str(base / "crash-arm")
         for d in (self.home / "agents", self.work, self.logs):
             d.mkdir(parents=True, exist_ok=True)
         (self.home / "agents" / "cluster.md").write_text(
-            ROOT_FILE.format(journal=self.journal, fire_after=fire_after))
+            ROOT_FILE.format(journal=self.journal, fire_after=fire_after, arm=self.arm))
         (self.home / "agents" / "cluster-child.md").write_text(
             CHILD_FILE.format(journal=self.journal))
         models = self.home / "models.json"

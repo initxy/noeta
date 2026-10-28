@@ -11,6 +11,8 @@
 * ``cluster_schedule`` (plugin): the real ``schedule`` plugin on a clock
   that runs a minute behind, so a ``ScheduleWakeup`` (clamped to at least
   60 s) fires a few seconds later instead of a minute.
+* ``cluster_crash`` (plugin): when armed, kills its worker right after a
+  take is committed and before the plugins after it react to it.
 
 The conversation script. A root task starts from::
 
@@ -47,6 +49,7 @@ import shlex
 import time
 from typing import Any
 
+from noeta.core.events import External, InputTaken, Recorded
 from noeta.core.extension import Extension, TaskView
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolUse, Usage
@@ -124,6 +127,36 @@ class EffectPlugin(Extension):
 
     def tools(self, view: TaskView) -> list[Tool]:
         return [self.tool, self.lookup]
+
+
+class CrashPlugin(Extension):
+    """Kills its worker process right after a take of ``External(<name>)``
+    is committed, before any plugin listed after it decides what follows
+    from it, once: when the file ``arm`` holds ``<name>``. The file is
+    removed first (so one worker dies), and ``<arm>.done`` written."""
+
+    name = "cluster_crash"
+
+    def __init__(self, *, arm: str) -> None:
+        self.arm = arm
+
+    async def on_event(self, view: TaskView, recorded: Recorded) -> None:
+        ev = recorded.event
+        if not isinstance(ev, InputTaken):
+            return
+        try:
+            with open(self.arm) as f:
+                want = f.read().strip()
+        except OSError:
+            return
+        if not any(isinstance(i.body, External) and i.body.name == want for i in ev.items):
+            return
+        try:
+            os.unlink(self.arm)
+        except FileNotFoundError:
+            return  # another worker took it
+        journal_line(self.arm + ".done", f"{os.getpid()} {view.task_id} {recorded.seq}")
+        os._exit(70)
 
 
 def fast_schedule(*, fire_after: float = 2.0) -> Extension:

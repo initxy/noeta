@@ -13,6 +13,7 @@ cluster_scripted = "noeta_cluster_scripted:provider"
 [project.entry-points."noeta.plugins"]
 cluster_effect = "noeta_cluster_scripted:EffectPlugin"
 cluster_schedule = "noeta_cluster_scripted:fast_schedule"
+cluster_crash = "noeta_cluster_scripted:CrashPlugin"
 
 [build-system]
 requires = ["hatchling"]
