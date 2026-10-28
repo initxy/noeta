@@ -42,7 +42,7 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | id | case | shape | noeta today |
 |---|---|---|---|
 | `tool.Edit.r.1` | success | one line: the file (absolute path) was updated successfully, followed by a parenthesised note that the file state is current in context and need not be read back. No snippet, no diff. | covered |
-| `tool.Edit.r.2` | success on the project `CLAUDE.md` | the same line **without** the "file state is current" note (`m1/0066`) | covered |
+| `tool.Edit.r.2` | success on the project `CLAUDE.md` | the same line **without** the "file state is current" note (`m1/0066`) | covered for `NOETA.md` (`deviations.md`) |
 | `tool.Edit.r.3` | two edits of one file in one turn | each call gets its own identical success line | covered |
 
 ## Variants

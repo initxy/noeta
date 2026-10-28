@@ -46,9 +46,22 @@ A row without an id is a difference the replay cannot see.
 | | The environment section names noeta's own front ends instead of Claude Code's, and leaves out fast mode (`main.envp.2`, `main.envp.3`). | Product facts of Claude Code; noeta has no fast mode. |
 | | The attribution note's PR footer links to noeta, and is left out for a model the catalog gives no display name. | The footer names the tool that wrote the PR; the trailer needs the model's name. |
 
+## noeta's own files
+
+noeta reads only its own places (owner, 2026-10-28): Claude Code's mechanisms and formats, noeta's
+file names. Each row is a name the model sees; the files themselves are product facts.
+
+| id | difference | reason |
+|---|---|---|
+| | The instructions reminder lists `NOETA.md`, `.noeta/NOETA.md`, `.noeta/rules/`, `NOETA.local.md`, the user's `~/.noeta/NOETA.md` and `~/.noeta/rules/`, and the managed `NOETA.md` (`/etc/noeta`, macOS `/Library/Application Support/Noeta`), in Claude Code's order, where Claude Code lists `CLAUDE.md` and `.claude/` paths; a directory with neither project file shows its `AGENTS.md` (`rem.instructions.5`). | noeta never picks up Claude Code's instructions; `AGENTS.md` is the cross-tool convention. |
+| | Texts that name the instruction file say `NOETA.md` where Claude Code says `CLAUDE.md`: the memory section (`main.mem.15`), the sub-agent prompts and caller messages (`sub.common.1`), the hand-back frame (`sub.result.4`), `Agent`'s `effort` description, and the auto-mode classifier's instructions block, which is a `<user_noeta_md>` element (`cls.input.1`). | The file the text means is noeta's. |
+| | `Agent`'s description names agent files in `.noeta/agents/` (`tool.Agent.20`). | noeta's agent directory. |
+| | `Edit` / `Write` leave the "file state is current" note off for `NOETA.md` (`tool.Edit.r.2`). | The rule is about the instruction file, which is `NOETA.md` here. |
+| | An isolated agent's worktree is under `.noeta/worktrees/`, not `.claude/worktrees/`, and the auto-mode policy names `.noeta/` trees and `NOETA.md` as the agent's configuration. | noeta's own directory. |
+| | An MCP result cut to its budget names `NOETA_MAX_MCP_OUTPUT_TOKENS`. | noeta's environment variables carry its prefix (`NOETA_MCP_TIMEOUT`, `NOETA_MCP_TOOL_TIMEOUT`, `NOETA_AUTO_COMPACT_WINDOW`, `NOETA_AUTOCOMPACT_PCT_OVERRIDE` likewise). |
+
 ## Instruction files
 
 | id | difference | reason |
 |---|---|---|
-| | A directory with no `CLAUDE.md` / `.claude/CLAUDE.md` shows its `NOETA.md`, else its `AGENTS.md` (`rem.instructions.5`). | noeta's own file and the cross-vendor convention keep working; a directory Claude Code reads is read the same. |
 | | An `@path` import from a repository file that leaves the repository directory and the working directory is skipped, not asked about (`rem.instructions.7`). | No noeta front end has Claude Code's approval dialog for external imports; skipping is the safe side of it. |

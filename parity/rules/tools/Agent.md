@@ -50,7 +50,7 @@ counterpart is `Agent` (`noeta/plugins/subtasks/tool.py`, `descriptions/agent.md
 | `tool.Agent.17` | Never invent or predict a pending agent's result; the completion notice is never something the model writes itself; if the user asks before it arrives, say it is still running. | covered (background ack says not to fabricate) |
 | `tool.Agent.18` | The user does not see the agent's final report; the caller passes on the parts that matter. | covered |
 | `tool.Agent.19` | `SendMessage` with the agent's id or name continues a finished agent with its context; a new `Agent` call starts fresh (except a fork, which inherits). | covered |
-| `tool.Agent.20` | Model, effort and tools of an agent type come from its definition (the frontmatter of `.claude/agents/*.md`, or an agent defined through the SDK). | covered |
+| `tool.Agent.20` | Model, effort and tools of an agent type come from its definition (the frontmatter of `.claude/agents/*.md`, or an agent defined through the SDK). | covered — `.noeta/agents/` (`deviations.md`) |
 | `tool.Agent.21` | `isolation: "worktree"` runs the agent in its own git worktree, removed automatically when left unchanged. | covered |
 | `tool.Agent.22` | Several independent agents go out as several `Agent` calls in one response so they run concurrently (stated in the agent-list message, not here). | covered (in the agent list) |
 
