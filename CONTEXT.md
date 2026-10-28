@@ -34,7 +34,7 @@ the hold is released or runs out.
 
 `noeta/core` (log, inbox, loop, runner, sqlite store, client, and every interface a plugin
 implements or uses), `noeta/plugins/<name>` (capabilities), `noeta/backends` (providers, exec
-envs, Postgres), `noeta/presets` (the built-in agent files), `noeta/apps` (CLI, TUI, ACP, HTTP
+envs, Postgres), `noeta/agents` (the built-in agent files), `noeta/apps` (CLI, TUI, ACP, HTTP
 server). Imports go downward only, plugins never import each other, backends never import each
 other (`lint-imports`, contracts in `pyproject.toml`). One plugin reaches another only through
 the kernel: a tool by its model-visible name (`TaskView.find_tool`), config a child inherits
@@ -73,7 +73,7 @@ them something with `notify`; neither reaches the model as the user.
 An agent is a markdown file (`noeta/core/agent_files.py`): YAML frontmatter (`name`,
 `description`, `model`, `plugins` as names or `name: {arguments}`, optional `tools`,
 `one_shot`) and the system prompt as body. One plugin instance per name and arguments is shared
-by every agent naming it. The built-ins are `noeta/presets/agents/*.md`.
+by every agent naming it. The built-ins are `noeta/agents/agents/*.md`.
 
 ## Prompt name
 

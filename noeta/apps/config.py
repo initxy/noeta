@@ -225,9 +225,9 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     those. Front ends (``-p``, ``acp``, the TUI) pass ``own_tasks_only`` so
     their worker never picks up another process's task from the shared
     store; ``worker`` and ``serve`` serve every task."""
+    from noeta.agents import default_agents
     from noeta.core.agent_files import read_agent_dir
     from noeta.host.local import LocalApp
-    from noeta.presets import default_agents
 
     notices = load_plugin_files(cwd)
     for notice in notices:

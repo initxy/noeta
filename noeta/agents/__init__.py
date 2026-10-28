@@ -1,4 +1,4 @@
-"""Ready-made agents, as agent files in ``agents/``: ``main`` is the general
+"""The built-in agents, as agent files in ``files/``: ``main`` is the general
 coding agent with Claude Code's working style; it delegates to the
 general-purpose, explore and plan sub-agents.
 
@@ -49,8 +49,8 @@ OFF_UNLESS_SET: frozenset[str] = frozenset({"memory", "mcp"})
 
 
 def builtin_agent_files() -> list[AgentFile]:
-    root = resources.files("noeta.presets") / "agents"
-    return [parse_agent_file(f.read_text("utf-8"), source=f"noeta.presets:{f.name}")
+    root = resources.files("noeta.agents") / "files"
+    return [parse_agent_file(f.read_text("utf-8"), source=f"noeta.agents:{f.name}")
             for f in sorted(root.iterdir(), key=lambda f: (f.name != "main.md", f.name))
             if f.name.endswith(".md")]
 

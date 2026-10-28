@@ -3,7 +3,7 @@
 The names a host or a plugin author needs, importable from ``noeta``
 (loaded on first use, so ``import noeta`` stays cheap). Everything else is
 imported from its module: ``noeta.core.*`` (the kernel), ``noeta.plugins.*``,
-``noeta.backends.*``, ``noeta.presets``, ``noeta.apps.*``.
+``noeta.backends.*``, ``noeta.agents``, ``noeta.apps.*``.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from noeta.agents import default_agents
     from noeta.core.agent import Agent
     from noeta.core.agent_files import parse_agent_file, read_agent_dir
     from noeta.core.client import Client
@@ -29,7 +30,6 @@ if TYPE_CHECKING:
     from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
     from noeta.host.local import LocalApp
     from noeta.host.remote import RemoteClient
-    from noeta.presets import default_agents
 
 #: Public name -> the module that defines it.
 _EXPORTS = {
@@ -48,7 +48,7 @@ _EXPORTS = {
     "ToolContext": "noeta.core.tool",
     "ToolOutput": "noeta.core.tool",
     "ask": "noeta.core.questions",
-    "default_agents": "noeta.presets",
+    "default_agents": "noeta.agents",
     "parse_agent_file": "noeta.core.agent_files",
     "provider": "noeta.core.registry",
     "read_agent_dir": "noeta.core.agent_files",

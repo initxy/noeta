@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from noeta.agents import default_agents
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
@@ -18,7 +19,6 @@ from noeta.plugins.compaction import Compaction
 from noeta.plugins.compaction.summary import SUMMARY_FRAME
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.todo import Todo
-from noeta.presets import default_agents
 
 from ._harness import Model, Probe, answer, call, rebuilt, run
 
