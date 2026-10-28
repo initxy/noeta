@@ -94,7 +94,8 @@ class EditTool:
         # ``Read`` shows lines without their ``\r``, so the model writes bare
         # ``\n``. In a CRLF file, match and write with the file's own ending —
         # never a mixed file.
-        if _dominant_eol(before) == "\r\n":
+        eol = _dominant_eol(before)
+        if eol == "\r\n":
             old_eol, new_eol = _to_eol(old, "\r\n"), _to_eol(new, "\r\n")
             if before.count(old_eol):
                 old, new = old_eol, new_eol
@@ -114,6 +115,10 @@ class EditTool:
                 "replace_all to true. To replace only one, provide more "
                 "surrounding context to uniquely identify the instance.",
             )
+        # Deleting whole lines without their line break would leave a blank
+        # line behind; Claude Code takes the break along.
+        if not new and not old.endswith("\n") and old + eol in before:
+            old += eol
         return count, (before.replace(old, new) if replace_all
                        else before.replace(old, new, 1))
 

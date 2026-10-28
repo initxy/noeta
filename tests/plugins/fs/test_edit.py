@@ -184,6 +184,19 @@ async def test_an_empty_old_string_creates_a_file(h: Harness, ws: Path) -> None:
         "Give the text to replace instead.")
 
 
+async def test_deleting_a_line_takes_its_line_break(h: Harness, ws: Path) -> None:
+    (ws / "a.py").write_text("keep\ndrop me\nkeep too\n")
+    await _read(h, "a.py")
+    assert not (await h.call(EditTool(), file_path="a.py", old_string="drop me",
+                             new_string="")).is_error
+    assert (ws / "a.py").read_text() == "keep\nkeep too\n"
+    (ws / "b.txt").write_bytes(b"one\r\ntwo\r\n")
+    await _read(h, "b.txt")
+    assert not (await h.call(EditTool(), file_path="b.txt", old_string="one",
+                             new_string="")).is_error
+    assert (ws / "b.txt").read_bytes() == b"two\r\n"
+
+
 async def test_a_file_over_1gb_is_refused_unread(h: Harness, ws: Path) -> None:
     with open(ws / "huge.log", "wb") as f:
         f.truncate(1536 * 1024 * 1024)  # sparse: nothing is written
