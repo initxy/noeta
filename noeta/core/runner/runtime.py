@@ -32,6 +32,15 @@ def _default_env(state: TaskState) -> ExecEnv:
     return registry.execenv("local", str(state.config.get("cwd") or os.getcwd()))
 
 
+def catalog_output_ceiling(model: str) -> int:
+    """``model``'s output ceiling in the model catalog
+    (:mod:`noeta.core.models`; an unknown model gets the unknown-model cap)."""
+    from noeta.core import models
+
+    spec = models.find_spec(model)
+    return spec.max_output_tokens if spec is not None else models.UNKNOWN_MODEL_MAX_OUTPUT_TOKENS
+
+
 @dataclass
 class Runtime:
     """Everything a runner needs. One ``Runtime`` runs many tasks at once."""
@@ -56,6 +65,11 @@ class Runtime:
     #: model is told (its ``.noeta/prompts``)? ``None`` trusts every workspace.
     workspace_trusted: Callable[[str], bool] | None = None
     on_delta: OnDelta | None = None
+    #: ``output_ceiling(model)``: the ``max_tokens`` a request sends when its
+    #: agent sets none (always sent: a gateway once defaulted to 1,000 when
+    #: it was left out). A host whose models the catalog does not know
+    #: passes its own.
+    output_ceiling: Callable[[str], int] = catalog_output_ceiling
     sleep: Callable[[float], Any] = asyncio.sleep
     #: Serve only the task trees whose root ids are in this set (a front end
     #: adds each task it creates or resumes); ``None`` serves every task.

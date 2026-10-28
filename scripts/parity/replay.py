@@ -382,7 +382,10 @@ class SessionReplay:
         main = app.runtime.agents["main"]
         async with app:
             if task_id is not None:
+                from noeta.toolkit.signals import RESUMED_SIGNAL
+
                 await app.adopt(task_id)
+                await app.client.signal(task_id, RESUMED_SIGNAL)
             for i, step in enumerate(self.spec["steps"]):
                 self.replayer.current_step = i
                 text = step["say"]

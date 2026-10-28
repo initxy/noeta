@@ -11,7 +11,7 @@ from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import httpx
 import msgspec
@@ -21,6 +21,8 @@ from noeta.core.events import (
     Cancel,
     Compacted,
     ExtensionRecorded,
+    External,
+    InputTaken,
     ModelReplied,
     Recorded,
     Say,
@@ -46,6 +48,7 @@ from noeta.plugins.hooks.runners import (
     run_prompt,
 )
 from noeta.toolkit.permission_rules import RuleContext, match
+from noeta.toolkit.signals import RESUMED_SIGNAL
 
 log = logging.getLogger("noeta.hooks")
 
@@ -58,6 +61,8 @@ HANDBACK_TOOL = "SubagentHandback"
 RETRY_NOTE = ("A PermissionDenied hook says the denied {tool} call may be retried, "
               "if it is still needed.")
 _KEEP = 256
+#: The plugin whose folded ``mode`` is the task's permission mode.
+PERMISSIONS_PLUGIN = "permissions"
 
 
 @dataclass(frozen=True)
@@ -78,8 +83,6 @@ class _State:
     #: PermissionRequest answers by call id: ``{"behavior", "input",
     #: "message"}`` (``behavior`` ``None``: no hook decided).
     permission: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
-    #: The permission mode, as the permissions plugin last recorded it.
-    mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -172,13 +175,6 @@ class Hooks(Extension):
         #: again, and the hook is not asked about its own rewrite.
         self._rewrites: OrderedDict[tuple[str, str], tuple[dict[str, Any], Gate | None]] = \
             OrderedDict()
-        #: PermissionRequest answers not yet folded into the task's state.
-        self._decisions: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
-        #: ``once`` hooks run in a step whose records are not folded yet.
-        self._ran_once: OrderedDict[tuple[str, str], bool] = OrderedDict()
-        #: Root tasks this process has started (a later pick-up elsewhere,
-        #: or after a restart, is a resume).
-        self._seen: OrderedDict[str, bool] = OrderedDict()
 
     # ------------------------------------------------------------ state
 
@@ -201,8 +197,6 @@ class Hooks(Extension):
             return replace(st, compact_trigger=str(data.get("trigger") or "auto"))
         if kind == "compact_seen":
             return replace(st, compact_seen=int(data.get("through") or 0))
-        if kind == "mode":
-            return replace(st, mode=str(data.get("mode") or "") or None)
         if kind == "once":
             return replace(st, once=st.once | {str(data.get("key"))})
         if kind == "permission":
@@ -214,20 +208,29 @@ class Hooks(Extension):
         return st
 
     def _state(self, view: TaskView) -> _State:
-        st = view.ext_state(self.name)
-        return st if isinstance(st, _State) else _State()
+        """This plugin's state, with what it recorded on ``view`` and the
+        runner has not folded yet (a ``once`` hook run, a PermissionRequest
+        answer earlier in the same step)."""
+        found = view.ext_state(self.name)
+        st: _State = found if isinstance(found, _State) else _State()
+        for ev in view.pending:
+            if isinstance(ev, ExtensionRecorded) and ev.extension == self.name:
+                st = cast(_State, self.reduce(st, ev.kind, ev.data))
+        return st
 
     # ------------------------------------------------------------ running
 
     @staticmethod
     def _cwd(view: TaskView) -> str | None:
-        return str(view.state.config.get("cwd") or "") or None
+        return view.cwd or None
 
     def _payload(self, event: str, view: TaskView, payload: Mapping[str, Any]) -> dict[str, Any]:
         """Claude Code's common input fields, then the event's own. The root
         task stands for Claude Code's conversation id."""
         st = view.state
-        mode = self._state(view).mode or st.config.get("permission_mode")
+        # The permissions plugin's current mode (its folded ``mode``).
+        mode = getattr(view.ext_state(PERMISSIONS_PLUGIN), "mode", None) \
+            or st.config.get("permission_mode")
         out: dict[str, Any] = {
             "session_id": st.root_id or st.task_id, "transcript_path": "",
             "cwd": self._cwd(view) or "", "permission_mode": mode if isinstance(mode, str)
@@ -265,7 +268,7 @@ class Hooks(Extension):
                     ctx = RuleContext(root=cwd, home=os.path.expanduser("~"), cwd=cwd)
                     if not match(h.condition, call.name, call.input, ctx):
                         continue
-                if h.once and (h.key in done or (view.task_id, h.key) in self._ran_once):
+                if h.once and h.key in done:
                     continue
                 seen.add(h.key)
                 out.append(h)
@@ -301,10 +304,8 @@ class Hooks(Extension):
         full = self._payload(event, view, payload)
         cwd = self._cwd(view)
         for h in hooks:
-            if h.once:
-                _remember(self._ran_once, (view.task_id, h.key), True)
-                if record:
-                    view.record(self.name, "once", {"key": h.key})
+            if h.once and record:
+                view.record(self.name, "once", {"key": h.key})
         for h in hooks:
             if h.background:
                 self._spawn(self._one(h, full, cwd, view, transcript))
@@ -345,9 +346,11 @@ class Hooks(Extension):
     # ------------------------------------------------------------ start
 
     async def on_start(self, view: TaskView) -> None:
-        """SessionStart (``startup``, or ``resume`` on a pick-up this
-        process did not start) for a top-level task; SubagentStart the
-        first time a sub-agent starts. What they add reaches the model."""
+        """SessionStart (``startup``) the first time a top-level task
+        starts; SubagentStart the first time a sub-agent starts. What they
+        add reaches the model. A pick-up by another worker or after a
+        restart is not a resume: that is a front end's
+        :data:`RESUMED_SIGNAL` (:meth:`on_event`)."""
         st = self._state(view)
         if view.state.parent_id is not None:
             if st.started or "SubagentStart" not in self.matchers:
@@ -359,15 +362,19 @@ class Hooks(Extension):
                     view.notify(f"SubagentStart hook: {r.block}")
             self._context(view, "context", "SubagentStart hook", [r.context for r in reads])
             return
-        fresh = view.task_id not in self._seen
-        _remember(self._seen, view.task_id, True)
-        if "SessionStart" not in self.matchers or (st.started and not fresh):
+        if "SessionStart" not in self.matchers or st.started:
             return
-        source = "resume" if st.started else "startup"
-        if not st.started:
-            view.record(self.name, "started", {"event": "SessionStart"})
-        reads = await self._run("SessionStart", view, {"source": source, "model": view.model})
-        self._start_context(view, source, reads)
+        view.record(self.name, "started", {"event": "SessionStart"})
+        reads = await self._run("SessionStart", view, {"source": "startup", "model": view.model})
+        self._start_context(view, "startup", reads)
+
+    async def _resumed(self, view: TaskView) -> None:
+        """SessionStart (``resume``): a front end reopened a started task."""
+        if view.state.parent_id is not None or "SessionStart" not in self.matchers \
+                or not self._state(view).started:
+            return
+        reads = await self._run("SessionStart", view, {"source": "resume", "model": view.model})
+        self._start_context(view, "resume", reads)
 
     def _start_context(self, view: TaskView, source: str, reads: Sequence[_Read]) -> None:
         for r in reads:
@@ -477,11 +484,9 @@ class Hooks(Extension):
         gated again is not asked about twice."""
         if "PermissionRequest" not in self.matchers:
             return None
-        decided = self._state(view).permission.get(call.id) \
-            or self._decisions.get((view.task_id, call.id))
+        decided = self._state(view).permission.get(call.id)
         if decided is None:
             decided = await self._permission_request(view, call)
-            _remember(self._decisions, (view.task_id, call.id), decided)
             view.record(self.name, "permission", {"call_id": call.id, **decided})
             if decided.get("behavior") == "deny" and decided.get("interrupt"):
                 await self._stop_turn(view, "")
@@ -579,14 +584,15 @@ class Hooks(Extension):
         elif isinstance(event, ExtensionRecorded):
             if event.extension == "permissions" and event.kind == "classified":
                 await self._denied(view, event.data)
-            elif event.extension == "permissions" and event.kind in ("mode", "plan_exit") \
-                    and isinstance(event.data, dict):
-                view.record(self.name, "mode", {"mode": event.data.get("mode")})
         elif isinstance(event, TaskEnded):
             if view.state.parent_id is None and "SessionEnd" in self.matchers:
                 await self._run("SessionEnd", view, {"reason": "other"}, record=False)
         elif isinstance(event, ModelReplied):
             await self._model_stopped(view, event)
+        elif isinstance(event, InputTaken) and any(
+                isinstance(i.body, External) and i.body.name == RESUMED_SIGNAL
+                for i in event.items):
+            await self._resumed(view)
 
     def _notify(self, view: TaskView, event: Waiting) -> None:
         """Notification, in the background (side effects only)."""

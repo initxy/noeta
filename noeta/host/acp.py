@@ -40,15 +40,24 @@ from noeta.host.local import LocalApp, UnknownAgent
 from noeta.host.pending import (
     Pending,
     answer_choice,
+    card_prompt,
     card_title,
     choices,
     follow_tree,
+    pending,
     pending_tree,
 )
 from noeta.host.questions import next_question, typed_answer
 from noeta.host.rewind import rewind, rewind_points
 from noeta.host.usage import context_breakdown, context_text, cost_text, tree_usage
-from noeta.toolkit.permission_modes import MODE_NAMES, MODE_SIGNAL, PERMISSION_MODES, current_mode
+from noeta.toolkit.permission_modes import (
+    MODE_SIGNAL,
+    PERMISSION_MODES,
+    Modes,
+    current_mode,
+    published_modes,
+)
+from noeta.toolkit.signals import RESUMED_SIGNAL
 
 log = logging.getLogger("noeta.host.acp")
 
@@ -296,11 +305,13 @@ class NoetaAcpAgent:
     async def _modes(self, task_id: str) -> schema.SessionModeState | None:
         """The permission modes, as ACP session modes (none when the agent
         records no mode: it has no permissions plugin)."""
-        mode = current_mode(await self.app.client.events(task_id))
+        events = await self.app.client.events(task_id)
+        mode = current_mode(events)
         if mode is None:
             return None
+        offered = published_modes(events) or Modes()
         return schema.SessionModeState(current_mode_id=mode, available_modes=[
-            schema.SessionMode(id=m, name=MODE_NAMES[m]) for m in PERMISSION_MODES])
+            schema.SessionMode(id=m, name=offered.names.get(m, m)) for m in offered.modes])
 
     async def set_session_mode(self, session_id: str, mode_id: str,
                                **kw: Any) -> schema.SetSessionModeResponse:
@@ -343,6 +354,7 @@ class NoetaAcpAgent:
 
     async def load_session(self, cwd: str, session_id: str, **kw: Any) -> None:
         await self._adopt(session_id)
+        await self.app.client.signal(session_id, RESUMED_SIGNAL)
         self._cwd[session_id] = cwd
         for rec in await self.app.client.events(session_id):
             for update in self._replay(rec):
@@ -559,24 +571,26 @@ class NoetaAcpAgent:
             self._asked.add((p.task_id, p.request_id))
             await out.join()
             await self._ask_one(session_id, p.task_id, p.request_id,
-                                card_title(p, session_id), choices(p.detail))
+                                card_title(p, session_id), choices(p.detail), card_prompt(p))
         return False
 
     async def _ask_permissions(self, session_id: str, waiting: Waiting) -> None:
-        for call_id in waiting.ids:
-            detail = waiting.detail.get(call_id) or {}
-            title = str(detail.get("title") or detail.get("prompt") or call_id)
-            await self._ask_one(session_id, session_id, call_id, title, choices(detail))
+        for p in pending(await self.app.client.events(session_id), session_id):
+            if p.kind == "approval" and p.request_id in waiting.ids:
+                await self._ask_one(session_id, session_id, p.request_id,
+                                    card_title(p, session_id), choices(p.detail),
+                                    card_prompt(p))
 
     async def _ask_one(self, session_id: str, task_id: str, call_id: str, title: str,
-                       options: list[dict[str, str]]) -> None:
+                       options: list[dict[str, str]], prompt: str = "") -> None:
         kinds = {"allow": "allow_once", "always": "allow_always", "deny": "reject_once"}
+        body: list[Any] | None = [acp.tool_content(acp.text_block(prompt))] if prompt else None
         resp = await self.conn.request_permission(
             session_id=session_id, options=[
                 schema.PermissionOption(option_id=o["id"], name=o["label"],
                                         kind=kinds.get(o["id"], "allow_once"))  # type: ignore[arg-type]
                 for o in options],
-            tool_call=schema.ToolCallUpdate(tool_call_id=call_id, title=title))
+            tool_call=schema.ToolCallUpdate(tool_call_id=call_id, title=title, content=body))
         chosen = getattr(resp.outcome, "option_id", None)
         known = {o["id"] for o in options}
         await answer_choice(self.app.client, task_id, call_id,

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from noeta.core.agent import Agent
+from noeta.core.client import Client
 from noeta.core.events import Waiting
 from noeta.plugins.fs import FileTools
 from noeta.plugins.skills import Skills, UsageRank
@@ -288,7 +289,7 @@ async def test_usage_rank_counts_model_and_user_activations(h: Harness) -> None:
     write_skill(skills_dir(h), "deploy", "Ship.")
     h.provider.add(reply("", ("Skill", {"skill": "deploy"})), reply("done"))
     await h.start(agent())
-    ranker = UsageRank(h.store)
+    ranker = UsageRank(Client(h.store))
     assert ranker() == {}
     await ranker.wait()
     assert set(ranker()) == {"deploy"} and ranker()["deploy"] > 0.9

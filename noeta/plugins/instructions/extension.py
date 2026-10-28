@@ -162,7 +162,7 @@ class Instructions(Extension):
 
     def _reader(self, view: TaskView) -> tuple[Reader, str]:
         env = task_env(view.env, view.state.config)
-        cwd = str(view.state.config.get("cwd") or env.cwd)
+        cwd = view.cwd or env.cwd
         local = task_env(None, {"cwd": self.user_dir or "/"})
         return Reader(env=env, local=local, cwd=cwd), cwd
 

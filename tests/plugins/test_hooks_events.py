@@ -26,6 +26,7 @@ from noeta.plugins.hooks import HookCommand, HookResult, Hooks
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.subtasks import SubagentSpec, Subtasks
 from noeta.testing import ScriptedProvider, reply
+from noeta.toolkit.signals import RESUMED_SIGNAL
 
 Answer = HookResult | Callable[[dict[str, Any]], HookResult]
 
@@ -126,6 +127,15 @@ class AskAll(Extension):
         return Ask(prompt="may I?", firm=self.firm)
 
 
+async def test_a_task_without_a_configured_cwd_runs_its_hooks_in_the_env_cwd(
+        tmp_path: Path) -> None:
+    s = Setup(tmp_path, {"PreToolUse": hook("pre", "Read")}, [reply("", READ_A), reply("done")])
+    s.tid = await s.client.create("a", "go")  # no config cwd: the exec env's is the task's
+    await s.runtime().run_until_idle()
+    [payload] = s.runner.payloads("pre")
+    assert payload["cwd"] == str(s.work)
+
+
 # ---------------------------------------------------------------- PreToolUse
 
 
@@ -192,6 +202,28 @@ async def test_pre_tool_use_rewrites_once_and_adds_context(tmp_path: Path) -> No
     second = s.provider.requests[1].messages
     assert second[-1].text == "PreToolUse hook (Read): Read b instead."
     assert second[-1].origin == "system"
+
+
+async def test_a_rewrite_is_recorded_so_another_worker_does_not_ask_again(
+        tmp_path: Path) -> None:
+    """The hook's verdict on its own rewrite is in the log: the worker that
+    picks the call up after its approval does not ask the hook about it."""
+    config = {"PreToolUse": hook("pre")}
+    rewrite = specific("PreToolUse", permissionDecision="ask",
+                       updatedInput={"file_path": "b.txt"})
+    s = await Setup(tmp_path, config, [reply("", READ_A), reply("ok")],
+                    answers={"pre": rewrite}).start()
+    last = (await s.events())[-1]
+    assert isinstance(last, Waiting) and last.on == "approval"
+    assert len(s.runner.payloads("pre")) == 1
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Hooks(hooks=config, runner=s.runner), FileTools()])
+    await s.client.answer(s.tid, last.ids[0], "allow")
+    await s.runtime().run_until_idle()
+    [(text, is_error)] = await s.results()
+    assert not is_error and "other" in text
+    # Asked once more about the model's own call, never about its rewrite.
+    assert [p["tool_input"] for p in s.runner.payloads("pre")] == [{"file_path": "a.txt"}] * 2
 
 
 async def test_if_condition_and_once(tmp_path: Path) -> None:
@@ -360,16 +392,24 @@ async def test_permission_denied_can_allow_a_retry(tmp_path: Path) -> None:
 
 
 async def test_session_start_startup_and_resume(tmp_path: Path) -> None:
-    s = await Setup(tmp_path, {"SessionStart": hook("start", "startup|resume")},
-                    [reply("a"), reply("b"), reply("c")],
+    config = {"SessionStart": hook("start", "startup|resume")}
+    s = await Setup(tmp_path, config, [reply("a"), reply("b"), reply("c"), reply("d")],
                     answers={"start": lambda p: ok(f"source was {p['source']}")}).start()
     assert s.system_texts(0) == ["SessionStart hook (startup): source was startup"]
     await s.send("again")  # the same process: no new SessionStart
     assert [p["source"] for p in s.runner.payloads("start")] == ["startup"]
-    s.hooks._seen.clear()  # as if this process had restarted
-    await s.send("after a restart")
+    # Another worker (or a restart: a fresh plugin) picking the task up is
+    # no resume; the request is what the log says.
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Hooks(hooks=config, runner=s.runner), FileTools()])
+    await s.send("on another worker")
+    assert [p["source"] for p in s.runner.payloads("start")] == ["startup"]
+    # A front end reopening the task is.
+    await s.client.signal(s.tid, RESUMED_SIGNAL)
+    await s.runtime().run_until_idle()
+    await s.send("after a resume")
     assert [p["source"] for p in s.runner.payloads("start")] == ["startup", "resume"]
-    assert s.provider.requests[2].messages[-2].text == \
+    assert s.provider.requests[3].messages[-2].text == \
         "SessionStart hook (resume): source was resume"
 
 

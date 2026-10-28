@@ -27,9 +27,8 @@ from noeta.cli.tui.widgets import (
     QuestionCard,
     ToolCall,
     UserMessage,
-    tool_title,
 )
-from noeta.core import models
+from noeta.core import models, records
 from noeta.core.commands import list_commands, run_typed
 from noeta.core.events import (
     Answer,
@@ -45,19 +44,28 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import CommandContext
-from noeta.core.records import CORE
-from noeta.core.types import Delta, Image, Usage
+from noeta.core.types import Delta, Image
 from noeta.host.feed import failure_text
 from noeta.host.local import LocalApp, UnknownAgent
 from noeta.host.pending import (
     Pending,
     answer_choice,
+    approvals,
+    card_prompt,
     card_title,
     choices,
     follow_tree,
 )
 from noeta.host.questions import next_question, typed_answer
-from noeta.toolkit.permission_modes import MODE_SIGNAL, current_mode, next_mode
+from noeta.host.usage import tree_usage
+from noeta.toolkit.permission_modes import (
+    MODE_SIGNAL,
+    Modes,
+    current_mode,
+    next_mode,
+    published_modes,
+)
+from noeta.toolkit.signals import RESUMED_SIGNAL
 
 log = logging.getLogger("noeta.cli.tui")
 
@@ -111,6 +119,8 @@ class NoetaApp(App[None]):
         self.permission_mode = permission_mode
         #: The task's permission mode, as its permissions plugin recorded it.
         self.mode = ""
+        #: The modes the task's permissions plugin offers (its ``modes`` record).
+        self.modes = Modes()
         self.task_id = ""
         self.calls: dict[str, ToolCall] = {}
         self.stream: MarkdownStream | None = None
@@ -126,7 +136,8 @@ class NoetaApp(App[None]):
         #: A delta is taken off the queue but not yet written.
         self._pumping = False
         self.busy = False
-        self.usage = Usage()
+        #: What the task tree has cost so far (``host.usage``, as ``/cost``).
+        self.cost_usd = 0.0
         self.context_tokens = 0
         #: The question the next input line answers: its call id, the task
         #: asking (the root or a sub-agent), its detail, and answers so far.
@@ -178,9 +189,11 @@ class NoetaApp(App[None]):
         if self.permission_mode:
             config["permission_mode"] = self.permission_mode
         tid = await self.local.client.create(self.agent, None, config=config)
-        await self.open_task(tid)
+        await self.open_task(tid, resumed=False)
 
-    async def open_task(self, task_id: str) -> None:
+    async def open_task(self, task_id: str, *, resumed: bool = True) -> None:
+        """Show and follow ``task_id``; ``resumed``: an existing task the
+        person reopens (its plugins are told)."""
         if self._follower is not None:
             self._follower.cancel()
         refused = ""
@@ -188,6 +201,8 @@ class NoetaApp(App[None]):
             await self.local.adopt(task_id)
         except UnknownAgent as exc:
             refused = str(exc)
+        if resumed and not refused:
+            await self.local.client.signal(task_id, RESUMED_SIGNAL)
         self.read_only = bool(refused)
         self.task_id = task_id
         self.calls.clear()
@@ -198,6 +213,7 @@ class NoetaApp(App[None]):
         await self._end_stream()
         self.streamed.clear()
         self.attempts.clear()
+        self.cost_usd = 0.0
         self.called = 0
         transcript = self.query_one("#transcript")
         await transcript.remove_children()
@@ -353,7 +369,7 @@ class NoetaApp(App[None]):
         """Step to the next permission mode (Claude Code's shift+tab)."""
         if not self.task_id or self.read_only:
             return
-        mode = next_mode(self.mode or self.permission_mode or "auto")
+        mode = next_mode(self.mode or self.permission_mode or "auto", self.modes.cycle)
         await self.local.client.signal(self.task_id, MODE_SIGNAL, {"mode": mode})
         self.mode = mode
         self.update_status()
@@ -399,7 +415,7 @@ class NoetaApp(App[None]):
                     await self.decide(call_id, choice, task_id=task_id)
 
                 await transcript.mount(ApprovalCard(
-                    p.request_id, card_title(p, self.task_id), p.prompt, decide,
+                    p.request_id, card_title(p, self.task_id), card_prompt(p), decide,
                     choices(p.detail)))
             else:
                 self.waiting_for = f"{who} waits for your answer"
@@ -512,8 +528,8 @@ class NoetaApp(App[None]):
                 block = ToolCall(call)
                 self.calls[call.id] = block
                 await transcript.mount(block)
-            self.usage = self.usage + ev.response.usage
             self.context_tokens = ev.response.usage.input + ev.response.usage.output
+            self._refresh_cost(self.task_id)
         elif isinstance(ev, ToolStarted):
             if ev.call.id in self.calls:
                 self.calls[ev.call.id].set_state("running")
@@ -527,42 +543,42 @@ class NoetaApp(App[None]):
             mode = current_mode([rec])
             if mode:
                 self.mode = mode
+            offered = published_modes([rec])
+            if offered is not None and offered.cycle:
+                self.modes = offered
+            # The core's own records by type: a plugin may record the same
+            # kind names (the hooks plugin's "retry") for something else.
+            core = records.decode(ev)
             if ev.extension == "title" and ev.kind == "title":
                 self.sub_title = str(data.get("title") or "")
-            elif ev.kind == "retry":
-                await self._retried(int(data.get("attempt") or 1))
-                await transcript.mount(Notice(f"retrying (attempt {data.get('attempt')}): "
-                                              f"{str(data.get('error', ''))[:120]}"))
-            elif ev.kind == "turn_stopped":
+            elif isinstance(core, records.Retry):
+                await self._retried(int(core.attempt or 1))
+                await transcript.mount(Notice(f"retrying (attempt {core.attempt}): "
+                                              f"{str(core.error or '')[:120]}"))
+            elif isinstance(core, records.TurnStopped):
                 await self._end_stream()
                 self._set_question("", "", {})
                 await transcript.mount(Notice("stopped"))
-            elif ev.kind == "turn_failed":
+            elif isinstance(core, records.TurnFailed):
                 await transcript.mount(Notice(f"turn failed: {failure_text(data)}",
                                               classes="-error"))
-            elif ev.kind == "notice" and ev.extension == CORE:
-                text = str(data.get("text") or "")
+            elif isinstance(core, records.Notice):
                 # Structured news (a review's findings) reads as a list.
-                await transcript.mount(Markdown(text, classes="notice") if data.get("kind")
-                                       else Notice(text))
+                await transcript.mount(Markdown(core.text, classes="notice")
+                                       if core.notice_kind else Notice(core.text))
         elif isinstance(ev, Waiting):
             await self._end_stream()
             self.waiting_for = {"approval": "waiting for your approval (y/a/n)",
                                 "question": "waiting for your answer",
                                 "children": "waiting for subtasks"}.get(ev.on, "")
             if ev.on == "approval":
-                for call_id in ev.ids:
-                    asked = self.calls.get(call_id)
-                    if asked is not None:
-                        asked.set_state("waiting")
-                    detail = ev.detail.get(call_id) or {}
-                    title = str(detail.get("title") or "") or (
-                        tool_title(asked.call) if asked is not None else call_id)
-                    prompt = str(detail.get("prompt") or "")
-                    if asked is not None and title != tool_title(asked.call):
-                        prompt = f"{tool_title(asked.call)}\n{prompt}".strip()
-                    await transcript.mount(ApprovalCard(call_id, title, prompt, self.decide,
-                                                        choices(detail)))
+                uses = {i: block.call for i, block in self.calls.items()}
+                for p in approvals(ev, uses, self.task_id):
+                    if p.request_id in self.calls:
+                        self.calls[p.request_id].set_state("waiting")
+                    await transcript.mount(ApprovalCard(
+                        p.request_id, card_title(p, self.task_id), card_prompt(p),
+                        self.decide, choices(p.detail)))
             elif ev.on == "question":
                 questions = [k for k, v in ev.detail.items()
                              if isinstance(v, dict) and v.get("on") == "question"]
@@ -574,6 +590,7 @@ class NoetaApp(App[None]):
                 self._set_question("", "", {})
         elif isinstance(ev, TaskEnded):
             self.busy = False
+            self._refresh_cost(self.task_id)
             await transcript.mount(Notice(f"task {ev.status}" + (f": {ev.error}" if ev.error
                                                                  else "")))
         transcript.scroll_end(animate=False)
@@ -583,18 +600,21 @@ class NoetaApp(App[None]):
         spec = models.find_spec(self.model)
         window = spec.context_window if spec else models.UNKNOWN_MODEL_CONTEXT_WINDOW
         used = f"{self.context_tokens / window:.0%}" if self.context_tokens else "-"
-        cost = ""
-        if spec is not None and spec.input_price_per_mtok and spec.output_price_per_mtok:
-            u = self.usage
-            usd = (u.uncached * spec.input_price_per_mtok + u.output * spec.output_price_per_mtok
-                   + u.cache_read * (spec.cache_read_price_per_mtok or 0)
-                   + u.cache_write * (spec.cache_write_price_per_mtok or 0)) / 1e6
-            cost = f" · ${usd:.2f}"
+        cost = f" · ${self.cost_usd:.2f}" if self.cost_usd else ""
         state = self.waiting_for or ("working… (Esc to stop)" if self.busy else "ready")
         width = max(self.size.width - len(self.model) - len(state) - 30, 12)
         self.query_one("#status", Static).update(RichText(
             f"{state} · {self.model} · {self.mode or self.permission_mode or 'auto'} mode "
             f"(shift+tab) · context {used}{cost} · {_short_path(self.cwd, width)}"))
+
+    @work(exclusive=True, group="cost", exit_on_error=False)
+    async def _refresh_cost(self, task_id: str) -> None:
+        """The status bar's cost: the whole tree's (sub-agents too), priced
+        per model as ``/cost`` prices it."""
+        total = await tree_usage(self.local.client, task_id)
+        if task_id == self.task_id:
+            self.cost_usd = total.cost_usd
+            self.update_status()
 
     @work(exclusive=True, group="side", exit_on_error=False)
     async def _refresh_side(self) -> None:

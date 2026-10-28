@@ -170,6 +170,30 @@ async def test_tui_drops_a_failed_attempts_output(tmp_path: Path) -> None:
         assert [w.source for w in app.query(AssistantMessage)] == ["good answer"]
 
 
+async def test_tui_shows_only_the_cores_retries(tmp_path: Path) -> None:
+    """A plugin's record named like a core one (the hooks plugin's
+    ``retry``) is not shown as the model being retried."""
+    from noeta.cli.tui.widgets import Notice
+    from noeta.core.extension import Extension, TaskView
+
+    class Recorder(Extension):
+        name = "hooks"
+
+        async def on_start(self, view: TaskView) -> None:
+            view.record(self.name, "retry", {"call_id": "c1"})
+            view.record(self.name, "notice", {"text": "not the core's"})
+
+    agent = Agent(name="main", model="claude-sonnet-4-5", extensions=[Recorder()])
+    app = NoetaApp(local(tmp_path, ScriptedProvider([reply("hi")]), agent), agent="main",
+                   model="claude-sonnet-4-5", cwd=str(tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press(*"go", "enter")
+        await settle(pilot, lambda: not app.busy and len(app.query(AssistantMessage)) >= 1)
+        await pilot.pause(0.2)
+        shown = [w.render().plain for w in app.query(Notice)]
+        assert not any("retrying" in s or "not the core's" in s for s in shown), shown
+
+
 # ------------------------------------------------------------ #11 own tasks only
 
 

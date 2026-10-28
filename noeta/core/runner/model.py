@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import msgspec
 
-from noeta.core import models, records
+from noeta.core import records
 from noeta.core.errors import ContextOverflow, ModelError, RequestStale, TurnDone, TurnFailed
 from noeta.core.events import ModelCalled, ModelReplied
 from noeta.core.extension import Reminder, TaskView
@@ -43,7 +43,7 @@ def build_model_request(run: TaskRun, *, final: bool) -> ModelRequest:
         parts=[p for ext in run.exts for p in ext.context(view)],
         tools=run.tools(view),
         effort=config.get("effort") or agent.effort,
-        max_tokens=agent.max_tokens or _output_ceiling(run.model),
+        max_tokens=agent.max_tokens or run.rt.output_ceiling(run.model),
         output_schema=config.get("output_schema") or agent.output_schema,
     )
     if final:
@@ -86,13 +86,6 @@ def _record_reminders(view: TaskView, due: list[tuple[str, Reminder]]) -> None:
     for name, r in due:
         message = system_message(r.text) if r.role == "system" else user(r.text, origin=r.origin)
         view.record(name, r.kind, r.data, message=message)
-
-
-def _output_ceiling(model: str) -> int:
-    """Always send max_tokens: the model's output ceiling (a gateway once
-    defaulted to 1,000 when it was left out)."""
-    spec = models.find_spec(model)
-    return spec.max_output_tokens if spec is not None else models.UNKNOWN_MODEL_MAX_OUTPUT_TOKENS
 
 
 def _empty(message: Message) -> bool:

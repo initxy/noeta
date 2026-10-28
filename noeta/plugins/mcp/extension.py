@@ -484,8 +484,7 @@ class Mcp(Extension):
             servers = _as_list(servers)
             scope = self._scope
             self._scopes[view.task_id] = scope(view) if callable(scope) else scope
-            cwd = view.state.config.get("cwd")
-            self._roots[view.task_id] = [str(cwd)] if cwd else []
+            self._roots[view.task_id] = [view.cwd] if view.cwd else []
             servers = [*servers, *await self._from_files(view)]
         except Exception:
             # Keep the recorded tool set; its calls fail until a pick-up
@@ -501,8 +500,8 @@ class Mcp(Extension):
     async def _from_files(self, view: TaskView) -> list[McpServer]:
         if not self._settings_files and not self._project:
             return []
-        cwd = view.state.config.get("cwd")
-        dirs = [str(cwd)] if cwd and self._trusts(str(cwd)) else []
+        cwd = view.cwd
+        dirs = [cwd] if cwd and self._trusts(cwd) else []
         return await asyncio.to_thread(read_servers, self._settings_files, dirs)
 
     def _trusts(self, directory: str) -> bool:

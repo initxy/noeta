@@ -1,11 +1,17 @@
 """The permission-mode vocabulary the permissions plugin acts on and front
 ends offer: the modes, their names, the order a mode key steps through, the
-signal that switches the mode, and the mode a task's log last recorded."""
+signal that switches the mode, and the mode a task's log last recorded.
+
+The permissions plugin publishes the vocabulary a task offers as its
+``modes`` record (:func:`modes_record`): front ends read that
+(:func:`published_modes`) rather than the constants here, so a plugin that
+refuses ``bypassPermissions`` is never stepped into it."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Literal
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 from noeta.core.events import ExtensionRecorded, Recorded
 
@@ -44,8 +50,47 @@ def current_mode(events: Sequence[Recorded]) -> str | None:
     return mode
 
 
-def next_mode(mode: str | None) -> str:
-    """The mode after ``mode`` in :data:`MODE_CYCLE`."""
-    if mode not in MODE_CYCLE:
-        return MODE_CYCLE[0]
-    return MODE_CYCLE[(MODE_CYCLE.index(mode) + 1) % len(MODE_CYCLE)]
+def next_mode(mode: str | None, cycle: Sequence[str] = MODE_CYCLE) -> str:
+    """The mode after ``mode`` in ``cycle``."""
+    if mode is None or mode not in cycle:
+        return cycle[0]
+    return cycle[(list(cycle).index(mode) + 1) % len(cycle)]
+
+
+#: The permissions plugin's record of the vocabulary a task offers.
+MODES_KIND = "modes"
+
+
+@dataclass(frozen=True)
+class Modes:
+    """The modes a task offers, the order a mode key steps through them, and
+    how front ends name them."""
+
+    modes: tuple[str, ...] = PERMISSION_MODES
+    cycle: tuple[str, ...] = MODE_CYCLE
+    names: Mapping[str, str] = field(default_factory=lambda: dict(MODE_NAMES))
+
+    def without(self, mode: str) -> Modes:
+        return Modes(modes=tuple(m for m in self.modes if m != mode),
+                     cycle=tuple(m for m in self.cycle if m != mode),
+                     names={k: v for k, v in self.names.items() if k != mode})
+
+
+def modes_record(modes: Modes) -> dict[str, Any]:
+    """The ``modes`` record's data for ``modes``."""
+    return {"modes": list(modes.modes), "cycle": list(modes.cycle), "names": dict(modes.names)}
+
+
+def published_modes(events: Sequence[Recorded]) -> Modes | None:
+    """The vocabulary the task's permissions plugin last published
+    (``None`` before it has)."""
+    found = None
+    for rec in events:
+        ev = rec.event
+        if isinstance(ev, ExtensionRecorded) and ev.extension == "permissions" \
+                and ev.kind == MODES_KIND and isinstance(ev.data, dict):
+            d = ev.data
+            found = Modes(modes=tuple(str(m) for m in d.get("modes") or ()),
+                          cycle=tuple(str(m) for m in d.get("cycle") or ()),
+                          names={str(k): str(v) for k, v in (d.get("names") or {}).items()})
+    return found

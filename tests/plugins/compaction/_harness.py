@@ -18,7 +18,7 @@ from noeta.core.loop.request import build_request, request_hash
 from noeta.core.loop.state import fold
 from noeta.core.provider import OnDelta
 from noeta.core.runner import Runtime
-from noeta.core.runner.model import _output_ceiling
+from noeta.core.runner.runtime import catalog_output_ceiling
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolUse, Usage
 from noeta.plugins.compaction.estimate import messages_tokens, prefix_tokens
@@ -162,7 +162,7 @@ async def rebuilt(store: SqliteStore, agent: Agent, tid: str) -> list[tuple[str,
         request = build_request(
             state, model=agent.model, system_prompt=agent.system_prompt, identity=agent.identity,
             parts=[p for e in exts for p in e.context(view)], tools=with_tool_search(tools),
-            effort=agent.effort, max_tokens=agent.max_tokens or _output_ceiling(agent.model),
+            effort=agent.effort, max_tokens=agent.max_tokens or catalog_output_ceiling(agent.model),
             output_schema=agent.output_schema)
         for e in exts:
             request = await e.before_model(view, request)

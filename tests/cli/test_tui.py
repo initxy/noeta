@@ -103,6 +103,22 @@ async def test_shift_tab_cycles_the_permission_mode(tmp_path: Path) -> None:
         assert External(name="permission_mode", data={"mode": "acceptEdits"}) in inbox
 
 
+async def test_shift_tab_steps_only_through_the_modes_the_plugin_offers(
+        tmp_path: Path) -> None:
+    """A plugin that refuses bypassPermissions publishes a cycle without it,
+    so the mode key never steps into it."""
+    from noeta.plugins.permissions import Permissions
+
+    app = make_app(tmp_path, ScriptedProvider([]),
+                   Permissions(mode="auto", disable_bypass_mode=True))
+    async with app.run_test(size=(140, 30)) as pilot:
+        await settle(pilot, app, lambda: app.mode == "auto")
+        await pilot.pause(0.2)
+        await pilot.press("shift+tab")
+        await settle(pilot, app, lambda: app.mode != "auto")
+        assert app.mode == "default"
+
+
 async def test_an_approval_decided_before_its_card_mounts() -> None:
     """On a slow event loop a card can be decided after it composed its
     buttons but before its mount handler ran; that handler used to look for

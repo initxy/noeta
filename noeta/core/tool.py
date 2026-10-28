@@ -62,8 +62,10 @@ class ToolContext(CoreNotices):
     #: never makes a second child.
     spawn: Callable[..., str] | None = None
     #: Post to this task's own inbox from outside a step (a background job
-    #: finishing), or with ``task_id=`` to another task of the same tree (the
-    #: root, once the spawner has ended). Wakes the task if it is waiting.
+    #: finishing), or with ``task_id=`` to any other task in the store (the
+    #: root once the spawner has ended; another conversation ``SendMessage``
+    #: writes to, as Claude Code messages its other open sessions). Wakes the
+    #: task if it is waiting; idempotent with a ``dedupe_key=``.
     post: Callable[..., Awaitable[None]] | None = None
     #: The root task's id (background jobs notify the spawner, then the root).
     root_id: str = ""

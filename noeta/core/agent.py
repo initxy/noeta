@@ -35,6 +35,15 @@ class Agent:
     #: Model calls allowed in one turn; the next one asks for the turn's
     #: final answer with tools switched off (the agent file's ``maxTurns``).
     step_budget: int = 1_000
+    #: As a sub-agent, run on the caller's model rather than ``model`` (an
+    #: agent file that names no model: ``model`` is then the host's default).
+    inherit_model: bool = False
+    #: As a sub-agent, start in this permission mode (the agent file's
+    #: ``permissionMode``); ``None``: the caller's.
+    permission_mode: str | None = None
+    #: ``"worktree"``: as a sub-agent, run in a fresh git worktree.
+    isolation: str | None = None
+    #: The agent file's other fields, as written.
     extra: dict[str, Any] = field(default_factory=dict)
     #: Only these tool names are offered (Claude Code's agent ``tools``);
     #: ``None`` = every tool the extensions offer.

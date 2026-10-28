@@ -103,7 +103,7 @@ async def test_pending_lists_the_card(served: tuple[str, ScriptedProvider]) -> N
                 break
             await asyncio.sleep(0.02)
     [row] = rows
-    assert row["kind"] == "approval" and row["title"] == "Read"
+    assert row["kind"] == "approval" and row["title"] == "Read x"
     assert [c["id"] for c in row["choices"]] == ["allow", "always", "deny"]
     await client.cancel(tid)
     await client.close()
