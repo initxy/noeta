@@ -123,6 +123,23 @@ for f in CONTEXT.md docs/adr/[0-9]*.md; do
   done < <(grep -oE '`[^` <>*]+/[^` <>*]*`' "$f" | tr -d '`' | sort -u)
 done
 
+# Docs name only docs that exist: every `docs/...` path and every relative markdown link in a
+# live doc resolves (a missing docs/adr/ went unnoticed once). History (CHANGELOG, archived
+# specs), shipped prompt texts, tests and recordings are not live docs.
+while IFS= read -r f; do
+  while IFS= read -r p; do
+    p=${p%%[#:]*}
+    p=${p%.}
+    [ -e "$p" ] || red "$f: names '$p', which does not exist"
+  done < <(grep -oE '(^|[^A-Za-z0-9._/-])docs/[A-Za-z0-9_./-]*' "$f" | sed -E 's#^[^d]*##' | sort -u)
+  while IFS= read -r p; do
+    case $p in http:* | https:* | mailto:* | '#'* | /*) continue ;; esac
+    p=${p%%#*}
+    [ -n "$p" ] || continue
+    [ -e "$(dirname "$f")/$p" ] || red "$f: links '$p', which does not exist"
+  done < <(grep -oE '\]\([^) ]+' "$f" | cut -c3- | sort -u)
+done < <(files '*.md' | grep -vE '^(docs/specs/archive|noeta|tests|parity)/|^CHANGELOG\.md$')
+
 [ $due = 1 ] && echo "gc due: tell the user and offer a scoped gc per docs/gc.md — never inside a feature diff"
 if [ $fail != 0 ]; then
   echo "check-docs: red"
