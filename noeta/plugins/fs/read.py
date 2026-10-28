@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import posixpath
 import re
 from collections.abc import AsyncIterator, Callable
@@ -31,7 +32,7 @@ from noeta.plugins.fs._read_formats import (
     read_size_tokens,
     too_many_tokens,
 )
-from noeta.plugins.fs.state import FS, KIND_READ, current_fs_state
+from noeta.plugins.fs.state import FS, KIND_NOTICE, KIND_READ, current_fs_state
 from noeta.toolkit.images import ImageTooLarge, fit_image
 from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
@@ -344,7 +345,7 @@ class ReadTool:
         large = input.get("allow_large") is True
         seen = current_fs_state(ctx.state).reads.get(resolved)
         asked = [offset, explicit_limit or 0]
-        if ctx.by_model and seen is not None and seen.range == asked \
+        if ctx.by_model and seen is not None and not seen.partial and seen.range == asked \
                 and seen.mtime == st.mtime and not input.get("pages"):
             return text_output(FILE_UNCHANGED, path=display, unchanged=True)
         size = st.size
@@ -423,6 +424,8 @@ class ReadTool:
             # Past a quarter of the ceiling the estimate is checked against
             # the provider's exact count, as Claude Code does.
             tokens = await ctx.count_tokens(text) or tokens
+        if not scan.capped and tokens > max_tokens and w.offset <= 1 and w.explicit_limit is None:
+            return self._first_page(ctx, w, scan, text, tokens, max_tokens)
         if scan.capped or tokens > max_tokens:
             return tool_error(self.name, too_many_tokens(tokens, max_tokens))
 
@@ -431,6 +434,35 @@ class ReadTool:
         _record_read(ctx, w.resolved, scan.digest, w.mtime, [w.offset, w.explicit_limit or 0])
 
         return _render(scan, w)
+
+    def _first_page(self, ctx: ToolContext, w: _Window, scan: _Scan, text: str,
+                    tokens: int, cap: int) -> ToolOutput:
+        """A whole-file read past the token ceiling: Claude Code returns the
+        first part that fits and tells the model, after the result, how to
+        page on. The read counts as partial (not read, for a later write)."""
+        page, by_chars = _first_part(text, tokens, cap)
+        shown = page.count("\n") + 1
+        total = scan.total_lines + (1 if scan.ends_with_newline else 0)
+        hint = (" Even with allow_large it does not fit." if w.large else
+                " To have all of it anyway, call Read again with allow_large: true (only when "
+                "you need every part, or the user asked for the whole file).")
+        head = (f"[Partial view, cut to fit the read limit: {w.resolved}")
+        size = f"({tokens} tokens; the cap is {cap})"
+        if not by_chars and shown < total:
+            banner = (f"{head} shows lines 1-{shown} of {total} {size}. For the next part call "
+                      f"Read with offset={shown + 1} limit={shown}, or search the file for the "
+                      f"section you need.{hint} Do not answer from this part alone if the "
+                      "answer could be further on.]")
+        else:
+            banner = (f"{head} shows its first {len(page)} of {len(text)} characters {size}; "
+                      "its lines are too long to page by line. Search the file for the section "
+                      f"you need, or page through it with Read's offset and limit.{hint} Do not "
+                      "answer from this excerpt alone if the answer could be elsewhere.]")
+        _record_read(ctx, w.resolved, scan.digest, w.mtime, [1, shown], partial=True)
+        ctx.record(FS, KIND_NOTICE, {"text": banner})
+        rendered = "\n".join(f"{i}\t{line}" for i, line in enumerate(page.split("\n"), 1))
+        return text_output(rendered, path=w.display, total_lines=scan.total_lines,
+                           lines=[1, shown], truncated=True)
 
     async def _read_image(
         self,
@@ -506,9 +538,40 @@ def _render(scan: _Scan, w: _Window) -> ToolOutput:
     return text_output(rendered, lines=[start + 1, shown_end], **meta)
 
 
+def _first_part(text: str, tokens: int, cap: int) -> tuple[str, bool]:
+    """The leading whole lines of ``text`` that fit ``cap`` tokens (Claude
+    Code's sizing: 85% of the proportional share, shrunk until it fits), or
+    its leading characters when not even one line fits; and whether it was
+    cut by characters."""
+    lines = text.split("\n")
+    per_token = max(0.5, len(text) / max(1, tokens))
+
+    def fits(part: str) -> bool:
+        return len(part) / per_token <= cap
+
+    count = max(1, min(len(lines), math.floor(len(lines) * cap / max(1, tokens) * 0.85)))
+    page = "\n".join(lines[:count])
+    for _ in range(6):
+        if fits(page) or count <= 1:
+            break
+        count = max(1, math.floor(count * 0.7))
+        page = "\n".join(lines[:count])
+    if fits(page) and page.strip():
+        return page, False
+    size = max(1, math.floor(cap * per_token * 0.85))
+    for _ in range(6):
+        page = text[:size]
+        if fits(page):
+            break
+        size = max(1, math.floor(size * 0.7))
+    return page, True
+
+
 def _record_read(ctx: ToolContext, path: str, digest: str, mtime: float,
-                 lines: list[int] | None = None) -> None:
+                 lines: list[int] | None = None, *, partial: bool = False) -> None:
     data: dict[str, Any] = {"path": path, "digest": digest, "mtime": mtime}
     if lines is not None:
         data["range"] = lines
+    if partial:
+        data["partial"] = True
     ctx.record(FS, KIND_READ, data)

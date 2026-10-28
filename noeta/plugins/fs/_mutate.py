@@ -55,7 +55,9 @@ def read_precondition_error(
     """The file must have been read (an ``fs`` entry for the canonical path)
     and its bytes must still hash to what was read — otherwise the model
     would change content it has not seen."""
-    recorded = current_fs_state(ctx.state).digest(resolved)
+    entry = current_fs_state(ctx.state).reads.get(resolved)
+    # A read cut to fit the token ceiling showed only part of the file.
+    recorded = entry.digest if entry is not None and not entry.partial else None
     if recorded is None:
         return tool_error(
             tool_name, f"File has not been read yet. Read it first before {verb} it."

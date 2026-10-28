@@ -363,6 +363,49 @@ async def test_read_refuses_more_than_25000_tokens(h: Harness, ws: Path) -> None
     assert not ok.is_error
 
 
+async def test_a_whole_read_past_the_token_cap_returns_the_first_page(
+        h: Harness, ws: Path) -> None:
+    # Claude Code pages a whole-file read instead of refusing it: the lines
+    # that fit come back, and a note after the result says how to go on.
+    body = "".join(f"{i:05d} " + "y" * 143 + "\n" for i in range(1700))  # 255 KB
+    (ws / "wide.txt").write_text(body)
+    out = await h.call(ReadTool(), file_path="wide.txt")
+    assert not out.is_error
+    lines = text_of(out).split("\n")
+    assert lines[0] == "1\t00000 " + "y" * 143
+    shown = len(lines)
+    assert 400 < shown < 600 and lines[-1].startswith(f"{shown}\t")
+    notes = [d["text"] for e, k, d in h.records if (e, k) == (FS, "notice")]
+    assert notes == [
+        f"[Partial view, cut to fit the read limit: {ws / 'wide.txt'} shows lines 1-{shown} "
+        f"of 1701 (63750 tokens; the cap is 25000). For the next part call Read with "
+        f"offset={shown + 1} limit={shown}, or search the file for the section you need. To "
+        "have all of it anyway, call Read again with allow_large: true (only when you need "
+        "every part, or the user asked for the whole file). Do not answer from this part "
+        "alone if the answer could be further on.]"]
+    assert h.fs.reads[str(ws / "wide.txt")].partial
+    # A window asked for explicitly is still refused, as before.
+    assert (await h.call(ReadTool(), file_path="wide.txt", limit=1000)).is_error
+
+
+async def test_a_page_of_one_long_line_is_cut_by_characters(h: Harness, ws: Path) -> None:
+    (ws / "min.js").write_text("z" * 200_000)
+    out = await h.call(ReadTool(), file_path="min.js")
+    assert not out.is_error
+    assert text_of(out).startswith("1\tzzz") and len(text_of(out)) < 100_000
+    [note] = [d["text"] for e, k, d in h.records if (e, k) == (FS, "notice")]
+    assert "lines are too long to page by line" in note
+
+
+async def test_a_cut_read_does_not_count_as_read_for_an_edit(h: Harness, ws: Path) -> None:
+    from noeta.plugins.fs import EditTool
+    (ws / "wide.txt").write_text("".join("y" * 150 + "\n" for _ in range(1700)))
+    await h.call(ReadTool(), file_path="wide.txt")
+    out = await h.call(EditTool(), file_path="wide.txt", old_string="y\n", new_string="z\n",
+                       replace_all=True)
+    assert out.is_error and "has not been read yet" in text_of(out)
+
+
 async def test_read_checks_a_large_window_with_the_exact_count(h: Harness, ws: Path) -> None:
     (ws / "wide.txt").write_text(("y" * 150 + "\n") * 3000)
     counted: list[int] = []
