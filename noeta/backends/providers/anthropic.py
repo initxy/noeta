@@ -289,10 +289,10 @@ class AnthropicProvider:
                 for block in wire["content"]:
                     if block.get("type") == "text":
                         block["text"] = MID_TURN_MESSAGE.format(text=block["text"])
-            # What a typed command adds rides in the person's turn, plain.
-            command = message.role == "user" and message.origin == "command"
+            # Host text meant to read as part of the person's turn rides in it, plain.
+            inline = message.role == "user" and message.origin == "inline"
             if (
-                (injected or prev_injected or mid_turn or command)
+                (injected or prev_injected or mid_turn or inline)
                 and wire["role"] == "user"
                 and outbound
                 and outbound[-1]["role"] == "user"

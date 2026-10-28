@@ -141,8 +141,9 @@ A tool call that waits (a question, an approval, children) parks: the task ends 
 
 A message's `origin` says who speaks in the user channel: `user`, `system` / `memory` for
 text the host or a plugin adds (reminders, notices, recalled memory), or `agent` for another
-agent's framed message (a sub-agent's hand-back, sent as plain text), or `command` for what a
-typed slash command adds to the person's turn (a skill's body, plain text in that turn). Providers render `system` / `memory` as
+agent's framed message (a sub-agent's hand-back, sent as plain text), or `inline` for host text
+joined into the person's turn as plain text (a typed command's skill body, the interrupted
+marker). Providers render `system` / `memory` as
 `<system-reminder>` blocks (Anthropic) or with a preamble saying it is not the user (OpenAI
 shapes); user text cannot forge the tag.
 

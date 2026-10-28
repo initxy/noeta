@@ -170,7 +170,7 @@ async def test_slash_command_activates_even_a_user_only_skill(h: Harness) -> Non
     tid = await h.start(agent(), "/hidden please")
     msgs = h.provider.requests[0].messages
     assert msgs[0].text == "/hidden please"
-    assert msgs[1].origin == "command"
+    assert msgs[1].origin == "inline"
     assert msgs[1].text.startswith("Base directory for this skill: ")
     assert msgs[1].text.endswith("Secret steps.\n\nARGUMENTS: please")
     [act] = await h.records(tid, "skills", "activated")

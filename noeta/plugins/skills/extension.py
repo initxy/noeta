@@ -371,7 +371,7 @@ class Skills(Extension):
                 # the command's tags (Claude Code's slash-command shape).
                 data["text"] = render_command_body(desc, typed[1])
                 view.record(self.name, "activated", data,
-                            message=user(data["text"], origin="command"))
+                            message=user(data["text"], origin="inline"))
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
         data = output.meta.get("skill_activation")
