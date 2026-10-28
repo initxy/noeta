@@ -19,10 +19,11 @@ from noeta.core.client import Client
 from noeta.core.errors import Fatal
 from noeta.core.events import Recorded, TaskCreated, TaskEnded, ToolFinished
 from noeta.core.extension import Ask, Extension, Gate, TaskView
+from noeta.core.pending import pending_tree
 from noeta.core.runner import Runtime
 from noeta.core.types import Message, ModelRequest, ToolUse, Usage
+from noeta.host.usage import tree_usage
 from noeta.plugins.subtasks import SubagentSpec, Subtasks, texts
-from noeta.plugins.subtasks.host import pending_requests, tree_usage
 from noeta.plugins.subtasks.tool import (
     SendMessageTool,
     agent_message,
@@ -446,9 +447,9 @@ async def test_agent_approvals_surface_at_the_root(store: SqliteStore) -> None:
     tid = await client.create("main", "go")
     await rt.run_until_idle()
     [child] = await client.tasks(parent_id=tid)
-    [pending] = await pending_requests(client, tid)
-    assert pending.task_id == child.task_id and pending.on == "approval"
-    assert await tree_usage(client, tid) == Usage(uncached=30, output=15)
+    [pending] = await pending_tree(client, tid)
+    assert pending.task_id == child.task_id and pending.kind == "approval"
+    assert (await tree_usage(client, tid)).usage == Usage(uncached=30, output=15)
 
 
 async def test_progress_label_beside_the_third_call(store: SqliteStore) -> None:

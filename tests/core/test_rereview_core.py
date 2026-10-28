@@ -16,11 +16,11 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ToolFinished
 from noeta.core.extension import Ask, Extension, Rewrite, TaskView
+from noeta.core.pending import pending_tree
 from noeta.core.runner import Runtime
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.core.types import ToolUse, user
 from noeta.plugins.ask_user import AskUser
-from noeta.plugins.subtasks.host import pending_requests
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -175,7 +175,7 @@ async def test_host_pending_requests_lists_only_questions(store: SqliteStore) ->
     await rt.run_until_idle()
     [child] = await client.tasks(parent_id=tid)
     assert (await client.get(tid)).waiting_on == "question"
-    found = await pending_requests(client, tid)
-    assert sorted((p.task_id, p.on) for p in found) == sorted(
+    found = await pending_tree(client, tid)
+    assert sorted((p.task_id, p.kind) for p in found) == sorted(
         [(tid, "question"), (child.task_id, "approval")])
     assert all(p.request_id != child.task_id for p in found)

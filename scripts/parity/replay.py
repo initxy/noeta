@@ -469,9 +469,9 @@ def _jobs_running(root_id: str) -> bool:
 async def _agents_done(app: Any, task_id: str) -> bool:
     """Every background agent below the task has ended, as Claude Code's
     driver waited for the session to go quiet before the next step."""
-    from noeta.plugins.subtasks.host import task_tree
+    from noeta.core.pending import tree_busy
 
-    return all(r.status == "ended" for r in (await task_tree(app.client, task_id))[1:])
+    return not await tree_busy(app.client, task_id)
 
 
 def write_models_file(path: Path) -> None:
