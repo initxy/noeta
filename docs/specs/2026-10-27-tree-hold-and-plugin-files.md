@@ -77,7 +77,7 @@ ask the person a question or tell them something, and front ends depend on no pl
 - [x] `noeta/core/questions.py`, `ask_user` on it, `TaskView.notify`, MCP servers as data,
       the apps ↛ plugins contract
 - [x] The example plugin asks a question and sends a notice
-- [ ] README / CONTEXT / CHANGELOG
+- [x] README / CONTEXT / CHANGELOG
 
 ## Acceptance criteria
 
@@ -113,3 +113,6 @@ ask the person a question or tell them something, and front ends depend on no pl
 - 2026-10-27: step 5 done; `make check` 1367 + the example's 4. Found on the way: `make example`
   ran a build uv had cached, so edits to the example were not what its tests ran; it now installs
   the example editable (`--with-editable`). The example also loads as a plain plugin directory.
+- 2026-10-27: docs done; `make check` 1367 + 4 green, coverage 87.14%; the whole suite with
+  Postgres (local postgres:16 container) 1393 passed, none skipped. Every acceptance criterion
+  has a test; nothing was run by hand in a real terminal or editor.
