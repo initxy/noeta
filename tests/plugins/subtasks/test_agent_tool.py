@@ -383,7 +383,7 @@ async def test_model_and_effort_precedence(store: SqliteStore) -> None:
     client = Client(store)
     tid = await client.create("main", "go", config={"model": "p", "effort": "high"})
     await rt.run_until_idle()
-    a, b = sorted(await client.tasks(parent_id=tid), key=lambda r: r.task_id)
+    a, b = sorted(await client.tasks(parent_id=tid), key=lambda r: (len(r.task_id), r.task_id))
     ca = (await events(client, a.task_id))[0].config
     cb = (await events(client, b.task_id))[0].config
     assert ca["model"] == "claude-haiku-5-5" and ca["effort"] == "low"
