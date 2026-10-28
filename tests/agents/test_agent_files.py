@@ -150,7 +150,11 @@ def test_claude_code_fields_map_onto_the_agent(caplog: pytest.LogCaptureFixture)
     [agent] = build_agents([f], model="host", default_plugins=[("instructions", {})])
     assert agent.model == "claude-haiku-5-5" and agent.denied_tools == ("Write",)
     assert agent.step_budget == 7 and agent.extensions == ()
-    assert agent.extra["permission_mode"] == "acceptEdits" and agent.extra["model"] == "haiku"
+    assert agent.permission_mode == "acceptEdits" and not agent.inherit_model
+    assert agent.isolation == "worktree"
+    [plain] = build_agents([parse_agent_file("---\nname: p\ndescription: d\n---\nx\n")],
+                           model="host", default_plugins=[])
+    assert plain.model == "host" and plain.inherit_model and plain.permission_mode is None
 
 
 def test_tools_star_and_inherit() -> None:

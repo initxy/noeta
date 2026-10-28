@@ -298,11 +298,6 @@ def build_agents(
         exts = [plugin(name, args) for name, args in entries
                 if settings.get(name, (True,))[0]
                 and not (f.omit_instructions and name == "instructions")]
-        extra: dict[str, Any] = dict(f.extra)
-        if f.model:
-            extra["model"] = f.model
-        if f.permission_mode:
-            extra["permission_mode"] = f.permission_mode
         agents.append(Agent(
             name=f.name,
             model=models.resolve_alias(f.model) if f.model else model,
@@ -315,6 +310,9 @@ def build_agents(
             allowed_tools=f.tools,
             denied_tools=f.denied_tools,
             step_budget=f.max_turns or Agent.step_budget,
-            extra=extra,
+            inherit_model=not f.model,
+            permission_mode=f.permission_mode,
+            isolation=str(f.extra["isolation"]) if f.extra.get("isolation") else None,
+            extra=dict(f.extra),
         ))
     return agents

@@ -14,6 +14,7 @@ from typing import Any
 import msgspec
 
 from noeta.core import models
+from noeta.core.agent import Agent
 from noeta.core.events import ChildEnded, External, InputTaken, ModelReplied, Recorded, Say
 from noeta.core.extension import Deny, Extension, Gate, Reminder, Rewrite, TaskView
 from noeta.core.loop.state import TaskState
@@ -481,18 +482,17 @@ def _auto_mode(owner: Extension, view: TaskView) -> bool:
     return bool(inherited.get("permission_mode", AUTO_MODE) == AUTO_MODE)
 
 
-def _definition_config(agent: Any) -> dict[str, Any]:
+def _definition_config(agent: Agent) -> dict[str, Any]:
     """Child config an agent's definition asks for: its own model and effort
     (so the parent's are not inherited over them) and permission mode."""
-    extra = getattr(agent, "extra", None) or {}
     out: dict[str, Any] = {}
-    if extra.get("model"):
-        out["model"] = models.resolve_alias(str(extra["model"]))
-    if getattr(agent, "effort", None):
+    if not agent.inherit_model:
+        out["model"] = models.resolve_alias(agent.model)
+    if agent.effort:
         out["effort"] = agent.effort
-    if extra.get("permission_mode"):
-        out["permission_mode"] = extra["permission_mode"]
-    if extra.get("isolation") == "worktree":
+    if agent.permission_mode:
+        out["permission_mode"] = agent.permission_mode
+    if agent.isolation == "worktree":
         out["isolation"] = "worktree"
     return out
 
