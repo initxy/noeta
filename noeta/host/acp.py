@@ -216,14 +216,29 @@ class NoetaAcpAgent:
         await self._adopt(session_id)
         await self.app.client.signal(session_id, RESUMED_SIGNAL)
         self._cwd[session_id] = cwd
-        log = self._logs[session_id] = SessionLog()
+        log = self._logs[session_id] = SessionLog(cwd)
         for rec in await self.app.client.events(session_id):
             for update in self._replay(rec, log):
                 await self.conn.session_update(session_id=session_id, update=update)
+        plan = log.plan_update(always=True)
+        if plan is not None:
+            await self.conn.session_update(session_id=session_id, update=plan)
         await self._announce_commands(session_id)
 
     def _log(self, session_id: str) -> SessionLog:
-        return self._logs.setdefault(session_id, SessionLog())
+        log = self._logs.get(session_id)
+        if log is None:
+            log = self._logs[session_id] = SessionLog(self._cwd.get(session_id) or os.getcwd())
+        return log
+
+    async def _catch_up(self, session_id: str, upto: int) -> None:
+        """Take in what the session recorded up to ``upto`` that this adapter
+        has not followed (a mode switched between prompts)."""
+        log = self._log(session_id)
+        if log.seq < upto:
+            for rec in await self.app.client.events(session_id, after=log.seq):
+                if rec.seq <= upto:
+                    log.note(rec)
 
     def _replay(self, rec: Recorded, log: SessionLog) -> list[Any]:
         ev = rec.event
@@ -252,6 +267,7 @@ class NoetaAcpAgent:
         await self._adopt(session_id)
         row = await client.get(session_id)
         after = row.last_seq
+        await self._catch_up(session_id, after)
         asked = [p for p in await pending_tree(client, session_id) if p.kind == "question"]
         turn = PromptTurn(session_id)
         unsubscribe = self.app.deltas(turn.on_delta)
@@ -381,6 +397,8 @@ class NoetaAcpAgent:
                 out.put_nowait(acp.update_tool_call(ev.call.id, status="in_progress"))
             elif isinstance(ev, ToolFinished):
                 out.put_nowait(finish_update(ev, call))
+                if (plan := log.plan_update()) is not None:
+                    out.put_nowait(plan)
             elif isinstance(ev, ExtensionRecorded) and ev.extension == "permissions" \
                     and current_mode([rec]):
                 out.put_nowait(schema.CurrentModeUpdate(

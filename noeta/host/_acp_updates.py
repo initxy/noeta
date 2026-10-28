@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import difflib
+import os
 import re
 from collections.abc import Iterable
 from typing import Any
@@ -15,7 +16,7 @@ from typing import Any
 import acp
 from acp import schema
 
-from noeta.core.events import ModelReplied, Recorded, ToolFinished, Waiting
+from noeta.core.events import ExtensionRecorded, ModelReplied, Recorded, ToolFinished, Waiting
 from noeta.core.types import Delta, Image, Message, Text, ToolUse
 from noeta.host.feed import tool_title
 
@@ -179,21 +180,93 @@ def question_text(detail: dict[str, Any], only: dict[str, Any] | None = None) ->
     return "\n".join(lines) or str(detail.get("prompt") or "")
 
 
+_ITEM = re.compile(r"\s*(?:[-*+]|\d+[.)])\s+(?:\[([ xX])\]\s+)?(.*\S)")
+_HEADING = re.compile(r"#{1,6}\s+(.*?)(?:\s+#+)?\s*$")
+
+
+def plan_entries(text: str) -> list[schema.PlanEntry]:
+    """A plan file's text as ACP plan entries: its list items (a checked
+    box is done), else its headings, else its first line."""
+    lines: list[str] = []
+    fenced = False
+    for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+        elif not fenced:
+            lines.append(line)
+    items = [(m[2], m[1] in ("x", "X")) for m in map(_ITEM.match, lines) if m]
+    if not items:
+        items = [(m[1], False) for m in map(_HEADING.match, lines) if m and m[1]]
+    if not items:
+        items = [(line.strip(), False) for line in lines if line.strip()][:1]
+    return [acp.plan_entry(content, status="completed" if done else "pending")
+            for content, done in items]
+
+
 class SessionLog:
     """What one session's updates need from records already seen: the calls
-    not yet answered, by id."""
+    not yet answered, by id, and plan mode's plan file with its text as the
+    calls that wrote it left it."""
 
-    def __init__(self) -> None:
+    def __init__(self, cwd: str = "") -> None:
+        self.cwd = cwd
         self.calls: dict[str, ToolUse] = {}
+        #: The newest record taken in.
+        self.seq = 0
+        self.plan_path: str | None = None
+        self.plan_text: str | None = None
+        #: The plan text changed since :meth:`plan_update` last said so.
+        self.plan_changed = False
 
     def note(self, rec: Recorded) -> ToolUse | None:
-        """Take in ``rec``; for a tool result, the call it answers."""
+        """Take in ``rec`` (once; an older record is skipped); for a tool
+        result, the call it answers."""
+        if rec.seq <= self.seq:
+            return None
+        self.seq = rec.seq
         ev = rec.event
         if isinstance(ev, ModelReplied):
             self.calls.update((c.id, c) for c in ev.response.message.tool_uses)
         elif isinstance(ev, ToolFinished):
-            return self.calls.pop(ev.result.call_id, None)
+            call = self.calls.pop(ev.result.call_id, None)
+            if call is not None and not ev.result.is_error:
+                self._wrote(call)
+            return call
+        elif isinstance(ev, ExtensionRecorded) and ev.extension == "permissions" \
+                and isinstance(ev.data, dict) and isinstance(ev.data.get("plan"), dict):
+            path = ev.data["plan"].get("path")
+            if isinstance(path, str) and path and self._full(path) != self.plan_path:
+                self.plan_path, self.plan_text = self._full(path), None
         return None
+
+    def _full(self, path: str) -> str:
+        return os.path.normpath(os.path.join(self.cwd, path))
+
+    def _wrote(self, call: ToolUse) -> None:
+        path = _path(call)
+        if self.plan_path is None or path is None or self._full(path) != self.plan_path:
+            return
+        text = self.plan_text
+        if call.name == "Write":
+            text = call.input.get("content") if isinstance(call.input.get("content"), str) \
+                else None
+        elif call.name == "Edit" and text is not None:
+            old, new = call.input.get("old_string"), call.input.get("new_string")
+            if not isinstance(old, str) or not isinstance(new, str) or old not in text:
+                text = None  # changed some way these calls do not show
+            else:
+                text = text.replace(old, new, -1 if call.input.get("replace_all") else 1)
+        if text is not None and text != self.plan_text:
+            self.plan_changed = True
+        self.plan_text = text
+
+    def plan_update(self, *, always: bool = False) -> Any | None:
+        """The plan as an ACP ``plan`` update when it changed (or, with
+        ``always``, whenever it is known)."""
+        changed, self.plan_changed = self.plan_changed, False
+        if self.plan_text is None or not (changed or always):
+            return None
+        return acp.update_plan(plan_entries(self.plan_text))
 
 
 class PromptTurn:
