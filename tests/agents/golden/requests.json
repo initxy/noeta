@@ -1,24 +1,24 @@
 {
  "hashes": [
+  "main 15ed555a4b46c3f1",
   "main 980258c798604500",
-  "main dcc2183fd14e1712",
-  "main 23579c5e21f2269c",
-  "main 57c2dfd8d644404e",
+  "main 8522929346601818",
+  "main b85ab3ebea07f1ac",
   "child 7533d2a08ac29869",
   "child b4fd98f1fde5d8a9",
-  "main 5c92979efde17a4b",
-  "main b4bc7b7e1aac1c64",
-  "main 8b9885b4bdb5423f",
-  "main 0ab089726c167fe0",
-  "main a5191b49e4d46b15",
-  "main f6338e7e0732df7e",
-  "main 865139fd95910ffe",
-  "main 6cded359a8112fce",
-  "main 0949122785056f40",
-  "main 81743c3f46821b02",
-  "main 38a03824d0c1bdf7",
-  "main 4cfe71126b74a3d9",
-  "main 37d06932db03b88f"
+  "main 080eb7eef33c87fc",
+  "main 1de1edecfac9f281",
+  "main 8daee958b2ceee65",
+  "main c3bd2f55fbf73d4f",
+  "main a10283e9faa5406b",
+  "main 7634943d399446de",
+  "main 84ccdb53b030a65e",
+  "main 4243a56f3c65bd7d",
+  "main 9ff404ecb6b96f08",
+  "main 069ee1b38b89068d",
+  "main c67f8afebb74a7f6",
+  "main 93d3a4a71c1145bc",
+  "main 636d983bfe08c804"
  ],
  "last": {
   "child": {
@@ -818,48 +818,6 @@
      {
       "content": [
        {
-        "text": "Planning.",
-        "type": "text"
-       },
-       {
-        "id": "t1",
-        "input": {
-         "max_results": 1,
-         "query": "select:WebFetch"
-        },
-        "name": "ToolSearch",
-        "type": "tool_use"
-       }
-      ],
-      "role": "assistant"
-     },
-     {
-      "content": [
-       {
-        "content": [
-         {
-          "tool_name": "WebFetch",
-          "type": "tool_reference"
-         }
-        ],
-        "is_error": false,
-        "tool_use_id": "t1",
-        "type": "tool_result"
-       },
-       {
-        "text": "Tool loaded.",
-        "type": "text"
-       }
-      ],
-      "role": "user"
-     },
-     {
-      "content": "<total_tokens>14999995 tokens left</total_tokens>",
-      "role": "system"
-     },
-     {
-      "content": [
-       {
         "id": "r1",
         "input": {
          "file_path": "<TMP>/work/notes.txt"
@@ -897,7 +855,7 @@
       "role": "user"
      },
      {
-      "content": "<total_tokens>14999990 tokens left</total_tokens>",
+      "content": "<total_tokens>14999995 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -927,7 +885,7 @@
       "role": "user"
      },
      {
-      "content": "<total_tokens>14999985 tokens left</total_tokens>",
+      "content": "<total_tokens>14999990 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -977,7 +935,7 @@
       "role": "user"
      },
      {
-      "content": "<total_tokens>14999975 tokens left</total_tokens>",
+      "content": "<total_tokens>14999980 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -1006,7 +964,7 @@
       "role": "user"
      },
      {
-      "content": "<total_tokens>14999970 tokens left</total_tokens>",
+      "content": "<total_tokens>14999975 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -1035,7 +993,7 @@
       "role": "user"
      },
      {
-      "content": "<total_tokens>14999965 tokens left</total_tokens>",
+      "content": "<total_tokens>14999970 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -1064,7 +1022,7 @@
       "role": "user"
      },
      {
-      "content": "<total_tokens>14999960 tokens left</total_tokens>",
+      "content": "<total_tokens>14999965 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -1093,7 +1051,7 @@
       "role": "user"
      },
      {
-      "content": "The user has heard nothing from you for a while. When you have something worth telling them, such as a finding or a change of plan, give them a short update.\n\n<total_tokens>14999955 tokens left</total_tokens>",
+      "content": "The user has heard nothing from you for a while. When you have something worth telling them, such as a finding or a change of plan, give them a short update.\n\n<total_tokens>14999960 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -1122,7 +1080,7 @@
       "role": "user"
      },
      {
-      "content": "<total_tokens>14999950 tokens left</total_tokens>",
+      "content": "<total_tokens>14999955 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -1151,7 +1109,7 @@
       "role": "user"
      },
      {
-      "content": "<total_tokens>14999945 tokens left</total_tokens>",
+      "content": "<total_tokens>14999950 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -1180,7 +1138,7 @@
       "role": "user"
      },
      {
-      "content": "<total_tokens>14999940 tokens left</total_tokens>",
+      "content": "<total_tokens>14999945 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -1209,7 +1167,7 @@
       "role": "user"
      },
      {
-      "content": "<total_tokens>14999935 tokens left</total_tokens>",
+      "content": "<total_tokens>14999940 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -1238,7 +1196,7 @@
       "role": "user"
      },
      {
-      "content": "<total_tokens>14999930 tokens left</total_tokens>",
+      "content": "<total_tokens>14999935 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -1267,7 +1225,7 @@
       "role": "user"
      },
      {
-      "content": "<total_tokens>14999925 tokens left</total_tokens>",
+      "content": "<total_tokens>14999930 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -1786,34 +1744,12 @@
      },
      {
       "defer_loading": true,
-      "description": "Fetches a URL, turns the page into Markdown and answers `prompt` about it with a small, fast model: you get the answer, not the page.\n\n- Pages behind a login, or otherwise private, fail. For those use an MCP tool that has access, or `gh` for GitHub.\n- `localhost` and host names without a dot cannot be fetched; reach a local server with `curl` through Bash.\n- `http` URLs are fetched over `https`.\n- A redirect to a different host is not followed: the result names the new URL, and you call again with it.\n- Pages are cached per URL for 15 minutes, so asking again about the same page is cheap.\n- A page too long for one call is answered from the part that fits, and the result gives the `offset` to continue from.",
+      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
       "input_schema": {
-       "$schema": "https://json-schema.org/draft/2020-12/schema",
-       "additionalProperties": false,
-       "properties": {
-        "offset": {
-         "description": "Character position in the page text to continue from, as given by the previous result, for a page too long for one call.",
-         "maximum": 9007199254740991,
-         "minimum": 0,
-         "type": "integer"
-        },
-        "prompt": {
-         "description": "What to find out from the fetched page.",
-         "type": "string"
-        },
-        "url": {
-         "description": "The URL to fetch.",
-         "format": "uri",
-         "type": "string"
-        }
-       },
-       "required": [
-        "url",
-        "prompt"
-       ],
+       "properties": {},
        "type": "object"
       },
-      "name": "WebFetch"
+      "name": "DeferredToolPlaceholder"
      },
      {
       "description": "Writes a file, replacing it if it already exists.\n\n- Use it to create a file, or to replace one you have read in full.\n- Overwriting an existing file that you have not read in this conversation fails.\n- To change part of a file, use Edit.",
@@ -1837,15 +1773,6 @@
        "type": "object"
       },
       "name": "Write"
-     },
-     {
-      "defer_loading": true,
-      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
-      "input_schema": {
-       "properties": {},
-       "type": "object"
-      },
-      "name": "DeferredToolPlaceholder"
      }
     ]
    },
@@ -1893,33 +1820,6 @@
       "role": "system"
      },
      {
-      "content": "Planning.",
-      "role": "assistant",
-      "tool_calls": [
-       {
-        "function": {
-         "arguments": "{\"query\": \"select:WebFetch\", \"max_results\": 1}",
-         "name": "ToolSearch"
-        },
-        "id": "t1",
-        "type": "function"
-       }
-      ]
-     },
-     {
-      "content": "Loaded: WebFetch",
-      "role": "tool",
-      "tool_call_id": "t1"
-     },
-     {
-      "content": "Tool loaded.",
-      "role": "user"
-     },
-     {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999995 tokens left</total_tokens>",
-      "role": "system"
-     },
-     {
       "content": null,
       "role": "assistant",
       "tool_calls": [
@@ -1952,7 +1852,7 @@
       "tool_call_id": "g1"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999990 tokens left</total_tokens>",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999995 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -1975,7 +1875,7 @@
       "tool_call_id": "k1"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999985 tokens left</total_tokens>",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999990 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -2014,7 +1914,7 @@
       "role": "system"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999975 tokens left</total_tokens>",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999980 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -2037,7 +1937,7 @@
       "tool_call_id": "b1"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999970 tokens left</total_tokens>",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999975 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -2060,7 +1960,7 @@
       "tool_call_id": "b2"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999965 tokens left</total_tokens>",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999970 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -2083,7 +1983,7 @@
       "tool_call_id": "b3"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999960 tokens left</total_tokens>",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999965 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -2110,7 +2010,7 @@
       "role": "system"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999955 tokens left</total_tokens>",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999960 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -2133,7 +2033,7 @@
       "tool_call_id": "b5"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999950 tokens left</total_tokens>",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999955 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -2156,7 +2056,7 @@
       "tool_call_id": "b6"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999945 tokens left</total_tokens>",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999950 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -2179,7 +2079,7 @@
       "tool_call_id": "b7"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999940 tokens left</total_tokens>",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999945 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -2202,7 +2102,7 @@
       "tool_call_id": "b8"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999935 tokens left</total_tokens>",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999940 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -2225,7 +2125,7 @@
       "tool_call_id": "b9"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999930 tokens left</total_tokens>",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999935 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -2248,7 +2148,7 @@
       "tool_call_id": "b10"
      },
      {
-      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999925 tokens left</total_tokens>",
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999930 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -2758,32 +2658,10 @@
      },
      {
       "function": {
-       "description": "Fetches a URL, turns the page into Markdown and answers `prompt` about it with a small, fast model: you get the answer, not the page.\n\n- Pages behind a login, or otherwise private, fail. For those use an MCP tool that has access, or `gh` for GitHub.\n- `localhost` and host names without a dot cannot be fetched; reach a local server with `curl` through Bash.\n- `http` URLs are fetched over `https`.\n- A redirect to a different host is not followed: the result names the new URL, and you call again with it.\n- Pages are cached per URL for 15 minutes, so asking again about the same page is cheap.\n- A page too long for one call is answered from the part that fits, and the result gives the `offset` to continue from.",
-       "name": "WebFetch",
+       "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
+       "name": "DeferredToolPlaceholder",
        "parameters": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "properties": {
-         "offset": {
-          "description": "Character position in the page text to continue from, as given by the previous result, for a page too long for one call.",
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer"
-         },
-         "prompt": {
-          "description": "What to find out from the fetched page.",
-          "type": "string"
-         },
-         "url": {
-          "description": "The URL to fetch.",
-          "format": "uri",
-          "type": "string"
-         }
-        },
-        "required": [
-         "url",
-         "prompt"
-        ],
+        "properties": {},
         "type": "object"
        }
       },
@@ -2810,17 +2688,6 @@
          "file_path",
          "content"
         ],
-        "type": "object"
-       }
-      },
-      "type": "function"
-     },
-     {
-      "function": {
-       "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
-       "name": "DeferredToolPlaceholder",
-       "parameters": {
-        "properties": {},
         "type": "object"
        }
       },
@@ -2956,51 +2823,6 @@
       "type": "message"
      },
      {
-      "content": [
-       {
-        "text": "Planning.",
-        "type": "output_text"
-       }
-      ],
-      "role": "assistant",
-      "type": "message"
-     },
-     {
-      "arguments": "{\"query\": \"select:WebFetch\", \"max_results\": 1}",
-      "call_id": "t1",
-      "name": "ToolSearch",
-      "type": "function_call"
-     },
-     {
-      "call_id": "t1",
-      "output": "Loaded: WebFetch",
-      "type": "function_call_output"
-     },
-     {
-      "content": [
-       {
-        "text": "Tool loaded.",
-        "type": "input_text"
-       }
-      ],
-      "role": "user",
-      "type": "message"
-     },
-     {
-      "content": [
-       {
-        "text": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]",
-        "type": "input_text"
-       },
-       {
-        "text": "<total_tokens>14999995 tokens left</total_tokens>",
-        "type": "input_text"
-       }
-      ],
-      "role": "system",
-      "type": "message"
-     },
-     {
       "arguments": "{\"file_path\": \"<TMP>/work/notes.txt\"}",
       "call_id": "r1",
       "name": "Read",
@@ -3029,7 +2851,7 @@
         "type": "input_text"
        },
        {
-        "text": "<total_tokens>14999990 tokens left</total_tokens>",
+        "text": "<total_tokens>14999995 tokens left</total_tokens>",
         "type": "input_text"
        }
       ],
@@ -3054,7 +2876,7 @@
         "type": "input_text"
        },
        {
-        "text": "<total_tokens>14999985 tokens left</total_tokens>",
+        "text": "<total_tokens>14999990 tokens left</total_tokens>",
         "type": "input_text"
        }
       ],
@@ -3127,7 +2949,7 @@
         "type": "input_text"
        },
        {
-        "text": "<total_tokens>14999975 tokens left</total_tokens>",
+        "text": "<total_tokens>14999980 tokens left</total_tokens>",
         "type": "input_text"
        }
       ],
@@ -3152,7 +2974,7 @@
         "type": "input_text"
        },
        {
-        "text": "<total_tokens>14999970 tokens left</total_tokens>",
+        "text": "<total_tokens>14999975 tokens left</total_tokens>",
         "type": "input_text"
        }
       ],
@@ -3177,7 +2999,7 @@
         "type": "input_text"
        },
        {
-        "text": "<total_tokens>14999965 tokens left</total_tokens>",
+        "text": "<total_tokens>14999970 tokens left</total_tokens>",
         "type": "input_text"
        }
       ],
@@ -3202,7 +3024,7 @@
         "type": "input_text"
        },
        {
-        "text": "<total_tokens>14999960 tokens left</total_tokens>",
+        "text": "<total_tokens>14999965 tokens left</total_tokens>",
         "type": "input_text"
        }
       ],
@@ -3241,7 +3063,7 @@
         "type": "input_text"
        },
        {
-        "text": "<total_tokens>14999955 tokens left</total_tokens>",
+        "text": "<total_tokens>14999960 tokens left</total_tokens>",
         "type": "input_text"
        }
       ],
@@ -3266,7 +3088,7 @@
         "type": "input_text"
        },
        {
-        "text": "<total_tokens>14999950 tokens left</total_tokens>",
+        "text": "<total_tokens>14999955 tokens left</total_tokens>",
         "type": "input_text"
        }
       ],
@@ -3291,7 +3113,7 @@
         "type": "input_text"
        },
        {
-        "text": "<total_tokens>14999945 tokens left</total_tokens>",
+        "text": "<total_tokens>14999950 tokens left</total_tokens>",
         "type": "input_text"
        }
       ],
@@ -3316,7 +3138,7 @@
         "type": "input_text"
        },
        {
-        "text": "<total_tokens>14999940 tokens left</total_tokens>",
+        "text": "<total_tokens>14999945 tokens left</total_tokens>",
         "type": "input_text"
        }
       ],
@@ -3341,7 +3163,7 @@
         "type": "input_text"
        },
        {
-        "text": "<total_tokens>14999935 tokens left</total_tokens>",
+        "text": "<total_tokens>14999940 tokens left</total_tokens>",
         "type": "input_text"
        }
       ],
@@ -3366,7 +3188,7 @@
         "type": "input_text"
        },
        {
-        "text": "<total_tokens>14999930 tokens left</total_tokens>",
+        "text": "<total_tokens>14999935 tokens left</total_tokens>",
         "type": "input_text"
        }
       ],
@@ -3391,7 +3213,7 @@
         "type": "input_text"
        },
        {
-        "text": "<total_tokens>14999925 tokens left</total_tokens>",
+        "text": "<total_tokens>14999930 tokens left</total_tokens>",
         "type": "input_text"
        }
       ],
@@ -3909,32 +3731,10 @@
       "type": "function"
      },
      {
-      "description": "Fetches a URL, turns the page into Markdown and answers `prompt` about it with a small, fast model: you get the answer, not the page.\n\n- Pages behind a login, or otherwise private, fail. For those use an MCP tool that has access, or `gh` for GitHub.\n- `localhost` and host names without a dot cannot be fetched; reach a local server with `curl` through Bash.\n- `http` URLs are fetched over `https`.\n- A redirect to a different host is not followed: the result names the new URL, and you call again with it.\n- Pages are cached per URL for 15 minutes, so asking again about the same page is cheap.\n- A page too long for one call is answered from the part that fits, and the result gives the `offset` to continue from.",
-      "name": "WebFetch",
+      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
+      "name": "DeferredToolPlaceholder",
       "parameters": {
-       "$schema": "https://json-schema.org/draft/2020-12/schema",
-       "additionalProperties": false,
-       "properties": {
-        "offset": {
-         "description": "Character position in the page text to continue from, as given by the previous result, for a page too long for one call.",
-         "maximum": 9007199254740991,
-         "minimum": 0,
-         "type": "integer"
-        },
-        "prompt": {
-         "description": "What to find out from the fetched page.",
-         "type": "string"
-        },
-        "url": {
-         "description": "The URL to fetch.",
-         "format": "uri",
-         "type": "string"
-        }
-       },
-       "required": [
-        "url",
-        "prompt"
-       ],
+       "properties": {},
        "type": "object"
       },
       "type": "function"
@@ -3959,15 +3759,6 @@
         "file_path",
         "content"
        ],
-       "type": "object"
-      },
-      "type": "function"
-     },
-     {
-      "description": "Reserved entry that only keeps deferred tool loading enabled. It does nothing; never call it.",
-      "name": "DeferredToolPlaceholder",
-      "parameters": {
-       "properties": {},
        "type": "object"
       },
       "type": "function"

@@ -19,6 +19,7 @@ plugins:
   - web
   - schedule
   - findings
+  - title
   - mcp
 ---
 

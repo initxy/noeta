@@ -437,7 +437,9 @@ class NoetaApp(App[None]):
                 finished.set_result(ev.result.text, is_error=ev.result.is_error, diff=diff)
         elif isinstance(ev, ExtensionRecorded):
             data = ev.data if isinstance(ev.data, dict) else {}
-            if ev.kind == "retry":
+            if ev.extension == "title" and ev.kind == "title":
+                self.sub_title = str(data.get("title") or "")
+            elif ev.kind == "retry":
                 await self._retried(int(data.get("attempt") or 1))
                 await transcript.mount(Notice(f"retrying (attempt {data.get('attempt')}): "
                                               f"{str(data.get('error', ''))[:120]}"))

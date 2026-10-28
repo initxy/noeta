@@ -39,6 +39,7 @@ schedule = "noeta.plugins.schedule:Schedule"
 shell = "noeta.plugins.shell:Shell"
 skills = "noeta.plugins.skills:Skills"
 structured_output = "noeta.plugins.structured:StructuredOutput"
+title = "noeta.plugins.title:Title"
 subtasks = "noeta.plugins.subtasks:Subtasks"
 web = "noeta.plugins.web:Web"
 
