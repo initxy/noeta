@@ -129,7 +129,7 @@ async def test_launch_hand_back_and_notice(store: SqliteStore) -> None:
     created = (await events(client, cid))[0]
     assert isinstance(created, TaskCreated) and created.agent == "worker"
     assert created.config == {"cwd": "/w", "subtask_depth": 1,
-                              "subagent_type": "general-purpose"}
+                              "subagent_type": "general-purpose", "subagent_handback": True}
     assert [t.name for t in p.requests[0].tools] == ["Agent", "ListAgents", "SendMessage"]
     # The child: the prompt, then the hand-back reminder; it ends on the call.
     first = c.requests[0]
@@ -173,6 +173,29 @@ async def test_final_text_without_hand_back_is_dropped(store: SqliteStore) -> No
     assert notice.origin == "system" and texts.RESULT_NO_REPORT in notice.text
     assert "my secret final words" not in "".join(texts_of(p.requests[2]))
     assert (await client.get(tid)).waiting_on == "input"
+
+
+class DefaultMode(Extension):
+    """Passes a non-auto permission mode down, as the permission plugin does."""
+
+    name = "mode"
+
+    def inherit(self, state: Any) -> dict[str, Any]:
+        return {"permission_mode": "default"}
+
+
+async def test_outside_auto_mode_the_last_reply_is_the_report(store: SqliteStore) -> None:
+    p = ScriptedProvider([reply("", agent("x", "scout")), reply("launched"), reply("ok")])
+    c = ScriptedProvider([reply("made the file")])
+    rt = runtime(store, {"p": p, "c": c}, parent(DefaultMode()), worker())
+    client = Client(store)
+    await client.create("main", "go")
+    await rt.run_until_idle()
+    child = c.requests[0]
+    assert "SubagentHandback" not in [t.name for t in child.tools]
+    assert not any("SubagentHandback" in t for t in texts_of(child))
+    notice = p.requests[2].messages[-1].text
+    assert "<result>made the file\n</result>" in notice
 
 
 async def test_failed_agent_notice_wakes_the_parent(store: SqliteStore) -> None:

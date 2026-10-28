@@ -2,6 +2,7 @@
 name: general-purpose
 description: 'General-purpose agent for researching complex questions, searching code and carrying out multi-step tasks. When a search for a keyword or file may take several tries to get right, let this agent do it.'
 model: inherit
+identity: You are an agent built on noeta, an open-source agent framework.
 plugins:
   - compaction
   - permissions

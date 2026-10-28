@@ -2,6 +2,7 @@
 name: Plan
 description: 'Software architect agent that designs implementation plans: use it to work out how to carry out a task. It returns a step-by-step plan, names the critical files and weighs architectural trade-offs.'
 model: inherit
+identity: You are an agent built on noeta, an open-source agent framework.
 disallowedTools: Agent, ExitPlanMode, Edit, Write, NotebookEdit
 plugins:
   - compaction

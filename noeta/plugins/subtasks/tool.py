@@ -30,6 +30,9 @@ DEPTH_KEY = "subtask_depth"
 TYPE_KEY = "subagent_type"
 #: The id the caller knows the agent by (a resumed agent runs in a new task).
 AGENT_ID_KEY = "agent_id"
+#: Whether the agent delivers its report with ``SubagentHandback`` (Claude
+#: Code offers it in auto mode; elsewhere the agent's last reply is the result).
+HANDBACK_KEY = "subagent_handback"
 FORK_KEY = "fork"
 #: An agent definition's default isolation, carried in its roster config.
 ISOLATION_KEY = "isolation"
@@ -167,7 +170,9 @@ class AgentTool:
     run_last = True
 
     def __init__(self, ext: Subtasks, state: TaskState,
-                 roster: Mapping[str, SubagentSpec], name: str = texts.AGENT_TOOL) -> None:
+                 roster: Mapping[str, SubagentSpec], name: str = texts.AGENT_TOOL,
+                 *, handback: bool = True) -> None:
+        self._handback = handback
         self._ext = ext
         self._state = state
         self._roster = roster
@@ -194,6 +199,7 @@ class AgentTool:
             queue = spec.queue or ext.queue
         isolation = input.get("isolation") or spec_config.pop(ISOLATION_KEY, None)
         config = ext.child_config(state, ctx, agent, spec_config, kind, input, fork=fork)
+        config[HANDBACK_KEY] = self._handback
         worktree = None
         if isolation == "worktree":
             worktree = await ext.add_worktree(ctx, config)

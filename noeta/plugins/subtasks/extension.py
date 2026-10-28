@@ -23,6 +23,7 @@ from noeta.plugins.subtasks import texts
 from noeta.plugins.subtasks.tool import (
     DELEGATION_TOOLS,
     DEPTH_KEY,
+    HANDBACK_KEY,
     TYPE_KEY,
     AgentTool,
     HandbackTool,
@@ -41,6 +42,8 @@ ALL_AGENTS = "*"
 #: Code's was alongside the third), and the inbox signal carrying it.
 PROGRESS_AT_CALL = 3
 PROGRESS_SIGNAL = "subtasks.progress"
+#: The permission mode in which agents hand back with ``SubagentHandback``.
+AUTO_MODE = "auto"
 #: The agent list's place in the first request's joined system turn
 #: (``Reminder.order``): after the environment and the deferred tools.
 AGENT_LIST_ORDER = 40
@@ -275,12 +278,12 @@ class Subtasks(Extension):
         roster = self.roster_for(view)
         out: list[Tool] = []
         if roster:
-            out.append(AgentTool(self, state, roster))
+            out.append(AgentTool(self, state, roster, handback=_auto_mode(self, view)))
             if not state.parent_id:
                 out.append(ListAgentsTool(self, state))
         if roster or state.parent_id:
             out.append(SendMessageTool(self, state))
-        if TYPE_KEY in state.config:
+        if _hands_back(state.config):
             out.append(HandbackTool(state))
         return out
 
@@ -328,7 +331,7 @@ class Subtasks(Extension):
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         st = self._state(view.state)
         out: list[Reminder] = []
-        if TYPE_KEY in view.state.config and not st["reminded"]:
+        if _hands_back(view.state.config) and not st["reminded"]:
             out.append(Reminder(text=texts.HANDBACK_REMINDER, kind="handback_reminder"))
         if st["held_list"]:
             # The first request: the agent list joins the environment's
@@ -349,12 +352,14 @@ class Subtasks(Extension):
         return "\n".join([texts.AGENT_LIST_HEAD, *lines, "", texts.AGENT_LIST_TAIL])
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
-        text = self.agent_list(view)
+        text = None if view.state.parent_id else self.agent_list(view)
         return [system_message(text)] if text else []
 
     async def on_start(self, view: TaskView) -> None:
         st = self._state(view.state)
-        text = self.agent_list(view)
+        # Only the main conversation is told the agent types (as Claude
+        # Code's sub-agents are not).
+        text = None if view.state.parent_id else self.agent_list(view)
         if text and not st["listed"]:
             # Held for the first request's system turn (``reminders``).
             view.record(self.name, "agent_list", {"text": text})
@@ -407,8 +412,12 @@ class Subtasks(Extension):
         handed_back = ended.status == "done" and agent_id in handbacks
         if ended.status == "done":
             status, summary = "completed", texts.SUMMARY_FINISHED.format(description=description)
-            result = texts.RESULT_POINTER.format(id=agent_id) if handed_back \
-                else texts.RESULT_NO_REPORT
+            if handed_back:
+                result = texts.RESULT_POINTER.format(id=agent_id)
+            elif (agent.get("config") or {}).get(HANDBACK_KEY, True):
+                result = texts.RESULT_NO_REPORT
+            else:  # no SubagentHandback offered: its last reply is the report
+                result = ended.answer
         elif ended.status == "failed":
             error = ended.error or texts.SUBAGENT_FAILED
             status = "failed"
@@ -445,6 +454,23 @@ class Subtasks(Extension):
         await view.post(Say(message=message, when="now"),
                         dedupe_key=f"subtasks:notice:{ended.child_id}")
         view.record(self.name, "noticed", data)
+
+
+def _hands_back(config: Mapping[str, Any]) -> bool:
+    """Whether a task is an agent that delivers its report with
+    ``SubagentHandback`` (older logs: every agent)."""
+    return TYPE_KEY in config and bool(config.get(HANDBACK_KEY, True))
+
+
+def _auto_mode(owner: Extension, view: TaskView) -> bool:
+    """Whether agents this task starts run in auto mode, as the permission
+    mode they inherit says (Claude Code offers ``SubagentHandback`` only
+    there); no mode inherited (no permission plugin) counts as auto."""
+    inherited: dict[str, Any] = {}
+    for ext in view.extensions:
+        if ext is not owner:
+            inherited.update(ext.inherit(view.state))
+    return bool(inherited.get("permission_mode", AUTO_MODE) == AUTO_MODE)
 
 
 def _definition_config(agent: Any) -> dict[str, Any]:

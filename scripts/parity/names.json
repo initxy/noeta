@@ -50,6 +50,7 @@
   "p:7f95bdd9": "mid-turn-message",
   "noeta_kinds": {
     "^You are noeta, an open-source coding agent": "identity",
+    "^You are an agent built on noeta": "agent-identity",
     "^You are an agent that works alongside the user": "main-prompt",
     "^You are a file-search specialist": "explore-prompt",
     "^You are an agent for noeta": "general-purpose-prompt",

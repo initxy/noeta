@@ -2,6 +2,7 @@
 name: Explore
 description: 'Read-only search agent for wide searches: when an answer means sweeping many files, directories or naming conventions and only the conclusion matters, not the file contents. It reads excerpts rather than whole files, so it finds code; it does not review or audit it. Say how broad to search: "medium" for a moderate look, "very thorough" for many locations and naming conventions.'
 model: inherit
+identity: You are an agent built on noeta, an open-source agent framework.
 disallowedTools: Agent, ExitPlanMode, Edit, Write, NotebookEdit
 plugins:
   - compaction
