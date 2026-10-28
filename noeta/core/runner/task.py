@@ -592,8 +592,11 @@ class TaskRun:
                 return
 
     async def _fire_timers(self) -> None:
-        """Post the due timers to the inbox while the task is idle (a turn
-        in progress keeps them for later). The dedupe key, the record that
+        """Post the due timers to the inbox while the task is idle. A turn
+        in progress keeps them for later, also while it is parked on an
+        approval, a question or children: Claude Code fires a scheduled
+        prompt only once it is idle, so a timer due meanwhile fires (once)
+        when the turn ends. The dedupe key, the record that
         set the timer, makes a crash between post and take harmless and
         lets a timer set again for the same name and time fire again."""
         st = self.state

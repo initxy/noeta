@@ -187,3 +187,44 @@ async def test_spawns_without_a_key_each_create_their_own_child(store: SqliteSto
     children = await client.tasks(parent_id=tid)
     assert sorted(c.task_id for c in children) == sorted(ext.spawned)
     assert all(c.end_status == "done" for c in children)
+
+
+class AskFirst(Extension):
+    """Every ``Danger`` call waits for a person's approval."""
+
+    name = "ask_first"
+
+    async def before_tool(self, view: TaskView, call: Any) -> Any:
+        from noeta.core.extension import Ask
+
+        return Ask(prompt="sure?") if call.name == "Danger" else None
+
+
+class Danger(Later):
+    name = "Danger"
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        return text_output("done the dangerous thing")
+
+
+async def test_a_timer_due_while_parked_fires_once_the_turn_ends(store: SqliteStore) -> None:
+    """As Claude Code fires a scheduled prompt only once it is idle, a
+    timer that falls due while a call waits for approval fires (once) when
+    the turn has ended, not before."""
+    provider = ScriptedProvider([reply("", ("Later", {"in": 0, "text": "tick"})),
+                                 reply("", ("Danger", {})), reply("did it"), reply("ticked")])
+    rt = runtime(store, provider, Agent(name="a", model="m", tools=[Later(), Danger()],
+                                        extensions=[AskFirst()]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    waiting = (await client.events(tid))[-1].event
+    assert isinstance(waiting, Waiting) and waiting.on == "approval"
+    assert len(provider.requests) == 2  # due, but the turn is still open
+    await client.answer(tid, waiting.ids[0], "allow")
+    await rt.run_until_idle()
+    events = [r.event for r in await client.events(tid)]
+    fired = [i for e in events if isinstance(e, InputTaken) for i in e.items
+             if isinstance(i.body, TimerFired)]
+    assert len(fired) == 1 and len(provider.requests) == 4
+    assert provider.requests[3].messages[-1].text == "tick"
