@@ -21,7 +21,7 @@ import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
-from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
+from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output, tool_flag
 from noeta.core.types import ToolReference, ToolSpec
 
 __all__ = [
@@ -71,11 +71,11 @@ _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 def is_deferred(tool: Tool) -> bool:
-    return bool(getattr(tool, "deferred", False))
+    return tool_flag(tool, "deferred")
 
 
 def _listed_last(tool: Tool) -> bool:
-    return bool(getattr(tool, "listed_last", False))
+    return tool_flag(tool, "listed_last")
 
 
 def deferred_names(tools: Iterable[Tool]) -> list[str]:

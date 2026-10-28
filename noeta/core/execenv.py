@@ -28,6 +28,14 @@ class FileStat(Struct):
 
 
 class ExecEnv(Protocol):
+    """Files and commands for tools.
+
+    Optional members: ``local: bool`` (commands run on this machine; read
+    by :func:`is_local`) and ``sandbox`` (a
+    ``noeta.toolkit.sandbox.CommandSandbox`` commands may run inside; read by
+    ``noeta.toolkit.sandbox.sandbox_of``).
+    """
+
     #: The working directory paths are resolved against, as the env sees it.
     cwd: str
 

@@ -22,7 +22,7 @@ from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView
 from noeta.core.loop.state import CORE
 from noeta.core.runner import texts
 from noeta.core.store import NewTask, Patch, Post
-from noeta.core.tool import Tool, ToolContext, ToolOutput
+from noeta.core.tool import Tool, ToolContext, ToolOutput, tool_flag
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
 
 if TYPE_CHECKING:
@@ -158,7 +158,7 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     await run.flush(view)
     # A call whose tool declares ``run_last`` (delegation) runs after the
     # reply's ordinary calls, as 0.6 spawned only once they had finished.
-    runnable.sort(key=lambda item: bool(getattr(item[1], "run_last", False)))
+    runnable.sort(key=lambda item: tool_flag(item[1], "run_last"))
     for group in _groups(runnable):
         await run.append([ToolStarted(call=u) for u, _ in group])
         await asyncio.gather(*(_run_one(run, u, t) for u, t in group))

@@ -117,6 +117,22 @@ def notice_data(text: str, kind: str | None = None, data: Any = None) -> dict[st
 
 
 class Tool(Protocol):
+    """A tool the model can call.
+
+    Optional members, read with their default when a tool leaves them out:
+
+    * ``deferred: bool = False`` — named to the model and sent only once it
+      loads the tool with ``ToolSearch`` (``noeta.core.deferred``).
+    * ``listed_last: bool = False`` — sent after the other tools (keeps a
+      changing set of tools at the end of the cached prefix).
+    * ``run_last: bool = False`` — runs after the reply's other calls
+      (delegation).
+    * ``async resume(input, ctx, outcome) -> ToolOutput`` — required of a
+      tool that parks: ``outcome`` is the ``Answer`` for a question, or
+      ``{child_id: ChildEnded}`` for children; ``None`` means the wait was
+      withdrawn (the turn was stopped).
+    """
+
     name: str
     #: The model-facing description: the single source of the tool's
     #: semantics. Never restated in the system prompt.
@@ -132,11 +148,7 @@ class Tool(Protocol):
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput: ...
 
 
-class Resumable(Protocol):
-    """A tool that parks implements ``resume``. ``outcome`` is the
-    ``Answer`` for a question, or ``{child_id: ChildEnded}`` for children;
-    ``None`` means the wait was withdrawn (the turn was stopped)."""
-
-    async def resume(
-        self, input: dict[str, Any], ctx: ToolContext, outcome: Any
-    ) -> ToolOutput: ...
+def tool_flag(tool: Tool, name: Literal["deferred", "listed_last", "run_last"]) -> bool:
+    """One of ``tool``'s optional flags (see :class:`Tool`); ``False`` when
+    the tool leaves it out."""
+    return bool(getattr(tool, name, False))
