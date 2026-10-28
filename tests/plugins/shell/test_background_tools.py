@@ -189,7 +189,7 @@ async def test_monitor_expiry_sends_one_note_and_no_end_notice(h: Harness) -> No
 
 async def test_monitor_needs_command_and_description(h: Harness) -> None:
     assert text(await h.call("Monitor", description="x")) == (
-        "Monitor: requires non-empty 'command'")
+        "Monitor: requires non-empty 'command' (or 'ws')")
     assert text(await h.call("Monitor", command="true")) == (
         "Monitor: requires non-empty 'description'")
 

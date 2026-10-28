@@ -12,6 +12,7 @@ from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.plugins.shell.bash import SCHEMA_DIALECT, SHELL, BashTool, shell_state
 from noeta.plugins.shell.jobs import Job, Registry
 from noeta.plugins.shell.notices import format_duration
+from noeta.plugins.shell.websocket import parse_ws
 from noeta.toolkit.shell import matching_rule, parse_argv
 from noeta.toolkit.tools import Workspace, require_str, tool_error
 
@@ -105,14 +106,29 @@ class BackgroundBash(BashTool):
 
 async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: str,
                  description: str, monitor_timeout_ms: float | None = None,
+                 ws: tuple[str, list[str]] | None = None,
                  ) -> ToolOutput | tuple[Job, str, bool]:
     """Start ``command`` the way ``Bash`` would run it (same directory,
     variables and hardening), as a job. Returns the job, its directory and
-    whether the command runs as written (so a ``cd`` in it matters)."""
+    whether the command runs as written (so a ``cd`` in it matters). A
+    monitor with ``ws`` streams that WebSocket instead (``command`` then
+    only names it)."""
     if ctx.post is None:
         return tool_error(tool, NOT_AVAILABLE)
-    ws = await Workspace.of(ctx.env)
-    cwd, _moved_back = await shell._start_cwd(ws, ctx)
+    if ws is not None:
+        release = await ctx.hold() if ctx.hold is not None else None
+        job = await shell.registry.spawn(
+            env=ctx.env, command=command, cwd="", env_vars={}, root_id=_root(ctx),
+            spawner_id=ctx.task_id, tool_use_id=ctx.call_id, description=description,
+            post=ctx.post, monitor_timeout_ms=monitor_timeout_ms, release=release, ws=ws)
+        if isinstance(job, str):
+            return tool_error(tool, job)
+        ctx.record(SHELL, "started", {
+            "job_id": job.job_id, "command": command, "description": job.description,
+            "tool_use_id": ctx.call_id, "monitor": True, "worker": shell.registry.worker})
+        return job, "", False
+    workspace = await Workspace.of(ctx.env)
+    cwd, _moved_back = await shell._start_cwd(workspace, ctx)
     rule = matching_rule(command, shell.hardening_rules)
     argv = parse_argv(command) if rule is not None and rule.harden is not None else None
     run_command, tracked = command, True
@@ -198,6 +214,21 @@ class MonitorTool:
                     "description": ("The script to run. Every line it prints on stdout is "
                                     "an event; its exit ends the watch."),
                 },
+                "ws": {
+                    "type": "object",
+                    "description": ("A WebSocket to connect to instead of a command. Every "
+                                    "text message is an event and a binary one shows as a "
+                                    "placeholder line; the socket closing ends the watch. "
+                                    "Not together with command."),
+                    "properties": {
+                        "url": {"type": "string"},
+                        "protocols": {"type": "array", "items": {
+                            "type": "string",
+                            "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"}},
+                    },
+                    "required": ["url"],
+                    "additionalProperties": False,
+                },
                 "description": {
                     "type": "string",
                     "description": ("A short, specific label for what is watched; shown "
@@ -220,20 +251,30 @@ class MonitorTool:
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         command = input.get("command")
+        ws: tuple[str, list[str]] | None = None
+        if input.get("ws") is not None:
+            if command is not None:
+                return tool_error(self.name, "takes 'command' or 'ws', not both")
+            parsed = parse_ws(input["ws"])
+            if isinstance(parsed, str):
+                return tool_error(self.name, parsed)
+            ws = parsed
+            command = f"ws {ws[0]}"
         if not isinstance(command, str) or not command.strip():
-            return tool_error(self.name, "requires non-empty 'command'")
+            return tool_error(self.name, "requires non-empty 'command' (or 'ws')")
         description = input.get("description")
         if not isinstance(description, str) or not description.strip():
             return tool_error(self.name, "requires non-empty 'description'")
         timeout_ms = _monitor_timeout_ms(input.get("timeout_ms"))
         started = await launch(self.shell, ctx, command, self.name, description,
-                               monitor_timeout_ms=timeout_ms)
+                               monitor_timeout_ms=timeout_ms, ws=ws)
         if isinstance(started, ToolOutput):
             return started
         job = started[0]
         output = (
             f"Monitor started with ID {job.job_id}; it expires in "
-            f"{format_duration(timeout_ms)} unless the script ends first, with one notice "
+            f"{format_duration(timeout_ms)} unless the "
+            f"{'socket closes' if ws else 'script ends'} first, with one notice "
             "at expiry (start it again if you still need it). Each event reaches you as a "
             "notification: keep working, do not poll or sleep. An event that arrives while "
             "you wait for the user is not their reply."

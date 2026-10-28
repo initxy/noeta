@@ -133,6 +133,9 @@ def render_call(use: ToolUse) -> str | None:
     if name in SKIPPED_TOOLS:
         return None
     if name in ("Bash", "Monitor"):
+        ws = i.get("ws")
+        if name == "Monitor" and isinstance(ws, dict) and not i.get("command"):
+            return f"ws {ws.get('url', '')}"
         return str(i.get("command") or "")
     if name == "WebFetch":
         return f"{i.get('url', '')}: {i.get('prompt', '')}"
