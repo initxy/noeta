@@ -131,12 +131,14 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     await run.append([ModelCalled(model=request.model, request_hash=request_hash(request),
                                   attempt=run.state.model_attempts + 1)])
 
-    on_delta = None
     current = {"attempt": 1}
-    if run.rt.on_delta is not None:
-        sink, tid, called = run.rt.on_delta, run.task_id, run.state.last_seq
+    sink, tid, called = run.rt.on_delta, run.task_id, run.state.last_seq
+    run.partial = []
 
-        def on_delta(d: Delta) -> None:
+    def on_delta(d: Delta) -> None:
+        if d.kind == "text":
+            run.partial.append(d.text)
+        if sink is not None:
             sink(tid, msgspec.structs.replace(d, call_seq=called, attempt=current["attempt"]))
 
     pending: list[asyncio.Task[None]] = []
@@ -144,6 +146,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     def on_retry(attempt: int, delay: float, error: Exception) -> None:
         # Hosts see "retrying" (and drop the failed attempt's deltas).
         current["attempt"] = attempt + 1
+        run.partial = []
         pending.append(asyncio.ensure_future(run.append([ExtensionRecorded(
             extension=CORE, kind="retry",
             data={"attempt": attempt, "delay": delay,
@@ -169,6 +172,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         await asyncio.gather(*pending, return_exceptions=True)
         return await run.fail_turn(texts.LLM_ERROR, _detail(exc))
     await asyncio.gather(*pending, return_exceptions=True)
+    run.partial = []
 
     if final:
         response = _final_answer(run, response)

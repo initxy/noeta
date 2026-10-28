@@ -66,6 +66,9 @@ class TaskRun:
         self._lost = False
         self._write_lock = asyncio.Lock()
         self._env: Any = None
+        #: The text the model call in flight has streamed so far (what an
+        #: interrupted reply keeps).
+        self.partial: list[str] = []
 
     # ------------------------------------------------------------ lifecycle
 
@@ -424,8 +427,15 @@ class TaskRun:
         return min((t["at"] for t in self.state.timers.values()), default=None)
 
     async def _stop_turn(self, call_ids: Sequence[str]) -> None:
+        data = None
+        if not call_ids and self.state.model_attempts:
+            # Stopped while the reply streamed: the streamed text stays in
+            # the conversation and the marker opens the person's next turn.
+            data = {"partial": "".join(self.partial), "marker": texts.INTERRUPTED_MARKER}
+        self.partial = []
         await self._close_calls(call_ids, texts.STOPPED_CALL_ERROR,
-                                ExtensionRecorded(extension=CORE, kind="turn_stopped"),
+                                ExtensionRecorded(extension=CORE, kind="turn_stopped",
+                                                  data=data),
                                 "the parent's turn was stopped")
 
     async def _close_calls(self, call_ids: Sequence[str], error: str, closing: Event,

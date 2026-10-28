@@ -264,6 +264,15 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
     elif isinstance(ev, ExtensionRecorded):
         if ev.extension == CORE and ev.kind == "turn_stopped":
             state.stop_turn_requested = None
+            stopped = ev.data if isinstance(ev.data, dict) else {}
+            if stopped.get("marker"):
+                # A reply stopped mid-stream keeps what streamed; the marker
+                # (plain text) opens the person's next turn.
+                if stopped.get("partial"):
+                    state._add(Message(role="assistant",
+                                       content=[Text(text=str(stopped["partial"]))]), rec.seq)
+                state._add(Message(role="user", content=[Text(text=str(stopped["marker"]))],
+                                   origin="inline"), rec.seq)
             _end_turn(state, rec.seq)
         if ev.extension == CORE and ev.kind == "parked":
             for c in state.calls:
