@@ -10,6 +10,7 @@
     noeta serve                the client API over HTTP (and workers, unless --no-worker)
     noeta plugin ...           install (pinned), list and remove plugins
     noeta mcp ...              add, list, remove and sign in to MCP servers
+    noeta token ...            add, list and remove the server's tenant tokens
 
 Model and provider come from ``--model`` / ``--provider`` or the environment
 (``NOETA_MODEL``, ``NOETA_PROVIDER``, ``NOETA_BASE_URL``, ``NOETA_API_KEY``)
@@ -26,11 +27,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from noeta.cli import mcp_command, plugin_command
+from noeta.cli import mcp_command, plugin_command, tenants
 from noeta.cli.config import Settings, load_settings
 from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
-SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp")
+SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp", "token")
 
 
 def _common(ap: argparse.ArgumentParser) -> None:
@@ -79,6 +80,7 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("plugins", help="list the plugins and where each comes from")
     plugin_command.add_parser(sub)
     mcp_command.add_parser(sub)
+    tenants.add_parser(sub)
     return ap
 
 
@@ -171,6 +173,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     app = _app(s, cwd=cwd, with_channels=True, **refuse)
     await app.start(worker=with_worker)
     api = create_app(app.client, token=token, auth=token is not None,
+                     tokens=tenants.tenant_tokens(),
                      deltas=app.deltas, agents=app.runtime.agents,
                      app=app if with_worker else None,
                      allowed_hosts=LOOPBACK_HOSTS if host in LOOPBACK_HOSTS else None,
@@ -217,6 +220,8 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(plugin_command.run(args, cwd))
     if args.command == "mcp":
         sys.exit(mcp_command.run(args, cwd))
+    if args.command == "token":
+        sys.exit(tenants.run(args))
     if args.command == "acp":
         from noeta.host.acp import EditorServers, serve_stdio
         if args.server:

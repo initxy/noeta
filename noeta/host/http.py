@@ -51,11 +51,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-import hmac
+import hashlib
 import json
 import logging
 import os
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Any, Literal
 
 import msgspec
@@ -70,7 +70,7 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client, ClientAPI, Input
 from noeta.core.commands import Typed
 from noeta.core.errors import UnknownTask
-from noeta.core.events import Recorded
+from noeta.core.events import DEFAULT_TENANT, Recorded
 from noeta.core.extension import Command, CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.store import Status, TaskRow
@@ -229,6 +229,35 @@ class _GuardedClient:
         return await self._client.wait(task_id, timeout=timeout)
 
 
+@dataclasses.dataclass
+class _Scope:
+    """What a request of one tenant reaches: its scoped client, that client
+    guarded, and a stream-json front on it."""
+
+    client: Any
+    guarded: _GuardedClient
+    front: Any
+
+
+def _digest(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _token_lookup(token: str | None, tokens: Any) -> Callable[[str], str | None]:
+    """A token's tenant, compared by digest (a lookup that leaks no timing
+    about the tokens it holds)."""
+    table: dict[str, str] = {_digest(token): DEFAULT_TENANT} if token else {}
+    if isinstance(tokens, Mapping):
+        table.update({_digest(t): name for t, name in tokens.items()})
+    find = tokens if callable(tokens) else None
+
+    def lookup(got: str) -> str | None:
+        hit = table.get(_digest(got))
+        return hit if hit is not None or find is None else find(got)
+
+    return lookup
+
+
 class _GuardedFront:
     """A stream-json front whose ``client`` is guarded."""
 
@@ -251,8 +280,9 @@ def _hostname(value: str) -> str:
     return value.rpartition(":")[0] if value.count(":") == 1 else value
 
 
-def create_app(client: Client, *, token: str | None = None, auth: bool = True,
-               deltas: Any = None, agents: Mapping[str, Agent] | None = None,
+def create_app(client: Client, *, token: str | None = None,
+               tokens: Mapping[str, str] | Callable[[str], str | None] | None = None,
+               auth: bool = True, deltas: Any = None, agents: Mapping[str, Agent] | None = None,
                app: Any = None, allowed_hosts: Sequence[str] | None = None,
                origins: Sequence[str] = (), allow_bypass: bool = False,
                cwd: str | None = None, roots: Sequence[str] = ()) -> Starlette:
@@ -261,32 +291,51 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
     (``/context``) and serves new stream-json conversations' trees.
 
-    Every request needs the bearer ``token``; serving without one takes
-    ``auth=False`` (a loopback-only development server).
+    Every request needs a bearer token: ``token`` is the default tenant's,
+    ``tokens`` maps more tokens to their tenants (or finds a token's
+    tenant). A request reaches only its tenant's tasks (``Client.scoped``);
+    another tenant's task answers 404. Serving without a token takes
+    ``auth=False`` (a loopback-only development server; the default
+    tenant).
 
     ``allowed_hosts``: the ``Host`` names served (any when ``None``);
     ``origins``: web origins (``https://host:port``) allowed besides the
     server's own; ``allow_bypass``: requests may ask for
     ``bypassPermissions``; ``cwd``: tasks a request creates run in it or
     below it, or below one of ``roots`` (anywhere when ``None``)."""
-    if auth and not token:
-        raise ValueError("create_app needs a bearer token; pass auth=False to serve "
-                         "every request without one")
+    if auth and not token and not tokens:
+        raise ValueError("create_app needs a bearer token (token= or tokens=); pass "
+                         "auth=False to serve every request without one")
+    if tokens and not hasattr(client, "scoped"):
+        raise ValueError("tenant tokens need a client that can be scoped to a tenant")
+    tenant_of = _token_lookup(token, tokens)
     agents = agents if agents is not None else getattr(getattr(app, "runtime", None),
                                                        "agents", None)
-    guarded = _GuardedClient(client, allow_bypass=allow_bypass, cwd=cwd, roots=roots)
     serving: AppAPI = app if app is not None else _Front(client=client, agents=agents or {},
                                                           live=deltas)
-    front = _GuardedFront(serving, guarded)
+    scopes: dict[str, _Scope] = {}
+
+    def scope_for(tenant: str) -> _Scope:
+        found = scopes.get(tenant)
+        if found is None:
+            scoped = client.scoped(tenant) if hasattr(client, "scoped") else client
+            guarded = _GuardedClient(scoped, allow_bypass=allow_bypass, cwd=cwd, roots=roots)
+            found = scopes[tenant] = _Scope(scoped, guarded, _GuardedFront(serving, guarded))
+        return found
+
+    def scope(request: Request) -> _Scope:
+        found: _Scope = request.state.scope
+        return found
     hosts = None if allowed_hosts is None else {h.lower() for h in allowed_hosts}
     allowed_origins = {o.rstrip("/").lower() for o in origins}
 
-    def authorized(headers: Any, query: Any) -> bool:
+    def tenant(headers: Any, query: Any) -> str | None:
+        """The request's tenant; ``None`` when its token is missing or wrong."""
         if not auth:
-            return True
+            return DEFAULT_TENANT
         got = headers.get("authorization", "").removeprefix("Bearer ").strip() \
             or query.get("token", "")
-        return hmac.compare_digest(got, token)
+        return tenant_of(got) if got else None
 
     def same_site(headers: Any) -> bool:
         """Whether the request comes from an allowed ``Host`` and, when a
@@ -304,8 +353,10 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
         async def wrapped(request: Request) -> Response:
             if not same_site(request.headers):
                 return JSONResponse({"error": "cross-site request refused"}, status_code=403)
-            if not authorized(request.headers, request.query_params):
+            who = tenant(request.headers, request.query_params)
+            if who is None:
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
+            request.state.scope = scope_for(who)
             try:
                 result: Response = await handler(request)
                 return result
@@ -319,7 +370,7 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
 
     async def create(request: Request) -> Response:
         body = await request.json()
-        task_id = await guarded.create(
+        task_id = await scope(request).guarded.create(
             body["agent"], _input(body.get("input")), config=body.get("config"),
             queue=body.get("queue", "default"), dedupe_key=body.get("dedupe_key"),
             history_from=body.get("history_from"), history_through=body.get("history_through"))
@@ -327,21 +378,21 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
 
     async def list_tasks(request: Request) -> Response:
         q = request.query_params
-        rows = await client.tasks(parent_id=q.get("parent_id"), status=q.get("status"),  # type: ignore[arg-type]
-                                  limit=int(q.get("limit", "100")))
+        rows = await scope(request).client.tasks(
+            parent_id=q.get("parent_id"), status=q.get("status"), limit=int(q.get("limit", "100")))
         return _json(rows)
 
     async def get_task(request: Request) -> Response:
-        return _json(await client.get(request.path_params["task_id"]))
+        return _json(await scope(request).client.get(request.path_params["task_id"]))
 
     async def events(request: Request) -> Response:
         after = int(request.query_params.get("after", "0"))
-        return _json(await client.events(request.path_params["task_id"], after))
+        return _json(await scope(request).client.events(request.path_params["task_id"], after))
 
     async def pending(request: Request) -> Response:
         task_id = request.path_params["task_id"]
         out = []
-        for item in await pending_tree(client, task_id):
+        for item in await pending_tree(scope(request).client, task_id):
             row = dataclasses.asdict(item)
             row["title"] = card_title(item, task_id)
             if item.kind == "approval":
@@ -354,22 +405,22 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
         task_id = request.path_params["task_id"]
         value = _input(body["input"])
         if isinstance(value, str) and value.startswith("/"):
-            row = await client.get(task_id)
+            row = await scope(request).client.get(task_id)
             typed = await serving.run_command(row.agent, CommandContext(cwd="", task_id=task_id),
                                               value)
             if typed is not None and typed.local:
                 return _json({"output": typed.text})
             value = typed.text if typed is not None else value
-        seq = await guarded.send(task_id, value,
+        seq = await scope(request).guarded.send(task_id, value,
                                  when=body.get("when", "next_turn"),
                                  dedupe_key=body.get("dedupe_key"))
         return _json({"inbox_seq": seq})
 
     async def answer(request: Request) -> Response:
         body = await request.json()
-        seq = await guarded.answer(request.path_params["task_id"], body["request_id"],
-                                  body.get("decision"), always=bool(body.get("always")),
-                                  data=body.get("data"))
+        seq = await scope(request).guarded.answer(
+            request.path_params["task_id"], body["request_id"], body.get("decision"),
+            always=bool(body.get("always")), data=body.get("data"))
         return _json({"ok": True, "inbox_seq": seq})
 
     async def signal(request: Request) -> Response:
@@ -377,20 +428,22 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
         name = body["name"]
         if not isinstance(name, str) or not name:
             raise ValueError("a signal needs a non-empty 'name'")
-        seq = await guarded.signal(request.path_params["task_id"], name, body.get("data"),
-                                  dedupe_key=body.get("dedupe_key"))
+        seq = await scope(request).guarded.signal(
+            request.path_params["task_id"], name, body.get("data"),
+            dedupe_key=body.get("dedupe_key"))
         return _json({"ok": True, "inbox_seq": seq})
 
     async def cancel(request: Request) -> Response:
         body = await request.json() if await request.body() else {}
-        await guarded.cancel(request.path_params["task_id"], body.get("reason", ""),
-                             turn_only=bool(body.get("turn_only")))
+        await scope(request).guarded.cancel(
+            request.path_params["task_id"], body.get("reason", ""),
+            turn_only=bool(body.get("turn_only")))
         return _json({"ok": True})
 
     async def usage(request: Request) -> Response:
         task_id = request.path_params["task_id"]
-        await client.get(task_id)
-        total = await tree_usage(client, task_id)
+        await scope(request).client.get(task_id)
+        total = await tree_usage(scope(request).client, task_id)
         return _json({"tasks": total.tasks, "cost_usd": total.cost_usd,
                       "api_seconds": total.api_seconds, "usage": total.usage,
                       "by_model": {name: {"usage": m.usage, "calls": m.calls,
@@ -399,7 +452,7 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
 
     async def context(request: Request) -> Response:
         task_id = request.path_params["task_id"]
-        await client.get(task_id)
+        await scope(request).client.get(task_id)
         parts = await serving.context(task_id)
         if parts is None:
             return _json({"error": "no worker in this server process runs the task's agent"},
@@ -408,17 +461,17 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
 
     async def rewind_list(request: Request) -> Response:
         task_id = request.path_params["task_id"]
-        await client.get(task_id)
+        await scope(request).client.get(task_id)
         return _json([{"index": i, "task_id": p.task_id, "seq": p.seq, "at": p.at,
                        "text": p.text, "files": list(p.files)}
-                      for i, p in enumerate(await rewind_points(client, task_id))])
+                      for i, p in enumerate(await rewind_points(scope(request).client, task_id))])
 
     async def rewind_post(request: Request) -> Response:
         task_id = request.path_params["task_id"]
         body = await request.json()
-        points = await rewind_points(client, task_id)
+        points = await rewind_points(scope(request).client, task_id)
         point = points[int(body["index"])]
-        done = await rewind(client, task_id, point,
+        done = await rewind(scope(request).client, task_id, point,
                             conversation=bool(body.get("conversation", True)),
                             files=bool(body.get("files", True)))
         if done.task_id != task_id and app is not None:
@@ -429,7 +482,7 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
         q = request.query_params
         name = q.get("agent") or "main"
         if q.get("task_id"):
-            name = (await client.get(q["task_id"])).agent
+            name = (await scope(request).client.get(q["task_id"])).agent
         listed = await serving.commands(name, CommandContext(cwd=q.get("cwd") or "",
                                                              task_id=q.get("task_id")))
         return _json([{"name": c.name, "description": c.description,
@@ -440,7 +493,7 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
         task_id = body.get("task_id")
         name = body.get("agent") or "main"
         if task_id:
-            name = (await client.get(task_id)).agent
+            name = (await scope(request).client.get(task_id)).agent
         typed = await serving.run_command(
             name, CommandContext(cwd=body.get("cwd") or "", task_id=task_id), str(body["text"]))
         return _json(None if typed is None else {"text": typed.text, "local": typed.local})
@@ -465,8 +518,8 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
         from noeta.host.stream_json import StreamJson, drive
 
         options = _options(request.query_params, ask_client=False)
-        guarded.check_config({"permission_mode": options.permission_mode})
-        options.cwd = guarded.check_cwd(options.cwd)
+        scope(request).guarded.check_config({"permission_mode": options.permission_mode})
+        options.cwd = scope(request).guarded.check_cwd(options.cwd)
         lines = [json.loads(x) for x in (await request.body()).decode().splitlines()
                  if x.strip()]
         queue: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -480,7 +533,7 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
 
         async def run() -> None:
             try:
-                await drive(StreamJson(front, options, emit), lines=given())
+                await drive(StreamJson(scope(request).front, options, emit), lines=given())
             finally:
                 queue.put_nowait(None)
 
@@ -502,13 +555,15 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
         if not same_site(ws.headers):
             await ws.close(code=4403)
             return
-        if not authorized(ws.headers, ws.query_params):
+        who = tenant(ws.headers, ws.query_params)
+        if who is None:
             await ws.close(code=4401)
             return
+        mine = scope_for(who)
         options = _options(ws.query_params, ask_client=True)
         try:
-            guarded.check_config({"permission_mode": options.permission_mode})
-            options.cwd = guarded.check_cwd(options.cwd)
+            mine.guarded.check_config({"permission_mode": options.permission_mode})
+            options.cwd = mine.guarded.check_cwd(options.cwd)
         except Refused:
             await ws.close(code=4403)
             return
@@ -525,7 +580,7 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
                         yield value
 
         try:
-            await drive(StreamJson(front, options, emit), lines=lines())
+            await drive(StreamJson(mine.front, options, emit), lines=lines())
         except UnknownTask as exc:
             await ws.send_text(json.dumps({"type": "error", "error": f"unknown task {exc}"}))
         with contextlib.suppress(Exception):
@@ -533,7 +588,7 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
 
     async def watch(request: Request) -> Response:
         task_id = request.path_params["task_id"]
-        await client.get(task_id)
+        await scope(request).client.get(task_id)
         after = int(request.query_params.get("after", "0"))
         queue: asyncio.Queue[bytes] = asyncio.Queue()
 
@@ -544,7 +599,7 @@ def create_app(client: Client, *, token: str | None = None, auth: bool = True,
         async def follow() -> None:
             end: dict[str, Any] = {}
             try:
-                async for rec in client.watch(task_id, after):
+                async for rec in scope(request).client.watch(task_id, after):
                     queue.put_nowait(b"event: event\ndata: " + _enc.encode(rec) + b"\n\n")
             except asyncio.CancelledError:
                 raise

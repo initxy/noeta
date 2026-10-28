@@ -145,6 +145,12 @@ All notable changes to Noeta are documented here. The format is based on
   (`PostgresStore.publish_deltas`, channel `<schema>_deltas`, best effort) and a server's
   `/watch` hears it (`on_delta`), so `noeta serve --no-worker` streams tasks that `noeta
   worker` processes elsewhere run. On sqlite live output stays in its process.
+- **Tenants**: a task carries `TaskCreated.tenant` (children inherit it; the `tasks` table
+  gains a `tenant` column at store open, existing rows `default`). `Client.scoped(tenant)`,
+  `create_app(tokens=)` and `noeta token add --tenant X` (`~/.noeta/tokens.json`) confine every
+  read, list, watch, message, answer, signal and cancel to the caller's tenant; a task's
+  `SendMessage` / `ToolContext.post` reaches only its own tenant's tasks. The server token
+  stays the default tenant's.
 
 - **Claude Code's headless protocol** (`noeta.host.stream_json`): the stream-json messages
   (`system`/`init`, `assistant`, tool-result `user`, `stream_event`, `result` with usage, cost,
