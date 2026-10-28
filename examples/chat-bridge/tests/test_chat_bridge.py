@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 import respx
 
 from noeta import Agent, Extension, Runtime, TaskView, function_tool
@@ -78,6 +79,7 @@ async def test_a_chat_thread_runs_a_task_with_approvals_through_the_chat(tmp_pat
 
 
 async def test_the_bridge_listens_over_http(tmp_path: Path) -> None:
+    pytest.importorskip("uvicorn", reason="the listener needs the server extra")
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
