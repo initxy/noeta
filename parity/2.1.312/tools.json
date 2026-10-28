@@ -1,5 +1,242 @@
 {
- "77f41b9a265b": [
+ "035d2a4552f1": [
+  {
+   "description": {
+    "len": 3049,
+    "sha": "e3567c6aef"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "description": {
+      "description": {
+       "len": 42,
+       "sha": "dd0bb2ec88"
+      },
+      "type": "string"
+     },
+     "effort": {
+      "description": {
+       "len": 341,
+       "sha": "4117fe0f22"
+      },
+      "enum": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ],
+      "type": "string"
+     },
+     "isolation": {
+      "description": {
+       "len": 221,
+       "sha": "2188ebd982"
+      },
+      "enum": [
+       "worktree",
+       "remote"
+      ],
+      "type": "string"
+     },
+     "model": {
+      "description": {
+       "len": 358,
+       "sha": "532ef2fc3e"
+      },
+      "enum": [
+       "sonnet",
+       "opus",
+       "haiku",
+       "fable"
+      ],
+      "type": "string"
+     },
+     "prompt": {
+      "description": {
+       "len": 33,
+       "sha": "4096a8cbf5"
+      },
+      "type": "string"
+     },
+     "subagent_type": {
+      "description": {
+       "len": 50,
+       "sha": "1df4b0b995"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "description",
+     "prompt"
+    ],
+    "type": "object"
+   },
+   "name": "Agent"
+  },
+  {
+   "description": {
+    "len": 2083,
+    "sha": "f2861f2bba"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "annotations": {
+      "additionalProperties": {
+       "additionalProperties": false,
+       "properties": {
+        "notes": {
+         "description": {
+          "len": 50,
+          "sha": "ee3b05218f"
+         },
+         "type": "string"
+        },
+        "preview": {
+         "description": {
+          "len": 74,
+          "sha": "86aa2bb99a"
+         },
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "description": {
+       "len": 108,
+       "sha": "38698a7f1c"
+      },
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "answers": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": {
+       "len": 50,
+       "sha": "7da72bece8"
+      },
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "metadata": {
+      "additionalProperties": false,
+      "description": {
+       "len": 77,
+       "sha": "7e9b61636b"
+      },
+      "properties": {
+       "source": {
+        "description": {
+         "len": 122,
+         "sha": "61f88094bc"
+        },
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "questions": {
+      "description": {
+       "len": 41,
+       "sha": "ccb30cdf09"
+      },
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "header": {
+         "description": {
+          "len": 104,
+          "sha": "290c53a18c"
+         },
+         "type": "string"
+        },
+        "multiSelect": {
+         "default": false,
+         "description": {
+          "len": 122,
+          "sha": "4e68d0abd7"
+         },
+         "type": "boolean"
+        },
+        "options": {
+         "description": {
+          "len": 228,
+          "sha": "2e37ed75f3"
+         },
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "description": {
+            "description": {
+             "len": 131,
+             "sha": "a7f9510f1d"
+            },
+            "type": "string"
+           },
+           "label": {
+            "description": {
+             "len": 130,
+             "sha": "599be8d70f"
+            },
+            "type": "string"
+           },
+           "preview": {
+            "description": {
+             "len": 207,
+             "sha": "2e0d40811d"
+            },
+            "type": "string"
+           }
+          },
+          "required": [
+           "label",
+           "description"
+          ],
+          "type": "object"
+         },
+         "maxItems": 4,
+         "minItems": 2,
+         "type": "array"
+        },
+        "question": {
+         "description": {
+          "len": 247,
+          "sha": "edf6606787"
+         },
+         "type": "string"
+        }
+       },
+       "required": [
+        "question",
+        "header",
+        "options",
+        "multiSelect"
+       ],
+       "type": "object"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "questions"
+    ],
+    "type": "object"
+   },
+   "name": "AskUserQuestion"
+  },
   {
    "description": {
     "len": 1552,
@@ -51,6 +288,150 @@
     "type": "object"
    },
    "name": "Bash"
+  },
+  {
+   "description": {
+    "len": 360,
+    "sha": "2eaaa8e08e"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "file_path": {
+      "description": {
+       "len": 39,
+       "sha": "c8e189fd93"
+      },
+      "type": "string"
+     },
+     "new_string": {
+      "description": {
+       "len": 63,
+       "sha": "362e211ee1"
+      },
+      "type": "string"
+     },
+     "old_string": {
+      "description": {
+       "len": 19,
+       "sha": "61ec4de247"
+      },
+      "type": "string"
+     },
+     "replace_all": {
+      "default": false,
+      "description": {
+       "len": 53,
+       "sha": "af82a7520f"
+      },
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "file_path",
+     "old_string",
+     "new_string"
+    ],
+    "type": "object"
+   },
+   "name": "Edit"
+  },
+  {
+   "description": {
+    "len": 777,
+    "sha": "398d4802fc"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "channel": {
+      "description": {
+       "len": 41,
+       "sha": "a23e9af247"
+      },
+      "maxLength": 256,
+      "type": "string"
+     },
+     "q": {
+      "description": {
+       "len": 41,
+       "sha": "a23e9af247"
+      },
+      "maxLength": 256,
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "name": "ListAgents"
+  },
+  {
+   "defer_loading": true,
+   "description": {
+    "len": 6354,
+    "sha": "0d17339834"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "command": {
+      "description": {
+       "len": 75,
+       "sha": "95f05c646f"
+      },
+      "type": "string"
+     },
+     "description": {
+      "description": {
+       "len": 85,
+       "sha": "1233ff91ae"
+      },
+      "type": "string"
+     },
+     "timeout_ms": {
+      "default": 300000,
+      "description": {
+       "len": 149,
+       "sha": "17cc8835e6"
+      },
+      "maximum": 3600000,
+      "minimum": 1000,
+      "type": "number"
+     },
+     "ws": {
+      "additionalProperties": false,
+      "description": {
+       "len": 159,
+       "sha": "9f0a3727a2"
+      },
+      "properties": {
+       "protocols": {
+        "items": {
+         "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "url"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "description",
+     "timeout_ms"
+    ],
+    "type": "object"
+   },
+   "name": "Monitor"
   },
   {
    "description": {
@@ -107,6 +488,1034 @@
     "type": "object"
    },
    "name": "Read"
+  },
+  {
+   "description": {
+    "len": 574,
+    "sha": "59ea4187fc"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "findings": {
+      "description": {
+       "len": 60,
+       "sha": "4c3f6289b4"
+      },
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "category": {
+         "description": {
+          "len": 110,
+          "sha": "dc9dc4a8f8"
+         },
+         "maxLength": 40,
+         "type": "string"
+        },
+        "failure_scenario": {
+         "description": {
+          "len": 42,
+          "sha": "3c2a56cad2"
+         },
+         "type": "string"
+        },
+        "file": {
+         "description": {
+          "len": 48,
+          "sha": "b75917b51e"
+         },
+         "type": "string"
+        },
+        "line": {
+         "description": {
+          "len": 37,
+          "sha": "7029ff11c3"
+         },
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "outcome": {
+         "description": {
+          "len": 78,
+          "sha": "181577005e"
+         },
+         "enum": [
+          "fixed",
+          "skipped",
+          "no_change_needed"
+         ],
+         "type": "string"
+        },
+        "short_summary": {
+         "description": {
+          "len": 96,
+          "sha": "83b7eec338"
+         },
+         "maxLength": 60,
+         "type": "string"
+        },
+        "summary": {
+         "description": {
+          "len": 36,
+          "sha": "7b7a3d27c3"
+         },
+         "type": "string"
+        },
+        "verdict": {
+         "description": {
+          "len": 57,
+          "sha": "890a5ed21d"
+         },
+         "enum": [
+          "CONFIRMED",
+          "PLAUSIBLE"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "file",
+        "summary",
+        "failure_scenario"
+       ],
+       "type": "object"
+      },
+      "maxItems": 32,
+      "type": "array"
+     },
+     "level": {
+      "description": {
+       "len": 30,
+       "sha": "256f0f4f0a"
+      },
+      "enum": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "findings"
+    ],
+    "type": "object"
+   },
+   "name": "ReportFindings"
+  },
+  {
+   "description": {
+    "len": 3396,
+    "sha": "cd114f81a9"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "delaySeconds": {
+      "description": {
+       "len": 98,
+       "sha": "336d8660b1"
+      },
+      "type": "number"
+     },
+     "noop": {
+      "description": {
+       "len": 307,
+       "sha": "de7f3ba87f"
+      },
+      "type": "boolean"
+     },
+     "prompt": {
+      "description": {
+       "len": 355,
+       "sha": "a7431c3cf5"
+      },
+      "type": "string"
+     },
+     "reason": {
+      "description": {
+       "len": 136,
+       "sha": "847ac4c680"
+      },
+      "type": "string"
+     },
+     "stop": {
+      "description": {
+       "len": 154,
+       "sha": "10e133589e"
+      },
+      "type": "boolean"
+     }
+    },
+    "type": "object"
+   },
+   "name": "ScheduleWakeup"
+  },
+  {
+   "description": {
+    "len": 1417,
+    "sha": "a58970596b"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "args": {
+      "description": {
+       "len": 32,
+       "sha": "e56146f4fe"
+      },
+      "type": "string"
+     },
+     "skill": {
+      "description": {
+       "len": 71,
+       "sha": "28ddcc6224"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "skill"
+    ],
+    "type": "object"
+   },
+   "name": "Skill"
+  },
+  {
+   "defer_loading": true,
+   "description": {
+    "len": 364,
+    "sha": "8435701ab3"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "shell_id": {
+      "description": {
+       "len": 31,
+       "sha": "e92030ff95"
+      },
+      "type": "string"
+     },
+     "task_id": {
+      "description": {
+       "len": 126,
+       "sha": "9ddf80da01"
+      },
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "name": "TaskStop"
+  },
+  {
+   "description": {
+    "len": 953,
+    "sha": "88033eceb4"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "max_results": {
+      "default": 5,
+      "description": {
+       "len": 48,
+       "sha": "67e0339f69"
+      },
+      "type": "number"
+     },
+     "query": {
+      "description": {
+       "len": 99,
+       "sha": "b90268e28a"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "query",
+     "max_results"
+    ],
+    "type": "object"
+   },
+   "name": "ToolSearch"
+  },
+  {
+   "description": {
+    "len": 3480,
+    "sha": "78a113f0d1"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "args": {
+      "description": {
+       "len": 280,
+       "sha": "2126b6037f"
+      }
+     },
+     "description": {
+      "description": {
+       "len": 68,
+       "sha": "19e4d3fd7b"
+      },
+      "type": "string"
+     },
+     "name": {
+      "description": {
+       "len": 105,
+       "sha": "a2bb766d62"
+      },
+      "type": "string"
+     },
+     "resumeFromRunId": {
+      "description": {
+       "len": 251,
+       "sha": "7a7fbb2f99"
+      },
+      "pattern": "^wf_[a-z0-9-]{6,}$",
+      "type": "string"
+     },
+     "script": {
+      "description": {
+       "len": 207,
+       "sha": "569e4a2fdd"
+      },
+      "maxLength": 524288,
+      "type": "string"
+     },
+     "scriptPath": {
+      "description": {
+       "len": 329,
+       "sha": "2a9e4b7526"
+      },
+      "type": "string"
+     },
+     "title": {
+      "description": {
+       "len": 62,
+       "sha": "065d5e7c35"
+      },
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "name": "Workflow"
+  },
+  {
+   "defer_loading": true,
+   "description": {
+    "len": 83,
+    "sha": "97f0a3ed59"
+   },
+   "input_schema": {
+    "properties": {},
+    "type": "object"
+   },
+   "name": "DeferredToolPlaceholder"
+  },
+  {
+   "description": {
+    "len": 240,
+    "sha": "c5d31bd001"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "content": {
+      "description": {
+       "len": 32,
+       "sha": "72a717c439"
+      },
+      "type": "string"
+     },
+     "file_path": {
+      "description": {
+       "len": 71,
+       "sha": "772d00b734"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path",
+     "content"
+    ],
+    "type": "object"
+   },
+   "name": "Write"
+  }
+ ],
+ "0e3c31542393": [
+  {
+   "description": {
+    "len": 3049,
+    "sha": "e3567c6aef"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "description": {
+      "description": {
+       "len": 42,
+       "sha": "dd0bb2ec88"
+      },
+      "type": "string"
+     },
+     "effort": {
+      "description": {
+       "len": 341,
+       "sha": "4117fe0f22"
+      },
+      "enum": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ],
+      "type": "string"
+     },
+     "isolation": {
+      "description": {
+       "len": 221,
+       "sha": "2188ebd982"
+      },
+      "enum": [
+       "worktree",
+       "remote"
+      ],
+      "type": "string"
+     },
+     "model": {
+      "description": {
+       "len": 358,
+       "sha": "532ef2fc3e"
+      },
+      "enum": [
+       "sonnet",
+       "opus",
+       "haiku",
+       "fable"
+      ],
+      "type": "string"
+     },
+     "prompt": {
+      "description": {
+       "len": 33,
+       "sha": "4096a8cbf5"
+      },
+      "type": "string"
+     },
+     "subagent_type": {
+      "description": {
+       "len": 50,
+       "sha": "1df4b0b995"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "description",
+     "prompt"
+    ],
+    "type": "object"
+   },
+   "name": "Agent"
+  },
+  {
+   "description": {
+    "len": 2083,
+    "sha": "f2861f2bba"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "annotations": {
+      "additionalProperties": {
+       "additionalProperties": false,
+       "properties": {
+        "notes": {
+         "description": {
+          "len": 50,
+          "sha": "ee3b05218f"
+         },
+         "type": "string"
+        },
+        "preview": {
+         "description": {
+          "len": 74,
+          "sha": "86aa2bb99a"
+         },
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "description": {
+       "len": 108,
+       "sha": "38698a7f1c"
+      },
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "answers": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": {
+       "len": 50,
+       "sha": "7da72bece8"
+      },
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "metadata": {
+      "additionalProperties": false,
+      "description": {
+       "len": 77,
+       "sha": "7e9b61636b"
+      },
+      "properties": {
+       "source": {
+        "description": {
+         "len": 122,
+         "sha": "61f88094bc"
+        },
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "questions": {
+      "description": {
+       "len": 41,
+       "sha": "ccb30cdf09"
+      },
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "header": {
+         "description": {
+          "len": 104,
+          "sha": "290c53a18c"
+         },
+         "type": "string"
+        },
+        "multiSelect": {
+         "default": false,
+         "description": {
+          "len": 122,
+          "sha": "4e68d0abd7"
+         },
+         "type": "boolean"
+        },
+        "options": {
+         "description": {
+          "len": 228,
+          "sha": "2e37ed75f3"
+         },
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "description": {
+            "description": {
+             "len": 131,
+             "sha": "a7f9510f1d"
+            },
+            "type": "string"
+           },
+           "label": {
+            "description": {
+             "len": 130,
+             "sha": "599be8d70f"
+            },
+            "type": "string"
+           },
+           "preview": {
+            "description": {
+             "len": 207,
+             "sha": "2e0d40811d"
+            },
+            "type": "string"
+           }
+          },
+          "required": [
+           "label",
+           "description"
+          ],
+          "type": "object"
+         },
+         "maxItems": 4,
+         "minItems": 2,
+         "type": "array"
+        },
+        "question": {
+         "description": {
+          "len": 247,
+          "sha": "edf6606787"
+         },
+         "type": "string"
+        }
+       },
+       "required": [
+        "question",
+        "header",
+        "options",
+        "multiSelect"
+       ],
+       "type": "object"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "questions"
+    ],
+    "type": "object"
+   },
+   "name": "AskUserQuestion"
+  },
+  {
+   "description": {
+    "len": 1552,
+    "sha": "8515c4f7d5"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "command": {
+      "description": {
+       "len": 22,
+       "sha": "0c002e50f0"
+      },
+      "type": "string"
+     },
+     "dangerouslyDisableSandbox": {
+      "description": {
+       "len": 90,
+       "sha": "ec23994e0d"
+      },
+      "type": "boolean"
+     },
+     "description": {
+      "description": {
+       "len": 926,
+       "sha": "7e54ad7282"
+      },
+      "type": "string"
+     },
+     "run_in_background": {
+      "description": {
+       "len": 50,
+       "sha": "2c1b8f9f6a"
+      },
+      "type": "boolean"
+     },
+     "timeout": {
+      "description": {
+       "len": 70,
+       "sha": "bbea8b3910"
+      },
+      "type": "number"
+     }
+    },
+    "required": [
+     "command"
+    ],
+    "type": "object"
+   },
+   "name": "Bash"
+  },
+  {
+   "description": {
+    "len": 360,
+    "sha": "2eaaa8e08e"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "file_path": {
+      "description": {
+       "len": 39,
+       "sha": "c8e189fd93"
+      },
+      "type": "string"
+     },
+     "new_string": {
+      "description": {
+       "len": 63,
+       "sha": "362e211ee1"
+      },
+      "type": "string"
+     },
+     "old_string": {
+      "description": {
+       "len": 19,
+       "sha": "61ec4de247"
+      },
+      "type": "string"
+     },
+     "replace_all": {
+      "default": false,
+      "description": {
+       "len": 53,
+       "sha": "af82a7520f"
+      },
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "file_path",
+     "old_string",
+     "new_string"
+    ],
+    "type": "object"
+   },
+   "name": "Edit"
+  },
+  {
+   "description": {
+    "len": 777,
+    "sha": "398d4802fc"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "channel": {
+      "description": {
+       "len": 41,
+       "sha": "a23e9af247"
+      },
+      "maxLength": 256,
+      "type": "string"
+     },
+     "q": {
+      "description": {
+       "len": 41,
+       "sha": "a23e9af247"
+      },
+      "maxLength": 256,
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "name": "ListAgents"
+  },
+  {
+   "defer_loading": true,
+   "description": {
+    "len": 6354,
+    "sha": "0d17339834"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "command": {
+      "description": {
+       "len": 75,
+       "sha": "95f05c646f"
+      },
+      "type": "string"
+     },
+     "description": {
+      "description": {
+       "len": 85,
+       "sha": "1233ff91ae"
+      },
+      "type": "string"
+     },
+     "timeout_ms": {
+      "default": 300000,
+      "description": {
+       "len": 149,
+       "sha": "17cc8835e6"
+      },
+      "maximum": 3600000,
+      "minimum": 1000,
+      "type": "number"
+     },
+     "ws": {
+      "additionalProperties": false,
+      "description": {
+       "len": 159,
+       "sha": "9f0a3727a2"
+      },
+      "properties": {
+       "protocols": {
+        "items": {
+         "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "url"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "description",
+     "timeout_ms"
+    ],
+    "type": "object"
+   },
+   "name": "Monitor"
+  },
+  {
+   "description": {
+    "len": 790,
+    "sha": "80fb15d2d1"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "allow_large": {
+      "description": {
+       "len": 281,
+       "sha": "5864e9d069"
+      },
+      "type": "boolean"
+     },
+     "file_path": {
+      "description": {
+       "len": 37,
+       "sha": "f60d0a6900"
+      },
+      "type": "string"
+     },
+     "limit": {
+      "description": {
+       "len": 83,
+       "sha": "32aa442b9d"
+      },
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     "offset": {
+      "description": {
+       "len": 92,
+       "sha": "a55994c8dc"
+      },
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "pages": {
+      "description": {
+       "len": 113,
+       "sha": "98c222c16a"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path"
+    ],
+    "type": "object"
+   },
+   "name": "Read"
+  },
+  {
+   "description": {
+    "len": 574,
+    "sha": "59ea4187fc"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "findings": {
+      "description": {
+       "len": 60,
+       "sha": "4c3f6289b4"
+      },
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "category": {
+         "description": {
+          "len": 110,
+          "sha": "dc9dc4a8f8"
+         },
+         "maxLength": 40,
+         "type": "string"
+        },
+        "failure_scenario": {
+         "description": {
+          "len": 42,
+          "sha": "3c2a56cad2"
+         },
+         "type": "string"
+        },
+        "file": {
+         "description": {
+          "len": 48,
+          "sha": "b75917b51e"
+         },
+         "type": "string"
+        },
+        "line": {
+         "description": {
+          "len": 37,
+          "sha": "7029ff11c3"
+         },
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "outcome": {
+         "description": {
+          "len": 78,
+          "sha": "181577005e"
+         },
+         "enum": [
+          "fixed",
+          "skipped",
+          "no_change_needed"
+         ],
+         "type": "string"
+        },
+        "short_summary": {
+         "description": {
+          "len": 96,
+          "sha": "83b7eec338"
+         },
+         "maxLength": 60,
+         "type": "string"
+        },
+        "summary": {
+         "description": {
+          "len": 36,
+          "sha": "7b7a3d27c3"
+         },
+         "type": "string"
+        },
+        "verdict": {
+         "description": {
+          "len": 57,
+          "sha": "890a5ed21d"
+         },
+         "enum": [
+          "CONFIRMED",
+          "PLAUSIBLE"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "file",
+        "summary",
+        "failure_scenario"
+       ],
+       "type": "object"
+      },
+      "maxItems": 32,
+      "type": "array"
+     },
+     "level": {
+      "description": {
+       "len": 30,
+       "sha": "256f0f4f0a"
+      },
+      "enum": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "findings"
+    ],
+    "type": "object"
+   },
+   "name": "ReportFindings"
+  },
+  {
+   "description": {
+    "len": 3396,
+    "sha": "cd114f81a9"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "delaySeconds": {
+      "description": {
+       "len": 98,
+       "sha": "336d8660b1"
+      },
+      "type": "number"
+     },
+     "noop": {
+      "description": {
+       "len": 307,
+       "sha": "de7f3ba87f"
+      },
+      "type": "boolean"
+     },
+     "prompt": {
+      "description": {
+       "len": 355,
+       "sha": "a7431c3cf5"
+      },
+      "type": "string"
+     },
+     "reason": {
+      "description": {
+       "len": 136,
+       "sha": "847ac4c680"
+      },
+      "type": "string"
+     },
+     "stop": {
+      "description": {
+       "len": 154,
+       "sha": "10e133589e"
+      },
+      "type": "boolean"
+     }
+    },
+    "type": "object"
+   },
+   "name": "ScheduleWakeup"
   },
   {
    "description": {
@@ -173,6 +1582,70 @@
    "name": "ToolSearch"
   },
   {
+   "description": {
+    "len": 3480,
+    "sha": "78a113f0d1"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "args": {
+      "description": {
+       "len": 280,
+       "sha": "2126b6037f"
+      }
+     },
+     "description": {
+      "description": {
+       "len": 68,
+       "sha": "19e4d3fd7b"
+      },
+      "type": "string"
+     },
+     "name": {
+      "description": {
+       "len": 105,
+       "sha": "a2bb766d62"
+      },
+      "type": "string"
+     },
+     "resumeFromRunId": {
+      "description": {
+       "len": 251,
+       "sha": "7a7fbb2f99"
+      },
+      "pattern": "^wf_[a-z0-9-]{6,}$",
+      "type": "string"
+     },
+     "script": {
+      "description": {
+       "len": 207,
+       "sha": "569e4a2fdd"
+      },
+      "maxLength": 524288,
+      "type": "string"
+     },
+     "scriptPath": {
+      "description": {
+       "len": 329,
+       "sha": "2a9e4b7526"
+      },
+      "type": "string"
+     },
+     "title": {
+      "description": {
+       "len": 62,
+       "sha": "065d5e7c35"
+      },
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "name": "Workflow"
+  },
+  {
    "defer_loading": true,
    "description": {
     "len": 83,
@@ -186,27 +1659,35 @@
   },
   {
    "description": {
-    "len": 583,
-    "sha": "5b8714aa92"
+    "len": 240,
+    "sha": "c5d31bd001"
    },
    "input_schema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "additionalProperties": false,
     "properties": {
-     "message": {
+     "content": {
       "description": {
        "len": 32,
-       "sha": "60502136e2"
+       "sha": "72a717c439"
+      },
+      "type": "string"
+     },
+     "file_path": {
+      "description": {
+       "len": 71,
+       "sha": "772d00b734"
       },
       "type": "string"
      }
     },
     "required": [
-     "message"
+     "file_path",
+     "content"
     ],
     "type": "object"
    },
-   "name": "SubagentHandback"
+   "name": "Write"
   }
  ],
  "78556df638be": [
@@ -3460,6 +4941,373 @@
    "name": "Write"
   }
  ],
+ "deca0c7eb408": [
+  {
+   "description": {
+    "len": 3049,
+    "sha": "e3567c6aef"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "description": {
+      "description": {
+       "len": 42,
+       "sha": "dd0bb2ec88"
+      },
+      "type": "string"
+     },
+     "effort": {
+      "description": {
+       "len": 341,
+       "sha": "4117fe0f22"
+      },
+      "enum": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ],
+      "type": "string"
+     },
+     "isolation": {
+      "description": {
+       "len": 221,
+       "sha": "2188ebd982"
+      },
+      "enum": [
+       "worktree",
+       "remote"
+      ],
+      "type": "string"
+     },
+     "model": {
+      "description": {
+       "len": 358,
+       "sha": "532ef2fc3e"
+      },
+      "enum": [
+       "sonnet",
+       "opus",
+       "haiku",
+       "fable"
+      ],
+      "type": "string"
+     },
+     "prompt": {
+      "description": {
+       "len": 33,
+       "sha": "4096a8cbf5"
+      },
+      "type": "string"
+     },
+     "subagent_type": {
+      "description": {
+       "len": 50,
+       "sha": "1df4b0b995"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "description",
+     "prompt"
+    ],
+    "type": "object"
+   },
+   "name": "Agent"
+  },
+  {
+   "description": {
+    "len": 1552,
+    "sha": "8515c4f7d5"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "command": {
+      "description": {
+       "len": 22,
+       "sha": "0c002e50f0"
+      },
+      "type": "string"
+     },
+     "dangerouslyDisableSandbox": {
+      "description": {
+       "len": 90,
+       "sha": "ec23994e0d"
+      },
+      "type": "boolean"
+     },
+     "description": {
+      "description": {
+       "len": 926,
+       "sha": "7e54ad7282"
+      },
+      "type": "string"
+     },
+     "run_in_background": {
+      "description": {
+       "len": 50,
+       "sha": "2c1b8f9f6a"
+      },
+      "type": "boolean"
+     },
+     "timeout": {
+      "description": {
+       "len": 70,
+       "sha": "bbea8b3910"
+      },
+      "type": "number"
+     }
+    },
+    "required": [
+     "command"
+    ],
+    "type": "object"
+   },
+   "name": "Bash"
+  },
+  {
+   "description": {
+    "len": 360,
+    "sha": "2eaaa8e08e"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "file_path": {
+      "description": {
+       "len": 39,
+       "sha": "c8e189fd93"
+      },
+      "type": "string"
+     },
+     "new_string": {
+      "description": {
+       "len": 63,
+       "sha": "362e211ee1"
+      },
+      "type": "string"
+     },
+     "old_string": {
+      "description": {
+       "len": 19,
+       "sha": "61ec4de247"
+      },
+      "type": "string"
+     },
+     "replace_all": {
+      "default": false,
+      "description": {
+       "len": 53,
+       "sha": "af82a7520f"
+      },
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "file_path",
+     "old_string",
+     "new_string"
+    ],
+    "type": "object"
+   },
+   "name": "Edit"
+  },
+  {
+   "description": {
+    "len": 790,
+    "sha": "80fb15d2d1"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "allow_large": {
+      "description": {
+       "len": 281,
+       "sha": "5864e9d069"
+      },
+      "type": "boolean"
+     },
+     "file_path": {
+      "description": {
+       "len": 37,
+       "sha": "f60d0a6900"
+      },
+      "type": "string"
+     },
+     "limit": {
+      "description": {
+       "len": 83,
+       "sha": "32aa442b9d"
+      },
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     "offset": {
+      "description": {
+       "len": 92,
+       "sha": "a55994c8dc"
+      },
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "pages": {
+      "description": {
+       "len": 113,
+       "sha": "98c222c16a"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path"
+    ],
+    "type": "object"
+   },
+   "name": "Read"
+  },
+  {
+   "description": {
+    "len": 1417,
+    "sha": "a58970596b"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "args": {
+      "description": {
+       "len": 32,
+       "sha": "e56146f4fe"
+      },
+      "type": "string"
+     },
+     "skill": {
+      "description": {
+       "len": 71,
+       "sha": "28ddcc6224"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "skill"
+    ],
+    "type": "object"
+   },
+   "name": "Skill"
+  },
+  {
+   "description": {
+    "len": 953,
+    "sha": "88033eceb4"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "max_results": {
+      "default": 5,
+      "description": {
+       "len": 48,
+       "sha": "67e0339f69"
+      },
+      "type": "number"
+     },
+     "query": {
+      "description": {
+       "len": 99,
+       "sha": "b90268e28a"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "query",
+     "max_results"
+    ],
+    "type": "object"
+   },
+   "name": "ToolSearch"
+  },
+  {
+   "description": {
+    "len": 240,
+    "sha": "c5d31bd001"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "content": {
+      "description": {
+       "len": 32,
+       "sha": "72a717c439"
+      },
+      "type": "string"
+     },
+     "file_path": {
+      "description": {
+       "len": 71,
+       "sha": "772d00b734"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path",
+     "content"
+    ],
+    "type": "object"
+   },
+   "name": "Write"
+  },
+  {
+   "defer_loading": true,
+   "description": {
+    "len": 83,
+    "sha": "97f0a3ed59"
+   },
+   "input_schema": {
+    "properties": {},
+    "type": "object"
+   },
+   "name": "DeferredToolPlaceholder"
+  },
+  {
+   "description": {
+    "len": 583,
+    "sha": "5b8714aa92"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "message": {
+      "description": {
+       "len": 32,
+       "sha": "60502136e2"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "message"
+    ],
+    "type": "object"
+   },
+   "name": "SubagentHandback"
+  }
+ ],
  "f081763dae10": [
   {
    "description": {
@@ -4389,6 +6237,349 @@
     "type": "object"
    },
    "name": "mcp__echo__echo"
+  }
+ ],
+ "facec68637f4": [
+  {
+   "description": {
+    "len": 3049,
+    "sha": "e3567c6aef"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "description": {
+      "description": {
+       "len": 42,
+       "sha": "dd0bb2ec88"
+      },
+      "type": "string"
+     },
+     "effort": {
+      "description": {
+       "len": 341,
+       "sha": "4117fe0f22"
+      },
+      "enum": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ],
+      "type": "string"
+     },
+     "isolation": {
+      "description": {
+       "len": 221,
+       "sha": "2188ebd982"
+      },
+      "enum": [
+       "worktree",
+       "remote"
+      ],
+      "type": "string"
+     },
+     "model": {
+      "description": {
+       "len": 358,
+       "sha": "532ef2fc3e"
+      },
+      "enum": [
+       "sonnet",
+       "opus",
+       "haiku",
+       "fable"
+      ],
+      "type": "string"
+     },
+     "prompt": {
+      "description": {
+       "len": 33,
+       "sha": "4096a8cbf5"
+      },
+      "type": "string"
+     },
+     "subagent_type": {
+      "description": {
+       "len": 50,
+       "sha": "1df4b0b995"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "description",
+     "prompt"
+    ],
+    "type": "object"
+   },
+   "name": "Agent"
+  },
+  {
+   "description": {
+    "len": 1862,
+    "sha": "188c364945"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "command": {
+      "description": {
+       "len": 22,
+       "sha": "0c002e50f0"
+      },
+      "type": "string"
+     },
+     "dangerouslyDisableSandbox": {
+      "description": {
+       "len": 90,
+       "sha": "ec23994e0d"
+      },
+      "type": "boolean"
+     },
+     "description": {
+      "description": {
+       "len": 926,
+       "sha": "7e54ad7282"
+      },
+      "type": "string"
+     },
+     "run_in_background": {
+      "description": {
+       "len": 50,
+       "sha": "2c1b8f9f6a"
+      },
+      "type": "boolean"
+     },
+     "timeout": {
+      "description": {
+       "len": 70,
+       "sha": "bbea8b3910"
+      },
+      "type": "number"
+     }
+    },
+    "required": [
+     "command"
+    ],
+    "type": "object"
+   },
+   "name": "Bash"
+  },
+  {
+   "description": {
+    "len": 360,
+    "sha": "2eaaa8e08e"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "file_path": {
+      "description": {
+       "len": 39,
+       "sha": "c8e189fd93"
+      },
+      "type": "string"
+     },
+     "new_string": {
+      "description": {
+       "len": 63,
+       "sha": "362e211ee1"
+      },
+      "type": "string"
+     },
+     "old_string": {
+      "description": {
+       "len": 19,
+       "sha": "61ec4de247"
+      },
+      "type": "string"
+     },
+     "replace_all": {
+      "default": false,
+      "description": {
+       "len": 53,
+       "sha": "af82a7520f"
+      },
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "file_path",
+     "old_string",
+     "new_string"
+    ],
+    "type": "object"
+   },
+   "name": "Edit"
+  },
+  {
+   "description": {
+    "len": 790,
+    "sha": "80fb15d2d1"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "allow_large": {
+      "description": {
+       "len": 281,
+       "sha": "5864e9d069"
+      },
+      "type": "boolean"
+     },
+     "file_path": {
+      "description": {
+       "len": 37,
+       "sha": "f60d0a6900"
+      },
+      "type": "string"
+     },
+     "limit": {
+      "description": {
+       "len": 83,
+       "sha": "32aa442b9d"
+      },
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     "offset": {
+      "description": {
+       "len": 92,
+       "sha": "a55994c8dc"
+      },
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "pages": {
+      "description": {
+       "len": 113,
+       "sha": "98c222c16a"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path"
+    ],
+    "type": "object"
+   },
+   "name": "Read"
+  },
+  {
+   "description": {
+    "len": 1417,
+    "sha": "a58970596b"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "args": {
+      "description": {
+       "len": 32,
+       "sha": "e56146f4fe"
+      },
+      "type": "string"
+     },
+     "skill": {
+      "description": {
+       "len": 71,
+       "sha": "28ddcc6224"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "skill"
+    ],
+    "type": "object"
+   },
+   "name": "Skill"
+  },
+  {
+   "description": {
+    "len": 953,
+    "sha": "88033eceb4"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "max_results": {
+      "default": 5,
+      "description": {
+       "len": 48,
+       "sha": "67e0339f69"
+      },
+      "type": "number"
+     },
+     "query": {
+      "description": {
+       "len": 99,
+       "sha": "b90268e28a"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "query",
+     "max_results"
+    ],
+    "type": "object"
+   },
+   "name": "ToolSearch"
+  },
+  {
+   "defer_loading": true,
+   "description": {
+    "len": 83,
+    "sha": "97f0a3ed59"
+   },
+   "input_schema": {
+    "properties": {},
+    "type": "object"
+   },
+   "name": "DeferredToolPlaceholder"
+  },
+  {
+   "description": {
+    "len": 240,
+    "sha": "c5d31bd001"
+   },
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+     "content": {
+      "description": {
+       "len": 32,
+       "sha": "72a717c439"
+      },
+      "type": "string"
+     },
+     "file_path": {
+      "description": {
+       "len": 71,
+       "sha": "772d00b734"
+      },
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path",
+     "content"
+    ],
+    "type": "object"
+   },
+   "name": "Write"
   }
  ]
 }

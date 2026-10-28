@@ -112,8 +112,8 @@
     },
     {
      "kind": "main-prompt",
-     "len": 5918,
-     "sha": "0e130fe48f",
+     "len": 5927,
+     "sha": "5356783f89",
      "cache": "*"
     }
    ],
@@ -121,37 +121,14 @@
    "messages": [
     "user(str): text:compact-summary+<system-reminder>/<tools-used-before-summary>+compact-transcript-note+compact-kept-note",
     "system: ",
-    "assistant: tool_use:Bash",
-    "user: tool_result:error | text:reminder/attribution | text:interrupted | text:<local-command-caveat> | text:<command-name> | text:<local-command-stdout> | text:prompt",
-    "system(str): text:plan-mode+<total_tokens>+post-compact-file+post-compact-file+post-compact-file+plan-mode+post-compact-skills+skill-body+deferred-tools+agent-list+skill-list+environment+model-identity+<total_tokens>+date",
-    "assistant: text | tool_use:Write | tool_use:ToolSearch",
-    "user: tool_result | tool_result[tool_reference] | text:tool-loaded",
-    "system(str): text:<total_tokens>",
-    "assistant: tool_use:Edit",
-    "user: tool_result",
-    "system(str): text:<total_tokens>",
-    "assistant: tool_use:ExitPlanMode",
-    "user: tool_result",
-    "system(str): text:plan-mode-exit+auto-mode+<total_tokens>",
-    "assistant: tool_use:Write",
-    "user: tool_result",
-    "system(str): text:<total_tokens>",
-    "assistant: tool_use:Write",
-    "user: tool_result",
-    "system(str): text:<total_tokens>",
-    "assistant: tool_use:Edit",
-    "user: tool_result",
-    "system(str): text:<total_tokens>",
-    "assistant: tool_use:Bash",
-    "user: tool_result",
-    "system(str): text:<total_tokens>",
-    "assistant: tool_use:Bash",
-    "user: tool_result",
-    "system(str): text:silence-nudge+<total_tokens>",
     "assistant: text",
-    "user: text:reminder/instructions-changed | text:prompt | text:prompt",
-    "system: text:<total_tokens>+<total_tokens>*"
+    "user: text:reminder/instructions | text:reminder/context | text:reminder/attribution | text:<local-command-caveat> | text:<command-name> | text:<local-command-stdout> | text:prompt",
+    "system(str): text:post-compact-file+post-compact-file+post-compact-file+post-compact-file+post-compact-skills+skill-body+deferred-tools+agent-list+skill-list+environment+model-identity+auto-mode+<total_tokens>+date",
+    "assistant: thinking | text",
+    "user(str): text:prompt",
+    "system: text:<total_tokens>*"
    ]
   }
- ]
+ ],
+ "cards": []
 }
