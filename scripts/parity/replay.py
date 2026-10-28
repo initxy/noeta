@@ -24,6 +24,7 @@ import asyncio
 import getpass
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -46,6 +47,33 @@ TOOL_NAMES = wire.TOOL_NAMES
 #: Opus 5.5 as Claude Code sends it, for noeta's model catalog.
 MODEL_ROW = {"id": MODEL, "context_window": 1_000_000, "max_output_tokens": 128_000,
              "supports_vision": True, "family": "anthropic"}
+
+
+#: Side requests answered the way the recordings answered them: every
+#: recorded classification ended in an allow (a stage-1 block in r2/m5 was
+#: cleared at stage 2), so both stages say allow here.
+SIDE_ANSWERS: dict[str, dict[str, Any]] = {
+    "auto-mode-classifier": {"content": [{"type": "text", "text": "<block>no</block>"}],
+                             "stop_reason": "end_turn"},
+    "plan-name": {"content": [{"type": "text", "text": '{"name": "plan"}'}],
+                  "stop_reason": "end_turn"},
+}
+
+
+#: A plan file path in Claude Code's recorded turns (``<config>/plans/<a>-<b>-<c>.md``).
+PLAN_FILE = re.compile(r"\{HOME\}[^\"\s]*/plans/[a-z]+-[a-z]+-[a-z]+\.md")
+NOETA_PLAN_FILE = re.compile(r"/[^\s'\"]+/plans/[a-z]+-[a-z]+-[a-z]+\.md")
+
+
+def _plan_path(events: list[Any]) -> str:
+    path = ""
+    for rec in events:
+        ev = rec.event
+        data = getattr(ev, "data", None)
+        if getattr(ev, "extension", "") == "permissions" and isinstance(data, dict) and \
+                isinstance(data.get("plan"), dict):
+            path = str(data["plan"].get("path") or "")
+    return path
 
 
 def _texts(m: Mapping[str, Any]) -> list[str]:
@@ -75,9 +103,14 @@ class Replayer:
         self.notes: list[str] = []
         self.current_step = 0  # the step the runner is driving
         self.stalls = threading.Event()
+        #: noeta's plan file, once plan mode named it.
+        self.plan_path = ""
 
     def fill(self, value: Any) -> Any:
         if isinstance(value, str):
+            if self.plan_path:
+                # Claude Code's plan file, as noeta named its own.
+                value = PLAN_FILE.sub(lambda _m: self.plan_path, value)
             for k, v in self.subs.items():
                 value = value.replace(k, v)
             return value
@@ -119,6 +152,11 @@ class Replayer:
         """``(routing, turn)``: how the request was read and the recorded turn
         to answer with (``None``: no recorded turn)."""
         msgs = list(body.get("messages") or [])
+        for m in msgs:  # noeta names its plan file in the plan-mode note
+            for t in _texts(m):
+                found = NOETA_PLAN_FILE.search(t)
+                if found and "Plan mode is on" in t:
+                    self.plan_path = found.group(0)
         kind = wire.request_kind("/v1/messages", body, self.kinds)
         with self.lock:
             if kind.startswith("compaction"):
@@ -154,7 +192,8 @@ class Replayer:
                     routing["stall"] = True
                     return routing, {"stall": True}
                 return routing, turns[turn] if turn < len(turns) else None
-            return {"kind": kind if kind != "main" else "side", "step": self._step_name()}, None
+            routing = {"kind": kind if kind != "main" else "side", "step": self._step_name()}
+            return routing, SIDE_ANSWERS.get(kind)
 
     def _step_name(self) -> str:
         return str(self.steps[self.current_step]["name"])
@@ -345,9 +384,11 @@ class SessionReplay:
                         text = expanded
                 after = len(await app.client.events(task_id)) if task_id else 0
                 if task_id is None:
-                    task_id = await app.client.create("main", text,
-                                                      config={"cwd": str(self.proj),
-                                                              "model": MODEL})
+                    config = {"cwd": str(self.proj), "model": MODEL}
+                    if self.spec.get("permission_mode"):
+                        # The mode Claude Code was started in (``--permission-mode``).
+                        config["permission_mode"] = self.spec["permission_mode"]
+                    task_id = await app.client.create("main", text, config=config)
                 else:
                     await app.client.send(task_id, text)
                 await self._settle(app, task_id, step, after)
@@ -374,8 +415,10 @@ class SessionReplay:
                 await app.client.cancel(task_id, "interrupted", turn_only=True)
             for p in await pending_tree(app.client, task_id):
                 if p.kind == "approval":
-                    key = next(keys, "1")
-                    self.notes.append(f"step {step['name']}: approval asked for {p.tool}")
+                    key = next(keys, None)
+                    if key is None:  # Claude Code showed no card here
+                        key = "1"
+                        self.notes.append(f"step {step['name']}: approval asked for {p.tool}")
                     await app.client.answer(p.task_id, p.request_id,
                                             "deny" if key == "Escape" else "allow",
                                             always=key == "2")
@@ -384,6 +427,9 @@ class SessionReplay:
                     data = {str(q.get("id")): {"selected": [q["options"][0]["label"]]}
                             for q in qs if q.get("options")}
                     await app.client.answer(p.task_id, p.request_id, data=data)
+            plan = _plan_path(await app.client.events(task_id))
+            if plan:
+                self.replayer.plan_path = plan
             row = await app.client.get(task_id)
             if row.status == "ended":
                 self.notes.append(f"step {step['name']}: task ended ({row.end_status})")

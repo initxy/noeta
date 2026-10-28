@@ -12,6 +12,7 @@ import logging
 import os
 import posixpath
 import sys
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -76,12 +77,13 @@ MAX_TOTAL_DENIALS = 20
 ORDER_PLAN = 64
 ORDER_AUTO = 70
 #: Betas Claude Code's auto-mode requests carry: every main-loop and
-#: sub-agent request names auto mode; the main loop also the classifier one.
+#: sub-agent request names auto mode; the main loop also the server-side
+#: classifier one, until its first compaction (as recorded).
 AUTO_BETAS = ("afk-mode-2026-01-31",)
 MAIN_AUTO_BETAS = ("dangerous-tool-use-2026-09-03", "afk-mode-2026-01-31")
 #: The local command wrapper ``/plan`` sends (Claude Code's tags).
 PLAN_COMMAND = ("<command-name>/plan</command-name>\n            <command-message>plan"
-                "</command-message>\n            <command-args>{args}</command-args>\n"
+                "</command-message>\n            <command-args>{args}</command-args>\n\n"
                 "<local-command-stdout>Enabled plan mode</local-command-stdout>")
 _PLAN_COMMAND_HEAD = "<command-name>/plan</command-name>"
 
@@ -119,7 +121,6 @@ class PermState:
     due: tuple[str, ...] = ()
     #: The seq of the newest prompt the plan-mode text was sent for.
     plan_noted: int = 0
-    safeguards_sent: bool = False
 
 
 def inherited_rules(state: Any) -> list[str]:
@@ -286,6 +287,9 @@ class Permissions(Extension):
         self._exit_plan = pl.ExitPlanModeTool()
         self._background: set[asyncio.Future[Any]] = set()
         self._template: str | None = None
+        #: Tasks this process sent the safeguards offer for, and compacted.
+        self._probed: OrderedDict[str, None] = OrderedDict()
+        self._compacted: OrderedDict[str, None] = OrderedDict()
 
     # ------------------------------------------------------------ state
 
@@ -319,7 +323,7 @@ class Permissions(Extension):
             plan = st.plan
             if mode == "plan" and isinstance(d.get("plan"), dict):
                 plan = dict(d["plan"])
-                due = (*due, "plan_active") if d.get("announce", True) else due
+                due = (*due, "plan_active")
             return replace(st, mode=mode, plan=plan, due=due, consecutive_denials=0)
         if kind == "plan_exit":
             mode = str(d.get("mode") or "default")
@@ -357,8 +361,6 @@ class Permissions(Extension):
                            total_denials=total)
         if kind == "demoted":
             return replace(st, demoted=True)
-        if kind == "safeguards":
-            return replace(st, safeguards_sent=True)
         return st
 
     def _state(self, view: TaskView) -> PermState:
@@ -405,7 +407,8 @@ class Permissions(Extension):
     # ------------------------------------------------------------ tools and commands
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
-        return (self._exit_plan,)
+        # Sub-agents do not plan for approval (none is offered it).
+        return () if view.state.parent_id else (self._exit_plan,)
 
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
         return (Command(name="plan", description="Switch to plan mode; with a request, plan it",
@@ -734,7 +737,7 @@ class Permissions(Extension):
 
     async def on_start(self, view: TaskView) -> None:
         if self._state(view).mode is None:
-            view.record(NAME, "mode", {"mode": self.mode_of(view), "announce": False})
+            view.record(NAME, "mode", {"mode": self.mode_of(view)})
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         ev = recorded.event
@@ -758,15 +761,17 @@ class Permissions(Extension):
                         view.notify(f"plan: {name}")
                 elif isinstance(body, Say) and body.message.role == "user" and \
                         body.message.text.startswith(_PLAN_COMMAND_HEAD):
-                    self._switch(view, "plan", recorded.seq, announce=False)
+                    self._switch(view, "plan", recorded.seq)
         elif isinstance(ev, Compacted):
+            self._compacted[view.task_id] = None
+            _trim(self._compacted)
             mode = self.mode_of(view)
             view.record(NAME, "compacted", {"auto": mode == "auto", "plan": mode == "plan"})
         elif isinstance(ev, ExtensionRecorded) and ev.extension == "core" and \
                 ev.kind == "parked" and isinstance(ev.data, dict):
             self._name_plan(view, ev.data)
 
-    def _switch(self, view: TaskView, mode: Any, seq: int, *, announce: bool = True) -> None:
+    def _switch(self, view: TaskView, mode: Any, seq: int) -> None:
         if not isinstance(mode, str) or mode not in p.PERMISSION_MODES:
             return
         if mode == "bypassPermissions" and self.disable_bypass:
@@ -780,7 +785,6 @@ class Permissions(Extension):
             st = self._state(view)
             path = (st.plan or {}).get("path") or pl.new_plan_path(self.plans_dir)
             data["plan"] = {"path": path, "pre_mode": current, "entered_seq": seq}
-            data["announce"] = announce
         view.record(NAME, "mode", data)
 
     def _name_plan(self, view: TaskView, parked: Mapping[str, Any]) -> None:
@@ -871,16 +875,24 @@ class Permissions(Extension):
             tools = [t for t in request.tools if self._offered(t.name)]
             if len(tools) != len(request.tools):
                 request = msgspec.structs.replace(request, tools=tools)
-        if self.mode_of(view) != "auto":
+        mode = self.mode_of(view)
+        plan = self._state(view).plan or {}
+        if mode != "auto" and not (mode == "plan" and plan.get("pre_mode") == "auto"):
             return request
+        # Per process, as Claude Code per session: the first main request
+        # offers the server-side check (the API answers an API-key session
+        # that it does not run it), and its beta rides along until the first
+        # compaction.
         main = view.state.parent_id is None
-        betas = [*request.betas, *(b for b in (MAIN_AUTO_BETAS if main else AUTO_BETAS)
-                                   if b not in request.betas)]
+        task = view.task_id
+        wanted = MAIN_AUTO_BETAS if main and task not in self._compacted else AUTO_BETAS
+        betas = [*request.betas, *(b for b in wanted if b not in request.betas)]
         fields = dict(request.vendor_fields)
-        if main and not self._state(view).safeguards_sent:
+        if main and task not in self._probed:
             fields["safeguards"] = [{"type": "dangerous_tool_use",
                                      "classifier_context": self._context(view)}]
-            view.record(NAME, "safeguards")
+            self._probed[task] = None
+            _trim(self._probed)
         return msgspec.structs.replace(request, betas=betas, vendor_fields=fields)
 
     def _offered(self, name: str) -> bool:
@@ -928,8 +940,9 @@ class Permissions(Extension):
         if mode == "plan" and st.plan is not None:
             newest = _newest_prompt(view)
             entered = int(st.plan.get("entered_seq") or 0)
-            if "plan_active" in st.due or (newest > max(st.plan_noted, entered)
-                                           and view.state.steps_in_turn == 0):
+            same_turn = view.state.steps_in_turn == 0 and newest == entered
+            if ("plan_active" in st.due and not same_turn) or (
+                    newest > max(st.plan_noted, entered) and view.state.steps_in_turn == 0):
                 out.append(Reminder(text=pl.plan_active_text(
                     st.plan["path"], await self._exists(view, st.plan["path"])),
                     kind="plan_active", role="system", order=ORDER_PLAN))
@@ -962,6 +975,11 @@ class Permissions(Extension):
 
 
 # ---------------------------------------------------------------- helpers
+
+
+def _trim(d: OrderedDict[str, None]) -> None:
+    while len(d) > 4096:
+        d.popitem(last=False)
 
 
 def _keep(d: dict[str, Any]) -> dict[str, Any]:

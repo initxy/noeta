@@ -48,7 +48,6 @@
   "p:9c096242": "silence-nudge",
   "p:9df5c46b": "date-changed",
   "p:7f95bdd9": "mid-turn-message",
-
   "noeta_kinds": {
     "^You are noeta, an open-source coding agent": "identity",
     "^You are an agent that works alongside the user": "main-prompt",
@@ -77,6 +76,15 @@
     "^The complete conversation from before this summary": "compact-transcript-note",
     "^The messages after this summary are the newest ones": "compact-kept-note",
     "^<system-reminder>\\s*The Read tool was called with this input": "post-compact-file",
-    "^<system-reminder>\\s*These skills were invoked earlier in this conversation": "post-compact-skills"
+    "^<system-reminder>\\s*These skills were invoked earlier in this conversation": "post-compact-skills",
+    "^You review one action of an autonomous coding agent": "classifier-prompt",
+    "^\\s*## Session Context": "classifier-session",
+    "^Below is the user.s project and personal instructions file": "classifier-instructions-intro",
+    "^\\s*Lean towards blocking": "classifier-instruction",
+    "^\\s*Work through the classification procedure": "classifier-instruction",
+    "^Name the main topic of the conversation in a short kebab-case": "plan-name-prompt",
+    "^Plan mode is on\\.": "plan-mode",
+    "^## Plan mode has ended": "plan-mode-exit",
+    "^Auto mode is on, so the shell": "auto-mode"
   }
 }

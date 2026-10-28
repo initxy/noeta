@@ -76,7 +76,7 @@ STAGE2_INSTRUCTION = (
     "should be blocked. Only explicit user confirmation, not a hint or an implication, "
     "overrides a block. Reason inside <thinking> first, then give <block>. Think longer "
     "about borderline actions and briefly about clear ones.")
-SESSION_CONTEXT = (
+USER_IDENTITY = (
     "\n\n## Session Context\n\n- **User identity**: `{user}`. In the rules above, a "
     "`$USER/...` branch pattern means `{user}/...`; a branch whose first segment names "
     "someone else (`<other-user>/...`) is not this user's personal branch.")
@@ -235,7 +235,7 @@ def classifier_request(*, model: str, prompt: str, instructions: str, transcript
     """One stage's request. ``fast``: the classifier model takes thinking
     off; otherwise the main model gets the headroom and no thinking
     parameter."""
-    session = SESSION_CONTEXT.format(user=user_name or _user_name())
+    identity = USER_IDENTITY.format(user=user_name or _user_name())
     head: list[Message] = []
     if instructions.strip():
         body = "\n".join(f"  {line}" for line in instructions.splitlines())
@@ -248,7 +248,7 @@ def classifier_request(*, model: str, prompt: str, instructions: str, transcript
     marks = [(mi, b) for b in range(max(1, len(transcript) - 1), len(transcript) + 1)]
     budget = STAGE1_MAX_TOKENS if stage == 1 else STAGE2_MAX_TOKENS
     return ModelRequest(
-        model=model, system=[SystemPart(text=prompt, cache=True), SystemPart(text=session)],
+        model=model, system=[SystemPart(text=prompt, cache=True), SystemPart(text=identity)],
         messages=[*head, Message(role="user", content=blocks)],
         max_tokens=budget if fast else budget + THINKING_HEADROOM,
         thinking=False if fast else None,

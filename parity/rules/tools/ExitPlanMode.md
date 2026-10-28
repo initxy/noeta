@@ -12,7 +12,7 @@ Claude Code 2.1.312 · baseline `m1` · rules in our words (see `../README.md`).
 Ends plan mode by asking the user to approve the plan the model wrote to the plan file.
 **Deferred** (`defer_loading: true`): listed by name in the deferred-tool list and loaded in
 m1 with `ToolSearch` `select:ExitPlanMode` after `/plan`; from then on sorted into the list by
-name (between `Edit` and `ListAgents`). noeta has no plan mode: every row is `missing`.
+name (between `Edit` and `ListAgents`). noeta: `noeta/plugins/permissions/plan.py` (deferred, main agent only; the approval is a question with the mode choices).
 
 ## Parameters
 
@@ -21,20 +21,20 @@ other baseline tools).
 
 | id | name | type | required | enum / default / limits | noeta today |
 |---|---|---|---|---|---|
-| `tool.ExitPlanMode.p.allowedPrompts` | `allowedPrompts` | array of `{tool, prompt}` | no | deprecated, unused; `tool` enum `Bash`; `prompt` a semantic action description ("run tests") | missing |
+| `tool.ExitPlanMode.p.allowedPrompts` | `allowedPrompts` | array of `{tool, prompt}` | no | deprecated, unused; `tool` enum `Bash`; `prompt` a semantic action description ("run tests") | covered |
 
 ## Rules
 
 | id | rule | noeta today |
 |---|---|---|
-| `tool.ExitPlanMode.1` | Call it in plan mode once the plan is written to the plan file and ready for approval. | missing |
-| `tool.ExitPlanMode.2` | The plan file's path is given in the plan-mode system text (see `reminders.md`); the plan must already be written there. | missing |
-| `tool.ExitPlanMode.3` | The tool takes no plan content; it reads the plan from that file. | missing |
-| `tool.ExitPlanMode.4` | It only signals that planning is done; the user reviews the file's contents. | missing |
-| `tool.ExitPlanMode.5` | Use it only for tasks whose plan is implementation steps for writing code; not for research, searching, reading or understanding code. | missing |
-| `tool.ExitPlanMode.6` | Before calling, the plan must be complete and unambiguous; open questions on requirements or approach go to `AskUserQuestion` earlier. | missing |
-| `tool.ExitPlanMode.7` | Never ask "is the plan okay?" / "should I proceed?" through `AskUserQuestion`; this tool is the approval request. | missing |
-| `tool.ExitPlanMode.8` | The description illustrates rule 5 with three cases: understanding existing code (no), implementing a feature (yes), a feature with an unclear choice (ask first, then yes). | missing |
+| `tool.ExitPlanMode.1` | Call it in plan mode once the plan is written to the plan file and ready for approval. | covered |
+| `tool.ExitPlanMode.2` | The plan file's path is given in the plan-mode system text (see `reminders.md`); the plan must already be written there. | covered |
+| `tool.ExitPlanMode.3` | The tool takes no plan content; it reads the plan from that file. | covered |
+| `tool.ExitPlanMode.4` | It only signals that planning is done; the user reviews the file's contents. | covered |
+| `tool.ExitPlanMode.5` | Use it only for tasks whose plan is implementation steps for writing code; not for research, searching, reading or understanding code. | covered |
+| `tool.ExitPlanMode.6` | Before calling, the plan must be complete and unambiguous; open questions on requirements or approach go to `AskUserQuestion` earlier. | covered |
+| `tool.ExitPlanMode.7` | Never ask "is the plan okay?" / "should I proceed?" through `AskUserQuestion`; this tool is the approval request. | covered |
+| `tool.ExitPlanMode.8` | The description illustrates rule 5 with three cases: understanding existing code (no), implementing a feature (yes), a feature with an unclear choice (ask first, then yes). | covered |
 
 ## Result shape
 
