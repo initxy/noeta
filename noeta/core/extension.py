@@ -149,6 +149,12 @@ class TaskView:
     #: ``await count_tokens(text)``: the provider's exact token count of one
     #: user message holding ``text`` (``None`` when it cannot count).
     count_tokens: Callable[[str], Awaitable[int | None]] | None = None
+    #: ``await read_log(task_id)``: a task's log, oldest first — what a
+    #: related task (a sub-agent, a conversation this one continues)
+    #: recorded. Read only.
+    read_log: Callable[[str], Awaitable[Sequence[Recorded]]] | None = None
+    #: ``await child_tasks(task_id)``: the ids of a task's children.
+    child_tasks: Callable[[str], Awaitable[list[str]]] | None = None
     #: The task's extensions, in the agent's order (``residents``).
     extensions: Sequence[Extension] = ()
     #: The model the task runs on (its config's, else its agent's).

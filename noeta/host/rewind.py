@@ -175,9 +175,11 @@ async def rewind(client: Any, task_id: str, point: RewindPoint, *, conversation:
                  files: bool = True) -> Rewound:
     """Rewind to before ``point``. With ``conversation`` a new task (same
     agent and config) continues the log up to just before the prompt; with
-    ``files`` the files changed since are written back as they were, by
-    ``task_id`` itself: its log holds the snapshots the checkpoints plugin
-    checks a restore against (the fork's stops before them)."""
+    ``files`` the files changed since (by the task or its sub-agents) are
+    written back as they were, by the task to go on with — so the front end
+    following it sees the restore's notice. The checkpoints plugin checks a
+    restore against the snapshots of that task, the conversations it
+    continues and their sub-agents: the logs this plan is read from."""
     target = task_id
     if conversation:
         events = await client.events(point.task_id)
@@ -191,7 +193,7 @@ async def rewind(client: Any, task_id: str, point: RewindPoint, *, conversation:
     if files:
         plan = await file_plan(client, task_id, point)
         if plan.files:
-            await client.signal(task_id, RESTORE_SIGNAL, {"files": [
+            await client.signal(target, RESTORE_SIGNAL, {"files": [
                 {"path": p, "data": base64.b64encode(c).decode() if c is not None else None}
                 for p, c in plan.files.items()]})
             restored = tuple(plan.files)

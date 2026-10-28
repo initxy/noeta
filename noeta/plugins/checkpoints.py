@@ -16,12 +16,14 @@ front ends (``noeta.host.rewind``):
 
 The ``restore_files`` signal (``{"files": [{"path", "data": base64 |
 None}]}``) writes files back through the task's environment, wherever the
-task runs; ``None`` removes the file. It only puts back what this task's
-log (or a conversation it continues) snapshotted: a path inside the
-workspace with a snapshot of it, and content hashing to one of that path's
-snapshots (``None`` only when a snapshot found it absent); anything else is
-reported as not restored. Changes made through ``Bash`` are not tracked, as
-in Claude Code.
+task runs; ``None`` removes the file. It only puts back what was
+snapshotted in this task's log, the conversations it continues (whole: a
+rewound conversation's fork restores what came after its fork point) and
+the sub-agents under any of them: a path inside the workspace with a
+snapshot of it, and content hashing to one of that path's snapshots
+(``None`` only when a snapshot found it absent); anything else is reported
+as not restored. Changes made through ``Bash`` are not tracked, as in
+Claude Code.
 """
 
 from __future__ import annotations
@@ -29,10 +31,17 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
-from noeta.core.events import External, InputTaken, Recorded, ToolStarted
+from noeta.core.events import (
+    ExtensionRecorded,
+    External,
+    InputTaken,
+    Recorded,
+    TaskCreated,
+    ToolStarted,
+)
 from noeta.core.extension import Extension, TaskView
 from noeta.core.types import ToolUse
 from noeta.toolkit.tools import Workspace
@@ -57,6 +66,43 @@ def _last_prompt(view: TaskView) -> int:
         if message.role == "user" and message.origin in (None, "human") and message.text:
             return seq
     return 0
+
+
+#: How far a restore follows continued conversations back.
+_MAX_LINEAGE = 64
+
+
+async def _restorable(view: TaskView) -> dict[str, frozenset[str | None]]:
+    """Per path, every content sha a snapshot found: in this task's state,
+    and in the logs a rewind's file plan reads (``noeta.host.rewind``) —
+    each conversation this task continues, whole, and every sub-agent under
+    any of them."""
+    state = view.ext_state(NAME) or {}
+    snaps: dict[str, frozenset[str | None]] = dict(state.get("snaps") or {})
+    read, children = view.read_log, view.child_tasks
+    if read is None or children is None:
+        return snaps
+    logs: dict[str, Sequence[Recorded]] = {}
+    current: str | None = view.task_id
+    while current and current not in logs and len(logs) < _MAX_LINEAGE:
+        logs[current] = await read(current)
+        first = logs[current][0].event if logs[current] else None
+        current = first.history_from if isinstance(first, TaskCreated) else None
+    queue, seen = list(logs), set()
+    while queue:
+        tid = queue.pop()
+        if tid in seen:
+            continue
+        seen.add(tid)
+        queue += await children(tid)
+        for rec in logs.get(tid) or await read(tid):
+            ev = rec.event
+            if isinstance(ev, ExtensionRecorded) and ev.extension == NAME \
+                    and ev.kind == "snapshot" and isinstance(ev.data, dict) \
+                    and ev.data.get("sha") != "" and ev.data.get("path"):
+                path = str(ev.data["path"])
+                snaps[path] = snaps.get(path, frozenset()) | {ev.data.get("sha")}
+    return snaps
 
 
 class Checkpoints(Extension):
@@ -124,7 +170,7 @@ class Checkpoints(Extension):
         files = data.get("files") if isinstance(data, dict) else None
         if env is None or not isinstance(files, list):
             return
-        snaps = (view.ext_state(NAME) or self.initial_state()).get("snaps") or {}
+        snaps = await _restorable(view)
         done: list[str] = []
         errors: dict[str, str] = {}
         ws: Workspace | None = None
@@ -137,7 +183,7 @@ class Checkpoints(Extension):
                 resolved = await ws.resolve_write(path)
                 known = snaps.get(resolved)
                 if known is None:
-                    raise PermissionError("this task has no snapshot of the file")
+                    raise PermissionError("no snapshot of the file was taken")
                 blob = entry.get("data")
                 if blob is None:
                     if None not in known:

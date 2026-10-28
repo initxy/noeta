@@ -20,6 +20,7 @@ from noeta.core.runner import Runtime
 from noeta.host.rewind import diff_stats, file_plan, rewind, rewind_points
 from noeta.plugins.checkpoints import RESTORE_SIGNAL, Checkpoints
 from noeta.plugins.fs import FileTools
+from noeta.plugins.subtasks import SubagentSpec, Subtasks
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -135,3 +136,42 @@ async def test_a_restore_puts_back_only_what_this_task_snapshotted(
     await client.signal(tid, RESTORE_SIGNAL, {"files": [{"path": str(a), "data": b64("one\n")}]})
     await rt.run_until_idle()
     assert a.read_text() == "one\n"
+
+
+async def test_a_rewind_restores_what_a_sub_agent_changed(
+        store: SqliteStore, tmp_path: Path) -> None:
+    work = tmp_path / "w"
+    work.mkdir()
+    a = work / "a.txt"
+    a.write_text("one\n")
+    provider = ScriptedProvider([
+        reply("", ("Task", {"description": "edit a", "prompt": "edit a",
+                            "subagent_type": "child"})),                       # parent
+        reply("launched"),
+        reply("", ("Read", {"file_path": str(a)})),                            # child
+        reply("", ("Edit", {"file_path": str(a), "old_string": "one", "new_string": "two"})),
+        reply("edited"),
+        reply("done"),                                                         # parent
+    ])
+    parent = Agent(name="a", model="m", extensions=[
+        FileTools(), Checkpoints(), Subtasks([SubagentSpec(name="child", description="c")])])
+    child = Agent(name="child", model="m", one_shot=True,
+                  extensions=[FileTools(), Checkpoints()])
+    rt = Runtime(store=store, agents={"a": parent, "child": child},
+                 provider_for=lambda _m: provider,  # type: ignore[arg-type,return-value]
+                 env_for=lambda _s: LocalExecEnv(str(work)), sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("a", "delegate", config={"model": "m"})
+    await rt.run_until_idle()
+    assert a.read_text() == "two\n"
+    assert _snapshots(await client.events(tid)) == []  # the sub-agent took the snapshot
+
+    [point] = await rewind_points(client, tid)
+    assert point.files == (str(a),)
+    done = await rewind(client, tid, point)
+    await rt.run_until_idle()
+    assert a.read_text() == "one\n"
+    # The notice reaches the task the front end goes on with.
+    notices = [r.event.data for r in await client.events(done.task_id)
+               if isinstance(r.event, ExtensionRecorded) and r.event.kind == "notice"]
+    assert [n["text"] for n in notices] == ["restored 1 file(s)"]

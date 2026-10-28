@@ -277,7 +277,11 @@ class TaskRun:
                         agents=self.rt.agents,
                         allowed_tools=self.agent.allowed_tools if self.agent else None,
                         denied_tools=self.agent.denied_tools if self.agent else (),
-                        count_tokens=self.counter(model))
+                        count_tokens=self.counter(model), read_log=self.store.read,
+                        child_tasks=self._child_ids)
+
+    async def _child_ids(self, task_id: str) -> list[str]:
+        return [row.task_id for row in await self.store.tasks(parent_id=task_id, limit=10_000)]
 
     def counter(self, model: str) -> Any:
         """``count_tokens(text)`` against ``model``'s provider, or ``None``
