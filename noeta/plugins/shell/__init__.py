@@ -68,6 +68,12 @@ def lost_notice(job_id: str, job: Mapping[str, Any]) -> str:
     return f"{NOTICE_GUARD}\n\n{text}"
 
 
+#: More than the core records a pickup writes before ``on_start`` (the
+#: prompt files, the plugin pins): how far back a pickup looks for the take
+#: its last runner may have died after.
+_START_RECORDS = 4
+
+
 def _notice_key(job_id: str) -> str:
     return f"shell:notice:{job_id}"
 
@@ -147,8 +153,10 @@ class Shell(Extension):
     async def on_start(self, view: TaskView) -> None:
         """Decide again what a crash may have left undecided: ends and
         losses this task took from its inbox while a job still shows running
-        (the runner died between taking them and recording the decision).
-        Deciding twice changes nothing: a settled job is skipped."""
+        (the runner died between taking them and recording the decision),
+        and a root's losses of ended tasks' jobs. Deciding twice changes
+        nothing: a settled job is skipped, a notice is posted once."""
+        await self._retell_last_take(view)
         st = view.ext_state(self.name)
         if not isinstance(st, ShellState) or view.read_log is None or not any(
                 j.get("status") == "running" for j in st.jobs.values()):
@@ -156,6 +164,23 @@ class Shell(Extension):
         items = [i for r in await view.read_log(view.task_id)
                  if isinstance(r.event, InputTaken) for i in r.event.items]
         self._decide(view, items)
+
+    async def _retell_last_take(self, view: TaskView) -> None:
+        """A root that died after taking ``hold_lost`` and before posting
+        the notices it decided for ended tasks' jobs: the take is then the
+        last thing in its log (but for what this pickup's start recorded),
+        so it is told again; the notices' dedupe keys make that a no-op when
+        they were posted."""
+        if view.state.parent_id is not None or view.read_log is None:
+            return
+        tail = await view.read_log(view.task_id, max(0, view.state.last_seq - _START_RECORDS))
+        for rec in reversed(tail):
+            ev = rec.event
+            if isinstance(ev, ExtensionRecorded) and ev.extension == records.CORE:
+                continue
+            if isinstance(ev, InputTaken):
+                await self._tell_lost_of_ended(view, ev.items)
+            return
 
     def _decide(self, view: TaskView, items: Sequence[InboxItem]) -> None:
         """Settle jobs from what the task took, in inbox order: a job's end

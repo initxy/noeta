@@ -34,6 +34,7 @@ from typing import Any
 import pytest
 
 from noeta.core.events import ToolStarted
+from noeta.core.store import HOLD_LOST
 from tests.cluster.harness import (
     Cluster,
     Faults,
@@ -284,11 +285,15 @@ async def test_retry_safe_call_runs_again_after_its_worker_dies(tmp_path: Path,
 # ------------------------------------------------------------------ one gap each
 
 
-async def test_lost_job_of_an_ended_sub_agent_reaches_the_root(tmp_path: Path,
-                                                               pg_url: str) -> None:
+@pytest.mark.parametrize("crash_after_take", [False, True], ids=["", "crash-after-take"])
+async def test_lost_job_of_an_ended_sub_agent_reaches_the_root(tmp_path: Path, pg_url: str,
+                                                               crash_after_take: bool) -> None:
     """A sub-agent starts a background job and ends; SIGKILL the worker
     running the job while the root waits on it: the root is told the job
-    is lost (the sub-agent's log is closed) and finishes; the job is gone."""
+    is lost (the sub-agent's log is closed) and finishes; the job is gone.
+    With ``crash_after_take`` the worker that takes ``hold_lost`` for the
+    root dies right after the take, before the root decides the notice:
+    the next pickup still tells it, once."""
     cluster = Cluster(tmp_path, pg_url, workers=3, lease=LEASE)
     await cluster.start()
     spec = Spec(id="r00", effects=1, agent=True, child_bg=8.0)
@@ -304,6 +309,8 @@ async def test_lost_job_of_an_ended_sub_agent_reaches_the_root(tmp_path: Path,
                 and bool(await cluster.running_job_pids())
 
         assert await wait_until(child_gone_job_running, 30), "the sub-agent's job never ran"
+        if crash_after_take:
+            Path(cluster.arm).write_text(HOLD_LOST)
         assert await kill_holder(cluster, {tid}, faults)
         await wait_until(lambda: root_finished(cluster, tid, spec), 10 * LEASE + 6.0)
         await asyncio.sleep(2.0)
@@ -317,6 +324,10 @@ async def test_lost_job_of_an_ended_sub_agent_reaches_the_root(tmp_path: Path,
     assert len(told) == 1 and "<status>failed</status>" in told[0], fail(outcome, told)
     assert not any(line.startswith("r00-cbg ") for line in outcome.journal), fail(
         outcome, ["the job of a dead worker wrote after the root was told it was lost"])
+    if crash_after_take:
+        done = Path(cluster.arm + ".done")
+        assert done.exists() and tid in done.read_text(), fail(
+            outcome, ["no worker died after taking hold_lost"])
 
 
 async def _one_job(tmp_path: Path, url: str, bg: float) -> tuple[Cluster, str, Spec, int]:

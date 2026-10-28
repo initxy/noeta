@@ -112,6 +112,19 @@ class Schedule(Extension):
 
     # ------------------------------------------------------------ firing
 
+    async def on_start(self, view: TaskView) -> None:
+        """Finish a firing a crash cut short: the take that fired a timer
+        is in the log, what it decided (re-arming a recurring job, deleting
+        a one-shot one, the loop's tick) is not. A job or a pending loop
+        whose kernel timer is gone is exactly that."""
+        st = self._st(view.ext_state(self.name))
+        timers = view.state.timers
+        for job_id in sorted(st["jobs"]):
+            if JOB_TIMER + job_id not in timers:
+                self._fired(view, st, JOB_TIMER + job_id, self.clock())
+        if st["loop"].get("pending") and WAKEUP_TIMER not in timers:
+            self._fired(view, st, WAKEUP_TIMER, self.clock())
+
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         ev = recorded.event
         st = self._st(view.ext_state(self.name))
