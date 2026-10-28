@@ -162,3 +162,8 @@ async def test_stopping_withdraws_the_question(store: SqliteStore) -> None:
     assert result.text == "Question withdrawn by user (no answer provided)."
     assert (await client.get(tid)).waiting_on == "input"
     assert len(provider.requests) == 1  # no model turn after the withdrawal
+
+
+def test_question_texts_must_differ() -> None:
+    error = validate_questions({"questions": [q(), q(header="Again")]})
+    assert isinstance(error, str) and "Which auth?" in error

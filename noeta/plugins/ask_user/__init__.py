@@ -229,6 +229,8 @@ def validate_questions(arguments: Any) -> list[dict[str, Any]] | str:
         question = item.get("question")
         if not isinstance(question, str) or not question:
             return "each question needs a non-empty question string"
+        if any(q["question"] == question for q in questions):
+            return f"two questions have the same text: {question!r}; each question must differ"
         if len(question) > _MAX_QUESTION_TEXT_LEN:
             return f"question too long (max {_MAX_QUESTION_TEXT_LEN})"
         header = item.get("header")
