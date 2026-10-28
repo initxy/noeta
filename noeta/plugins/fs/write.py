@@ -37,6 +37,7 @@ __all__ = ["WRITE_FILE_MAX_BYTES", "WriteTool"]
 
 #: Hard cap on one ``Write`` body — a runaway-file guard.
 WRITE_FILE_MAX_BYTES = 8 * 1024 * 1024
+_BOM = b"\xef\xbb\xbf"
 
 
 
@@ -140,6 +141,10 @@ class WriteTool:
                 before_text = existing.decode("utf-8")
             except UnicodeDecodeError:
                 return tool_error(self.name, f"{path!r} is not utf-8 text")
+            # Read never shows a byte-order mark, so new content lacks it;
+            # the file keeps its own (Claude Code's).
+            if existing.startswith(_BOM) and content and not content.startswith("\ufeff"):
+                body = _BOM + body
 
         diff = compute_diff(before_text, content, rel)
         added, removed = diff_stat_counts(diff)

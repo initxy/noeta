@@ -86,6 +86,13 @@ async def test_write_onto_a_directory_says_to_name_the_file(h: Harness, ws: Path
                             "name at the end of file_path.")
 
 
+async def test_an_overwrite_keeps_the_files_byte_order_mark(h: Harness, ws: Path) -> None:
+    (ws / "bom.txt").write_bytes(b"\xef\xbb\xbfold\n")
+    await _read(h, "bom.txt")
+    assert not (await h.call(WriteTool(), file_path="bom.txt", content="new\n")).is_error
+    assert (ws / "bom.txt").read_bytes() == b"\xef\xbb\xbfnew\n"
+
+
 async def test_write_existing_path_after_read_overwrites(h: Harness, ws: Path) -> None:
     (ws / "exists.txt").write_text("old\n")
     await _read(h, "exists.txt")
