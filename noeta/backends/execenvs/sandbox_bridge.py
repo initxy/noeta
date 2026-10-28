@@ -76,6 +76,7 @@ _ARCHES = {
     "aarch64": (0xC00000B7, 198, 97, 220, 435, False),
 }
 _RET_ALLOW = 0x7FFF0000
+_RET_KILL_PROCESS = 0x80000000
 _EPERM, _ENOSYS = 1, 38
 _CLONE_NEWUSER = 0x10000000
 
@@ -92,9 +93,12 @@ def _filter(allow_unix: bool, allow_userns: bool) -> bytes | None:
         return None
     audit, nr_socket, nr_unshare, nr_clone, nr_clone3, x32 = arch
     ld, jeq, jset, ret = 0x20, 0x15, 0x45, 0x06
+    # A call made through another ABI (i386's ``int 0x80`` on x86_64) has
+    # other numbers the checks below would miss: it kills the process.
     prog: list[tuple[int, int, int, int]] = [
-        (ld, 0, 0, 4), (jeq, 1, 0, audit), (ret, 0, 0, _RET_ALLOW), (ld, 0, 0, 0)]
+        (ld, 0, 0, 4), (jeq, 1, 0, audit), (ret, 0, 0, _RET_KILL_PROCESS), (ld, 0, 0, 0)]
     if x32:
+        # x32 calls share the arch but set this bit in the number.
         prog += [(jset, 0, 1, 0x40000000), (ret, 0, 0, _errno(_ENOSYS))]
 
     def flag_block(nr: int, test: tuple[int, int, int, int]) -> None:

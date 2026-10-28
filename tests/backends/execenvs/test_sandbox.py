@@ -324,3 +324,62 @@ def _ppid_chain_has(pid: str, ancestor: int) -> bool:
             return False
         current = int(stat.rpartition(")")[2].split()[1])
     return False
+
+
+# ---------------------------------------------------------------- seccomp
+
+
+def _run_bpf(program: bytes, nr: int, arch: int, arg0: int = 0) -> int:
+    """What the classic BPF ``program`` returns for one system call."""
+    data = struct.pack("<iI", nr, arch) + struct.pack("<Q", 0) + struct.pack("<Q", arg0)
+    ins = [struct.unpack("HBBI", program[i:i + 8]) for i in range(0, len(program), 8)]
+    pc, acc = 0, 0
+    while True:
+        code, jt, jf, k = ins[pc]
+        if code == 0x20:
+            acc = struct.unpack_from("<I", data, k)[0]
+        elif code == 0x06:
+            return int(k)
+        elif code in (0x15, 0x45):
+            hit = acc == k if code == 0x15 else bool(acc & k)
+            pc += jt if hit else jf
+        else:
+            raise AssertionError(f"unexpected opcode {code:#x}")
+        pc += 1
+
+
+def test_seccomp_filter_refuses_other_abis(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.backends.execenvs import sandbox_bridge as bridge
+    monkeypatch.setattr(bridge.platform, "machine", lambda: "x86_64")
+    program = bridge._filter(allow_unix=False, allow_userns=False)
+    assert program is not None
+    x86_64, i386 = 0xC000003E, 0x40000003
+    allow, kill = 0x7FFF0000, 0x80000000
+    assert _run_bpf(program, 41, x86_64, 1) == 0x00050000 | 1  # socket(AF_UNIX)
+    assert _run_bpf(program, 41, x86_64, 2) == allow  # socket(AF_INET)
+    assert _run_bpf(program, 0, x86_64) == allow
+    # i386 calls (socket is 359, socketcall 102 there) never reach the
+    # x86_64 checks: any of them kills the process.
+    for nr in (359, 102, 20):
+        assert _run_bpf(program, nr, i386, 1) == kill
+    assert _run_bpf(program, 41 | 0x40000000, x86_64, 1) == 0x00050000 | 38  # x32
+
+
+_I386_SOCKET = (
+    "import ctypes,mmap;"
+    # push rbx; mov eax,359 (i386 socket); mov ebx,1 (AF_UNIX); mov ecx,1;
+    # xor edx,edx; int 0x80; pop rbx; ret
+    "c=bytes.fromhex('53b867010000bb01000000b90100000031d2cd805bc3');"
+    "m=mmap.mmap(-1,4096,prot=7);m.write(c);"
+    "a=ctypes.addressof(ctypes.c_char.from_buffer(m));"
+    "print('fd',ctypes.CFUNCTYPE(ctypes.c_int)(a)())")
+
+
+@needs_bwrap
+@pytest.mark.skipif(os.uname().machine != "x86_64", reason="an i386 call needs x86_64")
+async def test_an_i386_system_call_cannot_open_a_unix_socket(tmp_path: Path,
+                                                             home: Path) -> None:
+    env = LocalExecEnv(str(tmp_path), sandbox={"enabled": True})
+    code, out, _ = await _run(env, f'python3 -c "{_I386_SOCKET}"')
+    assert "fd " not in out
+    assert code != 0
