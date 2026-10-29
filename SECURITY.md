@@ -70,25 +70,26 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
   worker's environment). `noeta serve` and `noeta worker` refuse other tenants unless the
   sandbox confines every command, or the operator sets `[server] shared_os_user_tenants =
   true` (tenants then trust each other). A non-default tenant's file tools (fenced
-  in-process, whatever the deployment) reach only an allow list, whatever its rules, mode or
-  approvals: its workspace, its own corners of noeta's places (its spilled outputs and
-  transcripts, its plans, memory and temporary directory, the operator's skills and
-  workflows to read) and, to read, the machine's programs and settings (`/usr`, `/bin`,
-  `/lib*`, `/etc` but `/etc/noeta`). So it never reaches noeta's home, the store's files,
-  `/proc`, another tenant's workspace, what other tasks leave on disk, any home directory
-  (the operator's credentials: `~/.ssh`, `~/.aws`, `~/.config/gh`, ...) or the server's own
-  directories (the default tenant's workspace, its `.env`), and the operator's
-  `additionalDirectories` are not its. Under the sandbox its commands (`Bash`, a skill's
-  script, any `git` noeta runs in the tenant's checkout with the hooks and programs its
-  config names) cannot read those places either but for its workspace and corners (the rest
-  of the machine stays readable to them), and
+  in-process, whatever the deployment) never reach a protected set, whatever its rules,
+  mode or approvals: noeta's home (but its own corners: its spilled outputs and
+  transcripts, its plans and memory, the operator's skills and workflows to read), the
+  store's files, `/etc/noeta`, `/proc`, what other tasks leave in the temp directories,
+  other tenants' workspaces, the server's own directories (the default tenant's
+  workspace, its `.env`), the credential stores of every home directory (`~/.ssh`,
+  `~/.aws`, `~/.config/gh`, `~/.netrc`, ...) and the operator's sandbox `denyRead`. They
+  write only in the tenant's workspace, its own corners and its temporary directory; the
+  operator's `additionalDirectories` are not its. The rest of what the OS user can read
+  stays readable to them. Under the sandbox its commands (`Bash`, a skill's script, any
+  `git` noeta runs in the tenant's checkout with the hooks and programs its config names)
+  cannot read the protected set either and write only where its file tools may, and
   code noeta runs on its own outside the sandbox never comes from the tenant's workspace;
   it starts no local MCP server (`docs/server.md`, "What separates tenants",
   lists what is and is not a boundary). A tenant reaching another tenant's tasks through the
-  API, a file tool reaching past its allow list, or a command reaching those places, is a
-  vulnerability; a tenant reading the OS user's other
-  files after the operator chose shared OS users, or through what the operator configured to
-  run outside the sandbox (hooks, MCP servers of the default tenant), is not.
+  API, or a file tool or command reaching the protected set or writing outside its places,
+  is a vulnerability; a tenant reading what the OS user can outside the protected set (an
+  operator puts other secrets in `denyRead`), anything after the operator chose shared OS
+  users, or through what the operator configured to run outside the sandbox (hooks, MCP
+  servers of the default tenant), is not.
 - **Plugins are code you install.** They run in-process with noeta's rights; installing one
   (`noeta plugin add`, a plugin file, a package) is trusting it. noeta runs nothing from a plugin
   while installing it, and a machine policy (`/etc/noeta/config.toml` `[policy]`) can allow or

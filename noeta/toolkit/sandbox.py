@@ -29,6 +29,7 @@ from noeta.core.execenv import ExecEnv, RunResult
 from noeta.toolkit.permission_rules import idna, parse_rule, shell_rule_matches
 
 __all__ = [
+    "DEFAULT_DENY_READ",
     "CommandSandbox",
     "PreparedCommand",
     "SandboxSettings",
@@ -42,6 +43,15 @@ __all__ = [
     "sandbox_of",
     "violations_block",
 ]
+
+#: Credential stores in the home directory a confined command never reads
+#: unless ``allowRead`` names them.
+DEFAULT_DENY_READ = (
+    "~/.ssh", "~/.gnupg", "~/.aws", "~/.azure", "~/.config/gcloud", "~/.kube",
+    "~/.docker/config.json", "~/.config/gh", "~/.netrc", "~/.git-credentials",
+    "~/.pypirc", "~/.npmrc", "~/.cargo/credentials", "~/.cargo/credentials.toml",
+    "~/.pgpass", "~/.password-store",
+)
 
 
 def _strings(value: Any) -> tuple[str, ...]:

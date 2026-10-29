@@ -41,7 +41,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from noeta.backends.execenvs.sandbox_plan import (
-    DEFAULT_DENY_READ,
     PLACEHOLDERS,
     PROTECTED,
     Plan,
@@ -52,7 +51,7 @@ from noeta.backends.execenvs.sandbox_plan import (
 )
 from noeta.backends.execenvs.sandbox_proxy import FilterProxy, Listeners, default_proxy
 from noeta.toolkit.paths import make_tenant_temp_dir, private_dir, temp_root
-from noeta.toolkit.sandbox import SandboxSettings
+from noeta.toolkit.sandbox import DEFAULT_DENY_READ, SandboxSettings
 
 __all__ = [
     "DEFAULT_DENY_READ",

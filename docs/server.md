@@ -140,31 +140,35 @@ of these holds:
    `shared_os_user_tenants = true` under `[server]` in `~/.noeta/config.toml`. Tenants then must trust each
    other and the operator with everything the OS user can reach.
 
-What a task of a tenant other than the default one may reach is an allow list:
+A task of a tenant other than the default one may read what the OS user can, except a
+protected set:
 
-- its tenant's workspace (read and write);
-- its own corners of noeta's places: its spilled tool outputs (its task's and its root's),
-  its tenant's plan files (`plans/<tenant>/`), in its tenant's project directory of its
-  working directory (`projects/<tenant>/<slug>/`) the memory and, to read, its own and its
-  root's compaction transcripts, read access to `skills/` and `workflows/`, and its
-  tenant's temporary directory (`noeta-temp-<uid>/tenants/<tenant>/`: its job logs and its
-  commands' `TMPDIR`);
-- to read, the machine's programs, libraries and settings: `/usr`, `/bin`, `/sbin`,
-  `/lib`, `/lib32`, `/lib64`, `/libx32`, `/etc` (macOS `/private/etc`) and `/nix/store`,
-  but not `/etc/noeta`, a home directory or the server's own directories inside them.
+- noeta's home (`NOETA_HOME`: tokens, settings, tenant directories, other tasks' files) and
+  the spill directory wherever they are, but for the task's own corners: its spilled tool
+  outputs (its task's and its root's), its tenant's plan files (`plans/<tenant>/`), in its
+  tenant's project directory of its working directory (`projects/<tenant>/<slug>/`) the
+  memory and, to read, its own and its root's compaction transcripts, and read access to
+  `skills/` and `workflows/`;
+- the sqlite store and its `-wal` / `-shm` files, `/etc/noeta` and `/proc`;
+- noeta's places in the temp directories (`noeta-background-<uid>`, `noeta-temp-<uid>`)
+  but for its tenant's temporary directory (`noeta-temp-<uid>/tenants/<tenant>/`: its job
+  logs and its commands' `TMPDIR`);
+- other tenants' workspaces;
+- the server's own directories (the default tenant's workspace: the directory `noeta serve`
+  or `noeta worker` started in, and `--allow-root` paths, with the server's `.env`), but a
+  tenant's workspace inside one;
+- the sandbox's credential stores in every home directory (the worker's `~`, each
+  account's, each directory in `/home` and `/Users`): `.ssh`, `.aws`, `.config/gh`,
+  `.netrc` and the rest of `DEFAULT_DENY_READ` in `noeta/toolkit/sandbox.py`;
+- the operator's sandbox `filesystem.denyRead` (with `Read(...)` deny rules and
+  `credentials` files), whether or not the sandbox is enabled.
 
-Everything else is refused, notably noeta's home (`NOETA_HOME`: tokens, settings, tenant
-directories, other tasks' files) and the spill directory wherever they are, the sqlite store
-and its `-wal` / `-shm` files, `/proc`, noeta's places in the temp directories
-(`noeta-background-<uid>`, `noeta-temp-<uid>`), other tenants' workspaces, every home
-directory (`/home`, `/root`, `/Users`, the worker's `~` and each login account's: the
-operator's SSH keys, cloud credentials and `gh` sign-in), the server's own directories (the
-default tenant's workspace: the directory `noeta serve` or `noeta worker` started in, and
-`--allow-root` paths, with the server's `.env`), the rest of `/tmp`, `/opt`, `/srv`, `/var`
-and `/mnt`. The operator's `additionalDirectories` (and the sandbox's `allowWrite` /
-`allowRead`) are the default tenant's only. A tenant whose workspace this worker does not
-know (no tenant directory here) reaches none. No allow rule, permission mode
-(`bypassPermissions` included) or approval lifts it. The default tenant's tasks are not
+It writes only in its tenant's workspace, its own corners and its tenant's temporary
+directory. `/opt`, `/srv`, `/var`, the rest of `/tmp`, data disks and the rest of a home
+directory stay readable: put anything else a tenant must not read in `denyRead`. The
+operator's `additionalDirectories` (and the sandbox's `allowWrite` / `allowRead`) are the
+default tenant's only. No allow rule, permission mode (`bypassPermissions` included) or
+approval lifts any of this. The default tenant's tasks are not
 fenced, their sandbox is the settings' own, and their project directories stay
 `projects/<slug>/`. A `log_dir` given to the shell plugin holds the default tenant's job
 logs only; it is not fenced, so keep it inside noeta's home.
@@ -178,13 +182,14 @@ logs only; it is not fenced, so keep it inside noeta's home.
   script, an inline skill command and every `git` noeta runs in the tenant's checkout (for
   a worktree, the first turn's git snapshot, memory's repository lookup; with the hooks and
   config programs such as `gpg.program` or filter drivers the tenant set there) run inside
-  the sandbox with the refused places above unreadable but for the tenant's workspace, its
+  the sandbox with the protected set above unreadable but for the tenant's workspace, its
   own corners and the Python running the sandbox's network bridge (`TenantFence.confine`;
   the rest of the machine stays readable as for any sandboxed command), always: the
   settings' `excludedCommands`, `dangerouslyDisableSandbox`, `filesystem.disabled` and
   `enableWeakerNestedSandbox` do not apply to them. On Linux each command has its own PID
-  namespace, so no other process (`/proc/<pid>/environ`) is visible; writes go only where
-  the settings allow. A worktree under `.noeta/worktrees/` cannot be made from inside the
+  namespace, so no other process (`/proc/<pid>/environ`) is visible; writes go only to
+  the command's working directory (in the tenant's workspace) and its tenant's temporary
+  directory. A worktree under `.noeta/worktrees/` cannot be made from inside the
   sandbox (`.noeta/` is read-only there), so `EnterWorktree` and isolated agents fail for
   such a task.
 - **MCP**: servers that run a process on the worker (stdio servers, a `headersHelper`) do
@@ -195,6 +200,11 @@ logs only; it is not fenced, so keep it inside noeta's home.
 
 Not a boundary, even under the strict sandbox:
 
+- Files outside the protected set: a tenant reads what the OS user can (other software's
+  settings and data, the rest of a home directory, data disks). Credential stores are
+  known by their usual names in the home directories noeta finds; a token kept anywhere
+  else (an app's own settings, a `.env` outside the server's directories) is readable
+  unless `denyRead` names it.
 - What the operator runs outside the sandbox: hooks (`settings.json` `hooks`, run as the OS
   user with the tool call on stdin), plugins (in-process code), the MCP servers of default
   tenant tasks. A hook starts in the task's working directory: one that runs `git` or a

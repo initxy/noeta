@@ -326,13 +326,11 @@ def _base_plugin_settings(found: FileSettings, cwd: str | None,
          "permissions": permission_args, "fs": {"write_roots": write_roots}})
 
 
-def _apply_sandbox(found: FileSettings, cwd: str | None, runtime_kw: dict[str, Any],
+def _apply_sandbox(sandbox: SandboxSettings, cwd: str | None, runtime_kw: dict[str, Any],
                    fence: TenantFence) -> list[str]:
-    """Run tasks' commands in the settings' sandbox (``runtime_kw``'s
+    """Run tasks' commands in the settings' ``sandbox`` (``runtime_kw``'s
     ``env_for``) when it is enabled, and tenants' file reads and writes
     behind ``fence``; a notice when the sandbox cannot start here."""
-    sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
-                                            base_dir=str(cwd or os.getcwd()))
     runtime_kw.setdefault("env_for", local_env_for(
         sandbox if sandbox.enabled else None, fence))
     if not sandbox.enabled:
@@ -406,13 +404,16 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         return setting_sources is None or name in setting_sources
 
     runtime_kw.setdefault("spill_root", str(home_dir.HOME / "tool-results"))
+    sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
+                                            base_dir=str(cwd or os.getcwd()))
     fence = TenantFence(home=str(home_dir.HOME), spill_root=runtime_kw["spill_root"],
                         plans_dir=str(home_dir.HOME / "plans"),
                         store_files=store_files(settings.store_url),
                         workspaces=dict(tenant_workspaces or {}),
-                        server_dirs=tuple((permissions or {}).get("server_dirs") or ()))
+                        server_dirs=tuple((permissions or {}).get("server_dirs") or ()),
+                        deny_read=tuple(sandbox.resolve(p) for p in sandbox.deny_read))
     permissions = {"tenant_workspaces": dict(fence.workspaces),
-                   "store_files": list(fence.store_files),
+                   "store_files": list(fence.store_files), "deny_read": list(fence.deny_read),
                    "spill_root": fence.spill_root, **(permissions or {})}
     base = _base_plugin_settings(found, cwd, permissions, project=source("project"))
     made: dict[Any, Any] = {}
@@ -443,7 +444,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         return default_agents(model, plugins=table, add=add, extra_files=files, made=made)
 
     agents = make_agents()
-    notices += _apply_sandbox(found, cwd, runtime_kw, fence)
+    notices += _apply_sandbox(sandbox, cwd, runtime_kw, fence)
     runtime_kw.setdefault("prompt_dirs", [str(home_dir.HOME / "prompts")])
     runtime_kw.setdefault("workspace_trusted", project_trusted)
     app = LocalApp(open_store(settings.store_url), agents,
