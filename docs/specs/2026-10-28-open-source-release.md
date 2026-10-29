@@ -239,6 +239,12 @@ servers and runs on many machines.
   into its config, so every worker runs it in the same place. `noeta -p --server` is refused
   rather than implemented (headless drives a local app). Rejected: sending the local path
   when it happens to exist on the server (a coincidence, and still another machine's path).
+- D33 (`os-fix-r4docs`) Tenant running limits, budgets and providers stay in the kernel as
+  scheduling (ADR-019, refines ADR-007): the limit is part of the claim, and every model call,
+  the turn's and each extension's `TaskRun.complete`, passes through the kernel, which picks
+  the tenant's provider, refuses past the budget and counts usage. `tenant_usage` is a
+  cross-task total beside the logs (no fold reads it; a refusal is logged), not task state.
+  Rejected: a budget plugin on `before_model` (misses extension calls, cannot choose the key).
 
 ## Plan
 
