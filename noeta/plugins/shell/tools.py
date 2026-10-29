@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import shlex
 from collections.abc import Awaitable, Callable
@@ -26,6 +27,8 @@ from noeta.plugins.shell.websocket import parse_ws
 from noeta.toolkit.sandbox import domain_allowed, resolve_allowed, sandbox_of
 from noeta.toolkit.shell_syntax import parse
 from noeta.toolkit.tools import Workspace, load_description, require_str, tool_error
+
+_log = logging.getLogger(__name__)
 
 #: Claude Code's ``Monitor`` deadline bounds.
 DEFAULT_MONITOR_TIMEOUT_MS = 300_000
@@ -212,6 +215,11 @@ class BackgroundBash(BashTool):
                 try:
                     held = await ctx.hold()
                 except HeldElsewhere:
+                    refused = True
+                except Exception:  # noqa: BLE001 — no hold means no background job
+                    # A hold that could not be taken (a store fault) keeps
+                    # nothing in the background: it times out as refused.
+                    _log.warning("Bash: no hold for a timed-out command", exc_info=True)
                     refused = True
         except asyncio.CancelledError:
             self.registry.kill(job, quiet=True)
