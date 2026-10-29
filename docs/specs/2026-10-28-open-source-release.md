@@ -240,6 +240,16 @@ servers and runs on many machines.
   its search tool is not available. Kernel-generic, no tool named. Rejected: dropping only
   the refused tool (its deferred tools would stay withheld, uncallable); a `loads_deferred`
   tool flag (needs the plugin to set it, and every deferred tool goes plain until it does).
+- D41 (`os-fix-r4kernel`) Snapshots are kept per task and fold version, at most
+  `SNAPSHOT_VERSIONS` (2) per task; a write replaces only its own version's at a lower seq,
+  and past the cap the one at the lowest seq goes. `snapshot(task_id, version=None)` reads one
+  version's, or the newest; the runner reads the newest and asks for its own version only
+  when that differs (one read in the common case; the task row names the agent when the
+  newest is not decodable here). Schema version 3 (sqlite rebuilds the table, Postgres swaps
+  the primary key; rows kept); the end still deletes every version in its transaction.
+  Rejected: one row per task with a version-aware overwrite rule (the two versions still
+  replace each other each claim); a written-at column to evict the least recently written
+  (lowest seq is close enough, no column).
 
 ## Plan
 

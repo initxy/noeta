@@ -86,9 +86,10 @@ Conn = psycopg.AsyncConnection[Any]
 log = logging.getLogger("noeta.backends.stores.postgres")
 
 #: 2: holds moved to ``tree_holds`` (one holding worker per tree), and
-#: ``tasks.tenant``, ``tenant_usage`` and ``snapshots`` were added. A store
-#: at a later version than this code knows is refused.
-SCHEMA_VERSION = 2
+#: ``tasks.tenant``, ``tenant_usage`` and ``snapshots`` were added. 3:
+#: ``snapshots`` keyed by task and fold version. A store at a later version
+#: than this code knows is refused.
+SCHEMA_VERSION = 3
 _LOCK_CLASS = 0x6E6F6574  # "noet": the advisory-lock namespace for schema setup
 _TENANT_LOCK_CLASS = 0x6E6F7465  # "note": one claim at a time per limited tenant
 _HOLD_LOCK_CLASS = 0x6E6F7468  # "noth": one hold taken at a time per tree; claims share it
@@ -149,10 +150,11 @@ CREATE TABLE IF NOT EXISTS {s}.tree_holds (
 );
 CREATE INDEX IF NOT EXISTS tree_holds_until ON {s}.tree_holds (until);
 CREATE TABLE IF NOT EXISTS {s}.snapshots (
-    task_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
     seq     BIGINT NOT NULL,
     version TEXT NOT NULL,
-    data    BYTEA NOT NULL
+    data    BYTEA NOT NULL,
+    PRIMARY KEY (task_id, version)
 );
 """
 
@@ -254,7 +256,12 @@ class PostgresStore:
                 await conn.execute(self._q("INSERT INTO {s}.noeta_schema VALUES (%s)"),
                                    (SCHEMA_VERSION,))
             elif version < SCHEMA_VERSION:
-                await self._tell_version_1_holds(conn)
+                if version < 2:
+                    await self._tell_version_1_holds(conn)
+                else:  # version 2 kept one snapshot per task
+                    await conn.execute(self._q(
+                        "ALTER TABLE {s}.snapshots DROP CONSTRAINT snapshots_pkey,"
+                        " ADD PRIMARY KEY (task_id, version)"))
                 await conn.execute(self._q("UPDATE {s}.noeta_schema SET version = %s"),
                                    (SCHEMA_VERSION,))
 
@@ -771,9 +778,9 @@ class PostgresStore:
         self._deliver(changes)
         return reaped
 
-    async def snapshot(self, task_id: str) -> Snapshot | None:
-        return await self._conns.tx(lambda conn: snapshots.read(conn, self._q, task_id),
-                                    write=False)
+    async def snapshot(self, task_id: str, version: str | None = None) -> Snapshot | None:
+        return await self._conns.tx(
+            lambda conn: snapshots.read(conn, self._q, task_id, version), write=False)
 
     async def put_snapshot(self, task_id: str, snapshot: Snapshot) -> None:
         await self._conns.tx(lambda conn: snapshots.write(conn, self._q, task_id, snapshot))

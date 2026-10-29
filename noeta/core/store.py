@@ -35,8 +35,8 @@ Delta)`` pairs) to the other processes, and ``on_delta(callback)`` hears it
 without them keeps live output in its process.
 
 Snapshots (optional members ``snapshot`` / ``put_snapshot``, see
-:class:`Snapshot`) keep one folded state per task so a claim need not fold
-the whole log; a store without them folds from the start.
+:class:`Snapshot`) keep a folded state per task and fold version so a claim
+need not fold the whole log; a store without them folds from the start.
 """
 
 from __future__ import annotations
@@ -143,18 +143,26 @@ class Appended(Struct):
     at: float
 
 
+#: Snapshots a store keeps per task, each of another fold version.
+SNAPSHOT_VERSIONS = 2
+
+
 class Snapshot(Struct):
     """A task's folded state as of log seq ``seq`` (``noeta.core.snapshots``),
     used only by a runner whose fold ``version`` is the same.
 
     Optional store members, read with ``getattr``:
 
-    * ``async snapshot(task_id) -> Snapshot | None`` — the task's newest.
+    * ``async snapshot(task_id, version=None) -> Snapshot | None`` — the
+      task's snapshot of ``version``; without one, its newest of any.
     * ``async put_snapshot(task_id, snapshot) -> None`` — keep it unless the
-      task's stored one is at a later seq, or the task has ended. Needs no
+      task's stored one of the same version is at a later seq, or the task
+      has ended. One is kept per version, so workers of two fold versions
+      (a rolling upgrade) do not replace each other's; past
+      :data:`SNAPSHOT_VERSIONS` the one at the lowest seq goes. Needs no
       claim: a snapshot is a fold of a log prefix, which never changes.
 
-    The append that ends a task deletes its snapshot in the same
+    The append that ends a task deletes its snapshots in the same
     transaction: an ended task is never claimed again.
     """
 

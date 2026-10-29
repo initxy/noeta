@@ -64,6 +64,13 @@ class LostClaim(Exception):
     pass
 
 
+def _decoded(stored: Snapshot) -> TaskState | None:
+    try:
+        return snapshots.decode(stored.data)
+    except Exception:  # noqa: BLE001 — another fold's data: fold from the start
+        return None
+
+
 class TaskRun:
     def __init__(self, rt: Runtime, claim: Claim, *, sent: float | None = None) -> None:
         self.rt = rt
@@ -283,12 +290,21 @@ class TaskRun:
         stored: Snapshot | None = await get(self.task_id)
         if stored is None:
             return False
-        try:
-            state = snapshots.decode(stored.data)
-        except Exception:  # noqa: BLE001 — another fold's data: fold from the start
+        state = _decoded(stored)
+        if state is not None:
+            agent = state.agent
+        else:  # another fold's data (a rolling upgrade): the row names the agent
+            row = await self.store.get(self.task_id)
+            agent = row.agent if row is not None else ""
+        self._use_agent(agent)
+        if self.agent is None:
             return False
-        self._use_agent(state.agent)
-        if self.agent is None or stored.version != self.fold_version():
+        mine = self.fold_version()
+        if stored.version != mine:
+            # The newest is another fold version's: this version's own, if any.
+            stored = await get(self.task_id, mine)
+            state = _decoded(stored) if stored is not None else None
+        if stored is None or state is None or state.agent != agent:
             return False
         records = await self.store.read(self.task_id, after=stored.seq)
         self.state = fold(records, self.reducers, state=state)
