@@ -9,6 +9,9 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **A plugin file missing a package says how to add it.** Plugins install no dependencies;
+  one that imports a module noeta's environment lacks is listed as broken with the
+  `uv tool install --with` / `pip install` line that adds it.
 - **A stopped turn leaves background jobs running; `TaskStop` sends no end notice.** As in
   Claude Code, stopping the root's turn (Esc, `cancel` with `turn_only`) no longer kills the
   tree's `run_in_background` commands and monitors: they keep running and report their end

@@ -196,6 +196,19 @@ def _import(path: Path) -> Any:
     return module
 
 
+def _install_hint(exc: Exception) -> str:
+    """How to install a module a plugin file imports but noeta's environment
+    lacks: plugins install no dependencies (``noeta plugin add`` runs nothing
+    from the plugin), so the user adds them next to noeta."""
+    if not isinstance(exc, ModuleNotFoundError) or not exc.name:
+        return ""
+    top = exc.name.split(".", 1)[0]
+    return (f"; {top!r} is not installed where noeta runs, and plugins install nothing:"
+            f" add it there (uv tool install --reinstall --with {top} plus the source and"
+            f" extras you installed noeta with, or pip install {top} in noeta's environment;"
+            " the package's name may differ from the module's)")
+
+
 def load_plugin_files(directories: Iterable[str | Path],
                       admit: Callable[[str], bool] | None = None) -> list[str]:
     """Register the plugins (and channels) of the files in ``directories``
@@ -220,8 +233,9 @@ def load_plugin_files(directories: Iterable[str | Path],
                 version = _file_version(path)
                 module = _import(path)
             except Exception as exc:  # noqa: BLE001 — a user's file must not stop noeta
-                _broken[shown] = f"{type(exc).__name__}: {exc}"
-                log.warning("plugin file %s failed to import: %s", shown, exc)
+                _broken[shown] = f"{type(exc).__name__}: {exc}{_install_hint(exc)}"
+                log.warning("plugin file %s failed to import: %s%s", shown, exc,
+                            _install_hint(exc))
                 continue
             found = [(PLUGINS if issubclass(cls, Extension) else CHANNELS, cls)
                      for _n, cls in inspect.getmembers(module, inspect.isclass)

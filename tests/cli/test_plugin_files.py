@@ -98,6 +98,14 @@ def test_a_broken_file_is_named_when_its_plugin_is_asked_for(home: Path,
         from_settings(load_settings(), cwd=str(tmp_path))
 
 
+def test_a_file_missing_a_dependency_says_how_to_install_it(home: Path) -> None:
+    (home / "plugins" / "needs.py").write_text("import some_missing_pkg_xyz.sub\n")
+    assert registry.load_plugin_files([home / "plugins"]) == []
+    why = registry.broken_plugin_files()[str(home / "plugins" / "needs.py")]
+    assert "ModuleNotFoundError" in why
+    assert "--with some_missing_pkg_xyz " in why and "pip install some_missing_pkg_xyz " in why
+
+
 def test_an_installed_plugin_wins_a_name_clash(home: Path) -> None:
     _write(home / "plugins" / "mine.py", "web")
     assert registry.load_plugin_files([home / "plugins"]) == []

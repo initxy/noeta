@@ -87,6 +87,8 @@ noeta plugin remove your-plugin
 ```
 
 Installing runs nothing from the plugin: no install scripts, git hooks or dependency installs.
+A plugin that imports a package noeta's environment lacks is listed as broken, with the
+`uv tool install --with` / `pip install` line that adds it there.
 A marketplace is only read, to find where a plugin comes from; an entry fetched from a
 repository installs at its `sha`, or at `--commit <sha>` when it pins none (a marketplace that
 is itself a repository needs `<url>@<commit>`).
