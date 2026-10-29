@@ -129,10 +129,14 @@ servers and runs on many machines.
   `ToolContext.allowed_outright`), never on older Claude models (`ToolContext.model`); with no
   permission layer the check always holds.
 - D19 (`os-fix-tools`) Own words, checked: `scripts/parity/own_words.py` fails on any run of
-  45+ characters shared with Claude Code's recorded texts. The repository keeps only hashed
-  43-character windows at stride 3 (`parity/<version>/cc-windows.bin`), so nothing of Claude
-  Code's text is committed; protocol literals go in `parity/own-words-allowed.txt`. Texts the
-  recordings never show (deferred tools, MCP sign-in) stay a review matter.
+  45+ characters shared with Claude Code's recorded texts. It hashes 43-character windows at
+  stride 3 in memory from the recordings outside the repository (`NOETA_PARITY_RECORDINGS`,
+  default `~/cc-recordings`) and skips with a notice where there are none (CI). No index is
+  committed: unkeyed hashes of overlapping windows can be reversed from a known opening
+  (`os-fix-r2docs` removed the one `os-fix-tools` committed; it stays in branch history). What
+  derived parity data is committed, and why: `scripts/parity/README.md`. Protocol literals go
+  in `parity/own-words-allowed.txt`. Texts the recordings never show (deferred tools, MCP
+  sign-in) stay a review matter.
 - D20 (`os-fix-tools`) Background and foreground job logs: the temp directory on disk, one
   directory per worker process (`w<pid>`, dead ones removed on this machine), each stream kept
   to its first 64 MB; a foreground command's guard kills it 30 s after its worker stops.

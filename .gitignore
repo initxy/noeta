@@ -60,3 +60,6 @@ bench/logs/
 # make parity output (the replay capture and the report it writes)
 parity/out/
 parity/report.md
+
+# Claude Code's wording, even hashed, stays out of the repository
+parity/*/cc-windows.bin

@@ -62,5 +62,27 @@ def test_the_recorded_text_check_finds_a_shared_run(tmp_path: Path) -> None:
     assert not own_words.matches(head + " but then ours", indexed, [head])
 
 
+def test_no_index_of_claude_code_text_is_committed() -> None:
+    assert not list((ROOT / "parity").rglob("cc-windows.bin"))
+
+
+def test_recordings_are_read_from_outside_the_repository(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    for name in ("2.1.312", "2.1.312-r2", "2.1.312-r2-attempts", "0.0.1"):
+        (tmp_path / name / "m1").mkdir(parents=True)
+        (tmp_path / name / "m1" / "0001.json").write_text(json.dumps({"body": {}}))
+    monkeypatch.setenv(own_words.RECORDINGS_ENV, str(tmp_path))
+    assert [p.name for p in own_words.recordings()] == ["2.1.312", "2.1.312-r2"]
+
+    monkeypatch.setenv(own_words.RECORDINGS_ENV, str(tmp_path / "absent"))
+    assert own_words.recordings() == []
+    assert own_words.main([]) == 0
+    assert capsys.readouterr().out.startswith("own-words: skipped, no Claude Code recordings")
+
+
 def test_noeta_repeats_no_recorded_text_of_claude_code() -> None:
-    assert own_words.check() == []
+    found = own_words.recordings()
+    if not found:
+        pytest.skip(f"no Claude Code recordings under {own_words.recordings_root()} "
+                    f"(set {own_words.RECORDINGS_ENV})")
+    assert own_words.check(own_words.load_index(found)) == []
