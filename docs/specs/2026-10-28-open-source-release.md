@@ -212,6 +212,9 @@ servers and runs on many machines.
 - [ ] Postgres contract tests and the 3.11 / 3.12 / 3.13 matrix run locally green.
 - [ ] Final independent review on code only: no P0/P1.
 
+### Follow-ups (after this release; each moves to a spec of its own before this one is `done`)
+- [ ] Deferred tool loading out of the kernel (ADR-016): an `Extension` way to offer tools computed from the task's other tools, then `ToolSearchTool`, its description and the placeholder into a `tool_search` plugin; request bytes unchanged (`make parity` 0), existing snapshots still valid.
+
 ## Acceptance criteria
 
 1. `make check` green; Postgres contract tests and Python 3.11/3.12/3.13 run locally green.
