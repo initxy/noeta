@@ -369,3 +369,23 @@ async def test_a_workspace_inside_the_server_directory_stays_the_tenants(
     assert await tenant.read_bytes("src/f") == b"MYFILE"
     with pytest.raises(PermissionError, match="server's own directories"):
         await tenant.read_bytes(str(server / ".env"))
+
+
+@needs_bwrap
+async def test_a_server_directory_inside_the_workspace_stays_the_servers(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mine = tmp_path / "ws"
+    server = mine / "server"
+    server.mkdir(parents=True)
+    (server / ".env").write_text("SERVERENV")
+    (mine / "f").write_text("MYFILE")
+    monkeypatch.chdir(server)
+    fence = TenantFence(home=str(tmp_path / "home"), workspaces={"acme": str(mine)})
+    tenant = local_env_for(SandboxSettings(enabled=True), fence)(_state("acme", mine))
+    assert isinstance(tenant, LocalExecEnv)
+    out = await _out(tenant, f"cat {server}/.env; echo PWN > {server}/.env; cat f; "
+                             "echo NEW > g && cat g")
+    assert "SERVERENV" not in out and "MYFILE" in out and "NEW" in out, out
+    assert (server / ".env").read_text() == "SERVERENV"
+    with pytest.raises(PermissionError, match="server's own directories"):
+        await tenant.read_bytes(str(server / ".env"))

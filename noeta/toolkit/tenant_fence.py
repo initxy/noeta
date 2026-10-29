@@ -242,8 +242,10 @@ class TenantFence:
         workspace = self.workspaces.get(tenant)
         others = [w for name, w in self.workspaces.items() if name != tenant]
         temps = self.temp_places()
-        servers = [d for d in self.servers()
-                   if not (workspace and _within(_real(d), _real(workspace)))]
+        # A server directory inside the workspace stays hidden (the
+        # workspace is mounted first); one holding the workspace is hidden
+        # with the workspace mounted again inside it.
+        servers = self.servers()
         creds = [c for c in credential_paths() if os.path.lexists(c)]
         denied = [home, *(p for p in (self.spill_root, self.plans_dir) if p),
                   *(s for s in SYSTEM_PATHS if s != "/proc"), *self.store_files, *others,

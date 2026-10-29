@@ -839,3 +839,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   whole config through the unguarded client, so a tenant could rewind a task host code made
   with plugin keys (`permission_rules`) or a mode a request may not ask for, on the
   `default` queue.
+- A non-default tenant's sandboxed commands cannot read or write a server directory (the
+  worker's working directory, serve's `--allow-root`) that lies inside the tenant's
+  workspace. Before, `TenantFence.confine` left such a directory out of what it hides, so
+  the tenant's `Bash` read and overwrote the server's files there while its file tools were
+  refused.
