@@ -113,6 +113,19 @@ async def test_timeout_reaps_backgrounded_grandchild(
     assert time.monotonic() - start < 8.0
 
 
+async def test_timeout_kills_the_group_after_its_leader_exited(
+    env: LocalExecEnv, tmp_path: Path
+) -> None:
+    """The direct child exited (and was reaped) while a grandchild keeps
+    its output open: the timeout still kills the grandchild."""
+    pid_file = tmp_path / "grandchild.pid"
+    script = f"sleep 77 & echo $! > {pid_file}; exit 0"
+    result = await env.run(["/bin/sh", "-c", script], timeout=2)
+    assert result.timed_out is True
+    grandchild = int(pid_file.read_text().strip())
+    assert await _wait_dead(grandchild), f"grandchild {grandchild} survived"
+
+
 async def test_timeout_keeps_partial_output(env: LocalExecEnv) -> None:
     result = await env.run(["bash", "-c", "echo hi; sleep 30"], timeout=1, output_cap=1024)
     assert result.timed_out is True
