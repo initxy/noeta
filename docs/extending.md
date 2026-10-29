@@ -70,7 +70,8 @@ A Claude Code plugin directory (`.claude-plugin/plugin.json`, `skills/`, `agents
 plugins that read those formats; commands are `/<plugin>:<command>`. `${CLAUDE_PLUGIN_ROOT}` and
 `${CLAUDE_PLUGIN_DATA}` (`~/.noeta/plugin-data/<name>`) are substituted. From a project, its MCP
 servers start only once `.noeta/mcp.json` consents. Monitors, `bin/`, LSP servers, themes and
-output styles are not loaded. noeta never reads `~/.claude` or `.claude/`.
+output styles are not loaded (reasons [below](#what-noeta-does-not-build-and-why)). noeta never
+reads `~/.claude` or `.claude/`.
 
 ### Installing
 
@@ -129,6 +130,8 @@ Where noeta is not strictly ahead, and why:
   their API. noeta's isolation options are the exec env, MCP servers and command hooks.
 - **Distribution.** No hosted gallery or auto-update: Python packaging, pinned git installs and
   Claude Code marketplaces cover it without running an index or moving code under a person.
+- **Claude Code plugin parts noeta does not load** (monitors, `bin/`, LSP servers, output
+  styles, themes): each has its reason and the noeta way in the table below.
 - **Interactive configuration.** Claude Code prompts for `userConfig`; noeta reads
   `config.toml` with secret references (environment or OS keyring) instead of a dialog.
 
@@ -144,4 +147,7 @@ Where noeta is not strictly ahead, and why:
 | Agents installing plugins into their own harness | Model output would install code into the harness; writes to `.noeta/` ask the person. |
 | Any default upload of logs or telemetry | Never. An opt-in exporter can be an `on_event` plugin the operator installs. |
 | Monitors and `bin/` from plugins | A per-session background process does not fit a task that holds no worker while waiting (use a channel or a timer); `bin/` silently widens what Bash runs. |
+| LSP servers from plugins | A language server is a long-lived process holding one checkout's state on one machine, while a task holds no worker between turns and resumes on any worker. To give the model a checker's findings, run the linter or type checker as a tool in the task's exec env (the shape of `examples/run-tests`), or put a language server behind an MCP server. |
+| Output styles from plugins | noeta has no style switch of its own: a style is prompt text a plugin adds, recorded when the task starts so a resumed task sends the same bytes. `examples/house-style` does this for a style file in Claude Code's format. |
+| Themes | Colors belong to a front end, and front ends import no plugin; each front end has its own settings. |
 | A second interface for a channel's outbound side | Outbound is an ordinary `Extension` (`on_event`); only the listener is new. |
