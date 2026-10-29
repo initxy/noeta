@@ -11,8 +11,8 @@ import pytest
 
 from noeta.backends.stores.sqlite import SCHEMA_VERSION, SqliteStore
 from noeta.core.errors import StoreUnavailable
-from noeta.core.events import TaskCreated
-from noeta.core.store import NewTask
+from noeta.core.events import External, TaskCreated
+from noeta.core.store import HOLD_LOST, NewTask
 
 
 async def test_a_locked_database_is_store_unavailable(tmp_path: Path) -> None:
@@ -94,3 +94,33 @@ async def test_a_version_1_store_is_upgraded_in_place(tmp_path: Path) -> None:
     assert conn.execute("SELECT version FROM noeta_schema").fetchall() == [(SCHEMA_VERSION,)]
     conn.close()
     assert SCHEMA_VERSION == 2
+
+
+async def test_upgrading_a_version_1_store_tells_its_held_trees(tmp_path: Path) -> None:
+    """Version 1 kept holds in a ``holds`` table that version 2 does not
+    read: each tree held there is told its hold is gone (its background
+    jobs' worker no longer holds it) instead of being let go silently."""
+    path = str(tmp_path / "t.db")
+    store = SqliteStore(path)
+    await store.create(NewTask(task_id="R", created=TaskCreated(agent="a")))
+    await store.create(NewTask(task_id="S", created=TaskCreated(agent="a", parent_id="R",
+                                                                root_id="R")))
+    await store.create(NewTask(task_id="free", created=TaskCreated(agent="a")))
+    await store.close()
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE holds (root_id TEXT PRIMARY KEY, worker TEXT NOT NULL,"
+                 " until REAL NOT NULL)")
+    conn.execute("INSERT INTO holds VALUES ('R', 'w-old', 1e12)")
+    conn.execute("UPDATE noeta_schema SET version = 1")
+    conn.commit()
+    conn.close()
+    lost = External(name=HOLD_LOST, data={"worker": "w-old", "epoch": 0})
+    for _ in range(2):  # told once
+        store = SqliteStore(path)
+        assert [i.body for i in await store.inbox("R")] == [lost]
+        assert [i.body for i in await store.inbox("S")] == [lost]
+        assert await store.inbox("free") == []
+        await store.close()
+    conn = sqlite3.connect(path)
+    assert conn.execute("SELECT count(*) FROM holds").fetchone() == (1,)  # kept
+    conn.close()

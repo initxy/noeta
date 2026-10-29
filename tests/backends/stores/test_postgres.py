@@ -256,3 +256,30 @@ async def test_a_hold_waits_for_a_claim_of_its_tree_being_taken(pg: Any) -> None
         await claimer.commit()
         assert await asyncio.wait_for(hold, 10) is None
     await store.close()
+
+
+async def test_upgrading_a_version_1_schema_tells_its_held_trees(pg: Any) -> None:
+    import psycopg
+
+    from noeta.core.events import External
+    from noeta.core.store import HOLD_LOST
+
+    store = pg.store()
+    await store.create(new("R"))
+    await store.create(NewTask(task_id="S", created=TaskCreated(agent="a", parent_id="R",
+                                                                root_id="R")))
+    await store.create(new("free"))
+    await store.close()
+    schema = f'"{pg.schema}"'
+    with psycopg.connect(pg.dsn, autocommit=True) as conn:
+        conn.execute(f"CREATE TABLE {schema}.holds (root_id TEXT PRIMARY KEY,"
+                     " worker TEXT NOT NULL, until DOUBLE PRECISION NOT NULL)")
+        conn.execute(f"INSERT INTO {schema}.holds VALUES ('R', 'w-old', 1e12)")
+        conn.execute(f"UPDATE {schema}.noeta_schema SET version = 1")
+    lost = External(name=HOLD_LOST, data={"worker": "w-old", "epoch": 0})
+    for _ in range(2):  # told once
+        store = pg.store()
+        assert [i.body for i in await store.inbox("R")] == [lost]
+        assert [i.body for i in await store.inbox("S")] == [lost]
+        assert await store.inbox("free") == []
+        await store.close()

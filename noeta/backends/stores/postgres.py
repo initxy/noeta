@@ -297,8 +297,25 @@ class PostgresStore:
                 await conn.execute(self._q("INSERT INTO {s}.noeta_schema VALUES (%s)"),
                                    (SCHEMA_VERSION,))
             elif version < SCHEMA_VERSION:
+                await self._tell_version_1_holds(conn)
                 await conn.execute(self._q("UPDATE {s}.noeta_schema SET version = %s"),
                                    (SCHEMA_VERSION,))
+
+    async def _tell_version_1_holds(self, conn: Conn) -> None:
+        """Version 1 kept holds in ``holds``, which this version does not
+        read: each tree held there is told the hold is gone (``hold_lost``
+        with epoch 0, which no hold of ``tree_holds`` has). The table itself
+        is kept."""
+        cur = await conn.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = %s"
+            " AND table_name = 'holds'", (self.schema,))
+        if await cur.fetchone() is None:
+            return
+        cur = await conn.execute(self._q("SELECT root_id, worker FROM {s}.holds ORDER BY root_id"))
+        changes: list[tuple[str, ChangeKind]] = []
+        for root_id, worker in await cur.fetchall():
+            await self._lost_posts(conn, str(root_id), str(worker), 0, changes)
+        await self._notify(conn, changes)
 
     async def _tx(self, body: Callable[[Conn], Awaitable[T]], *, write: bool = True) -> T:
         """Run ``body`` in one transaction (or, for reads, one autocommit
