@@ -123,7 +123,7 @@ async def test_upgrading_a_version_1_store_tells_its_held_trees(tmp_path: Path) 
         assert await store.inbox("free") == []
         await store.close()
     conn = sqlite3.connect(path)
-    assert conn.execute("SELECT count(*) FROM holds").fetchone() == (1,)  # kept
+    assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'holds'").fetchone() is None
     conn.close()
 
 

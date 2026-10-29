@@ -42,10 +42,9 @@ noeta serve --no-worker --host 0.0.0.0   # the API, on one or more machines
   versions must not share a store. The first process of the new version moves the store's
   schema forward in place; a process older than the store's schema refuses to open it
   (`StoreUnavailable`). On sqlite, a binary from before schema version 2 does not refuse:
-  left running, it keeps writing the upgraded store and holds trees in the old `holds` table,
-  which newer workers do not read, so stop every old sqlite worker before the upgrade. A
-  store from before schema version 2 keeps its old `holds` table, unused since; dropping it
-  is left to you.
+  left running, it fails once the upgrade has dropped the old `holds` table, so stop every old
+  sqlite worker before the upgrade. The upgrade tells each tree held in that table that its
+  hold is gone, then drops the table.
 
 ## Where commands run (the workspace)
 

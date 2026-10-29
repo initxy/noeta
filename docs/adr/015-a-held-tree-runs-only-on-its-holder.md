@@ -22,7 +22,8 @@ workers, one of them without the holder's jobs, which is what ADR-011 set out to
   if another worker now holds the tree, rolls back and claims afresh
   (`noeta/backends/stores/postgres.py`). sqlite writes are already serialized.
 - Upgrading a version 1 store posts `hold_lost` (epoch 0) for its old `holds` rows, so a task
-  that waited on such a hold is told; the old table is kept, unused.
+  that waited on such a hold is told; the old table is then dropped (maintainer's call,
+  2026-10-29; it was kept, unused, before).
 
 ## Rationale
 
@@ -30,8 +31,6 @@ A tree has one holder only if a hold and a running claim of the same tree can ne
 succeed. A lease is what says a worker is running a task, so the hold checks leases; the shared
 lock makes the claim's second look and the hold's check see each other's commits without
 serializing claims of different trees, or of one tree among themselves.
-
-Rejected: dropping the old `holds` table on upgrade (data deletion needs the maintainer).
 
 ## Consequences
 

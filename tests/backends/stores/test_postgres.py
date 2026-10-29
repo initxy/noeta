@@ -335,6 +335,9 @@ async def test_upgrading_a_version_1_schema_tells_its_held_trees(pg: Any) -> Non
         assert [i.body for i in await store.inbox("S")] == [lost]
         assert await store.inbox("free") == []
         await store.close()
+    with psycopg.connect(pg.dsn, autocommit=True) as conn:
+        assert conn.execute("SELECT 1 FROM information_schema.tables WHERE table_schema = %s"
+                            " AND table_name = 'holds'", (pg.schema,)).fetchone() is None
 
 
 async def test_a_schema_without_hold_queues_gains_the_column(pg: Any) -> None:

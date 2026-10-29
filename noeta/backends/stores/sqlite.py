@@ -158,6 +158,7 @@ def _set_version(conn: sqlite3.Connection) -> None:
             else:
                 _key_snapshots_by_version(conn)
             conn.execute("UPDATE noeta_schema SET version = ?", (SCHEMA_VERSION,))
+        conn.execute("DROP TABLE IF EXISTS holds")  # version 1's, told above
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
@@ -180,7 +181,7 @@ def _key_snapshots_by_version(conn: sqlite3.Connection) -> None:
 def _tell_version_1_holds(conn: sqlite3.Connection) -> None:
     """Version 1 kept holds in ``holds``, which this version does not read:
     each tree held there is told the hold is gone (``hold_lost`` with epoch
-    0, which no hold of ``tree_holds`` has). The table itself is kept."""
+    0, which no hold of ``tree_holds`` has); the table is dropped after."""
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'holds'"
                     ).fetchone() is None:
         return

@@ -268,12 +268,13 @@ class PostgresStore:
                         " ADD PRIMARY KEY (task_id, version)"))
                 await conn.execute(self._q("UPDATE {s}.noeta_schema SET version = %s"),
                                    (SCHEMA_VERSION,))
+            await conn.execute(self._q("DROP TABLE IF EXISTS {s}.holds"))
 
     async def _tell_version_1_holds(self, conn: Conn) -> None:
         """Version 1 kept holds in ``holds``, which this version does not
         read: each tree held there is told the hold is gone (``hold_lost``
-        with epoch 0, which no hold of ``tree_holds`` has). The table itself
-        is kept."""
+        with epoch 0, which no hold of ``tree_holds`` has); the table is
+        dropped after."""
         cur = await conn.execute(
             "SELECT 1 FROM information_schema.tables WHERE table_schema = %s"
             " AND table_name = 'holds'", (self.schema,))
