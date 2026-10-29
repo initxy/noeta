@@ -10,7 +10,7 @@ A row without an id is a difference the replay cannot see.
 | id | difference | reason |
 |---|---|---|
 | | Tools run after the assistant message is logged, not while it streams. | Log-first crash safety. |
-| | A tool started before a crash answers "result unknown" instead of re-running. | A call may have had effects; running it twice is worse than asking. |
+| | A tool started before a crash answers "result unknown", unless it can tell its own outcome (`Tool.recover`) or is safe to run again (`retry_safe`: it re-runs, a few times at most). | A call may have had effects; running it twice is worse than asking. |
 | | Waits (approval, sub-agent, timer) survive restarts and move between machines. | Durable tasks. |
 | `6c773c2c` | The results of one reply's calls go back in call order; Claude Code answered a `ToolSearch` ahead of the background `Bash` call made before it (r2 m5). | Results are logged per call and folded in call order; the order of a batch is the kernel's, not a model-visible rule noeta can see the reason for in the recording. |
 | `e9d39432` | After a compaction Claude Code sends an empty system turn carrying `output_config` (its effort); noeta sends none. | noeta puts the effort in the request's top-level `output_config` on every call, which the comparator already matches; the empty turn carries nothing the model reads. |
@@ -101,10 +101,8 @@ Known differences that no kernel or product reason forces: follow-ups, not accep
 | difference | where |
 |---|---|
 | `AskUserQuestion` needs every question answered; Claude Code accepts unanswered questions and a note per question. | `noeta/plugins/ask_user` |
-| MCP connections have no idle timeout. | `noeta/plugins/mcp` |
 | MCP result sizes are estimated (four characters a token, 1,600 an image), not counted. | `noeta/plugins/mcp/results.py` |
 | `WebFetch` has no raw-markdown answer for known documentation sites. | `noeta/plugins/web` |
 | `Bash` does not note that a command changed a file the model has read. | `noeta/plugins/shell`, `noeta/plugins/fs` |
 | The file tools refuse UTF-16 text files (Claude Code reads and writes them). | `noeta/plugins/fs` |
-| A background agent's transcript file is rewritten whole on each change, so the cost grows with the conversation. | `noeta/plugins/subtasks` |
 | Headless: SDK hook callbacks (`initialize.hooks`) are ignored with a warning; `--permission-prompt-tool` takes only `stdio`, not an MCP tool. | `noeta/host/_stream_json_control.py`, `noeta/cli/headless.py` |
