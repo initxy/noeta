@@ -6,6 +6,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import posixpath
+import re
 from collections.abc import Callable, Sequence
 
 from noeta.core.tool import ToolContext, ToolOutput
@@ -25,6 +26,7 @@ __all__ = [
     "record_written",
     "seen_whole",
     "stale_error",
+    "unread_write_allowed",
 ]
 
 #: ``ctx -> directories this call may write outside the workspace``. Asked
@@ -52,6 +54,33 @@ async def authorized_roots(
     return tuple(roots)
 
 
+#: Claude models that keep the read-first check whatever the permissions
+#: say (Claude Code's rule): Opus up to 4.6, Sonnet and Haiku up to 4.5, and
+#: every Claude 3 or older model.
+_FAMILY_VERSION = re.compile(r"claude-(opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?!\d)")
+_LAST_STRICT = {"opus": (4, 6), "sonnet": (4, 5), "haiku": (4, 5)}
+
+
+def reads_first_always(model: str) -> bool:
+    """Whether ``model`` is an older Claude model, for which the read-first
+    check is never skipped."""
+    name = model.lower().rsplit("/", 1)[-1]
+    if re.search(r"claude-(?:[0-3](?:[-.]|$)|instant)", name):
+        return True
+    found = _FAMILY_VERSION.search(name)
+    if found is None:
+        return False
+    version = (int(found.group(2)), int(found.group(3) or 0))
+    return version <= _LAST_STRICT[found.group(1)]
+
+
+def unread_write_allowed(ctx: ToolContext) -> bool:
+    """A write may skip the read-first check: the permission layer allowed
+    it outright (a mode or an allow rule, nobody asked), on a model that is
+    not an older Claude model. Never without a permission layer."""
+    return ctx.allowed_outright and not ctx.approved and not reads_first_always(ctx.model)
+
+
 def read_precondition_error(
     ctx: ToolContext, resolved: str, raw: bytes, *, tool_name: str, verb: str,
     unread_ok: bool = False, partial_ok: bool = False, check_stale: bool = True,
@@ -61,8 +90,8 @@ def read_precondition_error(
     would change content it has not seen.
 
     Claude Code skips the read-first part for a write its permissions allow
-    outright; here that is a call no person was asked about
-    (``not ctx.approved``), which the caller passes as ``unread_ok``.
+    outright (:func:`unread_write_allowed`), which the caller passes as
+    ``unread_ok``; with no permission layer the check always holds.
     ``partial_ok`` extends that to a read cut to fit the token ceiling
     (``Edit``; a whole-file ``Write`` over a partial view is always
     refused). ``check_stale=False`` leaves a change since the read to the

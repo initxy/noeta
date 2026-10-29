@@ -4,6 +4,7 @@ ever removed, and not with unsaved work unless told to."""
 
 from __future__ import annotations
 
+import dataclasses
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from noeta.core.tool import ToolContext
 from noeta.plugins.shell import Shell
 from noeta.plugins.shell.bash import ShellState, reduce_shell
 from noeta.plugins.shell.worktree import EnterWorktreeTool, ExitWorktreeTool
+from noeta.toolkit.tools import Workspace, path_within
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -79,6 +81,19 @@ async def test_remove_refuses_unsaved_work_unless_discarded(repo: Path) -> None:
     assert not err and not tree.exists()
 
 
+async def test_remove_refuses_when_git_cannot_say_what_would_be_lost(repo: Path) -> None:
+    s = Driver(repo)
+    await s.call(EnterWorktreeTool(), {"name": "w"})
+    tree = repo / ".noeta" / "worktrees" / "w"
+    assert s.state.worktree is not None
+    # A base git no longer knows: ``rev-list`` fails, so nothing is known.
+    s.state = dataclasses.replace(s.state, worktree={**s.state.worktree, "base": "0" * 40})
+    err, text = await s.call(ExitWorktreeTool(), {"action": "remove"})
+    assert err and "git" in text and tree.exists()
+    err, _ = await s.call(ExitWorktreeTool(), {"action": "remove", "discard_changes": True})
+    assert not err and not tree.exists()
+
+
 async def test_keep_and_entering_an_existing_worktree(repo: Path, tmp_path: Path) -> None:
     s = Driver(repo)
     err, text = await s.call(ExitWorktreeTool(), {"action": "keep"})
@@ -115,3 +130,24 @@ def test_the_shell_offers_both_tools_deferred() -> None:
     tools = {t.name: t for t in Shell(background=False)._tools}
     assert tools["EnterWorktree"].deferred and tools["ExitWorktree"].deferred
     assert tools["ExitWorktree"].input_schema["required"] == ["action"]
+
+
+async def test_a_worktree_entered_from_a_subdirectory_is_usable(repo: Path) -> None:
+    """A task started in ``repo/pkg``: Bash and the file tools stay inside
+    that directory, so the worktree goes under it and the shell starts in
+    the worktree's own ``pkg``."""
+    pkg = repo / "pkg"
+    pkg.mkdir()
+    (pkg / "b.txt").write_text("b\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "pkg")
+    s = Driver(pkg)
+    err, text = await s.call(EnterWorktreeTool(), {"name": "sub"})
+    assert not err, text
+    tree = pkg / ".noeta" / "worktrees" / "sub"
+    assert s.state.cwd == str(tree / "pkg") and (tree / "pkg" / "b.txt").is_file()
+    ws = await Workspace.of(s.env)
+    assert path_within(s.state.cwd, ws.root)
+    assert await ws.resolve_write(str(tree / "pkg" / "c.txt")) == str(tree / "pkg" / "c.txt")
+    err, text = await s.call(ExitWorktreeTool(), {"action": "remove"})
+    assert not err and not tree.exists() and s.state.cwd == str(pkg)

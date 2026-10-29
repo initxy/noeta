@@ -18,15 +18,12 @@ def command_in_allowlist(command: str, rules: tuple[HardeningRule, ...]) -> bool
 @pytest.mark.parametrize(
     "command",
     [
-        "find . -maxdepth 0 {-exec,touch} /tmp/x {} +",
-        "rg --files {--pre,touch} x",
         "git diff {--output,/dev/null}",
-        "grep -rn foo *.py",
-        "ls a?",
-        "ls a[bc]",
-        "ls ~",
-        "ls ~/other",
-        "ls --dir=~/x",
+        "git diff *.py",
+        "git log a?",
+        "git log a[bc]",
+        "git diff ~",
+        "git log ~/other",
     ],
 )
 def test_unquoted_expansion_is_never_allowlisted(command: str) -> None:
@@ -36,11 +33,9 @@ def test_unquoted_expansion_is_never_allowlisted(command: str) -> None:
 @pytest.mark.parametrize(
     "command",
     [
-        "find . -name '*.py'",
-        'find . -name "*.py"',
-        "find . -name \\*.py",
-        "rg 'a{1,2}' src",
-        'grep -rn "x[0-9]" .',
+        "git diff '*.py'",
+        'git diff "*.py"',
+        "git diff \\*.py",
         "git log HEAD~1",
         "git log -n 5 --oneline",
     ],
@@ -49,16 +44,12 @@ def test_quoted_or_escaped_expansion_stays_allowlisted(command: str) -> None:
     assert command_in_allowlist(command, _RULES) is True
 
 
-# -- what the scout prompts recommend runs, the rest needs sign-off ----------
+# -- the git commands that only read run hardened; nothing else matches -----
 
 
 @pytest.mark.parametrize(
     "command",
     [
-        "ls",
-        "ls -la packages",
-        "find . -name shell_rules.py",
-        "find packages -type f -name '*.md'",
         "git status",
         "git status --short",
         "git log",
@@ -69,12 +60,6 @@ def test_quoted_or_escaped_expansion_stays_allowlisted(command: str) -> None:
         "git diff",
         "git diff --stat",
         "git diff -- noeta/core",
-        "pytest -q",
-        "uv run pytest -x",
-        "npm test",
-        "pnpm test",
-        "rg foo src",
-        "grep -rn foo .",
     ],
 )
 def test_representative_invocations_match(command: str) -> None:
@@ -85,7 +70,9 @@ def test_representative_invocations_match(command: str) -> None:
     "command",
     [
         "git log --ext-diff",
-        "find packages -type f -name *.md",
+        "ls -la",
+        "pytest -q",
+        "rg foo src",
         "git log --format=%H",
         "git commit -m wip",
         "git add .",
@@ -96,13 +83,6 @@ def test_representative_invocations_match(command: str) -> None:
         "git status | cat",
         "ls; rm x",
         "echo $(id)",
-        "find . -delete",
-        "find . -exec rm {} ;",
-        "rg --pre=cat x",
-        "rg --pre cat x",
-        "rg --hostname-bin x",
-        "pytest --pdb",
-        "uv run python x.py",
         "git diff --output=x",
         "git status --ignored",
         "ls 'unbalanced",
@@ -111,11 +91,6 @@ def test_representative_invocations_match(command: str) -> None:
 )
 def test_state_changing_and_unbounded_commands_do_not_match(command: str) -> None:
     assert command_in_allowlist(command, _RULES) is False
-
-
-def test_test_runner_rules_are_marked_as_running_workspace_code() -> None:
-    marked = {r.label for r in DEFAULT_SHELL_RULES if r.runs_workspace_code}
-    assert marked == {"pytest", "uv_run_pytest", "npm_test", "pnpm_test"}
 
 
 # -- hardening ---------------------------------------------------------------
@@ -137,22 +112,17 @@ def test_test_runner_rules_are_marked_as_running_workspace_code() -> None:
 )
 def test_git_rules_harden_their_argv(command: str, hardened: list[str]) -> None:
     rule = matching_rule(command, _RULES)
-    assert rule is not None and rule.harden is not None
+    assert rule is not None
     argv = parse_argv(command)
     assert argv is not None
     assert rule.harden(argv) == hardened
-
-
-def test_non_git_rules_do_not_harden() -> None:
-    rule = matching_rule("ls -la", _RULES)
-    assert rule is not None and rule.harden is None
 
 
 # -- rule plumbing -------------------------------------------------------------
 
 
 def test_rule_matches_program_and_subcommand_exactly() -> None:
-    rule = HardeningRule("npm", "start", lambda tail: True, "npm_start")
+    rule = HardeningRule("npm", "start", lambda tail: True, lambda argv: argv)
     assert rule.matches(["npm", "start", "--x"])
     assert not rule.matches(["npm"])
     assert not rule.matches(["npm", "test"])

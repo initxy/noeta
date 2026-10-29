@@ -28,7 +28,9 @@ Kinds:
   result (a cut read's paging hint); ``notice_sent`` (the reminder that
   carried it) clears it.
 
-An unknown kind or malformed data leaves the state unchanged.
+Only the :data:`MAX_FILES` most recently read or written files are
+remembered (and told about); an older one counts as never read. An unknown
+kind or malformed data leaves the state unchanged.
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ __all__ = [
     "KIND_NOTICE",
     "KIND_NOTICE_SENT",
     "KIND_READ",
+    "MAX_FILES",
     "FileRead",
     "FsState",
     "current_fs_state",
@@ -60,6 +63,8 @@ KIND_CHANGED = "changed"
 KIND_FORGET_RANGES = "forget_ranges"
 KIND_NOTICE = "notice"
 KIND_NOTICE_SENT = "notice_sent"
+#: Files remembered as read at most: the oldest are forgotten past it.
+MAX_FILES = 1000
 
 
 class FileRead(Struct):
@@ -106,6 +111,8 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
             lines = None
         reads = dict(base.reads)
         reads.pop(path, None)
+        while len(reads) >= MAX_FILES:
+            del reads[next(iter(reads))]
         reads[path] = FileRead(digest=digest, mtime=float(mtime), range=lines,
                                partial=data.get("partial") is True,
                                whole=data.get("whole") is not False)
@@ -127,7 +134,9 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
         path, digest = data.get("path"), data.get("digest")
         if not isinstance(path, str) or not isinstance(digest, str):
             return base
-        return msgspec.structs.replace(base, noticed={**base.noticed, path: digest})
+        noticed = {p: d for p, d in base.noticed.items() if p != path and p in base.reads}
+        noticed[path] = digest
+        return msgspec.structs.replace(base, noticed=noticed)
     return base
 
 

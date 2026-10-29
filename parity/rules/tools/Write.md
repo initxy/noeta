@@ -30,7 +30,7 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 |---|---|---|
 | `tool.Write.1` | Purpose line: writes a file, overwriting any existing one. | covered |
 | `tool.Write.2` | Use it to create a file or to replace a file already read in full. | covered |
-| `tool.Write.3` | Overwriting an existing file that was not read first fails. | covered (also fails when changed since the read; skipped like `Edit`'s for a write allowed outright, never after a partial view) |
+| `tool.Write.3` | Overwriting an existing file that was not read first fails. | covered (also fails when changed since the read; skipped like `Edit`'s for a write the permission layer allowed outright, never after a partial view) |
 | `tool.Write.4` | For a partial change use `Edit`. | covered |
 | `tool.Write.5` | The description says nothing about parent directories, outside-workspace paths, placeholders or diffs. | covered |
 | `tool.Write.6` | Observed: the plan file is written with `Write` under the config dir's `plans/` folder, outside the project (`m1/0060`). | see `reminders.md` / plan mode |

@@ -193,7 +193,7 @@ class ReadMcpResourceTool:
     clearable = True
     deferred = True
     description = """
-Reads one resource from an MCP server, given the server's name and the resource URI.
+Reads one resource from an MCP server, given the server's name and a resource's URI.
 
 Parameters:
 - server (required): the name of the MCP server, as configured
@@ -268,8 +268,8 @@ class ReadMcpResourceDirTool:
     clearable = True
     deferred = True
     description = """
-Lists the direct children of a directory resource on an MCP server \
-(`resources/directory/read`); not recursive.
+Shows what one directory resource of an MCP server holds, one level down \
+(`resources/directory/read`); it does not descend into subdirectories.
 
 Parameters:
 - server (required): the name of the MCP server, as configured

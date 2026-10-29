@@ -4,8 +4,10 @@ under ``.noeta/worktrees/`` and back.
 The shell's working directory is what moves (``shell`` / ``cwd``, which
 ``Bash`` starts in): the task's root — its environment note, the file tools'
 relative paths and the permission scope — stays the launch directory, so a
-worktree lives inside it. The worktree the tool made is recorded
-(``shell`` / ``worktree``) so ``ExitWorktree`` touches only that one.
+worktree lives inside it, also when the task started in a subdirectory of
+the repository; the shell then starts in the worktree's copy of that
+subdirectory. The worktree the tool made is recorded (``shell`` /
+``worktree``) so ``ExitWorktree`` touches only that one.
 """
 
 from __future__ import annotations
@@ -17,25 +19,34 @@ from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, tool_error
+from noeta.toolkit.worktrees import (
+    WORKTREES,
+    add_worktree,
+    git,
+    remove_worktree,
+    repository_top,
+    unsaved_work,
+)
 
 __all__ = ["EnterWorktreeTool", "ExitWorktreeTool"]
 
 SHELL = "shell"
-#: Where new worktrees go, under the repository's top directory.
-WORKTREES = ".noeta/worktrees"
 _NAME = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
 MAX_NAME = 64
 
 ENTERED = ("Now working in the worktree {path} on branch {branch}: Bash commands start there. "
            "Give file tools absolute paths inside it. Leave it with ExitWorktree.")
 SWITCHED = ("Now working in the worktree {path}: Bash commands start there. Give file tools "
-            "absolute paths inside it. ExitWorktree will not remove a worktree entered this "
-            "way; use action \"keep\" to go back.")
+            "absolute paths inside it. A worktree entered by path is never deleted by "
+            "ExitWorktree: leave it with action \"keep\".")
 NOT_ACTIVE = "No worktree session is active: nothing was changed."
 KEPT = "Back in {root}. The worktree {path} (branch {branch}) is kept."
 REMOVED = "Back in {root}. The worktree {path} and its branch {branch} were removed."
 CHANGES = ("The worktree {path} was not removed: it has {what}. Confirm with the user, then "
            "call again with discard_changes: true to remove it anyway, or use action \"keep\".")
+UNCHECKED = ("The worktree {path} was not removed: git could not tell whether it holds unsaved "
+             "work ({error}). Confirm with the user, then call again with discard_changes: "
+             "true to remove it anyway, or use action \"keep\".")
 
 
 def name_problem(name: Any) -> str | None:
@@ -59,12 +70,6 @@ def _worktree(ctx: ToolContext) -> dict[str, Any] | None:
     st = ctx.state.get(SHELL)
     tree = getattr(st, "worktree", None)
     return dict(tree) if isinstance(tree, dict) else None
-
-
-async def _git(ctx: ToolContext, args: list[str], cwd: str) -> tuple[int, str]:
-    out = await ctx.env.run(["git", *args], cwd=cwd)
-    text = (out.stdout if out.exit_code == 0 else out.stderr or out.stdout)
-    return out.exit_code, text.decode(errors="replace").strip()
 
 
 class EnterWorktreeTool:
@@ -96,8 +101,8 @@ class EnterWorktreeTool:
         if name is not None and path is not None:
             return tool_error(self.name, "give `name` or `path`, not both")
         start = getattr(ctx.state.get(SHELL), "cwd", None) or ctx.env.cwd
-        code, top = await _git(ctx, ["rev-parse", "--show-toplevel"], ctx.env.cwd)
-        if code != 0:
+        top = await repository_top(ctx.env, ctx.env.cwd)
+        if top is None:
             return tool_error(self.name, f"{ctx.env.cwd} is not in a git repository")
         current = _worktree(ctx)
         if path is not None:
@@ -111,25 +116,34 @@ class EnterWorktreeTool:
         if problem is not None:
             return tool_error(self.name, problem)
         assert isinstance(name, str)
-        target = posixpath.join(top, WORKTREES, name)
+        root = await ctx.env.realpath(ctx.env.cwd)
+        target = posixpath.join(root, WORKTREES, name)
         branch = f"worktree-{name.replace('/', '-')}"
-        code, _ = await _git(ctx, ["rev-parse", "--verify", "--quiet", "origin/HEAD"], top)
+        code, _ = await git(ctx.env, ["rev-parse", "--verify", "--quiet", "origin/HEAD"], top)
         base = "origin/HEAD" if code == 0 else "HEAD"
-        code, err = await _git(ctx, ["worktree", "add", "-b", branch, target, base], top)
-        if code != 0:
-            return tool_error(self.name, err or "git worktree add failed")
-        _, base_sha = await _git(ctx, ["rev-parse", "HEAD"], target)
+        err = await add_worktree(ctx.env, top, target, branch, base)
+        if err:
+            return tool_error(self.name, err)
+        _, base_sha = await git(ctx.env, ["rev-parse", "HEAD"], target)
+        # Started below the repository's top: the same subdirectory of the
+        # worktree, when the base commit has it.
+        inside = target
+        rel = posixpath.relpath(root, top)
+        if rel != "." and not rel.startswith(".."):
+            st = await ctx.env.stat(posixpath.join(target, rel))
+            if st is not None and st.is_dir:
+                inside = posixpath.join(target, rel)
         ctx.record(SHELL, "worktree", {"worktree": {
             "path": target, "branch": branch, "root": top, "base": base_sha,
             "created": True, "back": start}})
-        ctx.record(SHELL, "cwd", {"cwd": target})
-        return text_output(ENTERED.format(path=target, branch=branch), cwd=target)
+        ctx.record(SHELL, "cwd", {"cwd": inside})
+        return text_output(ENTERED.format(path=inside, branch=branch), cwd=inside)
 
     async def _enter_existing(self, ctx: ToolContext, path: str, top: str,
                               current: dict[str, Any] | None) -> ToolOutput:
         target = posixpath.normpath(path if posixpath.isabs(path)
                                     else posixpath.join(ctx.env.cwd, path))
-        code, listing = await _git(ctx, ["worktree", "list", "--porcelain"], top)
+        code, listing = await git(ctx.env, ["worktree", "list", "--porcelain"], top)
         trees = [line[len("worktree "):] for line in listing.splitlines()
                  if line.startswith("worktree ")] if code == 0 else []
         root = await ctx.env.realpath(ctx.env.cwd)
@@ -140,7 +154,7 @@ class EnterWorktreeTool:
             return tool_error(self.name, f"{target} is not a worktree of this repository "
                                          "(see `git worktree list`)")
         if current is not None and not target.startswith(
-                posixpath.join(current["root"], WORKTREES) + "/"):
+                posixpath.join(root, WORKTREES) + "/"):
             return tool_error(self.name, "from a worktree, only another worktree under "
                                          f"{WORKTREES}/ can be entered")
         back = (current or {}).get("back") or ctx.env.cwd
@@ -167,8 +181,9 @@ class ExitWorktreeTool:
                 "\"keep\" leaves the worktree and its branch on disk; \"remove\" deletes "
                 "both.")},
             "discard_changes": {"type": "boolean", "description": (
-                "Needed (true) to remove a worktree with uncommitted files or commits not on "
-                "the original branch; without it the tool refuses and lists them.")},
+                "Set to true to remove a worktree that still holds files not yet committed or "
+                "commits the starting branch lacks; otherwise the tool refuses and says what it "
+                "found.")},
         },
         "required": ["action"],
         "additionalProperties": False,
@@ -187,14 +202,15 @@ class ExitWorktreeTool:
         made = tree if tree.get("created") else tree.get("made")
         back = str(tree.get("back") or ctx.env.cwd)
         if action == "remove" and isinstance(made, dict):
-            what = await self._changes(ctx, made)
-            if what and input.get("discard_changes") is not True:
+            what, failed = await unsaved_work(ctx.env, made["path"], made["base"])
+            if (what or failed) and input.get("discard_changes") is not True:
+                if failed:
+                    return tool_error(self.name, UNCHECKED.format(path=made["path"],
+                                                                  error=failed))
                 return tool_error(self.name, CHANGES.format(path=made["path"], what=what))
-            code, err = await _git(ctx, ["worktree", "remove", "--force", made["path"]],
-                                   made["root"])
-            if code != 0:
-                return tool_error(self.name, err or "git worktree remove failed")
-            await _git(ctx, ["branch", "-D", made["branch"]], made["root"])
+            err = await remove_worktree(ctx.env, made["root"], made["path"], made["branch"])
+            if err:
+                return tool_error(self.name, err)
             self._leave(ctx, back)
             return text_output(REMOVED.format(root=back, path=made["path"],
                                               branch=made["branch"]), cwd=back)
@@ -207,16 +223,3 @@ class ExitWorktreeTool:
     def _leave(ctx: ToolContext, back: str) -> None:
         ctx.record(SHELL, "worktree", {"worktree": None})
         ctx.record(SHELL, "cwd", {"cwd": back})
-
-    @staticmethod
-    async def _changes(ctx: ToolContext, tree: dict[str, Any]) -> str:
-        """What removing ``tree`` would lose, in words; empty when nothing."""
-        lost = []
-        code, status = await _git(ctx, ["status", "--porcelain"], tree["path"])
-        if code == 0 and status:
-            lost.append(f"{len(status.splitlines())} uncommitted file(s)")
-        code, ahead = await _git(ctx, ["rev-list", "--count", f"{tree['base']}..HEAD"],
-                                 tree["path"])
-        if code == 0 and ahead.isdigit() and int(ahead):
-            lost.append(f"{ahead} commit(s) not on the original branch")
-        return " and ".join(lost)

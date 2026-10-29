@@ -28,6 +28,7 @@ from noeta.plugins.fs._mutate import (
     record_written,
     seen_whole,
     stale_error,
+    unread_write_allowed,
 )
 from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
@@ -169,7 +170,7 @@ class EditTool:
         self.write_roots = write_roots
 
     def _replace(self, before: str, old: str, new: str, replace_all: bool, stale: bool,
-                 approved: bool) -> tuple[int, str] | ToolOutput:
+                 outright: bool) -> tuple[int, str] | ToolOutput:
         """``(matches, new content)``, or why the edit cannot be made."""
         # ``Read`` shows lines without their ``\r``, so the model writes bare
         # ``\n``. In a CRLF file, match and write with the file's own ending —
@@ -196,7 +197,7 @@ class EditTool:
         # Claude Code applies an edit over changes made since the read when
         # its permissions allow the write outright and old_string still
         # picks one place (or replace_all); otherwise the model must re-read.
-        if stale and (approved or count == 0 or (count > 1 and not replace_all)):
+        if stale and (not outright or count == 0 or (count > 1 and not replace_all)):
             return stale_error(self.name, "editing")
         if count == 0:
             hint = ("\n(Edit also tried \\uXXXX escapes and the characters they stand for, "
@@ -277,13 +278,14 @@ class EditTool:
                                              "NotebookEdit.")
             refused = read_precondition_error(
                 ctx, resolved, raw, tool_name=self.name, verb="editing",
-                unread_ok=not ctx.approved, partial_ok=True, check_stale=False,
+                unread_ok=unread_write_allowed(ctx), partial_ok=True, check_stale=False,
             )
             if refused is not None:
                 return refused
             stale = changed_since_read(ctx, resolved, raw)
             in_view = seen_whole(ctx, resolved, raw)
-            planned = self._replace(before, old, new, replace_all, stale, ctx.approved)
+            planned = self._replace(before, old, new, replace_all, stale,
+                                    unread_write_allowed(ctx))
             if isinstance(planned, ToolOutput):
                 return planned
             count, after = planned

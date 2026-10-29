@@ -30,9 +30,9 @@ MIN_PROMPT_CHARS = 10
 #: The side request's system prompt (``title/name``).
 PROMPT = resources.files("noeta.plugins").joinpath("title.md").read_text("utf-8").rstrip("\n")
 
-LANGUAGE = ("Write the title in the main language of the session: a stray word or code token in "
-            "another language does not change it, and neither does the English of these "
-            "instructions.")
+LANGUAGE = ("Write the title in the session's main language; a few words or code tokens in "
+            "another language do not change that, nor does the fact that these instructions "
+            "are in English.")
 
 SCHEMA: dict[str, Any] = {"type": "object", "properties": {"title": {"type": "string"}},
                           "required": ["title"], "additionalProperties": False}

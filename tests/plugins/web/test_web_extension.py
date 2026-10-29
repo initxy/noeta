@@ -263,16 +263,28 @@ async def test_binary_content_is_saved_for_the_model_to_read(tmp_path: Path) -> 
         return httpx.Response(200, headers={"content-type": "application/pdf"},
                               content=b"%PDF-1.4 hello")
 
-    tool = _mock_fetch(handler)
+    digested: list[str] = []
+
+    async def digest(url: str, title: str, page: str, prompt: str) -> str:
+        digested.append(page)
+        return "answer"
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    tool = WebFetchTool(HttpFetchTransport(client=client), digest_for=lambda _c: digest)
     ctx = ToolContext(task_id="t", call_id="c", env=LocalExecEnv(str(tmp_path)), state={},
                       record=lambda *_: None, spill_dir=str(tmp_path / "spill"))
     out = await tool.run({"url": "https://s.com/doc.pdf", "prompt": "p"}, ctx)
     assert not out.is_error
-    note = text(out).rsplit("\n", 1)[-1]
+    # Only the note: the bytes are neither rendered nor summarized.
+    note = text(out)
     assert note.startswith("[The response is binary (application/pdf, 14 bytes); it was saved to ")
     saved = note.removeprefix(
         "[The response is binary (application/pdf, 14 bytes); it was saved to ").rstrip("]")
     assert Path(saved).read_bytes() == b"%PDF-1.4 hello" and saved.endswith(".pdf")
+    assert digested == []
+    # A second fetch within the cache's life still names the saved file.
+    again = await tool.run({"url": "https://s.com/doc.pdf", "prompt": "other"}, ctx)
+    assert not again.is_error and text(again) == note and digested == []
     without = await tool.run({"url": "https://s.com/other.pdf", "prompt": "p"}, _ctx(tmp_path))
     assert without.is_error and "application/pdf" in text(without)
 

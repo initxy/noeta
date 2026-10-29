@@ -1,6 +1,6 @@
 Reads one file from the local filesystem: text, an image, a PDF or a Jupyter notebook.
 
-- `file_path` must be an absolute path.
+- Give `file_path` as an absolute path.
 - Without `limit` you get at most 2000 lines from the start of the file. When you already know which part you need, read only that part; this matters most for large files.
 - Lines come back numbered like `cat -n`, starting at 1.
 - Images (PNG, JPG and the like) are shown to you as images.

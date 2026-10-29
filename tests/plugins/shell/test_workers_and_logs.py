@@ -198,28 +198,67 @@ async def test_logs_go_to_a_private_per_user_directory(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = tmp_path / "run"
     runtime.mkdir()
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    # The temp directory on disk, never the small RAM-backed runtime one.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setenv("TMPDIR", str(runtime))
     job = await _spawn(Registry(), tmp_path)
     assert isinstance(job, Job)
     await asyncio.wait_for(job.done.wait(), 10)
     logs = runtime / f"noeta-background-{os.getuid()}"
-    assert Path(job.out_path).parent == logs
+    # One directory per worker process inside it.
+    assert Path(job.out_path).parent == logs / f"w{os.getpid()}"
     assert stat.S_IMODE(logs.stat().st_mode) == 0o700
     assert stat.S_IMODE(Path(job.out_path).stat().st_mode) == 0o600
     assert Path(job.out_path).read_text() == "secret\n\n[exited with code 0]\n"
+
+
+async def test_a_new_worker_removes_the_logs_of_dead_workers(tmp_path: Path) -> None:
+    logs = tmp_path / "logs"
+    dead = await asyncio.create_subprocess_exec("true")
+    await dead.wait()
+    for pid in (dead.pid, os.getppid()):
+        (logs / f"w{pid}").mkdir(parents=True)
+        (logs / f"w{pid}" / "abc.output").write_text("old")
+    (logs / "unrelated").mkdir()
+    job = await _spawn(Registry(log_dir=str(logs)), tmp_path)
+    assert isinstance(job, Job)
+    await asyncio.wait_for(job.done.wait(), 10)
+    assert not (logs / f"w{dead.pid}").exists()
+    # A live worker's logs, and what noeta did not make, stay.
+    assert (logs / f"w{os.getppid()}" / "abc.output").exists() and (logs / "unrelated").exists()
+    assert Path(job.out_path).parent == logs / f"w{os.getpid()}"
 
 
 async def test_a_planted_log_directory_is_refused(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = tmp_path / "run"
     runtime.mkdir()
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    monkeypatch.setenv("TMPDIR", str(runtime))
     elsewhere = tmp_path / "attacker"
     elsewhere.mkdir()
     (runtime / f"noeta-background-{os.getuid()}").symlink_to(elsewhere)
     refused = await _spawn(Registry(), tmp_path)
     assert isinstance(refused, str) and "not a directory owned by the current user" in refused
     assert list(elsewhere.iterdir()) == []
+
+
+@pytest.mark.parametrize("monitor", [False, True])
+async def test_a_log_stops_growing_at_its_cap_and_says_so(tmp_path: Path, monitor: bool) -> None:
+    registry = Registry(log_dir=str(tmp_path / "logs"), log_max_bytes=1000)
+    command = "head -c 300000 /dev/zero | tr '\\0' x; echo; echo late >&2; echo end"
+    job = await registry.spawn(env=LocalExecEnv(str(tmp_path)), command=command,
+                               cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r",
+                               tool_use_id="c", description="", post=_posted,
+                               monitor_timeout_ms=60_000 if monitor else None)
+    assert isinstance(job, Job)
+    await asyncio.wait_for(job.done.wait(), 10)
+    # The command ran to its end (nothing killed it for writing on).
+    assert job.exit_code == 0
+    text = Path(job.out_path).read_text()
+    # The cap, past it one read at most (64 KB), then the note.
+    kept, note = text.split("\n[output past 1000 bytes was not kept]\n")
+    assert 1000 <= len(kept) <= 1000 + 65536 and set(kept) == {"x"}
+    assert note == "\n[exited with code 0]\n" or (monitor and note == "")
 
 
 async def test_a_job_counts_as_running_until_its_end_is_posted(tmp_path: Path) -> None:
@@ -313,3 +352,29 @@ async def test_a_job_lives_while_its_hold_is_fresh(tmp_path: Path) -> None:
         await asyncio.sleep(0.1)
     assert job.exit_code == 0
     assert Path(job.out_path).read_text() == "done\n\n[exited with code 0]\n"
+
+
+class _ContainerEnv(LocalExecEnv):
+    """A local env posing as a container: the worker's process is not
+    visible to the job's guard."""
+
+    local = False
+
+
+async def test_a_foreground_job_in_a_container_dies_once_its_worker_stops(
+        tmp_path: Path) -> None:
+    marker = tmp_path / "late"
+    registry = Registry(log_dir=str(tmp_path / "logs"), foreground_alive_s=1.0)
+    job = await registry.spawn(
+        env=_ContainerEnv(str(tmp_path)), command=f"sleep 4; touch {marker}",
+        cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r", tool_use_id="c",
+        description="", post=_posted, foreground=True)
+    assert isinstance(job, Job) and job.alive_path
+    await asyncio.sleep(0.6)
+    assert job.status == "running"  # kept alive while the worker runs
+    assert registry._keeper is not None
+    registry._keeper.cancel()  # the worker froze: nothing re-creates its file
+    await asyncio.wait_for(job.done.wait(), 3.5)
+    assert job.exit_code != 0
+    await asyncio.sleep(1.0)
+    assert not marker.exists()

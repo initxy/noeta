@@ -28,6 +28,9 @@ class Harness:
     calls: int = 0
     #: Calls run as if a person allowed them at an approval prompt.
     approved: bool = False
+    #: Calls run as if a permission layer allowed them by its settings.
+    allowed_outright: bool = False
+    model: str = ""
 
     @property
     def root(self) -> Path:
@@ -59,6 +62,8 @@ class Harness:
             record=self.record,
             spill_dir=self.spill_dir,
             approved=self.approved,
+            allowed_outright=self.allowed_outright,
+            model=self.model,
         )
 
     async def call(self, tool: Tool, **input: Any) -> ToolOutput:

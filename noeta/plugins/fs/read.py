@@ -277,9 +277,9 @@ def _input_schema() -> dict[str, Any]:
             "allow_large": {"type": "boolean",
                             "description": (
                                 "Read a file or line range past the usual size limits, up to "
-                                "what fits in your context. Only when you need all of it or "
-                                "the user asked for the whole file; otherwise read it in "
-                                "parts or search it.")},
+                                "what fits in your context. Use it only when every line is "
+                                "needed or the whole file was asked for by the user; "
+                                "otherwise read it in pieces or search it.")},
         },
         "required": ["file_path"],
         "additionalProperties": False,

@@ -68,6 +68,7 @@ async def test_an_edit_of_noeta_md_read_whole_has_the_file_state_note(
 
 
 async def test_an_edit_without_the_whole_file_in_view_has_no_note(h: Harness, ws: Path) -> None:
+    h.allowed_outright = True
     target = ws / "a.py"
     target.write_text("one\ntwo\nthree\n")
     await h.call(ReadTool(), file_path="a.py", offset=2)
@@ -125,6 +126,7 @@ async def test_edit_without_read_first_rejected(h: Harness, ws: Path) -> None:
 async def test_an_allowed_edit_needs_no_read_first(h: Harness, ws: Path) -> None:
     # Claude Code skips the read-first check for a write its permissions allow
     # outright (an Edit after the model saw the file through Bash `cat`).
+    h.allowed_outright = True
     target = ws / "a.py"
     target.write_text("hello\n")
     out = await h.call(EditTool(), file_path="a.py", old_string="hello", new_string="world")
@@ -133,6 +135,7 @@ async def test_an_allowed_edit_needs_no_read_first(h: Harness, ws: Path) -> None
 
 
 async def test_an_allowed_edit_applies_over_changes_since_the_read(h: Harness, ws: Path) -> None:
+    h.allowed_outright = True
     target = ws / "a.py"
     target.write_text("v1\nkeep\n")
     await _read(h, "a.py")

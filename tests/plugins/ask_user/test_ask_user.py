@@ -83,6 +83,22 @@ def test_lengths_are_guidance_not_limits() -> None:
     assert one["header"] == "x" * 13 and one["options"][0]["label"] == "x" * 81
 
 
+def test_empty_and_runaway_texts_are_refused() -> None:
+    blank = [{"label": " ", "description": "d"}, {"label": "b", "description": "d"}]
+    assert "empty" in validate_questions({"questions": [q(options=blank)]})
+    assert "empty" in validate_questions({"questions": [q(question="  ")]})
+    # Far past anything a dialog can show: refused, saying the limit.
+    for text in (q(question="x" * 1001), q(header="x" * 101),
+                 q(options=[{"label": "x" * 201, "description": "d"},
+                            {"label": "b", "description": "d"}]),
+                 q(options=[{"label": "a", "description": "x" * 2001},
+                            {"label": "b", "description": "d"}]),
+                 q(options=[{"label": "a", "description": "d", "preview": "x" * 20_001},
+                            {"label": "b", "description": "d"}])):
+        error = validate_questions({"questions": [text]})
+        assert isinstance(error, str) and "characters" in error, error
+
+
 async def test_a_question_parks_and_the_answer_becomes_the_result(store: SqliteStore) -> None:
     provider = ScriptedProvider([reply("", ("AskUserQuestion", {"questions": [q()]})),
                                  reply("thanks")])

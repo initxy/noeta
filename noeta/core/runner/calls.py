@@ -61,7 +61,11 @@ async def gate(run: TaskRun, view: TaskView, call: ToolUse) -> Gate:
             if isinstance(v, kind):
                 return v
     asks = [v for v in verdicts if isinstance(v, Ask)]
-    if not asks or (answer is not None and answer.decision == "allow"):
+    if not asks:
+        # Outright only when nobody answered for the call either.
+        return Allow(outright=answer is None and any(
+            isinstance(v, Allow) and v.outright for v in verdicts))
+    if answer is not None and answer.decision == "allow":
         return Allow()
     if not any(a.firm for a in asks) and any(
             isinstance(v, Allow) and v.approve for v in verdicts):
@@ -119,6 +123,7 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     tools = {t.name: t for t in run.tools(view)}
     runnable: list[tuple[ToolUse, Tool]] = []
     asks: dict[str, Ask] = {}
+    outright: set[str] = set()
     for c in [c for c in run.state.calls if c.use.id in call_ids]:
         wanted = tools.get(c.use.name)
         if wanted is not None and is_deferred(wanted) \
@@ -154,6 +159,8 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
         if tool is None:
             await run.append([run.error_result(use.id, texts.UNKNOWN_TOOL.format(name=use.name))])
             continue
+        if isinstance(verdict, Allow) and verdict.outright:
+            outright.add(use.id)
         runnable.append((use, tool))
     await run.flush(view)
     # A call whose tool declares ``run_last`` (delegation) runs after the
@@ -161,7 +168,8 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     runnable.sort(key=lambda item: tool_flag(item[1], "run_last"))
     for group in _groups(runnable):
         await run.append([ToolStarted(call=u) for u, _ in group])
-        await asyncio.gather(*(_run_one(run, u, t) for u, t in group))
+        await asyncio.gather(*(_run_one(run, u, t, outright=u.id in outright)
+                               for u, t in group))
     if asks and run.state.config.get("unattended"):
         # One-shot: the task ends. Otherwise the turn closes and the loop
         # goes on to wait for input (and gives the task back).
@@ -176,7 +184,7 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
 
 
 def _context(run: TaskRun, use: ToolUse, records: list[Event],
-             creates: list[NewTask]) -> ToolContext:
+             creates: list[NewTask], *, outright: bool = False) -> ToolContext:
     def record(extension: str, kind: str, data: Any) -> None:
         records.append(ExtensionRecorded(extension=extension, kind=kind, data=data))
 
@@ -218,7 +226,8 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
                        spawn=spawn, post=post, root_id=root, prompt=run.state.prompt,
                        tasks=tasks, count_tokens=run.counter(run.model),
                        hold=lambda: run.rt.hold(root), by_model=True,
-                       approved=answer is not None and answer.decision == "allow")
+                       approved=answer is not None and answer.decision == "allow",
+                       allowed_outright=outright, model=run.model)
 
 
 async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[Event],
@@ -255,10 +264,10 @@ def _drop_staged(records: list[Event], creates: list[NewTask]) -> None:
     creates.clear()
 
 
-async def _run_one(run: TaskRun, use: ToolUse, tool: Tool) -> None:
+async def _run_one(run: TaskRun, use: ToolUse, tool: Tool, *, outright: bool = False) -> None:
     records: list[Event] = []
     creates: list[NewTask] = []
-    ctx = _context(run, use, records, creates)
+    ctx = _context(run, use, records, creates, outright=outright)
     try:
         output = await tool.run(use.input, ctx)
     except asyncio.CancelledError:

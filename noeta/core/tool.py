@@ -93,6 +93,12 @@ class ToolContext(CoreNotices):
     #: A person allowed this call at its approval prompt (rather than no
     #: extension asking).
     approved: bool = False
+    #: A permission layer allowed this call by its settings (a mode, an
+    #: allow rule) and nobody was asked (``Allow.outright``). ``False`` where
+    #: no permission layer judges calls.
+    allowed_outright: bool = False
+    #: The model the task runs on (``""`` when not known).
+    model: str = ""
     #: ``prompt(name, default)``: the task's text for a named prompt
     #: (``noeta.core.prompts``).
     prompt: Callable[[str, str], str] = field(default=lambda _name, default: default)

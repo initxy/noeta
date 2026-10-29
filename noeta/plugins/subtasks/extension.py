@@ -22,6 +22,7 @@ from noeta.core.events import (
     TaskEnded,
     Waiting,
 )
+from noeta.core.execenv import ExecEnv
 from noeta.core.extension import Deny, Extension, Gate, Reminder, Rewrite, TaskView
 from noeta.core.loop.state import TaskState
 from noeta.core.tool import Tool, ToolContext
@@ -57,6 +58,8 @@ log = logging.getLogger("noeta.plugins.subtasks")
 #: Code's was alongside the third), and the inbox signal carrying it.
 PROGRESS_AT_CALL = 3
 PROGRESS_SIGNAL = "subtasks.progress"
+#: Tasks whose transcript progress a process remembers at most.
+TRANSCRIBED_KEEP = 256
 #: The permission mode in which agents hand back with ``SubagentHandback``.
 AUTO_MODE = "auto"
 #: The agent list's place in the first request's joined system turn
@@ -125,8 +128,10 @@ class Subtasks(Extension):
         self.progress_labels = progress_labels
         self._labels: set[asyncio.Task[None]] = set()
         #: Per task: what of its conversation this process last wrote to its
-        #: transcript (a new process writes it whole once).
-        self._transcribed: dict[str, tuple[int, int]] = {}
+        #: transcript, ``(messages, last message seq, file size)`` (a new
+        #: process writes it whole once, then appends). The oldest beyond
+        #: :data:`TRANSCRIBED_KEEP` are forgotten (tasks another worker took).
+        self._transcribed: dict[str, tuple[int, int, int]] = {}
         self.agents = tuple(agents)
         self._roster = Roster(self.roster, self.agents)
         self.max_depth = max_depth
@@ -338,23 +343,55 @@ class Subtasks(Extension):
                     self._deliver(view, task_id, data["text"])
 
     async def _transcribe(self, view: TaskView, *, ended: bool) -> None:
-        """Rewrite this agent's transcript file from its conversation when the
+        """Bring this agent's transcript file up to its conversation when the
         conversation changed: a projection of the log, so a crash or another
-        worker loses nothing (the next write is whole)."""
+        worker loses nothing. New messages are appended; the file is written
+        whole when this process has not written it yet, when the
+        conversation was rewritten (a compaction), or when the file is not
+        what this process left (another worker wrote it)."""
         state, env = view.state, view.env
-        mark = (len(state.messages), state.message_seqs[-1] if state.message_seqs else 0)
-        if env is not None and self._transcribed.get(state.task_id) != mark:
+        count = len(state.messages)
+        last = state.message_seqs[-1] if state.message_seqs else 0
+        known = self._transcribed.pop(state.task_id, None)
+        if env is not None and (known is None or known[:2] != (count, last)):
             agent_id = str(state.config.get(AGENT_ID_KEY) or state.task_id)
             path = transcript_file(str(state.config[TRANSCRIPT_KEY]), agent_id)
-            lines = [msgspec.json.encode({"type": m.role, "message": m}) + b"\n"
-                     for m in state.messages]
-            try:
-                await env.write_bytes(path, b"".join(lines))
-                self._transcribed[state.task_id] = mark
-            except OSError:
-                log.debug("transcript %s not written", path, exc_info=True)
-        if ended:
-            self._transcribed.pop(state.task_id, None)
+            known = await self._write_transcript(env, path, state, known)
+        if known is not None and not ended:
+            self._transcribed[state.task_id] = known
+            while len(self._transcribed) > TRANSCRIBED_KEEP:
+                del self._transcribed[next(iter(self._transcribed))]
+
+    @staticmethod
+    async def _write_transcript(env: ExecEnv, path: str, state: TaskState,
+                                known: tuple[int, int, int] | None
+                                ) -> tuple[int, int, int] | None:
+        """Append to (or write) the transcript at ``path``; what it now
+        holds, or ``None`` when it could not be written."""
+        count = len(state.messages)
+        last = state.message_seqs[-1] if state.message_seqs else 0
+
+        def lines(start: int) -> bytes:
+            return b"".join(msgspec.json.encode({"type": m.role, "message": m}) + b"\n"
+                            for m in state.messages[start:])
+
+        try:
+            if known is not None and known[0] <= count and (
+                    known[0] == 0 or (len(state.message_seqs) >= known[0]
+                                      and state.message_seqs[known[0] - 1] == known[1])):
+                st = await env.stat(path)
+                if st is not None and st.size == known[2]:
+                    data = lines(known[0])
+                    out = await env.run(["sh", "-c", 'cat >> "$1"', "sh", path],
+                                        stdin=data, timeout=30)
+                    if out.exit_code == 0:
+                        return count, last, known[2] + len(data)
+            data = lines(0)
+            await env.write_bytes(path, data)
+            return count, last, len(data)
+        except OSError:
+            log.debug("transcript %s not written", path, exc_info=True)
+            return None
 
     def _deliver(self, view: TaskView, task_id: str, text: str) -> None:
         tools_used = texts.TOOLS_BEFORE_SUMMARY.format(tool=texts.HANDBACK_TOOL)

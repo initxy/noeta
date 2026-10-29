@@ -27,15 +27,22 @@ silent too long, or the worker stopping) the job is killed and its end never
 posted; the tree is told by ``hold_lost`` instead. A job also dies when its
 worker cannot kill it (killed itself, or frozen): a guard runs beside the
 command, in its process group, and kills the group once the worker stops
-re-creating the job's ``.alive`` file (it does while its hold is fresh) or,
-on this machine, once the worker's process is gone. The guard needs only
+re-creating the job's ``.alive`` file (it does while its hold is fresh, and
+for a foreground command, which has no hold, while the worker runs) or, on
+this machine, once the worker's process is gone. The guard needs only
 ``sh`` tools, so it works the same in a container or a sandbox.
 
 Job logs live in a private directory per user inside the env: by default
-``$XDG_RUNTIME_DIR`` (local env) or the temp directory, under
+under the temp directory on disk (``$TMPDIR``, else ``/var/tmp``, else
+``/tmp``; never the RAM-backed ``$XDG_RUNTIME_DIR``), in
 ``noeta-background-<uid>``, created 0700; a directory that already exists
 must be a real directory owned by the user (else launches are refused). Log
-files are created 0600.
+files are created 0600, in a directory of the worker process's own
+(``w<pid>``); a worker on this machine removes those of workers that are
+gone when it first prepares the directory. A job's output reaches its log through a pipe that
+keeps the first ``log_max_bytes`` (:data:`DEFAULT_LOG_MAX_BYTES`), then a
+line saying the rest was not kept, and drains the rest, so the command runs
+on unharmed.
 """
 
 from __future__ import annotations
@@ -46,11 +53,12 @@ import contextlib
 import logging
 import os
 import posixpath
+import re
 import secrets
 import shlex
+import shutil
 import socket
 import string
-import tempfile
 import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -91,6 +99,30 @@ DEFAULT_LOG_DIR = ""
 ENDED_KEEP = 4096
 #: How often a job's guard looks at its worker.
 GUARD_TICK_S = 0.5
+#: How long a foreground command outlives a worker that stopped re-creating
+#: its ``.alive`` file (it has no hold to time it by).
+FOREGROUND_ALIVE_S = 30.0
+#: Bytes of a job's output (and, for a monitor, of its stderr) its log keeps.
+DEFAULT_LOG_MAX_BYTES = 64 * 1024 * 1024
+
+#: Appends its stdin to the file ``$2`` as it comes (one read at a time, so
+#: a monitor sees each line at once) until the file holds ``$1`` bytes (one
+#: read more at most), then a line saying the rest was not kept, and reads
+#: the rest away: the writer never gets a broken pipe. Only ``sh`` tools.
+_KEEP_HEAD = r"""keep_head() {
+  s=0
+  while [ "$s" -lt "$1" ]; do
+    dd bs=65536 count=1 2>/dev/null >>"$2"
+    t=$(wc -c <"$2")
+    [ "$t" -gt "$s" ] || return 0
+    s=$t
+  done
+  if [ "$(dd bs=1 count=1 2>/dev/null | wc -c)" -gt 0 ]; then
+    printf '\n[output past %s bytes was not kept]\n' "$1" >>"$2"
+    cat >/dev/null
+  fi
+}
+"""
 
 #: Runs beside a job, in its process group: exits with the job, kills the
 #: group once the worker is gone. ``$1`` the job's shell (its pid), ``$2``
@@ -117,16 +149,26 @@ WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
 JOB_ENDED = "shell_job_ended"
 
 #: Makes (or checks) the log directory: ``$1`` an explicit directory, else
-#: ``${2:-/tmp}/noeta-background-<uid>``. Prints the directory.
+#: ``<temp>/noeta-background-<uid>``, ``<temp>`` the first usable of ``$2``,
+#: ``$TMPDIR``, ``/var/tmp`` and ``/tmp``; in it, this worker's own directory
+#: ``$3``. Prints that one.
 _PREPARE_DIR = r"""
 d=$1
-[ -n "$d" ] || d="${2:-/tmp}/noeta-background-$(id -u)"
+if [ -z "$d" ]; then
+  b=/tmp
+  for c in "$2" "${TMPDIR:-}" /var/tmp; do
+    if [ -n "$c" ] && [ -d "$c" ] && [ -w "$c" ]; then b=$c; break; fi
+  done
+  d="$b/noeta-background-$(id -u)"
+fi
 if [ ! -e "$d" ] && [ ! -L "$d" ]; then mkdir -p -m 700 -- "$d" || exit 3; fi
 if [ -L "$d" ] || [ ! -d "$d" ] || [ ! -O "$d" ]; then
   echo "refusing $d: not a directory owned by the current user" >&2; exit 4
 fi
 chmod 700 -- "$d" || exit 5
-printf '%s' "$d"
+if [ ! -e "$d/$3" ]; then mkdir -m 700 -- "$d/$3" || exit 6; fi
+if [ -L "$d/$3" ] || [ ! -d "$d/$3" ]; then echo "refusing $d/$3: not a directory" >&2; exit 4; fi
+printf '%s' "$d/$3"
 """
 
 
@@ -184,6 +226,34 @@ class Job:
     outbox: asyncio.Queue[str | None] = field(default_factory=asyncio.Queue)
 
 
+_WORKER_DIR_NAME = re.compile(r"w([0-9]+)")
+
+
+def _worker_dir() -> str:
+    """This worker process's own directory inside the log directory (asked
+    each time: a forked worker is a process of its own)."""
+    return f"w{os.getpid()}"
+
+
+def _remove_dead_workers(logs: str) -> None:
+    """Remove the directories of worker processes on this machine that are
+    gone (``w<pid>`` inside ``logs``); a pid that answers is kept."""
+    with contextlib.suppress(OSError), os.scandir(logs) as entries:
+        for entry in entries:
+            found = _WORKER_DIR_NAME.fullmatch(entry.name)
+            if found is None or entry.name == _worker_dir() \
+                    or not entry.is_dir(follow_symlinks=False):
+                continue
+            try:
+                os.kill(int(found.group(1)), 0)
+                continue
+            except ProcessLookupError:
+                pass
+            except (OSError, OverflowError):
+                continue
+            shutil.rmtree(entry.path, ignore_errors=True)
+
+
 def _touch(paths: Sequence[str]) -> None:
     for path in paths:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
@@ -198,9 +268,13 @@ class Registry:
     """Background jobs of this process, by root task."""
 
     def __init__(self, *, max_jobs: int = DEFAULT_MAX_JOBS,
-                 log_dir: str = DEFAULT_LOG_DIR) -> None:
+                 log_dir: str = DEFAULT_LOG_DIR,
+                 log_max_bytes: int = DEFAULT_LOG_MAX_BYTES,
+                 foreground_alive_s: float = FOREGROUND_ALIVE_S) -> None:
         self.max_jobs = max_jobs
+        self.foreground_alive_s = foreground_alive_s
         self.log_dir = log_dir
+        self.log_max_bytes = log_max_bytes
         self.worker = WORKER_ID
         self.jobs: dict[str, dict[str, Job]] = {}
         #: Tasks known (in this process) to have ended with jobs of their
@@ -227,16 +301,17 @@ class Registry:
             known = None
         if known is not None:
             return known
-        base = "/tmp"
-        if is_local(env):
-            runtime = os.environ.get("XDG_RUNTIME_DIR") or ""
-            base = runtime if runtime and os.path.isdir(runtime) else tempfile.gettempdir()
-        result = await env.run(["sh", "-c", _PREPARE_DIR, "sh", self.log_dir, base],
-                               timeout=10, output_cap=8192)
+        # The env's own variables may be scrubbed: on this machine, ours.
+        base = (os.environ.get("TMPDIR") or "") if is_local(env) else ""
+        result = await env.run(["sh", "-c", _PREPARE_DIR, "sh", self.log_dir, base,
+                                _worker_dir()], timeout=10, output_cap=8192)
         if result.exit_code != 0:
             raise OSError(result.stderr.decode("utf-8", "replace").strip()
                           or "could not prepare the background log directory")
         path = result.stdout.decode("utf-8", "replace")
+        if is_local(env):
+            # A worker that died left its jobs' logs: nobody reads them now.
+            await asyncio.to_thread(_remove_dead_workers, posixpath.dirname(path))
         with contextlib.suppress(TypeError):
             self._dirs[env] = path
         return path
@@ -306,7 +381,8 @@ class Registry:
             return f"background jobs are unavailable: {exc}"
         out = posixpath.join(log_dir, f"{job_id}.output")
         err = posixpath.join(log_dir, f"{job_id}.err") if monitor_timeout_ms else None
-        alive = posixpath.join(log_dir, f"{job_id}.alive") if tree is not None else ""
+        alive = (posixpath.join(log_dir, f"{job_id}.alive")
+                 if tree is not None or foreground else "")
         cwd_file = posixpath.join(log_dir, f"{job_id}.cwd") if foreground else ""
         made = await env.run(
             ["sh", "-c", 'umask 077 && for f; do : > "$f" || exit 1; done', "sh",
@@ -327,14 +403,22 @@ class Registry:
             job.proc = asyncio.ensure_future(run_ws(*ws, lambda text: stream.feed(text + "\n"),
                                                     resolve=ws_resolve))
         else:
-            redirect = f"2>{shlex.quote(err)}" if err is not None else "2>&1"
-            if cwd_file:
-                redirect += f" 3>{shlex.quote(cwd_file)}"
-            # The command runs as the shell's own process (``exec``), so the
-            # guard is no job of its: a ``wait`` in it never waits for that.
-            script = (f"exec >{shlex.quote(out)} {redirect}\n"
+            cap = str(self.log_max_bytes)
+            keep_out = f"keep_head {cap} {shlex.quote(out)}"
+            if err is not None:
+                # stdout and stderr each through their own pipe: both are
+                # members of the pipeline, so both are written out before
+                # the shell exits.
+                pipeline = (f'{{ "$@" 2>&1 1>&4 4>&- | keep_head {cap} {shlex.quote(err)}; '
+                            f'exit "${{PIPESTATUS[0]}}"; }} 4>&1 | {keep_out}')
+            else:
+                pipeline = f'"$@" 2>&1 | {keep_out}'
+            fd3 = f"exec 3>{shlex.quote(cwd_file)}\n" if cwd_file else ""
+            # The command runs in the pipeline, the guard beside it: a
+            # ``wait`` in the command never waits for the guard.
+            script = (f"{fd3}{_KEEP_HEAD}"
                       f"{self._guard(job)} </dev/null >/dev/null 2>&1 3>&- &\n"
-                      'exec "$@"')
+                      f'{pipeline}\nexit "${{PIPESTATUS[0]}}"')
             run = ["bash", "-c", script, "bash", *(argv or ["bash", "-c", command])]
             job.proc = asyncio.ensure_future(env.run(run, cwd=cwd,
                                                      env=dict(env_vars), timeout=None,
@@ -343,34 +427,39 @@ class Registry:
         job.sender = asyncio.create_task(self._send(job))
         if tree is not None:
             tree.on_lost(lambda: self._fence(job))
-            if self._keeper is None or self._keeper.done():
-                self._keeper = asyncio.create_task(self._keep_alive())
+        if alive and (self._keeper is None or self._keeper.done()):
+            self._keeper = asyncio.create_task(self._keep_alive())
         return job
+
+    def _alive_period(self, job: Job) -> float:
+        """How long ``job``'s guard waits for its ``.alive`` file: half its
+        hold's time, or for a foreground command :attr:`foreground_alive_s`."""
+        return job.tree.seconds / 2 if job.tree is not None else self.foreground_alive_s
 
     def _guard(self, job: Job) -> str:
         """The guard's command line for ``job`` (see :data:`_GUARD`)."""
         worker_pid = str(os.getpid()) if is_local(job.env) else ""
         ticks = 0
-        if job.tree is not None:
+        if job.alive_path:
             # The worker re-creates the file three times per period; the
             # period is half the hold's time, so a frozen worker's jobs are
             # dead about when its hold may be reaped.
-            ticks = max(2, round(job.tree.seconds / 2 / GUARD_TICK_S))
+            ticks = max(2, round(self._alive_period(job) / GUARD_TICK_S))
         return shlex.join(["sh", "-c", _GUARD, "sh", "$$", worker_pid, job.alive_path,
                            str(ticks), str(GUARD_TICK_S)]).replace("'$$'", "$$")
 
     async def _keep_alive(self) -> None:
         """Re-create the ``.alive`` file of every running job whose hold is
-        fresh, three times per guard period, until no such job is left."""
+        fresh (or that has none: a foreground command), three times per
+        guard period, until no such job is left."""
         while True:
             jobs = [j for root in self.jobs.values() for j in root.values()
-                    if j.status == "running" and j.tree is not None and j.alive_path]
+                    if j.status == "running" and j.alive_path]
             if not jobs:
                 return
             by_env: dict[int, list[Job]] = {}
             for job in jobs:
-                assert job.tree is not None
-                if job.tree.fresh() and not job.fenced:
+                if (job.tree is None or job.tree.fresh()) and not job.fenced:
                     by_env.setdefault(id(job.env), []).append(job)
             for group in by_env.values():
                 paths = [j.alive_path for j in group]
@@ -380,7 +469,7 @@ class Registry:
                     else:
                         await group[0].env.run(
                             ["sh", "-c", 'for f; do : > "$f"; done', "sh", *paths], timeout=10)
-            period = min(j.tree.seconds for j in jobs if j.tree is not None) / 2
+            period = min(self._alive_period(j) for j in jobs)
             await asyncio.sleep(max(period / 3, GUARD_TICK_S / 2))
 
     async def _run(self, job: Job, monitor_timeout_ms: float | None) -> None:

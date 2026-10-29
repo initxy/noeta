@@ -21,13 +21,11 @@ from noeta.plugins.shell.bash import (
     SCHEMA_DIALECT,
     SHELL,
     BashTool,
+    command_script,
     confine,
-    git_prelude,
-    guard_root,
     sandbox_required,
     shell_state,
 )
-from noeta.plugins.shell.hardening import hardened_argv
 from noeta.plugins.shell.jobs import Job, Registry
 from noeta.plugins.shell.notices import format_duration
 from noeta.plugins.shell.websocket import parse_ws
@@ -350,10 +348,8 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
         return job, "", False
     workspace = await Workspace.of(ctx.env)
     cwd, _moved_back = await shell._start_cwd(workspace, ctx)
-    prelude = (git_prelude(command, guard_root(workspace, ctx))
-               if shell.hardening_rules else "")
-    hardened = None if prelude else hardened_argv(command, shell.hardening_rules)
-    run_command, tracked = prelude + command, True
+    run_command, hardened = command_script(command, workspace, ctx, shell.hardening_rules)
+    tracked = True
     if hardened is not None:
         run_command, tracked = shlex.join(hardened), False
     confined = await confine(ctx.env, command, disable, ["bash", "-c", run_command], cwd)
