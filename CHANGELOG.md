@@ -465,6 +465,11 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Fixed
 
+- **A command being started no longer hangs the event loop's shutdown.** `LocalExecEnv` starts
+  its commands synchronously and reaps each with a thread of its own instead of using asyncio
+  subprocesses: before Python 3.14, asyncio waits forever for a child whose setup was
+  cancelled, and a loop shutting down (a worker exiting, a test ending) cancels everything at
+  once. A command cancelled while starting still has its whole process group killed.
 - The missing-extra message's `uv tool install --reinstall` line names the README's extras
   (`tui`, `images`) with the missing one and says to list every extra wanted. Before, it
   named the missing extra alone, and running it dropped the extras installed earlier.

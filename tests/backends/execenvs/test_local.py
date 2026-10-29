@@ -10,6 +10,7 @@ import os
 import signal
 import stat
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -137,6 +138,37 @@ async def test_cancellation_kills_the_group(env: LocalExecEnv, tmp_path: Path) -
         await task
     for pid in pids:
         assert await _wait_dead(pid), f"{pid} survived cancellation"
+
+
+@pytest.mark.parametrize("steps", range(8))
+def test_a_loop_shutting_down_mid_spawn_still_closes(tmp_path: Path, steps: int) -> None:
+    """The loop shuts down (every task cancelled at once) ``steps`` loop
+    turns into a run, while its child may still be being spawned: closing
+    the loop ends, and the child's group is killed."""
+    env = LocalExecEnv(str(tmp_path), kill_grace=0.5)
+    pid_file = tmp_path / "pid"
+    script = f"echo $$ > {pid_file}; sleep 300"
+    runs: list[asyncio.Future[Any]] = []
+
+    async def main() -> None:
+        runs.append(asyncio.ensure_future(env.run(["bash", "-c", script])))
+        for _ in range(steps):
+            await asyncio.sleep(0)
+
+    closed = threading.Event()
+
+    def run_loop() -> None:
+        asyncio.run(main())
+        closed.set()
+
+    threading.Thread(target=run_loop, daemon=True).start()
+    assert closed.wait(20), "the loop never finished closing"
+    if pid_file.exists() and pid_file.read_text().strip():
+        pid = int(pid_file.read_text())
+        deadline = time.monotonic() + 10
+        while _alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _alive(pid), f"{pid} survived the loop's shutdown"
 
 
 async def test_a_second_cancel_still_finishes_the_kill(tmp_path: Path) -> None:
