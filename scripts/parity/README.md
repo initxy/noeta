@@ -77,7 +77,8 @@ The own-words report picks the new recording up by its directory name once
 
 Derived from Claude Code 2.1.312's recorded requests and committed, so that
 `make parity` runs from a clone. Each item is an interface fact a client must
-match to speak the same protocol to the model, not prose:
+match to speak the same protocol to the model, not prose, except the model
+replies in `script/`:
 
 - `parity/<version>/m*.json`: per request, the parameter keys and values
   (`max_tokens`, `thinking`, `context_management`, `safeguards` types and
@@ -91,9 +92,11 @@ match to speak the same protocol to the model, not prose:
   A whole-text hash is reversible only by guessing the whole text, so it
   discloses only short texts such as a bare tag.
 - `parity/<version>/script/`: the model's side of each scenario (replies of
-  the upstream model, with the steps we typed), not Claude Code's text. A
-  thinking block keeps its place but its text is replaced by a placeholder,
-  since the upstream model's thinking can quote Claude Code's prompts.
+  the upstream model, with the steps we typed). The replies are kept as the
+  model wrote them, so they can paraphrase or quote Claude Code's prompts (a
+  compaction summary quotes the summary request's instructions, for one);
+  ADR-020 allows that where it serves parity. A thinking block keeps its
+  place but its text is replaced by a placeholder.
 - `parity/rules/*.md` and `parity/rules/tools/*.md` (one file per tool the
   recorded sessions send, the MCP server's tools sharing one, 21 files):
   Claude Code's rules restated in our words, with

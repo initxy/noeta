@@ -3,6 +3,8 @@
 - Status: accepted
 - Date: 2026-10-28
 - Refines: [ADR-007](007-tenants.md)
+- Refined by: [ADR-022](022-the-model-catalog-is-kernel-data.md) (the model catalog stays in
+  the kernel)
 
 ## Context
 

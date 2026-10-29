@@ -20,6 +20,8 @@ import argparse
 import asyncio
 import hashlib
 import json
+import os
+import stat
 import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -248,11 +250,23 @@ def _prompt_text(args: argparse.Namespace) -> str | None:
     return sys.stdin.read()
 
 
-async def _stdin_lines(bad: list[str]) -> AsyncIterator[dict[str, Any]]:
+async def _raw_stdin_lines() -> AsyncIterator[bytes]:
+    mode = os.fstat(sys.stdin.fileno()).st_mode
+    if not (stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode) or stat.S_ISCHR(mode)):
+        # A regular file (``< in.jsonl``): the event loop's pipe transport
+        # refuses it, and reading it never blocks for long.
+        while line := await asyncio.to_thread(sys.stdin.buffer.readline):
+            yield line
+        return
     loop = asyncio.get_running_loop()
     reader = asyncio.StreamReader(limit=64 * 1024 * 1024)
     await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
     while line := await reader.readline():
+        yield line
+
+
+async def _stdin_lines(bad: list[str]) -> AsyncIterator[dict[str, Any]]:
+    async for line in _raw_stdin_lines():
         text = line.decode("utf-8", errors="replace").strip()
         if not text:
             continue
