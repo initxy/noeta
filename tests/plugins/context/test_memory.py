@@ -190,12 +190,28 @@ async def test_an_agent_files_memory_scope_is_its_own_directory(
         Memory(agent_scope="team", agent_name="rev")
 
 
+async def test_an_agents_project_memory_is_the_main_checkouts_from_a_worktree(
+        h: Harness, tmp_path: Path) -> None:
+    for cmd in (["init", "-q"], ["-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q",
+                                 "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *cmd], cwd=h.work, check=True)
+    tree = h.work / ".noeta" / "worktrees" / "agent-1"
+    subprocess.run(["git", "worktree", "add", "-q", "-b", "wt", str(tree)], cwd=h.work,
+                   check=True)
+    home = tmp_path / "home"
+    h.provider.add(reply("ok"))
+    await h.start(agent(home, agent_scope="project", agent_name="rev"),
+                  config={"cwd": str(tree)})
+    assert Path(f"{h.work}/.noeta/agent-memory/rev/").is_dir()
+    assert not (tree / ".noeta").exists()
+
+
 def test_agent_memory_scopes_name_noetas_places(tmp_path: Path) -> None:
     from types import SimpleNamespace
 
     view: Any = SimpleNamespace(cwd="/w", env=None, state=SimpleNamespace(config={}))
     dirs = {scope: Memory(home=str(tmp_path), agent_scope=scope,
-                          agent_name="rev")._agent_dir(view)
+                          agent_name="rev")._agent_dir(view, "/w")
             for scope in ("user", "project", "local")}
     assert dirs == {"user": f"{tmp_path}/agent-memory/rev/",
                     "project": "/w/.noeta/agent-memory/rev/",
