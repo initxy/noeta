@@ -72,8 +72,12 @@ class NoetaApp(TranscriptView):
 
     def __init__(self, local: LocalApp | Any, *, agent: str, model: str, cwd: str,
                  resume: str | None = None, permission_mode: str | None = None,
-                 settings: Any = None, task_config: dict[str, Any] | None = None) -> None:
+                 settings: Any = None, task_config: dict[str, Any] | None = None,
+                 on_server: bool = False) -> None:
+        """``on_server``: ``local`` is a server's client, so its tasks run in
+        the server's directories, not ``cwd`` on this machine."""
         super().__init__()
+        self.on_server = on_server
         #: What each new task's config starts with (default: ``cwd`` and ``model``).
         self.task_config = {"cwd": cwd, "model": model} if task_config is None \
             else task_config
@@ -88,6 +92,7 @@ class NoetaApp(TranscriptView):
         self.agent = agent
         self.model = model
         self.cwd = cwd
+        self.task_cwd = self._default_task_cwd()
         self.resume = resume
         self.permission_mode = permission_mode
         #: The task's permission mode, as its permissions plugin recorded it.
@@ -182,6 +187,7 @@ class NoetaApp(TranscriptView):
             await self.local.client.signal(task_id, RESUMED_SIGNAL)
         self.read_only = bool(refused)
         self.task_id = task_id
+        self.task_cwd = self._default_task_cwd()
         self.calls.clear()
         self._set_question("", "", {})
         self.shown_requests.clear()
@@ -203,6 +209,10 @@ class NoetaApp(TranscriptView):
                                           "/new starts a task here.", classes="-error"))
         self._follower = self.follow(task_id)
         self.update_status()
+
+    def _default_task_cwd(self) -> str:
+        """What the status line shows until the task's ``TaskCreated`` says."""
+        return "" if self.on_server else self.cwd
 
     async def pick_task(self) -> None:
         rows = await self.local.client.tasks(limit=20)
@@ -234,8 +244,12 @@ class NoetaApp(TranscriptView):
             await self.answer_question(text)
             return
         images, self.images = self.images, []
-        message = mentions.attach(text, self.cwd, images) \
-            if images or mentions.mentioned(text, self.cwd) else text
+        if self.on_server and mentions.MENTION.search(text):
+            await self.say_notice("attached to a server: @ files on this machine are not "
+                                  "attached; the task reads the server's files itself")
+        files = None if self.on_server else self.cwd
+        message = mentions.attach(text, files, images) \
+            if images or (files and mentions.mentioned(text, files)) else text
         # Busy before the send: the turn may run, and its end be shown,
         # before the send returns.
         self.busy = True
