@@ -88,12 +88,12 @@ async def test_listener_and_pool_reconnect_after_backends_are_killed(pg: Any) ->
     a.on_change(lambda t, k: seen.append(k))
     await a.create(new())
     await b.get("t1")
-    await _terminate(pg.dsn, [*a._own.keys(), *b._own.keys()])
+    await _terminate(pg.dsn, [*a._feed.own.keys(), *b._feed.own.keys()])
     import psycopg
 
     async with await psycopg.AsyncConnection.connect(pg.dsn, autocommit=True) as c:
         await c.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
-                        " WHERE query = %s", (f'LISTEN "{a.channel}"',))
+                        " WHERE query = %s", (f'LISTEN "{a._feed.channel}"',))
     row = await a.get("t1")  # the pool replaced its dead connection
     assert row is not None and row.status == "ready"
 
