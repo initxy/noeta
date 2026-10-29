@@ -6,6 +6,7 @@ allowed hosts through the proxy with ``network.allowedDomains``."""
 from __future__ import annotations
 
 import http.server
+import socket
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -22,14 +23,23 @@ from noeta.backends.execenvs.container import (
 from tests.backends.execenvs.test_container import IMAGE
 
 
+def _free_ports() -> tuple[int, int]:
+    """Two TCP ports free right now, for the proxy a fake container names."""
+    with socket.socket() as a, socket.socket() as b:
+        a.bind(("127.0.0.1", 0))
+        b.bind(("127.0.0.1", 0))
+        return a.getsockname()[1], b.getsockname()[1]
+
+
 def _fake_docker(tmp_path: Path, gateway: str = "10.9.0.1") -> tuple[str, Path]:
     log = tmp_path / "calls"
     fake = tmp_path / "docker"
+    http_port, socks_port = _free_ports()
     fake.write_text(
         "#!/bin/sh\n"
         f'printf "%s\\n" "$*" >> {log}\n'
         f'case "$*" in "network inspect"*) echo "{gateway} ";; '
-        'inspect*) echo "127.0.0.1:41000:41001";; esac\n')
+        f'inspect*) echo "127.0.0.1:{http_port}:{socks_port}";; esac\n')
     fake.chmod(0o755)
     return str(fake), log
 
