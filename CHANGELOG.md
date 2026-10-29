@@ -1135,3 +1135,6 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - `Workflow`'s list of saved workflows (named when a name is not found) no longer lists a
   tenant's `.noeta/workflows` when it is a link to a place the tenant fence refuses, such as
   another tenant's workspace: the listing ran `ls` outside the fence.
+- A tenant's memory directory is no longer created where the tenant fence refuses writes:
+  the worker made it with `mkdir -p` itself, following a link in the tenant's `.noeta/` (or
+  a repository's shared directory outside the workspace) to a place outside it.
