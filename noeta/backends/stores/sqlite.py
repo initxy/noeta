@@ -566,8 +566,8 @@ class SqliteStore:
                     if conn.execute("SELECT count(*) FROM tasks WHERE tenant = ? AND"
                                     " status = 'running' AND lease_until >= ?",
                                     (t, now)).fetchone()[0] >= most]
-            not_full = (f" AND (status = 'running' OR tenant NOT IN"
-                        f" ({','.join('?' for _ in full)}))") if full else ""
+            not_full = (f" AND tenant NOT IN ({','.join('?' for _ in full)})"
+                        if full else "")
             row = conn.execute(
                 "SELECT task_id, owner_epoch, queue FROM tasks"
                 f" WHERE queue IN ({marks}){in_roots} AND ("

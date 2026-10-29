@@ -561,9 +561,9 @@ class PostgresStore:
             full = [t for t, most in limits.items()
                     if t in found_full or await running(conn, t) >= most]
             cur = await conn.execute(self._q(
-                "WITH c AS (SELECT task_id, status AS was FROM {s}.tasks k"
+                "WITH c AS (SELECT task_id FROM {s}.tasks k"
                 " WHERE queue = ANY(%(q)s)" + in_roots
-                + (" AND (status = 'running' OR tenant <> ALL(%(full)s))" if full else "")
+                + (" AND tenant <> ALL(%(full)s)" if full else "")
                 + " AND ("
                 f" (status = 'ready' AND (ready_at IS NULL OR ready_at <= {_NOW}))"
                 f" OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= {_NOW})"
@@ -575,8 +575,7 @@ class PostgresStore:
                 f" owner_epoch = t.owner_epoch + 1, lease_until = {_NOW} + %(ls)s,"
                 f" ready_at = NULL, waiting_on = NULL, updated_at = {_NOW}"
                 " FROM c WHERE t.task_id = c.task_id"
-                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.tenant, c.was, t.root_id,"
-                " t.queue"),
+                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.tenant, t.root_id, t.queue"),
                 {"q": list(queues), "w": worker, "ls": lease_seconds,
                  "r": list(roots or []), "full": full})
             row = await cur.fetchone()
@@ -586,21 +585,22 @@ class PostgresStore:
             # A hold of this tree being taken now: wait for it, then look
             # again (a fresh statement sees what it committed).
             await conn.execute("SELECT pg_advisory_xact_lock_shared(%s, hashtext(%s))",
-                               (_HOLD_LOCK_CLASS, f"{self.schema}:{row[5]}"))
+                               (_HOLD_LOCK_CLASS, f"{self.schema}:{row[4]}"))
             cur = await conn.execute(self._q(
                 "SELECT 1 FROM {s}.tree_holds WHERE root_id = %s AND worker <> %s"),
-                (row[5], worker))
+                (row[4], worker))
             if await cur.fetchone() is not None:
                 raise _HeldNow
-            if tenant in limits and row[4] != "running":
+            if tenant in limits:
                 # Workers claiming at once each counted before the others
-                # committed: one at a time per tenant, count again.
+                # committed: one at a time per tenant, count again. A lapsed
+                # task taken back counts like any other claim.
                 await conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
                                    (_TENANT_LOCK_CLASS, f"{self.schema}:{tenant}"))
                 if await running(conn, tenant, besides=task_id) >= limits[tenant]:
                     raise _TenantFull(tenant)
             return Claim(task_id=task_id, worker=worker, epoch=int(row[1]),
-                         lease_until=float(row[2]), queue=str(row[6]))
+                         lease_until=float(row[2]), queue=str(row[5]))
 
         while True:
             try:

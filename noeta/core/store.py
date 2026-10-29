@@ -280,8 +280,9 @@ class Store(Protocol):
         end serving its own task trees); ``None`` takes any task.
         ``tenant_limits`` (tenant -> most tasks running at once): a task of a
         tenant that many tasks of already run stays where it is (a running
-        task whose lease ran out holds no worker and is not counted); the
-        count holds across workers claiming at the same time."""
+        task whose lease ran out holds no worker and is not counted, and
+        taking one back is limited like any claim); the count holds across
+        workers claiming at the same time."""
         ...
 
     async def renew(self, claim: Claim, lease_seconds: float) -> Claim | None:

@@ -95,6 +95,23 @@ async def test_a_task_whose_lease_ran_out_does_not_count_toward_its_tenants_limi
     assert second is not None and second.task_id == "a2"
 
 
+async def test_reclaiming_a_lapsed_task_counts_toward_its_tenants_limit(
+        store: Store) -> None:
+    """Taking back a task whose lease ran out starts it running again like
+    any claim: with its tenant at the limit it stays where it is."""
+    for task in (_of("acme", "a1"), _of("acme", "a2")):
+        await store.create(task)
+    limits = {"acme": 1}
+    lapsed = await store.claim("w1", ["default"], -60, tenant_limits=limits)
+    assert lapsed is not None and lapsed.task_id == "a1"
+    second = await store.claim("w2", ["default"], 30, tenant_limits=limits)
+    assert second is not None and second.task_id == "a2"
+    assert await store.claim("w2", ["default"], 30, tenant_limits=limits) is None
+    running = [r.task_id for r in await store.tasks(status="running")
+               if r.owner == "w2"]
+    assert running == ["a2"]
+
+
 async def test_workers_claiming_at_once_keep_a_tenant_under_its_limit(store: Store) -> None:
     for i in range(6):
         await store.create(_of("acme", f"a{i}"))
