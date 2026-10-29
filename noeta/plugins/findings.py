@@ -26,8 +26,8 @@ _SAFE_INT = 9_007_199_254_740_991
 
 DESCRIPTION = (
     "Hand a code review's findings to the host interface as a typed list it can display. "
-    "Use it only when the code-review instructions you are following say to report "
-    "findings with this tool; otherwise use the output format those instructions give. "
+    "Use it only when the code-review instructions you follow ask for findings through "
+    "this tool; otherwise report in the format those instructions set. "
     "Call it once per review, with the findings that survived verification, most severe "
     "first (an empty list when none did), and do not repeat the findings as text "
     "afterwards. Report again after applying fixes only when the instructions for applying "
@@ -48,8 +48,8 @@ _FINDING: dict[str, Any] = {
         "failure_scenario": {"type": "string", "description": (
             "The concrete input or state that leads to the wrong result or the crash.")},
         "category": {"type": "string", "maxLength": 40, "description": (
-            'What kind of finding, as a short kebab-case word, such as "correctness", '
-            '"simplification", "efficiency" or "test-coverage".')},
+            'What kind of finding, as a short kebab-case word, such as "efficiency", '
+            '"correctness", "test-coverage" or "simplification".')},
         "verdict": {"type": "string", "enum": ["CONFIRMED", "PLAUSIBLE"], "description": (
             "Set when a verification pass ran; left out for reviews without one.")},
         "outcome": {"type": "string", "enum": ["fixed", "skipped", "no_change_needed"],

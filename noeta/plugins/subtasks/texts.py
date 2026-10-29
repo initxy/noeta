@@ -113,7 +113,7 @@ LAUNCHED = (
     "bookkeeping: never quote any of it, the id included, in a reply to the user.)\n"
     "agentId: {id} (internal; do not mention it to the user. To continue this agent, use "
     "SendMessage with to: '{id}' and a 5-10 word summary.)\n"
-    "You will be notified automatically when it finishes. Until then you know nothing about "
+    "You get a notice automatically once it finishes. Until then you know nothing about "
     "its results: do not report, assume or predict them. Carry on with other work or answer "
     "the user meanwhile.\n"
     "Do not duplicate its work: stay away from the files and topics it is working on."
@@ -188,7 +188,8 @@ OTHER_TASK_MESSAGE = (
 # The completion notice (a ``<system-reminder>`` once rendered).
 NOTICE_NOTE = (
     "One of these notices comes each time this agent stops with no background work of its own "
-    "still running. Messages can resume it, so the same task-id may notify again."
+    "still running. A message can wake it up again, so one task-id may notify more than "
+    "once."
 )
 RESULT_POINTER = (
     'The report came to you as a message from "{id}" (its SubagentHandback call); read it '

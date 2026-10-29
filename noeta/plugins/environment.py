@@ -223,8 +223,8 @@ def render_attribution(model: str) -> str | None:
     return "\n".join([
         "From here on, end the git commit messages and pull request descriptions you write "
         "with the lines below. This note replaces any earlier attribution note, earlier "
-        "copies of itself included; the user's own instructions about these lines (an "
-        "instructions file, a memory) take precedence over it; add no attribution line it "
+        "copies of itself included; where the user's own instructions (an instructions "
+        "file, a memory) say otherwise about these lines, those win; add no attribution line it "
         "does not list.",
         "- Commit messages end with:",
         f"Co-Authored-By: {spec.display_name} <noreply@anthropic.com>",

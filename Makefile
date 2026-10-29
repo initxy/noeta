@@ -64,8 +64,11 @@ eval-baseline:
 	uv run python -m evals --trials 9 --write-baseline
 
 ## noeta replayed through Claude Code's recorded scenarios (scripts/parity/README.md),
-## offline; writes parity/report.md and exits 1 while any mismatch is left (never in check)
+## offline; writes parity/report.md and exits 1 while any mismatch is left (never in check).
+## First, no model-visible text may repeat a run of Claude Code's recorded text
+## (scripts/parity/own_words.py; check runs it too, as a test)
 parity:
+	uv run python -m scripts.parity.own_words
 	uv run python -m scripts.parity.replay
 
 ## several worker processes on one Postgres (a throwaway postgres:16 container,

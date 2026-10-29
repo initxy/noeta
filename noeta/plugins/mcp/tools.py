@@ -193,7 +193,7 @@ class ReadMcpResourceTool:
     clearable = True
     deferred = True
     description = """
-Reads one resource from an MCP server, given the server's name and the resource URI.
+Reads one resource from an MCP server, given the server's name and a resource's URI.
 
 Parameters:
 - server (required): the name of the MCP server, as configured

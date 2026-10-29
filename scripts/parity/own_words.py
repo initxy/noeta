@@ -39,7 +39,7 @@ ROOT = HERE.parents[1]
 #: The shortest shared run the check is sure to catch.
 SHARED = 45
 #: Characters per indexed window, and how far apart indexed windows start.
-WINDOW, STRIDE = 40, 6
+WINDOW, STRIDE = 43, 3
 DIGEST = 5
 INDEX_NAME = "cc-windows.bin"
 ALLOWED = ROOT / "parity" / "own-words-allowed.txt"

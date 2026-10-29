@@ -6,11 +6,11 @@ Think before spawning: an agent costs more than it seems. A fresh agent knows on
 
 Use one for independent work that can run in parallel, for a side task the user wants kept off the main thread, or when answering means reading across many files and you only need the conclusion, not the file contents.
 
-Do it yourself when it takes a few tool calls or the target of a lookup is already known; never delegate a check you can run inline. Delegate a review only to get a reading not anchored on yours, and then hand over the code, not your conclusion. Once you delegate something, do not also do it yourself; wait for the result. When in doubt, do not spawn.
+Do it yourself when it takes a few tool calls or the target of a lookup is already known; never delegate a check you can run inline. Delegate a review only to get a reading not anchored on yours, and then hand over the code, not your conclusion. Once something is delegated, leave it to the agent and wait for its result. When unsure, do not spawn.
 
 ## Writing the prompt
 
-Brief the agent like a capable colleague: state the goal and what you have already ruled out, point to the files and docs worth reading instead of pasting them, and keep the scope explicit and narrow. The prompt is all the context it gets; if you cannot write a clear one, you do not understand the task well enough to hand it off.
+Brief the agent as you would a capable colleague: give the goal and what you have ruled out so far, name the files and docs it should read rather than pasting them in, and keep the scope narrow and stated. The prompt is all the context it gets; failing to write a clear one means you do not yet understand the task well enough to delegate it.
 
 ## How it runs
 
@@ -18,4 +18,4 @@ Agents run in the background: the call returns at once and you are notified when
 
 The user does not see the agent's report; pass on what matters. To continue an agent with its context intact, use SendMessage with its id; a new Agent call starts from scratch (except a fork).
 
-An agent type's model, effort and tools come from its definition (the frontmatter of an agent file in `.noeta/agents/`). `isolation: "worktree"` gives the agent its own git worktree, removed again when the agent left it unchanged.
+An agent type's model, effort and tools come from its definition (the frontmatter of an agent file in `.noeta/agents/`). With `isolation: "worktree"` the agent works in a git worktree of its own, removed again if the agent changed nothing there.

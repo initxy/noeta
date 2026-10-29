@@ -1,0 +1,17 @@
+# Literals scripts/parity/own_words.py cuts out of noeta's texts before it
+# looks for runs of Claude Code's: tags, sentinels and formats both sides must
+# spell the same way (protocol), never prose. One literal per line.
+<total_tokens>15000000 tokens left</total_tokens>
+<system-reminder>
+</system-reminder>
+<tools-used-before-summary>
+</tools-used-before-summary>
+<command-name>/plan</command-name>
+<command-message>plan</command-message>
+<command-args>
+<local-command-stdout>Enabled plan mode</local-command-stdout>
+<<autonomous-loop-dynamic>>
+export const meta = { name, description, phases }
+type: user | feedback | project | reference
+https://json-schema.org/draft/2020-12/schema
+name: <short-kebab-case-name>

@@ -20,6 +20,7 @@ scenario.
 | `compare.py` | contract vs noeta's capture → `parity/report.md` |
 | `facts.py`, `wire.py` | what a request is reduced to; SSE and request kinds |
 | `names.json` | our names for text kinds (Claude Code's by hash, noeta's by pattern) |
+| `own_words.py` | hashes of Claude Code's recorded texts (`parity/<version>/cc-windows.bin`) and the check that no noeta text repeats a run of 45+ of their characters (`make parity`, and a test in `check`); `parity/own-words-allowed.txt` lists the protocol literals it skips |
 
 ## Run
 
@@ -62,3 +63,7 @@ Mac with Claude Code and tmux, reachable over ssh, records through a gateway:
 
 Unnamed kinds show as `p:<hash>` in the contract; name the ones that matter
 in `names.json` (our words) and distill again.
+
+Then hash the new recording's texts for the own-words check:
+
+        uv run python -m scripts.parity.own_words index ~/cc-recordings/<ver> --out parity/<ver>/cc-windows.bin
