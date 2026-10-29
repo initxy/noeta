@@ -9,6 +9,18 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **Skills, memory recall, instruction files and list changes follow Claude Code 2.1.312.**
+  A skill's listing line is capped at 1,536 characters (not 384 estimated tokens); a skill
+  whose description changed is listed again; a loaded skill is its base-directory line and
+  body (no "Activated skill" header or description); a `/<skill>` named mid-message gets a
+  note; skill directories below the working directory join when a file there is touched; the
+  `priority:` skill key is gone. Recall shows a memory's first 200 lines / 4,096 bytes, notes
+  a memory older than a day, skips one-word messages, sub-agents and files already read, and
+  its selector is sparing with `[user]` / `[project]` memories. An `@import` of a non-text
+  file is skipped; a long nested instruction file is cut to its start; a changed instruction
+  file is shown again with the next message. Deferred tools and agent types that join or
+  leave mid-task are told, MCP servers' `instructions` reach the model, and `ToolSearch`'s
+  `+word` also matches the description. Records written for these live in the task log.
 - **A plugin file missing a package says how to add it.** Plugins install no dependencies;
   one that imports a module noeta's environment lacks is listed as broken (`noeta plugins`,
   `/reload-plugins`) with the `uv tool install` / `pip install` line that adds it, or the
