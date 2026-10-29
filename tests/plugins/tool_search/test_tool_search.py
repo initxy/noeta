@@ -124,6 +124,17 @@ def test_keyword_ranking() -> None:
     assert schema["properties"]["max_results"]["default"] == 5
 
 
+def test_the_whole_name_counts_for_each_term_on_its_own() -> None:
+    search = ToolSearchTool({t.name: t for t in [
+        Fake("mcp__slack__list", description="List channels."),
+        Fake("mcp__slack__send_message", description="Post to a channel."),
+    ]})
+    # "slack" scores both alike; "ack__send" is only in one tool's whole
+    # name, which counts though "slack" already scored.
+    assert search.search("slack ack__send") == ["mcp__slack__send_message",
+                                                "mcp__slack__list"]
+
+
 @pytest.mark.parametrize("limit", [float("inf"), float("-inf"), float("nan"), "5", None])
 async def test_an_unusable_max_results_means_the_default(limit: Any) -> None:
     # JSON's 1e400 arrives as float("inf"), which int() cannot take.

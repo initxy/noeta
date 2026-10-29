@@ -137,18 +137,22 @@ class ToolSearchTool:
                 continue
             score = 0
             for t in terms:
+                term = 0
                 if t in parts:
-                    score += 12 if mcp else 10
+                    term += 12 if mcp else 10
                 elif any(t in p for p in parts):
-                    score += 6 if mcp else 5
+                    term += 6 if mcp else 5
                 if t in coarse:
-                    score += 12 if mcp else 10
+                    term += 12 if mcp else 10
                 elif any(t in c for c in coarse):
-                    score += 4 if mcp else 3
-                if t in " ".join(parts) and score == 0:
-                    score += 3
+                    term += 4 if mcp else 3
+                # Only in the whole name (across a ``__`` boundary): this
+                # term's own score decides, not what earlier terms scored.
+                if term == 0 and t in name.lower():
+                    term += 3
                 if whole[t].search(text):
-                    score += 2
+                    term += 2
+                score += term
             if score > 0:
                 scored.append((score, name))
         scored.sort(key=lambda s: -s[0])  # stable: ties keep the tools' order
