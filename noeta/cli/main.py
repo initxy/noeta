@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from noeta.cli import config, mcp_command, plugin_command, tenants
+from noeta.cli import home_dir, mcp_command, plugin_command, tenants
 from noeta.cli.config import Settings, load_settings
 from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
@@ -215,7 +215,8 @@ def _allowed_hosts(args: argparse.Namespace) -> list[str] | None:
 async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     import uvicorn
 
-    from noeta.cli.config import HOME, server_token_digest
+    from noeta.cli.home_dir import HOME
+    from noeta.cli.server_token import server_token_digest
     from noeta.host.http import create_app, redact_token_logs
 
     host, with_worker = args.host, not args.no_worker
@@ -325,7 +326,7 @@ def _main(argv: list[str]) -> None:
     args = _parser().parse_args(argv)
     cwd = os.path.abspath(args.cwd or os.getcwd())
     if args.command == "trust":
-        from noeta.cli.config import trust_project
+        from noeta.cli.trust import trust_project
         print(f"trusted {trust_project(cwd)}: its plugins, agent files, prompt overrides, "
               "skills and Claude-Code-format settings load from now on")
         return
@@ -341,7 +342,7 @@ def _main(argv: list[str]) -> None:
     if args.command == "acp":
         from noeta.host.acp import EditorServers, serve_stdio
         if args.server:
-            from noeta.cli.config import server_token
+            from noeta.cli.server_token import server_token
             from noeta.host.remote import RemoteApp
             # The editor's directory is a path on this machine, and the
             # model is the server's unless --model names one.
@@ -385,7 +386,7 @@ def _front(argv: list[str]) -> None:
         try:
             layers: dict[str, Any] = {
                 "sources": headless.setting_sources(args),
-                "flag": headless.settings_layer(args, config.HOME / "flag-settings")}
+                "flag": headless.settings_layer(args, home_dir.HOME / "flag-settings")}
             mcp = headless.mcp_arguments(args)
             agent_files = headless.agent_files(args)
         except headless.FlagError as exc:

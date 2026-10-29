@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from noeta.cli import config
+from noeta.cli import config, home_dir
 from noeta.cli.main import main
 from noeta.plugins.mcp.config import McpServer
 from noeta.plugins.mcp.oauth import store_for
@@ -21,7 +21,7 @@ FAKE = str(Path(__file__).parents[1] / "plugins" / "mcp" / "fake_server.py")
 def places(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     home, project = tmp_path / "home", tmp_path / "project"
     project.mkdir()
-    monkeypatch.setattr(config, "HOME", home)
+    monkeypatch.setattr(home_dir, "HOME", home)
     monkeypatch.setattr(config, "managed_dir", lambda: tmp_path / "managed")
     monkeypatch.delenv("NOETA_MCP_CLIENT_SECRET", raising=False)
     return home, project

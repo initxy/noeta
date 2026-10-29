@@ -10,14 +10,14 @@ from typing import Any
 import pytest
 
 import noeta.cli.main as cli
-from noeta.cli import config
+from noeta.cli import config, home_dir
 
 
 @pytest.fixture(autouse=True)
 def no_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setattr(config, "HOME", home)
+    monkeypatch.setattr(home_dir, "HOME", home)
     monkeypatch.setattr(config, "managed_dir", lambda: tmp_path / "managed")
     monkeypatch.setenv("HOME", str(tmp_path / "user"))
     for name in ("NOETA_MODEL", "ANTHROPIC_MODEL"):

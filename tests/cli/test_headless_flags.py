@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 import noeta.cli.main as cli
-from noeta.cli import config, headless
+from noeta.cli import config, headless, home_dir
 from noeta.cli.config import from_settings, load_settings
 from noeta.cli.settings_files import load, settings_layers
 
@@ -20,7 +20,7 @@ from noeta.cli.settings_files import load, settings_layers
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setattr(config, "HOME", home)
+    monkeypatch.setattr(home_dir, "HOME", home)
     monkeypatch.setattr(config, "managed_dir", lambda: tmp_path / "managed")
     (home / "config.toml").write_text(
         f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n')

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from noeta.cli import config
+from noeta.cli import home_dir, trust
 
 
 @pytest.fixture(autouse=True)
@@ -28,10 +28,10 @@ def _mode(path: Path) -> int:
 def test_a_home_noeta_makes_is_owner_only(tmp_path: Path,
                                           monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "user" / ".noeta"
-    monkeypatch.setattr(config, "HOME", home)
-    config.device_id()
+    monkeypatch.setattr(home_dir, "HOME", home)
+    home_dir.device_id()
     assert _mode(home) == 0o700
-    assert config.loose_permissions(f"sqlite:///{home / 'tasks.db'}") == []
+    assert home_dir.loose_permissions(f"sqlite:///{home / 'tasks.db'}") == []
 
 
 def test_an_open_home_and_store_are_kept_and_named(tmp_path: Path,
@@ -41,9 +41,9 @@ def test_an_open_home_and_store_are_kept_and_named(tmp_path: Path,
     db = tmp_path / "tasks.db"
     db.touch()
     db.chmod(0o644)
-    monkeypatch.setattr(config, "HOME", home)
-    config.trust_project(str(tmp_path))
+    monkeypatch.setattr(home_dir, "HOME", home)
+    trust.trust_project(str(tmp_path))
     assert _mode(home) == 0o755  # never changed silently
-    notices = config.loose_permissions(f"sqlite:///{db}")
+    notices = home_dir.loose_permissions(f"sqlite:///{db}")
     assert [n.split(" is open")[0] for n in notices] == [str(home), str(db)]
     assert "chmod 700" in notices[0] and "chmod 600" in notices[1]

@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from noeta.cli import config
+from noeta.cli import config, home_dir, trust
 from noeta.cli.config import from_settings, load_settings, merge_plugin_settings
 from noeta.cli.settings_files import permission_arguments
 from noeta.plugins.web import Web
@@ -18,7 +18,7 @@ from noeta.plugins.web import Web
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setattr(config, "HOME", tmp_path)
+    monkeypatch.setattr(home_dir, "HOME", tmp_path)
     monkeypatch.setattr(config, "managed_dir", lambda: tmp_path / "managed")
     for var in ("NOETA_MODEL", "NOETA_PROVIDER", "NOETA_STORE"):
         monkeypatch.delenv(var, raising=False)
@@ -102,7 +102,7 @@ def test_settings_files_layer_in_claude_codes_precedence(
     found = config.file_settings(str(project))
     assert found.permissions == {"allow": ["Bash(make:*)"], "deny": ["Bash(curl:*)"],
                                  "defaultMode": "acceptEdits"}
-    config.trust_project(str(project))
+    trust.trust_project(str(project))
     found = config.file_settings(str(project))
     assert found.env == {"PARITY_A": "project", "PARITY_B": "user"}
     assert found.permissions == {
@@ -151,7 +151,7 @@ def test_claude_codes_own_places_are_never_read(
     (project / ".noeta").mkdir()
     (project / ".noeta" / "settings.json").write_text(json.dumps(
         {"enableAllProjectMcpServers": True}))
-    config.trust_project(str(project))
+    trust.trust_project(str(project))
 
     found = config.file_settings(str(project))
     assert not any(".claude" in str(f) for f in found.files)
@@ -209,7 +209,7 @@ def test_sandbox_settings_merge_and_reach_the_env(home: Path) -> None:
     (project / ".noeta" / "settings.json").write_text(json.dumps({"permissions": {
         "allow": ["WebFetch(domain:evil.com)", "Edit(~/**)"],
         "additionalDirectories": ["/"], "deny": ["Read(secret/**)"]}}))
-    config.trust_project(str(project))
+    trust.trust_project(str(project))
     found = config.file_settings(str(project))
     assert "WebFetch(domain:evil.com)" in found.permissions["allow"]
     assert found.sandbox_permissions == {"deny": ["Read(secret/**)"],

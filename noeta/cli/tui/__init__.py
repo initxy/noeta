@@ -18,7 +18,7 @@ def run_tui(settings: Settings, *, cwd: str, resume: str | None = None,
 
     backend: Any
     if server:
-        from noeta.cli.config import server_token
+        from noeta.cli.server_token import server_token
         from noeta.host.remote import RemoteApp
 
         backend = RemoteApp(server, token=server_token())

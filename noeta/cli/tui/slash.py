@@ -118,7 +118,7 @@ async def _memory_dir(app: NoetaApp) -> str | None:
 
 async def memory_files(app: NoetaApp) -> list[tuple[str, Path]]:
     """The instruction and memory files /memory offers, existing or not."""
-    from noeta.cli.config import HOME
+    from noeta.cli.home_dir import HOME
 
     cwd = Path(app.cwd)
     files = [("user instructions", HOME / "NOETA.md"),
@@ -159,7 +159,8 @@ async def _memory(app: NoetaApp, arg: str) -> None:
 
 
 async def _config(app: NoetaApp, arg: str) -> None:
-    from noeta.cli.config import HOME, file_settings
+    from noeta.cli.config import file_settings
+    from noeta.cli.home_dir import HOME
 
     words = arg.split()
     if words[:1] == ["edit"]:

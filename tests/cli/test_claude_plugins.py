@@ -10,8 +10,9 @@ from typing import Any
 
 import pytest
 
-from noeta.cli import config, main
-from noeta.cli.config import from_settings, load_settings, trust_project
+from noeta.cli import home_dir, main
+from noeta.cli.config import from_settings, load_settings
+from noeta.cli.trust import trust_project
 from noeta.core.commands import expand_command
 from noeta.core.extension import CommandContext
 
@@ -49,7 +50,7 @@ def make_plugin(root: Path, *, manifest: bool = True) -> Path:
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     (home / "plugins").mkdir(parents=True)
-    monkeypatch.setattr(config, "HOME", home)
+    monkeypatch.setattr(home_dir, "HOME", home)
     (home / "config.toml").write_text(
         f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n')
     return home

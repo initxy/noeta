@@ -10,7 +10,7 @@ import pytest
 from noeta import CommandContext, Runtime, parse_agent_file
 from noeta.agents.agent_files import build_agents
 from noeta.backends.stores.sqlite import SqliteStore
-from noeta.cli import config
+from noeta.cli import home_dir
 from noeta.cli.config import from_settings, load_settings
 from noeta.core import registry
 from noeta.core.client import Client
@@ -82,7 +82,7 @@ async def test_greet_without_a_name_asks_the_person(tmp_path: Path) -> None:
 
 async def test_config_toml_adds_it_to_main(tmp_path: Path,
                                            monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config, "HOME", tmp_path)
+    monkeypatch.setattr(home_dir, "HOME", tmp_path)
     (tmp_path / "config.toml").write_text(
         'model = "m"\napi_key = "k"\n'
         f'store = "sqlite:///{tmp_path / "t.db"}"\n'
