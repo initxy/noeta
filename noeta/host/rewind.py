@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import difflib
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -173,9 +174,10 @@ def diff_stats(plan: FilePlan) -> tuple[int, int]:
 
 
 async def rewind(client: ClientAPI, task_id: str, point: RewindPoint, *, conversation: bool = True,
-                 files: bool = True) -> Rewound:
+                 files: bool = True, config_keys: Sequence[str] | None = None) -> Rewound:
     """Rewind to before ``point``. With ``conversation`` a new task (same
-    agent and config) continues the log up to just before the prompt; with
+    agent, queue and config, or only its ``config_keys`` when given: what a
+    request may set) continues the log up to just before the prompt; with
     ``files`` the files changed since (by the task or its sub-agents) are
     written back as they were, by the task to go on with — so the front end
     following it sees the restore's notice. The checkpoints plugin checks a
@@ -187,7 +189,10 @@ async def rewind(client: ClientAPI, task_id: str, point: RewindPoint, *, convers
         first = events[0].event if events else None
         if not isinstance(first, TaskCreated):
             raise ValueError(f"task {point.task_id} has no creation event")
-        target = await client.create(first.agent, None, config=dict(first.config),
+        config = {k: v for k, v in first.config.items()
+                  if config_keys is None or k in config_keys}
+        queue = (await client.get(point.task_id)).queue
+        target = await client.create(first.agent, None, config=config, queue=queue,
                                      history_from=point.task_id,
                                      history_through=point.seq - 1)
     restored: tuple[str, ...] = ()

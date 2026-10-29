@@ -18,7 +18,7 @@ from noeta.core.agent import Agent
 from noeta.core.events import DEFAULT_TENANT, TaskCreated
 from noeta.core.extension import CommandContext
 from noeta.core.types import Message
-from noeta.host._http_guard import scope
+from noeta.host._http_guard import REQUEST_CONFIG, scope
 from noeta.host._http_openapi import OPENAPI
 from noeta.host.app import AppAPI
 from noeta.host.pending import card_title, choices, pending_tree
@@ -169,9 +169,11 @@ class Routes:
         body = await request.json()
         points = await rewind_points(scope(request).client, task_id)
         point = points[int(body["index"])]
-        done = await rewind(scope(request).client, task_id, point,
+        # The new task is a request's: the guard's checks and the tenant's
+        # queues, and only the config a request may set.
+        done = await rewind(scope(request).guarded, task_id, point,
                             conversation=bool(body.get("conversation", True)),
-                            files=bool(body.get("files", True)))
+                            files=bool(body.get("files", True)), config_keys=REQUEST_CONFIG)
         if done.task_id != task_id and self._app is not None:
             await self._app.adopt(done.task_id)
         return _json({"task_id": done.task_id, "prompt": done.prompt, "files": list(done.files)})

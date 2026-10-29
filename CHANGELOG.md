@@ -804,3 +804,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   request that runs it: listed prompts are kept per partition. Before, they were kept by
   command name only, so after another tenant listed the same command, a tenant's
   `/commands/run` used that tenant's connection and OAuth sign-in.
+- `POST /tasks/{id}/rewind` creates the new task through the request's guard: only the
+  config a request may set is carried over, `bypassPermissions` and a `cwd` outside the
+  tenant's workspace are refused (403), and the tenant's queues apply. A rewind keeps the
+  task's queue (`noeta.host.rewind.rewind(config_keys=)`). Before, it copied the original's
+  whole config through the unguarded client, so a tenant could rewind a task host code made
+  with plugin keys (`permission_rules`) or a mode a request may not ask for, on the
+  `default` queue.

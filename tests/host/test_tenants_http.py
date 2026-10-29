@@ -209,6 +209,43 @@ async def test_a_tenant_creates_tasks_only_on_its_queues(tmp_path: Path) -> None
     await store.close()
 
 
+async def test_a_rewind_creates_its_task_as_a_request_would(tmp_path: Path) -> None:
+    from noeta.core.client import Client
+    from noeta.core.events import TaskCreated
+    from noeta.core.runner import Runtime
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    store = SqliteStore(str(tmp_path / "t.db"))
+    workspaces = _workspaces(tmp_path, "c")
+    rt = Runtime(store=store, agents={"main": Agent(name="main", model="m")},
+                 provider_for=lambda _m: ScriptedProvider([reply("ok")] * 2),
+                 env_for=lambda _s: None,  # type: ignore[arg-type,return-value]
+                 sleep=no_sleep, queues=("gpu",))
+    # Host code made these tasks with config no request may set.
+    host = Client(store).scoped("c")
+    loose = await host.create("main", "hi", queue="gpu", config={
+        "cwd": workspaces["c"], "permission_rules": ["Bash"], "subtask_depth": 1})
+    bypass = await host.create("main", "hi", queue="gpu", config={
+        "cwd": workspaces["c"], "permission_mode": "bypassPermissions"})
+    await rt.run_until_idle()
+    api = create_app(Client(store), token="tok-default", tokens={"tok-c": "c"},
+                     cwd=str(tmp_path), queues={"c": ["gpu"]}, workspaces=workspaces)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api),
+                                 base_url="http://x", headers=_headers("tok-c")) as http:
+        got = await http.post(f"/tasks/{loose}/rewind", json={"index": 0})
+        assert got.status_code == 200, got.text
+        fork = got.json()["task_id"]
+        refused = await http.post(f"/tasks/{bypass}/rewind", json={"index": 0})
+        assert refused.status_code == 403 and "bypassPermissions" in refused.json()["error"]
+    created = (await store.read(fork))[0].event
+    assert isinstance(created, TaskCreated)
+    assert created.config == {"cwd": str(Path(workspaces["c"]).resolve())}
+    assert (await Client(store).get(fork)).queue == "gpu"
+    await store.close()
+
+
 def test_the_tokens_file_maps_tokens_to_tenants(tmp_path: Path,
                                                monkeypatch: pytest.MonkeyPatch) -> None:
     import stat
