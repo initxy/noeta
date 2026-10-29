@@ -52,7 +52,7 @@ async def _clear(app: NoetaApp, arg: str) -> None:
 
 async def _reload_plugins(app: NoetaApp, arg: str) -> None:
     from noeta.cli.config import plugin_changes
-    from noeta.core import registry
+    from noeta.cli.main import broken_plugin_lines
 
     reload = getattr(app.local, "reload_plugins", None)
     if reload is None:
@@ -62,7 +62,7 @@ async def _reload_plugins(app: NoetaApp, arg: str) -> None:
     before = dict(app.local.runtime.agents)
     notices = reload()
     changes = plugin_changes(before, app.local.runtime.agents) or ["no plugin changed"]
-    failed = [f"failed: {p}: {why}" for p, why in registry.broken_plugin_files().items()]
+    failed = [f"failed: {line}" for line in broken_plugin_lines()]
     await app.say_notice("plugins reloaded, in effect from the next turn: "
                          + "; ".join([*changes, *failed, *notices]))
 

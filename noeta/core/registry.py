@@ -89,6 +89,8 @@ _files: dict[str, tuple[str, Any]] = {}
 _channel_files: dict[str, tuple[str, Any]] = {}
 #: Plugin files that could not be used: path -> why.
 _broken: dict[str, str] = {}
+#: Of those, the ones that import a module nobody installed: path -> module.
+_missing: dict[str, str] = {}
 _loaded_paths: set[str] = set()
 _FILES_PACKAGE = "noeta_plugin_files"
 #: Where a plugin class came from: class -> (source, version).
@@ -119,6 +121,12 @@ def sources(group: str) -> dict[str, str]:
 def broken_plugin_files() -> dict[str, str]:
     """Plugin files that could not be used: path -> why."""
     return dict(_broken)
+
+
+def missing_modules() -> dict[str, str]:
+    """Broken plugin files that import a module not installed here: path ->
+    its top-level name. Not the plugin's own modules, nor noeta's."""
+    return dict(_missing)
 
 
 def added_by_files() -> dict[str, list[str]]:
@@ -196,19 +204,6 @@ def _import(path: Path) -> Any:
     return module
 
 
-def _install_hint(exc: Exception) -> str:
-    """How to install a module a plugin file imports but noeta's environment
-    lacks: plugins install no dependencies (``noeta plugin add`` runs nothing
-    from the plugin), so the user adds them next to noeta."""
-    if not isinstance(exc, ModuleNotFoundError) or not exc.name:
-        return ""
-    top = exc.name.split(".", 1)[0]
-    return (f"; {top!r} is not installed where noeta runs, and plugins install nothing:"
-            f" add it there (uv tool install --reinstall --with {top} plus the source and"
-            f" extras you installed noeta with, or pip install {top} in noeta's environment;"
-            " the package's name may differ from the module's)")
-
-
 def load_plugin_files(directories: Iterable[str | Path],
                       admit: Callable[[str], bool] | None = None) -> list[str]:
     """Register the plugins (and channels) of the files in ``directories``
@@ -233,9 +228,12 @@ def load_plugin_files(directories: Iterable[str | Path],
                 version = _file_version(path)
                 module = _import(path)
             except Exception as exc:  # noqa: BLE001 — a user's file must not stop noeta
-                _broken[shown] = f"{type(exc).__name__}: {exc}{_install_hint(exc)}"
-                log.warning("plugin file %s failed to import: %s%s", shown, exc,
-                            _install_hint(exc))
+                _broken[shown] = f"{type(exc).__name__}: {exc}"
+                top = (exc.name or "").split(".", 1)[0] if isinstance(
+                    exc, ModuleNotFoundError) else ""
+                if top and top not in (_FILES_PACKAGE, "noeta"):
+                    _missing[shown] = top
+                log.warning("plugin file %s failed to import: %s", shown, exc)
                 continue
             found = [(PLUGINS if issubclass(cls, Extension) else CHANNELS, cls)
                      for _n, cls in inspect.getmembers(module, inspect.isclass)
@@ -265,6 +263,7 @@ def forget_plugin_files() -> None:
     _files.clear()
     _channel_files.clear()
     _broken.clear()
+    _missing.clear()
     _loaded_paths.clear()
     for module in [m for m in sys.modules if m.startswith(f"{_FILES_PACKAGE}.")]:
         del sys.modules[module]

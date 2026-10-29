@@ -42,12 +42,15 @@ class {cls}(Extension):
 
 @pytest.fixture(autouse=True)
 def clean_registry() -> Iterator[None]:
-    saved = (dict(registry._files), dict(registry._broken), set(registry._loaded_paths))
+    saved = (dict(registry._files), dict(registry._broken), set(registry._loaded_paths),
+             dict(registry._missing))
     yield
     registry._files.clear()
     registry._files.update(saved[0])
     registry._broken.clear()
     registry._broken.update(saved[1])
+    registry._missing.clear()
+    registry._missing.update(saved[3])
     registry._loaded_paths.clear()
     registry._loaded_paths.update(saved[2])
 
@@ -98,12 +101,34 @@ def test_a_broken_file_is_named_when_its_plugin_is_asked_for(home: Path,
         from_settings(load_settings(), cwd=str(tmp_path))
 
 
-def test_a_file_missing_a_dependency_says_how_to_install_it(home: Path) -> None:
-    (home / "plugins" / "needs.py").write_text("import some_missing_pkg_xyz.sub\n")
-    assert registry.load_plugin_files([home / "plugins"]) == []
-    why = registry.broken_plugin_files()[str(home / "plugins" / "needs.py")]
-    assert "ModuleNotFoundError" in why
-    assert "--with some_missing_pkg_xyz " in why and "pip install some_missing_pkg_xyz " in why
+def test_a_file_missing_a_package_says_how_to_install_it(home: Path) -> None:
+    from noeta.cli.main import broken_plugin_lines
+
+    plugins = home / "plugins"
+    (plugins / "needs.py").write_text("import some_missing_pkg_xyz.sub\n")
+    (plugins / "pics.py").write_text("import PIL_is_not_it\nimport PIL\n")
+    (plugins / "sib").mkdir()
+    (plugins / "sib" / "__init__.py").write_text("from .helpers import x\n")
+    (plugins / "gone.py").write_text("import noeta.plugins.does_not_exist\n")
+    (plugins / "bad.py").write_text("raise RuntimeError('no')\n")
+    assert registry.load_plugin_files([plugins]) == []
+    assert registry.missing_modules() == {str(plugins / "needs.py"): "some_missing_pkg_xyz",
+                                          str(plugins / "pics.py"): "PIL_is_not_it"}
+    lines = {line.split(": ", 1)[0]: line for line in broken_plugin_lines()}
+    assert "--with some_missing_pkg_xyz " in lines[str(plugins / "needs.py")]
+    assert "pip install some_missing_pkg_xyz " in lines[str(plugins / "needs.py")]
+    for path in ("sib", "gone.py", "bad.py"):  # the plugin's own file, noeta's, not a module
+        assert "install" not in lines[str(plugins / path)]
+
+
+def test_a_module_of_an_extra_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.cli import main as cli
+
+    monkeypatch.setattr(registry, "missing_modules", lambda: {"/p.py": "PIL"})
+    monkeypatch.setattr(registry, "broken_plugin_files",
+                        lambda: {"/p.py": "ModuleNotFoundError: No module named 'PIL'"})
+    [line] = cli.broken_plugin_lines()
+    assert "the images extra" in line and "noeta[tui,images] @ " in line
 
 
 def test_an_installed_plugin_wins_a_name_clash(home: Path) -> None:
