@@ -331,6 +331,13 @@ async def test_no_background_job_starts_while_another_worker_holds_the_tree(h: H
     assert h.records == [] and h.registry.jobs == {}
 
 
+def test_the_refusal_names_both_reasons_a_tree_is_held_elsewhere() -> None:
+    # A hold is refused for another worker's background job and, as well, for
+    # another task of the tree running on another worker (the root, say).
+    assert "background command or another task" in HELD_ELSEWHERE
+    assert "in the foreground" in HELD_ELSEWHERE and "later" in HELD_ELSEWHERE
+
+
 async def test_a_timeout_kills_the_command_while_another_worker_holds_the_tree(
         h: Harness) -> None:
     ctx = _ctx_holding(h, _held_elsewhere)
