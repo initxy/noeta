@@ -300,7 +300,8 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      roots=[os.path.abspath(r) for r in args.allow_root],
                      workspaces=_workspaces(places),
                      queues={name: p.queues for name, p in places.items()
-                             if p.queues is not None})
+                             if p.queues is not None},
+                     server_dirs=permissions["server_dirs"])
     config = uvicorn.Config(api, host=host, port=args.port)
     redact_token_logs()
     try:

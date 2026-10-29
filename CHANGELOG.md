@@ -872,6 +872,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- `noeta serve` refuses at the edge a tenant's request for a `cwd` in one of the `[server] dirs`
+  inside its workspace, as `docs/server.md` says; the HTTP guard knew only the server's own
+  directory and `--allow-root` (the worker still refused it). `create_app(server_dirs=)` takes
+  them.
 - The end of a `noeta serve` event stream (`/tasks/{id}/watch`) and stream-json's "lost the
   task's events" result no longer carry an error's raw text: as for other requests, a client
   gets the text only of an error noeta raised itself, else a generic message (the server logs
