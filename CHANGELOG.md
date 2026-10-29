@@ -252,8 +252,9 @@ All notable changes to Noeta are documented here. The format is based on
   Creating a task with a known id is idempotent under a race (store contract test).
 - **The plugin set is pinned per task.** A task records each plugin's name, source (package
   version or file hash) and a hash of its arguments when it first starts and when a pickup
-  finds them changed; a worker missing one ends the task failed with `plugin_missing` instead
-  of running it without.
+  finds them changed; a worker missing one never runs the task without it: it lets the lease
+  run out for a worker that has the plugin (a rolling install), and ends the task failed with
+  `plugin_missing` after three such claims in a row with nothing new in the log.
 - **`Agent` fields for what a sub-agent definition asks**: `inherit_model`, `permission_mode`,
   `isolation` (were read from `Agent.extra`). An agent built in code runs its sub-agents on its
   own model unless it sets `inherit_model`.
@@ -456,6 +457,13 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Fixed
 
+- **A sub-agent is not left unclaimed behind a background command.** While a worker holds the
+  tree (a `run_in_background` command, a monitor), starting an agent on a queue that worker does
+  not serve fails with a tool error naming the queue instead of creating a child no worker
+  would claim until the command ended.
+- **A worker missing a newly installed plugin no longer fails tasks during a rolling install**
+  (see the pinned plugin set under Added), and a core log record of a kind this version does
+  not know is left to a newer worker instead of being skipped.
 - **An inbox item this version cannot read no longer fails a turn on every lease.** One a
   newer version posted lets the lease run out with nothing written (a newer worker takes the
   task); a malformed one ends the task `unreadable_log` after the usual claims.
