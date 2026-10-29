@@ -29,4 +29,4 @@ def run_tui(settings: Settings, *, cwd: str, resume: str | None = None,
     config = dict(task_config or {}) if server else {"cwd": cwd, "model": settings.model}
     NoetaApp(backend, agent=agent, model=str(config.get("model") or "the server's model"),
              cwd=cwd, resume=resume, permission_mode=permission_mode, settings=settings,
-             task_config=config).run()
+             task_config=config, on_server=bool(server)).run()

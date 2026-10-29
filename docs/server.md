@@ -142,8 +142,9 @@ of these holds:
 1. **The sandbox confines every command**: `sandbox.enabled: true`,
    `sandbox.failIfUnavailable: true` and `sandbox.allowUnsandboxedCommands: false` in
    `~/.noeta/settings.json`. `Bash` then runs inside bubblewrap or Seatbelt.
-2. **A remote exec env**: tools run in a container per task (`Runtime(env_for=…)`, from host
-   code embedding noeta; the `noeta` command does not set one up).
+2. **A remote exec env (host code only)**: tools run in a container per task, chosen by
+   `Runtime(env_for=…)` in host code that embeds noeta. The `noeta` command cannot set one
+   up, and its start-up check does not recognise one: such a host runs its own workers.
 3. **The operator accepts tenants separated at the API only**:
    `shared_os_user_tenants = true` under `[server]` in `~/.noeta/config.toml`. Tenants then must trust each
    other and the operator with everything the OS user can reach.

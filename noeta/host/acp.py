@@ -61,6 +61,7 @@ from noeta.host.pending import (
 )
 from noeta.host.questions import next_question, typed_answer
 from noeta.host.rewind import rewind, rewind_points
+from noeta.host.stream_json import noeta_version
 from noeta.host.usage import context_text, cost_text, tree_usage
 from noeta.toolkit.permission_modes import (
     MODE_SIGNAL,
@@ -170,7 +171,8 @@ class NoetaAcpAgent:
             agent_capabilities=schema.AgentCapabilities(
                 load_session=True,
                 prompt_capabilities=schema.PromptCapabilities(image=True, embedded_context=True)),
-            agent_info=schema.Implementation(name="noeta", title="Noeta", version="1.0.0"),
+            agent_info=schema.Implementation(name="noeta", title="Noeta",
+                                             version=noeta_version()),
         )
 
     async def new_session(self, cwd: str, mcp_servers: list[Any] | None = None,

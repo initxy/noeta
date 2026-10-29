@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from noeta.cli.tui.transcript import SERVER_DIRECTORY
 from noeta.core import models
 from noeta.core.events import ExtensionRecorded
 from noeta.core.loop.state import CONFIG_SIGNAL
@@ -180,7 +181,7 @@ async def _config(app: NoetaApp, arg: str) -> None:
     s: Any = app.settings
     found = file_settings(app.cwd)
     rows = [("model", app.model), ("permission mode", app.mode or app.permission_mode or "auto"),
-            ("working directory", app.cwd)]
+            ("working directory", app.task_cwd or SERVER_DIRECTORY)]
     if s is not None:
         rows += [("provider", s.provider), ("base URL", s.base_url or "(default)"),
                  ("store", s.store_url), ("effort", s.effort or "(default)")]
