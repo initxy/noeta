@@ -901,6 +901,20 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- On macOS, `noeta serve` and `noeta worker` no longer take the sandbox as a boundary between
+  tenants: Seatbelt's profile leaves Mach services such as launchd and Apple Events reachable,
+  so a tenant's command could likely have something run outside it as the OS user. Tenants
+  besides the default one are refused there (at start-up, and per task with
+  `tenant_not_isolated`) unless `[server] shared_os_user_tenants = true`; run their tools in
+  a container or a remote exec env instead. A single-user or default-tenant server is
+  unchanged.
+- The permissions plugin decides whether a workspace is trusted from each task's own working
+  directory (`noeta trust`), as the MCP and skills plugins do. Before, the `noeta` command
+  took the trust of the directory it started in for every task, so a server started in a
+  trusted project treated tasks in `--allow-root` directories or tenants' workspaces as
+  trusted: the auto-mode classifier read their `NOETA.md` as the person's intent, and
+  "always" answers were written into their `.noeta/settings.local.json`.
+  `Permissions(trusted_workspace=)` also takes a `(cwd) -> bool`.
 - `noeta token add` says that a `noeta serve` started with `--no-token` never reads the new
   token (it serves every request as the default tenant) and must restart with a token.
 - A fenced `LocalExecEnv.write_bytes` makes missing parent directories one at a time, each

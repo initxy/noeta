@@ -74,7 +74,8 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
 - **Tenants are separated at the API, not by the OS.** Their tools run as the worker's OS
   user, so without a boundary a tenant can read what that user can (`~/.noeta`, the store, the
   worker's environment). `noeta serve` and `noeta worker` refuse other tenants unless the
-  sandbox confines every command, or the operator sets `[server] shared_os_user_tenants =
+  sandbox confines every command (Linux only: on macOS Seatbelt is not a boundary between
+  tenants, so they need a container or a remote exec env), or the operator sets `[server] shared_os_user_tenants =
   true` (tenants then trust each other). A non-default tenant's file tools (fenced
   in-process, whatever the deployment) never reach a protected set, whatever its rules,
   mode or approvals: noeta's home (but its own corners: its spilled outputs and

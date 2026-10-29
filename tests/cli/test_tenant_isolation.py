@@ -175,3 +175,31 @@ async def test_the_permissions_plugin_gets_the_fenced_places(home: Path,
     assert fence.store_files[0] == str(tmp_path / "t.db")
     assert fence.spill_root == str(home / "tool-results")
     await app.store.close()
+
+
+def test_the_macos_sandbox_is_not_a_tenant_boundary(home: Path, tmp_path: Path,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = config.Settings(model="m")
+    box = {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False}
+    (home / "settings.json").write_text(json.dumps({"sandbox": box}))
+    assert tenants.isolation_problem(settings, str(tmp_path)) is None
+    monkeypatch.setattr(tenants.sys, "platform", "darwin")
+    problem = tenants.isolation_problem(settings, str(tmp_path))
+    assert problem is not None and "macOS" in problem and "shared_os_user_tenants" in problem
+    shared = dataclasses.replace(settings, server={"shared_os_user_tenants": True})
+    assert tenants.isolation_problem(shared, str(tmp_path)) is None
+
+
+def test_a_macos_server_with_a_confining_sandbox_refuses_tenants(
+        home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    box = {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False}
+    (home / "settings.json").write_text(json.dumps({"sandbox": box}))
+    with pytest.raises(_Started):
+        _run(tmp_path, "worker")
+    monkeypatch.setattr(tenants.sys, "platform", "darwin")
+    # The default tenant alone starts as before.
+    with pytest.raises(_Started):
+        _run(tmp_path, "worker")
+    _workspace(home, tmp_path, "acme")
+    with pytest.raises(SystemExit, match=r"acme.*macOS"):
+        _run(tmp_path, "worker")

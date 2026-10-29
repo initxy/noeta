@@ -107,6 +107,30 @@ async def test_read_only_commands_run_and_others_offer_a_rule(store: SqliteStore
     assert saved == {"permissions": {"allow": ["Bash(npm run *)"]}}
 
 
+@pytest.mark.parametrize("trusted", [False, True])
+async def test_always_answers_reach_the_project_only_when_the_tasks_cwd_is_trusted(
+        store: SqliteStore, tmp_path: Path, trusted: bool) -> None:
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": "npm run build"})),
+                                 reply("ok")])
+    project = tmp_path / "p"
+    project.mkdir()
+    seen: list[str] = []
+
+    def trusts(directory: str) -> bool:
+        seen.append(directory)
+        return trusted
+
+    client, tid, rt = await start(store, provider,
+                                  Permissions(mode="default", trusted_workspace=trusts),
+                                  [bash], cwd=project)
+    [item] = pending(await client.events(tid), tid)
+    await client.answer(tid, item.request_id, "allow", always=True)
+    await rt.run_until_idle()
+    assert len(bash.runs) == 1 and str(project) in seen
+    assert (project / ".noeta" / "settings.local.json").exists() is trusted
+
+
 async def test_reads_outside_ask_and_outside_writes_are_refused(store: SqliteStore,
                                                                 tmp_path: Path) -> None:
     read, write = Fake("Read"), Fake("Write")

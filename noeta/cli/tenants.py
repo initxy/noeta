@@ -160,10 +160,18 @@ def isolation_problem(settings: config.Settings, cwd: str) -> str | None:
     """Why tenants' tools here would run with no boundary between them and
     this server, or ``None`` when they would not: the settings' sandbox
     confines every command (``enabled``, ``failIfUnavailable``, no
-    ``allowUnsandboxedCommands``), or the operator accepted tenants
+    ``allowUnsandboxedCommands``; never on macOS), or the operator accepted tenants
     separated at the API only (``[server] shared_os_user_tenants = true``)."""
     if settings.server.get("shared_os_user_tenants") is True:
         return None
+    if sys.platform == "darwin":
+        # Seatbelt's profile starts from (allow default): a command could still
+        # ask launchd or another app over Mach to run something unsandboxed.
+        return ("tenants' tools would run as this OS user: on macOS the sandbox (Seatbelt) "
+                "is not a boundary between tenants (a command can ask launchd or another "
+                "app to run something outside it). Run the workers in a Linux container or "
+                "use a remote exec env, or accept tenants separated at the API only with "
+                f"[server] shared_os_user_tenants = true in {home_dir.HOME / 'config.toml'}.")
     found = config.file_settings(cwd)
     box = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
                                         base_dir=cwd)
