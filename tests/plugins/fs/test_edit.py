@@ -495,3 +495,17 @@ async def test_edit_authorization_failure_denies(h: Harness, ws: Path) -> None:
     out = await h.call(EditTool(write_roots=boom), file_path=str(target), old_string="x", new_string="y")
     assert out.is_error
     assert target.read_text() == "x"
+
+
+async def test_an_edit_of_a_very_large_file_skips_the_diff(h: Harness, ws: Path) -> None:
+    # difflib is slow on many lines (seconds per megabyte): past a size the
+    # edit is made without one.
+    target = ws / "big.txt"
+    target.write_text("".join(f"line {i}\n" for i in range(200_000)))
+    await h.call(ReadTool(), file_path="big.txt", limit=1)
+    out = await h.call(EditTool(), file_path="big.txt", old_string="line 7\n",
+                       new_string="line seven\n")
+    assert not out.is_error, text_of(out)
+    assert "line seven\n" in target.read_text()
+    assert out.meta["diff"] == ""
+    assert out.display is not None and out.display.fallback == "big.txt (too large to diff)"

@@ -3,6 +3,7 @@ the unified diff and the record of what the model has now seen."""
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 import hashlib
 import posixpath
@@ -21,6 +22,7 @@ __all__ = [
     "compute_diff",
     "diff_display",
     "diff_stat_counts",
+    "file_diff",
     "mutation_result",
     "read_precondition_error",
     "record_written",
@@ -185,6 +187,21 @@ def mutation_result(path: str, *, created: bool, stale: bool = False,
     return f"{head} {FILE_STATE_NOTE}"
 
 
+#: Characters (before and after together) past which a change gets no diff:
+#: difflib takes seconds a megabyte on files of many lines.
+DIFF_MAX_CHARS = 1_000_000
+
+
+async def file_diff(before: str, after: str, rel_path: str) -> tuple[str, int, int]:
+    """The change's unified diff and its ``(added, removed)`` line counts,
+    worked out off the event loop; ``("", 0, 0)`` past
+    :data:`DIFF_MAX_CHARS` (see :func:`diff_display`)."""
+    if len(before) + len(after) > DIFF_MAX_CHARS:
+        return "", 0, 0
+    diff = await asyncio.to_thread(compute_diff, before, after, rel_path)
+    return diff, *diff_stat_counts(diff)
+
+
 def compute_diff(before: str, after: str, rel_path: str) -> str:
     """``difflib`` unified diff with ``a/<rel>`` / ``b/<rel>`` framing."""
     return "".join(
@@ -210,9 +227,12 @@ def diff_stat_counts(diff: str) -> tuple[int, int]:
     return added, removed
 
 
-def diff_display(rel: str, diff: str, added: int, removed: int) -> Display:
+def diff_display(rel: str, diff: str, added: int, removed: int, *,
+                 skipped: bool = False) -> Display:
+    """The front ends' view of a change; ``skipped``: the file was too large
+    to diff (:func:`file_diff`)."""
     return Display(
         kind="diff",
         data={"path": rel, "diff": diff, "added": added, "removed": removed},
-        fallback=f"{rel} +{added}/-{removed}",
+        fallback=f"{rel} (too large to diff)" if skipped else f"{rel} +{added}/-{removed}",
     )

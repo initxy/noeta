@@ -20,9 +20,8 @@ from noeta.plugins.fs._mutate import (
     WriteRoots,
     authorized_roots,
     changed_since_read,
-    compute_diff,
     diff_display,
-    diff_stat_counts,
+    file_diff,
     mutation_result,
     read_precondition_error,
     record_written,
@@ -290,8 +289,8 @@ class EditTool:
                 return planned
             count, after = planned
         rel = ws.relative(resolved)
-        diff = compute_diff(before, after, rel)
-        added, removed = diff_stat_counts(diff)
+        diff, added, removed = await file_diff(before, after, rel)
+        skipped = not diff and before != after
         after_bytes = after.encode("utf-8")
         try:
             await env.write_bytes(resolved, after_bytes)
@@ -309,5 +308,5 @@ class EditTool:
                 "removed": removed,
                 "replacements": count if replace_all else 1,
             },
-            display=diff_display(rel, diff, added, removed),
+            display=diff_display(rel, diff, added, removed, skipped=skipped),
         )
