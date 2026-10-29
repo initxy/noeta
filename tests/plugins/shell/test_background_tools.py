@@ -69,9 +69,7 @@ class Harness:
         return await self.tool(name).run(input, self.ctx(task_id, root_id))
 
     def job(self, job_id: str) -> Job:
-        job = self.registry.get(job_id)
-        assert job is not None
-        return job
+        return next(jobs[job_id] for jobs in self.registry.jobs.values() if job_id in jobs)
 
     async def settle(self, job_id: str) -> None:
         job = self.job(job_id)

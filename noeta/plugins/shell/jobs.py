@@ -266,12 +266,6 @@ class Registry:
     def find(self, root_id: str, job_id: str) -> Job | None:
         return self.jobs.get(root_id, {}).get(job_id)
 
-    def get(self, job_id: str) -> Job | None:
-        for jobs in self.jobs.values():
-            if job_id in jobs:
-                return jobs[job_id]
-        return None
-
     def running(self, root_id: str) -> list[Job]:
         """The root's jobs whose end is not yet told: a job whose command
         has exited counts until its end is posted, so whoever waits for the
@@ -549,15 +543,11 @@ class Registry:
             del self.jobs[job.root_id][job.job_id]
             if not self.jobs[job.root_id]:
                 self.jobs.pop(job.root_id, None)
-        paths = [p for p in (job.out_path, job.err_path, job.alive_path, job.cwd_path) if p]
-        with contextlib.suppress(Exception):
-            await job.env.run(["rm", "-f", *paths], timeout=10)
+        await self._remove_files(job.env, _files(job))
 
     def discard_later(self, job: Job) -> None:
         """:meth:`discard` without waiting for it."""
-        task = asyncio.create_task(self.discard(job))
-        self._retiring.add(task)
-        task.add_done_callback(self._retiring.discard)
+        self._in_background(self.discard(job))
 
     def _stop_quietly(self, job: Job) -> None:
         self.kill(job, quiet=True)
@@ -583,9 +573,7 @@ class Registry:
             self.jobs.pop(root_id, None)
             self.ended.pop(root_id, None)
             return
-        task = asyncio.create_task(self._drop(root_id, jobs))
-        self._retiring.add(task)
-        task.add_done_callback(self._retiring.discard)
+        self._in_background(self._drop(root_id, jobs))
 
     async def _drop(self, root_id: str, jobs: list[Job]) -> None:
         for job in jobs:
