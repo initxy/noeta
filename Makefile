@@ -47,7 +47,7 @@ lint:
 ## then the single-file plugins of examples/ (docs/extending.md), loaded as plain files
 PLUGIN_FILE_EXAMPLES = examples/run-tests/tests examples/chat-bridge/tests examples/house-style/tests
 example:
-	uv run --with-editable ./examples/hello-plugin pytest -q -p no:cacheprovider examples/hello-plugin/tests
+	uv run --with-editable ./examples/hello-plugin python -m pytest -q -p no:cacheprovider examples/hello-plugin/tests
 	uv run pytest -q -p no:cacheprovider $(PLUGIN_FILE_EXAMPLES)
 
 ## live tests against a real LLM backend / sandbox container (opt-in, never in check)
