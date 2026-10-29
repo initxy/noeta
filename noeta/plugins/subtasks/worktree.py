@@ -16,6 +16,7 @@ from noeta.toolkit.worktrees import (
     WORKTREES,
     add_worktree,
     after_jobs,
+    cancel_after_jobs,
     git,
     job_runs_under,
     remove_worktree,
@@ -74,6 +75,12 @@ async def remove_unlaunched_worktree(ctx: ToolContext, config: Mapping[str, Any]
 async def worktree_exists(env: ExecEnv | None, tree: Mapping[str, str]) -> bool:
     """Whether the agent's worktree directory is still there."""
     return env is not None and await env.stat(tree["path"]) is not None
+
+
+def reopen_worktree(tree: Mapping[str, str]) -> None:
+    """A resumed agent works in its worktree again: a removal queued for
+    when its jobs end no longer applies (its own end queues one anew)."""
+    cancel_after_jobs(tree["path"])
 
 
 async def _remove_if_unchanged(env: ExecEnv, tree: Mapping[str, str]) -> None:

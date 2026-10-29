@@ -26,6 +26,7 @@ from noeta.plugins.subtasks import idle, texts
 from noeta.plugins.subtasks.worktree import (
     make_agent_worktree,
     remove_unlaunched_worktree,
+    reopen_worktree,
     worktree_exists,
 )
 from noeta.toolkit.tools import SCHEMA_DIALECT, load_description
@@ -406,6 +407,8 @@ class SendMessageTool:
                 config.pop("cwd", None)
                 if "cwd" in state.config:
                     config["cwd"] = state.config["cwd"]
+            elif tree:
+                reopen_worktree(tree)
             child = ctx.spawn(agent["agent"], message, config=config, background=True,
                               queue=agent.get("queue") or ext.queue, history_from=task)
             ctx.record(ext.name, "launched", {
