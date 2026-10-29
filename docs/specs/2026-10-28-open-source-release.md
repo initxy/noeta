@@ -309,6 +309,11 @@ servers and runs on many machines.
   (recordings read from outside the repository, nothing derived from their wording
   committed). Rejected: a word-run rule (8 consecutive words) on top of the character
   windows, and rewording `Agent`, `ToolSearch` and the background-command result to pass it.
+- D40 (`os-fix-r5tools`) A worker's background-job table lets a root go, with its jobs'
+  logs, when the root ends, when the worker's hold on the tree is lost (the tree left this
+  worker), and, past 256 roots, least recently used first among roots with no running job.
+  Rejected: letting go when the last job's hold is given back normally (its end notice just
+  told the model to read the log file).
 
 ## Plan
 

@@ -24,7 +24,8 @@ unless the log already says the job was lost (``noeta.plugins.shell``).
 A job lives as long as its worker's hold on the task tree
 (``ToolContext.hold``): when the hold is lost (reaped after the worker was
 silent too long, or the worker stopping) the job is killed and its end never
-posted; the tree is told by ``hold_lost`` instead. A job also dies when its
+posted; the tree is told by ``hold_lost`` instead, and the root's jobs
+leave the table with their logs. A job also dies when its
 worker cannot kill it (killed itself, or frozen): a guard runs beside the
 command, in its process group, and kills the group once the worker stops
 re-creating the job's ``.alive`` file (it does while its hold is fresh, and
@@ -90,6 +91,11 @@ ENDED_KEEP = 4096
 #: ``TaskStop`` / ``TaskOutput`` on them) at most; older ones are let go,
 #: their logs removed with the root's.
 ENDED_JOBS_KEEP = 64
+#: Roots kept in the table at most: past it, the least recently used root
+#: with no running job is let go of with its logs (a server's roots rarely
+#: end here: an idle one waits for days, a tree another worker took never
+#: comes back).
+ROOTS_KEEP = 256
 #: How often a job's guard looks at its worker.
 GUARD_TICK_S = 0.5
 #: How long a foreground command outlives a worker that stopped re-creating
@@ -222,9 +228,11 @@ class Registry:
                  log_dir: str = DEFAULT_LOG_DIR,
                  log_max_bytes: int = DEFAULT_LOG_MAX_BYTES,
                  foreground_alive_s: float = FOREGROUND_ALIVE_S,
-                 ended_jobs_keep: int = ENDED_JOBS_KEEP) -> None:
+                 ended_jobs_keep: int = ENDED_JOBS_KEEP,
+                 roots_keep: int = ROOTS_KEEP) -> None:
         self.max_jobs = max_jobs
         self.ended_jobs_keep = ended_jobs_keep
+        self.roots_keep = roots_keep
         self.foreground_alive_s = foreground_alive_s
         self.log_dir = log_dir
         self.log_max_bytes = log_max_bytes
@@ -336,7 +344,9 @@ class Registry:
         if monitor_timeout_ms is not None:
             job.monitor = MonitorStream(sink=lambda text, _note: self._event(job, text),
                                         stop=lambda: self._stop_quietly(job))
-        self.jobs.setdefault(root_id, {})[job_id] = job
+        self.jobs[root_id] = self.jobs.pop(root_id, {})  # most recently used last
+        self.jobs[root_id][job_id] = job
+        self._let_go_of_roots()
         if ws is not None and job.monitor is not None:
             stream = job.monitor
             job.proc = asyncio.ensure_future(run_ws(*ws, lambda text: stream.feed(text + "\n"),
@@ -365,7 +375,7 @@ class Registry:
         job.task = asyncio.create_task(self._run(job, monitor_timeout_ms))
         job.sender = asyncio.create_task(self._send(job))
         if tree is not None:
-            tree.on_lost(lambda: self._fence(job))
+            self.hold_with(job, tree)
         if alive and (self._keeper is None or self._keeper.done()):
             self._keeper = asyncio.create_task(self._keep_alive())
         return job
@@ -476,6 +486,22 @@ class Registry:
             del jobs[job.job_id]
             self._in_background(self._remove_files(job.env, _files(job)))
 
+    def _let_go_of_roots(self) -> None:
+        """Keep at most :attr:`roots_keep` roots, letting go of the least
+        recently used ones with no running job, with their logs."""
+        idle = [r for r, jobs in self.jobs.items()
+                if all(j.done.is_set() for j in jobs.values())]
+        for root_id in idle[:max(0, len(self.jobs) - self.roots_keep)]:
+            jobs = self.jobs.pop(root_id)
+            for job in jobs.values():
+                self.ended.pop(job.spawner_id, None)
+            self.ended.pop(root_id, None)
+            self._in_background(self._remove_files_of(list(jobs.values())))
+
+    async def _remove_files_of(self, jobs: list[Job]) -> None:
+        for job in jobs:
+            await self._remove_files(job.env, _files(job))
+
     def _in_background(self, work: Coroutine[Any, Any, None]) -> None:
         task = asyncio.create_task(work)
         self._retiring.add(task)
@@ -532,9 +558,18 @@ class Registry:
         return True
 
     def hold_with(self, job: Job, tree: TreeHold) -> None:
-        """A job moved to the background lives by ``tree`` from now on."""
+        """``job`` lives by ``tree`` from now on. Losing it (the tree
+        left this worker) kills the job, and the root's jobs and logs are let
+        go of once they are gone: the worker that takes the tree next has
+        its own table."""
         job.tree, job.worker = tree, tree.worker
-        tree.on_lost(lambda: self._fence(job))
+
+        def lost() -> None:
+            self._fence(job)
+            self._in_background(self._drop(job.root_id,
+                                           list(self.jobs.get(job.root_id, {}).values())))
+
+        tree.on_lost(lost)
 
     async def discard(self, job: Job) -> None:
         """Forget a foreground job once it is done, with its files."""
@@ -576,14 +611,18 @@ class Registry:
         self._in_background(self._drop(root_id, jobs))
 
     async def _drop(self, root_id: str, jobs: list[Job]) -> None:
+        """Once ``jobs`` (of ``root_id``) are gone, forget them and remove
+        their logs; a job started since stays."""
         for job in jobs:
             await job.done.wait()
+        await self._remove_files_of(jobs)
+        table = self.jobs.get(root_id, {})
         for job in jobs:
-            await self._remove_files(job.env, _files(job))
-        for job in jobs:
+            if table.get(job.job_id) is job:
+                del table[job.job_id]
             self.ended.pop(job.spawner_id, None)
         self.ended.pop(root_id, None)
-        if self.jobs.get(root_id) and all(j in jobs for j in self.jobs[root_id].values()):
+        if root_id in self.jobs and not table:
             self.jobs.pop(root_id, None)
 
     # ------------------------------------------------------------ notices

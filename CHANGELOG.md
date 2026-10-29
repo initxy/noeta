@@ -439,6 +439,11 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **A long-lived worker keeps a bounded number of task trees' background jobs.** A tree's
+  ended jobs and their logs stayed in the worker's table until its root ended here, so a
+  server's idle sessions and trees taken by other workers piled up. A tree whose hold this
+  worker lost now leaves with its logs, and past 256 trees the least recently used one with
+  no running job does.
 - **A long session keeps a bounded number of background logs on disk.** An ended
   background job let go of (beyond the 64 most recent of a root task) kept its log files,
   up to 64 MiB each, until the root task ended; they are now removed when it is let go.
