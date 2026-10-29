@@ -120,6 +120,5 @@ Known differences that no kernel or product reason forces: follow-ups, not accep
 | `AskUserQuestion` needs every question answered; Claude Code accepts unanswered questions and a note per question. | `noeta/plugins/ask_user` |
 | MCP result sizes are estimated (four characters a token, a CJK character one, 1,600 an image), not counted. | `noeta/plugins/mcp/results.py` |
 | `WebFetch` has no raw-markdown answer for known documentation sites. | `noeta/plugins/web` |
-| `Bash` does not note that a command changed a file the model has read. | `noeta/plugins/shell`, `noeta/plugins/fs` |
 | `Edit` and `Write` refuse to change an existing file that is not UTF-8 (UTF-16 or any other encoding), and `Read` shows such a file as UTF-8 with its invalid bytes replaced; Claude Code reads and writes UTF-16 and keeps a file's encoding. | `noeta/plugins/fs` |
 | Headless: SDK hook callbacks (`initialize.hooks`) are ignored with a warning; `--permission-prompt-tool` takes only `stdio`, not an MCP tool. | `noeta/host/_stream_json_control.py`, `noeta/cli/headless.py` |
