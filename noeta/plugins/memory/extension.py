@@ -39,6 +39,7 @@ from noeta.toolkit.memory_index import (
     trim_memory_index,
 )
 from noeta.toolkit.paths import noeta_home, project_dir
+from noeta.toolkit.tokens import has_cjk
 
 __all__ = ["INDEX_FILE", "MEMORY_SECTION", "Memory", "load_index", "memory_dir_for"]
 
@@ -147,6 +148,18 @@ def _stale_note(path: Path, now: float | None = None) -> str:
         return ""
     days = int(max(0.0, (now if now is not None else time.time()) - mtime) // 86_400)
     return RECALL_STALE_NOTE.format(days=days) + "\n" if days > 1 else ""
+
+
+def _read_files(view: TaskView) -> set[str]:
+    """The files the task's ``Read`` calls named: a memory already read is
+    not recalled again."""
+    out: set[str] = set()
+    for m in view.state.history:
+        for use in m.tool_uses if m.role == "assistant" else ():
+            path = use.input.get("file_path") if use.name == "Read" else None
+            if isinstance(path, str) and path:
+                out.add(posixpath.normpath(path))
+    return out
 
 
 def _instructions_show_index(view: TaskView, name: str) -> bool:
@@ -275,7 +288,9 @@ class Memory(Extension):
         recall model."""
         self._drop_voided(view)
         directory = self._dir(view)
-        if not self.recall_model or view.complete is None or directory is None:
+        # A sub-agent recalls nothing: its caller chose its prompt.
+        if not self.recall_model or view.complete is None or directory is None \
+                or view.state.parent_id:
             return ()
         state = view.state
         after = int((view.ext_state(self.name) or {}).get("through") or 0)
@@ -289,7 +304,10 @@ class Memory(Extension):
         if not new:
             return ()
         through = new[-1][0]
-        found = await self._recall(view, directory, "\n\n".join(m.text for _, m in new))
+        query = "\n\n".join(m.text for _, m in new).strip()
+        # A one-word message (Latin script) gives the selector nothing to go on.
+        one_word = not any(c.isspace() for c in query) and not has_cjk(query)
+        found = None if one_word else await self._recall(view, directory, query)
         if found is None:
             view.record(self.name, "checked", {"through": through})
             return ()
@@ -385,7 +403,8 @@ class Memory(Extension):
         if int(state.get("bytes") or 0) >= RECALL_TASK_BYTES:
             return None
         env = task_env(view.env, view.state.config)
-        manifest = await self._manifest(env, directory, set(state.get("surfaced") or []))
+        skip = {*(state.get("surfaced") or ()), *_read_files(view)}
+        manifest = await self._manifest(env, directory, skip)
         if not manifest:
             return None
         assert view.complete is not None and self.recall_model is not None

@@ -12,6 +12,7 @@ import pytest
 
 from noeta.core.agent import Agent
 from noeta.core.types import ModelRequest, ModelResponse
+from noeta.plugins.fs import FileTools
 from noeta.plugins.hooks import Hooks
 from noeta.plugins.memory import INDEX_FILE, Memory, load_index, memory_dir_for
 from noeta.plugins.memory.extension import (
@@ -299,3 +300,51 @@ async def test_an_old_recalled_memory_says_how_old_it_is(h: Harness, tmp_path: P
         f"Memory {directory / 'old.md'}:" in text
     # A day old or less carries no note (Claude Code's threshold).
     assert text.count("last changed") == 1
+
+
+async def test_a_one_word_message_asks_no_selector(h: Harness, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "tabs.md", "indent with tabs", "Use tabs.")
+    a = agent(home, recall_model="small")
+    h.provider.add(reply("ok"))
+    tid = await h.start(a, goal="  continue  ")
+    assert [r.model for r in h.provider.requests] == ["m"]
+    # CJK prose has no spaces; it is not one word.
+    h.provider.add(reply(json.dumps({"selected_memories": ["tabs.md"]})), reply("ok"))
+    await h.say(a, tid, "用制表符缩进这个文件")
+    assert [r.model for r in h.provider.requests] == ["m", "small", "m"]
+
+
+async def test_a_memory_the_task_read_is_not_recalled(h: Harness, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "tabs.md", "indent with tabs", "Use tabs.")
+    _memory(directory, "deploy.md", "how deploys run", "Deploy on Fridays.")
+    a = Agent(name="a", model="m", extensions=[
+        FileTools(), Memory(home=str(home), recall_model="small")])
+    h.provider.add(reply(json.dumps({"selected_memories": []})),
+                   reply("", ("Read", {"file_path": str(directory / "tabs.md")})), reply("ok"))
+    tid = await h.start(a, goal="look at my tabs memory")
+    h.provider.add(reply(json.dumps({"selected_memories": []})), reply("ok"))
+    await h.say(a, tid, "and now the deploy one")
+    listing = h.provider.requests[-2].messages[0].text
+    assert "deploy.md" in listing and "tabs.md" not in listing
+
+
+async def test_a_sub_agent_recalls_nothing(tmp_path: Path) -> None:
+    from noeta.core.extension import TaskView
+    from noeta.core.loop.state import TaskState
+    from noeta.core.types import user
+
+    async def complete(_r: ModelRequest) -> ModelResponse:
+        raise AssertionError("a sub-agent asked the selector")
+
+    state = TaskState(task_id="r.c1.1", agent="a", parent_id="r", root_id="r",
+                      ext={"memory": {"dir": str(tmp_path), "surfaced": [], "bytes": 0}})
+    state.messages.append(user("format this file"))
+    state.message_seqs.append(1)
+    view = TaskView(state=state, complete=complete)
+    assert await Memory(recall_model="small").reminders(view) == ()

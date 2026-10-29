@@ -30,6 +30,11 @@ _CJK_CHAR = re.compile(
 )
 
 
+def has_cjk(text: str) -> bool:
+    """Whether ``text`` holds a CJK character (prose with no spaces)."""
+    return _CJK_CHAR.search(text) is not None
+
+
 def estimate_tokens(text: str) -> int:
     """Deterministic, CJK-aware token estimate: CJK characters count one
     each, the rest ``ceil(n / 4)``. A budgeting unit, not a billed count."""
