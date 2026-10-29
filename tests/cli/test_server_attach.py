@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 import noeta.cli.main as cli
-from noeta.cli import config, home_dir
+from noeta.cli import config, home_dir, server_token
 
 
 @pytest.fixture(autouse=True)
@@ -61,6 +61,7 @@ def test_acp_on_a_server_leaves_the_directory_to_it(monkeypatch: pytest.MonkeyPa
         seen.update(kw)
 
     monkeypatch.setattr(acp, "serve_stdio", serve)
+    monkeypatch.setattr(server_token, "server_problem", lambda _url, _token: None)
     cli.main(["acp", "--server", "http://api.internal:8642"])
     assert seen == {"model": "", "editor_cwd": False, "cwd": ""}
 
@@ -81,5 +82,6 @@ def test_acp_takes_cwd_and_model_on_either_side(
         seen.update(kw)
 
     monkeypatch.setattr(acp, "serve_stdio", serve)
+    monkeypatch.setattr(server_token, "server_problem", lambda _url, _token: None)
     cli.main(argv)
     assert seen == {"model": "opus", "editor_cwd": False, "cwd": "projects/web"}

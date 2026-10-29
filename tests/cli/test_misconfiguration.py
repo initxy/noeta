@@ -70,12 +70,13 @@ def server() -> Iterator[str]:
         httpd.server_close()
 
 
+@pytest.mark.parametrize("command", [[], ["acp"]], ids=["tui", "acp"])
 @pytest.mark.parametrize("token", [None, "wrong"])
-def test_the_tui_on_a_server_without_its_token_names_the_variable(
-        tmp_path: Path, server: str, token: str | None) -> None:
+def test_a_front_end_on_a_server_without_its_token_names_the_variable(
+        tmp_path: Path, server: str, token: str | None, command: list[str]) -> None:
     more = {"NOETA_SERVER_TOKEN": token} if token else {}
     done = subprocess.run(
-        [sys.executable, "-m", "noeta.cli.main", "--server", server],
+        [sys.executable, "-m", "noeta.cli.main", *command, "--server", server],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, check=False,
         env=_env(tmp_path, **more))
     assert done.returncode == 1, done.stderr
