@@ -453,6 +453,12 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   held tree, so a `Cancel` or message to the root waited as long as the job ran.
   `Runtime.hold` now raises `HeldElsewhere` while an unended task of the tree is on a queue
   it does not serve.
+- **A worker leaves a log a newer version wrote to a newer worker.** An event, block or
+  value it does not know (msgspec's "Invalid value" / "Invalid enum value") counted toward
+  ending the task `failed (unreadable_log)`; the worker now lets the lease run out without
+  counting, so a newer worker claims it. A corrupt or misshapen log still ends failed after
+  three claims. Workers from this release on do this; 0.x workers still fail such a task
+  (see Changed).
 - **A long session keeps a bounded number of background logs on disk.** An ended
   background job let go of (beyond the 64 most recent of a root task) kept its log files,
   up to 64 MiB each, until the root task ended; they are now removed when it is let go.

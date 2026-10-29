@@ -17,10 +17,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import time
 from collections.abc import Sequence
 from typing import Any
 
+import msgspec
 from msgspec.structs import replace
 
 from noeta.core import records as core_records
@@ -62,6 +64,15 @@ LOAD_ATTEMPTS = 3
 
 class LostClaim(Exception):
     pass
+
+
+#: How msgspec words a tagged union member or a literal value it does not
+#: know: what a newer version writes, unlike a corrupt or misshapen entry.
+_NEWER_FORMAT = re.compile(r"Invalid (enum )?value '")
+
+
+def _newer_format(exc: Exception) -> bool:
+    return isinstance(exc, msgspec.ValidationError) and bool(_NEWER_FORMAT.match(str(exc)))
 
 
 def _decoded(stored: Snapshot) -> TaskState | None:
@@ -110,6 +121,13 @@ class TaskRun:
             except (Conflict, LostClaim, StoreUnavailable):
                 raise
             except Exception as exc:
+                if _newer_format(exc):
+                    # A newer version wrote it (a rolling upgrade): not this
+                    # worker's to fail. The lease runs out and the task is
+                    # claimed again, by a newer worker sooner or later.
+                    log.warning("task %s: its log has entries this version does not know, "
+                                "leaving it to a newer worker: %s", self.task_id, exc)
+                    return
                 # The log could not even be read and folded (nothing was written).
                 log.exception("task %s: could not load", self.task_id)
                 try:
