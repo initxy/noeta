@@ -439,6 +439,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **A long session keeps a bounded number of background logs on disk.** An ended
+  background job let go of (beyond the 64 most recent of a root task) kept its log files,
+  up to 64 MiB each, until the root task ended; they are now removed when it is let go.
 - **Front ends attached to a server work without a local model.** `noeta --server URL`
   exited with "no model configured" unless this machine named one, and its new tasks (and
   `noeta acp --server`'s) carried this machine's directory, which the server refuses (403

@@ -430,6 +430,28 @@ async def test_ended_jobs_are_kept_only_up_to_a_bound(tmp_path: Path) -> None:
     assert not any(Path(j.out_path).exists() for j in jobs)  # dropped ones too
 
 
+async def test_a_long_root_keeps_a_bounded_number_of_log_files(tmp_path: Path) -> None:
+    # A long session's root never retires: a job let go of takes its log
+    # with it, so the files on disk stay bounded.
+    reg = Registry(log_dir=str(tmp_path / "logs"), ended_jobs_keep=3)
+    env = LocalExecEnv(str(tmp_path))
+
+    async def post(body: Any, **kw: Any) -> None:
+        pass
+
+    jobs = []
+    for n in range(8):
+        job = await reg.spawn(env=env, command="echo out", cwd=str(tmp_path), env_vars={},
+                              root_id="r", spawner_id="r", tool_use_id=f"toolu_{n}",
+                              description="d", post=post)
+        assert isinstance(job, Job)
+        await job.done.wait()
+        jobs.append(job)
+    await asyncio.gather(*reg._retiring)
+    on_disk = [p for p in (tmp_path / "logs").rglob("*") if p.is_file()]
+    assert sorted(map(str, on_disk)) == sorted(j.out_path for j in jobs[-3:])
+
+
 def test_the_oldest_ended_task_is_forgotten_first(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("noeta.plugins.shell.jobs.ENDED_KEEP", 3)
     reg = Registry()

@@ -51,7 +51,7 @@ import shlex
 import socket
 import string
 import weakref
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -234,8 +234,6 @@ class Registry:
         #: tree still here: their notices go to the root instead. Ordered,
         #: oldest first.
         self.ended: dict[str, None] = {}
-        #: Log files of ended jobs let go of, by root: removed with its logs.
-        self._let_go: dict[str, list[tuple[ExecEnv, list[str]]]] = {}
         self._retiring: set[asyncio.Task[None]] = set()
         self._dirs: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
         self._keeper: asyncio.Task[None] | None = None
@@ -474,15 +472,25 @@ class Registry:
 
     def _let_go_of_ended(self, root_id: str) -> None:
         """Keep at most :attr:`ended_jobs_keep` of the root's background jobs
-        whose end is posted, dropping the oldest (their logs stay until the
-        root's go)."""
+        whose end is posted, dropping the oldest with their log files: a
+        root that runs for days keeps a bounded number on disk."""
         jobs = self.jobs.get(root_id)
         if not jobs:
             return
         ended = [j for j in jobs.values() if j.done.is_set() and not j.foreground]
         for job in ended[:max(0, len(ended) - self.ended_jobs_keep)]:
             del jobs[job.job_id]
-            self._let_go.setdefault(root_id, []).append((job.env, _files(job)))
+            self._in_background(self._remove_files(job.env, _files(job)))
+
+    def _in_background(self, work: Coroutine[Any, Any, None]) -> None:
+        task = asyncio.create_task(work)
+        self._retiring.add(task)
+        task.add_done_callback(self._retiring.discard)
+
+    @staticmethod
+    async def _remove_files(env: ExecEnv, paths: list[str]) -> None:
+        with contextlib.suppress(Exception):
+            await env.run(["rm", "-f", *paths], timeout=10)
 
     async def _post_end(self, job: Job, notice: str | None) -> None:
         if job.fenced:
@@ -571,8 +579,9 @@ class Registry:
         logs once they are gone."""
         self.kill_where(root_id)
         jobs = list(self.jobs.get(root_id, {}).values())
-        if not jobs and root_id not in self._let_go:
+        if not jobs:
             self.jobs.pop(root_id, None)
+            self.ended.pop(root_id, None)
             return
         task = asyncio.create_task(self._drop(root_id, jobs))
         self._retiring.add(task)
@@ -581,14 +590,10 @@ class Registry:
     async def _drop(self, root_id: str, jobs: list[Job]) -> None:
         for job in jobs:
             await job.done.wait()
-        # A job let go of while they ended is in ``jobs`` too.
-        files = [*self._let_go.pop(root_id, []), *((job.env, _files(job)) for job in jobs)]
-        for env, paths in files:
-            with contextlib.suppress(Exception):
-                await env.run(["rm", "-f", *paths], timeout=10)
+        for job in jobs:
+            await self._remove_files(job.env, _files(job))
         for job in jobs:
             self.ended.pop(job.spawner_id, None)
-        self._let_go.pop(root_id, None)
         self.ended.pop(root_id, None)
         if self.jobs.get(root_id) and all(j in jobs for j in self.jobs[root_id].values()):
             self.jobs.pop(root_id, None)
