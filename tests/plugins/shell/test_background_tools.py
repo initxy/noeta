@@ -280,6 +280,14 @@ async def test_a_foreground_command_ends_quietly_and_leaves_nothing(h: Harness) 
     assert list((h.tmp.parent / "logs" / f"w{os.getpid()}").iterdir()) == []
 
 
+async def test_a_command_using_fd_3_keeps_its_file_and_the_directory(h: Harness) -> None:
+    (h.tmp / "sub").mkdir()
+    out = await h.call("Bash", command="exec 3>notes.txt; echo mine >&3; cd sub")
+    assert not out.is_error
+    assert (h.tmp / "notes.txt").read_text() == "mine\n"
+    assert out.meta["cwd"] == str(h.tmp / "sub")
+
+
 async def test_a_timeout_moves_the_command_to_the_background(h: Harness) -> None:
     out = await h.call("Bash", command="echo started; sleep 2; echo done", timeout=1000)
     assert not out.is_error

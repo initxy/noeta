@@ -92,10 +92,19 @@ def _first_word(command: str) -> str:
     return parsed.commands[0].argv[0]
 
 
+#: The descriptor the EXIT trap writes the final directory to: fd 3 moved
+#: out of the way first, so a command that opens fd 3 itself keeps its file
+#: (a path would have to be writable inside the sandbox; a descriptor
+#: passes through it).
+_CWD_FD = 254
+
+
 def _track_cwd_fd(script: str) -> str:
     """``script`` with an EXIT trap writing the shell's final directory to
-    fd 3 (quietly, if fd 3 did not reach it)."""
-    return f"exec 2>&1\ntrap '{{ pwd -P >&3; }} 2>/dev/null' EXIT\n{script}"
+    the job's cwd file, which the job opened on fd 3 (quietly, if fd 3 did
+    not reach it)."""
+    return (f"exec 2>&1\n{{ exec {_CWD_FD}>&3 3>&-; }} 2>/dev/null\n"
+            f"trap '{{ pwd -P >&{_CWD_FD}; }} 2>/dev/null' EXIT\n{script}")
 
 
 def _output_so_far(data: bytes, truncated: bool) -> str:
