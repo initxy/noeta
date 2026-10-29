@@ -468,6 +468,52 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - **A worker's count of unreadable logs is bounded.** A task whose log failed to load once
   and then ended elsewhere kept its entry in the worker for good; the 1,024 most recent are
   kept.
+- **`WebFetch` no longer says a body was "saved to None".** A raw body of a text type
+  (from a custom transport) with no spill directory, or one that could not be written,
+  was reported, and cached, as saved to `None`; it is now an error, not cached.
+- **`NotebookEdit` refuses a `cell-N` that names no cell object.** On a notebook whose
+  N-th entry in `cells` is not an object, the call failed with an `AttributeError`; it
+  now returns a tool error.
+- **`ListAgents` says when its session list may be incomplete.** It lists the open
+  sessions among the store's 200 most recently active tasks and said nothing of older
+  ones; when that window is full it now says so, and that an older session can still be
+  messaged by its id.
+- **`SendMessage(notify_when_idle)` finds any open session.** It looked for the session
+  among the store's 200 newest tasks, so a session behind them was "unknown"; it is now
+  looked up by id (`ToolContext.task`, new, for plugin authors).
+- **`function_tool` leaves `*args` and `**kwargs` out of the schema.** They became
+  parameters named `args` and `kwargs` the model was told to fill.
+- **A sync `function_tool` runs off the event loop.** It ran on the worker's event loop,
+  so a blocking function stalled every other task of the worker; it now runs in a thread.
+- **The MCP plugin keeps a bounded number of tasks in memory.** Its per-task entries (the
+  resolved servers, their tools, roots and scope) were dropped only when the task waited or
+  ended here, so a task another worker took, or one left by a crash, stayed for the
+  process's life; past 256 tasks the least recently resolved are now forgotten.
+- **A skill's `allowed-tools` grant names any tool.** With `tool_enforcement` on, the grant
+  kept only names from a fixed table that had drifted (it lacked `Glob`, `Grep`,
+  `Workflow`, the worktree, schedule and plan tools, and every MCP tool), and a value in
+  Claude Code's space-separated form or `*` granted nothing. The grant is now the tools
+  the skill's rules name, read as its pre-approval reads them (`mcp__server` covers that
+  server's tools, `Read` covers `Grep` and `Glob`, `*` everything).
+- **Without background jobs, `Bash` runs a long leading `sleep`.** `Shell(background=False)`
+  refused it with a message pointing at `Monitor` and `run_in_background`, which that host
+  does not offer; the refusal now applies only where background jobs are offered.
+- **An agent's worktree is not removed under its background command.** An isolated agent
+  that ended while a background job it started still ran in its worktree had the
+  worktree force-removed under the job (it looked unchanged); it is now kept, and the
+  completion notice says why.
+- **An isolated agent's worktree goes when its caller ends first.** A task that ended or
+  was cancelled while its `isolation: "worktree"` agents ran never heard their ends, so
+  their worktrees stayed; they are now closed when it ends (an unchanged one removed).
+- **A plugin's markdown command fills its arguments as a skill does.** It replaced only
+  `$ARGUMENTS` and otherwise appended what was typed after a blank line; `$0`,
+  `$ARGUMENTS[0]` and `\$` now work as in Claude Code, and arguments no placeholder took
+  follow the body on an `ARGUMENTS:` line.
+- **A long-lived worker keeps a bounded number of task trees' background jobs.** A tree's
+  ended jobs and their logs stayed in the worker's table until its root ended here, so a
+  server's idle sessions and trees taken by other workers piled up. A tree whose hold this
+  worker lost now leaves with its logs, and past 256 trees the least recently used one with
+  no running job does.
 - **A long session keeps a bounded number of background logs on disk.** An ended
   background job let go of (beyond the 64 most recent of a root task) kept its log files,
   up to 64 MiB each, until the root task ended; they are now removed when it is let go.

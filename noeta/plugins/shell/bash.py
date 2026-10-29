@@ -142,6 +142,9 @@ class BashTool:
     read_only = False
     clearable = True
     input_schema: dict[str, Any]
+    #: Refuse a long leading ``sleep`` (its refusal points at ``Monitor`` and
+    #: ``run_in_background``, so only where background jobs are offered).
+    refuses_long_sleep = False
 
     def __init__(
         self,
@@ -163,7 +166,7 @@ class BashTool:
             return tool_error(self.name, "requires non-empty 'command'")
         if input.get("run_in_background"):
             return tool_error(self.name, "background execution is not available on this host")
-        described = long_leading_sleep(command)
+        described = long_leading_sleep(command) if self.refuses_long_sleep else None
         if described is not None:
             return tool_error(self.name, _blocked_sleep(described))
         timeout_s = resolve_timeout(input.get("timeout"), self.timeout_s)

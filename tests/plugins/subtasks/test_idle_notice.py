@@ -143,6 +143,21 @@ async def test_refusals(store: SqliteStore) -> None:
     assert not [m for m in o.requests[-1].messages if "hi" == m.text]
 
 
+async def test_a_session_behind_many_newer_tasks_is_found(store: SqliteStore) -> None:
+    o = ScriptedProvider([reply("hi")])
+    p = ScriptedProvider()
+    rt = runtime(store, {"p": p, "o": o}, main(), other())
+    client = Client(store)
+    peer = await client.create("other", "hello")
+    await rt.run_until_idle()
+    for _ in range(205):  # newer tasks no worker here runs
+        await client.create("other", "later", queue="elsewhere")
+    p.add(reply("", notify(peer)), reply("waiting"))
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    assert await results(client, tid) == [(texts.IDLE_SUBSCRIBED.format(to=peer), False)]
+
+
 async def test_a_sub_agent_cannot_subscribe(store: SqliteStore) -> None:
     c = ScriptedProvider([reply("", notify("someone", "hello")), reply("ok")])
     p = ScriptedProvider([reply("", ("Agent", {"description": "d", "prompt": "x"})),

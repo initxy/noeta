@@ -459,3 +459,59 @@ def test_the_oldest_ended_task_is_forgotten_first(monkeypatch: pytest.MonkeyPatc
     for task in ("a", "b", "c", "d"):
         reg.mark_ended(task, "r")
     assert list(reg.ended) == ["b", "c", "d"]
+
+
+async def test_a_long_server_keeps_a_bounded_number_of_roots(tmp_path: Path) -> None:
+    # Roots that never end here (idle, or taken by another worker) are let
+    # go of, least recently used first, with their logs.
+    reg = Registry(log_dir=str(tmp_path / "logs"), roots_keep=3)
+    env = LocalExecEnv(str(tmp_path))
+    jobs = []
+    for n in range(6):
+        job = await reg.spawn(env=env, command="echo out", cwd=str(tmp_path), env_vars={},
+                              root_id=f"r{n}", spawner_id=f"r{n}", tool_use_id="c",
+                              description="d", post=_posted)
+        assert isinstance(job, Job)
+        await job.done.wait()
+        jobs.append(job)
+    await asyncio.gather(*reg._retiring)
+    assert list(reg.jobs) == ["r3", "r4", "r5"]
+    on_disk = [p for p in (tmp_path / "logs").rglob("*") if p.is_file()]
+    assert sorted(map(str, on_disk)) == sorted(j.out_path for j in jobs[-3:])
+
+
+async def test_a_root_with_a_running_job_is_not_let_go_of(tmp_path: Path) -> None:
+    reg = Registry(log_dir=str(tmp_path / "logs"), roots_keep=1)
+    env = LocalExecEnv(str(tmp_path))
+    long = await reg.spawn(env=env, command="sleep 30", cwd=str(tmp_path), env_vars={},
+                           root_id="a", spawner_id="a", tool_use_id="c", description="d",
+                           post=_posted)
+    assert isinstance(long, Job)
+    short = await reg.spawn(env=env, command="true", cwd=str(tmp_path), env_vars={},
+                            root_id="b", spawner_id="b", tool_use_id="c", description="d",
+                            post=_posted)
+    assert isinstance(short, Job)
+    await short.done.wait()
+    assert set(reg.jobs) == {"a", "b"}
+    reg.retire("a")
+    await asyncio.gather(*reg._retiring)
+
+
+async def test_a_tree_whose_hold_is_lost_leaves_with_its_logs(tmp_path: Path) -> None:
+    reg = Registry(log_dir=str(tmp_path / "logs"))
+    tree = TreeHold(root_id="r", worker="w", epoch=1, seconds=60.0)
+    env = LocalExecEnv(str(tmp_path))
+    ended = await reg.spawn(env=env, command="true", cwd=str(tmp_path), env_vars={},
+                            root_id="r", spawner_id="r", tool_use_id="c", description="d",
+                            post=_posted)
+    assert isinstance(ended, Job)
+    await ended.done.wait()
+    job = await reg.spawn(env=env, command="sleep 30", cwd=str(tmp_path), env_vars={},
+                          root_id="r", spawner_id="r", tool_use_id="c", description="d",
+                          post=_posted, tree=tree)
+    assert isinstance(job, Job)
+    tree.mark_lost()  # the tree left this worker
+    await asyncio.wait_for(job.done.wait(), 5)
+    await asyncio.gather(*reg._retiring)
+    assert "r" not in reg.jobs
+    assert not Path(job.out_path).exists() and not Path(ended.out_path).exists()

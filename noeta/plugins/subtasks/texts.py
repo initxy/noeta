@@ -259,10 +259,13 @@ IDLE_SOURCE_PEER = "the other session's runtime"
 IDLE_SOURCE_OWN = "this session's runtime"
 LIST_EMPTY = "No agents to list: this task has started none and no other session is open."
 LIST_HEAD = "Agents you can message with SendMessage (the first word of a row is its address):"
+LIST_WINDOW_FULL = ("Only sessions among the {n} most recently active tasks are listed; an "
+                    "older open session can still be messaged by its id.")
 
 # Worktree isolation.
 WORKTREE_FAILED = "No agent was started: could not create its git worktree ({reason})."
 WORKTREE_KEPT = "Its changes are kept in the worktree {path} (branch {branch})."
+WORKTREE_IN_USE = "Its worktree {path} is kept: a background command still runs in it."
 
 # The agent list, recorded once when a task that can start agents begins.
 AGENT_LIST_HEAD = "Agent types the Agent tool can start:"

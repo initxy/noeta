@@ -434,8 +434,7 @@ class SendMessageTool:
             return texts.IDLE_ROOT_TASKS_ONLY
         if to in (state.task_id, me, state.root_id):
             return texts.IDLE_SELF.format(to=to)
-        rows = await ctx.tasks(limit=200) if ctx.tasks is not None else []
-        row = next((r for r in rows if r.task_id == to), None)
+        row = await ctx.task(to) if ctx.task is not None else None
         if row is None:
             return texts.UNKNOWN_RECIPIENT.format(to=to)
         if row.parent_id is not None:
@@ -457,6 +456,11 @@ class SendMessageTool:
         now = time.time()
         ctx.record(self._ext.name, "idle_subscribed", {"target": to, "id": sub_id, "at": now})
         ctx.set_timer(idle.timer_name(sub_id), now + idle.EXPIRY_SECONDS)
+
+
+#: The most recently active tasks ``ListAgents`` looks at for open sessions
+#: (the store lists no further back in one call).
+LIST_WINDOW = 200
 
 
 class ListAgentsTool:
@@ -486,12 +490,16 @@ class ListAgentsTool:
                 "done": "finished", "failed": "failed", "cancelled": "stopped"}[ended.status]
             label = f'"{a["description"]}"' if a.get("description") else a["type"]
             rows.append(f"- {agent_id} — sub-agent ({a['type']}) {label}, {status}")
+        full = False
         if ctx.tasks is not None:
             root = state.root_id or state.task_id
-            for row in await ctx.tasks(limit=200):
+            tasks = await ctx.tasks(limit=LIST_WINDOW)
+            full = len(tasks) >= LIST_WINDOW
+            for row in tasks:
                 if row.parent_id is None and row.task_id != root and row.status != "ended":
                     state_word = "idle" if row.waiting_on == "input" else "busy"
                     rows.append(f"- {row.task_id} — session (agent {row.agent}), {state_word}")
         if not rows:
             return text_output(texts.LIST_EMPTY)
-        return text_output("\n".join([texts.LIST_HEAD, *rows]))
+        tail = [texts.LIST_WINDOW_FULL.format(n=LIST_WINDOW)] if full else []
+        return text_output("\n".join([texts.LIST_HEAD, *rows, *tail]))

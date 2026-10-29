@@ -5,16 +5,45 @@ it would lose, and removing it with its branch. A git error is never read as
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Callable, Sequence
 
 from noeta.core.execenv import ExecEnv
 from noeta.toolkit.sandbox import run_in_tenant_sandbox
 
-__all__ = ["WORKTREES", "add_worktree", "git", "remove_worktree", "repository_top",
-           "unsaved_work"]
+__all__ = ["WORKTREES", "add_worktree", "git", "job_runs_in", "job_runs_under",
+           "remove_worktree", "repository_top", "unsaved_work"]
 
 #: Where new worktrees go, under the directory that holds them.
 WORKTREES = ".noeta/worktrees"
+
+#: The working directories of this process's running shell jobs, counted (the
+#: shell plugin keeps it). A job holds its task tree with this worker, so the
+#: task that would remove a worktree one runs in runs here and sees it.
+_JOB_DIRS: Counter[str] = Counter()
+
+
+def job_runs_in(cwd: str) -> Callable[[], None]:
+    """Count a job working in ``cwd`` until the returned call (once)."""
+    _JOB_DIRS[cwd] += 1
+    done = False
+
+    def ended() -> None:
+        nonlocal done
+        if done:
+            return
+        done = True
+        _JOB_DIRS[cwd] -= 1
+        if _JOB_DIRS[cwd] <= 0:
+            del _JOB_DIRS[cwd]
+
+    return ended
+
+
+def job_runs_under(path: str) -> bool:
+    """Whether a job of this process works in ``path`` or below it."""
+    top = path.rstrip("/") + "/"
+    return any(d == path or d.startswith(top) for d in _JOB_DIRS)
 
 
 async def git(env: ExecEnv, args: Sequence[str], cwd: str) -> tuple[int, str]:

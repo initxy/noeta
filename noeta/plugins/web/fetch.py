@@ -393,13 +393,17 @@ class WebFetchTool:
             if raw is not None:
                 assert isinstance(fetched, FetchedPage)
                 saved = await _save_binary(ctx, raw, fetched.content_type)
+                media = media_type_of(fetched.content_type)
                 if saved is None:
                     try:
                         check_text_media(url, fetched.content_type)
                     except ValueError as exc:
                         return text_output(f"WebFetch failed: {exc}", is_error=True)
+                    return text_output(
+                        f"WebFetch failed: the response is binary ({media}, "
+                        f"{format_size(len(raw))}) and there is nowhere to save it",
+                        is_error=True)
                 # Not text: neither rendered nor summarized, only named.
-                media = media_type_of(fetched.content_type)
                 note = (f"[The response is binary ({media}, {format_size(len(raw))}); "
                         f"it was saved to {saved}]")
                 cache.put(url, "", note, binary=True)

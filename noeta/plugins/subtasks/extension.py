@@ -335,6 +335,8 @@ class Subtasks(Extension):
                         view.record(self.name, "handback", {"agent_id": sender})
                 elif isinstance(body, ChildEnded) and body.child_id in st["tasks"]:
                     await self._ended(view, body, at=item.at, handbacks=handbacks)
+        elif isinstance(ev, TaskEnded):
+            await self._close_open_worktrees(view, st)
         elif isinstance(ev, ModelReplied):
             if any(v == "taken" for v in st["handbacks"].values()):
                 view.record(self.name, "seen")
@@ -393,6 +395,22 @@ class Subtasks(Extension):
         except OSError:
             log.debug("transcript %s not written", path, exc_info=True)
             return None
+
+    async def _close_open_worktrees(self, view: TaskView, st: Mapping[str, Any]) -> None:
+        """This task ended with agents still running (they are cancelled with
+        it): their ends reach no one, so their worktrees are closed now, an
+        unchanged one removed."""
+        for agent in st["agents"].values():
+            tree = agent.get("worktree")
+            if not tree or view.state.children.get(agent["task_id"]) is not None:
+                continue
+            try:
+                kept = await close_worktree(view, tree)
+            except Exception:
+                log.exception("closing worktree %s failed", tree.get("path"))
+                continue
+            if kept:
+                log.info("task %s ended: %s", view.task_id, kept)
 
     def _deliver(self, view: TaskView, task_id: str, text: str) -> None:
         tools_used = texts.TOOLS_BEFORE_SUMMARY.format(tool=texts.HANDBACK_TOOL)

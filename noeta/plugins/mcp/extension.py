@@ -102,6 +102,11 @@ ScopeFn = Callable[[TaskView], Union[str, None]]
 
 #: The ``tools/call`` ``_meta`` key that carries ``ToolContext.idempotency_key``.
 IDEMPOTENCY_META = "noeta/idempotencyKey"
+#: Tasks whose resolved servers are kept in memory at most. The runner lets
+#: go of a task with ``Waiting`` or ``TaskEnded``; one that leaves this worker
+#: otherwise (another worker took it, a crash) is forgotten, least recently
+#: resolved first, once this many newer ones are.
+TASKS_KEEP = 256
 
 
 def _as_list(servers: Servers) -> list[McpServer]:
@@ -439,13 +444,26 @@ class Mcp(Extension):
                     await parked.release()
         if isinstance(recorded.event, (Waiting, TaskEnded)):
             # The runner lets go of the task; the next pick-up resolves again.
-            for cache in (self._known, self._scopes, self._tools, self._marks, self._roots,
-                          self._refused):
-                cache.pop(view.task_id, None)
+            self._forget(view.task_id)
         elif self._turn_start(view) and view.task_id in self._known:
             # A turn opens on taken input, or on input queued behind the
             # turn that just ended.
             await self._refresh_once(view)
+
+    def _forget(self, task_id: str) -> None:
+        for cache in (self._known, self._scopes, self._tools, self._marks, self._roots,
+                      self._refused):
+            cache.pop(task_id, None)
+
+    def _forget_old_tasks(self) -> None:
+        """Keep the per-task entries of at most :data:`TASKS_KEEP` tasks
+        (a task with a call waiting on the person stays)."""
+        parked = {task_id for task_id, _call in self._parked}
+        old = [t for t in self._known if t not in parked]
+        for task_id in old[:max(0, len(self._known) - TASKS_KEEP)]:
+            self._forget(task_id)
+        for task_id in [t for t in self._tools if t not in self._known and t not in parked]:
+            del self._tools[task_id]
 
     @staticmethod
     def _turn_start(view: TaskView) -> bool:
@@ -484,7 +502,9 @@ class Mcp(Extension):
         known: dict[str, McpServer] = {}
         for s in servers:
             known.setdefault(s.alias, s)  # a duplicate alias is ignored
+        self._known.pop(view.task_id, None)  # most recently resolved last
         self._known[view.task_id] = known
+        self._forget_old_tasks()
         return True
 
     async def _from_files(self, view: TaskView) -> list[McpServer]:

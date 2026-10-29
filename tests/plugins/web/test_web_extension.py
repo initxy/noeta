@@ -289,6 +289,21 @@ async def test_binary_content_is_saved_for_the_model_to_read(tmp_path: Path) -> 
     assert without.is_error and "application/pdf" in text(without)
 
 
+async def test_a_raw_body_with_nowhere_to_save_it_is_an_error(tmp_path: Path) -> None:
+    # A transport may hand back raw bytes of a type the tool reads as text.
+    class RawFetch:
+        async def fetch(self, url: str) -> FetchedPage:
+            return FetchedPage("", "text/plain", raw=b"hello")
+
+    tool = WebFetchTool(RawFetch())
+    out = await tool.run({"url": "https://s.com/a.txt", "prompt": "p"}, _ctx(tmp_path))
+    assert out.is_error and "None" not in text(out)
+    assert text(out) == ("WebFetch failed: the response is binary (text/plain, 5 bytes) and "
+                         "there is nowhere to save it")
+    again = await tool.run({"url": "https://s.com/a.txt", "prompt": "p"}, _ctx(tmp_path))
+    assert again.is_error  # not cached as a note
+
+
 class FakeSearch:
     def __init__(self, results: list[SearchResult]) -> None:
         self.results = results

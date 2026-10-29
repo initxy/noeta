@@ -46,6 +46,7 @@ A row without an id is a difference the replay cannot see.
 | | `WebSearch` needs a search backend (a Tavily key, `NOETA_WEB_SEARCH_API_KEY`) and is not offered without one; the parity replay sets a placeholder key. | Claude Code searches through Anthropic's server-side tool, which only an Anthropic API key reaches; noeta runs on any provider. |
 | | When no model call is available for the digest (a host running tools without a runner) or the digest call fails, `WebFetch` returns the rendered page text, marked as such, instead of failing. | Tools reach a model only through the runner the host binds; a host without one still gets the page. |
 | | A binary `WebFetch` body (`tool.WebFetch.r.6`) is saved and named, and that line is the whole result: its bytes are not decoded as text for the digest or the page, and the cache keeps the line, so a repeat fetch names the same file. | Bytes decoded as text are noise to the digest model and to the result; the saved file is what the model can use, and `Read` opens it. |
+| | Stopping the root task's turn (the TUI's Esc, `cancel` with `turn_only` over HTTP or ACP) kills every background job (`run_in_background`, `Monitor`) of its tree without a notice; in Claude Code background tasks outlive an interrupt and are stopped with `TaskStop` or the tasks panel. (Not in the recordings: no recorded interrupt had a job running.) | noeta's front ends have no tasks panel and a remote one may detach after stopping, so the stop is the person's one control over what the turn started; a job left running also keeps the tree held by this worker. |
 | | A `Bash` command past its timeout is killed, not moved to the background, on a host that offers no background jobs (`Shell(background=False)`, or no runner to post the end to). | The move needs the job table and a task inbox for the end notice; such a host has neither. |
 | | `Bash` keeps the last 256 KB a command printed (and saves output past 30,000 characters to a file); there is no `BASH_MAX_OUTPUT_LENGTH` override. | The capture cap bounds a worker's memory for every command; the inline limit is Claude Code's default. |
 | | `Bash` has no `allowed_domains` parameter and its sandbox section no platform notes. | Both exist in Claude Code only with the sandbox on (and the parameter only in auto mode); the baseline runs without a sandbox, and its `Bash` schema has neither. |
@@ -57,6 +58,12 @@ A row without an id is a difference the replay cannot see.
 | | A PDF of up to 10 pages read without `pages` comes back as page images, not as one PDF document block. | A tool result is logged once, provider-neutral, and later requests of the task resend it, possibly to another provider (`/model` switches mid-conversation); a document block would then have to become page images inside the provider adapter, which has no exec env to run `pdftoppm` in, so after a switch to a provider without document blocks (OpenAI-compatible endpoints) the PDF would be lost to the model. Page images read the same on every vision provider. |
 | | `Read`'s empty-file and offset-past-the-end warnings are plain text in the result; Claude Code wraps them in `<system-reminder>`. | A tool result never carries the reserved tag (the wire neutralizes it), so a result cannot pose as host context. |
 | | `Workflow`'s description carries a short script-API reference (`tool.Workflow.8`): there is no bundled `workflow-authoring` skill to load. | noeta ships no bundled skills yet; the reference returns to a skill when it does. |
+
+## Hooks
+
+| id | difference | reason |
+|---|---|---|
+| | A `Stop` / `SubagentStop` hook that blocks the end of the turn 8 times in a row is let through (`MAX_STOP_CONTINUATIONS`); Claude Code sets no limit and leaves the loop to the hook (`stop_hook_active`). | A server runs unattended: a hook that always blocks would spend model calls until a budget or a person stopped it. `stop_hook_active` is still sent, so a hook written for Claude Code ends the loop itself first. |
 
 ## Request envelope
 

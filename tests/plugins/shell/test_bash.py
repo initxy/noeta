@@ -19,7 +19,9 @@ from noeta.core.execenv import RunResult
 from noeta.core.tool import ToolContext
 from noeta.plugins.shell.bash import BashTool, resolve_timeout
 from noeta.plugins.shell.git_prelude import git_prelude
+from noeta.plugins.shell.jobs import Registry
 from noeta.plugins.shell.state import SHELL, ShellState, reduce_shell
+from noeta.plugins.shell.tools import BackgroundBash
 from tests.plugins.conftest import Harness, text_of
 
 
@@ -158,7 +160,8 @@ async def test_timeout_is_an_error_with_the_output_so_far(h: Harness) -> None:
 
 async def test_a_long_leading_sleep_is_blocked_before_it_runs(h: Harness, ws: Path) -> None:
     marker = ws / "ran"
-    out = await bash(h, f"sleep 110 && touch {marker}")
+    tool = BackgroundBash(Registry(log_dir=str(ws / "logs")))
+    out = await bash(h, f"sleep 110 && touch {marker}", tool)
     assert out.is_error
     assert text_of(out) == (
         f"Bash: Blocked: sleep 110 followed by: touch {marker}. To wait until "
@@ -167,6 +170,14 @@ async def test_a_long_leading_sleep_is_blocked_before_it_runs(h: Harness, ws: Pa
         "run_in_background: true. Do not get around this with a chain of shorter "
         "sleeps."
     )
+    assert not marker.exists()
+
+
+async def test_without_background_jobs_a_long_sleep_just_runs(h: Harness, ws: Path) -> None:
+    # Its refusal points at Monitor and run_in_background, which are not there.
+    marker = ws / "ran"
+    out = await bash(h, f"sleep 110 && touch {marker}", timeout=1000)
+    assert text_of(out) == "Command timed out after 1s"
     assert not marker.exists()
 
 

@@ -139,6 +139,8 @@ class BackgroundBash(BashTool):
     waited for, and if its timeout runs out it is moved to the background
     instead of killed, as Claude Code does."""
 
+    refuses_long_sleep = True
+
     def __init__(self, registry: Registry, *, ends_with_turn: bool = False,
                  **kwargs: Any) -> None:
         super().__init__(**kwargs)

@@ -13,12 +13,13 @@ docstring, and its input schema comes from the parameters' annotations:
 (an enum) and ``X | None``; ``Annotated[T, "text"]`` describes a parameter,
 and a parameter with a default is optional. A parameter annotated
 ``ToolContext`` (or named ``ctx``) gets the call's context and is left out of
-the schema. The function may be sync or async and returns ``str``, a
-``ToolOutput``, or anything JSON can show.
+the schema. The function may be sync (it runs in a worker thread) or async
+and returns ``str``, a ``ToolOutput``, or anything JSON can show.
 """
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import types
@@ -78,6 +79,8 @@ class _FunctionTool:
             if _is_context(param, hint):
                 self._context = param.name
                 continue
+            if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+                continue  # nothing the model names
             properties[param.name] = _schema(hint)
             if param.default is inspect.Parameter.empty:
                 required.append(param.name)
@@ -98,9 +101,14 @@ class _FunctionTool:
         kwargs = dict(input)
         if self._context is not None:
             kwargs[self._context] = ctx
-        result = self.fn(**kwargs)
-        if inspect.isawaitable(result):
-            result = await result
+        if inspect.iscoroutinefunction(self.fn):
+            result = await self.fn(**kwargs)
+        else:
+            # Off the event loop: a blocking function must not stall every
+            # other task of the worker.
+            result = await asyncio.to_thread(self.fn, **kwargs)
+            if inspect.isawaitable(result):
+                result = await result
         if isinstance(result, ToolOutput):
             return result
         if isinstance(result, str):

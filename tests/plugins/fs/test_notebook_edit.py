@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from noeta.plugins.fs import NotebookEditTool, ReadTool
+from noeta.plugins.fs import NotebookEditTool, ReadTool, WriteTool
 from tests.plugins.conftest import Harness, text_of
 
 
@@ -57,6 +57,17 @@ async def test_a_cell_can_be_named_by_its_index(h: Harness, ws: Path) -> None:
     assert _cells(path)[1]["source"] == ["# New"]
     out = await h.call(tool, notebook_path="a.ipynb", cell_id="cell-2", new_source="x")
     assert text_of(out) == "NotebookEdit: no cell at index 2 in the notebook"
+
+
+async def test_an_index_naming_no_cell_object_is_refused(h: Harness, ws: Path) -> None:
+    # Written by the model (so known to it), never read as a notebook.
+    wrote = await h.call(WriteTool(), file_path="a.ipynb", content=json.dumps(
+        {"nbformat": 4, "nbformat_minor": 5, "metadata": {}, "cells": ["not a cell"]}))
+    assert not wrote.is_error, text_of(wrote)
+    out = await h.call(NotebookEditTool(), notebook_path="a.ipynb", cell_id="cell-0",
+                       new_source="x")
+    assert out.is_error
+    assert text_of(out) == "NotebookEdit: the cell at index 0 is not a cell object"
 
 
 async def test_a_notebook_before_4_5_gets_no_cell_ids(h: Harness, ws: Path) -> None:
