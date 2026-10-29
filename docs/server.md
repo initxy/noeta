@@ -143,7 +143,9 @@ default tenant's tasks are not fenced, and their sandbox is the settings' own.
   in between does not help. A PDF is read once through the fence and its page converters
   get a copy.
 - **Commands**, under the sandbox: `Bash` (foreground, background, `Monitor`), a skill's
-  script, an inline skill command and `git` for a worktree (its hooks included) run inside
+  script, an inline skill command and every `git` noeta runs in the tenant's checkout (for
+  a worktree, the first turn's git snapshot, memory's repository lookup; with the hooks and
+  config programs such as `gpg.program` or filter drivers the tenant set there) run inside
   the sandbox with the same places unreadable (`TenantFence.confine`), always: the
   settings' `excludedCommands`, `dangerouslyDisableSandbox`, `filesystem.disabled` and
   `enableWeakerNestedSandbox` do not apply to them. On Linux each command has its own PID
@@ -161,7 +163,12 @@ Not a boundary, even under the strict sandbox:
 
 - What the operator runs outside the sandbox: hooks (`settings.json` `hooks`, run as the OS
   user with the tool call on stdin), plugins (in-process code), the MCP servers of default
-  tenant tasks.
+  tenant tasks. A hook starts in the task's working directory: one that runs `git` or a
+  project's scripts there runs what the tenant wrote (its repository config, its files) as
+  the OS user.
+- The sandbox profile itself is built by the worker: it runs `git rev-parse --git-path
+  hooks` in the tenant's checkout as the OS user to find the hooks directory to protect.
+  That reads the repository's config but runs nothing from it.
 - A remote MCP server configured for the server reaches tenants with its configured
   headers, and `WebFetch` fetches any address the worker can reach (loopback and cloud
   metadata addresses included); the sandbox's network filter confines commands only.
@@ -171,7 +178,13 @@ Not a boundary, even under the strict sandbox:
 - On macOS, Seatbelt does not hide other processes: a command can list them and may see
   the arguments and environment of the worker's own (`ps eww`).
 - A trusted tenant workspace is configuration: its `.noeta/settings.json`, hooks, plugins and
-  agents load as the operator's own. Do not `noeta trust` a tenant's workspace.
+  agents load as the operator's own. Do not `noeta trust` a tenant's workspace. Untrusted,
+  its `.noeta/` settings, agents, plugins, prompts, skills and `mcp.json` are not read. What
+  is read from it either way is text for that tenant's own task (`NOETA.md`, `AGENTS.md`,
+  `.noeta/rules`, through the fence) or input like a tool call's: a saved workflow
+  (`.noeta/workflows/*.js`) runs in the in-process JavaScript engine as a `script` argument
+  would, with no file or process access. A host's `Skills(skills_dir=)` is not
+  trust-gated; its scripts still run in the sandbox.
 
 A token for another tenant added while a non-isolated server runs is not accepted (401) until
 it is restarted with one of the above. `noeta serve --no-worker` runs no tools and is not

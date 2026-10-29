@@ -44,8 +44,11 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
   that is intended.
 - **An untrusted project configures nothing.** A cloned repository's `.noeta/` settings,
   agents, prompts, skills and plugins load only after `noeta trust`; its MCP servers start only
-  with consent in its own settings. noeta never reads Claude Code's files (`~/.claude`,
-  `.claude/`, `CLAUDE.md`, `.mcp.json`).
+  with consent in its own settings. noeta never reads Claude Code's own files (`~/.claude`,
+  `.claude/`, `CLAUDE.md`, a project's `.mcp.json`). The one `.mcp.json` it reads is a
+  Claude-Code-format plugin's own, inside a plugin directory in noeta's plugin places
+  (`~/.noeta/plugins/<plugin>/`, or a trusted project's `.noeta/plugins/<plugin>/`, whose
+  servers start only with that project's consent).
 - **`noeta serve` always requires a bearer token** (`NOETA_SERVER_TOKEN`, or one made on first
   start and printed once; `~/.noeta/server-token`, owner-only, keeps only its SHA-256);
   `--no-token` is accepted only on a loopback address and with no tenant tokens or tenant
@@ -68,8 +71,10 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
   true` (tenants then trust each other). A non-default tenant's task may never reach noeta's
   home, the store's files, `/etc/noeta`, `/proc`, other tasks' spilled outputs or another
   tenant's workspace, whatever its rules, mode or approvals: not with a file tool (fenced
-  in-process), and under the sandbox not with a command (`Bash`, a skill's script, `git` and
-  its hooks), and it starts no local MCP server (`docs/server.md`, "What separates tenants",
+  in-process), and under the sandbox not with a command (`Bash`, a skill's script, any `git`
+  noeta runs in the tenant's checkout with the hooks and programs its config names), and
+  code noeta runs on its own outside the sandbox never comes from the tenant's workspace;
+  it starts no local MCP server (`docs/server.md`, "What separates tenants",
   lists what is and is not a boundary). A tenant reaching another tenant's tasks through the
   API, or those places with a tool, is a vulnerability; a tenant reading the OS user's other
   files after the operator chose shared OS users, or through what the operator configured to
