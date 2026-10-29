@@ -103,7 +103,8 @@ async def test_the_http_command_listing_carries_the_requests_tenant(tmp_path: Pa
         [McpServer(alias="local", command=[sys.executable, "-c", "pass"])], pool=pool)])
     store = SqliteStore(str(tmp_path / "h.db"))
     api = create_app(Client(store), token="tok-default", tokens={"tok-a": "acme"},
-                     agents={"main": agent}, cwd=str(tmp_path))
+                     agents={"main": agent}, cwd=str(tmp_path),
+                     workspaces={"acme": str(tmp_path)})
     transport = httpx.ASGITransport(app=api)
     try:
         async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as http:

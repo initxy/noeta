@@ -703,3 +703,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   (`noeta-background-<uid>/w<pid>/<job>.output`) and a worker's shared `TMPDIR`
   (`noeta-sandbox-*`) were readable, and the latter writable, by every tenant's tasks. A
   worker's sandbox directory moves to `<temp>/noeta-temp-<uid>/sandbox/`.
+- A tenant other than the default one needs a workspace: `noeta serve` refuses to start
+  while a tenant in `tokens.json` or `~/.noeta/tenants/` has none, `noeta token add` refuses
+  such a tenant, and the HTTP API (`create_app`) answers 403 when one without a workspace
+  starts a task or names a `cwd`. A request's `cwd` inside another tenant's workspace is
+  refused even where that lies inside the requester's own. Before, a tenant with only a
+  token could start tasks anywhere under the server's directory and `--allow-root` paths,
+  another tenant's workspace and the default tenant's included.

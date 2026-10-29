@@ -132,6 +132,30 @@ def other_tenants(places: dict[str, Any]) -> list[str]:
     return sorted(named - {DEFAULT_TENANT})
 
 
+def workspace_problem(places: dict[str, Any]) -> str | None:
+    """Why ``noeta serve`` may not serve the tenants this machine knows of,
+    or ``None``: one besides the default has no workspace, so nothing would
+    keep its tasks out of the server's directory and other tenants' work."""
+    missing = [t for t in other_tenants(places)
+               if places.get(t) is None or not places[t].workspace]
+    if not missing:
+        return None
+    files = ", ".join(str(config.HOME / "tenants" / t / "config.toml") for t in missing)
+    return (f"tenant(s) {', '.join(missing)} have no workspace, and a tenant's tasks run only "
+            f"in its own: set workspace = \"<directory>\" in {files}")
+
+
+def _has_workspace(tenant: str) -> bool:
+    """Whether ``tenant``'s config names a workspace directory."""
+    try:
+        data = tomllib.loads((config.HOME / "tenants" / tenant / "config.toml")
+                             .read_text("utf-8"))
+    except (OSError, ValueError):
+        return False
+    workspace = data.get("workspace")
+    return isinstance(workspace, str) and os.path.isdir(os.path.expanduser(workspace))
+
+
 def isolation_problem(settings: config.Settings, cwd: str) -> str | None:
     """Why tenants' tools here would run with no boundary between them and
     this server, or ``None`` when they would not: the settings' sandbox
@@ -243,6 +267,11 @@ def run(args: argparse.Namespace) -> int:
     """Run ``noeta token <command>``; the exit status."""
     try:
         if args.token_command == "add":
+            if args.tenant != DEFAULT_TENANT and not _has_workspace(args.tenant):
+                path = config.HOME / "tenants" / args.tenant / "config.toml"
+                raise ValueError(f"tenant {args.tenant!r} has no workspace: set workspace = "
+                                 f"\"<directory>\" in {path} first (a tenant's tasks run "
+                                 "only in its own)")
             token = add_token(args.tenant, args.name)
             print(token)
             print(f"noeta: a token for tenant {args.tenant!r}; it is shown only now",

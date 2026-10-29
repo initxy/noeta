@@ -30,6 +30,13 @@ from noeta.testing import ScriptedProvider, reply  # noqa: E402
 TOKENS = {"tok-a": "a", "tok-b": "b"}
 
 
+def _workspaces(base: Path, *names: str) -> dict[str, str]:
+    """A workspace directory for each tenant named."""
+    for name in names:
+        (base / name).mkdir(exist_ok=True)
+    return {name: str(base / name) for name in names}
+
+
 @pytest.fixture(autouse=True)
 def _send_message_loaded() -> Iterator[None]:
     SendMessageTool.deferred = False  # type: ignore[misc]
@@ -45,7 +52,7 @@ async def served(tmp_path: Path) -> AsyncIterator[tuple[str, ScriptedProvider, L
                      env_for=lambda _s: None)
     await local.start()
     api = create_app(local.client, token="tok-default", tokens=TOKENS, deltas=local.deltas,
-                     app=local, cwd=str(tmp_path))
+                     app=local, cwd=str(tmp_path), workspaces=_workspaces(tmp_path, "a", "b"))
     server = uvicorn.Server(uvicorn.Config(api, host="127.0.0.1", port=0, log_level="error"))
     serving = asyncio.create_task(server.serve())
     while not server.started:
@@ -140,13 +147,14 @@ async def test_send_message_cannot_cross_tenants(
 async def test_a_tenants_tasks_run_in_its_workspace(tmp_path: Path) -> None:
     from noeta.core.client import Client
 
-    work, other = tmp_path / "acme", tmp_path / "elsewhere"
+    work, other, inner = tmp_path / "acme", tmp_path / "elsewhere", tmp_path / "acme" / "c"
     (work / "sub").mkdir(parents=True)
     other.mkdir()
+    inner.mkdir()
     store = SqliteStore(str(tmp_path / "t.db"))
     client = Client(store)
-    api = create_app(client, token="tok-default", tokens=TOKENS, cwd=str(tmp_path),
-                     workspaces={"a": str(work)})
+    api = create_app(client, token="tok-default", tokens={**TOKENS, "tok-c": "c"},
+                     cwd=str(tmp_path), workspaces={"a": str(work), "c": str(inner)})
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api),
                                  base_url="http://x", headers=_headers("tok-a")) as a:
         made = (await a.post("/tasks", json={"agent": "main"})).json()["task_id"]
@@ -159,9 +167,25 @@ async def test_a_tenants_tasks_run_in_its_workspace(tmp_path: Path) -> None:
         created = (await store.read(tid))[0].event
         assert created.config["cwd"] == str(where.resolve())  # type: ignore[attr-defined]
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api),
-                                 base_url="http://x", headers=_headers("tok-b")) as b:
-        got = await b.post("/tasks", json={"agent": "main", "config": {"cwd": str(other)}})
-        assert got.status_code == 201  # a tenant without a workspace: the server's dirs
+                                 base_url="http://x") as http:
+        # A tenant without a workspace starts nothing, wherever it asks.
+        for config in ({"cwd": str(other)}, {"cwd": str(work)}, None):
+            got = await http.post("/tasks", json={"agent": "main", "config": config},
+                                  headers=_headers("tok-b"))
+            assert got.status_code == 403 and "no workspace" in got.json()["error"]
+        got = await http.get(f"/commands?cwd={other}", headers=_headers("tok-b"))
+        assert got.status_code == 403
+        # Another tenant's workspace is out of reach, even inside one's own.
+        for cwd in ("c", str(inner), str(inner / "..") + "/c"):
+            got = await http.post("/tasks", json={"agent": "main", "config": {"cwd": cwd}},
+                                  headers=_headers("tok-a"))
+            assert got.status_code == 403 and "another tenant" in got.json()["error"]
+        got = await http.post("/tasks", json={"agent": "main"}, headers=_headers("tok-c"))
+        assert got.status_code == 201
+        # The default tenant (the operator) works anywhere the server does.
+        got = await http.post("/tasks", json={"agent": "main", "config": {"cwd": str(inner)}},
+                              headers=_headers("tok-default"))
+        assert got.status_code == 201
     await store.close()
 
 
@@ -170,7 +194,8 @@ async def test_a_tenant_creates_tasks_only_on_its_queues(tmp_path: Path) -> None
 
     store = SqliteStore(str(tmp_path / "t.db"))
     api = create_app(Client(store), token="tok-default", tokens={**TOKENS, "tok-c": "c"},
-                     cwd=str(tmp_path), queues={"c": ["gpu"]})
+                     cwd=str(tmp_path), queues={"c": ["gpu"]},
+                     workspaces=_workspaces(tmp_path, "a", "b", "c"))
     expected = {("tok-a", "default"): 201, ("tok-a", "a"): 201, ("tok-a", "b"): 403,
                 ("tok-a", "gpu"): 403, ("tok-b", "a"): 403, ("tok-c", "gpu"): 201,
                 ("tok-c", "default"): 403, ("tok-c", "c"): 403,
@@ -203,6 +228,12 @@ def test_the_tokens_file_maps_tokens_to_tenants(tmp_path: Path,
     with pytest.raises(SystemExit) as done:
         main.main(["token", "remove", str(entry["sha256"])[:12]])
     assert done.value.code == 0 and lookup(token) is None
+    with pytest.raises(SystemExit) as done:
+        main.main(["token", "add", "--tenant", "beta"])
+    assert done.value.code == 1 and tenants.read_tokens() == []  # beta has no workspace
+    (tmp_path / "home" / "tenants" / "beta").mkdir(parents=True)
+    (tmp_path / "home" / "tenants" / "beta" / "config.toml").write_text(
+        f'workspace = "{tmp_path}"\n')
     with pytest.raises(SystemExit) as done:
         main.main(["token", "add", "--tenant", "beta"])
     assert done.value.code == 0 and [e["tenant"] for e in tenants.read_tokens()] == ["beta"]
