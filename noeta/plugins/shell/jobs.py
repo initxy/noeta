@@ -200,6 +200,9 @@ class Job:
     #: The file the worker re-creates while the job may live (its guard
     #: kills the job once it stays gone).
     alive_path: str = ""
+    #: How often its guard checks that file, fixed when the guard started
+    #: (a later hold does not change it).
+    guard_period: float = 0.0
     status: str = "running"  # running | exited | killed
     exit_code: int | None = None
     #: A ``Bash`` command waited on in the foreground: it ends without a
@@ -445,6 +448,7 @@ class Registry:
             # period is half the hold's time, so a frozen worker's jobs are
             # dead about when its hold may be reaped.
             ticks = max(2, round(self._alive_period(job) / GUARD_TICK_S))
+        job.guard_period = ticks * GUARD_TICK_S
         return shlex.join(["sh", "-c", _GUARD, "sh", "$$", worker_pid, job.alive_path,
                            str(ticks), str(GUARD_TICK_S)]).replace("'$$'", "$$")
 
@@ -469,7 +473,7 @@ class Registry:
                     else:
                         await group[0].env.run(
                             ["sh", "-c", 'for f; do : > "$f"; done', "sh", *paths], timeout=10)
-            period = min(self._alive_period(j) for j in jobs)
+            period = min(j.guard_period or self._alive_period(j) for j in jobs)
             await asyncio.sleep(max(period / 3, GUARD_TICK_S / 2))
 
     async def _run(self, job: Job, monitor_timeout_ms: float | None) -> None:

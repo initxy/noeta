@@ -533,6 +533,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - A worktree-isolated agent resumed with `SendMessage` after its unchanged worktree was
   removed runs in its caller's directory; before, it was started in the deleted directory
   and its end reported work "kept" at a path that no longer existed.
+- A foreground `Bash` command moved to the background is no longer killed after 30–60 s
+  when the worker's lease is longer than 90 s: its liveness file is re-created as often as
+  its guard checks it, not at the slower pace of the lease.
 
 ### Security
 
