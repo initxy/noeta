@@ -227,6 +227,34 @@ def test_the_version_follows_a_reducer_kept_in_a_helper_module(
             del sys.modules[name]
 
 
+def test_the_version_stays_that_of_the_code_the_runtime_started_with(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Code upgraded on disk under a running worker: its snapshots keep the
+    version of the code it runs, not the new code's."""
+    package = tmp_path / "snapver_plugin"
+    package.mkdir()
+    (package / "__init__.py").write_text(_PLUGIN_INIT)
+    old = "def count(state, data):\n    return (state or 0) + 1\n"
+    (package / "fold.py").write_text(old)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    from snapver_plugin import Counter  # type: ignore[import-not-found]
+
+    try:
+        _forget_code()  # a process starting
+        Runtime(store=SqliteStore(str(tmp_path / "s.db")),
+                agents={"a": Agent(name="a", model="m", extensions=[Counter()])},
+                provider_for=lambda _m: ScriptedProvider([]))
+        (package / "fold.py").write_text(old.replace("+ 1", "+ 2"))
+        running = snapshots.version("a", [Counter()])
+        (package / "fold.py").write_text(old)
+        _forget_code()
+        assert running == snapshots.version("a", [Counter()])
+    finally:
+        _forget_code()
+        for name in [m for m in sys.modules if m.startswith("snapver_plugin")]:
+            del sys.modules[name]
+
+
 @pytest.mark.parametrize("extension, helper", [
     ("noeta.plugins.fs:FileTools", "noeta.plugins.fs.state"),
     ("noeta.plugins.shell:Shell", "noeta.plugins.shell.bash"),

@@ -7,7 +7,8 @@ older one. It is used only when its version matches: the fold code (the
 kernel's and each of the agent's extensions', by source, with every module
 of the same top-level package they import, so a reducer kept in a helper
 module counts) and the agent's plugins (``registry.pin``). Anything else
-folds the log from the start.
+folds the log from the start. Source is hashed once per process (:func:`pin`),
+so a process keeps the version of the code it started with.
 
 A state is only written when it reads back equal (:func:`encode`): an
 extension state the encoding cannot carry faithfully (an object without
@@ -120,6 +121,18 @@ def _code_digest(module: str) -> str:
     for name in sorted(seen):
         h.update(f"{name}:{_module_digest(name)}\n".encode())
     return h.hexdigest()[:16]
+
+
+def pin(extensions: Sequence[Any]) -> None:
+    """Hash the fold code of ``extensions`` (and the kernel's) now: the hashes
+    are kept for the process, so code upgraded on disk later does not change
+    the version this process stamps on its snapshots (``Runtime`` pins its
+    agents when it is made; an agent first seen later is hashed then)."""
+    for module in FOLD_MODULES:
+        _code_digest(module)
+    for ext in extensions:
+        for cls in type(ext).__mro__[:-1]:
+            _code_digest(cls.__module__)
 
 
 def version(agent: str, extensions: Sequence[Any]) -> str:

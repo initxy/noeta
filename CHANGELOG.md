@@ -389,8 +389,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   WebSearch, CronList, ListAgents and the MCP resource tools are retry-safe.
 - **Fold snapshots** (`noeta.core.snapshots`, a `snapshots` table in both stores): a claim
   folds the task's newest snapshot plus the events after it; written every
-  `Runtime.snapshot_every` (100) events, versioned by the code that folds, never trusted when
-  the version differs. A 20,002-event log claims in 21 ms instead of 120 ms on sqlite.
+  `Runtime.snapshot_every` (100) events, versioned by the code that folds (hashed when the
+  `Runtime` is made, so code upgraded on disk under a running worker does not change it), never
+  trusted when the version differs. A 20,002-event log claims in 21 ms instead of 120 ms on sqlite.
 - `noeta worker --lease` and `--snapshot-every`; one worker id `host:pid:random`.
 - `make cluster`: worker processes on Postgres under random SIGKILL / SIGSTOP with a scripted
   provider (tool calls, background jobs, sub-agents, timers, Cron, mid-run messages); a CI job

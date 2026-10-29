@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from noeta.core import snapshots
 from noeta.core.agent import Agent
 from noeta.core.errors import HeldElsewhere
 from noeta.core.execenv import ExecEnv
@@ -112,6 +113,15 @@ class Runtime:
     #: released); a new hold of the tree waits for it.
     _unholding: dict[str, asyncio.Future[None]] = field(default_factory=dict, init=False,
                                                         repr=False)
+
+    def __post_init__(self) -> None:
+        # The snapshot version is of the code this process runs: hash it
+        # now, before an upgrade on disk could change what is read.
+        for agent in self.agents.values():
+            try:
+                snapshots.pin(agent.all_extensions())
+            except ValueError:  # a misconfigured agent fails when its task loads
+                continue
 
     @property
     def hold_seconds(self) -> float:
