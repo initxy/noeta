@@ -148,3 +148,25 @@ async def test_a_version_2_store_keeps_its_snapshots_keyed_by_version(tmp_path: 
     conn = sqlite3.connect(path)
     assert conn.execute("SELECT version FROM noeta_schema").fetchall() == [(SCHEMA_VERSION,)]
     conn.close()
+
+
+async def test_a_store_without_hold_queues_gains_the_column(tmp_path: Path) -> None:
+    """``tree_holds.queues`` came later: an older store gets the column, and
+    a hold written without it (NULL) refuses no child."""
+    path = str(tmp_path / "t.db")
+    store = SqliteStore(path)
+    await store.create(NewTask(task_id="R", created=TaskCreated(agent="a")))
+    await store.close()
+    conn = sqlite3.connect(path)
+    conn.execute("ALTER TABLE tree_holds DROP COLUMN queues")
+    conn.execute("INSERT INTO tree_holds (root_id, worker, until) VALUES ('R', 'w', 1e12)")
+    conn.commit()
+    conn.close()
+    store = SqliteStore(path)
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None
+    await store.append(claim, [], expected_seq=1, creates=[NewTask(
+        task_id="R.gpu", queue="gpu",
+        created=TaskCreated(agent="a", parent_id="R", root_id="R"))])
+    assert await store.get("R.gpu") is not None
+    await store.close()

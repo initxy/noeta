@@ -240,8 +240,11 @@ class Store(Protocol):
         ``noeta.core.errors.Conflict`` when the claim's epoch or the expected seq
         no longer holds, or the task is not running; ``InboxUnread`` (a
         ``Conflict``) when the append ends the task and its inbox holds items
-        past ``patch.inbox_read_seq`` (see :func:`next_row_state`). A post to a task that
-        does not exist is skipped (the rest still lands)."""
+        past ``patch.inbox_read_seq`` (see :func:`next_row_state`);
+        ``UnservedQueue`` when a created child is on a queue its tree's
+        holding worker does not serve (the ``queues`` its :meth:`hold` named),
+        nothing written. A post to a task that does not exist is skipped (the
+        rest still lands)."""
         ...
 
     async def read(self, task_id: str, after: int = 0) -> list[Recorded]: ...
@@ -304,7 +307,8 @@ class Store(Protocol):
         decided in the same transaction. With ``queues`` (those ``worker``
         claims from) it is also ``None`` while an unended task of the tree
         is on another queue: no other worker claims a held tree's tasks, so
-        its holder must be able to. With ``epoch`` it renews that hold:
+        its holder must be able to; the hold keeps ``queues``, which
+        :meth:`append` checks a new child of the tree against. With ``epoch`` it renews that hold:
         ``None`` when it is gone (released, or reaped while its worker was
         silent)."""
         ...

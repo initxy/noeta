@@ -335,3 +335,58 @@ async def test_upgrading_a_version_1_schema_tells_its_held_trees(pg: Any) -> Non
         assert [i.body for i in await store.inbox("S")] == [lost]
         assert await store.inbox("free") == []
         await store.close()
+
+
+async def test_a_schema_without_hold_queues_gains_the_column(pg: Any) -> None:
+    """``tree_holds.queues`` came later: an older schema gets the column, and
+    a hold written without it (NULL) refuses no child."""
+    import psycopg
+
+    store = pg.store()
+    await store.create(new("R"))
+    await store.close()
+    with psycopg.connect(pg.dsn, autocommit=True) as conn:
+        conn.execute(f'ALTER TABLE "{pg.schema}".tree_holds DROP COLUMN queues')
+        conn.execute(f'INSERT INTO "{pg.schema}".tree_holds (root_id, worker, until)'
+                     " VALUES ('R', 'w', extract(epoch from now()) + 60)")
+    store = pg.store()
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None
+    await store.append(claim, [], expected_seq=1, creates=[NewTask(
+        task_id="R.gpu", queue="gpu",
+        created=TaskCreated(agent="a", parent_id="R", root_id="R"))])
+    assert await store.get("R.gpu") is not None
+    await store.close()
+
+
+async def test_an_append_creating_a_child_waits_for_a_hold_of_its_tree_being_taken(
+        pg: Any) -> None:
+    """An append's child and a hold being taken of the same tree serialize:
+    the hold, once committed, is seen, and its holder not serving the
+    child's queue refuses the child."""
+    import psycopg
+
+    from noeta.backends.stores.postgres import _HOLD_LOCK_CLASS
+    from noeta.core.errors import UnservedQueue
+
+    store = pg.store()
+    await store.create(new("R"))
+    claim = await store.claim("A", ["default"], 30)
+    assert claim is not None
+    async with await psycopg.AsyncConnection.connect(pg.dsn) as holder:
+        # What PostgresStore.hold does, held open before its commit.
+        await holder.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
+                             (_HOLD_LOCK_CLASS, f"{pg.schema}:R"))
+        await holder.execute(
+            f'INSERT INTO "{pg.schema}".tree_holds (root_id, worker, until, queues)'
+            " VALUES ('R', 'A', extract(epoch from now()) + 60, ARRAY['default'])")
+        append = asyncio.create_task(store.append(claim, [], expected_seq=1, creates=[
+            NewTask(task_id="R.gpu", queue="gpu",
+                    created=TaskCreated(agent="a", parent_id="R", root_id="R"))]))
+        await asyncio.sleep(0.3)
+        assert not append.done()
+        await holder.commit()
+        with pytest.raises(UnservedQueue):
+            await asyncio.wait_for(append, 10)
+    assert await store.get("R.gpu") is None
+    await store.close()
