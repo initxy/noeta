@@ -62,6 +62,11 @@ class GuardedClient:
         self._cwd = os.path.realpath(cwd) if cwd else None
         self._roots = [r for r in (self._cwd, *(os.path.realpath(r) for r in roots)) if r]
 
+    @property
+    def workspace(self) -> str | None:
+        """The tenant's workspace, when it has one."""
+        return self._cwd if self._fill else None
+
     def _mode(self, mode: Any) -> None:
         if mode == _BYPASS and not self._allow_bypass:
             raise Refused("this server does not allow bypassPermissions "

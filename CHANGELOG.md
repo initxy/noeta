@@ -467,3 +467,7 @@ All notable changes to Noeta are documented here. The format is based on
   `config`, `resumed`, `restore_files`). Before, a request could post a plugin's own signal,
   such as a background job's end (a forged `<task-notification>`) or a sub-agent's idle
   subscription naming another tenant's task, which then received the notice.
+- `GET /commands` and `POST /commands/run` check `cwd` as a new task's (outside the server's
+  directories or the tenant's workspace: 403) and, given a `task_id`, use the directory that
+  task was created in. Before, any `cwd` was scanned for skills and could start a trusted
+  directory's MCP servers.

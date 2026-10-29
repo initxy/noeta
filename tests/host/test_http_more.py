@@ -43,11 +43,14 @@ class Echo:
 
 class Gate(Extension):
     name = "gate"
+    #: The ``cwd`` of every command listing, in order.
+    listed_in: list[str] = []
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Any:
         return Ask(prompt="echo?")
 
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
+        Gate.listed_in.append(ctx.cwd)
         return [Command(name="hi", description="Say hi", template="hi {args}"),
                 Command(name="where", description="Where", local=True)]
 
@@ -215,6 +218,25 @@ async def test_requests_cannot_set_the_config_plugins_own(
         refused = await http.post(f"/tasks/{task_id}/signals", json={
             "name": "config", "data": {"permission_rules": ["Bash"]}})
         assert refused.status_code == 403
+
+
+async def test_commands_run_only_in_the_servers_directories(
+        served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
+    host, _ = served
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        assert (await http.get("/commands", params={"cwd": "/etc"})).status_code == 403
+        run = await http.post("/commands/run", json={"text": "/hi x", "cwd": "/etc"})
+        assert run.status_code == 403
+        (tmp_path / "sub").mkdir()
+        task_id = (await http.post("/tasks", json={"agent": "main", "config": {
+            "cwd": str(tmp_path / "sub")}})).json()["task_id"]
+        Gate.listed_in.clear()
+        got = await http.get("/commands", params={"task_id": task_id, "cwd": "/etc"})
+        assert got.status_code == 200
+        ran = await http.post("/commands/run", json={"text": "/hi x", "task_id": task_id,
+                                                     "cwd": "/etc"})
+        assert ran.json() == {"text": "hi x", "local": False}
+        assert set(Gate.listed_in) == {str(tmp_path / "sub")}
 
 
 async def test_requests_post_only_the_signals_front_ends_send(
