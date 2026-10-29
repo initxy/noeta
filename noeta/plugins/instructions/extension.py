@@ -203,9 +203,11 @@ class Instructions(Extension):
         directory = memory.get("dir") if isinstance(memory, dict) else None
         return directory if isinstance(directory, str) else None
 
-    def _memory_index(self, view: TaskView, *, pending: bool) -> tuple[str, str, str] | None:
+    async def _memory_index(self, view: TaskView, *,
+                            pending: bool) -> tuple[str, str, str] | None:
         directory = self._memory_dir(view, pending=pending)
-        found = read_memory_index(directory) if directory else None
+        env = task_env(view.env, view.state.config)
+        found = await read_memory_index(env, directory) if directory else None
         return (found[0], MEMORY, found[1]) if found else None
 
     # ------------------------------------------------------------ hooks
@@ -217,7 +219,7 @@ class Instructions(Extension):
         reader, cwd = self._reader(view)
         files = await self._start_files(reader, cwd)
         rendered = [(f.path, f.kind, f.text) for f in files]
-        memory = self._memory_index(view, pending=True)
+        memory = await self._memory_index(view, pending=True)
         if memory is not None:
             rendered.append(memory)
         if not rendered:
@@ -291,7 +293,7 @@ class Instructions(Extension):
             text = await _reread(reader.env, path)
             if text is not None:
                 start.append((path, PROJECT, text))
-        memory = self._memory_index(view, pending=False)
+        memory = await self._memory_index(view, pending=False)
         if memory is not None:
             start.append(memory)
         out = [user(render_instructions(start), origin=self.origin)] if start else []

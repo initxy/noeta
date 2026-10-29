@@ -30,11 +30,12 @@ class Harness:
         self.work = work
         self.client = Client(store)
         self.provider = ScriptedProvider()
+        self.env_for: Any = lambda _s: LocalExecEnv(str(self.work))
 
     def runtime(self, *agents: Agent) -> Runtime:
         return Runtime(store=self.store, agents={a.name: a for a in agents},
                        provider_for=lambda _m: self.provider,
-                       env_for=lambda _s: LocalExecEnv(str(self.work)), sleep=_no_sleep)
+                       env_for=self.env_for, sleep=_no_sleep)
 
     async def start(self, agent: Agent, goal: str = "go", **kw: Any) -> str:
         tid = await self.client.create(agent.name, goal, **kw)

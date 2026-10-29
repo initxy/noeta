@@ -26,9 +26,10 @@ from pathlib import Path
 from typing import Any
 
 from noeta.core.events import DEFAULT_TENANT, Recorded
+from noeta.core.execenv import ExecEnv
 from noeta.core.extension import ContextPart, Extension, TaskView
 from noeta.core.types import Message, ModelRequest, SystemPart, user
-from noeta.toolkit.context import new_user_messages, task_env
+from noeta.toolkit.context import fence_refuses, new_user_messages, read_local_text, task_env
 from noeta.toolkit.memory_index import (
     MEMORY_INDEX_FILE,
     MEMORY_INDEX_MAX_BYTES,
@@ -185,7 +186,8 @@ class Memory(Extension):
         except OSError:
             log.warning("memory: could not create %s", directory)
         view.record(self.name, "dir", {"dir": directory})
-        index = None if _instructions_show_index(view, self.name) else self._index(directory)
+        index = None if _instructions_show_index(view, self.name) \
+            else await self._index(view, directory)
         if index is not None:
             view.record(self.name, "index", {}, message=user(index, origin="system"))
 
@@ -193,7 +195,7 @@ class Memory(Extension):
         directory = self._dir(view)
         if not self.rehang or directory is None or _instructions_show_index(view, self.name):
             return ()
-        index = self._index(directory)
+        index = await self._index(view, directory)
         return (user(index, origin="system"),) if index is not None else ()
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
@@ -245,24 +247,31 @@ class Memory(Extension):
         return main
 
     @staticmethod
-    def _index(directory: str) -> str | None:
-        found = read_memory_index(directory)
+    async def _index(view: TaskView, directory: str) -> str | None:
+        found = await read_memory_index(task_env(view.env, view.state.config), directory)
         if found is None:
             return None
         path, text = found
         return f"{INDEX_HEAD.format(path=path)}\n\n{text}"
 
     @staticmethod
-    def _manifest(directory: str, skip: set[str]) -> list[tuple[str, str]]:
-        """``(file name, manifest line)`` for every memory file not yet attached."""
+    async def _manifest(env: ExecEnv, directory: str,
+                        skip: set[str]) -> list[tuple[str, str]]:
+        """``(file name, manifest line)`` for every memory file not yet
+        attached. Read on this machine, behind the task's tenant fence (an
+        agent's memory may be in the tenant's workspace)."""
+        if fence_refuses(env, directory):
+            return []
         out: list[tuple[str, float, str]] = []
         for path in Path(directory).glob("*.md"):
             if path.name == INDEX_FILE or str(path) in skip:
                 continue
+            text = await read_local_text(env, str(path))
+            if text is None:
+                continue
             try:
-                text = path.read_text("utf-8")
                 mtime = path.stat().st_mtime
-            except (OSError, UnicodeDecodeError):
+            except OSError:
                 continue
             m = _FRONTMATTER.match(text)
             head = m.group(1) if m else ""
@@ -277,7 +286,8 @@ class Memory(Extension):
         state = view.ext_state(self.name) or {}
         if int(state.get("bytes") or 0) >= RECALL_TASK_BYTES:
             return
-        manifest = self._manifest(directory, set(state.get("surfaced") or []))
+        env = task_env(view.env, view.state.config)
+        manifest = await self._manifest(env, directory, set(state.get("surfaced") or []))
         if not manifest:
             return
         assert view.complete is not None and self.recall_model is not None
@@ -301,9 +311,8 @@ class Memory(Extension):
         used = 0
         for name in [p for p in picked if isinstance(p, str) and p in names][:RECALL_MAX_FILES]:
             path = Path(directory) / name
-            try:
-                body = path.read_text("utf-8")
-            except (OSError, UnicodeDecodeError):
+            body = await read_local_text(env, str(path))
+            if body is None:
                 continue
             size = len(body.encode("utf-8"))
             if used + size > budget:

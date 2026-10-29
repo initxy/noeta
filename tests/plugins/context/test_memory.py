@@ -10,7 +10,9 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.agent import Agent
+from noeta.plugins.instructions import Instructions
 from noeta.plugins.memory import INDEX_FILE, Memory, load_index, memory_dir_for
 from noeta.plugins.memory.extension import (
     INDEX_MAX_BYTES,
@@ -20,6 +22,7 @@ from noeta.plugins.memory.extension import (
 )
 from noeta.testing import reply
 from noeta.toolkit.paths import project_slug
+from noeta.toolkit.tenant_fence import TenantFence
 from tests.plugins.context.conftest import Harness
 
 
@@ -216,3 +219,57 @@ def test_agent_memory_scopes_name_noetas_places(tmp_path: Path) -> None:
     assert dirs == {"user": f"{tmp_path}/agent-memory/rev/",
                     "project": "/w/.noeta/agent-memory/rev/",
                     "local": "/w/.noeta/agent-memory-local/rev/"}
+
+
+def _fenced(h: Harness, home: Path, server: Path) -> None:
+    """The harness's tasks of a non-default tenant get the env a worker gives
+    them: one that checks each file it opens against the tenant fence."""
+    fence = TenantFence(home=str(home), workspaces={"acme": str(h.work)},
+                        server_dirs=(str(server),))
+
+    def env_for(state: Any) -> LocalExecEnv:
+        def check(path: str, write: bool) -> str | None:
+            return fence.refusal(path, tenant=state.tenant, task_id=state.task_id,
+                                 cwd=str(h.work), write=write)
+        return LocalExecEnv(str(h.work), fence=check)
+
+    h.env_for = env_for
+    h.client = h.client.scoped("acme")
+
+
+@pytest.mark.parametrize("instructions", [False, True])
+async def test_a_tenants_agent_memory_cannot_link_to_a_protected_file(
+        h: Harness, tmp_path: Path, instructions: bool) -> None:
+    home, server = tmp_path / "home", tmp_path / "server"
+    server.mkdir()
+    (server / "secret.md").write_text("---\ndescription: top secret\n---\nTOP-SECRET\n")
+    directory = h.work / ".noeta" / "agent-memory" / "rev"
+    directory.mkdir(parents=True)
+    (directory / INDEX_FILE).symlink_to(server / "secret.md")
+    (directory / "s.md").symlink_to(server / "secret.md")
+    _fenced(h, home, server)
+    exts: list[Any] = [Memory(home=str(home), agent_scope="project", agent_name="rev",
+                              recall_model="small")]
+    if instructions:
+        exts.append(Instructions(walk=False))
+    h.provider.add(reply(json.dumps({"selected_memories": ["s.md"]})), reply("ok"))
+    await h.start(Agent(name="a", model="m", extensions=exts))
+    sent = json.dumps([[m.text for m in r.messages] for r in h.provider.requests])
+    assert "TOP-SECRET" not in sent and "top secret" not in sent
+
+
+async def test_a_tenants_own_memory_is_still_read(h: Harness, tmp_path: Path) -> None:
+    home, server = tmp_path / "home", tmp_path / "server"
+    server.mkdir()
+    directory = h.work / ".noeta" / "agent-memory" / "rev"
+    directory.mkdir(parents=True)
+    (directory / INDEX_FILE).write_text("- [Tabs](tabs.md) — tabs please\n")
+    _memory(directory, "tabs.md", "indent with tabs", "Use tabs.")
+    _fenced(h, home, server)
+    h.provider.add(reply(json.dumps({"selected_memories": ["tabs.md"]})), reply("ok"))
+    await h.start(Agent(name="a", model="m", extensions=[
+        Memory(home=str(home), agent_scope="project", agent_name="rev", recall_model="small")]))
+    selector, main = h.provider.requests[:2]
+    assert "indent with tabs" in selector.messages[0].text
+    sent = "\n".join(m.text for m in main.messages)
+    assert "tabs please" in sent and "Use tabs." in sent

@@ -820,6 +820,12 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - The sandbox's filter refused `socket(AF_UNIX)` but let a command set up io_uring, which
   creates sockets without `socket(2)` on Linux 5.19 and later. `io_uring_setup`,
   `io_uring_enter` and `io_uring_register` are now refused unless Unix sockets are allowed.
+- **A tenant's agent memory can no longer link to a protected file.** An agent's `project` /
+  `local` memory is in the tenant's workspace, and the memory plugin read its `MEMORY.md`
+  and its memory files (recall's listing and the files it attached) in-process, past the
+  tenant fence, so a link there put a server file into the context. For a task of a
+  non-default tenant these reads now go through the task's fenced env, which refuses the
+  file it opens; so does the instructions plugin's read of `MEMORY.md`.
 - **A tenant's commands no longer keep the operator's Unix-socket and user-namespace
   allowances.** With `network.allowAllUnixSockets`, `network.allowUnixSockets` or
   `allowNestedUserNamespaces` in the settings, a tenant's sandboxed commands had them too, so
