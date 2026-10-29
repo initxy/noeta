@@ -1,6 +1,6 @@
-"""A skill's ``allowed-tools``: the permission rules it pre-approves while the
-skill is active, read as Claude Code reads them, and the tools they name
-(the grant ``tool_enforcement`` holds the task to)."""
+"""``allowed-tools`` of a skill or a markdown command: the permission rules
+it pre-approves while it is active, read as Claude Code reads them, and the
+tools they name (the grant ``tool_enforcement`` holds the task to)."""
 
 from __future__ import annotations
 

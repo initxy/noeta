@@ -588,8 +588,8 @@ async def test_a_cancelled_parent_closes_its_agents_worktrees(store: SqliteStore
     assert not Path(cwd).exists()  # unchanged, so removed with its parent
 
 
-async def test_a_worktree_a_background_job_runs_in_is_kept(store: SqliteStore,
-                                                           tmp_path: Path) -> None:
+async def test_a_worktree_a_background_job_runs_in_is_kept_until_the_job_ends(
+        store: SqliteStore, tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     registry = Registry(log_dir=str(tmp_path / "logs"))
     p = ScriptedProvider([reply("", agent("look", isolation="worktree")), reply("launched"),
@@ -613,8 +613,13 @@ async def test_a_worktree_a_background_job_runs_in_is_kept(store: SqliteStore,
             if getattr(e, "kind", "") == "pending"]
     assert told and texts.WORKTREE_IN_USE.format(path=cwd) in told[0]
     [job] = registry.running(tid)
-    registry.retire(tid)
+    registry.retire(tid)  # the root ends: its jobs are killed
     await asyncio.wait_for(job.done.wait(), 10)
+    for _ in range(200):  # then the unchanged worktree goes
+        if not Path(cwd).exists():
+            break
+        await asyncio.sleep(0.05)
+    assert not Path(cwd).exists()
 
 
 async def test_a_call_a_crash_cut_short_removes_the_worktree_it_made(tmp_path: Path) -> None:

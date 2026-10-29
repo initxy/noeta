@@ -265,7 +265,8 @@ LIST_WINDOW_FULL = ("Only sessions among the {n} most recently active tasks are 
 # Worktree isolation.
 WORKTREE_FAILED = "No agent was started: could not create its git worktree ({reason})."
 WORKTREE_KEPT = "Its changes are kept in the worktree {path} (branch {branch})."
-WORKTREE_IN_USE = "Its worktree {path} is kept: a background command still runs in it."
+WORKTREE_IN_USE = ("Its worktree {path} is kept while a background command runs in it, then "
+                   "removed if it holds no changes.")
 
 # The agent list, recorded once when a task that can start agents begins.
 AGENT_LIST_HEAD = "Agent types the Agent tool can start:"

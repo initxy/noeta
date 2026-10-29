@@ -23,6 +23,7 @@ from noeta.toolkit.worktrees import (
     WORKTREES,
     add_worktree,
     git,
+    job_runs_under,
     remove_worktree,
     repository_top,
     unsaved_work,
@@ -49,6 +50,8 @@ CHANGES = ("The worktree {path} was not removed: it has {what}. Confirm with the
 UNCHECKED = ("The worktree {path} was not removed: git could not tell whether it holds unsaved "
              "work ({error}). Confirm with the user, then call again with discard_changes: "
              "true to remove it anyway, or use action \"keep\".")
+IN_USE = ("The worktree {path} was not removed: a background command still runs in it. Stop "
+          "it with TaskStop first, or use action \"keep\".")
 
 
 def name_problem(name: Any) -> str | None:
@@ -205,6 +208,8 @@ class ExitWorktreeTool:
         made = tree if tree.get("created") else tree.get("made")
         back = str(tree.get("back") or ctx.env.cwd)
         if action == "remove" and isinstance(made, dict):
+            if job_runs_under(made["path"]):
+                return tool_error(self.name, IN_USE.format(path=made["path"]))
             what, failed = await unsaved_work(ctx.env, made["path"], made["base"],
                                               made["branch"])
             if (what or failed) and input.get("discard_changes") is not True:

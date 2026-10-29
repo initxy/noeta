@@ -36,12 +36,6 @@ from noeta.plugins.skills.gates import (
     pre_approved,
     script_gate,
 )
-from noeta.plugins.skills.inline_commands import (
-    InlineCommandError,
-    has_commands,
-    run_inline_commands,
-    strip_commands,
-)
 from noeta.plugins.skills.listing import listing_lines, render_listing
 from noeta.plugins.skills.registry import (
     SkillRegistry,
@@ -64,6 +58,12 @@ from noeta.plugins.skills.tool import (
 from noeta.toolkit import permission_rules as pr
 from noeta.toolkit.commands import command_message, parse_command_message
 from noeta.toolkit.context import new_user_messages, task_env
+from noeta.toolkit.inline_commands import (
+    InlineCommandError,
+    has_commands,
+    run_inline_commands,
+    strip_commands,
+)
 from noeta.toolkit.tokens import resident_budget
 
 __all__ = [

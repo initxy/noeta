@@ -15,6 +15,7 @@ from noeta.plugins.subtasks import texts
 from noeta.toolkit.worktrees import (
     WORKTREES,
     add_worktree,
+    after_jobs,
     git,
     job_runs_under,
     remove_worktree,
@@ -75,14 +76,24 @@ async def worktree_exists(env: ExecEnv | None, tree: Mapping[str, str]) -> bool:
     return env is not None and await env.stat(tree["path"]) is not None
 
 
+async def _remove_if_unchanged(env: ExecEnv, tree: Mapping[str, str]) -> None:
+    if await env.stat(tree["path"]) is None:
+        return
+    lost, failed = await unsaved_work(env, tree["path"], tree["base"], tree["branch"])
+    if not lost and not failed:
+        await remove_worktree(env, tree["root"], tree["path"], tree["branch"])
+
+
 async def close_worktree(view: TaskView, tree: Mapping[str, str]) -> str:
     """Remove an unchanged worktree; otherwise (or when git cannot tell)
     say where the work is. A worktree already gone keeps nothing; one a
-    background job still runs in is kept."""
+    background job still runs in is kept until its jobs end, then removed
+    if unchanged."""
     env = view.env
     if env is None or not await worktree_exists(env, tree):
         return ""
     if job_runs_under(tree["path"]):
+        after_jobs(tree["path"], lambda: _remove_if_unchanged(env, tree))
         return texts.WORKTREE_IN_USE.format(path=tree["path"])
     lost, failed = await unsaved_work(env, tree["path"], tree["base"], tree["branch"])
     if not lost and not failed:

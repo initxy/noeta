@@ -72,7 +72,8 @@ async def test_the_model_calls_it(tmp_path: Path) -> None:
     tid = await client.create("a", "go", task_id="t1")
     await rt.run_until_idle()
     results = sorted((r.event.result for r in await client.events(tid)
-                      if isinstance(r.event, ToolFinished)), key=lambda r: r.call_id)
+                      if isinstance(r.event, ToolFinished)),
+                     key=lambda r: int(r.call_id.rsplit("_", 1)[1]))
     assert [r.text for r in results] == [
         "5", "add: missing a", '{"kind": "task", "id": "t1", "tags": []}']
     assert [r.is_error for r in results] == [False, True, False]
@@ -102,3 +103,18 @@ async def test_star_parameters_stay_out_of_the_schema() -> None:
     out = await greet.run({"name": "a"}, ToolContext(task_id="t", call_id="c", env=None,
                                                      state={}, record=lambda *_: None))
     assert not out.is_error
+
+
+async def test_an_optional_context_and_positional_only_parameters() -> None:
+    @function_tool
+    def scale(x: int, factor: int = 2, /, *, ctx: ToolContext | None = None) -> str:
+        """Scale a number."""
+        return f"{x * factor} in {ctx.task_id if ctx else None}"
+
+    assert scale.input_schema["properties"] == {"x": {"type": "integer"},
+                                                "factor": {"type": "integer"}}
+    ctx = ToolContext(task_id="t", call_id="c", env=None, state={}, record=lambda *_: None)
+    out = await scale.run({"x": 3}, ctx)
+    assert out.content[0].text == "6 in t"  # type: ignore[union-attr]
+    out = await scale.run({"x": 3, "factor": 5}, ctx)
+    assert out.content[0].text == "15 in t"  # type: ignore[union-attr]

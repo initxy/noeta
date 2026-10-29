@@ -148,3 +148,17 @@ async def test_a_prompt_runs_in_the_partition_of_the_tenant_that_runs_it() -> No
     assert pool.used == [("remote", "tenant:acme")]
     assert await mcp.run_command(beta, names[0], "") == "from tenant:beta"
     assert await mcp.run_command(CommandContext(cwd="/"), names[0], "") == "from None"
+
+
+async def test_listed_prompts_are_kept_for_a_bounded_number_of_partitions(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.plugins.mcp import extension
+
+    monkeypatch.setattr(extension, "TASKS_KEEP", 2)
+    mcp = Mcp([McpServer(alias="remote", url="http://127.0.0.1:9/mcp")], pool=PromptPool())
+    for tenant in ("a", "b", "c"):
+        await mcp.commands(CommandContext(cwd="/", tenant=tenant))
+    assert {scope for scope, _ in mcp._prompts} == {"tenant:b", "tenant:c"}
+    # A partition let go lists its prompts again when it runs one.
+    assert await mcp.run_command(CommandContext(cwd="/", tenant="a"),
+                                 "mcp__remote__hello", "") == "from tenant:a"

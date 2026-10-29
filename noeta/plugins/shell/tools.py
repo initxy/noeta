@@ -429,7 +429,7 @@ class TaskStopTool:
         if job.status != "running":
             return tool_error(self.name, f"Task {job_id} is not running (status: "
                                          f"{Registry.status_of(job)})")
-        self.registry.kill(job)
+        self.registry.kill(job, quiet=True)  # Claude Code tells no end after a stop
         # Claude Code's result: the stop as a JSON object.
         return text_output(json.dumps({
             "message": f"Successfully stopped task: {job_id} ({job.description})",

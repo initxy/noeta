@@ -9,6 +9,18 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **A stopped turn leaves background jobs running; `TaskStop` sends no end notice.** As in
+  Claude Code, stopping the root's turn (Esc, `cancel` with `turn_only`) no longer kills the
+  tree's `run_in_background` commands and monitors: they keep running and report their end
+  as usual, and still die when the root ends or is cancelled. A job stopped with `TaskStop`
+  ends quietly; one killed for another reason still notifies.
+- **A plugin's markdown command runs in the task, as a typed skill does.** Typing
+  `/<plugin>:<command>` sends Claude Code's command tags, and the task adds the body: its
+  `` !`command` `` lines run through the permission checks (one that would ask stops it, with a
+  note), and its `allowed-tools` (frontmatter, or a manifest entry's `allowedTools`) are
+  pre-approved from then on. `noeta.plugins.skills.inline_commands` and `allowed_tools` moved
+  to `noeta.toolkit`.
+
 - **Deferred tool loading is the `tool_search` plugin; the kernel holds no capability.**
   `ToolSearch`, its search, the not-loaded error and `DeferredToolPlaceholder` moved from
   `noeta.core.deferred` (removed) to `noeta/plugins/tool_search`; the requests the model gets
@@ -443,6 +455,26 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   `docs/server.md`, `docs/architecture.md`, `docs/adr/`.
 
 ### Fixed
+
+- **An inbox item this version cannot read no longer fails a turn on every lease.** One a
+  newer version posted lets the lease run out with nothing written (a newer worker takes the
+  task); a malformed one ends the task `unreadable_log` after the usual claims.
+- **A spent budget refuses every model call.** It was checked after the request hooks, so
+  `/compact`'s and an automatic compaction's summary ran past it, and an extension's call
+  (`TaskView.complete`) was charged but never refused; that call now raises `BudgetSpent`
+  (`noeta.core.errors`, a `Fatal`).
+- **`ExitWorktree` does not remove a worktree a background job runs in** (it says to stop the
+  job with `TaskStop` first), and an agent's worktree kept for a running job is removed, if
+  unchanged, once the job ends or is killed with its root.
+- **`Workflow` saves its script through the task's env**, so `scriptPath` finds it in a
+  container or remote env.
+- **A read-only call that fails cancels the calls running beside it** instead of leaving
+  them running unowned.
+- Smaller: `complete_authentication` on a cancelled sign-in; the MCP prompt commands cache is
+  kept for at most 256 partitions; `ReadMcpResourceDirTool` runs again after a crash;
+  `function_tool` takes `ToolContext | None` and positional-only parameters; an ended
+  background job stops listening for its hold being lost (`TreeHold.on_lost` returns a call
+  that takes the callback back).
 
 - **A sub-agent is created on its caller's queue.** Children went to `default` unless a
   queue was named (`Subtasks(queue=)`, a roster entry's `queue`, `spawn(queue=)`), so a task

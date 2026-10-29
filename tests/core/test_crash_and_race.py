@@ -365,3 +365,122 @@ async def test_a_failure_after_the_log_loaded_is_not_an_unreadable_log(
         assert "t" not in rt._unreadable
     finally:
         await store.close()
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def store_kind(request: pytest.FixtureRequest) -> str:
+    return str(request.param)
+
+
+@pytest.mark.parametrize(("data", "newer"), [
+    (b'{"kind":"steer","text":"x"}', True),
+    (b'{"kind":"message"', False),
+])
+async def test_an_inbox_item_this_version_cannot_read(
+        tmp_path: Path, request: pytest.FixtureRequest, store_kind: str, data: bytes,
+        newer: bool) -> None:
+    """D43 for the inbox: an item a newer version posted is left to a newer
+    worker, nothing written, however often the task is claimed; a malformed
+    one ends the task failed after ``LOAD_ATTEMPTS`` claims. Neither fails a
+    turn on every lease."""
+    from noeta.core.events import Say, TaskEnded
+    from noeta.core.runner.task import LOAD_ATTEMPTS
+    from noeta.core.types import user
+
+    path = str(tmp_path / "t.db")
+    pg = request.getfixturevalue("pg") if store_kind == "postgres" else None
+    store: Any = pg.store() if pg is not None else SqliteStore(path)
+    calls: list[ModelRequest] = []
+
+    class Model:
+        async def complete(self, req: ModelRequest, on_delta: Any = None) -> ModelResponse:
+            calls.append(req)
+            return ModelResponse(message=Message(role="assistant", content=[Text(text="hi")]),
+                                 stop_reason="end_turn", usage=Usage(), model="m")
+
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m")},
+                 provider_for=lambda _m: Model(), lease_seconds=0.1)
+    try:
+        await store.create(NewTask(task_id="t", created=TaskCreated(agent="a"),
+                                   inbox=[Say(message=user("hello"))]))
+        await rt.run_until_idle()
+        await store.post(Post(task_id="t", body=Say(message=user("x"))))
+        if pg is not None:
+            import psycopg
+
+            from tests.conftest import PG_DSN
+
+            with psycopg.connect(PG_DSN, autocommit=True) as pconn:
+                pconn.execute(f'UPDATE "{pg.schema}".inbox SET data = %s '
+                              "WHERE task_id = 't' AND seq = 2", (data,))
+        else:
+            import sqlite3
+
+            conn = sqlite3.connect(path)
+            conn.execute("UPDATE inbox SET data = ? WHERE task_id = 't' AND seq = 2", (data,))
+            conn.commit()
+            conn.close()
+        before = (await store.get("t")).last_seq
+        for attempt in range(LOAD_ATTEMPTS + 1):
+            await asyncio.sleep(0.15)  # the last claim's lease runs out
+            await rt.run_once()
+            row = await store.get("t")
+            if row.status == "ended":
+                break
+            assert row.last_seq == before, attempt  # nothing written
+        assert len(calls) == 1
+        events = [r.event for r in await store.read("t")]
+        if newer:
+            assert row.status != "ended" and "t" not in rt._unreadable
+        else:
+            assert row.end_status == "failed"
+            assert isinstance(events[-1], TaskEnded) and "unreadable_log" in str(events[-1].error)
+            assert len(events) == before + 1
+    finally:
+        await store.close()
+
+
+async def test_a_failing_read_only_call_cancels_its_siblings(tmp_path: Path) -> None:
+    """Concurrent read-only calls: when one's result cannot be written (the
+    claim is lost), the others are stopped instead of running on."""
+    from noeta.core.errors import Conflict
+    from noeta.testing import ScriptedProvider, reply
+
+    cancelled: list[str] = []
+
+    class Look:
+        description = "Look."
+        input_schema = {"type": "object"}
+        read_only = True
+        clearable = False
+
+        def __init__(self, name: str, wait: float) -> None:
+            self.name, self.wait = name, wait
+
+        async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+            try:
+                await asyncio.sleep(self.wait)
+            except asyncio.CancelledError:
+                cancelled.append(self.name)
+                raise
+            return text_output("seen")
+
+    class LosesFast(SqliteStore):
+        async def append(self, claim: Claim, events: Sequence[Event], **kw: Any) -> Appended:
+            if any(isinstance(e, ToolFinished) and e.result.call_id == "fast" for e in events):
+                raise Conflict("the claim was lost")
+            return await super().append(claim, events, **kw)
+
+    store = LosesFast(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([ModelResponse(message=Message(role="assistant", content=[
+        ToolUse(id="fast", name="Fast", input={}), ToolUse(id="slow", name="Slow", input={})]),
+        stop_reason="tool_use", usage=Usage(output=1)), reply("done")])
+    agent = Agent(name="a", model="m", tools=[Look("Fast", 0), Look("Slow", 30)])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 env_for=lambda _s: None, sleep=_no_sleep)  # type: ignore[arg-type,return-value]
+    try:
+        await Client(store).create("a", "go")
+        await asyncio.wait_for(rt.run_once(), 5)
+        assert cancelled == ["Slow"]
+    finally:
+        await store.close()

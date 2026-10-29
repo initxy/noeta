@@ -410,3 +410,16 @@ async def test_tasks_that_never_come_back_are_forgotten(monkeypatch: pytest.Monk
     for n in range(5):
         assert await ext._resolve(TaskView(state=TaskState(task_id=f"t{n}", config={"cwd": "/w"})))
     assert set(ext._known) == set(ext._scopes) == set(ext._roots) == {"t3", "t4"}
+
+
+def test_the_resource_tools_run_again_after_a_crash() -> None:
+    """Reading resources changes nothing: each is retried, not answered
+    "outcome unknown", when a crash cut it off."""
+    from noeta.plugins.mcp.tools import (
+        ListMcpResourcesTool,
+        ReadMcpResourceDirTool,
+        ReadMcpResourceTool,
+    )
+
+    for tool in (ListMcpResourcesTool, ReadMcpResourceTool, ReadMcpResourceDirTool):
+        assert getattr(tool, "retry_safe", False) is True, tool

@@ -32,12 +32,19 @@ class TreeHold:
         recently enough that no other worker can have reaped it yet."""
         return not self.lost and time.monotonic() - self.renewed < self.seconds
 
-    def on_lost(self, callback: Callable[[], None]) -> None:
-        """Call ``callback`` once the hold is lost (at once if it is)."""
+    def on_lost(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Call ``callback`` once the hold is lost (at once if it is). The
+        returned call takes it back."""
         if self.lost:
             callback()
         else:
             self._on_lost.append(callback)
+
+        def forget() -> None:
+            if callback in self._on_lost:
+                self._on_lost.remove(callback)
+
+        return forget
 
     def mark_lost(self) -> None:
         if self.lost:

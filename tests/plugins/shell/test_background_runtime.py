@@ -1,6 +1,6 @@
 """Background shells under the runner: an end notice wakes an idle task into
-a turn and is recorded; stopping, cancelling and turn ends kill jobs
-silently; a tree with a running job stays with its worker, and a job whose
+a turn and is recorded; cancelling and turn ends kill jobs silently, a
+stopped turn leaves them running; a tree with a running job stays with its worker, and a job whose
 worker is gone is marked lost."""
 
 from __future__ import annotations
@@ -110,8 +110,9 @@ async def test_cancelling_the_root_kills_its_jobs_silently(store: SqliteStore,
     assert not Path(job.out_path).exists()
 
 
-async def test_stopping_the_roots_turn_kills_its_jobs(store: SqliteStore,
-                                                      tmp_path: Path) -> None:
+async def test_stopping_the_roots_turn_leaves_its_jobs_running(store: SqliteStore,
+                                                                tmp_path: Path) -> None:
+    # Claude Code's background tasks outlive an interrupt.
     provider = ScriptedProvider([reply("", _bg("sleep 30"), ("Bash", {"command": "sleep 1"}))])
     rt, ext = _setup(store, provider, tmp_path)
     client = Client(store)
@@ -123,6 +124,10 @@ async def test_stopping_the_roots_turn_kills_its_jobs(store: SqliteStore,
     await run
     await rt.run_until_idle()
     [job] = ext.registry.jobs[tid].values()
+    await asyncio.sleep(0.1)
+    assert job.status == "running" and not job.done.is_set()
+    await client.cancel(tid)
+    await rt.run_until_idle()
     await asyncio.wait_for(job.done.wait(), 10)
     assert job.status == "killed"
 

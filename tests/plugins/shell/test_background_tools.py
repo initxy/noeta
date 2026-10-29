@@ -137,7 +137,8 @@ async def test_a_leading_sleep_is_fine_in_the_background_only(h: Harness) -> Non
     await h.settle(bg.meta["job_id"])
 
 
-async def test_task_stop_stops_a_job_and_its_end_is_noticed(h: Harness) -> None:
+async def test_task_stop_stops_a_job_and_sends_no_notice(h: Harness) -> None:
+    # Claude Code sends no completion notification after a TaskStop.
     out = await h.call("Bash", command="echo keep; sleep 5", run_in_background=True)
     job_id = out.meta["job_id"]
     assert text(await stop(h, "nope12345")) == "TaskStop: No task found with ID: nope12345"
@@ -147,9 +148,9 @@ async def test_task_stop_stops_a_job_and_its_end_is_noticed(h: Harness) -> None:
     assert json.loads(text(stopped)) == {
         "message": f"Successfully stopped task: {job_id} (echo keep; sleep 5)",
         "task_id": job_id, "task_type": "local_bash", "command": "echo keep; sleep 5"}
+    posted = len(h.posts)
     await h.settle(job_id)
-    assert "<status>killed</status>" in h.posts[-1][1]
-    assert 'Background command "echo keep; sleep 5" was stopped' in h.posts[-1][1]
+    assert len(h.posts) == posted
     again = await h.call("TaskStop", shell_id=job_id)
     assert again.is_error and text(again) == (
         f"TaskStop: Task {job_id} is not running (status: killed)")

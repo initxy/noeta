@@ -226,14 +226,15 @@ def test_the_operators_saved_workflows_are_readable_like_skills(tmp_path: Path) 
     assert fence.refusal(str(tmp_path / "tokens.json"), tenant="acme", task_id="t")
 
 
-def test_a_started_workflows_script_is_kept_where_its_task_may_read_it(
+async def test_a_started_workflows_script_is_kept_where_its_task_may_read_it(
         tmp_path: Path) -> None:
+    from noeta.backends.execenvs.local import LocalExecEnv
     from noeta.plugins.workflow.tool import WorkflowTool
 
     spill = tmp_path / "tool-results"
-    ctx = ToolContext(task_id="t1", call_id="c", env=None,  # type: ignore[arg-type]
+    ctx = ToolContext(task_id="t1", call_id="c", env=LocalExecEnv(str(tmp_path)),
                       state={}, record=lambda *_: None, spill_dir=str(spill))
-    path = WorkflowTool._save(ctx, "wf_1", "export default 1")
+    path = await WorkflowTool._save(ctx, "wf_1", "export default 1")
     assert Path(path).read_text() == "export default 1"
     fence = TenantFence(home=str(tmp_path / "home"), spill_root=str(spill))
     assert fence.refusal(path, tenant="acme", task_id="t1") is None

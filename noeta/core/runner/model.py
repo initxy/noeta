@@ -152,13 +152,14 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     if run.state.model_attempts >= texts.MAX_MODEL_ATTEMPTS:
         return await closing.fail_turn(run, texts.LLM_ERROR,
                                        "the model call kept being interrupted")
+    # Before the hooks: a compaction's summary is a model call too.
+    refusal = await run.rt.budget_refusal(run.state.tenant)
+    if refusal is not None:
+        return await closing.fail_turn(run, texts.BUDGET_SPENT, refusal)
     prepared = await _run_hooks(run, build_model_request(run, final=final))
     if isinstance(prepared, bool):
         return prepared
     request = prepared
-    refusal = await run.rt.budget_refusal(run.state.tenant)
-    if refusal is not None:
-        return await closing.fail_turn(run, texts.BUDGET_SPENT, refusal)
     await run.append([ModelCalled(model=request.model, request_hash=request_hash(request),
                                   attempt=run.state.model_attempts + 1)])
 

@@ -105,6 +105,59 @@ async def test_a_spent_budget_fails_the_turn_with_a_clear_reason(tmp_path: Path)
     await store.close()
 
 
+async def test_a_spent_budget_refuses_compact(tmp_path: Path) -> None:
+    """No model call past the budget, not ``/compact``'s summary either."""
+    from noeta.plugins.compaction import Compaction
+    from noeta.plugins.compaction.extension import command_text
+
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("one", usage=Usage(uncached=30, output=5)),
+                                 reply("<summary>s</summary>")])
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m",
+                                                 extensions=[Compaction()])},
+                 provider_for=lambda _m: provider, env_for=lambda _s: None,  # type: ignore[arg-type,return-value]
+                 sleep=_no_sleep, tenants={"acme": Tenant(budget_tokens=20)})
+    client = Client(store).scoped("acme")
+    tid = await client.create("a", "first")
+    await rt.run_until_idle()
+    await client.send(tid, command_text(""))
+    await rt.run_until_idle()
+    assert len(provider.requests) == 1
+    log = [records.decode(e) for e in (r.event for r in await store.read(tid))
+           if isinstance(e, ExtensionRecorded)]
+    assert any(isinstance(e, records.TurnFailed) and e.reason == "budget_spent" for e in log)
+    await store.close()
+
+
+async def test_a_spent_budget_refuses_an_extensions_model_call(tmp_path: Path) -> None:
+    from noeta.core.errors import BudgetSpent
+    from noeta.core.extension import Extension, TaskView
+
+    refused: list[str] = []
+
+    class Judge(Extension):
+        name = "judge"
+
+        async def on_start(self, view: TaskView) -> None:
+            assert view.complete is not None
+            try:
+                await view.complete(ModelRequest(model="m", messages=[]))
+            except BudgetSpent as exc:
+                refused.append(str(exc))
+
+    store = SqliteStore(str(tmp_path / "t.db"))
+    await store.add_tenant_usage("acme", period(), 30, 0.0)
+    provider = ScriptedProvider([reply("never")])
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m", extensions=[Judge()])},
+                 provider_for=lambda _m: provider, env_for=lambda _s: None,  # type: ignore[arg-type,return-value]
+                 sleep=_no_sleep, tenants={"acme": Tenant(budget_tokens=20)})
+    await Client(store).scoped("acme").create("a", "first")
+    await rt.run_until_idle()
+    assert provider.requests == []
+    assert refused and "30 of 20 tokens" in refused[0]
+    await store.close()
+
+
 class LosesTheReply(SqliteStore):
     """The append of a model's reply finds the claim lost."""
 

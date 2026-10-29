@@ -4,13 +4,13 @@ grant (enforced, and pre-approving the tools it names) and the
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from typing import Any, Literal
 
 from noeta.core.extension import Ask, Deny, Gate, TaskView
 from noeta.core.types import ToolUse
 from noeta.toolkit import permission_rules as pr
+from noeta.toolkit.inline_commands import rules_cover
 
 Enforcement = Literal["off", "approval", "deny"]
 #: A whole-tool rule matches by name alone: no path is judged.
@@ -43,20 +43,7 @@ def pre_approved(view: TaskView, call: ToolUse, active: Mapping[str, Any]) -> bo
     the skill is in the conversation its tools run without asking (Claude
     Code's pre-approval). A deny, or an ask rule, still stands."""
     texts = [t for entry in active.values() for t in entry.get("allow_rules") or ()]
-    if not texts:
-        return False
-    if "*" in texts:
-        return True
-    cwd = view.cwd or os.getcwd()
-    ctx = pr.RuleContext(root=cwd, home=os.path.expanduser("~"), cwd=cwd)
-    for text in texts:
-        try:
-            rule = pr.parse_rule(text)
-        except ValueError:
-            continue
-        if pr.match(rule, call.name, call.input, ctx, for_allow=True):
-            return True
-    return False
+    return rules_cover(view, call, texts)
 
 
 def script_gate(call: ToolUse, active: Mapping[str, Any]) -> Gate:

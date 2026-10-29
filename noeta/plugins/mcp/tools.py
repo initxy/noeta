@@ -265,6 +265,7 @@ async def _save_blob(ctx: ToolContext, alias: str, entry: dict[str, Any],
 class ReadMcpResourceDirTool:
     name = READ_RESOURCE_DIR_TOOL
     read_only = True
+    retry_safe = True
     clearable = True
     deferred = True
     description = """

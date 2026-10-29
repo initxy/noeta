@@ -68,8 +68,10 @@ dependency never changes your agents by being installed.
 
 A Claude Code plugin directory (`.claude-plugin/plugin.json`, `skills/`, `agents/`,
 `commands/`, `hooks/hooks.json`, `.mcp.json`) put in `~/.noeta/plugins/` loads through the
-plugins that read those formats; commands are `/<plugin>:<command>`. `${CLAUDE_PLUGIN_ROOT}` and
-`${CLAUDE_PLUGIN_DATA}` (`~/.noeta/plugin-data/<name>`) are substituted. From a project, its MCP
+plugins that read those formats; commands are `/<plugin>:<command>` and, as skills do, run
+their `!` lines through the permission checks and pre-approve their `allowed-tools`.
+`${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}` (`~/.noeta/plugin-data/<name>`) are
+substituted. From a project, its MCP
 servers start only once `.noeta/mcp.json` consents. Monitors, `bin/`, LSP servers, themes and
 output styles are not loaded (reasons [below](#what-noeta-does-not-build-and-why)). noeta never
 reads `~/.claude` or `.claude/`.

@@ -55,3 +55,20 @@ async def test_finished_sign_ins_are_let_go(monkeypatch: pytest.MonkeyPatch) -> 
     await runs.start(tool, SimpleNamespace(alias="new"), None)  # type: ignore[arg-type]
     assert list(runs._runs) == [(None, "new")]
     assert _FakeSignIn.closed == 3
+
+
+async def test_completing_a_cancelled_sign_in_says_none_is_in_progress(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sign_ins, "SignIn", _FakeSignIn)
+    monkeypatch.setattr(sign_ins, "store_for", lambda server, scope: None)
+    pool = _Pool()
+    runs = sign_ins.SignIns(lambda: pool)  # type: ignore[arg-type,return-value]
+    server = SimpleNamespace(alias="s")
+    await runs.start(SimpleNamespace(name="mcp__s__authenticate"), server, None)  # type: ignore[arg-type]
+    [run] = runs._runs.values()
+    run.done.cancel()
+    await asyncio.sleep(0)
+    out = await runs.finish(SimpleNamespace(name="mcp__s__complete_authentication"),  # type: ignore[arg-type]
+                            server, None, {"callback_url": "http://x/?code=1"})  # type: ignore[arg-type]
+    assert out is not None and out.is_error
+    assert "No sign-in to 's' is in progress" in out.content[0].text  # type: ignore[union-attr]

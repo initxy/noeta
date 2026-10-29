@@ -17,6 +17,7 @@ from noeta.plugins.shell import Shell
 from noeta.plugins.shell.state import ShellState, reduce_shell
 from noeta.plugins.shell.worktree import EnterWorktreeTool, ExitWorktreeTool
 from noeta.toolkit.tools import Workspace, path_within
+from noeta.toolkit.worktrees import job_runs_in
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -91,6 +92,22 @@ async def test_remove_refuses_unsaved_work_unless_discarded(repo: Path) -> None:
     err, text = await s.call(ExitWorktreeTool(), {"action": "remove"})
     assert err and "1 uncommitted file" in text and tree.exists()
     err, _ = await s.call(ExitWorktreeTool(), {"action": "remove", "discard_changes": True})
+    assert not err and not tree.exists()
+
+
+async def test_remove_refuses_while_a_background_job_runs_in_it(repo: Path) -> None:
+    s = Driver(repo)
+    await s.call(EnterWorktreeTool(), {"name": "w"})
+    tree = repo / ".noeta" / "worktrees" / "w"
+    ended = job_runs_in(str(tree / "sub"))
+    try:
+        err, text = await s.call(ExitWorktreeTool(),
+                                 {"action": "remove", "discard_changes": True})
+        assert err and "TaskStop" in text and tree.exists()
+        assert s.state.worktree is not None
+    finally:
+        ended()
+    err, _ = await s.call(ExitWorktreeTool(), {"action": "remove"})
     assert not err and not tree.exists()
 
 

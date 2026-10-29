@@ -103,7 +103,8 @@ class SignIns:
         start = tool.name.removesuffix("complete_authentication") + "authenticate"
         await self._let_go()
         run = self._runs.get(self._pool().key(server, scope))
-        if run is None or (run.done.done() and run.done.exception() is not None):
+        if run is None or (run.done.done() and (run.done.cancelled()
+                                                or run.done.exception() is not None)):
             return text_output(f"No sign-in to {server.alias!r} is in progress. Call `{start}` "
                                "first, then retry with the callback URL.", is_error=True)
         url = str(args.get("callback_url") or "")
