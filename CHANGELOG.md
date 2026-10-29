@@ -1146,3 +1146,6 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   permission rules (the operator's among them) to the tenant's model provider: the
   server-side check's context leaves them out, and the classifier is told the tenant's name
   as the user.
+- A tenant's `Read` of a PDF no longer always fails: its copy and pages were made in the
+  tenant's temporary directory itself, where the fence lets file tools write nothing; they
+  now go in its `tmp/`.

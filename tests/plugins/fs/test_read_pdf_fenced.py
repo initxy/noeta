@@ -84,9 +84,18 @@ async def test_a_tenants_copy_and_pages_stay_in_its_own_temporary_directory(
     doc = tmp_path / "doc.pdf"
     doc.write_bytes(_PDF)
     own = tmp_path / "own-temp"
-    own.mkdir()
-    env = Recording(str(tmp_path), fence=lambda _p, _w: None, temp_dir=str(own))
-    await read_pdf("Read", env, str(doc), "doc.pdf", len(_PDF), None)
+    (own / "tmp").mkdir(parents=True)
+
+    def fence(path: str, write: bool) -> str | None:
+        # As the tenant fence: of its temporary directory, file tools write
+        # only its commands' TMPDIR.
+        inside = path.startswith(f"{own}/")
+        return "job logs" if write and inside and not path.startswith(f"{own}/tmp/") else None
+
+    env = Recording(str(tmp_path), fence=fence, temp_dir=str(own))
+    out = await read_pdf("Read", env, str(doc), "doc.pdf", len(_PDF), None)
     used = _converter_paths(env)
-    assert used and all(p.startswith(f"{own}/") for p in used)
-    assert list(own.iterdir()) == []  # removed after use
+    assert used and all(p.startswith(f"{own}/tmp/") for p in used)
+    if shutil.which("pdftoppm"):
+        assert not out.is_error
+    assert list((own / "tmp").iterdir()) == []  # removed after use
