@@ -872,6 +872,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- A fenced `LocalExecEnv.write_bytes` makes missing parent directories one at a time, each
+  relative to its parent opened and checked first. Before, `os.makedirs` followed a link a
+  tenant's command swapped in after the check and made empty directories outside the fence
+  (the file itself was refused).
 - `LocalExecEnv.read_bytes` / `read_range` open without blocking and refuse anything but a
   regular file (a directory still raises `IsADirectoryError`). Before, reading a FIFO a
   command had made held a worker thread until something wrote to it.

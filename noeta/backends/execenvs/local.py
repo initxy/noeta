@@ -467,7 +467,7 @@ def _fenced_write(target: str, data: bytes, fence: Fence) -> None:
     real = os.path.realpath(target)
     _refuse(fence, real, True)
     parent, name = os.path.dirname(real) or ".", os.path.basename(real)
-    os.makedirs(parent, exist_ok=True)
+    _fenced_makedirs(parent, fence)
     dfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
         _refuse(fence, os.path.join(_opened_path(dfd, parent), name), True)
@@ -491,6 +491,32 @@ def _fenced_write(target: str, data: bytes, fence: Fence) -> None:
             raise
     finally:
         os.close(dfd)
+
+
+def _fenced_makedirs(path: str, fence: Fence) -> None:
+    """``os.makedirs(path)``, each missing directory made relative to its
+    parent opened and checked first, so a link swapped in meanwhile cannot
+    carry the new directories out of the fence."""
+    missing: list[str] = []
+    head = path
+    while not os.path.isdir(head):
+        head, tail = os.path.split(head)
+        if not tail:
+            break
+        missing.append(tail)
+    if not missing:
+        return
+    fd = os.open(head, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for name in reversed(missing):
+            _refuse(fence, os.path.join(_opened_path(fd, head), name), True)
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(name, 0o777, dir_fd=fd)
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd, head = child, os.path.join(head, name)
+    finally:
+        os.close(fd)
 
 
 def _atomic_write(target: str, data: bytes) -> None:

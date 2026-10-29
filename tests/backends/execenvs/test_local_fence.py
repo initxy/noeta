@@ -87,3 +87,24 @@ async def test_a_fifo_is_refused_rather_than_waited_on(tmp_path: Path) -> None:
             await asyncio.wait_for(read, 5)
     with pytest.raises(IsADirectoryError):
         await env.read_bytes(".")
+
+
+async def test_a_link_swapped_in_after_the_check_makes_no_directory_outside(
+        tmp_path: Path) -> None:
+    ws, outside = tmp_path / "ws", tmp_path / "outside"
+    ws.mkdir()
+    outside.mkdir()
+    real_outside = os.path.realpath(outside)
+
+    def fence(path: str, write: bool) -> str | None:
+        # The tenant's command wins the race: right after the first check,
+        # the missing parent becomes a link out of the workspace.
+        if not (ws / "a").exists():
+            os.symlink(outside, ws / "a")
+        inside = path == real_outside or path.startswith(real_outside + "/")
+        return f"fenced: {path}" if inside else None
+
+    env = LocalExecEnv(str(ws), fence=fence)
+    with pytest.raises(PermissionError, match="fenced"):
+        await env.write_bytes("a/b/c.txt", b"x")
+    assert list(outside.iterdir()) == []
