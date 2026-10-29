@@ -552,6 +552,11 @@ servers and runs on many machines.
   refuses, outside the workspace, a git directory that is not `.git` (nor named by a `.git`
   file) and is not bare: a work tree is what runs a repository's filters, which no `-c` can
   turn off by name. A bare repository elsewhere still reads.
+- D110 (`os-fix-r11kernel`) Timers keep the worker's clock (`time.time()`); the store's
+  verdict wins through the log instead of a store time on `Claim`: when the `Waiting` a task
+  would write is exactly the log's last event, nothing happened since and the store woke the
+  task for its `until`, so the timers due by then fire (once per claim). No `Store` or
+  `Claim` change; costs one read of the last record, only in that case.
 
 ## Plan
 

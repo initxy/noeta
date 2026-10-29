@@ -467,6 +467,12 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Fixed
 
+- **A worker whose clock is behind the store's no longer spins on a timer.** The store
+  wakes a waiting task when its timer is due by the store's clock (the database's on
+  Postgres); a worker running behind found the timer not yet due and wrote the same
+  `Waiting` again, which left the task claimable at once, over and over until its own clock
+  caught up. A task whose log still ends with that exact `Waiting` now fires the timers due
+  by then.
 - **A blocked prompt never reaches memory recall.** With a `recall_model`, the memory plugin
   asked the recall model about a message when it arrived, before `UserPromptSubmit` checked
   it, and the recalled memory stayed in the conversation after the erase. Recall now runs
