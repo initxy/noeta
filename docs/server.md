@@ -48,9 +48,13 @@ front ends on other machines should open those files).
 
 ## Tokens and tenants
 
-`noeta serve` always requires a bearer token (`--no-token` only on a loopback address). The
-token in `NOETA_SERVER_TOKEN` or `~/.noeta/server-token` is the **default tenant's**; a
-single-tenant server needs nothing else.
+`noeta serve` always requires a bearer token (`--no-token` only on a loopback address):
+`NOETA_SERVER_TOKEN`, else one made on the first start and printed that once.
+`~/.noeta/server-token` (owner-only) keeps only its SHA-256, so a client (`noeta --server`,
+`noeta acp --server`) needs the token in its own `NOETA_SERVER_TOKEN`; delete the file and
+restart for a new one. A file an older noeta left holding the token itself is rewritten to
+its digest on the next start, which prints the token one last time. This token is the
+**default tenant's**; a single-tenant server needs nothing else.
 
 For more tenants, give each its own tokens:
 

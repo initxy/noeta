@@ -1,8 +1,8 @@
 """Tenants of a ``noeta serve`` server: the tokens that map a request to
 one tenant (``~/.noeta/tokens.json``, owner-only, holding each token's
 SHA-256 only), and ``noeta token add | list | remove``. The single server
-token (``NOETA_SERVER_TOKEN`` or ``~/.noeta/server-token``) stays the
-default tenant's.
+token (``NOETA_SERVER_TOKEN``, or the one whose digest
+``~/.noeta/server-token`` keeps) stays the default tenant's.
 
 What a tenant is allowed lives in ``~/.noeta/tenants/<name>/config.toml``
 (every worker and server reads its own copy; keep them the same)::
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hmac
 import json
 import os
 import re
@@ -96,14 +97,19 @@ def remove_tokens(prefix: str) -> int:
     return len(entries) - len(kept)
 
 
-def tenant_tokens(*, others: bool = True) -> Callable[[str], str | None]:
+def tenant_tokens(*, others: bool = True,
+                  server_sha256: str | None = None) -> Callable[[str], str | None]:
     """``token -> tenant`` from the tokens file, read again whenever the
     file changes (a token added or removed works without a restart).
     ``others=False``: a token of a tenant other than the default one finds
-    nothing (tenants are not isolated here; :func:`isolation_problem`)."""
+    nothing (tenants are not isolated here; :func:`isolation_problem`).
+    ``server_sha256``: the server token's digest, the default tenant's."""
     seen: dict[str, Any] = {"stamp": None, "table": {}}
 
     def lookup(token: str) -> str | None:
+        digest = token_digest(token)
+        if server_sha256 is not None and hmac.compare_digest(digest, server_sha256):
+            return DEFAULT_TENANT
         try:
             st = _tokens_path().stat()
             stamp: Any = (st.st_mtime_ns, st.st_size)
@@ -113,7 +119,7 @@ def tenant_tokens(*, others: bool = True) -> Callable[[str], str | None]:
             seen["stamp"] = stamp
             seen["table"] = {str(e["sha256"]): str(e["tenant"]) for e in read_tokens()
                              if others or e["tenant"] == DEFAULT_TENANT}
-        found: str | None = seen["table"].get(token_digest(token))
+        found: str | None = seen["table"].get(digest)
         return found
 
     return lookup

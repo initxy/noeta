@@ -484,3 +484,8 @@ All notable changes to Noeta are documented here. The format is based on
   separated at the API only; a tenant token added later is not accepted by such a server.
   Before, every tenant's tools ran as the server's OS user and could read `~/.noeta`, the
   store and the process environment.
+- `~/.noeta/server-token` keeps only the server token's SHA-256, like tenant tokens; the token
+  is printed once, when made (`noeta serve` no longer prints it on every start). A file an
+  older noeta left holding the token itself is rewritten to its digest on the next start,
+  which prints the token one last time. Clients (`noeta --server`, `noeta acp --server`) read
+  the token from `NOETA_SERVER_TOKEN`.

@@ -63,8 +63,8 @@ def _parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="command")
     ac = sub.add_parser("acp", help="serve the Agent Client Protocol on stdio")
     ac.add_argument("--server", metavar="URL",
-                    help="drive the tasks of a noeta server (token: NOETA_SERVER_TOKEN or "
-                         "~/.noeta/server-token) instead of running them here")
+                    help="drive the tasks of a noeta server (token: NOETA_SERVER_TOKEN) "
+                         "instead of running them here")
     w = sub.add_parser("worker", help="run tasks from the store until stopped")
     w.add_argument("--queue", action="append", default=None)
     w.add_argument("--concurrency", type=int, default=8)
@@ -187,13 +187,17 @@ def _check_isolation(s: Settings, cwd: str, places: dict[str, tenants.TenantPlac
 async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     import uvicorn
 
-    from noeta.cli.config import HOME, server_token
+    from noeta.cli.config import HOME, server_token_digest
     from noeta.host.http import LOOPBACK_HOSTS, create_app
 
     host, with_worker = args.host, not args.no_worker
-    token = None if args.no_token else server_token(create=True)
-    if token is not None and not os.environ.get("NOETA_SERVER_TOKEN"):
-        print(f"noeta: bearer token in {HOME / 'server-token'}: {token}", file=sys.stderr)
+    server = None if args.no_token else server_token_digest()
+    if server is not None and server.shown is not None:
+        print(f"noeta: bearer token (shown only now; {HOME / 'server-token'} keeps its "
+              f"SHA-256): {server.shown}", file=sys.stderr)
+    elif server is not None and not os.environ.get("NOETA_SERVER_TOKEN"):
+        print(f"noeta: bearer token: the one shown when {HOME / 'server-token'} was made "
+              "(delete that file and restart for a new one)", file=sys.stderr)
     # The plugin refuses bypassPermissions itself, whatever way it is asked.
     refuse = {} if args.allow_bypass_permissions else {
         "permissions": {"disable_bypass_mode": True}}
@@ -202,8 +206,9 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     app = _app(s, cwd=cwd, with_channels=True,
                tenants={name: p.allowed for name, p in places.items()}, **refuse)
     await app.start(worker=with_worker)
-    api = create_app(app.client, token=token, auth=token is not None,
-                     tokens=tenants.tenant_tokens(others=isolated),
+    api = create_app(app.client, auth=server is not None,
+                     tokens=tenants.tenant_tokens(
+                         others=isolated, server_sha256=server.sha256 if server else None),
                      deltas=app.deltas, agents=app.runtime.agents,
                      app=app if with_worker else None,
                      allowed_hosts=LOOPBACK_HOSTS if host in LOOPBACK_HOSTS else None,

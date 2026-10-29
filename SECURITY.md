@@ -46,8 +46,9 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
   agents, prompts, skills and plugins load only after `noeta trust`; its MCP servers start only
   with consent in its own settings. noeta never reads Claude Code's files (`~/.claude`,
   `.claude/`, `CLAUDE.md`, `.mcp.json`).
-- **`noeta serve` always requires a bearer token** (`NOETA_SERVER_TOKEN`, or one made in
-  `~/.noeta/server-token`, owner-only); `--no-token` is accepted only on a loopback address.
+- **`noeta serve` always requires a bearer token** (`NOETA_SERVER_TOKEN`, or one made on first
+  start and printed once; `~/.noeta/server-token`, owner-only, keeps only its SHA-256);
+  `--no-token` is accepted only on a loopback address.
   Other web origins and unexpected `Host` headers are refused, no request may start or switch a
   task into `bypassPermissions` unless the server allows it, and tasks run only inside the
   server's directory or `--allow-root` paths. Tenant tokens (`noeta token add`) are stored as
