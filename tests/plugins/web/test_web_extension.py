@@ -168,6 +168,8 @@ async def test_http_transport_redirects_and_media() -> None:
             return httpx.Response(301, headers={"location": "/new"})
         if request.url.path == "/away":
             return httpx.Response(302, headers={"location": "https://other.org/"})
+        if request.url.path == "/login":
+            return httpx.Response(302, headers={"location": "https://me:pw@site.com/in"})
         if request.url.path == "/img":
             return httpx.Response(200, headers={"content-type": "image/png"}, content=b"x")
         return httpx.Response(200, headers={"content-type": "text/html; charset=utf-8"},
@@ -179,6 +181,8 @@ async def test_http_transport_redirects_and_media() -> None:
     assert str(page) == "<p>hi</p>" and page.content_type.startswith("text/html")
     with pytest.raises(CrossHostRedirect):
         await transport.fetch("https://site.com/away")
+    with pytest.raises(CrossHostRedirect):  # credentials in the target
+        await transport.fetch("https://site.com/login")
     image = await transport.fetch("https://site.com/img")
     assert image.raw == b"x" and image.content_type == "image/png"
     await client.aclose()

@@ -268,7 +268,7 @@ class HttpFetchTransport:
                                          headers={"User-Agent": self.user_agent}) as resp:
                     if resp.is_redirect:
                         target = str(httpx.URL(current).join(resp.headers.get("location", "")))
-                        if not _same_origin(target, current):
+                        if not _same_origin(current, target):
                             raise CrossHostRedirect(current, target, resp.status_code)
                         current = target
                         continue
