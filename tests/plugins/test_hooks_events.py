@@ -555,6 +555,36 @@ async def test_sub_agent_start_and_stop(tmp_path: Path) -> None:
     assert isinstance(end, TaskEnded) and end.answer == "1 2 3"
 
 
+async def test_a_sub_agent_stop_prompt_hook_sees_no_unanswered_call(tmp_path: Path) -> None:
+    hooks = Hooks(hooks={"SubagentStop": [{"hooks": [{"type": "prompt",
+                                                      "prompt": "Were tests run?"}]}]})
+    roster = [SubagentSpec(name="scout", description="Looks around.", agent="worker")]
+    parent = Agent(name="main", model="p", extensions=[Subtasks(roster), hooks])
+    worker = Agent(name="worker", model="c", extensions=[Subtasks(()), hooks])
+    p = ScriptedProvider([reply("", ("Agent", {"description": "look", "prompt": "count",
+                                               "subagent_type": "scout"})),
+                          reply("launched"), reply("thanks")])
+    c = ScriptedProvider([reply("", ("SubagentHandback", {"message": "draft"})),
+                          reply('{"ok": false, "reason": "Run the tests."}'),
+                          reply("", ("SubagentHandback", {"message": "1 2 3"})),
+                          reply('{"ok": true}')])
+    store = SqliteStore(str(tmp_path / "t.db"))
+    providers = {"p": p, "c": c}
+    rt = Runtime(store=store, agents={"main": parent, "worker": worker},
+                 provider_for=lambda m: providers[m],
+                 env_for=lambda _s: LocalExecEnv(str(tmp_path)), sleep=_no_sleep)
+    client = Client(store)
+    await client.create("main", "go")
+    await rt.run_until_idle()
+    judged = [r for r in c.requests if not r.tools]
+    assert len(judged) == 2
+    for request in judged:
+        answered = {b.call_id for m in request.messages for b in m.content
+                    if isinstance(b, ToolResult)}
+        assert all(u.id in answered for m in request.messages for u in m.tool_uses)
+    assert c.requests[2].messages[-1].content[0].text == "Run the tests."  # type: ignore[union-attr]
+
+
 async def test_agent_hook_looks_with_read_only_tools_then_answers(tmp_path: Path) -> None:
     hooks = {"Stop": [{"hooks": [{"type": "agent", "prompt": "Was b.txt read?"}]}]}
     verdicts = [

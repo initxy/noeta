@@ -77,6 +77,22 @@ def _text(message: Message) -> str:
     return "".join(b.text for b in message.content if isinstance(b, Text))
 
 
+def _answered(messages: Sequence[Message]) -> list[Message]:
+    """``messages`` without the calls that have no result yet (a sub-agent's
+    hand-back being judged): a model refuses a call left unanswered."""
+    results = {b.call_id for m in messages for b in m.content if isinstance(b, ToolResult)}
+    out: list[Message] = []
+    for m in messages:
+        if m.role == "assistant" and any(u.id not in results for u in m.tool_uses):
+            content = [b for b in m.content
+                       if not (isinstance(b, ToolUse) and b.id not in results)]
+            if not content:
+                continue
+            m = msgspec.structs.replace(m, content=content)
+        out.append(m)
+    return out
+
+
 class Hooks(Extension):
     """Constructor arguments:
 
@@ -473,7 +489,7 @@ class Hooks(Extension):
                                    "last_assistant_message": last}
         if event == "SubagentStop":
             payload.update(agent_fields(view), agent_transcript_path="")
-        reads = await self._d.run(event, view, payload, transcript=list(view.state.messages))
+        reads = await self._d.run(event, view, payload, transcript=_answered(view.state.messages))
         if any(r.stop is not None for r in reads):
             return None
         reasons = [n for r in reads for n in (r.block, r.context) if n]
