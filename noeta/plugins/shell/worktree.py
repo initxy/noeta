@@ -4,8 +4,10 @@ under ``.noeta/worktrees/`` and back.
 The shell's working directory is what moves (``shell`` / ``cwd``, which
 ``Bash`` starts in): the task's root — its environment note, the file tools'
 relative paths and the permission scope — stays the launch directory, so a
-worktree lives inside it. The worktree the tool made is recorded
-(``shell`` / ``worktree``) so ``ExitWorktree`` touches only that one.
+worktree lives inside it, also when the task started in a subdirectory of
+the repository; the shell then starts in the worktree's copy of that
+subdirectory. The worktree the tool made is recorded (``shell`` /
+``worktree``) so ``ExitWorktree`` touches only that one.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, tool_error
 __all__ = ["EnterWorktreeTool", "ExitWorktreeTool"]
 
 SHELL = "shell"
-#: Where new worktrees go, under the repository's top directory.
+#: Where new worktrees go, under the task's root.
 WORKTREES = ".noeta/worktrees"
 _NAME = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
 MAX_NAME = 64
@@ -111,7 +113,8 @@ class EnterWorktreeTool:
         if problem is not None:
             return tool_error(self.name, problem)
         assert isinstance(name, str)
-        target = posixpath.join(top, WORKTREES, name)
+        root = await ctx.env.realpath(ctx.env.cwd)
+        target = posixpath.join(root, WORKTREES, name)
         branch = f"worktree-{name.replace('/', '-')}"
         code, _ = await _git(ctx, ["rev-parse", "--verify", "--quiet", "origin/HEAD"], top)
         base = "origin/HEAD" if code == 0 else "HEAD"
@@ -119,11 +122,19 @@ class EnterWorktreeTool:
         if code != 0:
             return tool_error(self.name, err or "git worktree add failed")
         _, base_sha = await _git(ctx, ["rev-parse", "HEAD"], target)
+        # Started below the repository's top: the same subdirectory of the
+        # worktree, when the base commit has it.
+        inside = target
+        rel = posixpath.relpath(root, top)
+        if rel != "." and not rel.startswith(".."):
+            st = await ctx.env.stat(posixpath.join(target, rel))
+            if st is not None and st.is_dir:
+                inside = posixpath.join(target, rel)
         ctx.record(SHELL, "worktree", {"worktree": {
             "path": target, "branch": branch, "root": top, "base": base_sha,
             "created": True, "back": start}})
-        ctx.record(SHELL, "cwd", {"cwd": target})
-        return text_output(ENTERED.format(path=target, branch=branch), cwd=target)
+        ctx.record(SHELL, "cwd", {"cwd": inside})
+        return text_output(ENTERED.format(path=inside, branch=branch), cwd=inside)
 
     async def _enter_existing(self, ctx: ToolContext, path: str, top: str,
                               current: dict[str, Any] | None) -> ToolOutput:
@@ -140,7 +151,7 @@ class EnterWorktreeTool:
             return tool_error(self.name, f"{target} is not a worktree of this repository "
                                          "(see `git worktree list`)")
         if current is not None and not target.startswith(
-                posixpath.join(current["root"], WORKTREES) + "/"):
+                posixpath.join(root, WORKTREES) + "/"):
             return tool_error(self.name, "from a worktree, only another worktree under "
                                          f"{WORKTREES}/ can be entered")
         back = (current or {}).get("back") or ctx.env.cwd

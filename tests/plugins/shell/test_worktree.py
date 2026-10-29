@@ -15,6 +15,7 @@ from noeta.core.tool import ToolContext
 from noeta.plugins.shell import Shell
 from noeta.plugins.shell.bash import ShellState, reduce_shell
 from noeta.plugins.shell.worktree import EnterWorktreeTool, ExitWorktreeTool
+from noeta.toolkit.tools import Workspace, path_within
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -115,3 +116,24 @@ def test_the_shell_offers_both_tools_deferred() -> None:
     tools = {t.name: t for t in Shell(background=False)._tools}
     assert tools["EnterWorktree"].deferred and tools["ExitWorktree"].deferred
     assert tools["ExitWorktree"].input_schema["required"] == ["action"]
+
+
+async def test_a_worktree_entered_from_a_subdirectory_is_usable(repo: Path) -> None:
+    """A task started in ``repo/pkg``: Bash and the file tools stay inside
+    that directory, so the worktree goes under it and the shell starts in
+    the worktree's own ``pkg``."""
+    pkg = repo / "pkg"
+    pkg.mkdir()
+    (pkg / "b.txt").write_text("b\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "pkg")
+    s = Driver(pkg)
+    err, text = await s.call(EnterWorktreeTool(), {"name": "sub"})
+    assert not err, text
+    tree = pkg / ".noeta" / "worktrees" / "sub"
+    assert s.state.cwd == str(tree / "pkg") and (tree / "pkg" / "b.txt").is_file()
+    ws = await Workspace.of(s.env)
+    assert path_within(s.state.cwd, ws.root)
+    assert await ws.resolve_write(str(tree / "pkg" / "c.txt")) == str(tree / "pkg" / "c.txt")
+    err, text = await s.call(ExitWorktreeTool(), {"action": "remove"})
+    assert not err and not tree.exists() and s.state.cwd == str(pkg)
