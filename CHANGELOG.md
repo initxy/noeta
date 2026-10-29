@@ -811,6 +811,31 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- **A sandboxed command can no longer reach into the network relay it runs under.** The
+  relay inside the Linux sandbox (same user, same PID namespace, no system-call filter, and
+  holding the proxies' Unix sockets) was dumpable, so where `kernel.yama.ptrace_scope` is 0 a
+  command could trace it, and under any setting read its `/proc` files. The relay is now not
+  dumpable, and the command's filter refuses `ptrace`, `process_vm_readv`,
+  `process_vm_writev` and `pidfd_getfd` whatever the settings allow.
+- The sandbox's filter refused `socket(AF_UNIX)` but let a command set up io_uring, which
+  creates sockets without `socket(2)` on Linux 5.19 and later. `io_uring_setup`,
+  `io_uring_enter` and `io_uring_register` are now refused unless Unix sockets are allowed.
+- **A tenant's agent memory can no longer link to a protected file.** An agent's `project` /
+  `local` memory is in the tenant's workspace, and the memory plugin read its `MEMORY.md`
+  and its memory files (recall's listing and the files it attached) in-process, past the
+  tenant fence, so a link there put a server file into the context. For a task of a
+  non-default tenant these reads now go through the task's fenced env, which refuses the
+  file it opens; so does the instructions plugin's read of `MEMORY.md`.
+- A tenant's skills and rules no longer list what a link leads to behind the fence. A
+  skill's resources and the rules directory's files are listed without what the tenant
+  fence refuses (their contents already were read through the fence), and the skill
+  commands a front end lists for a non-default tenant skip a `SKILL.md` that resolves out
+  of its skill directory, read with no task env to fence it.
+- `noeta serve` and `noeta worker` with tenants besides the default one refuse to start
+  when a server directory (where they started, `--allow-root`, `--server-dir`,
+  `[server] dirs`) holds the machine's programs or temporary directories (`/`, `/var`,
+  `/opt`, ...): it cannot be hidden from a tenant's commands, and was silently left
+  visible.
 - **A tenant's commands no longer keep the operator's Unix-socket and user-namespace
   allowances.** With `network.allowAllUnixSockets`, `network.allowUnixSockets` or
   `allowNestedUserNamespaces` in the settings, a tenant's sandboxed commands had them too, so

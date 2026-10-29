@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 import msgspec
 
-from noeta.core.events import Recorded
+from noeta.core.events import DEFAULT_TENANT, Recorded
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import (
     Allow,
@@ -300,12 +300,18 @@ class Skills(Extension):
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
         """``/<name>`` for every skill found locally (front ends run in the
         workspace); typing it activates the skill for that message."""
-        return await asyncio.to_thread(self._commands, ctx.cwd)
+        return await asyncio.to_thread(self._commands, ctx.cwd, ctx.tenant)
 
-    def _commands(self, cwd: str) -> list[Command]:
+    def _commands(self, cwd: str, tenant: str = DEFAULT_TENANT) -> list[Command]:
         found: dict[str, str] = {}
         for root, _tier in self.tiers(cwd):
+            real_root = os.path.realpath(root)
             for path in sorted(Path(root).rglob("SKILL.md")) if Path(root).is_dir() else []:
+                # Read here, with no task env to fence it: a tenant's skill
+                # file linked out of its directory is not read.
+                real = os.path.realpath(path)
+                if tenant != DEFAULT_TENANT and not real.startswith(real_root + os.sep):
+                    continue
                 try:
                     fields, _body, _w = _frontmatter.parse(path.read_text(encoding="utf-8"))
                 except (OSError, UnicodeDecodeError, _frontmatter.FrontmatterError):

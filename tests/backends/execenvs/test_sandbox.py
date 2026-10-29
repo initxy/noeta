@@ -729,3 +729,71 @@ async def test_an_i386_system_call_cannot_open_a_unix_socket(tmp_path: Path,
     code, out, _ = await _run(env, f'python3 -c "{_I386_SOCKET}"')
     assert "fd " not in out
     assert code != 0
+
+
+def test_seccomp_filter_refuses_reaching_into_other_processes(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.backends.execenvs import sandbox_bridge as bridge
+    monkeypatch.setattr(bridge.platform, "machine", lambda: "x86_64")
+    x86_64, eperm = 0xC000003E, 0x00050000 | 1
+    # ptrace, process_vm_readv, process_vm_writev, pidfd_getfd: refused even
+    # when Unix sockets and user namespaces are allowed.
+    for allow in (False, True):
+        program = bridge._filter(allow_unix=allow, allow_userns=allow)
+        assert program is not None
+        for nr in (101, 310, 311, 438):
+            assert _run_bpf(program, nr, x86_64) == eperm
+
+
+# Finds the relay the command was forked from by its command line, whatever
+# shells stand between them, then tries to read it and to be traced.
+_PROBE_RELAY = """\
+import ctypes, os
+p = os.getppid()
+while p > 1 and b"sandbox_bridge" not in open(f"/proc/{p}/cmdline", "rb").read():
+    p = int(open(f"/proc/{p}/stat").read().rpartition(")")[2].split()[1])
+assert p > 1
+try:
+    open(f"/proc/{p}/environ", "rb").read()
+    print("read relay")
+except OSError as exc:
+    print("relay closed", exc.errno)
+libc = ctypes.CDLL(None, use_errno=True)
+print("traceme", libc.ptrace(0, 0, 0, 0), ctypes.get_errno())
+"""
+
+
+@needs_bwrap
+async def test_a_command_cannot_reach_into_the_relay(tmp_path: Path, home: Path) -> None:
+    script = tmp_path / "probe.py"
+    script.write_text(_PROBE_RELAY)
+    for settings in ({"enabled": True},
+                     {"enabled": True, "network": {"allowAllUnixSockets": True}}):
+        env = LocalExecEnv(str(tmp_path), sandbox=settings)
+        code, out, _ = await _run(env, f"python3 {script}")
+        assert code == 0, out
+        assert "relay closed" in out and "read relay" not in out, out
+        assert "traceme -1 1" in out, out  # EPERM
+
+
+def test_seccomp_filter_refuses_io_uring_with_unix_sockets(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.backends.execenvs import sandbox_bridge as bridge
+    monkeypatch.setattr(bridge.platform, "machine", lambda: "aarch64")
+    aarch64, eperm, allow = 0xC00000B7, 0x00050000 | 1, 0x7FFF0000
+    strict = bridge._filter(allow_unix=False, allow_userns=True)
+    loose = bridge._filter(allow_unix=True, allow_userns=True)
+    assert strict is not None and loose is not None
+    for nr in (425, 426, 427):  # io_uring_setup, _enter, _register
+        assert _run_bpf(strict, nr, aarch64) == eperm
+        assert _run_bpf(loose, nr, aarch64) == allow
+
+
+@needs_bwrap
+async def test_io_uring_cannot_be_set_up(tmp_path: Path, home: Path) -> None:
+    probe = ("import ctypes;l=ctypes.CDLL(None,use_errno=True);"
+             "p=ctypes.create_string_buffer(120);"
+             "print('setup',l.syscall(425,1,p),ctypes.get_errno())")
+    env = LocalExecEnv(str(tmp_path), sandbox={"enabled": True})
+    code, out, _ = await _run(env, f'python3 -c "{probe}"')
+    assert code == 0 and out.split()[:3] in (["setup", "-1", "1"], ["setup", "-1", "38"]), out

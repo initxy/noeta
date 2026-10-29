@@ -8,8 +8,10 @@ ports inside the namespace (the ones the proxy variables name) and relays each
 connection to those sockets, then starts the command with a seccomp filter
 that refuses to create Unix sockets (so the command cannot reach a host
 daemon's socket, such as Docker's) and new user namespaces (which would let
-it undo the mounts), unless the settings allow them. It exits with the
-command's status.
+it undo the mounts), unless the settings allow them, and always refuses
+tracing or reading into another process. The relay itself is not dumpable,
+so the command cannot reach into it (and its sockets) by ``/proc`` either.
+It exits with the command's status.
 
 Usage: ``sandbox_bridge.py [--http SOCK PORT] [--socks SOCK PORT]
 [--allow-unix] [--allow-userns] -- ARGV...``
@@ -71,10 +73,14 @@ def _serve(server: socket.socket, path: str) -> None:
 # ---------------------------------------------------------------- seccomp
 
 _ARCHES = {
-    # machine: (AUDIT_ARCH, socket, unshare, clone, clone3, x32 bit)
-    "x86_64": (0xC000003E, 41, 272, 56, 435, True),
-    "aarch64": (0xC00000B7, 198, 97, 220, 435, False),
+    # machine: (AUDIT_ARCH, socket, unshare, clone, clone3, x32 bit,
+    # (ptrace, process_vm_readv, process_vm_writev, pidfd_getfd))
+    "x86_64": (0xC000003E, 41, 272, 56, 435, True, (101, 310, 311, 438)),
+    "aarch64": (0xC00000B7, 198, 97, 220, 435, False, (117, 270, 271, 438)),
 }
+# io_uring_setup, io_uring_enter, io_uring_register: the same numbers on
+# every architecture (added after the tables were unified).
+_IO_URING = (425, 426, 427)
 _RET_ALLOW = 0x7FFF0000
 _RET_KILL_PROCESS = 0x80000000
 _EPERM, _ENOSYS = 1, 38
@@ -86,6 +92,8 @@ def filter_unsupported(allow_unix: bool, allow_userns: bool) -> str | None:
     machine's architecture, or ``None``."""
     machine = platform.machine()
     if machine in _ARCHES or (allow_unix and allow_userns):
+        # Unknown and allowing both: only the relay's being non-dumpable
+        # keeps the command out of it.
         return None
     return (f"the sandbox's system-call filter (refusing Unix sockets and new user "
             f"namespaces) does not support the {machine or 'unknown'} architecture")
@@ -96,12 +104,12 @@ def _errno(code: int) -> int:
 
 
 def _filter(allow_unix: bool, allow_userns: bool) -> bytes | None:
-    """The BPF program, or ``None`` when nothing is refused or this machine's
-    architecture is not one it knows."""
+    """The BPF program, or ``None`` when this machine's architecture is not
+    one it knows."""
     arch = _ARCHES.get(platform.machine())
-    if arch is None or (allow_unix and allow_userns):
+    if arch is None:
         return None
-    audit, nr_socket, nr_unshare, nr_clone, nr_clone3, x32 = arch
+    audit, nr_socket, nr_unshare, nr_clone, nr_clone3, x32, refused = arch
     ld, jeq, jset, ret = 0x20, 0x15, 0x45, 0x06
     # A call made through another ABI (i386's ``int 0x80`` on x86_64) has
     # other numbers the checks below would miss: it kills the process.
@@ -116,7 +124,12 @@ def _filter(allow_unix: bool, allow_userns: bool) -> bytes | None:
         prog.extend([(jeq, 0, 4, nr), (ld, 0, 0, 16), test,
                      (ret, 0, 0, _errno(_EPERM)), (ret, 0, 0, _RET_ALLOW)])
 
+    for nr in refused:
+        prog += [(jeq, 0, 1, nr), (ret, 0, 0, _errno(_EPERM))]
     if not allow_unix:
+        # io_uring creates sockets without socket(2) on recent kernels.
+        for nr in _IO_URING:
+            prog += [(jeq, 0, 1, nr), (ret, 0, 0, _errno(_EPERM))]
         flag_block(nr_socket, (jeq, 0, 1, socket.AF_UNIX))
     if not allow_userns:
         flag_block(nr_unshare, (jset, 0, 1, _CLONE_NEWUSER))
@@ -164,6 +177,12 @@ def main(args: list[str]) -> int:
     # Listening before the command starts, relaying (threads) only after
     # the fork: the child is forked from a single-threaded process.
     servers = [(_listen(port), path) for path, port in relays]
+    # Not dumpable: a command running as the same user can neither trace
+    # the relay nor open its /proc files (fds, memory) whatever
+    # kernel.yama.ptrace_scope says. The command's own exec resets it.
+    if ctypes.CDLL(None, use_errno=True).prctl(4, 0, 0, 0, 0) != 0:  # PR_SET_DUMPABLE
+        print("sandbox: cannot make the relay non-dumpable", file=sys.stderr)
+        return 2
     program = _filter(allow_unix, allow_userns)
     pid = os.fork()
     if pid == 0:

@@ -49,7 +49,8 @@ from noeta.toolkit.paths import (
 from noeta.toolkit.sandbox import DEFAULT_DENY_READ, SandboxSettings
 from noeta.toolkit.tools import spill_path
 
-__all__ = ["SYSTEM_PATHS", "TenantFence", "credential_paths", "home_dirs", "store_files"]
+__all__ = ["SYSTEM_PATHS", "TenantFence", "credential_paths", "home_dirs", "store_files",
+           "unhideable"]
 
 #: Outside noeta's home: the machine's noeta settings and every process's
 #: environment, command line and open files.
@@ -115,6 +116,13 @@ def _hideable(path: str) -> bool:
     keep = [*_NEVER_HIDDEN, *map(_real, _NEVER_HIDDEN)]
     return not any(_within(k, path) for k in keep) \
         and not any(_within(path, k) for k in ("/dev", "/proc", "/sys"))
+
+
+def unhideable(dirs: list[str]) -> list[str]:
+    """The server directories of ``dirs`` that cannot be hidden from a
+    tenant's commands (:meth:`TenantFence.servers` leaves them out): a
+    server with tenants refuses to start with one."""
+    return [d for d in dirs if not _hideable(d)]
 
 
 def _matches(path: str, place: str) -> bool:

@@ -431,6 +431,22 @@ servers and runs on many machines.
   to diff.
 - D67 (`os-fix-r7tools`) An agent's `project` / `local` memory is under the repository's main
   checkout (auto memory's workspace), so an agent in a temporary worktree keeps it.
+- D68 (`os-fix-r8sec`) The sandbox's network relay is not dumpable (`PR_SET_DUMPABLE` 0 before
+  it forks), and the command's filter always refuses `ptrace`, `process_vm_readv`,
+  `process_vm_writev` and `pidfd_getfd`, also when the settings allow Unix sockets and user
+  namespaces (on a known architecture the filter is now always installed).
+- D69 (`os-fix-r8sec`) The filter refuses `io_uring_setup` / `_enter` / `_register` exactly
+  when it refuses Unix sockets.
+- D70 (`os-fix-r8sec`) Files the plugins read on the worker that a tenant can control (agent
+  memory in its workspace) are read through the task's env when it has a tenant fence (only a
+  local env has one, so it is the same machine) and otherwise in-process as before
+  (`toolkit/context.py` `read_local_text`, `fence_refuses`). Listings (a skill's resources,
+  rules files) drop what the fence refuses; names leaked otherwise, contents never did. The
+  skill commands a front end lists for a non-default tenant, read with no task env, skip a
+  `SKILL.md` that resolves out of its skill directory rather than consult the fence.
+- D71 (`os-fix-r8sec`) With tenants besides the default one, `noeta serve` / `noeta worker`
+  refuse to start when a server directory cannot be hidden (D38's reasonable protection: a
+  refusal, not a warning); without them nothing changes.
 
 ## Plan
 
@@ -546,3 +562,4 @@ servers and runs on many machines.
 - 2026-10-29 `os-fix-r7sec` (from `os-structure` f1acec64), the final security review's round-7 findings, one commit per fix, a test failing before each, make check green after each (2414 passed, 60 skipped, 88.55% at the end): a non-default tenant's sandbox drops the operator's Unix-socket and nested user-namespace allowances, so its commands no longer reach D-Bus (`systemd-run --user`), Docker or Postgres sockets (D57) e31d5485; a tenant with its own provider, `base_url` or `extra_headers` must set its own `api_key` and never inherits the server's `extra_headers` (D58) efbe4b44; the sandbox is unavailable on a Linux architecture its seccomp filter does not know (D59) b4e14b1b. Two `make check` runs under heavy machine load hung in teardown of `tests/plugins/subtasks/test_agent_tool.py`'s worktree recovery tests (asyncio `_cancel_all_tasks`); they pass alone and the reruns were green.
 - 2026-10-29 `os-fix-r7tools` (from `os-structure` f1acec64), the final review's round-7 tool findings, one commit per fix, a test failing before each behavior fix, make check green after each (2424 passed, 60 skipped at the end): a blocked `UserPromptSubmit` prompt is erased by a core `erased` record the fold applies (D60; touches `noeta/core/records.py` and `loop/state.py`); the foreground `Bash` exit trap writes through fd 254, not fd 3 (D61); a foreground log keeps its start and a rolling tail (D62); resuming an agent cancels its worktree's queued removal, and the note says a restart leaves it (D64); agent `project` / `local` memory lives in the main checkout (D67); a re-typed `/skill args` follows `Skill.md` r.3; one skill registry per task and input taken (D63); `Edit` / `Write` diffs in a thread, skipped past 1M characters (D66); MCP OAuth clears tokens only on `invalid_grant`, under the file lock across the refresh (D65); `Read` checks a notebook's size before reading; CRLF plus curly-quote multi-line `Edit`; positional-only `ToolContext` in `function_tool`; `tool.Edit.p.old_string` rule text; a deviations row for the empty `transcript_path`. `make parity` 0 mismatches; `make eval` 0.987 (baseline 0.987, no regression; `injection_in_file` 0.83 rerun with `--trials 9` sequentially: 1.00, noise).
 - 2026-10-29 `os-fix-r8docs` (from `os-structure` 6ecb2227), the final review's round-8 findings, one commit per fix, make check green after each (2432 passed, 60 skipped, 88.56% at the end): `noeta -p --input-format stream-json` with a regular file on stdin reads its lines in a thread instead of crashing in the pipe transport (subprocess test, failing before); ADR-022 refines ADR-019 with why the model catalog stays in the kernel (the kernel prices each call against the budget and caps its output from it), linked from docs/architecture.md; `scripts/parity/README.md` says the model replies in `script/` may quote Claude Code's prompts (ADR-020); Phase 6 gains the final-head run of make check, parity, cluster, e2e and eval.
+- 2026-10-29 `os-fix-r8sec` (from `os-structure` 6ecb2227), the final security review's round-8 findings, one commit per fix, a test failing before each, make check green after each (2442 passed, 60 skipped, 88.60% at the end): the sandbox relay is not dumpable and a command may not trace or read other processes (D68) 6a6f0860; io_uring refused with Unix sockets (D69) af61c0ee; a tenant's agent memory (index, recall manifest and attached files, and the instructions plugin's `MEMORY.md`) read behind its fence (D70) b04fe9d3; skill resources and rules listings drop what the fence refuses, a tenant's skill command list skips a `SKILL.md` linked out of its directory (D70) 7d0f8bac; serve / worker with tenants refuse a server directory that cannot be hidden (D71) 463bbdb2. Audit: instruction files, `@imports`, rules and `SKILL.md` bodies and skill scripts were already read through the fenced env.

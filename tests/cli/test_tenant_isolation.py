@@ -74,6 +74,21 @@ def test_a_server_refuses_a_tenant_without_a_workspace(home: Path, tmp_path: Pat
         _run(tmp_path, "serve", "--no-worker")
 
 
+@pytest.mark.parametrize("command", [("serve",), ("worker",)])
+def test_a_server_directory_that_cannot_be_hidden_is_refused(
+        home: Path, tmp_path: Path, command: tuple[str, ...]) -> None:
+    (home / "config.toml").write_text(
+        '[server]\nshared_os_user_tenants = true\ndirs = ["/var"]\n')
+    _workspace(home, tmp_path, "acme")
+    with pytest.raises(SystemExit, match=r"/var.*cannot be hidden.*tenant"):
+        _run(tmp_path, *command)
+    # Without other tenants it hides nothing from anyone: it starts.
+    (home / "tenants" / "acme" / "config.toml").unlink()
+    (home / "tenants" / "acme").rmdir()
+    with pytest.raises(_Started):
+        _run(tmp_path, *command)
+
+
 def test_a_server_without_tenants_starts(home: Path, tmp_path: Path) -> None:
     with pytest.raises(_Started):
         _run(tmp_path, "serve")

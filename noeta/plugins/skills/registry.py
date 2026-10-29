@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from noeta.core.execenv import ExecEnv
 from noeta.plugins.skills import _frontmatter
 from noeta.toolkit.arguments import ARGUMENTS_PLACEHOLDER, substitute_arguments
-from noeta.toolkit.context import read_text
+from noeta.toolkit.context import fence_refuses, read_text
 from noeta.toolkit.inline_commands import has_commands, neutralise
 
 __all__ = [
@@ -205,7 +205,8 @@ async def _list_files(env: ExecEnv, root: str) -> list[str]:
         _log.warning("skill: listing %s failed (%s); skipped", root, exc)
         return []
     text = out.stdout.decode("utf-8", errors="replace")
-    return [line for line in text.split("\n") if line]
+    # A link in a tenant's skill may lead behind its fence: not listed.
+    return [line for line in text.split("\n") if line and not fence_refuses(env, line)]
 
 
 def _rel(path: str, root: str) -> str | None:

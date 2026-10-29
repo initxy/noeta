@@ -34,8 +34,9 @@ noeta serve --no-worker --host 0.0.0.0   # the API, on one or more machines
   directory it started in, but knows nothing of where `noeta serve` started or its
   `--allow-root` paths: list them as `dirs = ["/srv/app", ...]` under `[server]` in
   `config.toml` (both read it) or pass `noeta worker --server-dir PATH`. A directory holding
-  the machine's programs or `/tmp` is never hidden, so a worker started in `/` hides only
-  these. Like `noeta serve`, a worker refuses `bypassPermissions` unless started with
+  the machine's programs or `/tmp` cannot be hidden, so with other tenants configured
+  `noeta serve` and `noeta worker` refuse to start in one (such as `/`) or with one listed.
+  Like `noeta serve`, a worker refuses `bypassPermissions` unless started with
   `--allow-bypass-permissions`.
 - **Upgrades:** stop every worker (and `noeta serve`) before upgrading; workers of different
   versions must not share a store. The first process of the new version moves the store's
