@@ -11,7 +11,7 @@ Claude Code 2.1.312 · baseline `m1` · rules in our words (see `../README.md`).
 
 A dummy tool with `defer_loading: true` that keeps the API's deferred-tool mechanism switched
 on even before any real deferred tool has been loaded. Present in every main-agent and
-sub-agent request of every session. noeta sends it whenever a task offers a deferred tool (`noeta/core/deferred.py`).
+sub-agent request of every session. noeta sends it whenever a task offers a deferred tool (`noeta/plugins/tool_search`).
 
 ## Parameters
 
@@ -24,7 +24,7 @@ nothing required (unlike every other baseline tool).
 |---|---|---|
 | `tool.DeferredToolPlaceholder.1` | The tool is always sent, with `defer_loading: true`. | covered |
 | `tool.DeferredToolPlaceholder.2` | Its description says it is reserved, exists only to keep deferred loading active, and must never be called. | covered |
-| `tool.DeferredToolPlaceholder.3` | Position: in the first request of a conversation it sat between `Workflow` and `Write` (m1/0001, m2/0002); once any deferred tool was loaded it moved after all built-ins and before the MCP tools (m1/0019 onward, m4/0001). In sub-agents it sat just before `SubagentHandback`. The list is otherwise sorted by name. | covered (`noeta/core/deferred.py` `request_tools`; tools that declare `listed_last` form the trailing group) |
+| `tool.DeferredToolPlaceholder.3` | Position: in the first request of a conversation it sat between `Workflow` and `Write` (m1/0001, m2/0002); once any deferred tool was loaded it moved after all built-ins and before the MCP tools (m1/0019 onward, m4/0001). In sub-agents it sat just before `SubagentHandback`. The list is otherwise sorted by name. | covered (`noeta/core/loop/request.py` `request_tools`, the placeholder placed by `noeta/plugins/tool_search` `ToolSearch.tool_changes`; tools that declare `listed_last` form the trailing group) |
 | `tool.DeferredToolPlaceholder.4` | Every tool fetched through `ToolSearch` is likewise sent with `defer_loading: true`; always-loaded tools carry no such field. | covered |
 
 ## Result shape

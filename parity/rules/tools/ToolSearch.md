@@ -11,7 +11,8 @@ Claude Code 2.1.312 · baseline `m1` · rules in our words (see `../README.md`).
 
 Loads the schemas of deferred tools so they become callable. Always loaded; position 10 of 13
 in the baseline list; also present for sub-agents. noeta's counterpart is `ToolSearchTool` in
-`noeta/core/deferred.py`, added by the runner whenever a task offers a deferred tool.
+`noeta/plugins/tool_search/search.py`, added by the `tool_search` plugin whenever a task offers a
+deferred tool.
 
 ## Parameters
 

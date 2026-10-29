@@ -16,18 +16,13 @@ from noeta.core.errors import HeldElsewhere
 from noeta.core.execenv import RunResult
 from noeta.core.holds import Release
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.plugins.shell.bash import (
-    _CWD_MARK,
-    SCHEMA_DIALECT,
-    SHELL,
-    BashTool,
-    command_script,
-    confine,
-    sandbox_required,
-    shell_state,
-)
+from noeta.plugins.shell.bash import SCHEMA_DIALECT, BashTool
+from noeta.plugins.shell.cwd import CWD_MARK, start_cwd
+from noeta.plugins.shell.hardening import command_script
 from noeta.plugins.shell.jobs import Job, Registry
 from noeta.plugins.shell.notices import format_duration
+from noeta.plugins.shell.sandbox import confine, sandbox_required
+from noeta.plugins.shell.state import SHELL, shell_state
 from noeta.plugins.shell.websocket import parse_ws
 from noeta.toolkit.sandbox import domain_allowed, resolve_allowed, sandbox_of
 from noeta.toolkit.shell_syntax import parse
@@ -259,7 +254,7 @@ class BackgroundBash(BashTool):
             if cst is not None and cst.size:
                 where = (await env.read_range(job.cwd_path, 0, cst.size)).strip()
         if where:
-            data += b"\n" + _CWD_MARK.encode() + where + b"\n"
+            data += b"\n" + CWD_MARK.encode() + where + b"\n"
         killed = job.status == "killed"
         return RunResult(exit_code=job.exit_code if job.exit_code is not None else -1,
                          stdout=data, stdout_truncated=size > take, timed_out=killed)
@@ -347,7 +342,7 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
             "tool_use_id": ctx.call_id, "monitor": True, **_holder(job)})
         return job, "", False
     workspace = await Workspace.of(ctx.env)
-    cwd, _moved_back = await shell._start_cwd(workspace, ctx)
+    cwd, _moved_back = await start_cwd(workspace, ctx)
     run_command, hardened = command_script(command, workspace, ctx, shell.hardening_rules)
     tracked = True
     if hardened is not None:

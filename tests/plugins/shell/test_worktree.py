@@ -14,7 +14,7 @@ import pytest
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.tool import ToolContext
 from noeta.plugins.shell import Shell
-from noeta.plugins.shell.bash import ShellState, reduce_shell
+from noeta.plugins.shell.state import ShellState, reduce_shell
 from noeta.plugins.shell.worktree import EnterWorktreeTool, ExitWorktreeTool
 from noeta.toolkit.tools import Workspace, path_within
 

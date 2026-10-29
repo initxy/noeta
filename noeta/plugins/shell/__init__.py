@@ -47,9 +47,12 @@ from noeta.core.extension import Extension, TaskView
 from noeta.core.store import HOLD_LOST
 from noeta.core.tool import Tool
 from noeta.core.types import user
-from noeta.plugins.shell.bash import SHELL, BashTool, ShellState, reduce_shell, sandbox_description
-from noeta.plugins.shell.jobs import DEFAULT_LOG_DIR, JOB_ENDED, REGISTRY, Registry
+from noeta.plugins.shell.bash import BashTool
+from noeta.plugins.shell.job_logs import DEFAULT_LOG_DIR
+from noeta.plugins.shell.jobs import JOB_ENDED, REGISTRY, Registry
 from noeta.plugins.shell.notices import lost_summary, task_notification
+from noeta.plugins.shell.sandbox import sandbox_description
+from noeta.plugins.shell.state import SHELL, ShellState, reduce_shell
 from noeta.plugins.shell.tools import LOST_REASON, BackgroundBash, MonitorTool, TaskStopTool
 from noeta.plugins.shell.worktree import EnterWorktreeTool, ExitWorktreeTool
 from noeta.toolkit.notices import NOTICE_GUARD

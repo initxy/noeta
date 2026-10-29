@@ -3,7 +3,7 @@ resource tools ``ListMcpResourcesTool`` / ``ReadMcpResourceTool``, and for a
 server that needs a sign-in, ``mcp__<alias>__authenticate`` and
 ``mcp__<alias>__complete_authentication`` in place of its tools.
 
-Every one of them is deferred (``noeta.core.deferred``): the conversation
+Every one of them is deferred (the ``tool_search`` plugin): the conversation
 names them, the model loads the ones it needs with ``ToolSearch`` and then
 calls them directly. Server tools are listed after the built-in tools.
 """
