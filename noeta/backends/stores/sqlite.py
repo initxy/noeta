@@ -568,7 +568,8 @@ class SqliteStore:
             now = time.time()
             full = [t for t, most in (tenant_limits or {}).items()
                     if conn.execute("SELECT count(*) FROM tasks WHERE tenant = ? AND"
-                                    " status = 'running'", (t,)).fetchone()[0] >= most]
+                                    " status = 'running' AND lease_until >= ?",
+                                    (t, now)).fetchone()[0] >= most]
             not_full = (f" AND (status = 'running' OR tenant NOT IN"
                         f" ({','.join('?' for _ in full)}))") if full else ""
             row = conn.execute(

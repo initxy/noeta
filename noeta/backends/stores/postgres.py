@@ -554,7 +554,7 @@ class PostgresStore:
         async def running(conn: Conn, tenant: str, besides: str = "") -> int:
             cur = await conn.execute(self._q(
                 "SELECT count(*) FROM {s}.tasks WHERE tenant = %s AND status = 'running'"
-                " AND task_id <> %s"), (tenant, besides))
+                f" AND lease_until >= {_NOW} AND task_id <> %s"), (tenant, besides))
             row = await cur.fetchone()
             return int(row[0]) if row else 0
 
