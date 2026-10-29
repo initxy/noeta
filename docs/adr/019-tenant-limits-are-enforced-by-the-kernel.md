@@ -5,7 +5,9 @@
 - Refines: [ADR-007](007-tenants.md)
 - Refined by: [ADR-022](022-the-model-catalog-is-kernel-data.md) (the model catalog stays in
   the kernel), [ADR-024](024-a-hold-takes-back-lapsed-claims-and-a-held-tree-stays-on-its-holders-queues.md)
-  (the running limit counts live leases only)
+  (the running limit counts live leases only),
+  [ADR-025](025-every-model-call-checks-the-budget-before-it-is-made.md) (the budget is checked
+  before every model call)
 
 ## Context
 

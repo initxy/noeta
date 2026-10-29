@@ -13,6 +13,7 @@ and describe a different codebase.
 ## Kernel
 
 - [001](001-task-is-an-event-log-with-one-writer.md) A task is an append-only event log with one writer and an inbox
+  (refined by 026)
 - [005](005-holds-with-epochs-and-hold-lost.md) Process-bound work holds its task tree, with epochs and a hold_lost notice
   (refined by 011)
 - [006](006-fold-snapshots.md) Claims fold from versioned snapshots; a snapshot may be missing, never wrong
@@ -29,8 +30,9 @@ and describe a different codebase.
 ## Extensibility and behavior
 
 - [002](002-one-extension-interface-and-entry-points.md) Every capability is a plugin behind one Extension interface, found through entry points
-  (refined by 017)
+  (refined by 017, 026)
 - [017](017-deferred-tool-loading-is-a-plugin.md) Deferred tool loading is a plugin; extensions change the tool list through tool_changes
+- [026](026-a-blocked-prompt-is-erased-by-a-core-record.md) A blocked prompt is erased by a core record, and plugin state follows it
 - [016](016-deferred-tool-loading-stays-in-the-kernel-for-now.md) Deferred tool loading stays in the kernel for now
   (superseded by 017)
 - [003](003-claude-code-is-the-model-visible-contract.md) Claude Code's model-visible behavior is the contract; prompt text is our own words
@@ -48,8 +50,9 @@ and describe a different codebase.
   (refined by 021)
 - [021](021-a-tenant-reads-all-but-a-protected-set-and-writes-only-its-own-places.md) A tenant reads all but a protected set and writes only its own places
 - [019](019-tenant-limits-are-enforced-by-the-kernel.md) Tenant limits and providers are enforced by the kernel
-  (refined by 022, 024)
+  (refined by 022, 024, 025)
 - [022](022-the-model-catalog-is-kernel-data.md) The model catalog is kernel data: budgets and output ceilings are kernel scheduling
+- [025](025-every-model-call-checks-the-budget-before-it-is-made.md) Every model call checks the tenant's budget before it is made
 - [008](008-sandbox-protected-path-placeholders.md) The sandbox keeps code-running paths read-only and covers missing ones with placeholders
 - [009](009-serve-requires-a-token.md) The HTTP API always requires a bearer token
   (refined by 013)
