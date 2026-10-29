@@ -2,6 +2,8 @@
 
 - Status: accepted
 - Date: 2026-10-28
+- Refined by: [ADR-026](026-a-blocked-prompt-is-erased-by-a-core-record.md) (a blocked prompt
+  leaves the fold, not the log)
 
 ## Context
 
