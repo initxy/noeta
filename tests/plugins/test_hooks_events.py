@@ -435,6 +435,21 @@ async def test_compaction_events(tmp_path: Path) -> None:
     assert "SessionStart hook (compact): Re-read NOTES.md." in s.system_texts(2)
 
 
+async def test_compaction_context_survives_a_blocked_prompt(tmp_path: Path) -> None:
+    hooks = {"SessionStart": hook("start", "compact"), "UserPromptSubmit": hook("prompt")}
+    answers: dict[str, Answer] = {
+        "start": specific("SessionStart", additionalContext="Re-read NOTES.md."),
+        "prompt": lambda p: HookResult(2, stderr="no") if "SECRET" in p["prompt"]
+        else HookResult(0)}
+    s = await Setup(tmp_path, hooks, [reply("first"), reply("summary text"), reply("next")],
+                    answers=answers, extensions=(Compaction(auto=False),)).start()
+    await s.send(command_text(""))
+    await s.send("my SECRET")
+    await s.send("go on")
+    assert [p["source"] for p in s.runner.payloads("start")] == ["compact"]
+    assert "SessionStart hook (compact): Re-read NOTES.md." in s.system_texts(2)
+
+
 async def test_pre_compact_can_refuse(tmp_path: Path) -> None:
     s = await Setup(tmp_path, {"PreCompact": hook("pre")}, [reply("first")],
                     answers={"pre": HookResult(2, stderr="Not during a deploy.")},

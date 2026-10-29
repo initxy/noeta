@@ -187,7 +187,15 @@ class Hooks(Extension):
                     view.notify(f"SessionStart hook: {r.block}")
             out.extend(Reminder(text=f"SessionStart hook (compact): {t}", kind="context")
                        for t in (r.context or r.text for r in reads) if t)
-        out.extend(await self._prompt_submit(view))
+        try:
+            out.extend(await self._prompt_submit(view))
+        except TurnFailed:
+            # The compaction's context is recorded as seen: keep what it
+            # added for the next turn's request.
+            for kept in out:
+                view.record(self.name, kept.kind, kept.data,
+                            message=user(kept.text, origin=kept.origin))
+            raise
         out.extend(await self._tool_batch(view))
         return out
 
