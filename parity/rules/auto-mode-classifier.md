@@ -112,7 +112,7 @@ extra soft-block entry listing the effective permission **deny rules** (see `cls
 |---|---|
 | cls.intent.1 | Intent works both ways: strong, specific user direction can clear a soft block (never a hard block); an explicit user boundary on an in-scope action creates a block. |
 | cls.intent.2 | Authorization covers that one instance unless the user grants a standing permission; authorized read-only access to a target stands for read-only on that target. A boundary stays until the user clearly lifts it. |
-| cls.intent.3 | Boundaries only bind actions in the classifier's scope (destruction, exfiltration, shared-state writes, credentials, deploys, sends from connected accounts). Preferences about libraries, wording or chat behaviour never create a block. |
+| cls.intent.3 | A user boundary binds only actions the classifier judges at all (ones that destroy data, leak it, write shared state, touch credentials, deploy, or send from a connected account). Preferences about libraries, wording or chat behaviour never create a block. |
 | cls.intent.4 | Consent bar: the user must name both the action and the specific dangerous parameter the rule names (target branch, public destination, the secret, the exact path…). Naming the overall goal is not naming the dangerous step. |
 | cls.intent.5 | The bar can be met by the user's own words, or by an affirmative user reply directly after an agent proposal that named both the action and the dangerous parameter. Without such a proposal right before the reply, only the user's own words count. |
 | cls.intent.6 | Consent is judged at the step that ships the result; consent to a preparatory step does not carry over to the later shipping step. |
