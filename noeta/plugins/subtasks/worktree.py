@@ -77,10 +77,10 @@ async def worktree_exists(env: ExecEnv | None, tree: Mapping[str, str]) -> bool:
     return env is not None and await env.stat(tree["path"]) is not None
 
 
-def reopen_worktree(tree: Mapping[str, str]) -> None:
+def reopen_worktree(env: ExecEnv, tree: Mapping[str, str]) -> None:
     """A resumed agent works in its worktree again: a removal queued for
     when its jobs end no longer applies (its own end queues one anew)."""
-    cancel_after_jobs(tree["path"])
+    cancel_after_jobs(env, tree["path"])
 
 
 async def _remove_if_unchanged(env: ExecEnv, tree: Mapping[str, str]) -> None:
@@ -99,8 +99,8 @@ async def close_worktree(view: TaskView, tree: Mapping[str, str]) -> str:
     env = view.env
     if env is None or not await worktree_exists(env, tree):
         return ""
-    if job_runs_under(tree["path"]):
-        after_jobs(tree["path"], lambda: _remove_if_unchanged(env, tree))
+    if job_runs_under(env, tree["path"]):
+        after_jobs(env, tree["path"], lambda: _remove_if_unchanged(env, tree))
         return texts.WORKTREE_IN_USE.format(path=tree["path"])
     lost, failed = await unsaved_work(env, tree["path"], tree["base"], tree["branch"])
     if not lost and not failed:

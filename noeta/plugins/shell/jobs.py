@@ -388,7 +388,7 @@ class Registry:
         if monitor_timeout_ms is not None:
             job.monitor = MonitorStream(sink=lambda text, _note: self._event(job, text),
                                         stop=lambda: self._stop_quietly(job))
-        job.left_dir = job_runs_in(cwd)
+        job.left_dir = job_runs_in(env, cwd)
         self.jobs[root_id] = self.jobs.pop(root_id, {})  # most recently used last
         self.jobs[root_id][job_id] = job
         self._let_go_of_roots()
