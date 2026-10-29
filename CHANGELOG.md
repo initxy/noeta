@@ -548,6 +548,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - Compaction's request estimate (and the files restored after it) and the MCP result budget
   count a CJK character as one token, as the other budgets do; they counted four characters
   a token, so Chinese, Japanese or Korean text was undercounted three- to four-fold.
+- MCP sign-ins that ended are let go three minutes after they started, instead of being
+  kept for the life of the worker.
 
 ### Security
 
