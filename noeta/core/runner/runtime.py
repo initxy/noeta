@@ -188,6 +188,11 @@ class Runtime:
 
         return Release(tree, release)
 
+    def holds(self, root_id: str) -> bool:
+        """Whether this worker holds the tree of ``root_id`` (not lost)."""
+        tree = self._holds.get(root_id)
+        return tree is not None and not tree.lost
+
     async def _take_hold(self, root_id: str) -> tuple[float, int | None]:
         """``Store.hold`` without an epoch, and this process's monotonic
         time just before it was asked for. A commit whose outcome is unknown
