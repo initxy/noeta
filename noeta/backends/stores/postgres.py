@@ -37,11 +37,8 @@ Changes are announced with ``pg_notify`` inside the same transaction, and
 live model output rides a second channel (``postgres_feed``). Snapshot
 reads and writes are in ``postgres_snapshots``.
 
-Connection loss: a connection that drops before ``COMMIT`` is sent leaves
-nothing behind, so the transaction is re-run once on a fresh connection. A
-drop while ``COMMIT`` is in flight raises ``CommitUnknown`` (a ``Conflict``)
-and is never re-run; the pool replaces the broken connection for the next
-call.
+The connection pool, opening the store and the transaction retry rules
+(deadlocks, connection loss) are in ``postgres_conn``.
 """
 
 from __future__ import annotations
@@ -49,12 +46,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import Any, TypeVar
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 import msgspec
 import psycopg
-from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
 from noeta.backends.stores import postgres_snapshots as snapshots
 from noeta.backends.stores._rows import (
@@ -65,8 +61,9 @@ from noeta.backends.stores._rows import (
     inbox_kind,
     task_row,
 )
+from noeta.backends.stores.postgres_conn import Connections
 from noeta.backends.stores.postgres_feed import ChangeFeed
-from noeta.core.errors import CommitUnknown, Conflict, StoreUnavailable, UnknownTask
+from noeta.core.errors import Conflict, StoreUnavailable, UnknownTask
 from noeta.core.events import Event, InboxItem, Recorded, event_type
 from noeta.core.store import (
     Appended,
@@ -84,7 +81,6 @@ from noeta.core.store import (
 )
 from noeta.core.types import Delta
 
-T = TypeVar("T")
 Conn = psycopg.AsyncConnection[Any]
 
 log = logging.getLogger("noeta.backends.stores.postgres")
@@ -96,9 +92,6 @@ SCHEMA_VERSION = 2
 _LOCK_CLASS = 0x6E6F6574  # "noet": the advisory-lock namespace for schema setup
 _TENANT_LOCK_CLASS = 0x6E6F7465  # "note": one claim at a time per limited tenant
 _HOLD_LOCK_CLASS = 0x6E6F7468  # "noth": one hold taken at a time per tree; claims share it
-_RETRY_SQLSTATES = frozenset({"40001", "40P01"})  # serialization failure, deadlock
-_LOST_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
-_DEADLOCK_RETRIES = 5
 _NAME = re.compile(r"^[a-z_][a-z0-9_]{0,40}$")
 _NOW = "EXTRACT(EPOCH FROM transaction_timestamp())::float8"
 
@@ -200,16 +193,6 @@ class _TenantFull(Exception):
         self.tenant = tenant
 
 
-def _lost(conn: Conn | None, exc: BaseException) -> bool:
-    """Whether ``exc`` means the connection is gone (not a query error)."""
-    if not isinstance(exc, psycopg.OperationalError | psycopg.InterfaceError):
-        return False
-    if conn is not None and (conn.closed or conn.broken):
-        return True
-    state = getattr(exc, "sqlstate", None) or ""
-    return state.startswith("08") or state in _LOST_SQLSTATES
-
-
 class PostgresStore:
     """``Store`` on Postgres (psycopg 3, async).
 
@@ -235,46 +218,14 @@ class PostgresStore:
         self.connect_timeout = connect_timeout
         self._feed = ChangeFeed(dsn, schema, connect_timeout=connect_timeout,
                                 listen_check_interval=listen_check_interval)
-        self._pool = AsyncConnectionPool(
-            dsn,
-            min_size=1,
-            max_size=max(pool_size, 1),
-            open=False,
-            kwargs={"autocommit": True},
-            configure=self._configure,
-            check=AsyncConnectionPool.check_connection,
-            timeout=connect_timeout,
-            name=f"noeta-{schema}",
-        )
-        self._open_lock = asyncio.Lock()
-        self._opened = False
-        self._closed = False
+        self._conns = Connections(dsn, name=f"noeta-{schema}", pool_size=pool_size,
+                                  connect_timeout=connect_timeout, feed=self._feed,
+                                  setup=self._create_schema)
 
     def _q(self, sql: str) -> str:
         return sql.replace("{s}", f'"{self.schema}"')
 
-    # ------------------------------------------------------------ connections
-
-    async def _configure(self, conn: Conn) -> None:
-        self._feed.add_own(conn)
-
-    async def _ensure_open(self) -> None:
-        if self._opened:
-            return
-        async with self._open_lock:
-            if self._opened:
-                return
-            if self._closed:
-                raise StoreUnavailable("the store is closed")
-            try:
-                await self._pool.open(wait=True, timeout=self.connect_timeout)
-                async with self._pool.connection() as conn:
-                    await self._create_schema(conn)
-                listen = await self._feed.connect()
-            except (PoolTimeout, psycopg.OperationalError) as e:
-                raise StoreUnavailable(f"cannot open the postgres store: {e}") from e
-            self._feed.start(listen)
-            self._opened = True
+    # ------------------------------------------------------------ schema
 
     async def _create_schema(self, conn: Conn) -> None:
         async with conn.transaction():
@@ -323,41 +274,6 @@ class PostgresStore:
             await self._lost_posts(conn, str(root_id), str(worker), 0, changes)
         await self._notify(conn, changes)
 
-    async def _tx(self, body: Callable[[Conn], Awaitable[T]], *, write: bool = True) -> T:
-        """Run ``body`` in one transaction (or, for reads, one autocommit
-        statement batch), with the retry rules in the module docstring."""
-        await self._ensure_open()
-        dropped = deadlocks = 0
-        while True:
-            conn: Conn | None = None
-            committing = False
-            try:
-                async with self._pool.connection() as conn:
-                    if not write:
-                        return await body(conn)
-                    async with conn.transaction():
-                        result = await body(conn)
-                        committing = True
-                    return result
-            except PoolTimeout as e:
-                raise StoreUnavailable(f"no postgres connection: {e}") from e
-            except (psycopg.OperationalError, psycopg.InterfaceError) as e:
-                if _lost(conn, e):
-                    if committing:
-                        raise CommitUnknown(f"connection lost during COMMIT: {e}") from e
-                    if dropped:
-                        raise StoreUnavailable(f"postgres connection lost: {e}") from e
-                    dropped += 1
-                    continue
-                if getattr(e, "sqlstate", None) in _RETRY_SQLSTATES and \
-                        deadlocks < _DEADLOCK_RETRIES:
-                    deadlocks += 1
-                    await asyncio.sleep(0.005 * deadlocks)
-                    continue
-                # Any other operational failure (a cancelled statement, a full
-                # disk): nothing committed; the caller may try again later.
-                raise StoreUnavailable(f"postgres: {e}") from e
-
     async def _notify(self, conn: Conn, changes: Sequence[tuple[str, ChangeKind]]) -> None:
         """Queue the notifications in the current transaction."""
         await self._feed.notify(conn, changes)
@@ -379,13 +295,10 @@ class PostgresStore:
         """Send live output to the other processes on this store
         (:meth:`on_delta`): best effort, never stored."""
         if deltas:
-            await self._tx(lambda conn: self._feed.send_deltas(conn, deltas), write=False)
+            await self._conns.tx(lambda conn: self._feed.send_deltas(conn, deltas), write=False)
 
     async def close(self) -> None:
-        self._closed = True
-        await self._feed.close()
-        await self._pool.close()
-        self._opened = False
+        await self._conns.close()
 
     # ------------------------------------------------------------ helpers run inside a tx
 
@@ -475,7 +388,7 @@ class PostgresStore:
                 await self._notify(conn, [(result[0], "created")])
             return result
 
-        result = await self._tx(tx)
+        result = await self._conns.tx(tx)
         if result[1]:
             self._deliver([(result[0], "created")])
         return result
@@ -544,7 +457,7 @@ class PostgresStore:
             await self._notify(conn, changes)
             return Appended(seq=seq, at=float(stamped[0]))
 
-        done = await self._tx(tx)
+        done = await self._conns.tx(tx)
         self._deliver(changes)
         return done
 
@@ -556,7 +469,7 @@ class PostgresStore:
             return [Recorded(seq=s, at=a, event=event_decoder.decode(d))
                     for s, a, d in await cur.fetchall()]
 
-        return await self._tx(q, write=False)
+        return await self._conns.tx(q, write=False)
 
     async def post(self, post: Post) -> tuple[int, bool]:
         async def tx(conn: Conn) -> tuple[Post, tuple[int, bool]]:
@@ -566,7 +479,7 @@ class PostgresStore:
                 await self._notify(conn, [(to.task_id, "posted")])
             return to, result
 
-        to, result = await self._tx(tx)
+        to, result = await self._conns.tx(tx)
         if result[1]:
             self._deliver([(to.task_id, "posted")])
         return result
@@ -579,7 +492,7 @@ class PostgresStore:
             return [InboxItem(seq=s, at=a, body=inbox_decoder.decode(d))
                     for s, a, d in await cur.fetchall()]
 
-        return await self._tx(q, write=False)
+        return await self._conns.tx(q, write=False)
 
     async def get(self, task_id: str) -> TaskRow | None:
         async def q(conn: Conn) -> TaskRow | None:
@@ -589,7 +502,7 @@ class PostgresStore:
             row = await cur.fetchone()
             return task_row(row) if row else None
 
-        return await self._tx(q, write=False)
+        return await self._conns.tx(q, write=False)
 
     async def tasks(
         self,
@@ -619,7 +532,7 @@ class PostgresStore:
             cur = await conn.execute(self._q(sql), (*args, limit))
             return [task_row(r) for r in await cur.fetchall()]
 
-        return await self._tx(q, write=False)
+        return await self._conns.tx(q, write=False)
 
     async def claim(
         self, worker: str, queues: Sequence[str], lease_seconds: float,
@@ -687,7 +600,7 @@ class PostgresStore:
 
         while True:
             try:
-                return await self._tx(tx)
+                return await self._conns.tx(tx)
             except _HeldNow:
                 continue  # rolled back; the committed hold now keeps the tree out
             except _TenantFull as full:
@@ -704,7 +617,7 @@ class PostgresStore:
                 " tokens = u.tokens + excluded.tokens,"
                 " cost_usd = u.cost_usd + excluded.cost_usd"), (tenant, period, tokens, cost_usd))
 
-        await self._tx(tx)
+        await self._conns.tx(tx)
 
     async def tenant_usage(self, tenant: str, period: str) -> tuple[int, float]:
         async def q(conn: Conn) -> tuple[int, float]:
@@ -714,7 +627,7 @@ class PostgresStore:
             row = await cur.fetchone()
             return (int(row[0]), float(row[1])) if row else (0, 0.0)
 
-        return await self._tx(q, write=False)
+        return await self._conns.tx(q, write=False)
 
     async def renew(self, claim: Claim, lease_seconds: float) -> Claim | None:
         async def tx(conn: Conn) -> Claim | None:
@@ -728,7 +641,7 @@ class PostgresStore:
             return Claim(task_id=claim.task_id, worker=claim.worker, epoch=claim.epoch,
                          lease_until=float(row[0]))
 
-        return await self._tx(tx)
+        return await self._conns.tx(tx)
 
     async def hold(self, root_id: str, worker: str, seconds: float,
                    *, epoch: int | None = None) -> int | None:
@@ -771,7 +684,7 @@ class PostgresStore:
 
         while True:
             try:
-                held = await self._tx(tx)
+                held = await self._conns.tx(tx)
             except _ClaimInFlight:
                 await asyncio.sleep(0.005)
                 continue
@@ -827,7 +740,7 @@ class PostgresStore:
                 await self._lost_posts(conn, root_id, worker, epoch, changes, wake=False)
             await self._notify(conn, changes)
 
-        await self._tx(tx)
+        await self._conns.tx(tx)
         self._deliver(changes)
 
     async def reap_holds(self) -> int:
@@ -852,17 +765,18 @@ class PostgresStore:
             return len(gone)
 
         # Most rounds find nothing to reap: a read, then no write at all.
-        if not await self._tx(expired, write=False):
+        if not await self._conns.tx(expired, write=False):
             return 0
-        reaped = await self._tx(tx)
+        reaped = await self._conns.tx(tx)
         self._deliver(changes)
         return reaped
 
     async def snapshot(self, task_id: str) -> Snapshot | None:
-        return await self._tx(lambda conn: snapshots.read(conn, self._q, task_id), write=False)
+        return await self._conns.tx(lambda conn: snapshots.read(conn, self._q, task_id),
+                                    write=False)
 
     async def put_snapshot(self, task_id: str, snapshot: Snapshot) -> None:
-        await self._tx(lambda conn: snapshots.write(conn, self._q, task_id, snapshot))
+        await self._conns.tx(lambda conn: snapshots.write(conn, self._q, task_id, snapshot))
 
     async def release(self, claim: Claim) -> None:
         async def tx(conn: Conn) -> bool:
@@ -874,7 +788,7 @@ class PostgresStore:
                 await self._notify(conn, [(claim.task_id, "released")])
             return cur.rowcount > 0
 
-        if await self._tx(tx):
+        if await self._conns.tx(tx):
             self._deliver([(claim.task_id, "released")])
 
 
