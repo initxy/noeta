@@ -104,6 +104,9 @@ GUARD_TICK_S = 0.5
 #: How long a foreground command outlives a worker that stopped re-creating
 #: its ``.alive`` file (it has no hold to time it by).
 FOREGROUND_ALIVE_S = 30.0
+#: Ticks of 20 ms a foreground command's keeper is given to write what came
+#: once the command's shell exited.
+FOREGROUND_DRAIN_TICKS = 50
 #: Bytes of a job's output (and, for a monitor, of its stderr) its log keeps.
 DEFAULT_LOG_MAX_BYTES = 64 * 1024 * 1024
 
@@ -258,9 +261,15 @@ def _label(text: str) -> str:
     return " ".join(text.split())
 
 
+def _keeping(out_path: str) -> str:
+    """The file a foreground command's output keeper removes once done."""
+    return f"{out_path}.keeping"
+
+
 def _files(job: Job) -> list[str]:
     """The job's files in its env."""
-    return [p for p in (job.out_path, job.err_path, job.alive_path, job.cwd_path) if p]
+    keeping = _keeping(job.out_path) if job.cwd_path else ""
+    return [p for p in (job.out_path, job.err_path, job.alive_path, job.cwd_path, keeping) if p]
 
 
 class Registry:
@@ -406,15 +415,29 @@ class Registry:
                 # members of the pipeline, so both are written out before
                 # the shell exits.
                 pipeline = (f'{{ "$@" 2>&1 1>&4 4>&- | keep_head {cap} {shlex.quote(err)}; '
-                            f'exit "${{PIPESTATUS[0]}}"; }} 4>&1 | {keep_out}')
+                            f'exit "${{PIPESTATUS[0]}}"; }} 4>&1 | {keep_out}\n'
+                            'exit "${PIPESTATUS[0]}"')
+            elif foreground:
+                # Ends when the command's shell exits, as Claude Code's: a
+                # child it left running (``cmd &``) holds the keeper's pipe,
+                # so the keeper is given a moment to write what came (its
+                # flag file gone), not waited for. Nothing but the shell
+                # may hold the run's own output: the keeper, a process
+                # substitution, gets /dev/null.
+                flag = shlex.quote(_keeping(out))
+                pipeline = (f': > {flag}\nexec >/dev/null 2>&1\n'
+                            f'"$@" > >({keep_out}; rm -f {flag}) 2>&1\n'
+                            f'code=$?\nn=0\nwhile [ -e {flag} ] && [ "$n" -lt '
+                            f'{FOREGROUND_DRAIN_TICKS} ]; do sleep 0.02; n=$((n + 1)); done\n'
+                            f'rm -f {flag}\nexit "$code"')
             else:
-                pipeline = f'"$@" 2>&1 | {keep_out}'
+                pipeline = f'"$@" 2>&1 | {keep_out}\nexit "${{PIPESTATUS[0]}}"'
             fd3 = f"exec 3>{shlex.quote(cwd_file)}\n" if cwd_file else ""
             # The command runs in the pipeline, the guard beside it: a
             # ``wait`` in the command never waits for the guard.
             script = (f"{fd3}{_KEEP_HEAD}{_KEEP_TAIL if foreground else ''}"
                       f"{self._guard(job)} </dev/null >/dev/null 2>&1 3>&- &\n"
-                      f'{pipeline}\nexit "${{PIPESTATUS[0]}}"')
+                      f"{pipeline}")
             run = ["bash", "-c", script, "bash", *(argv or ["bash", "-c", command])]
             job.proc = asyncio.ensure_future(env.run(run, cwd=cwd,
                                                      env=dict(env_vars), timeout=None,

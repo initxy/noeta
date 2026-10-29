@@ -309,6 +309,17 @@ async def test_a_foreground_command_ends_quietly_and_leaves_nothing(h: Harness) 
     assert list((h.tmp.parent / "logs" / f"w{os.getpid()}").iterdir()) == []
 
 
+async def test_a_foreground_command_returns_when_its_shell_exits(h: Harness) -> None:
+    # As Claude Code: a child left running with `&` (holding the output) does
+    # not keep the call waiting.
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    out = await h.call("Bash", command="echo before; sleep 5 & echo hi", timeout=20000)
+    assert loop.time() - start < 3
+    assert not out.is_error and text(out) == "before\nhi"
+    assert h.registry.jobs == {} or all(not jobs for jobs in h.registry.jobs.values())
+
+
 async def test_a_command_using_fd_3_keeps_its_file_and_the_directory(h: Harness) -> None:
     (h.tmp / "sub").mkdir()
     out = await h.call("Bash", command="exec 3>notes.txt; echo mine >&3; cd sub")
