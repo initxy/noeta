@@ -612,6 +612,8 @@ async def test_a_worktree_a_background_job_runs_in_is_kept_until_the_job_ends(
     told = [e.data["text"] for e in await events(client, tid)
             if getattr(e, "kind", "") == "pending"]
     assert told and texts.WORKTREE_IN_USE.format(path=cwd) in told[0]
+    # The removal waits in this worker's memory: a restart leaves the worktree.
+    assert "unless this worker restarts first" in told[0]
     [job] = registry.running(tid)
     registry.retire(tid)  # the root ends: its jobs are killed
     await asyncio.wait_for(job.done.wait(), 10)
