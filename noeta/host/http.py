@@ -21,7 +21,9 @@ events; when this process also runs workers, live model output streams too.
                                       {"mode": m} picks a card's mode choice
     POST /tasks/{id}/signals          {name, data?, dedupe_key?} — a signal: ``permission_mode``
                                       {mode} switches the permission mode, ``config``
-                                      {model?, effort?, max_turns?} changes the task's config
+                                      {model?, effort?, max_turns?} changes the task's config;
+                                      ``resumed`` and ``restore_files`` as front ends send
+                                      them; any other name: 403
     POST /tasks/{id}/cancel           {reason?, turn_only?}
     GET  /tasks/{id}/usage            the task tree's tokens, model calls and cost by model
     GET  /tasks/{id}/context          what fills the next request (workers in this process)

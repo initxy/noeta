@@ -57,7 +57,7 @@ OPENAPI: dict[str, Any] = {
             "Answer an approval or a question", params=_TASK,
             body=_props("request_id", decision="string", always="boolean", data="object"))},
         "/tasks/{task_id}/signals": {"post": _op(
-            "Post a signal (permission_mode, config)", params=_TASK,
+            "Post a signal (permission_mode, config, resumed, restore_files)", params=_TASK,
             body=_props("name", data="object", dedupe_key="string"))},
         "/tasks/{task_id}/cancel": {"post": _op(
             "End the task, or with turn_only stop the turn", params=_TASK,

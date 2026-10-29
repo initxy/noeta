@@ -20,7 +20,9 @@ from noeta.core.errors import UnknownTask
 from noeta.core.events import DEFAULT_TENANT, Recorded
 from noeta.core.loop.state import CHANGEABLE_CONFIG, CONFIG_SIGNAL
 from noeta.core.store import Status, TaskRow
+from noeta.host.rewind import RESTORE_SIGNAL
 from noeta.toolkit.permission_modes import MODE_SIGNAL
+from noeta.toolkit.signals import RESUMED_SIGNAL
 
 
 class Refused(Exception):
@@ -34,6 +36,11 @@ _BYPASS = "bypassPermissions"
 #: are set by plugins and the server for the tasks they start; from a
 #: request they would loosen the permission gates.
 REQUEST_CONFIG = ("model", "effort", "max_turns", "cwd", "permission_mode", "output_schema")
+
+#: The signals a request may post: the ones front ends send. The others
+#: (a background job's end, a sub-agent's idle subscription …) are posted
+#: by plugins inside the server, which trust what they say.
+REQUEST_SIGNALS = (MODE_SIGNAL, CONFIG_SIGNAL, RESUMED_SIGNAL, RESTORE_SIGNAL)
 
 
 class GuardedClient:
@@ -119,6 +126,9 @@ class GuardedClient:
 
     async def signal(self, task_id: str, name: str, data: Any = None, *,
                      dedupe_key: str | None = None) -> int:
+        if name not in REQUEST_SIGNALS:
+            raise Refused(f"a request may not post the signal {name!r} "
+                          f"(only {', '.join(REQUEST_SIGNALS)})")
         if name == MODE_SIGNAL and isinstance(data, Mapping):
             self._mode(data.get("mode"))
         if name == CONFIG_SIGNAL:

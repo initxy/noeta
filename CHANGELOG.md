@@ -463,3 +463,7 @@ All notable changes to Noeta are documented here. The format is based on
   `config` signal; any other key is refused with 403 naming it. Before, a request could set
   the permissions plugin's inherited allow rules (`permission_rules`) or `subtask_depth` and
   run tools without being asked.
+- `POST /tasks/{id}/signals` takes only the signals front ends send (`permission_mode`,
+  `config`, `resumed`, `restore_files`). Before, a request could post a plugin's own signal,
+  such as a background job's end (a forged `<task-notification>`) or a sub-agent's idle
+  subscription naming another tenant's task, which then received the notice.

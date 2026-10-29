@@ -217,6 +217,25 @@ async def test_requests_cannot_set_the_config_plugins_own(
         assert refused.status_code == 403
 
 
+async def test_requests_post_only_the_signals_front_ends_send(
+        served: tuple[str, ScriptedProvider]) -> None:
+    host, _ = served
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        task_id = (await http.post("/tasks", json={"agent": "main"})).json()["task_id"]
+        for name, data in (("subtasks.idle_subscribe", {"from": "other", "id": "s1"}),
+                           ("shell_job_ended", {"job_id": "j", "notice": "all done"}),
+                           ("hold_lost", {"worker": "w", "epoch": 1})):
+            got = await http.post(f"/tasks/{task_id}/signals", json={"name": name,
+                                                                     "data": data})
+            assert got.status_code == 403, name
+            assert repr(name) in got.json()["error"]
+        for name, data in (("resumed", None), ("permission_mode", {"mode": "plan"}),
+                           ("restore_files", {"files": []})):
+            got = await http.post(f"/tasks/{task_id}/signals", json={"name": name,
+                                                                     "data": data})
+            assert got.status_code == 200, name
+
+
 async def test_a_relative_cwd_is_the_servers_and_more_roots_can_be_allowed(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from noeta.core.client import Client
