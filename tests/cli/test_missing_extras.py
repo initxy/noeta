@@ -17,6 +17,13 @@ def _hide(monkeypatch: pytest.MonkeyPatch, *modules: str) -> None:
     for name in list(sys.modules):
         if name.startswith(tuple(f"{m}." for m in modules)) or name.startswith(
                 ("noeta.host.", "noeta.backends.stores.postgres", "noeta.cli.tui")):
+            module = sys.modules[name]
+            parent, _, child = name.rpartition(".")
+            if parent in sys.modules and getattr(sys.modules[parent], child, None) is module:
+                # Importing it again rebinds the package attribute; put it
+                # back with the module, or ``import a.b as c`` and
+                # ``from a.b import x`` see two different modules afterwards.
+                monkeypatch.setattr(sys.modules[parent], child, module)
             monkeypatch.delitem(sys.modules, name)
     for name in modules:
         monkeypatch.setitem(sys.modules, name, None)
