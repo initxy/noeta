@@ -389,3 +389,19 @@ async def test_a_server_directory_inside_the_workspace_stays_the_servers(
     assert (server / ".env").read_text() == "SERVERENV"
     with pytest.raises(PermissionError, match="server's own directories"):
         await tenant.read_bytes(str(server / ".env"))
+
+
+@needs_bwrap
+async def test_a_credential_store_made_after_the_task_starts_stays_hidden(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    p = Places(tmp_path)
+    o = People(tmp_path, monkeypatch)
+    carol = o.homes / "carol"
+    carol.mkdir()
+    tenant = local_env_for(SandboxSettings(enabled=True), p.fence)(_state("acme", p.mine))
+    assert isinstance(tenant, LocalExecEnv)
+    (carol / ".aws").mkdir()
+    (carol / ".aws" / "credentials").write_text("CAROLKEY")
+    (carol / ".netrc").write_text("CAROLNETRC")
+    out = await _out(tenant, f"cat {carol}/.aws/credentials {carol}/.netrc; cat f.txt")
+    assert "CAROLKEY" not in out and "CAROLNETRC" not in out and "MYFILE" in out, out

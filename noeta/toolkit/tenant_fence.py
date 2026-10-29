@@ -246,7 +246,9 @@ class TenantFence:
         # workspace is mounted first); one holding the workspace is hidden
         # with the workspace mounted again inside it.
         servers = self.servers()
-        creds = [c for c in credential_paths() if os.path.lexists(c)]
+        # Missing ones too: the plan is made again for each command, so one
+        # created after the task started is hidden from the next command.
+        creds = credential_paths()
         denied = [home, *(p for p in (self.spill_root, self.plans_dir) if p),
                   *(s for s in SYSTEM_PATHS if s != "/proc"), *self.store_files, *others,
                   *temps, *servers, *creds, *settings.deny_read]

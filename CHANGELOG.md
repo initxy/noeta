@@ -844,3 +844,7 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   workspace. Before, `TenantFence.confine` left such a directory out of what it hides, so
   the tenant's `Bash` read and overwrote the server's files there while its file tools were
   refused.
+- A credential store created after a non-default tenant's task started (a new `~/.aws`,
+  `~/.netrc`, ... in any home directory) is hidden from that task's next sandboxed
+  command. Before, `TenantFence.confine` hid only the ones that existed when the task's
+  environment was built.
