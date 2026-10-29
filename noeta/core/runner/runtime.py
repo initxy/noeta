@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from noeta.core import snapshots
 from noeta.core.agent import Agent
-from noeta.core.errors import HeldElsewhere
+from noeta.core.errors import CommitUnknown, HeldElsewhere
 from noeta.core.execenv import ExecEnv
 from noeta.core.holds import Release, TreeHold
 from noeta.core.provider import Provider
@@ -27,6 +27,10 @@ if TYPE_CHECKING:
     from noeta.core.loop.state import TaskState
 
 log = logging.getLogger("noeta.core.runner")
+
+#: Times a hold is asked for while its commit's outcome stays unknown
+#: (``CommitUnknown``) before that error is raised.
+HOLD_ATTEMPTS = 3
 
 ProviderFor = Callable[[str], Provider]
 EnvFor = Callable[["TaskState"], ExecEnv]
@@ -147,12 +151,10 @@ class Runtime:
                 unholding = self._unholding.get(root_id)
                 if unholding is not None:
                     await asyncio.shield(unholding)  # the last share's give-back
-                sent = time.monotonic()
-                epoch = await self.store.hold(root_id, self.worker, self.hold_seconds)
+                sent, epoch = await self._take_hold(root_id)
                 if epoch is None:
                     await self._reap()
-                    sent = time.monotonic()
-                    epoch = await self.store.hold(root_id, self.worker, self.hold_seconds)
+                    sent, epoch = await self._take_hold(root_id)
                 if epoch is None:
                     raise HeldElsewhere(f"task tree {root_id} is held by another worker, or "
                                        "another worker runs one of its tasks")
@@ -182,6 +184,22 @@ class Runtime:
                 await asyncio.shield(unholding)
 
         return Release(tree, release)
+
+    async def _take_hold(self, root_id: str) -> tuple[float, int | None]:
+        """``Store.hold`` without an epoch, and this process's monotonic
+        time just before it was asked for. A commit whose outcome is unknown
+        is asked again: taking a hold extends the one this worker already
+        has, so a hold that landed comes back with its epoch, registered and
+        renewed rather than left to be reaped as lost."""
+        for attempt in range(HOLD_ATTEMPTS):
+            sent = time.monotonic()
+            try:
+                return sent, await self.store.hold(root_id, self.worker, self.hold_seconds)
+            except CommitUnknown as exc:
+                if attempt + 1 == HOLD_ATTEMPTS:
+                    raise
+                log.warning("tree %s: hold commit unknown, asking again: %s", root_id, exc)
+        raise AssertionError("unreachable")
 
     async def _unhold(self, tree: TreeHold) -> None:
         try:

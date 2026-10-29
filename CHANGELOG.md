@@ -436,6 +436,12 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **A hold whose commit was cut off is no longer left behind.** When the store's connection
+  dropped while a hold committed (`CommitUnknown`), a hold that had landed was neither
+  registered nor renewed: the tree stayed unclaimable until the hold ran out and its reaping
+  told the tree `hold_lost` for nothing. `Runtime.hold` now asks again (up to three times);
+  taking a hold extends the one the worker has, so a hold that landed comes back with its
+  epoch and is renewed and given back as usual.
 - **An agent's `denied_tools` / `allowed_tools` also cover tools a plugin adds from the
   others' (`Extension.tool_changes`).** An agent that denied `ToolSearch` was still offered
   it and ran it. An added tool the lists refuse is now neither sent nor run, and the rest of
