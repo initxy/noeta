@@ -334,3 +334,29 @@ async def test_a_job_lives_while_its_hold_is_fresh(tmp_path: Path) -> None:
         await asyncio.sleep(0.1)
     assert job.exit_code == 0
     assert Path(job.out_path).read_text() == "done\n\n[exited with code 0]\n"
+
+
+class _ContainerEnv(LocalExecEnv):
+    """A local env posing as a container: the worker's process is not
+    visible to the job's guard."""
+
+    local = False
+
+
+async def test_a_foreground_job_in_a_container_dies_once_its_worker_stops(
+        tmp_path: Path) -> None:
+    marker = tmp_path / "late"
+    registry = Registry(log_dir=str(tmp_path / "logs"), foreground_alive_s=1.0)
+    job = await registry.spawn(
+        env=_ContainerEnv(str(tmp_path)), command=f"sleep 4; touch {marker}",
+        cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r", tool_use_id="c",
+        description="", post=_posted, foreground=True)
+    assert isinstance(job, Job) and job.alive_path
+    await asyncio.sleep(0.6)
+    assert job.status == "running"  # kept alive while the worker runs
+    assert registry._keeper is not None
+    registry._keeper.cancel()  # the worker froze: nothing re-creates its file
+    await asyncio.wait_for(job.done.wait(), 3.5)
+    assert job.exit_code != 0
+    await asyncio.sleep(1.0)
+    assert not marker.exists()

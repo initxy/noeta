@@ -27,8 +27,9 @@ silent too long, or the worker stopping) the job is killed and its end never
 posted; the tree is told by ``hold_lost`` instead. A job also dies when its
 worker cannot kill it (killed itself, or frozen): a guard runs beside the
 command, in its process group, and kills the group once the worker stops
-re-creating the job's ``.alive`` file (it does while its hold is fresh) or,
-on this machine, once the worker's process is gone. The guard needs only
+re-creating the job's ``.alive`` file (it does while its hold is fresh, and
+for a foreground command, which has no hold, while the worker runs) or, on
+this machine, once the worker's process is gone. The guard needs only
 ``sh`` tools, so it works the same in a container or a sandbox.
 
 Job logs live in a private directory per user inside the env: by default
@@ -94,6 +95,9 @@ DEFAULT_LOG_DIR = ""
 ENDED_KEEP = 4096
 #: How often a job's guard looks at its worker.
 GUARD_TICK_S = 0.5
+#: How long a foreground command outlives a worker that stopped re-creating
+#: its ``.alive`` file (it has no hold to time it by).
+FOREGROUND_ALIVE_S = 30.0
 #: Bytes of a job's output (and, for a monitor, of its stderr) its log keeps.
 DEFAULT_LOG_MAX_BYTES = 64 * 1024 * 1024
 
@@ -230,8 +234,10 @@ class Registry:
 
     def __init__(self, *, max_jobs: int = DEFAULT_MAX_JOBS,
                  log_dir: str = DEFAULT_LOG_DIR,
-                 log_max_bytes: int = DEFAULT_LOG_MAX_BYTES) -> None:
+                 log_max_bytes: int = DEFAULT_LOG_MAX_BYTES,
+                 foreground_alive_s: float = FOREGROUND_ALIVE_S) -> None:
         self.max_jobs = max_jobs
+        self.foreground_alive_s = foreground_alive_s
         self.log_dir = log_dir
         self.log_max_bytes = log_max_bytes
         self.worker = WORKER_ID
@@ -337,7 +343,8 @@ class Registry:
             return f"background jobs are unavailable: {exc}"
         out = posixpath.join(log_dir, f"{job_id}.output")
         err = posixpath.join(log_dir, f"{job_id}.err") if monitor_timeout_ms else None
-        alive = posixpath.join(log_dir, f"{job_id}.alive") if tree is not None else ""
+        alive = (posixpath.join(log_dir, f"{job_id}.alive")
+                 if tree is not None or foreground else "")
         cwd_file = posixpath.join(log_dir, f"{job_id}.cwd") if foreground else ""
         made = await env.run(
             ["sh", "-c", 'umask 077 && for f; do : > "$f" || exit 1; done', "sh",
@@ -382,34 +389,39 @@ class Registry:
         job.sender = asyncio.create_task(self._send(job))
         if tree is not None:
             tree.on_lost(lambda: self._fence(job))
-            if self._keeper is None or self._keeper.done():
-                self._keeper = asyncio.create_task(self._keep_alive())
+        if alive and (self._keeper is None or self._keeper.done()):
+            self._keeper = asyncio.create_task(self._keep_alive())
         return job
+
+    def _alive_period(self, job: Job) -> float:
+        """How long ``job``'s guard waits for its ``.alive`` file: half its
+        hold's time, or for a foreground command :attr:`foreground_alive_s`."""
+        return job.tree.seconds / 2 if job.tree is not None else self.foreground_alive_s
 
     def _guard(self, job: Job) -> str:
         """The guard's command line for ``job`` (see :data:`_GUARD`)."""
         worker_pid = str(os.getpid()) if is_local(job.env) else ""
         ticks = 0
-        if job.tree is not None:
+        if job.alive_path:
             # The worker re-creates the file three times per period; the
             # period is half the hold's time, so a frozen worker's jobs are
             # dead about when its hold may be reaped.
-            ticks = max(2, round(job.tree.seconds / 2 / GUARD_TICK_S))
+            ticks = max(2, round(self._alive_period(job) / GUARD_TICK_S))
         return shlex.join(["sh", "-c", _GUARD, "sh", "$$", worker_pid, job.alive_path,
                            str(ticks), str(GUARD_TICK_S)]).replace("'$$'", "$$")
 
     async def _keep_alive(self) -> None:
         """Re-create the ``.alive`` file of every running job whose hold is
-        fresh, three times per guard period, until no such job is left."""
+        fresh (or that has none: a foreground command), three times per
+        guard period, until no such job is left."""
         while True:
             jobs = [j for root in self.jobs.values() for j in root.values()
-                    if j.status == "running" and j.tree is not None and j.alive_path]
+                    if j.status == "running" and j.alive_path]
             if not jobs:
                 return
             by_env: dict[int, list[Job]] = {}
             for job in jobs:
-                assert job.tree is not None
-                if job.tree.fresh() and not job.fenced:
+                if (job.tree is None or job.tree.fresh()) and not job.fenced:
                     by_env.setdefault(id(job.env), []).append(job)
             for group in by_env.values():
                 paths = [j.alive_path for j in group]
@@ -419,7 +431,7 @@ class Registry:
                     else:
                         await group[0].env.run(
                             ["sh", "-c", 'for f; do : > "$f"; done', "sh", *paths], timeout=10)
-            period = min(j.tree.seconds for j in jobs if j.tree is not None) / 2
+            period = min(self._alive_period(j) for j in jobs)
             await asyncio.sleep(max(period / 3, GUARD_TICK_S / 2))
 
     async def _run(self, job: Job, monitor_timeout_ms: float | None) -> None:
