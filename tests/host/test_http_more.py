@@ -310,6 +310,10 @@ async def test_the_query_token_never_reaches_uvicorns_logs(
             async with websockets.connect(
                     f"ws://{host}/stream-json?token=secret-xyz&model={MODEL}") as ws:
                 await ws.recv()
+            # Starlette decodes the key, so ``%74oken`` is the token too.
+            async with websockets.connect(
+                    f"ws://{host}/stream-json?model={MODEL}&%74oken=secret-xyz") as ws:
+                await ws.recv()
             async with httpx.AsyncClient(base_url=f"http://{host}") as http:
                 await http.get("/models?token=secret-xyz")
     finally:
@@ -321,4 +325,4 @@ async def test_the_query_token_never_reaches_uvicorns_logs(
     logged = "\n".join(r.getMessage() for r in caplog.records
                        if r.name.startswith("uvicorn"))
     assert "/stream-json?token=" in logged and "/models?token=" in logged
-    assert "secret-xyz" not in logged
+    assert "&%74oken=" in logged and "secret-xyz" not in logged

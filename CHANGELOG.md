@@ -848,3 +848,6 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   `~/.netrc`, ... in any home directory) is hidden from that task's next sandboxed
   command. Before, `TenantFence.confine` hid only the ones that existed when the task's
   environment was built.
+- `noeta serve` keeps a query-string token out of uvicorn's logs whatever way its key is
+  spelled: `?%74oken=` (which the server decodes to `token` and accepts) is redacted too.
+  Before, only a literal `token=` was.
