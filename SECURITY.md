@@ -61,16 +61,19 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
   name the hosts). No request may start or switch a
   task into `bypassPermissions` unless the server allows it, and tasks run only inside the
   server's directory or `--allow-root` paths. Tenant tokens (`noeta token add`) are stored as
-  digests and confine every request to that tenant's tasks, workspace and queues; a request
-  sets only the task config and signals a client may. A way around any of this is a
+  digests and confine every request to that tenant's tasks, workspace (required: a tenant
+  without one starts no task) and queues; a request sets only the task config and signals a
+  client may. A way around any of this is a
   vulnerability.
 - **Tenants are separated at the API, not by the OS.** Their tools run as the worker's OS
   user, so without a boundary a tenant can read what that user can (`~/.noeta`, the store, the
   worker's environment). `noeta serve` and `noeta worker` refuse other tenants unless the
   sandbox confines every command, or the operator sets `[server] shared_os_user_tenants =
   true` (tenants then trust each other). A non-default tenant's task may never reach noeta's
-  home, the store's files, `/etc/noeta`, `/proc`, other tasks' spilled outputs or another
-  tenant's workspace, whatever its rules, mode or approvals: not with a file tool (fenced
+  home, the store's files, `/etc/noeta`, `/proc`, another tenant's workspace, nor what other
+  tasks leave on disk (spilled outputs and sub-agent transcripts but its own task's and root's,
+  background job logs, sandbox temporary files, compaction transcripts, other tenants' plans,
+  memory and temporary directories), whatever its rules, mode or approvals: not with a file tool (fenced
   in-process), and under the sandbox not with a command (`Bash`, a skill's script, any `git`
   noeta runs in the tenant's checkout with the hooks and programs its config names), and
   code noeta runs on its own outside the sandbox never comes from the tenant's workspace;

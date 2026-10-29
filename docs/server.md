@@ -94,8 +94,14 @@ base_url = "https://llm.acme.example/v1"
 api_key = "{env:ACME_API_KEY}"   # or "{keyring:service/user}"; never the secret itself
 ```
 
-- `workspace` is checked where tasks come in (the HTTP API, including `config` signals and
-  stream-json); with a shared filesystem, put it there.
+- `workspace` is required for every tenant but the default one: `noeta serve` refuses to
+  start while a tenant in `tokens.json` or `~/.noeta/tenants/` has none, `noeta token add`
+  refuses such a tenant, and a request of a tenant without one (a token added while the
+  server runs, or host code's `create_app` without `workspaces=`) may not start a task or
+  name a `cwd` (403). It is checked where tasks come in (the HTTP API, including `config`
+  signals and stream-json): a `cwd` must lie in the tenant's workspace and never in another
+  tenant's, even one nested inside its own. The default tenant works in the server's
+  directory and `--allow-root` paths. With a shared filesystem, put workspaces there.
 - `queues` is checked on `POST /tasks`: a queue not listed answers 403. Without it a tenant
   may use `default` and the queue of its own name, so a pool started with
   `noeta worker --queue acme` takes only acme's tasks (and the default tenant's, which may
@@ -133,11 +139,18 @@ of these holds:
 A task of a tenant other than the default one is fenced off from these places: noeta's
 home (`NOETA_HOME`: tokens, settings, tenant directories, other tasks' files), the spill
 directory wherever it is, the sqlite store and its `-wal` / `-shm` files wherever they are,
-`/etc/noeta`, `/proc` and every other tenant's workspace. Inside them such a task keeps its
-own spilled tool outputs, its tenant's plan files (`plans/<tenant>/`), the memory of its
-working directory (`projects/<slug>/`) and read access to `skills/` and `workflows/`. No
-allow rule, permission mode (`bypassPermissions` included) or approval lifts the fence. The
-default tenant's tasks are not fenced, and their sandbox is the settings' own.
+`/etc/noeta`, `/proc`, noeta's places in the temp directories (`noeta-background-<uid>`:
+background job logs; `noeta-temp-<uid>`: each worker's sandbox `TMPDIR`, each tenant's own
+directory) and every other tenant's workspace. Inside them such a task keeps its own spilled
+tool outputs (its task's and its root's), its tenant's plan files (`plans/<tenant>/`), in
+its tenant's project directory of its working directory (`projects/<tenant>/<slug>/`) the
+memory and, to read, its own and its root's compaction transcripts, read access to
+`skills/` and `workflows/`, and its tenant's temporary directory
+(`noeta-temp-<uid>/tenants/<tenant>/`: its job logs and its commands' `TMPDIR`). No allow
+rule, permission mode (`bypassPermissions` included) or approval lifts the fence. The
+default tenant's tasks are not fenced, their sandbox is the settings' own, and their
+project directories stay `projects/<slug>/`. A `log_dir` given to the shell plugin holds
+the default tenant's job logs only; it is not fenced, so keep it inside noeta's home.
 
 - **File tools** (`Read`, `Edit`, `Write`, `NotebookEdit`, a workflow's `scriptPath`) run in
   the worker process whatever the deployment. The fence is checked at the permission gate after symlinks and `..` are

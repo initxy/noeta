@@ -43,6 +43,10 @@ REQUEST_CONFIG = ("model", "effort", "max_turns", "cwd", "permission_mode", "out
 REQUEST_SIGNALS = (MODE_SIGNAL, CONFIG_SIGNAL, RESUMED_SIGNAL, RESTORE_SIGNAL)
 
 
+def _within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
 class GuardedClient:
     """``client`` refusing what a request may not ask for: a task in
     ``bypassPermissions`` (unless allowed) or with a ``cwd`` outside the
@@ -51,14 +55,20 @@ class GuardedClient:
     absolute, so every worker resolves it the same. With a ``workspace``
     (a tenant's) that directory is the only root, and a task created
     without a ``cwd`` runs in it. ``queues``: the queues a task may be
-    created on (any when ``None``)."""
+    created on (any when ``None``). ``tenant``: whose requests these are; one
+    other than the default needs a workspace to start or place tasks, and
+    never reaches into ``others`` (the other tenants' workspaces), even
+    where they lie inside its own."""
 
     def __init__(self, client: ClientAPI, *, allow_bypass: bool, cwd: str | None,
                  roots: Sequence[str] = (), workspace: str | None = None,
-                 queues: Sequence[str] | None = None) -> None:
+                 queues: Sequence[str] | None = None, tenant: str = DEFAULT_TENANT,
+                 others: Sequence[str] = ()) -> None:
         self._client = client
         self._allow_bypass = allow_bypass
         self._queues = None if queues is None else tuple(queues)
+        self._tenant = tenant
+        self._others = [os.path.realpath(w) for w in others]
         self._fill = workspace is not None
         if workspace is not None:
             cwd, roots = workspace, ()
@@ -75,18 +85,30 @@ class GuardedClient:
             raise Refused("this server does not allow bypassPermissions "
                           "(start it with --allow-bypass-permissions)")
 
+    def _need_workspace(self) -> None:
+        if self._tenant != DEFAULT_TENANT and not self._fill:
+            raise Refused(f"tenant {self._tenant!r} has no workspace on this server, so its "
+                          "tasks may not run here: give it one (workspace in "
+                          f"~/.noeta/tenants/{self._tenant}/config.toml, or "
+                          "create_app(workspaces=)) and restart the server")
+
     def check_cwd(self, cwd: Any) -> Any:
         """``cwd`` made absolute; raises :class:`Refused` when it lies
-        outside the server's directories."""
+        outside the server's directories or the tenant's workspace, or in
+        another tenant's."""
+        self._need_workspace()
         if not cwd or self._cwd is None:
             return cwd
         real = os.path.realpath(os.path.join(self._cwd, str(cwd)))
-        if not any(real == r or real.startswith(r.rstrip("/") + "/") for r in self._roots):
+        if not any(_within(real, r) for r in self._roots):
             where = ", ".join(self._roots)
             if self._fill:
                 raise Refused(f"cwd {cwd!r} is outside this tenant's workspace ({where})")
             raise Refused(f"cwd {cwd!r} is outside this server's directories ({where}); "
                           "start it there or add the directory with --allow-root")
+        mine = max((len(r) for r in self._roots if self._fill and _within(real, r)), default=-1)
+        if any(_within(real, w) and len(w) > mine for w in self._others):
+            raise Refused(f"cwd {cwd!r} is in another tenant's workspace")
         return real
 
     def check_config(self, config: Any, allowed: Sequence[str] = REQUEST_CONFIG) -> Any:
@@ -112,6 +134,7 @@ class GuardedClient:
                      queue: str = "default", dedupe_key: str | None = None,
                      history_from: str | None = None,
                      history_through: int | None = None) -> str:
+        self._need_workspace()
         if self._queues is not None and queue not in self._queues:
             raise Refused(f"queue {queue!r} is not one this tenant may use "
                           f"({', '.join(self._queues)})")
@@ -249,10 +272,13 @@ class Guard:
         if found is None:
             client = self._client
             scoped = client.scoped(tenant) if hasattr(client, "scoped") else client
+            workspaces = self._workspaces or {}
+            others = [] if tenant == DEFAULT_TENANT else [
+                w for name, w in workspaces.items() if name != tenant]
             guarded = GuardedClient(scoped, allow_bypass=self._allow_bypass, cwd=self._cwd,
-                                    roots=self._roots,
-                                    workspace=(self._workspaces or {}).get(tenant),
-                                    queues=self._queues.get(tenant, tenant_queues(tenant)))
+                                    roots=self._roots, workspace=workspaces.get(tenant),
+                                    queues=self._queues.get(tenant, tenant_queues(tenant)),
+                                    tenant=tenant, others=others)
             found = self._scopes[tenant] = Scope(scoped, guarded,
                                                  _GuardedFront(self._serving, guarded))
         return found

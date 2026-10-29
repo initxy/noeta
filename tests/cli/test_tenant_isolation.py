@@ -41,11 +41,37 @@ def _run(tmp_path: Path, *command: str) -> None:
 def test_tenants_without_a_boundary_are_refused(home: Path, tmp_path: Path,
                                                 command: tuple[str, ...]) -> None:
     tenants.add_token("acme")
+    _workspace(home, tmp_path, "acme")
     with pytest.raises(SystemExit, match=r"acme.*shared_os_user_tenants"):
         _run(tmp_path, *command)
     (home / "config.toml").write_text("[server]\nshared_os_user_tenants = true\n")
     with pytest.raises(_Started):
         _run(tmp_path, *command)
+
+
+def _workspace(home: Path, tmp_path: Path, tenant: str) -> None:
+    (tmp_path / f"{tenant}-ws").mkdir()
+    (home / "tenants" / tenant).mkdir(parents=True)
+    (home / "tenants" / tenant / "config.toml").write_text(
+        f'workspace = "{tmp_path / f"{tenant}-ws"}"\n')
+
+
+@pytest.mark.parametrize("known", ["token", "directory"])
+def test_a_server_refuses_a_tenant_without_a_workspace(home: Path, tmp_path: Path,
+                                                       known: str) -> None:
+    (home / "config.toml").write_text("[server]\nshared_os_user_tenants = true\n")
+    _workspace(home, tmp_path, "acme")
+    if known == "token":
+        tenants.add_token("beta")
+    else:
+        (home / "tenants" / "beta").mkdir()
+        (home / "tenants" / "beta" / "config.toml").write_text("max_running = 2\n")
+    with pytest.raises(SystemExit, match=r"beta have no workspace.*tenants/beta/config"):
+        _run(tmp_path, "serve", "--no-worker")
+    (home / "tenants" / "beta").mkdir(exist_ok=True)
+    (home / "tenants" / "beta" / "config.toml").write_text(f'workspace = "{tmp_path}"\n')
+    with pytest.raises(_Started):
+        _run(tmp_path, "serve", "--no-worker")
 
 
 def test_a_server_without_tenants_starts(home: Path, tmp_path: Path) -> None:

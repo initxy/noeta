@@ -32,7 +32,9 @@ class ExecEnv(Protocol):
     Optional members: ``local: bool`` (commands run on this machine; read
     by :func:`is_local`) and ``sandbox`` (a
     ``noeta.toolkit.sandbox.CommandSandbox`` commands may run inside; read by
-    ``noeta.toolkit.sandbox.sandbox_of``).
+    ``noeta.toolkit.sandbox.sandbox_of``) and ``temp_dir: str | None`` (a
+    temporary directory of the env's own, for files a tool keeps for the task
+    such as background job logs).
     """
 
     #: The working directory paths are resolved against, as the env sees it.

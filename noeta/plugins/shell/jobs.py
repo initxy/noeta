@@ -32,18 +32,19 @@ for a foreground command, which has no hold, while the worker runs) or, on
 this machine, once the worker's process is gone. The guard needs only
 ``sh`` tools, so it works the same in a container or a sandbox.
 
-Job logs live in a private directory per user inside the env: by default
-under the temp directory on disk (``$TMPDIR``, else ``/var/tmp``, else
-``/tmp``; never the RAM-backed ``$XDG_RUNTIME_DIR``), in
-``noeta-background-<uid>``, created 0700; a directory that already exists
-must be a real directory owned by the user (else launches are refused). Log
-files are created 0600, in a directory of the worker process's own
-(``w<pid>``); a worker on this machine removes those of workers that are
-gone, a day after their last write, when it first prepares the directory (a lost
-job's notice names its output file). A job's output reaches its log through a pipe that
-keeps the first ``log_max_bytes`` (:data:`DEFAULT_LOG_MAX_BYTES`), then a
-line saying the rest was not kept, and drains the rest, so the command runs
-on unharmed.
+Job logs live in a private directory per user inside the env: by default under
+the temp directory on disk (``$TMPDIR``, else ``/var/tmp``, else ``/tmp``;
+never the RAM-backed ``$XDG_RUNTIME_DIR``), in ``noeta-background-<uid>``,
+created 0700; a directory that already exists must be a real directory owned
+by the user (else launches are refused). An env with a ``temp_dir`` of its own
+(a tenant's task) keeps them in its ``jobs/`` instead, out of other tenants'
+reach. Log files are created 0600, in a directory of the worker process's own
+(``w<pid>``); a worker on this machine removes those of workers that are gone,
+a day after their last write, when it first prepares the directory (a lost
+job's notice names its output file). A job's output reaches its log through a
+pipe that keeps the first ``log_max_bytes`` (:data:`DEFAULT_LOG_MAX_BYTES`),
+then a line saying the rest was not kept, and drains the rest, so the command
+runs on unharmed.
 """
 
 from __future__ import annotations
@@ -166,7 +167,7 @@ if [ -z "$d" ]; then
   done
   d="$b/noeta-background-$(id -u)"
 fi
-if [ ! -e "$d" ] && [ ! -L "$d" ]; then mkdir -p -m 700 -- "$d" || exit 3; fi
+if [ ! -e "$d" ] && [ ! -L "$d" ]; then (umask 077 && mkdir -p -- "$d") || exit 3; fi
 if [ -L "$d" ] || [ ! -d "$d" ] || [ ! -O "$d" ]; then
   echo "refusing $d: not a directory owned by the current user" >&2; exit 4
 fi
@@ -326,7 +327,11 @@ class Registry:
             return known
         # The env's own variables may be scrubbed: on this machine, ours.
         base = (os.environ.get("TMPDIR") or "") if is_local(env) else ""
-        result = await env.run(["sh", "-c", _PREPARE_DIR, "sh", self.log_dir, base,
+        # An env with a temporary directory of its own (a tenant's task)
+        # keeps its jobs' logs there, away from other tenants' tasks.
+        own = getattr(env, "temp_dir", None)
+        logs = posixpath.join(own, "jobs") if isinstance(own, str) and own else self.log_dir
+        result = await env.run(["sh", "-c", _PREPARE_DIR, "sh", logs, base,
                                 _worker_dir()], timeout=10, output_cap=8192)
         if result.exit_code != 0:
             raise OSError(result.stderr.decode("utf-8", "replace").strip()

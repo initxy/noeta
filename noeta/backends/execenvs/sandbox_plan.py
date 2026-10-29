@@ -108,6 +108,8 @@ class Plan:
     allow_read: list[str]
     pinned: list[str] = field(default_factory=list)
     placeholders: list[tuple[str, bool]] = field(default_factory=list)
+    #: Writable directories inside a hidden one, mounted again over it.
+    rebound: list[str] = field(default_factory=list)
 
 
 def _first_missing(path: str) -> str | None:
@@ -242,20 +244,25 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
                 deny_write.append(path)  # a worktree's ``.git`` file
         deny_write += [os.path.join(w, p) for p in PROTECTED]
     home = str(noeta_home())
-    deny_read = _expand(settings, [*DEFAULT_DENY_READ, home, *settings.deny_read,
-                                   *settings.tenant_deny_read], base)
+    deny_read = _expand(settings, [*DEFAULT_DENY_READ, home, *settings.deny_read], base)
+    tenant_deny = _expand(settings, settings.tenant_deny_read, base)
     readable = HOME_ALLOW_READ if settings.noeta_home_readable is None \
         else settings.noeta_home_readable
     allow_read = _expand(settings, [*(os.path.join(home, p) for p in readable),
                                     *settings.allow_read, *settings.tenant_allow_read],
                          base)
-    # A denied directory holding a writable one would hide it.
+    # A denied directory holding a writable one would hide it; a tenant's
+    # stays denied and the writable one is mounted again inside it.
     deny_read = [d for d in deny_read if not any(_within(w, d) for w in writes)]
+    deny_read += [d for d in tenant_deny if d not in deny_read and d not in writes]
     hidden = [d for d in deny_read if os.path.isdir(d)]
+    rebound = [w for w in writes if any(_within(w, d) for d in hidden)]
     # Inside a hidden directory a path is unreadable and read-only already;
-    # binding it would show it again.
+    # binding it would show it again (unless it is in a writable one shown
+    # again).
     deny_write = [p for p in dict.fromkeys(deny_write)
-                  if not any(_within(p, d) for d in hidden)]
+                  if not any(_within(p, d) for d in hidden)
+                  or any(_within(p, w) for w in rebound)]
     for path in deny_write:
         pinned += _between(path, writes)
     pinned = sorted(dict.fromkeys(p for p in pinned if p not in deny_write),
@@ -272,7 +279,8 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
                 names.get(path, False) or ("/.git/" in path
                                            and os.path.basename(path) in _GIT_CONFIGS)))
     return Plan(writable=writes, deny_write=deny_write, deny_read=deny_read,
-                allow_read=allow_read, pinned=pinned, placeholders=list(placeholders.items()))
+                allow_read=allow_read, pinned=pinned, placeholders=list(placeholders.items()),
+                rebound=rebound)
 
 
 def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
@@ -304,6 +312,8 @@ def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
         for path in plan.allow_read:
             if os.path.exists(path) and any(_within(path, d) for d in hidden):
                 args += ["--ro-bind", path, path]
+        for path in sorted(plan.rebound, key=lambda p: p.count("/")):
+            args += ["--bind", path, path]
         for path in hidden:
             args += ["--remount-ro", path]
         for path in plan.pinned:
@@ -351,7 +361,8 @@ def seatbelt_profile(settings: SandboxSettings, plan: Plan,
         lines += [f"(deny file-read* (subpath {_sb_quote(os.path.realpath(p))}))"
                   for p in plan.deny_read]
         lines += [f"(allow file-read* (subpath {_sb_quote(os.path.realpath(p))}))"
-                  for p in plan.allow_read if any(_within(p, d) for d in plan.deny_read)]
+                  for p in (*plan.allow_read, *plan.rebound)
+                  if any(_within(p, d) for d in plan.deny_read)]
         lines += [f"(deny file-write* (subpath {_sb_quote(os.path.realpath(p))}))"
                   for p in plan.deny_write]
         # A subpath rule does not stop renaming a directory above it.

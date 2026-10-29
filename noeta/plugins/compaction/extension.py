@@ -117,7 +117,8 @@ class Compaction(Extension):
       the summary through the task's ``Read`` tool (or this one).
     - ``transcripts`` / ``home``: write the whole conversation to
       ``<home>/projects/<workspace>/<task id>.jsonl`` at each compaction
-      (local workspaces only) and point the summary at it.
+      (local workspaces only; a tenant other than the default one under
+      ``projects/<tenant>/``) and point the summary at it.
     """
 
     name = "compaction"
@@ -397,7 +398,7 @@ class Compaction(Extension):
         if not self.transcripts or view.env is None or not is_local(view.env):
             return None
         cwd = str(state.config.get("cwd") or view.env.cwd)
-        path = project_dir(cwd, self.home or noeta_home()) / f"{view.task_id}.jsonl"
+        path = project_dir(cwd, self.home or noeta_home(), state.tenant) / f"{view.task_id}.jsonl"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"".join(msgspec.json.encode(m) + b"\n" for m in state.history))

@@ -109,8 +109,16 @@ class SandboxSettings:
     #: A tenant's task: absolute paths its commands may not read, and those
     #: inside them they may (``noeta.toolkit.tenant_fence``). Never shown
     #: to the model, and not compared, so tasks of one profile share it.
+    #: Unlike ``denyRead``, a directory here stays hidden when a writable
+    #: directory lies inside it; that one alone is shown again.
     tenant_deny_read: tuple[str, ...] = field(default=(), compare=False)
     tenant_allow_read: tuple[str, ...] = field(default=(), compare=False)
+    #: noeta's places in the temp directories among :attr:`tenant_deny_read`,
+    #: made before each command so one made while it runs is hidden too.
+    tenant_temp_places: tuple[str, ...] = field(default=(), compare=False)
+    #: The tenant's own temporary directory: its commands' ``TMPDIR`` and
+    #: per-command files, instead of those this process's commands share.
+    tenant_temp_dir: str | None = field(default=None, compare=False)
     #: Where the working directory is, for relative paths.
     base_dir: str = field(default="", compare=False)
 

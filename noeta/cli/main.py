@@ -222,6 +222,8 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
             sys.exit(f"noeta: --no-token serves every request as the default tenant, but "
                      f"tenant(s) {', '.join(known)} are configured ({HOME / 'tokens.json'} "
                      f"or {HOME / 'tenants'}); serve with a token")
+    if (unplaced := tenants.workspace_problem(places)) is not None:
+        sys.exit(f"noeta: {unplaced}")
     server = None if args.no_token else server_token_digest()
     if server is not None and server.shown is not None:
         print(f"noeta: bearer token (shown only now; {HOME / 'server-token'} keeps its "

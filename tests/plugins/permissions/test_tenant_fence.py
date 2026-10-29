@@ -16,6 +16,7 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core import records
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, TaskEnded, ToolFinished, Waiting
+from noeta.core.tool import ToolContext
 from noeta.plugins.permissions import MODE_SIGNAL, Permissions
 from noeta.testing import ScriptedProvider, reply
 from noeta.toolkit.paths import project_slug
@@ -183,12 +184,23 @@ def test_own_spill_and_project_directories_stay_open(places: dict[str, Path]) ->
                         workspaces={"acme": str(places["acme"])})
     own = spill_path(str(home / "tool-results"), "t1", "c")
     root = spill_path(str(home / "tool-results"), "r1", "c")
-    project = home / "projects" / project_slug(str(places["acme"]))
+    slug = project_slug(str(places["acme"]))
+    project = home / "projects" / "acme" / slug
     kw: dict[str, Any] = {"tenant": "acme", "task_id": "t1", "root_id": "r1",
                           "cwd": str(places["acme"])}
     assert fence.refusal(own, **kw) is None
     assert fence.refusal(root, **kw) is None
     assert fence.refusal(str(project / "memory" / "MEMORY.md"), write=True, **kw) is None
+    # The default tenant's and another tenant's project directory of that cwd.
+    for theirs in (home / "projects" / slug, home / "projects" / "beta" / slug):
+        assert fence.refusal(str(theirs / "memory" / "MEMORY.md"), **kw) is not None
+    # Of its project directory, only its tree's transcripts, to read.
+    assert fence.refusal(str(project / "t1.jsonl"), **kw) is None
+    assert fence.refusal(str(project / "r1.jsonl"), **kw) is None
+    assert fence.refusal(str(project / "t1.jsonl"), write=True, **kw) is not None
+    for other in ("other-task.jsonl", "x"):
+        assert fence.refusal(str(project / other), **kw) is not None
+    assert fence.refusal(str(home / "projects" / slug / "default-task.jsonl"), **kw) is not None
     assert fence.refusal(str(home / "projects" / "-elsewhere" / "x"), **kw) is not None
     assert fence.refusal(str(home / "tokens.json"), **{**kw, "tenant": "default"}) is None
 
@@ -210,3 +222,17 @@ def test_the_operators_saved_workflows_are_readable_like_skills(tmp_path: Path) 
     assert fence.refusal(saved, tenant="acme", task_id="t") is None
     assert fence.refusal(saved, tenant="acme", task_id="t", write=True) is not None
     assert fence.refusal(str(tmp_path / "tokens.json"), tenant="acme", task_id="t")
+
+
+def test_a_started_workflows_script_is_kept_where_its_task_may_read_it(
+        tmp_path: Path) -> None:
+    from noeta.plugins.workflow.tool import WorkflowTool
+
+    spill = tmp_path / "tool-results"
+    ctx = ToolContext(task_id="t1", call_id="c", env=None,  # type: ignore[arg-type]
+                      state={}, record=lambda *_: None, spill_dir=str(spill))
+    path = WorkflowTool._save(ctx, "wf_1", "export default 1")
+    assert Path(path).read_text() == "export default 1"
+    fence = TenantFence(home=str(tmp_path / "home"), spill_root=str(spill))
+    assert fence.refusal(path, tenant="acme", task_id="t1") is None
+    assert fence.refusal(path, tenant="acme", task_id="t2") is not None

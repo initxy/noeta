@@ -161,7 +161,10 @@ class LocalExecEnv:
     :data:`ENV_ALLOWLIST`. ``kill_grace`` is the SIGTERM -> SIGKILL window.
     ``sandbox`` — Claude Code's ``sandbox`` settings (a mapping, or
     :class:`SandboxSettings`); when they enable it, :attr:`sandbox` confines
-    the commands the shell tools run.
+    the commands the shell tools run. ``temp_dir`` — a temporary directory
+    of the env's own (a tenant's task: ``noeta.toolkit.paths.tenant_temp_dir``;
+    by default the sandbox settings' ``tenant_temp_dir``) for its background
+    jobs' logs, instead of the place this machine's tasks share.
     """
 
     #: Commands run on this machine (``noeta.toolkit.local_env.is_local``).
@@ -175,12 +178,14 @@ class LocalExecEnv:
         kill_grace: float = KILL_GRACE_S,
         sandbox: SandboxSettings | Mapping[str, object] | None = None,
         fence: Fence | None = None,
+        temp_dir: str | None = None,
     ) -> None:
         self.cwd = os.path.abspath(cwd)
         self.fence = fence
+        settings = sandbox_settings(sandbox, base_dir=self.cwd)
+        self.temp_dir = temp_dir or (settings.tenant_temp_dir if settings else None)
         self.inherit_env = tuple(inherit_env)
         self.kill_grace = kill_grace
-        settings = sandbox_settings(sandbox, base_dir=self.cwd)
         self.sandbox: LocalSandbox | None = (
             LocalSandbox(settings, self.cwd) if settings is not None and settings.enabled
             else None)

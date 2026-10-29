@@ -84,7 +84,22 @@ async def test_a_tenant_cannot_borrow_another_repositorys_memory(
     h.provider.add(reply("ok"))
     await h.start(agent(home))
     assert all("beta's" not in m.text for m in h.provider.requests[0].messages)
-    assert Path(memory_dir_for(str(h.work), home)).is_dir()
+    assert Path(memory_dir_for(str(h.work), home, "acme")).is_dir()
+
+
+async def test_a_tenants_memory_is_its_own(h: Harness, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    # The default tenant's memory of the same directory.
+    theirs = Path(memory_dir_for(str(h.work), home))
+    theirs.mkdir(parents=True)
+    (theirs / INDEX_FILE).write_text("- [Secret](s.md) — the operator's\n")
+    h.client = h.client.scoped("acme")
+    h.provider.add(reply("ok"))
+    await h.start(agent(home))
+    assert all("operator's" not in m.text for m in h.provider.requests[0].messages)
+    mine = Path(memory_dir_for(str(h.work), home, "acme"))
+    assert mine.is_dir() and mine.parent.parent.name == "acme"
+    assert mine != theirs and theirs.parent.parent.name == "projects"
 
 
 async def test_a_tenants_user_scope_agent_memory_stays_in_its_workspace(

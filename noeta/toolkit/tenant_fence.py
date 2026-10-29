@@ -1,16 +1,19 @@
 """What a task of a tenant other than the default one may never read or
 write in-process, whatever its rules, mode or approvals: noeta's home (the
 tokens, settings, other tenants' directories, the store), the store's files,
-the machine's ``/etc/noeta``, ``/proc`` (other processes' environments) and
-other tenants' workspaces.
+the machine's ``/etc/noeta``, ``/proc`` (other processes' environments),
+noeta's places in the temp directories (other tasks' background job logs and
+sandbox temporary files) and other tenants' workspaces.
 
 Tenants share the worker's OS user, so this is the only boundary between a
 tenant's file tools and those files; a tenant answers its own approval
 prompts, so nothing it can approve may lift it. Inside the fenced places a
 task keeps its own corners: its spilled tool outputs and its tree's
-transcripts, its tenant's plan files, the project directory (memory) of its
-working directory, and read access to the operator's skills and saved
-workflows.
+transcripts, its tenant's plan files, in its tenant's project directory of its
+working directory the memory and (to read) its tree's compaction transcripts,
+and read access to the operator's skills and saved workflows; outside them,
+its tenant's own temporary directory (:meth:`TenantFence.temp_dir`: its
+commands' ``TMPDIR`` and its job logs).
 
 :meth:`TenantFence.refusal` is the check for in-process file access;
 :meth:`TenantFence.confine` makes the same places unreadable to the task's
@@ -26,9 +29,16 @@ import os
 import posixpath
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from noeta.core.events import DEFAULT_TENANT
-from noeta.toolkit.paths import noeta_home, project_slug
+from noeta.toolkit.paths import (
+    job_log_roots,
+    noeta_home,
+    project_dir,
+    temp_root,
+    tenant_temp_dir,
+)
 from noeta.toolkit.sandbox import SandboxSettings
 from noeta.toolkit.tools import spill_path
 
@@ -68,13 +78,26 @@ class TenantFence:
     ``~/.noeta`` when checked); ``spill_root`` and ``plans_dir`` are fenced
     wherever they are (a task keeps its own spill directories and its
     tenant's plan directory); ``store_files``: the store's files;
-    ``workspaces``: each tenant's workspace, by tenant name."""
+    ``workspaces``: each tenant's workspace, by tenant name; ``temp_root``:
+    noeta's directory in the temp directory (default
+    :func:`~noeta.toolkit.paths.temp_root`), where each tenant has its own."""
 
     home: str | None = None
     spill_root: str | None = None
     plans_dir: str | None = None
     store_files: tuple[str, ...] = ()
     workspaces: Mapping[str, str] = field(default_factory=dict)
+    temp_root: str | None = None
+
+    def temp_dir(self, tenant: str) -> str:
+        """The tenant's own temporary directory (its tasks' ``TMPDIR`` and
+        background job logs)."""
+        return tenant_temp_dir(tenant, self.temp_root)
+
+    def temp_places(self) -> list[str]:
+        """noeta's places in the temp directories, shared by this machine's
+        tasks: its temp root and the background job log directories."""
+        return [self.temp_root or temp_root(), *job_log_roots()]
 
     def refusal(self, path: str, *, tenant: str, task_id: str, root_id: str = "",
                 cwd: str = "", write: bool = False) -> str | None:
@@ -93,6 +116,10 @@ class TenantFence:
         owner = self._workspace_owner(path)
         if owner is not None and owner != tenant:
             return head + "it is in another tenant's workspace"
+        own_temp = _real(self.temp_dir(tenant))
+        if not _within(path, own_temp) and any(
+                _within(path, p) or _within(path, _real(p)) for p in self.temp_places()):
+            return head + "it holds other tasks' command output and temporary files"
         fenced = [p for p in (self.home or str(noeta_home()), self.spill_root, self.plans_dir)
                   if p]
         if not any(_within(path, _real(p)) for p in fenced):
@@ -105,19 +132,24 @@ class TenantFence:
                 root_id: str = "", cwd: str = "") -> SandboxSettings:
         """``settings`` for the commands of the task ``task_id`` (as
         :meth:`refusal` names it): the fenced places unreadable but for the
-        task's own corners, every command inside the sandbox (no excluded
-        commands, no way out, filesystem confined) and a fresh ``/proc`` of
+        task's own corners and its tenant's temporary directory, every
+        command inside the sandbox (no excluded commands, no way out,
+        filesystem confined) and a fresh ``/proc`` of
         its own PID namespace. ``settings`` themselves for the default
         tenant."""
         if tenant == DEFAULT_TENANT:
             return settings
         home = self.home or str(noeta_home())
         others = [w for name, w in self.workspaces.items() if name != tenant]
+        temps = self.temp_places()
         denied = [home, *(p for p in (self.spill_root, self.plans_dir) if p),
-                  *(s for s in SYSTEM_PATHS if s != "/proc"), *self.store_files, *others]
-        own = self._own(tenant, task_id, root_id or task_id, cwd, write=False)
+                  *(s for s in SYSTEM_PATHS if s != "/proc"), *self.store_files, *others,
+                  *temps]
+        own = [*self._own(tenant, task_id, root_id or task_id, cwd, write=False),
+               self.temp_dir(tenant)]
         return dataclasses.replace(
             settings, tenant_deny_read=tuple(denied), tenant_allow_read=tuple(own),
+            tenant_temp_places=tuple(temps), tenant_temp_dir=self.temp_dir(tenant),
             noeta_home_readable=(),
             excluded_commands=(), allow_unsandboxed=False, filesystem_disabled=False,
             weaker_nested=False)
@@ -141,8 +173,14 @@ class TenantFence:
                     for t in dict.fromkeys(x for x in (task_id, root_id) if x)]
         if self.plans_dir:
             out.append(posixpath.join(_real(self.plans_dir), tenant))
-        out += [posixpath.join(home, "projects", project_slug(d))
-                for d in self._project_roots(tenant, cwd)]
+        tree = list(dict.fromkeys(x for x in (task_id, root_id) if x))
+        for d in self._project_roots(tenant, cwd):
+            project = str(project_dir(d, Path(home), tenant))
+            # Its memory, and to read, its tree's transcripts: not other
+            # tasks' of the same directory.
+            out.append(posixpath.join(project, "memory"))
+            if not write:
+                out += [posixpath.join(project, f"{t}.jsonl") for t in tree]
         if not write:
             out += [posixpath.join(home, p) for p in _HOME_READABLE]
         return out

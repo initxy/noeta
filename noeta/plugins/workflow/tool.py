@@ -15,7 +15,7 @@ from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message
 from noeta.plugins.workflow.engine import EngineMissing
 from noeta.toolkit.paths import noeta_home
-from noeta.toolkit.tools import SCHEMA_DIALECT, load_description
+from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, spill_path
 
 if TYPE_CHECKING:
     from noeta.plugins.workflow import Orchestration
@@ -181,10 +181,12 @@ class WorkflowTool:
 
     @staticmethod
     def _save(ctx: ToolContext, rid: str, script: str) -> str:
-        """Keep the script beside the task's other spilled files."""
+        """Keep the script beside the task's other spilled files (in its own
+        directory there: a tenant's task may read only that one)."""
         if not ctx.spill_dir:
             return ""
-        path = Path(ctx.spill_dir) / "workflows" / f"{rid}.js"
+        task_dir = Path(spill_path(ctx.spill_dir, ctx.task_id, "x")).parent
+        path = task_dir / "workflows" / f"{rid}.js"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(script, encoding="utf-8")

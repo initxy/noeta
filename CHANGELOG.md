@@ -695,3 +695,33 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   (`pip install 'noeta[server] @ git+https://github.com/initxy/noeta'`, and the same for
   `uv tool install --reinstall`). Before, it named `noeta[server]` on PyPI, where noeta 1.0
   is not published and the name may install someone else's package.
+- A task of a tenant other than the default one keeps its background job logs and its
+  sandboxed commands' `TMPDIR` in its tenant's own temporary directory
+  (`<temp>/noeta-temp-<uid>/tenants/<tenant>/`, made 0700), and neither its file tools nor
+  its sandboxed commands can read noeta's shared temp places (`noeta-background-<uid>` in
+  each temp directory, `noeta-temp-<uid>` but its own). Before, every task's command output
+  (`noeta-background-<uid>/w<pid>/<job>.output`) and a worker's shared `TMPDIR`
+  (`noeta-sandbox-*`) were readable, and the latter writable, by every tenant's tasks. A
+  worker's sandbox directory moves to `<temp>/noeta-temp-<uid>/sandbox/`.
+- A tenant other than the default one needs a workspace: `noeta serve` refuses to start
+  while a tenant in `tokens.json` or `~/.noeta/tenants/` has none, `noeta token add` refuses
+  such a tenant, and the HTTP API (`create_app`) answers 403 when one without a workspace
+  starts a task or names a `cwd`. A request's `cwd` inside another tenant's workspace is
+  refused even where that lies inside the requester's own. Before, a tenant with only a
+  token could start tasks anywhere under the server's directory and `--allow-root` paths,
+  another tenant's workspace and the default tenant's included.
+- A tenant other than the default one keeps its auto memory and compaction transcripts in
+  a project directory of its own, `~/.noeta/projects/<tenant>/<slug>/`; the default
+  tenant's stay in `projects/<slug>/`. Before, every tenant working in one directory shared
+  its `projects/<slug>/` (memory read into the prompt and writable by each, transcripts of
+  each other's tasks).
+- In its project directory a tenant's task reaches only the memory (`memory/`) and, to
+  read, the compaction transcripts of its own task and its root (`<task id>.jsonl`), with a
+  file tool and in the sandbox. Before, the whole directory was open, so the transcripts of
+  every other task working in that directory could be read and rewritten.
+- A started workflow's script is kept in its task's own spill directory
+  (`tool-results/<task id>/workflows/`). Before, every task's went to one shared
+  `tool-results/workflows/`, which a tenant's task could not read back.
+- `Read` of a PDF by a tenant's task makes its copy and rendered pages in the tenant's own
+  temporary directory. Before, they went to a fresh directory in the worker's shared temp
+  directory, readable by other tenants' sandboxed commands while the conversion ran.
