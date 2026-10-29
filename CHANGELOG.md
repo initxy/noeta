@@ -189,7 +189,8 @@ All notable changes to Noeta are documented here. The format is based on
   `hold_lost` without waking the task (`Post.wake`): it hears with its next message. Third-party
   stores implement `hold`, `unhold` and `reap_holds` (a store an earlier
   development build opened keeps its unused `holds` table; upgrading it posts `hold_lost`, with
-  epoch 0, to the tasks of each tree held there). A hold is refused while another
+  epoch 0, to the tasks of each tree held there, and the tree's running jobs recorded without
+  an epoch are told lost). A hold is refused while another
   worker runs a task of the tree, and on Postgres a claim and a hold of one tree serialize, so a
   held tree's tasks run only on its holder; a background command refused for either reason
   says so and points the model to the foreground or a later try.
