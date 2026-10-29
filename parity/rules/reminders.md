@@ -178,6 +178,12 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | rem.command.5 | `/compact` is preceded by a `<local-command-caveat>` block: the command was run directly by the user, not sent to the model as a request, its output went straight to the user, and it is kept only as context for later messages. `/plan` with arguments had no caveat and itself started a model turn. |
 | rem.command.6 | All command blocks persist; after `/compact` they appear in the first user message after the summary, ahead of the next prompt (see `compaction.md`). |
 
+## skill notes (bundle, not recorded)
+
+| id | rule |
+|---|---|
+| rem.skill-mention.1 | When a user message names a skill as `/<name>` anywhere but as its leading command (preceded by the start, whitespace or a CJK sentence mark, followed by whitespace or the end), a `<system-reminder>` after the message says it names that skill: call `Skill` with it (and the arguments given) if the user wants it run, and do not run it if they only mention it. One per skill named; only skills the model may invoke. noeta today: covered (`skills` plugin, `reminder/skill_mention`, our words). |
+
 ## plan mode
 
 | id | rule |

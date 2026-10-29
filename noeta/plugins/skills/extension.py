@@ -122,6 +122,35 @@ WORKSPACE_AGENTS_SKILLS_DIR = ".agents/skills"
 
 Rank = Callable[[TaskView], "Mapping[str, float] | Awaitable[Mapping[str, float]] | None"]
 
+#: A skill named mid-message (``/<name>`` that is not the message's command).
+SKILL_MENTION = (
+    "The user's message names /{name}, a skill. If they want it run, call the Skill tool with "
+    "skill \"{name}\" and any arguments they gave as args; if they only mention it, do not "
+    "run it.")
+#: A ``/word`` after the start, whitespace or a CJK sentence mark, ending at
+#: whitespace or the end (Claude Code's mention rule).
+_MENTION = re.compile(r"(^|[\s。、？！])/([a-zA-Z][a-zA-Z0-9.:_-]*)")  # noqa: RUF001
+
+
+def mentioned_skills(text: str) -> list[str]:
+    """The ``/<name>`` words of ``text`` that are not its leading command,
+    in order, each once."""
+    out: list[str] = []
+    leading = text.startswith("/")
+    after = 0
+    for m in _MENTION.finditer(text):
+        name = m.group(2).rstrip(".")
+        start, end = m.start(2) - 1, m.start(2) + len(name)
+        if leading and not text[after:start].strip():
+            after = end  # the command itself, or its leading run
+            continue
+        leading = False
+        if end < len(text) and not text[end].isspace():
+            continue
+        if name not in out:
+            out.append(name)
+    return out
+
 
 def _typed_command(text: str) -> tuple[str, str] | None:
     """``(name, args)`` of a slash command the person typed: the command's
@@ -431,6 +460,7 @@ class Skills(Extension):
             if lines:
                 self._record_listing(view, lines, registry)
         for message in messages:
+            self._note_mentions(view, registry, state, message.text)
             typed = _typed_command(message.text)
             desc = registry.get(typed[0]) if typed else None
             if desc is not None and desc.paths and desc.name not in unlocked_skills(state):
@@ -451,6 +481,19 @@ class Skills(Extension):
                     continue
                 self._record_invocation(view, {**data, "input": recorded.seq}, prior,
                                         "inline")
+
+    def _note_mentions(self, view: TaskView, registry: SkillRegistry, state: Any,
+                       text: str) -> None:
+        """A note per skill the message names mid-text: whether to run it is
+        the model's call (Claude Code's skill mention)."""
+        if parse_command_message(text) is not None:
+            return
+        offered = set(registry.model_invocable(unlocked_skills(state)))
+        for name in mentioned_skills(text):
+            if name in offered:
+                note = view.prompt("reminder/skill_mention", SKILL_MENTION)
+                view.record(self.name, "mentioned", {"name": name},
+                            message=user(note.replace("{name}", name), origin=self.origin))
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
         if call.name in FILE_TOOLS and not output.is_error:

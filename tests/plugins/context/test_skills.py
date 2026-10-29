@@ -757,3 +757,28 @@ async def test_a_skill_whose_description_changed_is_listed_again(h: Harness) -> 
     assert h.last_messages()[-1].text == "and again"
     listings = await h.records(tid, "skills", "listing")
     assert [x.data["names"] for x in listings] == [["deploy", "review"], ["deploy"]]
+
+
+def test_mentions_are_slash_words_after_the_leading_command() -> None:
+    from noeta.plugins.skills.extension import mentioned_skills
+    assert mentioned_skills("please run /deploy now") == ["deploy"]
+    assert mentioned_skills("/notes v1 then /deploy") == ["deploy"]
+    assert mentioned_skills("/notes") == []
+    assert mentioned_skills("see /deploy. and /deploy") == ["deploy"]
+    assert mentioned_skills("a/b /x/y path") == []
+    assert mentioned_skills("用 /deploy 发布。/review") == ["deploy", "review"]
+    assert mentioned_skills("请/review") == []
+
+
+async def test_a_skill_named_mid_message_gets_a_note(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    write_skill(skills_dir(h), "hidden", "User only.", **{"disable-model-invocation": "true"})
+    a = agent()
+    h.provider.add(reply("ok"))
+    tid = await h.start(a, "should I use /deploy or /hidden or /nothing here?")
+    texts = [m.text for m in h.provider.requests[0].messages]
+    note = [t for t in texts if t.startswith("The user's message names /")]
+    assert note == ["The user's message names /deploy, a skill. If they want it run, call the "
+                    "Skill tool with skill \"deploy\" and any arguments they gave as args; if "
+                    "they only mention it, do not run it."]
+    assert [x.data for x in await h.records(tid, "skills", "mentioned")] == [{"name": "deploy"}]
