@@ -1,6 +1,6 @@
-"""Model-visible texts are noeta's own words. Sentences found copied from
-Claude Code outside the parity recordings (so the recorded-text check in
-``scripts/parity/own_words.py`` cannot see them) stay gone."""
+"""``scripts/parity/own_words.py`` reports where noeta's model-visible texts
+repeat Claude Code's recorded text; it is advisory (ADR-020) and never
+fails."""
 
 from __future__ import annotations
 
@@ -15,30 +15,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.parity import own_words  # noqa: E402
-
-#: Phrases of Claude Code's that were in noeta's texts, lower-cased.
-COPIED = (
-    "if the worktree has uncommitted files or commits not on the original branch",
-    "will not remove a worktree entered this way",
-    "send it again without notify_when_idle if it should still go",
-    "ask the user to open this url in their browser to authorize the",
-    "carries no authorization code. ask the user for the full address",
-    "lists the direct children of a directory resource on an mcp server",
-)
-
-
-def _texts() -> str:
-    parts = [p.read_text("utf-8") for p in sorted((ROOT / "noeta").rglob("*"))
-             if p.suffix in (".py", ".md")]
-    # Python's implicit concatenation splits sentences over lines: compare
-    # the words only.
-    joined = " ".join(parts).lower().replace('"\n', " ").replace("'\n", " ")
-    return " ".join(w.strip("\"'") for w in joined.split())
-
-
-@pytest.mark.parametrize("phrase", COPIED)
-def test_a_copied_sentence_stays_gone(phrase: str) -> None:
-    assert phrase not in _texts()
 
 
 def test_the_recorded_text_check_finds_a_shared_run(tmp_path: Path) -> None:
@@ -91,9 +67,14 @@ def test_a_deferred_tools_description_is_indexed() -> None:
     assert said in list(own_words.claude_code_texts(body))
 
 
-def test_noeta_repeats_no_recorded_text_of_claude_code() -> None:
-    found = own_words.recordings()
-    if not found:
-        pytest.skip(f"no Claude Code recordings under {own_words.recordings_root()} "
-                    f"(set {own_words.RECORDINGS_ENV})")
-    assert own_words.check(own_words.load_index(found)) == []
+def test_a_shared_run_is_reported_and_never_fails(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    said = (ROOT / "noeta" / "plugins" / "subtasks" / "descriptions" / "agent.md").read_text(
+        "utf-8")
+    (tmp_path / "2.1.312" / "m1").mkdir(parents=True)
+    (tmp_path / "2.1.312" / "m1" / "0001.json").write_text(json.dumps({"body": {
+        "tools": [{"name": "Agent", "description": said}]}}))
+    monkeypatch.setenv(own_words.RECORDINGS_ENV, str(tmp_path))
+    assert own_words.main([]) == 0
+    out = capsys.readouterr().out
+    assert "agent.md" in out and "own-words (advisory):" in out

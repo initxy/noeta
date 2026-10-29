@@ -282,6 +282,13 @@ servers and runs on many machines.
   programs, `/tmp`, `/var/tmp`, `/opt` or `/run` are never hidden (an account whose home is
   `/`). bwrap and Seatbelt read rules are applied outermost first. Rejected: hiding every
   account's home including service accounts (uid < 500: `/var/lib/...`, `/bin`).
+- D60 (`os-fix-r4tools`, owner) Supersedes D19's "fails on any shared run": copying Claude
+  Code's prompt wording is acceptable where it serves parity; what matters is the behavior
+  (ADR-020, refining ADR-003). `scripts/parity/own_words.py` is an advisory report: it
+  prints the shared runs, always exits 0, and no test fails on them. The rest of D19 holds
+  (recordings read from outside the repository, nothing derived from their wording
+  committed). Rejected: a word-run rule (8 consecutive words) on top of the character
+  windows, and rewording `Agent`, `ToolSearch` and the background-command result to pass it.
 
 ## Plan
 

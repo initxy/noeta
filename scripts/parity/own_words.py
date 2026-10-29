@@ -1,7 +1,8 @@
-"""noeta's model-visible texts are its own words: none repeats a run of
-Claude Code's text.
+"""Where noeta's model-visible texts repeat a run of Claude Code's text: an
+advisory report, never a failure (ADR-020 allows Claude Code's wording where
+it serves parity).
 
-    python -m scripts.parity.own_words          # check (make parity; a test in make check)
+    python -m scripts.parity.own_words          # report (make parity); always exits 0
 
 The check reads Claude Code's recordings from outside the repository:
 ``$NOETA_PARITY_RECORDINGS`` (default ``~/cc-recordings``), one directory per
@@ -20,7 +21,7 @@ collapsed.
 
 It then reads every text in ``noeta/`` the model can see — string literals
 of the Python modules (docstrings and comments left out) and the ``.md`` /
-``.js`` resources — collapses whitespace the same way, and fails on any of
+``.js`` resources — collapses whitespace the same way, and reports each of
 its windows found in the index. A run of :data:`SHARED` or more characters in
 common always contains an indexed window (``SHARED - WINDOW >= STRIDE - 1``);
 a shorter shared run is caught only when it happens to hold one. Literals in
@@ -231,10 +232,10 @@ def main(argv: list[str] | None = None) -> int:
     for problem in problems:
         print(problem)
     if problems:
-        print(f"own-words: {len(problems)} text(s) repeat Claude Code; reword them "
-              f"(or, for a tool name or protocol literal, list it in {ALLOWED.name})")
-        return 1
-    print(f"own-words: green ({', '.join(p.name for p in found)})")
+        print(f"own-words (advisory): {len(problems)} text(s) repeat Claude Code; that is "
+              f"allowed where it serves parity (ADR-020)")
+    else:
+        print(f"own-words: none ({', '.join(p.name for p in found)})")
     return 0
 
 if __name__ == "__main__":

@@ -85,9 +85,9 @@ See [Extension](../CONTEXT.md#extension), [Registry](../CONTEXT.md#registry),
 [Plugin pin](../CONTEXT.md#plugin-pin), and [docs/extending.md](extending.md) for writing one.
 
 What the model sees follows Claude Code: tool names and schemas, the order and roles of prompt
-parts, reminders, compaction. The texts are noeta's own words; `make parity` replays Claude
-Code's recorded requests against noeta and reports every difference
-(`scripts/parity/README.md`).
+parts, reminders, compaction, with Claude Code's wording where it serves that (ADR-020);
+`make parity` replays Claude Code's recorded requests against noeta and reports every
+difference (`scripts/parity/README.md`).
 
 ## Layers
 
