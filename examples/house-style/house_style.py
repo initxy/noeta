@@ -6,11 +6,14 @@ turns. Copy this file to ~/.noeta/plugins/."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from noeta import ContextPart, Extension, Reminder, TaskView
+
+FRONTMATTER = re.compile(r"\A---\n(?:.*?\n)?---[ \t]*(?:\n|\Z)", re.S)
 
 
 class HouseStyle(Extension):
@@ -32,9 +35,7 @@ class HouseStyle(Extension):
             return
         path = Path(self.file).expanduser()
         text = path.read_text("utf-8") if path.is_file() else ""
-        if text.startswith("---\n"):
-            text = text.split("\n---", 2)[-1]
-        view.record(self.name, "style", {"text": text.strip()})
+        view.record(self.name, "style", {"text": FRONTMATTER.sub("", text, 1).strip()})
 
     def context(self, view: TaskView) -> Sequence[ContextPart]:
         style = view.ext_state(self.name)
