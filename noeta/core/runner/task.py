@@ -28,7 +28,7 @@ from msgspec.structs import replace
 from noeta.core import records as core_records
 from noeta.core import registry, snapshots
 from noeta.core.agent import Agent
-from noeta.core.errors import Conflict, InboxUnread, StoreUnavailable
+from noeta.core.errors import BudgetSpent, Conflict, InboxUnread, StoreUnavailable
 from noeta.core.events import (
     Cancel,
     ChildEnded,
@@ -539,9 +539,13 @@ class TaskRun:
 
     async def complete(self, request: Any) -> Any:
         """A model call for an extension (a summary, a judge): retried like
-        the main call, not recorded as a step."""
+        the main call, not recorded as a step. Refused (:class:`BudgetSpent`)
+        past the tenant's budget."""
         from noeta.core.retry import complete_with_retries
 
+        refusal = await self.rt.budget_refusal(self.state.tenant)
+        if refusal is not None:
+            raise BudgetSpent(refusal)
         response = await complete_with_retries(
             self.rt.provider(request.model, self.state.tenant), request, sleep=self.rt.sleep)
         await self.rt.charge(self.state.tenant, request.model, response.usage)
