@@ -82,7 +82,7 @@ def _arguments(args: object) -> list[dict[str, Any]]:
 
 async def list_prompts(servers: Sequence[McpServer], *, scope: str | None = None,
                        pool: McpPool | None = None) -> list[McpPrompt]:
-    pool = pool or default_pool()
+    pool = pool if pool is not None else default_pool()
     out: list[McpPrompt] = []
     for server in servers:
         async with pool.acquire(server, scope) as client:  # a connect fault raises
@@ -128,7 +128,7 @@ def flatten_prompt(result: dict[str, Any]) -> str:
 
 async def expand_prompt(server: McpServer, name: str, arguments: dict[str, Any], *,
                         scope: str | None = None, pool: McpPool | None = None) -> str:
-    pool = pool or default_pool()
+    pool = pool if pool is not None else default_pool()
     result = await pool.use(server, scope, lambda c: c.get_prompt(name, dict(arguments)),
                             retry=True)
     return flatten_prompt(result)
@@ -136,7 +136,7 @@ async def expand_prompt(server: McpServer, name: str, arguments: dict[str, Any],
 
 async def list_resources(servers: Sequence[McpServer], *, scope: str | None = None,
                          pool: McpPool | None = None) -> list[McpResource]:
-    pool = pool or default_pool()
+    pool = pool if pool is not None else default_pool()
     out: list[McpResource] = []
     for server in servers:
         async with pool.acquire(server, scope) as client:  # a connect fault raises
@@ -164,6 +164,6 @@ def flatten_resource(result: dict[str, Any]) -> str:
 
 async def read_resource(server: McpServer, uri: str, *, scope: str | None = None,
                         pool: McpPool | None = None) -> str:
-    pool = pool or default_pool()
+    pool = pool if pool is not None else default_pool()
     result = await pool.use(server, scope, lambda c: c.read_resource(uri), retry=True)
     return flatten_resource(result)

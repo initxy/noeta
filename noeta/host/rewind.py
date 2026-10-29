@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import base64
 import difflib
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from noeta.core.client import ClientAPI
 from noeta.core.events import ExtensionRecorded, InputTaken, Recorded, Say, TaskCreated
 
 __all__ = ["CHECKPOINTS", "RESTORE_SIGNAL", "FilePlan", "RewindPoint", "Rewound",
@@ -62,7 +64,7 @@ class Rewound:
     files: tuple[str, ...] = ()
 
 
-async def _lineage(client: Any, task_id: str) -> list[tuple[str, list[Recorded]]]:
+async def _lineage(client: ClientAPI, task_id: str) -> list[tuple[str, list[Recorded]]]:
     """The task's log and, oldest first, each log it continues (trimmed to
     the event it continues from)."""
     out: list[tuple[str, list[Recorded]]] = []
@@ -80,14 +82,14 @@ async def _lineage(client: Any, task_id: str) -> list[tuple[str, list[Recorded]]
     return list(reversed(out))
 
 
-async def _tree(client: Any, task_id: str) -> list[str]:
+async def _tree(client: ClientAPI, task_id: str) -> list[str]:
     ids = [task_id]
     for child in await client.tasks(parent_id=task_id, limit=10_000):
         ids.extend(await _tree(client, child.task_id))
     return ids
 
 
-async def _snapshots(client: Any, task_id: str) -> tuple[list[tuple[float, dict[str, Any]]],
+async def _snapshots(client: ClientAPI, task_id: str) -> tuple[list[tuple[float, dict[str, Any]]],
                                                          dict[str, str]]:
     """Every snapshot of the task's lineage and its sub-agents, by time,
     and every blob recorded with them."""
@@ -110,7 +112,7 @@ async def _snapshots(client: Any, task_id: str) -> tuple[list[tuple[float, dict[
     return snaps, blobs
 
 
-async def rewind_points(client: Any, task_id: str) -> list[RewindPoint]:
+async def rewind_points(client: ClientAPI, task_id: str) -> list[RewindPoint]:
     """The person's prompts in the conversation, oldest first, each with
     the files changed since."""
     points: list[RewindPoint] = []
@@ -134,7 +136,7 @@ async def rewind_points(client: Any, task_id: str) -> list[RewindPoint]:
     return out
 
 
-async def file_plan(client: Any, task_id: str, point: RewindPoint) -> FilePlan:
+async def file_plan(client: ClientAPI, task_id: str, point: RewindPoint) -> FilePlan:
     """The files as they were when ``point``'s prompt arrived: the first
     snapshot of each file taken after it."""
     snaps, blobs = await _snapshots(client, task_id)
@@ -171,10 +173,11 @@ def diff_stats(plan: FilePlan) -> tuple[int, int]:
     return added, removed
 
 
-async def rewind(client: Any, task_id: str, point: RewindPoint, *, conversation: bool = True,
-                 files: bool = True) -> Rewound:
+async def rewind(client: ClientAPI, task_id: str, point: RewindPoint, *, conversation: bool = True,
+                 files: bool = True, config_keys: Sequence[str] | None = None) -> Rewound:
     """Rewind to before ``point``. With ``conversation`` a new task (same
-    agent and config) continues the log up to just before the prompt; with
+    agent, queue and config, or only its ``config_keys`` when given: what a
+    request may set) continues the log up to just before the prompt; with
     ``files`` the files changed since (by the task or its sub-agents) are
     written back as they were, by the task to go on with — so the front end
     following it sees the restore's notice. The checkpoints plugin checks a
@@ -186,7 +189,10 @@ async def rewind(client: Any, task_id: str, point: RewindPoint, *, conversation:
         first = events[0].event if events else None
         if not isinstance(first, TaskCreated):
             raise ValueError(f"task {point.task_id} has no creation event")
-        target = await client.create(first.agent, None, config=dict(first.config),
+        config = {k: v for k, v in first.config.items()
+                  if config_keys is None or k in config_keys}
+        queue = (await client.get(point.task_id)).queue
+        target = await client.create(first.agent, None, config=config, queue=queue,
                                      history_from=point.task_id,
                                      history_through=point.seq - 1)
     restored: tuple[str, ...] = ()

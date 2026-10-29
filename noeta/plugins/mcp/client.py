@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib.metadata
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -53,7 +54,10 @@ PROTOCOL_VERSION = "2025-11-25"
 #: Pages one list call follows: a server that keeps handing back a cursor
 #: must not loop forever.
 MAX_LIST_PAGES = 100
-_CLIENT_INFO = {"name": "noeta", "version": "1"}
+try:
+    _CLIENT_INFO = {"name": "noeta", "version": importlib.metadata.version("noeta")}
+except importlib.metadata.PackageNotFoundError:
+    _CLIENT_INFO = {"name": "noeta", "version": "0.0.0"}
 _METHOD_NOT_FOUND = -32601
 
 Request = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -61,14 +65,16 @@ Request = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 Elicit = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
-async def collect_pages(request: Request, method: str, key: str) -> list[dict[str, Any]]:
+async def collect_pages(request: Request, method: str, key: str,
+                        params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Run a paginated list call to its last page: follow ``nextCursor``
     until it stops, repeats, or :data:`MAX_LIST_PAGES` pages were read."""
     out: list[dict[str, Any]] = []
     cursor: str | None = None
     seen: set[str] = set()
     for _ in range(MAX_LIST_PAGES):
-        result = await request(method, {"cursor": cursor} if cursor else {})
+        result = await request(method, {**(params or {}), **({"cursor": cursor} if cursor
+                                                              else {})})
         entries = result.get(key)
         if not isinstance(entries, list):
             raise McpError(f"{method} result missing {key!r} array")
@@ -185,9 +191,12 @@ class McpClient:
         return await collect_pages(self.request, "tools/list", "tools")
 
     async def call_tool(self, name: str, arguments: dict[str, Any], *,
-                        timeout: float | None = None) -> dict[str, Any]:
-        return await self.request("tools/call", {"name": name, "arguments": dict(arguments)},
-                                  timeout=timeout)
+                        timeout: float | None = None,
+                        meta: dict[str, Any] | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {"name": name, "arguments": dict(arguments)}
+        if meta:
+            params["_meta"] = dict(meta)
+        return await self.request("tools/call", params, timeout=timeout)
 
     async def list_prompts(self) -> list[dict[str, Any]]:
         return await collect_pages(self.request, "prompts/list", "prompts")
@@ -200,6 +209,12 @@ class McpClient:
 
     async def read_resource(self, uri: str) -> dict[str, Any]:
         return await self.request("resources/read", {"uri": uri})
+
+    async def read_directory(self, uri: str) -> list[dict[str, Any]]:
+        """The direct children of a directory resource
+        (``resources/directory/read``)."""
+        return await collect_pages(self.request, "resources/directory/read", "resources",
+                                   {"uri": uri})
 
 
 def reply_result(method: str, msg: dict[str, Any]) -> dict[str, Any]:

@@ -3,13 +3,10 @@ points of a task and acts on what the hooks answer."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import os
-from collections import OrderedDict
+import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -18,129 +15,82 @@ import msgspec
 
 from noeta.core.errors import TurnFailed
 from noeta.core.events import (
-    Cancel,
     Compacted,
     ExtensionRecorded,
+    External,
+    InputTaken,
     ModelReplied,
     Recorded,
     Say,
     TaskEnded,
     Waiting,
 )
-from noeta.core.extension import Allow, Ask, Deny, Extension, Gate, Reminder, Rewrite, TaskView
+from noeta.core.extension import Ask, Deny, Extension, Gate, Reminder, TaskView
+from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.tool import ToolOutput
-from noeta.core.types import Message, Text, ToolUse, user
-from noeta.plugins.hooks.config import (
-    SUBJECT,
-    TOOL_EVENTS,
-    HookCommand,
-    Matcher,
-    parse_hooks,
-    read_settings,
-)
-from noeta.plugins.hooks.runners import (
-    HookResult,
-    Runner,
-    run_command,
-    run_http,
-    run_prompt,
-)
-from noeta.toolkit.permission_rules import RuleContext, match
+from noeta.core.types import Message, Text, ToolResult, ToolUse, user
+from noeta.plugins.hooks.config import Matcher, parse_hooks, read_settings
+from noeta.plugins.hooks.dispatch import NAME, Dispatcher, HookState, Read, agent_fields, fold
+from noeta.plugins.hooks.gates import HANDBACK_TOOL, ToolGates
+from noeta.plugins.hooks.runners import Runner, run_command
+from noeta.toolkit.signals import RESUMED_SIGNAL
+
+__all__ = ["HANDBACK_TOOL", "MAX_STOP_CONTINUATIONS", "RETRY_NOTE", "Hooks"]
 
 log = logging.getLogger("noeta.hooks")
 
 #: A Stop / SubagentStop hook that keeps blocking is let through after this
 #: many in a row.
 MAX_STOP_CONTINUATIONS = 8
-#: The tool a sub-agent ends its run with (a model-visible name).
-HANDBACK_TOOL = "SubagentHandback"
 #: What the model is told when a PermissionDenied hook allows a retry.
 RETRY_NOTE = ("A PermissionDenied hook says the denied {tool} call may be retried, "
               "if it is still needed.")
-_KEEP = 256
+#: The plugin whose ``cwd`` record says the shell changed directory.
+SHELL_PLUGIN = "shell"
+
+#: Turn failures that are a model call's (Claude Code's StopFailure fires on
+#: API errors, not on hooks or limits).
+_MODEL_FAILURES = frozenset({"llm_error", "llm_empty_response", "llm_truncated",
+                             "context_overflow"})
+_FAILURE_KINDS = (
+    (r"\b(401|403)\b|auth|api.?key", "authentication_failed"),
+    (r"\b429\b|rate.?limit", "rate_limit"),
+    (r"\b529\b|overloaded", "overloaded"),
+    (r"\b404\b|model.*not.*found|not_found", "model_not_found"),
+    (r"\b(400|413|422)\b|invalid", "invalid_request"),
+    (r"\b5\d\d\b|server", "server_error"),
+)
 
 
-@dataclass(frozen=True)
-class _State:
-    #: Seq of the newest person's message the prompt hooks have seen.
-    prompted_through: int = 0
-    #: Stop hooks that blocked since the person's message ``stop_since``.
-    stop_blocks: int = 0
-    stop_since: int = 0
-    #: SessionStart (startup) / SubagentStart has fired for this task.
-    started: bool = False
-    #: The compaction SessionStart (compact) last fired after, by ``through``.
-    compact_seen: int = 0
-    #: What started the newest compaction (``manual`` / ``auto``).
-    compact_trigger: str = "auto"
-    #: Keys of the ``once`` hooks that have run.
-    once: frozenset[str] = frozenset()
-    #: PermissionRequest answers by call id: ``{"behavior", "input",
-    #: "message"}`` (``behavior`` ``None``: no hook decided).
-    permission: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
-    #: The permission mode, as the permissions plugin last recorded it.
-    mode: str | None = None
-
-
-@dataclass(frozen=True)
-class _Read:
-    """One hook's answer, read the way every event reads it."""
-
-    #: The reason when it blocks (exit 2, or ``decision: "block"``).
-    block: str | None = None
-    #: ``continue: false``: the stop reason (may be empty).
-    stop: str | None = None
-    #: ``hookSpecificOutput``.
-    specific: Mapping[str, Any] = field(default_factory=dict)
-    data: Mapping[str, Any] = field(default_factory=dict)
-    #: Plain stdout (not a JSON object).
-    text: str = ""
-
-    @property
-    def context(self) -> str:
-        extra = self.specific.get("additionalContext")
-        return extra.strip() if isinstance(extra, str) else ""
-
-
-def _read(event: str, result: HookResult) -> _Read:
-    if result.exit_code == 2:
-        return _Read(block=result.stderr.strip() or "blocked by a hook")
-    if result.exit_code != 0:
-        return _Read()
-    data = result.data
-    if data is None:
-        return _Read(text=result.text)
-    specific = data.get("hookSpecificOutput")
-    specific = specific if isinstance(specific, dict) else {}
-    named = specific.get("hookEventName")
-    if named is not None and named != event:
-        log.warning("hooks: a %s hook answered for %r; its answer is ignored", event, named)
-        return _Read()
-    block = str(data.get("reason") or "blocked by a hook") \
-        if data.get("decision") == "block" else None
-    stop = str(data.get("stopReason") or "") if data.get("continue") is False else None
-    return _Read(block=block, stop=stop, specific=specific, data=data)
-
-
-def _agent(view: TaskView) -> dict[str, str]:
-    """A sub-agent's ``agent_id`` and ``agent_type``: the id and type the
-    spawning tool put in its config (``agent_id`` / ``subagent_type``), else
-    the task's id and agent."""
-    config = view.state.config
-    agent_id, kind = config.get("agent_id"), config.get("subagent_type")
-    return {"agent_id": agent_id if isinstance(agent_id, str) and agent_id else view.task_id,
-            "agent_type": kind if isinstance(kind, str) and kind else view.state.agent}
+def _failure_kind(reason: str, detail: str) -> str:
+    """A failed model call as Claude Code's StopFailure ``error`` kind."""
+    if reason == "llm_truncated":
+        return "max_output_tokens"
+    if reason == "context_overflow":
+        return "invalid_request"
+    text = detail.lower()
+    return next((kind for pattern, kind in _FAILURE_KINDS if re.search(pattern, text)),
+                "unknown")
 
 
 def _text(message: Message) -> str:
     return "".join(b.text for b in message.content if isinstance(b, Text))
 
 
-def _remember(cache: OrderedDict[Any, Any], key: Any, value: Any) -> None:
-    cache[key] = value
-    cache.move_to_end(key)
-    while len(cache) > _KEEP:
-        cache.popitem(last=False)
+def _answered(messages: Sequence[Message]) -> list[Message]:
+    """``messages`` without the calls that have no result yet (a sub-agent's
+    hand-back being judged): a model refuses a call left unanswered."""
+    results = {b.call_id for m in messages for b in m.content if isinstance(b, ToolResult)}
+    out: list[Message] = []
+    for m in messages:
+        if m.role == "assistant" and any(u.id not in results for u in m.tool_uses):
+            content = [b for b in m.content
+                       if not (isinstance(b, ToolUse) and b.id not in results)]
+            if not content:
+                continue
+            m = msgspec.structs.replace(m, content=content)
+        out.append(m)
+    return out
 
 
 class Hooks(Extension):
@@ -154,7 +104,7 @@ class Hooks(Extension):
       (tests swap it).
     """
 
-    name = "hooks"
+    name = NAME
 
     def __init__(self, *, hooks: Mapping[str, Any] | None = None,
                  settings_files: Sequence[str | Path] = (),
@@ -164,254 +114,169 @@ class Hooks(Extension):
         for config in [*(read_settings(f) for f in settings_files), hooks or {}]:
             for event, ms in parse_hooks(config).items():
                 self.matchers.setdefault(event, []).extend(ms)
-        self.runner = runner
-        self.http_transport = http_transport
-        self._background: set[asyncio.Future[Any]] = set()
-        #: (task id, call id) -> (the input a PreToolUse hook rewrote the
-        #: call to, its verdict on the call): the rewritten call is gated
-        #: again, and the hook is not asked about its own rewrite.
-        self._rewrites: OrderedDict[tuple[str, str], tuple[dict[str, Any], Gate | None]] = \
-            OrderedDict()
-        #: PermissionRequest answers not yet folded into the task's state.
-        self._decisions: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
-        #: ``once`` hooks run in a step whose records are not folded yet.
-        self._ran_once: OrderedDict[tuple[str, str], bool] = OrderedDict()
-        #: Root tasks this process has started (a later pick-up elsewhere,
-        #: or after a restart, is a resume).
-        self._seen: OrderedDict[str, bool] = OrderedDict()
+        self._d = Dispatcher(self.matchers, runner, http_transport)
+        self._gates = ToolGates(self._d, self._stop)
+
+    @property
+    def runner(self) -> Runner:
+        """Runs one command hook."""
+        return self._d.runner
+
+    @runner.setter
+    def runner(self, runner: Runner) -> None:
+        self._d.runner = runner
+
+    @property
+    def http_transport(self) -> httpx.AsyncBaseTransport | None:
+        """The transport HTTP hooks are sent through."""
+        return self._d.http_transport
+
+    @http_transport.setter
+    def http_transport(self, transport: httpx.AsyncBaseTransport | None) -> None:
+        self._d.http_transport = transport
 
     # ------------------------------------------------------------ state
 
-    def initial_state(self) -> _State:
-        return _State()
+    def initial_state(self) -> HookState:
+        return HookState()
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
-        st = state if isinstance(state, _State) else _State()
-        if not isinstance(data, dict):
-            return st
-        if kind == "prompted":
-            return replace(st, prompted_through=int(data.get("through") or 0))
-        if kind == "stop_blocked":
-            since = int(data.get("since") or 0)
-            blocks = st.stop_blocks + 1 if since == st.stop_since else 1
-            return replace(st, stop_blocks=blocks, stop_since=since)
-        if kind == "started":
-            return replace(st, started=True)
-        if kind == "compacting":
-            return replace(st, compact_trigger=str(data.get("trigger") or "auto"))
-        if kind == "compact_seen":
-            return replace(st, compact_seen=int(data.get("through") or 0))
-        if kind == "mode":
-            return replace(st, mode=str(data.get("mode") or "") or None)
-        if kind == "once":
-            return replace(st, once=st.once | {str(data.get("key"))})
-        if kind == "permission":
-            decided = dict(st.permission)
-            decided[str(data.get("call_id"))] = {k: v for k, v in data.items() if k != "call_id"}
-            while len(decided) > _KEEP:
-                decided.pop(next(iter(decided)))
-            return replace(st, permission=decided)
-        return st
-
-    def _state(self, view: TaskView) -> _State:
-        st = view.ext_state(self.name)
-        return st if isinstance(st, _State) else _State()
-
-    # ------------------------------------------------------------ running
-
-    @staticmethod
-    def _cwd(view: TaskView) -> str | None:
-        return str(view.state.config.get("cwd") or "") or None
-
-    def _payload(self, event: str, view: TaskView, payload: Mapping[str, Any]) -> dict[str, Any]:
-        """Claude Code's common input fields, then the event's own. The root
-        task stands for Claude Code's conversation id."""
-        st = view.state
-        mode = self._state(view).mode or st.config.get("permission_mode")
-        out: dict[str, Any] = {
-            "session_id": st.root_id or st.task_id, "transcript_path": "",
-            "cwd": self._cwd(view) or "", "permission_mode": mode if isinstance(mode, str)
-            else "default", "hook_event_name": event, "task_id": st.task_id,
-        }
-        if st.parent_id is not None:
-            out.update(_agent(view))
-        out.update(payload)
-        return out
-
-    def _select(self, event: str, view: TaskView, payload: Mapping[str, Any],
-                call: ToolUse | None) -> list[HookCommand]:
-        """The hooks to run: matched on the event's subject, ``if`` met,
-        identical ones once, ``once`` hooks that have not run."""
-        subject_field = SUBJECT.get(event)
-        subject = payload.get(subject_field) if subject_field else None
-        done = self._state(view).once
-        seen: set[str] = set()
-        out: list[HookCommand] = []
-        for m in self.matchers.get(event, ()):
-            if not m.matches(subject if isinstance(subject, str) else None):
-                continue
-            for h in m.hooks:
-                if h.key in seen:
-                    continue
-                if h.type == "http" and event == "SessionStart":
-                    log.info("hooks: HTTP hooks do not run on SessionStart; %s skipped", h.url)
-                    continue
-                if h.condition is not None:
-                    if call is None or event not in TOOL_EVENTS:
-                        log.info("hooks: %s cannot test 'if' %r; the hook does not run",
-                                 event, h.condition.text)
-                        continue
-                    cwd = self._cwd(view) or os.getcwd()
-                    ctx = RuleContext(root=cwd, home=os.path.expanduser("~"), cwd=cwd)
-                    if not match(h.condition, call.name, call.input, ctx):
-                        continue
-                if h.once and (h.key in done or (view.task_id, h.key) in self._ran_once):
-                    continue
-                seen.add(h.key)
-                out.append(h)
-        return out
-
-    async def _one(self, hook: HookCommand, payload: dict[str, Any], cwd: str | None,
-                   view: TaskView, transcript: list[Message] | None) -> HookResult:
-        try:
-            if hook.type == "http":
-                return await run_http(hook, payload, self.http_transport)
-            if hook.type == "prompt":
-                return await run_prompt(hook, payload, view.complete, view.model, transcript)
-            return await self.runner(hook, payload, cwd)
-        except Exception as exc:  # a broken hook is a failed hook
-            log.exception("hook %r failed", hook.label)
-            return HookResult(exit_code=-1, stderr=f"{type(exc).__name__}: {exc}")
-
-    def _spawn(self, coro: Any) -> None:
-        task = asyncio.ensure_future(coro)
-        self._background.add(task)
-        task.add_done_callback(self._background.discard)
-
-    async def _run(self, event: str, view: TaskView, payload: Mapping[str, Any], *,
-                   call: ToolUse | None = None, transcript: list[Message] | None = None,
-                   record: bool = True) -> list[_Read]:
-        """Run the event's hooks at once (``async`` ones in the background)
-        and read their answers, in configuration order. ``record``: the
-        person is told about failures and ``systemMessage``s, and ``once``
-        hooks are remembered (off where records cannot be made)."""
-        hooks = self._select(event, view, payload, call)
-        if not hooks:
-            return []
-        full = self._payload(event, view, payload)
-        cwd = self._cwd(view)
-        for h in hooks:
-            if h.once:
-                _remember(self._ran_once, (view.task_id, h.key), True)
-                if record:
-                    view.record(self.name, "once", {"key": h.key})
-        for h in hooks:
-            if h.background:
-                self._spawn(self._one(h, full, cwd, view, transcript))
-        now = [h for h in hooks if not h.background]
-        results = await asyncio.gather(*(self._one(h, full, cwd, view, transcript)
-                                         for h in now))
-        out: list[_Read] = []
-        for hook, result in zip(now, results, strict=True):
-            if result.failed:
-                log.warning("%s hook %r failed (exit %s): %s", event, hook.label,
-                            result.exit_code, result.stderr.strip()[:500])
-                if hook.block_on_failure and event not in ("Stop", "SubagentStop"):
-                    result = HookResult(exit_code=2, stderr=result.stderr or "the hook failed")
-                elif record:
-                    view.notify(f"{event} hook failed: {result.stderr.strip()[:300]}")
-            read = _read(event, result)
-            message = read.data.get("systemMessage")
-            if record and isinstance(message, str) and message.strip():
-                view.notify(message.strip())
-            out.append(read)
-        return out
-
-    def _context(self, view: TaskView, kind: str, label: str, texts: Sequence[str]) -> None:
-        """Record what hooks added for the model, as ``<label>: <text>``
-        (after the open calls' results when calls are open)."""
-        for text in texts:
-            if text.strip():
-                view.record(self.name, kind, {"hook": label},
-                            message=user(f"{label}: {text.strip()}", origin="system"))
-
-    async def _stop_turn(self, view: TaskView, reason: str) -> None:
-        """``continue: false``: the turn ends (the person sees why)."""
-        if reason:
-            view.notify(reason)
-        if view.post is not None:
-            await view.post(Cancel(reason=reason or "stopped by a hook", turn_only=True))
+        return fold(state, kind, data)
 
     # ------------------------------------------------------------ start
 
     async def on_start(self, view: TaskView) -> None:
-        """SessionStart (``startup``, or ``resume`` on a pick-up this
-        process did not start) for a top-level task; SubagentStart the
-        first time a sub-agent starts. What they add reaches the model."""
-        st = self._state(view)
+        """SessionStart (``startup``) the first time a top-level task
+        starts; SubagentStart the first time a sub-agent starts. What they
+        add reaches the model. A pick-up by another worker or after a
+        restart is not a resume: that is a front end's
+        :data:`RESUMED_SIGNAL` (:meth:`on_event`)."""
+        st = self._d.state(view)
+        if "PostModelSwitch" in self.matchers and st.model is None:
+            view.record(self.name, "model_seen", {"model": view.model})
         if view.state.parent_id is not None:
             if st.started or "SubagentStart" not in self.matchers:
                 return
             view.record(self.name, "started", {"event": "SubagentStart"})
-            reads = await self._run("SubagentStart", view, _agent(view))
+            reads = await self._d.run("SubagentStart", view, agent_fields(view))
             for r in reads:
                 if r.block is not None:
                     view.notify(f"SubagentStart hook: {r.block}")
-            self._context(view, "context", "SubagentStart hook", [r.context for r in reads])
+            self._d.context(view, "context", "SubagentStart hook", [r.context for r in reads])
             return
-        fresh = view.task_id not in self._seen
-        _remember(self._seen, view.task_id, True)
-        if "SessionStart" not in self.matchers or (st.started and not fresh):
+        if "SessionStart" not in self.matchers or st.started:
             return
-        source = "resume" if st.started else "startup"
-        if not st.started:
-            view.record(self.name, "started", {"event": "SessionStart"})
-        reads = await self._run("SessionStart", view, {"source": source, "model": view.model})
-        self._start_context(view, source, reads)
+        view.record(self.name, "started", {"event": "SessionStart"})
+        reads = await self._d.run("SessionStart", view, {"source": "startup", "model": view.model})
+        self._start_context(view, "startup", reads)
 
-    def _start_context(self, view: TaskView, source: str, reads: Sequence[_Read]) -> None:
+    async def _resumed(self, view: TaskView) -> None:
+        """SessionStart (``resume``): a front end reopened a started task."""
+        if view.state.parent_id is not None or "SessionStart" not in self.matchers \
+                or not self._d.state(view).started:
+            return
+        reads = await self._d.run("SessionStart", view, {"source": "resume", "model": view.model})
+        self._start_context(view, "resume", reads)
+
+    def _start_context(self, view: TaskView, source: str, reads: Sequence[Read]) -> None:
         for r in reads:
             if r.block is not None:
                 view.notify(f"SessionStart hook: {r.block}")
-        self._context(view, "context", f"SessionStart hook ({source})",
-                      [r.context or r.text for r in reads])
+        self._d.context(view, "context", f"SessionStart hook ({source})",
+                        [r.context or r.text for r in reads])
 
     # ------------------------------------------------------------ reminders
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         """SessionStart (``compact``) after a compaction; UserPromptSubmit
-        before the first model call of a turn."""
+        before the model call that first carries the person's new messages."""
         out: list[Reminder] = []
         compaction = view.state.compaction
-        st = self._state(view)
+        st = self._d.state(view)
         if compaction is not None and compaction.through != st.compact_seen \
                 and view.state.parent_id is None and "SessionStart" in self.matchers:
             view.record(self.name, "compact_seen", {"through": compaction.through})
-            reads = await self._run("SessionStart", view, {"source": "compact",
-                                                           "model": view.model})
+            reads = await self._d.run("SessionStart", view, {"source": "compact",
+                                                              "model": view.model})
             for r in reads:
                 if r.block is not None:
                     view.notify(f"SessionStart hook: {r.block}")
             out.extend(Reminder(text=f"SessionStart hook (compact): {t}", kind="context")
                        for t in (r.context or r.text for r in reads) if t)
-        out.extend(await self._prompt_submit(view))
+        try:
+            out.extend(await self._prompt_submit(view))
+        except TurnFailed:
+            # The compaction's context is recorded as seen: keep what it
+            # added for the next turn's request.
+            for kept in out:
+                view.record(self.name, kept.kind, kept.data,
+                            message=user(kept.text, origin=kept.origin))
+            raise
+        out.extend(await self._tool_batch(view))
         return out
 
-    async def _prompt_submit(self, view: TaskView) -> list[Reminder]:
-        if "UserPromptSubmit" not in self.matchers or view.state.steps_in_turn:
+    async def _tool_batch(self, view: TaskView) -> list[Reminder]:
+        """PostToolBatch: once every call of the newest reply has its
+        result, before the model sees them. What a hook adds (or blocks
+        with) reaches the model; ``continue: false`` ends the turn."""
+        if "PostToolBatch" not in self.matchers or not view.state.steps_in_turn:
             return []
-        st = self._state(view)
+        state = view.state
+        at = next((i for i in range(len(state.messages) - 1, -1, -1)
+                   if state.messages[i].role == "assistant"), None)
+        if at is None or not state.messages[at].tool_uses:
+            return []
+        results = {b.call_id: b for m in state.messages[at + 1:] if m.role == "user"
+                   for b in m.content if isinstance(b, ToolResult)}
+        uses = state.messages[at].tool_uses
+        through = state.message_seqs[at] if at < len(state.message_seqs) else 0
+        if through <= self._d.state(view).batched_through or \
+                any(u.id not in results for u in uses):
+            return []
+        view.record(self.name, "batched", {"through": through})
+        reads = await self._d.run("PostToolBatch", view, {"tool_calls": [
+            {"tool_name": u.name, "tool_input": u.input, "tool_use_id": u.id,
+             "tool_response": results[u.id].text} for u in uses]})
+        for r in reads:
+            if r.stop is not None:
+                raise TurnFailed("stopped_by_hook", r.stop or "a PostToolBatch hook stopped "
+                                                              "the turn")
+        return [Reminder(text=f"PostToolBatch hook: {t}", kind="context")
+                for r in reads for t in (r.block, r.context) if t]
+
+    async def _prompt_submit(self, view: TaskView) -> list[Reminder]:
+        # Before every model call, not only a turn's first: a message sent
+        # mid-turn is checked before the model sees it, and once only.
+        if "UserPromptSubmit" not in self.matchers:
+            return []
+        st = self._d.state(view)
+        after = st.prompted_through
+        if after is None:
+            # First look at this task (the hook was added since, or the task
+            # predates the record): what the model already answered stays.
+            replied = [seq for seq, m in zip(view.state.message_seqs, view.state.messages,
+                                             strict=False) if m.role == "assistant"]
+            compaction = view.state.compaction
+            after = max([0, *replied[-1:], *([compaction.through] if compaction else [])])
         new = [(seq, m) for seq, m in zip(view.state.message_seqs, view.state.messages,
                                            strict=False)
-               if m.role == "user" and m.origin == "human" and seq > st.prompted_through]
+               if m.role == "user" and m.origin == "human" and seq > after]
         if not new:
             return []
         through = new[-1][0]
         prompt = "\n\n".join(m.text for _, m in new)
-        reads = await self._run("UserPromptSubmit", view, {"prompt": prompt})
+        reads = await self._d.run("UserPromptSubmit", view, {"prompt": prompt})
         view.record(self.name, "prompted", {"through": through})
         for r in reads:
             if r.block is not None:
+                # A blocked prompt is erased, as Claude Code does: the next
+                # turn's request never carries it.
+                # What a command or skill expanded them into (``inline``
+                # text recorded after them) goes too.
+                first = new[0][0]
+                view.erase_messages(sorted({seq for seq, m in zip(
+                    view.state.message_seqs, view.state.messages, strict=False)
+                    if seq >= first and m.role == "user" and m.origin in ("human", "inline")}))
                 raise TurnFailed("blocked_by_hook", r.block)
             if r.stop is not None:
                 raise TurnFailed("stopped_by_hook", r.stop or "a UserPromptSubmit hook "
@@ -426,48 +291,7 @@ class Hooks(Extension):
         the person (firmly), ``allow`` vouches for it (a deny or ask rule
         still wins), ``updatedInput`` rewrites it. A sub-agent's hand-back
         is its SubagentStop: a block keeps it working."""
-        rewrite = self._rewrites.get((view.task_id, call.id))
-        if rewrite is not None and rewrite[0] == call.input:
-            return rewrite[1]
-        if call.name == HANDBACK_TOOL and view.state.parent_id is not None:
-            message = call.input.get("message")
-            reason = await self._stop("SubagentStop", view,
-                                      message if isinstance(message, str) else "")
-            if reason is not None:
-                return Deny(reason=reason)
-        reads = await self._run("PreToolUse", view, {
-            "tool_name": call.name, "tool_input": call.input, "tool_use_id": call.id}, call=call)
-        decision: str | None = None
-        reason = ""
-        updated: dict[str, Any] | None = None
-        contexts: list[str] = []
-        for r in reads:
-            if r.stop is not None:
-                await self._stop_turn(view, r.stop)
-                return Deny(reason=r.stop or "stopped by a hook")
-            chosen = r.specific.get("permissionDecision")
-            if chosen is None and r.data.get("decision") == "approve":
-                chosen = "allow"
-            why = str(r.specific.get("permissionDecisionReason") or r.data.get("reason") or "")
-            if chosen == "deny":
-                return Deny(reason=why or "denied by a hook")
-            if r.block is not None:
-                return Deny(reason=r.block)
-            if chosen == "ask" or (chosen == "allow" and decision != "ask"):
-                decision, reason = chosen, why
-            if isinstance(r.specific.get("updatedInput"), dict):
-                updated = dict(r.specific["updatedInput"])
-            contexts.append(r.context)
-        self._context(view, "context", f"PreToolUse hook ({call.name})", contexts)
-        verdict: Gate | None = None
-        if decision == "ask":
-            verdict = Ask(prompt=reason or f"A hook asks to confirm {call.name}", firm=True)
-        elif decision == "allow":
-            verdict = Allow(approve=True)
-        if updated is not None and updated != call.input:
-            _remember(self._rewrites, (view.task_id, call.id), (updated, verdict))
-            return Rewrite(input=updated)
-        return verdict
+        return await self._gates.before_tool(view, call)
 
     async def resolve_ask(self, view: TaskView, call: ToolUse,
                           asks: Sequence[Ask]) -> Gate | None:
@@ -475,45 +299,8 @@ class Hooks(Extension):
         optionally with ``updatedInput``; ``deny`` with a ``message``, and
         ``interrupt`` to stop the turn). The answer is recorded, so a call
         gated again is not asked about twice."""
-        if "PermissionRequest" not in self.matchers:
-            return None
-        decided = self._state(view).permission.get(call.id) \
-            or self._decisions.get((view.task_id, call.id))
-        if decided is None:
-            decided = await self._permission_request(view, call)
-            _remember(self._decisions, (view.task_id, call.id), decided)
-            view.record(self.name, "permission", {"call_id": call.id, **decided})
-            if decided.get("behavior") == "deny" and decided.get("interrupt"):
-                await self._stop_turn(view, "")
-        behavior = decided.get("behavior")
-        if behavior == "deny":
-            return Deny(reason=str(decided.get("message") or "denied by a hook"))
-        if behavior != "allow":
-            return None
-        wanted = decided.get("input")
-        if isinstance(wanted, dict) and wanted != call.input:
-            return Rewrite(input=wanted)
-        return Allow()
+        return await self._gates.resolve_ask(view, call)
 
-    async def _permission_request(self, view: TaskView, call: ToolUse) -> dict[str, Any]:
-        reads = await self._run("PermissionRequest", view, {
-            "tool_name": call.name, "tool_input": call.input, "tool_use_id": call.id}, call=call)
-        out: dict[str, Any] = {"behavior": None}
-        for r in reads:
-            if r.block is not None:
-                return {"behavior": "deny", "message": r.block}
-            answer = r.specific.get("decision")
-            if not isinstance(answer, dict):
-                continue
-            if answer.get("behavior") == "deny":
-                return {"behavior": "deny",
-                        "message": str(answer.get("message") or "denied by a hook"),
-                        "interrupt": bool(answer.get("interrupt"))}
-            if answer.get("behavior") == "allow":
-                wanted = answer.get("updatedInput")
-                out = {"behavior": "allow", "input": wanted if isinstance(wanted, dict)
-                       else None}
-        return out
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
         """PostToolUse (PostToolUseFailure for an error result): a block or
@@ -527,7 +314,7 @@ class Hooks(Extension):
         else:
             event = "PostToolUse"
             payload = {**base, "tool_response": {"text": text, "is_error": False}}
-        reads = await self._run(event, view, payload, call=call)
+        reads = await self._d.run(event, view, payload, call=call)
         notes: list[str] = []
         for r in reads:
             notes.extend(n for n in (r.block, r.context) if n)
@@ -539,8 +326,8 @@ class Hooks(Extension):
                     shown = replaced if isinstance(replaced, str) else json.dumps(replaced)
                     output = msgspec.structs.replace(output, content=[Text(text=shown)])
             if r.stop is not None:
-                await self._stop_turn(view, r.stop)
-        self._context(view, "feedback", f"{event} hook ({call.name})", notes)
+                await self._d.stop_turn(view, r.stop)
+        self._d.context(view, "feedback", f"{event} hook ({call.name})", notes)
         return output
 
     # ------------------------------------------------------------ compaction
@@ -552,7 +339,7 @@ class Hooks(Extension):
         if not {"PreCompact", "PostCompact"} & self.matchers.keys():
             return None
         view.record(self.name, "compacting", {"trigger": trigger})
-        reads = await self._run("PreCompact", view, {
+        reads = await self._d.run("PreCompact", view, {
             "trigger": trigger, "custom_instructions": instructions or None})
         added: list[str] = []
         for r in reads:
@@ -570,8 +357,8 @@ class Hooks(Extension):
             self._notify(view, event)
         elif isinstance(event, Compacted):
             if "PostCompact" in self.matchers:
-                reads = await self._run("PostCompact", view, {
-                    "trigger": self._state(view).compact_trigger,
+                reads = await self._d.run("PostCompact", view, {
+                    "trigger": self._d.state(view).compact_trigger,
                     "compact_summary": event.summary})
                 for r in reads:
                     if r.text:
@@ -579,14 +366,68 @@ class Hooks(Extension):
         elif isinstance(event, ExtensionRecorded):
             if event.extension == "permissions" and event.kind == "classified":
                 await self._denied(view, event.data)
-            elif event.extension == "permissions" and event.kind in ("mode", "plan_exit") \
-                    and isinstance(event.data, dict):
-                view.record(self.name, "mode", {"mode": event.data.get("mode")})
+            elif event.extension == SHELL_PLUGIN and event.kind == "cwd":
+                await self._cwd_changed(view, event.data)
+            elif event.extension == "core" and event.kind == "turn_failed":
+                data = event.data if isinstance(event.data, dict) else {}
+                await self._stop_failure(view, str(data.get("reason") or ""),
+                                         str(data.get("detail") or ""))
         elif isinstance(event, TaskEnded):
+            if event.status == "failed":
+                reason, _, detail = event.error.partition(": ")
+                await self._stop_failure(view, reason, detail)
             if view.state.parent_id is None and "SessionEnd" in self.matchers:
-                await self._run("SessionEnd", view, {"reason": "other"}, record=False)
+                await self._d.run("SessionEnd", view, {"reason": "other"}, record=False)
         elif isinstance(event, ModelReplied):
             await self._model_stopped(view, event)
+        elif isinstance(event, InputTaken):
+            signals = [i.body for i in event.items if isinstance(i.body, External)]
+            if any(b.name == CONFIG_SIGNAL and isinstance(b.data, dict) and b.data.get("model")
+                   for b in signals):
+                await self._model_switched(view, event)
+            if any(b.name == RESUMED_SIGNAL for b in signals):
+                await self._resumed(view)
+
+    async def _cwd_changed(self, view: TaskView, data: Any) -> None:
+        """CwdChanged, when a command left the shell in another directory
+        (the shell plugin's ``cwd`` record; empty: back at the start)."""
+        if "CwdChanged" not in self.matchers or not isinstance(data, dict):
+            return
+        new = str(data.get("cwd") or "") or self._d.cwd(view) or ""
+        old = self._d.state(view).cwd or self._d.cwd(view) or ""
+        if new == old:
+            return
+        view.record(self.name, "cwd_seen", {"cwd": new})
+        await self._d.run("CwdChanged", view, {"old_cwd": old, "new_cwd": new})
+
+    async def _stop_failure(self, view: TaskView, reason: str, detail: str) -> None:
+        """StopFailure, when a turn ends on a model call that failed (not a
+        hook or a limit): side effects only, its answer is not read."""
+        if "StopFailure" not in self.matchers or reason not in _MODEL_FAILURES \
+                or view.state.parent_id is not None:
+            return
+        last = next((_text(m) for m in reversed(view.state.messages)
+                     if m.role == "assistant"), "")
+        payload: dict[str, Any] = {"error": _failure_kind(reason, detail),
+                                   "error_details": detail or reason}
+        if last:
+            payload["last_assistant_message"] = last
+        await self._d.run("StopFailure", view, payload, record=False)
+
+    async def _model_switched(self, view: TaskView, event: InputTaken) -> None:
+        """PostModelSwitch, after a front end switched the task's model:
+        what a hook adds reaches the model with its next request."""
+        to = next(str(i.body.data["model"]) for i in event.items
+                  if isinstance(i.body, External) and i.body.name == CONFIG_SIGNAL
+                  and isinstance(i.body.data, dict) and i.body.data.get("model"))
+        if "PostModelSwitch" not in self.matchers:
+            return
+        before = self._d.state(view).model
+        view.record(self.name, "model_seen", {"model": to})
+        reads = await self._d.run("PostModelSwitch", view, {
+            "from_model": before or None, "to_model": to, "requested_model": to,
+            "source": "sdk"})
+        self._d.context(view, "context", "PostModelSwitch hook", [r.context for r in reads])
 
     def _notify(self, view: TaskView, event: Waiting) -> None:
         """Notification, in the background (side effects only)."""
@@ -598,7 +439,7 @@ class Hooks(Extension):
             kind = "permission_prompt"
         else:
             message, kind = "Noeta has a question for you", "elicitation_dialog"
-        self._spawn(self._run("Notification", view, {
+        self._d.spawn(self._d.run("Notification", view, {
             "message": message, "notification_type": kind}, record=False))
 
     async def _denied(self, view: TaskView, data: Any) -> None:
@@ -612,7 +453,7 @@ class Hooks(Extension):
                      for u in m.tool_uses if u.id == wanted), None)
         if call is None:
             return
-        reads = await self._run("PermissionDenied", view, {
+        reads = await self._d.run("PermissionDenied", view, {
             "tool_name": call.name, "tool_input": call.input, "tool_use_id": call.id,
             "reason": str(data.get("reason") or "")}, call=call)
         if any(r.specific.get("retry") is True for r in reads):
@@ -635,7 +476,7 @@ class Hooks(Extension):
         """Run Stop / SubagentStop hooks; the reason to go on, or ``None``."""
         if event not in self.matchers:
             return None
-        st = self._state(view)
+        st = self._d.state(view)
         since = max((seq for seq, m in zip(view.state.message_seqs, view.state.messages,
                                             strict=False)
                      if m.role == "user" and m.origin == "human"), default=0)
@@ -647,8 +488,8 @@ class Hooks(Extension):
         payload: dict[str, Any] = {"stop_hook_active": blocks > 0,
                                    "last_assistant_message": last}
         if event == "SubagentStop":
-            payload.update(_agent(view), agent_transcript_path="")
-        reads = await self._run(event, view, payload, transcript=list(view.state.messages))
+            payload.update(agent_fields(view), agent_transcript_path="")
+        reads = await self._d.run(event, view, payload, transcript=_answered(view.state.messages))
         if any(r.stop is not None for r in reads):
             return None
         reasons = [n for r in reads for n in (r.block, r.context) if n]

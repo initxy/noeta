@@ -21,7 +21,7 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | id | name | type | required | enum / default / limits | noeta today |
 |---|---|---|---|---|---|
 | `tool.Edit.p.file_path` | `file_path` | string | yes | absolute path of the file to change | covered (stated; relative paths still accepted) |
-| `tool.Edit.p.old_string` | `old_string` | string | yes | text to replace | covered (noeta also rejects an empty string) |
+| `tool.Edit.p.old_string` | `old_string` | string | yes | text to replace | covered (an empty string creates the file: `tool.Edit.9`) |
 | `tool.Edit.p.new_string` | `new_string` | string | yes | replacement; must differ from `old_string` | covered |
 | `tool.Edit.p.replace_all` | `replace_all` | boolean | no | default `false` (schema `default: false`); replace every occurrence | covered |
 
@@ -34,16 +34,27 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | `tool.Edit.3` | `old_string` must match exactly, indentation included, and must be unique; otherwise the edit fails. | covered |
 | `tool.Edit.4` | Strip `Read`'s line prefix (line number and tab) before matching. | covered |
 | `tool.Edit.5` | `replace_all: true` replaces every occurrence. | covered |
-| `tool.Edit.6` | Observed: an `Edit` succeeded on files the model had only seen through a Bash `cat` in the same conversation (`m1/0042`, `m1/0066`), i.e. a shell read satisfies the read-first check. | contradicts: noeta requires a `Read` tool call |
+| `tool.Edit.6` | Observed: an `Edit` succeeded on files the model had only seen through a Bash `cat` in the same conversation (`m1/0042`, `m1/0066`). The bundle's mechanism: the read-first check is skipped when the write is allowed outright by the permissions (mode or rule), for all but older Claude models. | covered (skipped when the permission layer allowed the call outright, `ToolContext.allowed_outright`; kept for older Claude models and without a permission layer; `deviations.md`) |
 | `tool.Edit.7` | The description says nothing about outside-workspace paths, diffs or snippets. | covered |
+
+## Runtime behaviour (2.1.312 bundle)
+
+| id | rule | noeta today |
+|---|---|---|
+| `tool.Edit.8` | A file changed on disk since the read: when the write is allowed outright and `old_string` still picks one place (or `replace_all`), the edit applies and the result says the file holds unseen changes; otherwise re-read. | covered |
+| `tool.Edit.9` | An empty `old_string` creates the file (parents too) or fills an empty one; refused over content. No read needed. | covered |
+| `tool.Edit.10` | Not found: the error repeats `old_string`; a missing file gets `Read`'s answer (working directory, a guess); an `.ipynb` is sent to `NotebookEdit`; a file over 1 GB is refused. | covered |
+| `tool.Edit.11` | Straight quotes match curly ones and `new_string` takes the file's quote style; `\uXXXX` escapes match their characters both ways. | covered |
+| `tool.Edit.12` | Deleting (`new_string` empty) takes the following line break along. CRLF files keep CRLF. | covered |
 
 ## Result shape
 
 | id | case | shape | noeta today |
 |---|---|---|---|
 | `tool.Edit.r.1` | success | one line: the file (absolute path) was updated successfully, followed by a parenthesised note that the file state is current in context and need not be read back. No snippet, no diff. | covered |
-| `tool.Edit.r.2` | success on the project `CLAUDE.md` | the same line **without** the "file state is current" note (`m1/0066`) | covered for `NOETA.md` (`deviations.md`) |
+| `tool.Edit.r.2` | success on the project `CLAUDE.md` | the same line **without** the "file state is current" note (`m1/0066`). The bundle's rule: the note follows only when the model had the whole file in view, unchanged, before the edit (the `m1` file had changed since it was loaded; the r2 recording's `m1/0071` CLAUDE.md edit after a whole read has the note), and stays off for later edits. | covered |
 | `tool.Edit.r.3` | two edits of one file in one turn | each call gets its own identical success line | covered |
+| `tool.Edit.r.4` | `replace_all` | a different line: the file was updated and every occurrence replaced | covered |
 
 ## Variants
 

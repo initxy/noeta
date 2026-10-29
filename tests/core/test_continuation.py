@@ -158,7 +158,7 @@ async def test_a_fork_answers_the_calls_its_source_still_had_open(store: SqliteS
 
     def fork(request: Any) -> Any:
         return reply("", ("Probe", {}), ("Spawn", {"prompt": "you are the fork", "from": tid,
-                                                    "through": 5}))
+                                                    "through": 6}))
 
     p.add(fork, reply("done"))
     await rt.run_until_idle()

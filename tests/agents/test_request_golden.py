@@ -30,7 +30,7 @@ from noeta.core.client import Client
 from noeta.core.runner import Runtime
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolUse, Usage
 from noeta.plugins.memory import memory_dir_for
-from noeta.toolkit.context import project_slug
+from noeta.toolkit.paths import project_slug
 
 GOLDEN = Path(__file__).parent / "golden" / "requests.json"
 MODEL = "claude-sonnet-4-6"

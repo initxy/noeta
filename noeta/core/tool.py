@@ -9,6 +9,8 @@ from typing import Any, Literal, Protocol
 import msgspec
 
 from noeta.core.execenv import ExecEnv
+from noeta.core.holds import Release
+from noeta.core.records import CoreNotices
 from noeta.core.types import Display, Image, Struct, Text, ToolReference
 
 
@@ -36,6 +38,9 @@ class ToolOutput(Struct):
     #: End the turn once this reply's results land, with this text as the
     #: turn's answer: no further model call (a sub-agent's hand-back).
     end_turn: str | None = None
+    #: Send the result as a list of content blocks even when it is plain
+    #: text (``ToolResult.block_list``).
+    block_list: bool = False
 
 
 def text_output(text: str, *, is_error: bool = False, **meta: Any) -> ToolOutput:
@@ -43,14 +48,15 @@ def text_output(text: str, *, is_error: bool = False, **meta: Any) -> ToolOutput
 
 
 @dataclass
-class ToolContext:
+class ToolContext(CoreNotices):
     task_id: str
     call_id: str
     env: ExecEnv
     #: Folded state of every extension, by extension name (read only).
     state: Mapping[str, Any]
     #: Record ``(extension, kind, data)``; the runner appends it as an
-    #: ``ExtensionRecorded`` just before the call's ``ToolFinished``.
+    #: ``ExtensionRecorded`` just before the call's ``ToolFinished``. Raises
+    #: ``ValueError`` for a ``core`` record of a kind the core does not know.
     record: Callable[[str, str, Any], None]
     #: Directory for full outputs too large to return inline, or ``None``.
     spill_dir: str | None = None
@@ -61,19 +67,29 @@ class ToolContext:
     #: never makes a second child.
     spawn: Callable[..., str] | None = None
     #: Post to this task's own inbox from outside a step (a background job
-    #: finishing), or with ``task_id=`` to another task of the same tree (the
-    #: root, once the spawner has ended). Wakes the task if it is waiting.
+    #: finishing), or with ``task_id=`` to any other task of its tenant (the
+    #: root once the spawner has ended; another conversation ``SendMessage``
+    #: writes to, as Claude Code messages its other open sessions); another
+    #: tenant's task raises ``UnknownTask``. Wakes the task if it is waiting;
+    #: idempotent with a ``dedupe_key=``; ``forward_if_ended=True`` sends it
+    #: to the root instead when the task has ended (``Post.forward_if_ended``).
     post: Callable[..., Awaitable[None]] | None = None
     #: The root task's id (background jobs notify the spawner, then the root).
     root_id: str = ""
     #: ``await hold()`` keeps this task tree with this worker until the
     #: returned release is awaited (``Runtime.hold``): for what lives only in
-    #: this process, e.g. a background job.
-    hold: Callable[[], Awaitable[Callable[[], Awaitable[None]]]] | None = None
+    #: this process, e.g. a background job. The release's ``tree`` is the
+    #: hold: its worker and epoch, and ``on_lost`` to stop with it. Raises
+    #: ``HeldElsewhere`` while another worker holds the tree or runs one of
+    #: its tasks.
+    hold: Callable[[], Awaitable[Release]] | None = None
     #: ``await tasks(parent_id=..., status=..., limit=...)``: rows of the
-    #: store's task table (``Store.tasks``), e.g. to list other tasks a
-    #: message could go to.
+    #: store's task table (``Store.tasks``) of this task's tenant, e.g. to
+    #: list other tasks a message could go to.
     tasks: Callable[..., Awaitable[list[Any]]] | None = None
+    #: ``await task(task_id)``: the store's row of one task of this task's
+    #: tenant, ``None`` when there is none.
+    task: Callable[[str], Awaitable[Any]] | None = None
     extras: dict[str, Any] = field(default_factory=dict)
     #: The model made this call (the runner's calls), so what earlier calls
     #: returned is in its conversation; ``False`` when an extension runs a
@@ -82,6 +98,12 @@ class ToolContext:
     #: A person allowed this call at its approval prompt (rather than no
     #: extension asking).
     approved: bool = False
+    #: A permission layer allowed this call by its settings (a mode, an
+    #: allow rule) and nobody was asked (``Allow.outright``). ``False`` where
+    #: no permission layer judges calls.
+    allowed_outright: bool = False
+    #: The model the task runs on (``""`` when not known).
+    model: str = ""
     #: ``prompt(name, default)``: the task's text for a named prompt
     #: (``noeta.core.prompts``).
     prompt: Callable[[str, str], str] = field(default=lambda _name, default: default)
@@ -89,34 +111,49 @@ class ToolContext:
     #: ``await count_tokens(text)``: the provider's exact token count of one
     #: user message holding ``text``; ``None`` when it cannot count.
     count_tokens: Callable[[str], Awaitable[int | None]] | None = None
+    #: ``serves_queue(queue)``: whether a child staged on ``queue`` could run
+    #: now (``TaskView.serves_queue``); one that could not is dropped with
+    #: the call's result. ``None`` takes every queue.
+    serves_queue: Callable[[str], bool] | None = None
 
-    def notify(self, text: str, *, kind: str | None = None, data: Any = None) -> None:
-        """Tell the person ``text``; front ends show it, the model never sees
-        it (a ``core`` / ``notice`` record). ``kind`` / ``data``: the same as
-        structured data for front ends that render it."""
-        self.record("core", "notice", notice_data(text, kind, data))
-
-    def set_timer(self, name: str, at: float, text: str = "") -> None:
-        """Wake the task at ``at`` once it is idle, ``text`` as its next
-        message (``TaskView.set_timer``)."""
-        self.record("core", "timer", {"name": name, "at": at, "text": text})
-
-    def clear_timer(self, name: str) -> None:
-        self.record("core", "timer_cleared", {"name": name})
-
-
-def notice_data(text: str, kind: str | None = None, data: Any = None) -> dict[str, Any]:
-    """A ``core`` / ``notice`` record's data: ``text``, and for structured
-    news its ``kind`` and ``data``."""
-    out: dict[str, Any] = {"text": text}
-    if kind:
-        out["kind"] = kind
-    if data is not None:
-        out["data"] = data
-    return out
+    @property
+    def idempotency_key(self) -> str:
+        """``<task id>:<call id>``: the same for every run of this call on
+        any worker (a re-run after a crash, a late run on a worker that
+        froze). Pass it to an outside system that can drop a repeat (an HTTP
+        ``Idempotency-Key``, MCP's ``_meta``), or look the outcome up by it
+        in ``recover``."""
+        return f"{self.task_id}:{self.call_id}"
 
 
 class Tool(Protocol):
+    """A tool the model can call.
+
+    Optional members, read with their default when a tool leaves them out:
+
+    * ``deferred: bool = False`` — named to the model by name only
+      (``TaskView.deferred_tool_names``) and sent with ``defer_loading``; the
+      ``tool_search`` plugin withholds it until the model loads it.
+    * ``listed_last: bool = False`` — sent after the other tools (keeps a
+      changing set of tools at the end of the cached prefix).
+    * ``run_last: bool = False`` — runs after the reply's other calls
+      (delegation).
+    * ``async resume(input, ctx, outcome) -> ToolOutput`` — required of a
+      tool that parks: ``outcome`` is the ``Answer`` for a question, or
+      ``{child_id: ChildEnded}`` for children; ``None`` means the wait was
+      withdrawn (the turn was stopped).
+    * ``retry_safe: bool = False`` — running it again changes nothing
+      outside the call (a read): a call that a crash left unfinished runs
+      again (up to :data:`MAX_ATTEMPTS` starts) instead of being answered
+      "outcome unknown".
+    * ``async recover(input, ctx) -> ToolOutput | None`` — for a call that a
+      crash left unfinished: its result, looked up by
+      ``ctx.idempotency_key`` (or got by running it again where the outside
+      system drops a repeat of that key); ``None`` when the outcome cannot
+      be told (then a ``retry_safe`` tool runs again, any other is answered
+      "outcome unknown"). Asked before ``retry_safe``.
+    """
+
     name: str
     #: The model-facing description: the single source of the tool's
     #: semantics. Never restated in the system prompt.
@@ -132,11 +169,13 @@ class Tool(Protocol):
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput: ...
 
 
-class Resumable(Protocol):
-    """A tool that parks implements ``resume``. ``outcome`` is the
-    ``Answer`` for a question, or ``{child_id: ChildEnded}`` for children;
-    ``None`` means the wait was withdrawn (the turn was stopped)."""
+#: Starts of a ``retry_safe`` call before a crash during it is answered
+#: "outcome unknown" anyway (a call that kills its worker is not run forever).
+MAX_ATTEMPTS = 3
 
-    async def resume(
-        self, input: dict[str, Any], ctx: ToolContext, outcome: Any
-    ) -> ToolOutput: ...
+
+def tool_flag(tool: Tool,
+              name: Literal["deferred", "listed_last", "run_last", "retry_safe"]) -> bool:
+    """One of ``tool``'s optional flags (see :class:`Tool`); ``False`` when
+    the tool leaves it out."""
+    return bool(getattr(tool, name, False))

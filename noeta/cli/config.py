@@ -13,46 +13,73 @@ win. The plugin part of ``config.toml``::
     add_plugins = ["my_plugin", {hooks = {}}]  # after the agent file's own
     [agents."*"]               # every agent
     add_plugins = []
+
+    [channels.chat_bridge]     # a channel's arguments; run by `noeta worker` / `noeta serve`
+    token = "{env:CHAT_TOKEN}"
 """
 
 from __future__ import annotations
 
-import contextlib
 import dataclasses
+import functools
 import logging
 import os
-import secrets
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from noeta.agents.agent_files import (
+    AgentFile,
     PluginEntry,
     PluginSetting,
     parse_plugin_list,
 )
+from noeta.cli import home_dir
+from noeta.cli.claude_plugins import ClaudePlugin, find_claude_plugins, plugin_settings
+from noeta.cli.plugin_policy import plugin_policy
 from noeta.cli.settings_files import (
     FileSettings,
     apply_env,
     managed_dir,
     permission_arguments,
-    settings_files,
+    settings_layers,
 )
 from noeta.cli.settings_files import load as load_file_settings
+from noeta.cli.trust import (
+    PROJECT_GATED_DIRS,
+    project_trusted,
+    untrusted_notice,
+)
+from noeta.cli.trust import trust_project as trust_project
 from noeta.core import models, registry
+from noeta.core.events import DEFAULT_TENANT
 from noeta.core.execenv import ExecEnv
 from noeta.core.provider import Provider
+from noeta.toolkit.paths import make_tenant_temp_dir
 from noeta.toolkit.sandbox import SandboxSettings
+from noeta.toolkit.tenant_fence import TenantFence, store_files
 
 if TYPE_CHECKING:
+    from noeta.core.agent import Agent
+    from noeta.core.channel import Channel
     from noeta.core.loop.state import TaskState
     from noeta.host.local import LocalApp
 
 log = logging.getLogger("noeta.cli")
 
-HOME = Path(os.environ.get("NOETA_HOME") or Path.home() / ".noeta")
+
+#: The built-in providers and the variable each reads a key from when none
+#: is given (``None``: none).
+_KEY_ENV: dict[str, str | None] = {
+    "anthropic": "ANTHROPIC_API_KEY", "openai_compat": "OPENAI_API_KEY",
+    "openai_responses": None,
+}
+
+
+class MissingAPIKey(ValueError):
+    """No API key for the configured provider; the message names where to set one."""
 
 
 @dataclass
@@ -77,82 +104,56 @@ class Settings:
     plugins: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: Per agent name (``"*"``: every agent): more plugins, after its own.
     add_plugins: dict[str, tuple[PluginEntry, ...]] = field(default_factory=dict)
+    #: Per channel name: its arguments (``enabled = false`` turns it off).
+    channels: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: ``[server]``: ``noeta serve`` / ``noeta worker`` switches
+    #: (``shared_os_user_tenants``, ``dirs``).
+    server: dict[str, Any] = field(default_factory=dict)
 
     def make_provider(self) -> Provider:
+        """Raises :class:`MissingAPIKey` when no key is set for a built-in
+        provider."""
+        if not self.api_key and self.provider in _KEY_ENV:
+            fallback = _KEY_ENV[self.provider]
+            if not (fallback and os.environ.get(fallback)):
+                also = f" ({fallback} is read too)" if fallback else ""
+                raise MissingAPIKey(
+                    f"no API key for the {self.provider} provider: set NOETA_API_KEY{also}, "
+                    f"or api_key in {home_dir.HOME / 'config.toml'}")
         kw: dict[str, Any] = {}
         if self.extra_headers:
             kw["extra_headers"] = dict(self.extra_headers)
         if self.provider == "anthropic":
-            kw["device_id"] = device_id()
+            kw["device_id"] = home_dir.device_id()
         return registry.provider(self.provider, base_url=self.base_url, api_key=self.api_key,
                                  **kw)
 
     @property
     def store_url(self) -> str:
-        return self.store or f"sqlite:///{HOME / 'tasks.db'}"
+        return self.store or f"sqlite:///{home_dir.HOME / 'tasks.db'}"
 
 
-def device_id() -> str | None:
-    """This machine's random id, made on first use (``~/.noeta/device_id``):
-    the stable device id Claude Code sends in ``metadata.user_id``. ``None``
-    when it cannot be kept (the provider then uses one per process)."""
-    path = HOME / "device_id"
-    try:
-        text = path.read_text("utf-8").strip()
-        if text:
-            return text
-    except OSError:
-        pass
-    value = secrets.token_hex(32)
-    try:
-        HOME.mkdir(parents=True, exist_ok=True)
-        path.write_text(value + "\n", "utf-8")
-    except OSError:
-        return None
-    return value
-
-
-def server_token(*, create: bool = False) -> str | None:
-    """The bearer token of ``noeta serve``: ``NOETA_SERVER_TOKEN``, else the
-    one kept in ``~/.noeta/server-token`` (owner-only), made when
-    ``create`` and missing."""
-    if os.environ.get("NOETA_SERVER_TOKEN"):
-        return os.environ["NOETA_SERVER_TOKEN"]
-    path = HOME / "server-token"
-    try:
-        text = path.read_text("utf-8").strip()
-        if text:
-            return text
-    except OSError:
-        pass
-    if not create:
-        return None
-    value = secrets.token_urlsafe(32)
-    HOME.mkdir(parents=True, exist_ok=True)
-    with contextlib.suppress(FileNotFoundError):
-        path.unlink()
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(value + "\n")
-    return value
-
-
-def file_settings(cwd: str | None) -> FileSettings:
+def file_settings(cwd: str | None, *, sources: Collection[str] | None = None,
+                  flag: Path | None = None) -> FileSettings:
     """The settings files for a front end started in ``cwd``
-    (:mod:`noeta.cli.settings_files`), the project's once it is trusted."""
+    (:mod:`noeta.cli.settings_files`), the project's once it is trusted;
+    ``sources`` and ``flag`` are ``--setting-sources`` and ``--settings``."""
     trusted = bool(cwd) and project_trusted(str(cwd))
-    return load_file_settings(settings_files(cwd, noeta_home=HOME, trusted=trusted,
-                                             managed=managed_dir()))
+    layers = settings_layers(cwd, noeta_home=home_dir.HOME, trusted=trusted, managed=managed_dir(),
+                             sources=sources, flag=flag)
+    return load_file_settings([p for p, _ in layers], [k for _, k in layers])
 
 
-def load_settings(*, cwd: str | None = None, **overrides: Any) -> Settings:
+def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = None,
+                  flag: Path | None = None, **overrides: Any) -> Settings:
     """``cwd``: where the front end runs; its settings files set
     environment variables (applied here, before the rest is read) and the
-    model when nothing else does."""
-    found = file_settings(cwd)
+    model when nothing else does. ``sources`` / ``flag``: as
+    :func:`file_settings`."""
+    found = file_settings(cwd, sources=sources, flag=flag)
     apply_env(found)
     data: dict[str, Any] = {}
-    path = HOME / "config.toml"
+    path = home_dir.HOME / "config.toml"
     if path.is_file():
         data.update(tomllib.loads(path.read_text("utf-8")))
     env = {
@@ -169,7 +170,10 @@ def load_settings(*, cwd: str | None = None, **overrides: Any) -> Settings:
     if not data.get("model") and found.model:
         data["model"] = found.model
     data["plugins"] = _plugin_tables(data.get("plugins", {}))
+    data["channels"] = _plugin_tables(data.get("channels", {}), "channels")
     data["add_plugins"] = _agent_tables(data.pop("agents", {}))
+    if not isinstance(data.get("server", {}), dict):
+        raise ValueError("config.toml: [server] is a table of switches")
     known = {f for f in Settings.__dataclass_fields__}
     settings = Settings(**{k: v for k, v in data.items() if k in known})
     if settings.models_file:
@@ -177,9 +181,9 @@ def load_settings(*, cwd: str | None = None, **overrides: Any) -> Settings:
     return settings
 
 
-def _plugin_tables(value: Any) -> dict[str, dict[str, Any]]:
+def _plugin_tables(value: Any, table: str = "plugins") -> dict[str, dict[str, Any]]:
     if not isinstance(value, dict) or not all(isinstance(v, dict) for v in value.values()):
-        raise ValueError("config.toml: [plugins.<name>] tables hold a plugin's arguments")
+        raise ValueError(f"config.toml: [{table}.<name>] tables hold one's arguments")
     return {name: dict(args) for name, args in value.items()}
 
 
@@ -216,14 +220,32 @@ def _permission_arguments(found: FileSettings) -> dict[str, Any]:
     return args
 
 
-def sandboxed_env_for(sandbox: SandboxSettings) -> Any:
+def local_env_for(sandbox: SandboxSettings | None,
+                      fence: TenantFence | None = None) -> Any:
     """The runtime's ``env_for``: each task's local env on its ``cwd``, with
-    the settings' sandbox."""
+    the settings' sandbox (when enabled); a task of a tenant other than the
+    default one also gets ``fence``, checked on every file it opens, its
+    tenant's own temporary directory, and the sandbox
+    :meth:`TenantFence.confine` makes of the settings."""
     def env_for(state: TaskState) -> ExecEnv:
         cwd = str(state.config.get("cwd") or os.getcwd())
-        return registry.execenv("local", cwd, sandbox=sandbox)
+        kw: dict[str, Any] = {"sandbox": sandbox} if sandbox is not None else {}
+        if fence is not None and state.tenant != DEFAULT_TENANT:
+            kw["fence"] = functools.partial(_fence_check, fence, state, cwd)
+            kw["temp_dir"] = make_tenant_temp_dir(fence.temp_dir(state.tenant))
+            if sandbox is not None:
+                kw["sandbox"] = fence.confine(sandbox, tenant=state.tenant,
+                                              task_id=state.task_id,
+                                              root_id=state.root_id or state.task_id, cwd=cwd)
+        return registry.execenv("local", cwd, **kw)
 
     return env_for
+
+
+def _fence_check(fence: TenantFence, state: TaskState, cwd: str, path: str,
+                 write: bool) -> str | None:
+    return fence.refusal(path, tenant=state.tenant, task_id=state.task_id,
+                         root_id=state.root_id or state.task_id, cwd=cwd, write=write)
 
 
 def merge_plugin_settings(*tables: Mapping[str, PluginSetting]) -> dict[str, PluginSetting]:
@@ -259,7 +281,7 @@ def register_models_file(path: str) -> None:
             real_model_id=row["id"], context_window=int(row["context_window"]),
             max_output_tokens=int(row["max_output_tokens"]),
             supports_vision=bool(row.get("supports_vision", False)),
-            is_reasoning=bool(row.get("efforts")), family=row.get("family"))
+            is_reasoning=bool(row.get("efforts")), vendor=row.get("family"))
     if specs:
         register_models(specs)
 
@@ -269,82 +291,93 @@ def open_store(url: str) -> Any:
     return registry.store(url)
 
 
-#: The projects whose gated directories (``PROJECT_GATED_DIRS``) may load:
-#: ``{"projects": [path, ...]}``,
-#: written by ``noeta trust``.
-TRUST_FILE = "trusted.json"
-
-
-def trusted_projects() -> list[str]:
-    import json
-
-    path = HOME / TRUST_FILE
-    if not path.is_file():
-        return []
-    data = json.loads(path.read_text("utf-8"))
-    projects = data.get("projects", []) if isinstance(data, dict) else []
-    return [str(Path(p).expanduser().resolve()) for p in projects if isinstance(p, str)]
-
-
-def trust_project(directory: str) -> str:
-    """Add ``directory`` to the trusted projects; returns it resolved."""
-    import json
-
-    resolved = str(Path(directory).expanduser().resolve())
-    projects = trusted_projects()
-    if resolved not in projects:
-        projects.append(resolved)
-        HOME.mkdir(parents=True, exist_ok=True)
-        (HOME / TRUST_FILE).write_text(json.dumps({"projects": projects}, indent=2) + "\n",
-                                       "utf-8")
-    return resolved
-
-
-def project_trusted(directory: str) -> bool:
-    """Has the person trusted the project at ``directory`` (``noeta trust``)?"""
-    return str(Path(directory).expanduser().resolve()) in trusted_projects()
-
-
-#: A project's directories that load only once it is trusted, with what each
-#: holds: code, or what changes an agent's plugins, permissions and prompts.
-PROJECT_GATED_DIRS = {
-    ".noeta/plugins": "plugins",
-    ".noeta/agents": "agent files",
-    ".noeta/prompts": "prompt overrides",
-    ".noeta/skills": "skills",
-    ".agents/skills": "skills",
-}
-
-
-def _untrusted_notice(cwd: str | None, sub: str) -> str | None:
-    """The notice for ``<cwd>/<sub>`` left alone because the project is not
-    trusted; ``None`` when it is absent or the project is trusted."""
-    if not cwd:
-        return None
-    project = Path(cwd).expanduser().resolve()
-    local = project / sub
-    if not local.is_dir() or str(project) in trusted_projects():
-        return None
-    return (f"{local} was not loaded: this project is not trusted "
-            f"(run `noeta trust` in {project} to load its {PROJECT_GATED_DIRS[sub]})")
+def _shipped(name: str) -> bool:
+    return registry.sources(registry.PLUGINS).get(name) == "package noeta"
 
 
 def load_plugin_files(cwd: str | None) -> list[str]:
     """Load the plugin files of ``~/.noeta/plugins`` and, for a trusted
     project, ``<cwd>/.noeta/plugins``. Returns notices for the person: a
     project's plugin directory left alone because it is not trusted."""
-    dirs = [HOME / "plugins"]
-    notice = _untrusted_notice(cwd, ".noeta/plugins")
+    dirs = [home_dir.HOME / "plugins"]
+    notice = untrusted_notice(cwd, ".noeta/plugins")
     if cwd and notice is None and (Path(cwd).expanduser() / ".noeta" / "plugins").is_dir():
         dirs.append(Path(cwd).expanduser().resolve() / ".noeta" / "plugins")
-    registry.load_plugin_files(dirs)
+    registry.load_plugin_files(dirs, admit=plugin_policy(managed_dir()).admits)
     return [notice] if notice else []
+
+
+def _permission_settings(found: FileSettings, cwd: str | None,
+                         permissions: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The permissions plugin's arguments: the settings files', with the
+    command line's (``permissions``) rule lists and directories added and
+    its other arguments laid over."""
+    permission_args = _permission_arguments(found)
+    for key, value in (permissions or {}).items():
+        if key in ("allow", "deny", "ask", "additional_directories"):
+            permission_args[key] = [*permission_args.get(key, ()), *value]
+        else:
+            permission_args[key] = value
+    if permission_args.get("disable_bypass_mode") and \
+            permission_args.get("mode") == "bypassPermissions":
+        log.warning("permission mode bypassPermissions is disabled here; ignored")
+        del permission_args["mode"]
+    # Each task's own working directory, not the server's: a task may run in
+    # an --allow-root directory or a tenant's workspace.
+    permission_args.setdefault("trusted_workspace", project_trusted)
+    return permission_args
+
+
+def _base_plugin_settings(found: FileSettings, cwd: str | None,
+                          permissions: Mapping[str, Any] | None, *,
+                          project: bool) -> dict[str, PluginSetting]:
+    """The built-in plugins' settings from noeta's places and the settings
+    files; ``project``: the project's MCP servers may load."""
+    setting_files = [str(f) for f in found.files]
+    permission_args = _permission_settings(found, cwd, permissions)
+    # The file tools may write in the additional directories too.
+    write_roots = [str(Path(cwd or os.getcwd(), d))
+                   for d in permission_args.get("additional_directories") or ()]
+    return merge_plugin_settings(
+        {"memory": {"home": str(home_dir.HOME)},
+         "hooks": {"settings_files": setting_files},
+         "mcp": {"settings_files": setting_files,
+                 "project": project_trusted if project else False},
+         "skills": {"trusted": project_trusted, "global_dir": str(home_dir.HOME / "skills")},
+         "instructions": {"user_dir": str(home_dir.HOME), "managed_dir": str(managed_dir())},
+         "permissions": permission_args, "fs": {"write_roots": write_roots}})
+
+
+def _apply_sandbox(sandbox: SandboxSettings, cwd: str | None, runtime_kw: dict[str, Any],
+                   fence: TenantFence) -> list[str]:
+    """Run tasks' commands in the settings' ``sandbox`` (``runtime_kw``'s
+    ``env_for``) when it is enabled, and tenants' file reads and writes
+    behind ``fence``; a notice when the sandbox cannot start here."""
+    runtime_kw.setdefault("env_for", local_env_for(
+        sandbox if sandbox.enabled else None, fence))
+    if not sandbox.enabled:
+        return []
+    probe = registry.execenv("local", str(cwd or os.getcwd()), sandbox=sandbox)
+    reason = getattr(getattr(probe, "sandbox", None), "unavailable", lambda: None)()
+    if reason is None:
+        return []
+    notice = (f"sandbox.enabled is set but the sandbox cannot start: {reason}. "
+              + ("Commands that would run in it are refused (failIfUnavailable)."
+                 if sandbox.fail_if_unavailable else
+                 "Commands run without it."))
+    log.warning("%s", notice)
+    return [notice]
 
 
 def from_settings(settings: Settings, *, cwd: str | None = None,
                   plugins: Mapping[str, PluginSetting] | None = None,
                   permissions: Mapping[str, Any] | None = None,
-                  own_tasks_only: bool = False, **runtime_kw: Any) -> LocalApp:
+                  own_tasks_only: bool = False, with_channels: bool = False,
+                  setting_sources: Collection[str] | None = None,
+                  flag_settings: Path | None = None,
+                  agent_files: Sequence[AgentFile] = (),
+                  tenant_workspaces: Mapping[str, str] | None = None,
+                  **runtime_kw: Any) -> LocalApp:
     """The default agents on the configured store, model and provider, with
     the user's plugin files (``~/.noeta/plugins``, and a trusted project's
     ``<cwd>/.noeta/plugins``), memory (``~/.noeta/projects/<workspace>/memory``), prompt
@@ -361,66 +394,144 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     trusted; each one skipped is a notice in ``app.notices``. Front ends
     (``-p``, ``acp``, the TUI) pass ``own_tasks_only`` so their worker never
     picks up another process's task from the shared store; ``worker`` and
-    ``serve`` serve every task."""
+    ``serve`` serve every task and pass ``with_channels`` to run the
+    channels ``config.toml`` enables. ``setting_sources`` / ``flag_settings``
+    (``--setting-sources`` / ``--settings``) choose the settings layers
+    (:func:`file_settings`); a left-out ``user`` source also skips
+    ``~/.noeta/agents``, a left-out ``project`` source the project's agents
+    and its ``.noeta/mcp.json``. ``agent_files`` (``--agents``) come last
+    and win a name. ``tenant_workspaces`` (tenant -> workspace) joins the
+    places a non-default tenant's task may not touch
+    (:mod:`noeta.toolkit.tenant_fence`), with noeta's home, the store's
+    files and the spill directory."""
     from noeta.agents import default_agents
     from noeta.agents.agent_files import read_agent_dir
     from noeta.host.local import LocalApp
 
-    notices = load_plugin_files(cwd)
+    home_dir.ensure_home()
+    notices = home_dir.loose_permissions(settings.store_url)
+    notices += load_plugin_files(cwd)
     notices += [n for sub in PROJECT_GATED_DIRS if sub != ".noeta/plugins"
-                if (n := _untrusted_notice(cwd, sub)) is not None]
+                if (n := untrusted_notice(cwd, sub)) is not None]
     if (unknown := models.unknown_model_notice(settings.model)) is not None:
         notices.append(unknown)
     for notice in notices:
         log.warning("%s", notice)
-    files = read_agent_dir(HOME / "agents")
-    if cwd and project_trusted(cwd):
-        files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
-    found = file_settings(cwd)
+    found = file_settings(cwd, sources=setting_sources, flag=flag_settings)
     apply_env(found)
     if not settings.model and found.model:
         settings = dataclasses.replace(settings, model=found.model)
-    setting_files = [str(f) for f in found.files]
-    permission_args = _permission_arguments(found)
-    for key, value in (permissions or {}).items():
-        if key in ("allow", "deny", "ask", "additional_directories"):
-            permission_args[key] = [*permission_args.get(key, ()), *value]
-        else:
-            permission_args[key] = value
-    if cwd and project_trusted(cwd):
-        permission_args["trusted_workspace"] = True
-    # The file tools may write in the additional directories too.
-    write_roots = [str(Path(cwd or os.getcwd(), d))
-                   for d in permission_args.get("additional_directories") or ()]
-    table = merge_plugin_settings(
-        {"memory": {"home": str(HOME)},
-         "hooks": {"settings_files": setting_files},
-         "mcp": {"settings_files": setting_files, "project": project_trusted},
-         "skills": {"trusted": project_trusted, "global_dir": str(HOME / "skills")},
-         "instructions": {"user_dir": str(HOME), "managed_dir": str(managed_dir())},
-         "permissions": permission_args, "fs": {"write_roots": write_roots}},
-        settings.plugins, plugins or {})
-    agents = default_agents(settings.model, plugins=table, add=settings.add_plugins,
-                            extra_files=files)
+
+    def source(name: str) -> bool:
+        return setting_sources is None or name in setting_sources
+
+    runtime_kw.setdefault("spill_root", str(home_dir.HOME / "tool-results"))
     sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
                                             base_dir=str(cwd or os.getcwd()))
-    if sandbox.enabled:
-        runtime_kw.setdefault("env_for", sandboxed_env_for(sandbox))
-        probe = registry.execenv("local", str(cwd or os.getcwd()), sandbox=sandbox)
-        reason = getattr(getattr(probe, "sandbox", None), "unavailable", lambda: None)()
-        if reason is not None:
-            notice = (f"sandbox.enabled is set but the sandbox cannot start: {reason}. "
-                      + ("Commands that would run in it are refused (failIfUnavailable)."
-                         if sandbox.fail_if_unavailable else
-                         "Commands run without it."))
-            log.warning("%s", notice)
-            notices.append(notice)
-    runtime_kw.setdefault("prompt_dirs", [str(HOME / "prompts")])
+    fence = TenantFence(home=str(home_dir.HOME), spill_root=runtime_kw["spill_root"],
+                        plans_dir=str(home_dir.HOME / "plans"),
+                        store_files=store_files(settings.store_url),
+                        workspaces=dict(tenant_workspaces or {}),
+                        server_dirs=tuple((permissions or {}).get("server_dirs") or ()),
+                        deny_read=tuple(sandbox.resolve(p) for p in sandbox.deny_read))
+    permissions = {"tenant_workspaces": dict(fence.workspaces),
+                   "store_files": list(fence.store_files), "deny_read": list(fence.deny_read),
+                   "spill_root": fence.spill_root, **(permissions or {})}
+    base = _base_plugin_settings(found, cwd, permissions, project=source("project"))
+    made: dict[Any, Any] = {}
+    model, add_plugins = settings.model, settings.add_plugins
+
+    def make_agents() -> list[Agent]:
+        """The agents from the agent files and plugins found now; a plugin
+        whose code and arguments did not change is the one made before."""
+        claude, found_notices = claude_plugins(cwd)
+        notices.extend(n for n in found_notices if n not in notices)
+        files = [a for p in claude for a in p.agents if a.name not in BUILTIN_AGENTS]
+        if source("user"):
+            files += read_agent_dir(home_dir.HOME / "agents")
+        if cwd and project_trusted(cwd) and source("project"):
+            files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
+        files += agent_files
+        from_plugins, plugin_notices = plugin_settings(claude)
+        notices.extend(n for n in plugin_notices if n not in notices)
+        table = merge_plugin_settings(base, from_plugins, settings.plugins, plugins or {})
+        policy = plugin_policy(managed_dir())
+        table.update({name: False for name in registry.available(registry.PLUGINS)
+                      if not policy.admits(name, shipped=_shipped(name))})
+        add = {agent: tuple(entries) for agent, entries in add_plugins.items()}
+        for agent, names in registry.added_by_files().items():
+            add[agent] = (*add.get(agent, ()), *((name, {}) for name in names))
+        if "markdown_commands" in from_plugins:
+            add["*"] = (*add.get("*", ()), ("markdown_commands", {}))
+        return default_agents(model, plugins=table, add=add, extra_files=files, made=made)
+
+    agents = make_agents()
+    notices += _apply_sandbox(sandbox, cwd, runtime_kw, fence)
+    runtime_kw.setdefault("prompt_dirs", [str(home_dir.HOME / "prompts")])
     runtime_kw.setdefault("workspace_trusted", project_trusted)
-    runtime_kw.setdefault("spill_root", str(HOME / "tool-results"))
     app = LocalApp(open_store(settings.store_url), agents,
                    settings.make_provider(), own_tasks_only=own_tasks_only,
                    task_config={"prompts": settings.prompts} if settings.prompts else None,
+                   channels=make_channels(settings.channels) if with_channels else (),
                    **runtime_kw)
     app.notices = notices
+
+    def reload_plugins() -> list[str]:
+        registry.forget_plugin_files()
+        found = load_plugin_files(cwd)
+        app.replace_agents(make_agents())
+        return found
+
+    app.reload_plugins = reload_plugins
     return app
+
+
+def make_channels(tables: Mapping[str, Mapping[str, Any]]) -> list[Channel]:
+    """The channels ``config.toml`` sets (``[channels.<name>]``, by name in
+    the ``noeta.channels`` group or a plugin file), made with their
+    arguments; ``enabled = false`` leaves one out."""
+    from noeta.agents.agent_files import resolve_secrets
+
+    out: list[Channel] = []
+    policy = plugin_policy(managed_dir())
+    for name, table in tables.items():
+        args = dict(table)
+        if args.pop("enabled", True) is False or not policy.admits(name):
+            continue
+        cls = registry.load(registry.CHANNELS, name)
+        out.append(cls(**resolve_secrets(args, f"channel {name!r}")))
+    return out
+
+
+#: The built-in agents' names: a plugin's agent file never replaces one.
+BUILTIN_AGENTS = frozenset({"main", "general-purpose", "Explore", "Plan"})
+
+
+def claude_plugins(cwd: str | None) -> tuple[list[ClaudePlugin], list[str]]:
+    """The Claude Code plugin directories of ``~/.noeta/plugins`` and, for a
+    trusted project, ``<cwd>/.noeta/plugins`` (:mod:`noeta.cli.claude_plugins`),
+    with notices for the person (an agent named like a built-in one)."""
+    places = [(home_dir.HOME / "plugins", False)]
+    if cwd and project_trusted(cwd):
+        places.append((Path(cwd).expanduser().resolve() / ".noeta" / "plugins", True))
+    policy = plugin_policy(managed_dir())
+    found = [p for p in find_claude_plugins(places, home_dir.HOME / "plugin-data")
+             if policy.admits(p.name)]
+    notices = [f"plugin {p.name}: agent {a.name!r} is a built-in agent's name; not loaded"
+               for p in found for a in p.agents if a.name in BUILTIN_AGENTS]
+    return found, notices
+
+
+def plugin_changes(before: Mapping[str, Agent], after: Mapping[str, Agent]) -> list[str]:
+    """What a reload changed, one line per plugin added, removed or changed
+    (its code or its arguments), over every agent."""
+    from noeta.core.registry import pin
+
+    def pins(agents: Mapping[str, Agent]) -> dict[str, dict[str, str]]:
+        return {e.name: pin(e) for a in agents.values() for e in a.extensions}
+
+    old, new = pins(before), pins(after)
+    lines = [f"added {n}" for n in sorted(new.keys() - old.keys())]
+    lines += [f"removed {n}" for n in sorted(old.keys() - new.keys())]
+    lines += [f"changed {n}" for n in sorted(old.keys() & new.keys()) if old[n] != new[n]]
+    return lines

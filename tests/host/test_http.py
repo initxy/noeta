@@ -103,7 +103,7 @@ async def test_pending_lists_the_card(served: tuple[str, ScriptedProvider]) -> N
                 break
             await asyncio.sleep(0.02)
     [row] = rows
-    assert row["kind"] == "approval" and row["title"] == "Read"
+    assert row["kind"] == "approval" and row["title"] == "Read x"
     assert [c["id"] for c in row["choices"]] == ["allow", "always", "deny"]
     await client.cancel(tid)
     await client.close()
@@ -115,3 +115,21 @@ async def test_token_is_required(served: tuple[str, ScriptedProvider]) -> None:
         assert (await http.get("/tasks")).status_code == 401
         resp = await http.get("/tasks/nope", headers={"authorization": "Bearer secret"})
         assert resp.status_code == 404
+
+
+async def test_create_app_needs_a_token_unless_auth_is_turned_off(tmp_path: Path) -> None:
+    from noeta.core.client import Client
+
+    client = Client(SqliteStore(str(tmp_path / "t.db")))
+    with pytest.raises(ValueError, match="auth=False"):
+        create_app(client)
+    open_app = create_app(client, auth=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=open_app),
+                                 base_url="http://x") as http:
+        assert (await http.get("/tasks")).status_code == 200
+    guarded = create_app(client, token="t")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=guarded),
+                                 base_url="http://x") as http:
+        assert (await http.get("/tasks")).status_code == 401
+        assert (await http.get("/tasks", headers={"authorization": "Bearer t"})
+                ).status_code == 200

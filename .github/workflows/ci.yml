@@ -48,10 +48,55 @@ jobs:
           enable-cache: true
 
       - name: Install ripgrep
-        # Grep and Glob shell out to `rg`.
+        # No tool shells out to `rg` any more (search runs through Bash, and the suite does not
+        # need it); installed so a `Bash` search in a test finds what a developer machine has.
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
 
       - name: make check
         env:
           NOETA_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
         run: make check
+
+  cluster:
+    name: make cluster (workers on Postgres under faults)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Raise max_connections
+        # Every worker process keeps its own pool; the default 100 runs out
+        # (the harness's own container starts with 400). A service container
+        # takes no server flags, so set it and restart.
+        run: |
+          pg=${{ job.services.postgres.id }}
+          docker exec "$pg" psql -U postgres -c "ALTER SYSTEM SET max_connections = 400"
+          docker restart "$pg"
+          for _ in $(seq 60); do
+            docker exec "$pg" pg_isready -U postgres -h 127.0.0.1 && break
+            sleep 1
+          done
+          docker exec "$pg" psql -U postgres -tAc "SHOW max_connections"
+
+      - name: make cluster
+        env:
+          NOETA_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
+        run: make cluster

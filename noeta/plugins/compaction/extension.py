@@ -33,7 +33,6 @@ import msgspec
 
 from noeta.core.errors import ContextOverflow, ModelError, RequestStale, TurnDone, TurnFailed
 from noeta.core.events import Compacted
-from noeta.core.execenv import is_local
 from noeta.core.extension import Command, CommandContext, Deny, Extension, Reminder, TaskView
 from noeta.core.loop.state import TaskState
 from noeta.core.models import model_limits
@@ -50,7 +49,8 @@ from noeta.plugins.compaction.window import (
     percent_from_env,
     window_from_env,
 )
-from noeta.toolkit.context import noeta_home, project_dir, simulated_state
+from noeta.toolkit.local_env import is_local
+from noeta.toolkit.paths import file_name_part, noeta_home, project_dir
 
 log = logging.getLogger("noeta.compaction")
 
@@ -91,7 +91,7 @@ class CompactionState:
 
 
 def _user_turns(state: TaskState) -> int:
-    return sum(1 for m in state.history if m.role == "user" and m.origin in (None, "human")
+    return sum(1 for m in state.history if m.from_person
                and not any(isinstance(b, ToolResult) for b in m.content))
 
 
@@ -117,7 +117,8 @@ class Compaction(Extension):
       the summary through the task's ``Read`` tool (or this one).
     - ``transcripts`` / ``home``: write the whole conversation to
       ``<home>/projects/<workspace>/<task id>.jsonl`` at each compaction
-      (local workspaces only) and point the summary at it.
+      (local workspaces only; a tenant other than the default one under
+      ``projects/<tenant>/``) and point the summary at it.
     """
 
     name = "compaction"
@@ -220,7 +221,7 @@ class Compaction(Extension):
                 if extra is not None:
                     await self._compact(view, state, request, cut, reason="manual",
                                         estimated=self._tokens(state, request, at)[0],
-                                        extra=extra)
+                                        extra=extra, command_at=at)
             raise TurnDone()
         if not self.auto or view.complete is None:
             return request
@@ -271,7 +272,7 @@ class Compaction(Extension):
         if at < 0:
             return None
         m = state.messages[at]
-        if m.role != "user" or m.origin not in (None, "human"):
+        if not m.from_person:
             return None
         match = _COMMAND_RE.search(m.text)
         return (at, match.group(1).strip()) if match else None
@@ -335,10 +336,12 @@ class Compaction(Extension):
         return "\n\n".join(parts)
 
     async def _compact(self, view: TaskView, state: TaskState, request: ModelRequest,
-                       cut: int, *, reason: str, estimated: int, extra: str = "") -> TaskState:
+                       cut: int, *, reason: str, estimated: int, extra: str = "",
+                       command_at: int | None = None) -> TaskState:
         """Summarize the first ``cut`` messages, rebuild what follows the
         summary, record; returns the state as it is once the records are
-        folded."""
+        folded. ``command_at``: the index of the ``/compact`` message a
+        manual compaction answers."""
         through = self._through(state, cut)
         assert through is not None
         to_summarize = list(request.messages[:cut])
@@ -363,9 +366,18 @@ class Compaction(Extension):
             if restored:
                 view.record(self.name, "restored", {"texts": [m.text for m in restored]})
         after.extend(await view.residents(keeps_tail=tail))
-        if manual:
-            # Claude Code gives it all again with the next prompt, after the
-            # command: nothing goes ahead of the summary.
+        if manual and command_at is not None and state.message_seqs[command_at]:
+            # Claude Code's order: nothing ahead of the summary; the kept
+            # reply, then what is given again in the person's turn ahead of
+            # the command's own message, and the system turns after them.
+            again = [*lead, *after]
+            through = state.message_seqs[command_at]
+            lead_turn: list[Message] = []
+            after_summary = [*state.messages[cut:command_at],
+                             *(m for m in again if m.role != "system"),
+                             state.messages[command_at]]
+            after = [m for m in again if m.role == "system"]
+        elif manual:
             lead_turn, after_summary, after = [], [], [*lead, *after]
         else:
             # A system turn cannot sit inside the summary's user turn: it
@@ -378,7 +390,7 @@ class Compaction(Extension):
                                              "estimated": estimated, "turn": _user_turns(state),
                                              "kept_replies": kept_replies})
         log.info("task %s: compacted through seq %s (%s)", view.task_id, through, reason)
-        return simulated_state(view, {self.name: self.reduce})
+        return view.folded({self.name: self.reduce})
 
     def _transcript(self, view: TaskView, state: TaskState) -> str | None:
         """Write the whole conversation so far as JSON lines and return the
@@ -386,7 +398,8 @@ class Compaction(Extension):
         if not self.transcripts or view.env is None or not is_local(view.env):
             return None
         cwd = str(state.config.get("cwd") or view.env.cwd)
-        path = project_dir(cwd, self.home or noeta_home()) / f"{view.task_id}.jsonl"
+        name = file_name_part(view.task_id, "task")
+        path = project_dir(cwd, self.home or noeta_home(), state.tenant) / f"{name}.jsonl"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"".join(msgspec.json.encode(m) + b"\n" for m in state.history))

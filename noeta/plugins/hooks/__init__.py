@@ -22,6 +22,12 @@ Hook types (``config.py`` has the fields and defaults):
   stdout.
 * ``prompt`` — the task's model (or ``model``) judges the hook's condition
   (``$ARGUMENTS`` is the event JSON); not ``ok`` blocks.
+* ``agent`` — like ``prompt``, but the model may first look with the
+  task's read-only tools (up to 50 calls, a minute by default) and answers
+  through a ``StructuredOutput`` tool; never on PermissionRequest.
+* ``mcp_tool`` — calls ``tool`` of the MCP ``server`` the task has, with
+  ``input`` (``${tool_input.file_path}``-style paths filled from the event);
+  its text answer is read like stdout, an error result is a failure.
 
 Exit 0 is success (stdout plain text, or a JSON object: ``continue`` /
 ``stopReason``, ``decision`` / ``reason``, ``systemMessage``,
@@ -36,8 +42,9 @@ Events:
 
 * ``SessionStart`` (``startup``, ``resume``, ``compact``) /
   ``SubagentStart`` — what they add reaches the model.
-* ``UserPromptSubmit`` — before the model answers new messages from the
-  person: adds context, or a block fails the turn.
+* ``UserPromptSubmit`` — before the model first sees new messages from the
+  person (mid-turn ones too): adds context, or a block fails the turn and
+  erases those messages and their command or skill expansions.
 * ``PreToolUse`` — ``permissionDecision`` ``deny`` / ``ask`` / ``allow``
   (an allow skips asking, but a deny or ask rule still wins);
   ``updatedInput`` rewrites the call, which is then checked again.
@@ -52,15 +59,28 @@ Events:
   message (at most :data:`MAX_STOP_CONTINUATIONS` times in a row).
 * ``PreCompact`` / ``PostCompact`` — stdout adds summary instructions / is
   shown to the person; a PreCompact block skips the compaction.
-* ``Notification`` (waiting on an approval or a question) and
-  ``SessionEnd`` — side effects only.
+* ``PostToolBatch`` — once every call of a reply has its result, before
+  the next model call: added context (or a block's reason) reaches the model.
+* ``PostModelSwitch`` — after a front end switched the model; added context
+  reaches the model.
+* ``Notification`` (waiting on an approval or a question), ``SessionEnd``,
+  ``StopFailure`` (a turn ended on a failed model call; ``error`` is Claude
+  Code's kind) and ``CwdChanged`` (a command left the shell elsewhere) —
+  side effects only.
 """
 
 from __future__ import annotations
 
 from noeta.plugins.hooks.config import EVENTS, HookCommand, Matcher, parse_hooks
 from noeta.plugins.hooks.extension import MAX_STOP_CONTINUATIONS, Hooks
-from noeta.plugins.hooks.runners import HookResult, run_command, run_http, run_prompt
+from noeta.plugins.hooks.runners import (
+    HookResult,
+    run_agent,
+    run_command,
+    run_http,
+    run_mcp_tool,
+    run_prompt,
+)
 
 __all__ = [
     "EVENTS",
@@ -70,7 +90,9 @@ __all__ = [
     "Hooks",
     "Matcher",
     "parse_hooks",
+    "run_agent",
     "run_command",
     "run_http",
+    "run_mcp_tool",
     "run_prompt",
 ]

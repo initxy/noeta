@@ -22,7 +22,7 @@ from noeta.core.events import ModelReplied, TaskEnded, ToolFinished
 from noeta.core.provider import Provider
 from noeta.core.runner import Runtime
 
-_MAX_STEPS_PER_TURN = 60
+_STEP_BUDGET = 60
 #: Usable history window for the compaction scenario.
 _SMALL_USABLE_WINDOW = 24_000
 
@@ -113,7 +113,7 @@ def run_trial(
     ws = root / "ws"
     ws.mkdir()
     setup(ws)
-    kw: dict[str, Any] = {"one_shot": True, "max_steps_per_turn": _MAX_STEPS_PER_TURN}
+    kw: dict[str, Any] = {"one_shot": True, "step_budget": _STEP_BUDGET}
     plugins: dict[str, Any] = {"memory": {"home": str(root / "home")}}
     if cfg.system_prompt is not None:
         kw["system_prompt"] = cfg.system_prompt

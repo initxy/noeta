@@ -4,7 +4,11 @@ their outputs). The wording, page caps and size limits are Claude Code's.
 
 PDF pages are rendered by poppler's ``pdftoppm`` (page count from
 ``pdfinfo``) through the ``ExecEnv``, so a container renders inside itself
-exactly as the host does locally; no Python dependency.
+exactly as the host does locally; no Python dependency. Each page is written
+to the converter's stdout, so no directory is made for it. A fenced env (a
+tenant's task) reads the PDF once through its fence and feeds the bytes to
+the converters on stdin: they never open a path the tenant's commands could
+swap for a link.
 """
 
 from __future__ import annotations
@@ -24,11 +28,13 @@ from noeta.toolkit.tools import format_size, tool_error
 __all__ = [
     "MAX_READ_TOKENS",
     "NOTEBOOK_MAX_BYTES",
+    "PDF_MAX_BYTES",
     "PDF_MAX_PAGES_PER_READ",
     "PDF_MAX_PAGES_WHOLE",
-    "estimate_tokens",
+    "notebook_too_large",
     "read_notebook",
     "read_pdf",
+    "read_size_tokens",
     "too_many_tokens",
 ]
 
@@ -40,6 +46,8 @@ MAX_READ_TOKENS = 25000
 PDF_MAX_PAGES_PER_READ = 20
 #: A PDF with more pages than this must be read with ``pages`` (Claude Code: 10).
 PDF_MAX_PAGES_WHOLE = 10
+#: Largest PDF whose pages ``Read`` renders (Claude Code: 100 MB).
+PDF_MAX_BYTES = 104_857_600
 #: Largest notebook ``Read`` opens (Claude Code: 100 MB).
 NOTEBOOK_MAX_BYTES = 104_857_600
 #: Characters of cell output past which a cell's outputs are replaced by a
@@ -51,11 +59,12 @@ _NOTEBOOK_OUTPUT_TEXT_MAX_CHARS = 30_000
 
 _PDF_TIMEOUT_S = 120.0
 _PDF_OUTPUT_CAP = 1024 * 1024
+#: Largest rendered page kept (one JPEG at 100 dpi).
+_PDF_PAGE_CAP = 32 * 1024 * 1024
 _PAGES_RE = re.compile(r"^\s*(\d+)\s*(?:-\s*(\d*)\s*)?$")
-_PAGE_FILE_RE = re.compile(r"^page-\d+\.jpg$")
 
 
-def estimate_tokens(text: str, suffix: str) -> int:
+def read_size_tokens(text: str, suffix: str) -> int:
     """Claude Code's token estimate for a read: characters / 4, or / 2 for
     JSON-shaped files."""
     per_token = 2 if suffix in ("json", "jsonl", "jsonc") else 4
@@ -64,10 +73,9 @@ def estimate_tokens(text: str, suffix: str) -> int:
 
 def too_many_tokens(tokens: int, limit: int = MAX_READ_TOKENS) -> str:
     return (
-        f"File content ({tokens} tokens) exceeds maximum allowed tokens "
-        f"({limit}). Use offset and limit parameters to read "
-        "specific portions of the file, search for specific content "
-        "instead of reading the whole file, or set allow_large when you need all of it."
+        f"At {tokens} tokens the file is over the {limit}-token limit for one read. "
+        "Read a part with offset and limit, search the file for what you need, or set "
+        "allow_large when you need all of it."
     )
 
 
@@ -93,18 +101,18 @@ def _parse_pages(spec: str) -> tuple[int, int | None] | None:
     return first, last
 
 
-async def _run(env: ExecEnv, argv: list[str], cwd: str) -> RunResult | None:
+async def _run(env: ExecEnv, argv: list[str], cwd: str, stdin: bytes | None,
+               output_cap: int = _PDF_OUTPUT_CAP) -> RunResult | None:
     """One bounded helper-program run; ``None`` when the program is missing."""
     try:
-        return await env.run(
-            argv, cwd=cwd, timeout=_PDF_TIMEOUT_S, output_cap=_PDF_OUTPUT_CAP
-        )
+        return await env.run(argv, cwd=cwd, stdin=stdin, timeout=_PDF_TIMEOUT_S,
+                             output_cap=output_cap)
     except OSError:
         return None
 
 
-async def _page_count(env: ExecEnv, path: str) -> int | None:
-    outcome = await _run(env, ["pdfinfo", path], posixpath.dirname(path))
+async def _page_count(env: ExecEnv, source: str, cwd: str, data: bytes | None) -> int | None:
+    outcome = await _run(env, ["pdfinfo", source], cwd, data)
     if outcome is None or outcome.exit_code != 0:
         return None
     m = re.search(rb"^Pages:\s+(\d+)", outcome.stdout, re.MULTILINE)
@@ -126,94 +134,31 @@ async def read_pdf(
     as a document block instead; noeta has no document block, so it is
     rendered page by page like a ``pages`` read.
     """
-
-    def err(message: str) -> ToolOutput:
-        return tool_error(tool_name, message)
-
-    total = await _page_count(env, path)
-    if pages is None:
-        if total is not None and total > PDF_MAX_PAGES_WHOLE:
-            return err(
-                f"This PDF has {total} pages, which is too many to read at "
-                "once. Use the pages parameter to read specific page ranges "
-                '(e.g., pages: "1-5"). Maximum '
-                f"{PDF_MAX_PAGES_PER_READ} pages per request."
-            )
-        first, last = 1, total
-    else:
-        spec = str(pages)
-        parsed = _parse_pages(spec)
-        if parsed is None:
-            return err(
-                f'Invalid pages parameter: "{spec}". Give one page ("3") or '
-                'one range ("1-5"), not a list. To read several pages or '
-                "ranges, read each one separately. Pages are 1-indexed."
-            )
-        first, last = parsed
-        span = PDF_MAX_PAGES_PER_READ + 1 if last is None else last - first + 1
-        if span > PDF_MAX_PAGES_PER_READ:
-            return err(
-                f'Page range "{spec}" exceeds maximum of '
-                f"{PDF_MAX_PAGES_PER_READ} pages per request. Please use a "
-                "smaller range."
-            )
-        if total is not None and first > total:
-            return err(
-                f'Page range "{spec}" is outside the document (PDF has '
-                f"{total} pages). Use a range within 1-{total}."
-            )
-    if total is not None:
-        last = total if last is None else min(last, total)
-
+    if size == 0:
+        return tool_error(tool_name, f"The PDF {display} has no content (0 bytes).")
+    if size > PDF_MAX_BYTES:
+        return tool_error(tool_name, f"The PDF {display} is over the "
+                                     f"{format_size(PDF_MAX_BYTES)} that page rendering accepts.")
+    # A fenced env (a tenant's task) reads the file once through the fence;
+    # the converters, run by the worker, get the bytes on stdin ("-") and
+    # never a path.
     cwd = posixpath.dirname(path)
-    made = await _run(env, ["mktemp", "-d"], cwd)
-    if made is None:
-        return err("read failed: could not make a directory for the pages")
-    out_dir = made.stdout.decode("utf-8", "replace").strip()
-    if made.exit_code != 0 or not posixpath.isabs(out_dir):
-        return err("read failed: could not make a directory for the pages")
     try:
-        argv = ["pdftoppm", "-jpeg", "-r", "100", "-f", str(first)]
-        if last is not None:
-            argv += ["-l", str(last)]
-        argv += [path, posixpath.join(out_dir, "page")]
-        outcome = await _run(env, argv, cwd)
-        if outcome is None or outcome.exit_code == 127:
-            return err(
-                "pdftoppm is not installed. Install poppler-utils (e.g. `brew "
-                "install poppler` or `apt-get install poppler-utils`) to "
-                "enable PDF page rendering."
-            )
-        if outcome.exit_code != 0:
-            stderr = outcome.stderr.decode("utf-8", "replace").strip()
-            if "Incorrect password" in stderr:
-                return err(
-                    "PDF is password-protected. Please provide an unprotected "
-                    "version."
-                )
-            return err(f"Could not render PDF: {stderr or 'pdftoppm failed'}")
-        listing = await _run(env, ["ls", "-1", out_dir], cwd)
-        names = (
-            sorted(
-                name
-                for name in listing.stdout.decode("utf-8", "replace").splitlines()
-                if _PAGE_FILE_RE.match(name)
-            )
-            if listing is not None and listing.exit_code == 0
-            else []
-        )
-        if not names:
-            return err("pdftoppm produced no output pages. The PDF may be invalid.")
-        images = [
-            Image(
-                media_type="image/jpeg",
-                data=await env.read_bytes(posixpath.join(out_dir, name)),
-            )
-            for name in names
-        ]
-    finally:
-        await _run(env, ["rm", "-rf", out_dir], cwd)
-
+        data = await env.read_bytes(path) if getattr(env, "fence", None) is not None else None
+        head = data[:5] if data is not None else await env.read_range(path, 0, 5)
+    except OSError as exc:
+        return tool_error(tool_name, f"read failed: {exc}")
+    if head != b"%PDF-":
+        return tool_error(tool_name,
+                          f"{display} does not start with a %PDF- header, so it is not a PDF.")
+    source = "-" if data is not None else path
+    total = await _page_count(env, source, cwd, data)
+    span = _page_span(pages, total)
+    if isinstance(span, str):
+        return tool_error(tool_name, span)
+    images = await _render_pages(env, source, cwd, data, *span)
+    if isinstance(images, str):
+        return tool_error(tool_name, images)
     count = len(images)
     text = (
         f"PDF pages extracted: {count} page(s) from {display} ({format_size(size)})"
@@ -222,6 +167,78 @@ async def read_pdf(
         content=[Text(text=text), *images],
         meta={"path": display, "pages": count},
     )
+
+
+def _page_span(pages: Any, total: int | None) -> tuple[int, int | None] | str:
+    """The first and last page to render (``None``: to the end), or why
+    the request cannot be served."""
+    if pages is None:
+        if total is not None and total > PDF_MAX_PAGES_WHOLE:
+            return (
+                f"The PDF has {total} pages, more than one read takes. Pass pages "
+                'to read a range (such as pages: "1-5"), at most '
+                f"{PDF_MAX_PAGES_PER_READ} pages per read."
+            )
+        first, last = 1, total
+    else:
+        spec = str(pages)
+        parsed = _parse_pages(spec)
+        if parsed is None:
+            return (
+                f'Invalid pages parameter: "{spec}". Give one page ("3") or '
+                'one range ("1-5"), not a list. To read several pages or '
+                "ranges, read each one separately. Pages are 1-indexed."
+            )
+        first, last = parsed
+        span = PDF_MAX_PAGES_PER_READ + 1 if last is None else last - first + 1
+        if span > PDF_MAX_PAGES_PER_READ:
+            return (
+                f'The page range "{spec}" covers more than '
+                f"{PDF_MAX_PAGES_PER_READ} pages, the most one read takes. Ask for a "
+                "shorter range."
+            )
+        if total is not None and first > total:
+            return (
+                f'Page range "{spec}" is outside the document (PDF has '
+                f"{total} pages). Use a range within 1-{total}."
+            )
+    if total is not None:
+        last = total if last is None else min(last, total)
+    return first, last
+
+
+async def _render_pages(env: ExecEnv, source: str, cwd: str, data: bytes | None,
+                        first: int, last: int | None) -> list[Image] | str:
+    """Pages ``first`` to ``last`` as JPEG images, one ``pdftoppm`` run per
+    page writing it to stdout, or why they could not be made."""
+    images: list[Image] = []
+    page = first
+    end = first + PDF_MAX_PAGES_PER_READ - 1 if last is None else last
+    while page <= end:
+        argv = ["pdftoppm", "-jpeg", "-r", "100", "-f", str(page), "-l", str(page), source]
+        outcome = await _run(env, argv, cwd, data, _PDF_PAGE_CAP)
+        if outcome is None or outcome.exit_code == 127:
+            return (
+                "PDF pages cannot be rendered: pdftoppm is missing. It comes with "
+                "poppler (`brew install poppler`, or `apt-get install poppler-utils`)."
+            )
+        stderr = outcome.stderr.decode("utf-8", "replace").strip()
+        if images and last is None and "Wrong page range" in stderr:
+            break  # past the last page of a PDF whose page count was unknown
+        if outcome.exit_code != 0:
+            if "Incorrect password" in stderr:
+                return ("The PDF is password-protected and cannot be opened; ask for "
+                        "a copy without the password.")
+            return f"Could not render PDF: {stderr or 'pdftoppm failed'}"
+        if outcome.stdout_truncated:
+            return f"Could not render PDF: page {page} is over {format_size(_PDF_PAGE_CAP)}."
+        if not outcome.stdout:
+            break
+        images.append(Image(media_type="image/jpeg", data=outcome.stdout))
+        page += 1
+    if not images:
+        return "pdftoppm rendered no pages; the PDF is probably damaged."
+    return images
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +303,12 @@ def _valid_cells(cells: Any) -> bool:
     return True
 
 
+def notebook_too_large(tool_name: str) -> ToolOutput:
+    """The refusal of a notebook over :data:`NOTEBOOK_MAX_BYTES`."""
+    return tool_error(tool_name, "Notebook file exceeds the maximum size this tool can read "
+                                 f"({format_size(NOTEBOOK_MAX_BYTES)}).")
+
+
 def read_notebook(tool_name: str, raw: bytes, display: str) -> ToolOutput:
     """Every cell of a notebook with its outputs, in Claude Code's form:
     ``<cell id="...">source</cell id="...">`` followed by each output's text,
@@ -295,10 +318,7 @@ def read_notebook(tool_name: str, raw: bytes, display: str) -> ToolOutput:
         return tool_error(tool_name, message)
 
     if len(raw) > NOTEBOOK_MAX_BYTES:
-        return err(
-            "Notebook file exceeds the maximum size this tool can read "
-            f"({format_size(NOTEBOOK_MAX_BYTES)})."
-        )
+        return notebook_too_large(tool_name)
     try:
         nb = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as exc:
@@ -338,8 +358,8 @@ def read_notebook(tool_name: str, raw: bytes, display: str) -> ToolOutput:
             weight += len(text) + (len(image[1]) if image else 0)
         if weight > _NOTEBOOK_OUTPUTS_MAX_CHARS:
             parts.append(
-                "\nOutputs are too large to include. Use Bash with: cat "
-                f"<notebook_path> | jq '.cells[{index}].outputs'"
+                "\nThese outputs are too large to show here. To see them, run in "
+                f"Bash: cat <notebook_path> | jq '.cells[{index}].outputs'"
             )
             continue
         for text, image in outputs:
@@ -352,7 +372,7 @@ def read_notebook(tool_name: str, raw: bytes, display: str) -> ToolOutput:
                     continue
                 images.append(Image(media_type=image[0], data=body))
     rendered = "\n".join(parts)
-    tokens = estimate_tokens(rendered, "ipynb")
+    tokens = read_size_tokens(rendered, "ipynb")
     if tokens > MAX_READ_TOKENS:
         return err(too_many_tokens(tokens))
     return ToolOutput(

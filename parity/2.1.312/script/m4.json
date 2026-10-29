@@ -9,7 +9,7 @@
      "content": [
       {
        "type": "thinking",
-       "thinking": "The user asks: remind what the last thing I did was. Based on summary and context, the last substantive work was implementing structured logging and verifying it. The final action in the previous turn? Before this message I just answered the summary question. But \"the last thing you did\" refers to last task work: the structured logging implementation, verified by tests (6 passed) and manual debug output. Then the compact happened, then they asked what we'd done. I should answer concisely."
+       "thinking": "(thinking not kept)"
       },
       {
        "type": "text",

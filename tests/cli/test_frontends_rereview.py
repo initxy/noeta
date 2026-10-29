@@ -160,6 +160,30 @@ async def test_tui_shows_and_answers_a_sub_agents_approval(tmp_path: Path) -> No
         assert echoed.result.text == "echoed"
 
 
+async def test_tui_status_cost_counts_the_whole_tree(tmp_path: Path) -> None:
+    """The status bar's cost is ``/cost``'s: sub-agents' calls count too."""
+    from textual.widgets import Static
+
+    from noeta.core.types import Usage
+    from noeta.host.usage import tree_usage
+
+    million = Usage(uncached=1_000_000, output=0)
+    provider = ScriptedProvider([reply("", ("Task", {}), usage=million),
+                                 reply("child done", usage=million),
+                                 reply("final", usage=million)])
+    priced = "claude-sonnet-4-6"
+    agents = [Agent(name="main", model=priced, tools=[Delegate()]),
+              Agent(name="worker", model=priced, one_shot=True, tools=[Echo()])]
+    app = NoetaApp(local(tmp_path, provider, *agents), agent="main", model=priced, cwd="/tmp")
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.press(*"go", "enter")
+        await settle(pilot, lambda: provider.steps == [] and not app.busy)
+        total = await tree_usage(app.local.client, app.task_id)
+        assert total.tasks == 2
+        want = f"${total.cost_usd:.2f}"
+        await settle(pilot, lambda: want in str(app.query_one("#status", Static).content))
+
+
 async def test_tui_shows_and_answers_a_sub_agents_question(tmp_path: Path) -> None:
     provider = ScriptedProvider([reply("", ("Task", {})),
                                  reply("", ("AskUserQuestion", DB_QUESTION)),

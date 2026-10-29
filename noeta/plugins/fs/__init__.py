@@ -6,7 +6,11 @@ The check runs at the start of each turn, over the most recently read
 files: a file whose modification time moved is hashed, and if its bytes are
 neither what the model read nor what it was already told about, the model is
 told once (the prompt ``reminder/file_changed``; ``{path}`` is the file).
-``Edit`` and ``Write`` still refuse until it reads the file again."""
+``Edit`` and ``Write`` still refuse until it reads the file again.
+
+A tool's own note for the model (``notice``: the paging hint of a read cut
+to fit the token ceiling) is sent as a reminder right after that call's
+result, as Claude Code does."""
 
 from __future__ import annotations
 
@@ -21,22 +25,29 @@ from noeta.core.tool import Tool
 from noeta.plugins.fs.edit import EditTool
 from noeta.plugins.fs.notebook import NotebookEditTool
 from noeta.plugins.fs.read import ReadTool
-from noeta.plugins.fs.state import FS, KIND_CHANGED, KIND_FORGET_RANGES, FsState, reduce_fs
+from noeta.plugins.fs.state import (
+    FS,
+    KIND_CHANGED,
+    KIND_FORGET_RANGES,
+    KIND_NOTICE_SENT,
+    FsState,
+    reduce_fs,
+)
 from noeta.plugins.fs.write import WriteTool
-from noeta.toolkit.context import plans_dir
+from noeta.toolkit.paths import plans_dir
 
 __all__ = ["EditTool", "FileTools", "NotebookEditTool", "ReadTool", "WriteTool"]
 
 
 #: How many of the most recently read files the turn-start check looks at.
 CHANGED_FILES_CHECKED = 20
-#: Claude Code's wording for a file changed outside the model's own edits, with
-#: a re-read asked for instead of its snippet of the new contents.
+#: The note for a file changed outside the model's own edits (Claude Code's
+#: meaning), with a re-read asked for instead of a snippet of the new contents.
 FILE_CHANGED_REMINDER = (
-    "Note: {path} was modified after you last read it, either by the user or by a linter. "
-    "Don't tell the user this, since they are already aware. This change was intentional, "
-    "so make sure to take it into account as you proceed (ie. don't revert it unless the "
-    "user asks you to). Read the file again before you edit it."
+    "Note: {path} changed after you last read it, edited by the user or by a tool such as "
+    "a formatter. The user knows and meant it, so do not mention it and do not undo it "
+    "unless they ask; take it into account from here on. Read the file again before you "
+    "edit it."
 )
 
 _BY_NAME: dict[str, type[Tool]] = {
@@ -82,9 +93,13 @@ class FileTools(Extension):
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         st = view.ext_state(self.name)
-        if view.state.steps_in_turn or view.env is None or not isinstance(st, FsState):
+        if not isinstance(st, FsState):
             return ()
-        out: list[Reminder] = []
+        # A tool's note rides right after the results of the call that made it.
+        out = [Reminder(text=text, kind=KIND_NOTICE_SENT, data={"text": text})
+               for text in st.notices]
+        if view.state.steps_in_turn or view.env is None:
+            return out
         for path, read in list(st.reads.items())[-CHANGED_FILES_CHECKED:]:
             try:
                 stat = await view.env.stat(path)

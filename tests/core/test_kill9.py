@@ -26,8 +26,9 @@ TASKS = int(os.environ.get("NOETA_KILL9_TASKS", "60"))
 ROUNDS_SEED = int(os.environ.get("NOETA_KILL9_SEED", "0")) or None
 
 
-def _spawn(args: list[str]) -> subprocess.Popen[bytes]:
+def _spawn(args: list[str], stall: str) -> subprocess.Popen[bytes]:
     return subprocess.Popen([sys.executable, WORKER, *args],
+                            env={**os.environ, "NOETA_KILL9_STALL": stall},
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -45,9 +46,25 @@ async def test_kill9_workers(tmp_path: Path, backend: str,
         store, args = SqliteStore(db), [db, journal]
     client = Client(store)
     ids = [await client.create("a", f"task {i}") for i in range(TASKS)]
-    procs = [_spawn(args) for _ in range(3)]
+    # One tool run stalls until killed, so at least one kill surely lands
+    # mid-call whatever the random kills hit.
+    stall = str(tmp_path / "stall")
+    Path(stall).touch()
+    procs = [_spawn(args, stall) for _ in range(3)]
     kills = 0
     try:
+        for _ in range(600):
+            if os.path.exists(stall + ".pid"):
+                break
+            await asyncio.sleep(0.02)
+        else:
+            pytest.fail("no tool run stalled")
+        pid = int(Path(stall + ".pid").read_text())
+        [victim] = [i for i, p in enumerate(procs) if p.pid == pid]
+        procs[victim].send_signal(signal.SIGKILL)
+        procs[victim].wait()
+        kills += 1
+        procs[victim] = _spawn(args, stall)
         for _ in range(600):
             rows = [await client.get(t) for t in ids]
             if all(r.status == "waiting" for r in rows):
@@ -57,7 +74,7 @@ async def test_kill9_workers(tmp_path: Path, backend: str,
             procs[victim].send_signal(signal.SIGKILL)
             procs[victim].wait()
             kills += 1
-            procs[victim] = _spawn(args)
+            procs[victim] = _spawn(args, stall)
         else:
             pytest.fail("tasks did not all finish")
     finally:

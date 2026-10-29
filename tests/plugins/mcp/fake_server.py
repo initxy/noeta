@@ -93,6 +93,8 @@ def handle(method: str, params: dict) -> dict:
                     fh.write(os.environ["FAKE_CHANGE_TO"])
             send({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
             return {"content": [{"type": "text", "text": "changed"}]}
+        if name == "meta":
+            return {"content": [{"type": "text", "text": json.dumps(params.get("_meta"))}]}
         if name == "pid":
             return {"content": [{"type": "text", "text": str(os.getpid())}]}
         if name == "fail":
@@ -116,6 +118,12 @@ def handle(method: str, params: dict) -> dict:
         return {"resources": [{"uri": "file:///notes.md", "name": "notes"}]}
     if method == "resources/read":
         return {"contents": [{"uri": params["uri"], "text": "the notes"}]}
+    if method == "resources/directory/read" and params["uri"] == "file:///docs":
+        if params.get("cursor") != "2":
+            return {"resources": [{"uri": "file:///docs/a.md", "name": "a.md"}],
+                    "nextCursor": "2"}
+        return {"resources": [{"uri": "file:///docs/sub", "name": "sub",
+                               "mimeType": "inode/directory"}]}
     raise KeyError(method)
 
 

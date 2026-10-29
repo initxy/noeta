@@ -108,8 +108,9 @@ class McpAdmin:
         """Forget the server's tokens (its client registration stays);
         ``False`` when there were none."""
         store = store_for(_server(name, spec), home=home)
-        data = store.load()
-        if not data.get("tokens"):
-            return False
-        store.save({k: v for k, v in data.items() if k != "tokens"})
+        with store.locked():
+            data = store.load()
+            if not data.get("tokens"):
+                return False
+            store.save({k: v for k, v in data.items() if k != "tokens"})
         return True

@@ -10,14 +10,14 @@ import pytest
 from noeta import CommandContext, Runtime, parse_agent_file
 from noeta.agents.agent_files import build_agents
 from noeta.backends.stores.sqlite import SqliteStore
-from noeta.cli import config
+from noeta.cli import home_dir
 from noeta.cli.config import from_settings, load_settings
 from noeta.core import registry
 from noeta.core.client import Client
 from noeta.core.commands import expand_command
 from noeta.core.events import ExtensionRecorded, ToolFinished
-from noeta.core.pending import pending
-from noeta.core.questions import answer_question
+from noeta.host.pending import pending
+from noeta.host.questions import answer_question
 from noeta.testing import ScriptedProvider, reply
 
 AGENT = """---
@@ -82,7 +82,7 @@ async def test_greet_without_a_name_asks_the_person(tmp_path: Path) -> None:
 
 async def test_config_toml_adds_it_to_main(tmp_path: Path,
                                            monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config, "HOME", tmp_path)
+    monkeypatch.setattr(home_dir, "HOME", tmp_path)
     (tmp_path / "config.toml").write_text(
         'model = "m"\napi_key = "k"\n'
         f'store = "sqlite:///{tmp_path / "t.db"}"\n'
@@ -92,6 +92,6 @@ async def test_config_toml_adds_it_to_main(tmp_path: Path,
     main = app.runtime.agents["main"]
     [hello] = [e for e in main.extensions if e.name == "hello"]
     assert hello.greeting == "Yo"  # type: ignore[attr-defined]
-    ctx = CommandContext(cwd=str(tmp_path))
+    ctx = CommandContext(cwd=str(tmp_path), tenant="default")
     assert await expand_command(main, ctx, "/greet Ada") == "Please greet Ada."
     await app.store.close()

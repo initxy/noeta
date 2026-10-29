@@ -4,14 +4,22 @@ activation text, ``/<name>``, scripts, allowed-tools, budget fitting."""
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from noeta.core.agent import Agent
+from noeta.core.client import Client
 from noeta.core.events import Waiting
+from noeta.core.extension import Ask, Extension, Gate, TaskView
+from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.types import ToolUse
 from noeta.plugins.fs import FileTools
+from noeta.plugins.permissions import Permissions
+from noeta.plugins.shell import Shell
 from noeta.plugins.skills import Skills, UsageRank
-from noeta.plugins.skills.allowed_tools import parse_allowed_tools
 from noeta.plugins.skills.listing import (
     ADDED_HEADER,
     ROSTER_HEADER,
@@ -19,9 +27,12 @@ from noeta.plugins.skills.listing import (
     listing_lines,
     short_summary,
 )
-from noeta.plugins.skills.registry import SkillDescription, SkillRegistry
+from noeta.plugins.skills.registry import SkillDescription, SkillRegistry, path_patterns
+from noeta.plugins.subtasks import SubagentSpec, Subtasks
 from noeta.testing import reply
-from noeta.toolkit.context import estimate_tokens
+from noeta.toolkit.allowed_tools import allow_rule_texts, granted_tools
+from noeta.toolkit.inline_commands import DISABLED_MARKER
+from noeta.toolkit.tokens import estimate_tokens
 from tests.plugins.context.conftest import Harness
 
 
@@ -92,6 +103,22 @@ async def test_a_slash_command_fills_the_skill_from_what_follows_it(h: Harness) 
         "Do it.\n\nARGUMENTS: fast please")
 
 
+async def test_a_slash_command_typed_again_follows_the_skill_again(h: Harness) -> None:
+    write_skill(skills_dir(h), "notes", "Release notes.", body="Notes for $0 since $1.\n")
+    a = agent()
+    h.provider.add(reply("ok"), reply("ok"), reply("ok"))
+    tid = await h.start(a, "/notes v0.1 monday")
+    await h.say(a, tid, "/notes v0.2 friday")
+    changed = h.provider.requests[1].messages[-1].text
+    assert changed.startswith("(/notes called again") and changed.endswith(
+        "Notes for v0.2 since friday.\n")
+    await h.say(a, tid, "/notes v0.2 friday")
+    same = h.provider.requests[2].messages[-1].text
+    assert "notes" in same and "Arguments: v0.2 friday" in same and "Notes for" not in same
+    acts = await h.records(tid, "skills", "activated")
+    assert [x.data["args"] for x in acts] == ["v0.1 monday", "v0.2 friday"]
+
+
 async def test_unknown_and_disabled_skills_are_refused(h: Harness) -> None:
     write_skill(skills_dir(h), "deploy", "Ship.")
     write_skill(skills_dir(h), "hidden", "User only.", **{"disable-model-invocation": "yes"})
@@ -100,8 +127,49 @@ async def test_unknown_and_disabled_skills_are_refused(h: Harness) -> None:
     tid = await h.start(agent())
     first, second = await h.results(tid)
     assert first.result.is_error
-    assert first.result.text == "unknown skill 'hidden'; available: deploy"
-    assert second.result.text == "skill must be a non-empty string"
+    # A user-only skill is named as such, with the way to start it.
+    assert first.result.text.startswith("The skill hidden is marked disable-model-invocation")
+    assert "/hidden" in first.result.text
+    assert second.result.text == "Not a skill name: ''"
+
+
+async def test_an_unknown_skill_suggests_a_near_name_not_the_whole_list(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    write_skill(skills_dir(h), "review", "Review.")
+    h.provider.add(reply("", ("Skill", {"skill": "deplyo"})), reply("", ("Skill", {"skill": "x"})),
+                   reply("done"))
+    tid = await h.start(agent())
+    first, second = await h.results(tid)
+    assert first.result.is_error and second.result.is_error
+    assert first.result.text == "There is no skill named deplyo. Did you mean deploy?"
+    assert second.result.text == "There is no skill named x."
+
+
+async def test_calling_an_active_skill_again_follows_it_again(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.", body="Scope: $ARGUMENTS\n")
+    h.provider.add(reply("", ("Skill", {"skill": "deploy", "args": "eu"})),
+                   reply("", ("Skill", {"skill": "deploy", "args": "eu"})),
+                   reply("", ("Skill", {"skill": "deploy", "args": "us"})),
+                   reply("done"))
+    tid = await h.start(agent())
+    same = h.provider.requests[2].messages[-1].text
+    assert "deploy" in same and "Arguments: eu" in same and "Scope:" not in same
+    changed = h.provider.requests[3].messages[-1].text
+    assert changed.startswith("(/deploy called again") and changed.endswith("Scope: us\n")
+    acts = await h.records(tid, "skills", "activated")
+    assert [a.data["args"] for a in acts] == ["eu", "us"]
+
+
+async def test_a_leading_slash_and_spaces_around_the_name_are_ignored(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    h.provider.add(reply("", ("Skill", {"skill": " /deploy "})), reply("", ("Skill", {"skill": " "})),
+                   reply("done"))
+    tid = await h.start(agent())
+    first, second = await h.results(tid)
+    assert not first.result.is_error
+    [act] = await h.records(tid, "skills", "activated")
+    assert act.data["name"] == "deploy"
+    assert second.result.is_error
 
 
 async def test_skill_may_share_a_reply_with_other_calls(h: Harness) -> None:
@@ -140,7 +208,7 @@ async def test_new_skills_are_announced_at_the_next_message(h: Harness) -> None:
 async def test_a_skill_installed_into_an_empty_task_is_announced(h: Harness) -> None:
     """Installed mid-turn, announced with the person's next message, with no
     pick-up in between (the runner keeps the task)."""
-    from noeta.core.tool import ToolContext, ToolOutput, text_output
+    from noeta.core.tool import text_output
 
     class Install:
         name = "Install"
@@ -184,7 +252,7 @@ async def test_a_command_in_its_tags_puts_the_body_in_the_persons_turn(h: Harnes
 
     d = write_skill(skills_dir(h), "notes", "Release notes.", body="Notes for $ARGUMENTS.\n")
     skills = Skills()
-    text = await expand_with([skills], CommandContext(cwd=str(h.work)), "/notes v0.2")
+    text = await expand_with([skills], CommandContext(cwd=str(h.work), tenant="default"), "/notes v0.2")
     assert text == ("<command-message>notes</command-message>\n<command-name>/notes"
                     "</command-name>\n<command-args>v0.2</command-args>")
     h.provider.add(reply("ok"))
@@ -266,6 +334,50 @@ async def test_allowed_tools_enforcement_denies_outside_the_grant(h: Harness) ->
     assert bash.result.is_error and "not in the allowed-tools grant" in bash.result.text
 
 
+class _Named:
+    """A tool that answers ``ok``."""
+
+    description = "A tool."
+    input_schema: dict[str, Any] = {"type": "object"}
+    read_only = True
+    clearable = True
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        return text_output("ok")
+
+
+@pytest.mark.parametrize("declared", ["Read Grep", "[Read, Grep]", "Read, Grep(*)"])
+async def test_the_grant_names_any_tool_as_a_permission_rule_does(h: Harness,
+                                                                  declared: str) -> None:
+    write_skill(skills_dir(h), "readonly", "Read only.", **{"allowed-tools": declared})
+    (h.work / "f.txt").write_text("x\n")
+    h.provider.add(
+        reply("", ("Skill", {"skill": "readonly"})),
+        reply("", ("Read", {"file_path": "f.txt"})),
+        reply("", ("Grep", {"pattern": "x"})),
+        reply("", ("Bash", {"command": "echo hi"})),
+        reply("done"),
+    )
+    tid = await h.start(Agent(name="a", model="m", tools=[_Named("Grep"), _Named("Bash")],
+                              extensions=[FileTools(), Skills(tool_enforcement="deny")]))
+    _, read, grep, bash = await h.results(tid)
+    assert not read.result.is_error and not grep.result.is_error
+    assert bash.result.is_error and "not in the allowed-tools grant" in bash.result.text
+
+
+async def test_a_grant_of_every_tool_restricts_nothing(h: Harness) -> None:
+    write_skill(skills_dir(h), "any", "Anything.", **{"allowed-tools": "'*'"})
+    h.provider.add(reply("", ("Skill", {"skill": "any"})),
+                   reply("", ("Bash", {"command": "echo hi"})), reply("done"))
+    tid = await h.start(Agent(name="a", model="m", tools=[_Named("Bash")],
+                              extensions=[FileTools(), Skills(tool_enforcement="deny")]))
+    _, bash = await h.results(tid)
+    assert not bash.result.is_error
+
+
 async def test_rank_resolver_is_asked_once_and_shapes_the_fit(h: Harness) -> None:
     long = "Very long description sentence. " * 40
     for name in ("alpha", "beta"):
@@ -288,7 +400,7 @@ async def test_usage_rank_counts_model_and_user_activations(h: Harness) -> None:
     write_skill(skills_dir(h), "deploy", "Ship.")
     h.provider.add(reply("", ("Skill", {"skill": "deploy"})), reply("done"))
     await h.start(agent())
-    ranker = UsageRank(h.store)
+    ranker = UsageRank(Client(h.store))
     assert ranker() == {}
     await ranker.wait()
     assert set(ranker()) == {"deploy"} and ranker()["deploy"] > 0.9
@@ -328,9 +440,11 @@ def test_long_summary_is_capped_with_a_marker() -> None:
 
 
 def test_allowed_tools_parsing() -> None:
-    assert parse_allowed_tools("[Read, Bash(git:*)]") == frozenset({"Read", "Bash"})
-    assert parse_allowed_tools("Read, Grep") == frozenset({"Read", "Grep"})
-    assert parse_allowed_tools("{Read}") is None
+    assert granted_tools("[Read, Bash(git:*)]") == ("Bash", "Read")
+    assert granted_tools("Read, Grep mcp__github") == ("Grep", "Read", "mcp__github")
+    assert granted_tools("Task, Workflow") == ("Agent", "Workflow")
+    assert granted_tools("{Read}") == ()
+    assert granted_tools("Read *") == ("*",)
 
 
 async def test_skill_dirs_are_listed_workspace_first_never_claude_codes(
@@ -343,3 +457,314 @@ async def test_skill_dirs_are_listed_workspace_first_never_claude_codes(
     assert h.provider.requests[0].messages[-1].text == (
         f"{ROSTER_HEADER}\n\n- release-notes: Draft release notes.\n"
         "- a-user-skill: From the user.")
+
+
+async def test_when_to_use_follows_the_description_in_the_listing(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship the app.",
+                when_to_use="Use when the user says ship it.")
+    h.provider.add(reply("ok"))
+    await h.start(agent())
+    assert h.provider.requests[0].messages[1].text == (
+        f"{ROSTER_HEADER}\n\n- deploy: Ship the app. - Use when the user says ship it.")
+
+
+async def test_named_arguments_fill_a_typed_skill(h: Harness) -> None:
+    write_skill(skills_dir(h), "notes", "Release notes.", body="Notes for $tag.\n",
+                arguments="[tag]")
+    h.provider.add(reply("ok"))
+    await h.start(agent(), "/notes v0.3")
+    assert h.provider.requests[0].messages[-2].text.endswith("Notes for v0.3.\n")
+
+
+async def test_directory_variables_name_the_skill_and_the_project(h: Harness) -> None:
+    d = write_skill(skills_dir(h), "deploy", "Ship.",
+                    body="Run ${NOETA_SKILL_DIR}/go.sh in ${CLAUDE_PROJECT_DIR}; "
+                         "also ${CLAUDE_SKILL_DIR}.\n")
+    h.provider.add(reply("", ("Skill", {"skill": "deploy"})), reply("done"))
+    await h.start(agent())
+    assert h.provider.requests[1].messages[-1].text.endswith(
+        f"Run {d}/go.sh in {h.work}; also {d}.\n")
+
+
+class _AsksForWrites(Extension):
+    """Stands in for a permission layer that asks before every write."""
+
+    name = "asks"
+
+    async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
+        return Ask(prompt="write?") if call.name == "Write" else None
+
+
+async def test_allowed_tools_run_without_asking_while_the_skill_is_active(h: Harness) -> None:
+    d = write_skill(skills_dir(h), "notes", "Notes.",
+                    **{"allowed-tools": "Write(/out/**) Bash(${NOETA_SKILL_DIR}/run.sh)"})
+    a = Agent(name="a", model="m", extensions=[FileTools(), Skills(), _AsksForWrites()])
+    inside, outside = str(h.work / "out" / "n.md"), str(h.work / "n.md")
+    h.provider.add(reply("", ("Skill", {"skill": "notes"})),
+                   reply("", ("Write", {"file_path": inside, "content": "x"})),
+                   reply("", ("Write", {"file_path": outside, "content": "x"})),
+                   reply("done"))
+    tid = await h.start(a)
+    parked = [r.event for r in await h.events(tid) if isinstance(r.event, Waiting)]
+    # Inside the rule the write runs; outside it, it asks.
+    assert len(parked) == 1
+    assert (h.work / "out" / "n.md").exists() and not (h.work / "n.md").exists()
+    [act] = await h.records(tid, "skills", "activated")
+    assert act.data["allow_rules"] == ["Write(/out/**)", f"Bash({d}/run.sh)"]
+
+
+def test_allow_rule_texts() -> None:
+    assert allow_rule_texts("Bash(git add:*), Read Edit") == ("Bash(git add:*)", "Read", "Edit")
+    assert allow_rule_texts("[Read, 'Bash(npm run test)']") == ("Read", "Bash(npm run test)")
+    assert allow_rule_texts("- Read\n- Bash(ls -la)") == ("Read", "Bash(ls -la)")
+    assert allow_rule_texts("Read *") == ("*",)
+
+
+def shell_agent(tmp: Path, **kw: Any) -> Agent:
+    return Agent(name="a", model="m", extensions=[
+        FileTools(), Shell(), Permissions(mode="default", plans_dir=str(tmp / "plans")),
+        Skills(**kw)])
+
+
+async def test_inline_commands_run_when_the_skill_loads(h: Harness) -> None:
+    write_skill(skills_dir(h), "status", "Status.",
+                body="Branch: !`echo main-line`\n```!\necho block-out\n```\nCode `!x` stays.\n")
+    h.provider.add(reply("ok"))
+    await h.start(shell_agent(h.work.parent), "/status")
+    text = h.provider.requests[0].messages[-2].text
+    assert "Branch: main-line\nblock-out\nCode `!x` stays." in text
+
+
+async def test_a_command_that_would_ask_stops_the_skill(h: Harness) -> None:
+    write_skill(skills_dir(h), "mk", "Make.", body="Made: !`touch made.txt`\n")
+    h.provider.add(reply("", ("Skill", {"skill": "mk"})), reply("done"))
+    tid = await h.start(shell_agent(h.work.parent))
+    [result] = await h.results(tid)
+    assert result.result.is_error and "touch made.txt" in result.result.text
+    assert not (h.work / "made.txt").exists()
+    assert await h.records(tid, "skills", "activated") == []
+
+
+async def test_allowed_tools_let_a_skill_command_run(h: Harness) -> None:
+    write_skill(skills_dir(h), "mk", "Make.", body="Made: !`touch made.txt`\n",
+                **{"allowed-tools": "Bash(touch:*)"})
+    h.provider.add(reply("", ("Skill", {"skill": "mk"})), reply("done"))
+    tid = await h.start(shell_agent(h.work.parent))
+    [result] = await h.results(tid)
+    assert not result.result.is_error
+    assert (h.work / "made.txt").exists()
+    assert "touch" not in h.provider.requests[1].messages[-1].text
+
+
+async def test_commands_turned_off_leave_a_marker_and_arguments_cannot_add_one(
+        h: Harness) -> None:
+    write_skill(skills_dir(h), "say", "Say.", body="Now: !`echo hi` for $ARGUMENTS\n")
+    h.provider.add(reply("ok"))
+    await h.start(shell_agent(h.work.parent, shell_commands=False), "/say !`id`")
+    text = h.provider.requests[0].messages[-2].text
+    assert text.endswith(f"Now: {DISABLED_MARKER} for \\! `id`\n")
+
+
+async def test_a_skill_with_paths_is_offered_once_a_matching_file_is_touched(
+        h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    write_skill(skills_dir(h), "pyfix", "Python fixes.", paths="[\"src/**\", \"*.toml\"]")
+    (h.work / "README.md").write_text("hi\n")
+    (h.work / "src").mkdir()
+    (h.work / "src" / "a.py").write_text("x = 1\n")
+    h.provider.add(reply("", ("Skill", {"skill": "pyfix"})),
+                   reply("", ("Read", {"file_path": "README.md"})),
+                   reply("", ("Read", {"file_path": str(h.work / "src" / "a.py")})),
+                   reply("", ("Skill", {"skill": "pyfix"})),
+                   reply("done"))
+    tid = await h.start(agent())
+    assert h.provider.requests[0].messages[1].text == f"{ROSTER_HEADER}\n\n- deploy: Ship."
+    refused, _readme, _src, loaded = await h.results(tid)
+    assert refused.result.is_error and "no skill named pyfix" in refused.result.text
+    assert not loaded.result.is_error
+    [unlocked] = await h.records(tid, "skills", "unlocked")
+    assert unlocked.data == {"names": ["pyfix"]}
+    texts = [m.text for m in h.provider.requests[3].messages]
+    assert f"{ADDED_HEADER}\n\n- pyfix: Python fixes." in texts
+
+
+async def test_the_skill_directories_are_scanned_once_a_turn_not_after_every_read(
+        h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.plugins.skills import extension as skills_extension
+
+    write_skill(skills_dir(h), "pyfix", "Python fixes.", paths="[\"src/**\"]")
+    (h.work / "a.txt").write_text("hi\n")
+    scans = 0
+    real = skills_extension.load_registry
+
+    async def counting(*args: Any) -> Any:
+        nonlocal scans
+        scans += 1
+        return await real(*args)
+
+    monkeypatch.setattr(skills_extension, "load_registry", counting)
+    h.provider.add(*[reply("", ("Read", {"file_path": "a.txt"})) for _ in range(5)],
+                   reply("done"))
+    await h.start(agent())
+    assert scans <= 2
+
+
+def test_path_patterns() -> None:
+    assert path_patterns("- src/**\n- docs/") == ("src", "docs/")
+    assert path_patterns("**") == ()
+    assert path_patterns(None) == ()
+
+
+async def test_a_fork_skill_runs_in_a_sub_agent(h: Harness) -> None:
+    write_skill(skills_dir(h), "review", "Review.", body="Review $ARGUMENTS closely.\n",
+                context="fork", agent="scout")
+    main = Agent(name="a", model="m", extensions=[
+        FileTools(), Subtasks([SubagentSpec(name="scout", description="Looks.", agent="w")]),
+        Skills()])
+    worker = Agent(name="w", model="m", extensions=[])
+    h.provider.add(reply("", ("Skill", {"skill": "review", "args": "a.py"})),
+                   reply("started"), reply("child report"), reply("thanks"))
+    tid = await h.client.create("a", "go")
+    await h.runtime(main, worker).run_until_idle()
+    first = (await h.results(tid))[0]
+    assert not first.result.is_error
+    [launched] = await h.records(tid, "subtasks", "launched")
+    assert launched.data["type"] == "scout" and launched.data["description"] == (
+        "Run the review skill")
+    assert any(m.text.endswith("Review a.py closely.\n")
+               for r in h.provider.requests for m in r.messages)
+    assert await h.records(tid, "skills", "activated") == []
+
+
+async def test_a_denied_fork_skill_runs_none_of_its_commands(h: Harness) -> None:
+    write_skill(skills_dir(h), "mk", "Make.", body="Made: !`touch made.txt`\n",
+                context="fork", agent="scout", **{"allowed-tools": "Bash(touch:*)"})
+    main = Agent(name="a", model="m", extensions=[
+        FileTools(), Shell(), Permissions(mode="default", plans_dir=str(h.work.parent / "p"),
+                                          deny=["Skill(mk)"]),
+        Subtasks([SubagentSpec(name="scout", description="Looks.", agent="w")]), Skills()])
+    h.provider.add(reply("", ("Skill", {"skill": "mk"})), reply("done"))
+    tid = await h.client.create("a", "go")
+    await h.runtime(main, Agent(name="w", model="m", extensions=[])).run_until_idle()
+    [result] = await h.results(tid)
+    assert result.result.is_error
+    assert not (h.work / "made.txt").exists()
+
+
+async def test_a_fork_skills_commands_run_once_it_is_allowed(h: Harness) -> None:
+    write_skill(skills_dir(h), "mk", "Make.", body="Made: !`echo made-it`\n",
+                context="fork", agent="scout", **{"allowed-tools": "Bash(echo:*)"})
+    main = Agent(name="a", model="m", extensions=[
+        FileTools(), Shell(), Permissions(mode="default", plans_dir=str(h.work.parent / "p"),
+                                          allow=["Skill(mk)"]),
+        Subtasks([SubagentSpec(name="scout", description="Looks.", agent="w")]), Skills()])
+    h.provider.add(reply("", ("Skill", {"skill": "mk"})), reply("started"),
+                   reply("child report"), reply("thanks"))
+    tid = await h.client.create("a", "go")
+    await h.runtime(main, Agent(name="w", model="m", extensions=[])).run_until_idle()
+    first = (await h.results(tid))[0]
+    assert not first.result.is_error, first.result.text
+    assert any(m.text.endswith("Made: made-it\n") or "Made: made-it" in m.text
+               for r in h.provider.requests for m in r.messages)
+
+
+def test_an_untrusted_workspace_is_warned_about_once(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    (tmp_path / ".noeta" / "skills").mkdir(parents=True)
+    every_agent = [Skills(trusted=lambda _cwd: False) for _ in range(3)]
+    with caplog.at_level("WARNING", logger="noeta.plugins.skills.extension"):
+        for skills in every_agent:
+            skills.tiers(str(tmp_path))
+            skills.tiers(str(tmp_path))
+    warned = [r.getMessage() for r in caplog.records if "is not trusted" in r.getMessage()]
+    assert len(warned) == 1
+    # Only the skill directories that exist are named.
+    assert str(tmp_path / ".noeta" / "skills") in warned[0]
+    assert str(tmp_path / ".agents" / "skills") not in warned[0]
+
+
+def test_an_untrusted_workspace_without_skill_directories_is_not_warned_about(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", logger="noeta.plugins.skills.extension"):
+        Skills(trusted=lambda _cwd: False).tiers(str(tmp_path / "plain"))
+    assert not [r for r in caplog.records if "is not trusted" in r.getMessage()]
+
+
+def test_the_untrusted_warnings_remembered_are_bounded(tmp_path: Path) -> None:
+    from noeta.plugins.skills import extension
+
+    skills = Skills(trusted=lambda _cwd: False)
+    for n in range(extension.WARNED_KEEP + 50):
+        (tmp_path / f"w{n}" / ".noeta" / "skills").mkdir(parents=True)
+        skills.tiers(str(tmp_path / f"w{n}"))
+    assert len(extension._warned_untrusted) == extension.WARNED_KEEP
+
+
+def _server_secret(tmp_path: Path) -> Path:
+    server = tmp_path / "server"
+    write_skill(server, "leak", "SECRET-DESC")
+    (server / "keys").mkdir()
+    (server / "keys" / "id_secret").write_text("k")
+    return server
+
+
+async def test_a_tenants_command_list_skips_a_skill_linked_outside(
+        h: Harness, tmp_path: Path) -> None:
+    from noeta.core.extension import CommandContext
+
+    server = _server_secret(tmp_path)
+    write_skill(skills_dir(h), "mine", "My own.")
+    (skills_dir(h) / "leak").mkdir()
+    (skills_dir(h) / "leak" / "SKILL.md").symlink_to(server / "leak" / "SKILL.md")
+    skills = Skills()
+    acme = {c.name: c.description for c in
+            await skills.commands(CommandContext(cwd=str(h.work), tenant="acme"))}
+    assert acme == {"mine": "My own."}
+    default = await skills.commands(CommandContext(cwd=str(h.work), tenant="default"))
+    assert {c.name for c in default} == {"mine", "leak"}
+
+
+async def test_a_tenants_command_list_skips_its_skill_directory_linked_outside(
+        h: Harness, tmp_path: Path) -> None:
+    from noeta.core.extension import CommandContext
+
+    other = tmp_path / "other" / ".noeta" / "skills"
+    write_skill(other, "secret", "OTHER TENANT'S TEXT")
+    (h.work / ".noeta").mkdir(exist_ok=True)
+    shutil.rmtree(skills_dir(h), ignore_errors=True)
+    skills_dir(h).symlink_to(other)
+    skills = Skills()
+    acme = await skills.commands(CommandContext(cwd=str(h.work), tenant="acme"))
+    assert acme == []
+    default = await skills.commands(CommandContext(cwd=str(h.work), tenant="default"))
+    assert {c.name for c in default} == {"secret"}
+
+
+async def test_a_tenants_skill_lists_no_resource_behind_the_fence(
+        h: Harness, tmp_path: Path) -> None:
+    from noeta.backends.execenvs.local import LocalExecEnv
+    from noeta.plugins.skills.registry import index_dir
+    from noeta.toolkit.tenant_fence import TenantFence
+
+    server = _server_secret(tmp_path)
+    d = write_skill(skills_dir(h), "mine", "My own.")
+    (d / "notes.md").write_text("n")
+    (d / "keys").symlink_to(server / "keys")
+    (skills_dir(h) / "leak").symlink_to(server / "leak")
+    fence = TenantFence(home=str(tmp_path / "home"), workspaces={"acme": str(h.work)},
+                        server_dirs=(str(server),))
+    env = LocalExecEnv(str(h.work), fence=lambda p, w: fence.refusal(
+        p, tenant="acme", task_id="t", cwd=str(h.work), write=w))
+    found = await index_dir(env, str(skills_dir(h)))
+    assert list(found) == ["mine"]
+    assert found["mine"].resources == ("notes.md",)
+
+
+def test_the_typed_and_forked_entries_kept_are_bounded() -> None:
+    skills = Skills()
+    state = skills.initial_state()
+    for seq in range(1, 500):
+        state = skills.reduce(state, "activated", {"name": f"s{seq % 3}", "input": seq})
+        state = skills.reduce(state, "forked", {"call_id": f"c{seq}", "prompt": "p"})
+    assert len(state["typed"]) <= 64 and "499" in state["typed"]
+    assert len(state["forks"]) <= 64 and "c499" in state["forks"]

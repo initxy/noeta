@@ -4,25 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Coroutine, Sequence
 from typing import TYPE_CHECKING, Any
 
-from noeta.core.deferred import is_deferred
+from noeta.core import records as core_records
+from noeta.core.errors import UnknownTask, UnservedQueue
 from noeta.core.events import (
     Event,
     ExtensionRecorded,
     InboxKind,
     Say,
-    TaskCreated,
     ToolFinished,
     ToolStarted,
     Waiting,
 )
-from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView
-from noeta.core.loop.state import CORE
-from noeta.core.runner import texts
-from noeta.core.store import NewTask, Patch, Post
-from noeta.core.tool import Tool, ToolContext, ToolOutput
+from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView, child_task
+from noeta.core.runner import closing, texts
+from noeta.core.store import NewTask, Post
+from noeta.core.tool import MAX_ATTEMPTS, Tool, ToolContext, ToolOutput, tool_flag
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
 
 if TYPE_CHECKING:
@@ -61,7 +60,11 @@ async def gate(run: TaskRun, view: TaskView, call: ToolUse) -> Gate:
             if isinstance(v, kind):
                 return v
     asks = [v for v in verdicts if isinstance(v, Ask)]
-    if not asks or (answer is not None and answer.decision == "allow"):
+    if not asks:
+        # Outright only when nobody answered for the call either.
+        return Allow(outright=answer is None and any(
+            isinstance(v, Allow) and v.outright for v in verdicts))
+    if answer is not None and answer.decision == "allow":
         return Allow()
     if not any(a.firm for a in asks) and any(
             isinstance(v, Allow) and v.approve for v in verdicts):
@@ -114,17 +117,31 @@ def _groups(runnable: list[tuple[ToolUse, Tool]]) -> list[list[tuple[ToolUse, To
     return groups
 
 
+async def _together(runs: list[Coroutine[Any, Any, None]]) -> None:
+    """Run a group's calls at once; when one fails (its result could not be
+    written), the others are cancelled before the failure goes up."""
+    started = [asyncio.ensure_future(r) for r in runs]
+    try:
+        await asyncio.gather(*started)
+    except BaseException:
+        for task in started:
+            task.cancel()
+        await asyncio.gather(*started, return_exceptions=True)
+        raise
+
+
 async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     view = run.view()
-    tools = {t.name: t for t in run.tools(view)}
+    offer = run.tool_offer(view)
+    tools = {t.name: t for t in offer.tools}
     runnable: list[tuple[ToolUse, Tool]] = []
     asks: dict[str, Ask] = {}
+    outright: set[str] = set()
     for c in [c for c in run.state.calls if c.use.id in call_ids]:
-        wanted = tools.get(c.use.name)
-        if wanted is not None and is_deferred(wanted) \
-                and c.use.name not in run.state.loaded_tools:
-            await run.append([run.error_result(
-                c.use.id, texts.DEFERRED_NOT_LOADED.format(name=c.use.name))])
+        withheld = offer.withheld.get(c.use.name)
+        if withheld is not None:
+            # Not in the request the model saw: refused before any gate.
+            await run.append([run.error_result(c.use.id, withheld)])
             continue
         answer = run.state.answers.get(c.use.id)
         if answer is not None and answer.decision == "deny" and isinstance(answer.data, dict) \
@@ -154,81 +171,121 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
         if tool is None:
             await run.append([run.error_result(use.id, texts.UNKNOWN_TOOL.format(name=use.name))])
             continue
+        if isinstance(verdict, Allow) and verdict.outright:
+            outright.add(use.id)
         runnable.append((use, tool))
     await run.flush(view)
     # A call whose tool declares ``run_last`` (delegation) runs after the
     # reply's ordinary calls, as 0.6 spawned only once they had finished.
-    runnable.sort(key=lambda item: bool(getattr(item[1], "run_last", False)))
+    runnable.sort(key=lambda item: tool_flag(item[1], "run_last"))
     for group in _groups(runnable):
         await run.append([ToolStarted(call=u) for u, _ in group])
-        await asyncio.gather(*(_run_one(run, u, t) for u, t in group))
+        await _together([_run_one(run, u, t, outright=u.id in outright) for u, t in group])
     if asks and run.state.config.get("unattended"):
         # One-shot: the task ends. Otherwise the turn closes and the loop
         # goes on to wait for input (and gives the task back).
-        return await run.fail_turn(texts.NEEDS_HUMAN, texts.NEEDS_HUMAN_DETAIL)
+        return await closing.fail_turn(run, texts.NEEDS_HUMAN, texts.NEEDS_HUMAN_DETAIL)
     if asks:
         await run.append(
             [Waiting(on="approval", ids=list(asks),
                      detail={k: {"prompt": a.prompt, **a.detail} for k, a in asks.items()})],
-            patch=Patch(status="waiting", waiting_on="approval",
-                        inbox_read_seq=run.state.inbox_read),
         )
         return False
     return True
 
 
 def _context(run: TaskRun, use: ToolUse, records: list[Event],
-             creates: list[NewTask]) -> ToolContext:
+             creates: list[NewTask], *, outright: bool = False) -> ToolContext:
     def record(extension: str, kind: str, data: Any) -> None:
+        core_records.check_writable(extension, kind)
         records.append(ExtensionRecorded(extension=extension, kind=kind, data=data))
 
     def spawn(agent: str, prompt: str | Message, *, config: dict[str, Any] | None = None,
-              background: bool = False, queue: str = "default",
+              background: bool = False, queue: str | None = None,
               history_from: str | None = None, history_through: int | None = None) -> str:
         child_id = f"{run.task_id}.{use.id}.{len(creates) + 1}"
         message = user(prompt) if isinstance(prompt, str) else prompt
-        child_config = dict(config or {})
-        for ext in run.exts:
-            child_config.update(ext.inherit(run.state))
         creates.append(NewTask(
             task_id=child_id,
-            created=TaskCreated(agent=agent, config=child_config, parent_id=run.task_id,
-                                root_id=run.state.root_id or run.task_id,
-                                history_from=history_from, history_through=history_through),
-            queue=queue,
+            created=child_task(run.task_id, run.state, run.exts, agent, config,
+                               history_from=history_from, history_through=history_through),
+            queue=queue or run.claim.queue,
             inbox=[Say(message=message)],
         ))
-        records.append(ExtensionRecorded(extension=CORE, kind="spawned", data={"children": [
-            {"id": child_id, "call_id": use.id, "background": background}]}))
+        records.append(core_records.event(core_records.Spawned(children=[
+            {"id": child_id, "call_id": use.id, "background": background}])))
         return child_id
 
-    async def post(body: InboxKind, task_id: str | None = None) -> None:
-        await run.store.post(Post(task_id=task_id or run.task_id, body=body))
+    tenant = run.state.tenant
+
+    async def post(body: InboxKind, task_id: str | None = None,
+                   dedupe_key: str | None = None, forward_if_ended: bool = False) -> None:
+        target = task_id or run.task_id
+        if target != run.task_id:
+            row = await run.store.get(target)
+            if row is None or row.tenant != tenant:
+                raise UnknownTask(target)  # another tenant's task is not there for it
+        await run.store.post(Post(task_id=target, body=body, dedupe_key=dedupe_key,
+                                  forward_if_ended=forward_if_ended))
+
+    async def tasks(**kw: Any) -> list[Any]:
+        return list(await run.store.tasks(**{**kw, "tenant": tenant}))
+
+    async def task(task_id: str) -> Any:
+        row = await run.store.get(task_id)
+        return row if row is not None and row.tenant == tenant else None
 
     root = run.state.root_id or run.task_id
     answer = run.state.answers.get(use.id)
     return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
                        state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
                        spawn=spawn, post=post, root_id=root, prompt=run.state.prompt,
-                       tasks=run.store.tasks, count_tokens=run.counter(_model(run)),
+                       tasks=tasks, task=task, count_tokens=run.counter(run.model),
                        hold=lambda: run.rt.hold(root), by_model=True,
-                       approved=answer is not None and answer.decision == "allow")
+                       approved=answer is not None and answer.decision == "allow",
+                       allowed_outright=outright, model=run.model,
+                       serves_queue=run.serves_queue)
 
 
-def _model(run: TaskRun) -> str:
-    return str(run.state.config.get("model") or (run.agent.model if run.agent else ""))
+async def _foreign_history(run: TaskRun, creates: list[NewTask]) -> str | None:
+    """A ``history_from`` among the staged children that is not a task of
+    this task's tenant (``Client.create`` refuses it the same way)."""
+    for c in creates:
+        source = c.created.history_from
+        if source is not None:
+            row = await run.store.get(source)
+            if row is None or row.tenant != run.state.tenant:
+                return source
+    return None
+
+
+def _unserved_queue(run: TaskRun, creates: list[NewTask]) -> str | None:
+    """A staged child's queue the child could not run on now
+    (:meth:`TaskRun.serves_queue`)."""
+    return next((c.queue for c in creates if not run.serves_queue(c.queue)), None)
 
 
 async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[Event],
                   creates: list[NewTask]) -> None:
+    foreign = await _foreign_history(run, creates)
+    if foreign is not None:
+        output = ToolOutput(content=[Text(text=f"UnknownTask: {foreign}")], is_error=True)
+        _drop_staged(records, creates)
+    unserved = _unserved_queue(run, creates)
+    if unserved is not None:
+        output = _unserved_output(unserved)
+        _drop_staged(records, creates)
     view = run.view()
     if output.park is not None:
         park = output.park
         keys = park.keys or [use.id]
-        records.append(ExtensionRecorded(extension=CORE, kind="parked", data={
-            "call_id": use.id, "on": park.on, "keys": keys, "detail": park.detail}))
-        await run.append(records, creates=creates)
-        return
+        try:
+            await run.append([*records, core_records.event(core_records.Parked(
+                call_id=use.id, on=park.on, keys=keys, detail=park.detail))], creates=creates)
+            return
+        except UnservedQueue as exc:  # held since the check above
+            output = _unserved_output(exc.queue)
+            _drop_staged(records, creates)
     for ext in run.exts:
         try:
             output = await ext.after_tool(view, use, output)
@@ -238,10 +295,22 @@ async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[
     if output.display is not None:
         meta["display"] = output.display
     finished = ToolFinished(result=ToolResult(call_id=use.id, content=output.content,
-                                              is_error=output.is_error), meta=meta,
+                                              is_error=output.is_error,
+                                              block_list=output.block_list), meta=meta,
                             end_turn=output.end_turn)
-    await run.append([*records, *view.pending, finished],
-                     creates=[*creates, *run.staged(view)])
+    try:
+        await run.append([*records, *view.pending, finished],
+                         creates=[*creates, *run.staged(view)], posts=await run.enqueued(view))
+    except UnservedQueue as exc:
+        # The tree was held since the check above (a hook may take seconds):
+        # the call fails and stages nothing, its hooks' records included.
+        await run.append([run.error_result(
+            use.id, texts.UNSERVED_QUEUE_ERROR.format(queue=exc.queue))])
+
+
+def _unserved_output(queue: str) -> ToolOutput:
+    return ToolOutput(content=[Text(text=texts.UNSERVED_QUEUE_ERROR.format(queue=queue))],
+                      is_error=True)
 
 
 def _drop_staged(records: list[Event], creates: list[NewTask]) -> None:
@@ -252,10 +321,10 @@ def _drop_staged(records: list[Event], creates: list[NewTask]) -> None:
     creates.clear()
 
 
-async def _run_one(run: TaskRun, use: ToolUse, tool: Tool) -> None:
+async def _run_one(run: TaskRun, use: ToolUse, tool: Tool, *, outright: bool = False) -> None:
     records: list[Event] = []
     creates: list[NewTask] = []
-    ctx = _context(run, use, records, creates)
+    ctx = _context(run, use, records, creates, outright=outright)
     try:
         output = await tool.run(use.input, ctx)
     except asyncio.CancelledError:
@@ -265,6 +334,41 @@ async def _run_one(run: TaskRun, use: ToolUse, tool: Tool) -> None:
         output = ToolOutput(content=[Text(text=f"{type(exc).__name__}: {exc}")], is_error=True)
         _drop_staged(records, creates)
     await _finish(run, use, output, records, creates)
+
+
+async def recover_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
+    """Calls a crash (or a lost claim) left started and unfinished: each
+    gets the result its tool recovers, or runs again when its tool is
+    ``retry_safe`` (and has not started :data:`MAX_ATTEMPTS` times), or is
+    answered "outcome unknown". They are not gated again: each was allowed
+    as it ran (``Call.ran``)."""
+    tools = {t.name: t for t in run.tools(run.view())}
+    again: list[tuple[ToolUse, Tool]] = []
+    for c in [c for c in run.state.calls if c.use.id in call_ids]:
+        use = c.ran or c.use
+        tool = tools.get(use.name)
+        recover = getattr(tool, "recover", None)
+        if recover is not None:
+            records: list[Event] = []
+            creates: list[NewTask] = []
+            try:
+                output = await recover(use.input, _context(run, use, records, creates))
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # a failing lookup tells nothing
+                log.exception("tool %s recover failed", use.name)
+                output = None
+            if output is not None and output.park is None:
+                await _finish(run, use, output, records, creates)
+                continue
+        if tool is not None and tool_flag(tool, "retry_safe") and c.attempts < MAX_ATTEMPTS:
+            again.append((use, tool))
+            continue
+        await run.append([run.error_result(use.id, texts.INTERRUPTED_CALL_ERROR)])
+    for group in _groups(again):
+        await run.append([ToolStarted(call=u) for u, _ in group])
+        await _together([_run_one(run, u, t) for u, t in group])
+    return True
 
 
 def _outcome(run: TaskRun, parked: dict[str, Any], call_id: str) -> Any:

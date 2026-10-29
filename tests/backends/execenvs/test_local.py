@@ -10,6 +10,7 @@ import os
 import signal
 import stat
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -17,13 +18,9 @@ from typing import Any
 import pytest
 
 from noeta.backends.execenvs import local as local_mod
-from noeta.backends.execenvs.local import (
-    ENV_ALLOWLIST,
-    LocalExecEnv,
-    scrub_env,
-    send_group_signal,
-)
+from noeta.backends.execenvs.local import LocalExecEnv, send_group_signal
 from noeta.core.execenv import ExecEnv, FileStat, RunResult
+from noeta.toolkit.local_env import ENV_ALLOWLIST, scrub_env
 
 
 def _alive(pid: int) -> bool:
@@ -116,6 +113,19 @@ async def test_timeout_reaps_backgrounded_grandchild(
     assert time.monotonic() - start < 8.0
 
 
+async def test_timeout_kills_the_group_after_its_leader_exited(
+    env: LocalExecEnv, tmp_path: Path
+) -> None:
+    """The direct child exited (and was reaped) while a grandchild keeps
+    its output open: the timeout still kills the grandchild."""
+    pid_file = tmp_path / "grandchild.pid"
+    script = f"sleep 77 & echo $! > {pid_file}; exit 0"
+    result = await env.run(["/bin/sh", "-c", script], timeout=2)
+    assert result.timed_out is True
+    grandchild = int(pid_file.read_text().strip())
+    assert await _wait_dead(grandchild), f"grandchild {grandchild} survived"
+
+
 async def test_timeout_keeps_partial_output(env: LocalExecEnv) -> None:
     result = await env.run(["bash", "-c", "echo hi; sleep 30"], timeout=1, output_cap=1024)
     assert result.timed_out is True
@@ -141,6 +151,37 @@ async def test_cancellation_kills_the_group(env: LocalExecEnv, tmp_path: Path) -
         await task
     for pid in pids:
         assert await _wait_dead(pid), f"{pid} survived cancellation"
+
+
+@pytest.mark.parametrize("steps", range(8))
+def test_a_loop_shutting_down_mid_spawn_still_closes(tmp_path: Path, steps: int) -> None:
+    """The loop shuts down (every task cancelled at once) ``steps`` loop
+    turns into a run, while its child may still be being spawned: closing
+    the loop ends, and the child's group is killed."""
+    env = LocalExecEnv(str(tmp_path), kill_grace=0.5)
+    pid_file = tmp_path / "pid"
+    script = f"echo $$ > {pid_file}; sleep 300"
+    runs: list[asyncio.Future[Any]] = []
+
+    async def main() -> None:
+        runs.append(asyncio.ensure_future(env.run(["bash", "-c", script])))
+        for _ in range(steps):
+            await asyncio.sleep(0)
+
+    closed = threading.Event()
+
+    def run_loop() -> None:
+        asyncio.run(main())
+        closed.set()
+
+    threading.Thread(target=run_loop, daemon=True).start()
+    assert closed.wait(20), "the loop never finished closing"
+    if pid_file.exists() and pid_file.read_text().strip():
+        pid = int(pid_file.read_text())
+        deadline = time.monotonic() + 10
+        while _alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _alive(pid), f"{pid} survived the loop's shutdown"
 
 
 async def test_a_second_cancel_still_finishes_the_kill(tmp_path: Path) -> None:

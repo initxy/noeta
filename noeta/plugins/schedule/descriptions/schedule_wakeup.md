@@ -2,7 +2,7 @@ Set when the next iteration of a self-paced `/loop` runs. Use it only in `/loop`
 
 Background work the harness tracks (a sub-agent, a background command, a monitor) wakes you by itself when it finishes, so never schedule short wake-ups to poll it; schedule one long fallback instead (1200 s or more), in case that work stalls or never reports. Work outside the harness (a CI run, a deploy, a remote queue) is the exception: wait about as long as that state takes to change.
 
-Each turn, pass the same `/loop` input back as `prompt`; that is what makes the next wake-up run the task again. A loop the user started with no prompt at all (an autonomous loop) passes the literal sentinel `<<autonomous-loop-dynamic>>` instead, which is expanded into the loop's instructions when the wake-up fires. `<<autonomous-loop>>` is the sentinel of loops driven by CronCreate; never pass it here. To end the loop, call this tool with `stop: true` and no other field: it ends at once and nothing fires again.
+Each turn, pass the same `/loop` input back as `prompt`; that is what makes the next wake-up run the task again. A loop the user started with no prompt at all (an autonomous loop) passes the literal sentinel `<<autonomous-loop-dynamic>>` instead, which is expanded into the loop's instructions when the wake-up fires. `<<autonomous-loop>>` is the sentinel of loops driven by CronCreate; never pass it here. To stop the loop, call this tool with only `stop: true`: it ends at once and nothing fires again.
 
 ## Choosing delaySeconds
 

@@ -16,10 +16,11 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.events import ToolFinished
 from noeta.core.extension import Extension, TaskView
-from noeta.core.questions import AnswerValidationError, answer_question, ask, read_answer
+from noeta.core.questions import AnswerValidationError, ask, read_answer
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.host.acp import EditorServers
 from noeta.host.local import LocalApp
+from noeta.host.questions import answer_question
 from noeta.plugins.mcp import Mcp, McpPool
 from noeta.testing import ScriptedProvider, reply
 from tests.host.test_acp_review import acp_session, text_block
@@ -169,7 +170,7 @@ async def test_mcp_servers_in_claude_codes_shape() -> None:
 
     try:
         mcp = Mcp({"fake": {"command": sys.executable, "args": [FAKE_MCP]}}, pool=pool)
-        [command] = await mcp.commands(CommandContext(cwd="/"))
+        [command] = await mcp.commands(CommandContext(cwd="/", tenant="default"))
         assert command.name == "mcp__fake__review"
     finally:
         await pool.close()

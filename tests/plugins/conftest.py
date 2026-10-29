@@ -15,7 +15,7 @@ from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Image, Text
 from noeta.plugins.fs.state import FS, FsState, reduce_fs
-from noeta.plugins.shell.bash import SHELL, ShellState, reduce_shell, shell_state
+from noeta.plugins.shell.state import SHELL, ShellState, reduce_shell, shell_state
 
 
 @dataclass
@@ -26,6 +26,11 @@ class Harness:
     spill_dir: str | None = None
     task_id: str = "task-1"
     calls: int = 0
+    #: Calls run as if a person allowed them at an approval prompt.
+    approved: bool = False
+    #: Calls run as if a permission layer allowed them by its settings.
+    allowed_outright: bool = False
+    model: str = ""
 
     @property
     def root(self) -> Path:
@@ -56,6 +61,9 @@ class Harness:
             state=self.state,
             record=self.record,
             spill_dir=self.spill_dir,
+            approved=self.approved,
+            allowed_outright=self.allowed_outright,
+            model=self.model,
         )
 
     async def call(self, tool: Tool, **input: Any) -> ToolOutput:

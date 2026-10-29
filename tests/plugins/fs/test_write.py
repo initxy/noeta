@@ -45,13 +45,79 @@ async def test_write_creates_new_file(h: Harness, ws: Path) -> None:
 
 
 async def test_write_existing_path_without_read_rejected(h: Harness, ws: Path) -> None:
+    h.approved = True  # asked about: the read-first check holds
     (ws / "exists.txt").write_text("old\n")
     out = await h.call(WriteTool(), file_path="exists.txt", content="new\n")
     assert out.is_error
     assert text_of(out) == (
-        "Write: File has not been read yet. Read it first before overwriting it."
+        "Write: Read the file first: overwriting a file this conversation has not "
+        "read is refused."
     )
     assert (ws / "exists.txt").read_text() == "old\n"
+
+
+async def test_an_allowed_overwrite_needs_no_read_first(h: Harness, ws: Path) -> None:
+    h.allowed_outright = True
+    (ws / "exists.txt").write_text("old\n")
+    out = await h.call(WriteTool(), file_path="exists.txt", content="new\n")
+    assert not out.is_error, text_of(out)
+    assert (ws / "exists.txt").read_text() == "new\n"
+
+
+@pytest.mark.parametrize("model", ["claude-opus-4-6", "claude-sonnet-4-5-20250929",
+                                   "claude-haiku-4-5", "claude-3-5-sonnet-20241022"])
+async def test_older_claude_models_keep_the_read_first_check(
+        h: Harness, ws: Path, model: str) -> None:
+    h.allowed_outright, h.model = True, model
+    (ws / "exists.txt").write_text("old\n")
+    out = await h.call(WriteTool(), file_path="exists.txt", content="new\n")
+    assert out.is_error and "this conversation has not read" in text_of(out)
+    h.model = "claude-opus-4-7"
+    out = await h.call(WriteTool(), file_path="exists.txt", content="new\n")
+    assert not out.is_error
+
+
+async def test_without_a_permission_layer_an_unread_file_is_never_overwritten(
+        h: Harness, ws: Path) -> None:
+    # Nobody asked and nothing allowed it outright (a host running the file
+    # tools without the permissions plugin): the read-first check holds.
+    (ws / "exists.txt").write_text("old\n")
+    out = await h.call(WriteTool(), file_path="exists.txt", content="new\n")
+    assert out.is_error and "this conversation has not read" in text_of(out)
+    out = await h.call(EditTool(), file_path="exists.txt", old_string="old", new_string="x")
+    assert out.is_error and "this conversation has not read" in text_of(out)
+    assert (ws / "exists.txt").read_text() == "old\n"
+
+
+async def test_an_overwrite_after_a_cut_read_is_refused_even_when_allowed(
+        h: Harness, ws: Path) -> None:
+    # A read cut to fit the token cap showed only part: Claude Code refuses a
+    # whole-file Write over it whatever the permissions say.
+    (ws / "wide.txt").write_text("".join("y" * 150 + "\n" for _ in range(1700)))
+    await _read(h, "wide.txt")
+    out = await h.call(WriteTool(), file_path="wide.txt", content="new\n")
+    assert out.is_error and "this conversation has not read" in text_of(out)
+
+
+async def test_a_write_of_noeta_md_has_the_file_state_note(h: Harness, ws: Path) -> None:
+    out = await h.call(WriteTool(), file_path="NOETA.md", content="a\n")
+    assert text_of(out) == (f"File created successfully at: {ws / 'NOETA.md'} "
+                            "(what you wrote is the file's current state; no need to Read it "
+                            "back)")
+
+
+async def test_write_onto_a_directory_says_to_name_the_file(h: Harness, ws: Path) -> None:
+    (ws / "pkg").mkdir()
+    out = await h.call(WriteTool(), file_path="pkg", content="x")
+    assert text_of(out) == ("Write: pkg is a directory. To create a file in it, put the file's "
+                            "name at the end of file_path.")
+
+
+async def test_an_overwrite_keeps_the_files_byte_order_mark(h: Harness, ws: Path) -> None:
+    (ws / "bom.txt").write_bytes(b"\xef\xbb\xbfold\n")
+    await _read(h, "bom.txt")
+    assert not (await h.call(WriteTool(), file_path="bom.txt", content="new\n")).is_error
+    assert (ws / "bom.txt").read_bytes() == b"\xef\xbb\xbfnew\n"
 
 
 async def test_write_existing_path_after_read_overwrites(h: Harness, ws: Path) -> None:
@@ -161,13 +227,6 @@ async def test_write_inside_sub_dir(h: Harness, ws: Path) -> None:
     assert text_of(out) == f"File created successfully at: {ws / 'sub' / 'x.txt'} (what you wrote is the file's current state; no need to Read it back)"
 
 
-async def test_write_onto_a_directory_rejected(h: Harness, ws: Path) -> None:
-    (ws / "sub").mkdir()
-    out = await h.call(WriteTool(), file_path="sub", content="x")
-    assert out.is_error
-    assert text_of(out) == "Write: not a file: 'sub'"
-
-
 async def test_write_over_a_binary_file_after_read_is_rejected(h: Harness, ws: Path) -> None:
     (ws / "b.bin").write_bytes(b"\xff\xfe")
     # Read records nothing for a non-text file, so the read-first check refuses.
@@ -236,7 +295,7 @@ async def test_restricted_write_guard_precedes_read_first_check(h: Harness, ws: 
     out = await h.call(tool, file_path="src/main.py", content="new\n")
     assert out.is_error
     assert "writable allow-list" in text_of(out)
-    assert "has not been read yet" not in text_of(out)
+    assert "this conversation has not read" not in text_of(out)
     assert target.read_text() == "old\n"
 
 
@@ -323,13 +382,14 @@ async def test_relative_authorized_root_grants_nothing(h: Harness, ws: Path) -> 
 
 
 async def test_authorized_write_still_refuses_an_unread_overwrite(h: Harness, ws: Path) -> None:
+    h.approved = True
     other = _neighbour(ws)
     target = other / "keep.txt"
     target.write_text("keep\n")
     tool = WriteTool(write_roots=lambda ctx: ["/"])
     out = await h.call(tool, file_path=str(target), content="clobber")
     assert out.is_error
-    assert "has not been read yet" in text_of(out)
+    assert "this conversation has not read" in text_of(out)
     assert target.read_text() == "keep\n"
 
 

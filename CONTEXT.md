@@ -9,28 +9,48 @@ The only unit of work. A task has an agent, a config, an event log, an inbox and
 `tasks` (a projection of the log written in the same transaction). Sub-agents are child tasks
 with `parent_id` / `root_id`; a task may start from another's conversation
 (`TaskCreated.history_from`: a resumed or forked sub-agent). There is no session, run or workflow
-entity.
+entity. A task belongs to one tenant (see Tenant).
+
+## Tenant
+
+Whose tasks they are: `TaskCreated.tenant` (`default` unless a scoped client made the task;
+children inherit it). A client scoped to a tenant (`Client.scoped`) and a task's own posts and
+task lists (`ToolContext.post`, `tasks`) reach only that tenant's tasks; host code with an
+unscoped client sees the whole store. On `noeta serve` a request's bearer token picks its
+tenant: the server token is `default`'s, more come from `noeta token add --tenant`
+(`~/.noeta/tokens.json`, digests only). What a tenant may do is `~/.noeta/tenants/<name>/
+config.toml` (`noeta/cli/tenants.py`): a workspace bounding its tasks' `cwd` (the HTTP host),
+and `Runtime.tenants` (`noeta/core/tenants.py`): running limit (the claim), monthly budget
+(the model call), its own provider. No directory, no limits.
 
 ## Event log
 
 Ten event types (`noeta/core/events.py`). Plugin state is never a new event type: a plugin records
-`ExtensionRecorded(extension, kind, data, message?)` and folds it in its own `reduce`. The loop
-state is a pure fold of the log; the model request is a pure function of that state.
+`ExtensionRecorded(extension, kind, data, message?)` and folds it in its own `reduce`. The core's
+own entries use the same event under `extension="core"`, one typed payload per kind
+(`noeta/core/records.py`), which the kernel writes and folds them through. The loop
+state is a pure fold of the log; the model request is a pure function of that state. A claim
+folds from the task's snapshot (`noeta/core/snapshots.py`) when one of its fold version exists.
 
 ## Inbox
 
 The only way into a task: `Say`, `Cancel`, `Answer`, `ChildEnded`, `TimerFired`, `External`,
 each idempotent on an optional `dedupe_key`. Front ends, parents, timers and plugins all post;
-only the task's runner reads.
+only the task's runner reads. A task never ends over an item it has not taken (the store
+refuses the end, `InboxUnread`; the runner takes it and decides again).
 
 ## One writer
 
 A runner claims a task from the store (`claim` / `renew` / `release`; Postgres uses
 `SKIP LOCKED`). Every append is conditional on `expected_seq` and the claim's `owner_epoch`, so a
 stale runner can never write. A tool call is logged as started before it runs; on recovery an
-unfinished call is answered "outcome unknown", never re-run. What lives only in one worker
-process (a background job) holds the task tree there (`Store.hold`): other workers skip it until
-the hold is released or runs out.
+unfinished call is answered "outcome unknown", never re-run, unless its tool looks the outcome
+up (`Tool.recover`, by `ToolContext.idempotency_key`) or is `retry_safe`. What lives only in one worker
+process (a background job) holds the task tree there (`Store.hold`; a tree has one holding worker,
+so a hold is refused while another worker holds the tree or runs one of its tasks, `HeldElsewhere`, and takes back another worker's lapsed claim of the tree): other workers skip it until
+the hold is released, or reaped once it ran out (every worker reaps), which posts `hold_lost` to
+the tree's tasks, waking them (a worker stopping on purpose posts it without waking: the task
+hears with its next message); a hold's epoch fences its old holder.
 
 ## Layers
 
@@ -41,17 +61,21 @@ the ways in: HTTP with `RemoteClient`, ACP) > `noeta/toolkit` (code plugins shar
 `noeta/core`. `|` siblings never import each other, nor do two plugins or two backends
 (`lint-imports`). One plugin reaches another only through the kernel: a tool by name
 (`TaskView.find_tool`), inherited config (`Extension.inherit`), runnable agents
-(`TaskView.agents`), or a record another plugin documents as read by others (the memory
-plugin's `dir`, which the instructions plugin reads to show `MEMORY.md`; the shell plugin's
-`cwd`, which the permissions plugin judges commands from). Front ends import no plugin. The SDK is everything but `noeta/cli`.
+(`TaskView.agents`), or a record documented as read by others (memory's `dir` for
+instructions, shell's `cwd` and permissions' `mode` for permissions and hooks). Front ends
+import no plugin; they read what plugins publish (permissions' `modes`). SDK = all but `noeta/cli`.
 
 ## Ways in
 
-One API, the client (`noeta/core/client.py`): create, send, answer, cancel, read and watch
-events. HTTP (`noeta/host/http.py`, `noeta serve`) is that API on the wire; ACP
-(`noeta/host/acp.py`) translates the protocol editors speak into it, and
-`noeta/host/stream_json.py` Claude Code's headless protocol (`noeta -p`, the server's
-`/stream-json`). A new outside protocol is another translation in `host`, never a second API.
+One API, the client (`noeta/core/client.py`): create, send, answer, cancel, read, watch. HTTP
+(`noeta/host/http.py`, `noeta serve`) is it on the wire; ACP (`noeta/host/acp.py`) and
+`noeta/host/stream_json.py` (`noeta -p`, `/stream-json`) translate editors' and Claude Code's
+headless protocols into it. A front end runs on `AppAPI` (`noeta/host/app.py`: client, agents,
+commands, request preview), `LocalApp` in process or `RemoteApp` against a server (`--server`).
+A new outside protocol is another translation in `host`, never a second API. A long-running
+listener for an outside conversation (a chat) is a `Channel` (`noeta/core/channel.py`, group
+`noeta.channels`), run by `noeta worker` / `noeta serve`; its posts are idempotent (`deliver`),
+and replies go out from inside the task (a plugin).
 
 ## Where code goes
 
@@ -66,11 +90,24 @@ module the kernel never imports, unless listed there as kernel surface with a re
 ## Registry
 
 Plugins and backends are found by name through entry points (`noeta/core/registry.py`): groups
-`noeta.plugins`, `noeta.providers`, `noeta.execenvs`, `noeta.stores`. The built-ins register in
-`pyproject.toml` exactly as a third-party package would (`examples/hello-plugin` is one,
-installed and tested by `make check`). A plugin's registry name is its `Extension.name`. A
-plugin can also be a plain file in `~/.noeta/plugins` or a trusted project's `.noeta/plugins`
-(`registry.load_plugin_files`); an installed plugin wins a name clash.
+`noeta.plugins`, `noeta.providers`, `noeta.execenvs`, `noeta.stores`, `noeta.channels`. The
+built-ins register in `pyproject.toml` exactly as a third-party package would
+(`examples/hello-plugin` is one, installed and tested by `make check`). A plugin's registry name
+is its `Extension.name`. A plugin (or channel) can also be a plain file in `~/.noeta/plugins` or
+a trusted project's `.noeta/plugins` (`registry.load_plugin_files`); an installed plugin wins a
+name clash. Such a file joins the agents its `Extension.add_to` names by itself (an installed
+package's `add_to` is ignored). `noeta plugin add <git-url>@<commit>` installs one there pinned
+(also from a Claude Code `marketplace.json`, only read), running nothing from it.
+
+## Plugin pin
+
+A task records the plugins it runs with (`records.Plugins`: each one's `registry.pin` — name,
+source, version or file hash, arguments hash) when it first starts and whenever a pickup finds
+them changed. A worker missing a recorded plugin never runs the task without it: it lets the
+lease run out, and fails the task with `plugin_missing` after `LOAD_ATTEMPTS` such claims in a
+row (`TaskRun._plugin_missing`). A reload (the TUI's
+`/reload-plugins`, `LocalApp.reload_plugins`; on servers a rolling restart) re-imports plugin
+files and remakes the agents: a task runs the new code from its next turn, recorded so.
 
 ## Plugin setting
 
@@ -79,23 +116,26 @@ it off), a ready `Extension`, or on/off. One table at every level (`build_agents
 `default_agents`, `from_settings`, `config.toml` `[plugins.<name>]`); argument tables of one
 plugin merge key by key. `add` (`[agents.<name>] add_plugins`, `"*"` for all) appends plugins
 to an agent without copying its file. The built-in agents keep memory and MCP off until set.
+A secret is written as a reference, `{env:NAME}` or `{keyring:service/user}`, resolved only when
+the plugin is made (`agent_files.resolve_secrets`).
 
 ## Config places
 
 noeta reads only its own places: `~/.noeta/` (`NOETA_HOME`), a project's `.noeta/` (most of it
 only once trusted), `NOETA.md` and the cross-tool `AGENTS.md`, and the machine's managed
-directory (`/etc/noeta`). The mechanisms and formats inside are Claude Code's (instruction
-layering, settings, skills, agents, `.noeta/mcp.json`); its own places (`~/.claude/`,
-`.claude/`, `CLAUDE.md`, `.mcp.json`, `CLAUDE_*` variables) are never read
-(`noeta/cli/settings_files.py`, `noeta/plugins/instructions/files.py`). Trusted projects are
-listed in `~/.noeta/trusted.json` (`noeta trust`); a trusted project's MCP servers start only
-with Claude Code's consent keys in its own settings, so a cloned repository never starts a
-process by itself.
+directory (`/etc/noeta`; its `config.toml` `[policy]` allows and blocks plugins by name over
+every other setting, `plugin_policy.PluginPolicy`). The mechanisms and formats inside are Claude Code's
+(instruction layering, settings, skills, agents, `.noeta/mcp.json`, plugin directories:
+`noeta/cli/claude_plugins.py`); its own places (`~/.claude/`, `.claude/`, `CLAUDE.md`,
+`.mcp.json`, `CLAUDE_*` variables) are never read (`noeta/cli/settings_files.py`,
+`noeta/plugins/instructions/files.py`). Trusted projects are listed in `~/.noeta/trusted.json`
+(`noeta trust`); a trusted project's MCP servers start only with Claude Code's consent keys in
+its own settings, so a cloned repository never starts a process by itself.
 
 ## Extension
 
-The one capability-plugin interface (`noeta/core/extension.py`): tools, context parts, commands,
-reminders, `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow;
+The one capability-plugin interface (`noeta/core/extension.py`): tools, `tool_changes` (tools
+computed from the others'), context parts, commands, reminders, `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow;
 an approving Allow satisfies asks that are not firm), `resolve_ask` (answers asks before the
 call parks), `after_tool`, `on_event`, `reduce`, `continue_state`, `inherit`, `on_context_overflow`,
 `before_compact` (asked by the compacting plugin), `resident`, `lead_resident`. Every method is
@@ -108,8 +148,11 @@ something with `notify`; neither reaches the model as the user.
 ## Deferred tool
 
 A tool that sets `deferred = True` is named to the model (`TaskView.deferred_tool_names`) and
-sent only once the model loads it with `ToolSearch`, which the runner adds while any is offered
-(`noeta/core/deferred.py`). MCP tools are deferred by default.
+sent only once the model loads it with `ToolSearch`. The `tool_search` plugin
+(`noeta/plugins/tool_search`) adds `ToolSearch` and withholds the tools not loaded through
+`Extension.tool_changes`; a tool is loaded once a `ToolReference` in the task's history or open
+batch names it. Every agent built from agent files runs it. MCP tools are deferred by default
+(ADR-017).
 
 ## Agent file
 

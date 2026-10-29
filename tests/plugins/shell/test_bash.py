@@ -17,14 +17,11 @@ import pytest
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.execenv import RunResult
 from noeta.core.tool import ToolContext
-from noeta.plugins.shell.bash import (
-    SHELL,
-    BashTool,
-    ShellState,
-    git_prelude,
-    reduce_shell,
-    resolve_timeout,
-)
+from noeta.plugins.shell.bash import BashTool, resolve_timeout
+from noeta.plugins.shell.git_prelude import git_prelude
+from noeta.plugins.shell.jobs import Registry
+from noeta.plugins.shell.state import SHELL, ShellState, reduce_shell
+from noeta.plugins.shell.tools import BackgroundBash
 from tests.plugins.conftest import Harness, text_of
 
 
@@ -54,6 +51,49 @@ async def test_nonzero_exit_leads_with_the_code(h: Harness) -> None:
     assert out.meta["exit_code"] == 3
     bare = await bash(h, "sh -c 'exit 4'")
     assert bare.is_error and text_of(bare) == "Exit code 4"
+
+
+@pytest.mark.parametrize("command", [
+    "grep nothing-here marker.txt", "cd . && rg nothing-here marker.txt",
+    "find . -name marker.txt -exec false {} +", "diff <(echo a) <(echo b)",
+    "test -f absent", "[ -f absent ]",
+    "git -C . diff --quiet --no-index marker.txt /dev/null",
+    "egrep nothing-here marker.txt", "fgrep nothing-here marker.txt",
+])
+async def test_exit_one_of_a_search_or_compare_is_not_an_error(
+        h: Harness, ws: Path, command: str) -> None:
+    (ws / "marker.txt").write_text("x\n")
+    out = await bash(h, command)
+    assert out.meta["exit_code"] == 1
+    assert not out.is_error
+    assert "Exit code" not in text_of(out)
+
+
+async def test_exit_two_of_grep_and_one_elsewhere_stay_errors(h: Harness) -> None:
+    out = await bash(h, "grep x /no/such/file")
+    assert out.is_error and text_of(out).startswith("Exit code 2\n")
+    piped = await bash(h, "grep nothing-here /dev/null | cat; false")
+    assert piped.is_error and text_of(piped) == "Exit code 1"
+
+
+_PNG_1X1 = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9"
+            "awAAAABJRU5ErkJggg==")
+
+
+async def test_an_image_data_uri_comes_back_as_an_image(h: Harness) -> None:
+    from noeta.core.types import Image
+    out = await bash(h, f"echo; echo 'data:image/jpeg;base64,{_PNG_1X1}'")
+    assert not out.is_error
+    [block] = out.content
+    assert isinstance(block, Image) and block.media_type == "image/png"
+    assert block.data.startswith(b"\x89PNG")
+
+
+async def test_a_broken_or_failing_image_uri_stays_text(h: Harness) -> None:
+    out = await bash(h, "echo 'data:image/png;base64,@@@'")
+    assert text_of(out) == "data:image/png;base64,@@@"
+    failed = await bash(h, f"echo 'data:image/png;base64,{_PNG_1X1}'; exit 3")
+    assert failed.is_error and text_of(failed).startswith("Exit code 3\ndata:image/png")
 
 
 async def test_stdout_and_stderr_merge_in_print_order(h: Harness) -> None:
@@ -120,15 +160,24 @@ async def test_timeout_is_an_error_with_the_output_so_far(h: Harness) -> None:
 
 async def test_a_long_leading_sleep_is_blocked_before_it_runs(h: Harness, ws: Path) -> None:
     marker = ws / "ran"
-    out = await bash(h, f"sleep 110 && touch {marker}")
+    tool = BackgroundBash(Registry(log_dir=str(ws / "logs")))
+    out = await bash(h, f"sleep 110 && touch {marker}", tool)
     assert out.is_error
     assert text_of(out) == (
-        f"Bash: Blocked: sleep 110 followed by: touch {marker}. To wait for a "
-        "condition, use Monitor with an until-loop (e.g. `until <check>; do "
-        "sleep 2; done`). To wait for a command you started, use "
-        "run_in_background: true. Do not chain shorter sleeps to work around "
-        "this block."
+        f"Bash: Blocked: sleep 110 followed by: touch {marker}. To wait until "
+        "something is true, run an until-loop under Monitor (`until <check>; do "
+        "sleep 2; done`); to wait for a command of yours, start it with "
+        "run_in_background: true. Do not get around this with a chain of shorter "
+        "sleeps."
     )
+    assert not marker.exists()
+
+
+async def test_without_background_jobs_a_long_sleep_just_runs(h: Harness, ws: Path) -> None:
+    # Its refusal points at Monitor and run_in_background, which are not there.
+    marker = ws / "ran"
+    out = await bash(h, f"sleep 110 && touch {marker}", timeout=1000)
+    assert text_of(out) == "Command timed out after 1s"
     assert not marker.exists()
 
 
@@ -198,6 +247,18 @@ async def test_a_recorded_directory_outside_the_workspace_is_given_up(
     h: Harness, tmp_path: Path
 ) -> None:
     h.state[SHELL] = ShellState(cwd=str(tmp_path))
+    out = await bash(h, "pwd")
+    assert text_of(out) == f"{h.root}\nShell cwd was reset to {h.root}"
+
+
+async def test_a_directory_swapped_for_a_link_out_starts_back_at_the_root(
+    h: Harness, tmp_path: Path
+) -> None:
+    await bash(h, "mkdir sub && cd sub")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    os.rmdir(h.root / "sub")
+    os.symlink(elsewhere, h.root / "sub")
     out = await bash(h, "pwd")
     assert text_of(out) == f"{h.root}\nShell cwd was reset to {h.root}"
 
@@ -489,6 +550,53 @@ async def test_a_planted_bare_repository_is_refused_unless_a_person_approved(
     assert not out.is_error, text_of(out)
     assert "+2" in text_of(out)
     assert [k for k, m in markers.items() if m.exists()] == []
+
+
+def _planted_with_a_work_tree(where: Path, marker: Path, *, bare: bool = False) -> Path:
+    """A git directory ``where/evil`` (not ``.git``) whose config gives it
+    ``where`` as its work tree and a filter that touches ``marker``, with
+    ``f.txt`` in its index and changed since: what a model could write
+    into a directory it may write without asking."""
+    (where / "f.txt").write_text("x\n")
+    _git(where, "init", "-q", "--separate-git-dir", str(where / "evil"), str(where))
+    _git(where, "add", "f.txt")
+    (where / ".git").unlink()
+    config = (where / "evil" / "config").read_text()
+    if bare:
+        config = config.replace("bare = false", "bare = true")
+    (where / "evil" / "config").write_text(
+        config + f'\tworktree = ..\n[filter "x"]\n\tclean = "touch {marker}; cat"\n')
+    (where / "evil" / "info" / "attributes").write_text("* filter=x\n")
+    (where / "f.txt").write_text("y\n")
+    return where / "evil"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+async def test_a_planted_repository_outside_the_workspace_is_refused_when_it_has_a_work_tree(
+        tmp_path: Path) -> None:
+    from noeta.plugins.permissions.scope import Scope, read_only
+
+    ws, extra = tmp_path / "ws", tmp_path / "extra"
+    ws.mkdir()
+    extra.mkdir()
+    marker = tmp_path / "filter-ran"
+    evil = _planted_with_a_work_tree(extra, marker)
+    h = Harness(env=LocalExecEnv(str(ws)))
+    for command in (f"git -C {evil} status", f"git -C {evil} diff", f"cd {evil} && git status",
+                    f"git -C {evil} ls-files -m"):
+        # An additional working directory: read-only, so allowed without asking.
+        assert read_only(command, Scope(dirs=(str(ws), str(extra)), home=str(tmp_path)))
+        out = await bash(h, command)
+        assert out.is_error and "not a .git directory" in text_of(out), command
+    assert not marker.exists()
+    # A bare repository outside the workspace (no work tree, so no filter)
+    # still reads.
+    other = tmp_path / "other"
+    other.mkdir()
+    bare = _planted_with_a_work_tree(other, marker, bare=True)
+    out = await bash(h, f"git -C {bare} log --oneline")
+    assert "not a .git directory" not in text_of(out)
+    assert not marker.exists()
 
 
 # -- the capture cap -------------------------------------------------------------

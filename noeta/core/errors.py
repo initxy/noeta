@@ -19,6 +19,12 @@ class CommitUnknown(Conflict):
     if its claim were lost, and whoever runs the task next reads the log."""
 
 
+class InboxUnread(Conflict):
+    """An append that ends the task found inbox items its runner has not
+    taken: a task never ends over a message it did not read. The runner
+    takes them and decides again."""
+
+
 class StoreUnavailable(NoetaError):
     """The store could not be reached, or its connection dropped before a
     write committed. Nothing was written; the call may be made again."""
@@ -26,6 +32,23 @@ class StoreUnavailable(NoetaError):
 
 class UnknownTask(NoetaError):
     pass
+
+
+class HeldElsewhere(NoetaError):
+    """A hold on a task tree was refused: another worker holds the tree or
+    runs one of its tasks (``Store.hold``), and a tree has at most one
+    holding worker. What needed the hold (a background job) cannot start in
+    this process."""
+
+
+class UnservedQueue(NoetaError):
+    """An append would create a child on a queue its tree's holding worker
+    does not serve (``Store.append``): a held tree's tasks run only on its
+    holder, so nobody would claim the child. Nothing was written."""
+
+    def __init__(self, queue: str) -> None:
+        super().__init__(f"queue {queue!r} is not served by the task tree's holding worker")
+        self.queue = queue
 
 
 class ModelError(NoetaError):
@@ -53,9 +76,14 @@ class Fatal(ModelError):
     """Retrying the same request cannot help (auth, bad request, refusal)."""
 
 
+class BudgetSpent(Fatal):
+    """The tenant's budget is spent: the call was not made."""
+
+
 class MalformedToolArguments(Transient):
     """Tool-call arguments that are not a JSON object. Almost always a stream
-    cut mid-call, so the call is retried like any transient failure."""
+    cut mid-call, so the call is asked for again — once
+    (:data:`noeta.core.retry.MALFORMED_RETRIES`)."""
 
 
 class TurnFailed(Exception):

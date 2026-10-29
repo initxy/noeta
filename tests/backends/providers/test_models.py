@@ -25,13 +25,23 @@ from noeta.core.models import (
     price,
     register_models,
     resolve_alias,
-    spec_for,
 )
 from noeta.core.types import Usage
 
 #: A neutral stand-in for an internal gateway routing name — carries no vendor
 #: prefix, so nothing about it is inferable from the id.
 GATEWAY_ID = "gateway/relay-large"
+
+
+def spec_for(model_id: str) -> ModelSpec:
+    spec = find_spec(model_id)
+    assert spec is not None, model_id
+    return spec
+
+
+def is_priced(spec: ModelSpec) -> bool:
+    return None not in (spec.input_price_per_mtok, spec.output_price_per_mtok,
+                        spec.cache_read_price_per_mtok, spec.cache_write_price_per_mtok)
 
 
 @pytest.fixture(autouse=True)
@@ -49,7 +59,7 @@ def _gateway_spec(**overrides: Any) -> ModelSpec:
         "max_output_tokens": 128_000,
         "is_reasoning": True,
         "supports_vision": True,
-        "family": "anthropic",
+        "vendor": "anthropic",
     }
     base.update(overrides)
     return ModelSpec(**base)
@@ -187,12 +197,23 @@ def test_an_unknown_model_is_announced() -> None:
     assert "'my-gateway-model'" in notice and "128,000 tokens" in notice
 
 
+def test_an_announced_unknown_model_is_not_announced_again_for_its_price(
+        caplog: pytest.LogCaptureFixture) -> None:
+    notice = models.unknown_model_notice("deepseek-chat")
+    assert notice is not None and "$0.00" in notice
+    with caplog.at_level("WARNING", logger=models._LOGGER.name):
+        assert models.model_limits("deepseek-chat") == (
+            models.UNKNOWN_MODEL_CONTEXT_WINDOW, models.UNKNOWN_MODEL_MAX_OUTPUT_TOKENS)
+        assert models.price("deepseek-chat", Usage(uncached=1000, output=1000)) == 0.0
+    assert caplog.records == []
+
+
 def test_superseded_rows_stay_addressable_by_full_id() -> None:
     for model_id in ("claude-opus-4-8", "claude-sonnet-4-6"):
         spec = spec_for(model_id)
         assert spec.real_model_id == model_id
         assert spec.context_window > 0
-        assert spec.is_priced
+        assert is_priced(spec)
 
 
 def test_5_generation_rows_carry_window_output_and_prices() -> None:
@@ -202,7 +223,7 @@ def test_5_generation_rows_carry_window_output_and_prices() -> None:
         assert spec.max_output_tokens == 128_000
         assert spec.is_reasoning is True
         assert spec.supports_vision is True
-        assert spec.is_priced
+        assert is_priced(spec)
         # Anthropic's published tiering: read ≈ 0.1x input, write ≈ 1.25x.
         base = _price(spec, "input_price_per_mtok")
         assert _price(spec, "cache_read_price_per_mtok") == pytest.approx(base * 0.1)
@@ -267,9 +288,8 @@ def test_price_empty_usage_is_zero() -> None:
     assert price("claude-opus-4-8", Usage()) == 0.0
 
 
-def test_spec_for_unknown_model_raises_keyerror() -> None:
-    with pytest.raises(KeyError):
-        spec_for("totally-unknown-model")
+def test_find_spec_unknown_model_is_none() -> None:
+    assert find_spec("totally-unknown-model") is None
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +319,7 @@ def test_price_catalogued_but_unpriced_row_warns_once_and_charges_zero(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     spec = spec_for("gpt-5.5-2026-04-24")
-    assert spec.is_priced is False
+    assert is_priced(spec) is False
     assert spec.input_price_per_mtok is None
     usage = Usage(uncached=1_000_000, output=1_000_000)
     lines = _price_warnings(caplog, "gpt-5.5-2026-04-24", usage)
@@ -387,7 +407,7 @@ def test_family_explicit_field_beats_prefix_inference() -> None:
 
 
 def test_extension_without_family_stays_unknown() -> None:
-    register_models({GATEWAY_ID: _gateway_spec(family=None)})
+    register_models({GATEWAY_ID: _gateway_spec(vendor=None)})
     assert model_family(GATEWAY_ID) is None
 
 
@@ -503,7 +523,7 @@ def test_alias_across_calls_targets_earlier_row() -> None:
 
 def test_unknown_family_refuses() -> None:
     with pytest.raises(ValueError, match="unknown family"):
-        register_models({GATEWAY_ID: _gateway_spec(family="antropic")})
+        register_models({GATEWAY_ID: _gateway_spec(vendor="antropic")})
 
 
 def test_empty_model_id_refuses() -> None:

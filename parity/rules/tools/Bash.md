@@ -72,6 +72,9 @@ Observed in `m1`, `m2`, `m3`, `s1`.
 | `tool.Bash.r.5` | background start | one paragraph: running in background with an ID (9 lower-case alphanumerics); the absolute path of the output file (under the per-project temp dir, `.../<session>/tasks/<id>.output`); the model will be notified on completion and must not poll or sleep; read the file only if the user asks for progress or a line (such as a server's ready line or port) is needed before going on | covered |
 | `tool.Bash.r.6` | background output file | when the job ends, the file holds the output followed by a blank line and `[exited with code <n>]` (seen via `cat` in `s1`) | covered |
 | `tool.Bash.r.7` | background completion | arrives later as a background-task notification, not as a tool result (see `reminders.md`) | see `reminders.md` |
+| `tool.Bash.r.9` | exit 1 of a search or comparison | when the last command of the line is `grep`, `rg`, `egrep`, `fgrep`, `find`, `diff`, `test`, `[` or `git diff` / `git grep`, exit status 1 (no match, a difference, a false condition) is not a failure: no `Exit code` line, `is_error` false, `(Bash completed with no output)` when it printed nothing; status 2 and up still fails (2.1.312 bundle) | covered |
+| `tool.Bash.r.10` | foreground timeout | a command still running at its timeout is not killed but moved to the background (unless its first command is `sleep`, or background tasks are off): the result is not an error; it carries the last 2,000 bytes printed so far, then the job ID, the output file, that the model is notified at the end, not to start it again, `TaskStop` to stop it, reading the file for interim output, and a note when nothing was printed yet; the end comes as the usual notification. A command that cannot be moved is killed with a timed-out error (2.1.312 bundle) | covered (a host without background jobs kills it) |
+| `tool.Bash.r.11` | image output | a successful command whose whole output is one `data:image/<type>;base64,...` URI comes back as an image block (typed by its bytes, resized to the image limits); an undecodable one stays text (2.1.312 bundle) | covered |
 | `tool.Bash.r.8` | attached context | a result may carry `<system-reminder>` blocks appended after the output (after compaction, the `CLAUDE.md` and git-status reminders rode on the first tool result, `m1/0059`) | see `compaction.md` |
 
 ## Variants
@@ -96,5 +99,5 @@ With `sandbox.enabled` and a sandbox that can start, the description gains a san
 | `tool.Bash.s.7` | With `allowUnsandboxedCommands: false` the parameter is said to be disabled, and a sandbox failure is reported to the user instead. | covered |
 | `tool.Bash.s.8` | Temporary files go under `$TMPDIR`. | covered |
 | `tool.Bash.s.9` | `autoAllowBashIfSandboxed` (default true): a command that runs sandboxed needs no approval. | covered (not in plan mode) |
-| `tool.Bash.s.10` | An `allowed_domains` parameter widens the network for one sandboxed command (auto mode). | missing |
-| `tool.Bash.s.11` | Platform notes (macOS `open`/`osascript`, Windows localhost and TLS, git repositories made in the sandbox, `pytest` cache). | missing |
+| `tool.Bash.s.10` | An `allowed_domains` parameter widens the network for one sandboxed command (auto mode). | n/a — sandbox-on only; the baseline runs unsandboxed (`parity/deviations.md`) |
+| `tool.Bash.s.11` | Platform notes (macOS `open`/`osascript`, Windows localhost and TLS, git repositories made in the sandbox, `pytest` cache). | n/a — sandbox-on only (`parity/deviations.md`) |

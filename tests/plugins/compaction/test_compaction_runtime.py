@@ -257,6 +257,10 @@ async def test_compact_command(store: SqliteStore) -> None:
     instruction = summ.messages[-1].text
     assert "keep the probe ids" in instruction and instruction.startswith(SUMMARIZE_PROMPT)
     assert "<command-name>" not in "".join(m.text for m in summ.messages)
+    # Claude Code's order: the kept reply, what is given again in the
+    # person's turn, then the command's own message.
+    assert compacted.kept[0].text == "done"
+    assert "<command-name>/compact</command-name>" in compacted.kept[-1].text
     last = (await events(client, tid))[-1]
     assert isinstance(last, Waiting) and last.on == "input"
     # The next message is answered after the summary and the command.
@@ -330,3 +334,44 @@ async def test_an_extension_can_refuse_a_compaction(store: SqliteStore) -> None:
     notices = [e.data["text"] for e in await events(client, tid)
                if isinstance(e, ExtensionRecorded) and e.kind == "notice"]
     assert notices[-1] == "Compaction skipped: not now"
+
+
+def test_a_tenants_transcripts_go_to_its_own_project_directory(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from noeta.core.loop.state import TaskState
+    from noeta.toolkit.paths import project_slug
+
+    work = tmp_path / "w"
+    work.mkdir()
+    ext = Compaction(home=str(tmp_path / "home"))
+    view = SimpleNamespace(env=LocalExecEnv(str(work)), task_id="t1")
+    written = {}
+    for tenant in ("default", "acme"):
+        state = TaskState(task_id="t1")
+        state.tenant = tenant
+        written[tenant] = ext._transcript(view, state)  # type: ignore[arg-type]
+    projects = tmp_path / "home" / "projects"
+    assert written == {"default": str(projects / project_slug(str(work)) / "t1.jsonl"),
+                       "acme": str(projects / "acme" / project_slug(str(work)) / "t1.jsonl")}
+
+
+@pytest.mark.parametrize("task_id", ["../../escaped", "a/../../b", "..", "/abs/x"])
+def test_a_transcript_stays_in_the_project_directory_whatever_the_task_id(
+        tmp_path: Path, task_id: str) -> None:
+    """A child's id carries the provider's tool-use id, which a gateway
+    picks."""
+    from types import SimpleNamespace
+
+    from noeta.core.loop.state import TaskState
+
+    work = tmp_path / "w"
+    work.mkdir()
+    ext = Compaction(home=str(tmp_path / "home"))
+    view = SimpleNamespace(env=LocalExecEnv(str(work)), task_id=task_id)
+    written = ext._transcript(view, TaskState(task_id=task_id))  # type: ignore[arg-type]
+    assert written is not None
+    from noeta.toolkit.paths import project_slug
+
+    project = tmp_path / "home" / "projects" / project_slug(str(work))
+    assert Path(written).parent == project and Path(written).resolve().parent == project

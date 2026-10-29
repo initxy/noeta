@@ -24,7 +24,6 @@ import logging
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
-from noeta.core.execenv import scrub_env
 from noeta.plugins.mcp.client import (
     MAX_LIST_PAGES,
     PROTOCOL_VERSION,
@@ -34,6 +33,7 @@ from noeta.plugins.mcp.client import (
     initialize_params,
 )
 from noeta.plugins.mcp.config import DEFAULT_TIMEOUT_S, McpError
+from noeta.toolkit.local_env import scrub_env
 
 __all__ = [
     "LINE_CAP",

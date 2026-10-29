@@ -14,11 +14,6 @@ import uuid
 _PROCESS_DEVICE_ID = secrets.token_hex(32)
 
 
-def new_device_id() -> str:
-    """A fresh random device id (64 hex characters, no machine data)."""
-    return secrets.token_hex(32)
-
-
 def user_id(device_id: str | None, root_id: str | None) -> str:
     """The ``user_id`` value; ``root_id`` (a task tree) goes in UUID form."""
     conversation = ""

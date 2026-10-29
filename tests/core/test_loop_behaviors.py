@@ -130,7 +130,7 @@ async def test_step_limit_ends_with_a_report(store: SqliteStore) -> None:
     probe = Probe()
     provider = ScriptedProvider([reply("", ("Probe", {})), reply("", ("Probe", {})),
                                  reply("here is where it stands", ("Probe", {}))])
-    agent = Agent(name="a", model="m", tools=[probe], max_steps_per_turn=2)
+    agent = Agent(name="a", model="m", tools=[probe], step_budget=2)
     client, tid = await run(store, provider, agent)
     final = provider.requests[-1]
     assert final.tool_choice == "none" and final.tools

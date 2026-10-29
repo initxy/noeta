@@ -1,6 +1,6 @@
 """Background shells under the runner: an end notice wakes an idle task into
-a turn and is recorded; stopping, cancelling and turn ends kill jobs
-silently; a tree with a running job stays with its worker, and a job whose
+a turn and is recorded; cancelling and turn ends kill jobs silently, a
+stopped turn leaves them running; a tree with a running job stays with its worker, and a job whose
 worker is gone is marked lost."""
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
-from noeta.core.events import ExtensionRecorded, ToolFinished
+from noeta.core.events import ToolFinished
 from noeta.core.loop.state import fold
 from noeta.core.runner import Runtime
 from noeta.plugins.fs import FileTools
@@ -110,8 +110,9 @@ async def test_cancelling_the_root_kills_its_jobs_silently(store: SqliteStore,
     assert not Path(job.out_path).exists()
 
 
-async def test_stopping_the_roots_turn_kills_its_jobs(store: SqliteStore,
-                                                      tmp_path: Path) -> None:
+async def test_stopping_the_roots_turn_leaves_its_jobs_running(store: SqliteStore,
+                                                                tmp_path: Path) -> None:
+    # Claude Code's background tasks outlive an interrupt.
     provider = ScriptedProvider([reply("", _bg("sleep 30"), ("Bash", {"command": "sleep 1"}))])
     rt, ext = _setup(store, provider, tmp_path)
     client = Client(store)
@@ -123,6 +124,10 @@ async def test_stopping_the_roots_turn_kills_its_jobs(store: SqliteStore,
     await run
     await rt.run_until_idle()
     [job] = ext.registry.jobs[tid].values()
+    await asyncio.sleep(0.1)
+    assert job.status == "running" and not job.done.is_set()
+    await client.cancel(tid)
+    await rt.run_until_idle()
     await asyncio.wait_for(job.done.wait(), 10)
     assert job.status == "killed"
 
@@ -144,7 +149,7 @@ async def test_jobs_end_with_the_turn_when_configured(store: SqliteStore,
 
 async def test_a_tree_with_a_job_stays_with_its_worker_until_that_worker_is_gone(
         store: SqliteStore, tmp_path: Path) -> None:
-    provider = ScriptedProvider([reply("", _bg("sleep 30")), reply("ok"), reply("again")])
+    provider = ScriptedProvider([reply("", _bg("sleep 30")), reply("ok"), reply("told")])
     rt, ext = _setup(store, provider, tmp_path)
     rt.lease_seconds = 0.15
     client = Client(store)
@@ -155,19 +160,24 @@ async def test_a_tree_with_a_job_stays_with_its_worker_until_that_worker_is_gone
     await client.send(tid, "status?")
     await asyncio.sleep(0.4)  # longer than a hold: the first worker keeps renewing it
     assert not await rt2.run_once()
-    # The first worker dies: nothing renews its hold, which runs out.
+    # The first worker dies: nothing renews its hold, which runs out; the
+    # next claim reaps it and the tree hears the job is lost.
     assert rt._renewer is not None
     rt._renewer.cancel()
     await asyncio.sleep(rt.hold_seconds + 0.1)
     await rt2.run_until_idle()
     [job] = (await _jobs(client, tid, ext2)).values()
     assert job["status"] == "lost"
-    texts = [r.event.message.text for r in await client.events(tid)
-             if isinstance(r.event, ExtensionRecorded) and r.event.kind == "lost"
-             and r.event.message is not None]
-    assert texts and "was lost" in texts[0]
+    told = provider.requests[2].messages[-1]
+    assert told.origin == "system" and told.text.startswith(f"{NOTICE_GUARD}\n\n")
+    assert "<status>failed</status>" in told.text
+    assert 'Background command "sleep 30" was lost: the worker process' in told.text
     ext.registry.kill_where(tid)
     await _settle(ext)
+    await rt2.run_until_idle()  # the dead worker's job ending later changes nothing
+    assert len(provider.requests) == 3
+    [job] = (await _jobs(client, tid, ext2)).values()
+    assert job["status"] == "lost"
 
 
 async def test_the_hold_is_released_when_the_job_ends(store: SqliteStore,
@@ -265,3 +275,49 @@ def test_a_continuation_drops_the_running_jobs_of_its_source() -> None:
     st = ext.reduce(st, "ended", {"job_id": "b", "status": "completed"})
     out = ext.continue_state(st)
     assert out.cwd == "/w/sub" and list(out.jobs) == ["b"]
+
+
+async def test_a_job_that_ended_is_never_lost_on_another_worker(store: SqliteStore,
+                                                                tmp_path: Path) -> None:
+    provider = ScriptedProvider([reply("", _bg("sleep 0.2")), reply("started"),
+                                 reply("it finished")])
+    rt, ext = _setup(store, provider, tmp_path)
+    client = Client(store)
+    tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
+    await rt.run_until_idle()
+    await _settle(ext)
+    # Its end is in the inbox before the hold is given back, so whichever
+    # worker takes it next settles the job as ended.
+    assert rt._holds == {}
+    rt2, ext2 = _setup(store, provider, tmp_path)
+    await rt2.run_until_idle()
+    [job] = (await _jobs(client, tid, ext2)).values()
+    assert job["status"] == "completed"
+    told = provider.requests[2].messages[-1]
+    assert told.origin == "system" and "completed (exit code 0)</summary>" in told.text
+
+
+async def test_a_worker_stopping_tells_the_job_loss_with_the_next_message(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """Closing a front end kills its jobs (as Claude Code does on exit) but
+    starts no turn: the waiting task hears of the loss along with the
+    person's next message."""
+    provider = ScriptedProvider([reply("", _bg("sleep 30")), reply("started it"),
+                                 reply("answered")])
+    rt, ext = _setup(store, provider, tmp_path)
+    client = Client(store)
+    tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
+    await rt.run_until_idle()
+    await rt._drop_holds()  # the serve loop's way out
+    after_close = Runtime(store=store, agents=rt.agents, provider_for=rt.provider_for,
+                          sleep=_no_sleep)
+    await after_close.run_until_idle()
+    row = await client.get(tid)
+    assert row is not None and row.status == "waiting" and len(provider.requests) == 2
+    await client.send(tid, "what happened?")
+    await after_close.run_until_idle()
+    assert len(provider.requests) == 3
+    *_, said, notice = provider.requests[2].messages
+    assert said.text == "what happened?"
+    assert notice.origin == "system" and "<status>failed</status>" in notice.text
+    assert [j["status"] for j in (await _jobs(client, tid, ext)).values()] == ["lost"]

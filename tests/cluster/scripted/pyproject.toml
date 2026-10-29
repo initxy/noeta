@@ -1,0 +1,27 @@
+[project]
+name = "noeta-cluster-scripted"
+version = "0.1.0"
+description = "Test-only plugins for the noeta cluster test: an offline scripted provider, a journalled side-effect tool and a fast-clock schedule."
+requires-python = ">=3.11"
+dependencies = ["noeta"]
+
+# Registered exactly as a third-party package would be, so `noeta` worker
+# processes find them by name.
+[project.entry-points."noeta.providers"]
+cluster_scripted = "noeta_cluster_scripted:provider"
+
+[project.entry-points."noeta.plugins"]
+cluster_effect = "noeta_cluster_scripted:EffectPlugin"
+cluster_schedule = "noeta_cluster_scripted:fast_schedule"
+cluster_crash = "noeta_cluster_scripted:CrashPlugin"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/noeta_cluster_scripted"]
+
+# Inside this repository: build against the checkout, not a published noeta.
+[tool.uv.sources]
+noeta = { path = "../../..", editable = true }

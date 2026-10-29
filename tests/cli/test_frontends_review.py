@@ -170,6 +170,82 @@ async def test_tui_drops_a_failed_attempts_output(tmp_path: Path) -> None:
         assert [w.source for w in app.query(AssistantMessage)] == ["good answer"]
 
 
+async def test_tui_survives_a_stream_stopped_before_its_task_ran(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """On a loaded loop a live-output stream can be stopped (the attempt
+    failed, or the reply arrived) before Textual's stream task first ran;
+    its ``stop()`` then raises the cancellation into the caller, which used
+    to end the follower and the delta pump: the TUI froze for the task."""
+    from textual.widgets.markdown import MarkdownStream
+
+    run = MarkdownStream._run
+
+    def late_start(self: MarkdownStream) -> None:
+        async def late() -> None:
+            await asyncio.sleep(0.3)  # the loop runs the stream's task late
+            await run(self)
+
+        if self._task is None:
+            self._task = asyncio.create_task(late())
+
+    monkeypatch.setattr(MarkdownStream, "start", late_start)
+    app = tui(tmp_path, RetryOnce())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press(*"go", "enter")
+        await settle(pilot, lambda: not app.busy and len(app.query(AssistantMessage)) >= 1)
+        await pilot.pause(0.5)
+        assert [w.source for w in app.query(AssistantMessage)] == ["good answer"]
+
+
+async def test_tui_is_not_left_busy_when_the_turn_ends_before_the_send_returns(
+        tmp_path: Path) -> None:
+    """Under load the task can take the message, reply and wait again before
+    ``client.send`` returns; the front end must not mark itself busy after
+    the turn it sent was already shown ending."""
+    app = tui(tmp_path, ScriptedProvider([reply("done already")]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        client = app.local.client
+        send = client.send
+
+        async def slow_send(task_id: str, *args: Any, **kw: Any) -> Any:
+            out = await send(task_id, *args, **kw)
+            for _ in range(400):  # until the follower has shown the turn end
+                await asyncio.sleep(0.05)
+                if app.query(AssistantMessage) and not app.busy:
+                    break
+            return out
+
+        client.send = slow_send  # type: ignore[method-assign]
+        await pilot.press(*"go", "enter")
+        await settle(pilot, lambda: len(app.query(AssistantMessage)) >= 1)
+        await pilot.pause(0.3)
+        assert not app.busy
+
+
+async def test_tui_shows_only_the_cores_retries(tmp_path: Path) -> None:
+    """A plugin's record named like a core one (the hooks plugin's
+    ``retry``) is not shown as the model being retried."""
+    from noeta.cli.tui.widgets import Notice
+    from noeta.core.extension import Extension, TaskView
+
+    class Recorder(Extension):
+        name = "hooks"
+
+        async def on_start(self, view: TaskView) -> None:
+            view.record(self.name, "retry", {"call_id": "c1"})
+            view.record(self.name, "notice", {"text": "not the core's"})
+
+    agent = Agent(name="main", model="claude-sonnet-4-5", extensions=[Recorder()])
+    app = NoetaApp(local(tmp_path, ScriptedProvider([reply("hi")]), agent), agent="main",
+                   model="claude-sonnet-4-5", cwd=str(tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press(*"go", "enter")
+        await settle(pilot, lambda: not app.busy and len(app.query(AssistantMessage)) >= 1)
+        await pilot.pause(0.2)
+        shown = [w.render().plain for w in app.query(Notice)]
+        assert not any("retrying" in s or "not the core's" in s for s in shown), shown
+
+
 # ------------------------------------------------------------ #11 own tasks only
 
 
@@ -207,15 +283,18 @@ class BrokenWatchClient:
 
     async def watch(self, task_id: str, after: int = 0) -> Any:
         yield Recorded(seq=1, at=0, event=TaskCreated(agent="a"))
-        raise RuntimeError("store went away")
+        raise RuntimeError("store went away at /srv/private/t.db")
 
 
 async def test_server_ends_the_stream_when_the_follower_fails() -> None:
-    app = create_app(BrokenWatchClient())  # type: ignore[arg-type]
+    app = create_app(BrokenWatchClient(), auth=False)  # type: ignore[arg-type]
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://x") as http:
         resp = await asyncio.wait_for(http.get("/tasks/t/watch"), 5)
-    assert b"event: end" in resp.content and b"store went away" in resp.content
+    # The stream ends with an error; a library's text (a server path) stays
+    # in the server's log.
+    assert b"event: end" in resp.content and b'"error"' in resp.content
+    assert b"/srv/private" not in resp.content
 
 
 def _sse(*recs: Recorded, end: bool) -> bytes:

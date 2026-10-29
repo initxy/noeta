@@ -6,14 +6,21 @@ built-ins exactly like a third-party package's (see ``pyproject.toml``):
 * ``noeta.plugins`` — a name -> an ``Extension`` class (or factory);
 * ``noeta.providers`` — a provider family -> ``factory(**kw) -> Provider``;
 * ``noeta.execenvs`` — a name -> ``factory(cwd, **kw) -> ExecEnv``;
-* ``noeta.stores`` — a URL scheme -> ``factory(url) -> Store``.
+* ``noeta.stores`` — a URL scheme -> ``factory(url) -> Store``;
+* ``noeta.channels`` — a name -> a ``Channel`` class (``noeta.core.channel``).
 
 The kernel imports no plugin or backend module statically; it loads one by
 name here when it needs a default (the local exec env).
 
 Plugins can also be plain files (:func:`load_plugin_files`): every
-``Extension`` subclass a ``*.py`` file (or a directory's ``__init__.py``)
-defines registers under its ``name``. An installed plugin wins a name clash.
+``Extension`` (or ``Channel``) subclass a ``*.py`` file (or a directory's
+``__init__.py``) defines registers under its ``name``. An installed plugin
+wins a name clash.
+
+:func:`pin` says which plugin an extension instance is (name, where its
+code comes from and which version, a hash of its arguments): what a task
+records when it starts, so a worker that cannot run the same plugins never
+runs the task without them.
 """
 
 from __future__ import annotations
@@ -21,10 +28,12 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import inspect
+import json
 import logging
 import sys
 import types
-from collections.abc import Iterable
+import weakref
+from collections.abc import Callable, Iterable, Mapping
 from functools import cache
 from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
@@ -36,16 +45,21 @@ if TYPE_CHECKING:
     from noeta.core.store import Store
 
 __all__ = [
+    "CHANNELS",
     "EXECENVS",
     "PLUGINS",
     "PROVIDERS",
     "STORES",
     "UnknownName",
+    "added_by_files",
     "available",
     "broken_plugin_files",
     "execenv",
+    "forget_plugin_files",
     "load",
     "load_plugin_files",
+    "note_arguments",
+    "pin",
     "provider",
     "sources",
     "store",
@@ -57,6 +71,7 @@ PLUGINS = "noeta.plugins"
 PROVIDERS = "noeta.providers"
 EXECENVS = "noeta.execenvs"
 STORES = "noeta.stores"
+CHANNELS = "noeta.channels"
 
 
 class UnknownName(LookupError):
@@ -70,18 +85,26 @@ def _group(group: str) -> dict[str, EntryPoint]:
 
 #: Plugins from files: name -> (path, the Extension class).
 _files: dict[str, tuple[str, Any]] = {}
+#: Channels from files: name -> (path, the Channel class).
+_channel_files: dict[str, tuple[str, Any]] = {}
 #: Plugin files that could not be used: path -> why.
 _broken: dict[str, str] = {}
 _loaded_paths: set[str] = set()
 _FILES_PACKAGE = "noeta_plugin_files"
+#: Where a plugin class came from: class -> (source, version).
+_origins: weakref.WeakKeyDictionary[Any, tuple[str, str]] = weakref.WeakKeyDictionary()
+#: The hash of the arguments each plugin instance was made with.
+_arguments: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+
+
+def _from_files(group: str) -> dict[str, tuple[str, Any]]:
+    """What plugin files registered in ``group``: name -> (path, class)."""
+    return {PLUGINS: _files, CHANNELS: _channel_files}.get(group, {})
 
 
 def available(group: str) -> list[str]:
     """The names registered in ``group``, sorted."""
-    names = set(_group(group))
-    if group == PLUGINS:
-        names |= set(_files)
-    return sorted(names)
+    return sorted(set(_group(group)) | set(_from_files(group)))
 
 
 def sources(group: str) -> dict[str, str]:
@@ -89,8 +112,7 @@ def sources(group: str) -> dict[str, str]:
     (``package <name>``) or the plugin file's path."""
     out = {name: f"package {ep.dist.name}" if ep.dist is not None else f"entry point {ep.value}"
            for name, ep in _group(group).items()}
-    if group == PLUGINS:
-        out.update({name: path for name, (path, _cls) in _files.items()})
+    out.update({name: path for name, (path, _cls) in _from_files(group).items()})
     return dict(sorted(out.items()))
 
 
@@ -99,17 +121,30 @@ def broken_plugin_files() -> dict[str, str]:
     return dict(_broken)
 
 
+def added_by_files() -> dict[str, list[str]]:
+    """Per agent name (``"*"``: every agent), the plugin files that join it
+    by themselves (``Extension.add_to``)."""
+    out: dict[str, list[str]] = {}
+    for name, (_path, cls) in sorted(_files.items()):
+        for agent in getattr(cls, "add_to", ()) or ():
+            out.setdefault(str(agent), []).append(name)
+    return out
+
+
 def load(group: str, name: str) -> Any:
     """The object the entry point ``name`` in ``group`` points at (for
     plugins, else the class a plugin file defines)."""
     ep = _group(group).get(name)
     if ep is not None:
-        return ep.load()
-    if group == PLUGINS and name in _files:
-        return _files[name][1]
+        obj = ep.load()
+        if group == PLUGINS and isinstance(obj, type) and ep.dist is not None:
+            _origins.setdefault(obj, (f"package {ep.dist.name}", ep.dist.version))
+        return obj
+    if name in _from_files(group):
+        return _from_files(group)[name][1]
     known = ", ".join(available(group)) or "none"
     msg = f"no {group} entry point named {name!r} (available: {known})"
-    if group == PLUGINS and _broken:
+    if group in (PLUGINS, CHANNELS) and _broken:
         msg += "; plugin files that failed: " + "; ".join(
             f"{path}: {why}" for path, why in _broken.items())
     raise UnknownName(msg)
@@ -145,51 +180,125 @@ def _import(path: Path) -> Any:
         sys.modules[_FILES_PACKAGE] = parent
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
+    # Compiled from source every time, never from a cached .pyc: a file
+    # edited within the same second at the same size would otherwise load
+    # its old code on a reload.
+    saved = sys.pycache_prefix, sys.dont_write_bytecode
+    sys.pycache_prefix = str(path.parent / "__noeta_no_cache__")
+    sys.dont_write_bytecode = True
     try:
         spec.loader.exec_module(module)
     except BaseException:
         sys.modules.pop(module_name, None)
         raise
+    finally:
+        sys.pycache_prefix, sys.dont_write_bytecode = saved
     return module
 
 
-def load_plugin_files(directories: Iterable[str | Path]) -> list[str]:
-    """Register the plugins of the files in ``directories`` (each loaded
-    once per process); returns the names added. A file that fails to import
-    is remembered and named when its plugin is asked for; a name an
-    installed plugin already has is skipped with a warning."""
+def load_plugin_files(directories: Iterable[str | Path],
+                      admit: Callable[[str], bool] | None = None) -> list[str]:
+    """Register the plugins (and channels) of the files in ``directories``
+    (each loaded once per process); returns the names added. A file that
+    fails to import is remembered and named when its plugin is asked for; a
+    name an installed plugin already has is skipped with a warning.
+    ``admit(name)``: whether a file (by its stem, a directory by its name)
+    may be imported at all."""
+    from noeta.core.channel import Channel
     from noeta.core.extension import Extension
 
     added: list[str] = []
     for directory in directories:
         for path in _plugin_paths(Path(directory).expanduser()):
             key = str(path.resolve())
-            if key in _loaded_paths:
+            stem = path.parent.name if path.name == "__init__.py" else path.stem
+            if key in _loaded_paths or (admit is not None and not admit(stem)):
                 continue
             _loaded_paths.add(key)
             shown = str(path.parent if path.name == "__init__.py" else path)
             try:
+                version = _file_version(path)
                 module = _import(path)
             except Exception as exc:  # noqa: BLE001 — a user's file must not stop noeta
                 _broken[shown] = f"{type(exc).__name__}: {exc}"
                 log.warning("plugin file %s failed to import: %s", shown, exc)
                 continue
-            found = [cls for _n, cls in inspect.getmembers(module, inspect.isclass)
-                     if issubclass(cls, Extension) and cls is not Extension
+            found = [(PLUGINS if issubclass(cls, Extension) else CHANNELS, cls)
+                     for _n, cls in inspect.getmembers(module, inspect.isclass)
+                     if issubclass(cls, (Extension, Channel)) and cls not in (Extension, Channel)
                      and cls.__module__ == module.__name__ and getattr(cls, "name", None)]
             if not found:
-                _broken[shown] = "defines no Extension subclass with a name"
+                _broken[shown] = "defines no Extension or Channel subclass with a name"
                 continue
-            for cls in found:
-                name = str(cls.name)
-                if name in _group(PLUGINS) or name in _files:
-                    where = sources(PLUGINS).get(name, "")
+            for group, cls in found:
+                name, table = str(cls.name), _from_files(group)
+                if name in _group(group) or name in table:
+                    where = sources(group).get(name, "")
                     log.warning("plugin file %s: %r is already %s; skipped", shown, name, where)
-                    _broken[shown] = f"plugin {name!r} is already {where}"
+                    _broken[shown] = f"{'plugin' if group == PLUGINS else 'channel'} " \
+                        f"{name!r} is already {where}"
                     continue
-                _files[name] = (shown, cls)
+                table[name] = (shown, cls)
+                _origins[cls] = ("file", version)
                 added.append(name)
     return added
+
+
+def forget_plugin_files() -> None:
+    """Forget every plugin file loaded (and its modules), so the next
+    :func:`load_plugin_files` imports them afresh: a reload. Extensions
+    already made from the old code keep running it."""
+    _files.clear()
+    _channel_files.clear()
+    _broken.clear()
+    _loaded_paths.clear()
+    for module in [m for m in sys.modules if m.startswith(f"{_FILES_PACKAGE}.")]:
+        del sys.modules[module]
+
+
+def _file_version(path: Path) -> str:
+    """A plugin file's version: the hash of its bytes (a directory's: of
+    every ``*.py`` below it, by relative path)."""
+    digest = hashlib.sha256()
+    if path.name == "__init__.py":
+        root = path.parent
+        for file in sorted(root.rglob("*.py")):
+            if "__pycache__" not in file.parts:
+                digest.update(str(file.relative_to(root)).encode() + b"\0" + file.read_bytes())
+    else:
+        digest.update(path.read_bytes())
+    return f"sha256:{digest.hexdigest()[:16]}"
+
+
+def note_arguments(extension: Any, arguments: Mapping[str, Any]) -> None:
+    """Remember the arguments ``extension`` was made with (as written, so a
+    secret reference stays a reference), for :func:`pin`."""
+    text = json.dumps(arguments, sort_keys=True, default=_stable_text)
+    _arguments[extension] = hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def _stable_text(value: Any) -> str:
+    """A value JSON cannot show, as text that is the same in every process
+    (a function's or an object's type name, never its address)."""
+    if isinstance(value, Path):
+        return str(value)
+    named = value if callable(value) and hasattr(value, "__qualname__") else type(value)
+    return f"{getattr(named, '__module__', '')}.{named.__qualname__}"
+
+
+def pin(extension: Any) -> dict[str, str]:
+    """Which plugin ``extension`` is: its name, where its code comes from
+    (``package <dist>``, ``file``, else ``class <module.qualname>``), that
+    code's version (the distribution's, or a file's hash) and the hash of
+    its arguments (empty when they are unknown)."""
+    cls = type(extension)
+    source, version = _origins.get(cls, (f"class {cls.__module__}.{cls.__qualname__}", ""))
+    try:
+        arguments = _arguments.get(extension, "")
+    except TypeError:  # not weakly referable
+        arguments = ""
+    return {"name": str(getattr(extension, "name", "")), "source": source,
+            "version": version, "arguments": arguments}
 
 
 def provider(family: str, **kw: Any) -> Provider:

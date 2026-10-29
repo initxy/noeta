@@ -101,16 +101,28 @@ class Schedule(Extension):
         if prompt.strip() in (texts.DYNAMIC_SENTINEL, texts.CRON_SENTINEL):
             return sentinel_text if prompt.strip() == texts.DYNAMIC_SENTINEL \
                 else texts.CRON_TICK
-        cwd = str(view.state.config.get("cwd") or getattr(view.env, "cwd", "") or "")
+        cwd = view.cwd
         try:
-            expanded = await expand_with(view.extensions, CommandContext(cwd=cwd,
-                                                                         task_id=view.task_id),
-                                         prompt.strip())
+            ctx = CommandContext(cwd=cwd, task_id=view.task_id, tenant=view.state.tenant)
+            expanded = await expand_with(view.extensions, ctx, prompt.strip())
         except Exception:  # noqa: BLE001 — a command that fails to expand is sent as typed
             expanded = None
         return expanded or prompt
 
     # ------------------------------------------------------------ firing
+
+    async def on_start(self, view: TaskView) -> None:
+        """Finish a firing a crash cut short: the take that fired a timer
+        is in the log, what it decided (re-arming a recurring job, deleting
+        a one-shot one, the loop's tick) is not. A job or a pending loop
+        whose kernel timer is gone is exactly that."""
+        st = self._st(view.ext_state(self.name))
+        timers = view.state.timers
+        for job_id in sorted(st["jobs"]):
+            if JOB_TIMER + job_id not in timers:
+                self._fired(view, st, JOB_TIMER + job_id, self.clock())
+        if st["loop"].get("pending") and WAKEUP_TIMER not in timers:
+            self._fired(view, st, WAKEUP_TIMER, self.clock())
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         ev = recorded.event
@@ -296,6 +308,7 @@ class CronListTool(_Base):
     description = load_description("noeta.plugins.schedule", "cron_list")
     deferred = True
     read_only = True
+    retry_safe = True
     input_schema = _object({})
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:

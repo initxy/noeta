@@ -5,6 +5,8 @@ worktrees and the refusals."""
 
 from __future__ import annotations
 
+import asyncio
+import json
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -19,16 +21,25 @@ from noeta.core.client import Client
 from noeta.core.errors import Fatal
 from noeta.core.events import Recorded, TaskCreated, TaskEnded, ToolFinished
 from noeta.core.extension import Ask, Extension, Gate, TaskView
+from noeta.core.loop.state import TaskState
 from noeta.core.runner import Runtime
+from noeta.core.tool import ToolContext
 from noeta.core.types import Message, ModelRequest, ToolUse, Usage
+from noeta.host.pending import pending_tree
+from noeta.host.usage import tree_usage
+from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.subtasks import SubagentSpec, Subtasks, texts
-from noeta.plugins.subtasks.host import pending_requests, tree_usage
 from noeta.plugins.subtasks.tool import (
+    LIST_WINDOW,
+    TRANSCRIPT_KEY,
+    AgentTool,
     SendMessageTool,
     agent_message,
     agent_schema,
     handback_sender,
 )
+from noeta.plugins.subtasks.worktree import make_agent_worktree
+from noeta.plugins.tool_search import ToolSearch
 from noeta.testing import ScriptedProvider, reply
 from noeta.toolkit.notices import NOTICE_GUARD
 from tests.plugins.subtasks.conftest import Probe, events, runtime
@@ -162,16 +173,19 @@ async def test_launch_hand_back_and_notice(store: SqliteStore) -> None:
     assert f"<tool-use-id>{call_id}</tool-use-id>" in notice
 
 
-async def test_final_text_without_hand_back_is_dropped(store: SqliteStore) -> None:
+async def test_final_text_without_hand_back_is_the_report(store: SqliteStore) -> None:
+    # Offered SubagentHandback (or not known to be), it ended with a plain
+    # reply instead: that reply is its report rather than nothing.
     p = ScriptedProvider([reply("", agent("x", "scout")), reply("launched"), reply("hm")])
-    c = ScriptedProvider([reply("my secret final words")])
+    c = ScriptedProvider([reply("my final words")])
     rt = runtime(store, {"p": p, "c": c}, parent(), worker())
     client = Client(store)
     tid = await client.create("main", "go")
     await rt.run_until_idle()
+    assert "SubagentHandback" in [t.name for t in c.requests[0].tools]
     notice = p.requests[2].messages[-1]
-    assert notice.origin == "system" and texts.RESULT_NO_REPORT in notice.text
-    assert "my secret final words" not in "".join(texts_of(p.requests[2]))
+    assert notice.origin == "system" and "<result>my final words\n</result>" in notice.text
+    assert texts.RESULT_NO_REPORT not in notice.text
     assert (await client.get(tid)).waiting_on == "input"
 
 
@@ -196,6 +210,37 @@ async def test_outside_auto_mode_the_last_reply_is_the_report(store: SqliteStore
     assert not any("SubagentHandback" in t for t in texts_of(child))
     notice = p.requests[2].messages[-1].text
     assert "<result>made the file\n</result>" in notice
+
+
+async def test_a_child_without_the_handback_tool_reports_its_last_reply(
+        store: SqliteStore) -> None:
+    # In auto mode, but the child's agent definition has no subtasks plugin:
+    # it cannot hand back, so its final message is its report (Claude Code's).
+    p = ScriptedProvider([reply("", agent("x", "scout")), reply("launched"), reply("ok")])
+    c = ScriptedProvider([reply("made the file")])
+    bare = Agent(name="worker", model="c", tools=[Probe()])
+    rt = runtime(store, {"p": p, "c": c}, parent(), bare)
+    client = Client(store)
+    await client.create("main", "go")
+    await rt.run_until_idle()
+    assert "SubagentHandback" not in [t.name for t in c.requests[0].tools]
+    notice = p.requests[2].messages[-1].text
+    assert "<result>made the file\n</result>" in notice
+    assert texts.RESULT_NO_REPORT not in notice
+
+
+async def test_a_child_whose_tools_leave_out_the_handback_reports_its_last_reply(
+        store: SqliteStore) -> None:
+    p = ScriptedProvider([reply("", agent("x", "scout")), reply("launched"), reply("ok")])
+    c = ScriptedProvider([reply("made the file")])
+    narrow = Agent(name="worker", model="c", tools=[Probe()], extensions=[Subtasks(())],
+                   allowed_tools=["Probe"])
+    rt = runtime(store, {"p": p, "c": c}, parent(), narrow)
+    client = Client(store)
+    await client.create("main", "go")
+    await rt.run_until_idle()
+    assert not any("SubagentHandback" in t for t in texts_of(c.requests[0]))
+    assert "<result>made the file\n</result>" in p.requests[2].messages[-1].text
 
 
 async def test_failed_agent_notice_wakes_the_parent(store: SqliteStore) -> None:
@@ -238,6 +283,21 @@ async def test_send_message_resumes_a_finished_agent(store: SqliteStore) -> None
     assert handback_sender(p.requests[5].messages[-1]) == first.task_id
 
 
+@pytest.mark.parametrize(("kind", "lands"), [("scout", "tenant-a"), ("gpu-only", "kids")])
+async def test_a_sub_agent_inherits_its_callers_queue_unless_its_spec_names_one(
+        store: SqliteStore, kind: str, lands: str) -> None:
+    roster = [*ROSTER, SubagentSpec(name="gpu-only", description="x", agent="worker",
+                                    queue="kids")]
+    main = Agent(name="main", model="p", extensions=[Subtasks(roster)])
+    p = ScriptedProvider([reply("", agent("a", kind)), reply("launched")])
+    rt = runtime(store, {"p": p}, main, queues=("tenant-a",))
+    client = Client(store)
+    tid = await client.create("main", "go", queue="tenant-a")
+    await rt.run_once()
+    [child] = await client.tasks(parent_id=tid)
+    assert child.queue == lands
+
+
 async def test_send_message_reaches_a_running_agent_and_its_caller(store: SqliteStore) -> None:
     p = ScriptedProvider([reply("", agent("slow")), reply("launched")])
     rt = runtime(store, {"p": p}, parent(queue="kids"), worker())  # the child is not run here
@@ -266,7 +326,8 @@ async def test_send_message_refusals_and_other_tasks(store: SqliteStore) -> None
     p = ScriptedProvider([
         reply("", ("SendMessage", {"to": "nobody", "message": "hi"}),
               ("SendMessage", {"to": "main", "message": "hi"}),
-              ("SendMessage", {"to": "x", "message": " "})),
+              ("SendMessage", {"to": "x", "message": " "}),
+              ("SendMessage", {"to": "*", "message": "all of you"})),
         reply("ok")])
     rt = runtime(store, {"p": p, "o": other_p}, parent(),
                  Agent(name="other", model="o"))
@@ -278,16 +339,30 @@ async def test_send_message_refusals_and_other_tasks(store: SqliteStore) -> None
     await rt.run_until_idle()
     assert await results(client, tid) == [
         (texts.UNKNOWN_RECIPIENT.format(to="nobody"), True), (texts.NO_CALLER, True),
-        (texts.EMPTY_MESSAGE, True)]
+        (texts.EMPTY_MESSAGE, True), (texts.NO_BROADCAST, True)]
     p.add(reply("", ("SendMessage", {"to": other, "message": "ping"}), ("ListAgents", {})),
           reply("done"))
     await client.send(tid, "ping the other one")
     await rt.run_until_idle()
     out = await results(client, tid)
-    assert out[3] == (texts.SENT.format(to=other), False)
-    assert out[4][0].startswith(texts.LIST_HEAD) and f"- {other} — session" in out[4][0]
+    assert out[4] == (texts.SENT.format(to=other), False)
+    assert out[5][0].startswith(texts.LIST_HEAD) and f"- {other} — session" in out[5][0]
     got = other_p.requests[-1].messages[-1]
     assert got.origin == "agent" and '<cross-session-message from="' in got.text
+
+
+async def test_list_agents_says_when_it_looked_at_the_newest_tasks_only(
+        store: SqliteStore) -> None:
+    client = Client(store)
+    for _ in range(LIST_WINDOW + 1):  # sessions no worker here runs
+        await client.create("worker", "later", queue="elsewhere")
+    p = ScriptedProvider([reply("", ("ListAgents", {})), reply("listed")])
+    rt = runtime(store, {"p": p}, parent(), worker())
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    [(listed, _)] = await results(client, tid)
+    assert listed.count("— session") == LIST_WINDOW - 1
+    assert listed.endswith("\n" + texts.LIST_WINDOW_FULL.format(n=LIST_WINDOW))
 
 
 async def test_list_agents_shows_launched_agents(store: SqliteStore) -> None:
@@ -306,7 +381,7 @@ async def test_list_agents_shows_launched_agents(store: SqliteStore) -> None:
 async def test_refusals(store: SqliteStore) -> None:
     probe = Probe()
     p = ScriptedProvider([
-        reply("", agent("  ")),
+        reply("", agent("  "), ("Probe", {}), agent("fine", "scout")),
         reply("", agent("x", model="gpt")),
         reply("", agent("x", "nobody"), ("Probe", {})),
         reply("", agent("x", isolation="remote")),
@@ -317,15 +392,17 @@ async def test_refusals(store: SqliteStore) -> None:
     tid = await client.create("main", "go")
     await rt.run_until_idle()
     out = await results(client, tid)
-    assert out[0] == (texts.NOTHING_RAN.format(reason=texts.EMPTY_PROMPT), True)
-    assert out[1] == (texts.NOTHING_RAN.format(reason=texts.BAD_CHOICE.format(
-        field="model", choices="sonnet, opus, haiku, fable", value="gpt")), True)
+    # A bad Agent call is refused by itself: the reply's other calls run.
+    assert out[0] == (texts.EMPTY_PROMPT, True)
+    assert out[1] == ("seen", False) and out[2][0].startswith("The agent was launched")
+    assert out[3] == (texts.BAD_CHOICE.format(
+        field="model", choices="sonnet, opus, haiku, fable", value="gpt"), True)
     unknown = texts.SPAWN_DENIED.format(reason=texts.UNKNOWN_AGENT.format(
         name="nobody", available="fork, general-purpose, scout"))
-    assert out[2:4] == [(unknown, True), ("seen", False)]
-    assert out[4] == (texts.SPAWN_DENIED.format(reason=texts.NO_REMOTE), True)
-    assert out[5] == (texts.MISSING_FIELDS, True)
-    assert await client.tasks(parent_id=tid) == []
+    assert out[4:6] == [(unknown, True), ("seen", False)]
+    assert out[6] == (texts.SPAWN_DENIED.format(reason=texts.NO_REMOTE), True)
+    assert out[7] == (texts.MISSING_FIELDS, True)
+    assert len(await client.tasks(parent_id=tid)) == 1
 
 
 async def test_depth_cap_and_fan_out(store: SqliteStore) -> None:
@@ -338,7 +415,7 @@ async def test_depth_cap_and_fan_out(store: SqliteStore) -> None:
     tid = await client.create("main", "go", config={"subtask_depth": 3})
     await rt.run_until_idle()
     [(depth, _)] = await results(client, tid)
-    assert depth == texts.SPAWN_DENIED.format(reason=texts.DEPTH_REACHED.format(n=3))
+    assert depth == texts.SPAWN_DENIED.format(reason=texts.DEPTH_REACHED.format(depth=3, n=3))
     tid = await client.create("main", "go")
     await rt.run_until_idle()
     await client.send(tid, "more")
@@ -346,6 +423,18 @@ async def test_depth_cap_and_fan_out(store: SqliteStore) -> None:
     out = await results(client, tid)
     assert out[:3] == [(texts.FANOUT_TOO_BIG.format(n=3, limit=2), True)] * 3
     assert out[3:] == [(texts.TOO_MANY_BACKGROUND.format(limit=1), True)] * 2
+
+
+async def test_agent_calls_of_one_reply_count_once_against_the_cap(
+        store: SqliteStore) -> None:
+    p = ScriptedProvider([reply("", agent("a"), agent("b")), reply("ok")])
+    rt = runtime(store, {"p": p}, parent(queue="kids", max_background=2), worker())
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    out = await results(client, tid)
+    assert [failed for _, failed in out] == [False, False]
+    assert len(await client.tasks(parent_id=tid)) == 2
 
 
 async def test_task_is_the_old_name_and_exclusive_tools(store: SqliteStore) -> None:
@@ -370,10 +459,8 @@ async def test_task_is_the_old_name_and_exclusive_tools(store: SqliteStore) -> N
 
 async def test_model_and_effort_precedence(store: SqliteStore) -> None:
     def defined(model: str | None) -> Agent:
-        extra = {"model": model} if model else {}
-        return Agent(name="fixer", model="claude-haiku-5-5" if model else "p",
-                     description="Fixes.", extra=extra, effort="low",
-                     extensions=[Subtasks()])
+        return Agent(name="fixer", model=model or "p", inherit_model=not model,
+                     description="Fixes.", effort="low", extensions=[Subtasks()])
 
     main = Agent(name="main", model="p", extensions=[Subtasks(agents=["*"], queue="kids")])
     p = ScriptedProvider([reply("", agent("a", "fixer"), agent("b", "fixer", model="opus",
@@ -382,7 +469,7 @@ async def test_model_and_effort_precedence(store: SqliteStore) -> None:
     client = Client(store)
     tid = await client.create("main", "go", config={"model": "p", "effort": "high"})
     await rt.run_until_idle()
-    a, b = sorted(await client.tasks(parent_id=tid), key=lambda r: r.task_id)
+    a, b = sorted(await client.tasks(parent_id=tid), key=lambda r: (len(r.task_id), r.task_id))
     ca = (await events(client, a.task_id))[0].config
     cb = (await events(client, b.task_id))[0].config
     assert ca["model"] == "claude-haiku-5-5" and ca["effort"] == "low"
@@ -435,7 +522,7 @@ async def test_a_notice_lost_to_a_crash_is_posted_on_the_next_run(store: SqliteS
     p.add(reply("hi"), reply("thanks for the result"))
     await client.send(tid, "hello")
     await runtime(store, {"p": p, "c": c}, parent(), worker()).run_until_idle()
-    assert texts.RESULT_NO_REPORT in "".join(texts_of(p.requests[-1]))
+    assert "<result>no report\n</result>" in "".join(texts_of(p.requests[-1]))
 
 
 async def test_agent_approvals_surface_at_the_root(store: SqliteStore) -> None:
@@ -446,9 +533,9 @@ async def test_agent_approvals_surface_at_the_root(store: SqliteStore) -> None:
     tid = await client.create("main", "go")
     await rt.run_until_idle()
     [child] = await client.tasks(parent_id=tid)
-    [pending] = await pending_requests(client, tid)
-    assert pending.task_id == child.task_id and pending.on == "approval"
-    assert await tree_usage(client, tid) == Usage(uncached=30, output=15)
+    [pending] = await pending_tree(client, tid)
+    assert pending.task_id == child.task_id and pending.kind == "approval"
+    assert (await tree_usage(client, tid)).usage == Usage(uncached=30, output=15)
 
 
 async def test_progress_label_beside_the_third_call(store: SqliteStore) -> None:
@@ -490,10 +577,248 @@ async def test_worktree_isolation(store: SqliteStore, tmp_path: Path) -> None:
     assert not Path(cwd).exists()  # unchanged, so removed again
 
 
+async def test_an_agent_refused_for_its_queue_leaves_no_worktree(
+        store: SqliteStore, tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    p = ScriptedProvider([reply("", agent("look", isolation="worktree")), reply("ok")])
+    rt = Runtime(store=store, agents={"main": parent(queue="kids"), "worker": worker()},
+                 provider_for=lambda m: {"p": p}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or repo)))
+    client = Client(store)
+    tid = await client.create("main", "go", config={"cwd": str(repo)})
+    release = await rt.hold(tid)  # as a background job does
+    try:
+        await rt.run_until_idle()
+    finally:
+        await release()
+    assert await client.tasks(parent_id=tid) == []
+    [(text, failed)] = await results(client, tid)
+    assert failed and "kids" in text
+    assert not (repo / ".noeta" / "worktrees").exists() \
+        or not list((repo / ".noeta" / "worktrees").iterdir())
+    branches = subprocess.run(["git", "branch", "--list", "worktree-*"], cwd=repo,
+                              capture_output=True, text=True, check=True).stdout
+    assert branches.strip() == ""
+
+
+async def test_a_cancelled_parent_closes_its_agents_worktrees(store: SqliteStore,
+                                                              tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for cmd in (["init", "-q"], ["-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q",
+                                 "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *cmd], cwd=repo, check=True)
+    p = ScriptedProvider([reply("", agent("look", isolation="worktree")), reply("launched")])
+    c = ScriptedProvider([reply("", ("probe", {"x": 1}))])  # waits for an approval
+    rt = Runtime(store=store, agents={"main": parent(), "worker": worker(AskEverything())},
+                 provider_for=lambda m: {"p": p, "c": c}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or repo)))
+    client = Client(store)
+    tid = await client.create("main", "go", config={"cwd": str(repo)})
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    cwd = (await events(client, child.task_id))[0].config["cwd"]
+    assert Path(cwd).exists()
+    await client.cancel(tid)
+    await rt.run_until_idle()
+    assert not Path(cwd).exists()  # unchanged, so removed with its parent
+
+
+async def test_a_worktree_a_background_job_runs_in_is_kept_until_the_job_ends(
+        store: SqliteStore, tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    registry = Registry(log_dir=str(tmp_path / "logs"))
+    p = ScriptedProvider([reply("", agent("look", isolation="worktree")), reply("launched"),
+                          reply("seen it")])
+    c = ScriptedProvider([reply("", ("Bash", {"command": "sleep 30",
+                                              "run_in_background": True})),
+                          handback("started it")])
+    child_agent = Agent(name="worker", model="c", tools=[],
+                        extensions=[Subtasks(()), Shell(registry=registry)])
+    rt = Runtime(store=store, agents={"main": parent(), "worker": child_agent},
+                 provider_for=lambda m: {"p": p, "c": c}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or repo)))
+    client = Client(store)
+    tid = await client.create("main", "go", config={"cwd": str(repo)})
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    cwd = (await events(client, child.task_id))[0].config["cwd"]
+    assert (await client.get(child.task_id)).status == "ended"
+    assert Path(cwd).exists()  # not removed under the running job
+    told = [e.data["text"] for e in await events(client, tid)
+            if getattr(e, "kind", "") == "pending"]
+    assert told and texts.WORKTREE_IN_USE.format(path=cwd) in told[0]
+    # The removal waits in this worker's memory: a restart leaves the worktree.
+    assert "unless this worker restarts first" in told[0]
+    [job] = registry.running(tid)
+    registry.retire(tid)  # the root ends: its jobs are killed
+    await asyncio.wait_for(job.done.wait(), 10)
+    for _ in range(200):  # then the unchanged worktree goes
+        if not Path(cwd).exists():
+            break
+        await asyncio.sleep(0.05)
+    assert not Path(cwd).exists()
+
+
+class AskProbe(Extension):
+    name = "ask-probe"
+
+    async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
+        return Ask(prompt="may I?") if call.name == "probe" else None
+
+
+async def test_a_resumed_agent_keeps_the_worktree_its_job_was_to_free(
+        store: SqliteStore, tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    registry = Registry(log_dir=str(tmp_path / "logs"))
+    p = ScriptedProvider([reply("", agent("look", isolation="worktree")), reply("launched"),
+                          reply("seen it")])
+    c = ScriptedProvider([reply("", ("Bash", {"command": "sleep 30",
+                                              "run_in_background": True})),
+                          handback("started it")])
+    child_agent = Agent(name="worker", model="c", tools=[Probe()],
+                        extensions=[Subtasks(()), Shell(registry=registry), AskProbe()])
+    rt = Runtime(store=store, agents={"main": parent(), "worker": child_agent},
+                 provider_for=lambda m: {"p": p, "c": c}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or repo)))
+    client = Client(store)
+    tid = await client.create("main", "go", config={"cwd": str(repo)})
+    await rt.run_until_idle()
+    [first] = await client.tasks(parent_id=tid)
+    cwd = (await events(client, first.task_id))[0].config["cwd"]
+    assert (await client.get(first.task_id)).status == "ended" and Path(cwd).exists()
+    # Resumed while its job still runs: it works in the worktree again.
+    p.add(reply("", ("SendMessage", {"to": first.task_id, "message": "look again"})),
+          reply("asked"))
+    c.add(reply("", ("probe", {"x": 1})))  # waits for an approval
+    await client.send(tid, "again")
+    await rt.run_until_idle()
+    second = next(r for r in await client.tasks(parent_id=tid) if r.task_id != first.task_id)
+    assert (await events(client, second.task_id))[0].config["cwd"] == cwd
+    [job] = registry.running(tid)
+    registry.retire(tid)
+    await asyncio.wait_for(job.done.wait(), 10)
+    await asyncio.sleep(0.5)
+    assert Path(cwd).exists()  # the resumed agent still works there
+
+
+async def test_a_call_a_crash_cut_short_removes_the_worktree_it_made(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for cmd in (["init", "-q"], ["-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q",
+                                 "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *cmd], cwd=repo, check=True)
+    state = TaskState(task_id="t", agent="main", config={"cwd": str(repo)})
+    tool = AgentTool(Subtasks(ROSTER), state, {s.name: s for s in ROSTER})
+    ctx = ToolContext(task_id="t", call_id="toolu_crash1", env=LocalExecEnv(str(repo)),
+                      state={}, record=lambda *_: None)
+    args = {"description": "d", "prompt": "p", "isolation": "worktree"}
+    # The worker died after making the worktree, before the launch was recorded.
+    tree = await make_agent_worktree(ctx, {"cwd": str(repo)})
+    assert isinstance(tree, dict) and Path(tree["path"]).exists()
+    assert await tool.recover(args, ctx) is None  # no agent ran: outcome unknown
+    assert not Path(tree["path"]).exists()
+    assert tree["branch"] not in subprocess.run(["git", "branch"], cwd=repo, check=True,
+                                                capture_output=True, text=True).stdout
+    # Nothing made: nothing to remove.
+    assert await tool.recover(args, ctx) is None
+
+
+async def test_a_hand_back_a_crash_cut_short_reports_once(tmp_path: Path) -> None:
+    from noeta.plugins.subtasks.tool import HandbackTool
+
+    posts: list[tuple[Any, dict[str, Any]]] = []
+
+    async def post(body: Any, **kw: Any) -> None:
+        posts.append((body, kw))
+
+    tool = HandbackTool(TaskState(task_id="p.c.1", agent="worker", parent_id="p"))
+    ctx = ToolContext(task_id="p.c.1", call_id="toolu_back", env=LocalExecEnv(str(tmp_path)),
+                      state={}, record=lambda *_: None, post=post)
+    first = await tool.run({"message": "1 2 3"}, ctx)
+    # The worker died after the report was posted, before the result was written.
+    again = await tool.recover({"message": "1 2 3"}, ctx)
+    assert again is not None and again.end_turn == first.end_turn == "1 2 3"
+    keys = [kw.get("dedupe_key") for _, kw in posts]
+    assert len(keys) == 2 and keys[0] is not None and keys[0] == keys[1]
+
+
+def _repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for cmd in (["init", "-q"], ["-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q",
+                                 "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *cmd], cwd=repo, check=True)
+    return repo
+
+
+async def test_recovery_leaves_another_tasks_worktree_with_the_same_call_id(
+        tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+
+    def tool_ctx(task_id: str) -> tuple[AgentTool, ToolContext]:
+        state = TaskState(task_id=task_id, agent="main", config={"cwd": str(repo)})
+        return (AgentTool(Subtasks(ROSTER), state, {s.name: s for s in ROSTER}),
+                ToolContext(task_id=task_id, call_id="call_3_0", env=LocalExecEnv(str(repo)),
+                            state={}, record=lambda *_: None))
+    args = {"description": "d", "prompt": "p", "isolation": "worktree"}
+    _, ctx_a = tool_ctx("task-a")
+    tool_b, ctx_b = tool_ctx("task-b")
+    tree = await make_agent_worktree(ctx_a, {"cwd": str(repo)})
+    assert isinstance(tree, dict)
+    other = await make_agent_worktree(ctx_b, {"cwd": str(repo)})
+    assert isinstance(other, dict) and other["path"] != tree["path"]
+    subprocess.run(["git", "worktree", "remove", other["path"]], cwd=repo, check=True)
+    await tool_b.recover(args, ctx_b)  # task b's crashed call left nothing behind
+    assert Path(tree["path"]).exists()
+
+
+async def test_recovery_keeps_a_worktree_with_unsaved_work(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    state = TaskState(task_id="t", agent="main", config={"cwd": str(repo)})
+    tool = AgentTool(Subtasks(ROSTER), state, {s.name: s for s in ROSTER})
+    ctx = ToolContext(task_id="t", call_id="toolu_crash2", env=LocalExecEnv(str(repo)),
+                      state={}, record=lambda *_: None)
+    tree = await make_agent_worktree(ctx, {"cwd": str(repo)})
+    assert isinstance(tree, dict)
+    (Path(tree["path"]) / "notes.txt").write_text("work")
+    await tool.recover({"description": "d", "prompt": "p", "isolation": "worktree"}, ctx)
+    assert (Path(tree["path"]) / "notes.txt").exists()
+
+
+async def test_resuming_a_worktree_agent_whose_worktree_is_gone(store: SqliteStore,
+                                                               tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for cmd in (["init", "-q"], ["-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q",
+                                 "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *cmd], cwd=repo, check=True)
+    p = ScriptedProvider([reply("", agent("look", isolation="worktree")), reply("launched"),
+                          reply("seen it")])
+    c = ScriptedProvider([handback("nothing changed"), handback("still nothing")])
+    rt = Runtime(store=store, agents={"main": parent(), "worker": worker()},
+                 provider_for=lambda m: {"p": p, "c": c}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or repo)))
+    client = Client(store)
+    tid = await client.create("main", "go", config={"cwd": str(repo)})
+    await rt.run_until_idle()
+    [first] = await client.tasks(parent_id=tid)
+    gone = (await events(client, first.task_id))[0].config["cwd"]
+    assert not Path(gone).exists()
+    p.add(reply("", ("SendMessage", {"to": first.task_id, "message": "look again"})),
+          reply("asked"), reply("done"))
+    await client.send(tid, "again")
+    await rt.run_until_idle()
+    second = next(r for r in await client.tasks(parent_id=tid) if r.task_id != first.task_id)
+    assert (await events(client, second.task_id))[0].config["cwd"] == str(repo)
+    sent = "".join(texts_of(p.requests[-1]))
+    assert "<status>completed</status>" in sent and gone not in sent
+
+
 async def test_send_message_is_deferred(store: SqliteStore) -> None:
     SendMessageTool.deferred = True  # type: ignore[misc]
     p = ScriptedProvider([reply("hi")])
-    rt = runtime(store, {"p": p}, parent())
+    rt = runtime(store, {"p": p}, parent(ToolSearch()))
     await Client(store).create("main", "go")
     await rt.run_until_idle()
     assert [t.name for t in p.requests[0].tools] == [
@@ -514,3 +839,96 @@ async def test_a_sub_agent_hears_of_agent_types_with_its_second_request(
 
     first, second = c.requests
     assert not listed(first) and listed(second)
+
+
+async def test_a_background_agent_keeps_its_transcript_file(store: SqliteStore,
+                                                            tmp_path: Path) -> None:
+    p = ScriptedProvider([reply("", agent("count to 3")), reply("launched"),
+                          reply("it says 1 2 3"), reply("ok")])
+    c = ScriptedProvider([reply("", ("Probe", {})), handback("1 2 3")])
+    spill = tmp_path / "spill"
+    rt = Runtime(store=store, agents={"main": parent(), "worker": worker()},
+                 provider_for=lambda m: {"p": p, "c": c}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(tmp_path)), spill_root=str(spill))
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    path = spill / tid / "tasks" / f"{child.task_id}.output"
+    [(ack, _)] = await results(client, tid)
+    assert ack.endswith(texts.LAUNCHED_OUTPUT_FILE.format(path=path))
+    lines = [json.loads(line) for line in path.read_text().splitlines()]
+    assert lines[0] == {"type": "user", "message": {
+        "role": "user", "content": [{"type": "text", "text": "count to 3"}]}}
+    called = [line["message"]["content"][0] for line in lines if line["type"] == "assistant"]
+    assert [b["name"] for b in called] == ["Probe", "SubagentHandback"]
+    await client.send(tid, "thanks")
+    await rt.run_until_idle()
+    notice = p.requests[3].messages[-2].text
+    assert (f"<tool-use-id>{p.requests[1].messages[-2].tool_uses[0].id}</tool-use-id>\n"
+            f"<output-file>{path}</output-file>\n<status>completed</status>") in notice
+
+
+class _CountingEnv(LocalExecEnv):
+    """Counts whole-file writes per path."""
+
+    writes: dict[str, int] = {}
+
+    async def write_bytes(self, path: str, data: bytes) -> None:
+        self.writes[path] = self.writes.get(path, 0) + 1
+        await super().write_bytes(path, data)
+
+
+async def test_a_transcript_is_appended_to_not_rewritten(store: SqliteStore,
+                                                          tmp_path: Path) -> None:
+    p = ScriptedProvider([reply("", agent("count to 3")), reply("launched"),
+                          reply("it says 1 2 3"), reply("ok")])
+    c = ScriptedProvider([reply("", ("Probe", {})), handback("1 2 3")])
+    spill = tmp_path / "spill"
+    _CountingEnv.writes = {}
+    rt = Runtime(store=store, agents={"main": parent(), "worker": worker()},
+                 provider_for=lambda m: {"p": p, "c": c}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: _CountingEnv(str(tmp_path)), spill_root=str(spill))
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    path = spill / tid / "tasks" / f"{child.task_id}.output"
+    lines = [json.loads(line) for line in path.read_text().splitlines()]
+    called = [line["message"]["content"][0] for line in lines if line["type"] == "assistant"]
+    assert [b["name"] for b in called] == ["Probe", "SubagentHandback"]
+    # Written whole once; every later message was appended.
+    assert _CountingEnv.writes[str(path)] == 1
+
+
+async def test_transcript_progress_is_forgotten_past_its_bound(tmp_path: Path) -> None:
+    from noeta.core.loop.state import TaskState
+    from noeta.plugins.subtasks import extension as ext_module
+
+    subtasks = Subtasks(ROSTER)
+    env = LocalExecEnv(str(tmp_path))
+    for i in range(ext_module.TRANSCRIBED_KEEP + 10):
+        # Tasks another worker took on: none of them ends here.
+        state = TaskState(task_id=f"t{i}", config={TRANSCRIPT_KEY: str(tmp_path)})
+        await subtasks._transcribe(TaskView(state=state, env=env), ended=False)
+    assert len(subtasks._transcribed) == ext_module.TRANSCRIBED_KEEP
+    assert "t0" not in subtasks._transcribed and f"t{ext_module.TRANSCRIBED_KEEP}" in \
+        subtasks._transcribed
+
+
+async def test_an_agent_type_matches_loosely_when_only_one_fits(store: SqliteStore) -> None:
+    roster = [*ROSTER, SubagentSpec(name="code-review", description="Reviews.", agent="worker"),
+              SubagentSpec(name="code_review", description="Also reviews.", agent="worker")]
+    p = ScriptedProvider([reply("", agent("a", "Scout"), agent("b", "General Purpose"),
+                                agent("c", "Code Review")), reply("ok")])
+    main = Agent(name="main", model="p", extensions=[Subtasks(roster, queue="kids")])
+    rt = runtime(store, {"p": p}, main, worker())
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    kinds = sorted([(await events(client, r.task_id))[0].config["subagent_type"]
+                    for r in await client.tasks(parent_id=tid)])
+    assert kinds == ["general-purpose", "scout"]
+    ambiguous = texts.SPAWN_DENIED.format(reason=texts.AMBIGUOUS_AGENT.format(
+        name="Code Review", matches="code-review or code_review"))
+    assert (ambiguous, True) in await results(client, tid)

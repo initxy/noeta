@@ -1,7 +1,5 @@
-# Claude Code local private config (skills travel with the project; not ignored)
-.claude/settings.local.json
-.claude/*.local.*
-.claude/worktrees/
+# Claude Code local config of contributors (not part of noeta)
+.claude/
 
 # Live-test secrets (never committed)
 .env
@@ -60,3 +58,6 @@ bench/logs/
 # make parity output (the replay capture and the report it writes)
 parity/out/
 parity/report.md
+
+# Claude Code's wording, even hashed, stays out of the repository
+parity/*/cc-windows.bin

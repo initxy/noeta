@@ -76,21 +76,19 @@ async def test_pages_picks_one_page_or_a_range(h: Harness, ws: Path) -> None:
 
 
 @needs_poppler
-async def test_page_images_are_cleaned_up(h: Harness, ws: Path) -> None:
-    seen: list[str] = []
+async def test_pages_are_rendered_to_stdout_with_no_files(h: Harness, ws: Path) -> None:
+    seen: list[list[str]] = []
 
     class _Spy(LocalExecEnv):
         async def run(self, argv: Sequence[str], **kw: Any) -> RunResult:
-            result = await super().run(argv, **kw)
-            if argv[0] == "mktemp":
-                seen.append(result.stdout.decode().strip())
-            return result
+            seen.append(list(argv))
+            return await super().run(argv, **kw)
 
     spy = Harness(env=_Spy(str(ws)))
     (ws / "doc.pdf").write_bytes(_pdf(1))
     assert not (await spy.call(ReadTool(), file_path="doc.pdf")).is_error
-    [tmp] = seen
-    assert not Path(tmp).exists()
+    assert [argv[0] for argv in seen] == ["pdfinfo", "pdftoppm"]
+    assert sorted(p.name for p in ws.iterdir()) == ["doc.pdf"]
 
 
 @needs_poppler
@@ -99,9 +97,8 @@ async def test_a_long_pdf_needs_pages(h: Harness, ws: Path) -> None:
     out = await h.call(ReadTool(), file_path="doc.pdf")
     assert out.is_error
     assert text_of(out) == (
-        "Read: This PDF has 12 pages, which is too many to read at once. Use "
-        'the pages parameter to read specific page ranges (e.g., pages: "1-5"). '
-        "Maximum 20 pages per request."
+        'Read: The PDF has 12 pages, more than one read takes. Pass pages to read '
+        'a range (such as pages: "1-5"), at most 20 pages per read.'
     )
 
 
@@ -123,11 +120,11 @@ async def test_bad_or_too_wide_pages_are_refused(h: Harness, ws: Path) -> None:
     )
     wide = await h.call(ReadTool(), file_path="doc.pdf", pages="1-21")
     assert text_of(wide) == (
-        'Read: Page range "1-21" exceeds maximum of 20 pages per request. '
-        "Please use a smaller range."
+        'Read: The page range "1-21" covers more than 20 pages, the most one read '
+        "takes. Ask for a shorter range."
     )
     open_ended = await h.call(ReadTool(), file_path="doc.pdf", pages="3-")
-    assert "exceeds maximum" in text_of(open_ended)
+    assert "covers more than 20 pages" in text_of(open_ended)
 
 
 class _NoPoppler(LocalExecEnv):
@@ -153,13 +150,34 @@ async def test_missing_pdftoppm_says_how_to_install_it(ws: Path) -> None:
     (ws / "doc.pdf").write_bytes(_pdf(1))
     out = await h.call(ReadTool(), file_path="doc.pdf")
     assert text_of(out) == (
-        "Read: pdftoppm is not installed. Install poppler-utils (e.g. `brew "
-        "install poppler` or `apt-get install poppler-utils`) to enable PDF "
-        "page rendering."
+        "Read: PDF pages cannot be rendered: pdftoppm is missing. It comes with "
+        "poppler (`brew install poppler`, or `apt-get install poppler-utils`)."
     )
 
 
 @needs_poppler
+async def test_a_pdf_is_known_by_its_extension(h: Harness, ws: Path) -> None:
+    # Claude Code goes by the .pdf extension: an empty or headerless one is
+    # refused as a PDF, never shown as text.
+    (ws / "empty.pdf").write_bytes(b"")
+    out = await h.call(ReadTool(), file_path="empty.pdf")
+    assert out.is_error and text_of(out) == "Read: The PDF empty.pdf has no content (0 bytes)."
+    (ws / "page.pdf").write_text("<html>not found</html>\n")
+    out = await h.call(ReadTool(), file_path="page.pdf")
+    assert out.is_error and text_of(out) == (
+        "Read: page.pdf does not start with a %PDF- header, so it is not a PDF.")
+
+
+async def test_a_pdf_over_100mb_is_refused(h: Harness, ws: Path) -> None:
+    with open(ws / "huge.pdf", "wb") as f:
+        f.write(b"%PDF-1.7\n")
+        f.truncate(100 * 1024 * 1024 + 1)
+    out = await h.call(ReadTool(), file_path="huge.pdf", pages="1")
+    assert out.is_error
+    assert text_of(out) == (
+        "Read: The PDF huge.pdf is over the 100MB that page rendering accepts.")
+
+
 async def test_a_broken_pdf_reports_the_render_failure(h: Harness, ws: Path) -> None:
     (ws / "doc.pdf").write_bytes(b"%PDF-1.4\nnot really a pdf\n")
     out = await h.call(ReadTool(), file_path="doc.pdf")
@@ -221,7 +239,7 @@ async def test_a_notebook_reads_as_cells_with_outputs(h: Harness, ws: Path) -> N
     assert img.media_type == "image/png"
     assert img.data == _PNG_BYTES
     # Recorded like any read, so Edit / Write may follow.
-    assert h.fs.digest(str(ws / "nb.ipynb")) == hashlib.sha256(body).hexdigest()
+    assert h.fs.reads[str(ws / "nb.ipynb")].digest == hashlib.sha256(body).hexdigest()
 
 
 async def test_a_non_python_code_cell_names_its_language(h: Harness, ws: Path) -> None:
@@ -246,8 +264,8 @@ async def test_large_cell_outputs_point_at_jq(h: Harness, ws: Path) -> None:
     )
     out = await h.call(ReadTool(), file_path="nb.ipynb")
     assert text_of(out).endswith(
-        "\nOutputs are too large to include. Use Bash with: cat "
-        "<notebook_path> | jq '.cells[0].outputs'"
+        "\nThese outputs are too large to show here. To see them, run in Bash: "
+        "cat <notebook_path> | jq '.cells[0].outputs'"
     )
 
 
@@ -266,4 +284,25 @@ async def test_an_over_large_notebook_is_refused_by_tokens(h: Harness, ws: Path)
         _notebook([{"cell_type": "markdown", "source": "z" * 120_000}])
     )
     out = await h.call(ReadTool(), file_path="nb.ipynb")
-    assert "exceeds maximum allowed tokens (25000)" in text_of(out)
+    assert "over the 25000-token limit" in text_of(out)
+
+
+async def test_a_notebook_over_the_cap_is_refused_before_it_is_read(
+        h: Harness, ws: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.plugins.fs._read_formats import NOTEBOOK_MAX_BYTES
+
+    with (ws / "huge.ipynb").open("wb") as fh:
+        fh.truncate(NOTEBOOK_MAX_BYTES + 1)  # sparse: nothing written
+    read = 0
+    real = h.env.read_range
+
+    async def counting(path: str, offset: int, length: int) -> bytes:
+        nonlocal read
+        data = await real(path, offset, length)
+        read += len(data)
+        return data
+
+    monkeypatch.setattr(h.env, "read_range", counting)
+    out = await h.call(ReadTool(), file_path="huge.ipynb")
+    assert out.is_error and "Notebook file exceeds the maximum size" in text_of(out)
+    assert read < 1024 * 1024

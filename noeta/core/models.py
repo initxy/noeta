@@ -39,7 +39,6 @@ __all__ = [
     "price",
     "register_models",
     "resolve_alias",
-    "spec_for",
     "unknown_model_notice",
 ]
 
@@ -90,29 +89,20 @@ class ModelSpec:
     #: the image up front, while a model absent from the table is merely
     #: *unknown* and images are let through for the provider to judge.
     supports_vision: bool = False
-    #: Explicit vendor family (``"anthropic"`` / ``"openai"``) for a row whose
-    #: real id carries no recognisable prefix — a gateway routing name that IS
-    #: a Claude behind a relay declares it here. Consumed by
-    #: :func:`model_family` ahead of prefix inference and validated at
-    #: registration. ``None`` (every shipped row) falls back to real-id prefix
-    #: inference. This is the *vendor*, not the wire an adapter speaks
+    #: Explicit vendor (``"anthropic"`` / ``"openai"``) for a row whose real
+    #: id carries no recognisable prefix — a gateway routing name that IS a
+    #: Claude behind a relay declares it here (``family`` in a models file).
+    #: Consumed by :func:`model_family` ahead of prefix inference and
+    #: validated at registration. ``None`` (every shipped row) falls back to
+    #: real-id prefix inference. Not the wire an adapter speaks
     #: (``Provider.family``).
-    family: str | None = None
+    vendor: str | None = None
     #: The name people call the model by (``Claude Opus 5.5``): the model
     #: line of the environment message and the commit co-author trailer.
     display_name: str | None = None
     #: The month its training data ends (``June 2026``), when published.
     knowledge_cutoff: str | None = None
 
-    @property
-    def is_priced(self) -> bool:
-        """True when all four rates are known, i.e. :func:`price` can charge."""
-        return None not in (
-            self.input_price_per_mtok,
-            self.output_price_per_mtok,
-            self.cache_read_price_per_mtok,
-            self.cache_write_price_per_mtok,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -375,9 +365,9 @@ def register_models(
                     f"extra model {name!r} collides with an existing catalog "
                     "row/alias; extensions never override existing data"
                 )
-            if spec.family is not None and spec.family not in _KNOWN_FAMILIES:
+            if spec.vendor is not None and spec.vendor not in _KNOWN_FAMILIES:
                 raise ValueError(
-                    f"extra model {name!r}: unknown family {spec.family!r}; "
+                    f"extra model {name!r}: unknown family {spec.vendor!r}; "
                     f"expected one of {sorted(_KNOWN_FAMILIES)}"
                 )
             existing = _EXTENSIONS.get(name)
@@ -456,19 +446,10 @@ def find_spec(model_id: str) -> ModelSpec | None:
     return spec
 
 
-def spec_for(model_id: str) -> ModelSpec:
-    """Look up a model's spec, by real id or alias. Raises :class:`KeyError`
-    for an unknown id so a mis-typed or unpriced model surfaces loudly."""
-    spec = find_spec(model_id)
-    if spec is None:
-        raise KeyError(resolve_alias(model_id))
-    return spec
-
-
 def model_family(model: str) -> str | None:
     """Classify a model selector as ``"anthropic"``, ``"openai"`` or ``None``.
 
-    The family comes from a **catalogued** model's declared ``family``, else
+    The family comes from a **catalogued** model's declared ``vendor``, else
     its real-id prefix, so only a known model classifies at all. ``None`` — an
     uncatalogued selector — means "unknown": callers must not narrow anything
     on it.
@@ -476,8 +457,8 @@ def model_family(model: str) -> str | None:
     spec = find_spec(model)
     if spec is None:
         return None
-    if spec.family is not None:
-        return spec.family
+    if spec.vendor is not None:
+        return spec.vendor
     if spec.real_model_id.startswith("claude"):
         return "anthropic"
     if spec.real_model_id.startswith("gpt"):
@@ -514,15 +495,19 @@ def model_limits(model: str) -> tuple[int, int]:
 
 def unknown_model_notice(model: str) -> str | None:
     """What to tell the person when ``model`` is not in the catalog (the
-    limits it then runs under, and how to give the real ones), else ``None``.
-    Front ends show it where the person sees it, not only in the log."""
+    limits and price it then runs under, and how to give the real ones), else
+    ``None``. Front ends show it where the person sees it, not only in the
+    log, so asking counts as telling: :func:`model_limits` and :func:`price`
+    do not log it again."""
     if not model or find_spec(model) is not None:
         return None
-    return (f"noeta doesn't recognize the model {resolve_alias(model)!r}, so it assumes a "
+    real = resolve_alias(model)
+    _WARNED.update({("limits", real), ("pricing", real)})
+    return (f"noeta doesn't recognize the model {real!r}, so it assumes a "
             f"context window of {UNKNOWN_MODEL_CONTEXT_WINDOW:,} tokens and an output cap of "
-            f"{UNKNOWN_MODEL_MAX_OUTPUT_TOKENS:,}; describe it in a models file "
-            "(NOETA_MODELS_FILE / models_file) or with register_models to use its real "
-            "limits")
+            f"{UNKNOWN_MODEL_MAX_OUTPUT_TOKENS:,} and counts its cost as $0.00 (a cost budget "
+            "will under-report); describe it in a models file (NOETA_MODELS_FILE / "
+            "models_file) or with register_models to use its real limits and prices")
 
 
 def price(model_id: str, usage: Usage) -> float:

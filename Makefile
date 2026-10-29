@@ -8,10 +8,11 @@
 #   make e2e        live tests: real LLM / real container (needs credentials)
 #   make eval       prompt-regression eval vs evals/baseline.json (needs credentials)
 #   make parity     replay Claude Code's recorded scenarios against noeta, report every difference
+#   make cluster    worker processes on Postgres under random kills (needs docker or a DSN)
 #   make build      wheel + sdist into dist/
 
 .DEFAULT_GOAL := help
-.PHONY: help install check test lint example e2e eval eval-baseline parity build
+.PHONY: help install check test lint example e2e eval eval-baseline parity cluster build
 
 help:
 	@echo "noeta"
@@ -25,6 +26,7 @@ help:
 	@echo "  make eval       prompt-regression eval vs evals/baseline.json (needs credentials)"
 	@echo "  make eval-baseline  9-trial run, then rewrite evals/baseline.json"
 	@echo "  make parity     replay Claude Code's recorded scenarios, write parity/report.md"
+	@echo "  make cluster    worker processes on Postgres under random kills (docker or a DSN)"
 	@echo "  make build      wheel + sdist into dist/"
 
 install:
@@ -41,9 +43,13 @@ lint:
 	uv run lint-imports
 
 ## a third-party plugin end to end: built and installed from examples/hello-plugin
-## (found through its entry point, nothing patched), in a throwaway environment
+## (found through its entry point, nothing patched), in a throwaway environment;
+## then the single-file plugins of examples/ (docs/extending.md), loaded as plain files
+PLUGIN_FILE_EXAMPLES = examples/run-tests/tests examples/chat-bridge/tests \
+	examples/chat-approvals/tests examples/house-style/tests
 example:
-	uv run --with-editable ./examples/hello-plugin pytest -q -p no:cacheprovider examples/hello-plugin/tests
+	uv run --with-editable ./examples/hello-plugin python -m pytest -q -p no:cacheprovider examples/hello-plugin/tests
+	uv run pytest -q -p no:cacheprovider $(PLUGIN_FILE_EXAMPLES)
 
 ## live tests against a real LLM backend / sandbox container (opt-in, never in check)
 e2e:
@@ -59,9 +65,18 @@ eval-baseline:
 	uv run python -m evals --trials 9 --write-baseline
 
 ## noeta replayed through Claude Code's recorded scenarios (scripts/parity/README.md),
-## offline; writes parity/report.md and exits 1 while any mismatch is left (never in check)
+## offline; writes parity/report.md and exits 1 while any mismatch is left (never in check).
+## First, an advisory report of model-visible texts that repeat Claude Code's
+## recorded text (scripts/parity/own_words.py; never fails, ADR-020)
 parity:
+	uv run python -m scripts.parity.own_words
 	uv run python -m scripts.parity.replay
+
+## several worker processes on one Postgres (a throwaway postgres:16 container,
+## or NOETA_TEST_POSTGRES_DSN) under random SIGKILL / SIGSTOP, offline with a
+## scripted provider (tests/cluster); NOETA_CLUSTER_SEED replays a run (never in check)
+cluster:
+	uv run --all-extras --with-editable ./tests/cluster/scripted pytest -m cluster -p no:cacheprovider -s -v tests/cluster
 
 build:
 	uv build

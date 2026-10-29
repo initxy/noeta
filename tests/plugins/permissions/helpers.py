@@ -25,9 +25,12 @@ class Fake:
     def __init__(self, name: str) -> None:
         self.name = name
         self.runs: list[dict[str, Any]] = []
+        #: ``(approved, allowed_outright)`` of each run.
+        self.allowed: list[tuple[bool, bool]] = []
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         self.runs.append(input)
+        self.allowed.append((ctx.approved, ctx.allowed_outright))
         return text_output(f"ran {self.name}")
 
 

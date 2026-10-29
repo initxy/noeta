@@ -12,13 +12,29 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, Union
 
-from noeta.core.deferred import deferred_names
-from noeta.core.events import Compacted, Event, ExtensionRecorded, Recorded, Say, TaskCreated
+from noeta.core import records
+from noeta.core.events import (
+    Compacted,
+    Event,
+    ExtensionRecorded,
+    InboxKind,
+    Recorded,
+    Say,
+    TaskCreated,
+)
 from noeta.core.execenv import ExecEnv
-from noeta.core.tool import Tool, ToolOutput, notice_data
-from noeta.core.types import Message, ModelRequest, ModelResponse, Struct, ToolUse, user
+from noeta.core.tool import Tool, ToolOutput, tool_flag
+from noeta.core.types import (
+    Message,
+    ModelRequest,
+    ModelResponse,
+    Struct,
+    ToolSpec,
+    ToolUse,
+    user,
+)
 
 if TYPE_CHECKING:
     from noeta.core.agent import Agent
@@ -30,9 +46,13 @@ log = logging.getLogger("noeta.plugins")
 class Allow(Struct, tag="allow", tag_field="gate"):
     """No objection. With ``approve`` the extension also vouches for the
     call (a PreToolUse hook that allows it): other extensions' asks are
-    satisfied, except a ``firm`` one; a deny still wins."""
+    satisfied, except a ``firm`` one; a deny still wins. With ``outright``
+    a permission layer says it allows the call by its own settings (a mode,
+    a rule) with nobody asked; the call's tool sees it as
+    ``ToolContext.allowed_outright`` when no extension asked about it."""
 
     approve: bool = False
+    outright: bool = False
 
 
 class Deny(Struct, tag="deny", tag_field="gate"):
@@ -112,10 +132,97 @@ class Command(Struct):
 @dataclass(frozen=True)
 class CommandContext:
     """Where a command is listed or run: the front end's task (``None``
-    before it has one) and working directory."""
+    before it has one), working directory and tenant. ``tenant`` has no
+    default: a command runs with its tenant's servers and files, so every
+    caller names it."""
 
     cwd: str
     task_id: str | None = None
+    tenant: str = field(kw_only=True)
+
+
+@dataclass(frozen=True)
+class ToolEntry:
+    """An entry of a request's tool list that is no tool: sent, never
+    called (a vendor's mode switch). It goes right before the sent tool
+    named ``before``; with ``before`` empty or not sent, after the tools
+    that are not ``listed_last``."""
+
+    spec: ToolSpec
+    before: str = ""
+
+
+@dataclass(frozen=True)
+class ToolChanges:
+    """What ``Extension.tool_changes`` changes in a task's tool list."""
+
+    #: Tools offered besides the extensions' own (one computed from them).
+    add: Sequence[Tool] = ()
+    #: Offered tools left out of the request, by name, each with the error
+    #: a call to it gets (answered before any gate).
+    withhold: Mapping[str, str] = field(default_factory=dict)
+    #: Entries the request lists that are no tool.
+    entries: Sequence[ToolEntry] = ()
+
+
+@dataclass(frozen=True)
+class ToolOffer:
+    """A task's tools for one step (``offer_tools``)."""
+
+    #: The tools it offers: the ones a call runs.
+    tools: list[Tool]
+    #: Offered tools left out of the request: name -> the error a call to
+    #: one gets.
+    withheld: dict[str, str]
+    #: The request's entries that are no tool, by name.
+    entries: list[ToolEntry]
+    #: Deferred tools sent as plain tools (no ``defer_loading``, never
+    #: announced): the ones a refused change set withheld.
+    plain: frozenset[str] = frozenset()
+
+
+def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str] | None,
+                denied: Sequence[str]) -> ToolOffer:
+    """A task's tools for one step: every extension's (the first of a name
+    wins), then each extension's ``tool_changes`` to them, the agent's allow
+    and deny lists applied to both (deny wins). An extension whose added
+    tool the lists refuse has its whole change set dropped: its withholds
+    and entries were computed alongside that tool (a loader of deferred
+    tools), so the deferred tools it withheld are sent plain instead."""
+    refused = set(denied)
+
+    def offered_name(name: str) -> bool:
+        return (allowed is None or name in allowed) and name not in refused
+
+    tools: list[Tool] = []
+    seen: set[str] = set()
+    for ext in exts:
+        for t in ext.tools(view):
+            if offered_name(t.name) and t.name not in seen:
+                seen.add(t.name)
+                tools.append(t)
+    offered = tuple(tools)
+    deferred = {t.name for t in offered if tool_flag(t, "deferred")}
+    withheld: dict[str, str] = {}
+    entries: list[ToolEntry] = []
+    plain: set[str] = set()
+    for ext in exts:
+        changes = ext.tool_changes(view, offered)
+        if changes is None:
+            continue
+        if not all(offered_name(t.name) for t in changes.add):
+            plain.update(n for n in changes.withhold if n in deferred)
+            continue
+        for t in changes.add:
+            if t.name not in seen:
+                seen.add(t.name)
+                tools.append(t)
+        for name, error in changes.withhold.items():
+            withheld.setdefault(name, error)
+        entries.extend(changes.entries)
+    plain.difference_update(withheld)
+    return ToolOffer(tools=tools, withheld=withheld,
+                     entries=sorted(entries, key=lambda e: e.spec.name), plain=frozenset(plain))
 
 
 class StagedChild(Struct):
@@ -123,12 +230,19 @@ class StagedChild(Struct):
 
     task_id: str
     created: TaskCreated
-    queue: str
+    #: ``None``: the spawning task's queue.
+    queue: str | None
     first: Say
 
 
+class ReadLog(Protocol):
+    """``TaskView.read_log``: a task's log after seq ``after`` (``Store.read``)."""
+
+    def __call__(self, task_id: str, after: int = 0) -> Awaitable[Sequence[Recorded]]: ...
+
+
 @dataclass
-class TaskView:
+class TaskView(records.CoreNotices):
     """What an extension sees: the folded task state (read only) and a way to
     record its own entries. Records made during a hook are appended by the
     runner right after the hook returns."""
@@ -146,14 +260,19 @@ class TaskView:
     pending: list[Event] = field(default_factory=list)
     #: Child tasks staged by ``spawn``, created with ``pending``.
     creates: list[StagedChild] = field(default_factory=list)
+    #: Inbox items staged by ``enqueue`` (body, dedupe key, target task or
+    #: ``None`` for this one), posted with ``pending``.
+    enqueued: list[tuple[InboxKind, str | None, str | None]] = field(default_factory=list)
     #: ``await count_tokens(text)``: the provider's exact token count of one
     #: user message holding ``text`` (``None`` when it cannot count).
     count_tokens: Callable[[str], Awaitable[int | None]] | None = None
-    #: ``await read_log(task_id)``: a task's log, oldest first — what a
-    #: related task (a sub-agent, a conversation this one continues)
-    #: recorded. Read only.
-    read_log: Callable[[str], Awaitable[Sequence[Recorded]]] | None = None
-    #: ``await child_tasks(task_id)``: the ids of a task's children.
+    #: ``await read_log(task_id, after=0)``: a task's log after seq
+    #: ``after``, oldest first — what a related task (a sub-agent, a
+    #: conversation this one continues) recorded. Read only; another
+    #: tenant's task reads as empty.
+    read_log: ReadLog | None = None
+    #: ``await child_tasks(task_id)``: the ids of a task's children of this
+    #: task's tenant.
     child_tasks: Callable[[str], Awaitable[list[str]]] | None = None
     #: The task's extensions, in the agent's order (``residents``).
     extensions: Sequence[Extension] = ()
@@ -166,6 +285,10 @@ class TaskView:
     allowed_tools: Sequence[str] | None = None
     #: Tool names the agent never offers.
     denied_tools: Sequence[str] = ()
+    #: ``serves_queue(queue)``: whether a child staged on ``queue`` could
+    #: run now (not on a queue this worker does not serve while it holds the
+    #: task tree); ``None`` takes every queue.
+    serves_queue: Callable[[str], bool] | None = None
     #: While a compaction asks for residents: whether the newest messages
     #: stay after its summary (``None`` outside a compaction).
     keeps_tail: bool | None = None
@@ -174,8 +297,24 @@ class TaskView:
     def task_id(self) -> str:
         return self.state.task_id
 
+    @property
+    def cwd(self) -> str:
+        """The task's working directory: its config's ``cwd``, else its
+        exec env's, else ``""``."""
+        return task_cwd(self.state, self.env)
+
     def ext_state(self, name: str) -> Any:
         return self.state.ext.get(name)
+
+    def folded(self, reducers: Mapping[str, Callable[[Any, str, Any], Any]] | None = None
+               ) -> TaskState:
+        """The task state with every record pending on this view folded in,
+        on a copy: what the next fold will see (a compaction made earlier in
+        the same ``before_model`` round included). ``reducers`` folds those
+        extensions' own records too."""
+        from noeta.core.loop.state import fold_on_copy
+
+        return fold_on_copy(self.state, self.pending, dict(reducers or {}))
 
     def prompt(self, name: str, default: str) -> str:
         """The prompt text ``name`` for this task (``noeta.core.prompts``)."""
@@ -185,48 +324,47 @@ class TaskView:
         self, extension: str, kind: str, data: Any = None, *, message: Message | None = None
     ) -> None:
         """Record an entry; with ``message`` the core also appends that
-        message to the conversation history."""
+        message to the conversation history. Raises ``ValueError`` for a
+        ``core`` record of a kind the core does not know."""
+        records.check_writable(extension, kind)
         self.pending.append(
             ExtensionRecorded(extension=extension, kind=kind, data=data, message=message)
         )
 
-    def notify(self, text: str, *, kind: str | None = None, data: Any = None) -> None:
-        """Tell the person ``text``; front ends show it, the model never sees
-        it (a ``core`` / ``notice`` record). ``kind`` and ``data`` carry the
-        same news as structured data for a front end that renders it
-        (``text`` stays the plain fallback)."""
-        self.record("core", "notice", notice_data(text, kind, data))
 
-    def set_timer(self, name: str, at: float, text: str = "") -> None:
-        """Wake the task at ``at`` (epoch seconds) once it is idle, with
-        ``text`` as the next message (``TimerFired(name)`` either way); a
-        timer of the same name is replaced. Durable: any worker fires it."""
-        self.record("core", "timer", {"name": name, "at": at, "text": text})
-
-    def clear_timer(self, name: str) -> None:
-        self.record("core", "timer_cleared", {"name": name})
+    def enqueue(self, body: InboxKind, *, dedupe_key: str | None = None,
+                task_id: str | None = None) -> None:
+        """Post ``body`` to this task's own inbox in the same append as the
+        records this hook leaves: input that must open a turn (a notice),
+        made together with the record that decided it, so a crash keeps
+        both or neither. Idempotent with a ``dedupe_key``. With ``task_id``
+        it goes to that task instead, when it is one of this task's tenant
+        (otherwise it is dropped): news another task asked to hear."""
+        self.enqueued.append((body, dedupe_key, task_id))
 
     def spawn(self, agent: str, prompt: str | Message, *, config: Mapping[str, Any] | None = None,
-              queue: str = "default", key: str = "") -> str:
+              queue: str | None = None, key: str = "") -> str:
         """Stage a child task outside a tool call (a background
         orchestration): created with the records this hook leaves, and
         tracked like any child (its ``ChildEnded`` arrives in the inbox).
         ``key`` names the child; the same key gives the same child id.
         Without one the id is new for every spawn of this task (the log
-        position it is staged at, and its place among this hook's)."""
+        position it is staged at, and its place among this hook's).
+        Raises ``ValueError`` for a ``queue`` the child could not run on
+        now (this worker holds the task tree and does not serve it)."""
+        if queue is not None and self.serves_queue is not None \
+                and not self.serves_queue(queue):
+            raise ValueError(f"cannot start a child on queue {queue!r} now: this worker "
+                             "holds the task tree and does not serve that queue")
         child_id = f"{self.task_id}.{key}" if key \
             else f"{self.task_id}.s{self.state.last_seq}.{len(self.creates) + 1}"
         message = user(prompt) if isinstance(prompt, str) else prompt
-        child_config = dict(config or {})
-        for ext in self.extensions:
-            child_config.update(ext.inherit(self.state))
         self.creates.append(StagedChild(
             task_id=child_id,
-            created=TaskCreated(agent=agent, config=child_config, parent_id=self.task_id,
-                                root_id=self.state.root_id or self.task_id),
+            created=child_task(self.task_id, self.state, self.extensions, agent, config),
             queue=queue, first=Say(message=message)))
-        self.record("core", "spawned", {"children": [
-            {"id": child_id, "call_id": "", "background": True}]})
+        self._record_core(records.Spawned(children=[
+            {"id": child_id, "call_id": "", "background": True}]))
         return child_id
 
     def find_tool(self, name: str) -> Tool | None:
@@ -245,11 +383,11 @@ class TaskView:
 
     def deferred_tool_names(self) -> list[str]:
         """The names of the deferred tools this task offers, sorted (loaded
-        or not): the list a message announces so the model can load them
-        with ``ToolSearch`` (``noeta.core.deferred``)."""
-        allowed = self.allowed_tools
-        return deferred_names(t for ext in self.extensions for t in ext.tools(self)
-                              if allowed is None or t.name in allowed)
+        or not): the list a message announces so the model can load them.
+        A deferred tool sent plain (``ToolOffer.plain``) is not one."""
+        offer = offer_tools(self.extensions, self, self.allowed_tools, self.denied_tools)
+        return sorted({t.name for t in offer.tools
+                       if tool_flag(t, "deferred") and t.name not in offer.plain})
 
     def compacted(self, event: Compacted) -> None:
         """Record a compaction (the compaction extension's one core event)."""
@@ -276,17 +414,42 @@ class TaskView:
         return out
 
 
+def task_cwd(state: TaskState, env: ExecEnv | None) -> str:
+    """A task's working directory: its config's ``cwd``, else ``env``'s."""
+    return str(state.config.get("cwd") or getattr(env, "cwd", "") or "")
+
+
+def child_task(task_id: str, state: TaskState, extensions: Sequence[Extension], agent: str,
+               config: Mapping[str, Any] | None, *, history_from: str | None = None,
+               history_through: int | None = None) -> TaskCreated:
+    """The ``TaskCreated`` of a child the task ``task_id`` stages: ``config``
+    with what every extension passes on (``Extension.inherit``) laid over it."""
+    child_config = dict(config or {})
+    for ext in extensions:
+        child_config.update(ext.inherit(state))
+    return TaskCreated(agent=agent, config=child_config, parent_id=task_id,
+                       root_id=state.root_id or task_id, history_from=history_from,
+                       history_through=history_through, tenant=state.tenant)
+
+
 GatePhase = Literal["model", "user"]
 
 
 class Extension:
     name: str = ""
+    #: The agents a plugin *file* (``~/.noeta/plugins``, a trusted project's
+    #: ``.noeta/plugins``) joins by itself when found (``"*"``: every agent),
+    #: after the agent's own plugins; an installed package's is ignored, and
+    #: ``enabled = false`` in the host's setting still turns it off.
+    add_to: ClassVar[tuple[str, ...]] = ()
 
     def initial_state(self) -> Any:
         return None
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
-        """Fold one of this extension's own records into its state."""
+        """Fold one of this extension's own records into its state; also
+        ``records.ERASED_KIND`` when the person's messages are erased (a
+        blocked prompt), so what was recorded for them can go too."""
         return state
 
     def continue_state(self, state: Any) -> Any:
@@ -299,6 +462,18 @@ class Extension:
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
         return ()
+
+    def tool_changes(self, view: TaskView, offered: Sequence[Tool]) -> ToolChanges | None:
+        """Changes to the task's tool list computed from the tools every
+        extension offers (``offered``: their ``tools`` after the agent's
+        allow and deny lists, never another extension's changes). Every
+        extension is asked with the same ``offered``, so no answer depends
+        on their order: added tools join after the offered ones (a name
+        already offered or added stays the first), withheld names are the
+        union (the first extension's error stands), entries go in by name.
+        An added tool the agent's lists refuse drops the whole answer
+        (``offer_tools``)."""
+        return None
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         """Reminders to record now. Called before every model call, after

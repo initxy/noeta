@@ -18,6 +18,7 @@ lists each where it first appears. A mismatch whose id appears in
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import re
 from collections.abc import Iterable, Mapping
@@ -271,6 +272,39 @@ def diff_layout(cc: Mapping[str, Any], no: Mapping[str, Any]) -> list[tuple[str,
         a, b = a.replace("*", ""), b.replace("*", "")
         if a != b:
             out.append(("layout", f"first message: Claude Code `{a}`, noeta `{b}`"))
+    out += [("layout", d) for d in diff_shapes(cc["messages"], no["messages"])]
+    dc, dn = cc.get("deferred") or [], no.get("deferred") or []
+    if dc and dn and dc != dn:
+        only_cc = [n for n in dc if n not in dn]
+        only_no = [n for n in dn if n not in dc]
+        if only_cc:
+            out.append(("tools", "deferred-tool list: names noeta does not list: "
+                                 + ", ".join(only_cc)))
+        if only_no:
+            out.append(("tools", "deferred-tool list: names only noeta lists: "
+                                 + ", ".join(only_no)))
+    return out
+
+
+def _shape_line(line: str) -> str:
+    """A layout line as its shape: cache marks are counted elsewhere, and
+    whether a tool call failed depends on the machine the replay runs on
+    (a command Claude Code's machine lacked), not on noeta."""
+    return re.sub(r"\*(1h)?", "", line).replace("tool_result:error", "tool_result")
+
+
+def diff_shapes(cc: list[str], no: list[str]) -> list[str]:
+    """Every run of messages whose shape differs (block types, their order,
+    a bare string against a block list, the kinds and order of text parts),
+    after the first message, which ``diff_layout`` reports as a whole."""
+    a = [_shape_line(x) for x in cc[1:]]
+    b = [_shape_line(x) for x in no[1:]]
+    out = []
+    matcher = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
+    for op, i1, i2, j1, j2 in matcher.get_opcodes():
+        if op != "equal":
+            out.append("message shape: Claude Code " + _short(" / ".join(a[i1:i2]) or "-", 240)
+                       + ", noeta " + _short(" / ".join(b[j1:j2]) or "-", 240))
     return out
 
 

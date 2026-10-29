@@ -9,12 +9,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from noeta.core import models
+from noeta.core.client import ClientAPI
 from noeta.core.events import ModelCalled, ModelReplied, TaskCreated
+from noeta.core.extension import ToolOffer
+from noeta.core.runner import Runtime, TaskRun
+from noeta.core.store import Claim
 from noeta.core.types import ModelRequest, Usage
-from noeta.toolkit.context import estimate_tokens
+from noeta.toolkit.tokens import estimate_tokens
 
 __all__ = ["ModelUse", "TreeUsage", "context_breakdown", "context_text", "cost_text",
-           "tree_usage"]
+           "task_context", "tree_usage"]
 
 
 @dataclass
@@ -71,7 +75,7 @@ def add_events(total: TreeUsage, events: list[Any], *, after: int = 0) -> None:
                       rec.at - called_at if called_at else 0.0)
 
 
-async def tree_usage(client: Any, task_id: str) -> TreeUsage:
+async def tree_usage(client: ClientAPI, task_id: str) -> TreeUsage:
     """Every model call of the task and its sub-agents, by model."""
     total = TreeUsage()
     pending = [task_id]
@@ -103,12 +107,31 @@ def _tool_tokens(spec: Any) -> int:
     return estimate_tokens(spec.name + spec.description + json.dumps(spec.input_schema))
 
 
-def context_breakdown(request: ModelRequest) -> dict[str, Any]:
+async def task_context(runtime: Runtime, task_id: str) -> dict[str, Any] | None:
+    """:func:`context_breakdown` of the task's next request
+    (``Runtime.preview``'s), its tools named from the task's tool offer;
+    ``None`` when ``runtime`` does not have the task's agent."""
+    from noeta.core.runner.model import build_model_request
+
+    run = TaskRun(runtime, Claim(task_id=task_id, worker=runtime.worker, epoch=0,
+                                 lease_until=0.0))
+    await run.load()
+    if run.agent is None:
+        return None
+    return context_breakdown(build_model_request(run, final=False), run.tool_offer(run.view()))
+
+
+def context_breakdown(request: ModelRequest, offer: ToolOffer | None = None) -> dict[str, Any]:
     """Estimated tokens per part of ``request`` (a ``Runtime.preview``),
     against the model's window: ``categories`` (name -> tokens, in Claude
-    Code's ``/context`` order), ``total``, ``window``, ``model``."""
+    Code's ``/context`` order), ``total``, ``window``, ``model``, and the
+    ``tools`` it offers by name. With the task's ``offer``, a request entry
+    that is no tool is left out and ``tools`` also names the deferred tools
+    not sent yet (as Claude Code's init message lists them)."""
+    real = None if offer is None else {t.name for t in offer.tools}
+    specs = [t for t in request.tools if real is None or t.name in real]
     system = sum(estimate_tokens(p.text) for p in request.system)
-    loaded = [t for t in request.tools if not t.defer_loading]
+    loaded = [t for t in specs if not t.defer_loading]
     mcp = sum(_tool_tokens(t) for t in loaded if t.name.startswith("mcp__"))
     tools = sum(_tool_tokens(t) for t in loaded if not t.name.startswith("mcp__"))
     messages = sum(estimate_tokens(json.dumps(_plain(m))) for m in request.messages)
@@ -116,8 +139,11 @@ def context_breakdown(request: ModelRequest) -> dict[str, Any]:
     used = system + tools + mcp + messages
     categories = {"System prompt": system, "System tools": tools, "MCP tools": mcp,
                   "Messages": messages, "Free space": max(window - used, 0)}
+    withheld = sorted(offer.withheld) if offer is not None else []
+    deferred = len(withheld) if offer is not None else len(request.tools) - len(loaded)
     return {"model": request.model, "window": window, "total": used,
-            "categories": categories, "deferred_tools": len(request.tools) - len(loaded)}
+            "categories": categories, "deferred_tools": deferred,
+            "tools": [t.name for t in specs] + withheld}
 
 
 def _plain(message: Any) -> Any:

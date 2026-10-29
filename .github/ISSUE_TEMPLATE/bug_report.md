@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report something that behaves incorrectly in Noeta
+about: Report something that behaves incorrectly in noeta
 title: "[bug] "
 labels: bug
 assignees: ''
@@ -16,25 +16,26 @@ A clear, concise description of the incorrect behavior.
 2. …
 3. …
 
-Include the smallest program, command, or config that triggers it. If you can
-reproduce on the offline `stub` provider, prefer that — it needs no API key.
+Include the smallest command, program or config that triggers it. If it concerns what the
+model was sent or did, the output of `noeta -p --output-format stream-json --verbose` helps.
 
 ## Expected behavior
 
-What you expected to happen instead.
+What you expected instead. If Claude Code behaves differently, say how: a difference in what
+the model sees is a bug.
 
 ## Environment
 
 - OS:
 - Python version:
-- Install path used: <!-- packages/noeta-sdk | packages/noeta-runtime -->
-- Provider: <!-- stub | openai-compat | anthropic -->
-- Noeta version / commit: <!-- `main` @ <sha>, or the 0.4.0 tag -->
+- noeta version / commit: <!-- e.g. 1.0.0.dev0 @ <sha> -->
+- Install: <!-- uv tool install from the repository / a checkout / pip -->
+- Provider and model: <!-- anthropic | openai_compat | openai_responses, model id -->
+- Store: <!-- sqlite (default) | postgres -->
 
 ## Logs
 
-Relevant logs, tracebacks, or EventLog output. Please redact API keys and any
-sensitive task input.
+Relevant output or tracebacks. Redact API keys, tokens and sensitive task content.
 
 ```
 <paste logs here>

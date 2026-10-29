@@ -15,7 +15,7 @@ on `make check` alone.
 
 ## Non-goals
 
-- Replacing the public benchmark runs in `docs/benchmarks.md` (Terminal-Bench /
+- Replacing the public benchmark runs (`bench/README.md`: Terminal-Bench /
   SWE-bench through `noeta-agent`'s harbor adapter); those stay the headline numbers.
 - Putting a live-LLM step into `make check` or CI.
 

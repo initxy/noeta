@@ -7,14 +7,13 @@ from typing import TYPE_CHECKING, Any
 
 import msgspec
 
-from noeta.core import models
+from noeta.core import records
 from noeta.core.errors import ContextOverflow, ModelError, RequestStale, TurnDone, TurnFailed
-from noeta.core.events import ExtensionRecorded, ModelCalled, ModelReplied
+from noeta.core.events import ModelCalled, ModelReplied
 from noeta.core.extension import Reminder, TaskView
 from noeta.core.loop.request import build_request, cache_breakpoints, request_hash
-from noeta.core.loop.state import CORE
 from noeta.core.retry import complete_with_retries
-from noeta.core.runner import texts
+from noeta.core.runner import closing, texts
 from noeta.core.types import (
     Delta,
     Message,
@@ -36,21 +35,25 @@ def build_model_request(run: TaskRun, *, final: bool) -> ModelRequest:
     assert agent is not None
     view = run.view()
     config = run.state.config
+    offer = run.tool_offer(view)
     request = build_request(
         run.state,
-        model=str(config.get("model") or agent.model),
+        model=run.model,
         system_prompt=run.state.prompt(f"system/{agent.name}", agent.system_prompt),
         identity=run.state.prompt(f"identity/{agent.name}", agent.identity),
         parts=[p for ext in run.exts for p in ext.context(view)],
-        tools=run.tools(view),
+        tools=offer.tools,
+        withheld=offer.withheld,
+        entries=offer.entries,
+        plain=offer.plain,
         effort=config.get("effort") or agent.effort,
-        max_tokens=agent.max_tokens or _output_ceiling(str(config.get("model") or agent.model)),
+        max_tokens=agent.max_tokens or run.rt.output_ceiling(run.model),
         output_schema=config.get("output_schema") or agent.output_schema,
     )
     if final:
         # The step-limit round: tool schemas stay (the prefix stays cached),
         # tools are switched off, and the instruction is not recorded.
-        prompt = texts.STEP_LIMIT_PROMPT.format(n=agent.max_steps_per_turn)
+        prompt = texts.STEP_LIMIT_PROMPT.format(n=agent.step_budget)
         request = msgspec.structs.replace(
             request, messages=[*request.messages, user(prompt, origin="system")],
             tool_choice="none")
@@ -74,11 +77,13 @@ async def _remind(run: TaskRun, request: ModelRequest) -> ModelRequest:
     _record_reminders(view, due)
     if not view.pending:
         return request
-    n = len(run.state.messages)
+    unrecorded = request.messages[len(run.state.messages):]
     await run.flush(view)
-    added = run.state.messages[n:]
+    # The recorded messages are taken again from the folded log, not the
+    # old ones plus what was added: a record among the reminders' may
+    # also have taken messages out (an erase).
     return msgspec.structs.replace(
-        request, messages=[*request.messages[:n], *added, *request.messages[n:]],
+        request, messages=[*run.state.messages, *unrecorded],
         cache_after=cache_breakpoints(run.state))
 
 
@@ -89,20 +94,13 @@ def _record_reminders(view: TaskView, due: list[tuple[str, Reminder]]) -> None:
         view.record(name, r.kind, r.data, message=message)
 
 
-def _output_ceiling(model: str) -> int:
-    """Always send max_tokens: the model's output ceiling (a gateway once
-    defaulted to 1,000 when it was left out)."""
-    spec = models.find_spec(model)
-    return spec.max_output_tokens if spec is not None else models.UNKNOWN_MODEL_MAX_OUTPUT_TOKENS
-
-
 def _empty(message: Message) -> bool:
     return not message.text.strip() and not message.tool_uses
 
 
 def _final_answer(run: TaskRun, response: ModelResponse) -> ModelResponse:
     assert run.agent is not None
-    head = texts.STEP_LIMIT_HEAD.format(n=run.agent.max_steps_per_turn)
+    head = texts.STEP_LIMIT_HEAD.format(n=run.agent.step_budget)
     text = response.message.text.strip()
     blocks: list[Any] = [b for b in response.message.content if not isinstance(b, ToolUse)
                          and not isinstance(b, Text)]
@@ -111,11 +109,11 @@ def _final_answer(run: TaskRun, response: ModelResponse) -> ModelResponse:
                          stop_reason="end_turn", usage=response.usage, model=response.model)
 
 
-async def call_model(run: TaskRun, *, final: bool = False) -> bool:
-    if run.state.model_attempts >= texts.MAX_MODEL_ATTEMPTS:
-        return await run.fail_turn(texts.LLM_ERROR, "the model call kept being interrupted")
+async def _run_hooks(run: TaskRun, request: ModelRequest) -> ModelRequest | bool:
+    """The reminders, then every ``before_model``: the request to send, or
+    what ``call_model`` returns when a hook ended the step (the turn failed
+    or is done, or the request went stale)."""
     view = run.view()
-    request = build_model_request(run, final=final)
     try:
         # The reminders first, as Claude Code adds its notes before it
         # decides to compact: the hooks see the request that would go.
@@ -126,22 +124,56 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         await run.flush(view)
     except TurnFailed as exc:
         await run.flush(view)
-        return await run.fail_turn(exc.reason, exc.detail)
+        return await closing.fail_turn(run, exc.reason, exc.detail)
     except TurnDone:
         await run.flush(view)
-        await run.append([ExtensionRecorded(extension=CORE, kind="turn_done")])
+        await run.append([records.event(records.TurnDone())])
         return True
     except RequestStale:
         await run.flush(view)
         return True  # the next boundary builds the request from the new state
+    return request
+
+
+async def _on_overflow(run: TaskRun, exc: ContextOverflow) -> bool:
+    """The model refused the request as too long: an extension makes room
+    and the next boundary calls again, or the turn fails."""
+    overflow_view = run.view()
+    try:
+        for ext in run.exts:
+            if await ext.on_context_overflow(overflow_view):
+                await run.flush(overflow_view)
+                return True  # room was made; the next boundary calls again
+    except TurnFailed as failed:
+        await run.flush(overflow_view)
+        return await closing.fail_turn(run, failed.reason, failed.detail)
+    return await closing.fail_turn(run, texts.CONTEXT_OVERFLOW, _detail(exc))
+
+
+async def call_model(run: TaskRun, *, final: bool = False) -> bool:
+    if run.state.model_attempts >= texts.MAX_MODEL_ATTEMPTS:
+        return await closing.fail_turn(run, texts.LLM_ERROR,
+                                       "the model call kept being interrupted")
+    # Before the hooks: a compaction's summary is a model call too.
+    refusal = await run.rt.budget_refusal(run.state.tenant)
+    if refusal is not None:
+        return await closing.fail_turn(run, texts.BUDGET_SPENT, refusal)
+    prepared = await _run_hooks(run, build_model_request(run, final=final))
+    if isinstance(prepared, bool):
+        return prepared
+    request = prepared
     await run.append([ModelCalled(model=request.model, request_hash=request_hash(request),
                                   attempt=run.state.model_attempts + 1)])
 
     current = {"attempt": 1}
     sink, tid, called = run.rt.on_delta, run.task_id, run.state.last_seq
-    run.partial = []
+    run.partial, run.thinking = [], []
 
     def on_delta(d: Delta) -> None:
+        if d.kind == "block":
+            if d.block is not None and (d.block.text or d.block.signature or d.block.data):
+                run.thinking.append(d.block)
+            return
         if d.kind == "text":
             run.partial.append(d.text)
         if sink is not None:
@@ -152,33 +184,25 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     def on_retry(attempt: int, delay: float, error: Exception) -> None:
         # Hosts see "retrying" (and drop the failed attempt's deltas).
         current["attempt"] = attempt + 1
-        run.partial = []
-        pending.append(asyncio.ensure_future(run.append([ExtensionRecorded(
-            extension=CORE, kind="retry",
-            data={"attempt": attempt, "delay": delay,
-                  "error": str(error)[: texts.ERROR_DETAIL_CHARS]},
-        )])))
+        run.partial, run.thinking = [], []
+        pending.append(asyncio.ensure_future(run.append([records.event(records.Retry(
+            attempt=attempt, delay=delay, error=str(error)[: texts.ERROR_DETAIL_CHARS]))])))
 
     try:
-        response = await complete_with_retries(run.rt.provider_for(request.model), request,
-                                               on_delta, sleep=run.rt.sleep, on_retry=on_retry)
+        provider = run.rt.provider(request.model, run.state.tenant)
+        response = await complete_with_retries(provider, request, on_delta, sleep=run.rt.sleep,
+                                               on_retry=on_retry)
     except ContextOverflow as exc:
         await asyncio.gather(*pending, return_exceptions=True)
-        overflow_view = run.view()
-        try:
-            for ext in run.exts:
-                if await ext.on_context_overflow(overflow_view):
-                    await run.flush(overflow_view)
-                    return True  # room was made; the next boundary calls again
-        except TurnFailed as failed:
-            await run.flush(overflow_view)
-            return await run.fail_turn(failed.reason, failed.detail)
-        return await run.fail_turn(texts.CONTEXT_OVERFLOW, _detail(exc))
+        return await _on_overflow(run, exc)
     except ModelError as exc:
         await asyncio.gather(*pending, return_exceptions=True)
-        return await run.fail_turn(texts.LLM_ERROR, _detail(exc))
+        return await closing.fail_turn(run, texts.LLM_ERROR, _detail(exc))
     await asyncio.gather(*pending, return_exceptions=True)
-    run.partial = []
+    run.partial, run.thinking = [], []
+    # Paid for whether or not the reply is kept (an empty one, or a claim
+    # lost before it is appended).
+    await run.rt.charge(run.state.tenant, request.model, response.usage)
 
     if final:
         response = _final_answer(run, response)
@@ -186,9 +210,9 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     if response.stop_reason == "max_tokens" and _empty(message):
         # Cut while still reasoning: nothing to record (an empty assistant
         # turn is a provider 400 on every later request).
-        return await run.continue_after_cap(thinking_only=True)
+        return await closing.continue_after_cap(run, thinking_only=True)
     if _empty(message):
-        return await run.fail_turn(texts.LLM_EMPTY_RESPONSE,
+        return await closing.fail_turn(run, texts.LLM_EMPTY_RESPONSE,
                                    f"the model returned no text and no tool call "
                                    f"(stop: {response.stop_reason})")
     response = unique_call_ids(run.state, response, run.state.last_seq + 1)

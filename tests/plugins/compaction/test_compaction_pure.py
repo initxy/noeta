@@ -72,6 +72,7 @@ def test_the_environment_knobs(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_estimate() -> None:
     assert text_tokens("") == 0 and text_tokens("abcde") == 2
+    assert text_tokens("压缩摘要") == 4 and text_tokens("ab压缩") == 3
     m = Message(role="user", content=[ToolResult(call_id="a", content=[
         Text(text="x" * 8), Image(media_type="image/png", data=b"\0" * 10_000)])])
     assert messages_tokens([m]) == 1 + 2 + IMAGE_TOKENS

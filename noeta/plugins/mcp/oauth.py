@@ -3,7 +3,7 @@
 A remote server that answers ``401`` wants a bearer token. The way to one,
 as the MCP authorization spec and Claude Code do it:
 
-1. **Discovery.** The protected resource metadata (RFC 9728) — at the
+1. **Discovery** (:mod:`.oauth_discovery`). The protected resource metadata (RFC 9728) — at the
    ``resource_metadata`` URL the ``WWW-Authenticate`` challenge names, else
    at the server's ``/.well-known/oauth-protected-resource`` — names the
    authorization server; its metadata (RFC 8414, else OpenID discovery)
@@ -37,17 +37,25 @@ import os
 import random
 import secrets
 import socket
+import tempfile
 import time
 import urllib.parse
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from noeta.plugins.mcp.config import McpAuthRequired, McpError, McpServer, OAuthSettings
-from noeta.toolkit.context import noeta_home
+from noeta.plugins.mcp.config import McpError, McpServer, OAuthSettings
+from noeta.plugins.mcp.oauth_discovery import HTTP_TIMEOUT_S as _HTTP_TIMEOUT_S
+from noeta.plugins.mcp.oauth_discovery import (
+    Endpoints,
+    discover,
+)
+from noeta.plugins.mcp.oauth_discovery import (
+    parse_challenge as parse_challenge,
+)
+from noeta.toolkit.paths import noeta_home
 
 __all__ = [
     "AUTH_DIR",
@@ -68,7 +76,6 @@ CALLBACK_PORT_ENV = "NOETA_MCP_OAUTH_CALLBACK_PORT"
 SIGN_IN_TIMEOUT_S = 300.0
 #: A token this close to its expiry is renewed before use.
 REFRESH_MARGIN_S = 60.0
-_HTTP_TIMEOUT_S = 30.0
 _FALLBACK_PORT = 3118
 _PORT_RANGE = (49152, 65535)
 _PORT_TRIES = 100
@@ -94,21 +101,74 @@ class TokenStore:
             return {}
         return data if isinstance(data, dict) else {}
 
-    def save(self, data: Mapping[str, Any]) -> None:
+    def _dir(self) -> Path:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with contextlib.suppress(OSError):
             self.path.parent.chmod(0o700)
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(dict(data), fh)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, self.path)
+        return self.path.parent
+
+    def save(self, data: Mapping[str, Any]) -> None:
+        """Replace the file at once (a temporary file of its own, renamed)."""
+        fd, tmp = tempfile.mkstemp(dir=self._dir(), prefix=f".{self.path.name}.",
+                                   suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(dict(data), fh)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self.path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
+
+    @contextlib.contextmanager
+    def locked(self) -> Iterator[None]:
+        """Hold the file's lock (a sibling ``.lock`` file) for a
+        read-modify-write, across threads and processes. Without ``fcntl``
+        (Windows) there is no lock."""
+        try:
+            import fcntl
+        except ImportError:
+            yield
+            return
+        fd = os.open(self._dir() / f"{self.path.name}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
+    @contextlib.asynccontextmanager
+    async def locked_async(self) -> AsyncIterator[None]:
+        """:meth:`locked` held across awaits: the lock is taken in a thread,
+        so a wait for another process never stalls the event loop. Nothing
+        inside may take :meth:`locked` again (``update``): save instead."""
+        cm = self.locked()
+        taking = asyncio.ensure_future(asyncio.to_thread(cm.__enter__))
+        try:
+            await asyncio.shield(taking)
+        except asyncio.CancelledError:
+            # The thread may still get the lock: let it go once it does.
+            taking.add_done_callback(
+                lambda t: None if t.cancelled() or t.exception() is not None
+                else cm.__exit__(None, None, None))
+            raise
+        try:
+            yield
+        finally:
+            cm.__exit__(None, None, None)
 
     def update(self, **fields: Any) -> dict[str, Any]:
-        data = {**self.load(), **fields}
-        self.save(data)
+        with self.locked():
+            data = {**self.load(), **fields}
+            self.save(data)
         return data
+
+    async def update_async(self, **fields: Any) -> dict[str, Any]:
+        """:meth:`update` in a thread: the lock may be held for a while (a
+        refresh elsewhere waits for the network under it), and a wait on
+        the event loop would stall the very refresh it waits for."""
+        return await asyncio.to_thread(self.update, **fields)
 
     def clear(self) -> bool:
         try:
@@ -126,145 +186,6 @@ def store_for(server: McpServer, scope: str | None = None,
     return TokenStore((home or noeta_home()) / AUTH_DIR / f"{server.alias}-{digest}.json")
 
 
-# ---------------------------------------------------------------- challenge
-
-
-def parse_challenge(header: str) -> dict[str, str]:
-    """The parameters of a ``Bearer`` ``WWW-Authenticate`` challenge."""
-    out: dict[str, str] = {}
-    text = header.strip()
-    if text.lower().startswith("bearer"):
-        text = text[len("bearer"):]
-    i = 0
-    while i < len(text):
-        while i < len(text) and text[i] in " ,":
-            i += 1
-        eq = text.find("=", i)
-        if eq < 0:
-            break
-        key = text[i:eq].strip().lower()
-        i = eq + 1
-        if i < len(text) and text[i] == '"':
-            end = i + 1
-            value = []
-            while end < len(text) and text[end] != '"':
-                if text[end] == "\\" and end + 1 < len(text):
-                    end += 1
-                value.append(text[end])
-                end += 1
-            out[key] = "".join(value)
-            i = end + 1
-        else:
-            end = text.find(",", i)
-            end = len(text) if end < 0 else end
-            out[key] = text[i:end].strip()
-            i = end
-    return out
-
-
-# ---------------------------------------------------------------- discovery
-
-
-def _origin(url: str) -> str:
-    parts = urllib.parse.urlsplit(url)
-    return f"{parts.scheme}://{parts.netloc}"
-
-
-def _path(url: str) -> str:
-    return urllib.parse.urlsplit(url).path.rstrip("/")
-
-
-async def _get_json(http: httpx.AsyncClient, url: str) -> dict[str, Any] | None:
-    try:
-        resp = await http.get(url, headers={"Accept": "application/json",
-                                            "MCP-Protocol-Version": "2025-11-25"},
-                              timeout=_HTTP_TIMEOUT_S)
-    except httpx.HTTPError:
-        return None
-    if resp.status_code != 200:
-        return None
-    try:
-        data = resp.json()
-    except ValueError:
-        return None
-    return data if isinstance(data, dict) else None
-
-
-async def _resource_metadata(http: httpx.AsyncClient, server_url: str,
-                             hint: str) -> dict[str, Any] | None:
-    urls = [hint] if hint else []
-    base = _origin(server_url) + "/.well-known/oauth-protected-resource"
-    if _path(server_url):
-        urls.append(base + _path(server_url))
-    urls.append(base)
-    for url in urls:
-        found = await _get_json(http, url)
-        if found is not None and found.get("authorization_servers"):
-            return found
-    return None
-
-
-async def _server_metadata(http: httpx.AsyncClient, issuer: str) -> dict[str, Any] | None:
-    origin, path = _origin(issuer), _path(issuer)
-    if path:
-        urls = [f"{origin}/.well-known/oauth-authorization-server{path}",
-                f"{origin}/.well-known/openid-configuration{path}",
-                f"{origin}{path}/.well-known/openid-configuration"]
-    else:
-        urls = [f"{origin}/.well-known/oauth-authorization-server",
-                f"{origin}/.well-known/openid-configuration"]
-    for url in urls:
-        found = await _get_json(http, url)
-        if found is not None and found.get("authorization_endpoint") \
-                and found.get("token_endpoint"):
-            return found
-    return None
-
-
-@dataclass
-class _Endpoints:
-    authorization: str
-    token: str
-    registration: str
-    auth_methods: list[str]
-    #: The resource indicator (RFC 8707), when the server published one.
-    resource: str
-    scopes: str
-
-
-async def discover(http: httpx.AsyncClient, server: McpServer,
-                   challenge: str = "") -> _Endpoints:
-    """The endpoints a sign-in with ``server`` uses."""
-    settings = server.oauth or OAuthSettings()
-    params = parse_challenge(challenge)
-    prm = await _resource_metadata(http, server.url, params.get("resource_metadata", ""))
-    meta: dict[str, Any] | None
-    if settings.auth_server_metadata_url:
-        if not settings.auth_server_metadata_url.startswith("https://"):
-            raise McpError("authServerMetadataUrl must use https://")
-        meta = await _get_json(http, settings.auth_server_metadata_url)
-    else:
-        issuer = str((prm or {}).get("authorization_servers", [""])[0] or "") \
-            or _origin(server.url)
-        meta = await _server_metadata(http, issuer)
-        if meta is None and prm is None:
-            # A server from before resource metadata: its own endpoints.
-            origin = _origin(server.url)
-            meta = {"authorization_endpoint": f"{origin}/authorize",
-                    "token_endpoint": f"{origin}/token",
-                    "registration_endpoint": f"{origin}/register"}
-    if meta is None:
-        raise McpError(f"MCP server {server.alias!r}: no OAuth authorization server metadata "
-                       "found")
-    scopes = settings.scopes or params.get("scope", "") or " ".join(
-        str(s) for s in (prm or {}).get("scopes_supported") or [])
-    return _Endpoints(
-        authorization=str(meta["authorization_endpoint"]), token=str(meta["token_endpoint"]),
-        registration=str(meta.get("registration_endpoint") or ""),
-        auth_methods=[str(m) for m in meta.get("token_endpoint_auth_methods_supported") or []],
-        resource=str((prm or {}).get("resource") or ""), scopes=scopes)
-
-
 # ---------------------------------------------------------------- tokens
 
 
@@ -280,6 +201,15 @@ def _client_auth(client: Mapping[str, Any], methods: list[str], body: dict[str, 
     if secret:
         body["client_secret"] = secret
     return {}
+
+
+class TokenRefused(McpError):
+    """The authorization server answered a token request with an error
+    (``error``: its OAuth error code, else the HTTP status)."""
+
+    def __init__(self, message: str, *, error: Any) -> None:
+        super().__init__(message)
+        self.error = error
 
 
 async def _token_request(http: httpx.AsyncClient, data: Mapping[str, Any],
@@ -300,7 +230,7 @@ async def _token_request(http: httpx.AsyncClient, data: Mapping[str, Any],
     if resp.status_code != 200 or not isinstance(tokens, dict) \
             or not tokens.get("access_token"):
         detail = tokens.get("error") if isinstance(tokens, dict) else resp.status_code
-        raise McpError(f"token request refused ({detail})")
+        raise TokenRefused(f"token request refused ({detail})", error=detail)
     expires = tokens.get("expires_in")
     if isinstance(expires, (int, float)) and not isinstance(expires, bool):
         tokens["expires_at"] = time.time() + float(expires)
@@ -327,7 +257,7 @@ class OAuth:
                 return None
             expires = tokens.get("expires_at")
             if isinstance(expires, (int, float)) and expires - time.time() < REFRESH_MARGIN_S:
-                tokens = await self._refresh(data) or tokens
+                tokens = await self._refresh(tokens) or tokens
             return f"Bearer {tokens['access_token']}"
 
     async def refused(self, sent: str | None) -> bool:
@@ -339,26 +269,38 @@ class OAuth:
             current = f"Bearer {tokens['access_token']}" if tokens.get("access_token") else None
             if current is not None and current != sent:
                 return True  # another connection renewed it meanwhile
-            return await self._refresh(data) is not None
+            return await self._refresh(tokens) is not None
 
-    async def _refresh(self, data: dict[str, Any]) -> dict[str, Any] | None:
-        tokens = data.get("tokens") or {}
-        refresh = tokens.get("refresh_token")
-        if not refresh or not (data.get("endpoints") or {}).get("token"):
-            return None
-        body = {"grant_type": "refresh_token", "refresh_token": str(refresh)}
-        resource = (data.get("endpoints") or {}).get("resource")
-        if resource:
-            body["resource"] = str(resource)
-        try:
-            async with _client(self._http) as http:
-                fresh = await _token_request(http, data, body)
-        except McpError:
-            self.store.update(tokens={})  # a refused refresh token is spent
-            return None
-        fresh.setdefault("refresh_token", refresh)
-        self.store.update(tokens=fresh)
-        return fresh
+    async def _refresh(self, seen: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Renew the tokens ``seen`` holds: the new ones, or ``None``. Under
+        the file's lock from the read to the write, so another connection
+        or process renewing meanwhile is found instead of spending a
+        rotated refresh token twice."""
+        async with self.store.locked_async():
+            data = self.store.load()
+            tokens = data.get("tokens") or {}
+            if tokens.get("access_token") and tokens.get("access_token") != seen.get(
+                    "access_token"):
+                return dict(tokens)  # renewed elsewhere meanwhile
+            refresh = tokens.get("refresh_token")
+            if not refresh or not (data.get("endpoints") or {}).get("token"):
+                return None
+            body = {"grant_type": "refresh_token", "refresh_token": str(refresh)}
+            resource = (data.get("endpoints") or {}).get("resource")
+            if resource:
+                body["resource"] = str(resource)
+            try:
+                async with _client(self._http) as http:
+                    fresh = await _token_request(http, data, body)
+            except TokenRefused as exc:
+                if exc.error == "invalid_grant":  # the refresh token is spent
+                    self.store.save({**data, "tokens": {}})
+                return None
+            except McpError:  # the network: try again later
+                return None
+            fresh.setdefault("refresh_token", refresh)
+            self.store.save({**data, "tokens": fresh})
+            return fresh
 
 
 @contextlib.asynccontextmanager
@@ -368,11 +310,6 @@ async def _client(http: httpx.AsyncClient | None) -> Any:
         return
     async with httpx.AsyncClient(follow_redirects=True) as own:
         yield own
-
-
-def auth_required(server: McpServer, challenge: str = "") -> McpAuthRequired:
-    return McpAuthRequired(f"MCP server {server.alias!r} requires authentication",
-                           challenge)
 
 
 # ---------------------------------------------------------------- sign-in
@@ -440,7 +377,7 @@ class SignIn:
         async with _client(self._http) as http:
             endpoints = await discover(http, self.server, self.challenge)
             client = await self._client(http, endpoints, settings)
-        self.store.update(endpoints=endpoints.__dict__, client=client)
+        await self.store.update_async(endpoints=endpoints.__dict__, client=client)
         try:
             self._listener = await asyncio.start_server(self._on_redirect, "127.0.0.1", port)
         except OSError as exc:
@@ -456,7 +393,7 @@ class SignIn:
         self.url = endpoints.authorization + sep + urllib.parse.urlencode(query)
         return self.url
 
-    async def _client(self, http: httpx.AsyncClient, endpoints: _Endpoints,
+    async def _client(self, http: httpx.AsyncClient, endpoints: Endpoints,
                       settings: OAuthSettings) -> dict[str, Any]:
         saved = self.store.load().get("client") or {}
         if settings.client_id:
@@ -550,7 +487,7 @@ class SignIn:
             body["resource"] = str(resource)
         async with _client(self._http) as http:
             tokens = await _token_request(http, data, body)
-        self.store.update(tokens=tokens)
+        await self.store.update_async(tokens=tokens)
 
     async def close(self) -> None:
         listener, self._listener = self._listener, None

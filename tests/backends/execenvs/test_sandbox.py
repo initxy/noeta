@@ -242,6 +242,27 @@ def test_bwrap_missing_from_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert "not installed" in (linux.unavailable() or "")
 
 
+async def test_an_architecture_without_the_syscall_filter_is_unavailable(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import platform
+
+    from noeta.toolkit.sandbox import run_in_tenant_sandbox
+
+    monkeypatch.setattr(platform, "machine", lambda: "riscv64")
+    strict = SandboxSettings(enabled=True, fail_if_unavailable=True)
+    reason = sb.LocalSandbox(strict, str(tmp_path), platform="linux").unavailable()
+    assert reason is not None and "riscv64" in reason
+    # Nothing to refuse: the filter is not needed.
+    loose = SandboxSettings(enabled=True, allow_all_unix_sockets=True,
+                            nested_user_namespaces=True, bwrap_path="/nonexistent/bwrap")
+    assert "riscv64" not in (sb.LocalSandbox(loose, str(tmp_path), platform="linux")
+                             .unavailable() or "")
+    env = LocalExecEnv(str(tmp_path), sandbox=strict)
+    env.fence = object()  # type: ignore[assignment]  # a tenant's task
+    with pytest.raises(OSError, match="riscv64"):
+        await run_in_tenant_sandbox(env, ["true"])
+
+
 # ---------------------------------------------------------------- real commands
 
 
@@ -373,23 +394,122 @@ def test_the_protected_list_follows_the_permissions_and_git(tmp_path: Path, home
     ws = tmp_path / "ws"
     _repo_with_hooks_elsewhere(ws)
     plan = sb.plan_paths(SandboxSettings(enabled=True), str(ws), str(tmp_path / "t"))
-    module = ws / ".git" / "modules" / "lib"
     for path in (ws / ".envrc", ws / ".vscode", ws / ".husky", ws / "githooks",
-                 module / "config", module / "hooks", ws / ".git" / "config.worktree"):
+                 ws / ".git" / "modules", ws / ".git" / "commondir",
+                 ws / ".git" / "config.worktree"):
         assert str(path) in plan.deny_write, path
     held = dict(plan.placeholders)
     # Missing git config files are empty files; anything else an empty
     # directory, which git does not list.
     assert held[str(ws / ".git" / "config.worktree")] is True
-    assert held[str(module / "config.worktree")] is True
     assert held[str(ws / ".noeta")] is False
     # Other protected names are read-only when present, never placeheld: a
     # placeholder is a directory the person sees appear in the project.
     assert str(ws / ".pre-commit-config.yaml") not in held
-    assert set(held) <= {str(ws / n) for n in sb.PLACEHOLDERS} | {
-        str(module / "config.worktree"), str(module / "hooks")}, held
+    assert set(held) <= {str(ws / n) for n in sb.PLACEHOLDERS}, held
+    # Git dies on an empty commondir: a missing one is removed afterwards.
+    assert plan.remove_after == [str(ws / ".git" / "commondir")]
     # Every directory above a protected path is pinned: none can be renamed.
-    assert {str(ws / ".git"), str(ws / ".git" / "modules"), str(module)} <= set(plan.pinned)
+    assert str(ws / ".git") in plan.pinned
+
+
+def _linked_worktree(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """``(main repository, its git directory, a linked worktree)``, the
+    worktree where an isolated agent's goes."""
+    main = tmp_path / "main"
+    main.mkdir()
+    _git(main, "init", "-q")
+    (main / "a.txt").write_text("a\n")
+    _git(main, "add", "-A")
+    _git(main, "commit", "-qm", "init")
+    tree = main / ".noeta" / "worktrees" / "agent-x"
+    _git(main, "worktree", "add", "-q", "-b", "worktree-agent-x", str(tree))
+    return main, main / ".git", tree
+
+
+def test_a_linked_worktree_may_write_the_git_data_it_commits_to(tmp_path: Path,
+                                                                home: Path) -> None:
+    main, common, tree = _linked_worktree(tmp_path)
+    plan = sb.plan_paths(SandboxSettings(enabled=True), str(tree), str(tmp_path / "t"))
+    gitdir = common / "worktrees" / "agent-x"
+    for path in (gitdir, common / "objects", common / "refs", common / "logs"):
+        assert str(path) in plan.writable, path
+    for path in (common, common / "hooks", common / "config", main):
+        assert str(path) not in plan.writable, path
+    for path in (gitdir / "commondir", gitdir / "gitdir", gitdir / "config.worktree"):
+        assert str(path) in plan.deny_write, path
+    assert dict(plan.placeholders)[str(gitdir / "config.worktree")] is True
+    profile = sb.seatbelt_profile(SandboxSettings(enabled=True), plan, ())
+    assert f'(allow file-write* (subpath "{common}/objects"))' in profile
+    assert f'(deny file-write* (subpath "{gitdir}/commondir"))' in profile
+    assert f'(allow file-write* (subpath "{common}"))' not in profile
+
+
+def test_a_git_file_not_pointing_back_opens_nothing(tmp_path: Path, home: Path) -> None:
+    _, common, _ = _linked_worktree(tmp_path)
+    elsewhere = tmp_path / "ws"
+    elsewhere.mkdir()
+    (elsewhere / ".git").write_text(f"gitdir: {common / 'worktrees' / 'agent-x'}\n")
+    plan = sb.plan_paths(SandboxSettings(enabled=True), str(elsewhere), str(tmp_path / "t"))
+    assert plan.writable == [str(elsewhere)]
+    (elsewhere / ".git").write_text(f"gitdir: {tmp_path}\n")  # not a linked worktree
+    plan = sb.plan_paths(SandboxSettings(enabled=True), str(elsewhere), str(tmp_path / "t"))
+    assert plan.writable == [str(elsewhere)]
+
+
+@needs_bwrap
+async def test_an_agent_commits_in_its_worktree_but_cannot_touch_git_code(
+        tmp_path: Path, home: Path) -> None:
+    main, common, tree = _linked_worktree(tmp_path)
+    env = LocalExecEnv(str(tree), sandbox={"enabled": True})
+    git = "git -c user.name=t -c user.email=t@t"
+    code, out, _ = await _run(env, f"echo hi > f && {git} add f && {git} commit -qm x && "
+                                   f"{git} log --oneline | wc -l")
+    assert code == 0, out
+    assert out.split() == ["2"]
+    gitdir = common / "worktrees" / "agent-x"
+    for command in (f"echo x >> {common}/config", f"echo x > {common}/hooks/pre-commit",
+                    f"echo x > {gitdir}/config.worktree", f"echo {tmp_path} > {gitdir}/commondir",
+                    f"mv {gitdir} {common}/worktrees/old", f"echo x > {common}/HEAD",
+                    f"echo x > {main}/b.txt"):
+        code, _, _ = await _run(env, command)
+        assert code != 0, command
+    assert not (gitdir / "config.worktree").exists()
+    assert not (common / "hooks" / "pre-commit").exists()
+    assert (gitdir / "commondir").read_text().strip() == "../.."
+
+
+@needs_bwrap
+async def test_git_cannot_be_pointed_at_other_config_or_hooks(tmp_path: Path,
+                                                              home: Path) -> None:
+    main, common, _ = _linked_worktree(tmp_path)
+    module = common / "modules" / "lib"
+    module.mkdir(parents=True)
+    (module / "HEAD").write_text("ref: refs/heads/main\n")
+    env = LocalExecEnv(str(main), sandbox={"enabled": True})
+    # commondir redirects config and hooks; a missing one written by the
+    # command is gone when it ends.
+    code, out, _ = await _run(env, "echo ../evil > .git/commondir && echo planted")
+    assert "planted" in out or code != 0
+    assert not (common / "commondir").exists()
+    gitdir = common / "worktrees" / "agent-x"
+    for command in ("mkdir -p .git/modules/new/hooks", "echo x > .git/modules/lib/config",
+                    "mv .git/modules .git/old-modules",
+                    f"echo {tmp_path} > {gitdir}/commondir", f"echo x > {gitdir}/gitdir"):
+        code, _, _ = await _run(env, command)
+        assert code != 0, command
+    assert sorted(os.listdir(common / "modules")) == ["lib"]
+    assert not (module / "config").exists()
+    assert (gitdir / "commondir").read_text().strip() == "../.."
+    # Git still works in the sandbox, and the placeholders are gone.
+    git = "git -c user.name=t -c user.email=t@t"
+    code, out, _ = await _run(env, f"echo hi > f && {git} add f && {git} commit -qm x && "
+                                   f"{git} status --short && echo ok")
+    assert code == 0 and "ok" in out, out
+    shutil.rmtree(common / "modules")
+    code, out, _ = await _run(env, f"{git} status --short && echo ok")
+    assert code == 0 and "ok" in out, out
+    assert not (common / "modules").exists() and not (common / "commondir").exists()
 
 
 #: What a package manager or build tool runs on its next ordinary command.
@@ -642,3 +762,94 @@ async def test_an_i386_system_call_cannot_open_a_unix_socket(tmp_path: Path,
     code, out, _ = await _run(env, f'python3 -c "{_I386_SOCKET}"')
     assert "fd " not in out
     assert code != 0
+
+
+def test_seccomp_filter_refuses_reaching_into_other_processes(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.backends.execenvs import sandbox_bridge as bridge
+    monkeypatch.setattr(bridge.platform, "machine", lambda: "x86_64")
+    x86_64, eperm = 0xC000003E, 0x00050000 | 1
+    # ptrace, process_vm_readv, process_vm_writev, pidfd_getfd: refused even
+    # when Unix sockets and user namespaces are allowed.
+    for allow in (False, True):
+        program = bridge._filter(allow_unix=allow, allow_userns=allow)
+        assert program is not None
+        for nr in (101, 310, 311, 438):
+            assert _run_bpf(program, nr, x86_64) == eperm
+
+
+# Finds the relay the command was forked from by its command line, whatever
+# shells stand between them, then tries to read it and to be traced.
+_PROBE_RELAY = """\
+import ctypes, os
+p = os.getppid()
+while p > 1 and b"sandbox_bridge" not in open(f"/proc/{p}/cmdline", "rb").read():
+    p = int(open(f"/proc/{p}/stat").read().rpartition(")")[2].split()[1])
+assert p > 1
+try:
+    open(f"/proc/{p}/environ", "rb").read()
+    print("read relay")
+except OSError as exc:
+    print("relay closed", exc.errno)
+libc = ctypes.CDLL(None, use_errno=True)
+print("traceme", libc.ptrace(0, 0, 0, 0), ctypes.get_errno())
+"""
+
+
+@needs_bwrap
+async def test_a_command_cannot_reach_into_the_relay(tmp_path: Path, home: Path) -> None:
+    script = tmp_path / "probe.py"
+    script.write_text(_PROBE_RELAY)
+    for settings in ({"enabled": True},
+                     {"enabled": True, "network": {"allowAllUnixSockets": True}}):
+        env = LocalExecEnv(str(tmp_path), sandbox=settings)
+        code, out, _ = await _run(env, f"python3 {script}")
+        assert code == 0, out
+        assert "relay closed" in out and "read relay" not in out, out
+        assert "traceme -1 1" in out, out  # EPERM
+
+
+def test_seccomp_filter_refuses_io_uring_with_unix_sockets(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.backends.execenvs import sandbox_bridge as bridge
+    monkeypatch.setattr(bridge.platform, "machine", lambda: "aarch64")
+    aarch64, eperm, allow = 0xC00000B7, 0x00050000 | 1, 0x7FFF0000
+    strict = bridge._filter(allow_unix=False, allow_userns=True)
+    loose = bridge._filter(allow_unix=True, allow_userns=True)
+    assert strict is not None and loose is not None
+    for nr in (425, 426, 427):  # io_uring_setup, _enter, _register
+        assert _run_bpf(strict, nr, aarch64) == eperm
+        assert _run_bpf(loose, nr, aarch64) == allow
+
+
+@pytest.mark.parametrize(("machine", "audit", "nr"),
+                         [("x86_64", 0xC000003E, 53), ("aarch64", 0xC00000B7, 199)])
+def test_seccomp_filter_refuses_a_unix_socketpair(monkeypatch: pytest.MonkeyPatch,
+                                                  machine: str, audit: int, nr: int) -> None:
+    from noeta.backends.execenvs import sandbox_bridge as bridge
+    monkeypatch.setattr(bridge.platform, "machine", lambda: machine)
+    eperm, allow = 0x00050000 | 1, 0x7FFF0000
+    strict = bridge._filter(allow_unix=False, allow_userns=False)
+    loose = bridge._filter(allow_unix=True, allow_userns=False)
+    assert strict is not None and loose is not None
+    assert _run_bpf(strict, nr, audit, 1) == eperm  # socketpair(AF_UNIX, ...)
+    assert _run_bpf(strict, nr, audit, 2) == allow
+    assert _run_bpf(loose, nr, audit, 1) == allow
+
+
+@needs_bwrap
+async def test_a_unix_socketpair_cannot_be_made(tmp_path: Path, home: Path) -> None:
+    env = LocalExecEnv(str(tmp_path), sandbox={"enabled": True})
+    code, out, _ = await _run(
+        env, "python3 -c 'import socket; socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)'")
+    assert code != 0 and "Operation not permitted" in out
+
+
+@needs_bwrap
+async def test_io_uring_cannot_be_set_up(tmp_path: Path, home: Path) -> None:
+    probe = ("import ctypes;l=ctypes.CDLL(None,use_errno=True);"
+             "p=ctypes.create_string_buffer(120);"
+             "print('setup',l.syscall(425,1,p),ctypes.get_errno())")
+    env = LocalExecEnv(str(tmp_path), sandbox={"enabled": True})
+    code, out, _ = await _run(env, f'python3 -c "{probe}"')
+    assert code == 0 and out.split()[:3] in (["setup", "-1", "1"], ["setup", "-1", "38"]), out

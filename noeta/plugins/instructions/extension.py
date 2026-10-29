@@ -52,7 +52,8 @@ from noeta.plugins.instructions.files import (
     Reader,
     clean,
 )
-from noeta.toolkit.context import read_memory_index, read_text, simulated_state, task_env
+from noeta.toolkit.context import read_text, task_env
+from noeta.toolkit.memory_index import read_memory_index
 from noeta.toolkit.tools import path_within
 
 __all__ = ["DEFAULT_INSTRUCTIONS_FILENAMES", "Instructions", "render_file",
@@ -161,7 +162,7 @@ class Instructions(Extension):
 
     def _reader(self, view: TaskView) -> tuple[Reader, str]:
         env = task_env(view.env, view.state.config)
-        cwd = str(view.state.config.get("cwd") or env.cwd)
+        cwd = view.cwd or env.cwd
         local = task_env(None, {"cwd": self.user_dir or "/"})
         return Reader(env=env, local=local, cwd=cwd), cwd
 
@@ -196,15 +197,17 @@ class Instructions(Extension):
         return out
 
     def _memory_dir(self, view: TaskView, *, pending: bool) -> str | None:
-        state = simulated_state(view, {e.name: e.reduce for e in view.extensions}) \
+        state = view.folded({e.name: e.reduce for e in view.extensions}) \
             if pending else view.state
         memory = state.ext.get(MEMORY_PLUGIN)
         directory = memory.get("dir") if isinstance(memory, dict) else None
         return directory if isinstance(directory, str) else None
 
-    def _memory_index(self, view: TaskView, *, pending: bool) -> tuple[str, str, str] | None:
+    async def _memory_index(self, view: TaskView, *,
+                            pending: bool) -> tuple[str, str, str] | None:
         directory = self._memory_dir(view, pending=pending)
-        found = read_memory_index(directory) if directory else None
+        env = task_env(view.env, view.state.config)
+        found = await read_memory_index(env, directory) if directory else None
         return (found[0], MEMORY, found[1]) if found else None
 
     # ------------------------------------------------------------ hooks
@@ -216,7 +219,7 @@ class Instructions(Extension):
         reader, cwd = self._reader(view)
         files = await self._start_files(reader, cwd)
         rendered = [(f.path, f.kind, f.text) for f in files]
-        memory = self._memory_index(view, pending=True)
+        memory = await self._memory_index(view, pending=True)
         if memory is not None:
             rendered.append(memory)
         if not rendered:
@@ -290,7 +293,7 @@ class Instructions(Extension):
             text = await _reread(reader.env, path)
             if text is not None:
                 start.append((path, PROJECT, text))
-        memory = self._memory_index(view, pending=False)
+        memory = await self._memory_index(view, pending=False)
         if memory is not None:
             start.append(memory)
         out = [user(render_instructions(start), origin=self.origin)] if start else []

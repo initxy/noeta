@@ -11,19 +11,31 @@ continued by a new child task that starts from its conversation
 
 from __future__ import annotations
 
+import posixpath
+import re
 import time
+import unicodedata
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from noeta.core.errors import UnknownTask
-from noeta.core.events import Say
+from noeta.core.events import External, Say
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ToolUse, user
-from noeta.plugins.subtasks import texts
+from noeta.plugins.subtasks import idle, texts
+from noeta.plugins.subtasks.worktree import (
+    make_agent_worktree,
+    remove_unlaunched_worktree,
+    reopen_worktree,
+    worktree_exists,
+)
+from noeta.toolkit.tools import SCHEMA_DIALECT, load_description
 
 if TYPE_CHECKING:
+    from noeta.core.agent import Agent
     from noeta.core.loop.state import TaskState
-    from noeta.plugins.subtasks.extension import SubagentSpec, Subtasks
+    from noeta.plugins.subtasks.extension import Subtasks
+    from noeta.plugins.subtasks.roster import SubagentSpec
 
 #: Child config keys this extension sets.
 DEPTH_KEY = "subtask_depth"
@@ -31,18 +43,23 @@ TYPE_KEY = "subagent_type"
 #: The id the caller knows the agent by (a resumed agent runs in a new task).
 AGENT_ID_KEY = "agent_id"
 #: Whether the agent delivers its report with ``SubagentHandback`` (Claude
-#: Code offers it in auto mode; elsewhere the agent's last reply is the result).
+#: Code offers it in auto mode, to an agent that has the tool; elsewhere the
+#: agent's last reply is the result).
 HANDBACK_KEY = "subagent_handback"
 FORK_KEY = "fork"
 #: An agent definition's default isolation, carried in its roster config.
 ISOLATION_KEY = "isolation"
 #: Set by hosts on a task no human watches: a call that needs one ends it.
 UNATTENDED_KEY = "unattended"
+#: The directory a background agent keeps its transcript in (the agent
+#: writes ``<dir>/<agent id>.output``; see ``transcript_file``).
+TRANSCRIPT_KEY = "transcript_dir"
+_UNSAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]")
 DELEGATION_TOOLS = (texts.AGENT_TOOL, texts.LEGACY_AGENT_TOOL)
 
 
 def _schema(properties: dict[str, Any], required: Sequence[str] = ()) -> dict[str, Any]:
-    out: dict[str, Any] = {"$schema": texts.JSON_SCHEMA, "type": "object",
+    out: dict[str, Any] = {"$schema": SCHEMA_DIALECT, "type": "object",
                            "properties": properties}
     if required:
         out["required"] = list(required)
@@ -66,9 +83,37 @@ def agent_schema() -> dict[str, Any]:
     }, ["description", "prompt"])
 
 
-def agent_type(args: Mapping[str, Any]) -> str:
+def transcript_dir(spill_dir: str | None, root_id: str) -> str | None:
+    """Where the agents of the task tree ``root_id`` keep their transcripts:
+    a ``tasks`` directory beside the tree's spilled tool outputs."""
+    if not spill_dir:
+        return None
+    return posixpath.join(spill_dir, _UNSAFE_NAME.sub("_", root_id) or "task", "tasks")
+
+
+def transcript_file(directory: str, agent_id: str) -> str:
+    """An agent's transcript: one JSON line per message of its conversation."""
+    return posixpath.join(directory, f"{_UNSAFE_NAME.sub('_', agent_id) or 'agent'}.output")
+
+
+def agent_type(args: Mapping[str, Any], roster: Mapping[str, Any] | None = None) -> str:
+    """The agent type a call names. A name that is not a type exactly but
+    matches one type (or ``fork``) once case, spaces, dashes and underscores
+    are ignored means that type, as in Claude Code."""
     value = args.get("subagent_type")
-    return value if isinstance(value, str) and value.strip() else texts.DEFAULT_TYPE
+    name = value if isinstance(value, str) and value.strip() else texts.DEFAULT_TYPE
+    roster = roster or {}
+    if name in roster or name == texts.FORK_TYPE:
+        return name
+    key = _loose(name)
+    if key == _loose(texts.FORK_TYPE):
+        return texts.FORK_TYPE
+    matches = [k for k in roster if _loose(k) == key]
+    return matches[0] if len(matches) == 1 else name
+
+
+def _loose(name: str) -> str:
+    return re.sub(r"[\s\-_\u2010-\u2015]+", "", unicodedata.normalize("NFKC", name).lower())
 
 
 def argument_refusal(args: Mapping[str, Any]) -> str | None:
@@ -84,47 +129,51 @@ def argument_refusal(args: Mapping[str, Any]) -> str | None:
     return None
 
 
-def batch_refusal(
-    ext: Subtasks, state: TaskState, calls: Sequence[ToolUse],
-    roster: Mapping[str, SubagentSpec],
-) -> tuple[str, bool] | None:
-    """Why this reply's Agent calls may not run: ``(text, every_call)``. With
-    ``every_call`` the text answers every call of the reply (nothing ran);
-    otherwise only the Agent calls (the ordinary calls still run)."""
+def call_refusal(ext: Subtasks, state: TaskState, call: ToolUse,
+                 roster: Mapping[str, SubagentSpec]) -> str | None:
+    """Why this one Agent call may not start its agent; the reply's other
+    calls are not affected (Claude Code answers each call by itself)."""
+    args = call.input
+    if not isinstance(args.get("prompt"), str) or not isinstance(args.get("description", ""), str):
+        return texts.MISSING_FIELDS
+    refusal = argument_refusal(args)
+    if refusal is not None:
+        return refusal
+    name = agent_type(args, roster)
+    reason = None
+    if name == texts.FORK_TYPE:
+        if state.config.get(FORK_KEY):
+            reason = texts.FORK_IN_FORK
+    elif name not in roster:
+        available = ", ".join(sorted([*roster, texts.FORK_TYPE]))
+        alike = sorted(k for k in roster if _loose(k) == _loose(name))
+        reason = texts.AMBIGUOUS_AGENT.format(name=name, matches=" or ".join(alike)) \
+            if alike else texts.UNKNOWN_AGENT.format(name=name, available=available)
+    if reason is None and args.get("isolation") == "remote":
+        reason = texts.NO_REMOTE
+    depth = int(state.config.get(DEPTH_KEY) or 0)
+    if reason is None and ext.max_depth is not None and depth >= ext.max_depth:
+        reason = texts.DEPTH_REACHED.format(depth=depth, n=ext.max_depth)
+    return texts.SPAWN_DENIED.format(reason=reason) if reason is not None else None
+
+
+def batch_refusal(ext: Subtasks, state: TaskState, calls: Sequence[ToolUse]
+                  ) -> tuple[str, bool] | None:
+    """Limits on this reply's Agent calls taken together: ``(text,
+    every_call)``. With ``every_call`` the text answers every call of the
+    reply (nothing ran); otherwise only the Agent calls (the ordinary calls
+    still run)."""
     agents = [u for u in calls if u.name in DELEGATION_TOOLS]
     if not agents:
         return None
     for u in calls:
         if u.name in ext.exclusive_with:
             return texts.EXCLUSIVE.format(name=u.name), True
-    for u in agents:
-        if not isinstance(u.input.get("prompt"), str) \
-                or not isinstance(u.input.get("description", ""), str):
-            return texts.MISSING_FIELDS, True
-        refusal = argument_refusal(u.input)
-        if refusal is not None:
-            return texts.NOTHING_RAN.format(reason=refusal), True
     n = len(agents)
     if n > ext.max_fanout:
         return texts.FANOUT_TOO_BIG.format(n=n, limit=ext.max_fanout), False
     if len({u.id for u in agents}) != n:
         return texts.DUPLICATE_CALL_ID, False
-    depth = int(state.config.get(DEPTH_KEY) or 0)
-    for u in agents:
-        name = agent_type(u.input)
-        reason = None
-        if name == texts.FORK_TYPE:
-            if state.config.get(FORK_KEY):
-                reason = texts.FORK_IN_FORK
-        elif name not in roster:
-            available = ", ".join(sorted([*roster, texts.FORK_TYPE]))
-            reason = texts.UNKNOWN_AGENT.format(name=name, available=available)
-        if reason is None and u.input.get("isolation") == "remote":
-            reason = texts.NO_REMOTE
-        if reason is None and ext.max_depth is not None and depth >= ext.max_depth:
-            reason = texts.DEPTH_REACHED.format(n=ext.max_depth)
-        if reason is not None:
-            return texts.SPAWN_DENIED.format(reason=reason), False
     running = len(ext.running(state))
     if running + n > ext.max_background:
         return texts.TOO_MANY_BACKGROUND.format(limit=ext.max_background), False
@@ -163,7 +212,7 @@ class AgentTool:
     """``Agent``: start one background agent of the roster (or a fork)."""
 
     name = texts.AGENT_TOOL
-    description = texts.load_description("agent")
+    description = load_description("noeta.plugins.subtasks", "agent")
     read_only = False
     clearable = False
     #: Spawns after the reply's ordinary calls have run.
@@ -171,8 +220,9 @@ class AgentTool:
 
     def __init__(self, ext: Subtasks, state: TaskState,
                  roster: Mapping[str, SubagentSpec], name: str = texts.AGENT_TOOL,
-                 *, handback: bool = True) -> None:
+                 *, handback: bool = True, agents: Mapping[str, Agent] | None = None) -> None:
         self._handback = handback
+        self._agents = agents or {}
         self._ext = ext
         self._state = state
         self._roster = roster
@@ -181,15 +231,66 @@ class AgentTool:
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         ext, state = self._ext, self._state
-        refusal = batch_refusal(ext, state, [c.use for c in state.calls]
-                                or [ToolUse(id=ctx.call_id, name=self.name, input=input)],
-                                self._roster)
+        use = ToolUse(id=ctx.call_id, name=self.name, input=input)
+        # The reply's limits taken together are the gate's (``before_tool``):
+        # here the siblings started before this call already count as running.
+        refusal = call_refusal(ext, state, use, self._roster)
         if refusal is not None:  # normally denied at the gate already
-            return text_output(refusal[0], is_error=True)
+            return text_output(refusal, is_error=True)
         assert ctx.spawn is not None
-        kind = agent_type(input)
+        kind = agent_type(input, self._roster)
         prompt = str(input["prompt"])
         description = str(input.get("description") or "")
+        fork = kind == texts.FORK_TYPE
+        agent, queue, isolation, config = self._plan(input, ctx, kind)
+        config[HANDBACK_KEY] = self._handback and self._can_hand_back(agent)
+        transcripts = transcript_dir(ctx.spill_dir, ctx.root_id or state.task_id)
+        if transcripts:
+            config[TRANSCRIPT_KEY] = transcripts
+        worktree = None
+        # A child on a queue it could not run on now is dropped with this
+        # call's result (the runner says why): make no worktree for it.
+        refused = queue is not None and ctx.serves_queue is not None \
+            and not ctx.serves_queue(queue)
+        if isolation == "worktree" and not refused:
+            worktree = await make_agent_worktree(ctx, config)
+            if isinstance(worktree, str):
+                return text_output(worktree, is_error=True)
+            config["cwd"] = worktree["path"]
+        child = ctx.spawn(agent, prompt, config=config, background=True, queue=queue,
+                          history_from=state.task_id if fork else None,
+                          history_through=state.last_seq if fork else None)
+        output_file = transcript_file(transcripts, child) if transcripts else ""
+        ctx.record(ext.name, "launched", {
+            "task_id": child, "agent_id": child, "type": kind, "agent": agent,
+            "description": description, "call_id": ctx.call_id, "config": config,
+            "queue": queue, "at": time.time(), "worktree": worktree,
+            "output_file": output_file})
+        text = texts.LAUNCHED.format(id=child) + (texts.LAUNCHED_FORK if fork else "")
+        if output_file:
+            text += texts.LAUNCHED_OUTPUT_FILE.format(path=output_file)
+        # A one-block list, as Claude Code sends an Agent result.
+        return ToolOutput(content=text_output(text).content, meta={"child_id": child},
+                          block_list=True)
+
+    def _can_hand_back(self, agent: str) -> bool:
+        """Whether ``agent``, as a sub-agent, is offered ``SubagentHandback``:
+        it carries this plugin and its tool list keeps the tool. One that is
+        not reports with its final message, as in Claude Code. An agent this
+        worker does not know is assumed to."""
+        spec = self._agents.get(agent)
+        if spec is None:
+            return True
+        name = texts.HANDBACK_TOOL
+        if (spec.allowed_tools is not None and name not in spec.allowed_tools) \
+                or name in spec.denied_tools:
+            return False
+        return any(e.name == self._ext.name for e in spec.extensions)
+
+    def _plan(self, input: Mapping[str, Any], ctx: ToolContext, kind: str
+              ) -> tuple[str, str | None, Any, dict[str, Any]]:
+        """``(agent, queue, isolation, child config)`` for a call naming ``kind``."""
+        ext, state = self._ext, self._state
         fork = kind == texts.FORK_TYPE
         if fork:
             agent, spec_config, queue = state.agent, {FORK_KEY: True}, ext.queue
@@ -199,29 +300,25 @@ class AgentTool:
             queue = spec.queue or ext.queue
         isolation = input.get("isolation") or spec_config.pop(ISOLATION_KEY, None)
         config = ext.child_config(state, ctx, agent, spec_config, kind, input, fork=fork)
-        config[HANDBACK_KEY] = self._handback
-        worktree = None
+        return agent, queue, isolation, config
+
+    async def recover(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput | None:
+        """A call a crash cut short launched no agent (the launch is written
+        with the call's result); only a worktree it made is left, and it goes."""
+        kind = agent_type(input, self._roster)
+        if kind != texts.FORK_TYPE and kind not in self._roster:
+            return None
+        _, _, isolation, config = self._plan(input, ctx, kind)
         if isolation == "worktree":
-            worktree = await ext.add_worktree(ctx, config)
-            if isinstance(worktree, str):
-                return text_output(worktree, is_error=True)
-            config["cwd"] = worktree["path"]
-        child = ctx.spawn(agent, prompt, config=config, background=True, queue=queue,
-                          history_from=state.task_id if fork else None,
-                          history_through=state.last_seq if fork else None)
-        ctx.record(ext.name, "launched", {
-            "task_id": child, "agent_id": child, "type": kind, "agent": agent,
-            "description": description, "call_id": ctx.call_id, "config": config,
-            "queue": queue, "at": time.time(), "worktree": worktree})
-        text = texts.LAUNCHED.format(id=child) + (texts.LAUNCHED_FORK if fork else "")
-        return text_output(text, child_id=child)
+            await remove_unlaunched_worktree(ctx, config)
+        return None
 
 
 class HandbackTool:
     """``SubagentHandback``: deliver the final report and end the run."""
 
     name = texts.HANDBACK_TOOL
-    description = texts.load_description("subagent_handback")
+    description = load_description("noeta.plugins.subtasks", "subagent_handback")
     read_only = False
     clearable = False
     #: Last in the sub-agent's tool list, after the deferred-tool placeholder.
@@ -241,8 +338,13 @@ class HandbackTool:
         sender = str(self._state.config.get(AGENT_ID_KEY) or self._state.task_id)
         if parent and ctx.post is not None:
             await ctx.post(Say(message=agent_message(sender, report), when="now"),
-                           task_id=parent)
+                           task_id=parent, dedupe_key=f"subtasks:handback:{ctx.idempotency_key}")
         return ToolOutput(content=text_output(texts.HANDBACK_DONE).content, end_turn=report)
+
+    async def recover(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput | None:
+        """A hand-back a crash cut short is made again: the caller drops the
+        repeated report (its key), and the run ends as it would have."""
+        return await self.run(input, ctx)
 
 
 class SendMessageTool:
@@ -250,7 +352,7 @@ class SendMessageTool:
     caller, or to another task of the store."""
 
     name = texts.SEND_TOOL
-    description = texts.load_description("send_message")
+    description = load_description("noeta.plugins.subtasks", "send_message")
     read_only = False
     clearable = False
     #: Claude Code lists it among the tools loaded on demand.
@@ -260,7 +362,8 @@ class SendMessageTool:
         "message": {"description": texts.SEND_MESSAGE_PROP, "type": "string"},
         "summary": {"description": texts.SEND_SUMMARY_PROP, "type": "string",
                     "maxLength": 200},
-    }, ["to", "message"])
+        "notify_when_idle": {"description": texts.SEND_NOTIFY_PROP, "type": "boolean"},
+    }, ["to"])
 
     def __init__(self, ext: Subtasks, state: TaskState) -> None:
         self._ext = ext
@@ -269,11 +372,29 @@ class SendMessageTool:
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         ext, state = self._ext, self._state
         to = str(input.get("to") or "").strip()
-        body = input.get("message")
-        if not isinstance(body, str) or not body.strip():
+        notify = input.get("notify_when_idle") is True
+        body = input.get("message", "" if notify else None)
+        if not isinstance(body, str) or not (body.strip() or notify):
             return text_output(texts.EMPTY_MESSAGE, is_error=True)
         assert ctx.post is not None
+        if to == "*":
+            return text_output(texts.NO_BROADCAST, is_error=True)
         me = str(state.config.get(AGENT_ID_KEY) or state.task_id)
+        if notify:
+            refusal = await self._idle_refusal(to, me, ctx)
+            if refusal is not None:
+                return text_output(refusal + (texts.IDLE_NOT_SENT if body.strip() else ""),
+                                   is_error=True)
+            lines = []
+            if body.strip():
+                await ctx.post(Say(message=user(texts.OTHER_TASK_MESSAGE.format(
+                    sender=me, body=body), origin="agent"), when="next_turn"), task_id=to)
+                lines.append(texts.SENT.format(to=to))
+            self._subscribe(to, ctx)
+            await ctx.post(External(name=idle.SUBSCRIBE_SIGNAL,
+                                    data={"from": state.task_id, "id": self._sub_id(ctx)}),
+                           task_id=to, dedupe_key=f"subtasks:idle-sub:{self._sub_id(ctx)}")
+            return text_output("\n".join([*lines, texts.IDLE_SUBSCRIBED.format(to=to)]))
         if to == texts.MAIN_ADDRESS:
             if not state.parent_id:
                 return text_output(texts.NO_CALLER, is_error=True)
@@ -289,10 +410,20 @@ class SendMessageTool:
                 return text_output(texts.SENT.format(to=to))
             assert ctx.spawn is not None
             config = {**agent["config"], AGENT_ID_KEY: to}
+            tree = agent.get("worktree")
+            if tree and not await worktree_exists(ctx.env, tree):
+                # Removed when it ended unchanged: resume where the caller works.
+                tree = None
+                config.pop("cwd", None)
+                if "cwd" in state.config:
+                    config["cwd"] = state.config["cwd"]
+            elif tree:
+                reopen_worktree(ctx.env, tree)
             child = ctx.spawn(agent["agent"], message, config=config, background=True,
                               queue=agent.get("queue") or ext.queue, history_from=task)
             ctx.record(ext.name, "launched", {
-                **agent, "task_id": child, "agent_id": to, "config": config, "at": time.time()})
+                **agent, "task_id": child, "agent_id": to, "config": config, "at": time.time(),
+                "worktree": tree})
             return text_output(texts.RESUMED.format(to=to), child_id=child)
         if not to or to in (state.task_id, me):
             return text_output(texts.UNKNOWN_RECIPIENT.format(to=to), is_error=True)
@@ -303,14 +434,56 @@ class SendMessageTool:
             return text_output(texts.UNKNOWN_RECIPIENT.format(to=to), is_error=True)
         return text_output(texts.SENT.format(to=to))
 
+    @staticmethod
+    def _sub_id(ctx: ToolContext) -> str:
+        return f"{ctx.task_id}:{ctx.call_id}"
+
+    async def _idle_refusal(self, to: str, me: str, ctx: ToolContext) -> str | None:
+        """Why ``notify_when_idle`` cannot subscribe to ``to``, or ``None``."""
+        state = self._state
+        if state.parent_id:
+            return texts.IDLE_MAIN_ONLY
+        if to == texts.MAIN_ADDRESS or to in self._ext.agents_of(state):
+            return texts.IDLE_ROOT_TASKS_ONLY
+        if to in (state.task_id, me, state.root_id):
+            return texts.IDLE_SELF.format(to=to)
+        row = await ctx.task(to) if ctx.task is not None else None
+        if row is None:
+            return texts.UNKNOWN_RECIPIENT.format(to=to)
+        if row.parent_id is not None:
+            return texts.IDLE_ROOT_TASKS_ONLY
+        if row.status == "ended":
+            return texts.IDLE_GONE.format(to=to)
+        waits = self._ext.idle_waits(state)
+        if to not in waits and len(waits) >= idle.MAX_SUBSCRIPTIONS:
+            return texts.IDLE_CAP.format(n=idle.MAX_SUBSCRIPTIONS)
+        return None
+
+    def _subscribe(self, to: str, ctx: ToolContext) -> None:
+        """Record the wait and its expiry; a new subscription to the same
+        session replaces the one before."""
+        earlier = self._ext.idle_waits(self._state).get(to)
+        if earlier is not None:
+            ctx.clear_timer(idle.timer_name(earlier["id"]))
+        sub_id = self._sub_id(ctx)
+        now = time.time()
+        ctx.record(self._ext.name, "idle_subscribed", {"target": to, "id": sub_id, "at": now})
+        ctx.set_timer(idle.timer_name(sub_id), now + idle.EXPIRY_SECONDS)
+
+
+#: The most recently active tasks ``ListAgents`` looks at for open sessions
+#: (the store lists no further back in one call).
+LIST_WINDOW = 200
+
 
 class ListAgentsTool:
     """``ListAgents``: the agents this task started, and the store's other
     open root tasks."""
 
     name = texts.LIST_TOOL
-    description = texts.load_description("list_agents")
+    description = load_description("noeta.plugins.subtasks", "list_agents")
     read_only = True
+    retry_safe = True
     clearable = True
     input_schema = _schema({
         "channel": {"description": texts.LIST_FILTER_PROP, "type": "string", "maxLength": 256},
@@ -330,12 +503,16 @@ class ListAgentsTool:
                 "done": "finished", "failed": "failed", "cancelled": "stopped"}[ended.status]
             label = f'"{a["description"]}"' if a.get("description") else a["type"]
             rows.append(f"- {agent_id} — sub-agent ({a['type']}) {label}, {status}")
+        full = False
         if ctx.tasks is not None:
             root = state.root_id or state.task_id
-            for row in await ctx.tasks(limit=200):
+            tasks = await ctx.tasks(limit=LIST_WINDOW)
+            full = len(tasks) >= LIST_WINDOW
+            for row in tasks:
                 if row.parent_id is None and row.task_id != root and row.status != "ended":
                     state_word = "idle" if row.waiting_on == "input" else "busy"
                     rows.append(f"- {row.task_id} — session (agent {row.agent}), {state_word}")
         if not rows:
             return text_output(texts.LIST_EMPTY)
-        return text_output("\n".join([texts.LIST_HEAD, *rows]))
+        tail = [texts.LIST_WINDOW_FULL.format(n=LIST_WINDOW)] if full else []
+        return text_output("\n".join([texts.LIST_HEAD, *rows, *tail]))

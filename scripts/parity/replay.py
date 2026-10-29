@@ -304,14 +304,19 @@ class Endpoint:
                 self.wfile.flush()
 
             def _stall(self) -> None:
-                """A reply that starts and never finishes, for the interrupt step."""
-                head = list(wire.sse([{"type": "text", "text": "Writing"}], None, model=MODEL))
+                """A reply that starts and never finishes, for the interrupt step:
+                a finished thinking block (empty signature, as the recorded
+                gateway sent), then text that is still streaming."""
+                head = list(wire.sse([{"type": "thinking", "thinking": "Planning the answer."},
+                                      {"type": "text", "text": "Writing"}], None, model=MODEL))
                 try:
                     self.send_response(200)
                     self.send_header("content-type", "text/event-stream")
                     self.send_header("transfer-encoding", "chunked")
                     self.end_headers()
-                    for chunk in head[:3]:
+                    # message_start, the thinking block start to stop, the
+                    # text block's start and first delta.
+                    for chunk in head[:7]:
                         self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                     self.wfile.flush()
                     ep.replayer.stalls.set()
@@ -367,6 +372,7 @@ class SessionReplay:
     async def drive(self, endpoint: Endpoint, task_id: str | None) -> str | None:
         from noeta.cli.config import Settings, from_settings
         from noeta.core.commands import expand_command
+        from noeta.core.events import DEFAULT_TENANT
         from noeta.core.extension import CommandContext
 
         # The session's environment knobs (Claude Code's compaction window
@@ -382,12 +388,16 @@ class SessionReplay:
         main = app.runtime.agents["main"]
         async with app:
             if task_id is not None:
+                from noeta.toolkit.signals import RESUMED_SIGNAL
+
                 await app.adopt(task_id)
+                await app.client.signal(task_id, RESUMED_SIGNAL)
             for i, step in enumerate(self.spec["steps"]):
                 self.replayer.current_step = i
                 text = step["say"]
                 if text.startswith("/"):
-                    ctx = CommandContext(cwd=str(self.proj), task_id=task_id)
+                    ctx = CommandContext(cwd=str(self.proj), task_id=task_id,
+                                         tenant=DEFAULT_TENANT)
                     expanded = await expand_command(main, ctx, text)
                     if expanded is None:
                         self.notes.append(f"step {step['name']}: noeta has no command "
@@ -414,7 +424,7 @@ class SessionReplay:
         step's ``cards`` keys in order: ``Escape`` denies, ``2`` allows
         always, anything else allows), questions get their first option."""
         from noeta.core.events import InputTaken, Waiting
-        from noeta.core.pending import pending_tree
+        from noeta.host.pending import pending_tree
 
         deadline = time.monotonic() + STEP_TIMEOUT_S
         self.replayer.stalls.clear()
@@ -469,9 +479,9 @@ def _jobs_running(root_id: str) -> bool:
 async def _agents_done(app: Any, task_id: str) -> bool:
     """Every background agent below the task has ended, as Claude Code's
     driver waited for the session to go quiet before the next step."""
-    from noeta.plugins.subtasks.host import task_tree
+    from noeta.host.pending import tree_busy
 
-    return all(r.status == "ended" for r in (await task_tree(app.client, task_id))[1:])
+    return not await tree_busy(app.client, task_id)
 
 
 def write_models_file(path: Path) -> None:
@@ -495,7 +505,10 @@ def replay(version: str, sessions: list[str] | None, out: Path, keep: bool = Fal
     contract_dir = ROOT / "parity" / version
     scratch_root = Path(tempfile.mkdtemp(prefix="noeta-parity-"))
     os.environ["NOETA_HOME"] = str(scratch_root / "noeta-home")
-    (scratch_root / "noeta-home").mkdir()
+    # Claude Code offers WebSearch through its API; noeta needs a search key
+    # to offer it. No scenario searches, so a placeholder only lists it.
+    os.environ.setdefault("NOETA_WEB_SEARCH_API_KEY", "parity-placeholder")
+    (scratch_root / "noeta-home").mkdir(mode=0o700)  # an open home draws a notice
     write_models_file(scratch_root / "models.json")
     from noeta.cli.config import register_models_file
     register_models_file(str(scratch_root / "models.json"))

@@ -56,16 +56,26 @@ class ToolUse(Struct, tag="tool_use", tag_field="type"):
 
 
 class ToolReference(Struct, tag="tool_reference", tag_field="type"):
-    """A tool result naming a deferred tool whose schema is now loaded
-    (``noeta.core.deferred``): from the next request on, the tool is sent."""
+    """A tool result naming a deferred tool whose schema is now loaded (the
+    ``tool_search`` plugin's ``ToolSearch`` answers with them): adapters
+    send it as the vendor's tool reference, or as text."""
 
     tool_name: str
+
+
+#: The text that follows a batch's tool results in the same user message
+#: when one of them holds a :class:`ToolReference`.
+TOOL_LOADED_TEXT = "Tool loaded."
 
 
 class ToolResult(Struct, tag="tool_result", tag_field="type"):
     call_id: str
     content: list[Text | Image | ToolReference]
     is_error: bool = False
+    #: Sent as a list of content blocks even when it is plain text, where an
+    #: adapter otherwise sends a string (Claude Code's shape for MCP and
+    #: Agent results).
+    block_list: bool = False
 
     @property
     def text(self) -> str:
@@ -101,6 +111,13 @@ class Message(Struct):
     def tool_uses(self) -> list[ToolUse]:
         return [b for b in self.content if isinstance(b, ToolUse)]
 
+    @property
+    def from_person(self) -> bool:
+        """A user turn the person wrote (``origin`` unset or ``human``), not
+        a notice, recalled memory or another agent. Tool results also ride
+        in user turns; callers that must exclude them check the content."""
+        return self.role == "user" and self.origin in (None, "human")
+
 
 def user(text: str, origin: Origin | None = None) -> Message:
     return Message(role="user", content=[Text(text=text)], origin=origin)
@@ -119,8 +136,8 @@ class ToolSpec(Struct):
     name: str
     description: str
     input_schema: dict[str, Any]
-    #: A deferred tool (sent once loaded, see ``noeta.core.deferred``); the
-    #: adapter marks it so the vendor keeps it out of the cached prefix.
+    #: A deferred tool (``Tool.deferred``); the adapter marks it so the
+    #: vendor keeps it out of the cached prefix.
     defer_loading: bool = False
 
 
@@ -202,11 +219,17 @@ class ModelResponse(Struct):
 
 
 class Delta(Struct):
-    """A streamed fragment. Never stored; the recorded reply is the truth."""
+    """A streamed fragment. Never stored; the recorded reply is the truth.
 
-    kind: Literal["text", "thinking"]
-    text: str
+    ``kind="block"`` is not a fragment: it hands the runner a reasoning block
+    the provider finished streaming (in ``block``, continuation token and
+    all), so a reply stopped before it ends can keep it. The runner does not
+    pass it on to front ends."""
+
+    kind: Literal["text", "thinking", "block"]
+    text: str = ""
     index: int = 0
+    block: Thinking | None = None
     #: Set by the runner: the log seq of the ``ModelCalled`` this fragment
     #: belongs to, and which attempt of that call (a retry starts over, so a
     #: front end drops the fragments of an earlier attempt).

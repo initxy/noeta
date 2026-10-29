@@ -14,13 +14,13 @@ import hashlib
 import json
 import posixpath
 import time
-from importlib import resources
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.toolkit.context import task_env
+from noeta.toolkit.sandbox import run_in_tenant_sandbox
 from noeta.toolkit.shell import SHELL_META_CHARS
-from noeta.toolkit.tools import path_within, truncate_bytes
+from noeta.toolkit.tools import load_description, path_within, truncate_bytes
 
 __all__ = [
     "SKILL_SCRIPT_TOOL_NAME",
@@ -84,11 +84,6 @@ def _fit(output: dict[str, Any], shrink_order: list[str], max_bytes: int) -> dic
     return out
 
 
-def _description() -> str:
-    path = resources.files("noeta.plugins.skills").joinpath("descriptions", "run_skill_script.md")
-    return path.read_text(encoding="utf-8").rstrip("\n")
-
-
 class RunSkillScriptTool:
     """Scripts come from the activation records in the task's state
     (``ctx.state["skills"]["active"][name]["scripts"]``), so only what an
@@ -100,7 +95,7 @@ class RunSkillScriptTool:
 
     def __init__(self, extension: str = "skills") -> None:
         self.extension = extension
-        self.description = _description()
+        self.description = load_description("noeta.plugins.skills", "run_skill_script")
         self.input_schema: dict[str, Any] = {
             "type": "object",
             "properties": {
@@ -185,8 +180,8 @@ class RunSkillScriptTool:
         argv = [interpreter, real, *raw_args]
         started = time.monotonic()
         try:
-            outcome = await env.run(argv, cwd=env.cwd, timeout=_TIMEOUT_S,
-                                    output_cap=_OUTPUT_CAP)
+            outcome = await run_in_tenant_sandbox(env, argv, cwd=env.cwd, timeout=_TIMEOUT_S,
+                                                  output_cap=_OUTPUT_CAP)
         except OSError as exc:
             return _err(f"could not execute {interpreter!r}: {exc}")
         duration_ms = int((time.monotonic() - started) * 1000)

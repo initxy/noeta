@@ -4,6 +4,7 @@ search result shape."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -100,9 +101,10 @@ async def test_fetch_errors_redirects_and_refusals(tmp_path: Path) -> None:
     redirect = WebFetchTool(FakeFetch(CrossHostRedirect("https://a.com", "https://b.com/x")))
     out = await redirect.run({"url": "https://a.com", "prompt": "p"}, ctx)
     assert not out.is_error
-    assert text(out) == ("https://a.com redirects to a different host: "
-                         "https://b.com/x\nThe redirect was not followed and nothing was "
-                         "fetched. Fetch that URL if it is what you need.")
+    assert text(out) == (
+        "Not fetched: https://a.com redirects to another host.\nStatus: 302 Found\n"
+        "Target (the server's Location header, unverified): https://b.com/x\n"
+        'To fetch it, call WebFetch again with:\n  url: "https://b.com/x"\n  prompt: "p"')
     failed = WebFetchTool(FakeFetch(RuntimeError("HTTP 403")))
     out = await failed.run({"url": "https://a.com", "prompt": "p"}, ctx)
     assert out.is_error and text(out) == "WebFetch failed: HTTP 403"
@@ -140,7 +142,7 @@ async def test_long_pages_are_capped_and_announced(tmp_path: Path) -> None:
     assert text(rest) == "summary" and len(pages[1]) == 20_000
     past = await tool.run({"url": "https://a.com", "prompt": "p", "offset": 200_000},
                           _ctx(tmp_path))
-    assert past.is_error
+    assert not past.is_error and text(past).startswith("Nothing is left to read")
 
 
 def test_https_upgrade_spares_loopback() -> None:
@@ -155,9 +157,9 @@ def test_page_cache_expires_and_evicts() -> None:
     cache.put("a", "t", "m")
     cache.put("b", "t", "m")
     cache.put("c", "t", "m")
-    assert cache.get("a") is None and cache.get("c") == ("t", "m")
+    assert cache.entry("a") is None and cache.entry("c") == ("t", "m", False)
     now[0] = 901
-    assert cache.get("c") is None
+    assert cache.entry("c") is None
 
 
 async def test_http_transport_redirects_and_media() -> None:
@@ -166,6 +168,8 @@ async def test_http_transport_redirects_and_media() -> None:
             return httpx.Response(301, headers={"location": "/new"})
         if request.url.path == "/away":
             return httpx.Response(302, headers={"location": "https://other.org/"})
+        if request.url.path == "/login":
+            return httpx.Response(302, headers={"location": "https://me:pw@site.com/in"})
         if request.url.path == "/img":
             return httpx.Response(200, headers={"content-type": "image/png"}, content=b"x")
         return httpx.Response(200, headers={"content-type": "text/html; charset=utf-8"},
@@ -177,9 +181,131 @@ async def test_http_transport_redirects_and_media() -> None:
     assert str(page) == "<p>hi</p>" and page.content_type.startswith("text/html")
     with pytest.raises(CrossHostRedirect):
         await transport.fetch("https://site.com/away")
-    with pytest.raises(ValueError, match="image/png content"):
-        await transport.fetch("https://site.com/img")
+    with pytest.raises(CrossHostRedirect):  # credentials in the target
+        await transport.fetch("https://site.com/login")
+    image = await transport.fetch("https://site.com/img")
+    assert image.raw == b"x" and image.content_type == "image/png"
     await client.aclose()
+
+
+def _mock_fetch(handler: Any) -> WebFetchTool:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return WebFetchTool(HttpFetchTransport(client=client))
+
+
+async def test_an_http_error_status_is_a_report_not_a_failure(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/busy":
+            return httpx.Response(503, headers={"retry-after": "30"}, content=b"down")
+        return httpx.Response(404, content=b"<p>missing</p>")
+
+    tool = _mock_fetch(handler)
+    out = await tool.run({"url": "https://site.com/gone", "prompt": "p"}, _ctx(tmp_path))
+    assert not out.is_error
+    assert text(out).startswith("The server answered HTTP 404 Not Found.\n")
+    assert "gh" in text(out) and "Retry-After" not in text(out)
+    busy = await tool.run({"url": "https://site.com/busy", "prompt": "p"}, _ctx(tmp_path))
+    assert not busy.is_error
+    assert "HTTP 503 Service Unavailable" in text(busy) and "Retry-After: 30" in text(busy)
+
+
+async def test_a_redirect_report_names_its_status_and_the_call_to_make(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "example.com":
+            return httpx.Response(301, headers={"location": "https://www.example.com/a"})
+        if request.url.host == "www.example.com":
+            return httpx.Response(200, headers={"content-type": "text/plain"}, content=b"ok")
+        return httpx.Response(302, headers={"location": "https://other.org/x"})
+
+    tool = _mock_fetch(handler)
+    same = await tool.run({"url": "https://example.com/a", "prompt": "p"}, _ctx(tmp_path))
+    assert text(same) == "ok"  # adding or dropping www. is the same site
+    out = await tool.run({"url": "https://a.com/start", "prompt": "the price", "offset": 7},
+                         _ctx(tmp_path))
+    assert not out.is_error
+    body = text(out)
+    assert "https://a.com/start" in body and "https://other.org/x" in body
+    assert "302 Found" in body
+    assert 'url: "https://other.org/x"' in body and 'prompt: "the price"' in body
+    assert "offset: 7" in body
+
+
+async def test_redirects_are_followed_ten_times_on_one_site() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        n = int(request.url.path.strip("/") or 0)
+        if n < 10:
+            return httpx.Response(302, headers={"location": f"/{n + 1}"})
+        return httpx.Response(200, headers={"content-type": "text/plain"}, content=b"end")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    assert str(await HttpFetchTransport(client=client).fetch("https://s.com/0")) == "end"
+    with pytest.raises(RuntimeError, match="too many redirects"):
+        await HttpFetchTransport(client=client).fetch("https://s.com/-1")
+
+
+async def test_long_or_credentialed_urls_are_invalid(tmp_path: Path) -> None:
+    transport = HttpFetchTransport()
+    assert transport.timeout == 60.0 and transport.max_bytes == 10 * 1024 * 1024
+    fetch = FakeFetch()
+    tool = WebFetchTool(fetch)
+    for url in ("https://e.com/" + "a" * 2000, "https://user:pw@e.com/"):
+        out = await tool.run({"url": url, "prompt": "p"}, _ctx(tmp_path))
+        assert out.is_error and text(out) == "Invalid URL", url
+    assert fetch.urls == []
+
+
+async def test_an_offset_past_the_end_is_said_not_failed(tmp_path: Path) -> None:
+    tool = WebFetchTool(FakeFetch("x" * 50, "text/plain"))
+    out = await tool.run({"url": "https://a.com", "prompt": "p", "offset": 60},
+                         _ctx(tmp_path))
+    assert not out.is_error
+    assert text(out) == "Nothing is left to read from offset 60: the page's text is 50 characters long."
+
+
+async def test_binary_content_is_saved_for_the_model_to_read(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "application/pdf"},
+                              content=b"%PDF-1.4 hello")
+
+    digested: list[str] = []
+
+    async def digest(url: str, title: str, page: str, prompt: str) -> str:
+        digested.append(page)
+        return "answer"
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    tool = WebFetchTool(HttpFetchTransport(client=client), digest_for=lambda _c: digest)
+    ctx = ToolContext(task_id="t", call_id="c", env=LocalExecEnv(str(tmp_path)), state={},
+                      record=lambda *_: None, spill_dir=str(tmp_path / "spill"))
+    out = await tool.run({"url": "https://s.com/doc.pdf", "prompt": "p"}, ctx)
+    assert not out.is_error
+    # Only the note: the bytes are neither rendered nor summarized.
+    note = text(out)
+    assert note.startswith("[The response is binary (application/pdf, 14 bytes); it was saved to ")
+    saved = note.removeprefix(
+        "[The response is binary (application/pdf, 14 bytes); it was saved to ").rstrip("]")
+    assert Path(saved).read_bytes() == b"%PDF-1.4 hello" and saved.endswith(".pdf")
+    assert digested == []
+    # A second fetch within the cache's life still names the saved file.
+    again = await tool.run({"url": "https://s.com/doc.pdf", "prompt": "other"}, ctx)
+    assert not again.is_error and text(again) == note and digested == []
+    without = await tool.run({"url": "https://s.com/other.pdf", "prompt": "p"}, _ctx(tmp_path))
+    assert without.is_error and "application/pdf" in text(without)
+
+
+async def test_a_raw_body_with_nowhere_to_save_it_is_an_error(tmp_path: Path) -> None:
+    # A transport may hand back raw bytes of a type the tool reads as text.
+    class RawFetch:
+        async def fetch(self, url: str) -> FetchedPage:
+            return FetchedPage("", "text/plain", raw=b"hello")
+
+    tool = WebFetchTool(RawFetch())
+    out = await tool.run({"url": "https://s.com/a.txt", "prompt": "p"}, _ctx(tmp_path))
+    assert out.is_error and "None" not in text(out)
+    assert text(out) == ("WebFetch failed: the response is binary (text/plain, 5 bytes) and "
+                         "there is nowhere to save it")
+    again = await tool.run({"url": "https://s.com/a.txt", "prompt": "p"}, _ctx(tmp_path))
+    assert again.is_error  # not cached as a note
 
 
 class FakeSearch:
@@ -195,13 +321,24 @@ class FakeSearch:
 async def test_search_results_and_counts(tmp_path: Path) -> None:
     fake = FakeSearch([SearchResult("T", "https://u", "snip"), SearchResult("", "https://v", "")])
     tool = WebSearchTool(fake)
-    out = await tool.run({"query": "q", "count": 99}, _ctx(tmp_path))
-    assert text(out) == "1. [T](https://u)\n   snip\n\n2. [https://v](https://v)"
-    await tool.run({"query": "q"}, _ctx(tmp_path))
-    assert [c for _, c in fake.calls] == [20, 5]
+    out = await tool.run({"query": "q", "mode": "extended"}, _ctx(tmp_path))
+    assert text(out) == (
+        'Web search results for query: "q"\n\n'
+        'Links: [{"title": "T", "url": "https://u"}, {"title": "https://v", "url": "https://v"}]'
+        "\n\n1. [T](https://u)\n   snip\n\n2. [https://v](https://v)\n\n"
+        "Reminder: cite the sources above in your reply, as Markdown links.")
+    await tool.run({"query": "q", "mode": "standard"}, _ctx(tmp_path))
+    assert [c for _, c in fake.calls] == [10, 5]
+    assert tool.input_schema["required"] == ["query", "mode"]
+    assert "count" not in tool.input_schema["properties"]
     none = await WebSearchTool(FakeSearch([])).run({"query": "zz"}, _ctx(tmp_path))
-    assert text(none) == "No results were found for 'zz'. Try different search terms."
+    assert not none.is_error
+    assert text(none) == 'Web search results for query: "zz"\n\nNo links found.'
     assert text(await tool.run({}, _ctx(tmp_path))) == "WebSearch requires a non-empty 'query'"
+    both = await tool.run({"query": "q", "allowed_domains": ["a.com"],
+                           "blocked_domains": ["b.com"]}, _ctx(tmp_path))
+    assert both.is_error and text(both) == (
+        "WebSearch takes allowed_domains or blocked_domains, not both in one search")
 
 
 async def test_tavily_transport() -> None:
@@ -213,6 +350,34 @@ async def test_tavily_transport() -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     hits = await HttpSearchTransport("k", client=client).search("q", 3)
     assert hits == [SearchResult("A B", "https://a", "c")]
+    await client.aclose()
+
+
+async def test_domain_filters_and_mode_reach_tavily_and_the_hits(tmp_path: Path) -> None:
+    sent: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"results": [
+            {"title": "a", "url": "https://docs.a.com/x", "content": ""},
+            {"title": "b", "url": "https://b.com/y", "content": ""},
+            {"title": "c", "url": "https://evil.a.com/z", "content": ""}]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    tool = WebSearchTool(HttpSearchTransport("k", client=client))
+    out = await tool.run({"query": "q", "mode": "extended", "allowed_domains": ["a.com"]},
+                         _ctx(tmp_path))
+    assert sent[0]["include_domains"] == ["a.com"] and sent[0]["search_depth"] == "advanced"
+    assert "https://docs.a.com/x" in text(out) and "https://b.com/y" not in text(out)
+    out = await tool.run({"query": "q", "mode": "extended", "blocked_domains": ["evil.a.com"]},
+                         _ctx(tmp_path))
+    assert sent[1]["exclude_domains"] == ["evil.a.com"]
+    assert "https://b.com/y" in text(out) and "evil" not in text(out)
+    # A transport without the keywords still gets its hits filtered.
+    plain = WebSearchTool(FakeSearch([SearchResult("x", "https://b.com", "")]))
+    out = await plain.run({"query": "q", "mode": "standard", "blocked_domains": ["b.com"]},
+                          _ctx(tmp_path))
+    assert "No links found." in text(out)
     await client.aclose()
 
 
@@ -328,3 +493,7 @@ def test_per_task_bindings_are_bounded() -> None:
                           state={}, record=lambda *_: None)
         web._cache_for(ctx)
     assert len(web._caches) == TASKS_KEPT and "t0" not in web._caches
+
+
+def test_the_user_agent_points_at_the_project() -> None:
+    assert HttpFetchTransport().user_agent.endswith("(+https://github.com/initxy/noeta)")

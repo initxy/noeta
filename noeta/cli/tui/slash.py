@@ -12,11 +12,12 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from noeta.cli.tui.transcript import SERVER_DIRECTORY
 from noeta.core import models
 from noeta.core.events import ExtensionRecorded
 from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.host.rewind import rewind, rewind_points
-from noeta.host.usage import context_breakdown, context_text, cost_text, tree_usage
+from noeta.host.usage import context_text, cost_text, task_context, tree_usage
 
 if TYPE_CHECKING:
     from noeta.cli.tui.app import NoetaApp
@@ -32,12 +33,13 @@ COMMANDS = {
     "config": "`[edit user|project|local]` show the settings; edit a settings file",
     "rewind": "`[n] [both|conversation|code]` go back to before a prompt (also Esc Esc)",
     "clear": "start a new task (`/new`)",
+    "reload-plugins": "load the plugin and agent files again (from the next turn on)",
 }
 
 
 async def run(app: NoetaApp, name: str, arg: str) -> bool:
     """Run ``/name arg`` if it is one of :data:`COMMANDS`; ``False`` if not."""
-    handler = globals().get(f"_{name}")
+    handler = globals().get(f"_{name.replace('-', '_')}")
     if name not in COMMANDS or handler is None:
         return False
     await handler(app, arg.strip())
@@ -46,6 +48,23 @@ async def run(app: NoetaApp, name: str, arg: str) -> bool:
 
 async def _clear(app: NoetaApp, arg: str) -> None:
     await app.new_task()
+
+
+async def _reload_plugins(app: NoetaApp, arg: str) -> None:
+    from noeta.cli.config import plugin_changes
+    from noeta.core import registry
+
+    reload = getattr(app.local, "reload_plugins", None)
+    if reload is None:
+        await app.say_notice("attached to a server: its workers load plugins when they start, "
+                             "so restart them (one by one) to reload")
+        return
+    before = dict(app.local.runtime.agents)
+    notices = reload()
+    changes = plugin_changes(before, app.local.runtime.agents) or ["no plugin changed"]
+    failed = [f"failed: {p}: {why}" for p, why in registry.broken_plugin_files().items()]
+    await app.say_notice("plugins reloaded, in effect from the next turn: "
+                         + "; ".join([*changes, *failed, *notices]))
 
 
 async def _model(app: NoetaApp, arg: str) -> None:
@@ -70,11 +89,11 @@ async def _context(app: NoetaApp, arg: str) -> None:
         return
     runtime = getattr(app.local, "runtime", None)
     if runtime is not None:
-        preview = await runtime.preview(app.task_id)
-        if preview is None:
+        found = await task_context(runtime, app.task_id)
+        if found is None:
             await app.say_notice("this task's agent is not one this front end runs")
             return
-        parts = context_breakdown(preview)
+        parts = found
     else:
         remote: Any = app.local.client
         parts = await remote.context(app.task_id)
@@ -100,7 +119,7 @@ async def _memory_dir(app: NoetaApp) -> str | None:
 
 async def memory_files(app: NoetaApp) -> list[tuple[str, Path]]:
     """The instruction and memory files /memory offers, existing or not."""
-    from noeta.cli.config import HOME
+    from noeta.cli.home_dir import HOME
 
     cwd = Path(app.cwd)
     files = [("user instructions", HOME / "NOETA.md"),
@@ -141,7 +160,8 @@ async def _memory(app: NoetaApp, arg: str) -> None:
 
 
 async def _config(app: NoetaApp, arg: str) -> None:
-    from noeta.cli.config import HOME, file_settings
+    from noeta.cli.config import file_settings
+    from noeta.cli.home_dir import HOME
 
     words = arg.split()
     if words[:1] == ["edit"]:
@@ -161,7 +181,7 @@ async def _config(app: NoetaApp, arg: str) -> None:
     s: Any = app.settings
     found = file_settings(app.cwd)
     rows = [("model", app.model), ("permission mode", app.mode or app.permission_mode or "auto"),
-            ("working directory", app.cwd)]
+            ("working directory", app.task_cwd or SERVER_DIRECTORY)]
     if s is not None:
         rows += [("provider", s.provider), ("base URL", s.base_url or "(default)"),
                  ("store", s.store_url), ("effort", s.effort or "(default)")]
@@ -203,7 +223,7 @@ async def _rewind(app: NoetaApp, arg: str) -> None:
     done = await rewind(app.local.client, app.task_id, point,
                         conversation=what != "code", files=what != "conversation")
     if done.task_id != app.task_id:
-        await app.open_task(done.task_id)
+        await app.open_task(done.task_id, resumed=False)
         app.prefill(done.prompt)
     restored = f"; {len(done.files)} file(s) restored" if done.files else ""
     await app.say_notice(f"rewound to before prompt {n}{restored}")

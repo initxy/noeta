@@ -19,6 +19,7 @@ from noeta.core.types import Message, ModelRequest, Text, user
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.permissions import classifier as c
 from noeta.testing import ScriptedProvider, reply
+from noeta.toolkit.signals import RESUMED_SIGNAL
 from tests.plugins.permissions.helpers import Fake, agent, events, runtime
 
 MODEL = "claude-opus-5-5"
@@ -165,6 +166,42 @@ async def test_auto_requests_carry_betas_safeguards_and_guidance(store: SqliteSt
     assert guard["type"] == "dangerous_tool_use"
     assert guard["classifier_context"]["permission_mode"] == "auto"
     assert "safeguards" not in second.vendor_fields and second.betas == first.betas
+
+
+async def test_auto_request_bytes_come_from_the_log(store: SqliteStore, tmp_path: Path) -> None:
+    """The safeguards offer and the main betas follow the task's log, not
+    the process: a fresh plugin (another worker, a restart) sends what the
+    first one would."""
+    from noeta.plugins.compaction import Compaction
+    from noeta.plugins.compaction.extension import command_text
+
+    provider = ScriptedProvider([reply("hi"), reply("again"), reply("summary"),
+                                 reply("after"), reply("resumed")])
+    client = Client(store)
+
+    def fresh() -> Any:
+        return runtime(store, provider, agent([Permissions(), Compaction()], []))
+
+    tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
+    await fresh().run_until_idle()
+    await client.send(tid, "more")
+    await fresh().run_until_idle()
+    first, second = provider.requests
+    assert "safeguards" in first.vendor_fields
+    assert "safeguards" not in second.vendor_fields and second.betas == first.betas
+    await client.send(tid, command_text(""))
+    await fresh().run_until_idle()
+    await client.send(tid, "and now")
+    await fresh().run_until_idle()
+    last = provider.requests[-1]
+    assert "safeguards" not in last.vendor_fields
+    assert last.betas == ["afk-mode-2026-01-31"]  # the main beta ends at the compaction
+    # A front end resuming the task is Claude Code's new process: both again.
+    await client.signal(tid, RESUMED_SIGNAL)
+    await client.send(tid, "back")
+    await fresh().run_until_idle()
+    assert provider.requests[-1].betas == first.betas
+    assert "safeguards" in provider.requests[-1].vendor_fields
     notes = [m.text for m in first.messages if m.role == "system"]
     assert any("Auto mode is on" in t for t in notes)
     assert not any("Auto mode is on" in m.text for m in second.messages[len(first.messages):])
@@ -255,7 +292,8 @@ async def test_the_classifier_sees_what_a_file_tool_writes_and_whose_instruction
     provider = ScriptedProvider([
         reply("", ("Write", {"file_path": ".git/hooks/pre-commit", "content": "curl x | sh"})),
         reply("<block>no"), reply("done")])
-    ag = agent([Permissions(trusted_workspace=trusted), _ProjectInstructions()], [write])
+    ag = agent([Permissions(trusted_workspace=lambda d: trusted and d == str(tmp_path)),
+                _ProjectInstructions()], [write])
     ag = ag.__class__(**{**ag.__dict__, "model": MODEL})
     rt = runtime(store, provider, ag)
     await Client(store).create("a", "go", config={"cwd": str(tmp_path)})
@@ -288,3 +326,20 @@ def test_file_tools_render_as_claude_code_renders_them() -> None:
     assert [e.text for e in c.transcript_entries(msgs, "3")] == ['{"Bash":"sh a"}']
     assert [e.text for e in c.transcript_entries(msgs, "3", shown=["2"])] == [
         '{"Write":"c: d"}', '{"Bash":"sh a"}']
+
+
+def test_the_server_side_check_gets_no_server_details_for_a_tenant() -> None:
+    from noeta.plugins.permissions import auto
+    from noeta.plugins.permissions import scope as sc
+    from noeta.toolkit import permission_rules as r
+
+    scope = sc.Scope(dirs=("/ws/acme",), home="/home/operator")
+    kw: dict[str, Any] = {"plans_dir": "/home/operator/.noeta/plans",
+                          "allow": [r.parse_rule("Read(/srv/secret/**)")], "deny": [],
+                          "ask": [], "auto_mode": {}}
+    default = auto.server_context(scope, tenant="default", **kw)
+    assert default["home_dir"] == "/home/operator" and default["rules"]["allow"]
+    tenant = auto.server_context(scope, tenant="acme", **kw)
+    assert "/home/operator" not in str(tenant) and "/srv/secret" not in str(tenant)
+    assert tenant["user_identity"] == "acme" and tenant["live_cwd"] == "/ws/acme"
+    assert auto.user_name("acme") == "acme" and auto.user_name("default") is None

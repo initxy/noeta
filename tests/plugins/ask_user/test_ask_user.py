@@ -12,12 +12,13 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
 from noeta.core.events import ToolFinished
-from noeta.core.pending import pending
+from noeta.host.pending import pending
+from noeta.host.questions import answer_question
 from noeta.plugins.ask_user import (
     INPUT_SCHEMA,
+    SINGLE_OPTION_ERROR,
     AnswerValidationError,
     AskUser,
-    answer_question,
     validate_questions,
 )
 from noeta.plugins.permissions import Permissions
@@ -56,26 +57,46 @@ def test_limits() -> None:
     assert isinstance(validate_questions({"questions": [q()]}), list)
     assert validate_questions({"questions": []}) == "questions must contain 1-4 items"
     assert validate_questions({"questions": [q()] * 5}) == "questions must contain 1-4 items"
-    assert validate_questions({"questions": [q(header="x" * 13)]}) == \
-        "header too long (max 12 chars)"
-    assert validate_questions({"questions": [q(question="x" * 501)]}) == \
-        "question too long (max 500)"
     assert validate_questions({"questions": [q(multiSelect="yes")]}) == \
         "multiSelect must be a boolean"
     no_multi = {k: v for k, v in q().items() if k != "multiSelect"}
     [default] = validate_questions({"questions": [no_multi]})
     assert default["multiSelect"] is False
     one = [{"label": "a", "description": "d"}]
-    assert validate_questions({"questions": [q(options=one)]}) == \
+    assert validate_questions({"questions": [q(options=one)]}) == SINGLE_OPTION_ERROR
+    assert validate_questions({"questions": [q(), q(question="B?", options=one)]}) == \
+        SINGLE_OPTION_ERROR
+    assert validate_questions({"questions": [q(options=one * 5)]}) == \
         "options must contain 2-4 items"
     dup = [{"label": "a", "description": "d"}] * 2
     assert validate_questions({"questions": [q(options=dup)]}) == "duplicate option label: 'a'"
-    long = [{"label": "x" * 81, "description": "d"}, {"label": "b", "description": "d"}]
-    assert validate_questions({"questions": [q(options=long)]}) == \
-        "option label too long (max 80)"
-    desc = [{"label": "a", "description": "x" * 301}, {"label": "b", "description": "d"}]
-    assert validate_questions({"questions": [q(options=desc)]}) == \
-        "option description too long (max 300)"
+    assert validate_questions({"questions": [q(options=[{"label": "a"}, *one])]}) == \
+        "each option needs a description string"
+
+
+def test_lengths_are_guidance_not_limits() -> None:
+    # The 12-character header and the 1-5 word label are what the schema
+    # asks for; a longer one is still shown, not refused.
+    long = [{"label": "x" * 81, "description": ""}, {"label": "b", "description": "x" * 301}]
+    [one] = validate_questions({"questions": [
+        q(header="x" * 13, question="x" * 501, options=long)]})
+    assert one["header"] == "x" * 13 and one["options"][0]["label"] == "x" * 81
+
+
+def test_empty_and_runaway_texts_are_refused() -> None:
+    blank = [{"label": " ", "description": "d"}, {"label": "b", "description": "d"}]
+    assert "empty" in validate_questions({"questions": [q(options=blank)]})
+    assert "empty" in validate_questions({"questions": [q(question="  ")]})
+    # Far past anything a dialog can show: refused, saying the limit.
+    for text in (q(question="x" * 1001), q(header="x" * 101),
+                 q(options=[{"label": "x" * 201, "description": "d"},
+                            {"label": "b", "description": "d"}]),
+                 q(options=[{"label": "a", "description": "x" * 2001},
+                            {"label": "b", "description": "d"}]),
+                 q(options=[{"label": "a", "description": "d", "preview": "x" * 20_001},
+                            {"label": "b", "description": "d"}])):
+        error = validate_questions({"questions": [text]})
+        assert isinstance(error, str) and "characters" in error, error
 
 
 async def test_a_question_parks_and_the_answer_becomes_the_result(store: SqliteStore) -> None:
@@ -113,9 +134,11 @@ async def test_it_may_share_a_reply_with_other_calls(store: SqliteStore) -> None
         "0": {"other": "Passkeys"}, "1": {"selected": ["A"]}})
     await rt.run_until_idle()
     result = finished(await events(client, tid))[-1]
-    assert result.text == ('The user answered your questions: "Which auth?"="Passkeys", '
+    # "Passkeys" is typed text, not an option: the model is told to read it as written.
+    assert result.text == ('The user replied: "Which auth?"="Passkeys", '
                            '"Layout?"="A" selected preview:\n+--+\n|a |. '
-                           "Go on with these answers in mind.")
+                           "What they wrote may ask for clarification, for changes, or for "
+                           "you to stop: read it closely and do what it actually says.")
 
 
 def test_schema_shape() -> None:
@@ -162,3 +185,8 @@ async def test_stopping_withdraws_the_question(store: SqliteStore) -> None:
     assert result.text == "Question withdrawn by user (no answer provided)."
     assert (await client.get(tid)).waiting_on == "input"
     assert len(provider.requests) == 1  # no model turn after the withdrawal
+
+
+def test_question_texts_must_differ() -> None:
+    error = validate_questions({"questions": [q(), q(header="Again")]})
+    assert isinstance(error, str) and "Which auth?" in error

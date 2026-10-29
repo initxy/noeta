@@ -11,6 +11,13 @@ OnDelta = Callable[[Delta], None]
 
 
 class Provider(Protocol):
+    """A model backend.
+
+    Optional members: ``async count_tokens(model, text) -> int | None`` (the
+    exact token count of one user message holding ``text``; without it
+    callers estimate) and ``async aclose()`` (release connections).
+    """
+
     #: Which vendor wire the adapter speaks (``anthropic``, ``openai_compat``,
     #: ``openai_responses``). Thinking blocks are only replayed to their family.
     family: str

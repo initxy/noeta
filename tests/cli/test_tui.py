@@ -90,6 +90,22 @@ async def test_approval_with_a_key(tmp_path: Path) -> None:
         assert call.state == "done"
 
 
+async def test_a_new_task_asks_only_for_its_task_config(tmp_path: Path) -> None:
+    """Attached to a server, a new task names no directory or model of its
+    own: the server picks them."""
+    from noeta.core.events import TaskCreated
+
+    agent = Agent(name="main", model="claude-sonnet-4-5", tools=[Look()])
+    local = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], ScriptedProvider([]),
+                     env_for=lambda _s: None)
+    app = NoetaApp(local, agent="main", model="the server's model", cwd=str(tmp_path),
+                   task_config={})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(pilot, app, lambda: app.task_id != "")
+        first = (await local.client.events(app.task_id))[0].event
+        assert isinstance(first, TaskCreated) and first.config == {}
+
+
 async def test_shift_tab_cycles_the_permission_mode(tmp_path: Path) -> None:
     from noeta.core.events import External
     from noeta.plugins.permissions import Permissions
@@ -101,6 +117,56 @@ async def test_shift_tab_cycles_the_permission_mode(tmp_path: Path) -> None:
         await settle(pilot, app, lambda: app.mode == "acceptEdits")
         inbox = [i.body for i in await app.local.store.inbox(app.task_id)]
         assert External(name="permission_mode", data={"mode": "acceptEdits"}) in inbox
+
+
+async def test_shift_tab_before_the_mode_is_shown_steps_from_the_tasks_mode(
+        tmp_path: Path) -> None:
+    """Shift+Tab pressed before the follower has shown the plugin's ``mode``
+    and ``modes`` records (or before the task's start recorded them) steps
+    from the task's mode, not from a guess (from ``auto`` it would step into
+    ``bypassPermissions``)."""
+    import asyncio
+
+    from noeta.core.events import External
+    from noeta.plugins.permissions import Permissions
+
+    app = make_app(tmp_path, ScriptedProvider([]), Permissions(mode="default"))
+    client = app.local.client
+    watch, hold = client.watch, asyncio.Event()
+
+    async def held_watch(task_id: str, after: int = 0) -> Any:
+        await hold.wait()
+        async for rec in watch(task_id, after):
+            yield rec
+
+    client.watch = held_watch  # type: ignore[method-assign]
+    async with app.run_test(size=(140, 30)) as pilot:
+        await settle(pilot, app, lambda: app.task_id != "")
+        assert app.mode == ""
+        await pilot.press("shift+tab")
+        await pilot.pause(0.1)
+        hold.set()
+        await settle(pilot, app, lambda: app.mode == "acceptEdits")
+        await pilot.pause(0.5)
+        assert app.mode == "acceptEdits"
+        inbox = [i.body for i in await app.local.store.inbox(app.task_id)]
+        assert External(name="permission_mode", data={"mode": "acceptEdits"}) in inbox
+
+
+async def test_shift_tab_steps_only_through_the_modes_the_plugin_offers(
+        tmp_path: Path) -> None:
+    """A plugin that refuses bypassPermissions publishes a cycle without it,
+    so the mode key never steps into it."""
+    from noeta.plugins.permissions import Permissions
+
+    app = make_app(tmp_path, ScriptedProvider([]),
+                   Permissions(mode="auto", disable_bypass_mode=True))
+    async with app.run_test(size=(140, 30)) as pilot:
+        await settle(pilot, app, lambda: app.mode == "auto")
+        await pilot.pause(0.2)
+        await pilot.press("shift+tab")
+        await settle(pilot, app, lambda: app.mode != "auto")
+        assert app.mode == "default"
 
 
 async def test_an_approval_decided_before_its_card_mounts() -> None:
@@ -131,3 +197,44 @@ async def test_an_approval_decided_before_its_card_mounts() -> None:
         assert picked == ["allow"] and not card.query(Button)
         [result] = card.query(".approval-result").results(Static)
         assert str(result.render()) == "Yes"
+
+
+async def test_on_a_server_the_status_shows_the_tasks_directory_and_no_file_is_attached(
+        tmp_path: Path) -> None:
+    """Attached to a server, the task runs in the server's directory: the
+    status line shows the one its task recorded, and an ``@`` mention is
+    not read from this machine's disk."""
+    from noeta.cli.tui.widgets import Notice
+    from noeta.core.types import Text
+
+    (tmp_path / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+    provider = ScriptedProvider([reply("seen")])
+    agent = Agent(name="main", model="claude-sonnet-4-5", tools=[Look()])
+    local = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], provider,
+                     env_for=lambda _s: None)
+    app = NoetaApp(local, agent="main", model="the server's model", cwd=str(tmp_path),
+                   task_config={"cwd": "/srv/projects/web"}, on_server=True)
+    async with app.run_test(size=(160, 30)) as pilot:
+        def status() -> str:
+            return str(app.query_one("#status").render())
+
+        await settle(pilot, app, lambda: "/srv/projects/web" in status())
+        assert str(tmp_path) not in status()
+        await pilot.press(*"look at @calc.py", "enter")
+        await settle(pilot, app, lambda: len(provider.requests) == 1 and not app.busy)
+        sent = provider.requests[0].messages[-1]
+        assert [b.text for b in sent.content if isinstance(b, Text)] == ["look at @calc.py"]
+        assert any("not attached" in str(n.render()) for n in app.query(Notice))
+
+
+async def test_on_a_server_with_no_directory_asked_the_status_names_the_servers(
+        tmp_path: Path) -> None:
+    agent = Agent(name="main", model="claude-sonnet-4-5", tools=[Look()])
+    local = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], ScriptedProvider([]),
+                     env_for=lambda _s: None)
+    app = NoetaApp(local, agent="main", model="the server's model", cwd=str(tmp_path),
+                   task_config={}, on_server=True)
+    async with app.run_test(size=(160, 30)) as pilot:
+        await settle(pilot, app, lambda: app.task_id != "")
+        status = str(app.query_one("#status").render())
+        assert str(tmp_path) not in status and "server's directory" in status

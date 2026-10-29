@@ -32,8 +32,9 @@ TOP_LEVEL = {
 
 #: Kernel modules no other kernel module imports, and why they belong to it.
 KERNEL_SURFACE = {
+    "noeta.core.client": "the one API hosts and front ends create, drive and read tasks through",
     "noeta.core.commands": "front ends list and expand the slash commands plugins offer",
-    "noeta.core.questions": "the question form plugins ask with and front ends answer with",
+    "noeta.core.questions": "the question form plugins ask with (ask, read_answer)",
 }
 
 

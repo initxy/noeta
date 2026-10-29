@@ -7,10 +7,13 @@ sub-agent's after its tool results).
 
 Everything is captured through the task's ExecEnv (``view.env``), never by a
 host subprocess: on a container the facts describe the container's checkout,
-and the shell / OS version lines (facts of this machine) are left out. git
-runs with the same hardening the Bash tool's ``git status`` rule applies
-(``-c core.fsmonitor=``, no hooks), so a repository's own config cannot make
-the capture run a program. A ``filter.<driver>.clean`` program has no off
+and the shell / OS version lines (facts of this machine) are left out. For a
+task of a tenant other than the default one, git runs inside that task's
+sandbox (the tenant writes the repository's config; hardening flags cannot
+cover every config key that runs a program). git also runs with the
+hardening the Bash tool's ``git status`` rule applies (``-c
+core.fsmonitor=``, no hooks), no signature program and no look inside
+submodules. A ``filter.<driver>.clean`` program has no off
 switch, so when the repository's own config (local or worktree scope)
 defines any filter driver the status is skipped. The capture is recorded
 once, when the task first starts, and never changes under the prompt cache.
@@ -27,20 +30,23 @@ from datetime import datetime
 from typing import Any
 
 from noeta.core import models
-from noeta.core.commands import is_command_message
-from noeta.core.execenv import ExecEnv, is_local
+from noeta.core.execenv import ExecEnv
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.types import Message, ToolResult, system_message, user
+from noeta.toolkit.commands import is_command_message
 from noeta.toolkit.context import task_env
-from noeta.toolkit.shell import _harden_git
+from noeta.toolkit.local_env import is_local
+from noeta.toolkit.sandbox import run_in_tenant_sandbox
+from noeta.toolkit.shell import harden_git
 
 #: Git status beyond this is cut at a line boundary and marked.
 GIT_STATUS_MAX_BYTES = 2048
 #: Commits listed in the git snapshot.
 RECENT_COMMITS = 5
-#: Global flags every capture git runs with: no fsmonitor hook, no index
-#: refresh written back.
-_GIT_FLAGS = ("-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null", "--no-optional-locks")
+#: Global flags every capture git runs with: no fsmonitor hook, no signature
+#: program, no index refresh written back.
+_GIT_FLAGS = ("-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null",
+              "-c", "log.showSignature=false", "--no-optional-locks")
 #: Config scopes a person set up themselves (a filter there is trusted).
 _TRUSTED_SCOPES = ("system", "global")
 #: The budget a turn starts with (Claude Code's ``<total_tokens>``).
@@ -63,10 +69,10 @@ ORDER_DATE = 90
 async def _git(env: ExecEnv, cwd: str, *args: str) -> str:
     argv = ["git", *args]
     if args and args[0] == "status":
-        argv = _harden_git(argv)
+        argv = harden_git(argv)
     argv = [argv[0], *_GIT_FLAGS, *argv[1:]]
     try:
-        out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20)
+        out = await run_in_tenant_sandbox(env, argv, cwd=cwd, timeout=5, output_cap=1 << 20)
     except Exception:  # noqa: BLE001 — capture is best-effort
         return ""
     if out.exit_code != 0 or out.timed_out:
@@ -79,7 +85,7 @@ async def _repo_defines_filters(env: ExecEnv, cwd: str) -> bool:
     ``clean`` program ``git status`` would run). Unsure counts as yes."""
     argv = ["git", *_GIT_FLAGS, "config", "--show-scope", "--get-regexp", r"^filter\."]
     try:
-        out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20)
+        out = await run_in_tenant_sandbox(env, argv, cwd=cwd, timeout=5, output_cap=1 << 20)
     except Exception:  # noqa: BLE001 — capture is best-effort
         return True
     if out.timed_out:
@@ -98,7 +104,9 @@ async def _git_status(env: ExecEnv, cwd: str) -> str | None:
     """The short status (``""`` when clean), ``None`` when not captured."""
     if await _repo_defines_filters(env, cwd):
         return None
-    status = (await _git(env, cwd, "status", "--short")).rstrip("\n")
+    # Not inside submodules: their own config's filters are not checked.
+    status = (await _git(env, cwd, "status", "--short",
+                         "--ignore-submodules=dirty")).rstrip("\n")
     encoded = status.encode("utf-8")
     if len(encoded) <= GIT_STATUS_MAX_BYTES:
         return status
@@ -222,8 +230,8 @@ def render_attribution(model: str) -> str | None:
     return "\n".join([
         "From here on, end the git commit messages and pull request descriptions you write "
         "with the lines below. This note replaces any earlier attribution note, earlier "
-        "copies of itself included; the user's own instructions about these lines (an "
-        "instructions file, a memory) take precedence over it; add no attribution line it "
+        "copies of itself included; where the user's own instructions (an instructions "
+        "file, a memory) say otherwise about these lines, those win; add no attribution line it "
         "does not list.",
         "- Commit messages end with:",
         f"Co-Authored-By: {spec.display_name} <noreply@anthropic.com>",
@@ -268,7 +276,7 @@ def _owes_budget_note(messages: Sequence[Message], *, prompts: bool = True) -> b
             return False
         if m.role == "user" and any(isinstance(b, ToolResult) for b in m.content):
             return True
-        if m.role == "user" and m.origin in (None, "human"):
+        if m.from_person:
             return prompts and not is_command_message(m.text)
     return False
 
@@ -335,7 +343,7 @@ class Environment(Extension):
         if view.ext_state(self.name):
             return
         env = task_env(view.env, view.state.config)
-        cwd = str(view.state.config.get("cwd") or env.cwd)
+        cwd = view.cwd or env.cwd
         model = self._model(view)
         text = await capture_environment(env, cwd, model if self.model_name else "")
         # Held for the first request's system turn, after the prompt.

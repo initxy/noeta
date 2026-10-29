@@ -1,7 +1,7 @@
 # Accepted deviations from Claude Code
 
 A model-visible difference from the baseline is allowed only when noeta's kernel or product
-forces it (`docs/specs/2026-10-28-claude-code-parity.md`, Decisions). Each row names the reason;
+forces it ([ADR 003](../docs/adr/003-claude-code-is-the-model-visible-contract.md)). Each row names the reason;
 a backticked id is the `make parity` mismatch it accepts (the comparator does not count it).
 A row without an id is a difference the replay cannot see.
 
@@ -10,8 +10,11 @@ A row without an id is a difference the replay cannot see.
 | id | difference | reason |
 |---|---|---|
 | | Tools run after the assistant message is logged, not while it streams. | Log-first crash safety. |
-| | A tool started before a crash answers "result unknown" instead of re-running. | A call may have had effects; running it twice is worse than asking. |
+| | A tool started before a crash answers "result unknown", unless it can tell its own outcome (`Tool.recover`) or is safe to run again (`retry_safe`: it re-runs, a few times at most). | A call may have had effects; running it twice is worse than asking. |
 | | Waits (approval, sub-agent, timer) survive restarts and move between machines. | Durable tasks. |
+| `6c773c2c` | The results of one reply's calls go back in call order; Claude Code answered a `ToolSearch` ahead of the background `Bash` call made before it (r2 m5). | Results are logged per call and folded in call order; the order of a batch is the kernel's, not a model-visible rule noeta can see the reason for in the recording. |
+| `e9d39432` | After a compaction Claude Code sends an empty system turn carrying `output_config` (its effort); noeta sends none. | noeta puts the effort in the request's top-level `output_config` on every call, which the comparator already matches; the empty turn carries nothing the model reads. |
+| | `EnterWorktree` moves the shell (where `Bash` starts) into the worktree; the task's root — the environment note, the file tools' relative paths, the permission scope — stays the launch directory, so a worktree must lie inside it (`.noeta/worktrees/`, or an existing one inside the working directory), and a sandboxed command cannot write there (`.noeta` is read-only in the sandbox). | A task's working directory is its config, fixed for its exec env and its sandbox; changing it mid-task needs a kernel config change (and its confinement rules for servers) left for later. |
 | | `ScheduleWakeup` wake-ups and `CronCreate` jobs are kernel timers in the task's log: they survive restarts and fire on any worker, so `CronCreate.durable` changes nothing and its description says so (Claude Code keeps session jobs in memory and writes durable ones to `.claude/scheduled_tasks.json`). | Durable tasks. |
 | | A `Workflow` run is replayed from its recorded agent results (the script is re-executed, finished `agent()` calls answer from the log) instead of running once in memory; it survives restarts like any wait. | Durable tasks. |
 
@@ -30,6 +33,7 @@ A row without an id is a difference the replay cannot see.
 | | A sandboxed command's connection to a host outside `sandbox.network.allowedDomains` is refused and listed in `<sandbox_violations>`; nobody is asked mid-command (Claude Code prompts unless `strictAllowlist`). | The network filter answers while the command runs; asking would need the task to park inside a running tool call. The model retries with `dangerouslyDisableSandbox`, which is asked about. |
 | | `credentials` entries in `mask` mode act as `deny` (the file is hidden, the variable unset) on every platform. | Claude Code substitutes sentinels and swaps them at the proxy only on Linux, and only for HTTPS with TLS termination; noeta's proxy does not terminate TLS. |
 | | The sandbox section of `Bash`'s description sends the user to the `sandbox` section of their settings, not to a `/sandbox` command. | noeta has no `/sandbox` command yet. |
+| | When a sandboxed command's working directory is a linked git worktree (an isolated agent's), its own git directory and the shared repository's `objects`, `refs` and `logs` are writable too, so the agent can commit; the shared `config`, `hooks`, `packed-refs` and the worktree's `commondir`, `gitdir` and `config.worktree` stay read-only. Rewriting `packed-refs` (deleting a packed branch, `git pack-refs`) fails there. `EnterWorktree` does not need this (the main repository's `.git` is already writable under the task's root), but its worktree itself is read-only in the sandbox (see the `EnterWorktree` row above). | git keeps a worktree's commits in the shared repository; hooks and config there run code outside the sandbox later, and `packed-refs` is replaced by a rename in the shared directory, which would have to be writable as a whole. |
 
 ## Tools
 
@@ -37,7 +41,30 @@ A row without an id is a difference the replay cannot see.
 |---|---|---|
 | | `Workflow` scripts run in an embedded V8 (`mini-racer`), no system Node: a fresh context per replay with a time and memory limit; where mini-racer cannot load, the tool refuses and starts nothing. | Owner-confirmed (2026-10-28): the contract (JavaScript, the script API) is Claude Code's; Claude Code runs the script in its own JavaScript runtime, noeta in a capability-free engine inside the worker. |
 | | `Workflow`'s `name` loads a saved workflow from the project's `.noeta/workflows/`, then `~/.noeta/workflows/`, never `.claude/workflows/`, and its parameter description says so. | noeta reads only its own config places (owner, 2026-10-28). |
+| `cd29435e` `b5c9150c` | No `DesignSync` in the deferred-tool list. | It syncs claude.ai design projects, a Claude Code cloud feature (the parity spec's non-goals). |
+| | No `LSP` tool. | Claude Code offers it only with a language-server plugin installed; it is not in the baseline's tool set. |
+| | `WebSearch` needs a search backend (a Tavily key, `NOETA_WEB_SEARCH_API_KEY`) and is not offered without one; the parity replay sets a placeholder key. | Claude Code searches through Anthropic's server-side tool, which only an Anthropic API key reaches; noeta runs on any provider. |
+| | When no model call is available for the digest (a host running tools without a runner) or the digest call fails, `WebFetch` returns the rendered page text, marked as such, instead of failing. | Tools reach a model only through the runner the host binds; a host without one still gets the page. |
+| | A binary `WebFetch` body (`tool.WebFetch.r.6`) is saved and named, and that line is the whole result: its bytes are not decoded as text for the digest or the page, and the cache keeps the line, so a repeat fetch names the same file. | Bytes decoded as text are noise to the digest model and to the result; the saved file is what the model can use, and `Read` opens it. |
+| | A `Bash` command past its timeout is killed, not moved to the background, on a host that offers no background jobs (`Shell(background=False)`, or no runner to post the end to), or while another worker holds the task tree (`HeldElsewhere`). | The move needs the job table and a task inbox for the end notice; such a host has neither. A job lives by its tree's hold on this worker, so one started while another worker holds the tree could not be read or stopped later. |
+| | A background job's output file, which its end notice names, is removed once its task tree ends, once the tree's forgotten jobs' files pass 256 MB (oldest first), or when a worker forgets an idle tree after 256 others (Claude Code keeps them in its per-session temp directory). | Jobs belong to a long-running worker serving many trees; their files on disk must stay bounded. |
+| | `Bash` keeps the last 256 KB a command printed (and saves output past 30,000 characters to a file); there is no `BASH_MAX_OUTPUT_LENGTH` override. | The capture cap bounds a worker's memory for every command; the inline limit is Claude Code's default. |
+| | `Bash` has no `allowed_domains` parameter and its sandbox section no platform notes. | Both exist in Claude Code only with the sandbox on (and the parameter only in auto mode); the baseline runs without a sandbox, and its `Bash` schema has neither. |
+| | A background agent's transcript (`output_file`) lies under the host's spill directory (`<spill root>/<root task id>/tasks/<agent id>.output`) and holds one `{"type", "message"}` line per message in noeta's message encoding, appended to as the conversation grows (written whole again after a compaction, or by a worker that did not write it last); a host without a spill directory names no file. | The task log is the record; the file is a projection of it written by the agent, so a crash or a move to another worker loses nothing (Claude Code appends its own session-record lines under its per-project temp directory). |
+| | `SendMessage(notify_when_idle: true)` subscribes to another open root task of the store (a "session" `ListAgents` lists), which must run the `subtasks` plugin to answer; one subscription per session at a time (a new one replaces the last; Claude Code keeps up to three), the notice names the session by its task id, and it always carries the last reply's first line. The subscription, the answer and the 12-hour expiry are inbox posts, records and a kernel timer, so they survive restarts. | Durable tasks; noeta's sessions are tasks of one store, not processes that prove their identity to each other. |
+| | `Edit` / `Write` refuse an unread file, or (`Edit`) one changed since the read, after a person approved the call rather than before the prompt (`tool.Edit.6`). The skip itself follows Claude Code: only for a write the permission layer allowed outright by its mode or an allow rule, never on older Claude models (Opus 4.6, Sonnet 4.5, Haiku 4.5 and before); a host without a permission layer always keeps the check. | The file tools run after the permission layer and see its verdict only as `ToolContext.approved` / `allowed_outright`; the refusal comes from the tool, once the call runs. |
+| | `AskUserQuestion` refuses an empty (or blank) question or option label, and a question over 1,000 characters, a header over 100, a label over 200, a description over 2,000 or a preview over 20,000; Claude Code's schema and checks set no length limit (`tool.AskUserQuestion.r.4`). The schema stays Claude Code's: the limits are checked when the call runs, with an error saying which text and limit. | An empty label leaves the person nothing to pick; the caps bound what one call can push into a dialog, the task log and every later request, far above anything the schema's guidance (a 12-character header, a 1-5 word label) produces. |
+| | A file counts as changed since the read when its bytes differ from what was read, not when its modification time moved (Claude Code refuses a `Write` / `NotebookEdit` over a file merely touched since). | The read record keeps a digest of the whole file; comparing content cannot refuse a write over unchanged bytes, and a restart cannot lose it. |
+| | A PDF of up to 10 pages read without `pages` comes back as page images, not as one PDF document block. | A tool result is logged once, provider-neutral, and later requests of the task resend it, possibly to another provider (`/model` switches mid-conversation); a document block would then have to become page images inside the provider adapter, which has no exec env to run `pdftoppm` in, so after a switch to a provider without document blocks (OpenAI-compatible endpoints) the PDF would be lost to the model. Page images read the same on every vision provider. |
+| | `Read`'s empty-file and offset-past-the-end warnings are plain text in the result; Claude Code wraps them in `<system-reminder>`. | A tool result never carries the reserved tag (the wire neutralizes it), so a result cannot pose as host context. |
 | | `Workflow`'s description carries a short script-API reference (`tool.Workflow.8`): there is no bundled `workflow-authoring` skill to load. | noeta ships no bundled skills yet; the reference returns to a skill when it does. |
+
+## Hooks
+
+| id | difference | reason |
+|---|---|---|
+| | A `Stop` / `SubagentStop` hook that blocks the end of the turn 8 times in a row is let through (`MAX_STOP_CONTINUATIONS`); Claude Code sets no limit and leaves the loop to the hook (`stop_hook_active`). | A server runs unattended: a hook that always blocks would spend model calls until a budget or a person stopped it. `stop_hook_active` is still sent, so a hook written for Claude Code ends the loop itself first. |
+| | A hook's input carries an empty `transcript_path` (and `agent_transcript_path`): noeta writes no transcript file. | Durable tasks: the conversation is the task's event log in the store, which a hook reads through a client (`Client.events`), not a local JSONL file. |
 
 ## Request envelope
 
@@ -67,7 +94,6 @@ file names. Each row is a name the model sees; the files themselves are product 
 | | The instructions reminder lists `NOETA.md`, `.noeta/NOETA.md`, `.noeta/rules/`, `NOETA.local.md`, the user's `~/.noeta/NOETA.md` and `~/.noeta/rules/`, and the managed `NOETA.md` (`/etc/noeta`, macOS `/Library/Application Support/Noeta`), in Claude Code's order, where Claude Code lists `CLAUDE.md` and `.claude/` paths; a directory with neither project file shows its `AGENTS.md` (`rem.instructions.5`). | noeta never picks up Claude Code's instructions; `AGENTS.md` is the cross-tool convention. |
 | | Texts that name the instruction file say `NOETA.md` where Claude Code says `CLAUDE.md`: the memory section (`main.mem.15`), the sub-agent prompts and caller messages (`sub.common.1`), the hand-back frame (`sub.result.4`), `Agent`'s `effort` description, and the auto-mode classifier's instructions block, which is a `<user_noeta_md>` element (`cls.input.1`). | The file the text means is noeta's. |
 | | `Agent`'s description names agent files in `.noeta/agents/` (`tool.Agent.20`). | noeta's agent directory. |
-| | `Edit` / `Write` leave the "file state is current" note off for `NOETA.md` (`tool.Edit.r.2`). | The rule is about the instruction file, which is `NOETA.md` here. |
 | | An isolated agent's worktree is under `.noeta/worktrees/`, not `.claude/worktrees/`, and the auto-mode policy names `.noeta/` trees and `NOETA.md` as the agent's configuration. | noeta's own directory. |
 | | An MCP result cut to its budget names `NOETA_MAX_MCP_OUTPUT_TOKENS`. | noeta's environment variables carry its prefix (`NOETA_MCP_TIMEOUT`, `NOETA_MCP_TOOL_TIMEOUT`, `NOETA_AUTO_COMPACT_WINDOW`, `NOETA_AUTOCOMPACT_PCT_OVERRIDE` likewise). |
 
@@ -76,3 +102,16 @@ file names. Each row is a name the model sees; the files themselves are product 
 | id | difference | reason |
 |---|---|---|
 | | An `@path` import from a repository file that leaves the repository directory and the working directory is skipped, not asked about (`rem.instructions.7`). | No noeta front end has Claude Code's approval dialog for external imports; skipping is the safe side of it. |
+
+## Not yet matched
+
+Known differences that no kernel or product reason forces: follow-ups, not accepted deviations.
+
+| difference | where |
+|---|---|
+| `AskUserQuestion` needs every question answered; Claude Code accepts unanswered questions and a note per question. | `noeta/plugins/ask_user` |
+| MCP result sizes are estimated (four characters a token, a CJK character one, 1,600 an image), not counted. | `noeta/plugins/mcp/results.py` |
+| `WebFetch` has no raw-markdown answer for known documentation sites. | `noeta/plugins/web` |
+| `Bash` does not note that a command changed a file the model has read. | `noeta/plugins/shell`, `noeta/plugins/fs` |
+| `Edit` and `Write` refuse to change an existing file that is not UTF-8 (UTF-16 or any other encoding), and `Read` shows such a file as UTF-8 with its invalid bytes replaced; Claude Code reads and writes UTF-16 and keeps a file's encoding. | `noeta/plugins/fs` |
+| Headless: SDK hook callbacks (`initialize.hooks`) are ignored with a warning; `--permission-prompt-tool` takes only `stdio`, not an MCP tool. | `noeta/host/_stream_json_control.py`, `noeta/cli/headless.py` |

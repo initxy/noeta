@@ -109,7 +109,8 @@ def test_a_third_party_plugin_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
     files = [parse_agent_file("---\nname: a\nplugins: [{greeter: {greeting: hello}}]\n---\nP\n"),
              parse_agent_file("---\nname: b\nplugins: [{greeter: {greeting: hello}}]\n---\nP\n"),
              parse_agent_file("---\nname: c\nplugins: [greeter]\n---\nP\n")]
-    a, b, c = build_agents(files, model="m", plugins={"greeter": {"greeting": "hey"}})
+    a, b, c = build_agents(files, model="m", plugins={"greeter": {"greeting": "hey"},
+                                                      "tool_search": False})
     assert a.extensions[0] is b.extensions[0]  # same arguments, one instance
     assert a.extensions[0].greeting == "hello"  # type: ignore[attr-defined]
     assert c.extensions[0].greeting == "hey"  # type: ignore[attr-defined]
@@ -121,11 +122,13 @@ def test_settings_defaults_additions_and_models() -> None:
     shared = Greeter()
     files = [parse_agent_file("---\nname: a\nplugins: [greeter, fs]\n---\nP\n"),
              parse_agent_file("---\nname: b\nmodel: other\n---\nQ\n")]
-    a, b = build_agents(files, model="m", plugins={"greeter": shared, "fs": False},
+    a, b = build_agents(files, model="m", plugins={"greeter": shared, "fs": False,
+                                                   "tool_search": False},
                         default_plugins=[("greeter", {})])
     assert list(a.extensions) == [shared] and a.model == "m"
     assert list(b.extensions) == [shared] and b.model == "other"
-    a, b = build_agents(files, model="m", plugins={"fs": {"enabled": False}, "greeter": shared},
+    a, b = build_agents(files, model="m", plugins={"fs": {"enabled": False}, "greeter": shared,
+                                                   "tool_search": False},
                         add={"b": [("instructions", {})], "*": [("greeter", {})]})
     assert [e.name for e in a.extensions] == ["greeter"]  # not added twice
     assert [e.name for e in b.extensions] == ["instructions", "greeter"]
@@ -145,19 +148,24 @@ def test_claude_code_fields_map_onto_the_agent(caplog: pytest.LogCaptureFixture)
     assert f.permission_mode == "acceptEdits" and f.max_turns == 7 and f.omit_instructions
     assert f.extra == {"isolation": "worktree", "skills": ["a"], "flavour": "x"}
     logged = caplog.text
-    assert "'flavour' is ignored" in logged and "'skills' is not applied" in logged
+    assert "'flavour' is ignored" in logged and "'skills'" not in logged
     assert "isolation" not in logged
-    [agent] = build_agents([f], model="host", default_plugins=[("instructions", {})])
+    [agent] = build_agents([f], model="host", plugins={"skills": False, "tool_search": False},
+                           default_plugins=[("instructions", {})])
     assert agent.model == "claude-haiku-5-5" and agent.denied_tools == ("Write",)
-    assert agent.max_steps_per_turn == 7 and agent.extensions == ()
-    assert agent.extra["permission_mode"] == "acceptEdits" and agent.extra["model"] == "haiku"
+    assert agent.step_budget == 7 and agent.extensions == ()
+    assert agent.permission_mode == "acceptEdits" and not agent.inherit_model
+    assert agent.isolation == "worktree"
+    [plain] = build_agents([parse_agent_file("---\nname: p\ndescription: d\n---\nx\n")],
+                           model="host", default_plugins=[])
+    assert plain.model == "host" and plain.inherit_model and plain.permission_mode is None
 
 
 def test_tools_star_and_inherit() -> None:
     f = parse_agent_file("---\nname: a\ntools: '*'\nmodel: inherit\n---\n")
     assert f.tools is None and f.model is None
     [agent] = build_agents([f], model="host")
-    assert agent.model == "host" and agent.max_steps_per_turn == 1_000
+    assert agent.model == "host" and agent.step_budget == 1_000
 
 
 @pytest.mark.parametrize("text", [
@@ -169,3 +177,76 @@ def test_tools_star_and_inherit() -> None:
 def test_bad_claude_code_fields(text: str) -> None:
     with pytest.raises(AgentFileError):
         parse_agent_file(text)
+
+
+def test_claude_code_fields_become_plugin_arguments(caplog: pytest.LogCaptureFixture) -> None:
+    from noeta.agents.agent_files import plugin_overlays
+
+    f = parse_agent_file(
+        "---\nname: rev\nskills: a, b\nmemory: project\nautoCompactWindow: 120k\n"
+        "mcpServers:\n  - github\n  - local: {command: srv}\n"
+        "hooks: {Stop: [{hooks: [{type: command, command: 'true'}]}]}\n"
+        "initialPrompt: Start here.\nbackground: true\ncacheTtl: 1h\n---\nP\n",
+        source="overlay-rev.md")
+    stop = {"hooks": [{"type": "command", "command": "true"}]}
+    assert plugin_overlays(f) == [
+        ("skills", {"preload": ["a", "b"]}),
+        ("mcp", {"agent_servers": {"local": {"command": "srv"}}}),
+        ("hooks", {"hooks": {"Stop": [stop], "SubagentStop": [stop]}}),
+        ("memory", {"agent_scope": "project", "agent_name": "rev"}),
+        ("compaction", {"auto_compact_window": 120_000}),
+    ]
+    assert "'cacheTtl' is not applied" in caplog.text
+    assert "initialPrompt" not in caplog.text and "background" not in caplog.text
+    caplog.clear()
+    parse_agent_file("---\nname: rev\ncacheTtl: 1h\n---\nP\n", source="overlay-rev.md")
+    assert "cacheTtl" not in caplog.text  # once per file
+
+
+def test_overlays_add_to_the_hosts_arguments_and_the_plugin() -> None:
+    host_hooks = {"Stop": [{"hooks": [{"type": "command", "command": "host"}]}]}
+    f = parse_agent_file(
+        "---\nname: rev\nskills: [a]\n"
+        "hooks: {Stop: [{hooks: [{type: command, command: own}]}]}\n---\nP\n")
+    [agent] = build_agents([f], model="m", plugins={"hooks": {"hooks": host_hooks}},
+                           default_plugins=[("hooks", {}), ("compaction", {})])
+    assert [e.name for e in agent.extensions] == ["hooks", "tool_search", "skills", "compaction"]
+    hooks = agent.extensions[0]
+    assert [h.command for m in hooks.matchers["Stop"]  # type: ignore[attr-defined]
+            for h in m.hooks] == ["host", "own"]
+    assert agent.extensions[2].preload == ["a"]  # type: ignore[attr-defined]
+    [off] = build_agents([f], model="m", plugins={"skills": False, "tool_search": False},
+                         default_plugins=[("hooks", {})])
+    assert [e.name for e in off.extensions] == ["hooks"]
+
+
+def test_agent_mcp_servers_come_first() -> None:
+    from noeta.plugins.mcp import Mcp
+
+    f = parse_agent_file("---\nname: rev\nmcpServers:\n  - local: {command: own}\n---\nP\n")
+    [agent] = build_agents([f], model="m", plugins={"mcp": {"servers": {
+        "local": {"command": "host"}, "other": {"command": "x"}}}, "tool_search": False},
+        default_plugins=[])
+    [mcp] = agent.extensions
+    assert isinstance(mcp, Mcp)
+    assert [(s.alias, s.command) for s in mcp._agent_servers] == [("local", ["own"])]
+
+
+@pytest.mark.parametrize("text", [
+    "---\nname: a\nmemory: team\n---\n",
+    "---\nname: a\nmcpServers: x\n---\n",
+    "---\nname: a\nhooks: [x]\n---\n",
+    "---\nname: a\ninitialPrompt: [x]\n---\n",
+    "---\nname: a\nautoCompactWindow: lots\n---\n",
+])
+def test_bad_applied_fields(text: str) -> None:
+    with pytest.raises(AgentFileError):
+        parse_agent_file(text)
+
+
+def test_every_agent_gets_tool_search_unless_the_host_turns_it_off() -> None:
+    f = parse_agent_file("---\nname: a\nplugins: [fs, compaction]\n---\nP\n")
+    [agent] = build_agents([f], model="m")
+    assert [e.name for e in agent.extensions] == ["fs", "tool_search", "compaction"]
+    [off] = build_agents([f], model="m", plugins={"tool_search": False})
+    assert [e.name for e in off.extensions] == ["fs", "compaction"]

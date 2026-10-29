@@ -9,44 +9,63 @@ import logging
 import os
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from importlib import resources
 from pathlib import Path
 from typing import Any, Literal
 
 import msgspec
 
-from noeta.core.commands import command_message, parse_command_message
-from noeta.core.events import Recorded
+from noeta.core import records
+from noeta.core.events import DEFAULT_TENANT, Recorded
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import (
-    Ask,
+    Allow,
     Command,
     CommandContext,
     Deny,
     Extension,
     Gate,
     Reminder,
+    Rewrite,
     TaskView,
 )
-from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
-from noeta.core.types import Message, ToolUse, user
+from noeta.core.tool import Tool, ToolOutput, text_output
+from noeta.core.types import Message, Origin, ToolUse, user
 from noeta.plugins.skills import _frontmatter
-from noeta.plugins.skills.allowed_tools import resolve_skill_allowed_tools
+from noeta.plugins.skills.gates import (
+    Enforcement,
+    allowed_tools_gate,
+    pre_approved,
+    script_gate,
+)
 from noeta.plugins.skills.listing import listing_lines, render_listing
 from noeta.plugins.skills.registry import (
-    SkillDescription,
     SkillRegistry,
     load_registry,
     render_activation,
+    render_body,
     render_command_body,
 )
 from noeta.plugins.skills.script import (
     SKILL_SCRIPT_TOOL_NAME,
     RunSkillScriptTool,
-    is_skill_script_resource,
 )
-from noeta.toolkit.context import new_user_messages, resident_budget, task_env
-from noeta.toolkit.tools import SCHEMA_DIALECT
+from noeta.plugins.skills.tool import (
+    SKILL_TOOL,
+    SkillTool,
+    activation_data,
+    skill_name,
+    unlocked_skills,
+)
+from noeta.toolkit import permission_rules as pr
+from noeta.toolkit.commands import command_message, parse_command_message
+from noeta.toolkit.context import new_user_messages, task_env
+from noeta.toolkit.inline_commands import (
+    InlineCommandError,
+    has_commands,
+    run_inline_commands,
+    strip_commands,
+)
+from noeta.toolkit.tokens import resident_budget
 
 __all__ = [
     "SKILL_TOOL",
@@ -55,8 +74,34 @@ __all__ = [
 ]
 
 _log = logging.getLogger(__name__)
+#: Workspaces already warned about as untrusted: every agent's Skills reads
+#: the same directories, so the warning goes out once per process (for the
+#: newest :data:`WARNED_KEEP` workspaces; a server sees many).
+_warned_untrusted: dict[str, None] = {}
+WARNED_KEEP = 1024
 
-SKILL_TOOL = "Skill"
+AGENT_TOOL = "Agent"
+#: Fork skills waiting for their commands to run, remembered at most.
+FORKS_DUE_KEEP = 256
+#: The agent a ``context: fork`` skill runs in when it names none.
+DEFAULT_FORK_AGENT = "general-purpose"
+#: The forked agent's ``description``.
+FORK_DESCRIPTION = "Run the {name} skill"
+#: A skill called again while its unchanged instructions are in the
+#: conversation; a changed one (other arguments, other command output)
+#: gets the whole text after the second note.
+REINVOKED_SAME = ("The /{name} skill was loaded earlier in this conversation and its "
+                  "instructions have not changed; this is a new call, so follow them again now.")
+REINVOKED_CHANGED = ("(/{name} called again: its instructions were loaded earlier; the "
+                     "arguments or command output below are new.)")
+#: Tasks whose turn's registry is kept (:meth:`Skills.turn_registry`).
+TURN_REGISTRIES_KEEP = 256
+#: Typed ``/skill`` inputs kept for an erase, and fork prompts kept for
+#: their calls, newest last.
+ERASABLE_KEEP = 32
+FORKS_KEEP = 32
+#: Calls whose file makes a skill with matching ``paths`` available.
+FILE_TOOLS = frozenset({"Read", "Write", "Edit", "NotebookEdit"})
 
 #: Heads the skills re-attached after a compaction.
 INVOKED_SKILLS_HEADER = (
@@ -66,10 +111,6 @@ INVOKED_SKILLS_HEADER = (
     "belongs to that earlier moment, not to the user's current message."
 )
 
-_SKILL_PROP_DESCRIPTION = ("The skill's name exactly as the skill listing gives it, without "
-                           "a leading slash; never a guessed name.")
-_ARGS_PROP_DESCRIPTION = "Optional text passed to the skill."
-_SKILL_NAME_MAX_LEN = 200
 #: The listing's place in the joined system turn (``Reminder.order``): after
 #: the environment, deferred tools and agents, before the budget and date.
 LISTING_ORDER = 50
@@ -81,58 +122,6 @@ WORKSPACE_SKILLS_DIR = ".noeta/skills"
 WORKSPACE_AGENTS_SKILLS_DIR = ".agents/skills"
 
 Rank = Callable[[TaskView], "Mapping[str, float] | Awaitable[Mapping[str, float]] | None"]
-Enforcement = Literal["off", "approval", "deny"]
-
-
-def _skill_description() -> str:
-    path = resources.files("noeta.plugins.skills").joinpath("descriptions", "skill.md")
-    return path.read_text(encoding="utf-8").rstrip("\n")
-
-
-class SkillTool:
-    """``Skill(skill, args?)``: the same schema bytes for every task. The listing
-    in the conversation names the skills; the tool validates against the
-    live roster (a skill installed since the listing is accepted, a removed
-    one is not)."""
-
-    name = SKILL_TOOL
-    read_only = False
-    clearable = False
-
-    def __init__(self, owner: Skills) -> None:
-        self._owner = owner
-        self.description = _skill_description()
-        self.input_schema: dict[str, Any] = {
-            "$schema": SCHEMA_DIALECT,
-            "type": "object",
-            "properties": {
-                "skill": {"type": "string", "description": _SKILL_PROP_DESCRIPTION},
-                "args": {"type": "string", "description": _ARGS_PROP_DESCRIPTION},
-            },
-            "required": ["skill"],
-            "additionalProperties": False,
-        }
-
-    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
-        name = input.get("skill")
-        if not isinstance(name, str) or not name:
-            return text_output("skill must be a non-empty string", is_error=True)
-        if len(name) > _SKILL_NAME_MAX_LEN:
-            return text_output(f"skill too long (max {_SKILL_NAME_MAX_LEN})", is_error=True)
-        registry = await self._owner.registry(task_env(ctx.env, {}))
-        menu = registry.model_invocable()
-        desc = registry.get(name)
-        if desc is None or name not in menu:
-            available = ", ".join(menu) if menu else "(none)"
-            return text_output(f"unknown skill {name!r}; available: {available}", is_error=True)
-        args = input.get("args")
-        if args is not None and not isinstance(args, str):
-            return text_output("args must be a string", is_error=True)
-        return text_output(
-            f"Skill '{name}' loaded; its instructions will appear in your "
-            f"context from your next step.",
-            skill_activation=_activation_data(desc, "model", args),
-        )
 
 
 def _typed_command(text: str) -> tuple[str, str] | None:
@@ -143,24 +132,6 @@ def _typed_command(text: str) -> tuple[str, str] | None:
         return tagged[0], tagged[1].strip()
     m = re.match(r"/([a-z0-9][a-z0-9-]*)(?:\s+|$)(.*)", text.lstrip(), re.DOTALL)
     return (m.group(1), m.group(2).strip()) if m else None
-
-
-def _activation_data(desc: SkillDescription, source: str,
-                     args: str | None = None) -> dict[str, Any]:
-    raw = desc.meta("allowed-tools")
-    allowed: list[str] | None = None
-    if raw is not None:
-        [(_, grant)] = resolve_skill_allowed_tools(((desc.name, raw),))
-        allowed = sorted(grant)
-    return {
-        "name": desc.name,
-        "source": source,
-        "dir": desc.base_dir,
-        "scripts": [r for r in desc.resources if is_skill_script_resource(r)],
-        "allowed_tools": allowed,
-        "args": args,
-        "text": render_activation(desc, args),
-    }
 
 
 class Skills(Extension):
@@ -193,6 +164,9 @@ class Skills(Extension):
     * ``rehang`` — put the listing and active skills right after a
       compaction's summary (``resident``; ADR-036 re-hang).
     * ``origin`` — origin of recorded listing / skill text (``"system"``).
+    * ``shell_commands`` — run the ``!`command``` lines of a skill body when
+      it loads (Claude Code's ``disableSkillShellExecution`` turned off);
+      ``False`` leaves a marker in their place.
     """
 
     name = "skills"
@@ -213,6 +187,7 @@ class Skills(Extension):
         tool_enforcement: Enforcement = "off",
         rehang: bool = True,
         origin: Literal["system"] | None = "system",
+        shell_commands: bool = True,
     ) -> None:
         if budget_tokens is not None and budget_tokens <= 0:
             raise ValueError("Skills: budget_tokens must be a positive int")
@@ -232,8 +207,15 @@ class Skills(Extension):
         self.tool_enforcement = tool_enforcement
         self.rehang = rehang
         self.origin = origin
+        self.shell_commands = shell_commands
         self._skill_tool = SkillTool(self)
         self._script_tool = RunSkillScriptTool(self.name)
+        #: The registry a task's turn last loaded, by task: ``(turn key,
+        #: registry)`` (see :meth:`turn_registry`).
+        self._turn_registries: dict[str, tuple[tuple[Any, ...], SkillRegistry]] = {}
+        #: Fork skills whose commands wait until every check passed the
+        #: ``Skill`` call: ``(task, call id)`` -> ``(Agent input, activation)``.
+        self._forks_due: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
 
     # ------------------------------------------------------------ discovery
 
@@ -251,13 +233,35 @@ class Skills(Extension):
                      os.path.join(cwd, WORKSPACE_SKILLS_DIR)]
             if self.trusted is None or self.trusted(cwd):
                 out += [(gated[0], 3), (gated[1], 4)]
-            else:
-                _log.warning("workspace %s is not trusted; skipping its skill directories: %s",
-                             cwd, ", ".join(gated))
+            elif cwd not in _warned_untrusted:
+                skipped = [d for d in gated if os.path.isdir(d)]
+                if skipped:  # nothing is skipped where the directories do not exist
+                    if len(_warned_untrusted) >= WARNED_KEEP:
+                        del _warned_untrusted[next(iter(_warned_untrusted))]
+                    _warned_untrusted[cwd] = None
+                    _log.warning("workspace %s is not trusted; skipping its skill "
+                                 "directories: %s", cwd, ", ".join(skipped))
         return out
 
     async def registry(self, env: ExecEnv) -> SkillRegistry:
         return await load_registry(env, self.tiers(env.cwd))
+
+    async def turn_registry(self, view: TaskView) -> SkillRegistry:
+        """The skills as found once per turn of the task: loaded again when
+        new input was taken (a skill installed since shows up with the
+        person's next message), not after every file a call touched."""
+        env = task_env(view.env, view.state.config)
+        tiers = self.tiers(env.cwd)
+        key = (view.state.inbox_read, env.cwd, tuple(tiers))
+        cached = self._turn_registries.pop(view.task_id, None)
+        if cached is not None and cached[0] == key:
+            registry = cached[1]
+        else:
+            registry = await load_registry(env, tiers)
+        self._turn_registries[view.task_id] = (key, registry)  # most recent last
+        while len(self._turn_registries) > TURN_REGISTRIES_KEEP:
+            del self._turn_registries[next(iter(self._turn_registries))]
+        return registry
 
     # ------------------------------------------------------------ state
 
@@ -279,8 +283,33 @@ class Skills(Extension):
             return {**state, "listings": [{k: v for k, v in listing.items() if k != "held"}
                                           for listing in state["listings"]]}
         if kind == "activated":
-            entry = {k: v for k, v in data.items() if k != "text"}
-            return {**state, "active": {**state["active"], data["name"]: entry}}
+            entry = {k: v for k, v in data.items() if k not in ("text", "input")}
+            name, active = data["name"], state["active"]
+            if data.get("input") is not None:
+                # What a typed /name replaced, given back if a hook blocks it.
+                typed, at = dict(state.get("typed") or {}), str(data["input"])
+                typed[at] = [*typed.get(at, ()), [name, active.get(name)]]
+                # Only a message the model has not seen yet is blocked: the
+                # newest few are kept.
+                state = {**state, "typed": dict(list(typed.items())[-ERASABLE_KEEP:])}
+            return {**state, "active": {**active, name: entry}}
+        if kind == records.ERASED_KIND:
+            typed = dict(state.get("typed") or {})
+            active = dict(state["active"])
+            for seq in data["seqs"]:
+                for name, prior in reversed(typed.pop(str(seq), ())):
+                    if prior is None:
+                        active.pop(name, None)
+                    else:
+                        active[name] = prior
+            return {**state, "active": active, "typed": typed}
+        if kind == "forked":
+            forks = {**(state.get("forks") or {}), data["call_id"]: data["prompt"]}
+            # Needed until the call runs: the reply's calls, at most.
+            return {**state, "forks": dict(list(forks.items())[-FORKS_KEEP:])}
+        if kind == "unlocked":
+            have = list(state.get("unlocked") or [])
+            return {**state, "unlocked": have + [n for n in data["names"] if n not in have]}
         return state
 
     @staticmethod
@@ -300,12 +329,24 @@ class Skills(Extension):
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
         """``/<name>`` for every skill found locally (front ends run in the
         workspace); typing it activates the skill for that message."""
-        return await asyncio.to_thread(self._commands, ctx.cwd)
+        return await asyncio.to_thread(self._commands, ctx.cwd, ctx.tenant)
 
-    def _commands(self, cwd: str) -> list[Command]:
+    def _commands(self, cwd: str, tenant: str = DEFAULT_TENANT) -> list[Command]:
         found: dict[str, str] = {}
-        for root, _tier in self.tiers(cwd):
+        real_cwd = os.path.realpath(cwd) if cwd else ""
+        for root, tier in self.tiers(cwd):
+            real_root = os.path.realpath(root)
+            # A tenant's own skill directory linked out of its workspace (into
+            # another tenant's) is not listed.
+            if tenant != DEFAULT_TENANT and tier >= 3 and not (
+                    real_cwd and real_root.startswith(real_cwd.rstrip(os.sep) + os.sep)):
+                continue
             for path in sorted(Path(root).rglob("SKILL.md")) if Path(root).is_dir() else []:
+                # Read here, with no task env to fence it: a tenant's skill
+                # file linked out of its directory is not read.
+                real = os.path.realpath(path)
+                if tenant != DEFAULT_TENANT and not real.startswith(real_root + os.sep):
+                    continue
                 try:
                     fields, _body, _w = _frontmatter.parse(path.read_text(encoding="utf-8"))
                 except (OSError, UnicodeDecodeError, _frontmatter.FrontmatterError):
@@ -323,7 +364,7 @@ class Skills(Extension):
         if not state.get("listings"):
             registry = await self.registry(env)
             lines = listing_lines(registry, budget_tokens=self._budget(view),
-                                  rank=await self._rank(view))
+                                  rank=await self._rank(view), unlocked=unlocked_skills(state))
             if lines:
                 # Held for the first request's system turn, after the prompt.
                 view.record(self.name, "listing", {"names": [n for n, _ in lines],
@@ -337,7 +378,13 @@ class Skills(Extension):
                 if desc is None:
                     _log.warning("skills: preload %r is not an indexed skill; skipped", name)
                     continue
-                self._record_activation(view, _activation_data(desc, "preload"))
+                data = activation_data(desc, "preload", cwd=view.cwd)
+                try:
+                    data = await self._expand(view, data, f"skill-preload-{name}")
+                except InlineCommandError as exc:
+                    _log.warning("skills: preload %r skipped: %s", name, exc)
+                    continue
+                self._record_invocation(view, data, None, self.origin)
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         """The listing taken at start, in the environment's system turn
@@ -359,69 +406,77 @@ class Skills(Extension):
         if not messages:
             return
         state = view.ext_state(self.name) or {}
-        env = task_env(view.env, view.state.config)
-        registry = await self.registry(env)
+        registry = await self.turn_registry(view)
         # Skills installed since the last listing are announced with the
         # person's next message (the first listing, and with it the
         # ``skill`` tool, when the task started with none).
         if state.get("listings"):
             announced = self.announced(state)
-            lines = listing_lines(registry, budget_tokens=self._budget(view))
+            lines = listing_lines(registry, budget_tokens=self._budget(view),
+                                  unlocked=unlocked_skills(state))
             added = [(n, line) for n, line in lines if n not in announced]
             if added:
                 self._record_listing(view, added, first=False)
         else:
             lines = listing_lines(registry, budget_tokens=self._budget(view),
-                                  rank=await self._rank(view))
+                                  rank=await self._rank(view), unlocked=unlocked_skills(state))
             if lines:
                 self._record_listing(view, lines, first=True)
         for message in messages:
             typed = _typed_command(message.text)
             desc = registry.get(typed[0]) if typed else None
-            if typed and desc is not None and desc.name not in state.get("active", {}):
-                data = _activation_data(desc, "user", typed[1])
+            if desc is not None and desc.paths and desc.name not in unlocked_skills(state):
+                desc = None
+            if typed and desc is not None:
+                prior = (state.get("active") or {}).get(desc.name)
+                data = activation_data(desc, "user", typed[1], view.cwd)
                 # The body rides in the person's turn as plain text, after
                 # the command's tags (Claude Code's slash-command shape).
-                data["text"] = render_command_body(desc, typed[1])
-                view.record(self.name, "activated", data,
-                            message=user(data["text"], origin="inline"))
+                data["text"] = render_command_body(desc, typed[1], view.cwd)
+                try:
+                    data = await self._expand(view, data, f"skill-{recorded.seq}")
+                except InlineCommandError as exc:
+                    view.notify(str(exc))
+                    view.record(self.name, "load_failed", {"name": desc.name},
+                                message=user(f"The skill could not load: {exc}",
+                                             origin="inline"))
+                    continue
+                self._record_invocation(view, {**data, "input": recorded.seq}, prior,
+                                        "inline")
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
+        if call.name in FILE_TOOLS and not output.is_error:
+            await self._unlock(view, call)
         data = output.meta.get("skill_activation")
         if call.name != SKILL_TOOL or output.is_error or not isinstance(data, dict):
             return output
-        if data["name"] not in (view.ext_state(self.name) or {}).get("active", {}):
-            self._record_activation(view, data)
+        prior = ((view.ext_state(self.name) or {}).get("active") or {}).get(data["name"])
+        try:
+            data = await self._expand(view, data, call.id)
+        except InlineCommandError as exc:
+            return text_output(str(exc), is_error=True)
+        self._record_invocation(view, data, prior, self.origin)
         meta = {k: v for k, v in output.meta.items() if k != "skill_activation"}
         meta["skill"] = data["name"]
         return msgspec.structs.replace(output, meta=meta)
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
         if call.name == SKILL_TOOL:
-            return None
+            return await self._fork(view, call)
+        if call.name == AGENT_TOOL:
+            due = self._forks_due.pop((view.task_id, call.id), None)
+            if due is not None and due[0] == call.input:
+                return await self._expand_fork(view, call, due[1])
         state = view.ext_state(self.name) or {}
         active: dict[str, Any] = state.get("active") or {}
         if call.name == SKILL_SCRIPT_TOOL_NAME and self.scripts:
-            return _script_gate(call, active)
-        return self._allowed_tools_gate(call.name, active)
+            return script_gate(call, active)
+        restricted = allowed_tools_gate(call.name, active, self.tool_enforcement)
+        if restricted is None and pre_approved(view, call, active):
+            return Allow(approve=True)
+        return restricted
 
     # ------------------------------------------------------------ helpers
-
-    def _allowed_tools_gate(self, tool: str, active: Mapping[str, Any]) -> Gate | None:
-        """Enforcement is on only when the mode is on and an active skill
-        declares ``allowed-tools``; the grant is the union over them."""
-        if self.tool_enforcement == "off":
-            return None
-        declaring = sorted(n for n, a in active.items() if a.get("allowed_tools") is not None)
-        if not declaring:
-            return None
-        granted = {t for n in declaring for t in active[n]["allowed_tools"]}
-        if tool in granted:
-            return None
-        reason = f"tool {tool!r} not in the allowed-tools grant of active skills {declaring!r}"
-        if self.tool_enforcement == "deny":
-            return Deny(reason=reason)
-        return Ask(prompt=reason, detail={"tool": tool, "skills": declaring})
 
     def _budget(self, view: TaskView) -> int:
         if self.budget_tokens is not None:
@@ -440,6 +495,98 @@ class Skills(Extension):
             return None
         return dict(got) if got else None
 
+    async def _fork(self, view: TaskView, call: ToolUse) -> Gate | None:
+        """A ``context: fork`` skill runs as an ``Agent`` call: a sub-agent
+        of the skill's ``agent`` type gets the rendered body as its prompt
+        and its result comes back as any agent's does. Without an ``Agent``
+        tool the skill loads inline."""
+        name, args = skill_name(call.input.get("skill")), call.input.get("args")
+        if name is None or (args is not None and not isinstance(args, str)):
+            return None
+        state = view.ext_state(self.name) or {}
+        registry = await self.turn_registry(view)
+        desc = registry.get(name)
+        if desc is None or not desc.fork or name not in registry.model_invocable(
+                unlocked_skills(state)) or view.find_tool(AGENT_TOOL) is None:
+            return None
+        prompt = (state.get("forks") or {}).get(call.id)
+        due: dict[str, Any] | None = None
+        if prompt is None:
+            data = activation_data(desc, "model", args, view.cwd)
+            data["text"] = prompt = render_body(desc, args, view.cwd)
+            if has_commands(prompt) and self.shell_commands:
+                # Run once the rewritten call is gated: a deny of this
+                # ``Skill`` call (any plugin's) has stopped it by then.
+                due = data
+            else:
+                prompt = (await self._expand(view, data, call.id))["text"]
+                view.record(self.name, "forked", {"call_id": call.id, "name": name,
+                                                  "prompt": prompt})
+        agent_input = {"description": FORK_DESCRIPTION.format(name=name), "prompt": prompt,
+                       "subagent_type": desc.agent or DEFAULT_FORK_AGENT}
+        if due is not None:
+            if len(self._forks_due) >= FORKS_DUE_KEEP:
+                self._forks_due.pop(next(iter(self._forks_due)))
+            self._forks_due[(view.task_id, call.id)] = (agent_input, due)
+        return Rewrite(name=AGENT_TOOL, input=agent_input)
+
+    async def _expand_fork(self, view: TaskView, call: ToolUse,
+                           data: dict[str, Any]) -> Gate:
+        """A fork skill's commands, run now that its ``Skill`` call passed."""
+        try:
+            prompt = (await self._expand(view, data, call.id))["text"]
+        except InlineCommandError as exc:
+            return Deny(reason=str(exc))
+        view.record(self.name, "forked", {"call_id": call.id, "name": data["name"],
+                                          "prompt": prompt})
+        return Rewrite(name=AGENT_TOOL, input={**call.input, "prompt": prompt})
+
+    async def _unlock(self, view: TaskView, call: ToolUse) -> None:
+        """Offer the skills whose ``paths`` match the file this call touched,
+        announced like a newly installed skill."""
+        path = next((call.input[k] for k in ("file_path", "notebook_path")
+                     if isinstance(call.input.get(k), str) and call.input[k]), None)
+        if path is None:
+            return
+        state = view.ext_state(self.name) or {}
+        unlocked = unlocked_skills(state)
+        registry = await self.turn_registry(view)
+        waiting = [d for d in registry.conditional() if d.name not in unlocked]
+        if not waiting:
+            return
+        cwd = view.cwd or os.getcwd()
+        ctx = pr.RuleContext(root=cwd, home=os.path.expanduser("~"), cwd=cwd)
+        target = path if os.path.isabs(path) else os.path.join(cwd, path)
+        rel = os.path.relpath(os.path.normpath(target), cwd)
+        if rel.startswith(".."):
+            return
+        names = [d.name for d in waiting
+                 if any(pr.path_pattern_matches(p, target, ctx) for p in d.paths)]
+        if not names:
+            return
+        view.record(self.name, "unlocked", {"names": names})
+        lines = listing_lines(registry, budget_tokens=self._budget(view),
+                              unlocked={*unlocked, *names})
+        fresh = [(n, line) for n, line in lines if n in names and n not in self.announced(state)]
+        if fresh:
+            self._record_listing(view, fresh, first=not state.get("listings"))
+
+    async def _expand(self, view: TaskView, data: dict[str, Any], call_id: str
+                      ) -> dict[str, Any]:
+        """``data`` with the commands of its text run (or blanked when the
+        host turned them off); the text they produced is kept as
+        ``rendered`` so a compaction re-attaches it without running them
+        again."""
+        text = data["text"]
+        if not has_commands(text):
+            return data
+        if not self.shell_commands:
+            text = strip_commands(text)
+        else:
+            text = await run_inline_commands(view, text, skill=data["name"], call_id=call_id,
+                                             approve_rules=data.get("allow_rules") or ())
+        return {**data, "text": text, "rendered": text}
+
     def _record_listing(self, view: TaskView, lines: Sequence[tuple[str, str]],
                         *, first: bool) -> None:
         names = [n for n, _ in lines]
@@ -447,9 +594,22 @@ class Skills(Extension):
         view.record(self.name, "listing", {"names": names, "lines": texts},
                     message=user(render_listing(first, texts), origin=self.origin))
 
-    def _record_activation(self, view: TaskView, data: dict[str, Any]) -> None:
-        view.record(self.name, "activated", data,
-                    message=user(data["text"], origin=self.origin))
+    def _record_invocation(self, view: TaskView, data: dict[str, Any],
+                           prior: Mapping[str, Any] | None, origin: Origin | None) -> None:
+        """A skill invoked, by the model or a typed ``/name``: its text the
+        first time; a short note when the same text is already in the
+        conversation; a note and the whole text when its arguments or
+        command output changed (Claude Code's)."""
+        if prior is not None and (prior.get("args"), prior.get("rendered")) == (
+                data.get("args"), data.get("rendered")):
+            args = f" Arguments: {data['args']}" if data.get("args") else ""
+            view.record(self.name, "reinvoked", {"name": data["name"]}, message=user(
+                REINVOKED_SAME.format(name=data["name"]) + args, origin=origin))
+            return
+        if prior is not None:
+            data = {**data, "text": REINVOKED_CHANGED.format(name=data["name"]) + "\n\n"
+                    + data["text"]}
+        view.record(self.name, "activated", data, message=user(data["text"], origin=origin))
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
         """After a compaction, given again with the next request in its
@@ -466,27 +626,12 @@ class Skills(Extension):
             for name, entry in active.items():
                 desc = registry.get(name)
                 if desc is not None:
+                    text = entry.get("rendered") or strip_commands(
+                        render_activation(desc, entry.get("args"), view.cwd), "")
                     parts.append(f"### Skill: {desc.name}\nPath: {desc.base_dir or desc.name}"
-                                 f"\n\n{render_activation(desc, entry.get('args'))}")
+                                 f"\n\n{text}")
             if len(parts) > 1 and view.keeps_tail is not None:
                 view.record(self.name, "invoked_rehold", {"text": "\n\n".join(parts)})
         if view.keeps_tail is not None and state.get("listings"):
             view.record(self.name, "listing_rehold", {})
         return out
-
-
-def _script_gate(call: ToolUse, active: Mapping[str, Any]) -> Gate:
-    """Fail closed: malformed, inactive or undiscovered => deny; a
-    discovered script of an active skill => ask. Never allow."""
-    skill = call.input.get("skill")
-    relpath = call.input.get("relpath")
-    if not (isinstance(skill, str) and skill):
-        return Deny(reason="run_skill_script requires a non-empty 'skill' string")
-    if not (isinstance(relpath, str) and relpath):
-        return Deny(reason="run_skill_script requires a non-empty 'relpath' string")
-    if skill not in active:
-        return Deny(reason=f"skill {skill!r} is not active; cannot run its scripts")
-    if relpath not in (active[skill].get("scripts") or []):
-        return Deny(reason=f"{skill!r}/{relpath!r} is not a discovered skill script")
-    return Ask(prompt=f"running skill script {skill!r}/{relpath!r} requires approval",
-               detail={"skill": skill, "relpath": relpath, "args": call.input.get("args", [])})

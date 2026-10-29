@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import mimetypes
+import posixpath
 import time
 from collections.abc import Awaitable, Callable
-from importlib import resources
+from http import HTTPStatus
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -25,9 +27,17 @@ from noeta.plugins.web.render import (
     check_text_media,
     collapse_whitespace,
     decode_body,
+    media_type_of,
     render,
 )
-from noeta.toolkit.tools import SCHEMA_DIALECT, limit_output, truncate_bytes
+from noeta.toolkit.tools import (
+    SCHEMA_DIALECT,
+    format_size,
+    limit_output,
+    load_description,
+    spill_path,
+    truncate_bytes,
+)
 
 __all__ = [
     "CrossHostRedirect",
@@ -39,11 +49,12 @@ __all__ = [
     "render_digest_prompt",
 ]
 
-_MAX_URL_BYTES = 512
 #: The rendered page cap: the digest model's reading budget and the
 #: raw-render fallback's inline ceiling.
 INLINE_PAGE_MAX_CHARS = 100_000
-_MAX_REDIRECT_HOPS = 5
+_MAX_REDIRECT_HOPS = 10
+#: The longest URL fetched.
+MAX_URL_CHARS = 2000
 CACHE_TTL_SECONDS = 900.0
 CACHE_MAX_ENTRIES = 16
 #: Claude Code's ``maxResultSizeChars`` for WebFetch.
@@ -51,11 +62,7 @@ WEBFETCH_RESULT_LIMIT = 50_000
 _FETCH_SCHEMES = frozenset({"http", "https"})
 
 
-def _resource(name: str) -> str:
-    return (resources.files(__package__) / f"{name}.md").read_text("utf-8").rstrip("\n")
-
-
-DIGEST_INSTRUCTIONS = _resource("webfetch_digest")
+DIGEST_INSTRUCTIONS = load_description("noeta.plugins.web", "webfetch_digest")
 
 
 def render_digest_prompt(*, url: str, title: str, page_markdown: str, prompt: str,
@@ -72,7 +79,9 @@ Digest = Callable[[str, str, str, str], Awaitable[str]]
 
 
 class PageCache:
-    """The 15-minute per-URL page cache (successes only) of one task."""
+    """The 15-minute per-URL page cache (successes only) of one task. A
+    binary body is cached as the note naming the file it was saved to
+    (``binary=True``), never as text."""
 
     def __init__(self, *, clock: Callable[[], float] = time.monotonic,
                  ttl_seconds: float = CACHE_TTL_SECONDS,
@@ -80,23 +89,24 @@ class PageCache:
         self.clock = clock
         self._ttl = ttl_seconds
         self._max = max_entries
-        self._pages: dict[str, tuple[float, str, str]] = {}
+        self._pages: dict[str, tuple[float, str, str, bool]] = {}
 
-    def get(self, url: str) -> tuple[str, str] | None:
+    def entry(self, url: str) -> tuple[str, str, bool] | None:
+        """``(title, markdown, binary)`` for ``url``, or ``None``."""
         entry = self._pages.get(url)
         if entry is None:
             return None
-        expires_at, title, markdown = entry
+        expires_at, title, markdown, binary = entry
         if self.clock() >= expires_at:
             del self._pages[url]
             return None
-        return title, markdown
+        return title, markdown, binary
 
-    def put(self, url: str, title: str, markdown: str) -> None:
+    def put(self, url: str, title: str, markdown: str, *, binary: bool = False) -> None:
         self._pages.pop(url, None)
         while len(self._pages) >= self._max:
             del self._pages[next(iter(self._pages))]
-        self._pages[url] = (self.clock() + self._ttl, title, markdown)
+        self._pages[url] = (self.clock() + self._ttl, title, markdown, binary)
 
 
 def _is_loopback_url(url: str) -> bool:
@@ -138,37 +148,108 @@ def unsupported_scheme_refusal(url: str) -> str | None:
 class CrossHostRedirect(RuntimeError):
     """A redirect that leaves the requested host: surfaced, never followed."""
 
-    def __init__(self, url: str, location: str) -> None:
+    def __init__(self, url: str, location: str, status: int = 302) -> None:
         super().__init__(f"{url} redirects to a different host: {location}")
         self.url = url
         self.location = location
+        self.status = status
+
+
+#: Longest redirect target relayed to the model, and the longest host name
+#: that can be fetched (a DNS name's limit).
+_MAX_RELAYED_URL_CHARS = 1000
+_MAX_HOST_CHARS = 255
+
+
+def redirect_report(redirect: CrossHostRedirect, prompt: str, offset: int) -> str:
+    """What the model is told of a redirect to another host: where from and
+    to, the status, and the call that would fetch the target."""
+    try:
+        target = httpx.URL(redirect.location)
+        fetchable = target.scheme in _FETCH_SCHEMES and bool(target.host)
+    except Exception:  # noqa: BLE001 - an unusable target is reported as such
+        fetchable = False
+    location = collapse_whitespace(redirect.location)
+    lines = [f"Not fetched: {redirect.url} redirects to another host.",
+             f"Status: {redirect.status} {status_phrase(redirect.status)}"]
+    if not fetchable:
+        lines.append("Target: withheld, the server's Location header is not an http(s) URL. "
+                     "It cannot be fetched from here; report the redirect.")
+        return "\n".join(lines)
+    shown = location[:_MAX_RELAYED_URL_CHARS]
+    cut = len(location) - len(shown)
+    lines.append(f"Target (the server's Location header, unverified): {shown}"
+                 + (f" [{cut} more characters left out]" if cut else ""))
+    if cut or len(target.host) > _MAX_HOST_CHARS:
+        lines.append("That target cannot be fetched from here (too long to relay, or not a "
+                     "valid host name); report the redirect.")
+        return "\n".join(lines)
+    call = f'To fetch it, call WebFetch again with:\n  url: "{shown}"\n  prompt: "{prompt}"'
+    if offset > 0:
+        call += f"\n  offset: {offset}"
+    lines.append(call)
+    return "\n".join(lines)
+
+
+class HttpStatus(RuntimeError):
+    """The server answered with a status that is not success: reported to
+    the model as what the server said, not as a failed call."""
+
+    def __init__(self, status: int, retry_after: str | None = None) -> None:
+        super().__init__(f"HTTP {status}")
+        self.status = status
+        self.retry_after = retry_after
+
+
+def status_phrase(status: int) -> str:
+    try:
+        return HTTPStatus(status).phrase
+    except ValueError:
+        return "Unknown Status"
+
+
+def http_status_report(error: HttpStatus) -> str:
+    """What the model is told of an error status."""
+    retry = f"Retry-After: {error.retry_after}\n" if error.retry_after else ""
+    return (f"The server answered HTTP {error.status} {status_phrase(error.status)}.\n{retry}"
+            "Its body was not read. If the page needs a sign-in, fetch it with a tool that "
+            "is signed in instead (`gh` for GitHub, or an MCP server's fetch tool).")
 
 
 class FetchTransport(Protocol):
-    """url -> page. Raises on transport / HTTP failure, on a body that is not
-    text, and :class:`CrossHostRedirect` on a redirect leaving the origin."""
+    """url -> page. Raises on transport failure, :class:`HttpStatus` on an
+    error status, on a body that is not text, and :class:`CrossHostRedirect`
+    on a redirect leaving the origin."""
 
     async def fetch(self, url: str) -> str | FetchedPage: ...
 
 
 def _same_origin(a: str, b: str) -> bool:
+    """Whether a redirect from ``a`` to ``b`` stays on the site: the same
+    scheme and port, the same host up to a leading ``www.``, and no
+    credentials in the target."""
     ua, ub = httpx.URL(a), httpx.URL(b)
     defaults = {"http": 80, "https": 443}
 
     def _port(u: httpx.URL) -> int | None:
         return u.port if u.port is not None else defaults.get(u.scheme)
 
-    return (ua.scheme, ua.host, _port(ua)) == (ub.scheme, ub.host, _port(ub))
+    def _site(host: str) -> str:
+        return host.removeprefix("www.")
+
+    if ub.userinfo:
+        return False
+    return (ua.scheme, _site(ua.host), _port(ua)) == (ub.scheme, _site(ub.host), _port(ub))
 
 
 class HttpFetchTransport:
-    """Fetch over httpx: same-origin redirects followed (5 hops), the body
+    """Fetch over httpx: same-site redirects followed (10 hops), the body
     streamed and refused past ``max_bytes``."""
 
-    def __init__(self, *, timeout: float = 10.0,
-                 user_agent: str = "noeta-webfetch/0.1 (+https://github.com/noeta)",
+    def __init__(self, *, timeout: float = 60.0,
+                 user_agent: str = "noeta-webfetch/0.1 (+https://github.com/initxy/noeta)",
                  client: httpx.AsyncClient | None = None,
-                 max_bytes: int = 5 * 1024 * 1024) -> None:
+                 max_bytes: int = 10 * 1024 * 1024) -> None:
         self.timeout = timeout
         self.user_agent = user_agent
         self.client = client
@@ -183,13 +264,20 @@ class HttpFetchTransport:
                                          headers={"User-Agent": self.user_agent}) as resp:
                     if resp.is_redirect:
                         target = str(httpx.URL(current).join(resp.headers.get("location", "")))
-                        if not _same_origin(target, current):
-                            raise CrossHostRedirect(current, target)
+                        if not _same_origin(current, target):
+                            raise CrossHostRedirect(current, target, resp.status_code)
                         current = target
                         continue
-                    resp.raise_for_status()
+                    if not resp.is_success:
+                        retry = resp.headers.get("retry-after", "").strip()
+                        raise HttpStatus(resp.status_code, retry if retry.isdigit()
+                                         and len(retry) <= 6 else None)
                     content_type = resp.headers.get("content-type", "")
-                    check_text_media(current, content_type)
+                    try:
+                        check_text_media(current, content_type)
+                        binary = False
+                    except ValueError:
+                        binary = True
                     chunks: list[bytes] = []
                     total = 0
                     async for chunk in resp.aiter_bytes():
@@ -197,12 +285,31 @@ class HttpFetchTransport:
                         if total > self.max_bytes:
                             raise ValueError(f"response exceeds {self.max_bytes} byte limit")
                         chunks.append(chunk)
-                    return FetchedPage(decode_body(b"".join(chunks), content_type),
-                                       content_type)
+                    body = b"".join(chunks)
+                    if binary:
+                        return FetchedPage("", content_type, raw=body)
+                    return FetchedPage(decode_body(body, content_type), content_type)
             raise RuntimeError(f"too many redirects (>{_MAX_REDIRECT_HOPS}) fetching {url}")
         finally:
             if self.client is None:
                 await client.aclose()
+
+
+def _valid_url(url: str) -> bool:
+    """Claude Code's bounds on a URL: at most :data:`MAX_URL_CHARS`
+    characters, and no user name or password in it."""
+    if len(url) > MAX_URL_CHARS:
+        return False
+    try:
+        parts = urlsplit(url)
+        return parts.username is None and parts.password is None
+    except ValueError:
+        return False
+
+
+def _offset(input: dict[str, Any]) -> int:
+    raw = input.get("offset")
+    return raw if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0 else 0
 
 
 def _schema() -> dict[str, Any]:
@@ -229,6 +336,7 @@ class WebFetchTool:
 
     name = "WebFetch"
     read_only = True
+    retry_safe = True
     clearable = True
     deferred = True
 
@@ -237,7 +345,7 @@ class WebFetchTool:
                  cache_for: Callable[[ToolContext], PageCache] | None = None,
                  digest_timeout: float = 60.0) -> None:
         self.transport = transport
-        self.description = _resource("webfetch")
+        self.description = load_description("noeta.plugins.web", "webfetch")
         self.input_schema = _schema()
         self.digest_for = digest_for
         self._cache = PageCache()
@@ -253,27 +361,48 @@ class WebFetchTool:
             return text_output(
                 "WebFetch requires a non-empty 'prompt' — the question to "
                 "answer against the fetched page", is_error=True)
+        if not _valid_url(url):
+            return text_output("Invalid URL", is_error=True)
         url = upgrade_to_https(url)
         refusal = unsupported_scheme_refusal(url)
         if refusal is not None:
             return text_output(refusal, is_error=True)
         cache = self.cache_for(ctx)
-        cached = cache.get(url)
+        cached = cache.entry(url)
+        if cached is not None and cached[2]:
+            return text_output(cached[1], url=url)
         if cached is not None:
-            title, markdown = cached
+            title, markdown, _ = cached
         else:
             try:
                 fetched = await self.transport.fetch(url)
             except CrossHostRedirect as redirect:
-                location = collapse_whitespace(truncate_bytes(redirect.location, _MAX_URL_BYTES))
-                return text_output(
-                    f"{truncate_bytes(url, _MAX_URL_BYTES)} redirects to a "
-                    f"different host: {location}\n"
-                    "The redirect was not followed and nothing was "
-                    "fetched. Fetch that URL if it is what you need.",
-                    redirect=location)
+                return text_output(redirect_report(redirect, prompt, _offset(input)),
+                                   redirect=redirect.location[:_MAX_RELAYED_URL_CHARS])
+            except HttpStatus as status:
+                return text_output(http_status_report(status), url=url,
+                                   status=status.status)
             except Exception as exc:  # noqa: BLE001 - degrade, don't crash the step
                 return text_output(f"WebFetch failed: {exc}", is_error=True)
+            raw = fetched.raw if isinstance(fetched, FetchedPage) else None
+            if raw is not None:
+                assert isinstance(fetched, FetchedPage)
+                saved = await _save_binary(ctx, raw, fetched.content_type)
+                media = media_type_of(fetched.content_type)
+                if saved is None:
+                    try:
+                        check_text_media(url, fetched.content_type)
+                    except ValueError as exc:
+                        return text_output(f"WebFetch failed: {exc}", is_error=True)
+                    return text_output(
+                        f"WebFetch failed: the response is binary ({media}, "
+                        f"{format_size(len(raw))}) and there is nowhere to save it",
+                        is_error=True)
+                # Not text: neither rendered nor summarized, only named.
+                note = (f"[The response is binary ({media}, {format_size(len(raw))}); "
+                        f"it was saved to {saved}]")
+                cache.put(url, "", note, binary=True)
+                return text_output(note, url=url)
             title, markdown = render(fetched)
             if not markdown.strip():
                 return text_output(
@@ -282,13 +411,11 @@ class WebFetchTool:
                     "try another source", is_error=True)
             cache.put(url, title, markdown)
 
-        raw_offset = input.get("offset")
-        start = raw_offset if isinstance(raw_offset, int) and not isinstance(
-            raw_offset, bool) and raw_offset > 0 else 0
+        start = _offset(input)
         total = len(markdown)
         if start >= total > 0:
-            return text_output(f"offset {start} is past the end of the page ({total} "
-                               "characters).", is_error=True)
+            return text_output(f"Nothing is left to read from offset {start}: the page's text "
+                               f"is {total} characters long.", url=url, chars=total)
         end = min(total, start + INLINE_PAGE_MAX_CHARS)
         page = markdown[start:end]
         more = (f"\n\n(The page continues: this covers characters {start}-{end} of {total}. "
@@ -308,4 +435,20 @@ class WebFetchTool:
                 meta["digested"] = True
             else:
                 body = f"(Digest unavailable — raw page rendering follows.)\n{page}{more}"
-        return text_output(await limit_output(body, WEBFETCH_RESULT_LIMIT, ctx), **meta)
+        body = await limit_output(body, WEBFETCH_RESULT_LIMIT, ctx)
+        return text_output(body, **meta)
+
+
+async def _save_binary(ctx: ToolContext, raw: bytes, content_type: str) -> str | None:
+    """A binary body saved under the spill directory, for the model to open
+    (with ``Read``); ``None`` when there is nowhere to save it."""
+    if not ctx.spill_dir:
+        return None
+    ext = mimetypes.guess_extension(media_type_of(content_type)) or ".bin"
+    base = posixpath.splitext(spill_path(ctx.spill_dir, ctx.task_id, ctx.call_id))[0]
+    path = f"{posixpath.dirname(base)}/webfetch-{posixpath.basename(base)}{ext}"
+    try:
+        await ctx.env.write_bytes(path, raw)
+    except OSError:
+        return None
+    return path

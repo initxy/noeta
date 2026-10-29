@@ -20,7 +20,7 @@
 - Code is the single source of truth for "what is." When docs and code disagree, trust the code and fix the docs.
 - One fact, one home: never state the same fact in two docs — link instead. A change that invalidates a `CONTEXT.md` entry or ADR updates it in the same task.
 - Write docs lean: a `CONTEXT.md` or `AGENTS.md` line exists only if code can't tell an agent the same thing quickly; point at code by repo path instead of restating it. An ADR only for a shipped decision that is costly to reverse; changing one is a new ADR that refines or supersedes it, never an amendment in place. `scripts/check-docs.sh` holds the budgets and formats — trim, don't raise them. When unsure, don't write it.
-- Code comments carry only constraints the code can't show — never a `docs/specs/` reference (one-shot artifacts). Code needn't cite ADRs; where a comment names one it is plain prose, not a contract (`docs/adr/006-doc-code-link-direction.md`).
+- Code comments carry only constraints the code can't show — never a `docs/specs/` reference (one-shot artifacts). Code needn't cite ADRs; where a comment names one it is plain prose, not a contract.
 - Archived specs (`docs/specs/archive/`) are construction history — never read them as a description of the current system.
 
 ## Task flow
@@ -43,15 +43,16 @@
 - test: `make test`
 - lint: `make lint`
 - build: `make build` (wheel and sdist into `dist/`)
-- e2e: `make e2e` — `-m live` tests against a real LLM / sandbox container; needs credentials, never part of `check`
+- e2e: `make e2e` — `-m live` tests against a real model (providers, ACP); needs credentials, never part of `check`
 - eval: `make eval` — prompt-regression scenarios against a real model, compared to `evals/baseline.json`; `make eval-baseline` re-records it; needs credentials, never part of `check`
 - parity: `make parity` — noeta replayed offline through Claude Code's recorded scenarios, every request difference in `parity/report.md` (`scripts/parity/README.md`); never part of `check`
-- check: `make check` — ruff, mypy --strict, `scripts/lint-naming.py`, `scripts/lint-layout.py` (placement), `lint-imports` (layering), pytest with coverage ≥ 85, `scripts/check-docs.sh`
+- cluster: `make cluster` — worker processes on one Postgres (a throwaway `postgres:16` container, or `NOETA_TEST_POSTGRES_DSN`) under random SIGKILL / SIGSTOP with a scripted provider (`tests/cluster`); a known gap is an `xfail(strict=True)` there; `NOETA_CLUSTER_SEED` replays a run; never part of `check`
+- check: `make check` — ruff, mypy --strict, `scripts/lint-naming.py`, `scripts/lint-layout.py` (placement), `lint-imports` (layering), pytest with coverage ≥ 85, `make example` (the example plugins), `scripts/check-docs.sh`
 - release: tag push per `docs/releasing.md` — approval gate
 
 ## Gates
 
-- Automated gates (required for done): `make check`. CI's test job runs the same target; CI-only on top: the Postgres parameters of the store contract tests (`NOETA_TEST_POSTGRES_DSN`), and the Python 3.11 / 3.12 / 3.13 matrix.
+- Automated gates (required for done): `make check`. CI's test job runs the same target; CI-only on top: the Postgres parameters of the store contract tests (`NOETA_TEST_POSTGRES_DSN`), the Python 3.11 / 3.12 / 3.13 matrix, and the `cluster` job (`make cluster` against a Postgres service container).
 - `make check` can't judge model-facing prompt text or provider wire behavior. A change there also runs `make eval` (no scenario may regress; re-record the baseline when a scenario changes) and the relevant `make e2e` tests.
 - Approval gates (the maintainer signs off before running): release, data migration or deletion on a host's store.
 

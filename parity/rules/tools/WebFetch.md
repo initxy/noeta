@@ -18,7 +18,7 @@ placed alphabetically among the built-in tools (between `ToolSearch` and `Workfl
 loaded for the rest of the conversation, across compaction (`m1/0059`) and `--continue`
 (`m4/0001`).
 
-noeta equivalent: `noeta/plugins/web/fetch.py`, description `noeta/plugins/web/webfetch.md`.
+noeta equivalent: `noeta/plugins/web/fetch.py`, description `noeta/plugins/web/descriptions/webfetch.md`.
 noeta defers it the same way.
 
 ## Parameters
@@ -42,12 +42,17 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | `tool.WebFetch.5` | A redirect to another host is not followed; it is reported so the model can call again with the new URL. | covered |
 | `tool.WebFetch.6` | Responses are cached for 15 minutes per URL. | covered |
 | `tool.WebFetch.7` | The description does not mention `WebSearch`. | covered |
+| `tool.WebFetch.8` | A URL over 2,000 characters, or carrying a user name or password, is refused as invalid before anything is fetched; a fetch gives up after 60 s and refuses a body over 10 MB (2.1.312 bundle). | covered |
 
 ## Result shape
 
 | id | case | shape | noeta today |
 |---|---|---|---|
 | `tool.WebFetch.r.1` | success | only the small model's answer text (`Example Domain`), no header, no URL/title lines, no source warning | covered |
+| `tool.WebFetch.r.3` | error status (4xx/5xx) | not an error result: the status and its reason phrase, a `Retry-After` line when the server sent a numeric one, that the body was not read, and to use a signed-in tool (`gh`, an MCP fetch tool) for a page behind a sign-in (2.1.312 bundle) | covered |
+| `tool.WebFetch.r.4` | redirect to another host | not an error result: the original URL, the status and its reason phrase, the target from the `Location` header (marked unverified, cut at 1,000 characters), and the exact call to make next (`url`, `prompt`, and `offset` when one was given); a target that is not http(s), was cut, or has a host name over 255 characters is reported as not fetchable. A redirect that stays on the site (same scheme and port, host equal up to a leading `www.`, no credentials) is followed, at most 10 times (2.1.312 bundle) | covered |
+| `tool.WebFetch.r.5` | `offset` at or past the end | not an error result: nothing is left from that offset, and the page text's length (2.1.312 bundle) | covered |
+| `tool.WebFetch.r.6` | binary body (PDF, image, ...) | the bytes are saved to a local file and a closing line names the media type, the size and the file's path, so the model can open it with `Read`; the body's text still goes to the digest (2.1.312 bundle) | covered except the digest: the result is only the line naming the file (`deviations.md`); refused when the host gives no spill directory to save into |
 | `tool.WebFetch.r.2` | cache marker | in `s1` the result block carried `cache_control` with a 1-hour TTL (OAuth only, not baseline) | n/a (baseline uses no 1-hour TTL here) |
 
 ## Variants

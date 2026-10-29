@@ -47,6 +47,7 @@ position 9 of 13 in the baseline list; also present for sub-agents. noeta's coun
 |---|---|
 | `tool.Skill.r.1` | Not observed as a tool call; in m1 the skill was started by the user's `/release-notes v0.1`. |
 | `tool.Skill.r.2` | A user-invoked skill appears in the user message as a `<command-message>`/`<command-name>`/`<command-args>` text block followed by a separate text block: `Base directory for this skill: <dir>`, a blank line, the SKILL.md body without frontmatter, then `Arguments: <args>` when args were given. That body block carried the message's cache breakpoint. See `reminders.md`. |
+| `tool.Skill.r.3` | (bundle, not recorded) The name is trimmed and a leading `/` dropped, also for `Skill(...)` rules. An unknown name is refused naming it, plus a suggestion within edit distance 2. A `disable-model-invocation` skill is refused with its own message: the user starts it with `/<name>`; do not carry out its steps another way. Calling a loaded skill again re-sends nothing when the text is unchanged (a short note to follow it again, with the arguments), and the whole text after a short note when the arguments or command output changed. noeta today: covered, in our wording. |
 
 ## Variants
 

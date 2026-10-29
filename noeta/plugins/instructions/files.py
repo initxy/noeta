@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 import yaml
 
 from noeta.core.execenv import ExecEnv
-from noeta.toolkit.context import read_text
+from noeta.toolkit.context import fence_refuses, read_text
 from noeta.toolkit.tools import path_within
 
 log = logging.getLogger("noeta.instructions")
@@ -114,9 +114,12 @@ class Reader:
             return []
         out = [InstructionFile(path=path, kind=kind, text=text, globs=globs, parent=parent)]
         base = fence if fence is not None else posixpath.dirname(path)
+        # Matched resolved: a link inside the repository may lead out of it.
+        within = [await self._canonical(env, d) for d in (base, self.cwd)] \
+            if kind not in (MANAGED, USER) else []
         for target in imports(raw, posixpath.dirname(path)):
-            if kind not in (MANAGED, USER) and not (
-                    path_within(target, base) or path_within(target, self.cwd)):
+            real_target = await self._canonical(env, target) if within else target
+            if within and not any(path_within(real_target, d) for d in within):
                 log.info("instructions: %s imports %s, outside %s; skipped", path, target, base)
                 continue
             out += await self.file(target, kind, fence=base, depth=depth + 1, parent=path)
@@ -264,8 +267,9 @@ async def list_markdown(env: ExecEnv, directory: str) -> list[str]:
     except (OSError, ValueError) as exc:
         log.warning("instructions: listing %s failed (%s); skipped", directory, exc)
         return []
+    # A link in a tenant's rules may lead behind its fence: not listed.
     return sorted(line for line in out.stdout.decode("utf-8", errors="replace").split("\n")
-                  if line)
+                  if line and not fence_refuses(env, line))
 
 
 # ------------------------------------------------------------------ globs

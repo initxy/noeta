@@ -2,32 +2,31 @@
 
 What this change does and why. Lead with the conclusion.
 
-## Which package(s)
+## Kind
 
-- [ ] `noeta-runtime` (the event-sourced engine / kernel)
-- [ ] `noeta-sdk` (in-process client surface)
+- [ ] behavior (with a test that fails before it)
+- [ ] structure only (no behavior change)
 - [ ] docs
 
-## Related ADR
+Structure and behavior never share a pull request (see [CONTRIBUTING.md](../CONTRIBUTING.md)).
 
-If this changes a long-term decision, add a new ADR that refines or supersedes
-the old one and update `CONTEXT.md` in lockstep (see [CONTRIBUTING.md](../CONTRIBUTING.md)). Link the
-ADR touched, or write "none — no decision changed".
+## Spec / decision
+
+Link the spec in `docs/specs/` this implements, or "none — no open decision". If a decision in
+`docs/adr/` changes, link the new ADR that refines or supersedes it.
 
 ## How verified
 
 ```bash
-make check   # ruff, pytest + coverage, mypy --strict, naming + import lints, doc hygiene — CI runs the same target
+make check   # lint, mypy, layering, tests with coverage, examples, doc hygiene
 ```
 
-Note anything that couldn't be verified and why. The Postgres storage contract
-tests and the fresh-venv install smoke run in CI only (see
-[CONTRIBUTING.md](../CONTRIBUTING.md)).
+Paste the result. For model-facing text or provider wire changes, also `make eval` /
+`make parity` and the relevant `make e2e` tests. Say what could not be verified and why.
 
 ## Checklist
 
 - [ ] `make check` passes.
-- [ ] If the SDK public surface changed, the `examples/` still run (their smoke tests pass).
-- [ ] If a decision changed, a new ADR in `docs/adr/` and `CONTEXT.md` were updated in lockstep.
-- [ ] If this implements a spec in `docs/specs/`: status, Plan checkboxes, and Progress log are up to date.
+- [ ] Docs the change makes wrong are fixed in it (`CONTEXT.md`, `docs/`, `CHANGELOG.md` Unreleased).
+- [ ] If this implements a spec: its status, Plan checkboxes and Progress log are up to date.
 - [ ] A human owner has read this change and can answer review questions about it.

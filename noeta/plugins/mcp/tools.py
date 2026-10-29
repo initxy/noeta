@@ -3,20 +3,24 @@ resource tools ``ListMcpResourcesTool`` / ``ReadMcpResourceTool``, and for a
 server that needs a sign-in, ``mcp__<alias>__authenticate`` and
 ``mcp__<alias>__complete_authentication`` in place of its tools.
 
-Every one of them is deferred (``noeta.core.deferred``): the conversation
+Every one of them is deferred (the ``tool_search`` plugin): the conversation
 names them, the model loads the ones it needs with ``ToolSearch`` and then
 calls them directly. Server tools are listed after the built-in tools.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+import mimetypes
+import posixpath
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.plugins.mcp.config import McpError, McpServer, cap_injected, make_tool_name
-from noeta.toolkit.tools import load_description
+from noeta.toolkit.tools import format_size, load_description, spill_path
 
 __all__ = [
     "AUTH_STUBS",
@@ -25,12 +29,16 @@ __all__ = [
     "ListMcpResourcesTool",
     "McpAuthTool",
     "McpTool",
+    "ReadMcpResourceDirTool",
     "ReadMcpResourceTool",
     "auth_stub_entries",
 ]
 
 LIST_RESOURCES_TOOL = "ListMcpResourcesTool"
 READ_RESOURCE_TOOL = "ReadMcpResourceTool"
+READ_RESOURCE_DIR_TOOL = "ReadMcpResourceDirTool"
+#: The MIME type of a child that is itself a directory.
+DIRECTORY_MIME = "inode/directory"
 _SCHEMA = "https://json-schema.org/draft/2020-12/schema"
 
 #: ``(tool, arguments, ctx) -> output``: the extension's way to reach the
@@ -133,6 +141,7 @@ def _compact(value: Any) -> str:
 class ListMcpResourcesTool:
     name = LIST_RESOURCES_TOOL
     read_only = True
+    retry_safe = True
     clearable = True
     deferred = True
     description = """
@@ -180,10 +189,11 @@ Parameters:
 class ReadMcpResourceTool:
     name = READ_RESOURCE_TOOL
     read_only = True
+    retry_safe = True
     clearable = True
     deferred = True
     description = """
-Reads one resource from an MCP server, given the server's name and the resource URI.
+Reads one resource from an MCP server, given the server's name and a resource's URI.
 
 Parameters:
 - server (required): the name of the MCP server, as configured
@@ -218,4 +228,96 @@ Parameters:
             result = await self._use(ctx, server, lambda c: c.read_resource(uri))
         except McpError as exc:
             return text_output(f"{READ_RESOURCE_TOOL}: {exc}", is_error=True)
+        if isinstance(result, dict) and isinstance(result.get("contents"), list):
+            result = {**result, "contents": [
+                await _save_blob(ctx, server.alias, entry, i) if isinstance(entry, dict)
+                and isinstance(entry.get("blob"), str) else entry
+                for i, entry in enumerate(result["contents"])]}
         return text_output(cap_injected(_compact(result), kind="resource"))
+
+
+async def _save_blob(ctx: ToolContext, alias: str, entry: dict[str, Any],
+                     index: int) -> dict[str, Any]:
+    """A binary resource entry with its bytes saved under the spill
+    directory (for ``Read``) in place of the base64 (Claude Code's shape)."""
+    mime = entry.get("mimeType") if isinstance(entry.get("mimeType"), str) else None
+    out = {k: v for k, v in entry.items() if k != "blob"}
+    try:
+        raw = base64.b64decode(entry["blob"], validate=True)
+    except (binascii.Error, ValueError):
+        return {**out, "text": "Binary content could not be saved: it is not valid base64"}
+    if not ctx.spill_dir:
+        return {**out, "text": f"Binary content ({mime or 'unknown type'}, "
+                               f"{format_size(len(raw))}) could not be saved: this host "
+                               "keeps no files for tool output"}
+    ext = (mimetypes.guess_extension(mime) if mime else None) or ".bin"
+    base = posixpath.splitext(spill_path(ctx.spill_dir, ctx.task_id, ctx.call_id))[0]
+    path = f"{base}-resource-{index}{ext}"
+    try:
+        await ctx.env.write_bytes(path, raw)
+    except OSError as exc:
+        return {**out, "text": f"The binary data was not saved ({exc}); it is not available here."}
+    return {**out, "blobSavedTo": path,
+            "text": f"[Resource from {alias} at {entry.get('uri')}] Binary content "
+                    f"({mime or 'unknown type'}, {format_size(len(raw))}) saved to {path}"}
+
+
+class ReadMcpResourceDirTool:
+    name = READ_RESOURCE_DIR_TOOL
+    read_only = True
+    retry_safe = True
+    clearable = True
+    deferred = True
+    description = """
+Shows what one directory resource of an MCP server holds, one level down \
+(`resources/directory/read`); it does not descend into subdirectories.
+
+Parameters:
+- server (required): the name of the MCP server, as configured
+- uri (required): the URI of the directory resource
+
+Each child has its own URI; a subdirectory is shown with a trailing "/" (MIME type \
+"inode/directory"): call this tool again on its URI to go deeper. Read a file resource with \
+ReadMcpResourceTool. Works only with servers that support directory listing; others answer \
+with an error.
+"""
+    input_schema: dict[str, Any] = {
+        "$schema": _SCHEMA,
+        "type": "object",
+        "properties": {
+            "server": {"type": "string", "description": "The MCP server's name."},
+            "uri": {"type": "string", "description": "The directory resource's URI."},
+        },
+        "required": ["server", "uri"],
+        "additionalProperties": False,
+    }
+
+    def __init__(self, servers_of: ServersOf, use: Use) -> None:
+        self._servers_of = servers_of
+        self._use = use
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        servers = self._servers_of(ctx)
+        alias, uri = input.get("server"), input.get("uri")
+        if not isinstance(uri, str) or not uri:
+            return text_output(f"{self.name}: `uri` must be a non-empty string.", is_error=True)
+        server = servers.get(alias) if isinstance(alias, str) else None
+        if server is None:
+            return text_output(f"No MCP server named {alias!r}. Configured: "
+                               f"{', '.join(sorted(servers)) or 'none'}.", is_error=True)
+        try:
+            children = await self._use(ctx, server, lambda c: c.read_directory(uri))
+        except McpError as exc:
+            return text_output(f"{self.name}: {alias} could not list {uri} ({exc}). It may not "
+                               "support directory listing, or the resource is not a "
+                               "directory (read a file with ReadMcpResourceTool).",
+                               is_error=True)
+        lines = []
+        for child in children:
+            name = str(child.get("name") or child.get("uri") or "")
+            slash = "/" if child.get("mimeType") == DIRECTORY_MIME else ""
+            lines.append(f"{name}{slash}  {child.get('uri', '')}".rstrip())
+        if not lines:
+            return text_output(f"The directory {uri} is empty.")
+        head = f"{len(lines)} {'entry' if len(lines) == 1 else 'entries'} in {uri}:"
+        return text_output(cap_injected("\n".join([head, *lines]), kind="directory listing"))

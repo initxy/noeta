@@ -16,17 +16,14 @@ from textual.containers import Vertical
 from textual.widgets import Button, Collapsible, Markdown, Static, TextArea
 
 from noeta.core.types import ToolUse
+from noeta.host import feed
 
 #: Characters of a tool result shown when a call is expanded.
 RESULT_PREVIEW_CHARS = 6000
 
 
 def tool_title(call: ToolUse) -> str:
-    i = call.input
-    target = (i.get("file_path") or i.get("path") or i.get("command") or i.get("pattern")
-              or i.get("url") or i.get("query") or i.get("description") or "")
-    target = str(target).splitlines()[0][:100] if target else ""
-    return f"{call.name}  {target}".rstrip()
+    return feed.tool_title(call, limit=100, gap="  ")
 
 
 class UserMessage(Static):
@@ -83,7 +80,7 @@ Decide = Callable[[str, str], Awaitable[None]]
 
 class ApprovalCard(Vertical):
     """Asks before a tool runs, with Claude Code's choices
-    (:func:`noeta.core.pending.choices`: Yes, don't ask again, switch mode,
+    (:func:`noeta.host.pending.choices`: Yes, don't ask again, switch mode,
     No), picked by number, or y / a / n for yes / always / no."""
 
     DEFAULT_CLASSES = "approval"

@@ -4,7 +4,6 @@ resolution against the workspace, and the large-output rule."""
 from __future__ import annotations
 
 import posixpath
-import re
 from functools import cache
 from importlib import resources
 from pathlib import PurePosixPath
@@ -13,6 +12,7 @@ from typing import Any
 from noeta.core.execenv import ExecEnv
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Text
+from noeta.toolkit.paths import file_name_part
 
 __all__ = [
     "SCHEMA_DIALECT",
@@ -155,9 +155,6 @@ class Workspace:
 #: Characters of a spilled output shown inline as its preview.
 PERSISTED_PREVIEW_CHARS = 2000
 
-_SPILL_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9_.-]")
-
-
 def _preview(text: str, limit: int) -> tuple[str, bool]:
     """The first ``limit`` characters of ``text``, ended at the last newline
     when that keeps more than half, and whether anything was left out."""
@@ -225,8 +222,8 @@ def large_output_message(output: str, limit: int, *, saved_to: str | None = None
 def spill_path(spill_dir: str, task_id: str, call_id: str) -> str:
     """Where one call's full output is saved: a pure function of the
     directory, the task and the call, so a re-run names the same file."""
-    task_part = _SPILL_NAME_UNSAFE.sub("_", task_id) or "task"
-    call_part = _SPILL_NAME_UNSAFE.sub("_", call_id) or "call"
+    task_part = file_name_part(task_id, "task")
+    call_part = file_name_part(call_id, "call")
     return posixpath.join(spill_dir, task_part, f"{call_part}.txt")
 
 

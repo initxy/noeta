@@ -12,7 +12,9 @@ from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.plugins.fs import EditTool, ReadTool
 from noeta.plugins.fs.state import (
     FS,
+    KIND_CHANGED,
     KIND_READ,
+    MAX_FILES,
     FileRead,
     FsState,
     current_fs_state,
@@ -24,8 +26,8 @@ from tests.plugins.conftest import Harness, text_of
 def test_reduce_from_nothing() -> None:
     state = reduce_fs(None, KIND_READ, {"path": "/a", "digest": "d1", "mtime": 1.5})
     assert state.reads == {"/a": FileRead(digest="d1", mtime=1.5)}
-    assert state.digest("/a") == "d1"
-    assert state.digest("/b") is None
+    assert state.reads["/a"].digest == "d1"
+    assert "/b" not in state.reads
 
 
 def test_reduce_never_mutates_its_input() -> None:
@@ -39,6 +41,21 @@ def test_a_later_read_replaces_the_digest() -> None:
     state = reduce_fs(None, KIND_READ, {"path": "/a", "digest": "old"})
     state = reduce_fs(state, KIND_READ, {"path": "/a", "digest": "new", "mtime": 2})
     assert state.reads["/a"] == FileRead(digest="new", mtime=2.0)
+
+
+def test_only_the_most_recent_files_are_remembered() -> None:
+    state = None
+    for i in range(MAX_FILES + 5):
+        state = reduce_fs(state, KIND_READ, {"path": f"/f{i}", "digest": "d"})
+        state = reduce_fs(state, KIND_CHANGED, {"path": f"/f{i}", "digest": "e"})
+    # A re-read moves a file to the newest end.
+    state = reduce_fs(state, KIND_READ, {"path": "/f6", "digest": "d"})
+    state = reduce_fs(state, KIND_READ, {"path": "/new", "digest": "d"})
+    assert state is not None
+    assert len(state.reads) == MAX_FILES and len(state.noticed) <= MAX_FILES
+    assert "/f0" not in state.reads and "/f5" not in state.reads
+    assert "/f6" in state.reads and "/new" in state.reads
+    assert f"/f{MAX_FILES + 4}" in state.reads
 
 
 def test_unknown_kind_leaves_the_state_unchanged() -> None:
@@ -91,7 +108,7 @@ def _fresh(h: Harness) -> Harness:
     for ext, kind, data in h.records:
         if ext == FS:
             state = reduce_fs(state, kind, data)
-    fresh = Harness(env=LocalExecEnv(h.env.cwd))
+    fresh = Harness(env=LocalExecEnv(h.env.cwd), approved=h.approved)
     if state is not None:
         fresh.state[FS] = state
     return fresh
@@ -120,6 +137,7 @@ async def test_an_edit_vouches_for_the_next_one_after_a_restart(h: Harness, ws: 
 
 
 async def test_a_change_since_the_recorded_read_needs_a_read(h: Harness, ws: Path) -> None:
+    h.approved = True
     _setup(ws)
     await h.call(ReadTool(), file_path="a.py")
     (ws / "a.py").write_text("x = 1\ny = 2\nz = 3\n")
@@ -129,19 +147,21 @@ async def test_a_change_since_the_recorded_read_needs_a_read(h: Harness, ws: Pat
 
 
 async def test_never_read_is_refused(h: Harness, ws: Path) -> None:
+    h.approved = True
     _setup(ws)
     out = await h.call(EditTool(), file_path="a.py", old_string="x = 1", new_string="x = 10")
-    assert "File has not been read yet" in text_of(out)
+    assert "this conversation has not read" in text_of(out)
 
 
 async def test_dropped_records_vouch_for_nothing(h: Harness, ws: Path) -> None:
     # Entries the runner does not fold (a sealed / rewound stretch) leave
     # nothing behind.
+    h.approved = True
     _setup(ws)
     await h.call(ReadTool(), file_path="a.py")
     h.records.clear()
     out = await _fresh(h).call(EditTool(), file_path="a.py", old_string="x = 1", new_string="x = 10")
-    assert "File has not been read yet" in text_of(out)
+    assert "this conversation has not read" in text_of(out)
 
 
 async def test_the_read_is_recorded_under_the_canonical_path(h: Harness, ws: Path) -> None:

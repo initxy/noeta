@@ -13,23 +13,18 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Literal
 
-from noeta.core.pending import MODE_CYCLE as _CYCLE
-from noeta.core.pending import PERMISSION_MODES as _MODES
-from noeta.toolkit.permission_rules import Rule, idna, url_host
+from noeta.toolkit.permission_modes import MODE_CYCLE as MODE_CYCLE
+from noeta.toolkit.permission_modes import PERMISSION_MODES as PERMISSION_MODES
+from noeta.toolkit.permission_modes import PermissionMode as PermissionMode
+from noeta.toolkit.permission_rules import Rule, idna
 from noeta.toolkit.shell import WRAPPER_PROGRAMS
 
-PermissionMode = Literal["default", "acceptEdits", "plan", "auto", "dontAsk",
-                         "bypassPermissions"]
-
-#: Claude Code's permission modes and the mode key's order (their home is
-#: ``noeta.core.pending``, which front ends read): ``default`` asks before
-#: anything that needs permission, ``acceptEdits`` also lets file edits in
-#: the working directories run, ``plan`` explores without changing anything,
-#: ``auto`` lets a classifier model approve or block what would ask,
-#: ``dontAsk`` refuses what would ask, ``bypassPermissions`` asks only for
-#: ask rules and protected paths.
-PERMISSION_MODES = _MODES
-MODE_CYCLE = _CYCLE
+# Claude Code's permission modes (``noeta.toolkit.permission_modes``, which
+# front ends read too): ``default`` asks before anything that needs
+# permission, ``acceptEdits`` also lets file edits in the working directories
+# run, ``plan`` explores without changing anything, ``auto`` lets a classifier
+# model approve or block what would ask, ``dontAsk`` refuses what would ask,
+# ``bypassPermissions`` asks only for ask rules and protected paths.
 
 RiskLevel = Literal["low", "medium", "high"]
 
@@ -74,7 +69,8 @@ DEFAULT_RISK: Mapping[str, str] = {
 #: is still classified (an ``Agent`` spawn, a sub-agent's hand-back).
 AUTO_SAFE_TOOLS: frozenset[str] = frozenset({
     "Read", "Glob", "Grep", "LS", "NotebookRead", "ToolSearch", "Skill", "AskUserQuestion",
-    "ExitPlanMode", "ListMcpResourcesTool", "ReadMcpResourceTool", "ListAgents", "TaskStop",
+    "ExitPlanMode", "ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool",
+    "ListAgents", "TaskStop",
     "structured_output", "ReportFindings", "ScheduleWakeup",
 })
 
@@ -215,28 +211,6 @@ def normalize_allowed_hosts(entries: Iterable[object]) -> tuple[str, ...]:
             raise ValueError(f"webfetch_allowed_hosts entry {raw!r} is not a valid hostname")
         out.append(f"*.{name}" if wildcard else name)
     return tuple(out)
-
-
-def host_in_allowlist(host: str | None, allowed: Sequence[str]) -> bool:
-    """Whole-host matching: ``*.a.com`` covers ``www.a.com`` but not
-    ``a.com``; ``None`` matches nothing."""
-    if not host:
-        return False
-    for entry in allowed:
-        if entry.startswith("*."):
-            suffix = entry[1:]
-            if host.endswith(suffix) and len(host) > len(suffix):
-                return True
-        elif host == entry:
-            return True
-    return False
-
-
-def webfetch_needs_approval(input: Mapping[str, Any], allowed: Sequence[str]) -> bool:
-    url = input.get("url")
-    if not isinstance(url, str) or not url.strip():
-        return True
-    return not host_in_allowlist(url_host(url), allowed)
 
 
 # ---------------------------------------------------------------- local settings

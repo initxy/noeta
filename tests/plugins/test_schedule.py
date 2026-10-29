@@ -5,18 +5,19 @@ and the one fallback wake-up of a loop iteration that forgot to re-arm."""
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
-from noeta.core.events import ExtensionRecorded, TimerFired, ToolFinished
+from noeta.core.events import Event, ExtensionRecorded, InputTaken, TimerFired, ToolFinished
 from noeta.core.runner import Runtime
-from noeta.core.store import Post
+from noeta.core.store import Appended, Claim, NewTask, Patch, Post
 from noeta.plugins.schedule import JOB_TIMER, WAKEUP_TIMER, Schedule, cron, texts
 from noeta.testing import ScriptedProvider, reply
 
@@ -231,7 +232,98 @@ async def test_loop_is_a_command_front_ends_list() -> None:
     from noeta.core.extension import CommandContext
 
     agent = Agent(name="a", model="m", extensions=[Schedule()])
-    ctx = CommandContext(cwd="/tmp")
+    ctx = CommandContext(cwd="/tmp", tenant="default")
     assert [c.name for c in await list_commands(agent, ctx)] == ["loop"]
     text = await expand_command(agent, ctx, "/loop 5m /babysit")
     assert text is not None and text.startswith("# /loop") and text.endswith("5m /babysit")
+
+
+# ------------------------------------------------------------ a crash mid-firing
+
+
+class Crash(BaseException):
+    """Stands in for the process dying."""
+
+
+class CrashAfterFiring(SqliteStore):
+    """Dies right after committing the first append that takes a fired
+    timer (once ``armed``): the firing is in the log, its follow-up is not."""
+
+    armed = False
+
+    async def append(self, claim: Claim, events: Sequence[Event], *, expected_seq: int,
+                     patch: Patch = Patch(), posts: Sequence[Post] = (),
+                     creates: Sequence[NewTask] = ()) -> Appended:
+        done = await super().append(claim, events, expected_seq=expected_seq, patch=patch,
+                                    posts=posts, creates=creates)
+        if self.armed and any(isinstance(e, InputTaken) and any(
+                isinstance(i.body, TimerFired) for i in e.items) for e in events):
+            self.armed = False
+            raise Crash()
+        return done
+
+
+async def _crash_then_recover(path: str, crashing: CrashAfterFiring, tid: str,
+                              make: Callable[[SqliteStore], Runtime]) -> SqliteStore:
+    """Run until the armed crash, then pick the task up in a new process."""
+    with pytest.raises(Crash):
+        await make(crashing).run_until_idle()
+    await crashing.close()
+    store = SqliteStore(path)
+
+    def tx(conn: Any) -> None:
+        conn.execute("UPDATE tasks SET lease_until = 0 WHERE task_id = ?", (tid,))
+
+    await store._run(tx)
+    await make(store).run_until_idle()
+    return store
+
+
+async def test_a_crash_after_a_cron_job_fires_does_not_drop_it(tmp_path: Path) -> None:
+    path = str(tmp_path / "t.db")
+    crashing = CrashAfterFiring(path)
+    provider = ScriptedProvider([
+        reply("", ("ToolSearch", {"query": "select:CronCreate"})),
+        reply("", (texts.CRON_CREATE_TOOL, {"cron": "*/5 * * * *", "prompt": "check CI"}),
+              (texts.CRON_CREATE_TOOL, {"cron": "31 14 28 2 *", "prompt": "once",
+                                        "recurring": False})),
+        reply("scheduled"),
+        reply("checked"),
+    ])
+    ext = Schedule()
+    client = Client(crashing)
+    tid = await client.create("a", "set it up")
+    await runtime(crashing, provider, ext).run_until_idle()
+    jobs = (await _state(client, tid, ext))["jobs"]
+    assert isinstance(jobs, dict) and len(jobs) == 2
+    crashing.armed = True
+    for job_id in jobs:
+        await crashing.post(Post(task_id=tid, body=TimerFired(name=JOB_TIMER + job_id)))
+    store = await _crash_then_recover(path, crashing, tid, lambda s: runtime(s, provider, ext))
+    after = (await _state(Client(store), tid, ext))["jobs"]
+    assert isinstance(after, dict)
+    recurring = next(j for j in jobs.values() if j["recurring"])
+    assert list(after) == [recurring["id"]]  # the one-shot job is done
+    row = await store.get(tid)
+    assert row is not None and row.ready_at is not None and row.ready_at > time.time()
+    await store.close()
+
+
+async def test_a_crash_after_a_loop_wakeup_fires_keeps_its_fallback(tmp_path: Path) -> None:
+    path = str(tmp_path / "t.db")
+    crashing = CrashAfterFiring(path)
+    crashing.armed = True
+    past = time.time() - 10_000
+    provider = ScriptedProvider([
+        reply("", (texts.WAKEUP_TOOL, {"delaySeconds": 600, "reason": "idle",
+                                       "prompt": texts.DYNAMIC_SENTINEL, "noop": True})),
+        reply("armed"),
+        reply("tick without re-arming"),   # the wake-up fired before the crash
+        reply("fallback tick"),            # the keepalive still fires once
+    ])
+    ext = Schedule(clock=lambda: past)
+    tid = await Client(crashing).create("a", "/loop")
+    store = await _crash_then_recover(path, crashing, tid, lambda s: runtime(s, provider, ext))
+    assert provider.requests[3].messages[-1].text == texts.DYNAMIC_TICK
+    assert not provider.steps
+    await store.close()

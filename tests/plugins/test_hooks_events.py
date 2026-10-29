@@ -18,6 +18,7 @@ from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, TaskEnded, ToolFinished, Waiting
 from noeta.core.extension import Ask, Deny, Extension, Gate, TaskView
 from noeta.core.runner import Runtime
+from noeta.core.tool import ToolOutput
 from noeta.core.types import Text, ToolResult, ToolUse
 from noeta.plugins.compaction import Compaction
 from noeta.plugins.compaction.extension import command_text
@@ -26,6 +27,7 @@ from noeta.plugins.hooks import HookCommand, HookResult, Hooks
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.subtasks import SubagentSpec, Subtasks
 from noeta.testing import ScriptedProvider, reply
+from noeta.toolkit.signals import RESUMED_SIGNAL
 
 Answer = HookResult | Callable[[dict[str, Any]], HookResult]
 
@@ -126,6 +128,15 @@ class AskAll(Extension):
         return Ask(prompt="may I?", firm=self.firm)
 
 
+async def test_a_task_without_a_configured_cwd_runs_its_hooks_in_the_env_cwd(
+        tmp_path: Path) -> None:
+    s = Setup(tmp_path, {"PreToolUse": hook("pre", "Read")}, [reply("", READ_A), reply("done")])
+    s.tid = await s.client.create("a", "go")  # no config cwd: the exec env's is the task's
+    await s.runtime().run_until_idle()
+    [payload] = s.runner.payloads("pre")
+    assert payload["cwd"] == str(s.work)
+
+
 # ---------------------------------------------------------------- PreToolUse
 
 
@@ -192,6 +203,28 @@ async def test_pre_tool_use_rewrites_once_and_adds_context(tmp_path: Path) -> No
     second = s.provider.requests[1].messages
     assert second[-1].text == "PreToolUse hook (Read): Read b instead."
     assert second[-1].origin == "system"
+
+
+async def test_a_rewrite_is_recorded_so_another_worker_does_not_ask_again(
+        tmp_path: Path) -> None:
+    """The hook's verdict on its own rewrite is in the log: the worker that
+    picks the call up after its approval does not ask the hook about it."""
+    config = {"PreToolUse": hook("pre")}
+    rewrite = specific("PreToolUse", permissionDecision="ask",
+                       updatedInput={"file_path": "b.txt"})
+    s = await Setup(tmp_path, config, [reply("", READ_A), reply("ok")],
+                    answers={"pre": rewrite}).start()
+    last = (await s.events())[-1]
+    assert isinstance(last, Waiting) and last.on == "approval"
+    assert len(s.runner.payloads("pre")) == 1
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Hooks(hooks=config, runner=s.runner), FileTools()])
+    await s.client.answer(s.tid, last.ids[0], "allow")
+    await s.runtime().run_until_idle()
+    [(text, is_error)] = await s.results()
+    assert not is_error and "other" in text
+    # Asked once more about the model's own call, never about its rewrite.
+    assert [p["tool_input"] for p in s.runner.payloads("pre")] == [{"file_path": "a.txt"}] * 2
 
 
 async def test_if_condition_and_once(tmp_path: Path) -> None:
@@ -360,16 +393,24 @@ async def test_permission_denied_can_allow_a_retry(tmp_path: Path) -> None:
 
 
 async def test_session_start_startup_and_resume(tmp_path: Path) -> None:
-    s = await Setup(tmp_path, {"SessionStart": hook("start", "startup|resume")},
-                    [reply("a"), reply("b"), reply("c")],
+    config = {"SessionStart": hook("start", "startup|resume")}
+    s = await Setup(tmp_path, config, [reply("a"), reply("b"), reply("c"), reply("d")],
                     answers={"start": lambda p: ok(f"source was {p['source']}")}).start()
     assert s.system_texts(0) == ["SessionStart hook (startup): source was startup"]
     await s.send("again")  # the same process: no new SessionStart
     assert [p["source"] for p in s.runner.payloads("start")] == ["startup"]
-    s.hooks._seen.clear()  # as if this process had restarted
-    await s.send("after a restart")
+    # Another worker (or a restart: a fresh plugin) picking the task up is
+    # no resume; the request is what the log says.
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Hooks(hooks=config, runner=s.runner), FileTools()])
+    await s.send("on another worker")
+    assert [p["source"] for p in s.runner.payloads("start")] == ["startup"]
+    # A front end reopening the task is.
+    await s.client.signal(s.tid, RESUMED_SIGNAL)
+    await s.runtime().run_until_idle()
+    await s.send("after a resume")
     assert [p["source"] for p in s.runner.payloads("start")] == ["startup", "resume"]
-    assert s.provider.requests[2].messages[-2].text == \
+    assert s.provider.requests[3].messages[-2].text == \
         "SessionStart hook (resume): source was resume"
 
 
@@ -389,6 +430,21 @@ async def test_compaction_events(tmp_path: Path) -> None:
     [post] = s.runner.payloads("post")
     assert post["trigger"] == "manual" and post["compact_summary"]
     assert "Compacted, all good." in await s.notices()
+    await s.send("go on")
+    assert [p["source"] for p in s.runner.payloads("start")] == ["compact"]
+    assert "SessionStart hook (compact): Re-read NOTES.md." in s.system_texts(2)
+
+
+async def test_compaction_context_survives_a_blocked_prompt(tmp_path: Path) -> None:
+    hooks = {"SessionStart": hook("start", "compact"), "UserPromptSubmit": hook("prompt")}
+    answers: dict[str, Answer] = {
+        "start": specific("SessionStart", additionalContext="Re-read NOTES.md."),
+        "prompt": lambda p: HookResult(2, stderr="no") if "SECRET" in p["prompt"]
+        else HookResult(0)}
+    s = await Setup(tmp_path, hooks, [reply("first"), reply("summary text"), reply("next")],
+                    answers=answers, extensions=(Compaction(auto=False),)).start()
+    await s.send(command_text(""))
+    await s.send("my SECRET")
     await s.send("go on")
     assert [p["source"] for p in s.runner.payloads("start")] == ["compact"]
     assert "SessionStart hook (compact): Re-read NOTES.md." in s.system_texts(2)
@@ -497,3 +553,203 @@ async def test_sub_agent_start_and_stop(tmp_path: Path) -> None:
     assert denied.content == [Text(text="Run the tests first.")]
     end = [r.event for r in await client.events(child.task_id)][-1]
     assert isinstance(end, TaskEnded) and end.answer == "1 2 3"
+
+
+async def test_a_sub_agent_stop_prompt_hook_sees_no_unanswered_call(tmp_path: Path) -> None:
+    hooks = Hooks(hooks={"SubagentStop": [{"hooks": [{"type": "prompt",
+                                                      "prompt": "Were tests run?"}]}]})
+    roster = [SubagentSpec(name="scout", description="Looks around.", agent="worker")]
+    parent = Agent(name="main", model="p", extensions=[Subtasks(roster), hooks])
+    worker = Agent(name="worker", model="c", extensions=[Subtasks(()), hooks])
+    p = ScriptedProvider([reply("", ("Agent", {"description": "look", "prompt": "count",
+                                               "subagent_type": "scout"})),
+                          reply("launched"), reply("thanks")])
+    c = ScriptedProvider([reply("", ("SubagentHandback", {"message": "draft"})),
+                          reply('{"ok": false, "reason": "Run the tests."}'),
+                          reply("", ("SubagentHandback", {"message": "1 2 3"})),
+                          reply('{"ok": true}')])
+    store = SqliteStore(str(tmp_path / "t.db"))
+    providers = {"p": p, "c": c}
+    rt = Runtime(store=store, agents={"main": parent, "worker": worker},
+                 provider_for=lambda m: providers[m],
+                 env_for=lambda _s: LocalExecEnv(str(tmp_path)), sleep=_no_sleep)
+    client = Client(store)
+    await client.create("main", "go")
+    await rt.run_until_idle()
+    judged = [r for r in c.requests if not r.tools]
+    assert len(judged) == 2
+    for request in judged:
+        answered = {b.call_id for m in request.messages for b in m.content
+                    if isinstance(b, ToolResult)}
+        assert all(u.id in answered for m in request.messages for u in m.tool_uses)
+    assert c.requests[2].messages[-1].content[0].text == "Run the tests."  # type: ignore[union-attr]
+
+
+async def test_agent_hook_looks_with_read_only_tools_then_answers(tmp_path: Path) -> None:
+    hooks = {"Stop": [{"hooks": [{"type": "agent", "prompt": "Was b.txt read?"}]}]}
+    verdicts = [
+        reply("done"),
+        reply("", ("Read", {"file_path": "b.txt"})),
+        reply("", ("StructuredOutput", {"ok": False, "reason": "b.txt says other"})),
+        reply("fixed"),
+        reply("", ("StructuredOutput", {"ok": True, "reason": "fine"})),
+    ]
+    s = await Setup(tmp_path, hooks, verdicts).start()
+    look = s.provider.requests[1]
+    assert {t.name for t in look.tools} == {"Read", "StructuredOutput"}  # no Write / Edit
+    assert "Was b.txt read?" in look.messages[-1].text
+    seen = s.provider.requests[2].messages[-1].content
+    assert isinstance(seen[0], ToolResult) and "other" in seen[0].text
+    assert s.provider.requests[3].messages[-1].text == "b.txt says other"
+    assert len(s.provider.requests) == 5
+
+
+class _Guard(Extension):
+    """Asks before reading ``b.txt``, refuses ``a.txt``."""
+
+    name = "guard"
+
+    async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
+        path = str(call.input.get("file_path", ""))
+        if path.endswith("b.txt"):
+            return Ask(prompt="read b.txt?")
+        if path.endswith("a.txt"):
+            return Deny(reason="a.txt is off limits")
+        return None
+
+
+async def test_agent_hook_tools_go_through_the_permission_checks(tmp_path: Path) -> None:
+    hooks = {"Stop": [{"hooks": [{"type": "agent", "prompt": "Was b.txt read?"}]}]}
+    verdicts = [
+        reply("done"),
+        reply("", ("Read", {"file_path": "b.txt"}), ("Read", {"file_path": "a.txt"})),
+        reply("", ("StructuredOutput", {"ok": True, "reason": "fine"})),
+    ]
+    s = await Setup(tmp_path, hooks, verdicts, extensions=(_Guard(),)).start()
+    asked, denied = s.provider.requests[2].messages[-1].content
+    assert isinstance(asked, ToolResult) and asked.is_error and "other" not in asked.text
+    assert isinstance(denied, ToolResult) and denied.is_error and "hello" not in denied.text
+    assert "a.txt is off limits" in denied.text
+
+
+async def test_agent_hook_that_never_answers_fails_open(tmp_path: Path) -> None:
+    hooks = {"Stop": [{"hooks": [{"type": "agent", "prompt": "check"}]}]}
+    s = await Setup(tmp_path, hooks, [reply("done"), reply("I think it is fine")]).start()
+    assert len(s.provider.requests) == 2
+    assert any("Stop hook failed" in n for n in await s.notices())
+
+
+class McpLike(Extension):
+    name = "fake-mcp"
+
+    def __init__(self, answer: str, is_error: bool = False) -> None:
+        self.calls: list[dict[str, Any]] = []
+        outer = self
+
+        class Verify:
+            name = "mcp__chk__verify"
+            description = "verify"
+            input_schema: dict[str, Any] = {"type": "object"}
+            read_only = False
+
+            async def run(self, input: dict[str, Any], ctx: Any) -> ToolOutput:
+                outer.calls.append(input)
+                return ToolOutput(content=[Text(text=answer)], is_error=is_error)
+
+        self._tool = Verify()
+
+    def tools(self, view: TaskView) -> list[Any]:
+        return [self._tool]
+
+
+async def test_mcp_tool_hook_calls_the_tool_with_filled_input(tmp_path: Path) -> None:
+    answer = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                "permissionDecision": "deny",
+                                                "permissionDecisionReason": "not that file"}})
+    mcp = McpLike(answer)
+    hooks = {"PreToolUse": [{"matcher": "Read", "hooks": [{
+        "type": "mcp_tool", "server": "chk", "tool": "verify",
+        "input": {"path": "${tool_input.file_path}", "missing": "${nope.x}", "n": 3}}]}]}
+    s = await Setup(tmp_path, hooks, [reply("", READ_A), reply("ok")],
+                    extensions=(mcp,)).start()
+    assert mcp.calls == [{"path": "a.txt", "missing": "", "n": 3}]
+    assert await s.results() == [("not that file", True)]
+
+
+async def test_mcp_tool_hook_error_or_missing_tool_is_a_failure(tmp_path: Path) -> None:
+    hooks: dict[str, Any] = {"PreToolUse": [{"hooks": [{"type": "mcp_tool", "server": "chk",
+                                                        "tool": "verify"}]}]}
+    s = await Setup(tmp_path, hooks, [reply("", READ_A), reply("ok")],
+                    extensions=(McpLike("boom", is_error=True),)).start()
+    assert (await s.results())[0][1] is False
+    assert any("returned an error: boom" in n for n in await s.notices())
+    hooks["PreToolUse"][0]["hooks"][0]["server"] = "other"
+    s = await Setup(tmp_path / "2", hooks, [reply("", READ_A), reply("ok")]).start()
+    assert any("offers no tool" in n for n in await s.notices())
+
+
+async def test_post_tool_batch_once_per_reply_with_every_result(tmp_path: Path) -> None:
+    answers = {"batch": specific("PostToolBatch", additionalContext="Both read.")}
+    s = Setup(tmp_path, {"PostToolBatch": hook("batch")},
+              [reply("", READ_A, ("Read", {"file_path": "b.txt"})), reply("ok")],
+              answers=answers)
+    await s.start()
+    [payload] = s.runner.payloads("batch")
+    calls = payload["tool_calls"]
+    assert [c["tool_input"]["file_path"] for c in calls] == ["a.txt", "b.txt"]
+    assert "hello" in calls[0]["tool_response"] and "other" in calls[1]["tool_response"]
+    assert "PostToolBatch hook: Both read." in s.system_texts(1)
+
+
+async def test_stop_failure_on_a_failed_model_call_only(tmp_path: Path) -> None:
+    from noeta.core.errors import Fatal
+
+    s = await Setup(tmp_path, {"StopFailure": hook("failed", "rate_limit|authentication_failed")},
+                    [Fatal("bad key", status=401, body="invalid x-api-key")]).start()
+    [payload] = s.runner.payloads("failed")
+    assert payload["error"] == "authentication_failed" and "bad key" in payload["error_details"]
+    s = await Setup(tmp_path / "2", {"StopFailure": hook("failed")},
+                    [reply("fine")]).start()
+    assert s.runner.payloads("failed") == []
+
+
+class MovesShell(Extension):
+    name = "mover"
+
+    def __init__(self) -> None:
+        class Cd:
+            name = "Cd"
+            description = "cd"
+            input_schema: dict[str, Any] = {"type": "object"}
+            read_only = False
+
+            async def run(self, input: dict[str, Any], ctx: Any) -> ToolOutput:
+                ctx.record("shell", "cwd", {"cwd": input["to"]})
+                return ToolOutput(content=[Text(text="moved")])
+
+        self._tool = Cd()
+
+    def tools(self, view: TaskView) -> list[Any]:
+        return [self._tool]
+
+
+async def test_cwd_changed_when_the_shell_moves(tmp_path: Path) -> None:
+    s = await Setup(tmp_path, {"CwdChanged": hook("cwd")},
+                    [reply("", ("Cd", {"to": "/elsewhere"})), reply("", ("Cd", {"to": ""})),
+                     reply("ok")], extensions=(MovesShell(),)).start()
+    first, second = s.runner.payloads("cwd")
+    assert (first["old_cwd"], first["new_cwd"]) == (str(s.work), "/elsewhere")
+    assert (second["old_cwd"], second["new_cwd"]) == ("/elsewhere", str(s.work))
+
+
+async def test_post_model_switch_adds_context_for_the_new_model(tmp_path: Path) -> None:
+    from noeta.core.loop.state import CONFIG_SIGNAL
+
+    answers = {"switch": specific("PostModelSwitch", additionalContext="Now on m2.")}
+    s = await Setup(tmp_path, {"PostModelSwitch": hook("switch", "m2")},
+                    [reply("one"), reply("two")], answers=answers).start()
+    await s.client.signal(s.tid, CONFIG_SIGNAL, {"model": "m2"})
+    await s.send("again")
+    [payload] = s.runner.payloads("switch")
+    assert (payload["from_model"], payload["to_model"]) == ("m", "m2")
+    assert any("Now on m2." in t for t in s.system_texts(1))

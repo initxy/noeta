@@ -44,6 +44,7 @@ from noeta.core.events import (
 )
 from noeta.core.extension import Extension, TaskView
 from noeta.core.types import ToolUse
+from noeta.toolkit.sandbox import run_in_tenant_sandbox
 from noeta.toolkit.tools import Workspace
 
 __all__ = ["EDITING_TOOLS", "MAX_SNAPSHOT_BYTES", "NAME", "RESTORE_SIGNAL", "Checkpoints"]
@@ -63,7 +64,7 @@ def _last_prompt(view: TaskView) -> int:
     """The log seq of the person's newest message (0 before any)."""
     st = view.state
     for message, seq in zip(reversed(st.history), reversed(st.history_seqs), strict=True):
-        if message.role == "user" and message.origin in (None, "human") and message.text:
+        if message.from_person and message.text:
             return seq
     return 0
 
@@ -189,7 +190,8 @@ class Checkpoints(Extension):
                     if None not in known:
                         raise PermissionError("no snapshot found the file absent")
                     if await env.stat(resolved) is not None:
-                        result = await env.run(["rm", "-f", "--", resolved], timeout=30)
+                        result = await run_in_tenant_sandbox(
+                            env, ["rm", "-f", "--", resolved], timeout=30)
                         if result.exit_code != 0:
                             raise OSError(result.stderr.decode(errors="replace").strip())
                 else:

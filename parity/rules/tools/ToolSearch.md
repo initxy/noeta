@@ -11,7 +11,8 @@ Claude Code 2.1.312 · baseline `m1` · rules in our words (see `../README.md`).
 
 Loads the schemas of deferred tools so they become callable. Always loaded; position 10 of 13
 in the baseline list; also present for sub-agents. noeta's counterpart is `ToolSearchTool` in
-`noeta/core/deferred.py`, added by the runner whenever a task offers a deferred tool.
+`noeta/plugins/tool_search/search.py`, added by the `tool_search` plugin whenever a task offers a
+deferred tool.
 
 ## Parameters
 
@@ -35,7 +36,7 @@ in the baseline list; also present for sub-agents. noeta's counterpart is `ToolS
 | `tool.ToolSearch.7` | Query form `select:A,B,C` fetches exactly those tools by name. | covered |
 | `tool.ToolSearch.8` | Query form of plain keywords does a keyword search returning up to `max_results` best matches. | covered |
 | `tool.ToolSearch.9` | Query form `+word rest` requires `word` in the tool name and ranks by the remaining terms. | covered |
-| `tool.ToolSearch.10` | The deferred set is not only MCP tools: built-in tools such as `WebFetch`, `WebSearch`, `NotebookEdit`, `Monitor`, `TaskStop`, `SendMessage`, the plan-mode, worktree and cron tools, and the MCP resource tools are deferred in the baseline (see `main-prompt.md` for the list). | covered for `WebFetch`, `WebSearch`, `NotebookEdit`, `Monitor`, `TaskStop` and the MCP tools; the plan-mode, worktree, cron and `SendMessage` tools are not built yet |
+| `tool.ToolSearch.10` | The deferred set is not only MCP tools: built-in tools such as `WebFetch`, `WebSearch`, `NotebookEdit`, `Monitor`, `TaskStop`, `SendMessage`, the plan-mode, worktree and cron tools, and the MCP resource tools are deferred in the baseline (see `main-prompt.md` for the list). | covered (`DesignSync` left out, `parity/deviations.md`) |
 
 ## Result shape
 
@@ -45,6 +46,7 @@ in the baseline list; also present for sub-agents. noeta's counterpart is `ToolS
 | `tool.ToolSearch.r.2` | The same user message carries, after the tool_result, a separate `text` block `Tool loaded.`. |
 | `tool.ToolSearch.r.3` | From the next request on, each loaded tool appears in `tools` with its full schema and `defer_loading: true`, sorted into the list by name (MCP tools last); it stays there for the rest of the conversation, including after compaction. |
 | `tool.ToolSearch.r.4` | The model was observed passing `max_results` equal to the number of names in a `select:` query (1–3) as well as the default 5. |
+| `tool.ToolSearch.r.5` | (bundle, not recorded) `select:` reads at most 64 names; a name that is no tool's full name also matches MCP tools by their own name (without `mcp__<server>__`). A keyword query reads at most 32 words; a query equal to a tool's name (any case) loads that tool alone; an `mcp__…` prefix loads the tools whose names start with it; otherwise each word scores against the name's words and parts (MCP server and tool names weigh a little more) and, as a whole word, the description; `+word` filters on the same fields; ties keep the tool order; `max_results` is not raised to 1. No match: a plain-text result saying nothing matched. noeta today: covered (the no-match text in our words; no MCP connection notes), except that `+word` matches the name only, as rule 9 and the description say. |
 
 ## Variants
 

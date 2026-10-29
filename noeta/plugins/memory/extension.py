@@ -25,20 +25,21 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from noeta.core.events import Recorded
-from noeta.core.extension import ContextPart, Extension, TaskView
-from noeta.core.types import Message, ModelRequest, SystemPart, user
-from noeta.toolkit.context import (
+from noeta.core import records
+from noeta.core.events import DEFAULT_TENANT
+from noeta.core.execenv import ExecEnv
+from noeta.core.extension import ContextPart, Extension, Reminder, TaskView
+from noeta.core.types import Message, ModelRequest, SystemPart, ToolResult, user
+from noeta.toolkit.context import fence_refuses, read_local_text, task_env
+from noeta.toolkit.memory_index import (
     MEMORY_INDEX_FILE,
     MEMORY_INDEX_MAX_BYTES,
     MEMORY_INDEX_MAX_LINES,
-    new_user_messages,
-    noeta_home,
-    project_dir,
     read_memory_index,
-    task_env,
     trim_memory_index,
 )
+from noeta.toolkit.paths import noeta_home, project_dir
+from noeta.toolkit.sandbox import run_in_tenant_sandbox
 
 __all__ = ["INDEX_FILE", "MEMORY_SECTION", "Memory", "load_index", "memory_dir_for"]
 
@@ -59,6 +60,9 @@ ENVIRONMENT_HEADING = "# Environment"
 #: The recall selector's instructions (``memory/recall``).
 RECALL_PROMPT = _load("recall")
 
+#: Claude Code's agent memory scopes (an agent file's ``memory``).
+AGENT_SCOPES = ("user", "project", "local")
+
 INDEX_FILE = MEMORY_INDEX_FILE
 INDEX_MAX_LINES = MEMORY_INDEX_MAX_LINES
 INDEX_MAX_BYTES = MEMORY_INDEX_MAX_BYTES
@@ -75,6 +79,11 @@ INSTRUCTIONS = "instructions"
 RECALL_MAX_FILES = 5
 RECALL_MAX_TOKENS = 512
 RECALL_TASK_BYTES = 61_440
+#: Recalls kept so a hook's erase of their prompt can take them back (a
+#: prompt is blocked before the model answers it: the newest few).
+ERASABLE_RECALLS = 8
+#: Erased prompt seqs remembered, for a recall recorded after the erase.
+ERASED_SEQS_KEEP = 64
 RECALL_HEAD = ("Memories that may be relevant to this message; use one only if it really "
                "applies to what the user asked.")
 _RECALL_SCHEMA = {
@@ -90,8 +99,8 @@ def load_index(text: str) -> str:
     return trim_memory_index(text)
 
 
-def memory_dir_for(root: str, home: Path | None = None) -> str:
-    return str(project_dir(root, home or noeta_home()) / "memory") + "/"
+def memory_dir_for(root: str, home: Path | None = None, tenant: str = DEFAULT_TENANT) -> str:
+    return str(project_dir(root, home or noeta_home(), tenant) / "memory") + "/"
 
 
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*(\n|\Z)", re.S)
@@ -114,19 +123,31 @@ class Memory(Extension):
     """Constructor arguments:
 
     * ``home`` — noeta's home (default ``$NOETA_HOME`` or ``~/.noeta``); the
-      memory directory is ``<home>/projects/<workspace>/memory/``.
+      memory directory is ``<home>/projects/<workspace>/memory/`` (a tenant
+      other than the default one: ``<home>/projects/<tenant>/<workspace>/memory/``).
     * ``directory`` — use this directory instead.
     * ``recall_model`` — the model asked, on each user message, which memory
       files to attach (off when unset).
     * ``rehang`` — read ``MEMORY.md`` again after a compaction.
+    * ``agent_scope`` / ``agent_name`` — an agent file's ``memory`` field
+      (Claude Code's agent memory): the directory is the agent's own,
+      ``<home>/agent-memory/<agent>/`` (``user``),
+      ``<cwd>/.noeta/agent-memory/<agent>/`` (``project``) or
+      ``<cwd>/.noeta/agent-memory-local/<agent>/`` (``local``).
     """
 
     name = "memory"
 
     def __init__(self, *, home: str | None = None, directory: str | None = None,
-                 recall_model: str | None = None, rehang: bool = True) -> None:
+                 recall_model: str | None = None, rehang: bool = True,
+                 agent_scope: str | None = None, agent_name: str | None = None) -> None:
+        if agent_scope is not None and (agent_scope not in AGENT_SCOPES or not agent_name):
+            raise ValueError(f"Memory: agent_scope is one of {', '.join(AGENT_SCOPES)}, "
+                             "with an agent_name")
         self.home = Path(home).expanduser() if home else None
         self.directory = directory
+        self.agent_scope = agent_scope
+        self.agent_name = agent_name
         self.recall_model = recall_model
         self.rehang = rehang
 
@@ -140,8 +161,34 @@ class Memory(Extension):
         if kind == "dir":
             return {**state, "dir": data["dir"]}
         if kind == "recalled":
+            through = data.get("through") or state.get("through")
+            if through is not None and through in (state.get("erased") or ()):
+                # Recalled for a prompt a hook blocked (one listed after
+                # this plugin): taken out of the conversation next round.
+                return {**state, "through": through,
+                        "voided": [*(state.get("voided") or ()), through]}
+            recent = [*(state.get("recent") or ()),
+                      {"through": through, "paths": data["paths"],
+                       "bytes": int(data.get("bytes") or 0)}]
             return {**state, "surfaced": [*state["surfaced"], *data["paths"]],
-                    "bytes": state["bytes"] + int(data.get("bytes") or 0)}
+                    "bytes": state["bytes"] + int(data.get("bytes") or 0),
+                    "through": through, "recent": recent[-ERASABLE_RECALLS:]}
+        if kind == "checked":
+            return {**state, "through": data["through"]}
+        if kind == records.ERASED_KIND:
+            seqs = set(data["seqs"])
+            state = {**state, "erased": [*(state.get("erased") or ()),
+                                         *sorted(seqs)][-ERASED_SEQS_KEEP:]}
+            for recall in [r for r in state.get("recent") or () if r["through"] in seqs]:
+                gone = set(recall["paths"])
+                state = {**state, "surfaced": [p for p in state["surfaced"] if p not in gone],
+                         "bytes": max(0, state["bytes"] - recall["bytes"]),
+                         "recent": [r for r in state["recent"] if r is not recall],
+                         "voided": [*(state.get("voided") or ()), recall["through"]]}
+            return state
+        if kind == "unrecalled":
+            return {**state, "voided": [t for t in state.get("voided") or ()
+                                        if t != data["through"]]}
         return state
 
     def _dir(self, view: TaskView) -> str | None:
@@ -161,13 +208,23 @@ class Memory(Extension):
     async def on_start(self, view: TaskView) -> None:
         if self._dir(view) is not None:
             return
-        directory = self.directory or memory_dir_for(await self._workspace(view), self.home)
+        directory = self.directory
+        if not directory:
+            workspace = await self._workspace(view)
+            directory = self._agent_dir(view, workspace) \
+                or memory_dir_for(workspace, self.home, view.state.tenant)
         try:
+            # Made by the worker: not where the task's tenant may not write
+            # (a link on the way, or a repository's shared directory outside
+            # the workspace).
+            if fence_refuses(task_env(view.env, view.state.config), directory, write=True):
+                raise OSError("the tenant fence refuses it")
             Path(directory).mkdir(parents=True, exist_ok=True)
         except OSError:
             log.warning("memory: could not create %s", directory)
         view.record(self.name, "dir", {"dir": directory})
-        index = None if _instructions_show_index(view, self.name) else self._index(directory)
+        index = None if _instructions_show_index(view, self.name) \
+            else await self._index(view, directory)
         if index is not None:
             view.record(self.name, "index", {}, message=user(index, origin="system"))
 
@@ -175,54 +232,122 @@ class Memory(Extension):
         directory = self._dir(view)
         if not self.rehang or directory is None or _instructions_show_index(view, self.name):
             return ()
-        index = self._index(directory)
+        index = await self._index(view, directory)
         return (user(index, origin="system"),) if index is not None else ()
 
-    async def on_event(self, view: TaskView, recorded: Recorded) -> None:
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        """Recall for the person's messages the model has not answered yet,
+        before the call that first carries them. Run as a reminder, not when
+        a message arrives, so a ``UserPromptSubmit`` hook listed before this
+        plugin has blocked (and erased) a prompt before its text reaches the
+        recall model."""
+        self._drop_voided(view)
         directory = self._dir(view)
         if not self.recall_model or view.complete is None or directory is None:
+            return ()
+        state = view.state
+        after = int((view.ext_state(self.name) or {}).get("through") or 0)
+        new: list[tuple[int, Message]] = []
+        for seq, m in zip(state.message_seqs, state.messages, strict=False):
+            if m.role == "assistant":
+                new = []
+            elif seq > after and m.from_person and m.text \
+                    and not any(isinstance(b, ToolResult) for b in m.content):
+                new.append((seq, m))
+        if not new:
+            return ()
+        through = new[-1][0]
+        found = await self._recall(view, directory, "\n\n".join(m.text for _, m in new))
+        if found is None:
+            view.record(self.name, "checked", {"through": through})
+            return ()
+        text, paths, used = found
+        return (Reminder(text=text, kind="recalled", origin="memory",
+                         data={"paths": paths, "bytes": used, "through": through}),)
+
+    def _drop_voided(self, view: TaskView) -> None:
+        """Erase the recalls made for prompts a hook blocked: a hook listed
+        after this plugin blocks a prompt after its recall was taken, so the
+        recall is recorded behind the erase and outlives it."""
+        voided = (view.ext_state(self.name) or {}).get("voided") or ()
+        if not voided:
             return
-        messages = new_user_messages(view.state, recorded.seq)
-        if messages:
-            await self._recall(view, directory, "\n\n".join(m.text for m in messages))
+        state = view.state
+        for through in voided:
+            # The recall's message is the first recalled memory after the
+            # prompt it was made for (none: compacted away).
+            seq = next((s for s, m in zip(state.message_seqs, state.messages, strict=False)
+                        if s > through and m.origin == "memory"), None)
+            if seq is not None:
+                view.erase_messages([seq])
+            view.record(self.name, "unrecalled", {"through": through})
 
     # ------------------------------------------------------------ helpers
+
+    def _agent_dir(self, view: TaskView, workspace: str) -> str | None:
+        """The agent's own memory: under noeta's home (``user``) or under
+        ``workspace``, the main checkout, so an agent in a temporary
+        worktree keeps it."""
+        if self.agent_scope is None or self.agent_name is None:
+            return None
+        # "user" memory under noeta's home is shared by every tenant: a task
+        # of a tenant other than the default one keeps it in its working
+        # directory instead.
+        if self.agent_scope == "user" and getattr(view.state, "tenant",
+                                                  DEFAULT_TENANT) == DEFAULT_TENANT:
+            base = self.home or noeta_home()
+            return str(base / "agent-memory" / self.agent_name) + "/"
+        folder = "agent-memory-local" if self.agent_scope == "local" else "agent-memory"
+        return posixpath.join(workspace, ".noeta", folder, self.agent_name) + "/"
 
     async def _workspace(self, view: TaskView) -> str:
         """The repository's main checkout when the working directory is in
         one (so every worktree shares one memory), else the directory."""
         env = task_env(view.env, view.state.config)
-        cwd = str(view.state.config.get("cwd") or env.cwd)
+        cwd = view.cwd or env.cwd
         try:
-            out = await env.run(["git", "rev-parse", "--path-format=absolute",
-                                 "--git-common-dir"], cwd=cwd, timeout=5, output_cap=4096)
+            out = await run_in_tenant_sandbox(
+                env, ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                cwd=cwd, timeout=5, output_cap=4096)
         except Exception:  # noqa: BLE001 — not a repository, or no git
             return cwd
         common = out.stdout.decode("utf-8", errors="replace").strip()
-        if out.exit_code != 0 or not common:
+        if out.exit_code != 0 or not common or not common.rstrip("/").endswith("/.git"):
             return cwd
-        return posixpath.dirname(common.rstrip("/")) if common.rstrip("/").endswith("/.git") \
-            else cwd
+        main = posixpath.dirname(common.rstrip("/"))
+        # A ``.git`` file may name any repository; another tenant's task
+        # shares a main checkout's memory only from inside it.
+        if view.state.tenant != DEFAULT_TENANT and not (
+                cwd == main or cwd.startswith(main.rstrip("/") + "/")):
+            return cwd
+        return main
 
     @staticmethod
-    def _index(directory: str) -> str | None:
-        found = read_memory_index(directory)
+    async def _index(view: TaskView, directory: str) -> str | None:
+        found = await read_memory_index(task_env(view.env, view.state.config), directory)
         if found is None:
             return None
         path, text = found
         return f"{INDEX_HEAD.format(path=path)}\n\n{text}"
 
     @staticmethod
-    def _manifest(directory: str, skip: set[str]) -> list[tuple[str, str]]:
-        """``(file name, manifest line)`` for every memory file not yet attached."""
+    async def _manifest(env: ExecEnv, directory: str,
+                        skip: set[str]) -> list[tuple[str, str]]:
+        """``(file name, manifest line)`` for every memory file not yet
+        attached. Read on this machine, behind the task's tenant fence (an
+        agent's memory may be in the tenant's workspace)."""
+        if fence_refuses(env, directory):
+            return []
         out: list[tuple[str, float, str]] = []
         for path in Path(directory).glob("*.md"):
             if path.name == INDEX_FILE or str(path) in skip:
                 continue
+            text = await read_local_text(env, str(path))
+            if text is None:
+                continue
             try:
-                text = path.read_text("utf-8")
                 mtime = path.stat().st_mtime
-            except (OSError, UnicodeDecodeError):
+            except OSError:
                 continue
             m = _FRONTMATTER.match(text)
             head = m.group(1) if m else ""
@@ -233,13 +358,17 @@ class Memory(Extension):
         out.sort(key=lambda t: -t[1])
         return [(name, line) for name, _, line in out]
 
-    async def _recall(self, view: TaskView, directory: str, query: str) -> None:
+    async def _recall(self, view: TaskView, directory: str,
+                      query: str) -> tuple[str, list[str], int] | None:
+        """The recalled text, the files attached and their bytes; ``None``
+        when nothing is attached."""
         state = view.ext_state(self.name) or {}
         if int(state.get("bytes") or 0) >= RECALL_TASK_BYTES:
-            return
-        manifest = self._manifest(directory, set(state.get("surfaced") or []))
+            return None
+        env = task_env(view.env, view.state.config)
+        manifest = await self._manifest(env, directory, set(state.get("surfaced") or []))
         if not manifest:
-            return
+            return None
         assert view.complete is not None and self.recall_model is not None
         listing = "\n".join(line for _, line in manifest)
         request = ModelRequest(
@@ -253,7 +382,7 @@ class Memory(Extension):
             picked = json.loads(response.message.text).get("selected_memories") or []
         except Exception:
             log.info("memory: recall selection failed", exc_info=True)
-            return
+            return None
         names = {name for name, _ in manifest}
         budget = RECALL_TASK_BYTES - int(state.get("bytes") or 0)
         parts: list[str] = []
@@ -261,9 +390,8 @@ class Memory(Extension):
         used = 0
         for name in [p for p in picked if isinstance(p, str) and p in names][:RECALL_MAX_FILES]:
             path = Path(directory) / name
-            try:
-                body = path.read_text("utf-8")
-            except (OSError, UnicodeDecodeError):
+            body = await read_local_text(env, str(path))
+            if body is None:
                 continue
             size = len(body.encode("utf-8"))
             if used + size > budget:
@@ -271,6 +399,6 @@ class Memory(Extension):
             used += size
             parts.append(f"Memory {path}:\n{body.strip()}")
             paths.append(str(path))
-        if parts:
-            view.record(self.name, "recalled", {"paths": paths, "bytes": used},
-                        message=user(RECALL_HEAD + "\n\n" + "\n\n".join(parts), origin="memory"))
+        if not parts:
+            return None
+        return RECALL_HEAD + "\n\n" + "\n\n".join(parts), paths, used

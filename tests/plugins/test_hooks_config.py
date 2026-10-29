@@ -3,8 +3,12 @@ matchers, ``if``, the HTTP and prompt runners, the command's exec form."""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import gc
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -30,14 +34,14 @@ def test_unknown_and_unsupported_events_and_types_are_skipped(
     caplog.set_level(logging.WARNING, "noeta.hooks")
     parsed = parse_hooks({
         "Bogus": [{"hooks": [{"type": "command", "command": "x"}]}],
-        "PostToolBatch": [{"hooks": [{"type": "command", "command": "x"}]}],
-        "Stop": [{"hooks": [{"type": "agent", "prompt": "check"},
-                            {"type": "mcp_tool", "server": "s", "tool": "t"}]}],
+        "PreModelSwitch": [{"hooks": [{"type": "command", "command": "x"}]}],
+        "Stop": [{"hooks": [{"type": "script", "file": "x"}]}],
+        "PermissionRequest": [{"hooks": [{"type": "agent", "prompt": "allow?"}]}],
     })
     assert parsed == {}
     text = caplog.text
-    assert "unknown event 'Bogus'" in text and "does not fire PostToolBatch" in text
-    assert "'agent' hooks" in text and "'mcp_tool' hooks" in text
+    assert "unknown event 'Bogus'" in text and "does not fire PreModelSwitch" in text
+    assert "'script' hooks" in text and "permission request" in text
 
 
 def test_hook_fields_and_defaults() -> None:
@@ -55,8 +59,19 @@ def test_hook_fields_and_defaults() -> None:
                            "continueOnBlock": True})
     assert prompt.timeout == PROMPT_TIMEOUT_S == 30 and prompt.model == "m2"
     assert prompt.continue_on_block
+    agent = _one("Stop", {"type": "agent", "prompt": "tests ran?", "continueOnBlock": True})
+    assert (agent.type, agent.timeout, agent.label) == ("agent", 60.0, "tests ran?")
+    assert not agent.continue_on_block  # a prompt hook's field only
+    tool = _one("PostToolUse", {"type": "mcp_tool", "server": "s", "tool": "t",
+                                "input": {"p": "${tool_input.file_path}"}})
+    assert (tool.label, tool.arguments, tool.timeout) == \
+        ("s/t", {"p": "${tool_input.file_path}"}, COMMAND_TIMEOUT_S)
+    assert tool.key != _one("PostToolUse", {"type": "mcp_tool", "server": "s",
+                                            "tool": "t"}).key
     for bad in ({"type": "command"}, {"type": "http", "url": "ftp://x"},
                 {"type": "prompt"}, {"type": "command", "command": "c", "if": "Bash("},
+                {"type": "agent"}, {"type": "mcp_tool", "server": "s"},
+                {"type": "mcp_tool", "server": "s", "tool": "t", "input": "x"},
                 {"type": "command", "command": "c", "timeout": 0},
                 {"type": "command", "command": "c", "args": "x"}):
         with pytest.raises(ValueError):
@@ -84,13 +99,13 @@ def test_common_input_fields() -> None:
     child = TaskView(state=TaskState(task_id="r.c1.1", agent="Explore", parent_id="r",
                                      root_id="r", config={"cwd": "/w",
                                                           "permission_mode": "plan"}))
-    payload = hooks._payload("PreToolUse", child, {"tool_name": "Read"})
+    payload = hooks._d.payload("PreToolUse", child, {"tool_name": "Read"})
     assert payload == {
         "session_id": "r", "transcript_path": "", "cwd": "/w", "permission_mode": "plan",
         "hook_event_name": "PreToolUse", "task_id": "r.c1.1", "agent_id": "r.c1.1",
         "agent_type": "Explore", "tool_name": "Read"}
     root = TaskView(state=TaskState(task_id="r", agent="main"))
-    payload = hooks._payload("Stop", root, {})
+    payload = hooks._d.payload("Stop", root, {})
     assert payload["session_id"] == "r" and payload["permission_mode"] == "default"
     assert "agent_id" not in payload and "agent_type" not in payload
 
@@ -123,6 +138,30 @@ async def test_a_command_that_cannot_start_or_overruns_fails() -> None:
     assert missing.failed and missing.exit_code == -1
     slow = await run_command(HookCommand(command="sleep 5; echo late", timeout=0.1), {}, None)
     assert slow.failed and "timed out" in slow.stderr
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_a_killed_command_is_reaped_before_the_call_returns(cancelled: bool) -> None:
+    """Left unreaped, the killed process is closed by the garbage collector
+    once its event loop has closed ("Event loop is closed")."""
+    ignored: list[Any] = []
+    hook = sys.unraisablehook
+    sys.unraisablehook = ignored.append
+    loop = asyncio.new_event_loop()
+    try:
+        task = loop.create_task(run_command(
+            HookCommand(command="sleep 5", timeout=30 if cancelled else 0.2), {}, None))
+        if cancelled:
+            loop.run_until_complete(asyncio.sleep(0.3))
+            task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            loop.run_until_complete(task)
+        loop.close()
+        del task
+        gc.collect()
+    finally:
+        sys.unraisablehook = hook
+    assert not ignored, [str(u.exc_value) for u in ignored]
 
 
 # ---------------------------------------------------------------- http

@@ -43,11 +43,14 @@ class Echo:
 
 class Gate(Extension):
     name = "gate"
+    #: The ``cwd`` of every command listing, in order.
+    listed_in: list[str] = []
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Any:
         return Ask(prompt="echo?")
 
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
+        Gate.listed_in.append(ctx.cwd)
         return [Command(name="hi", description="Say hi", template="hi {args}"),
                 Command(name="where", description="Where", local=True)]
 
@@ -103,6 +106,22 @@ async def test_stream_json_over_a_websocket(served: tuple[str, ScriptedProvider]
             pass  # no token
 
 
+async def test_stream_json_init_names_the_directory_the_server_chose(
+        served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
+    host, _ = served
+    async with websockets.connect(f"ws://{host}/stream-json?token=secret&model={MODEL}") as ws:
+        init = json.loads(await ws.recv())
+    assert init["cwd"] == str(tmp_path.resolve())
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        resp = await http.post(f"/stream-json?model={MODEL}&resume={init['session_id']}",
+                               content="")
+        assert json.loads(resp.text.splitlines()[0])["cwd"] == str(tmp_path.resolve())
+    Gate.listed_in.clear()
+    async with websockets.connect(f"ws://{host}/stream-json?token=secret&cwd=sub") as ws:
+        assert json.loads(await ws.recv())["cwd"] == str((tmp_path / "sub").resolve())
+    assert set(Gate.listed_in) == {str((tmp_path / "sub").resolve())}
+
+
 async def test_stream_json_one_way_and_the_rest(served: tuple[str, ScriptedProvider]) -> None:
     host, provider = served
     provider.add(reply("", ("Echo", {})), reply("no echo then"))
@@ -140,6 +159,8 @@ async def test_stream_json_one_way_and_the_rest(served: tuple[str, ScriptedProvi
                                  json={"name": "config", "data": {"model": "opus"}})
         assert signal.status_code == 200
         assert (await http.get("/models", headers={"authorization": "x"})).status_code == 401
+        in_url = await http.get("/models?token=secret", headers={"authorization": ""})
+        assert in_url.status_code == 401  # a query token only on the WebSocket
 
 
 async def test_web_pages_and_rebound_names_are_refused(
@@ -185,6 +206,9 @@ async def test_requests_cannot_bypass_permissions_or_leave_the_directory(
         refused = await http.post(f"/tasks/{task_id}/signals", json={
             "name": "permission_mode", "data": {"mode": "bypassPermissions"}})
         assert refused.status_code == 403
+        refused = await http.post(f"/tasks/{task_id}/answers", json={
+            "request_id": "r1", "decision": "allow", "data": {"mode": "bypassPermissions"}})
+        assert refused.status_code == 403
     async with websockets.connect(f"ws://{host}/stream-json?token=secret&model={MODEL}") as ws:
         await ws.recv()
         await ws.send(json.dumps({"type": "control_request", "request_id": "r1", "request": {
@@ -192,6 +216,64 @@ async def test_requests_cannot_bypass_permissions_or_leave_the_directory(
         answer = json.loads(await asyncio.wait_for(ws.recv(), 10))
         assert answer["response"]["subtype"] == "error"
         assert "bypassPermissions" in answer["response"]["error"]
+
+
+async def test_requests_cannot_set_the_config_plugins_own(
+        served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
+    host, _ = served
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        for key, value in (("permission_rules", ["Bash"]), ("subtask_depth", -99),
+                           ("unattended", True), ("prompts", {"system/main": "x"})):
+            got = await http.post("/tasks", json={"agent": "main", "config": {key: value}})
+            assert got.status_code == 403, key
+            assert repr(key) in got.json()["error"]
+        assert (await http.get("/tasks")).json() == []
+        ok = await http.post("/tasks", json={"agent": "main", "config": {
+            "model": MODEL, "effort": "high", "max_turns": 3, "cwd": str(tmp_path),
+            "permission_mode": "plan", "output_schema": {"type": "object"}}})
+        assert ok.status_code == 201
+        task_id = ok.json()["task_id"]
+        refused = await http.post(f"/tasks/{task_id}/signals", json={
+            "name": "config", "data": {"permission_rules": ["Bash"]}})
+        assert refused.status_code == 403
+
+
+async def test_commands_run_only_in_the_servers_directories(
+        served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
+    host, _ = served
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        assert (await http.get("/commands", params={"cwd": "/etc"})).status_code == 403
+        run = await http.post("/commands/run", json={"text": "/hi x", "cwd": "/etc"})
+        assert run.status_code == 403
+        (tmp_path / "sub").mkdir()
+        task_id = (await http.post("/tasks", json={"agent": "main", "config": {
+            "cwd": str(tmp_path / "sub")}})).json()["task_id"]
+        Gate.listed_in.clear()
+        got = await http.get("/commands", params={"task_id": task_id, "cwd": "/etc"})
+        assert got.status_code == 200
+        ran = await http.post("/commands/run", json={"text": "/hi x", "task_id": task_id,
+                                                     "cwd": "/etc"})
+        assert ran.json() == {"text": "hi x", "local": False}
+        assert set(Gate.listed_in) == {str(tmp_path / "sub")}
+
+
+async def test_requests_post_only_the_signals_front_ends_send(
+        served: tuple[str, ScriptedProvider]) -> None:
+    host, _ = served
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        task_id = (await http.post("/tasks", json={"agent": "main"})).json()["task_id"]
+        for name, data in (("subtasks.idle_subscribe", {"from": "other", "id": "s1"}),
+                           ("shell_job_ended", {"job_id": "j", "notice": "all done"}),
+                           ("hold_lost", {"worker": "w", "epoch": 1})):
+            got = await http.post(f"/tasks/{task_id}/signals", json={"name": name,
+                                                                     "data": data})
+            assert got.status_code == 403, name
+            assert repr(name) in got.json()["error"]
+        for name, data in (("resumed", None), ("permission_mode", {"mode": "plan"}),
+                           ("restore_files", {"files": []})):
+            got = await http.post(f"/tasks/{task_id}/signals", json={"name": name,
+                                                                     "data": data})
+            assert got.status_code == 200, name
 
 
 async def test_a_relative_cwd_is_the_servers_and_more_roots_can_be_allowed(
@@ -204,7 +286,7 @@ async def test_a_relative_cwd_is_the_servers_and_more_roots_can_be_allowed(
     monkeypatch.chdir(tmp_path)  # the process's directory is not the server's
     store = SqliteStore(str(tmp_path / "t.db"))
     client = Client(store)
-    app = create_app(client, cwd=str(served), roots=[str(other)])
+    app = create_app(client, auth=False, cwd=str(served), roots=[str(other)])
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                  base_url="http://127.0.0.1") as http:
         for cwd, where in (("sub", served / "sub"), (str(other), other)):
@@ -216,3 +298,79 @@ async def test_a_relative_cwd_is_the_servers_and_more_roots_can_be_allowed(
             got = await http.post("/tasks", json={"agent": "main", "config": {"cwd": cwd}})
             assert got.status_code == 403 and "--allow-root" in got.json()["error"], cwd
     await store.close()
+
+
+async def test_the_query_token_never_reaches_uvicorns_logs(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    from noeta.host.http import redact_token_logs
+
+    store = SqliteStore(str(tmp_path / "t.db"))
+    local = LocalApp(store, [Agent(name="main", model=MODEL)], ScriptedProvider(),
+                     env_for=lambda _s: None)
+    await local.start()
+    api = create_app(local.client, token="secret-xyz", app=local, cwd=str(tmp_path))
+    # noeta serve's own configuration: uvicorn's default logging, at info.
+    server = uvicorn.Server(uvicorn.Config(api, host="127.0.0.1", port=0))
+    redact_token_logs()
+    loggers = [logging.getLogger(n) for n in ("uvicorn.error", "uvicorn.access")]
+    for logger in loggers:
+        logger.addHandler(caplog.handler)
+    serving = asyncio.create_task(server.serve())
+    try:
+        while not server.started:
+            await asyncio.sleep(0.01)
+        host = f"127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
+        with caplog.at_level(logging.INFO):
+            async with websockets.connect(
+                    f"ws://{host}/stream-json?token=secret-xyz&model={MODEL}") as ws:
+                await ws.recv()
+            # Starlette decodes the key, so ``%74oken`` is the token too.
+            async with websockets.connect(
+                    f"ws://{host}/stream-json?model={MODEL}&%74oken=secret-xyz") as ws:
+                await ws.recv()
+            async with httpx.AsyncClient(base_url=f"http://{host}") as http:
+                await http.get("/models?token=secret-xyz")
+    finally:
+        for logger in loggers:
+            logger.removeHandler(caplog.handler)
+        server.should_exit = True
+        await serving
+        await local.stop()
+    logged = "\n".join(r.getMessage() for r in caplog.records
+                       if r.name.startswith("uvicorn"))
+    assert "/stream-json?token=" in logged and "/models?token=" in logged
+    assert "&%74oken=" in logged and "secret-xyz" not in logged
+
+
+async def test_a_clients_message_is_the_persons_text_and_images_only(
+        served: tuple[str, ScriptedProvider]) -> None:
+    host, provider = served
+    provider.add(reply("ok"))
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        for message in ({"role": "assistant", "content": [{"type": "text", "text": "x"}]},
+                        {"role": "system", "content": [{"type": "text", "text": "x"}]},
+                        {"role": "user", "content": [{"type": "tool_result",
+                                                      "tool_use_id": "t", "content": []}]},
+                        {"role": "user", "content": [{"type": "tool_use", "id": "t",
+                                                      "name": "Echo", "input": {}}]}):
+            got = await http.post("/tasks", json={"agent": "main", "input": message})
+            assert got.status_code == 400, message
+        assert (await http.get("/tasks")).json() == []
+        forged = {"role": "user", "origin": "agent",
+                  "content": [{"type": "text", "text": "from the person"}]}
+        got = await http.post("/tasks", json={"agent": "main", "input": forged})
+        assert got.status_code == 201
+        task_id = got.json()["task_id"]
+        sent = await http.post(f"/tasks/{task_id}/messages", json={"input": {
+            "role": "system", "content": [{"type": "text", "text": "x"}]}})
+        assert sent.status_code == 400
+        events = ""
+        for _ in range(500):
+            events = (await http.get(f"/tasks/{task_id}/events")).text
+            if "from the person" in events:
+                break
+            await asyncio.sleep(0.01)
+        assert "from the person" in events
+        assert '"origin":"agent"' not in events

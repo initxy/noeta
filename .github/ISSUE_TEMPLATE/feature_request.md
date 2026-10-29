@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Propose a change or addition to Noeta
+about: Propose a change or addition to noeta
 title: "[feat] "
 labels: enhancement
 assignees: ''
@@ -8,23 +8,23 @@ assignees: ''
 
 ## Problem / motivation
 
-What are you trying to do, and where does the current runtime get in the way?
-Describe the concrete need, not just the solution.
+What are you trying to do, and where does noeta get in the way? Describe the need, not only
+the solution.
 
 ## Proposed solution
 
-What you'd like Noeta to do. Sketch the shape of the interface or behavior if
-you have one in mind.
+What you would like noeta to do. If Claude Code already does it, say how. If it could be a
+plugin (`docs/extending.md`), say why it should be built in.
 
 ## Alternatives considered
 
-Other approaches you weighed, and why they fall short. If a decision already
-lives in `docs/adr/`, note whether this proposal changes it.
+Other approaches you weighed and why they fall short. If a decision in `docs/adr/` stands in
+the way, name it.
 
-## Scope
+## Area
 
-Which package(s) does this touch?
-
-- [ ] `noeta-runtime` (the event-sourced engine / kernel)
-- [ ] `noeta-sdk` (in-process client surface)
+- [ ] kernel (`noeta/core`)
+- [ ] a plugin (`noeta/plugins/...`)
+- [ ] backends (providers, exec envs, stores)
+- [ ] ways in (HTTP, ACP, stream-json) or the `noeta` command
 - [ ] docs / other

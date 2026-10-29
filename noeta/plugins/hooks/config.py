@@ -25,16 +25,16 @@ log = logging.getLogger("noeta.hooks")
 
 #: The events noeta fires, with Claude Code's names.
 EVENTS = (
-    "PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop",
-    "SubagentStart", "SubagentStop", "SessionStart", "SessionEnd", "PreCompact",
-    "PostCompact", "PermissionRequest", "PermissionDenied", "Notification",
+    "PreToolUse", "PostToolUse", "PostToolUseFailure", "PostToolBatch", "UserPromptSubmit",
+    "Stop", "StopFailure", "SubagentStart", "SubagentStop", "SessionStart", "SessionEnd",
+    "PreCompact", "PostCompact", "PostModelSwitch", "PermissionRequest", "PermissionDenied",
+    "Notification", "CwdChanged",
 )
 #: Claude Code's other events: configured ones are skipped with a warning.
 UNSUPPORTED_EVENTS = (
-    "PostToolBatch", "UserPromptExpansion", "StopFailure", "PreModelSwitch",
-    "PostModelSwitch", "Setup", "TeammateIdle", "TaskCreated", "TaskCompleted",
-    "Elicitation", "ElicitationResult", "ConfigChange", "WorktreeCreate", "WorktreeRemove",
-    "InstructionsLoaded", "CwdChanged", "FileChanged", "DirectoryAdded", "MessageDisplay",
+    "UserPromptExpansion", "PreModelSwitch", "Setup", "TeammateIdle", "TaskCreated",
+    "TaskCompleted", "Elicitation", "ElicitationResult", "ConfigChange", "WorktreeCreate",
+    "WorktreeRemove", "InstructionsLoaded", "FileChanged", "DirectoryAdded", "MessageDisplay",
 )
 #: Events about one tool call (where ``if`` applies).
 TOOL_EVENTS = frozenset({"PreToolUse", "PostToolUse", "PostToolUseFailure",
@@ -45,17 +45,20 @@ SUBJECT = {
     **{e: "tool_name" for e in TOOL_EVENTS},
     "SessionStart": "source", "SessionEnd": "reason", "PreCompact": "trigger",
     "PostCompact": "trigger", "Notification": "notification_type",
-    "SubagentStart": "agent_type", "SubagentStop": "agent_type",
+    "SubagentStart": "agent_type", "SubagentStop": "agent_type", "StopFailure": "error",
+    "PostModelSwitch": "to_model",
 }
 #: Old tool names a matcher may use, both ways.
 _ALIASES = {"Task": "Agent", "Agent": "Task"}
 
-#: Default timeouts in seconds: command and HTTP hooks 10 minutes, prompt
-#: hooks 30 seconds (Claude Code's).
+#: Default timeouts in seconds: command, HTTP and MCP tool hooks 10 minutes,
+#: prompt hooks 30 seconds, agent hooks a minute (Claude Code's).
 COMMAND_TIMEOUT_S = 600.0
 PROMPT_TIMEOUT_S = 30.0
+AGENT_TIMEOUT_S = 60.0
 
-HookType = Literal["command", "http", "prompt"]
+HookType = Literal["command", "http", "prompt", "agent", "mcp_tool"]
+HOOK_TYPES = ("command", "http", "prompt", "agent", "mcp_tool")
 
 
 @dataclass(frozen=True)
@@ -63,7 +66,8 @@ class HookCommand:
     """One hook. ``type`` says which fields apply: ``command`` (with
     ``args``: run directly, no shell), ``url`` / ``headers`` /
     ``allowed_env_vars`` (``http``), ``prompt`` / ``model`` /
-    ``continue_on_block`` (``prompt``)."""
+    ``continue_on_block`` (``prompt``; ``agent`` without the last),
+    ``server`` / ``tool`` / ``arguments`` (``mcp_tool``)."""
 
     command: str = ""
     timeout: float = COMMAND_TIMEOUT_S
@@ -82,18 +86,26 @@ class HookCommand:
     #: A failure (could not start, timed out, exit code other than 0 / 2)
     #: blocks like exit 2 (``onFailure: block``).
     block_on_failure: bool = False
+    server: str = ""
+    tool: str = ""
+    #: An ``mcp_tool`` hook's arguments (``${path}`` filled from the input).
+    arguments: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def key(self) -> str:
         """Identical hooks (same key) run once per event."""
-        what = {"command": self.command, "http": self.url, "prompt": self.prompt}[self.type]
         args = "\x00".join(self.args or ())
+        if self.type == "mcp_tool":
+            args = json.dumps(dict(self.arguments), sort_keys=True)
         cond = self.condition.text if self.condition else ""
-        return f"{self.type}\x00{what}\x00{args}\x00{cond}"
+        return f"{self.type}\x00{self.label}\x00{args}\x00{cond}"
 
     @property
     def label(self) -> str:
-        return {"command": self.command, "http": self.url, "prompt": self.prompt}[self.type]
+        if self.type == "mcp_tool":
+            return f"{self.server}/{self.tool}"
+        return {"command": self.command, "http": self.url, "prompt": self.prompt,
+                "agent": self.prompt}[self.type]
 
 
 @dataclass(frozen=True)
@@ -136,8 +148,12 @@ def _strings(value: Any, where: str, name: str) -> tuple[str, ...]:
 def _hook(event: str, h: Mapping[str, Any]) -> HookCommand | None:
     where = f"hooks.{event}"
     kind = h.get("type", "command")
-    if kind not in ("command", "http", "prompt"):
+    if kind not in HOOK_TYPES:
         log.warning("%s: %r hooks do not run in noeta; skipped", where, kind)
+        return None
+    if kind == "agent" and event == "PermissionRequest":
+        log.warning("%s: an agent hook answers ok or not, never the allow / deny a "
+                    "permission request needs; skipped", where)
         return None
     condition = None
     if h.get("if") is not None:
@@ -147,7 +163,7 @@ def _hook(event: str, h: Mapping[str, Any]) -> HookCommand | None:
     common: dict[str, Any] = {
         "type": kind, "condition": condition, "once": bool(h.get("once")),
         "timeout": _number(h["timeout"], where) if h.get("timeout") is not None
-        else (PROMPT_TIMEOUT_S if kind == "prompt" else COMMAND_TIMEOUT_S),
+        else {"prompt": PROMPT_TIMEOUT_S, "agent": AGENT_TIMEOUT_S}.get(kind, COMMAND_TIMEOUT_S),
         "block_on_failure": h.get("onFailure") == "block",
     }
     if kind == "command":
@@ -169,12 +185,21 @@ def _hook(event: str, h: Mapping[str, Any]) -> HookCommand | None:
             if h.get("allowedEnvVars") is not None else ()
         return HookCommand(url=url, headers=tuple(headers.items()), allowed_env_vars=allowed,
                            **common)
+    if kind == "mcp_tool":
+        server, tool = h.get("server"), h.get("tool")
+        if not isinstance(server, str) or not server or not isinstance(tool, str) or not tool:
+            raise ValueError(f"{where}: an mcp_tool hook needs 'server' and 'tool'")
+        arguments = h.get("input") or {}
+        if not isinstance(arguments, dict):
+            raise ValueError(f"{where}: an mcp_tool hook's 'input' must be an object")
+        return HookCommand(server=server, tool=tool, arguments=dict(arguments), **common)
     prompt = h.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
-        raise ValueError(f"{where}: a prompt hook needs 'prompt'")
+        raise ValueError(f"{where}: a {kind} hook needs 'prompt'")
     model = h.get("model")
     return HookCommand(prompt=prompt, model=model if isinstance(model, str) else "",
-                       continue_on_block=bool(h.get("continueOnBlock")), **common)
+                       continue_on_block=kind == "prompt" and bool(h.get("continueOnBlock")),
+                       **common)
 
 
 def parse_hooks(config: Mapping[str, Any]) -> dict[str, list[Matcher]]:

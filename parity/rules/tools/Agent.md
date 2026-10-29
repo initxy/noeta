@@ -64,7 +64,7 @@ counterpart is `Agent` (`noeta/plugins/subtasks/tool.py`, `descriptions/agent.md
 | `tool.Agent.r.4` | The ack tells the caller not to duplicate the agent's work (avoid the same files or topics). |
 | `tool.Agent.r.5` | The ack ends with `output_file: <tmp>/claude-<uid>/<project-slug>/<session-id>/tasks/<id>.output` and a warning not to read or tail that file through the shell (it is the full JSONL transcript and would flood the context); if asked for progress, say it is still running. |
 | `tool.Agent.r.6` | Completion comes later as two user-role pieces: the agent's `SubagentHandback` report wrapped in `<agent-message from="<id>">` (see `SubagentHandback.md`, `subagent.md`), and a `<task-notification>` in a `<system-reminder>` with `task-id`, `tool-use-id`, `output-file`, `status` `completed`, `summary` `Agent "<description>" finished`, a note that the same id may notify again, a `result` that points at the hand-back message instead of repeating it, and `usage` (`subagent_tokens`, `tool_uses`, `duration_ms`). See `reminders.md`. |
-| `tool.Agent.r.7` | noeta today: r.1–r.6, except that the ack and the notice carry no `output_file` (noeta keeps the transcript in the task log, not a file). |
+| `tool.Agent.r.7` | noeta today: r.1–r.6. The transcript file is `<spill root>/<root task id>/tasks/<agent id>.output` (the host's spill directory for large tool outputs), one JSON line (`type`, `message`) per message of the agent's conversation, rewritten from its log as it changes; a host with no spill directory has no file, and then neither the ack nor the notice names one. |
 
 ## Variants
 

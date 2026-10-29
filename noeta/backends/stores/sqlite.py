@@ -7,31 +7,46 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import os
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, TypeVar
+from typing import TypeVar
 
-import msgspec
+from msgspec.structs import replace
 
-from noeta.core.errors import Conflict, StoreUnavailable, UnknownTask
-from noeta.core.events import Event, InboxItem, InboxKind, Recorded, event_type
+from noeta.backends.stores._rows import (
+    SCHEMA_VERSION,
+    TASK_COLUMNS,
+    encode,
+    event_decoder,
+    inbox_decoder,
+    inbox_kind,
+    task_row,
+)
+from noeta.core.errors import Conflict, StoreUnavailable, UnknownTask, UnservedQueue
+from noeta.core.events import Event, InboxItem, Recorded, event_type
 from noeta.core.store import (
+    SNAPSHOT_VERSIONS,
+    Appended,
     ChangeKind,
     Claim,
     NewTask,
     OnChange,
     Patch,
     Post,
+    Snapshot,
     Status,
     TaskRow,
+    hold_lost,
+    next_row_state,
 )
 
 T = TypeVar("T")
 
-SCHEMA_VERSION = 1
 _BUSY_TIMEOUT_MS = 10000
 _OPEN_ATTEMPTS = 5
 #: sqlite failures that mean "the store is not usable right now", not a bug
@@ -66,6 +81,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE INDEX IF NOT EXISTS tasks_claimable ON tasks (queue, status, ready_at);
 CREATE INDEX IF NOT EXISTS tasks_parent ON tasks (parent_id);
+CREATE INDEX IF NOT EXISTS tasks_root ON tasks (root_id);
 CREATE TABLE IF NOT EXISTS events (
     task_id TEXT NOT NULL,
     seq     INTEGER NOT NULL,
@@ -85,30 +101,117 @@ CREATE TABLE IF NOT EXISTS inbox (
 ) WITHOUT ROWID;
 CREATE UNIQUE INDEX IF NOT EXISTS inbox_dedupe ON inbox (task_id, dedupe_key)
     WHERE dedupe_key IS NOT NULL;
-CREATE TABLE IF NOT EXISTS holds (
-    root_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS tree_holds (
+    epoch   INTEGER PRIMARY KEY AUTOINCREMENT,
+    root_id TEXT NOT NULL,
     worker  TEXT NOT NULL,
-    until   REAL NOT NULL
+    until   REAL NOT NULL,
+    UNIQUE (root_id, worker)
+);
+CREATE INDEX IF NOT EXISTS tree_holds_until ON tree_holds (until);
+CREATE TABLE IF NOT EXISTS snapshots (
+    task_id TEXT NOT NULL,
+    seq     INTEGER NOT NULL,
+    version TEXT NOT NULL,
+    data    BLOB NOT NULL,
+    PRIMARY KEY (task_id, version)
+) WITHOUT ROWID;
+"""
+
+#: Columns added after a table was first created: (table, column, definition).
+#: Existing rows take the definition's default; nothing is ever dropped.
+_ADDED_COLUMNS = (
+    ("tasks", "tenant", "TEXT NOT NULL DEFAULT 'default'"),
+    # The holding worker's queues (a JSON list); NULL from a hold that
+    # named none, or an older version's: not checked.
+    ("tree_holds", "queues", "TEXT"),
+)
+_ADDED_TABLES = """
+CREATE INDEX IF NOT EXISTS tasks_tenant ON tasks (tenant, status);
+CREATE TABLE IF NOT EXISTS tenant_usage (
+    tenant   TEXT NOT NULL,
+    period   TEXT NOT NULL,
+    tokens   INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant, period)
 );
 """
 
-_TASK_COLUMNS = (
-    "task_id, root_id, agent, queue, status, last_seq, created_at, updated_at, parent_id, "
-    "waiting_on, ready_at, owner, owner_epoch, lease_until, inbox_seq, inbox_read_seq, end_status"
-)
 
-_event_decoder = msgspec.json.Decoder(Event)
-_inbox_decoder = msgspec.json.Decoder(InboxKind)
-_encode = msgspec.json.encode
+def _refuse_newer(conn: sqlite3.Connection, path: str) -> None:
+    row = conn.execute("SELECT max(version) FROM noeta_schema").fetchone()
+    if row is not None and row[0] is not None and int(row[0]) > SCHEMA_VERSION:
+        raise StoreUnavailable(f"sqlite store {path} is at schema version {row[0]}; this "
+                               f"noeta knows {SCHEMA_VERSION} (stop every worker and upgrade)")
 
 
-def _row(values: Sequence[Any]) -> TaskRow:
-    names = [n.strip() for n in _TASK_COLUMNS.split(",")]
-    return TaskRow(**dict(zip(names, values, strict=False)))
+def _set_version(conn: sqlite3.Connection) -> None:
+    """Record this code's schema version once its tables are in place."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute("SELECT max(version) FROM noeta_schema").fetchone()
+        if row is None or row[0] is None:
+            conn.execute("INSERT INTO noeta_schema VALUES (?)", (SCHEMA_VERSION,))
+        elif int(row[0]) < SCHEMA_VERSION:
+            if int(row[0]) < 2:
+                _tell_version_1_holds(conn)
+            else:
+                _key_snapshots_by_version(conn)
+            conn.execute("UPDATE noeta_schema SET version = ?", (SCHEMA_VERSION,))
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
 
 
-def _kind(body: InboxKind) -> str:
-    return type(body).__struct_config__.tag  # type: ignore[return-value]
+def _key_snapshots_by_version(conn: sqlite3.Connection) -> None:
+    """Version 2 kept one snapshot per task: its rows move to a table keyed
+    by task and version (sqlite cannot change a primary key in place)."""
+    conn.execute("CREATE TABLE snapshots_by_version (task_id TEXT NOT NULL,"
+                 " seq INTEGER NOT NULL, version TEXT NOT NULL, data BLOB NOT NULL,"
+                 " PRIMARY KEY (task_id, version)) WITHOUT ROWID")
+    conn.execute("INSERT INTO snapshots_by_version (task_id, seq, version, data)"
+                 " SELECT task_id, seq, version, data FROM snapshots")
+    conn.execute("DROP TABLE snapshots")
+    conn.execute("ALTER TABLE snapshots_by_version RENAME TO snapshots")
+
+
+def _tell_version_1_holds(conn: sqlite3.Connection) -> None:
+    """Version 1 kept holds in ``holds``, which this version does not read:
+    each tree held there is told the hold is gone (``hold_lost`` with epoch
+    0, which no hold of ``tree_holds`` has). The table itself is kept."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'holds'"
+                    ).fetchone() is None:
+        return
+    now = time.time()
+    for root_id, worker in conn.execute("SELECT root_id, worker FROM holds").fetchall():
+        SqliteStore._lost_posts(conn, str(root_id), str(worker), 0, now, [])
+
+
+def _add_columns(conn: sqlite3.Connection) -> None:
+    for table, column, definition in _ADDED_COLUMNS:
+        have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in have:
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc):  # another process was first
+                    raise
+    conn.executescript(_ADDED_TABLES)
+
+
+def _create_private(path: str) -> None:
+    """Create the database file owner-only (it holds every conversation)
+    when it does not exist; SQLite gives its ``-wal`` and ``-shm`` files the
+    database file's mode. An existing file keeps its mode."""
+    if not path or path == ":memory:" or path.startswith("file:"):
+        return
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return
+    os.close(fd)
 
 
 class SqliteStore:
@@ -129,21 +232,28 @@ class SqliteStore:
             # WAL; the busy timeout comes first so that waits instead of
             # failing, and a first open that still finds the file locked is
             # tried again.
+            _create_private(self.path)
             for attempt in range(_OPEN_ATTEMPTS):
                 conn = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
                 try:
                     conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
                     conn.execute("PRAGMA journal_mode=WAL")
                     conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.execute("CREATE TABLE IF NOT EXISTS noeta_schema"
+                                 " (version INTEGER NOT NULL)")
+                    _refuse_newer(conn, self.path)
                     conn.executescript(_SCHEMA)
-                    if conn.execute("SELECT count(*) FROM noeta_schema").fetchone()[0] == 0:
-                        conn.execute("INSERT INTO noeta_schema VALUES (?)", (SCHEMA_VERSION,))
+                    _add_columns(conn)
+                    _set_version(conn)
                 except sqlite3.OperationalError as exc:
                     conn.close()
                     if "locked" not in str(exc) or attempt + 1 >= _OPEN_ATTEMPTS:
                         raise
                     time.sleep(0.05 * (attempt + 1))
                     continue
+                except BaseException:
+                    conn.close()
+                    raise
                 self._conn = conn
                 break
         assert self._conn is not None
@@ -224,8 +334,8 @@ class SqliteStore:
         created = task.created
         conn.execute(
             "INSERT INTO tasks (task_id, parent_id, root_id, agent, queue, status, last_seq,"
-            " inbox_seq, dedupe_key, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, 'ready', 1, ?, ?, ?, ?)",
+            " inbox_seq, dedupe_key, created_at, updated_at, tenant)"
+            " VALUES (?, ?, ?, ?, ?, 'ready', 1, ?, ?, ?, ?, ?)",
             (
                 task.task_id,
                 created.parent_id,
@@ -236,18 +346,46 @@ class SqliteStore:
                 task.dedupe_key,
                 now,
                 now,
+                created.tenant,
             ),
         )
         conn.execute(
             "INSERT INTO events (task_id, seq, type, at, data) VALUES (?, 1, ?, ?, ?)",
-            (task.task_id, event_type(created), now, _encode(created)),
+            (task.task_id, event_type(created), now, encode(created)),
         )
         for i, body in enumerate(task.inbox, start=1):
             conn.execute(
                 "INSERT INTO inbox (task_id, seq, kind, at, data) VALUES (?, ?, ?, ?, ?)",
-                (task.task_id, i, _kind(body), now, _encode(body)),
+                (task.task_id, i, inbox_kind(body), now, encode(body)),
             )
         return task.task_id, True
+
+    @staticmethod
+    def _check_served(conn: sqlite3.Connection, creates: Sequence[NewTask]) -> None:
+        """Raise ``UnservedQueue`` for a child on a queue its tree's holding
+        worker does not serve (it could never be claimed while held)."""
+        for task in creates:
+            root = task.created.root_id
+            if root is None or root == task.task_id:
+                continue
+            for (queues,) in conn.execute(
+                    "SELECT queues FROM tree_holds WHERE root_id = ? AND queues IS NOT NULL",
+                    (root,)).fetchall():
+                if task.queue not in json.loads(queues):
+                    raise UnservedQueue(task.queue)
+
+    @staticmethod
+    def _forwarded(conn: sqlite3.Connection, post: Post) -> Post:
+        """``post``, or the same post to its task's root when it asks to be
+        forwarded and the task has ended (see ``Post.forward_if_ended``)."""
+        if not post.forward_if_ended:
+            return post
+        row = conn.execute(
+            "SELECT status, root_id FROM tasks WHERE task_id = ?", (post.task_id,)
+        ).fetchone()
+        if row is None or row[0] != "ended" or row[1] == post.task_id:
+            return post
+        return replace(post, task_id=str(row[1]), forward_if_ended=False)
 
     @staticmethod
     def _insert_post(conn: sqlite3.Connection, post: Post, now: float) -> tuple[int, bool]:
@@ -268,9 +406,9 @@ class SqliteStore:
         conn.execute(
             "INSERT INTO inbox (task_id, seq, kind, at, data, dedupe_key)"
             " VALUES (?, ?, ?, ?, ?, ?)",
-            (post.task_id, seq, _kind(post.body), now, _encode(post.body), post.dedupe_key),
+            (post.task_id, seq, inbox_kind(post.body), now, encode(post.body), post.dedupe_key),
         )
-        wake = status == "waiting"
+        wake = status == "waiting" and post.wake
         conn.execute(
             "UPDATE tasks SET inbox_seq = ?, updated_at = ?"
             + (", status = 'ready', ready_at = NULL" if wake else "")
@@ -296,10 +434,10 @@ class SqliteStore:
         patch: Patch = Patch(),
         posts: Sequence[Post] = (),
         creates: Sequence[NewTask] = (),
-    ) -> int:
+    ) -> Appended:
         changes: list[tuple[str, ChangeKind]] = []
 
-        def tx(conn: sqlite3.Connection) -> int:
+        def tx(conn: sqlite3.Connection) -> Appended:
             now = time.time()
             row = conn.execute(
                 "SELECT status, owner_epoch, last_seq, inbox_seq, inbox_read_seq"
@@ -315,19 +453,19 @@ class SqliteStore:
                 raise Conflict(
                     f"{claim.task_id}: expected seq {expected_seq}, log is at {last_seq}"
                 )
+            self._check_served(conn, creates)
+            new_status, waiting_on, ready_at, read_seq = next_row_state(patch, inbox_seq,
+                                                                        read_seq)
             seq = int(last_seq)
             for event in events:
                 seq += 1
                 conn.execute(
                     "INSERT INTO events (task_id, seq, type, at, data) VALUES (?, ?, ?, ?, ?)",
-                    (claim.task_id, seq, event_type(event), now, _encode(event)),
+                    (claim.task_id, seq, event_type(event), now, encode(event)),
                 )
-            read_seq = patch.inbox_read_seq if patch.inbox_read_seq is not None else read_seq
-            new_status: Status = patch.status
-            ready_at = patch.ready_at
-            if new_status == "waiting" and inbox_seq > read_seq:
-                new_status, ready_at = "ready", None
             releasing = new_status != "running"
+            if new_status == "ended":
+                conn.execute("DELETE FROM snapshots WHERE task_id = ?", (claim.task_id,))
             conn.execute(
                 "UPDATE tasks SET last_seq = ?, status = ?, waiting_on = ?, ready_at = ?,"
                 " inbox_read_seq = ?, end_status = COALESCE(?, end_status), updated_at = ?"
@@ -336,7 +474,7 @@ class SqliteStore:
                 (
                     seq,
                     new_status,
-                    patch.waiting_on if new_status == "waiting" else None,
+                    waiting_on,
                     ready_at,
                     read_seq,
                     patch.end_status,
@@ -351,16 +489,17 @@ class SqliteStore:
                     changes.append((task_id, "created"))
             for post in posts:
                 try:
+                    post = self._forwarded(conn, post)
                     _, created = self._insert_post(conn, post, now)
                 except UnknownTask:
                     continue  # a notice for a task that does not exist is dropped
                 if created:
                     changes.append((post.task_id, "posted"))
-            return seq
+            return Appended(seq=seq, at=now)
 
-        seq = await self._write(tx)
+        done = await self._write(tx)
         self._notify(changes)
-        return seq
+        return done
 
     async def read(self, task_id: str, after: int = 0) -> list[Recorded]:
         def q(conn: sqlite3.Connection) -> list[Recorded]:
@@ -368,14 +507,18 @@ class SqliteStore:
                 "SELECT seq, at, data FROM events WHERE task_id = ? AND seq > ? ORDER BY seq",
                 (task_id, after),
             ).fetchall()
-            return [Recorded(seq=s, at=a, event=_event_decoder.decode(d)) for s, a, d in rows]
+            return [Recorded(seq=s, at=a, event=event_decoder.decode(d)) for s, a, d in rows]
 
         return await self._run(q)
 
     async def post(self, post: Post) -> tuple[int, bool]:
-        result = await self._write(lambda conn: self._insert_post(conn, post, time.time()))
+        def tx(conn: sqlite3.Connection) -> tuple[Post, tuple[int, bool]]:
+            to = self._forwarded(conn, post)
+            return to, self._insert_post(conn, to, time.time())
+
+        to, result = await self._write(tx)
         if result[1]:
-            self._notify([(post.task_id, "posted")])
+            self._notify([(to.task_id, "posted")])
         return result
 
     async def inbox(self, task_id: str, after: int = 0) -> list[InboxItem]:
@@ -384,16 +527,16 @@ class SqliteStore:
                 "SELECT seq, at, data FROM inbox WHERE task_id = ? AND seq > ? ORDER BY seq",
                 (task_id, after),
             ).fetchall()
-            return [InboxItem(seq=s, at=a, body=_inbox_decoder.decode(d)) for s, a, d in rows]
+            return [InboxItem(seq=s, at=a, body=inbox_decoder.decode(d)) for s, a, d in rows]
 
         return await self._run(q)
 
     async def get(self, task_id: str) -> TaskRow | None:
         def q(conn: sqlite3.Connection) -> TaskRow | None:
             row = conn.execute(
-                f"SELECT {_TASK_COLUMNS} FROM tasks WHERE task_id = ?", (task_id,)
+                f"SELECT {TASK_COLUMNS} FROM tasks WHERE task_id = ?", (task_id,)
             ).fetchone()
-            return _row(row) if row else None
+            return task_row(row) if row else None
 
         return await self._run(q)
 
@@ -403,27 +546,36 @@ class SqliteStore:
         parent_id: str | None = None,
         status: Status | None = None,
         limit: int = 100,
+        tenant: str | None = None,
+        owner: str | None = None,
     ) -> list[TaskRow]:
         where, args = [], []
         if parent_id is not None:
             where.append("parent_id = ?")
             args.append(parent_id)
+        if tenant is not None:
+            where.append("tenant = ?")
+            args.append(tenant)
         if status is not None:
             where.append("status = ?")
             args.append(status)
-        sql = f"SELECT {_TASK_COLUMNS} FROM tasks"
+        if owner is not None:
+            where.append("owner = ?")
+            args.append(owner)
+        sql = f"SELECT {TASK_COLUMNS} FROM tasks"
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY updated_at DESC LIMIT ?"
 
         def q(conn: sqlite3.Connection) -> list[TaskRow]:
-            return [_row(r) for r in conn.execute(sql, (*args, limit)).fetchall()]
+            return [task_row(r) for r in conn.execute(sql, (*args, limit)).fetchall()]
 
         return await self._run(q)
 
     async def claim(
         self, worker: str, queues: Sequence[str], lease_seconds: float,
         *, roots: Sequence[str] | None = None,
+        tenant_limits: Mapping[str, int] | None = None,
     ) -> Claim | None:
         if not queues or (roots is not None and not roots):
             return None
@@ -433,15 +585,22 @@ class SqliteStore:
 
         def tx(conn: sqlite3.Connection) -> Claim | None:
             now = time.time()
+            full = [t for t, most in (tenant_limits or {}).items()
+                    if conn.execute("SELECT count(*) FROM tasks WHERE tenant = ? AND"
+                                    " status = 'running' AND lease_until >= ?",
+                                    (t, now)).fetchone()[0] >= most]
+            not_full = (f" AND tenant NOT IN ({','.join('?' for _ in full)})"
+                        if full else "")
             row = conn.execute(
-                f"SELECT task_id, owner_epoch FROM tasks WHERE queue IN ({marks}){in_roots} AND ("
+                "SELECT task_id, owner_epoch, queue FROM tasks"
+                f" WHERE queue IN ({marks}){in_roots} AND ("
                 " (status = 'ready' AND (ready_at IS NULL OR ready_at <= ?))"
                 " OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= ?)"
                 " OR (status = 'running' AND lease_until < ?))"
-                " AND NOT EXISTS (SELECT 1 FROM holds h WHERE h.root_id = tasks.root_id"
-                " AND h.worker <> ? AND h.until > ?)"
+                " AND NOT EXISTS (SELECT 1 FROM tree_holds h WHERE h.root_id = tasks.root_id"
+                f" AND h.worker <> ?){not_full}"
                 " ORDER BY updated_at LIMIT 1",
-                (*queues, *root_ids, now, now, now, worker, now),
+                (*queues, *root_ids, now, now, now, worker, *full),
             ).fetchone()
             if row is None:
                 return None
@@ -449,12 +608,33 @@ class SqliteStore:
             until = now + lease_seconds
             conn.execute(
                 "UPDATE tasks SET status = 'running', owner = ?, owner_epoch = ?,"
-                " lease_until = ?, ready_at = NULL, updated_at = ? WHERE task_id = ?",
+                " lease_until = ?, ready_at = NULL, waiting_on = NULL, updated_at = ?"
+                " WHERE task_id = ?",
                 (worker, epoch, until, now, task_id),
             )
-            return Claim(task_id=task_id, worker=worker, epoch=epoch, lease_until=until)
+            return Claim(task_id=task_id, worker=worker, epoch=epoch, lease_until=until,
+                         queue=str(row[2]))
 
         return await self._write(tx)
+
+    async def add_tenant_usage(self, tenant: str, period: str, tokens: int,
+                               cost_usd: float) -> None:
+        def tx(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "INSERT INTO tenant_usage (tenant, period, tokens, cost_usd) VALUES (?, ?, ?, ?)"
+                " ON CONFLICT (tenant, period) DO UPDATE SET"
+                " tokens = tokens + excluded.tokens, cost_usd = cost_usd + excluded.cost_usd",
+                (tenant, period, tokens, cost_usd))
+
+        await self._write(tx)
+
+    async def tenant_usage(self, tenant: str, period: str) -> tuple[int, float]:
+        def q(conn: sqlite3.Connection) -> tuple[int, float]:
+            row = conn.execute("SELECT tokens, cost_usd FROM tenant_usage WHERE tenant = ?"
+                               " AND period = ?", (tenant, period)).fetchone()
+            return (int(row[0]), float(row[1])) if row else (0, 0.0)
+
+        return await self._run(q)
 
     async def renew(self, claim: Claim, lease_seconds: float) -> Claim | None:
         def tx(conn: sqlite3.Connection) -> Claim | None:
@@ -467,42 +647,164 @@ class SqliteStore:
             if cur.rowcount == 0:
                 return None
             return Claim(task_id=claim.task_id, worker=claim.worker, epoch=claim.epoch,
-                         lease_until=until)
+                         lease_until=until, queue=claim.queue)
 
         return await self._write(tx)
 
-    async def hold(self, root_id: str, worker: str, seconds: float) -> bool:
-        def tx(conn: sqlite3.Connection) -> bool:
+    async def hold(self, root_id: str, worker: str, seconds: float,
+                   *, epoch: int | None = None,
+                   queues: Sequence[str] | None = None) -> int | None:
+        changes: list[tuple[str, ChangeKind]] = []
+
+        def tx(conn: sqlite3.Connection) -> int | None:
+            changes.clear()
             now = time.time()
+            until = now + seconds
+            if epoch is not None:
+                cur = conn.execute(
+                    "UPDATE tree_holds SET until = ? WHERE epoch = ? AND root_id = ?"
+                    " AND worker = ?", (until, epoch, root_id, worker))
+                return epoch if cur.rowcount else None
+            if conn.execute("SELECT 1 FROM tree_holds WHERE root_id = ? AND worker <> ?",
+                            (root_id, worker)).fetchone() is not None:
+                return None  # one holding worker per tree
+            if queues is not None and conn.execute(
+                    "SELECT 1 FROM tasks WHERE root_id = ? AND status <> 'ended'"
+                    f" AND queue NOT IN ({','.join('?' for _ in queues)}) LIMIT 1",
+                    (root_id, *queues)).fetchone() is not None:
+                return None  # a task of the tree this worker could not claim
+            # Other workers' lapsed claims of the tree are taken back (a new
+            # epoch), so one that stalled past its lease cannot renew or
+            # write once this worker holds the tree.
+            lapsed = [str(r[0]) for r in conn.execute(
+                "SELECT task_id FROM tasks WHERE root_id = ? AND status = 'running'"
+                " AND owner <> ? AND lease_until < ?", (root_id, worker, now)).fetchall()]
+            for task_id in lapsed:
+                conn.execute(
+                    "UPDATE tasks SET status = 'ready', owner = NULL, lease_until = NULL,"
+                    " owner_epoch = owner_epoch + 1, updated_at = ? WHERE task_id = ?",
+                    (now, task_id))
+                changes.append((task_id, "released"))
+            if conn.execute(
+                    "SELECT 1 FROM tasks WHERE root_id = ? AND status = 'running'"
+                    " AND owner <> ? AND lease_until >= ? LIMIT 1",
+                    (root_id, worker, now)).fetchone() is not None:
+                return None  # a task of the tree runs on another worker
+            row = conn.execute(
+                "SELECT epoch FROM tree_holds WHERE root_id = ? AND worker = ?",
+                (root_id, worker)).fetchone()
+            served = json.dumps(list(queues)) if queues is not None else None
+            if row is not None:
+                conn.execute("UPDATE tree_holds SET until = ?, queues = ? WHERE epoch = ?",
+                             (until, served, row[0]))
+                return int(row[0])
+            cur = conn.execute("INSERT INTO tree_holds (root_id, worker, until, queues)"
+                               " VALUES (?, ?, ?, ?)", (root_id, worker, until, served))
+            return int(cur.lastrowid or 0)
+
+        held = await self._write(tx)
+        self._notify(changes)
+        return held
+
+    @staticmethod
+    def _lost_posts(conn: sqlite3.Connection, root_id: str, worker: str, epoch: int,
+                    now: float, changes: list[tuple[str, ChangeKind]],
+                    *, wake: bool = True) -> None:
+        """Post ``hold_lost`` to every unended task of the tree."""
+        tasks = conn.execute("SELECT task_id FROM tasks WHERE root_id = ? AND status <> 'ended'",
+                             (root_id,)).fetchall()
+        for (task_id,) in tasks:
+            _, created = SqliteStore._insert_post(conn, hold_lost(str(task_id), worker, epoch,
+                                                         wake=wake), now)
+            if created:
+                changes.append((str(task_id), "posted"))
+
+    async def unhold(self, root_id: str, worker: str, epoch: int,
+                     *, lost: bool = False) -> None:
+        changes: list[tuple[str, ChangeKind]] = []
+
+        def tx(conn: sqlite3.Connection) -> None:
             cur = conn.execute(
-                "INSERT INTO holds (root_id, worker, until) VALUES (?, ?, ?)"
-                " ON CONFLICT (root_id) DO UPDATE SET worker = excluded.worker,"
-                " until = excluded.until WHERE holds.worker = excluded.worker"
-                " OR holds.until <= ?",
-                (root_id, worker, now + seconds, now),
-            )
-            return cur.rowcount > 0
+                "DELETE FROM tree_holds WHERE epoch = ? AND root_id = ? AND worker = ?",
+                (epoch, root_id, worker))
+            if not cur.rowcount:
+                return
+            changes.append((root_id, "released"))
+            if lost:
+                self._lost_posts(conn, root_id, worker, epoch, time.time(), changes,
+                                 wake=False)
 
-        return await self._write(tx)
+        changes.clear()
+        await self._write(tx)
+        self._notify(changes)
 
-    async def unhold(self, root_id: str, worker: str) -> None:
+    async def reap_holds(self) -> int:
+        changes: list[tuple[str, ChangeKind]] = []
+
         def tx(conn: sqlite3.Connection) -> int:
-            return conn.execute("DELETE FROM holds WHERE root_id = ? AND worker = ?",
-                                (root_id, worker)).rowcount
+            changes.clear()
+            now = time.time()
+            gone = conn.execute("SELECT epoch, root_id, worker FROM tree_holds WHERE until < ?",
+                                (now,)).fetchall()
+            for epoch, root_id, worker in gone:
+                conn.execute("DELETE FROM tree_holds WHERE epoch = ?", (epoch,))
+                changes.append((str(root_id), "released"))
+                self._lost_posts(conn, str(root_id), str(worker), int(epoch), now, changes)
+            return len(gone)
 
-        if await self._write(tx):
-            self._notify([(root_id, "posted")])
+        if not await self._run(self._any_expired):
+            return 0
+        reaped = await self._write(tx)
+        self._notify(changes)
+        return reaped
+
+    @staticmethod
+    def _any_expired(conn: sqlite3.Connection) -> bool:
+        """A read before the write: most rounds find nothing to reap and
+        then take no write lock."""
+        return conn.execute("SELECT 1 FROM tree_holds WHERE until < ? LIMIT 1",
+                            (time.time(),)).fetchone() is not None
+
+    async def snapshot(self, task_id: str, version: str | None = None) -> Snapshot | None:
+        def q(conn: sqlite3.Connection) -> Snapshot | None:
+            row = conn.execute(
+                "SELECT seq, version, data FROM snapshots WHERE task_id = ?"
+                + (" AND version = ?" if version is not None else "")
+                + " ORDER BY seq DESC LIMIT 1",
+                (task_id, version) if version is not None else (task_id,)).fetchone()
+            return Snapshot(seq=int(row[0]), version=str(row[1]), data=bytes(row[2])) \
+                if row else None
+
+        return await self._run(q)
+
+    async def put_snapshot(self, task_id: str, snapshot: Snapshot) -> None:
+        def tx(conn: sqlite3.Connection) -> None:
+            if conn.execute("SELECT 1 FROM tasks WHERE task_id = ? AND status = 'ended'",
+                            (task_id,)).fetchone() is not None:
+                return  # its end deleted the last one; nothing claims it again
+            conn.execute(
+                "INSERT INTO snapshots (task_id, seq, version, data) VALUES (?, ?, ?, ?)"
+                " ON CONFLICT (task_id, version) DO UPDATE SET seq = excluded.seq,"
+                " data = excluded.data WHERE excluded.seq >= snapshots.seq",
+                (task_id, snapshot.seq, snapshot.version, snapshot.data))
+            conn.execute(
+                "DELETE FROM snapshots WHERE task_id = ? AND version NOT IN ("
+                " SELECT version FROM snapshots WHERE task_id = ?"
+                " ORDER BY version = ? DESC, seq DESC LIMIT ?)",
+                (task_id, task_id, snapshot.version, SNAPSHOT_VERSIONS))
+
+        await self._write(tx)
 
     async def release(self, claim: Claim) -> None:
-        def tx(conn: sqlite3.Connection) -> None:
-            conn.execute(
+        def tx(conn: sqlite3.Connection) -> int:
+            return conn.execute(
                 "UPDATE tasks SET status = 'ready', owner = NULL, lease_until = NULL,"
                 " updated_at = ? WHERE task_id = ? AND owner_epoch = ? AND status = 'running'",
                 (time.time(), claim.task_id, claim.epoch),
-            )
+            ).rowcount
 
-        await self._write(tx)
-        self._notify([(claim.task_id, "posted")])
+        if await self._write(tx):
+            self._notify([(claim.task_id, "released")])
 
 
 def open_url(url: str) -> SqliteStore:

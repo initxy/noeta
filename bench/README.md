@@ -258,13 +258,14 @@ export SWE_INCLUDE_GLOBS="django__django-13741 astropy__astropy-14182 ..."
 bench/run_benchmark.sh swe-subset
 ```
 
-Each id becomes a `-i/--include-task-name` filter. Record the full id list in
-`docs/benchmarks.md` alongside the score. TB2.1 is small enough (89 tasks) to
+Each id becomes a `-i/--include-task-name` filter. Record the full id list with
+the score when publishing (below). TB2.1 is small enough (89 tasks) to
 run in full, so it needs no subset.
 
 ## Publishing
 
-After a scored run, summarize into `docs/benchmarks.md`: the score, the model
+After a scored run, summarize it in a results page under `docs/` (none is
+published for 1.0 yet): the score, the model
 id, the dataset **name@version**, the exact command, and — for SWE-bench — the
 pinned instance-id list. State honestly what was run and what was not; usage /
 cost in the JSON is token-derived and is approximate when the gateway model is

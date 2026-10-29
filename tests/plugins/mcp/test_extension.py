@@ -16,11 +16,13 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
 from noeta.core.extension import Ask, Deny, Extension, Gate, TaskView
+from noeta.core.loop.state import TaskState
 from noeta.core.runner import Runtime
 from noeta.core.types import Image, ModelRequest, ToolUse
 from noeta.plugins.mcp import Mcp, McpPool, McpServer
 from noeta.plugins.mcp.config import describe_tool, make_tool_name, map_server_names
 from noeta.plugins.mcp.tools import McpTool
+from noeta.plugins.tool_search import ToolSearch
 from noeta.testing import ScriptedProvider, reply
 
 FAKE = str(Path(__file__).with_name("fake_server.py"))
@@ -60,7 +62,10 @@ async def events(client: Client, tid: str) -> list[Any]:
 
 
 def finished(evs: list[Any]) -> list[ToolFinished]:
-    return [e for e in evs if isinstance(e, ToolFinished)]
+    """The results in call order (one reply's calls run concurrently and may
+    finish in any order; ``reply`` numbers its call ids in order)."""
+    return sorted((e for e in evs if isinstance(e, ToolFinished)),
+                  key=lambda e: int(e.result.call_id.removeprefix("call_")))
 
 
 def records(evs: list[Any], kind: str) -> list[ExtensionRecorded]:
@@ -85,7 +90,7 @@ async def test_server_tools_are_offered_called_and_recorded_once(
         reply("done"),
         reply("again"),
     ])
-    agent = Agent(name="a", model="m", extensions=[Mcp([server()], pool=pool)])
+    agent = Agent(name="a", model="m", extensions=[Mcp([server()], pool=pool), ToolSearch()])
     rt = runtime(store, provider, agent)
     client = Client(store)
     tid = await client.create("a", "go")
@@ -173,13 +178,17 @@ async def test_deferred_server_tools_are_loaded_with_toolsearch_then_called_dire
     provider = ScriptedProvider([
         reply("", ("mcp__fake__echo", {"text": "early"})),
         reply("", ("ToolSearch", {"query": "select:mcp__fake__echo,ListMcpResourcesTool,"
-                                           "ReadMcpResourceTool", "max_results": 3})),
+                                           "ReadMcpResourceTool,ReadMcpResourceDirTool",
+                                  "max_results": 4})),
         reply("", ("mcp__fake__echo", {"text": "via"}),
               ("ReadMcpResourceTool", {"server": "fake", "uri": "file:///notes.md"}),
-              ("ListMcpResourcesTool", {})),
+              ("ListMcpResourcesTool", {}),
+              ("ReadMcpResourceDirTool", {"server": "fake", "uri": "file:///docs"}),
+              ("ReadMcpResourceDirTool", {"server": "fake", "uri": "file:///notes.md"})),
         reply("done"),
     ])
-    agent = Agent(name="a", model="m", extensions=[Mcp([server(deferred=True)], pool=pool)])
+    agent = Agent(name="a", model="m", extensions=[Mcp([server(deferred=True)], pool=pool),
+                                                   ToolSearch()])
     client = Client(store)
     tid = await client.create("a", "go")
     await runtime(store, provider, agent).run_until_idle()
@@ -187,13 +196,19 @@ async def test_deferred_server_tools_are_loaded_with_toolsearch_then_called_dire
     assert names == ["DeferredToolPlaceholder", "ToolSearch"]
     loaded = provider.requests[2].tools
     assert [(t.name, t.defer_loading) for t in loaded] == [
-        ("ListMcpResourcesTool", True), ("ReadMcpResourceTool", True), ("ToolSearch", False),
+        ("ListMcpResourcesTool", True), ("ReadMcpResourceDirTool", True),
+        ("ReadMcpResourceTool", True), ("ToolSearch", False),
         ("DeferredToolPlaceholder", True), ("mcp__fake__echo", True)]
-    early, search, echo, read, listing = (f.result for f in finished(await events(client, tid)))
+    early, search, echo, read, listing, folder, not_folder = (
+        f.result for f in finished(await events(client, tid)))
+    assert folder.text == ("2 entries in file:///docs:\na.md  file:///docs/a.md\n"
+                           "sub/  file:///docs/sub")
+    assert not_folder.is_error and "could not list" in not_folder.text
     assert early.is_error and early.text.startswith(
         "InputValidationError: mcp__fake__echo is a deferred tool")
     assert [b.tool_name for b in search.content] == [  # type: ignore[union-attr]
-        "mcp__fake__echo", "ListMcpResourcesTool", "ReadMcpResourceTool"]
+        "mcp__fake__echo", "ListMcpResourcesTool", "ReadMcpResourceTool",
+        "ReadMcpResourceDirTool"]
     after = provider.requests[2].messages[-1]
     assert after.text == "Tool loaded."
     assert texts(echo) == ["echo: via"]
@@ -244,7 +259,8 @@ async def test_a_dead_server_is_dropped_and_reported_once(
         store: SqliteStore, pool: McpPool) -> None:
     dead = McpServer(alias="dead", command=["/no/such/binary"], deferred=True)
     provider = ScriptedProvider([reply("one"), reply("two")])
-    agent = Agent(name="a", model="m", extensions=[Mcp([dead, server()], pool=pool)])
+    agent = Agent(name="a", model="m", extensions=[Mcp([dead, server()], pool=pool),
+                                                   ToolSearch()])
     client = Client(store)
     tid = await client.create("a", "go")
     rt = runtime(store, provider, agent)
@@ -387,3 +403,38 @@ async def test_permissions_ask_about_server_tools_not_toolsearch(
     await rt.run_until_idle()
     results = [f.result for f in finished(await events(client, tid))]
     assert texts(results[-1]) == ["echo: p"]
+
+
+async def test_tasks_that_never_come_back_are_forgotten(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A task the runner never lets go of here (taken by another worker, a
+    # crash) leaves no event: its entries go once newer tasks crowd it out.
+    monkeypatch.setattr("noeta.plugins.mcp.extension.TASKS_KEEP", 2)
+    ext = Mcp([McpServer(alias="s", command=["true"])])
+    for n in range(5):
+        assert await ext._resolve(TaskView(state=TaskState(task_id=f"t{n}", config={"cwd": "/w"})))
+    assert set(ext._known) == set(ext._scopes) == set(ext._roots) == {"t3", "t4"}
+
+
+async def test_a_failed_resolution_leaves_no_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*_a: object) -> list[McpServer]:
+        raise OSError("unreadable settings")
+
+    monkeypatch.setattr("noeta.plugins.mcp.extension.read_servers", broken)
+    ext = Mcp([McpServer(alias="s", command=["true"])], settings_files=["/nowhere.json"])
+    for n in range(5):
+        view = TaskView(state=TaskState(task_id=f"t{n}", config={"cwd": "/w"}))
+        assert not await ext._resolve(view)
+    assert not ext._known and not ext._scopes and not ext._roots and not ext._refused
+
+
+def test_the_resource_tools_run_again_after_a_crash() -> None:
+    """Reading resources changes nothing: each is retried, not answered
+    "outcome unknown", when a crash cut it off."""
+    from noeta.plugins.mcp.tools import (
+        ListMcpResourcesTool,
+        ReadMcpResourceDirTool,
+        ReadMcpResourceTool,
+    )
+
+    for tool in (ListMcpResourcesTool, ReadMcpResourceTool, ReadMcpResourceDirTool):
+        assert getattr(tool, "retry_safe", False) is True, tool

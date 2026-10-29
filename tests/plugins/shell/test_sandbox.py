@@ -131,6 +131,22 @@ def test_the_description_gains_a_sandbox_section(ws: Path) -> None:
     assert shell.tools(View(broken))[0].description == plain[0].description  # type: ignore[arg-type]
 
 
+def test_the_sandboxed_tool_lists_kept_are_bounded(ws: Path,
+                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    import noeta.plugins.shell as shell_plugin
+
+    monkeypatch.setattr(shell_plugin, "SANDBOXED_KEEP", 2)
+    shell = Shell(background=False)
+    envs = []
+    for n in range(3):
+        (ws / str(n)).mkdir()
+        env, _ = fake_env(ws / str(n))
+        envs.append(env)
+        shell.tools(View(env))  # type: ignore[arg-type]
+    assert len(shell._sandboxed) == 2
+    assert [k[1] for k in shell._sandboxed] == [str(ws / "1"), str(ws / "2")]
+
+
 async def test_background_jobs_run_sandboxed(tmp_path: Path) -> None:
     work = tmp_path / "w"
     work.mkdir()
@@ -139,7 +155,7 @@ async def test_background_jobs_run_sandboxed(tmp_path: Path) -> None:
     env, fake = fake_env(work)
     posts: list[str] = []
 
-    async def post(body: Any, task_id: str | None = None) -> None:
+    async def post(body: Any, task_id: str | None = None, **_kw: Any) -> None:
         assert isinstance(body, Say)
         posts.append(body.message.text)
 
@@ -147,7 +163,7 @@ async def test_background_jobs_run_sandboxed(tmp_path: Path) -> None:
                       record=lambda *_: None, post=post, root_id="t")
     out = await shell._tools[0].run({"command": PROBE, "run_in_background": True}, ctx)
     job_id = out.meta["job_id"]
-    job = registry.get(job_id)
+    job = registry.find("t", job_id)
     assert job is not None
     await asyncio.wait_for(job.done.wait(), 10)
     assert job.sender is not None

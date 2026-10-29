@@ -2,6 +2,13 @@
 and a client — what the TUI, the ACP adapter and ``noeta -p`` run on. Live
 model output reaches subscribers through ``deltas``.
 
+A worker publishes its live output through the store when the store can
+carry it to other processes (Postgres: ``publish_deltas``), and ``deltas``
+hears what workers elsewhere publish (``on_delta``), so a front end attached
+to one server streams the text of a task another machine runs. On a store
+without that (sqlite) live output stays in its process; the recorded events
+still reach everyone.
+
 A front end shares its store (``~/.noeta/tasks.db``) with every other noeta
 process on the machine, so it runs with ``own_tasks_only=True``: its worker
 serves only the task trees it created or resumed (``adopt``), never a task
@@ -10,21 +17,28 @@ another front end or a host left in the store."""
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import tempfile
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
+import msgspec
+
 from noeta.core.agent import Agent
+from noeta.core.channel import Channel
 from noeta.core.client import Client, Input
+from noeta.core.commands import Typed
 from noeta.core.errors import NoetaError
+from noeta.core.extension import Command, CommandContext
 from noeta.core.provider import Provider
 from noeta.core.runner import Runtime
 from noeta.core.store import Store
-from noeta.core.types import Delta
+from noeta.core.types import Delta, Text
+from noeta.host.app import AppAPI, DeltaSink, agent_commands, agent_run_command
 
-DeltaSink = Callable[[str, Delta], None]
+log = logging.getLogger("noeta.host.local")
 
 
 def default_spill_root() -> str:
@@ -33,6 +47,10 @@ def default_spill_root() -> str:
     model gets a preview and the path, as the tools' descriptions promise."""
     user = getattr(os, "getuid", lambda: "user")()
     return os.path.join(tempfile.gettempdir(), f"noeta-{user}", "tool-results")
+
+
+#: How long live output gathers before it is published to other processes.
+DELTA_BATCH_SECONDS = 0.03
 
 
 class UnknownAgent(NoetaError):
@@ -58,22 +76,43 @@ class LocalClient(Client):
         prompts = {**self.task_config.get("prompts", {}), **(config or {}).get("prompts", {})}
         if prompts:
             merged["prompts"] = prompts
+        if not kw.get("history_from"):
+            input = self._initial_prompt(agent, input)
         self.runtime.serve_root(tid)  # before it exists, so the first claim sees it
         created = await super().create(agent, input, task_id=tid, config=merged, **kw)
         if created != tid:  # a dedupe key named an existing task
             self.runtime.serve_root(created)
         return created
 
+    def _initial_prompt(self, agent: str, input: Input | None) -> Input | None:
+        """An agent file's ``initialPrompt`` (Claude Code's): the first
+        message of a new top-level conversation with that agent, ahead of
+        what the person sent with it. Sub-agents never read it."""
+        found = self.runtime.agents.get(agent)
+        initial = found.extra.get("initialPrompt") if found is not None else None
+        if not isinstance(initial, str) or not initial.strip():
+            return input
+        if input is None:
+            return initial
+        if isinstance(input, str):
+            return f"{initial}\n\n{input}" if input else initial
+        if input.role == "user" and input.origin == "human":
+            return msgspec.structs.replace(input, content=[Text(text=initial), *input.content])
+        return input
+
 
 class LocalApp:
     def __init__(self, store: Store, agents: list[Agent],
                  provider: Provider | Callable[[str], Provider], *,
                  own_tasks_only: bool = False, task_config: dict[str, Any] | None = None,
-                 **runtime_kw: Any) -> None:
+                 channels: Sequence[Channel] = (), **runtime_kw: Any) -> None:
         self.store = store
         provider_for = provider if callable(provider) and not hasattr(provider, "complete") \
             else (lambda _m: provider)
         self._sinks: list[DeltaSink] = []
+        self._outgoing: list[tuple[str, Delta]] = []
+        self._publishing: asyncio.Task[None] | None = None
+        self._hearing: Callable[[], None] | None = None
         if own_tasks_only:
             runtime_kw.setdefault("roots", set())
         runtime_kw.setdefault("spill_root", default_spill_root())
@@ -82,19 +121,69 @@ class LocalApp:
                                on_delta=self._fan_out, poll_interval=0.2, **runtime_kw)
         self.client = LocalClient(store, self.runtime, task_config=task_config,
                                   poll_interval=0.2)
+        #: Listeners letting outside conversations in (``noeta.core.channel``),
+        #: run while the app is started.
+        self.channels = list(channels)
         self._stop = asyncio.Event()
         self._serving: asyncio.Task[None] | None = None
+        self._listening: asyncio.Task[None] | None = None
         #: What the person should know about how this app was set up (a
         #: project's plugins left unloaded); front ends show them.
         self.notices: list[str] = []
+        #: Finds the plugins again and replaces the agents with ones made
+        #: from them (``replace_agents``), returning notices for the person;
+        #: set by a host that loads plugins from files (the ``noeta``
+        #: command), ``None`` otherwise.
+        self.reload_plugins: Callable[[], list[str]] | None = None
+
+    def replace_agents(self, agents: list[Agent]) -> None:
+        """Run ``agents`` from now on: every task picked up after this (the
+        next turn of a waiting one) runs the new ones; a turn in progress
+        finishes with the agent it started with."""
+        self.runtime.agents.clear()
+        self.runtime.agents.update({a.name: a for a in agents})
 
     def _fan_out(self, task_id: str, delta: Delta) -> None:
+        self._deliver(task_id, delta)
+        if getattr(self.store, "publish_deltas", None) is not None:
+            self._outgoing.append((task_id, delta))
+            if self._publishing is None or self._publishing.done():
+                self._publishing = asyncio.get_running_loop().create_task(self._publish())
+
+    def _deliver(self, task_id: str, delta: Delta) -> None:
         for sink in list(self._sinks):
             sink(task_id, delta)
 
+    async def _publish(self) -> None:
+        """Send the output gathered over a short while in one go."""
+        while self._outgoing:
+            await asyncio.sleep(DELTA_BATCH_SECONDS)
+            batch, self._outgoing = self._outgoing, []
+            try:
+                await self.store.publish_deltas(batch)  # type: ignore[attr-defined]
+            except Exception as exc:  # noqa: BLE001 — live output is best effort
+                log.debug("publishing live output failed: %s", exc)
+
     def deltas(self, sink: DeltaSink) -> Callable[[], None]:
         self._sinks.append(sink)
+        hear = getattr(self.store, "on_delta", None)
+        if self._hearing is None and hear is not None:
+            self._hearing = hear(self._deliver)
         return lambda: self._sinks.remove(sink) if sink in self._sinks else None
+
+    async def agent_names(self) -> list[str]:
+        return sorted(self.runtime.agents)
+
+    async def commands(self, agent: str, ctx: CommandContext) -> list[Command]:
+        return await agent_commands(self.runtime.agents, agent, ctx)
+
+    async def run_command(self, agent: str, ctx: CommandContext, text: str) -> Typed | None:
+        return await agent_run_command(self.runtime.agents, agent, ctx, text)
+
+    async def context(self, task_id: str) -> dict[str, Any] | None:
+        from noeta.host.usage import task_context
+
+        return await task_context(self.runtime, task_id)
 
     async def adopt(self, task_id: str) -> None:
         """Serve the tree of an existing task (one being resumed). Raises
@@ -110,15 +199,26 @@ class LocalApp:
                     f"have (it has: {', '.join(sorted(self.runtime.agents)) or 'none'})")
         self.runtime.serve_root(row.root_id if row is not None else task_id)
 
-    async def start(self) -> None:
-        if self._serving is None:
+    async def start(self, *, worker: bool = True) -> None:
+        """Run the worker (unless ``worker`` is false: tasks run elsewhere)
+        and the channels in the background until :meth:`stop`."""
+        from noeta.host.channels import run_channels
+
+        if worker and self._serving is None:
             self._serving = asyncio.create_task(self.runtime.serve(self._stop))
+        if self.channels and self._listening is None:
+            self._listening = asyncio.create_task(
+                run_channels(self.channels, self.client, self._stop))
 
     async def stop(self) -> None:
         self._stop.set()
-        if self._serving is not None:
-            await self._serving
-            self._serving = None
+        for running in (self._listening, self._serving, self._publishing):
+            if running is not None:
+                await running
+        self._serving = self._listening = self._publishing = None
+        if self._hearing is not None:
+            self._hearing()
+            self._hearing = None
         await self.store.close()
 
     async def __aenter__(self) -> LocalApp:
@@ -127,3 +227,7 @@ class LocalApp:
 
     async def __aexit__(self, *exc: Any) -> None:
         await self.stop()
+
+
+def _is_app(app: LocalApp) -> AppAPI:
+    return app  # mypy checks LocalApp against AppAPI here

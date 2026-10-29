@@ -1,9 +1,28 @@
 [project]
 name = "noeta"
 version = "1.0.0.dev0"
-description = "Durable AI agents for Python: one writer per task, crash-safe tool calls, approvals that cost nothing while waiting, from one process to many machines."
+description = "An open-source Claude Code for servers: the same model-visible behavior on durable event-log tasks that survive crashes and run on many machines."
+readme = "README.md"
 license = "Apache-2.0"
-authors = [{ name = "The Noeta Authors" }]
+license-files = ["LICENSE"]
+authors = [{ name = "The Noeta Authors", email = "initxy0@gmail.com" }]
+keywords = ["agent", "llm", "claude-code", "coding-agent", "event-sourcing", "durable-execution", "mcp", "acp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28.1",
@@ -18,6 +37,14 @@ server = ["starlette>=0.40", "uvicorn>=0.30", "websockets>=12"]
 tui = ["textual>=8.0"]
 acp = ["agent-client-protocol>=0.12,<0.13"]
 images = ["pillow>=10.4"]
+keyring = ["keyring>=24"]
+
+[project.urls]
+Homepage = "https://github.com/initxy/noeta"
+Documentation = "https://github.com/initxy/noeta/tree/main/docs"
+Source = "https://github.com/initxy/noeta"
+Issues = "https://github.com/initxy/noeta/issues"
+Changelog = "https://github.com/initxy/noeta/blob/main/CHANGELOG.md"
 
 [project.scripts]
 noeta = "noeta.cli.main:main"
@@ -33,6 +60,7 @@ findings = "noeta.plugins.findings:Findings"
 fs = "noeta.plugins.fs:FileTools"
 hooks = "noeta.plugins.hooks:Hooks"
 instructions = "noeta.plugins.instructions:Instructions"
+markdown_commands = "noeta.plugins.markdown_commands:MarkdownCommands"
 mcp = "noeta.plugins.mcp:Mcp"
 memory = "noeta.plugins.memory:Memory"
 permissions = "noeta.plugins.permissions:Permissions"
@@ -40,8 +68,9 @@ quiet_nudge = "noeta.plugins.quiet_nudge:QuietNudge"
 schedule = "noeta.plugins.schedule:Schedule"
 shell = "noeta.plugins.shell:Shell"
 skills = "noeta.plugins.skills:Skills"
-structured_output = "noeta.plugins.structured:StructuredOutput"
+structured_output = "noeta.plugins.structured_output:StructuredOutput"
 title = "noeta.plugins.title:Title"
+tool_search = "noeta.plugins.tool_search:ToolSearch"
 subtasks = "noeta.plugins.subtasks:Subtasks"
 web = "noeta.plugins.web:Web"
 workflow = "noeta.plugins.workflow:Orchestration"
@@ -71,6 +100,7 @@ dev = [
     "ruff>=0.6",
     "import-linter>=2.0",
     "types-pyyaml>=6.0",
+    "pytest-timeout>=2.3",
 ]
 
 [build-system]
@@ -80,6 +110,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["noeta"]
 
+# A local coding tool's settings are not part of the source distribution.
+[tool.hatch.build.targets.sdist]
+exclude = ["/.claude"]
+
 [tool.mypy]
 strict = true
 files = ["noeta"]
@@ -87,8 +121,16 @@ files = ["noeta"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-ra -m 'not live' --import-mode=importlib"
-markers = ["live: needs a real model backend; opt in with -m live"]
+addopts = "-ra -m 'not live and not cluster' --import-mode=importlib"
+# A hung test fails with every thread's stack instead of stalling the run:
+# faulthandler dumps the stacks at 120 s, pytest-timeout ends the test at 300 s.
+faulthandler_timeout = 120
+timeout = 300
+timeout_method = "thread"
+markers = [
+    "live: needs a real model backend; opt in with -m live",
+    "cluster: worker processes on Postgres under faults; run with make cluster",
+]
 
 [tool.coverage.run]
 source = ["noeta"]

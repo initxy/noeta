@@ -2,7 +2,7 @@
 
 Claude Code version: **2.1.312**. Baseline: recording session `m1` (API-key user, default
 settings, `auto` permission mode, Opus 5.5 as Claude Code believes it). Recordings live outside
-the repo in `~/cc-recordings/<version>/` (see `docs/specs/2026-10-28-claude-code-parity.md`).
+the repo in `~/cc-recordings/<version>/` (see `scripts/parity/README.md`).
 
 ## What these are
 
