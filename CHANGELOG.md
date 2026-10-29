@@ -617,3 +617,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - `noeta plugin add` fetches only from git URLs (`https://`, `ssh://`, `git://`, `file://`,
   `user@host:path`) and passes `--` before them, so a marketplace entry's `url` cannot be a
   git option such as `--upload-pack=…`.
+- The git snapshot of the first user turn and the memory plugin's repository lookup run
+  inside the sandbox for a non-default tenant's task. Before, they ran as the worker's OS
+  user in the tenant's repository, so a `gpg.program` the tenant set in its own
+  `.git/config` (with `log.showSignature` and a signed commit) ran outside the sandbox and
+  could read the tokens file.

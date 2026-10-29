@@ -7,10 +7,12 @@ sub-agent's after its tool results).
 
 Everything is captured through the task's ExecEnv (``view.env``), never by a
 host subprocess: on a container the facts describe the container's checkout,
-and the shell / OS version lines (facts of this machine) are left out. git
-runs with the same hardening the Bash tool's ``git status`` rule applies
-(``-c core.fsmonitor=``, no hooks), so a repository's own config cannot make
-the capture run a program. A ``filter.<driver>.clean`` program has no off
+and the shell / OS version lines (facts of this machine) are left out. For a
+task of a tenant other than the default one, git runs inside that task's
+sandbox (the tenant writes the repository's config; hardening flags cannot
+cover every config key that runs a program). git also runs with the
+hardening the Bash tool's ``git status`` rule applies (``-c
+core.fsmonitor=``, no hooks). A ``filter.<driver>.clean`` program has no off
 switch, so when the repository's own config (local or worktree scope)
 defines any filter driver the status is skipped. The capture is recorded
 once, when the task first starts, and never changes under the prompt cache.
@@ -33,6 +35,7 @@ from noeta.core.types import Message, ToolResult, system_message, user
 from noeta.toolkit.commands import is_command_message
 from noeta.toolkit.context import task_env
 from noeta.toolkit.local_env import is_local
+from noeta.toolkit.sandbox import run_in_tenant_sandbox
 from noeta.toolkit.shell import harden_git
 
 #: Git status beyond this is cut at a line boundary and marked.
@@ -67,7 +70,7 @@ async def _git(env: ExecEnv, cwd: str, *args: str) -> str:
         argv = harden_git(argv)
     argv = [argv[0], *_GIT_FLAGS, *argv[1:]]
     try:
-        out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20)
+        out = await run_in_tenant_sandbox(env, argv, cwd=cwd, timeout=5, output_cap=1 << 20)
     except Exception:  # noqa: BLE001 — capture is best-effort
         return ""
     if out.exit_code != 0 or out.timed_out:
@@ -80,7 +83,7 @@ async def _repo_defines_filters(env: ExecEnv, cwd: str) -> bool:
     ``clean`` program ``git status`` would run). Unsure counts as yes."""
     argv = ["git", *_GIT_FLAGS, "config", "--show-scope", "--get-regexp", r"^filter\."]
     try:
-        out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20)
+        out = await run_in_tenant_sandbox(env, argv, cwd=cwd, timeout=5, output_cap=1 << 20)
     except Exception:  # noqa: BLE001 — capture is best-effort
         return True
     if out.timed_out:

@@ -152,6 +152,17 @@ servers and runs on many machines.
   that only list names (`find -L` of instructions and skills, the gate's glob expansion) and
   the PDF converters (given a fenced copy) do not. The operator's saved workflows join
   `skills/` as readable.
+- D23 (`os-fix-r2host`) git that noeta itself runs in a non-default tenant's workspace (the
+  environment's snapshot, memory's repository lookup) goes through `run_in_tenant_sandbox`
+  too, extending D22 to every place operator code runs git on a tenant's checkout. Hardened
+  flags alone are not sound: the repository's config is the tenant's, git has no switch for
+  every config key that runs a program (`gpg.program` under `log.showSignature`, a
+  submodule's filter drivers, keys added by later git versions), and repository
+  `include.path` cannot be turned off with `-c`. The capture keeps its flags for every task
+  (the default tenant's checkout may be cloned code). Without a sandbox (the operator set
+  `shared_os_user_tenants`) git runs as the OS user, as that tenant's `Bash` already does.
+  `sandbox_plan`'s `git rev-parse --git-path hooks` stays a host call: it reads config but
+  runs nothing from it.
 
 ## Plan
 

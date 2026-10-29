@@ -37,6 +37,7 @@ from noeta.toolkit.memory_index import (
     trim_memory_index,
 )
 from noeta.toolkit.paths import noeta_home, project_dir
+from noeta.toolkit.sandbox import run_in_tenant_sandbox
 
 __all__ = ["INDEX_FILE", "MEMORY_SECTION", "Memory", "load_index", "memory_dir_for"]
 
@@ -221,8 +222,9 @@ class Memory(Extension):
         env = task_env(view.env, view.state.config)
         cwd = view.cwd or env.cwd
         try:
-            out = await env.run(["git", "rev-parse", "--path-format=absolute",
-                                 "--git-common-dir"], cwd=cwd, timeout=5, output_cap=4096)
+            out = await run_in_tenant_sandbox(
+                env, ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                cwd=cwd, timeout=5, output_cap=4096)
         except Exception:  # noqa: BLE001 — not a repository, or no git
             return cwd
         common = out.stdout.decode("utf-8", errors="replace").strip()
