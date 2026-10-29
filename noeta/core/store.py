@@ -267,8 +267,11 @@ class Store(Protocol):
         status: Status | None = None,
         limit: int = 100,
         tenant: str | None = None,
+        owner: str | None = None,
     ) -> list[TaskRow]:
-        """The newest rows first; ``tenant`` keeps only that tenant's."""
+        """The most recently updated rows first; ``tenant`` keeps only that
+        tenant's, ``owner`` only those whose claim that worker holds or
+        held last."""
         ...
 
     async def claim(

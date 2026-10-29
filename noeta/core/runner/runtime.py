@@ -124,6 +124,8 @@ class Runtime:
     #: pinned plugin missing here (``TaskRun._plugin_missing``).
     _plugin_missing: dict[str, tuple[int, int]] = field(default_factory=dict, init=False,
                                                         repr=False)
+    #: The tasks this runtime runs now (:meth:`run_claim`).
+    _running: set[str] = field(default_factory=set, init=False, repr=False)
 
     def __post_init__(self) -> None:
         # The snapshot version is of the code this process runs: hash it
@@ -286,13 +288,27 @@ class Runtime:
         limits = {name: t.max_running for name, t in self.tenants.items()
                   if t.max_running is not None}
         sent = time.monotonic()
-        if limits:
-            claim = await self.store.claim(self.worker, self.queues, self.lease_seconds,
-                                           roots=roots, tenant_limits=limits)
-        else:
-            claim = await self.store.claim(self.worker, self.queues, self.lease_seconds,
-                                           roots=roots)
+        try:
+            if limits:
+                claim = await self.store.claim(self.worker, self.queues, self.lease_seconds,
+                                               roots=roots, tenant_limits=limits)
+            else:
+                claim = await self.store.claim(self.worker, self.queues, self.lease_seconds,
+                                               roots=roots)
+        except CommitUnknown as exc:
+            log.warning("claim commit unknown, looking for what it took: %s", exc)
+            claim = await self._adopt()
         return (claim, sent) if claim is not None else None
+
+    async def _adopt(self) -> Claim | None:
+        """A task the store says this worker runs and it does not: a claim
+        whose commit landed unseen (``CommitUnknown``), run now rather than
+        after its lease ran out. The epoch in the row fences it as any claim."""
+        for row in await self.store.tasks(owner=self.worker, status="running", limit=100):
+            if row.task_id not in self._running:
+                return Claim(task_id=row.task_id, worker=self.worker, epoch=row.owner_epoch,
+                             lease_until=row.lease_until or 0.0, queue=row.queue)
+        return None
 
     def provider(self, model: str, tenant: str) -> Provider:
         """The provider for ``model`` in a task of ``tenant``."""
@@ -330,11 +346,14 @@ class Runtime:
         from noeta.core.runner.task import TaskRun
 
         run = TaskRun(self, claim, sent=sent)
+        self._running.add(claim.task_id)
         try:
             await run.run()
         except asyncio.CancelledError:
             await self._release(run.claim)
             raise
+        finally:
+            self._running.discard(claim.task_id)
 
     async def _release(self, claim: Claim) -> None:
         try:

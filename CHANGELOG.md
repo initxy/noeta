@@ -467,6 +467,11 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Fixed
 
+- **A claim whose commit landed unseen runs at once.** When the connection dropped during
+  a claim's `COMMIT` (`CommitUnknown` on Postgres) the worker only logged it; if the claim had
+  landed, the task sat `running` until its lease ran out. The worker now asks the store for
+  the tasks it owns but does not run and takes one up. For store authors: `Store.tasks` takes
+  `owner=` (the worker holding the claim).
 - **A channel's thread outlives its task.** `deliver` posted every later message of a thread
   into its task even after the task ended (failed, cancelled, or a one-shot agent's), where
   nobody read it. Once the task ended, the next message starts a continuation (`<id>.2`,

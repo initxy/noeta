@@ -563,6 +563,11 @@ servers and runs on many machines.
   the newest is found in `O(log n)` reads. A message posted to a task that ended meanwhile is
   found unread (a task never ends over an unread message) and moves on. Dedupe holds per
   task: a delivery repeated after its task ended lands again in the continuation.
+- D112 (`os-fix-r11kernel`) A claim answered `CommitUnknown` adopts a row the store says
+  this worker owns (`Store.tasks(owner=, status="running")`, a new filter) and this runtime
+  does not run (`Runtime._running`); the row's epoch fences it like any claim. A row left
+  `running` by a run that stopped early (store error, unreadable log) can be adopted this way
+  too, sooner than its lease would hand it back.
 
 ## Plan
 
