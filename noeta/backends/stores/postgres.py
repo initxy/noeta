@@ -579,7 +579,8 @@ class PostgresStore:
                 f" owner_epoch = t.owner_epoch + 1, lease_until = {_NOW} + %(ls)s,"
                 f" ready_at = NULL, waiting_on = NULL, updated_at = {_NOW}"
                 " FROM c WHERE t.task_id = c.task_id"
-                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.tenant, c.was, t.root_id"),
+                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.tenant, c.was, t.root_id,"
+                " t.queue"),
                 {"q": list(queues), "w": worker, "ls": lease_seconds,
                  "r": list(roots or []), "full": full})
             row = await cur.fetchone()
@@ -603,7 +604,7 @@ class PostgresStore:
                 if await running(conn, tenant, besides=task_id) >= limits[tenant]:
                     raise _TenantFull(tenant)
             return Claim(task_id=task_id, worker=worker, epoch=int(row[1]),
-                         lease_until=float(row[2]))
+                         lease_until=float(row[2]), queue=str(row[6]))
 
         while True:
             try:
@@ -646,12 +647,13 @@ class PostgresStore:
             if row is None:
                 return None
             return Claim(task_id=claim.task_id, worker=claim.worker, epoch=claim.epoch,
-                         lease_until=float(row[0]))
+                         lease_until=float(row[0]), queue=claim.queue)
 
         return await self._conns.tx(tx)
 
     async def hold(self, root_id: str, worker: str, seconds: float,
-                   *, epoch: int | None = None) -> int | None:
+                   *, epoch: int | None = None,
+                   queues: Sequence[str] | None = None) -> int | None:
         changes: list[tuple[str, ChangeKind]] = []
 
         async def tx(conn: Conn) -> int | None:
@@ -671,6 +673,12 @@ class PostgresStore:
                     (root_id, worker))
                 if await cur.fetchone() is not None:
                     return None
+                if queues is not None:
+                    cur = await conn.execute(self._q(
+                        "SELECT 1 FROM {s}.tasks WHERE root_id = %s AND status <> 'ended'"
+                        " AND queue <> ALL(%s) LIMIT 1"), (root_id, list(queues)))
+                    if await cur.fetchone() is not None:
+                        return None  # a task of the tree this worker could not claim
                 await self._revoke_lapsed(conn, root_id, worker, changes)
                 # A claim of the tree takes the same lock (shared), so one
                 # that committed before this lock is seen here, and one

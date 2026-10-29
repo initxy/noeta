@@ -90,6 +90,9 @@ class Claim(Struct):
     worker: str
     epoch: int
     lease_until: float
+    #: The queue the task is on: a child it creates goes there unless one is
+    #: named, so the workers that serve the parent serve the child.
+    queue: str = "default"
 
 
 class Patch(Struct):
@@ -285,7 +288,8 @@ class Store(Protocol):
         ...
 
     async def hold(self, root_id: str, worker: str, seconds: float,
-                   *, epoch: int | None = None) -> int | None:
+                   *, epoch: int | None = None,
+                   queues: Sequence[str] | None = None) -> int | None:
         """Keep the task tree of ``root_id`` with ``worker``: until the hold
         is released or reaped, ``claim`` by any other worker skips every task
         of the tree. ``seconds`` is how long it lasts without renewal before
@@ -295,7 +299,10 @@ class Store(Protocol):
         already has) and returns its epoch, never reused by another hold;
         ``None`` when another worker holds the tree (one whose hold ran out
         counts until it is reaped): a tree has at most one holding worker,
-        decided in the same transaction. With ``epoch`` it renews that hold:
+        decided in the same transaction. With ``queues`` (those ``worker``
+        claims from) it is also ``None`` while an unended task of the tree
+        is on another queue: no other worker claims a held tree's tasks, so
+        its holder must be able to. With ``epoch`` it renews that hold:
         ``None`` when it is gone (released, or reaped while its worker was
         silent)."""
         ...

@@ -572,7 +572,8 @@ class SqliteStore:
             not_full = (f" AND (status = 'running' OR tenant NOT IN"
                         f" ({','.join('?' for _ in full)}))") if full else ""
             row = conn.execute(
-                f"SELECT task_id, owner_epoch FROM tasks WHERE queue IN ({marks}){in_roots} AND ("
+                "SELECT task_id, owner_epoch, queue FROM tasks"
+                f" WHERE queue IN ({marks}){in_roots} AND ("
                 " (status = 'ready' AND (ready_at IS NULL OR ready_at <= ?))"
                 " OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= ?)"
                 " OR (status = 'running' AND lease_until < ?))"
@@ -591,7 +592,8 @@ class SqliteStore:
                 " WHERE task_id = ?",
                 (worker, epoch, until, now, task_id),
             )
-            return Claim(task_id=task_id, worker=worker, epoch=epoch, lease_until=until)
+            return Claim(task_id=task_id, worker=worker, epoch=epoch, lease_until=until,
+                         queue=str(row[2]))
 
         return await self._write(tx)
 
@@ -625,12 +627,13 @@ class SqliteStore:
             if cur.rowcount == 0:
                 return None
             return Claim(task_id=claim.task_id, worker=claim.worker, epoch=claim.epoch,
-                         lease_until=until)
+                         lease_until=until, queue=claim.queue)
 
         return await self._write(tx)
 
     async def hold(self, root_id: str, worker: str, seconds: float,
-                   *, epoch: int | None = None) -> int | None:
+                   *, epoch: int | None = None,
+                   queues: Sequence[str] | None = None) -> int | None:
         changes: list[tuple[str, ChangeKind]] = []
 
         def tx(conn: sqlite3.Connection) -> int | None:
@@ -645,6 +648,11 @@ class SqliteStore:
             if conn.execute("SELECT 1 FROM tree_holds WHERE root_id = ? AND worker <> ?",
                             (root_id, worker)).fetchone() is not None:
                 return None  # one holding worker per tree
+            if queues is not None and conn.execute(
+                    "SELECT 1 FROM tasks WHERE root_id = ? AND status <> 'ended'"
+                    f" AND queue NOT IN ({','.join('?' for _ in queues)}) LIMIT 1",
+                    (root_id, *queues)).fetchone() is not None:
+                return None  # a task of the tree this worker could not claim
             # Other workers' lapsed claims of the tree are taken back (a new
             # epoch), so one that stalled past its lease cannot renew or
             # write once this worker holds the tree.

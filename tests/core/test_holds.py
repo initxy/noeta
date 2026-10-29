@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +15,7 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
-from noeta.core.errors import CommitUnknown, HeldElsewhere
+from noeta.core.errors import CommitUnknown, HeldElsewhere, StoreUnavailable
 from noeta.core.events import External, InputTaken
 from noeta.core.runner import Runtime
 from noeta.core.store import HOLD_LOST
@@ -109,6 +109,19 @@ async def test_a_tree_another_worker_holds_cannot_be_held_here(store: SqliteStor
     await mine()
 
 
+async def test_a_tree_with_a_task_on_a_queue_not_served_here_cannot_be_held(
+        store: SqliteStore) -> None:
+    """A worker serving only ``gpu`` holding a tree whose root waits on
+    ``default``: a Cancel to the root would wait for the hold to end."""
+    tid = await Client(store).create("a", "go")
+    gpu = _runtime(store, ScriptedProvider([]), queues=("gpu",))
+    with pytest.raises(HeldElsewhere):
+        await gpu.hold(tid)
+    both = _runtime(store, ScriptedProvider([]), queues=("default", "gpu"))
+    release = await both.hold(tid)
+    await release()
+
+
 async def test_a_silent_workers_hold_is_reaped_before_holding(store: SqliteStore) -> None:
     rt = _runtime(store, ScriptedProvider([]), lease_seconds=0.15)
     await store.hold("root", "dead-worker", 0.05)
@@ -154,11 +167,12 @@ class SlowHold(SqliteStore):
         self.sent: list[float] = []
 
     async def hold(self, root_id: str, worker: str, seconds: float,
-                   *, epoch: int | None = None) -> int | None:
+                   *, epoch: int | None = None,
+                   queues: Sequence[str] | None = None) -> int | None:
         if epoch is not None:
             self.sent.append(time.monotonic())
         await asyncio.sleep(self.delay)
-        return await super().hold(root_id, worker, seconds, epoch=epoch)
+        return await super().hold(root_id, worker, seconds, epoch=epoch, queues=queues)
 
 
 async def test_a_holds_local_clock_starts_when_it_was_asked_for(tmp_path: Path) -> None:
@@ -192,13 +206,42 @@ class LostCommit(SqliteStore):
         self.fail = fail
 
     async def hold(self, root_id: str, worker: str, seconds: float,
-                   *, epoch: int | None = None) -> int | None:
+                   *, epoch: int | None = None,
+                   queues: Sequence[str] | None = None) -> int | None:
         if epoch is None and self.fail:
             self.fail -= 1
             if self.committed:
-                await super().hold(root_id, worker, seconds)
+                await super().hold(root_id, worker, seconds, queues=queues)
             raise CommitUnknown("connection lost during COMMIT")
-        return await super().hold(root_id, worker, seconds, epoch=epoch)
+        return await super().hold(root_id, worker, seconds, epoch=epoch, queues=queues)
+
+
+class FlakyUnhold(SqliteStore):
+    """The first unhold fails as a dropped connection would."""
+
+    fail = 1
+
+    async def unhold(self, root_id: str, worker: str, epoch: int,
+                     *, lost: bool = False) -> None:
+        if self.fail:
+            self.fail -= 1
+            raise StoreUnavailable("connection lost")
+        await super().unhold(root_id, worker, epoch, lost=lost)
+
+
+async def test_a_release_whose_unhold_fails_once_still_gives_the_hold_back(
+        tmp_path: Path) -> None:
+    """Left in the store, the hold would run out and be reaped, telling the
+    tree a job that ended normally was lost (``hold_lost``)."""
+    store = FlakyUnhold(str(tmp_path / "t.db"))
+    rt = _runtime(store, ScriptedProvider([]))
+    try:
+        release = await rt.hold("root")
+        await release()
+        assert await _hold_rows(store) == []
+    finally:
+        await rt._drop_holds()
+        await store.close()
 
 
 async def _hold_rows(store: SqliteStore) -> list[tuple[Any, ...]]:

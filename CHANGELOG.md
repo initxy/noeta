@@ -307,7 +307,7 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Store contract
 
-Third-party `Store` implementations must add both; `noeta.testing.store_contract` checks them.
+Third-party `Store` implementations must add these; `noeta.testing.store_contract` checks them.
 
 - **Refuse to end a task over an unread inbox.** An append that ends a task while its inbox
   holds items past the read seq raises `InboxUnread` (a `Conflict`), checked under the task's
@@ -317,6 +317,11 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   root's inbox instead (same dedupe key), decided under the target's row lock; `post` returns
   the seq of the inbox it went to. Background jobs' ends and monitor events use it
   (`ToolContext.post(forward_if_ended=True)`).
+- **`Claim.queue`.** A claim (and its renewal) names the queue of the task claimed; a store
+  that leaves it out puts every child on `default`, as before.
+- **`Store.hold(queues=)`.** Taking a hold with the holder's queues is refused (`None`) while
+  an unended task of the tree is on a queue not among them, decided in the hold's
+  transaction; `Runtime.hold` passes its queues.
 
 ### Added
 
@@ -439,6 +444,30 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **A sub-agent is created on its caller's queue.** Children went to `default` unless a
+  queue was named (`Subtasks(queue=)`, a roster entry's `queue`, `spawn(queue=)`), so a task
+  on its own queue (a tenant's, a GPU worker's) had children only other workers ran, and a
+  tree held by one of them waited for a worker that never came.
+- **A tree is held only by a worker that can run all of it.** A worker serving one queue
+  could hold a tree (for a background job) whose root was on another; other workers skip a
+  held tree, so a `Cancel` or message to the root waited as long as the job ran.
+  `Runtime.hold` now raises `HeldElsewhere` while an unended task of the tree is on a queue
+  it does not serve.
+- **A worker leaves a log a newer version wrote to a newer worker.** An event, block or
+  value it does not know (msgspec's "Invalid value" / "Invalid enum value") counted toward
+  ending the task `failed (unreadable_log)`; the worker now lets the lease run out without
+  counting, so a newer worker claims it. A corrupt or misshapen log still ends failed after
+  three claims. Workers from this release on do this; 0.x workers still fail such a task
+  (see Changed).
+- **A tenant's budget counts every model call it paid for.** Usage was counted after the
+  reply was appended, so a reply whose claim was lost meanwhile, or an empty one, was not
+  counted; it is counted as soon as the call returns.
+- **A hold given back after a store hiccup is asked for once more.** One failed unhold left
+  the hold to run out and be reaped, which told the tree (`hold_lost`) that a background job
+  that had ended normally was lost.
+- **A worker's count of unreadable logs is bounded.** A task whose log failed to load once
+  and then ended elsewhere kept its entry in the worker for good; the 1,024 most recent are
+  kept.
 - **A long session keeps a bounded number of background logs on disk.** An ended
   background job let go of (beyond the 64 most recent of a root task) kept its log files,
   up to 64 MiB each, until the root task ended; they are now removed when it is let go.
@@ -670,6 +699,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   would be its sandboxed commands' writable root, so they could read and change the
   server's files there; the HTTP guard now refuses such a `cwd` as it refuses another
   tenant's workspace.
+- **A child continues only its own tenant's conversation.** A tool's
+  `spawn(history_from=)` could name another tenant's task, and the child folded that
+  conversation in; the call now fails with `UnknownTask` and stages no child, as
+  `Client.create(history_from=)` already refused it.
 - **noeta's home and the sqlite store are owner-only when noeta creates them.** `~/.noeta`
   (`NOETA_HOME`) was made 0775 and the store's database with its `-wal` and `-shm` files
   0644 under the usual umask, though the store holds every conversation. noeta now makes its

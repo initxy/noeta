@@ -197,6 +197,9 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         return await closing.fail_turn(run, texts.LLM_ERROR, _detail(exc))
     await asyncio.gather(*pending, return_exceptions=True)
     run.partial, run.thinking = [], []
+    # Paid for whether or not the reply is kept (an empty one, or a claim
+    # lost before it is appended).
+    await run.rt.charge(run.state.tenant, request.model, response.usage)
 
     if final:
         response = _final_answer(run, response)
@@ -211,7 +214,6 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
                                    f"(stop: {response.stop_reason})")
     response = unique_call_ids(run.state, response, run.state.last_seq + 1)
     await run.append([ModelReplied(response=response)])
-    await run.rt.charge(run.state.tenant, request.model, response.usage)
     return True
 
 

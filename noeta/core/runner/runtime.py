@@ -144,7 +144,9 @@ class Runtime:
         ``release.tree.on_lost`` to stop when the hold is gone (reaped after
         this worker was silent too long, or this runtime stopping).
         Raises ``HeldElsewhere`` while another worker holds the tree (one
-        whose hold ran out is reaped first) or runs one of its tasks."""
+        whose hold ran out is reaped first) or runs one of its tasks, or
+        while one of its unended tasks is on a queue this runtime does not
+        serve (no other worker would run it while the tree is held)."""
         async with self._tree_lock(root_id):
             tree = self._holds.get(root_id)
             if tree is None or tree.lost:
@@ -156,8 +158,9 @@ class Runtime:
                     await self._reap()
                     sent, epoch = await self._take_hold(root_id)
                 if epoch is None:
-                    raise HeldElsewhere(f"task tree {root_id} is held by another worker, or "
-                                       "another worker runs one of its tasks")
+                    raise HeldElsewhere(f"task tree {root_id} is held by another worker, "
+                                       "another worker runs one of its tasks, or one of its "
+                                       "tasks is on a queue this worker does not serve")
                 tree = TreeHold(root_id=root_id, worker=self.worker, epoch=epoch,
                                 seconds=self.hold_seconds, renewed=sent)
                 self._holds[root_id] = tree
@@ -194,7 +197,8 @@ class Runtime:
         for attempt in range(HOLD_ATTEMPTS):
             sent = time.monotonic()
             try:
-                return sent, await self.store.hold(root_id, self.worker, self.hold_seconds)
+                return sent, await self.store.hold(root_id, self.worker, self.hold_seconds,
+                                                   queues=self.queues)
             except CommitUnknown as exc:
                 if attempt + 1 == HOLD_ATTEMPTS:
                     raise
@@ -202,10 +206,16 @@ class Runtime:
         raise AssertionError("unreachable")
 
     async def _unhold(self, tree: TreeHold) -> None:
+        # Asked twice: a hold left behind runs out and is reaped, telling the
+        # tree (``hold_lost``) that what ended normally was lost.
         try:
-            await self.store.unhold(tree.root_id, self.worker, tree.epoch)
-        except Exception as exc:  # noqa: BLE001 — the hold runs out and is reaped
-            log.warning("tree %s: unhold failed: %s", tree.root_id, exc)
+            for attempt in range(2):
+                try:
+                    await self.store.unhold(tree.root_id, self.worker, tree.epoch)
+                    return
+                except Exception as exc:  # noqa: BLE001 — the hold runs out and is reaped
+                    log.warning("tree %s: unhold failed%s: %s", tree.root_id,
+                                ", asking again" if not attempt else "", exc)
         finally:
             if self._unholding.get(tree.root_id) is asyncio.current_task():
                 self._unholding.pop(tree.root_id, None)

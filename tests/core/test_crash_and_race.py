@@ -273,6 +273,69 @@ async def test_a_task_whose_log_cannot_be_read_ends_failed_after_a_few_claims(
         await store.close()
 
 
+async def test_a_workers_count_of_unreadable_logs_is_bounded(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A task whose log failed to load here once and then ended on another
+    worker is never loaded here again: its count must not stay forever."""
+    import sqlite3
+
+    from noeta.core.runner import task
+
+    monkeypatch.setattr(task, "UNREADABLE_KEEP", 2)
+    path = str(tmp_path / "t.db")
+    store = SqliteStore(path)
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m")},
+                 provider_for=lambda _m: None, lease_seconds=30)  # type: ignore[arg-type,return-value]
+    try:
+        for tid in ("t1", "t2", "t3"):
+            await store.create(NewTask(task_id=tid, created=TaskCreated(agent="a")))
+        conn = sqlite3.connect(path)
+        conn.execute("UPDATE events SET data = x'7b'")
+        conn.commit()
+        conn.close()
+        for _ in range(3):
+            assert await rt.run_once()
+        assert len(rt._unreadable) == 2 and "t1" not in rt._unreadable
+    finally:
+        await store.close()
+
+
+@pytest.mark.parametrize("data", [
+    b'{"type":"FutureEvent"}',
+    b'{"type":"ModelReplied","response":{"message":{"role":"assistant",'
+    b'"content":[{"type":"future_block"}]},"usage":{}}}',
+])
+async def test_a_log_written_by_a_newer_version_is_left_to_it(tmp_path: Path,
+                                                             data: bytes) -> None:
+    """In a rolling upgrade an older worker claims a task a newer one wrote
+    an event or block it does not know: it is not its to fail. It lets the
+    lease run out (a newer worker claims it) however often that happens."""
+    import sqlite3
+
+    from noeta.core.runner.task import LOAD_ATTEMPTS
+
+    path = str(tmp_path / "t.db")
+    store = SqliteStore(path)
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m")},
+                 provider_for=lambda _m: None, lease_seconds=0.1)  # type: ignore[arg-type,return-value]
+    try:
+        await store.create(NewTask(task_id="t", created=TaskCreated(agent="a")))
+        conn = sqlite3.connect(path)
+        conn.execute("INSERT INTO events (task_id, seq, type, at, data) VALUES ('t', 2, 'x', 0, ?)",
+                     (data,))
+        conn.execute("UPDATE tasks SET last_seq = 2 WHERE task_id = 't'")
+        conn.commit()
+        conn.close()
+        for attempt in range(LOAD_ATTEMPTS + 1):
+            await asyncio.sleep(0.15)  # the last claim's lease runs out
+            assert await rt.run_once(), attempt
+        row = await store.get("t")
+        assert row is not None and row.status == "running"
+        assert "t" not in rt._unreadable
+    finally:
+        await store.close()
+
+
 async def test_a_failure_after_the_log_loaded_is_not_an_unreadable_log(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Failing the turn can itself fail (a store hiccup, a bug in an end

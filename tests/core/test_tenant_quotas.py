@@ -15,7 +15,8 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core import records
 from noeta.core.agent import Agent
 from noeta.core.client import Client
-from noeta.core.events import ExtensionRecorded, ModelCalled
+from noeta.core.errors import Conflict
+from noeta.core.events import ExtensionRecorded, ModelCalled, ModelReplied
 from noeta.core.runner import Runtime
 from noeta.core.tenants import Tenant, period
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, Usage
@@ -101,6 +102,28 @@ async def test_a_spent_budget_fails_the_turn_with_a_clear_reason(tmp_path: Path)
     await rt.run_until_idle()
     assert (await store.get(other)).status == "waiting"  # type: ignore[union-attr]
     assert await store.tenant_usage("default", period()) == (0, 0.0)
+    await store.close()
+
+
+class LosesTheReply(SqliteStore):
+    """The append of a model's reply finds the claim lost."""
+
+    async def append(self, claim: Any, events: Any, **kw: Any) -> Any:
+        if any(isinstance(e, ModelReplied) for e in events):
+            raise Conflict("the claim was lost")
+        return await super().append(claim, events, **kw)
+
+
+async def test_a_reply_whose_claim_was_lost_is_still_charged(tmp_path: Path) -> None:
+    """The call was paid for whether or not its reply is kept."""
+    store = LosesTheReply(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("one", usage=Usage(uncached=10, output=5))])
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m")},
+                 provider_for=lambda _m: provider, env_for=lambda _s: None,  # type: ignore[arg-type,return-value]
+                 sleep=_no_sleep, tenants={"acme": Tenant(budget_tokens=100)})
+    await Client(store).scoped("acme").create("a", "first")
+    await rt.run_once()
+    assert await store.tenant_usage("acme", period()) == (15, 0.0)
     await store.close()
 
 

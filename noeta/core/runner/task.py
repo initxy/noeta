@@ -17,10 +17,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import time
 from collections.abc import Sequence
 from typing import Any
 
+import msgspec
 from msgspec.structs import replace
 
 from noeta.core import records as core_records
@@ -59,9 +61,21 @@ MAX_HISTORY_DEPTH = 64
 #: Claims in a row (in one worker) whose log could not be read or folded
 #: before the task is ended failed instead of claimed again.
 LOAD_ATTEMPTS = 3
+#: Tasks a worker keeps that count for (the oldest is forgotten): one that
+#: ends on another worker is never loaded here again.
+UNREADABLE_KEEP = 1024
 
 class LostClaim(Exception):
     pass
+
+
+#: How msgspec words a tagged union member or a literal value it does not
+#: know: what a newer version writes, unlike a corrupt or misshapen entry.
+_NEWER_FORMAT = re.compile(r"Invalid (enum )?value '")
+
+
+def _newer_format(exc: Exception) -> bool:
+    return isinstance(exc, msgspec.ValidationError) and bool(_NEWER_FORMAT.match(str(exc)))
 
 
 def _decoded(stored: Snapshot) -> TaskState | None:
@@ -110,6 +124,13 @@ class TaskRun:
             except (Conflict, LostClaim, StoreUnavailable):
                 raise
             except Exception as exc:
+                if _newer_format(exc):
+                    # A newer version wrote it (a rolling upgrade): not this
+                    # worker's to fail. The lease runs out and the task is
+                    # claimed again, by a newer worker sooner or later.
+                    log.warning("task %s: its log has entries this version does not know, "
+                                "leaving it to a newer worker: %s", self.task_id, exc)
+                    return
                 # The log could not even be read and folded (nothing was written).
                 log.exception("task %s: could not load", self.task_id)
                 try:
@@ -152,7 +173,10 @@ class TaskRun:
         are cancelled."""
         tries = self.rt._unreadable.get(self.task_id, 0) + 1
         if tries < LOAD_ATTEMPTS:
-            self.rt._unreadable[self.task_id] = tries
+            counts = self.rt._unreadable
+            if self.task_id not in counts and len(counts) >= UNREADABLE_KEEP:
+                counts.pop(next(iter(counts)))
+            counts[self.task_id] = tries
             return
         self.rt._unreadable.pop(self.task_id, None)
         error = texts.UNREADABLE_LOG.format(attempts=tries, error=repr(exc))
@@ -513,11 +537,11 @@ class TaskRun:
             posts.append(Post(task_id=target, body=body, dedupe_key=key))
         return posts
 
-    @staticmethod
-    def staged(view: TaskView) -> list[NewTask]:
+    def staged(self, view: TaskView) -> list[NewTask]:
         """The children ``view.spawn`` staged, taken out of the view."""
         staged, view.creates = list(view.creates), []
-        return [NewTask(task_id=c.task_id, created=c.created, queue=c.queue, inbox=[c.first])
+        return [NewTask(task_id=c.task_id, created=c.created, queue=c.queue or self.claim.queue,
+                        inbox=[c.first])
                 for c in staged]
 
     def tool_offer(self, view: TaskView) -> ToolOffer:
