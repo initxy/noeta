@@ -100,6 +100,7 @@ dev = [
     "ruff>=0.6",
     "import-linter>=2.0",
     "types-pyyaml>=6.0",
+    "pytest-timeout>=2.3",
 ]
 
 [build-system]
@@ -121,6 +122,11 @@ files = ["noeta"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-ra -m 'not live and not cluster' --import-mode=importlib"
+# A hung test fails with every thread's stack instead of stalling the run:
+# faulthandler dumps the stacks at 120 s, pytest-timeout ends the test at 300 s.
+faulthandler_timeout = 120
+timeout = 300
+timeout_method = "thread"
 markers = [
     "live: needs a real model backend; opt in with -m live",
     "cluster: worker processes on Postgres under faults; run with make cluster",

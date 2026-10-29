@@ -5,6 +5,7 @@ otherwise; each test gets its own schema, dropped afterwards."""
 from __future__ import annotations
 
 import os
+import threading
 import uuid
 from collections.abc import Iterator
 from typing import Any
@@ -35,6 +36,56 @@ def pg() -> Iterator[Pg]:
     yield Pg(PG_DSN, schema)
     with psycopg.connect(PG_DSN, autocommit=True) as conn:
         conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+#: The real stderr, kept before output capture takes fd 2 over.
+_STDERR_FD: list[int] = []
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    _STDERR_FD.append(os.dup(2))
+
+
+def _dump_pending_tasks(nodeid: str) -> None:
+    """Every unfinished asyncio task with its stack: faulthandler's thread
+    stacks show a stuck loop, not the coroutine it waits on."""
+    import asyncio.tasks
+
+    lines = [f"\n--- asyncio tasks still pending in {nodeid} ---\n"]
+    for _ in range(3):  # read from another thread: the set may change under us
+        try:
+            pending = [t for t in list(asyncio.tasks._scheduled_tasks) if not t.done()]
+            break
+        except RuntimeError:
+            pending = []
+    for task in pending:
+        lines.append(f"{task!r}\n")
+        awaited: Any = task.get_coro()
+        while awaited is not None:  # down the await chain, outermost first
+            frame = getattr(awaited, "cr_frame", None) or getattr(awaited, "gi_frame", None)
+            if frame is None:
+                lines.append(f"  awaiting {awaited!r}\n")
+                break
+            lines.append(f"  {frame.f_code.co_filename}:{frame.f_lineno} in "
+                         f"{frame.f_code.co_name}\n")
+            awaited = getattr(awaited, "cr_await", None) or getattr(awaited, "gi_yieldfrom", None)
+    os.write(_STDERR_FD[0], "".join(lines).encode())
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> Any:
+    """With ``faulthandler_timeout`` set, a test still running then also
+    has its pending asyncio tasks printed."""
+    after = float(item.config.getini("faulthandler_timeout") or 0)
+    if after <= 0:
+        return (yield)
+    timer = threading.Timer(after, _dump_pending_tasks, args=(item.nodeid,))
+    timer.daemon = True
+    timer.start()
+    try:
+        return (yield)
+    finally:
+        timer.cancel()
 
 
 @pytest.fixture(autouse=True)
