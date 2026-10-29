@@ -181,10 +181,9 @@ class LocalApp:
         return await agent_run_command(self.runtime.agents, agent, ctx, text)
 
     async def context(self, task_id: str) -> dict[str, Any] | None:
-        from noeta.host.usage import context_breakdown
+        from noeta.host.usage import task_context
 
-        preview = await self.runtime.preview(task_id)
-        return context_breakdown(preview) if preview is not None else None
+        return await task_context(self.runtime, task_id)
 
     async def adopt(self, task_id: str) -> None:
         """Serve the tree of an existing task (one being resumed). Raises

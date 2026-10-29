@@ -16,7 +16,7 @@ from noeta.core import models
 from noeta.core.events import ExtensionRecorded
 from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.host.rewind import rewind, rewind_points
-from noeta.host.usage import context_breakdown, context_text, cost_text, tree_usage
+from noeta.host.usage import context_text, cost_text, task_context, tree_usage
 
 if TYPE_CHECKING:
     from noeta.cli.tui.app import NoetaApp
@@ -88,11 +88,11 @@ async def _context(app: NoetaApp, arg: str) -> None:
         return
     runtime = getattr(app.local, "runtime", None)
     if runtime is not None:
-        preview = await runtime.preview(app.task_id)
-        if preview is None:
+        found = await task_context(runtime, app.task_id)
+        if found is None:
             await app.say_notice("this task's agent is not one this front end runs")
             return
-        parts = context_breakdown(preview)
+        parts = found
     else:
         remote: Any = app.local.client
         parts = await remote.context(app.task_id)
