@@ -263,7 +263,7 @@ servers and runs on many machines.
   Rejected: one row per task with a version-aware overwrite rule (the two versions still
   replace each other each claim); a written-at column to evict the least recently written
   (lowest seq is close enough, no column).
-- D36 (`os-fix-r4tenant`; superseded by D70) A non-default tenant's file tools reach an allow
+- D36 (`os-fix-r4tenant`; superseded by D38) A non-default tenant's file tools reach an allow
   list (refines D16):
   its workspace, its own corners (D16, D26, D28), its temporary directory and, to read only,
   `/usr`, `/bin`, `/sbin`, `/lib`, `/lib32`, `/lib64`, `/libx32`, `/etc`, `/private/etc`,
@@ -275,7 +275,7 @@ servers and runs on many machines.
   `additionalDirectories` are not its scope. Rejected: `/opt`, `/srv`, `/var`, `/mnt`
   (other software's data, data disks: `/opt` is a link to one on the dev box); using the
   task's cwd when the workspace is unknown (host code can set any cwd).
-- D37 (`os-fix-r4tenant`; superseded by D70) A non-default tenant's sandboxed commands also cannot read any home
+- D37 (`os-fix-r4tenant`; superseded by D38) A non-default tenant's sandboxed commands also cannot read any home
   directory or server directory (D36's), but the tenant's workspace and own corners; the
   operator's `allowWrite` / `allowRead` / `additionalDirectories` do not apply to them. The
   real Python running the bridge (`sys.base_prefix`) is shown again, since a virtual
@@ -283,7 +283,7 @@ servers and runs on many machines.
   programs, `/tmp`, `/var/tmp`, `/opt` or `/run` are never hidden (an account whose home is
   `/`). bwrap and Seatbelt read rules are applied outermost first. Rejected: hiding every
   account's home including service accounts (uid < 500: `/var/lib/...`, `/bin`).
-- D70 (`os-tenant-relax`; supersedes D36, D37: too strict, the goal is reasonable
+- D38 (`os-tenant-relax`; supersedes D36, D37: too strict, the goal is reasonable
   protection) A non-default tenant's file tools and sandboxed commands may read what the OS
   user can but a protected set: noeta's home but its own corners (D16, D26, D28), the
   store's files, `/etc/noeta`, `/proc` (a command has its own), noeta's temp places but
@@ -402,4 +402,4 @@ servers and runs on many machines.
 - 2026-10-28 `os-fix-r4docs` (from `os-structure` 8a847cc2), the final review's round-4 findings, one commit each, behavior fixes with a test failing before, make check green after each (2305 passed, 54 skipped, 88.35% at the end): front ends on a server need no local model and send neither this machine's directory nor its model, `--cwd PATH` names one on the server, a cwd-less HTTP task gets the server's directory recorded, `-p --server` refused (D32, 2e7762fd); ADR-018 for D26–D28, refining ADR-014 (0ab7a68b); ADR-019, tenant limits and providers as kernel scheduling, refining ADR-007, with the reason in `docs/architecture.md` (D33, 14ebdadd); `docs/extending.md` counts a skill as one step (97d1312c); `~/.noeta` made 0700 and a new sqlite store 0600 (side files follow), existing ones kept with a notice (9af315a3); `cli/config.py` split into `home_dir`, `server_token`, `trust` and `plugin_policy`, `HOME` patched only in `home_dir` (676b1930).
 - 2026-10-28 `os-fix-r4kernel` (from `os-structure` 8a847cc2), the final review's kernel findings, one commit per fix, a test failing before each, make check green after each (2307 passed, 56 skipped, 88.29% at the end; with Postgres 2363 passed; `make cluster` 13/13; `make parity` 0, 11 accepted, own-words green): the agent's allow and deny lists cover tools added through `tool_changes`, a refused added tool drops its extension's whole change set and the deferred tools it withheld are sent plain (D34) bee646f3; `Runtime.hold` asks again when a hold's commit is unknown (taking a hold extends the worker's own) f1a80eb9; snapshots kept per task and fold version, schema version 3 (D35) a28c97aa. Left: a hold whose last of three attempts commits and still raises `CommitUnknown` is reaped as before; `_unhold` and lease renewal do not retry on `CommitUnknown` (the hold runs out).
 - 2026-10-28 `os-fix-r4tenant` (from `os-structure` 8a847cc2, rebased on 22c46102), one commit per fix, a test failing before each, make check green after each (2314 passed, 54 skipped at the end): tenant file tools on an allow list and tenant commands seeing no home or server directory (D36, D37; gate tests in bypass mode and after approval, an opened-file test, a real bwrap test with a temp `HOME`'s `~/.ssh` and the server directory's `.env`); MCP prompt commands kept per connection partition (two tenants interleaved); HTTP rewind through the guard with only request config and the task's queue. `noeta/cli/config.py`: one line (the sandbox fence's `server_dirs`). Left: names listed by `find -L` and glob expansion still cover home directories (as before, "Not a boundary"); a worker's `servers()` reads its cwd at check time.
-- 2026-10-29 `os-tenant-relax` (from `os-structure` 3af861a2), owner feedback that D36/D37 were too strict: D70 replaces them; two commits (move `DEFAULT_DENY_READ` into `noeta/toolkit/sandbox.py`; the protected-set rule with gate tests in bypass mode and after approval, an opened-file test, real bwrap tests for the credential stores of two homes, the server directory, the operator's `denyRead`, `/opt`- and `/var`-like reads and a workspace inside the server directory), make check green after each (2328 passed, 56 skipped). ADR-014's file-fence line is to be refined at the review wrap-up. Left: credentials kept under other names or outside home directories are readable unless `denyRead` names them.
+- 2026-10-29 `os-tenant-relax` (from `os-structure` 3af861a2), owner feedback that D36/D37 were too strict: D38 replaces them; two commits (move `DEFAULT_DENY_READ` into `noeta/toolkit/sandbox.py`; the protected-set rule with gate tests in bypass mode and after approval, an opened-file test, real bwrap tests for the credential stores of two homes, the server directory, the operator's `denyRead`, `/opt`- and `/var`-like reads and a workspace inside the server directory), make check green after each (2328 passed, 56 skipped). ADR-014's file-fence line is to be refined at the review wrap-up. Left: credentials kept under other names or outside home directories are readable unless `denyRead` names them.
