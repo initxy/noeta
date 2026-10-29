@@ -61,3 +61,23 @@ def test_acp_on_a_server_leaves_the_directory_to_it(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(acp, "serve_stdio", serve)
     cli.main(["acp", "--server", "http://api.internal:8642"])
     assert seen == {"model": "", "editor_cwd": False, "cwd": ""}
+
+
+@pytest.mark.parametrize("argv", [
+    ["--cwd", "projects/web", "--model", "opus", "acp", "--server", "http://api.internal:8642"],
+    ["acp", "--server", "http://api.internal:8642", "--cwd", "projects/web", "--model", "opus"],
+    ["--cwd", "elsewhere", "acp", "--server", "http://api.internal:8642",
+     "--cwd", "projects/web", "--model", "opus"],
+])
+def test_acp_takes_cwd_and_model_on_either_side(
+        argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    import noeta.host.acp as acp
+
+    seen: dict[str, Any] = {}
+
+    async def serve(_app: Any, **kw: Any) -> None:
+        seen.update(kw)
+
+    monkeypatch.setattr(acp, "serve_stdio", serve)
+    cli.main(argv)
+    assert seen == {"model": "opus", "editor_cwd": False, "cwd": "projects/web"}

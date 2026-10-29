@@ -2,7 +2,9 @@
 
 - Status: accepted
 - Refined by: [ADR-018](018-each-tenant-has-its-own-places-on-disk.md)
-  (per-tenant project and temp directories; a workspace is required)
+  (per-tenant project and temp directories; a workspace is required),
+  [ADR-021](021-a-tenant-reads-all-but-a-protected-set-and-writes-only-its-own-places.md)
+  (the file fence becomes a protected set for reads and the tenant's own places for writes)
 - Date: 2026-10-28
 - Refines: [ADR-007](007-tenants.md)
 

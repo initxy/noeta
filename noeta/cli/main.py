@@ -70,6 +70,9 @@ def _parser() -> argparse.ArgumentParser:
     ac.add_argument("--server", metavar="URL",
                     help="drive the tasks of a noeta server (token: NOETA_SERVER_TOKEN) "
                          "instead of running them here")
+    # The top-level --cwd and --model, also taken after "acp" (the later wins).
+    ac.add_argument("--cwd", default=argparse.SUPPRESS, help="as noeta --cwd")
+    ac.add_argument("--model", default=argparse.SUPPRESS, help="as noeta --model")
     w = sub.add_parser("worker", help="run tasks from the store until stopped")
     w.add_argument("--queue", action="append", default=None)
     w.add_argument("--concurrency", type=int, default=8)
