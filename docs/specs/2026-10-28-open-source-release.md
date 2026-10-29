@@ -2,7 +2,7 @@
 status: active
 created: 2026-10-28
 owner: main agent (integrates); phase work by subagents in worktrees
-branch: os-structure (phase 1; each phase gets its own branch)
+branch: os-structure (phase and fix branches merge into it; it merges to local main after the final review, D1)
 ---
 
 # Open-source release: Claude Code parity, extensible, multi-machine
@@ -51,7 +51,10 @@ servers and runs on many machines.
 ## Decisions
 
 - D1 Phases run on their own branches, each merged to local main `--no-ff` only after an
-  independent review per `docs/reviewing.md` says mergeable.
+  independent review per `docs/reviewing.md` says mergeable. (2026-10-29: in practice every
+  phase branch and every review-fix branch merged `--no-ff` into `os-structure`, not local
+  main, which is still at a244d2e; `os-structure` merges to local main once the final review
+  in Phase 6 finds no P0/P1.)
 - D2 Structural and behavior commits never mix (AGENTS.md); phase 1 does the structural series
   before the behavior series.
 - D3 Workspace on many machines: the exec env stays replaceable. Supported deployments are a
