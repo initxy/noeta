@@ -275,7 +275,8 @@ class TenantFence:
         of the operator's; every command inside the sandbox (no excluded
         commands, no way out, filesystem confined), no Unix sockets or user
         namespaces of the operator's allowing (a host daemon's socket, such
-        as D-Bus or Docker's, would run commands outside it) and a fresh
+        as D-Bus or Docker's, would run commands outside it), no local binding
+        (on macOS: every localhost port, the server's own included) and a fresh
         ``/proc`` of its own PID namespace. ``settings`` themselves for the default
         tenant."""
         if tenant == DEFAULT_TENANT:
@@ -305,7 +306,7 @@ class TenantFence:
             noeta_home_readable=(),
             excluded_commands=(), allow_unsandboxed=False, filesystem_disabled=False,
             weaker_nested=False, allow_all_unix_sockets=False, allow_unix_sockets=(),
-            nested_user_namespaces=False)
+            nested_user_namespaces=False, allow_local_binding=False)
 
     def _workspace_owner(self, path: str) -> str | None:
         """The tenant whose workspace most closely holds ``path``."""

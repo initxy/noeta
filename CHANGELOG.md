@@ -872,6 +872,9 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- A non-default tenant's sandbox profile drops the operator's `allowLocalBinding` too, as it
+  drops the Unix-socket and namespace allowances: on macOS it lets a command reach every
+  localhost port, the server's own included.
 - `noeta serve` refuses at the edge a tenant's request for a `cwd` in one of the `[server] dirs`
   inside its workspace, as `docs/server.md` says; the HTTP guard knew only the server's own
   directory and `--allow-root` (the worker still refused it). `create_app(server_dirs=)` takes
