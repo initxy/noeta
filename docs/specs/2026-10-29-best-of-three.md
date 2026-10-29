@@ -40,7 +40,7 @@ and reported in the README.
 ## Plan
 
 ### Phase 0: baseline
-- [ ] DeepSeek V4.1 eval of the existing 13 scenarios on main, 9 trials, archived.
+- [x] DeepSeek V4.1 eval of the existing 13 scenarios on main, 9 trials, archived.
 
 ### Phase 1: context audit (branch `ctx-*`)
 - [ ] Per-area comparison CC / pi / dsh / noeta: system prompt, reminders, environment and
@@ -89,3 +89,4 @@ and reported in the README.
 
 ## Progress log
 - 2026-10-29 Started from local main @37fd9997; `make check` 2424 passed.
+- 2026-10-29 Baseline on main: `make parity` 0 mismatches (11 accepted deviations); `make cluster` 13/13; DeepSeek V4.1 eval 9 trials overall 0.919 (`evals/results/ds41-main-37fd9997.json`): every scenario 1.00 except delegate_parallel_review 0.11 (5 of 9 hit the 240 s trial timeout), honest_test_failure 0.89, concise_direct_answer 0.94. 522 requests, 6.7M input tokens (5.3M cached), 125k output.
