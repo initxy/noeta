@@ -1,7 +1,7 @@
 # noeta
 
 **An open-source Claude Code that runs on servers.** The model sees what Claude Code shows it —
-the same tools, prompts' rules, reminders and request shape (prompt text in our own words) — and
+the same tools, prompts' rules, reminders and request shape — and
 reads Claude Code's formats for settings, hooks, skills, agents, MCP servers and plugins. Under
 it, every task is an append-only event log with exactly one writer, so a task survives a crash
 without re-running a tool, waits days for a person while holding no worker, and runs on one

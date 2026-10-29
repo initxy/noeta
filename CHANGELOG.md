@@ -456,6 +456,9 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Fixed
 
+- The missing-extra message's `uv tool install --reinstall` line names the README's extras
+  (`tui`, `images`) with the missing one and says to list every extra wanted. Before, it
+  named the missing extra alone, and running it dropped the extras installed earlier.
 - **An inbox item this version cannot read no longer fails a turn on every lease.** One a
   newer version posted lets the lease run out with nothing written (a newer worker takes the
   task); a malformed one ends the task `unreadable_log` after the usual claims.

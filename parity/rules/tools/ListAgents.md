@@ -28,7 +28,7 @@ position 5 of 13 in the baseline list. Never called in the recordings. noeta's i
 |---|---|---|
 | `tool.ListAgents.1` | Lists every agent reachable by `SendMessage`: sub-agents this session spawned, teammates, other local Claude Code sessions on the machine, the user's cloud sessions (when the session has cloud access) and, with Remote Control connected, the account's sessions on other machines; each row is labelled with its kind. | covered (sub-agents and the store's open root tasks; cloud/remote rows n/a) |
 | `tool.ListAgents.2` | A cloud session receives messages but cannot reply yet; do not ask it to answer — read its answer in its own transcript. | n/a (cloud feature) |
-| `tool.ListAgents.3` | The row's name is the address: send with `SendMessage({to: "<name>", message: "..."})`, using the listed name character for character. | covered |
+| `tool.ListAgents.3` | A row's name is what `SendMessage` takes as `to`; it must be passed exactly as listed. | covered |
 | `tool.ListAgents.4` | Append a row's ` [ref]` suffix to the name only when the bare name is ambiguous (two rows share it) or an error asks for disambiguation. | n/a (addresses are task ids, never ambiguous) |
 
 ## Result shape

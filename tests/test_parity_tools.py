@@ -116,7 +116,8 @@ def test_sse_round_trips_through_the_recorded_response_reader() -> None:
     msg = wire.parse_response(raw)
     assert msg is not None and msg["stop_reason"] == "tool_use"
     assert wire.script_turn(msg)["content"] == [
-        {"type": "thinking", "thinking": "hm"}, {"type": "text", "text": "hi"},
+        {"type": "thinking", "thinking": wire.THINKING_PLACEHOLDER},
+        {"type": "text", "text": "hi"},
         {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]
     assert wire.parse_response('{"type": "error", "error": {}}') is None
     assert wire.parse_response('{"content": [], "stop_reason": "end_turn"}') == {
