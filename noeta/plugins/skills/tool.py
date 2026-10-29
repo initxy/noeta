@@ -71,8 +71,9 @@ class SkillTool:
         name = skill_name(raw)
         if name is None:
             return text_output(f"Not a skill name: {raw!r}", is_error=True)
-        registry = await self._owner.registry(task_env(ctx.env, {}))
-        menu = registry.model_invocable(unlocked_skills(ctx.state.get(self._owner.name)))
+        state = ctx.state.get(self._owner.name)
+        registry = await self._owner.registry(task_env(ctx.env, {}), state)
+        menu = registry.model_invocable(unlocked_skills(state))
         desc = registry.get(name)
         if desc is not None and not desc.model_invocable:
             return text_output(USER_ONLY_SKILL.format(name=name), is_error=True)

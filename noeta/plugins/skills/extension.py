@@ -40,6 +40,7 @@ from noeta.plugins.skills.gates import (
 from noeta.plugins.skills.listing import listing_lines, render_listing, skill_digest
 from noeta.plugins.skills.registry import (
     SkillRegistry,
+    index_dir,
     load_registry,
     render_body,
     render_command_body,
@@ -119,6 +120,11 @@ INVOKED_ORDER = 20
 #: The directories a workspace contributes, relative to its root.
 WORKSPACE_SKILLS_DIR = ".noeta/skills"
 WORKSPACE_AGENTS_SKILLS_DIR = ".agents/skills"
+#: The tier of a skill directory found below the working directory: above
+#: the workspace's own.
+NESTED_TIER = 5
+#: Announces the skills of a directory found below the working directory.
+NESTED_SKILLS = "Skills found in {dir}, now available through the Skill tool:"
 
 Rank = Callable[[TaskView], "Mapping[str, float] | Awaitable[Mapping[str, float]] | None"]
 
@@ -160,6 +166,11 @@ def _typed_command(text: str) -> tuple[str, str] | None:
         return tagged[0], tagged[1].strip()
     m = re.match(r"/([a-z0-9][a-z0-9-]*)(?:\s+|$)(.*)", text.lstrip(), re.DOTALL)
     return (m.group(1), m.group(2).strip()) if m else None
+
+
+def nested_dirs(state: Any) -> tuple[str, ...]:
+    """The skill directories below the working directory a task has found."""
+    return tuple((state or {}).get("nested") or ())
 
 
 def _digests(registry: SkillRegistry, lines: Sequence[tuple[str, str]]) -> dict[str, str]:
@@ -256,8 +267,10 @@ class Skills(Extension):
 
     # ------------------------------------------------------------ discovery
 
-    def tiers(self, cwd: str) -> list[tuple[str, int]]:
-        """``(directory, keep-order tier)``, low precedence first."""
+    def tiers(self, cwd: str, nested: Sequence[str] = ()) -> list[tuple[str, int]]:
+        """``(directory, keep-order tier)``, low precedence first; ``nested``
+        are skill directories found below the working directory (deepest
+        last)."""
         out = [(d, 0) for d in self.dirs]
         if self.global_agents_dir is not None:
             out.append((self.global_agents_dir, 1))
@@ -270,6 +283,7 @@ class Skills(Extension):
                      os.path.join(cwd, WORKSPACE_SKILLS_DIR)]
             if self.trusted is None or self.trusted(cwd):
                 out += [(gated[0], 3), (gated[1], 4)]
+                out += [(d, NESTED_TIER) for d in nested]
             elif cwd not in _warned_untrusted:
                 skipped = [d for d in gated if os.path.isdir(d)]
                 if skipped:  # nothing is skipped where the directories do not exist
@@ -280,15 +294,17 @@ class Skills(Extension):
                                  "directories: %s", cwd, ", ".join(skipped))
         return out
 
-    async def registry(self, env: ExecEnv) -> SkillRegistry:
-        return await load_registry(env, self.tiers(env.cwd))
+    async def registry(self, env: ExecEnv, state: Any = None) -> SkillRegistry:
+        """The skills ``env`` sees, with the nested directories ``state``
+        (this plugin's) recorded."""
+        return await load_registry(env, self.tiers(env.cwd, nested_dirs(state)))
 
     async def turn_registry(self, view: TaskView) -> SkillRegistry:
         """The skills as found once per turn of the task: loaded again when
         new input was taken (a skill installed since shows up with the
         person's next message), not after every file a call touched."""
         env = task_env(view.env, view.state.config)
-        tiers = self.tiers(env.cwd)
+        tiers = self.tiers(env.cwd, nested_dirs(view.ext_state(self.name)))
         key = (view.state.inbox_read, env.cwd, tuple(tiers))
         cached = self._turn_registries.pop(view.task_id, None)
         if cached is not None and cached[0] == key:
@@ -344,6 +360,8 @@ class Skills(Extension):
             forks = {**(state.get("forks") or {}), data["call_id"]: data["prompt"]}
             # Needed until the call runs: the reply's calls, at most.
             return {**state, "forks": dict(list(forks.items())[-FORKS_KEEP:])}
+        if kind == "nested":
+            return {**state, "nested": [*(state.get("nested") or []), data["dir"]]}
         if kind == "unlocked":
             have = list(state.get("unlocked") or [])
             return {**state, "unlocked": have + [n for n in data["names"] if n not in have]}
@@ -497,6 +515,7 @@ class Skills(Extension):
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
         if call.name in FILE_TOOLS and not output.is_error:
+            await self._discover(view, call)
             await self._unlock(view, call)
         data = output.meta.get("skill_activation")
         if call.name != SKILL_TOOL or output.is_error or not isinstance(data, dict):
@@ -592,6 +611,53 @@ class Skills(Extension):
                                           "prompt": prompt})
         return Rewrite(name=AGENT_TOOL, input={**call.input, "prompt": prompt})
 
+    async def _discover(self, view: TaskView, call: ToolUse) -> None:
+        """Skill directories (``.noeta/skills``, ``.agents/skills``) of the
+        directories between the working directory and the file this call
+        touched join the task, announced with their skills' names (Claude
+        Code's nested skill discovery)."""
+        path = next((call.input[k] for k in ("file_path", "notebook_path")
+                     if isinstance(call.input.get(k), str) and call.input[k]), None)
+        if path is None or self.skills_dir is not None or not self.workspace:
+            return
+        env = task_env(view.env, view.state.config)
+        cwd = env.cwd
+        if self.trusted is not None and not self.trusted(cwd):
+            return
+        target = os.path.normpath(path if os.path.isabs(path) else os.path.join(cwd, path))
+        rel = os.path.relpath(os.path.dirname(target), cwd)
+        if rel == "." or rel.startswith(".."):
+            return
+        state = view.ext_state(self.name) or {}
+        known = set(nested_dirs(state))
+        d = cwd
+        for part in rel.split(os.sep):
+            d = os.path.join(d, part)
+            for sub in (WORKSPACE_AGENTS_SKILLS_DIR, WORKSPACE_SKILLS_DIR):
+                root = os.path.join(d, sub)
+                if root in known:
+                    continue
+                found = await index_dir(env, root)
+                names = sorted(n for n, desc in found.items()
+                               if desc.model_invocable and not desc.paths)
+                if not found:
+                    continue
+                known.add(root)
+                view.record(self.name, "nested", {"dir": root})
+                state = {**state, "nested": [*nested_dirs(state), root]}
+                if not names:
+                    continue
+                registry = await self.registry(env, state)
+                lines = [(n, line) for n, line in listing_lines(
+                    registry, budget_tokens=self._budget(view), unlocked=unlocked_skills(state))
+                    if n in names]
+                text = NESTED_SKILLS.format(dir=os.path.relpath(root, cwd)) + "\n" + "\n".join(
+                    f"- {n}" for n in names)
+                view.record(self.name, "listing",
+                            {"names": [n for n, _ in lines], "lines": [t for _, t in lines],
+                             "digests": _digests(registry, lines)},
+                            message=user(text, origin=self.origin))
+
     async def _unlock(self, view: TaskView, call: ToolUse) -> None:
         """Offer the skills whose ``paths`` match the file this call touched,
         announced like a newly installed skill."""
@@ -673,7 +739,7 @@ class Skills(Extension):
         out: list[Message] = []
         active = state.get("active") or {}
         if active:
-            registry = await self.registry(task_env(view.env, view.state.config))
+            registry = await self.registry(task_env(view.env, view.state.config), state)
             parts = [INVOKED_SKILLS_HEADER]
             for name, entry in active.items():
                 desc = registry.get(name)

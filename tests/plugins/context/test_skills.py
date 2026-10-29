@@ -782,3 +782,27 @@ async def test_a_skill_named_mid_message_gets_a_note(h: Harness) -> None:
                     "Skill tool with skill \"deploy\" and any arguments they gave as args; if "
                     "they only mention it, do not run it."]
     assert [x.data for x in await h.records(tid, "skills", "mentioned")] == [{"name": "deploy"}]
+
+
+async def test_skills_below_the_working_directory_join_when_a_file_there_is_touched(
+        h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    pkg = h.work / "apps" / "web"
+    write_skill(pkg / ".noeta" / "skills", "web-build", "Build the web app.")
+    (pkg / "src").mkdir()
+    (pkg / "src" / "main.ts").write_text("export {}\n")
+    a = agent()
+    h.provider.add(reply("", ("Read", {"file_path": str(pkg / "src" / "main.ts")})),
+                   reply("", ("Skill", {"skill": "web-build"})), reply("done"))
+    tid = await h.start(a)
+    texts = [m.text for m in h.provider.requests[1].messages]
+    assert "Skills found in apps/web/.noeta/skills, now available through the Skill tool:\n" \
+        "- web-build" in texts
+    # Loadable now, and not listed again with the next message.
+    results = await h.results(tid)
+    assert results[-1].result.text == "Starting skill: web-build. Its instructions follow."
+    h.provider.add(reply("ok"))
+    await h.say(a, tid, "next")
+    assert h.last_messages()[-1].text == "next"
+    [nested] = await h.records(tid, "skills", "nested")
+    assert nested.data == {"dir": str(pkg / ".noeta" / "skills")}
