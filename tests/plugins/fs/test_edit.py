@@ -509,3 +509,14 @@ async def test_an_edit_of_a_very_large_file_skips_the_diff(h: Harness, ws: Path)
     assert "line seven\n" in target.read_text()
     assert out.meta["diff"] == ""
     assert out.display is not None and out.display.fallback == "big.txt (too large to diff)"
+
+
+async def test_crlf_multi_line_edit_with_straight_quotes_matches_curly_ones(
+        h: Harness, ws: Path) -> None:
+    target = ws / "q.md"
+    target.write_bytes("He said “hi”\r\nand “bye”\r\n".encode())
+    await _read(h, "q.md")
+    out = await h.call(EditTool(), file_path="q.md", old_string='He said "hi"\nand "bye"',
+                       new_string='He said "yo"\nand "ciao"')
+    assert not out.is_error, text_of(out)
+    assert target.read_bytes() == "He said “yo”\r\nand “ciao”\r\n".encode()
