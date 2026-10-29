@@ -90,10 +90,13 @@ async def test_approval_with_a_key(tmp_path: Path) -> None:
         assert call.state == "done"
 
 
-async def test_a_new_task_asks_only_for_its_task_config(tmp_path: Path) -> None:
+async def test_a_new_task_asks_only_for_its_task_config(tmp_path: Path,
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
     """Attached to a server, a new task names no directory or model of its
-    own: the server picks them."""
+    own: the server picks them. It names the person's time zone."""
     from noeta.core.events import TaskCreated
+
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
 
     agent = Agent(name="main", model="claude-sonnet-4-5", tools=[Look()])
     local = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], ScriptedProvider([]),
@@ -103,7 +106,7 @@ async def test_a_new_task_asks_only_for_its_task_config(tmp_path: Path) -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(pilot, app, lambda: app.task_id != "")
         first = (await local.client.events(app.task_id))[0].event
-        assert isinstance(first, TaskCreated) and first.config == {}
+        assert isinstance(first, TaskCreated) and first.config == {"timezone": "Asia/Shanghai"}
 
 
 async def test_shift_tab_cycles_the_permission_mode(tmp_path: Path) -> None:

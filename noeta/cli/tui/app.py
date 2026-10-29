@@ -33,6 +33,7 @@ from noeta.core.types import Delta, Image
 from noeta.host.local import LocalApp, UnknownAgent
 from noeta.host.pending import answer_choice
 from noeta.host.questions import next_question, typed_answer
+from noeta.toolkit.local_env import local_timezone
 from noeta.toolkit.permission_modes import (
     MODE_SIGNAL,
     Modes,
@@ -170,6 +171,9 @@ class NoetaApp(TranscriptView):
         config = dict(self.task_config)
         if self.permission_mode:
             config["permission_mode"] = self.permission_mode
+        # The person is at this machine: their dates are in its time zone.
+        if "timezone" not in config and (zone := local_timezone()):
+            config["timezone"] = zone
         tid = await self.local.client.create(self.agent, None, config=config)
         await self.open_task(tid, resumed=False)
 

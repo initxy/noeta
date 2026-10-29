@@ -22,13 +22,15 @@ import os
 import platform
 import posixpath
 import sys
-from collections.abc import Callable, Sequence
-from datetime import datetime
+from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from noeta.core import models
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import Extension, Reminder, TaskView
+from noeta.core.loop.state import TaskState
 from noeta.core.types import Message, ToolResult, system_message, user
 from noeta.toolkit.commands import is_command_message
 from noeta.toolkit.context import task_env
@@ -196,8 +198,20 @@ async def _env_platform(env: ExecEnv) -> str:
     return name if name in ("linux", "darwin") or name.startswith("freebsd") else ""
 
 
-def _today() -> str:
-    return datetime.now().astimezone().date().isoformat()
+def valid_zone(name: Any) -> str | None:
+    """``name`` when it is an IANA time zone this machine knows, else ``None``."""
+    if not isinstance(name, str) or not name or name.startswith(("/", ".")):
+        return None
+    try:
+        ZoneInfo(name)
+    except (ValueError, KeyError, OSError):
+        return None
+    return name
+
+
+def today_in(zone: str | None) -> str:
+    """Today's date in ``zone``, or in UTC without one."""
+    return datetime.now(ZoneInfo(zone) if zone else UTC).date().isoformat()
 
 
 def render_environment(cwd: str, model: str, *, is_git: bool, local: bool = True,
@@ -271,13 +285,25 @@ def budget_note(left: int) -> str:
     return f"<total_tokens>{left} tokens left</total_tokens>"
 
 
-def date_line(today: str) -> str:
+def date_line(today: str, *, utc: bool = False) -> str:
+    """Today's date for the environment turn; ``utc`` when the user's time
+    zone is not known, so the date is UTC's and said to be."""
+    if utc:
+        return (f"The date today is {today} in UTC; the user's own date may differ. A date or "
+                "time in a system reminder that is not marked UTC is the user's local one: "
+                "take it as today's date.")
     return f"The date today is {today}."
 
 
 DATE_CHANGED_REMINDER = (
     "The date moved on during this conversation: today is {date}. The user knows, so do not "
     "point it out."
+)
+#: The same, when the dates are UTC's (the user's time zone is not known).
+DATE_CHANGED_UTC_REMINDER = (
+    "The date in UTC moved on during this conversation: it is now {date}; the user's own "
+    "date may differ. The earlier date line was in UTC too; a date or time in a system "
+    "reminder that is not marked UTC is the user's local one: take it as today's date."
 )
 
 
@@ -308,8 +334,12 @@ class Environment(Extension):
       (``0``: no budget notes).
     * ``date_change`` — tell the model, at the start of a turn, when the date
       is no longer the one it was given (the prompt
-      ``reminder/date_changed``; ``{date}`` is today).
-    * ``today`` — today's date as ``YYYY-MM-DD`` (default: this machine's).
+      ``reminder/date_changed``, or ``reminder/date_changed_utc`` for UTC
+      dates; ``{date}`` is today).
+    * ``today`` — today's date as ``YYYY-MM-DD``, taken as the user's
+      (default: the date in the task config's ``timezone``, the user's IANA
+      zone a front end passes; without one, the UTC date, said to be UTC's,
+      so a server never gives its own zone's date as the user's).
     """
 
     name = "environment"
@@ -317,7 +347,7 @@ class Environment(Extension):
     def __init__(self, *, model: str | None = None, model_name: bool = True,
                  git_status: bool = True, attribution: bool = True,
                  token_budget: int = TOKEN_BUDGET, date_change: bool = True,
-                 today: Callable[[], str] = _today) -> None:
+                 today: Callable[[], str] | None = None) -> None:
         self.model = model
         self.model_name = model_name
         self.git_status = git_status
@@ -332,7 +362,8 @@ class Environment(Extension):
         if kind == "environment" and "text" in data:
             # A record without ``held`` (an older log) went out as a message.
             return {"text": data["text"], "date": data.get("date"),
-                    "held": bool(data.get("held")), "turn_base": 0}
+                    "utc": bool(data.get("utc")), "held": bool(data.get("held")),
+                    "turn_base": 0}
         if not isinstance(state, dict):
             return state
         if kind in ("git", "attribution"):
@@ -355,6 +386,18 @@ class Environment(Extension):
     def _model(self, view: TaskView) -> str:
         return str(view.state.config.get("model") or self.model or view.model or "")
 
+    def _today(self, view: TaskView) -> tuple[str, bool]:
+        """Today's date for this task, and whether it is UTC's (the user's
+        zone is not known)."""
+        if self.today is not None:
+            return self.today(), False
+        zone = valid_zone(view.state.config.get("timezone"))
+        return today_in(zone), zone is None
+
+    def inherit(self, state: TaskState) -> Mapping[str, Any]:
+        zone = valid_zone(state.config.get("timezone"))
+        return {"timezone": zone} if zone else {}
+
     async def on_start(self, view: TaskView) -> None:
         if view.ext_state(self.name):
             return
@@ -362,9 +405,12 @@ class Environment(Extension):
         cwd = view.cwd or env.cwd
         model = self._model(view)
         text = await capture_environment(env, cwd, model if self.model_name else "")
+        today, utc = self._today(view)
         # Held for the first request's system turn, after the prompt.
-        view.record(self.name, "environment", {"text": text, "date": self.today(),
-                                               "held": True})
+        data: dict[str, Any] = {"text": text, "date": today, "held": True}
+        if utc:
+            data["utc"] = True
+        view.record(self.name, "environment", data)
         if self.git_status:
             snapshot = await capture_git(env, cwd)
             if snapshot:
@@ -394,12 +440,15 @@ class Environment(Extension):
                 out.append(Reminder(text=deferred_list(names), kind="deferred",
                                     data={"names": names}, role="system", order=order))
             if not st.get("skip_date"):
-                out.append(Reminder(text=date_line(st["date"]), kind="date",
-                                    data={"date": st["date"]}, role="system", order=ORDER_DATE))
+                out.append(Reminder(text=date_line(st["date"], utc=bool(st.get("utc"))),
+                                    kind="date", data={"date": st["date"]}, role="system",
+                                    order=ORDER_DATE))
         elif self.date_change and not view.state.steps_in_turn and st.get("date"):
-            today = self.today()
+            today, _ = self._today(view)
             if st["date"] != today:
-                text = view.prompt("reminder/date_changed", DATE_CHANGED_REMINDER)
+                text = view.prompt("reminder/date_changed_utc", DATE_CHANGED_UTC_REMINDER) \
+                    if st.get("utc") else view.prompt("reminder/date_changed",
+                                                      DATE_CHANGED_REMINDER)
                 out.append(Reminder(text=text.replace("{date}", today), kind="date",
                                     data={"date": today}, role="system", order=ORDER_DATE))
         # A sub-agent's task prompt gets none; its tool results do.
@@ -427,7 +476,7 @@ class Environment(Extension):
             out.append(user(st["attribution"], origin="system"))
         date = view.keeps_tail and bool(st.get("date"))
         if date:
-            out.append(system_message(date_line(st["date"])))
+            out.append(system_message(date_line(st["date"], utc=bool(st.get("utc")))))
         if isinstance(st.get("text"), str):
             view.record(self.name, "rehold", {"date": not date})
         return out

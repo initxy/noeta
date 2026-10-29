@@ -31,6 +31,7 @@ import yaml
 
 from noeta.agents.agent_files import AgentFile, AgentFileError, parse_agent_file
 from noeta.cli.config import Settings
+from noeta.toolkit.local_env import local_timezone
 
 #: Accepted for compatibility, not applied (value-taking, then flags).
 IGNORED_WITH_VALUE = ("--fallback-model",
@@ -313,7 +314,8 @@ async def run(app: Any, s: Settings, args: argparse.Namespace, *, cwd: str) -> i
             ask_client=args.permission_prompt_tool == "stdio"
             and args.permission_prompts == "host",
             resume=resume, fork=bool(args.fork), task_id=args.new_task_id,
-            config={"effort": s.effort} if s.effort else {})
+            config={**({"effort": s.effort} if s.effort else {}),
+                    **({"timezone": zone} if (zone := local_timezone()) else {})})
         if args.permission_prompt_tool not in (None, "stdio"):
             print(f"noeta: --permission-prompt-tool {args.permission_prompt_tool}: only "
                   "\"stdio\" is supported; permission prompts are refused", file=sys.stderr)

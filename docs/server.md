@@ -71,9 +71,11 @@ the loopback `Host` names are answered (DNS rebinding); on any other bind `Host`
 only against the names given with `--allow-host NAME` (repeatable), so name them.
 
 A request may set only the task config a client may (`model`, `effort`, `max_turns`, `cwd`,
-`permission_mode`, `output_schema`), post only the signals front ends send, and create tasks
+`permission_mode`, `output_schema`, `timezone`), post only the signals front ends send, and create tasks
 only in the server's directory and its `--allow-root` paths. Host code embedding the API uses
-`create_app(client, token=...)` (or `token_sha256=`).
+`create_app(client, token=...)` (or `token_sha256=`). `timezone` is the person's IANA zone
+(`Europe/Berlin`), which noeta's own front ends send: without it the model is given the UTC
+date, marked as UTC's, never the server's local one.
 
 ## Several parties
 
