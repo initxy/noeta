@@ -1,0 +1,149 @@
+"""The sandbox profile of a task whose tenant is not the default one: on top
+of the operator's settings, its commands may not read noeta's home (but its
+own corners), the spill directory (but its own), the store's files,
+``/etc/noeta`` or another tenant's workspace, nor leave the sandbox."""
+
+from __future__ import annotations
+
+import os
+import shutil
+import sys
+from pathlib import Path
+
+import pytest
+
+from noeta.backends.execenvs import sandbox as sb
+from noeta.backends.execenvs.local import LocalExecEnv
+from noeta.cli.config import local_env_for
+from noeta.core.loop.state import TaskState
+from noeta.toolkit.paths import project_slug
+from noeta.toolkit.sandbox import SandboxSettings
+from noeta.toolkit.tenant_fence import TenantFence
+
+
+def _bwrap_works() -> bool:
+    bwrap = shutil.which("bwrap")
+    return bwrap is not None and sys.platform.startswith("linux") \
+        and sb._probe_bwrap(bwrap) is None
+
+
+needs_bwrap = pytest.mark.skipif(not _bwrap_works(),
+                                 reason="bubblewrap cannot create namespaces here")
+
+
+class Places:
+    def __init__(self, tmp: Path) -> None:
+        self.home = tmp / "home"
+        self.spill = tmp / "spill"
+        self.store = tmp / "db" / "tasks.sqlite"
+        self.mine = tmp / "ws" / "acme"
+        self.theirs = tmp / "ws" / "globex"
+        for d in (self.home / "skills", self.home / "plans" / "acme", self.home / "plans" / "globex",
+                  self.spill / "t1", self.spill / "other", self.store.parent, self.mine,
+                  self.theirs, self.home / "projects" / project_slug(str(self.mine)),
+                  self.home / "projects" / "elsewhere"):
+            d.mkdir(parents=True, exist_ok=True)
+        files = {
+            self.home / "tokens.json": "TOKENS", self.home / "skills" / "s.md": "SKILL",
+            self.home / "plans" / "acme" / "p.md": "MYPLAN",
+            self.home / "plans" / "globex" / "p.md": "THEIRPLAN",
+            self.home / "projects" / project_slug(str(self.mine)) / "m.md": "MYMEMORY",
+            self.home / "projects" / "elsewhere" / "m.md": "THEIRMEMORY",
+            self.spill / "t1" / "a.txt": "MYSPILL", self.spill / "other" / "a.txt": "THEIRSPILL",
+            self.store: "STORE", self.mine / "f.txt": "MYFILE", self.theirs / "f.txt": "THEIRFILE",
+        }
+        for path, text in files.items():
+            path.write_text(text)
+        self.fence = TenantFence(home=str(self.home), spill_root=str(self.spill),
+                                 plans_dir=str(self.home / "plans"),
+                                 store_files=(str(self.store),),
+                                 workspaces={"acme": str(self.mine), "globex": str(self.theirs)})
+
+
+def _state(tenant: str, cwd: Path) -> TaskState:
+    state = TaskState(task_id="t1")
+    state.tenant = tenant
+    state.config = {"cwd": str(cwd)}
+    return state
+
+
+def test_the_profile_of_a_tenants_task(tmp_path: Path) -> None:
+    p = Places(tmp_path)
+    loose = SandboxSettings(enabled=True, excluded_commands=("docker *",),
+                            filesystem_disabled=True, weaker_nested=True,
+                            deny_read=("~/.ssh",))
+    box = p.fence.confine(loose, tenant="acme", task_id="t1", cwd=str(p.mine))
+    assert box.excluded_commands == () and not box.allow_unsandboxed
+    # Another task's own corners differ; the tool description it gets does not.
+    assert p.fence.confine(loose, tenant="acme", task_id="t2", cwd=str(p.mine)) == box
+    assert not box.filesystem_disabled and not box.weaker_nested
+    assert box.deny_read == ("~/.ssh",)  # what the model is told stays the operator's
+    plan = sb.plan_paths(box, str(p.mine), str(tmp_path / "tmp"))
+    real = os.path.realpath
+    for denied in (p.home, p.spill, p.store, p.theirs, "/etc/noeta"):
+        assert real(str(denied)) in plan.deny_read
+    assert real(str(p.mine)) not in plan.deny_read
+    for own in (p.spill / "t1", p.home / "skills", p.home / "plans" / "acme",
+                p.home / "projects" / project_slug(str(p.mine))):
+        assert real(str(own)) in plan.allow_read
+    assert real(str(p.home / "tool-results")) not in plan.allow_read
+    assert real(str(p.home / "projects")) not in plan.allow_read
+    args = " ".join(sb.bwrap_args(box, plan, bwrap="bwrap", cwd=str(p.mine), relays=[],
+                                  bridge="/b.py"))
+    assert f"--tmpfs {real(str(p.theirs))}" in args
+    assert f"--ro-bind /dev/null {real(str(p.store))}" in args
+    assert "--proc /proc" in args  # its own PID namespace: no other process is visible
+    profile = sb.seatbelt_profile(box, plan, (4000, 4001))
+    assert f'(deny file-read* (subpath "{real(str(p.theirs))}"))' in profile
+    assert f'(allow file-read* (subpath "{real(str(p.spill / "t1"))}"))' in profile
+
+
+def test_the_default_tenants_profile_is_the_operators(tmp_path: Path) -> None:
+    p = Places(tmp_path)
+    settings = SandboxSettings(enabled=True, excluded_commands=("docker *",))
+    assert p.fence.confine(settings, tenant="default", task_id="t1") is settings
+    env_for = local_env_for(settings, p.fence)
+    env = env_for(_state("default", p.mine))
+    assert isinstance(env, LocalExecEnv) and env.sandbox is not None
+    assert env.sandbox.settings is settings
+    tenant_env = env_for(_state("acme", p.mine))
+    assert isinstance(tenant_env, LocalExecEnv) and tenant_env.sandbox is not None
+    assert tenant_env.sandbox.settings.excluded_commands == ()
+
+
+async def _out(env: LocalExecEnv, command: str) -> str:
+    assert env.sandbox is not None
+    prepared = await env.sandbox.prepare(["bash", "-c", command], cwd=env.cwd)
+    try:
+        result = await env.run(prepared.argv, env=prepared.env, timeout=60)
+    finally:
+        await prepared.close()
+    return (result.stdout + result.stderr).decode("utf-8", "replace")
+
+
+@needs_bwrap
+async def test_a_tenants_command_cannot_read_the_fenced_places(tmp_path: Path) -> None:
+    p = Places(tmp_path)
+    env_for = local_env_for(SandboxSettings(enabled=True), p.fence)
+    show = " ".join(f"cat {f};" for f in (
+        p.home / "tokens.json", p.home / "skills" / "s.md", p.home / "plans" / "acme" / "p.md",
+        p.home / "plans" / "globex" / "p.md",
+        p.home / "projects" / project_slug(str(p.mine)) / "m.md",
+        p.home / "projects" / "elsewhere" / "m.md", p.spill / "t1" / "a.txt",
+        p.spill / "other" / "a.txt", p.store, p.mine / "f.txt", p.theirs / "f.txt"))
+    show += f" cat /proc/{os.getpid()}/environ; echo PIDS=$(ls /proc | grep -c '^[0-9]')"
+    tenant = env_for(_state("acme", p.mine))
+    assert isinstance(tenant, LocalExecEnv)
+    out = await _out(tenant, show)
+    for seen in ("SKILL", "MYPLAN", "MYMEMORY", "MYSPILL", "MYFILE"):
+        assert seen in out
+    for hidden in ("TOKENS", "THEIRPLAN", "THEIRMEMORY", "THEIRSPILL", "STORE", "THEIRFILE"):
+        assert hidden not in out
+    assert "PATH=" not in out
+    pids = int(out.rsplit("PIDS=", 1)[1].split()[0])
+    assert pids < 10
+    # The default tenant's commands see what they always did.
+    default = env_for(_state("default", p.mine))
+    assert isinstance(default, LocalExecEnv)
+    out = await _out(default, f"cat {p.theirs / 'f.txt'} {p.spill / 'other' / 'a.txt'}")
+    assert "THEIRFILE" in out and "THEIRSPILL" in out

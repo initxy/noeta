@@ -97,6 +97,15 @@ class SandboxSettings:
     deny_env: tuple[str, ...] = ()
     #: An absolute ``bwrap`` to use instead of the one on ``PATH``.
     bwrap_path: str | None = None
+    #: Inside noeta's home (unreadable), the names a command may still read;
+    #: ``None``: spilled tool outputs and project memory (a tenant's task
+    #: gets none, and its own corners in :attr:`tenant_allow_read` instead).
+    noeta_home_readable: tuple[str, ...] | None = None
+    #: A tenant's task: absolute paths its commands may not read, and those
+    #: inside them they may (``noeta.toolkit.tenant_fence``). Never shown
+    #: to the model, and not compared, so tasks of one profile share it.
+    tenant_deny_read: tuple[str, ...] = field(default=(), compare=False)
+    tenant_allow_read: tuple[str, ...] = field(default=(), compare=False)
     #: Where the working directory is, for relative paths.
     base_dir: str = field(default="", compare=False)
 
