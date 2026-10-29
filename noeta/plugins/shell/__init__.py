@@ -74,6 +74,16 @@ def lost_notice(job_id: str, job: Mapping[str, Any]) -> str:
 _START_RECORDS = 4
 
 
+def _ran_under(job: Mapping[str, Any], lost: Sequence[tuple[Any, Any]]) -> bool:
+    """Whether ``job`` ran under one of the ``lost`` holds (worker, epoch).
+    Epoch 0 is a version 1 store's hold, told on upgrade: it covers the jobs
+    a version 1 worker recorded, which carry no epoch, and whose worker is
+    that worker's process rather than the hold's worker."""
+    if "hold" not in job:
+        return any(epoch == 0 for _worker, epoch in lost)
+    return (job.get("worker"), job.get("hold")) in lost
+
+
 def _notice_key(job_id: str) -> str:
     return f"shell:notice:{job_id}"
 
@@ -211,10 +221,9 @@ class Shell(Extension):
                     view.enqueue(Say(message=user(notice, origin="system"), when="now"),
                                  dedupe_key=_notice_key(job_id))
             elif body.name == HOLD_LOST:
+                lost = (body.data.get("worker"), body.data.get("epoch"))
                 for job_id, job in jobs.items():
-                    if job.get("status") != "running" or "hold" not in job \
-                            or job.get("hold") != body.data.get("epoch") \
-                            or job.get("worker") != body.data.get("worker"):
+                    if job.get("status") != "running" or not _ran_under(job, [lost]):
                         continue
                     job["status"] = "lost"
                     view.record(self.name, "lost", {"job_id": job_id})
@@ -250,7 +259,7 @@ class Shell(Extension):
             if not ended or st is None:
                 continue  # a live task hears ``hold_lost`` itself: it cannot end unread
             for job_id, job in st.jobs.items():
-                if job.get("status") == "running" and (job.get("worker"), job.get("hold")) in lost:
+                if job.get("status") == "running" and _ran_under(job, lost):
                     view.enqueue(Say(message=user(lost_notice(job_id, job), origin="system"),
                                      when="now"), dedupe_key=_notice_key(job_id))
 

@@ -189,9 +189,11 @@ All notable changes to Noeta are documented here. The format is based on
   `hold_lost` without waking the task (`Post.wake`): it hears with its next message. Third-party
   stores implement `hold`, `unhold` and `reap_holds` (a store an earlier
   development build opened keeps its unused `holds` table; upgrading it posts `hold_lost`, with
-  epoch 0, to the tasks of each tree held there). A hold is refused while another
+  epoch 0, to the tasks of each tree held there, and the tree's running jobs recorded without
+  an epoch are told lost). A hold is refused while another
   worker runs a task of the tree, and on Postgres a claim and a hold of one tree serialize, so a
-  held tree's tasks run only on its holder.
+  held tree's tasks run only on its holder; a background command refused for either reason
+  says so and points the model to the foreground or a later try.
 - **Plugins as files.** `~/.noeta/plugins/*.py` (or a directory) is a plugin without packaging;
   a project's `.noeta/plugins/` loads once trusted (`noeta trust`). `noeta plugins` lists where
   each plugin comes from.
@@ -402,6 +404,11 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **A sub-agent that cannot hand back reports with its final message.** In auto mode the
+  caller expected `SubagentHandback` from every sub-agent, so one whose agent definition lacks
+  the subtasks plugin, or whose tool list leaves the tool out, came back as "no report"
+  instead of its last reply. Such a sub-agent's final message is now its report, as in Claude
+  Code.
 - **An unknown model is announced once.** The front end's notice now also says its cost
   counts as $0.00, and the catalog no longer logs a second "not in the catalog" warning about
   its price.

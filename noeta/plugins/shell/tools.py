@@ -44,14 +44,14 @@ MONITOR_TIMEOUT_CAP_MS = 1_800_000
 _CD_WORD = re.compile(r"(?:^|[\s;&|(])cd(?:\s|$)")
 
 NOT_AVAILABLE = "background execution is not available on this host"
+#: Why a job cannot start: a tree's jobs all run on one worker, and another
+#: worker holds the tree (for a job of its own) or runs one of its tasks.
+HELD_ELSEWHERE = ("cannot start a background command now: another worker process is running "
+                  "part of this task tree (a background command or another task), and a "
+                  "background command needs the whole tree on one worker; run the command "
+                  "in the foreground, or try again later")
 #: Why a job is gone: its worker held the task tree while the job ran, so a
 #: worker that does not have it is not the one that started it.
-#: Why a job cannot start: a tree's jobs all run on one worker, and another
-#: worker already runs one for this tree.
-HELD_ELSEWHERE = ("cannot start a background command now: another worker process is running "
-                  "a background job of this task tree, and every background job of a tree "
-                  "runs on one worker; run the command in the foreground, or start it once "
-                  "that job has ended")
 LOST_REASON = ("the worker process running it stopped, so its further output and exit "
                "status are unknown")
 

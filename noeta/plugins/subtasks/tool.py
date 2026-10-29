@@ -31,6 +31,7 @@ from noeta.plugins.subtasks.worktree import (
 from noeta.toolkit.tools import SCHEMA_DIALECT
 
 if TYPE_CHECKING:
+    from noeta.core.agent import Agent
     from noeta.core.loop.state import TaskState
     from noeta.plugins.subtasks.extension import Subtasks
     from noeta.plugins.subtasks.roster import SubagentSpec
@@ -41,7 +42,8 @@ TYPE_KEY = "subagent_type"
 #: The id the caller knows the agent by (a resumed agent runs in a new task).
 AGENT_ID_KEY = "agent_id"
 #: Whether the agent delivers its report with ``SubagentHandback`` (Claude
-#: Code offers it in auto mode; elsewhere the agent's last reply is the result).
+#: Code offers it in auto mode, to an agent that has the tool; elsewhere the
+#: agent's last reply is the result).
 HANDBACK_KEY = "subagent_handback"
 FORK_KEY = "fork"
 #: An agent definition's default isolation, carried in its roster config.
@@ -217,8 +219,9 @@ class AgentTool:
 
     def __init__(self, ext: Subtasks, state: TaskState,
                  roster: Mapping[str, SubagentSpec], name: str = texts.AGENT_TOOL,
-                 *, handback: bool = True) -> None:
+                 *, handback: bool = True, agents: Mapping[str, Agent] | None = None) -> None:
         self._handback = handback
+        self._agents = agents or {}
         self._ext = ext
         self._state = state
         self._roster = roster
@@ -238,7 +241,7 @@ class AgentTool:
         description = str(input.get("description") or "")
         fork = kind == texts.FORK_TYPE
         agent, queue, isolation, config = self._plan(input, ctx, kind)
-        config[HANDBACK_KEY] = self._handback
+        config[HANDBACK_KEY] = self._handback and self._can_hand_back(agent)
         transcripts = transcript_dir(ctx.spill_dir, ctx.root_id or state.task_id)
         if transcripts:
             config[TRANSCRIPT_KEY] = transcripts
@@ -263,6 +266,20 @@ class AgentTool:
         # A one-block list, as Claude Code sends an Agent result.
         return ToolOutput(content=text_output(text).content, meta={"child_id": child},
                           block_list=True)
+
+    def _can_hand_back(self, agent: str) -> bool:
+        """Whether ``agent``, as a sub-agent, is offered ``SubagentHandback``:
+        it carries this plugin and its tool list keeps the tool. One that is
+        not reports with its final message, as in Claude Code. An agent this
+        worker does not know is assumed to."""
+        spec = self._agents.get(agent)
+        if spec is None:
+            return True
+        name = texts.HANDBACK_TOOL
+        if (spec.allowed_tools is not None and name not in spec.allowed_tools) \
+                or name in spec.denied_tools:
+            return False
+        return any(e.name == self._ext.name for e in spec.extensions)
 
     def _plan(self, input: Mapping[str, Any], ctx: ToolContext, kind: str
               ) -> tuple[str, str | None, Any, dict[str, Any]]:
