@@ -695,3 +695,11 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   (`pip install 'noeta[server] @ git+https://github.com/initxy/noeta'`, and the same for
   `uv tool install --reinstall`). Before, it named `noeta[server]` on PyPI, where noeta 1.0
   is not published and the name may install someone else's package.
+- A task of a tenant other than the default one keeps its background job logs and its
+  sandboxed commands' `TMPDIR` in its tenant's own temporary directory
+  (`<temp>/noeta-temp-<uid>/tenants/<tenant>/`, made 0700), and neither its file tools nor
+  its sandboxed commands can read noeta's shared temp places (`noeta-background-<uid>` in
+  each temp directory, `noeta-temp-<uid>` but its own). Before, every task's command output
+  (`noeta-background-<uid>/w<pid>/<job>.output`) and a worker's shared `TMPDIR`
+  (`noeta-sandbox-*`) were readable, and the latter writable, by every tenant's tasks. A
+  worker's sandbox directory moves to `<temp>/noeta-temp-<uid>/sandbox/`.

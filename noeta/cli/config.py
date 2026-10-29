@@ -52,6 +52,7 @@ from noeta.core.events import DEFAULT_TENANT
 from noeta.core.execenv import ExecEnv
 from noeta.core.provider import Provider
 from noeta.core.tenants import token_digest
+from noeta.toolkit.paths import make_tenant_temp_dir
 from noeta.toolkit.sandbox import SandboxSettings
 from noeta.toolkit.tenant_fence import TenantFence, store_files
 
@@ -273,13 +274,15 @@ def local_env_for(sandbox: SandboxSettings | None,
                       fence: TenantFence | None = None) -> Any:
     """The runtime's ``env_for``: each task's local env on its ``cwd``, with
     the settings' sandbox (when enabled); a task of a tenant other than the
-    default one also gets ``fence``, checked on every file it opens, and the
-    sandbox :meth:`TenantFence.confine` makes of the settings."""
+    default one also gets ``fence``, checked on every file it opens, its
+    tenant's own temporary directory, and the sandbox
+    :meth:`TenantFence.confine` makes of the settings."""
     def env_for(state: TaskState) -> ExecEnv:
         cwd = str(state.config.get("cwd") or os.getcwd())
         kw: dict[str, Any] = {"sandbox": sandbox} if sandbox is not None else {}
         if fence is not None and state.tenant != DEFAULT_TENANT:
             kw["fence"] = functools.partial(_fence_check, fence, state, cwd)
+            kw["temp_dir"] = make_tenant_temp_dir(fence.temp_dir(state.tenant))
             if sandbox is not None:
                 kw["sandbox"] = fence.confine(sandbox, tenant=state.tenant,
                                               task_id=state.task_id,
