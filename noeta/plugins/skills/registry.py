@@ -31,7 +31,6 @@ __all__ = [
     "load_registry",
     "parse_list",
     "path_patterns",
-    "render_activation",
     "render_body",
     "render_command_body",
     "strip_argument_placeholder",
@@ -318,21 +317,10 @@ def render_body(desc: SkillDescription, args: str | None = None,
     return substitute_arguments(body, args, desc.arguments, escape)
 
 
-def render_activation(desc: SkillDescription, args: str | None = None,
-                      project_dir: str | None = None) -> str:
-    """The text an activated skill puts in the conversation, its body
-    rendered by :func:`render_body`."""
-    base = f"Base directory for this skill: {desc.base_dir}\n\n" if desc.base_dir else ""
-    return (
-        f"Activated skill: {desc.name}\n\n"
-        f"{strip_argument_placeholder(desc.description)}\n\n"
-        f"{base}{render_body(desc, args, project_dir)}"
-    )
-
-
 def render_command_body(desc: SkillDescription, args: str | None = None,
                         project_dir: str | None = None) -> str:
-    """What ``/<name> <args>`` adds to the person's turn after the command
-    tags: the skill's directory and its rendered body."""
+    """What a skill puts in the conversation when it loads (after the
+    command tags of a typed ``/<name> <args>``, or after a ``Skill`` call's
+    result): the skill's directory and its rendered body."""
     base = f"Base directory for this skill: {desc.base_dir}\n\n" if desc.base_dir else ""
-    return f"{base}{render_body(desc, args, project_dir)}"
+    return base + render_body(desc, args, project_dir).lstrip("\n")

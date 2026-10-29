@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.plugins.skills.registry import (
     SkillDescription,
-    render_activation,
+    render_command_body,
     substitute_variables,
 )
 from noeta.plugins.skills.script import is_skill_script_resource
@@ -84,8 +84,7 @@ class SkillTool:
         if args is not None and not isinstance(args, str):
             return text_output("args must be a string", is_error=True)
         return text_output(
-            f"Skill '{name}' loaded; its instructions will appear in your "
-            f"context from your next step.",
+            f"Starting skill: {name}. Its instructions follow.",
             skill_activation=activation_data(desc, "model", args, ctx.env.cwd),
         )
 
@@ -128,7 +127,7 @@ def activation_data(desc: SkillDescription, source: str,
         "allowed_tools": allowed,
         "allow_rules": rules,
         "args": args,
-        "text": render_activation(desc, args, cwd),
+        "text": render_command_body(desc, args, cwd),
     }
 
 

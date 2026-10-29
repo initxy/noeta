@@ -80,12 +80,12 @@ async def test_activation_records_the_body_after_the_result(h: Harness) -> None:
     h.provider.add(reply("", ("Skill", {"skill": "deploy", "args": "prod eu"})), reply("done"))
     tid = await h.start(agent())
     [result] = await h.results(tid)
-    assert result.result.text == ("Skill 'deploy' loaded; its instructions will appear in "
-                                  "your context from your next step.")
+    assert result.result.text == "Starting skill: deploy. Its instructions follow."
     msgs = h.provider.requests[1].messages
     body = msgs[-1]
-    assert body.text == (f"Activated skill: deploy\n\nShip now.\n\nBase directory for this "
-                         f"skill: {d}\n\nStep one.\n\nScope: prod eu\nStep two.\n")
+    # Claude Code's shape: the directory and the body, no name or description.
+    assert body.text == (f"Base directory for this skill: {d}\n\nStep one.\n\nScope: prod eu\n"
+                         f"Step two.\n")
     [act] = await h.records(tid, "skills", "activated")
     assert act.data["source"] == "model" and act.data["args"] == "prod eu"
 
@@ -271,7 +271,7 @@ async def test_preload_and_tiers(h: Harness, tmp_path: Path) -> None:
     h.provider.add(reply("ok"))
     tid = await h.start(agent(global_dir=user_dir, preload=["lint"]))
     msgs = h.provider.requests[0].messages
-    assert msgs[0].text.startswith("Activated skill: lint")
+    assert msgs[0].text == f"Base directory for this skill: {user_dir / 'lint'}\n\nDo the thing.\n"
     assert msgs[1].text == "go"
     assert msgs[2].text == f"{ROSTER_HEADER}\n\n- deploy: Workspace deploy.\n- lint: Lint."
     assert (await h.records(tid, "skills", "activated"))[0].data["source"] == "preload"
@@ -732,3 +732,11 @@ def test_priority_is_no_skill_key() -> None:
     other = SkillDescription(name="alpha", description="A.", body="")
     registry = SkillRegistry({"zed": desc, "alpha": other})
     assert menu_keep_order(registry, ["zed", "alpha"]) == ("alpha", "zed")
+
+
+def test_the_loaded_text_has_one_blank_line_before_the_body() -> None:
+    from noeta.plugins.skills.registry import parse_skill, render_command_body
+    desc = parse_skill("/s/notes/SKILL.md",
+                       "---\nname: notes\ndescription: N.\n---\n\nRun it.\n")
+    assert desc is not None
+    assert render_command_body(desc) == "Base directory for this skill: /s/notes\n\nRun it.\n"

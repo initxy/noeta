@@ -269,6 +269,7 @@ async def test_residents_rehang_after_a_compaction(h: Harness, tmp_path: Path) -
     assert texts[0].endswith("- [Note](note.md) — a note")
     assert texts[1] == "(summary)"
     assert texts[2].startswith("These skills were invoked earlier")
-    assert "### Skill: deploy" in texts[2] and "Activated skill: deploy" in texts[2]
+    assert "### Skill: deploy\nPath: " in texts[2]
+    assert "\n\nBase directory for this skill: " in texts[2] and "Activated" not in texts[2]
     assert texts[3].startswith("The following skills are available")
     assert len(texts) == 4

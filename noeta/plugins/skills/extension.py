@@ -41,7 +41,6 @@ from noeta.plugins.skills.listing import listing_lines, render_listing
 from noeta.plugins.skills.registry import (
     SkillRegistry,
     load_registry,
-    render_activation,
     render_body,
     render_command_body,
 )
@@ -615,7 +614,7 @@ class Skills(Extension):
                 desc = registry.get(name)
                 if desc is not None:
                     text = entry.get("rendered") or strip_commands(
-                        render_activation(desc, entry.get("args"), view.cwd), "")
+                        render_command_body(desc, entry.get("args"), view.cwd), "")
                     parts.append(f"### Skill: {desc.name}\nPath: {desc.base_dir or desc.name}"
                                  f"\n\n{text}")
             if len(parts) > 1 and view.keeps_tail is not None:
