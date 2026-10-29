@@ -37,7 +37,7 @@ async def confine(env: Any, command: str, disable: Any, argv: list[str], cwd: st
         return None
     try:
         return await sandbox.prepare(argv, cwd=cwd, writable=writable)
-    except PermissionError as exc:  # a tenant's working directory gone elsewhere
+    except PermissionError as exc:
         return f"{exc}. The command was not run."
 
 

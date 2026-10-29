@@ -12,7 +12,6 @@ from collections.abc import Awaitable, Callable, Sequence
 
 from noeta.core.execenv import ExecEnv
 from noeta.toolkit.local_env import is_local
-from noeta.toolkit.sandbox import run_in_tenant_sandbox
 
 __all__ = ["WORKTREES", "add_worktree", "after_jobs", "cancel_after_jobs", "git", "job_runs_in",
            "job_runs_under", "remove_worktree", "repository_top", "unsaved_work"]
@@ -111,9 +110,8 @@ def _runs_under(filesystem: object, path: str) -> bool:
 async def git(env: ExecEnv, args: Sequence[str], cwd: str) -> tuple[int, str]:
     """``git args`` in ``cwd``: its exit code and its output (stderr when it
     failed), stripped. With no hook and no fsmonitor command (what a
-    sandboxed command could have planted in the repository), and in a
-    tenant's sandbox."""
-    out = await run_in_tenant_sandbox(env, ["git", *GIT_NO_HOOKS, *args], cwd=cwd)
+    sandboxed command could have planted in the repository)."""
+    out = await env.run(["git", *GIT_NO_HOOKS, *args], cwd=cwd)
     text = out.stdout if out.exit_code == 0 else out.stderr or out.stdout
     return out.exit_code, text.decode(errors="replace").strip()
 

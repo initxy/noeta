@@ -10,11 +10,9 @@ from typing import Any
 
 import pytest
 
-from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.agent import Agent
 from noeta.core.types import ModelRequest, ModelResponse
 from noeta.plugins.hooks import Hooks
-from noeta.plugins.instructions import Instructions
 from noeta.plugins.memory import INDEX_FILE, Memory, load_index, memory_dir_for
 from noeta.plugins.memory.extension import (
     INDEX_MAX_BYTES,
@@ -24,7 +22,6 @@ from noeta.plugins.memory.extension import (
 )
 from noeta.testing import reply
 from noeta.toolkit.paths import project_slug
-from noeta.toolkit.tenant_fence import TenantFence
 from tests.plugins.context.conftest import Harness
 
 
@@ -73,48 +70,6 @@ async def test_a_repository_shares_one_memory_across_worktrees(
     h.provider.add(reply("ok"))
     await h.start(agent(home), config={"cwd": str(h.work / "sub")})
     assert Path(memory_dir_for(str(h.work), home)).is_dir()
-
-
-async def test_a_tenant_cannot_borrow_another_repositorys_memory(
-        h: Harness, tmp_path: Path) -> None:
-    other = tmp_path / "beta"
-    subprocess.run(["git", "init", "-q", str(other)], check=True)
-    home = tmp_path / "home"
-    theirs = Path(memory_dir_for(str(other), home))
-    theirs.mkdir(parents=True)
-    (theirs / INDEX_FILE).write_text("- [Secret](s.md) — beta's\n")
-    # A .git file naming the other repository makes it this directory's main checkout.
-    (h.work / ".git").write_text(f"gitdir: {other / '.git'}\n")
-    h.client = h.client.scoped("acme")
-    h.provider.add(reply("ok"))
-    await h.start(agent(home))
-    assert all("beta's" not in m.text for m in h.provider.requests[0].messages)
-    assert Path(memory_dir_for(str(h.work), home, "acme")).is_dir()
-
-
-async def test_a_tenants_memory_is_its_own(h: Harness, tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    # The default tenant's memory of the same directory.
-    theirs = Path(memory_dir_for(str(h.work), home))
-    theirs.mkdir(parents=True)
-    (theirs / INDEX_FILE).write_text("- [Secret](s.md) — the operator's\n")
-    h.client = h.client.scoped("acme")
-    h.provider.add(reply("ok"))
-    await h.start(agent(home))
-    assert all("operator's" not in m.text for m in h.provider.requests[0].messages)
-    mine = Path(memory_dir_for(str(h.work), home, "acme"))
-    assert mine.is_dir() and mine.parent.parent.name == "acme"
-    assert mine != theirs and theirs.parent.parent.name == "projects"
-
-
-async def test_a_tenants_user_scope_agent_memory_stays_in_its_workspace(
-        h: Harness, tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    h.client = h.client.scoped("acme")
-    h.provider.add(reply("ok"))
-    await h.start(agent(home, agent_scope="user", agent_name="rev"))
-    assert Path(f"{h.work}/.noeta/agent-memory/rev/").is_dir()
-    assert not (home / "agent-memory").exists()
 
 
 async def test_memory_md_is_loaded(h: Harness, tmp_path: Path) -> None:
@@ -221,73 +176,6 @@ def test_agent_memory_scopes_name_noetas_places(tmp_path: Path) -> None:
     assert dirs == {"user": f"{tmp_path}/agent-memory/rev/",
                     "project": "/w/.noeta/agent-memory/rev/",
                     "local": "/w/.noeta/agent-memory-local/rev/"}
-
-
-def _fenced(h: Harness, home: Path, server: Path) -> None:
-    """The harness's tasks of a non-default tenant get the env a worker gives
-    them: one that checks each file it opens against the tenant fence."""
-    fence = TenantFence(home=str(home), workspaces={"acme": str(h.work)},
-                        server_dirs=(str(server),))
-
-    def env_for(state: Any) -> LocalExecEnv:
-        def check(path: str, write: bool) -> str | None:
-            return fence.refusal(path, tenant=state.tenant, task_id=state.task_id,
-                                 cwd=str(h.work), write=write)
-        return LocalExecEnv(str(h.work), fence=check)
-
-    h.env_for = env_for
-    h.client = h.client.scoped("acme")
-
-
-@pytest.mark.parametrize("instructions", [False, True])
-async def test_a_tenants_agent_memory_cannot_link_to_a_protected_file(
-        h: Harness, tmp_path: Path, instructions: bool) -> None:
-    home, server = tmp_path / "home", tmp_path / "server"
-    server.mkdir()
-    (server / "secret.md").write_text("---\ndescription: top secret\n---\nTOP-SECRET\n")
-    directory = h.work / ".noeta" / "agent-memory" / "rev"
-    directory.mkdir(parents=True)
-    (directory / INDEX_FILE).symlink_to(server / "secret.md")
-    (directory / "s.md").symlink_to(server / "secret.md")
-    _fenced(h, home, server)
-    exts: list[Any] = [Memory(home=str(home), agent_scope="project", agent_name="rev",
-                              recall_model="small")]
-    if instructions:
-        exts.append(Instructions(walk=False))
-    h.provider.add(reply(json.dumps({"selected_memories": ["s.md"]})), reply("ok"))
-    await h.start(Agent(name="a", model="m", extensions=exts))
-    sent = json.dumps([[m.text for m in r.messages] for r in h.provider.requests])
-    assert "TOP-SECRET" not in sent and "top secret" not in sent
-
-
-async def test_a_tenants_memory_directory_is_not_made_through_a_link_out(
-        h: Harness, tmp_path: Path) -> None:
-    home, server = tmp_path / "home", tmp_path / "server"
-    server.mkdir()
-    (h.work / ".noeta").mkdir()
-    (h.work / ".noeta" / "agent-memory").symlink_to(server)
-    _fenced(h, home, server)
-    h.provider.add(reply("ok"))
-    await h.start(Agent(name="a", model="m", extensions=[
-        Memory(home=str(home), agent_scope="project", agent_name="rev")]))
-    assert list(server.iterdir()) == []
-
-
-async def test_a_tenants_own_memory_is_still_read(h: Harness, tmp_path: Path) -> None:
-    home, server = tmp_path / "home", tmp_path / "server"
-    server.mkdir()
-    directory = h.work / ".noeta" / "agent-memory" / "rev"
-    directory.mkdir(parents=True)
-    (directory / INDEX_FILE).write_text("- [Tabs](tabs.md) — tabs please\n")
-    _memory(directory, "tabs.md", "indent with tabs", "Use tabs.")
-    _fenced(h, home, server)
-    h.provider.add(reply(json.dumps({"selected_memories": ["tabs.md"]})), reply("ok"))
-    await h.start(Agent(name="a", model="m", extensions=[
-        Memory(home=str(home), agent_scope="project", agent_name="rev", recall_model="small")]))
-    selector, main = h.provider.requests[:2]
-    assert "indent with tabs" in selector.messages[0].text
-    sent = "\n".join(m.text for m in main.messages)
-    assert "tabs please" in sent and "Use tabs." in sent
 
 
 async def test_a_blocked_prompt_is_never_recalled_for(h: Harness, tmp_path: Path) -> None:

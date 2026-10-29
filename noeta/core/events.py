@@ -79,15 +79,8 @@ class InboxItem(Struct):
 # --------------------------------------------------------------------------
 
 
-#: The tenant of a task no one assigned to another (every task of a
-#: single-tenant host, and every task logged before tenants existed).
-DEFAULT_TENANT = "default"
-
-
 class TaskCreated(Struct, tag="TaskCreated", tag_field="type"):
-    """``tenant`` is whose task it is: a child inherits its parent's, and a
-    tenant-scoped client sees and drives only its own tenant's tasks.
-    ``history_from`` starts the task from another task's conversation:
+    """``history_from`` starts the task from another task's conversation:
     that task's log up to ``history_through`` is folded first, so the task
     continues it (a resumed or forked sub-agent). Creating a task pins an
     unset ``history_through`` to the source's last seq at that moment
@@ -100,7 +93,6 @@ class TaskCreated(Struct, tag="TaskCreated", tag_field="type"):
     root_id: str | None = None
     history_from: str | None = None
     history_through: int | None = None
-    tenant: str = DEFAULT_TENANT
 
 
 class InputTaken(Struct, tag="InputTaken", tag_field="type"):

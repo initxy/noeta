@@ -206,7 +206,7 @@ async def test_a_version_1_schema_is_upgraded_in_place(pg: Any) -> None:
     await store.close()
     with psycopg.connect(pg.dsn, autocommit=True) as conn:
         rows = conn.execute(f'SELECT version FROM "{pg.schema}".noeta_schema').fetchall()
-    assert rows == [(SCHEMA_VERSION,)] and SCHEMA_VERSION == 3
+    assert rows == [(SCHEMA_VERSION,)] and SCHEMA_VERSION == 4
 
 
 async def test_a_version_2_schema_keeps_its_snapshots_keyed_by_version(pg: Any) -> None:
@@ -229,6 +229,34 @@ async def test_a_version_2_schema_keeps_its_snapshots_keyed_by_version(pg: Any) 
         await store.put_snapshot("t1", Snapshot(seq=6, version="v2", data=b"two"))
         assert await store.snapshot("t1", "v1") == Snapshot(seq=4, version="v1", data=b"\x00")
         await store.close()
+
+
+async def test_a_version_3_schema_drops_its_tenant_column_and_usage(pg: Any) -> None:
+    """Version 3 kept a tenant per task and each tenant's usage; version 4
+    drops both and keeps the tasks."""
+    import psycopg
+
+    store = pg.store()
+    await store.create(new())
+    await store.close()
+    with psycopg.connect(pg.dsn, autocommit=True) as conn:
+        s = f'"{pg.schema}"'
+        conn.execute(f"ALTER TABLE {s}.tasks ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default'")
+        conn.execute(f"CREATE INDEX tasks_tenant ON {s}.tasks (tenant, status)")
+        conn.execute(f"CREATE TABLE {s}.tenant_usage (tenant TEXT NOT NULL, period TEXT NOT NULL,"
+                     " tokens BIGINT NOT NULL DEFAULT 0, cost_usd DOUBLE PRECISION NOT NULL"
+                     " DEFAULT 0, PRIMARY KEY (tenant, period))")
+        conn.execute(f"UPDATE {s}.noeta_schema SET version = 3")
+    store = pg.store()
+    assert (await store.get("t1")) is not None
+    await store.create(NewTask(task_id="t2", created=TaskCreated(agent="a")))
+    await store.close()
+    with psycopg.connect(pg.dsn, autocommit=True) as conn:
+        cols = conn.execute("SELECT column_name FROM information_schema.columns WHERE"
+                            " table_schema = %s AND table_name = 'tasks'", (pg.schema,)).fetchall()
+        tables = conn.execute("SELECT 1 FROM information_schema.tables WHERE table_schema = %s"
+                              " AND table_name = 'tenant_usage'", (pg.schema,)).fetchall()
+    assert ("tenant",) not in cols and tables == []
 
 
 async def test_a_claim_waits_for_a_hold_of_its_tree_being_taken(pg: Any) -> None:

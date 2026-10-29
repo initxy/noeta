@@ -55,7 +55,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import unquote_plus
 
@@ -66,13 +66,14 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.commands import Typed
 from noeta.core.extension import Command, CommandContext
-from noeta.host._http_guard import LOOPBACK_HOSTS, Guard, Refused
+from noeta.host._http_guard import LOOPBACK_HOSTS, Guard, Refused, token_digest
 from noeta.host._http_openapi import OPENAPI
 from noeta.host._http_routes import Routes
 from noeta.host._http_stream import StreamRoutes
 from noeta.host.app import AppAPI, agent_commands, agent_run_command
 
-__all__ = ["LOOPBACK_HOSTS", "OPENAPI", "Refused", "create_app", "redact_token_logs"]
+__all__ = ["LOOPBACK_HOSTS", "OPENAPI", "Refused", "create_app", "redact_token_logs",
+           "token_digest"]
 
 
 @dataclasses.dataclass
@@ -152,53 +153,39 @@ def redact_token_logs() -> None:
             logger.addFilter(_RedactQueryToken())
 
 
-def create_app(client: Client, *, token: str | None = None,
-               tokens: Mapping[str, str] | Callable[[str], str | None] | None = None,
+def create_app(client: Client, *, token: str | None = None, token_sha256: str | None = None,
                auth: bool = True, deltas: Any = None, agents: Mapping[str, Agent] | None = None,
                app: Any = None, allowed_hosts: Sequence[str] | None = None,
                origins: Sequence[str] = (), allow_bypass: bool = False,
-               cwd: str | None = None, roots: Sequence[str] = (),
-               workspaces: Mapping[str, str] | None = None,
-               queues: Mapping[str, Sequence[str]] | None = None,
-               server_dirs: Sequence[str] = ()) -> Starlette:
+               cwd: str | None = None, roots: Sequence[str] = ()) -> Starlette:
     """``deltas`` is ``LocalApp.deltas`` when workers run in this process;
     ``agents`` (by name) lets a message run its task agent's slash commands;
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
     (``/context``) and serves new stream-json conversations' trees.
 
-    Every request needs a bearer token: ``token`` is the default tenant's,
-    ``tokens`` maps more tokens to their tenants (or finds a token's
-    tenant). A request reaches only its tenant's tasks (``Client.scoped``);
-    another tenant's task answers 404. Serving without a token takes
-    ``auth=False`` (a loopback-only development server; the default
-    tenant). Serve it after :func:`redact_token_logs`, or uvicorn logs the
+    Every request needs the bearer token: ``token``, or the token whose
+    SHA-256 is ``token_sha256`` (what ``noeta serve`` keeps). Serving
+    without a token takes ``auth=False`` (a loopback-only development
+    server). Serve it after :func:`redact_token_logs`, or uvicorn logs the
     WebSocket's ``?token=``.
 
     ``allowed_hosts``: the ``Host`` names served (any when ``None``);
     ``origins``: web origins (``https://host:port``) allowed besides the
     server's own; ``allow_bypass``: requests may ask for
     ``bypassPermissions``; ``cwd``: tasks a request creates run in it or
-    below it, or below one of ``roots`` (anywhere when ``None``);
-    ``workspaces``: per tenant, the directory its tasks run in or below
-    (instead of ``cwd`` and ``roots``), and by default; ``queues``: per
-    tenant, the queues its requests may create tasks on (a tenant not
-    named: ``default`` and the queue of its own name; the default tenant:
-    any); ``server_dirs``: more of the server's own directories (``[server]
-    dirs``), where no other tenant's task may run, like ``cwd`` and
-    ``roots``."""
-    if auth and not token and not tokens:
-        raise ValueError("create_app needs a bearer token (token= or tokens=); pass "
+    below it, or below one of ``roots`` (anywhere when ``None``)."""
+    if auth and not token and not token_sha256:
+        raise ValueError("create_app needs a bearer token (token= or token_sha256=); pass "
                          "auth=False to serve every request without one")
-    if tokens and not hasattr(client, "scoped"):
-        raise ValueError("tenant tokens need a client that can be scoped to a tenant")
+    if token:
+        token_sha256 = token_digest(token)
     agents = agents if agents is not None else getattr(getattr(app, "runtime", None),
                                                        "agents", None)
     serving: AppAPI = app if app is not None else _Front(client=client, agents=agents or {},
                                                           live=deltas)
-    guard = Guard(client, serving, token=token, tokens=tokens, auth=auth,
+    guard = Guard(client, serving, token_sha256=token_sha256, auth=auth,
                   allowed_hosts=allowed_hosts, origins=origins, allow_bypass=allow_bypass,
-                  cwd=cwd, roots=roots, workspaces=workspaces, queues=queues,
-                  server_dirs=server_dirs)
+                  cwd=cwd, roots=roots)
     r = Routes(serving, app, agents)
     s = StreamRoutes(guard, deltas)
     return Starlette(routes=[

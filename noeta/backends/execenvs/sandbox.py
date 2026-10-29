@@ -29,7 +29,6 @@ touch, and the ``bwrap`` arguments and Seatbelt profile for it, are
 from __future__ import annotations
 
 import atexit
-import contextlib
 import os
 import shutil
 import subprocess
@@ -51,7 +50,7 @@ from noeta.backends.execenvs.sandbox_plan import (
     seatbelt_profile,
 )
 from noeta.backends.execenvs.sandbox_proxy import FilterProxy, Listeners, default_proxy
-from noeta.toolkit.paths import make_tenant_temp_dir, private_dir, temp_root
+from noeta.toolkit.paths import private_dir, temp_root
 from noeta.toolkit.sandbox import DEFAULT_DENY_READ, SandboxSettings
 
 __all__ = [
@@ -128,11 +127,7 @@ def _probe_bwrap(bwrap: str) -> str | None:
 
 class LocalSandbox:
     """The sandbox of a :class:`~noeta.backends.execenvs.local.LocalExecEnv`
-    rooted at ``root``. With ``settings.tenant_temp_dir`` (a tenant's task)
-    the commands keep their ``TMPDIR`` and per-command files there instead
-    of in the directory this process's commands share, and noeta's temp
-    places (``settings.tenant_temp_places``) are made before each command,
-    so one made later cannot appear unhidden while it runs."""
+    rooted at ``root``."""
 
     def __init__(self, settings: SandboxSettings, root: str, *,
                  proxy: FilterProxy | None = None, platform: str | None = None) -> None:
@@ -142,7 +137,6 @@ class LocalSandbox:
         self.root = os.path.abspath(root)
         self.proxy = proxy or default_proxy()
         self.platform = platform or sys.platform
-        self.temp_dir = settings.tenant_temp_dir
         self._base: str | None = None
 
     # -------------------------------------------------------------- checks
@@ -170,11 +164,6 @@ class LocalSandbox:
     # -------------------------------------------------------------- setup
 
     def _base_dir(self) -> str:
-        if self.temp_dir is not None:
-            for place in self.settings.tenant_temp_places:
-                with contextlib.suppress(OSError):
-                    private_dir(place)
-            return make_tenant_temp_dir(self.temp_dir)
         if self._base is None or not os.path.isdir(self._base):
             self._base = _process_base()
         return self._base

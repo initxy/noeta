@@ -4,8 +4,8 @@ A stdio server is a subprocess that may take seconds to start and may hold
 state a user expects to keep (a browser, a login), so its connection outlives
 a turn and is shared by every task naming the same server in the same scope.
 The key is ``(scope, server identity)`` — credentials included, in memory
-only — so two tenants with different credentials, or a host that scopes per
-tenant, never share a connection.
+only — so two configurations with different credentials, or two scopes,
+never share a connection.
 
 * ``acquire`` returns a started connection (connecting when needed) and
   counts a holder until the ``async with`` exits.

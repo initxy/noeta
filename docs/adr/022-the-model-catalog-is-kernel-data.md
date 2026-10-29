@@ -1,6 +1,6 @@
 # ADR-022: The model catalog is kernel data
 
-- Status: accepted
+- Status: superseded by ADR-028
 - Date: 2026-10-29
 - Refines: [ADR-019](019-tenant-limits-are-enforced-by-the-kernel.md)
 

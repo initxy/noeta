@@ -53,14 +53,8 @@ the events since the last one hold a tenth of its bytes), and a claim folds the 
 the events after it. Ending a task deletes its snapshot. A snapshot whose version does not match the code is ignored and the log is
 folded from the start, so a snapshot can be missing but never wrong.
 
-**Tenant limits are scheduling.** The claim skips a tenant's tasks at its running limit, and
-every model call (the turn's and every plugin's) passes through the kernel, which picks the
-tenant's provider, refuses a call past its monthly budget and counts the usage. The count is a
-per-tenant total beside the logs, not task state: no fold reads it, and a refusal is written
-to the task's log. See [ADR-019](adr/019-tenant-limits-are-enforced-by-the-kernel.md).
-The model catalog (`noeta/core/models.py`: windows, output limits, prices) lives in the kernel
-for the same reason: the kernel prices each call against the budget and caps each call's
-output from it ([ADR-022](adr/022-the-model-catalog-is-kernel-data.md)).
+The model catalog (`noeta/core/models.py`: windows, output limits, prices) lives in the kernel,
+which caps each call's output from it ([ADR-022](adr/022-the-model-catalog-is-kernel-data.md)).
 
 ## One step of a task
 
@@ -125,12 +119,11 @@ watch. Every front end is a translation of it ([Ways in](../CONTEXT.md#ways-in))
 - **Channels**: long-running listeners for outside conversations (a chat app, a webhook), run by
   `noeta worker` / `noeta serve` (`noeta/core/channel.py`).
 
-## Many machines and tenants
+## Many machines
 
 Any number of `noeta worker` processes share one Postgres store; any of them can continue any
 task, because everything a task needs is in its log. Live model output crosses machines through
 Postgres notifications; recorded events reach everyone through the store. A task's commands run
 in an exec env that must look the same from every worker: a shared filesystem or a remote
-container. Tasks belong to a tenant; a server token selects one, and every read, write and
-inter-task message stays inside it, with per-tenant workspace, running limit, monthly budget and
-provider. See [Tenant](../CONTEXT.md#tenant) and [docs/server.md](server.md).
+container. A store and a server serve one party: noeta has no tenants
+([ADR-028](adr/028-no-tenants-in-noeta.md)); see [docs/server.md](server.md).

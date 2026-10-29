@@ -4,7 +4,6 @@ activation text, ``/<name>``, scripts, allowed-tools, budget fitting."""
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -252,7 +251,7 @@ async def test_a_command_in_its_tags_puts_the_body_in_the_persons_turn(h: Harnes
 
     d = write_skill(skills_dir(h), "notes", "Release notes.", body="Notes for $ARGUMENTS.\n")
     skills = Skills()
-    text = await expand_with([skills], CommandContext(cwd=str(h.work), tenant="default"), "/notes v0.2")
+    text = await expand_with([skills], CommandContext(cwd=str(h.work)), "/notes v0.2")
     assert text == ("<command-message>notes</command-message>\n<command-name>/notes"
                     "</command-name>\n<command-args>v0.2</command-args>")
     h.provider.add(reply("ok"))
@@ -706,58 +705,6 @@ def _server_secret(tmp_path: Path) -> Path:
     (server / "keys").mkdir()
     (server / "keys" / "id_secret").write_text("k")
     return server
-
-
-async def test_a_tenants_command_list_skips_a_skill_linked_outside(
-        h: Harness, tmp_path: Path) -> None:
-    from noeta.core.extension import CommandContext
-
-    server = _server_secret(tmp_path)
-    write_skill(skills_dir(h), "mine", "My own.")
-    (skills_dir(h) / "leak").mkdir()
-    (skills_dir(h) / "leak" / "SKILL.md").symlink_to(server / "leak" / "SKILL.md")
-    skills = Skills()
-    acme = {c.name: c.description for c in
-            await skills.commands(CommandContext(cwd=str(h.work), tenant="acme"))}
-    assert acme == {"mine": "My own."}
-    default = await skills.commands(CommandContext(cwd=str(h.work), tenant="default"))
-    assert {c.name for c in default} == {"mine", "leak"}
-
-
-async def test_a_tenants_command_list_skips_its_skill_directory_linked_outside(
-        h: Harness, tmp_path: Path) -> None:
-    from noeta.core.extension import CommandContext
-
-    other = tmp_path / "other" / ".noeta" / "skills"
-    write_skill(other, "secret", "OTHER TENANT'S TEXT")
-    (h.work / ".noeta").mkdir(exist_ok=True)
-    shutil.rmtree(skills_dir(h), ignore_errors=True)
-    skills_dir(h).symlink_to(other)
-    skills = Skills()
-    acme = await skills.commands(CommandContext(cwd=str(h.work), tenant="acme"))
-    assert acme == []
-    default = await skills.commands(CommandContext(cwd=str(h.work), tenant="default"))
-    assert {c.name for c in default} == {"secret"}
-
-
-async def test_a_tenants_skill_lists_no_resource_behind_the_fence(
-        h: Harness, tmp_path: Path) -> None:
-    from noeta.backends.execenvs.local import LocalExecEnv
-    from noeta.plugins.skills.registry import index_dir
-    from noeta.toolkit.tenant_fence import TenantFence
-
-    server = _server_secret(tmp_path)
-    d = write_skill(skills_dir(h), "mine", "My own.")
-    (d / "notes.md").write_text("n")
-    (d / "keys").symlink_to(server / "keys")
-    (skills_dir(h) / "leak").symlink_to(server / "leak")
-    fence = TenantFence(home=str(tmp_path / "home"), workspaces={"acme": str(h.work)},
-                        server_dirs=(str(server),))
-    env = LocalExecEnv(str(h.work), fence=lambda p, w: fence.refusal(
-        p, tenant="acme", task_id="t", cwd=str(h.work), write=w))
-    found = await index_dir(env, str(skills_dir(h)))
-    assert list(found) == ["mine"]
-    assert found["mine"].resources == ("notes.md",)
 
 
 def test_the_typed_and_forked_entries_kept_are_bounded() -> None:

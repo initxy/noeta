@@ -1,6 +1,6 @@
 # ADR-007: Tasks belong to a tenant; a server token selects it and nothing crosses it
 
-- Status: accepted
+- Status: superseded by ADR-028
 - Date: 2026-10-28
 - Refined by: [ADR-014](014-tenants-separated-at-the-api-tools-need-an-os-boundary.md)
   ("nothing crosses it" holds for the API; tools need an OS boundary),

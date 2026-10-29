@@ -258,21 +258,6 @@ async def _pid(client: Any) -> int:
     return int(result["structuredContent"]["pid"])
 
 
-async def test_pool_shares_per_scope_and_reconnects_a_broken_one() -> None:
-    pool = McpPool()
-    server = fake_server()
-    try:
-        a = await pool.use(server, None, _pid)
-        assert await pool.use(server, None, _pid) == a
-        assert await pool.use(server, "tenant-b", _pid) != a
-        with pytest.raises(McpError):
-            await pool.use(server, None, lambda c: c.call_tool("die", {}))
-        assert await pool.use(server, None, _pid) != a  # the dead one was dropped
-    finally:
-        await pool.close()
-    assert len(pool) == 0
-
-
 async def test_pool_retries_a_list_once_on_a_reused_dead_connection() -> None:
     pool = McpPool()
     server = fake_server()
@@ -332,3 +317,18 @@ def test_server_spec_validation() -> None:
     with pytest.raises(McpConfigError):
         McpServer(alias="a", command=["x"], call_timeout=0)
     assert os.path.exists(FAKE)
+
+
+async def test_pool_shares_per_scope_and_reconnects_a_broken_one() -> None:
+    pool = McpPool()
+    server = fake_server()
+    try:
+        a = await pool.use(server, None, _pid)
+        assert await pool.use(server, None, _pid) == a
+        assert await pool.use(server, "scope-b", _pid) != a
+        with pytest.raises(McpError):
+            await pool.use(server, None, lambda c: c.call_tool("die", {}))
+        assert await pool.use(server, None, _pid) != a  # the dead one was dropped
+    finally:
+        await pool.close()
+    assert len(pool) == 0

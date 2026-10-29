@@ -232,7 +232,7 @@ async def test_loop_is_a_command_front_ends_list() -> None:
     from noeta.core.extension import CommandContext
 
     agent = Agent(name="a", model="m", extensions=[Schedule()])
-    ctx = CommandContext(cwd="/tmp", tenant="default")
+    ctx = CommandContext(cwd="/tmp")
     assert [c.name for c in await list_commands(agent, ctx)] == ["loop"]
     text = await expand_command(agent, ctx, "/loop 5m /babysit")
     assert text is not None and text.startswith("# /loop") and text.endswith("5m /babysit")

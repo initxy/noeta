@@ -151,24 +151,6 @@ async def test_read_missing_file_suggests_another_extension(h: Harness, ws: Path
         f"Read: No file at that path (the working directory is {ws}). Did you mean app.ts?")
 
 
-async def test_a_missing_files_guess_does_not_look_where_the_fence_refuses(
-        tmp_path: Path) -> None:
-    from noeta.plugins.fs._missing import missing_file_message
-    from noeta.toolkit.tools import Workspace
-
-    work, secret = tmp_path / "work", tmp_path / "secret"
-    work.mkdir()
-    secret.mkdir()
-    (secret / "keys.pem").write_text("k")
-
-    def fence(path: str, write: bool) -> str | None:
-        return "refused" if path.startswith(str(secret)) else None
-
-    env = LocalExecEnv(str(work), fence=fence)
-    message = await missing_file_message(await Workspace.of(env), str(secret / "keys.txt"))
-    assert "keys.pem" not in message
-
-
 async def test_read_missing_file_suggests_the_path_inside_the_workspace(
         h: Harness, ws: Path) -> None:
     (ws / "src").mkdir()

@@ -15,7 +15,7 @@ from typing import Any, Literal
 import msgspec
 
 from noeta.core import records
-from noeta.core.events import DEFAULT_TENANT, Recorded
+from noeta.core.events import Recorded
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import (
     Allow,
@@ -329,24 +329,12 @@ class Skills(Extension):
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
         """``/<name>`` for every skill found locally (front ends run in the
         workspace); typing it activates the skill for that message."""
-        return await asyncio.to_thread(self._commands, ctx.cwd, ctx.tenant)
+        return await asyncio.to_thread(self._commands, ctx.cwd)
 
-    def _commands(self, cwd: str, tenant: str = DEFAULT_TENANT) -> list[Command]:
+    def _commands(self, cwd: str) -> list[Command]:
         found: dict[str, str] = {}
-        real_cwd = os.path.realpath(cwd) if cwd else ""
-        for root, tier in self.tiers(cwd):
-            real_root = os.path.realpath(root)
-            # A tenant's own skill directory linked out of its workspace (into
-            # another tenant's) is not listed.
-            if tenant != DEFAULT_TENANT and tier >= 3 and not (
-                    real_cwd and real_root.startswith(real_cwd.rstrip(os.sep) + os.sep)):
-                continue
+        for root, _tier in self.tiers(cwd):
             for path in sorted(Path(root).rglob("SKILL.md")) if Path(root).is_dir() else []:
-                # Read here, with no task env to fence it: a tenant's skill
-                # file linked out of its directory is not read.
-                real = os.path.realpath(path)
-                if tenant != DEFAULT_TENANT and not real.startswith(real_root + os.sep):
-                    continue
                 try:
                     fields, _body, _w = _frontmatter.parse(path.read_text(encoding="utf-8"))
                 except (OSError, UnicodeDecodeError, _frontmatter.FrontmatterError):

@@ -68,9 +68,7 @@ class StreamRoutes:
 
         async def run() -> None:
             try:
-                await drive(StreamJson(scope(request).front, options, emit,
-                                       tenant=scope(request).tenant),
-                            lines=given())
+                await drive(StreamJson(scope(request).front, options, emit), lines=given())
             finally:
                 queue.put_nowait(None)
 
@@ -92,11 +90,10 @@ class StreamRoutes:
         if not self._guard.same_site(ws.headers):
             await ws.close(code=4403)
             return
-        who = self._guard.tenant(ws.headers, ws.query_params)
-        if who is None:
+        if not self._guard.authorized(ws.headers, ws.query_params):
             await ws.close(code=4401)
             return
-        mine = self._guard.scope_for(who)
+        mine = self._guard.scope
         options = _options(ws.query_params, ask_client=True)
         try:
             mine.guarded.check_config({"permission_mode": options.permission_mode})
@@ -117,7 +114,7 @@ class StreamRoutes:
                         yield value
 
         try:
-            await drive(StreamJson(mine.front, options, emit, tenant=who), lines=lines())
+            await drive(StreamJson(mine.front, options, emit), lines=lines())
         except UnknownTask as exc:
             await ws.send_text(json.dumps({"type": "error", "error": f"unknown task {exc}"}))
         with contextlib.suppress(Exception):

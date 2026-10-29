@@ -327,19 +327,3 @@ def test_file_tools_render_as_claude_code_renders_them() -> None:
     assert [e.text for e in c.transcript_entries(msgs, "3", shown=["2"])] == [
         '{"Write":"c: d"}', '{"Bash":"sh a"}']
 
-
-def test_the_server_side_check_gets_no_server_details_for_a_tenant() -> None:
-    from noeta.plugins.permissions import auto
-    from noeta.plugins.permissions import scope as sc
-    from noeta.toolkit import permission_rules as r
-
-    scope = sc.Scope(dirs=("/ws/acme",), home="/home/operator")
-    kw: dict[str, Any] = {"plans_dir": "/home/operator/.noeta/plans",
-                          "allow": [r.parse_rule("Read(/srv/secret/**)")], "deny": [],
-                          "ask": [], "auto_mode": {}}
-    default = auto.server_context(scope, tenant="default", **kw)
-    assert default["home_dir"] == "/home/operator" and default["rules"]["allow"]
-    tenant = auto.server_context(scope, tenant="acme", **kw)
-    assert "/home/operator" not in str(tenant) and "/srv/secret" not in str(tenant)
-    assert tenant["user_identity"] == "acme" and tenant["live_cwd"] == "/ws/acme"
-    assert auto.user_name("acme") == "acme" and auto.user_name("default") is None

@@ -21,7 +21,6 @@ win. The plugin part of ``config.toml``::
 from __future__ import annotations
 
 import dataclasses
-import functools
 import logging
 import os
 import tomllib
@@ -54,12 +53,9 @@ from noeta.cli.trust import (
 )
 from noeta.cli.trust import trust_project as trust_project
 from noeta.core import models, registry
-from noeta.core.events import DEFAULT_TENANT
 from noeta.core.execenv import ExecEnv
 from noeta.core.provider import Provider
-from noeta.toolkit.paths import make_tenant_temp_dir
 from noeta.toolkit.sandbox import SandboxSettings
-from noeta.toolkit.tenant_fence import TenantFence, store_files
 
 if TYPE_CHECKING:
     from noeta.core.agent import Agent
@@ -106,9 +102,6 @@ class Settings:
     add_plugins: dict[str, tuple[PluginEntry, ...]] = field(default_factory=dict)
     #: Per channel name: its arguments (``enabled = false`` turns it off).
     channels: dict[str, dict[str, Any]] = field(default_factory=dict)
-    #: ``[server]``: ``noeta serve`` / ``noeta worker`` switches
-    #: (``shared_os_user_tenants``, ``dirs``).
-    server: dict[str, Any] = field(default_factory=dict)
 
     def make_provider(self) -> Provider:
         """Raises :class:`MissingAPIKey` when no key is set for a built-in
@@ -172,8 +165,6 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
     data["plugins"] = _plugin_tables(data.get("plugins", {}))
     data["channels"] = _plugin_tables(data.get("channels", {}), "channels")
     data["add_plugins"] = _agent_tables(data.pop("agents", {}))
-    if not isinstance(data.get("server", {}), dict):
-        raise ValueError("config.toml: [server] is a table of switches")
     known = {f for f in Settings.__dataclass_fields__}
     settings = Settings(**{k: v for k, v in data.items() if k in known})
     if settings.models_file:
@@ -220,32 +211,15 @@ def _permission_arguments(found: FileSettings) -> dict[str, Any]:
     return args
 
 
-def local_env_for(sandbox: SandboxSettings | None,
-                      fence: TenantFence | None = None) -> Any:
+def local_env_for(sandbox: SandboxSettings | None) -> Any:
     """The runtime's ``env_for``: each task's local env on its ``cwd``, with
-    the settings' sandbox (when enabled); a task of a tenant other than the
-    default one also gets ``fence``, checked on every file it opens, its
-    tenant's own temporary directory, and the sandbox
-    :meth:`TenantFence.confine` makes of the settings."""
+    the settings' sandbox (when enabled)."""
     def env_for(state: TaskState) -> ExecEnv:
         cwd = str(state.config.get("cwd") or os.getcwd())
         kw: dict[str, Any] = {"sandbox": sandbox} if sandbox is not None else {}
-        if fence is not None and state.tenant != DEFAULT_TENANT:
-            kw["fence"] = functools.partial(_fence_check, fence, state, cwd)
-            kw["temp_dir"] = make_tenant_temp_dir(fence.temp_dir(state.tenant))
-            if sandbox is not None:
-                kw["sandbox"] = fence.confine(sandbox, tenant=state.tenant,
-                                              task_id=state.task_id,
-                                              root_id=state.root_id or state.task_id, cwd=cwd)
         return registry.execenv("local", cwd, **kw)
 
     return env_for
-
-
-def _fence_check(fence: TenantFence, state: TaskState, cwd: str, path: str,
-                 write: bool) -> str | None:
-    return fence.refusal(path, tenant=state.tenant, task_id=state.task_id,
-                         root_id=state.root_id or state.task_id, cwd=cwd, write=write)
 
 
 def merge_plugin_settings(*tables: Mapping[str, PluginSetting]) -> dict[str, PluginSetting]:
@@ -323,7 +297,7 @@ def _permission_settings(found: FileSettings, cwd: str | None,
         log.warning("permission mode bypassPermissions is disabled here; ignored")
         del permission_args["mode"]
     # Each task's own working directory, not the server's: a task may run in
-    # an --allow-root directory or a tenant's workspace.
+    # an --allow-root directory.
     permission_args.setdefault("trusted_workspace", project_trusted)
     return permission_args
 
@@ -348,13 +322,12 @@ def _base_plugin_settings(found: FileSettings, cwd: str | None,
          "permissions": permission_args, "fs": {"write_roots": write_roots}})
 
 
-def _apply_sandbox(sandbox: SandboxSettings, cwd: str | None, runtime_kw: dict[str, Any],
-                   fence: TenantFence) -> list[str]:
+def _apply_sandbox(sandbox: SandboxSettings, cwd: str | None,
+                   runtime_kw: dict[str, Any]) -> list[str]:
     """Run tasks' commands in the settings' ``sandbox`` (``runtime_kw``'s
-    ``env_for``) when it is enabled, and tenants' file reads and writes
-    behind ``fence``; a notice when the sandbox cannot start here."""
-    runtime_kw.setdefault("env_for", local_env_for(
-        sandbox if sandbox.enabled else None, fence))
+    ``env_for``) when it is enabled; a notice when the sandbox cannot start
+    here."""
+    runtime_kw.setdefault("env_for", local_env_for(sandbox if sandbox.enabled else None))
     if not sandbox.enabled:
         return []
     probe = registry.execenv("local", str(cwd or os.getcwd()), sandbox=sandbox)
@@ -376,7 +349,6 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
                   setting_sources: Collection[str] | None = None,
                   flag_settings: Path | None = None,
                   agent_files: Sequence[AgentFile] = (),
-                  tenant_workspaces: Mapping[str, str] | None = None,
                   **runtime_kw: Any) -> LocalApp:
     """The default agents on the configured store, model and provider, with
     the user's plugin files (``~/.noeta/plugins``, and a trusted project's
@@ -400,10 +372,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     (:func:`file_settings`); a left-out ``user`` source also skips
     ``~/.noeta/agents``, a left-out ``project`` source the project's agents
     and its ``.noeta/mcp.json``. ``agent_files`` (``--agents``) come last
-    and win a name. ``tenant_workspaces`` (tenant -> workspace) joins the
-    places a non-default tenant's task may not touch
-    (:mod:`noeta.toolkit.tenant_fence`), with noeta's home, the store's
-    files and the spill directory."""
+    and win a name."""
     from noeta.agents import default_agents
     from noeta.agents.agent_files import read_agent_dir
     from noeta.host.local import LocalApp
@@ -428,15 +397,6 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     runtime_kw.setdefault("spill_root", str(home_dir.HOME / "tool-results"))
     sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
                                             base_dir=str(cwd or os.getcwd()))
-    fence = TenantFence(home=str(home_dir.HOME), spill_root=runtime_kw["spill_root"],
-                        plans_dir=str(home_dir.HOME / "plans"),
-                        store_files=store_files(settings.store_url),
-                        workspaces=dict(tenant_workspaces or {}),
-                        server_dirs=tuple((permissions or {}).get("server_dirs") or ()),
-                        deny_read=tuple(sandbox.resolve(p) for p in sandbox.deny_read))
-    permissions = {"tenant_workspaces": dict(fence.workspaces),
-                   "store_files": list(fence.store_files), "deny_read": list(fence.deny_read),
-                   "spill_root": fence.spill_root, **(permissions or {})}
     base = _base_plugin_settings(found, cwd, permissions, project=source("project"))
     made: dict[Any, Any] = {}
     model, add_plugins = settings.model, settings.add_plugins
@@ -466,7 +426,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         return default_agents(model, plugins=table, add=add, extra_files=files, made=made)
 
     agents = make_agents()
-    notices += _apply_sandbox(sandbox, cwd, runtime_kw, fence)
+    notices += _apply_sandbox(sandbox, cwd, runtime_kw)
     runtime_kw.setdefault("prompt_dirs", [str(home_dir.HOME / "prompts")])
     runtime_kw.setdefault("workspace_trusted", project_trusted)
     app = LocalApp(open_store(settings.store_url), agents,

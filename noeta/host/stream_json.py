@@ -37,7 +37,6 @@ from typing import Any
 from noeta.core import models, records
 from noeta.core.client import ClientAPI
 from noeta.core.events import (
-    DEFAULT_TENANT,
     ChildEnded,
     Compacted,
     ExtensionRecorded,
@@ -162,14 +161,10 @@ class StreamJson(ControlRequests):
     """One conversation over the headless protocol. ``app`` is what a front
     end runs on (``noeta.host.app.AppAPI``: in process or a remote server);
     ``emit`` writes one outgoing message. The control requests both ways
-    are :class:`~noeta.host._stream_json_control.ControlRequests`.
-    ``tenant``: whose conversation it is (its commands run with that
-    tenant's servers and files)."""
+    are :class:`~noeta.host._stream_json_control.ControlRequests`."""
 
-    def __init__(self, app: AppAPI, options: HeadlessOptions, emit: Emit, *,
-                 tenant: str = DEFAULT_TENANT) -> None:
+    def __init__(self, app: AppAPI, options: HeadlessOptions, emit: Emit) -> None:
         self.app = app
-        self.tenant = tenant
         self.client = app.client
         self.options = options
         self._emit = emit
@@ -230,8 +225,8 @@ class StreamJson(ControlRequests):
         if o.output_schema is not None:
             config["output_schema"] = o.output_schema
         if o.resume:
-            # Through the (tenant-scoped) client first: another tenant's
-            # task is unknown before the app serves or names anything of it.
+            # Through the client first: an unknown task is refused before
+            # the app serves or names anything of it.
             await self.client.get(o.resume)
         if o.resume and not o.fork:
             await self.app.adopt(o.resume)
@@ -297,8 +292,7 @@ class StreamJson(ControlRequests):
             skills=[], plugins=[])
 
     async def _commands(self) -> list[dict[str, Any]]:
-        ctx = CommandContext(cwd=self.options.cwd, task_id=self.task_id or None,
-                             tenant=self.tenant)
+        ctx = CommandContext(cwd=self.options.cwd, task_id=self.task_id or None)
         return [{"name": c.name, "description": c.description,
                  "argumentHint": c.argument_hint}
                 for c in await self.app.commands(self.options.agent, ctx)]
@@ -338,8 +332,7 @@ class StreamJson(ControlRequests):
                        "uuid": prompt_uuid})  # the id rewind_files names it by
         text = message.text
         if text.startswith("/") and len(message.content) == 1:
-            ctx = CommandContext(cwd=self.options.cwd, task_id=self.task_id,
-                                 tenant=self.tenant)
+            ctx = CommandContext(cwd=self.options.cwd, task_id=self.task_id)
             typed = await self.app.run_command(self.options.agent, ctx, text)
             if typed is not None and typed.local:
                 self._put(self._message(type="system", subtype="local_command_output",

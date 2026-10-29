@@ -34,14 +34,14 @@ its own spec before work starts.
 - [x] The recording file that could rebuild Claude Code's texts is gone from the unpushed history too (owner, 2026-10-29); that history no longer names private companies, products or gateways either, apart from files already public, byte for byte, in the pushed history.
 - [x] The old `holds` table is dropped when a store is opened, after its trees are told the hold is gone (owner, 2026-10-29: old data may be deleted).
 - [x] `noeta plugin add` installs no pip dependencies (it would run a package's build code; every worker would need them anyway); a plugin missing one names the install line (owner, 2026-10-29).
-- [ ] Tenant directories are per-machine copies read at worker start (D47; `docs/server.md`). Owner decision on a shared source.
+- [x] Tenant directories are per-machine copies read at worker start (D47). Moot: tenants are removed (owner, 2026-10-29; ADR-028).
 - [ ] The README's `git+https` install line is untested until the branch is pushed, and its relative links will not resolve on a PyPI page. Owner decision, with the push and the first release.
 
 ### Follow-ups
 - [ ] `core/runner/task.py` is back to 730 lines (S29 took it to 614). Follow-up spec: another branch is changing the runner now, and a structural split under it would collide.
 - [ ] The memory plugin's `git rev-parse --git-common-dir` (`noeta/plugins/memory/extension.py`, `_workspace`) runs without `GIT_NO_HOOKS` (D97). Follow-up spec: another branch is changing the memory plugin.
 - [ ] A background command's planted `.git/commondir` lives until the command ends (D96). Follow-up spec.
-- [ ] The macOS Seatbelt profile still allows `mach-lookup` and Apple Events (D99 refuses tenants there instead). Follow-up spec: needs a macOS machine to test.
+- [ ] The macOS Seatbelt profile still allows `mach-lookup` and Apple Events. Follow-up spec: needs a macOS machine to test.
 - [ ] MCP (`plugins/mcp/stdio.py`, `plugins/mcp/pool.py`) and the hooks runner (`plugins/hooks/runners.py`) still start processes with asyncio subprocesses: before CPython 3.14 a loop shut down mid-start waits forever (`LocalExecEnv` moved to `subprocess.Popen` for this). Follow-up spec.
 - [ ] Holds under unknown commits: a hold whose last of three attempts commits and still raises `CommitUnknown` is reaped as lost; lease renewal does not retry on it; a second failed unhold ends in a false `hold_lost`. Follow-up spec.
 - [ ] A parked MCP elicitation learns of a lost hold only when answered ("outcome unknown"). Follow-up spec.
@@ -49,7 +49,6 @@ its own spec before work starts.
 - [ ] A sub-agent that takes its input, gets `hold_lost` and ends, while the root took its own copy when the sub-agent was live, is told by neither (one inbox read to the end append). Follow-up spec.
 - [ ] Snapshots hold the whole conversation (a 20k-event log's is 12 MiB), so Postgres claims are bound by transfer. Follow-up spec.
 - [ ] Deltas published before a front end's `LISTEN` is up are not replayed (the recorded reply still arrives). Follow-up spec.
-- [ ] A worker's `TenantFence.servers()` reads its working directory when it checks, not at start. Follow-up spec.
 - [ ] A link swapped in between the sandbox plan's resolution and bwrap's mounts is not caught (D46; file tools keep the opened-file fence). Follow-up spec.
 - [ ] `EnterWorktree`'s worktree is read-only in the sandbox (`.noeta`; `parity/deviations.md`). Follow-up spec: a task's working directory would have to change mid-task.
 - [ ] Dead workers' job log directories (`w<pid>`) in an exec env that is not this machine are not swept (`plugins/shell/job_logs.py`). Follow-up spec.
@@ -65,11 +64,9 @@ its own spec before work starts.
 - [ ] The `delegate_parallel_review` eval scenario runs into its 240 s trial timeout in every trial (it still scores); raise the timeout or shorten the scenario. Follow-up spec.
 
 ### Decided not to do (kept for the record)
-- [x] A budget may end over its limit by one call's cost (checked before each call, D52). Won't do: a call's cost is known only after it returns.
 - [x] ACP over `--server` cannot pass the editor's MCP servers. Won't do: they hold the editor's credentials and stay in its process.
 - [x] MCP tools are never retry-safe on recovery. Won't do: a server's `idempotentHint` is not trusted.
 - [x] A hold is not checked again on renewal (D42). Won't do: a child named onto another queue meanwhile is the host's explicit route, and refusing would stop a running background job.
-- [x] Operator hooks run as the OS user in a tenant's directory, and the sandbox plan's `git rev-parse --git-path hooks` reads the tenant's config; `find -L` and glob expansion list names under home directories; credentials under other names are readable unless `denyRead` names them. Won't do: documented under "Not a boundary" in `docs/server.md`.
 - [x] Texts the recordings never show (deferred tools, MCP sign-in) are outside the own-words report. Won't do: the report is advisory (D39).
 - [x] A short PDF stays page images. Won't do: a logged document block would be lost after a `/model` switch to a provider without one (`parity/deviations.md`).
 
@@ -85,3 +82,4 @@ Each item above is done, moved to its own spec, or dropped with the owner's agre
 - 2026-10-29 Owner sign-offs: private names out of the tree, the old `holds` table told and dropped on open, and main's unpushed history rewritten (`git filter-repo` on `origin/main..main`: the recording file removed, private names replaced in files and messages); the tip's tree is unchanged.
 - 2026-10-29 Owner: tenants stay (off unless configured); the parity data is published; plugins install no dependencies, a missing one names its install line.
 - 2026-10-29 Owner: the whole of `main`'s history is rewritten locally as well (private names, local paths and the recording file out of every commit and message; the tip's tree unchanged), so it no longer shares history with the pushed `main`: publishing it is a force push. The pushed release tags and GitHub's pull-request refs still reach the old commits; removing those is part of the push sign-off.
+- 2026-10-29 Owner reversed "tenants stay": tenants are removed entirely (ADR-028; `docs/specs/archive/2026-10-29-drop-tenants.md`). The tenant-only items above are moot and dropped.

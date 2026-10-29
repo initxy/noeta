@@ -216,24 +216,20 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
             {"id": child_id, "call_id": use.id, "background": background}])))
         return child_id
 
-    tenant = run.state.tenant
-
     async def post(body: InboxKind, task_id: str | None = None,
                    dedupe_key: str | None = None, forward_if_ended: bool = False) -> None:
         target = task_id or run.task_id
         if target != run.task_id:
-            row = await run.store.get(target)
-            if row is None or row.tenant != tenant:
-                raise UnknownTask(target)  # another tenant's task is not there for it
+            if await run.store.get(target) is None:
+                raise UnknownTask(target)
         await run.store.post(Post(task_id=target, body=body, dedupe_key=dedupe_key,
                                   forward_if_ended=forward_if_ended))
 
     async def tasks(**kw: Any) -> list[Any]:
-        return list(await run.store.tasks(**{**kw, "tenant": tenant}))
+        return list(await run.store.tasks(**kw))
 
     async def task(task_id: str) -> Any:
-        row = await run.store.get(task_id)
-        return row if row is not None and row.tenant == tenant else None
+        return await run.store.get(task_id)
 
     root = run.state.root_id or run.task_id
     answer = run.state.answers.get(use.id)
@@ -247,15 +243,13 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
                        serves_queue=run.serves_queue)
 
 
-async def _foreign_history(run: TaskRun, creates: list[NewTask]) -> str | None:
-    """A ``history_from`` among the staged children that is not a task of
-    this task's tenant (``Client.create`` refuses it the same way)."""
+async def _unknown_history(run: TaskRun, creates: list[NewTask]) -> str | None:
+    """A ``history_from`` among the staged children that is no task
+    (``Client.create`` refuses it the same way)."""
     for c in creates:
         source = c.created.history_from
-        if source is not None:
-            row = await run.store.get(source)
-            if row is None or row.tenant != run.state.tenant:
-                return source
+        if source is not None and await run.store.get(source) is None:
+            return source
     return None
 
 
@@ -267,9 +261,9 @@ def _unserved_queue(run: TaskRun, creates: list[NewTask]) -> str | None:
 
 async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[Event],
                   creates: list[NewTask]) -> None:
-    foreign = await _foreign_history(run, creates)
-    if foreign is not None:
-        output = ToolOutput(content=[Text(text=f"UnknownTask: {foreign}")], is_error=True)
+    unknown = await _unknown_history(run, creates)
+    if unknown is not None:
+        output = ToolOutput(content=[Text(text=f"UnknownTask: {unknown}")], is_error=True)
         _drop_staged(records, creates)
     unserved = _unserved_queue(run, creates)
     if unserved is not None:

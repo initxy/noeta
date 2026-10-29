@@ -4,15 +4,19 @@ the server keeps in ``~/.noeta/server-token``."""
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import secrets
 from dataclasses import dataclass
 
 from noeta.cli import home_dir
-from noeta.core.tenants import token_digest
 
 #: How ``~/.noeta/server-token`` starts: it keeps the token's digest only.
 _DIGEST_PREFIX = "sha256:"
+
+
+def _digest(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def server_token() -> str | None:
@@ -53,7 +57,7 @@ def server_problem(url: str, token: str | None) -> str | None:
 class ServerToken:
     """The server's bearer token as ``noeta serve`` holds it."""
 
-    #: Its SHA-256 (``noeta.core.tenants.token_digest``).
+    #: Its SHA-256 in hex (as ``noeta.host.http.token_digest`` makes it).
     sha256: str
     #: The token itself when it was made, or moved out of a plain-text file,
     #: just now: shown this once, never again.
@@ -66,7 +70,7 @@ def server_token_digest() -> ServerToken:
     a file of an older noeta holding the token itself is rewritten to hold
     its digest. Either way the token is :attr:`ServerToken.shown`."""
     if os.environ.get("NOETA_SERVER_TOKEN"):
-        return ServerToken(token_digest(os.environ["NOETA_SERVER_TOKEN"]))
+        return ServerToken(_digest(os.environ["NOETA_SERVER_TOKEN"]))
     path = home_dir.HOME / "server-token"
     try:
         text = path.read_text("utf-8").strip()
@@ -81,6 +85,6 @@ def server_token_digest() -> ServerToken:
         fresh.unlink()
     fd = os.open(fresh, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(_DIGEST_PREFIX + token_digest(value) + "\n")
+        fh.write(_DIGEST_PREFIX + _digest(value) + "\n")
     os.replace(fresh, path)
-    return ServerToken(token_digest(value), shown=value)
+    return ServerToken(_digest(value), shown=value)

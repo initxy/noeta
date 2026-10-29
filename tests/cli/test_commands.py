@@ -52,7 +52,7 @@ class Shadow(Extension):
 
 
 AGENT = Agent(name="main", model="m", extensions=[Broken(), Greeter(), Shadow()])
-CTX = CommandContext(cwd="/w", tenant="default")
+CTX = CommandContext(cwd="/w")
 
 
 def test_parse() -> None:
@@ -160,7 +160,7 @@ async def test_skills_commands_follow_the_cwd(tmp_path: Path) -> None:
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text("---\nname: deploy\ndescription: Ship it.\n---\nSteps.\n")
     [c] = await Skills(global_dir=None, global_agents_dir=None).commands(
-        CommandContext(cwd=str(tmp_path), tenant="default"))
+        CommandContext(cwd=str(tmp_path)))
     assert (c.name, c.description) == ("deploy", "Ship it.")
     assert c.template == ("<command-message>deploy</command-message>\n<command-name>/deploy"
                           "</command-name>\n<command-args>{args}</command-args>")

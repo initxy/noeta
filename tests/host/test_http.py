@@ -113,8 +113,9 @@ async def test_token_is_required(served: tuple[str, ScriptedProvider]) -> None:
     url, _ = served
     async with httpx.AsyncClient(base_url=url) as http:
         assert (await http.get("/tasks")).status_code == 401
-        resp = await http.get("/tasks/nope", headers={"authorization": "Bearer secret"})
-        assert resp.status_code == 404
+        auth = {"authorization": "Bearer secret"}
+        for path in ("/tasks/nope", "/tasks/nope/events", "/tasks/nope/pending"):
+            assert (await http.get(path, headers=auth)).status_code == 404
 
 
 async def test_create_app_needs_a_token_unless_auth_is_turned_off(tmp_path: Path) -> None:

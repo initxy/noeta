@@ -76,7 +76,7 @@ async def test_a_claude_code_plugin_loads_through_noetas_plugins(home: Path,
     assert reviewer.system_prompt == f"Scripts: {root}\n"
     assert app.runtime.agents["Explore"].system_prompt != "mine\n"
     assert any("'Explore' is a built-in agent's name" in n for n in app.notices)
-    ctx = CommandContext(cwd=str(tmp_path), tenant="default")
+    ctx = CommandContext(cwd=str(tmp_path))
     main_agent = app.runtime.agents["main"]
     assert await expand_command(main_agent, ctx, "/deploy-tools:status prod") == \
         command_message("deploy-tools:status", "prod")

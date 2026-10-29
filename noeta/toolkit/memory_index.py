@@ -46,7 +46,7 @@ def trim_memory_index(text: str) -> str:
 
 async def read_memory_index(env: ExecEnv, directory: str) -> tuple[str, str] | None:
     """``(path, trimmed text)`` of the memory directory's index, or ``None``
-    when it is missing, unreadable, blank or behind the task's tenant fence.
+    when it is missing, unreadable or blank.
     Read on this machine (:func:`~noeta.toolkit.context.read_local_text`):
     the memory directory lives under noeta's home or the workspace."""
     path = Path(directory) / MEMORY_INDEX_FILE

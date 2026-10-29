@@ -101,7 +101,7 @@ A worker that dies leaves nothing behind: another claims its tasks where their l
 front end attached with `--server` needs the token in `NOETA_SERVER_TOKEN` and no model of its
 own: its tasks run on the server's model and in the server's directory unless `--model` or
 `--cwd PATH` (a directory on the server) say otherwise.
-Workspaces, tokens and tenants: [docs/server.md](docs/server.md).
+Workspaces and the token: [docs/server.md](docs/server.md).
 
 ## Extend it
 
@@ -122,7 +122,7 @@ telemetry, no log upload, no update check. Tools reach out only when the model c
 
 - [docs/architecture.md](docs/architecture.md) — the kernel, plugins, layers, ways in, many machines
 - [docs/extending.md](docs/extending.md) — writing and shipping plugins
-- [docs/server.md](docs/server.md) — workers, workspaces, tokens and tenants
+- [docs/server.md](docs/server.md) — workers, workspaces and the token
 - [CONTEXT.md](CONTEXT.md) — the vocabulary; [docs/adr/](docs/adr/index.md) — the decisions and why
 - [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md)
 

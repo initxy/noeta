@@ -94,7 +94,7 @@ async def test_a_version_1_store_is_upgraded_in_place(tmp_path: Path) -> None:
     conn = sqlite3.connect(path)
     assert conn.execute("SELECT version FROM noeta_schema").fetchall() == [(SCHEMA_VERSION,)]
     conn.close()
-    assert SCHEMA_VERSION == 3
+    assert SCHEMA_VERSION == 4
 
 
 async def test_upgrading_a_version_1_store_tells_its_held_trees(tmp_path: Path) -> None:
@@ -169,6 +169,36 @@ async def test_a_version_2_store_keeps_its_snapshots_keyed_by_version(tmp_path: 
         assert await store.snapshot("t", "v1") == Snapshot(seq=4, version="v1", data=b"\x00")
         await store.close()
     conn = sqlite3.connect(path)
+    assert conn.execute("SELECT version FROM noeta_schema").fetchall() == [(SCHEMA_VERSION,)]
+    conn.close()
+
+
+async def test_a_version_3_store_drops_its_tenant_column_and_usage(tmp_path: Path) -> None:
+    """Version 3 kept a tenant per task and each tenant's usage; version 4
+    drops both and keeps the tasks."""
+    path = str(tmp_path / "t.db")
+    store = SqliteStore(path)
+    await store.create(NewTask(task_id="t", created=TaskCreated(agent="a")))
+    await store.close()
+    conn = sqlite3.connect(path)
+    conn.execute("ALTER TABLE tasks ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default'")
+    conn.execute("CREATE INDEX tasks_tenant ON tasks (tenant, status)")
+    conn.execute("CREATE TABLE tenant_usage (tenant TEXT NOT NULL, period TEXT NOT NULL,"
+                 " tokens INTEGER NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0,"
+                 " PRIMARY KEY (tenant, period))")
+    conn.execute("UPDATE tasks SET tenant = 'acme'")
+    conn.execute("UPDATE noeta_schema SET version = 3")
+    conn.commit()
+    conn.close()
+    store = SqliteStore(path)
+    assert (await store.get("t")) is not None
+    await store.create(NewTask(task_id="u", created=TaskCreated(agent="a")))
+    assert {r.task_id for r in await store.tasks()} == {"t", "u"}
+    await store.close()
+    conn = sqlite3.connect(path)
+    assert "tenant" not in {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+    assert conn.execute("SELECT name FROM sqlite_master WHERE name IN"
+                        " ('tenant_usage', 'tasks_tenant')").fetchall() == []
     assert conn.execute("SELECT version FROM noeta_schema").fetchall() == [(SCHEMA_VERSION,)]
     conn.close()
 

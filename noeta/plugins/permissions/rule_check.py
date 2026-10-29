@@ -9,7 +9,6 @@ import posixpath
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from noeta.core.events import DEFAULT_TENANT
 from noeta.core.extension import TaskView
 from noeta.core.types import ToolUse
 from noeta.plugins.permissions import plan as pl
@@ -47,13 +46,11 @@ class RuleCheck:
         return (*self.allow_rules, *remembered)
 
     def scope(self, view: TaskView) -> sc.Scope:
-        """The working directory and the additional ones (the operator's:
-        not a non-default tenant's)."""
+        """The working directory and the additional ones."""
         root = posixpath.normpath(view.cwd or os.getcwd())
         home = os.path.expanduser("~")
         dirs = [root]
-        extra = self.additional_directories if view.state.tenant == DEFAULT_TENANT else ()
-        for d in extra:
+        for d in self.additional_directories:
             if d == "~" or d.startswith("~/"):
                 d = home + d[1:]
             dirs.append(posixpath.normpath(d if posixpath.isabs(d) else posixpath.join(root, d)))

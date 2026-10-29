@@ -76,10 +76,6 @@ class Fatal(ModelError):
     """Retrying the same request cannot help (auth, bad request, refusal)."""
 
 
-class BudgetSpent(Fatal):
-    """The tenant's budget is spent: the call was not made."""
-
-
 class MalformedToolArguments(Transient):
     """Tool-call arguments that are not a JSON object. Almost always a stream
     cut mid-call, so the call is asked for again — once

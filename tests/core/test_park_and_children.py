@@ -287,28 +287,6 @@ async def test_an_extension_spawn_refused_by_the_store_writes_nothing_of_its_flu
     assert not [r for r in await client.events(tid) if "spawned" in repr(r.event)]
 
 
-@pytest.mark.parametrize("source_tenant", ["acme", "beta"])
-async def test_a_child_continues_only_its_own_tenants_conversation(
-        store: SqliteStore, source_tenant: str) -> None:
-    """``spawn(history_from=)`` reads another task's conversation: another
-    tenant's is not there for it, as for ``Client.create``."""
-    source = await Client(store).scoped(source_tenant).create("a")
-    provider = ScriptedProvider([
-        reply("", ("Delegate", {"prompt": "go", "history_from": source})), reply("ok")])
-    rt = runtime(store, provider, Agent(name="a", model="m", tools=[Delegate()]))
-    acme = Client(store).scoped("acme")
-    tid = await acme.create("a", "go")
-    await rt.run_until_idle()
-    children = await acme.tasks(parent_id=tid)
-    if source_tenant == "acme":
-        assert len(children) == 1
-        return
-    assert children == []
-    [result] = [r.event.result for r in await acme.events(tid)
-                if isinstance(r.event, ToolFinished)]
-    assert result.is_error and "UnknownTask" in result.text
-
-
 async def test_a_sub_agent_ends_after_its_turn_without_one_shot(store: SqliteStore) -> None:
     # A Claude Code agent file has no one_shot; its sub-agent used to wait
     # for a next message that never comes, and the parent waited forever.

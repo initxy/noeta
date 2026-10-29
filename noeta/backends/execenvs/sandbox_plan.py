@@ -248,46 +248,19 @@ def _between(path: str, writes: Sequence[str]) -> list[str]:
     return []
 
 
-def _tenant_refusal(path: str, roots: Sequence[str], denied: Sequence[str]) -> str | None:
-    """Why a tenant's command may not write the resolved ``path``: it lies
-    outside ``roots`` (the tenant's workspace), or in a ``denied`` place
-    inside the root that holds it (one holding the whole root is the
-    workspace's surroundings, hidden with the root shown again)."""
-    holders = [r for r in roots if _within(path, r)]
-    if not holders:
-        return f"{path}, outside the tenant's workspace"
-    for d in denied:
-        if _within(path, d) and not any(_within(r, d) for r in holders):
-            return f"{path}, inside {d}, which the tenant's commands may not read"
-    return None
-
-
 def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
                writable: Sequence[str] = ()) -> Plan:
     """The paths of :class:`Plan` for a command whose working directory is
-    ``root``. For a tenant's task (``settings.tenant_write_roots``) raises
-    ``PermissionError`` when ``root`` resolves outside its workspace or
-    into a place it may not read, rather than make that place writable."""
+    ``root``."""
     base = root
     home = str(noeta_home())
     deny_read = _expand(settings, [*DEFAULT_DENY_READ, home, *settings.deny_read], base)
-    tenant_deny = _expand(settings, settings.tenant_deny_read, base)
     projects = [os.path.realpath(p) for p in (root, *writable)]
-    roots = None if settings.tenant_write_roots is None \
-        else [os.path.realpath(r) for r in settings.tenant_write_roots]
-    guarded = [*tenant_deny, os.path.realpath(home)]
-    if roots is not None:
-        why = _tenant_refusal(projects[0], roots, guarded)
-        if why is not None:
-            raise PermissionError(f"the sandbox may not run this command: its working "
-                                  f"directory {root} resolves to {why}")
     # A linked worktree's git data (git commits there), unless it lies in a
-    # directory the command may not read (or, for a tenant's task, outside
-    # its workspace).
+    # directory the command may not read.
     linked = [_linked_git_dirs(p) for p in projects]
     linked_writes = [w for ws, _ in linked for w in ws
-                     if not any(_within(w, d) for d in (*deny_read, *tenant_deny))
-                     and (roots is None or _tenant_refusal(w, roots, guarded) is None)]
+                     if not any(_within(w, d) for d in deny_read)]
     writes = [root, *_expand(settings, settings.allow_write, base), tmpdir, *writable,
               *linked_writes]
     writes = [w for w in dict.fromkeys(os.path.realpath(w) for w in writes) if os.path.exists(w)]
@@ -310,15 +283,10 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
             elif os.path.lexists(path):
                 deny_write.append(path)  # a worktree's ``.git`` file
         deny_write += [os.path.join(w, p) for p in PROTECTED]
-    readable = HOME_ALLOW_READ if settings.noeta_home_readable is None \
-        else settings.noeta_home_readable
-    allow_read = _expand(settings, [*(os.path.join(home, p) for p in readable),
-                                    *settings.allow_read, *settings.tenant_allow_read],
-                         base)
-    # A denied directory holding a writable one would hide it; a tenant's
-    # stays denied and the writable one is mounted again inside it.
+    allow_read = _expand(settings, [*(os.path.join(home, p) for p in HOME_ALLOW_READ),
+                                    *settings.allow_read], base)
+    # A denied directory holding a writable one would hide it.
     deny_read = [d for d in deny_read if not any(_within(w, d) for w in writes)]
-    deny_read += [d for d in tenant_deny if d not in deny_read and d not in writes]
     hidden = [d for d in deny_read if os.path.isdir(d)]
     rebound = [w for w in writes if any(_within(w, d) for d in hidden)]
     # A denied path inside a hidden directory is hidden already, unless a
@@ -394,8 +362,8 @@ def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
         steps += [(path, 2, ["--bind", path, path]) for path in plan.rebound]
         for _path, _kind, step in sorted(steps, key=lambda s: (s[0].count("/"), s[1])):
             args += step
-        # The bridge may lie in a hidden directory (a tenant's task hides
-        # the server's own directories): mounted before those turn read-only.
+        # The bridge may lie in a hidden directory: mounted before those
+        # turn read-only.
         args += own
         for path in hidden:
             args += ["--remount-ro", path]
@@ -416,11 +384,7 @@ def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
     for name in settings.deny_env:
         args += ["--unsetenv", name]
     args += ["--chdir", cwd, "--"]
-    # A tenant's task hides the server's own directories, which a virtual
-    # environment's link to its Python may pass through: the Python itself
-    # is shown.
-    python = os.path.realpath(sys.executable) if settings.tenant_deny_read else sys.executable
-    inner = [python, "-I", "-S", bridge]
+    inner = [sys.executable, "-I", "-S", bridge]
     for kind, (path, port) in zip(("--http", "--socks"), relays, strict=False):
         inner += [kind, path, str(port)]
     if settings.allow_all_unix_sockets:

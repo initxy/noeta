@@ -12,7 +12,7 @@ import os
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import TypeVar
 
@@ -119,24 +119,12 @@ CREATE TABLE IF NOT EXISTS snapshots (
 """
 
 #: Columns added after a table was first created: (table, column, definition).
-#: Existing rows take the definition's default; nothing is ever dropped.
+#: Existing rows take the definition's default.
 _ADDED_COLUMNS = (
-    ("tasks", "tenant", "TEXT NOT NULL DEFAULT 'default'"),
     # The holding worker's queues (a JSON list); NULL from a hold that
     # named none, or an older version's: not checked.
     ("tree_holds", "queues", "TEXT"),
 )
-_ADDED_TABLES = """
-CREATE INDEX IF NOT EXISTS tasks_tenant ON tasks (tenant, status);
-CREATE TABLE IF NOT EXISTS tenant_usage (
-    tenant   TEXT NOT NULL,
-    period   TEXT NOT NULL,
-    tokens   INTEGER NOT NULL DEFAULT 0,
-    cost_usd REAL NOT NULL DEFAULT 0,
-    PRIMARY KEY (tenant, period)
-);
-"""
-
 
 def _refuse_newer(conn: sqlite3.Connection, path: str) -> None:
     row = conn.execute("SELECT max(version) FROM noeta_schema").fetchone()
@@ -157,6 +145,7 @@ def _set_version(conn: sqlite3.Connection) -> None:
                 _key_snapshots_by_version(conn)
             conn.execute("UPDATE noeta_schema SET version = ?", (SCHEMA_VERSION,))
         _drop_version_1_holds(conn)
+        _drop_tenants(conn)
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
@@ -190,6 +179,17 @@ def _drop_version_1_holds(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE holds")
 
 
+def _drop_tenants(conn: sqlite3.Connection) -> None:
+    """Version 3 kept a tenant per task and each tenant's usage; this
+    version has no tenants. A sqlite older than 3.35 cannot drop a column:
+    ``tasks.tenant`` then stays, unread, with its default."""
+    conn.execute("DROP INDEX IF EXISTS tasks_tenant")
+    conn.execute("DROP TABLE IF EXISTS tenant_usage")
+    if "tenant" in {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}:
+        with contextlib.suppress(sqlite3.OperationalError):
+            conn.execute("ALTER TABLE tasks DROP COLUMN tenant")
+
+
 def _add_columns(conn: sqlite3.Connection) -> None:
     for table, column, definition in _ADDED_COLUMNS:
         have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -199,7 +199,6 @@ def _add_columns(conn: sqlite3.Connection) -> None:
             except sqlite3.OperationalError as exc:
                 if "duplicate column" not in str(exc):  # another process was first
                     raise
-    conn.executescript(_ADDED_TABLES)
 
 
 def _create_private(path: str) -> None:
@@ -335,8 +334,8 @@ class SqliteStore:
         created = task.created
         conn.execute(
             "INSERT INTO tasks (task_id, parent_id, root_id, agent, queue, status, last_seq,"
-            " inbox_seq, dedupe_key, created_at, updated_at, tenant)"
-            " VALUES (?, ?, ?, ?, ?, 'ready', 1, ?, ?, ?, ?, ?)",
+            " inbox_seq, dedupe_key, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, 'ready', 1, ?, ?, ?, ?)",
             (
                 task.task_id,
                 created.parent_id,
@@ -347,7 +346,6 @@ class SqliteStore:
                 task.dedupe_key,
                 now,
                 now,
-                created.tenant,
             ),
         )
         conn.execute(
@@ -547,16 +545,12 @@ class SqliteStore:
         parent_id: str | None = None,
         status: Status | None = None,
         limit: int = 100,
-        tenant: str | None = None,
         owner: str | None = None,
     ) -> list[TaskRow]:
         where, args = [], []
         if parent_id is not None:
             where.append("parent_id = ?")
             args.append(parent_id)
-        if tenant is not None:
-            where.append("tenant = ?")
-            args.append(tenant)
         if status is not None:
             where.append("status = ?")
             args.append(status)
@@ -576,7 +570,6 @@ class SqliteStore:
     async def claim(
         self, worker: str, queues: Sequence[str], lease_seconds: float,
         *, roots: Sequence[str] | None = None,
-        tenant_limits: Mapping[str, int] | None = None,
     ) -> Claim | None:
         if not queues or (roots is not None and not roots):
             return None
@@ -586,12 +579,6 @@ class SqliteStore:
 
         def tx(conn: sqlite3.Connection) -> Claim | None:
             now = time.time()
-            full = [t for t, most in (tenant_limits or {}).items()
-                    if conn.execute("SELECT count(*) FROM tasks WHERE tenant = ? AND"
-                                    " status = 'running' AND lease_until >= ?",
-                                    (t, now)).fetchone()[0] >= most]
-            not_full = (f" AND tenant NOT IN ({','.join('?' for _ in full)})"
-                        if full else "")
             row = conn.execute(
                 "SELECT task_id, owner_epoch, queue FROM tasks"
                 f" WHERE queue IN ({marks}){in_roots} AND ("
@@ -599,9 +586,9 @@ class SqliteStore:
                 " OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= ?)"
                 " OR (status = 'running' AND lease_until < ?))"
                 " AND NOT EXISTS (SELECT 1 FROM tree_holds h WHERE h.root_id = tasks.root_id"
-                f" AND h.worker <> ?){not_full}"
+                " AND h.worker <> ?)"
                 " ORDER BY updated_at LIMIT 1",
-                (*queues, *root_ids, now, now, now, worker, *full),
+                (*queues, *root_ids, now, now, now, worker),
             ).fetchone()
             if row is None:
                 return None
@@ -617,25 +604,6 @@ class SqliteStore:
                          queue=str(row[2]))
 
         return await self._write(tx)
-
-    async def add_tenant_usage(self, tenant: str, period: str, tokens: int,
-                               cost_usd: float) -> None:
-        def tx(conn: sqlite3.Connection) -> None:
-            conn.execute(
-                "INSERT INTO tenant_usage (tenant, period, tokens, cost_usd) VALUES (?, ?, ?, ?)"
-                " ON CONFLICT (tenant, period) DO UPDATE SET"
-                " tokens = tokens + excluded.tokens, cost_usd = cost_usd + excluded.cost_usd",
-                (tenant, period, tokens, cost_usd))
-
-        await self._write(tx)
-
-    async def tenant_usage(self, tenant: str, period: str) -> tuple[int, float]:
-        def q(conn: sqlite3.Connection) -> tuple[int, float]:
-            row = conn.execute("SELECT tokens, cost_usd FROM tenant_usage WHERE tenant = ?"
-                               " AND period = ?", (tenant, period)).fetchone()
-            return (int(row[0]), float(row[1])) if row else (0, 0.0)
-
-        return await self._run(q)
 
     async def renew(self, claim: Claim, lease_seconds: float) -> Claim | None:
         def tx(conn: sqlite3.Connection) -> Claim | None:
