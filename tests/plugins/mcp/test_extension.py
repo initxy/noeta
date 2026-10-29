@@ -62,7 +62,10 @@ async def events(client: Client, tid: str) -> list[Any]:
 
 
 def finished(evs: list[Any]) -> list[ToolFinished]:
-    return [e for e in evs if isinstance(e, ToolFinished)]
+    """The results in call order (one reply's calls run concurrently and may
+    finish in any order; ``reply`` numbers its call ids in order)."""
+    return sorted((e for e in evs if isinstance(e, ToolFinished)),
+                  key=lambda e: int(e.result.call_id.removeprefix("call_")))
 
 
 def records(evs: list[Any], kind: str) -> list[ExtensionRecorded]:

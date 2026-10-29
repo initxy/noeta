@@ -1,6 +1,6 @@
 """``LocalExecEnv``: the host machine as an ``ExecEnv``.
 
-Commands run as asyncio subprocesses, each leading its own process group, with
+Commands run as child processes, each leading its own process group, with
 a scrubbed environment and stdin closed. On timeout or cancellation the whole
 group is sent SIGTERM, given a grace period, then SIGKILL — signalling the
 group is what reaps backgrounded grandchildren (``bash -c "server & wait"``)
@@ -25,7 +25,9 @@ import os
 import secrets
 import signal
 import stat as _st
+import subprocess
 import tempfile
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from typing import BinaryIO
 
@@ -103,24 +105,31 @@ class _TailBuffer:
         self.buf = bytearray()
         self.total = 0
 
-    async def drain(self, stream: asyncio.StreamReader | None) -> None:
-        if stream is None:
-            return
-        while True:
-            chunk = await stream.read(_CHUNK)
-            if not chunk:
-                return
-            self.total += len(chunk)
-            self.buf += chunk
-            if self.keep is not None and len(self.buf) > self.keep:
-                del self.buf[: len(self.buf) - self.keep]
+    async def drain(self, fd: int) -> None:
+        """Read the pipe ``fd`` to EOF; it is closed when this ends, however."""
+        os.set_blocking(fd, False)
+        try:
+            while True:
+                try:
+                    chunk = os.read(fd, _CHUNK)
+                except BlockingIOError:
+                    await _ready(fd, write=False)
+                    continue
+                if not chunk:
+                    return
+                self.total += len(chunk)
+                self.buf += chunk
+                if self.keep is not None and len(self.buf) > self.keep:
+                    del self.buf[: len(self.buf) - self.keep]
+        finally:
+            os.close(fd)
 
     def result(self) -> tuple[bytes, bool]:
         truncated = self.keep is not None and self.total > self.keep
         return bytes(self.buf), truncated
 
 
-async def _kill_group(proc: asyncio.subprocess.Process, grace: float) -> None:
+async def _kill_group(proc: _Child, grace: float) -> None:
     """SIGTERM the child's group, wait up to ``grace``, then SIGKILL the group
     unconditionally — a grandchild that ignores SIGTERM must die even when
     the direct child exited within the grace."""
@@ -133,13 +142,81 @@ async def _kill_group(proc: asyncio.subprocess.Process, grace: float) -> None:
         await proc.wait()
 
 
-async def _finish_kill(proc: asyncio.subprocess.Process, grace: float) -> None:
+async def _finish_kill(proc: _Child, grace: float) -> None:
     """Run :func:`_kill_group` to completion even if the caller is cancelled
     again while it waits."""
     task = asyncio.ensure_future(_kill_group(proc, grace))
     _REAPERS.add(task)
     task.add_done_callback(_REAPERS.discard)
     await asyncio.shield(task)
+
+
+async def _ready(fd: int, *, write: bool) -> None:
+    """Wait until the non-blocking ``fd`` can be read (or written)."""
+    loop = asyncio.get_running_loop()
+    ready = loop.create_future()
+
+    def wake() -> None:
+        if not ready.done():
+            ready.set_result(None)
+
+    if write:
+        loop.add_writer(fd, wake)
+    else:
+        loop.add_reader(fd, wake)
+    try:
+        await ready
+    finally:
+        if write:
+            loop.remove_writer(fd)
+        else:
+            loop.remove_reader(fd)
+
+
+def _close(fds: Sequence[int]) -> None:
+    for fd in fds:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
+class _Child:
+    """A started child, reaped by a daemon thread of its own.
+
+    Not an asyncio subprocess: before Python 3.14, asyncio waits forever for
+    a child whose setup task was cancelled before it finished — and a loop
+    shutting down cancels every task at once, so a command being spawned
+    then hung the shutdown. Here the start is synchronous and waiting for
+    the exit can be cancelled at any point."""
+
+    def __init__(self, popen: subprocess.Popen[bytes]) -> None:
+        self.pid = popen.pid
+        self._popen = popen
+        loop = asyncio.get_running_loop()
+        self._exited: asyncio.Future[None] = loop.create_future()
+        threading.Thread(target=self._reap, args=(loop,), daemon=True,
+                         name=f"noeta-reap-{self.pid}").start()
+
+    @property
+    def returncode(self) -> int | None:
+        return self._popen.returncode
+
+    def _reap(self, loop: asyncio.AbstractEventLoop) -> None:
+        try:
+            _, status = os.waitpid(self.pid, 0)
+            code = os.waitstatus_to_exitcode(status)
+        except ChildProcessError:  # reaped by someone else: status unknown
+            code = 255
+        self._popen.returncode = code
+        with contextlib.suppress(RuntimeError):  # the loop is closed: nobody waits
+            loop.call_soon_threadsafe(self._set_exited)
+
+    def _set_exited(self) -> None:
+        if not self._exited.done():
+            self._exited.set_result(None)
+
+    async def wait(self) -> int:
+        await asyncio.shield(self._exited)
+        return self._popen.returncode if self._popen.returncode is not None else -1
 
 
 async def _settle(tasks: Sequence[asyncio.Future[None]], timeout: float) -> None:
@@ -208,29 +285,36 @@ class LocalExecEnv:
         if not argv:
             raise ValueError("argv must not be empty")
         full_env = {**scrub_env(inherit=self.inherit_env), **(env or {})}
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=self._abs(cwd) if cwd is not None else self.cwd,
-            env=full_env,
-            # DEVNULL rather than the host's fd 0: an inherited stdin lets a
-            # command block forever on a read or eat the host's input.
-            stdin=(
-                asyncio.subprocess.PIPE
-                if stdin is not None
-                else asyncio.subprocess.DEVNULL
-            ),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
-        )
+        out_r, out_w = os.pipe()
+        err_r, err_w = os.pipe()
+        in_r, in_w = os.pipe() if stdin is not None else (None, None)
+        try:
+            # Started synchronously, so no cancellation lands mid-start (see
+            # _Child).
+            proc = _Child(subprocess.Popen(
+                argv,
+                cwd=self._abs(cwd) if cwd is not None else self.cwd,
+                env=full_env,
+                # DEVNULL rather than the host's fd 0: an inherited stdin lets
+                # a command block forever on a read or eat the host's input.
+                stdin=in_r if in_r is not None else subprocess.DEVNULL,
+                stdout=out_w,
+                stderr=err_w,
+                start_new_session=True,
+            ))
+        except BaseException:
+            _close([out_r, err_r] if in_w is None else [out_r, err_r, in_w])
+            raise
+        finally:
+            _close([out_w, err_w] if in_r is None else [out_w, err_w, in_r])
         keep = None if output_cap is None else max(0, output_cap)
         out, err = _TailBuffer(keep), _TailBuffer(keep)
         drains: list[asyncio.Future[None]] = [
-            asyncio.ensure_future(out.drain(proc.stdout)),
-            asyncio.ensure_future(err.drain(proc.stderr)),
+            asyncio.ensure_future(out.drain(out_r)),
+            asyncio.ensure_future(err.drain(err_r)),
         ]
-        if stdin is not None:
-            drains.append(asyncio.ensure_future(_feed(proc, stdin)))
+        if in_w is not None and stdin is not None:
+            drains.append(asyncio.ensure_future(_feed(in_w, stdin)))
 
         async def _complete() -> None:
             await asyncio.gather(*drains)
@@ -299,19 +383,21 @@ class LocalExecEnv:
         return await asyncio.to_thread(os.path.realpath, self._abs(path))
 
 
-async def _feed(proc: asyncio.subprocess.Process, data: bytes) -> None:
-    """Write ``data`` to the child's stdin and close it; a child that exits
-    without reading is not an error."""
-    if proc.stdin is None:
-        return
+async def _feed(fd: int, data: bytes) -> None:
+    """Write ``data`` to the child's stdin pipe ``fd`` and close it; a child
+    that exits without reading is not an error."""
+    os.set_blocking(fd, False)
+    left = memoryview(data)
     try:
-        proc.stdin.write(data)
-        await proc.stdin.drain()
+        while left:
+            try:
+                left = left[os.write(fd, left):]
+            except BlockingIOError:
+                await _ready(fd, write=True)
     except (BrokenPipeError, ConnectionResetError):
         pass
     finally:
-        with contextlib.suppress(OSError):
-            proc.stdin.close()
+        os.close(fd)
 
 
 def _stat(target: str) -> FileStat | None:

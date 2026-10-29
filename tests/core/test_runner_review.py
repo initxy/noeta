@@ -300,7 +300,9 @@ async def test_a_renewal_that_keeps_failing_gives_the_task_up(store: SqliteStore
                  Agent(name="a", model="m", tools=[slow]), lease_seconds=0.3)
     client = Client(store)
     await client.create("a", "go")
-    await asyncio.wait_for(rt.run_once(), 5)  # the keeper gave up and cancelled the step
+    running = asyncio.ensure_future(rt.run_once())
+    await asyncio.wait_for(slow.started.wait(), 10)
+    await asyncio.wait_for(running, 5)  # the keeper gave up and cancelled the step
     assert slow.cancelled.is_set()
 
 
