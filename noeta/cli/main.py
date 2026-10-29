@@ -241,6 +241,8 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     # The plugin refuses bypassPermissions itself, whatever way it is asked.
     permissions: dict[str, Any] = {} if args.allow_bypass_permissions else {
         "disable_bypass_mode": True}
+    # The default tenant's workspace: hidden from other tenants' tasks.
+    permissions["server_dirs"] = [cwd, *(os.path.abspath(r) for r in args.allow_root)]
     problem = _check_isolation(s, cwd, places) if with_worker else None
     isolated = problem is None
     if problem is not None:

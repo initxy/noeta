@@ -145,12 +145,14 @@ class Permissions(Extension):
     * ``can_use_tool`` — ``(tool, input) -> bool`` (sync or async) that
       answers this extension's asks instead of a person; recorded with
       ``resolver="can_use_tool"``.
-    * ``tenant_workspaces`` (tenant -> workspace), ``store_files`` and
-      ``spill_root`` — the places a task of a tenant other than the default
-      one may never name in a tool call beyond noeta's home, ``/etc/noeta``
-      and ``/proc`` (:mod:`noeta.toolkit.tenant_fence`); no rule, mode or
-      answer lifts it. Such a task keeps its plan files under
-      ``plans_dir/<tenant>``.
+    * ``tenant_workspaces`` (tenant -> workspace), ``store_files``,
+      ``spill_root`` and ``server_dirs`` (the default tenant's workspace) —
+      what the file tools of a task of a tenant other than the default one
+      may reach is an allow list (:mod:`noeta.toolkit.tenant_fence`): its
+      workspace, its own places in noeta and, to read, the machine's
+      programs and settings; no rule, mode or answer lifts it, and
+      ``additional_directories`` are not its. Such a task keeps its plan
+      files under ``plans_dir/<tenant>``.
     * ``tenant_refusal`` — why this worker may not run tools of tenants
       other than the default one (``noeta worker`` without an OS-level
       boundary): such a task's turn fails with ``tenant_not_isolated`` and
@@ -194,6 +196,7 @@ class Permissions(Extension):
         tenant_workspaces: Mapping[str, str] | None = None,
         store_files: Sequence[str] = (),
         spill_root: str | None = None,
+        server_dirs: Sequence[str] = (),
         tenant_refusal: str | None = None,
     ) -> None:
         self.tenant_refusal = tenant_refusal
@@ -243,7 +246,8 @@ class Permissions(Extension):
         self.can_use_tool = can_use_tool
         self.fence = TenantFence(spill_root=spill_root, plans_dir=self.plans_dir,
                                  store_files=tuple(store_files),
-                                 workspaces=dict(tenant_workspaces or {}))
+                                 workspaces=dict(tenant_workspaces or {}),
+                                 server_dirs=tuple(server_dirs))
         self._check = RuleCheck(
             allow_rules=self.allow_rules, deny_rules=self.deny_rules, ask_rules=self.ask_rules,
             additional_directories=self.additional_directories, risk=self.risk,

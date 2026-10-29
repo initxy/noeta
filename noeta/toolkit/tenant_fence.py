@@ -1,19 +1,22 @@
-"""What a task of a tenant other than the default one may never read or
-write in-process, whatever its rules, mode or approvals: noeta's home (the
+"""What a task of a tenant other than the default one may read or write
+in-process, whatever its rules, mode or approvals: an allow list. It may
+reach its tenant's workspace; its own corners of noeta's places (its spilled
+tool outputs and its tree's transcripts, its tenant's plan files, in its
+tenant's project directory of its working directory the memory and, to read,
+its tree's compaction transcripts, and read access to the operator's skills
+and saved workflows); its tenant's own temporary directory
+(:meth:`TenantFence.temp_dir`: its commands' ``TMPDIR`` and its job logs);
+and, to read, the machine's programs, libraries and settings
+(:data:`SYSTEM_READABLE`, but never ``/etc/noeta``, a home directory or the
+server's own directories). Everything else is refused: noeta's home (the
 tokens, settings, other tenants' directories, the store), the store's files,
-the machine's ``/etc/noeta``, ``/proc`` (other processes' environments),
-noeta's places in the temp directories (other tasks' background job logs and
-sandbox temporary files) and other tenants' workspaces.
+``/proc``, noeta's places in the temp directories, other tenants'
+workspaces, every home directory (the operator's credentials) and the
+server's own directories (the default tenant's workspace).
 
 Tenants share the worker's OS user, so this is the only boundary between a
 tenant's file tools and those files; a tenant answers its own approval
-prompts, so nothing it can approve may lift it. Inside the fenced places a
-task keeps its own corners: its spilled tool outputs and its tree's
-transcripts, its tenant's plan files, in its tenant's project directory of its
-working directory the memory and (to read) its tree's compaction transcripts,
-and read access to the operator's skills and saved workflows; outside them,
-its tenant's own temporary directory (:meth:`TenantFence.temp_dir`: its
-commands' ``TMPDIR`` and its job logs).
+prompts, so nothing it can approve may lift it.
 
 :meth:`TenantFence.refusal` is the check for in-process file access;
 :meth:`TenantFence.confine` makes the same places unreadable to the task's
@@ -27,6 +30,8 @@ from __future__ import annotations
 import dataclasses
 import os
 import posixpath
+import pwd
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +52,19 @@ __all__ = ["SYSTEM_PATHS", "TenantFence", "store_files"]
 #: Outside noeta's home: the machine's noeta settings and every process's
 #: environment, command line and open files.
 SYSTEM_PATHS = ("/etc/noeta", "/proc")
+#: What a tenant's task may read (never write) outside its workspace and
+#: corners: the machine's programs, libraries and settings, but for
+#: :data:`SYSTEM_PATHS`, home directories and the server's own directories.
+#: Not ``/opt``, ``/srv``, ``/var`` or ``/mnt``: other software's data and
+#: other disks are kept there (``/opt`` may be a link to a data disk).
+SYSTEM_READABLE = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc",
+                   "/private/etc", "/nix/store")
+#: Where people's home directories are kept; every one of them, the worker's
+#: own home and each login account's are hidden from a tenant's task.
+HOME_ROOTS = ("/home", "/root", "/Users", "/var/root")
+#: Places a directory to hide may not hold: hiding one would hide the
+#: machine's programs or the command's own temporary files.
+_NEVER_HIDDEN = (*SYSTEM_READABLE, "/opt", "/tmp", "/var/tmp", "/dev", "/proc", "/sys", "/run")
 #: Inside noeta's home, what a tenant's task may read but never write.
 _HOME_READABLE = ("skills", "workflows")
 #: The files sqlite keeps beside a database.
@@ -72,6 +90,29 @@ def _within(path: str, base: str) -> bool:
     return path == base or path.startswith(base.rstrip("/") + "/")
 
 
+def home_dirs() -> list[str]:
+    """The machine's home directories: :data:`HOME_ROOTS`, the worker's
+    ``~`` and every login account's (root's and those from uid 500 on), but
+    none that holds the machine's programs (an account whose home is
+    ``/``)."""
+    out = [*HOME_ROOTS, os.path.expanduser("~")]
+    try:
+        accounts = pwd.getpwall()
+    except OSError:  # pragma: no cover - no account database
+        accounts = []
+    out += [a.pw_dir for a in accounts if (a.pw_uid == 0 or 500 <= a.pw_uid < 65534)
+            and posixpath.isabs(a.pw_dir)]
+    return [d for d in dict.fromkeys(posixpath.normpath(d) for d in out) if _hideable(d)]
+
+
+def _hideable(path: str) -> bool:
+    """Whether hiding ``path`` leaves the machine's programs, temporary
+    directories and kernel file systems alone."""
+    keep = [*_NEVER_HIDDEN, *map(_real, _NEVER_HIDDEN)]
+    return not any(_within(k, path) for k in keep) \
+        and not any(_within(path, k) for k in ("/dev", "/proc", "/sys"))
+
+
 @dataclass(frozen=True)
 class TenantFence:
     """The fenced places. ``home``: noeta's home (default ``NOETA_HOME`` /
@@ -80,7 +121,10 @@ class TenantFence:
     tenant's plan directory); ``store_files``: the store's files;
     ``workspaces``: each tenant's workspace, by tenant name; ``temp_root``:
     noeta's directory in the temp directory (default
-    :func:`~noeta.toolkit.paths.temp_root`), where each tenant has its own."""
+    :func:`~noeta.toolkit.paths.temp_root`), where each tenant has its own;
+    ``server_dirs``: the server's own directories (the default tenant's
+    workspace), beside the worker's working directory, which always is
+    one."""
 
     home: str | None = None
     spill_root: str | None = None
@@ -88,6 +132,7 @@ class TenantFence:
     store_files: tuple[str, ...] = ()
     workspaces: Mapping[str, str] = field(default_factory=dict)
     temp_root: str | None = None
+    server_dirs: tuple[str, ...] = ()
 
     def temp_dir(self, tenant: str) -> str:
         """The tenant's own temporary directory (its tasks' ``TMPDIR`` and
@@ -122,33 +167,60 @@ class TenantFence:
             return head + "it holds other tasks' command output and temporary files"
         fenced = [p for p in (self.home or str(noeta_home()), self.spill_root, self.plans_dir)
                   if p]
-        if not any(_within(path, _real(p)) for p in fenced):
+        if any(_within(path, _real(p)) for p in fenced):
+            if any(_within(path, own)
+                   for own in self._own(tenant, task_id, root_id, cwd, write)):
+                return None
+            return head + "it is in noeta's own directories (tokens, settings, other tasks' " \
+                "files)"
+        # What is left is an allow list: the workspace, the own temporary
+        # directory and, to read, the machine's programs and settings.
+        real = _real(path)
+        if self._workspace_owner(real) == tenant or _within(real, own_temp):
             return None
-        if any(_within(path, own) for own in self._own(tenant, task_id, root_id, cwd, write)):
+        if not write and self._system_readable(real):
             return None
-        return head + "it is in noeta's own directories (tokens, settings, other tasks' files)"
+        return head + "it is outside the tenant's workspace and its own places in noeta"
+
+    def _system_readable(self, real: str) -> bool:
+        if not any(_within(real, p) or _within(real, _real(p)) for p in SYSTEM_READABLE):
+            return False
+        hidden = [*self.servers(), *home_dirs()]
+        return not any(_within(real, h) or _within(real, _real(h)) for h in hidden)
+
+    def servers(self) -> list[str]:
+        """The server's own directories: the worker's working directory and
+        :attr:`server_dirs`."""
+        return list(dict.fromkeys([os.getcwd(), *self.server_dirs]))
 
     def confine(self, settings: SandboxSettings, *, tenant: str, task_id: str,
                 root_id: str = "", cwd: str = "") -> SandboxSettings:
         """``settings`` for the commands of the task ``task_id`` (as
-        :meth:`refusal` names it): the fenced places unreadable but for the
-        task's own corners and its tenant's temporary directory, every
-        command inside the sandbox (no excluded commands, no way out,
-        filesystem confined) and a fresh ``/proc`` of
-        its own PID namespace. ``settings`` themselves for the default
-        tenant."""
+        :meth:`refusal` names it): the fenced places, every home directory
+        and the server's own directories unreadable but for the tenant's
+        workspace, the task's own corners, its tenant's temporary directory
+        and the Python that runs the sandbox's network bridge; no
+        ``allowWrite`` / ``allowRead`` / ``additionalDirectories`` of the
+        operator's; every command inside the sandbox (no excluded commands,
+        no way out, filesystem confined) and a fresh ``/proc`` of its own
+        PID namespace. ``settings`` themselves for the default tenant."""
         if tenant == DEFAULT_TENANT:
             return settings
         home = self.home or str(noeta_home())
+        workspace = self.workspaces.get(tenant)
         others = [w for name, w in self.workspaces.items() if name != tenant]
         temps = self.temp_places()
+        people = [d for d in (*home_dirs(), *self.servers()) if _hideable(d)
+                  and not (workspace and _within(_real(d), _real(workspace)))]
         denied = [home, *(p for p in (self.spill_root, self.plans_dir) if p),
                   *(s for s in SYSTEM_PATHS if s != "/proc"), *self.store_files, *others,
-                  *temps]
+                  *temps, *people]
         own = [*self._own(tenant, task_id, root_id or task_id, cwd, write=False),
-               self.temp_dir(tenant)]
+               self.temp_dir(tenant), *([workspace] if workspace else []),
+               os.path.realpath(sys.executable), sys.base_prefix]
         return dataclasses.replace(
-            settings, tenant_deny_read=tuple(denied), tenant_allow_read=tuple(own),
+            settings, tenant_deny_read=tuple(dict.fromkeys(denied)),
+            tenant_allow_read=tuple(own), allow_write=(), allow_read=(),
             tenant_temp_places=tuple(temps), tenant_temp_dir=self.temp_dir(tenant),
             noeta_home_readable=(),
             excluded_commands=(), allow_unsandboxed=False, filesystem_disabled=False,

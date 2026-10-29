@@ -409,7 +409,8 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     fence = TenantFence(home=str(home_dir.HOME), spill_root=runtime_kw["spill_root"],
                         plans_dir=str(home_dir.HOME / "plans"),
                         store_files=store_files(settings.store_url),
-                        workspaces=dict(tenant_workspaces or {}))
+                        workspaces=dict(tenant_workspaces or {}),
+                        server_dirs=tuple((permissions or {}).get("server_dirs") or ()))
     permissions = {"tenant_workspaces": dict(fence.workspaces),
                    "store_files": list(fence.store_files),
                    "spill_root": fence.spill_root, **(permissions or {})}

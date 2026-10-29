@@ -786,3 +786,17 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - `Read` of a PDF by a tenant's task makes its copy and rendered pages in the tenant's own
   temporary directory. Before, they went to a fresh directory in the worker's shared temp
   directory, readable by other tenants' sandboxed commands while the conversion ran.
+- What a non-default tenant's file tools may reach is an allow list
+  (`noeta.toolkit.tenant_fence`): its workspace, its own corners of noeta's places, its
+  temporary directory and, to read, `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc` (but
+  `/etc/noeta`) and `/nix/store`, never a home directory or the server's own directories
+  in them; everything else is refused before any rule, mode or approval. The operator's
+  `additionalDirectories` are no longer a tenant's working directories. Before, the fence
+  was a deny list, so a tenant could approve its own `Read ~/.ssh/id_rsa` or
+  `Read <server dir>/.env` and write in the operator's additional directories.
+- Under the sandbox, a non-default tenant's commands may not read any home directory
+  (`/home`, `/root`, `/Users`, the worker's `~`, each login account's) or the server's own
+  directories (its working directory and `--allow-root` paths), but for the tenant's
+  workspace and its own corners, nor write the operator's `allowWrite` /
+  `additionalDirectories` (`TenantFence.confine`, `TenantFence(server_dirs=)`). Before, they
+  read everything but noeta's places and the sandbox's credential stores.

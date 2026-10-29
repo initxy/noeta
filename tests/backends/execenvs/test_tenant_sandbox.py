@@ -259,10 +259,65 @@ def test_a_writable_directory_inside_a_tenants_denied_one_is_shown_again(
     assert real(str(work / ".git" / "hooks")) in plan.deny_write
     args = sb.bwrap_args(tenant, plan, bwrap="bwrap", cwd=str(work), relays=[], bridge="/b")
     line = " ".join(args)
-    assert line.index(f"--tmpfs {real(str(outer))}") < line.index(
-        f"--bind {real(str(work))} {real(str(work))} --remount-ro")
+    assert line.index(f"--tmpfs {real(str(outer))}") < line.rindex(
+        f"--bind {real(str(work))} {real(str(work))} --") < line.index(
+        f"--remount-ro {real(str(outer))}")
     # The operator's denyRead of a directory holding the working one is
     # dropped, as before.
     operator = SandboxSettings(enabled=True, deny_read=(str(outer),))
     plan = sb.plan_paths(operator, str(work), str(tmp_path / "tmp"))
     assert real(str(outer)) not in plan.deny_read and plan.rebound == []
+
+
+async def test_a_tenants_opened_file_must_be_on_the_allow_list(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    p = Places(tmp_path)
+    home = tmp_path / "userhome"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "id_test").write_text("SSHKEY")
+    monkeypatch.setenv("HOME", str(home))
+    os.symlink(home / ".ssh" / "id_test", p.mine / "link")
+    tenant = local_env_for(None, p.fence)(_state("acme", p.mine))
+    with pytest.raises(PermissionError, match="outside the tenant's workspace"):
+        await tenant.read_bytes("link")
+    with pytest.raises(PermissionError):
+        await tenant.write_bytes(str(tmp_path / "elsewhere.txt"), b"x")
+    assert await tenant.read_bytes("f.txt") == b"MYFILE"
+    assert await tenant.read_bytes("/etc/hostname") is not None
+
+
+@needs_bwrap
+async def test_a_tenants_command_sees_no_home_directory_nor_the_server_directory(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    p = Places(tmp_path)
+    home, server, root = tmp_path / "userhome", tmp_path / "server", tmp_path / "allowed-root"
+    extra = tmp_path / "extra"
+    for path, text in ((home / ".ssh" / "id_test", "SSHKEY"), (home / "notes", "HOMENOTE"),
+                       (server / ".env", "SERVERENV"),
+                       (root / "data", "ROOTDATA"), (extra / "f", "EXTRA")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(server)
+    fence = dataclasses.replace(p.fence, server_dirs=(str(root),))
+    # The operator's additional directory is writable for the default
+    # tenant's commands, not for another tenant's.
+    settings = SandboxSettings(enabled=True, allow_write=(str(extra),))
+    env_for = local_env_for(settings, fence)
+    show = (f"cat ~/.ssh/id_test {home}/.ssh/id_test ~/notes {server}/.env {root}/data; "
+            f"echo W > {extra}/g; cat {p.mine}/f.txt /etc/hostname >/dev/null && echo SYSTEM; "
+            f"echo MINE > {p.mine}/new && cat {p.mine}/new")
+    tenant = env_for(_state("acme", p.mine))
+    assert isinstance(tenant, LocalExecEnv)
+    out = await _out(tenant, show)
+    for hidden in ("SSHKEY", "HOMENOTE", "SERVERENV", "ROOTDATA"):
+        assert hidden not in out, out
+    assert not (extra / "g").exists()
+    assert "SYSTEM" in out and "MINE" in out, out
+    default = env_for(_state("default", p.mine))
+    assert isinstance(default, LocalExecEnv)
+    out = await _out(default, show)
+    for seen in ("HOMENOTE", "SERVERENV", "ROOTDATA", "SYSTEM"):
+        assert seen in out, out
+    assert "SSHKEY" not in out  # the sandbox's own credential stores
+    assert (extra / "g").exists()
