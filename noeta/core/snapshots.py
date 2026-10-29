@@ -4,8 +4,10 @@ the snapshot and folds only the events after it instead of the whole log.
 A snapshot is only ever a fold of the log up to its seq, which never
 changes, so any runner may write one and a newer one simply replaces an
 older one. It is used only when its version matches: the fold code (the
-kernel's and each of the agent's extensions', by source) and the agent's
-plugins (``registry.pin``). Anything else folds the log from the start.
+kernel's and each of the agent's extensions', by source, with every module
+of the same top-level package they import, so a reducer kept in a helper
+module counts) and the agent's plugins (``registry.pin``). Anything else
+folds the log from the start.
 
 A state is only written when it reads back equal (:func:`encode`): an
 extension state the encoding cannot carry faithfully (an object without
@@ -15,10 +17,11 @@ task, never a wrong one.
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import functools
 import hashlib
-import inspect
+import importlib.util
 import sys
 from collections.abc import Sequence
 from typing import Any
@@ -37,18 +40,86 @@ FOLD_MODULES = ("noeta.core.loop.state", "noeta.core.records", "noeta.core.event
                 "noeta.core.types", "noeta.core.deferred")
 
 
+def _source_path(module: str) -> str | None:
+    """``module``'s ``.py`` file, found without importing it (its parent
+    packages may be imported); ``None`` when it has none or is unknown."""
+    mod = sys.modules.get(module)
+    path = getattr(mod, "__file__", None) if mod is not None else None
+    if path is None:
+        try:
+            spec = importlib.util.find_spec(module)
+        except (ImportError, ValueError):
+            return None
+        path = spec.origin if spec is not None else None
+    return path if isinstance(path, str) and path.endswith(".py") else None
+
+
+@functools.cache
+def _module_source(module: str) -> bytes | None:
+    path = _source_path(module)
+    if path is None:
+        return None
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
 @functools.cache
 def _module_digest(module: str) -> str:
     """The hash of ``module``'s source file (its name when it has none)."""
-    mod = sys.modules.get(module)
+    source = _module_source(module)
+    return hashlib.sha256(source).hexdigest()[:16] if source is not None else module
+
+
+def _imported(module: str) -> set[str]:
+    """The modules ``module``'s source imports (anywhere in it, also under
+    ``TYPE_CHECKING`` or inside a function), by absolute name; a ``from m
+    import n`` counts ``m.n`` when that is a module."""
+    source = _module_source(module)
+    if source is None:
+        return set()
     try:
-        path = inspect.getsourcefile(mod) if mod is not None else None
-        if path:
-            with open(path, "rb") as fh:
-                return hashlib.sha256(fh.read()).hexdigest()[:16]
-    except (OSError, TypeError):
-        pass
-    return module
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    is_package = (_source_path(module) or "").endswith("__init__.py")
+    package = module if is_package else module.rpartition(".")[0]
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            out.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            try:
+                base = importlib.util.resolve_name("." * node.level + (node.module or ""),
+                                                   package) if node.level else node.module
+            except (ImportError, ValueError):
+                continue
+            if not base:
+                continue
+            out.add(base)
+            out.update(f"{base}.{alias.name}" for alias in node.names
+                       if _source_path(f"{base}.{alias.name}") is not None)
+    return out
+
+
+@functools.cache
+def _code_digest(module: str) -> str:
+    """The hash of ``module`` and every module of its top-level package it
+    imports, directly or not: the code a fold reaches from it."""
+    top = module.partition(".")[0]
+    seen, todo = {module}, [module]
+    while todo:
+        for name in _imported(todo.pop()):
+            if name.partition(".")[0] == top and name not in seen \
+                    and _source_path(name) is not None:
+                seen.add(name)
+                todo.append(name)
+    h = hashlib.sha256()
+    for name in sorted(seen):
+        h.update(f"{name}:{_module_digest(name)}\n".encode())
+    return h.hexdigest()[:16]
 
 
 def version(agent: str, extensions: Sequence[Any]) -> str:
@@ -56,11 +127,11 @@ def version(agent: str, extensions: Sequence[Any]) -> str:
     must carry to be used."""
     h = hashlib.sha256(f"{FORMAT}\n{agent}\n".encode())
     for module in FOLD_MODULES:
-        h.update(_module_digest(module).encode())
+        h.update(_code_digest(module).encode())
     for ext in extensions:
         h.update(repr(sorted(registry.pin(ext).items())).encode())
         for cls in type(ext).__mro__[:-1]:
-            h.update(f"{cls.__qualname__}:{_module_digest(cls.__module__)}".encode())
+            h.update(f"{cls.__qualname__}:{_code_digest(cls.__module__)}".encode())
     return f"{FORMAT}:{h.hexdigest()[:32]}"
 
 
