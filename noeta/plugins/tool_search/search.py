@@ -113,7 +113,7 @@ class ToolSearchTool:
         ``mcp__<server>`` prefix loads that server's tools; otherwise the
         words are scored against each tool's name parts (most) and its
         description (whole words), after ``+word`` keeps only the tools
-        whose name holds ``word``."""
+        whose name or description (as a whole word) holds ``word``."""
         limit = max(0, max_results)
         q = " ".join(query.split()[:MAX_KEYWORDS]).lower()
         exact = next((n for n in self._tools if n.lower() == q), None)
@@ -132,7 +132,8 @@ class ToolSearchTool:
         for name, tool in self._tools.items():
             parts, coarse, mcp = _name_parts(name)
             text = (getattr(tool, "description", "") or "").lower()
-            if not all(any(r in p for p in (*parts, *coarse)) for r in required):
+            if not all(any(r in p for p in (*parts, *coarse)) or whole[r].search(text)
+                       for r in required):
                 continue
             score = 0
             for t in terms:

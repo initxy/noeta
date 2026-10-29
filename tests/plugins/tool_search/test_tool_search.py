@@ -112,9 +112,11 @@ def test_keyword_ranking() -> None:
     assert search.search("webfetch") == ["WebFetch"]
     # An mcp__ prefix loads that server's tools.
     assert search.search("mcp__slack") == ["mcp__slack__send_message", "mcp__slack__list"]
-    # +word must be in the name: a description that says it does not count.
-    assert search.search("+slack send") == ["mcp__slack__send_message", "mcp__slack__list"]
-    assert search.search("+inbox send") == []
+    # +word filters on the name and, as a whole word, the description.
+    assert search.search("+slack send") == [
+        "mcp__slack__send_message", "mcp__mail__send", "mcp__slack__list"]
+    assert search.search("+inbox send") == ["mcp__mail__send"]
+    assert search.search("+inbo send") == []
     # Name words outrank description words.
     assert search.search("web fetch", max_results=2) == ["WebFetch", "WebSearch"]
     assert search.search("jupyter", max_results=0) == []
