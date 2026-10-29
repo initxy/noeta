@@ -39,7 +39,8 @@ under the temp directory on disk (``$TMPDIR``, else ``/var/tmp``, else
 must be a real directory owned by the user (else launches are refused). Log
 files are created 0600, in a directory of the worker process's own
 (``w<pid>``); a worker on this machine removes those of workers that are
-gone when it first prepares the directory. A job's output reaches its log through a pipe that
+gone, a day after their last write, when it first prepares the directory (a lost
+job's notice names its output file). A job's output reaches its log through a pipe that
 keeps the first ``log_max_bytes`` (:data:`DEFAULT_LOG_MAX_BYTES`), then a
 line saying the rest was not kept, and drains the rest, so the command runs
 on unharmed.
@@ -59,6 +60,7 @@ import shlex
 import shutil
 import socket
 import string
+import time
 import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -97,6 +99,9 @@ MONITOR_POLL_S = 0.1
 DEFAULT_LOG_DIR = ""
 #: Tasks remembered as ended (their notices go to the root) at most.
 ENDED_KEEP = 4096
+#: How long the logs of a worker that is gone stay after their last write:
+#: the notice of a job it lost names its output file.
+DEAD_WORKER_LOGS_KEEP_S = 24 * 3600
 #: How often a job's guard looks at its worker.
 GUARD_TICK_S = 0.5
 #: How long a foreground command outlives a worker that stopped re-creating
@@ -240,7 +245,9 @@ def _worker_dir() -> str:
 
 def _remove_dead_workers(logs: str) -> None:
     """Remove the directories of worker processes on this machine that are
-    gone (``w<pid>`` inside ``logs``); a pid that answers is kept."""
+    gone (``w<pid>`` inside ``logs``) once nothing in them was written for
+    :data:`DEAD_WORKER_LOGS_KEEP_S`; a pid that answers is kept."""
+    cutoff = time.time() - DEAD_WORKER_LOGS_KEEP_S
     with contextlib.suppress(OSError), os.scandir(logs) as entries:
         for entry in entries:
             found = _WORKER_DIR_NAME.fullmatch(entry.name)
@@ -254,7 +261,20 @@ def _remove_dead_workers(logs: str) -> None:
                 pass
             except (OSError, OverflowError):
                 continue
-            shutil.rmtree(entry.path, ignore_errors=True)
+            if _last_written(entry.path) < cutoff:
+                shutil.rmtree(entry.path, ignore_errors=True)
+
+
+def _last_written(directory: str) -> float:
+    """When ``directory`` or a file directly in it was last written."""
+    newest = 0.0
+    with contextlib.suppress(OSError):
+        newest = os.stat(directory).st_mtime
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                with contextlib.suppress(OSError):
+                    newest = max(newest, entry.stat(follow_symlinks=False).st_mtime)
+    return newest
 
 
 def _touch(paths: Sequence[str]) -> None:

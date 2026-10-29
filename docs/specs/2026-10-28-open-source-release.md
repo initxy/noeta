@@ -134,7 +134,7 @@ servers and runs on many machines.
   Code's text is committed; protocol literals go in `parity/own-words-allowed.txt`. Texts the
   recordings never show (deferred tools, MCP sign-in) stay a review matter.
 - D20 (`os-fix-tools`) Background and foreground job logs: the temp directory on disk, one
-  directory per worker process (`w<pid>`, dead ones removed on this machine), each stream kept
+  directory per worker process (`w<pid>`, a dead one's removed on this machine a day after its last write), each stream kept
   to its first 64 MB; a foreground command's guard kills it 30 s after its worker stops.
 - D21 (`os-fix-tenant2`) MCP for tenants: a task whose tenant is not `default` gets no server
   that runs a process on the worker (a `command`, a `headers_helper`), whoever configured it

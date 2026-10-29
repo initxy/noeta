@@ -536,6 +536,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - A foreground `Bash` command moved to the background is no longer killed after 30–60 s
   when the worker's lease is longer than 90 s: its liveness file is re-created as often as
   its guard checks it, not at the slower pace of the lease.
+- The output file a lost job's notice names still exists: a worker sweeps a dead worker's
+  log directory only a day after its last write, not as soon as it prepares its own.
 
 ### Security
 
