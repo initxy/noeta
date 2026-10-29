@@ -31,7 +31,8 @@ from noeta.core.store import HOLD_LOST
 from noeta.core.tool import ToolContext
 from noeta.core.types import Text, user
 from noeta.plugins.shell import Registry, Shell
-from noeta.plugins.shell.jobs import DEAD_WORKER_LOGS_KEEP_S, JOB_ENDED, Job
+from noeta.plugins.shell.job_logs import DEAD_WORKER_LOGS_KEEP_S
+from noeta.plugins.shell.jobs import JOB_ENDED, Job
 from noeta.plugins.shell.state import ShellState
 from noeta.toolkit.notices import NOTICE_GUARD
 
