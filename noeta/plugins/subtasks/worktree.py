@@ -33,12 +33,32 @@ async def make_agent_worktree(ctx: ToolContext,
     if root is None:
         return texts.WORKTREE_FAILED.format(reason=f"{cwd} is not in a git repository")
     _, base = await git(env, ["rev-parse", "HEAD"], root)
-    name = "agent-" + re.sub(r"[^A-Za-z0-9_-]", "", ctx.call_id)[-16:]
-    path, branch = posixpath.join(root, WORKTREES, name), f"worktree-{name}"
+    path, branch = _place(root, ctx.call_id)
     err = await add_worktree(env, root, path, branch, "HEAD")
     if err:
         return texts.WORKTREE_FAILED.format(reason=err)
     return {"path": path, "branch": branch, "base": base, "root": root}
+
+
+def _place(root: str, call_id: str) -> tuple[str, str]:
+    """The path and branch of the worktree the call ``call_id`` makes."""
+    name = "agent-" + re.sub(r"[^A-Za-z0-9_-]", "", call_id)[-16:]
+    return posixpath.join(root, WORKTREES, name), f"worktree-{name}"
+
+
+async def remove_unlaunched_worktree(ctx: ToolContext, config: Mapping[str, Any]) -> None:
+    """Remove the worktree this call made before a crash stopped it from
+    launching its agent (the launch and its record are one write, so no
+    agent ever worked in it)."""
+    env = ctx.env
+    if env is None:
+        return
+    root = await repository_top(env, str(config.get("cwd") or env.cwd))
+    if root is None:
+        return
+    path, branch = _place(root, ctx.call_id)
+    if await env.stat(path) is not None:
+        await remove_worktree(env, root, path, branch)
 
 
 async def worktree_exists(env: ExecEnv | None, tree: Mapping[str, str]) -> bool:

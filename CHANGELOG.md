@@ -540,6 +540,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   log directory only a day after its last write, not as soon as it prepares its own.
 - `ExitWorktree` with `remove` removes the worktree `EnterWorktree` made even after the
   shell switched between two other worktrees; the second switch forgot it.
+- An `Agent` call with `isolation: "worktree"` that a crash cut short, after its worktree
+  was made but before its agent launched, no longer leaves that worktree behind: the call's
+  recovery removes it.
 
 ### Security
 
