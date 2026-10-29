@@ -18,6 +18,7 @@ from noeta.core.errors import UnknownTask
 from noeta.core.events import DEFAULT_TENANT, External, ModelReplied, Recorded, TaskCreated
 from noeta.core.extension import Extension, TaskView
 from noeta.core.runner import Runtime
+from noeta.core.store import NewTask
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.testing import ScriptedProvider, reply
 from tests.conftest import Pg
@@ -133,6 +134,46 @@ async def test_an_extension_posts_to_another_task_only_within_its_tenant(
             if isinstance(i.body, External) and i.body.name == "news"]
     assert len(news) == 1
     assert not any(isinstance(i.body, External) for i in await store.inbox(other))
+    await store.close()
+
+
+class Peek(Extension):
+    """On each model reply, reads the log and the children of every task
+    named in the task's config (``of``)."""
+
+    name = "peek"
+
+    def __init__(self) -> None:
+        self.logs: dict[str, int] = {}
+        self.children: dict[str, list[str]] = {}
+
+    async def on_event(self, view: TaskView, recorded: Recorded) -> None:
+        if isinstance(recorded.event, ModelReplied):
+            assert view.read_log is not None and view.child_tasks is not None
+            for target in view.state.config.get("of", []):
+                self.logs[target] = len(await view.read_log(target))
+                self.children[target] = await view.child_tasks(target)
+
+
+async def test_an_extension_reads_logs_and_children_only_within_its_tenant(
+        tmp_path: Path) -> None:
+    store = SqliteStore(str(tmp_path / "t.db"))
+    peek = Peek()
+    provider = ScriptedProvider([reply("done")])
+    agents = {"main": Agent(name="main", model="m", extensions=[peek]),
+              "idle": Agent(name="idle", model="m")}
+    rt = Runtime(store=store, agents=agents, provider_for=lambda _m: provider,  # type: ignore[arg-type,return-value]
+                 env_for=lambda _s: None, sleep=_no_sleep)  # type: ignore[arg-type,return-value]
+    host = Client(store)
+    other = await host.scoped("b").create("idle")
+    neighbour = await host.scoped("a").create("idle")
+    for parent, tenant in ((other, "b"), (neighbour, "a")):
+        await store.create(NewTask(task_id=f"{parent}.c", created=TaskCreated(
+            agent="idle", parent_id=parent, root_id=parent, tenant=tenant)))
+    await host.scoped("a").create("main", "go", config={"of": [other, neighbour]})
+    await rt.run_until_idle()
+    assert peek.logs[other] == 0 and peek.logs[neighbour] > 0
+    assert peek.children == {other: [], neighbour: [f"{neighbour}.c"]}
     await store.close()
 
 

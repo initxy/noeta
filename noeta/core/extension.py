@@ -175,9 +175,11 @@ class TaskView(records.CoreNotices):
     count_tokens: Callable[[str], Awaitable[int | None]] | None = None
     #: ``await read_log(task_id, after=0)``: a task's log after seq
     #: ``after``, oldest first — what a related task (a sub-agent, a
-    #: conversation this one continues) recorded. Read only.
+    #: conversation this one continues) recorded. Read only; another
+    #: tenant's task reads as empty.
     read_log: ReadLog | None = None
-    #: ``await child_tasks(task_id)``: the ids of a task's children.
+    #: ``await child_tasks(task_id)``: the ids of a task's children of this
+    #: task's tenant.
     child_tasks: Callable[[str], Awaitable[list[str]]] | None = None
     #: The task's extensions, in the agent's order (``residents``).
     extensions: Sequence[Extension] = ()

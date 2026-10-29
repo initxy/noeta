@@ -536,6 +536,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Security
 
+- An extension's `TaskView.read_log` reads another tenant's task as empty and
+  `TaskView.child_tasks` lists only children of its own tenant, as `ToolContext.post` and
+  `ToolContext.tasks` already did. Before, a plugin given another tenant's task id could read
+  its log.
 - `noeta serve` takes only `model`, `effort`, `max_turns`, `cwd`, `permission_mode` and
   `output_schema` in a new task's `config`, and only `model`, `effort` and `max_turns` in a
   `config` signal; any other key is refused with 403 naming it. Before, a request could set

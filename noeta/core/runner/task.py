@@ -367,11 +367,20 @@ class TaskRun:
                         agents=self.rt.agents,
                         allowed_tools=self.agent.allowed_tools if self.agent else None,
                         denied_tools=self.agent.denied_tools if self.agent else (),
-                        count_tokens=self.counter(model), read_log=self.store.read,
+                        count_tokens=self.counter(model), read_log=self._read_log,
                         child_tasks=self._child_ids)
 
+    async def _read_log(self, task_id: str, after: int = 0) -> Sequence[Recorded]:
+        """``TaskView.read_log``: another tenant's task is not there for it."""
+        if task_id != self.task_id:
+            row = await self.store.get(task_id)
+            if row is None or row.tenant != self.state.tenant:
+                return []
+        return await self.store.read(task_id, after)
+
     async def _child_ids(self, task_id: str) -> list[str]:
-        return [row.task_id for row in await self.store.tasks(parent_id=task_id, limit=10_000)]
+        return [row.task_id for row in await self.store.tasks(
+            parent_id=task_id, limit=10_000, tenant=self.state.tenant)]
 
     def counter(self, model: str) -> Any:
         """``count_tokens(text)`` against ``model``'s provider, or ``None``
