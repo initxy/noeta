@@ -70,6 +70,19 @@ async def test_enter_then_remove_a_clean_worktree(repo: Path) -> None:
     assert "worktree-feature" not in _git(repo, "branch")
 
 
+async def test_a_branch_git_will_not_delete_is_reported_kept(repo: Path) -> None:
+    s = Driver(repo)
+    await s.call(EnterWorktreeTool(), {"name": "w"})
+    tree = repo / ".noeta" / "worktrees" / "w"
+    assert s.state.worktree is not None
+    # ``main`` is checked out in the repository itself: ``git branch -D`` refuses.
+    s.state = dataclasses.replace(s.state, worktree={**s.state.worktree, "branch": "main"})
+    err, text = await s.call(ExitWorktreeTool(), {"action": "remove"})
+    assert not err and not tree.exists()
+    assert "branch main was kept" in text and "were removed" not in text
+    assert "main" in _git(repo, "branch")
+
+
 async def test_remove_refuses_unsaved_work_unless_discarded(repo: Path) -> None:
     s = Driver(repo)
     await s.call(EnterWorktreeTool(), {"name": "w"})
