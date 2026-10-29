@@ -24,10 +24,10 @@ How Claude Code presents a tool that an MCP server advertises. noeta equivalent:
 | `tool.mcp.5` | After loading, the model calls the tool directly by its `mcp__...` name, with no wrapper tool. | covered |
 | `tool.mcp.6` | The description is the server's own text, unchanged, with no prefix (`Echo text back.`). | covered (capped at 1024 bytes) |
 | `tool.mcp.7` | The input schema is the server's `inputSchema` unchanged: no `$schema`, no added `additionalProperties`, no added descriptions. | covered (passed through; noeta substitutes an open object only when the server sends none) |
-| `tool.mcp.8` | MCP resources are reached through the two deferred tools `ListMcpResourcesTool` and `ReadMcpResourceTool`, offered whenever a server is configured. | covered |
+| `tool.mcp.8` | MCP resources are reached through the three deferred tools `ListMcpResourcesTool`, `ReadMcpResourceTool` and `ReadMcpResourceDirTool`, offered whenever a server is configured. | covered (to the main agent; a sub-agent gets the servers' tools only, as in Claude Code) |
 | `tool.mcp.9` | A remote (`http` / `sse`) server that needs the user to sign in offers, in place of its own tools, `mcp__<server>__authenticate` (no parameters): it starts an OAuth authorization-code sign-in and returns an authorization URL for the model to give the user; a sign-in started in the last 3 minutes is handed out again. Once the user has authorized, the server's tools replace the two. (bundle, not recorded) | covered |
 | `tool.mcp.10` | `mcp__<server>__complete_authentication` takes `callback_url` (string, required): the full redirect URL from the browser's address bar, for when the `http://localhost:<port>/callback` page cannot load; a URL without `code`/`error`, or with another sign-in's `state`, is refused. (bundle, not recorded) | covered |
-| `tool.mcp.11` | `ReadMcpResourceDirTool` exists in 2.1.312's bundle but its build gate is off, so it is never offered. | n/a (not offered) |
+| `tool.mcp.11` | `ReadMcpResourceDirTool` is offered: it is in the recorded deferred-tool lists (`m1` to `m5`; `main.env.7`). | covered |
 
 ## Result shape
 
