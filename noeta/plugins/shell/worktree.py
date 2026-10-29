@@ -203,7 +203,8 @@ class ExitWorktreeTool:
         made = tree if tree.get("created") else tree.get("made")
         back = str(tree.get("back") or ctx.env.cwd)
         if action == "remove" and isinstance(made, dict):
-            what, failed = await unsaved_work(ctx.env, made["path"], made["base"])
+            what, failed = await unsaved_work(ctx.env, made["path"], made["base"],
+                                              made["branch"])
             if (what or failed) and input.get("discard_changes") is not True:
                 if failed:
                     return tool_error(self.name, UNCHECKED.format(path=made["path"],

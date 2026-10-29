@@ -420,6 +420,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   file system`). The worktree's own git directory and the shared `objects`, `refs` and
   `logs` are now writable; hooks, config and the files that point git elsewhere stay
   read-only (`parity/deviations.md`).
+- **Removing a worktree no longer drops commits left on its branch.** The unsaved-work check
+  (`ExitWorktree remove`, an isolated agent's end) counted only commits on the worktree's
+  current `HEAD`, so after a switch to another branch the commits on the `worktree-*` branch
+  were lost with `branch -D`. It now counts both.
 - **A sub-agent that ends without handing back reports with its final message.** In auto
   mode a sub-agent that ended without `SubagentHandback` came back as "no report" and its
   last reply was dropped: one whose agent definition lacks the subtasks plugin, whose tool

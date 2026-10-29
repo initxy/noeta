@@ -64,7 +64,7 @@ async def remove_unlaunched_worktree(ctx: ToolContext, config: Mapping[str, Any]
     code, base = await git(env, ["merge-base", "HEAD", branch], root)
     if code != 0:
         return
-    lost, failed = await unsaved_work(env, path, base)
+    lost, failed = await unsaved_work(env, path, base, branch)
     if not lost and not failed:
         await remove_worktree(env, root, path, branch)
 
@@ -80,7 +80,7 @@ async def close_worktree(view: TaskView, tree: Mapping[str, str]) -> str:
     env = view.env
     if env is None or not await worktree_exists(env, tree):
         return ""
-    lost, failed = await unsaved_work(env, tree["path"], tree["base"])
+    lost, failed = await unsaved_work(env, tree["path"], tree["base"], tree["branch"])
     if not lost and not failed:
         await remove_worktree(env, tree["root"], tree["path"], tree["branch"])
         return ""
