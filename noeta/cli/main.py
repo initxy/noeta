@@ -305,7 +305,8 @@ def _main(argv: list[str]) -> None:
                             args.lease, args.snapshot_every))
         return
     if args.command == "serve":
-        if args.no_token and args.host not in ("127.0.0.1", "localhost", "::1"):
+        from noeta.host.http import LOOPBACK_HOSTS
+        if args.no_token and args.host not in LOOPBACK_HOSTS:
             sys.exit("noeta: --no-token serves only a loopback address")
         asyncio.run(_serve(_settings(args), args, cwd))
         return

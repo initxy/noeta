@@ -6,7 +6,6 @@ server's directories."""
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import os
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Any, Literal
@@ -20,6 +19,7 @@ from noeta.core.errors import UnknownTask
 from noeta.core.events import DEFAULT_TENANT, Recorded
 from noeta.core.loop.state import CHANGEABLE_CONFIG, CONFIG_SIGNAL
 from noeta.core.store import Status, TaskRow
+from noeta.core.tenants import token_digest
 from noeta.host.rewind import RESTORE_SIGNAL
 from noeta.toolkit.permission_modes import MODE_SIGNAL
 from noeta.toolkit.signals import RESUMED_SIGNAL
@@ -184,20 +184,16 @@ def tenant_queues(tenant: str) -> tuple[str, ...] | None:
     return None if tenant == DEFAULT_TENANT else ("default", tenant)
 
 
-def _digest(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
-
-
 def _token_lookup(token: str | None, tokens: Any) -> Callable[[str], str | None]:
     """A token's tenant, compared by digest (a lookup that leaks no timing
     about the tokens it holds)."""
-    table: dict[str, str] = {_digest(token): DEFAULT_TENANT} if token else {}
+    table: dict[str, str] = {token_digest(token): DEFAULT_TENANT} if token else {}
     if isinstance(tokens, Mapping):
-        table.update({_digest(t): name for t, name in tokens.items()})
+        table.update({token_digest(t): name for t, name in tokens.items()})
     find = tokens if callable(tokens) else None
 
     def lookup(got: str) -> str | None:
-        hit = table.get(_digest(got))
+        hit = table.get(token_digest(got))
         return hit if hit is not None or find is None else find(got)
 
     return lookup

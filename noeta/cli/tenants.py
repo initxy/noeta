@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import hashlib
 import json
 import os
 import re
@@ -38,7 +37,7 @@ from typing import Any
 from noeta.agents.agent_files import resolve_secrets
 from noeta.cli import config
 from noeta.core.events import DEFAULT_TENANT
-from noeta.core.tenants import Tenant
+from noeta.core.tenants import Tenant, token_digest
 from noeta.toolkit.sandbox import SandboxSettings
 
 #: A tenant name: what a token, a tenant directory and the task rows use.
@@ -47,10 +46,6 @@ TENANT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 
 def _tokens_path() -> Any:
     return config.HOME / "tokens.json"
-
-
-def _digest(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def read_tokens() -> list[dict[str, Any]]:
@@ -83,7 +78,7 @@ def add_token(tenant: str, name: str = "") -> str:
                          f"(at most 63): {tenant!r}")
     token = secrets.token_urlsafe(32)
     entries = read_tokens()
-    entries.append({"sha256": _digest(token), "tenant": tenant, "name": name,
+    entries.append({"sha256": token_digest(token), "tenant": tenant, "name": name,
                     "created": time.time()})
     _write_tokens(entries)
     return token
@@ -118,7 +113,7 @@ def tenant_tokens(*, others: bool = True) -> Callable[[str], str | None]:
             seen["stamp"] = stamp
             seen["table"] = {str(e["sha256"]): str(e["tenant"]) for e in read_tokens()
                              if others or e["tenant"] == DEFAULT_TENANT}
-        found: str | None = seen["table"].get(_digest(token))
+        found: str | None = seen["table"].get(token_digest(token))
         return found
 
     return lookup
