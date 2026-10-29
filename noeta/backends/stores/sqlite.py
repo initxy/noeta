@@ -153,12 +153,10 @@ def _set_version(conn: sqlite3.Connection) -> None:
         if row is None or row[0] is None:
             conn.execute("INSERT INTO noeta_schema VALUES (?)", (SCHEMA_VERSION,))
         elif int(row[0]) < SCHEMA_VERSION:
-            if int(row[0]) < 2:
-                _tell_version_1_holds(conn)
-            else:
+            if int(row[0]) >= 2:
                 _key_snapshots_by_version(conn)
             conn.execute("UPDATE noeta_schema SET version = ?", (SCHEMA_VERSION,))
-        conn.execute("DROP TABLE IF EXISTS holds")  # version 1's, told above
+        _drop_version_1_holds(conn)
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
@@ -178,16 +176,18 @@ def _key_snapshots_by_version(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE snapshots_by_version RENAME TO snapshots")
 
 
-def _tell_version_1_holds(conn: sqlite3.Connection) -> None:
-    """Version 1 kept holds in ``holds``, which this version does not read:
-    each tree held there is told the hold is gone (``hold_lost`` with epoch
-    0, which no hold of ``tree_holds`` has); the table is dropped after."""
+def _drop_version_1_holds(conn: sqlite3.Connection) -> None:
+    """Version 1 kept holds in ``holds``, which this version does not read
+    (an older binary started again may write it anew): each tree held there
+    is told the hold is gone (``hold_lost`` with epoch 0, which no hold of
+    ``tree_holds`` has), then the table is dropped."""
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'holds'"
                     ).fetchone() is None:
         return
     now = time.time()
     for root_id, worker in conn.execute("SELECT root_id, worker FROM holds").fetchall():
         SqliteStore._lost_posts(conn, str(root_id), str(worker), 0, now, [])
+    conn.execute("DROP TABLE holds")
 
 
 def _add_columns(conn: sqlite3.Connection) -> None:

@@ -40,10 +40,12 @@ All notable changes to Noeta are documented here. The format is based on
 - **Stores are at schema version 3 and refuse a newer store.** Holds moved to `tree_holds`,
   and `tasks.tenant`, `tenant_usage` and `snapshots` (keyed by task and fold version) were
   added. The first process of this version moves a version 1 store (sqlite or Postgres)
-  forward in place, posting `hold_lost` for the old `holds` rows and then dropping that table (a version 2 store from a development build gets its snapshot rows re-keyed); a store at a later version than the
-  code knows is refused with `StoreUnavailable` before anything is written to it (sqlite never
-  checked before). Upgrading: stop every worker first; an older sqlite binary does not refuse
-  the upgraded store and fails once the old `holds` table is gone.
+  forward in place, posting `hold_lost` for the old `holds` rows and then dropping that table
+  (a version 2 store from a development build gets its snapshot rows re-keyed); a store at a
+  later version than the code knows is refused with `StoreUnavailable` before anything is
+  written to it (sqlite never checked before). Upgrading: stop every worker first; an older
+  sqlite binary does not refuse the upgraded store: one left running fails, one started again
+  writes a new `holds` table, which the next open tells and drops again.
 - **noeta reads only its own places, with Claude Code's mechanisms.** `~/.claude/`,
   `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json` and `CLAUDE_CONFIG_DIR` are no
   longer read, so the two tools never pick up each other's hooks, env or instructions.
