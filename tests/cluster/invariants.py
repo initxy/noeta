@@ -36,9 +36,10 @@ from noeta.core.store import TaskRow
 from noeta.core.tool import MAX_ATTEMPTS
 
 SHELL = "shell"
-#: The scripted tools that are ``retry_safe``: a crash during one starts it
+#: The tools the scripts call that are ``retry_safe`` (``ToolSearch`` loads the
+#: cron tools): a crash during one starts it
 #: again (up to ``MAX_ATTEMPTS`` times).
-RETRY_SAFE = frozenset({"Lookup"})
+RETRY_SAFE = frozenset({"Lookup", "ToolSearch"})
 
 
 def check_log(row: TaskRow, records: Sequence[Recorded], *, settled: bool) -> list[str]:
