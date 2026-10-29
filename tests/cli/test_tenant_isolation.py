@@ -145,11 +145,15 @@ async def test_the_permissions_plugin_gets_the_fenced_places(home: Path,
                                                              tmp_path: Path) -> None:
     settings = config.load_settings(model="sonnet", store=f"sqlite:///{tmp_path / 't.db'}")
     settings = dataclasses.replace(settings, api_key="k")
+    (home / "settings.json").write_text(json.dumps(
+        {"sandbox": {"filesystem": {"denyRead": ["~/secrets", "/data/private"]}}}))
     app = config.from_settings(settings, cwd=str(tmp_path),
                                tenant_workspaces={"acme": "/srv/acme"})
     perms = next(e for e in app.runtime.agents["main"].extensions if e.name == "permissions")
     fence = perms.fence  # type: ignore[attr-defined]
     assert fence.workspaces == {"acme": "/srv/acme"}
+    # The operator's denyRead holds for a tenant's file tools too.
+    assert fence.deny_read == (str(Path("~/secrets").expanduser()), "/data/private")
     assert fence.store_files[0] == str(tmp_path / "t.db")
     assert fence.spill_root == str(home / "tool-results")
     await app.store.close()

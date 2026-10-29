@@ -371,7 +371,7 @@ def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
         for _path, _kind, step in sorted(steps, key=lambda s: (s[0].count("/"), s[1])):
             args += step
         # The bridge may lie in a hidden directory (a tenant's task hides
-        # every home directory): mounted before those turn read-only.
+        # the server's own directories): mounted before those turn read-only.
         args += own
         for path in hidden:
             args += ["--remount-ro", path]
@@ -392,8 +392,9 @@ def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
     for name in settings.deny_env:
         args += ["--unsetenv", name]
     args += ["--chdir", cwd, "--"]
-    # A tenant's task hides the home directories a virtual environment's
-    # link to its Python may pass through: the Python itself is shown.
+    # A tenant's task hides the server's own directories, which a virtual
+    # environment's link to its Python may pass through: the Python itself
+    # is shown.
     python = os.path.realpath(sys.executable) if settings.tenant_deny_read else sys.executable
     inner = [python, "-I", "-S", bridge]
     for kind, (path, port) in zip(("--http", "--socks"), relays, strict=False):

@@ -1,7 +1,9 @@
 """The sandbox profile of a task whose tenant is not the default one: on top
 of the operator's settings, its commands may not read noeta's home (but its
 own corners), the spill directory (but its own), the store's files,
-``/etc/noeta`` or another tenant's workspace, nor leave the sandbox."""
+``/etc/noeta``, another tenant's workspace, the server's own directories or
+any home directory's credential stores, write only where its file tools may,
+and never leave the sandbox."""
 
 from __future__ import annotations
 
@@ -269,55 +271,101 @@ def test_a_writable_directory_inside_a_tenants_denied_one_is_shown_again(
     assert real(str(outer)) not in plan.deny_read and plan.rebound == []
 
 
-async def test_a_tenants_opened_file_must_be_on_the_allow_list(
+async def test_a_tenants_opened_file_is_checked_against_the_protected_set(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     p = Places(tmp_path)
     home = tmp_path / "userhome"
     (home / ".ssh").mkdir(parents=True)
     (home / ".ssh" / "id_test").write_text("SSHKEY")
+    (tmp_path / "shared.txt").write_text("SHARED")
     monkeypatch.setenv("HOME", str(home))
     os.symlink(home / ".ssh" / "id_test", p.mine / "link")
+    os.symlink(tmp_path / "shared.txt", p.mine / "shared")
     tenant = local_env_for(None, p.fence)(_state("acme", p.mine))
-    with pytest.raises(PermissionError, match="outside the tenant's workspace"):
+    with pytest.raises(PermissionError, match="it holds credentials"):
         await tenant.read_bytes("link")
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionError, match="outside the tenant's workspace"):
         await tenant.write_bytes(str(tmp_path / "elsewhere.txt"), b"x")
     assert await tenant.read_bytes("f.txt") == b"MYFILE"
+    assert await tenant.read_bytes("shared") == b"SHARED"
     assert await tenant.read_bytes("/etc/hostname") is not None
 
 
+class People:
+    """The operator's home (credentials and notes), another account's in a
+    directory of homes, the server's directory and an ``--allow-root`` path,
+    an additional directory of the operator's, a place its ``denyRead``
+    names and shared data elsewhere."""
+
+    def __init__(self, tmp: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from noeta.toolkit import tenant_fence
+
+        self.home, self.homes = tmp / "userhome", tmp / "homes"
+        self.server, self.root = tmp / "server", tmp / "allowed-root"
+        self.extra, self.denied, self.data = tmp / "extra", tmp / "denied", tmp / "data"
+        for path, text in ((self.home / ".ssh" / "id_test", "SSHKEY"),
+                           (self.home / "notes", "HOMENOTE"),
+                           (self.homes / "bob" / ".aws" / "credentials", "BOBKEY"),
+                           (self.homes / "bob" / "notes", "BOBNOTE"),
+                           (self.server / ".env", "SERVERENV"), (self.root / "data", "ROOTDATA"),
+                           (self.extra / "f", "EXTRA"), (self.denied / "f", "DENIED"),
+                           (self.data / "opt" / "f", "OPTDATA")):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        monkeypatch.setenv("HOME", str(self.home))
+        monkeypatch.setattr(tenant_fence, "HOME_ROOTS", (str(self.homes),))
+        monkeypatch.chdir(self.server)
+
+
 @needs_bwrap
-async def test_a_tenants_command_sees_no_home_directory_nor_the_server_directory(
+async def test_a_tenants_command_reads_all_but_the_protected_set(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     p = Places(tmp_path)
-    home, server, root = tmp_path / "userhome", tmp_path / "server", tmp_path / "allowed-root"
-    extra = tmp_path / "extra"
-    for path, text in ((home / ".ssh" / "id_test", "SSHKEY"), (home / "notes", "HOMENOTE"),
-                       (server / ".env", "SERVERENV"),
-                       (root / "data", "ROOTDATA"), (extra / "f", "EXTRA")):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(server)
-    fence = dataclasses.replace(p.fence, server_dirs=(str(root),))
+    o = People(tmp_path, monkeypatch)
+    fence = dataclasses.replace(p.fence, server_dirs=(str(o.root),))
     # The operator's additional directory is writable for the default
     # tenant's commands, not for another tenant's.
-    settings = SandboxSettings(enabled=True, allow_write=(str(extra),))
+    settings = SandboxSettings(enabled=True, allow_write=(str(o.extra),),
+                               deny_read=(str(o.denied),))
     env_for = local_env_for(settings, fence)
-    show = (f"cat ~/.ssh/id_test {home}/.ssh/id_test ~/notes {server}/.env {root}/data; "
-            f"echo W > {extra}/g; cat {p.mine}/f.txt /etc/hostname >/dev/null && echo SYSTEM; "
+    show = (f"cat ~/.ssh/id_test {o.home}/.ssh/id_test {o.homes}/bob/.aws/credentials "
+            f"{o.server}/.env {o.root}/data {o.denied}/f; "
+            f"ls /var/lib >/dev/null && echo VARSEEN; "
+            f"cat ~/notes {o.homes}/bob/notes {o.extra}/f {o.data}/opt/f; "
+            f"echo W > {o.extra}/g; echo W > {o.data}/g; "
             f"echo MINE > {p.mine}/new && cat {p.mine}/new")
     tenant = env_for(_state("acme", p.mine))
     assert isinstance(tenant, LocalExecEnv)
     out = await _out(tenant, show)
-    for hidden in ("SSHKEY", "HOMENOTE", "SERVERENV", "ROOTDATA"):
+    for hidden in ("SSHKEY", "BOBKEY", "SERVERENV", "ROOTDATA", "DENIED"):
         assert hidden not in out, out
-    assert not (extra / "g").exists()
-    assert "SYSTEM" in out and "MINE" in out, out
+    for seen in ("HOMENOTE", "BOBNOTE", "EXTRA", "OPTDATA", "VARSEEN", "MINE"):
+        assert seen in out, out
+    assert not (o.extra / "g").exists() and not (o.data / "g").exists()
     default = env_for(_state("default", p.mine))
     assert isinstance(default, LocalExecEnv)
     out = await _out(default, show)
-    for seen in ("HOMENOTE", "SERVERENV", "ROOTDATA", "SYSTEM"):
+    for seen in ("BOBKEY", "SERVERENV", "ROOTDATA", "HOMENOTE"):
         assert seen in out, out
-    assert "SSHKEY" not in out  # the sandbox's own credential stores
-    assert (extra / "g").exists()
+    # The sandbox's own credential stores and the operator's denyRead.
+    assert "SSHKEY" not in out and "DENIED" not in out
+    assert (o.extra / "g").exists()
+
+
+@needs_bwrap
+async def test_a_workspace_inside_the_server_directory_stays_the_tenants(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    server = tmp_path / "server"
+    mine = server / "tenants" / "acme"
+    (mine / "src").mkdir(parents=True)
+    (mine / "src" / "f").write_text("MYFILE")
+    (server / ".env").write_text("SERVERENV")
+    monkeypatch.chdir(server)
+    fence = TenantFence(home=str(tmp_path / "home"), workspaces={"acme": str(mine)})
+    tenant = local_env_for(SandboxSettings(enabled=True), fence)(_state("acme", mine))
+    assert isinstance(tenant, LocalExecEnv)
+    out = await _out(tenant, f"cat {server}/.env; cat src/f; echo NEW > src/g && cat src/g")
+    assert "SERVERENV" not in out and "MYFILE" in out and "NEW" in out, out
+    assert await tenant.read_bytes("src/f") == b"MYFILE"
+    with pytest.raises(PermissionError, match="server's own directories"):
+        await tenant.read_bytes(str(server / ".env"))

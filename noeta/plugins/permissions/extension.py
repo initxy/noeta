@@ -146,11 +146,11 @@ class Permissions(Extension):
       answers this extension's asks instead of a person; recorded with
       ``resolver="can_use_tool"``.
     * ``tenant_workspaces`` (tenant -> workspace), ``store_files``,
-      ``spill_root`` and ``server_dirs`` (the default tenant's workspace) —
-      what the file tools of a task of a tenant other than the default one
-      may reach is an allow list (:mod:`noeta.toolkit.tenant_fence`): its
-      workspace, its own places in noeta and, to read, the machine's
-      programs and settings; no rule, mode or answer lifts it, and
+      ``spill_root``, ``server_dirs`` (the default tenant's workspace) and
+      ``deny_read`` (the operator's ``denyRead``) — the file tools of a task
+      of a tenant other than the default one never reach the protected set
+      of :mod:`noeta.toolkit.tenant_fence` and write only in its workspace
+      and its own places; no rule, mode or answer lifts it, and
       ``additional_directories`` are not its. Such a task keeps its plan
       files under ``plans_dir/<tenant>``.
     * ``tenant_refusal`` — why this worker may not run tools of tenants
@@ -197,6 +197,7 @@ class Permissions(Extension):
         store_files: Sequence[str] = (),
         spill_root: str | None = None,
         server_dirs: Sequence[str] = (),
+        deny_read: Sequence[str] = (),
         tenant_refusal: str | None = None,
     ) -> None:
         self.tenant_refusal = tenant_refusal
@@ -247,7 +248,8 @@ class Permissions(Extension):
         self.fence = TenantFence(spill_root=spill_root, plans_dir=self.plans_dir,
                                  store_files=tuple(store_files),
                                  workspaces=dict(tenant_workspaces or {}),
-                                 server_dirs=tuple(server_dirs))
+                                 server_dirs=tuple(server_dirs),
+                                 deny_read=tuple(deny_read))
         self._check = RuleCheck(
             allow_rules=self.allow_rules, deny_rules=self.deny_rules, ask_rules=self.ask_rules,
             additional_directories=self.additional_directories, risk=self.risk,

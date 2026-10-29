@@ -1,7 +1,9 @@
 """The tenant fence at the gate: a task of a tenant other than the default
-one never reaches noeta's home, the store's files, ``/etc/noeta``, ``/proc``
-or another tenant's workspace with a file tool — not by rule, mode or
-approval — while the default tenant's tasks behave as before."""
+one never reaches noeta's home, the store's files, ``/etc/noeta``, ``/proc``,
+another tenant's workspace, the server's directories, credential stores or
+the operator's ``denyRead`` with a file tool, and writes only its own places
+— not by rule, mode or approval — while the default tenant's tasks behave as
+before."""
 
 from __future__ import annotations
 
@@ -240,19 +242,28 @@ def test_a_started_workflows_script_is_kept_where_its_task_may_read_it(
 
 @pytest.fixture
 def operator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
-    """The operator's credentials in a home directory, the server's own
-    directory (its working directory, with a ``.env``), an additional
-    directory of the operator's settings and a shared file elsewhere."""
+    """The operator's credentials in its home directory and another
+    account's in a directory of homes, the server's own directory (its
+    working directory, with a ``.env``), an additional directory of the
+    operator's settings, a place its ``denyRead`` names and shared files
+    elsewhere (an ``/opt``-like and a ``/var``-like directory)."""
+    from noeta.toolkit import tenant_fence
+
     home = tmp_path / "userhome"
-    for path in (home / ".ssh" / "id_rsa", home / ".aws" / "credentials",
+    homes = tmp_path / "homes"
+    for path in (home / ".ssh" / "id_rsa", home / ".aws" / "credentials", home / "notes.txt",
+                 homes / "bob" / ".config" / "gh" / "hosts.yml",
                  tmp_path / "server" / ".env", tmp_path / "extra" / "f",
-                 tmp_path / "shared" / "f.txt"):
+                 tmp_path / "denied" / "f", tmp_path / "shared" / "f.txt",
+                 tmp_path / "opt" / "tool" / "config", tmp_path / "var" / "log" / "syslog"):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("secret")
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(tenant_fence, "HOME_ROOTS", (str(homes),))
     monkeypatch.chdir(tmp_path / "server")
-    return {"home": home, "server": tmp_path / "server", "extra": tmp_path / "extra",
-            "shared": tmp_path / "shared"}
+    return {"home": home, "bob": homes / "bob", "server": tmp_path / "server",
+            "extra": tmp_path / "extra", "denied": tmp_path / "denied",
+            "shared": tmp_path / "shared", "opt": tmp_path / "opt", "var": tmp_path / "var"}
 
 
 def _reach(places: dict[str, Path],
@@ -260,16 +271,22 @@ def _reach(places: dict[str, Path],
     from noeta.toolkit.paths import tenant_temp_dir
 
     return [
+        # The protected set, and writes outside the tenant's own places.
         ("Read", {"file_path": "~/.ssh/id_rsa"}),
         ("Read", {"file_path": str(operator["home"] / ".aws" / "credentials")}),
+        ("Read", {"file_path": str(operator["bob"] / ".config" / "gh" / "hosts.yml")}),
         ("Read", {"file_path": str(operator["server"] / ".env")}),
-        ("Read", {"file_path": str(operator["extra"] / "f")}),
+        ("Read", {"file_path": str(operator["denied"] / "f")}),
         ("Write", {"file_path": str(operator["extra"] / "g")}),
-        ("Read", {"file_path": str(operator["shared"] / "f.txt")}),
+        ("Write", {"file_path": str(operator["shared"] / "new.txt")}),
         ("Edit", {"file_path": "/usr/bin/env"}),
         ("Write", {"file_path": "/etc/hosts"}),
-        # What stays open: the machine's programs and settings to read, the
-        # workspace, the tenant's own temporary directory.
+        # What stays open: reading anything else and writing the workspace.
+        ("Read", {"file_path": str(operator["home"] / "notes.txt")}),
+        ("Read", {"file_path": str(operator["extra"] / "f")}),
+        ("Read", {"file_path": str(operator["shared"] / "f.txt")}),
+        ("Read", {"file_path": str(operator["opt"] / "tool" / "config")}),
+        ("Read", {"file_path": str(operator["var"] / "log" / "syslog")}),
         ("Read", {"file_path": "/usr/bin/env"}),
         ("Read", {"file_path": "/etc/hosts"}),
         ("Read", {"file_path": "README"}),
@@ -278,8 +295,11 @@ def _reach(places: dict[str, Path],
     ]
 
 
+_REFUSED = 9
+
+
 @pytest.mark.parametrize("how", ["bypass", "approved"])
-async def test_a_tenant_reaches_only_its_workspace_own_places_and_system_files(
+async def test_a_tenant_reads_all_but_the_protected_set_and_writes_only_its_places(
         store: SqliteStore, places: dict[str, Path], operator: dict[str, Path],
         how: str) -> None:
     async def yes(_name: str, _input: dict[str, Any]) -> bool:
@@ -288,19 +308,21 @@ async def test_a_tenant_reaches_only_its_workspace_own_places_and_system_files(
     kw: dict[str, Any] = {"mode": "bypassPermissions", "allow": ["Read(//**)", "Edit(//**)"]} \
         if how == "bypass" else {"mode": "default", "can_use_tool": yes}
     calls = _reach(places, operator)
-    evs, tools = await run(store, places, calls,
+    evs, tools = await run(store, places, calls, deny_read=[str(operator["denied"])],
                            additional_directories=[str(operator["extra"])], **kw)
     results = outcomes(evs)
-    assert sorted(err for _, err in results) == [False] * 5 + [True] * 8, results
+    refused = [text for text, err in results if err]
+    assert len(refused) == _REFUSED and len(results) == len(calls), refused
     assert all("tenant 'acme' may not" in text for text, err in results if err)
     ran = [r["file_path"] for t in ("Read", "Write", "Edit") for r in tools[t].runs]
-    assert sorted(ran) == sorted(str(c[1]["file_path"]) for c in calls[8:])
+    assert sorted(ran) == sorted(str(c[1]["file_path"]) for c in calls[_REFUSED:])
 
 
 async def test_the_default_tenant_still_reaches_the_operators_files(
         store: SqliteStore, places: dict[str, Path], operator: dict[str, Path]) -> None:
     calls = _reach(places, operator)[:6]
     evs, _tools = await run(store, places, calls, tenant="default", mode="bypassPermissions",
+                            deny_read=[str(operator["denied"])],
                             additional_directories=[str(operator["extra"])])
     assert [err for _, err in outcomes(evs)] == [False] * 6, outcomes(evs)
 
@@ -325,16 +347,34 @@ async def test_the_operators_additional_directories_are_not_a_tenants(
     assert asked == {"default": False, "acme": True}
 
 
-def test_the_server_directories_and_homes_are_not_system_files(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    fence = TenantFence(home=str(tmp_path / "h"), server_dirs=("/usr/share/doc",))
+def test_the_protected_set_beyond_noetas_places(tmp_path: Path,
+                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    server = tmp_path / "srv"
+    fence = TenantFence(home=str(tmp_path / "h"), server_dirs=(str(server),),
+                        workspaces={"acme": str(server / "tenants" / "acme")},
+                        deny_read=(str(tmp_path / "secrets"), "*/.env.production"))
     kw: dict[str, Any] = {"tenant": "acme", "task_id": "t"}
-    assert fence.refusal("/usr/bin/env", **kw) is None
-    assert fence.refusal("/usr/share/doc/README", **kw) is not None
-    monkeypatch.setenv("HOME", "/usr/local/someone")
-    assert fence.refusal("/usr/local/someone/.ssh/id_rsa", **kw) is not None
-    assert fence.refusal("/usr/local/bin/tool", **kw) is None
-    for elsewhere in ("/opt/tool/config", "/srv/data", "/var/log/syslog", "/tmp/f"):
-        assert fence.refusal(elsewhere, **kw) is not None
-    # A tenant whose workspace this worker does not know reaches none.
-    assert fence.refusal(str(tmp_path / "anywhere"), **kw) is not None
+    monkeypatch.setenv("HOME", str(tmp_path / "someone"))
+    refused = [server / ".env", server / "tenants" / "other.txt",
+               tmp_path / "someone" / ".ssh" / "id_rsa", tmp_path / "someone" / ".netrc",
+               tmp_path / "someone" / ".docker" / "config.json",
+               tmp_path / "secrets" / "k", tmp_path / "app" / ".env.production"]
+    for path in refused:
+        assert fence.refusal(str(path), **kw) is not None, path
+    # A server directory holding the workspaces does not hide them; what the
+    # protected set names inside the workspace stays protected.
+    mine = server / "tenants" / "acme"
+    assert fence.refusal(str(mine / "src" / "app.py"), **kw) is None
+    assert fence.refusal(str(mine / "src" / "app.py"), write=True, **kw) is None
+    assert fence.refusal(str(mine / ".env.production"), **kw) is not None
+    for readable in ("/usr/bin/env", "/opt/tool/config", "/srv/data", "/var/log/syslog",
+                     "/tmp/f", str(tmp_path / "someone" / "notes.txt")):
+        assert fence.refusal(readable, **kw) is None, readable
+        assert fence.refusal(readable, write=True, **kw) is not None, readable
+    # A server directory holding the machine's programs is not hidden.
+    assert TenantFence(server_dirs=("/usr",)).refusal("/usr/bin/env", **kw) is None
+    # A tenant whose workspace this worker does not know reads, but writes
+    # nowhere outside its own places in noeta.
+    unknown = {**kw, "tenant": "globex"}
+    assert fence.refusal(str(tmp_path / "anywhere"), **unknown) is None
+    assert fence.refusal(str(tmp_path / "anywhere"), write=True, **unknown) is not None

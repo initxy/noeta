@@ -802,20 +802,21 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - `Read` of a PDF by a tenant's task makes its copy and rendered pages in the tenant's own
   temporary directory. Before, they went to a fresh directory in the worker's shared temp
   directory, readable by other tenants' sandboxed commands while the conversion ran.
-- What a non-default tenant's file tools may reach is an allow list
-  (`noeta.toolkit.tenant_fence`): its workspace, its own corners of noeta's places, its
-  temporary directory and, to read, `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc` (but
-  `/etc/noeta`) and `/nix/store`, never a home directory or the server's own directories
-  in them; everything else is refused before any rule, mode or approval. The operator's
-  `additionalDirectories` are no longer a tenant's working directories. Before, the fence
-  was a deny list, so a tenant could approve its own `Read ~/.ssh/id_rsa` or
-  `Read <server dir>/.env` and write in the operator's additional directories.
-- Under the sandbox, a non-default tenant's commands may not read any home directory
-  (`/home`, `/root`, `/Users`, the worker's `~`, each login account's) or the server's own
-  directories (its working directory and `--allow-root` paths), but for the tenant's
-  workspace and its own corners, nor write the operator's `allowWrite` /
-  `additionalDirectories` (`TenantFence.confine`, `TenantFence(server_dirs=)`). Before, they
-  read everything but noeta's places and the sandbox's credential stores.
+- A non-default tenant's file tools never reach the server's own directories (the
+  directory `noeta serve` / `noeta worker` started in and `--allow-root` paths), the
+  sandbox's credential stores (`~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.netrc`, ...) in
+  every home directory, or the operator's sandbox `denyRead`, besides the places they were
+  already fenced from; they write only in the tenant's workspace, its own corners of
+  noeta's places and its temporary directory (`noeta.toolkit.tenant_fence`;
+  `Permissions(server_dirs=, deny_read=)`). The rest of the machine stays readable. No rule,
+  mode or approval lifts it, and the operator's `additionalDirectories` are no longer a
+  tenant's working directories. Before, a tenant could approve its own
+  `Read ~/.ssh/id_rsa`, `Read <server dir>/.env` or a write anywhere the OS user could.
+- Under the sandbox, a non-default tenant's commands cannot read those places either (but
+  a workspace inside a server directory), and write only where its file tools may: the
+  operator's `allowWrite` / `allowRead` / `additionalDirectories` do not apply to them
+  (`TenantFence.confine`). Before, they read the server's directories and other accounts'
+  credential stores.
 - An MCP prompt command (`/mcp__<server>__<prompt>`) runs in the connection partition of the
   request that runs it: listed prompts are kept per partition. Before, they were kept by
   command name only, so after another tenant listed the same command, a tenant's
