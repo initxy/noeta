@@ -96,11 +96,15 @@ def strip_commands(text: str, marker: str = DISABLED_MARKER) -> str:
     return text
 
 
-async def _allowed(view: TaskView, use: ToolUse, approve_rules: Sequence[str]) -> str | None:
-    """``None`` when the task's checks let ``use`` run without asking anyone,
-    else why not."""
+async def refusal(view: TaskView, use: ToolUse, approve_rules: Sequence[str] = (), *,
+                  skip: str | None = None) -> str | None:
+    """``None`` when the task's checks (every extension's but ``skip``'s)
+    let ``use`` run without asking anyone, else why not: what would ask is
+    refused, as in ``dontAsk`` mode."""
     verdicts = []
     for ext in view.extensions:
+        if ext.name == skip:
+            continue
         try:
             verdict = await ext.before_tool(view, use)
         except Exception as exc:  # noqa: BLE001 — a failing check refuses
@@ -168,7 +172,7 @@ async def run_inline_commands(view: TaskView, text: str, *, skill: str, call_id:
         return text
     for i, f in enumerate(found):
         use = ToolUse(id=f"{call_id}.cmd{i}", name="Bash", input={"command": f.command})
-        why = await _allowed(view, use, approve_rules)
+        why = await refusal(view, use, approve_rules)
         if why is not None:
             raise InlineCommandError(
                 f"the {what} {skill!r} runs `{f.command.strip()}` while it loads, and that "

@@ -17,7 +17,7 @@ import httpx
 from noeta.core.events import Cancel, ExtensionRecorded
 from noeta.core.extension import TaskView
 from noeta.core.tool import Tool, ToolContext, ToolOutput
-from noeta.core.types import Message, ToolUse, user
+from noeta.core.types import Message, Text, ToolUse, user
 from noeta.plugins.hooks.config import SUBJECT, TOOL_EVENTS, HookCommand, Matcher
 from noeta.plugins.hooks.runners import (
     HookResult,
@@ -28,6 +28,7 @@ from noeta.plugins.hooks.runners import (
     run_mcp_tool,
     run_prompt,
 )
+from noeta.toolkit.inline_commands import refusal
 from noeta.toolkit.permission_rules import RuleContext, match
 
 log = logging.getLogger("noeta.hooks")
@@ -163,13 +164,21 @@ def _mcp_tool(view: TaskView, hook: HookCommand) -> Tool | None:
     return view.find_tool(name) or view.find_tool(re.sub(r"[^A-Za-z0-9_-]", "_", name))
 
 
-def _tool_runner(view: TaskView, kind: str) -> RunTool:
+def _tool_runner(view: TaskView, kind: str, *, checked: bool = False) -> RunTool:
     """Runs a tool for a hook, outside the model's calls: nothing it would
-    record is kept."""
+    record is kept. ``checked``: the task's permission checks (not its
+    hooks) run first, and what would ask is refused, as Claude Code runs an
+    agent hook in ``dontAsk`` mode."""
 
     async def run(tool: Tool, input: dict[str, Any], n: int) -> ToolOutput:
         if view.env is None:
             raise RuntimeError("this task has no execution environment")
+        if checked:
+            why = await refusal(view, ToolUse(id=f"hook-{kind}-{n}", name=tool.name,
+                                              input=input), skip=NAME)
+            if why is not None:
+                return ToolOutput(content=[Text(text=f"{tool.name} was not run: {why}")],
+                                  is_error=True)
         ctx = ToolContext(task_id=view.task_id, call_id=f"hook-{kind}-{n}", env=view.env,
                           state=dict(view.state.ext), record=lambda *_a: None)
         return await tool.run(input, ctx)
@@ -261,8 +270,8 @@ class Dispatcher:
                 return await run_prompt(hook, payload, view.complete, view.model, transcript)
             if hook.type == "agent":
                 return await run_agent(hook, payload, view.complete, view.model,
-                                       _read_only_tools(view), _tool_runner(view, "agent"),
-                                       transcript)
+                                       _read_only_tools(view),
+                                       _tool_runner(view, "agent", checked=True), transcript)
             if hook.type == "mcp_tool":
                 return await run_mcp_tool(hook, payload, _mcp_tool(view, hook),
                                           _tool_runner(view, "mcp"))

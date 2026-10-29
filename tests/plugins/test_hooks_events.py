@@ -559,6 +559,34 @@ async def test_agent_hook_looks_with_read_only_tools_then_answers(tmp_path: Path
     assert len(s.provider.requests) == 5
 
 
+class _Guard(Extension):
+    """Asks before reading ``b.txt``, refuses ``a.txt``."""
+
+    name = "guard"
+
+    async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
+        path = str(call.input.get("file_path", ""))
+        if path.endswith("b.txt"):
+            return Ask(prompt="read b.txt?")
+        if path.endswith("a.txt"):
+            return Deny(reason="a.txt is off limits")
+        return None
+
+
+async def test_agent_hook_tools_go_through_the_permission_checks(tmp_path: Path) -> None:
+    hooks = {"Stop": [{"hooks": [{"type": "agent", "prompt": "Was b.txt read?"}]}]}
+    verdicts = [
+        reply("done"),
+        reply("", ("Read", {"file_path": "b.txt"}), ("Read", {"file_path": "a.txt"})),
+        reply("", ("StructuredOutput", {"ok": True, "reason": "fine"})),
+    ]
+    s = await Setup(tmp_path, hooks, verdicts, extensions=(_Guard(),)).start()
+    asked, denied = s.provider.requests[2].messages[-1].content
+    assert isinstance(asked, ToolResult) and asked.is_error and "other" not in asked.text
+    assert isinstance(denied, ToolResult) and denied.is_error and "hello" not in denied.text
+    assert "a.txt is off limits" in denied.text
+
+
 async def test_agent_hook_that_never_answers_fails_open(tmp_path: Path) -> None:
     hooks = {"Stop": [{"hooks": [{"type": "agent", "prompt": "check"}]}]}
     s = await Setup(tmp_path, hooks, [reply("done"), reply("I think it is fine")]).start()
