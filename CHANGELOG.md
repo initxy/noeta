@@ -761,6 +761,11 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   temporary directory. Before, they could write anywhere in it, its background jobs' logs
   and state files (`jobs/w<pid>/*.output`, `.alive`, `.cwd`) and its commands' sandbox files
   included.
+- `noeta plugin add` takes only a full commit id (40 hex digits, or 64 for a SHA-256
+  repository) and only `https://`, `ssh://`, `user@host:path` or a local `file://` source,
+  for a plugin and for a marketplace and its entries. Before, a 7-character prefix (which a
+  commit pushed later could share) and `http://` or `git://` (which anyone on the way could
+  answer with other code) were accepted.
 - **A tenant's task may not run in a server directory inside its workspace.** Its `cwd`
   would be its sandboxed commands' writable root, so they could read and change the
   server's files there; the HTTP guard now refuses such a `cwd` as it refuses another

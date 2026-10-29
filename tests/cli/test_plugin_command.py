@@ -75,7 +75,7 @@ async def test_a_git_plugin_installs_at_its_commit_and_loads(home: Path, tmp_pat
     with pytest.raises(PluginInstallError, match="needs @<commit>"):
         install(url)
     with pytest.raises(SystemExit, match="0"):
-        main.main(["plugin", "add", f"{url}@{first[:10]}"])
+        main.main(["plugin", "add", f"{url}@{first}"])
     assert "installed pinned-plugin" in capsys.readouterr().out
     installed = home / "plugins" / "pinned-plugin"
     assert (installed / "__init__.py").read_text() == PLUGIN and not (installed / ".git").exists()
@@ -93,6 +93,24 @@ async def test_a_git_plugin_installs_at_its_commit_and_loads(home: Path, tmp_pat
         main.main(["plugin", "remove", "pinned-plugin"])
     assert done.value.code == 0 and not installed.exists()
     assert json.loads((home / "plugin-sources.json").read_text()) == {}
+
+
+def test_a_pin_is_a_full_commit_over_an_encrypted_transport(home: Path,
+                                                            tmp_path: Path) -> None:
+    src = tmp_path / "short-pinned"
+    src.mkdir()
+    first = repo(src, {"__init__.py": PLUGIN})
+    # A short id could match a commit made later to collide with it.
+    for short in (first[:7], first[:12], first[:39]):
+        with pytest.raises(PluginInstallError, match="full commit id"):
+            install(f"file://{src}@{short}")
+    with pytest.raises(PluginInstallError, match="full commit id"):
+        install(f"file://{src}", commit=first[:10])
+    # Plain-text transports: anyone on the way could hand over other code.
+    for url in ("http://example.invalid/p.git", "git://example.invalid/p.git"):
+        with pytest.raises(PluginInstallError, match="not a git URL"):
+            install(f"{url}@{first}")
+    assert not (home / "plugins").exists()
 
 
 def test_a_local_file_is_copied(home: Path, tmp_path: Path) -> None:
