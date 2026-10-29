@@ -666,6 +666,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Security
 
+- **A tenant's task may not run in a server directory inside its workspace.** Its `cwd`
+  would be its sandboxed commands' writable root, so they could read and change the
+  server's files there; the HTTP guard now refuses such a `cwd` as it refuses another
+  tenant's workspace.
 - **noeta's home and the sqlite store are owner-only when noeta creates them.** `~/.noeta`
   (`NOETA_HOME`) was made 0775 and the store's database with its `-wal` and `-shm` files
   0644 under the usual umask, though the store holds every conversation. noeta now makes its

@@ -71,6 +71,9 @@ class GuardedClient:
         self._tenant = tenant
         self._others = [os.path.realpath(w) for w in others]
         self._fill = workspace is not None
+        # The server's own directories; a tenant's cwd never lies in one
+        # inside its workspace (one holding the workspace is its parent).
+        self._servers = [os.path.realpath(d) for d in (cwd, *roots) if d] if self._fill else []
         if workspace is not None:
             cwd, roots = workspace, ()
         self._cwd = os.path.realpath(cwd) if cwd else None
@@ -95,8 +98,9 @@ class GuardedClient:
 
     def check_cwd(self, cwd: Any) -> Any:
         """``cwd`` made absolute; raises :class:`Refused` when it lies
-        outside the server's directories or the tenant's workspace, or in
-        another tenant's."""
+        outside the server's directories or the tenant's workspace, or for a
+        tenant in another tenant's workspace or in a server directory inside
+        its own."""
         self._need_workspace()
         if not cwd or self._cwd is None:
             return cwd
@@ -110,6 +114,8 @@ class GuardedClient:
         mine = max((len(r) for r in self._roots if self._fill and _within(real, r)), default=-1)
         if any(_within(real, w) and len(w) > mine for w in self._others):
             raise Refused(f"cwd {cwd!r} is in another tenant's workspace")
+        if any(_within(real, d) and len(d) > mine for d in self._servers):
+            raise Refused(f"cwd {cwd!r} is in the server's own directories")
         return real
 
     def check_config(self, config: Any, allowed: Sequence[str] = REQUEST_CONFIG) -> Any:

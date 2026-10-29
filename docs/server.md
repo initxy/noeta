@@ -163,7 +163,8 @@ protected set:
 - other tenants' workspaces;
 - the server's own directories (the default tenant's workspace: the directory `noeta serve`
   or `noeta worker` started in, `--allow-root` and `--server-dir` paths and `[server] dirs`,
-  with the server's `.env`), but a tenant's workspace inside one;
+  with the server's `.env`), but a tenant's workspace inside one; a tenant's task may not
+  run in a server directory that lies inside its workspace;
 - the sandbox's credential stores in every home directory (the worker's `~`, each
   account's, each directory in `/home` and `/Users`): `.ssh`, `.aws`, `.config/gh`,
   `.netrc` and the rest of `DEFAULT_DENY_READ` in `noeta/toolkit/sandbox.py`;

@@ -189,6 +189,30 @@ async def test_a_tenants_tasks_run_in_its_workspace(tmp_path: Path) -> None:
     await store.close()
 
 
+async def test_a_server_directory_inside_a_workspace_is_not_a_tenants_cwd(
+        tmp_path: Path) -> None:
+    """A server directory (its cwd or an --allow-root) lying inside a
+    tenant's workspace is the server's: the tenant may not run a task there,
+    where its commands would get it as their working directory."""
+    from noeta.core.client import Client
+
+    work = tmp_path / "work"
+    served, extra = work / "server", work / "extra"
+    for d in (served, extra, work / "own"):
+        d.mkdir(parents=True)
+    store = SqliteStore(str(tmp_path / "t.db"))
+    api = create_app(Client(store), token="tok-default", tokens=TOKENS, cwd=str(served),
+                     roots=[str(extra)], workspaces={"a": str(work)})
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api),
+                                 base_url="http://x", headers=_headers("tok-a")) as a:
+        for cwd in (str(served), str(served / "."), "extra", str(extra)):
+            got = await a.post("/tasks", json={"agent": "main", "config": {"cwd": cwd}})
+            assert got.status_code == 403 and "server's own" in got.json()["error"], cwd
+        got = await a.post("/tasks", json={"agent": "main", "config": {"cwd": "own"}})
+        assert got.status_code == 201
+    await store.close()
+
+
 async def test_a_tenant_creates_tasks_only_on_its_queues(tmp_path: Path) -> None:
     from noeta.core.client import Client
 

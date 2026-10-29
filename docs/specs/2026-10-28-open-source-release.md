@@ -317,9 +317,9 @@ servers and runs on many machines.
   home's credential stores are listed whether or not they exist yet (the plan is remade per
   command and mounts only existing ones). Rejected: tmpfs over whole home directories for
   credential stores made later (D38 keeps homes readable); a start-up warning for a worker
-  in `/` (documented instead). Known gap: a tenant task whose `cwd` is itself a server
-  directory inside its workspace has that directory as its writable root, so its commands
-  still see it (file tools are refused).
+  in `/` (documented instead). A tenant's task may not have its `cwd` in a server directory
+  inside its workspace (the HTTP guard refuses it, as it refuses another tenant's
+  workspace), since that directory would be its commands' writable root.
 
 ## Plan
 
