@@ -9,7 +9,8 @@ tenant's file tools and those files; a tenant answers its own approval
 prompts, so nothing it can approve may lift it. Inside the fenced places a
 task keeps its own corners: its spilled tool outputs and its tree's
 transcripts, its tenant's plan files, the project directory (memory) of its
-working directory, and read access to the operator's skills.
+working directory, and read access to the operator's skills and saved
+workflows.
 
 :meth:`TenantFence.refusal` is the check for in-process file access;
 :meth:`TenantFence.confine` makes the same places unreadable to the task's
@@ -37,7 +38,7 @@ __all__ = ["SYSTEM_PATHS", "TenantFence", "store_files"]
 #: environment, command line and open files.
 SYSTEM_PATHS = ("/etc/noeta", "/proc")
 #: Inside noeta's home, what a tenant's task may read but never write.
-_HOME_READABLE = ("skills",)
+_HOME_READABLE = ("skills", "workflows")
 #: The files sqlite keeps beside a database.
 _SQLITE_SIDE_FILES = ("", "-wal", "-shm", "-journal")
 
