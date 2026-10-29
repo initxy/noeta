@@ -26,6 +26,7 @@ from noeta.host.pending import pending_tree
 from noeta.host.usage import tree_usage
 from noeta.plugins.subtasks import SubagentSpec, Subtasks, texts
 from noeta.plugins.subtasks.tool import (
+    TRANSCRIPT_KEY,
     SendMessageTool,
     agent_message,
     agent_schema,
@@ -545,6 +546,53 @@ async def test_a_background_agent_keeps_its_transcript_file(store: SqliteStore,
     notice = p.requests[3].messages[-2].text
     assert (f"<tool-use-id>{p.requests[1].messages[-2].tool_uses[0].id}</tool-use-id>\n"
             f"<output-file>{path}</output-file>\n<status>completed</status>") in notice
+
+
+class _CountingEnv(LocalExecEnv):
+    """Counts whole-file writes per path."""
+
+    writes: dict[str, int] = {}
+
+    async def write_bytes(self, path: str, data: bytes) -> None:
+        self.writes[path] = self.writes.get(path, 0) + 1
+        await super().write_bytes(path, data)
+
+
+async def test_a_transcript_is_appended_to_not_rewritten(store: SqliteStore,
+                                                          tmp_path: Path) -> None:
+    p = ScriptedProvider([reply("", agent("count to 3")), reply("launched"),
+                          reply("it says 1 2 3"), reply("ok")])
+    c = ScriptedProvider([reply("", ("Probe", {})), handback("1 2 3")])
+    spill = tmp_path / "spill"
+    _CountingEnv.writes = {}
+    rt = Runtime(store=store, agents={"main": parent(), "worker": worker()},
+                 provider_for=lambda m: {"p": p, "c": c}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: _CountingEnv(str(tmp_path)), spill_root=str(spill))
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    path = spill / tid / "tasks" / f"{child.task_id}.output"
+    lines = [json.loads(line) for line in path.read_text().splitlines()]
+    called = [line["message"]["content"][0] for line in lines if line["type"] == "assistant"]
+    assert [b["name"] for b in called] == ["Probe", "SubagentHandback"]
+    # Written whole once; every later message was appended.
+    assert _CountingEnv.writes[str(path)] == 1
+
+
+async def test_transcript_progress_is_forgotten_past_its_bound(tmp_path: Path) -> None:
+    from noeta.core.loop.state import TaskState
+    from noeta.plugins.subtasks import extension as ext_module
+
+    subtasks = Subtasks(ROSTER)
+    env = LocalExecEnv(str(tmp_path))
+    for i in range(ext_module.TRANSCRIBED_KEEP + 10):
+        # Tasks another worker took on: none of them ends here.
+        state = TaskState(task_id=f"t{i}", config={TRANSCRIPT_KEY: str(tmp_path)})
+        await subtasks._transcribe(TaskView(state=state, env=env), ended=False)
+    assert len(subtasks._transcribed) == ext_module.TRANSCRIBED_KEEP
+    assert "t0" not in subtasks._transcribed and f"t{ext_module.TRANSCRIBED_KEEP}" in \
+        subtasks._transcribed
 
 
 async def test_an_agent_type_matches_loosely_when_only_one_fits(store: SqliteStore) -> None:
