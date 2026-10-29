@@ -872,6 +872,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- The git noeta runs itself for worktrees (`EnterWorktree`, `isolation: "worktree"`) runs no
+  hook and no `core.fsmonitor` command (`-c core.hooksPath=/dev/null -c core.fsmonitor=`), so
+  what a command planted in the repository does not run as the worker; the sandbox's lookup of
+  the hooks directory runs no fsmonitor either.
 - **A sandboxed command can no longer point git at other config or hooks.** It could write
   `.git/commondir` (git then takes config and hooks from the directory it names) or a
   submodule's git directory under `.git/modules/`, and the next unsandboxed `git commit` or

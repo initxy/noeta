@@ -43,6 +43,24 @@ async def test_commits_left_on_the_worktree_branch_after_switching_away_count(
     assert lost == "2 commit(s) the starting branch lacks"
 
 
+async def test_noetas_own_git_runs_no_hook_and_no_fsmonitor(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    base = _git(repo, "rev-parse", "HEAD")
+    hook = repo / ".git" / "hooks" / "post-checkout"
+    hook.write_text(f"#!/bin/sh\ntouch {tmp_path}/hook-ran\n")
+    hook.chmod(0o755)
+    _git(repo, "config", "core.fsmonitor", f"touch {tmp_path}/fsmonitor-ran; false")
+    env = LocalExecEnv(str(repo))
+    tree = repo / ".noeta" / "worktrees" / "w"
+    assert await add_worktree(env, str(repo), str(tree), "worktree-w", "HEAD") == ""
+    assert await unsaved_work(env, str(tree), base, "worktree-w") == ("", "")
+    assert not (tmp_path / "hook-ran").exists()
+    assert not (tmp_path / "fsmonitor-ran").exists()
+
+
 class _Remote:
     """An env on another machine: its paths name its own filesystem."""
 

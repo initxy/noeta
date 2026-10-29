@@ -1,5 +1,5 @@
 """The commands tools run besides ``Bash``'s — a skill's script, an inline
-skill command, ``git`` (and the hooks it runs) for a worktree, a rewind's
+skill command, ``git`` (and the filters it runs) for a worktree, a rewind's
 delete — run inside the task's sandbox when its tenant is not the default
 one, so they cannot read what that tenant's ``Bash`` cannot."""
 
@@ -61,19 +61,29 @@ async def test_a_command_runs_in_the_tenants_sandbox(tmp_path: Path) -> None:
     assert b"TOKENS" not in (await run_in_tenant_sandbox(tenant, argv)).stdout
 
 
-async def test_a_git_hook_runs_in_the_tenants_sandbox(tmp_path: Path) -> None:
+async def test_a_git_filter_runs_in_the_tenants_sandbox(tmp_path: Path) -> None:
     default, tenant, home, ws = _envs(tmp_path)
     run = {"cwd": ws, "check": True, "capture_output": True}
+    (ws / "a.txt").write_text("a\n")
+    (ws / ".gitattributes").write_text("a.txt filter=probe\n")
     subprocess.run(["git", "init", "-q"], **run)  # type: ignore[call-overload]
+    subprocess.run(["git", "add", "-A"], **run)  # type: ignore[call-overload]
     subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q",
-                    "--allow-empty", "-m", "x"], **run)  # type: ignore[call-overload]
+                    "-m", "x"], **run)  # type: ignore[call-overload]
+    subprocess.run(["git", "config", "filter.probe.smudge",  # type: ignore[call-overload]
+                    f"cat {home / 'tokens.json'} > {ws / 'seen.txt'} 2>&1; cat"], **run)
     hook = ws / ".git" / "hooks" / "post-checkout"
-    hook.write_text(f"#!/bin/sh\ncat {home / 'tokens.json'} > {ws / 'seen.txt'} 2>&1\n")
+    hook.write_text(f"#!/bin/sh\ntouch {ws / 'hook-ran'}\n")
     hook.chmod(0o755)
-    await git(tenant, ["checkout", "-q", "-b", "one"], str(ws))
+    (ws / "a.txt").unlink()
+    await git(tenant, ["checkout", "-q", "--", "a.txt"], str(ws))
     assert "TOKENS" not in (ws / "seen.txt").read_text()
-    await git(default, ["checkout", "-q", "-b", "two"], str(ws))
+    (ws / "a.txt").unlink()
+    await git(default, ["checkout", "-q", "--", "a.txt"], str(ws))
     assert "TOKENS" in (ws / "seen.txt").read_text()
+    # noeta's own git runs no hook at all.
+    await git(default, ["checkout", "-q", "-b", "two"], str(ws))
+    assert not (ws / "hook-ran").exists()
 
 
 async def test_a_skill_script_runs_in_the_tenants_sandbox(tmp_path: Path) -> None:

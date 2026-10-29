@@ -145,7 +145,8 @@ def _hooks_dir(project: str) -> str | None:
     if not os.path.lexists(os.path.join(project, ".git")):
         return None
     try:
-        done = subprocess.run(["git", "rev-parse", "--git-path", "hooks"], cwd=project,
+        done = subprocess.run(["git", "-c", "core.fsmonitor=", "rev-parse", "--git-path",
+                               "hooks"], cwd=project,
                               capture_output=True, timeout=10, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return None

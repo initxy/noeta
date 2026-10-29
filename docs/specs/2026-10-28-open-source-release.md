@@ -523,6 +523,10 @@ servers and runs on many machines.
   cannot (git dies on an empty or directory `commondir`, also on the host while the mount
   point exists), so on Linux the sandbox removes one the command made when the command ends.
   A background command's planted `commondir` lives until it ends: a known gap.
+- D162 (`os-fix-r10sec`) Every git noeta runs itself passes `-c core.hooksPath=/dev/null
+  -c core.fsmonitor=` (`noeta.toolkit.worktrees.GIT_NO_HOOKS`): a worktree's
+  `post-checkout` hook no longer runs (Claude Code's does). The memory plugin's
+  `rev-parse` (another branch's file) runs no hook or fsmonitor by itself and is left.
 
 ## Plan
 
