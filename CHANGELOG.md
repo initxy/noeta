@@ -722,3 +722,6 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - A started workflow's script is kept in its task's own spill directory
   (`tool-results/<task id>/workflows/`). Before, every task's went to one shared
   `tool-results/workflows/`, which a tenant's task could not read back.
+- `Read` of a PDF by a tenant's task makes its copy and rendered pages in the tenant's own
+  temporary directory. Before, they went to a fresh directory in the worker's shared temp
+  directory, readable by other tenants' sandboxed commands while the conversion ran.

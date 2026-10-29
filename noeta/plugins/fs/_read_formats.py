@@ -212,8 +212,12 @@ def _page_span(pages: Any, total: int | None) -> tuple[int, int | None] | str:
 
 
 async def _scratch_dir(env: ExecEnv, cwd: str) -> str | None:
-    """A new temporary directory (``mktemp -d``), or ``None``."""
-    made = await _run(env, ["mktemp", "-d"], cwd)
+    """A new temporary directory (``mktemp -d``), or ``None``: in the env's
+    own temporary directory when it has one (a tenant's task, whose copies
+    and pages other tenants' commands must not see)."""
+    own = getattr(env, "temp_dir", None)
+    made = await _run(env, ["mktemp", "-d", *(["-p", own] if isinstance(own, str) and own
+                                               else [])], cwd)
     if made is None or made.exit_code != 0:
         return None
     out_dir = made.stdout.decode("utf-8", "replace").strip()

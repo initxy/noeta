@@ -77,3 +77,16 @@ async def test_a_fenced_pdf_behind_a_link_into_the_fence_is_refused(tmp_path: Pa
     except PermissionError:
         pass
     assert not _converter_paths(env)
+
+
+async def test_a_tenants_copy_and_pages_stay_in_its_own_temporary_directory(
+        tmp_path: Path) -> None:
+    doc = tmp_path / "doc.pdf"
+    doc.write_bytes(_PDF)
+    own = tmp_path / "own-temp"
+    own.mkdir()
+    env = Recording(str(tmp_path), fence=lambda _p, _w: None, temp_dir=str(own))
+    await read_pdf("Read", env, str(doc), "doc.pdf", len(_PDF), None)
+    used = _converter_paths(env)
+    assert used and all(p.startswith(f"{own}/") for p in used)
+    assert list(own.iterdir()) == []  # removed after use
