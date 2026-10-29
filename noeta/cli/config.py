@@ -70,6 +70,18 @@ if TYPE_CHECKING:
 log = logging.getLogger("noeta.cli")
 
 
+#: The built-in providers and the variable each reads a key from when none
+#: is given (``None``: none).
+_KEY_ENV: dict[str, str | None] = {
+    "anthropic": "ANTHROPIC_API_KEY", "openai_compat": "OPENAI_API_KEY",
+    "openai_responses": None,
+}
+
+
+class MissingAPIKey(ValueError):
+    """No API key for the configured provider; the message names where to set one."""
+
+
 @dataclass
 class Settings:
     model: str = ""
@@ -99,6 +111,15 @@ class Settings:
     server: dict[str, Any] = field(default_factory=dict)
 
     def make_provider(self) -> Provider:
+        """Raises :class:`MissingAPIKey` when no key is set for a built-in
+        provider."""
+        if not self.api_key and self.provider in _KEY_ENV:
+            fallback = _KEY_ENV[self.provider]
+            if not (fallback and os.environ.get(fallback)):
+                also = f" ({fallback} is read too)" if fallback else ""
+                raise MissingAPIKey(
+                    f"no API key for the {self.provider} provider: set NOETA_API_KEY{also}, "
+                    f"or api_key in {home_dir.HOME / 'config.toml'}")
         kw: dict[str, Any] = {}
         if self.extra_headers:
             kw["extra_headers"] = dict(self.extra_headers)

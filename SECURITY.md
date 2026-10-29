@@ -47,8 +47,9 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
   with consent in its own settings. noeta never reads Claude Code's own files (`~/.claude`,
   `.claude/`, `CLAUDE.md`, a project's `.mcp.json`). The one `.mcp.json` it reads is a
   Claude-Code-format plugin's own, inside a plugin directory in noeta's plugin places
-  (`~/.noeta/plugins/<plugin>/`, or a trusted project's `.noeta/plugins/<plugin>/`, whose
-  servers start only with that project's consent).
+  (`~/.noeta/plugins/<plugin>/`; a trusted project's `.noeta/plugins/<plugin>/` never starts
+  its servers, and noeta tells you to copy them into the project's `.noeta/mcp.json`, which
+  needs that project's consent).
 - **`noeta serve` always requires a bearer token** (`NOETA_SERVER_TOKEN`, or one made on first
   start and printed once; `~/.noeta/server-token`, owner-only, keeps only its SHA-256);
   `--no-token` is accepted only on a loopback address and with no tenant tokens or tenant

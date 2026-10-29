@@ -28,6 +28,27 @@ def server_token() -> str | None:
     return text if text and not text.startswith(_DIGEST_PREFIX) else None
 
 
+def server_problem(url: str, token: str | None) -> str | None:
+    """Why ``url`` cannot be driven with ``token``, in one line naming what
+    to set, or ``None`` when its ``/agents`` answers."""
+    import httpx
+
+    headers = {"authorization": f"Bearer {token}"} if token else {}
+    try:
+        resp = httpx.get(f"{url.rstrip('/')}/agents", headers=headers, timeout=15)
+    except httpx.HTTPError as exc:
+        return f"cannot reach the server at {url}: {str(exc) or type(exc).__name__}"
+    if resp.status_code == 401:
+        if token is None:
+            return (f"the server at {url} needs its bearer token: set NOETA_SERVER_TOKEN "
+                    "to the token noeta serve printed when it made it")
+        return (f"the server at {url} refused the token: set NOETA_SERVER_TOKEN to the "
+                "token noeta serve printed when it made it")
+    if resp.is_error:
+        return f"the server at {url} answered {resp.status_code} to GET /agents"
+    return None
+
+
 @dataclass(frozen=True)
 class ServerToken:
     """The server's bearer token as ``noeta serve`` holds it."""

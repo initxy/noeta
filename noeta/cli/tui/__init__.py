@@ -18,10 +18,13 @@ def run_tui(settings: Settings, *, cwd: str, resume: str | None = None,
 
     backend: Any
     if server:
-        from noeta.cli.server_token import server_token
+        from noeta.cli.server_token import server_problem, server_token
         from noeta.host.remote import RemoteApp
 
-        backend = RemoteApp(server, token=server_token())
+        token = server_token()
+        if (problem := server_problem(server, token)) is not None:
+            raise SystemExit(f"noeta: {problem}")
+        backend = RemoteApp(server, token=token)
     else:
         from noeta.cli.config import from_settings
 

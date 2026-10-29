@@ -4,6 +4,7 @@
 - Date: 2026-10-29
 - Refines: [ADR-015](015-a-held-tree-runs-only-on-its-holder.md),
   [ADR-019](019-tenant-limits-are-enforced-by-the-kernel.md) (the running limit)
+- Refined by: [ADR-027](027-the-store-refuses-a-child-off-its-held-trees-queues-and-a-reclaim-counts-toward-the-limit.md)
 
 ## Context
 
