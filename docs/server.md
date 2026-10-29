@@ -125,8 +125,9 @@ File tools (`Read`, `Edit`, `Write`, `NotebookEdit`, a workflow's `scriptPath`) 
 worker process whatever the deployment, so a task of a tenant other than the default one is
 fenced off from these paths: noeta's home (`NOETA_HOME`: tokens, settings, tenant
 directories, other tasks' files), the sqlite store and its `-wal` / `-shm` files,
-`/etc/noeta`, `/proc` and every other tenant's workspace. The fence is checked after
-symlinks and `..` are resolved, and no allow rule, permission mode (`bypassPermissions`
+`/etc/noeta`, `/proc` and every other tenant's workspace. The fence is checked at the
+permission gate after symlinks and `..` are resolved, and again by the local exec env on
+the file actually opened (a link swapped in between does not help), and no allow rule, permission mode (`bypassPermissions`
 included) or approval lifts it. Inside noeta's home such a task keeps its own spilled tool
 outputs, its tenant's plan files (`plans/<tenant>/`), the memory of its working directory
 (`projects/<slug>/`) and read access to `skills/`. The default tenant's tasks are not fenced.
