@@ -3,7 +3,9 @@ service can drive tasks on another machine. Events stream as server-sent
 events; when this process also runs workers, live model output streams too.
 
     POST /tasks                       {agent, input?, config?, queue?, dedupe_key?,
-                                      history_from?, history_through?} -> {task_id}
+                                      history_from?, history_through?} -> {task_id};
+                                      config takes only model, effort, max_turns, cwd,
+                                      permission_mode and output_schema (any other: 403)
     GET  /tasks?parent_id=&status=&limit=
     GET  /tasks/{id}
     GET  /tasks/{id}/events?after=N

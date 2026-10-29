@@ -197,6 +197,26 @@ async def test_requests_cannot_bypass_permissions_or_leave_the_directory(
         assert "bypassPermissions" in answer["response"]["error"]
 
 
+async def test_requests_cannot_set_the_config_plugins_own(
+        served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
+    host, _ = served
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        for key, value in (("permission_rules", ["Bash"]), ("subtask_depth", -99),
+                           ("unattended", True), ("prompts", {"system/main": "x"})):
+            got = await http.post("/tasks", json={"agent": "main", "config": {key: value}})
+            assert got.status_code == 403, key
+            assert repr(key) in got.json()["error"]
+        assert (await http.get("/tasks")).json() == []
+        ok = await http.post("/tasks", json={"agent": "main", "config": {
+            "model": MODEL, "effort": "high", "max_turns": 3, "cwd": str(tmp_path),
+            "permission_mode": "plan", "output_schema": {"type": "object"}}})
+        assert ok.status_code == 201
+        task_id = ok.json()["task_id"]
+        refused = await http.post(f"/tasks/{task_id}/signals", json={
+            "name": "config", "data": {"permission_rules": ["Bash"]}})
+        assert refused.status_code == 403
+
+
 async def test_a_relative_cwd_is_the_servers_and_more_roots_can_be_allowed(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from noeta.core.client import Client

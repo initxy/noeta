@@ -455,3 +455,11 @@ All notable changes to Noeta are documented here. The format is based on
   reach the model as one block each with the next prompt joined to them, as Claude Code sends
   them.
 - Workflow end notices keep their dedupe key.
+
+### Security
+
+- `noeta serve` takes only `model`, `effort`, `max_turns`, `cwd`, `permission_mode` and
+  `output_schema` in a new task's `config`, and only `model`, `effort` and `max_turns` in a
+  `config` signal; any other key is refused with 403 naming it. Before, a request could set
+  the permissions plugin's inherited allow rules (`permission_rules`) or `subtask_depth` and
+  run tools without being asked.

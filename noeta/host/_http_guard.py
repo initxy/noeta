@@ -18,7 +18,7 @@ from starlette.responses import JSONResponse, Response
 from noeta.core.client import ClientAPI, Input
 from noeta.core.errors import UnknownTask
 from noeta.core.events import DEFAULT_TENANT, Recorded
-from noeta.core.loop.state import CONFIG_SIGNAL
+from noeta.core.loop.state import CHANGEABLE_CONFIG, CONFIG_SIGNAL
 from noeta.core.store import Status, TaskRow
 from noeta.toolkit.permission_modes import MODE_SIGNAL
 
@@ -28,6 +28,12 @@ class Refused(Exception):
 
 
 _BYPASS = "bypassPermissions"
+
+#: The task config keys a request may set when it creates a task. The rest
+#: (``permission_rules``, ``subtask_depth``, ``unattended``, ``prompts`` …)
+#: are set by plugins and the server for the tasks they start; from a
+#: request they would loosen the permission gates.
+REQUEST_CONFIG = ("model", "effort", "max_turns", "cwd", "permission_mode", "output_schema")
 
 
 class GuardedClient:
@@ -68,11 +74,19 @@ class GuardedClient:
                           "start it there or add the directory with --allow-root")
         return real
 
-    def check_config(self, config: Any) -> Any:
+    def check_config(self, config: Any, allowed: Sequence[str] = REQUEST_CONFIG) -> Any:
         """``config`` with its ``cwd`` absolute; raises :class:`Refused` for
-        what a request may not ask for."""
-        if not isinstance(config, Mapping):
+        what a request may not ask for: a key not in ``allowed``, a
+        ``bypassPermissions`` mode, a ``cwd`` outside the server's
+        directories."""
+        if config is None:
             return config
+        if not isinstance(config, Mapping):
+            raise ValueError("a task config is a JSON object")
+        for key in config:
+            if key not in allowed:
+                raise Refused(f"a request may not set the task config key {key!r} "
+                              f"(only {', '.join(allowed)})")
         self._mode(config.get("permission_mode"))
         if not config.get("cwd"):
             return config
@@ -108,7 +122,7 @@ class GuardedClient:
         if name == MODE_SIGNAL and isinstance(data, Mapping):
             self._mode(data.get("mode"))
         if name == CONFIG_SIGNAL:
-            data = self.check_config(data)
+            data = self.check_config(data, CHANGEABLE_CONFIG)
         return await self._client.signal(task_id, name, data, dedupe_key=dedupe_key)
 
     async def cancel(self, task_id: str, reason: str = "", *,
