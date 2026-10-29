@@ -27,12 +27,19 @@ from noeta.cli.tui.widgets import (
     UserMessage,
 )
 from noeta.core.commands import list_commands, run_typed
+from noeta.core.events import Waiting
 from noeta.core.extension import CommandContext
 from noeta.core.types import Delta, Image
 from noeta.host.local import LocalApp, UnknownAgent
 from noeta.host.pending import answer_choice
 from noeta.host.questions import next_question, typed_answer
-from noeta.toolkit.permission_modes import MODE_SIGNAL, Modes, next_mode
+from noeta.toolkit.permission_modes import (
+    MODE_SIGNAL,
+    Modes,
+    current_mode,
+    next_mode,
+    published_modes,
+)
 from noeta.toolkit.signals import RESUMED_SIGNAL
 
 log = logging.getLogger("noeta.cli.tui")
@@ -48,6 +55,8 @@ attaches the image
 
 #: Seconds between two presses of Esc that open the rewind list.
 DOUBLE_ESCAPE = 0.8
+#: Seconds the mode key waits for a new task's start to record its mode.
+MODE_WAIT = 2.0
 
 
 class NoetaApp(TranscriptView):
@@ -82,12 +91,16 @@ class NoetaApp(TranscriptView):
         self.mode = ""
         #: The modes the task's permissions plugin offers (its ``modes`` record).
         self.modes = Modes()
+        #: ``modes`` came from the task's record, not the default.
+        self.modes_published = False
         self.task_id = ""
         self.calls: dict[str, ToolCall] = {}
         self.stream: MarkdownStream | None = None
         self.stream_widget: AssistantMessage | None = None
         #: The model call (its ``ModelCalled`` seq) and attempt being streamed.
         self.stream_key = (0, 1)
+        #: What was written to the stream so far.
+        self.stream_text = ""
         #: Model calls whose text was streamed (their reply is not shown again).
         self.streamed: set[int] = set()
         #: Per model call, the attempt still live (earlier ones failed).
@@ -171,6 +184,7 @@ class NoetaApp(TranscriptView):
         self.shown_requests.clear()
         self.waiting_for = ""
         self.busy = False
+        self.mode, self.modes, self.modes_published = "", Modes(), False
         await self._end_stream()
         self.streamed.clear()
         self.attempts.clear()
@@ -337,10 +351,32 @@ class NoetaApp(TranscriptView):
         """Step to the next permission mode (Claude Code's shift+tab)."""
         if not self.task_id or self.read_only:
             return
-        mode = next_mode(self.mode or self.permission_mode or "auto", self.modes.cycle)
+        if not self.mode or not self.modes_published:
+            await self._modes_from_log()
+        current = self.mode or self.permission_mode
+        if not current:
+            await self.say_notice("the task has not recorded a permission mode yet")
+            return
+        mode = next_mode(current, self.modes.cycle)
         await self.local.client.signal(self.task_id, MODE_SIGNAL, {"mode": mode})
         self.mode = mode
         self.update_status()
+
+    async def _modes_from_log(self) -> None:
+        """Pressed before the follower showed the permissions plugin's
+        records: take them from the log, waiting (briefly) for the task's
+        start to record them — stepping from a guess could land in
+        ``bypassPermissions``."""
+        deadline = time.monotonic() + MODE_WAIT
+        while True:
+            events = await self.local.client.events(self.task_id)
+            started = any(isinstance(r.event, Waiting) for r in events)
+            mode = current_mode(events)
+            if mode or started or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(0.05)
+        self.mode = mode or self.mode
+        self._take_modes(published_modes(events))
 
     async def answer_question(self, text: str) -> None:
         """The typed line answers the pending question (one line per part of

@@ -170,6 +170,33 @@ async def test_tui_drops_a_failed_attempts_output(tmp_path: Path) -> None:
         assert [w.source for w in app.query(AssistantMessage)] == ["good answer"]
 
 
+async def test_tui_survives_a_stream_stopped_before_its_task_ran(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """On a loaded loop a live-output stream can be stopped (the attempt
+    failed, or the reply arrived) before Textual's stream task first ran;
+    its ``stop()`` then raises the cancellation into the caller, which used
+    to end the follower and the delta pump: the TUI froze for the task."""
+    from textual.widgets.markdown import MarkdownStream
+
+    run = MarkdownStream._run
+
+    def late_start(self: MarkdownStream) -> None:
+        async def late() -> None:
+            await asyncio.sleep(0.3)  # the loop runs the stream's task late
+            await run(self)
+
+        if self._task is None:
+            self._task = asyncio.create_task(late())
+
+    monkeypatch.setattr(MarkdownStream, "start", late_start)
+    app = tui(tmp_path, RetryOnce())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press(*"go", "enter")
+        await settle(pilot, lambda: not app.busy and len(app.query(AssistantMessage)) >= 1)
+        await pilot.pause(0.5)
+        assert [w.source for w in app.query(AssistantMessage)] == ["good answer"]
+
+
 async def test_tui_is_not_left_busy_when_the_turn_ends_before_the_send_returns(
         tmp_path: Path) -> None:
     """Under load the task can take the message, reply and wait again before
