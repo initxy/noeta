@@ -5,10 +5,13 @@ compared: ``tests/snapshot_check.py``.)"""
 
 from __future__ import annotations
 
+import importlib
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+import msgspec
 import pytest
 
 from noeta.backends.stores.sqlite import SqliteStore
@@ -19,6 +22,7 @@ from noeta.core.events import Recorded
 from noeta.core.extension import Extension, TaskView
 from noeta.core.loop.state import TaskState, fold, new_state
 from noeta.core.runner import Runtime
+from noeta.core.runner.snapshotting import SNAPSHOT_GROWTH
 from noeta.core.runner.task import TaskRun
 from noeta.core.store import Claim, Snapshot
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
@@ -177,3 +181,108 @@ def test_values_come_back_with_their_types() -> None:
     from collections import OrderedDict
     assert snapshots.encode(TaskState(ext={"x": OrderedDict(a=1)})) is None
     assert snapshots.encode(TaskState(ext={"x": {1: "int key"}})) is None
+
+
+_PLUGIN_INIT = '''
+from noeta.core.extension import Extension
+
+
+class Counter(Extension):
+    name = "counter"
+
+    def reduce(self, state, kind, data):
+        from snapver_plugin.fold import count
+
+        return count(state, data)
+'''
+
+
+def _forget_code() -> None:
+    """Drop what the version caches about source files (a process sees its
+    code change only across a restart)."""
+    for value in vars(snapshots).values():
+        clear = getattr(value, "cache_clear", None)
+        if clear is not None:
+            clear()
+
+
+def test_the_version_follows_a_reducer_kept_in_a_helper_module(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    package = tmp_path / "snapver_plugin"
+    package.mkdir()
+    (package / "__init__.py").write_text(_PLUGIN_INIT)
+    (package / "fold.py").write_text("def count(state, data):\n    return (state or 0) + 1\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    from snapver_plugin import Counter  # type: ignore[import-not-found]
+
+    try:
+        _forget_code()
+        before = snapshots.version("a", [Counter()])
+        (package / "fold.py").write_text("def count(state, data):\n    return (state or 0) + 2\n")
+        _forget_code()
+        assert snapshots.version("a", [Counter()]) != before
+    finally:
+        _forget_code()
+        for name in [m for m in sys.modules if m.startswith("snapver_plugin")]:
+            del sys.modules[name]
+
+
+@pytest.mark.parametrize("extension, helper", [
+    ("noeta.plugins.fs:FileTools", "noeta.plugins.fs.state"),
+    ("noeta.plugins.shell:Shell", "noeta.plugins.shell.bash"),
+    ("noeta.plugins.subtasks.extension:Subtasks", "noeta.plugins.subtasks.idle"),
+])
+def test_the_version_follows_the_builtin_reducer_helpers(
+        extension: str, helper: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    module, _, name = extension.partition(":")
+    cls = getattr(importlib.import_module(module), name)
+    real = snapshots._module_digest
+    _forget_code()
+    before = snapshots._code_digest(cls.__module__)
+    monkeypatch.setattr(snapshots, "_module_digest",
+                        lambda m: "changed" if m == helper else real(m))
+    _forget_code()
+    try:
+        assert snapshots._code_digest(cls.__module__) != before
+    finally:
+        _forget_code()
+
+
+class Sized(Counting):
+    """Adds up the bytes of every snapshot written."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(path)
+        self.written: list[int] = []
+
+    async def put_snapshot(self, task_id: str, snapshot: Snapshot) -> None:
+        self.written.append(len(snapshot.data))
+        await super().put_snapshot(task_id, snapshot)
+
+
+async def test_snapshot_bytes_written_stay_within_a_few_times_the_logs(
+        tmp_path: Path) -> None:
+    """Each snapshot rewrites the whole state: written at a fixed interval
+    their bytes grow with the square of the log. The next one waits until
+    the events since the last hold a share of its bytes."""
+    store = Sized(str(tmp_path / "s.db"))
+    try:
+        provider = ScriptedProvider([reply("", ("Echo", {}))] * 300 + [reply("done")])
+        agent = Agent(name="a", model="m", extensions=[Note()])
+        rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                     env_for=lambda _s: None, sleep=_no_sleep,  # type: ignore[arg-type,return-value]
+                     snapshot_every=4)
+        tid = await Client(store).create("a", "go")
+        await rt.run_until_idle()
+        log = sum(len(msgspec.json.encode(r.event))
+                  for r in await SqliteStore.read(store, tid))
+        assert len(store.written) > 3
+        bound = (1 + 1 / SNAPSHOT_GROWTH) * log
+        assert sum(store.written) <= bound, (sum(store.written), log)
+        stored = await store.snapshot(tid)
+        assert stored is not None
+        after = sum(len(msgspec.json.encode(r.event))
+                    for r in await SqliteStore.read(store, tid, after=stored.seq))
+        assert after <= SNAPSHOT_GROWTH * len(stored.data) + log / 100
+    finally:
+        await store.close()

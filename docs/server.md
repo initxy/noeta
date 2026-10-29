@@ -26,8 +26,12 @@ noeta serve --no-worker --host 0.0.0.0   # the API, on one or more machines
   plugins, `config.toml`, tenant directories. Ship the same copy to every machine; a worker
   missing a plugin a task was started with fails that task with `plugin_missing` instead of
   running it without.
-- **Upgrades:** stop every worker before upgrading; workers of different versions must not
-  share a store.
+- **Upgrades:** stop every worker (and `noeta serve`) before upgrading; workers of different
+  versions must not share a store. The first process of the new version moves the store's
+  schema forward in place; a process older than the store's schema refuses to open it
+  (`StoreUnavailable`; on sqlite, a process from before schema version 2 does not check, one
+  more reason every worker stops first). A store from before schema version 2 keeps its old `holds` table,
+  unused since; dropping it is left to you.
 
 ## Where commands run (the workspace)
 

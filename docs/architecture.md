@@ -42,13 +42,15 @@ Timers (`view.set_timer`) are kernel state too, so a scheduled wake-up survives 
 See [Park](../CONTEXT.md#park).
 
 **Holds** cover what lives in one process: a background shell job holds its task tree on its
-worker (`Store.hold`), so no other worker claims those tasks while the job runs. Each hold has
+worker (`Store.hold`, one holding worker per tree), so no other worker claims those tasks while
+the job runs. Each hold has
 an epoch; when a worker goes silent any worker reaps its holds and posts `hold_lost` to the
 tree, so the model is told the job is gone instead of waiting forever.
 
-**Snapshots** keep claims cheap: every `Runtime.snapshot_every` events the runner stores a
-versioned fold snapshot (`noeta/core/snapshots.py`), and a claim folds the snapshot plus the
-events after it. A snapshot whose version does not match the code is ignored and the log is
+**Snapshots** keep claims cheap: as a task's log grows the runner stores a versioned fold
+snapshot (`noeta/core/snapshots.py`; at most every `Runtime.snapshot_every` events, and once
+the events since the last one hold a tenth of its bytes), and a claim folds the snapshot plus
+the events after it. Ending a task deletes its snapshot. A snapshot whose version does not match the code is ignored and the log is
 folded from the start, so a snapshot can be missing but never wrong.
 
 ## One step of a task

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from noeta.backends.stores.sqlite import SqliteStore
+from noeta.backends.stores.sqlite import SCHEMA_VERSION, SqliteStore
 from noeta.core.errors import StoreUnavailable
 from noeta.core.events import TaskCreated
 from noeta.core.store import NewTask
@@ -63,3 +63,34 @@ def test_concurrent_first_open(tmp_path: Path) -> None:
             p.join(30)
         results += [q.get(timeout=5) for _ in procs]
     assert results == ["ok"] * len(results)
+
+
+async def test_a_store_from_a_newer_noeta_is_refused(tmp_path: Path) -> None:
+    path = str(tmp_path / "t.db")
+    store = SqliteStore(path)
+    await store.create(NewTask(task_id="t", created=TaskCreated(agent="a")))
+    await store.close()
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE noeta_schema SET version = ?", (SCHEMA_VERSION + 1,))
+    conn.commit()
+    conn.close()
+    newer = SqliteStore(path)
+    with pytest.raises(StoreUnavailable, match="schema version"):
+        await newer.get("t")
+    await newer.close()
+
+
+async def test_a_version_1_store_is_upgraded_in_place(tmp_path: Path) -> None:
+    path = str(tmp_path / "t.db")
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE noeta_schema (version INTEGER NOT NULL)")
+    conn.execute("INSERT INTO noeta_schema VALUES (1)")
+    conn.commit()
+    conn.close()
+    store = SqliteStore(path)
+    await store.create(NewTask(task_id="t", created=TaskCreated(agent="a")))
+    await store.close()
+    conn = sqlite3.connect(path)
+    assert conn.execute("SELECT version FROM noeta_schema").fetchall() == [(SCHEMA_VERSION,)]
+    conn.close()
+    assert SCHEMA_VERSION == 2

@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import socket
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from noeta.core.agent import Agent
+from noeta.core.errors import HeldElsewhere
 from noeta.core.execenv import ExecEnv
 from noeta.core.holds import Release, TreeHold
 from noeta.core.provider import Provider
@@ -52,6 +54,13 @@ def catalog_output_ceiling(model: str) -> int:
 
 
 @dataclass
+class _TreeLock:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    #: Callers inside or waiting: the entry is dropped when none are left.
+    users: int = 0
+
+
+@dataclass
 class Runtime:
     """Everything a runner needs. One ``Runtime`` runs many tasks at once."""
 
@@ -82,8 +91,9 @@ class Runtime:
     output_ceiling: Callable[[str], int] = catalog_output_ceiling
     sleep: Callable[[float], Any] = asyncio.sleep
     #: Write a task's fold snapshot (``noeta.core.snapshots``) once its log
-    #: is this many events past the newest one, so a claim folds at most
-    #: about this many; ``0`` never reads or writes snapshots.
+    #: is at least this many events past the newest one and those events
+    #: hold a share of its bytes (``noeta.core.runner.snapshotting.SNAPSHOT_GROWTH``);
+    #: ``0`` never reads or writes snapshots.
     snapshot_every: int = 100
     #: Serve only the task trees whose root ids are in this set (a front end
     #: adds each task it creates or resumes); ``None`` serves every task.
@@ -95,6 +105,13 @@ class Runtime:
     #: This worker's holds, by tree root (:meth:`hold`).
     _holds: dict[str, TreeHold] = field(default_factory=dict, init=False, repr=False)
     _renewer: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
+    #: Per tree root: holds are taken one at a time, so one ``TreeHold``
+    #: stands for the store's hold.
+    _hold_locks: dict[str, _TreeLock] = field(default_factory=dict, init=False, repr=False)
+    #: Per tree root: the store's hold being given back (the last share
+    #: released); a new hold of the tree waits for it.
+    _unholding: dict[str, asyncio.Future[None]] = field(default_factory=dict, init=False,
+                                                        repr=False)
 
     @property
     def hold_seconds(self) -> float:
@@ -108,15 +125,25 @@ class Runtime:
         counted and renewed while this runtime lives. For what lives only in
         this process, e.g. a background job: it registers
         ``release.tree.on_lost`` to stop when the hold is gone (reaped after
-        this worker was silent too long, or this runtime stopping)."""
-        tree = self._holds.get(root_id)
-        if tree is None or tree.lost:
-            epoch = await self.store.hold(root_id, self.worker, self.hold_seconds)
-            assert epoch is not None  # taking a hold always succeeds
-            tree = TreeHold(root_id=root_id, worker=self.worker, epoch=epoch,
-                            seconds=self.hold_seconds)
-            self._holds[root_id] = tree
-        tree.count += 1
+        this worker was silent too long, or this runtime stopping).
+        Raises ``HeldElsewhere`` while another worker holds the tree (one
+        whose hold ran out is reaped first)."""
+        async with self._tree_lock(root_id):
+            tree = self._holds.get(root_id)
+            if tree is None or tree.lost:
+                unholding = self._unholding.get(root_id)
+                if unholding is not None:
+                    await asyncio.shield(unholding)  # the last share's give-back
+                epoch = await self.store.hold(root_id, self.worker, self.hold_seconds)
+                if epoch is None:
+                    await self._reap()
+                    epoch = await self.store.hold(root_id, self.worker, self.hold_seconds)
+                if epoch is None:
+                    raise HeldElsewhere(f"task tree {root_id} is held by another worker")
+                tree = TreeHold(root_id=root_id, worker=self.worker, epoch=epoch,
+                                seconds=self.hold_seconds)
+                self._holds[root_id] = tree
+            tree.count += 1
         if self._renewer is None or self._renewer.done():
             self._renewer = asyncio.create_task(self._renew_holds())
         released = False
@@ -130,14 +157,40 @@ class Runtime:
             if tree.count > 0 or self._holds.get(root_id) is not tree:
                 return
             self._holds.pop(root_id, None)
-            if tree.lost:
-                return
-            try:
-                await self.store.unhold(root_id, self.worker, tree.epoch)
-            except Exception as exc:  # noqa: BLE001 — the hold runs out and is reaped
-                log.warning("tree %s: unhold failed: %s", root_id, exc)
+            if not tree.lost:
+                # A hold taken for the tree meanwhile waits for this, so it
+                # never gets the epoch being deleted; given back even when
+                # the caller is cancelled while it waits.
+                unholding = asyncio.ensure_future(self._unhold(tree))
+                self._unholding[root_id] = unholding
+                await asyncio.shield(unholding)
 
         return Release(tree, release)
+
+    async def _unhold(self, tree: TreeHold) -> None:
+        try:
+            await self.store.unhold(tree.root_id, self.worker, tree.epoch)
+        except Exception as exc:  # noqa: BLE001 — the hold runs out and is reaped
+            log.warning("tree %s: unhold failed: %s", tree.root_id, exc)
+        finally:
+            if self._unholding.get(tree.root_id) is asyncio.current_task():
+                self._unholding.pop(tree.root_id, None)
+
+    @contextlib.asynccontextmanager
+    async def _tree_lock(self, root_id: str) -> AsyncIterator[None]:
+        """Taking a hold of one tree, one at a time: two holds taken at
+        once would make two ``TreeHold`` objects, one never renewed."""
+        entry = self._hold_locks.get(root_id)
+        if entry is None:
+            entry = self._hold_locks[root_id] = _TreeLock()
+        entry.users += 1
+        try:
+            async with entry.lock:
+                yield
+        finally:
+            entry.users -= 1
+            if not entry.users:
+                self._hold_locks.pop(root_id, None)
 
     async def _renew_holds(self) -> None:
         while self._holds:

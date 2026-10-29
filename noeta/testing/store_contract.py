@@ -82,6 +82,19 @@ async def test_workers_claiming_at_once_keep_a_tenant_under_its_limit(store: Sto
     assert len(await store.tasks(tenant="acme", status="running")) == 2
 
 
+async def test_a_tenant_at_its_limit_leaves_racing_claims_to_the_others(store: Store) -> None:
+    """Claims racing for a limited tenant's tasks that find it full after
+    all take another tenant's task instead of coming back empty."""
+    for i in range(6):
+        await store.create(_of("acme", f"a{i}"))
+    for i in range(12):
+        await store.create(_of("beta", f"b{i:02d}"))
+    got = await asyncio.gather(*(store.claim(f"w{i}", ["default"], 30,
+                                             tenant_limits={"acme": 2}) for i in range(12)))
+    assert all(c is not None for c in got)
+    assert len(await store.tasks(tenant="acme", status="running")) == 2
+
+
 async def test_tenant_usage_adds_up_per_period(store: Store) -> None:
     add = getattr(store, "add_tenant_usage", None)
     if add is None:
@@ -370,6 +383,31 @@ async def test_a_held_tree_is_claimed_only_by_its_holders(store: Store) -> None:
     assert got == {"root", "root.child"}
 
 
+async def test_a_tree_has_at_most_one_holding_worker(store: Store) -> None:
+    """A second worker's hold is refused, so the held tree's tasks always
+    have a worker that may claim them; once released, another may hold."""
+    await store.create(new("root"))
+    await store.create(NewTask(task_id="root.child",
+                               created=TaskCreated(agent="a", parent_id="root", root_id="root")))
+    epoch = await store.hold("root", "A", 30)
+    assert epoch is not None
+    assert await store.hold("root", "B", 30) is None
+    assert await store.hold("root", "A", 30) == epoch
+    assert await store.claim("B", ["default"], 30) is None
+    assert await store.claim("C", ["default"], 30) is None
+    got = {c.task_id for c in [await store.claim("A", ["default"], 30) for _ in range(2)] if c}
+    assert got == {"root", "root.child"}
+    await store.unhold("root", "A", epoch)
+    other = await store.hold("root", "B", 30)
+    assert other is not None and other != epoch
+
+
+async def test_workers_holding_one_tree_at_once_leave_one_holder(store: Store) -> None:
+    await store.create(new("root"))
+    got = await asyncio.gather(*(store.hold("root", f"w{i}", 30) for i in range(6)))
+    assert len([e for e in got if e is not None]) == 1
+
+
 async def test_an_expired_hold_blocks_claims_until_it_is_reaped(store: Store) -> None:
     await store.create(new("root"))
     root = await store.claim("w1", ["default"], 30)
@@ -460,3 +498,22 @@ async def test_snapshots_keep_the_latest_seq(store: Store) -> None:
     await put("t2", Snapshot(seq=1, version="v1", data=b"one"))
     assert await get("t1") == Snapshot(seq=9, version="v2", data=b"nine")
     assert (await get("t2") or Snapshot(seq=0, version="", data=b"")).seq == 1
+
+
+async def test_ending_a_task_deletes_its_snapshot(store: Store) -> None:
+    """The end deletes it in the same transaction, and none is kept after."""
+    get, put = getattr(store, "snapshot", None), getattr(store, "put_snapshot", None)
+    if get is None or put is None:
+        pytest.skip("the store keeps no snapshots")
+    await store.create(new())
+    await store.create(new("t2"))
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None and claim.task_id == "t1"
+    await put("t1", Snapshot(seq=1, version="v1", data=b"one"))
+    await put("t2", Snapshot(seq=1, version="v1", data=b"other"))
+    await store.append(claim, [TaskEnded(status="done")], expected_seq=1,
+                       patch=Patch(status="ended", end_status="done"))
+    assert await get("t1") is None
+    await put("t1", Snapshot(seq=2, version="v1", data=b"late"))  # a write in flight
+    assert await get("t1") is None
+    assert await get("t2") == Snapshot(seq=1, version="v1", data=b"other")

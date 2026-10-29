@@ -99,13 +99,13 @@ def test_long_output_is_cut_under_the_notification_limit() -> None:
     pytest.importorskip("psycopg")
     import msgspec
 
-    from noeta.backends.stores.postgres import _DELTA_PAYLOAD_BYTES, _delta_payloads
+    from noeta.backends.stores.postgres_feed import DELTA_PAYLOAD_BYTES, delta_payloads
 
     text = "日本語の文" * 3000 + "\u0000end"
-    payloads = _delta_payloads([("t1", Delta(kind="text", text=text, call_seq=7)),
+    payloads = delta_payloads([("t1", Delta(kind="text", text=text, call_seq=7)),
                                 ("t2", Delta(kind="thinking", text="short"))])
     assert len(payloads) > 1
-    assert all(len(p.encode()) < _DELTA_PAYLOAD_BYTES + 100 for p in payloads)
+    assert all(len(p.encode()) < DELTA_PAYLOAD_BYTES + 100 for p in payloads)
     back = [item for p in payloads
             for item in msgspec.json.decode(p, type=list[tuple[str, Delta]])]
     assert "".join(d.text for t, d in back if t == "t1") == text

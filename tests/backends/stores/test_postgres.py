@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from noeta.core.errors import CommitUnknown
+from noeta.core.errors import CommitUnknown, StoreUnavailable
 from noeta.core.events import Cancel, TaskCreated, Waiting
 from noeta.core.store import NewTask, Post
 
@@ -88,12 +88,12 @@ async def test_listener_and_pool_reconnect_after_backends_are_killed(pg: Any) ->
     a.on_change(lambda t, k: seen.append(k))
     await a.create(new())
     await b.get("t1")
-    await _terminate(pg.dsn, [*a._own.keys(), *b._own.keys()])
+    await _terminate(pg.dsn, [*a._feed.own.keys(), *b._feed.own.keys()])
     import psycopg
 
     async with await psycopg.AsyncConnection.connect(pg.dsn, autocommit=True) as c:
         await c.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
-                        " WHERE query = %s", (f'LISTEN "{a.channel}"',))
+                        " WHERE query = %s", (f'LISTEN "{a._feed.channel}"',))
     row = await a.get("t1")  # the pool replaced its dead connection
     assert row is not None and row.status == "ready"
 
@@ -173,3 +173,37 @@ async def test_concurrent_schema_setup_from_many_processes(pg: Any) -> None:
     """)
     procs = [subprocess.Popen([sys.executable, "-c", script]) for _ in range(6)]
     assert [p.wait(60) for p in procs] == [0] * 6
+
+
+async def test_a_schema_from_a_newer_noeta_is_refused(pg: Any) -> None:
+    import psycopg
+
+    from noeta.backends.stores.postgres import SCHEMA_VERSION
+
+    store = pg.store()
+    await store.create(new())
+    await store.close()
+    with psycopg.connect(pg.dsn, autocommit=True) as conn:
+        conn.execute(f'UPDATE "{pg.schema}".noeta_schema SET version = %s',
+                     (SCHEMA_VERSION + 1,))
+    newer = pg.store()
+    with pytest.raises(StoreUnavailable, match="version"):
+        await newer.get("t1")
+    await newer.close()
+
+
+async def test_a_version_1_schema_is_upgraded_in_place(pg: Any) -> None:
+    import psycopg
+
+    from noeta.backends.stores.postgres import SCHEMA_VERSION
+
+    with psycopg.connect(pg.dsn, autocommit=True) as conn:
+        conn.execute(f'CREATE SCHEMA "{pg.schema}"')
+        conn.execute(f'CREATE TABLE "{pg.schema}".noeta_schema (version INTEGER NOT NULL)')
+        conn.execute(f'INSERT INTO "{pg.schema}".noeta_schema VALUES (1)')
+    store = pg.store()
+    await store.create(new())
+    await store.close()
+    with psycopg.connect(pg.dsn, autocommit=True) as conn:
+        rows = conn.execute(f'SELECT version FROM "{pg.schema}".noeta_schema').fetchall()
+    assert rows == [(SCHEMA_VERSION,)] and SCHEMA_VERSION == 2
