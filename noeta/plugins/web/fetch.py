@@ -49,7 +49,6 @@ __all__ = [
     "render_digest_prompt",
 ]
 
-_MAX_URL_BYTES = 512
 #: The rendered page cap: the digest model's reading budget and the
 #: raw-render fallback's inline ceiling.
 INLINE_PAGE_MAX_CHARS = 100_000
