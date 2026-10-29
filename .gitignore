@@ -1,7 +1,5 @@
-# Claude Code local private config (skills travel with the project; not ignored)
-.claude/settings.local.json
-.claude/*.local.*
-.claude/worktrees/
+# Claude Code local config of contributors (not part of noeta)
+.claude/
 
 # Live-test secrets (never committed)
 .env
