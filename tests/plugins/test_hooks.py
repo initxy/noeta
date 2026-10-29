@@ -23,6 +23,8 @@ from noeta.plugins.fs import FileTools
 from noeta.plugins.hooks import Hooks, parse_hooks
 from noeta.plugins.hooks.config import HookCommand
 from noeta.plugins.hooks.runners import OUTPUT_CAP, run_command
+from noeta.plugins.markdown_commands import MarkdownCommands
+from noeta.plugins.skills import Skills
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -89,6 +91,43 @@ async def test_a_blocked_prompt_is_erased_from_later_requests(tmp_path: Path) ->
     assert not any("SECRET" in t for t in texts)
     state = fold(await client.events(tid), {})
     assert not any("SECRET" in m.text for m in state.history)
+
+
+async def _blocked_expansion(tmp_path: Path, extension: Any, prompt: str) -> list[str]:
+    hooks = {"UserPromptSubmit": _hook("grep -q SECRET && { echo blocked >&2; exit 2; }; "
+                                       "exit 0")}
+    work = tmp_path / "w"
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("ok")])
+    agent = Agent(name="a", model="m", extensions=[extension, Hooks(hooks=hooks), FileTools()])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 env_for=lambda _s: LocalExecEnv(str(work)), sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("a", prompt, config={"cwd": str(work)})
+    await rt.run_until_idle()
+    await client.send(tid, "hello")
+    await rt.run_until_idle()
+    assert len(provider.requests) == 1
+    return [m.text for m in provider.requests[0].messages]
+
+
+async def test_a_blocked_command_loses_its_expansion_too(tmp_path: Path) -> None:
+    (tmp_path / "w").mkdir()
+    commands = MarkdownCommands([{"name": "deploy", "body": "Deploy with key $ARGUMENTS now."}])
+    texts = await _blocked_expansion(tmp_path, commands, "/deploy SECRET42")
+    assert any("hello" in t for t in texts)
+    assert not any("SECRET" in t for t in texts)
+
+
+async def test_a_blocked_skill_command_loses_its_expansion_too(tmp_path: Path) -> None:
+    skill = tmp_path / "w" / ".noeta" / "skills" / "deploy"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: deploy\ndescription: Ship it.\n---\n"
+                                    "Deploy with key $ARGUMENTS now.\n")
+    skills = Skills(global_dir=None, global_agents_dir=None)
+    texts = await _blocked_expansion(tmp_path, skills, "/deploy SECRET42")
+    assert any("hello" in t for t in texts)
+    assert not any("SECRET" in t for t in texts)
 
 
 async def test_pre_tool_use_blocks_matching_calls_only(tmp_path: Path) -> None:

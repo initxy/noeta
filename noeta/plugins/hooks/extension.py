@@ -237,7 +237,12 @@ class Hooks(Extension):
             if r.block is not None:
                 # A blocked prompt is erased, as Claude Code does: the next
                 # turn's request never carries it.
-                view.erase_messages(sorted({seq for seq, _ in new}))
+                # What a command or skill expanded them into (``inline``
+                # text recorded after them) goes too.
+                first = new[0][0]
+                view.erase_messages(sorted({seq for seq, m in zip(
+                    view.state.message_seqs, view.state.messages, strict=False)
+                    if seq >= first and m.role == "user" and m.origin in ("human", "inline")}))
                 raise TurnFailed("blocked_by_hook", r.block)
             if r.stop is not None:
                 raise TurnFailed("stopped_by_hook", r.stop or "a UserPromptSubmit hook "
