@@ -91,6 +91,8 @@ REINVOKED_SAME = ("The /{name} skill was loaded earlier in this conversation and
                   "instructions have not changed; this is a new call, so follow them again now.")
 REINVOKED_CHANGED = ("(/{name} called again: its instructions were loaded earlier; the "
                      "arguments or command output below are new.)")
+#: Tasks whose turn's registry is kept (:meth:`Skills.turn_registry`).
+TURN_REGISTRIES_KEEP = 256
 #: Calls whose file makes a skill with matching ``paths`` available.
 FILE_TOOLS = frozenset({"Read", "Write", "Edit", "NotebookEdit"})
 
@@ -201,6 +203,9 @@ class Skills(Extension):
         self.shell_commands = shell_commands
         self._skill_tool = SkillTool(self)
         self._script_tool = RunSkillScriptTool(self.name)
+        #: The registry a task's turn last loaded, by task: ``(turn key,
+        #: registry)`` (see :meth:`turn_registry`).
+        self._turn_registries: dict[str, tuple[tuple[Any, ...], SkillRegistry]] = {}
 
     # ------------------------------------------------------------ discovery
 
@@ -230,6 +235,23 @@ class Skills(Extension):
 
     async def registry(self, env: ExecEnv) -> SkillRegistry:
         return await load_registry(env, self.tiers(env.cwd))
+
+    async def turn_registry(self, view: TaskView) -> SkillRegistry:
+        """The skills as found once per turn of the task: loaded again when
+        new input was taken (a skill installed since shows up with the
+        person's next message), not after every file a call touched."""
+        env = task_env(view.env, view.state.config)
+        tiers = self.tiers(env.cwd)
+        key = (view.state.inbox_read, env.cwd, tuple(tiers))
+        cached = self._turn_registries.pop(view.task_id, None)
+        if cached is not None and cached[0] == key:
+            registry = cached[1]
+        else:
+            registry = await load_registry(env, tiers)
+        self._turn_registries[view.task_id] = (key, registry)  # most recent last
+        while len(self._turn_registries) > TURN_REGISTRIES_KEEP:
+            del self._turn_registries[next(iter(self._turn_registries))]
+        return registry
 
     # ------------------------------------------------------------ state
 
@@ -343,8 +365,7 @@ class Skills(Extension):
         if not messages:
             return
         state = view.ext_state(self.name) or {}
-        env = task_env(view.env, view.state.config)
-        registry = await self.registry(env)
+        registry = await self.turn_registry(view)
         # Skills installed since the last listing are announced with the
         # person's next message (the first listing, and with it the
         # ``skill`` tool, when the task started with none).
@@ -437,7 +458,7 @@ class Skills(Extension):
         if name is None or (args is not None and not isinstance(args, str)):
             return None
         state = view.ext_state(self.name) or {}
-        registry = await self.registry(task_env(view.env, view.state.config))
+        registry = await self.turn_registry(view)
         desc = registry.get(name)
         if desc is None or not desc.fork or name not in registry.model_invocable(
                 unlocked_skills(state)) or view.find_tool(AGENT_TOOL) is None:
@@ -465,7 +486,7 @@ class Skills(Extension):
             return
         state = view.ext_state(self.name) or {}
         unlocked = unlocked_skills(state)
-        registry = await self.registry(task_env(view.env, view.state.config))
+        registry = await self.turn_registry(view)
         waiting = [d for d in registry.conditional() if d.name not in unlocked]
         if not waiting:
             return

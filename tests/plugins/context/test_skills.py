@@ -587,6 +587,27 @@ async def test_a_skill_with_paths_is_offered_once_a_matching_file_is_touched(
     assert f"{ADDED_HEADER}\n\n- pyfix: Python fixes." in texts
 
 
+async def test_the_skill_directories_are_scanned_once_a_turn_not_after_every_read(
+        h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.plugins.skills import extension as skills_extension
+
+    write_skill(skills_dir(h), "pyfix", "Python fixes.", paths="[\"src/**\"]")
+    (h.work / "a.txt").write_text("hi\n")
+    scans = 0
+    real = skills_extension.load_registry
+
+    async def counting(*args: Any) -> Any:
+        nonlocal scans
+        scans += 1
+        return await real(*args)
+
+    monkeypatch.setattr(skills_extension, "load_registry", counting)
+    h.provider.add(*[reply("", ("Read", {"file_path": "a.txt"})) for _ in range(5)],
+                   reply("done"))
+    await h.start(agent())
+    assert scans <= 2
+
+
 def test_path_patterns() -> None:
     assert path_patterns("- src/**\n- docs/") == ("src", "docs/")
     assert path_patterns("**") == ()
