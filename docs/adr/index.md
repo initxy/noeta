@@ -16,11 +16,15 @@ and describe a different codebase.
 - [005](005-holds-with-epochs-and-hold-lost.md) Process-bound work holds its task tree, with epochs and a hold_lost notice
   (refined by 011)
 - [006](006-fold-snapshots.md) Claims fold from versioned snapshots; a snapshot may be missing, never wrong
-  (refined by 012)
+  (refined by 012, 023)
 - [011](011-one-holding-worker-per-tree.md) A task tree has at most one holding worker
   (refined by 015)
 - [015](015-a-held-tree-runs-only-on-its-holder.md) A held tree's tasks run only on its holder
+  (refined by 024)
+- [024](024-a-hold-takes-back-lapsed-claims-and-a-held-tree-stays-on-its-holders-queues.md) A hold takes back lapsed claims, and a held tree stays on its holder's queues
 - [012](012-snapshots-follow-state-size.md) Snapshots are written as the state grows and deleted when the task ends
+  (refined by 023)
+- [023](023-snapshots-per-fold-version-and-newer-logs-left-to-newer-workers.md) Snapshots are kept per fold version; a newer version's log is left to a newer worker
 
 ## Extensibility and behavior
 
@@ -44,7 +48,7 @@ and describe a different codebase.
   (refined by 021)
 - [021](021-a-tenant-reads-all-but-a-protected-set-and-writes-only-its-own-places.md) A tenant reads all but a protected set and writes only its own places
 - [019](019-tenant-limits-are-enforced-by-the-kernel.md) Tenant limits and providers are enforced by the kernel
-  (refined by 022)
+  (refined by 022, 024)
 - [022](022-the-model-catalog-is-kernel-data.md) The model catalog is kernel data: budgets and output ceilings are kernel scheduling
 - [008](008-sandbox-protected-path-placeholders.md) The sandbox keeps code-running paths read-only and covers missing ones with placeholders
 - [009](009-serve-requires-a-token.md) The HTTP API always requires a bearer token

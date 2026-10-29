@@ -1,6 +1,7 @@
 # ADR-012: Snapshots are written as the state grows and deleted when the task ends
 
 - Status: accepted
+- Refined by: ADR-023 (snapshots per fold version)
 - Date: 2026-10-28
 - Refines: ADR-006
 
