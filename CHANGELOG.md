@@ -424,6 +424,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   (`ExitWorktree remove`, an isolated agent's end) counted only commits on the worktree's
   current `HEAD`, so after a switch to another branch the commits on the `worktree-*` branch
   were lost with `branch -D`. It now counts both.
+- **A long-lived conversation no longer piles up ended background jobs in memory.** The
+  worker kept every ended background job of a root until the root ended; it now keeps the
+  last 64 once their end is posted (older logs are removed with the root's), and the list of
+  ended tasks forgets its oldest entry first instead of an arbitrary one.
 - **A sub-agent that ends without handing back reports with its final message.** In auto
   mode a sub-agent that ended without `SubagentHandback` came back as "no report" and its
   last reply was dropped: one whose agent definition lacks the subtasks plugin, whose tool
