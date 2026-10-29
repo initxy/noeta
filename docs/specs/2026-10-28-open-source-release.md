@@ -118,7 +118,7 @@ servers and runs on many machines.
   for its cwd and the directories above it within its workspace, and read access to
   `skills/`. The memory plugin, which reads in-process, takes a git main checkout only when
   it holds the cwd and keeps `user`-scope agent memory under the cwd for such tasks.
-- D17 The tenant decision is also made per task: a worker without a strict sandbox or
+- D17 (extends D14) The tenant decision is also made per task: a worker without a strict sandbox or
   `[server] shared_os_user_tenants = true` (whether or not it knows of tenants) fails a
   non-default tenant's turn with `tenant_not_isolated` and the reason before any model
   call, and denies its pending calls (`Permissions(tenant_refusal=)`). Rejected: skipping
@@ -157,7 +157,7 @@ servers and runs on many machines.
   that only list names (`find -L` of instructions and skills, the gate's glob expansion) and
   the PDF converters (given a fenced copy) do not. The operator's saved workflows join
   `skills/` as readable.
-- D23 (`os-fix-r2host`) git that noeta itself runs in a non-default tenant's workspace (the
+- D23 (`os-fix-r2host`; extends D22) git that noeta itself runs in a non-default tenant's workspace (the
   environment's snapshot, memory's repository lookup) goes through `run_in_tenant_sandbox`
   too, extending D22 to every place operator code runs git on a tenant's checkout. Hardened
   flags alone are not sound: the repository's config is the tenant's, git has no switch for
@@ -303,14 +303,14 @@ servers and runs on many machines.
   (`/opt`, `/srv`, `/var`, data disks, `/tmp` are where tenants' inputs live); hiding
   whole home directories (credential stores are what matters there); matching credential
   names anywhere on disk (a project's own `.npmrc`).
-- D39 (`os-fix-r4tools`, owner) Supersedes D19's "fails on any shared run": copying Claude
+- D39 (`os-fix-r4tools`, owner; partly supersedes D19) Supersedes D19's "fails on any shared run": copying Claude
   Code's prompt wording is acceptable where it serves parity; what matters is the behavior
   (ADR-020, refining ADR-003). `scripts/parity/own_words.py` is an advisory report: it
   prints the shared runs, always exits 0, and no test fails on them. The rest of D19 holds
   (recordings read from outside the repository, nothing derived from their wording
   committed). Rejected: a word-run rule (8 consecutive words) on top of the character
   windows, and rewording `Agent`, `ToolSearch` and the background-command result to pass it.
-- D40 (`os-fix-r5sec`) The server's own directories are named once for every process:
+- D40 (`os-fix-r5sec`; extends D38) The server's own directories are named once for every process:
   `[server] dirs` in `config.toml` (absolute paths, read by `noeta serve` and `noeta
   worker`) plus `noeta worker --server-dir PATH`; a worker refuses `bypassPermissions`
   unless `--allow-bypass-permissions`, as serve does. A server directory inside a tenant's
@@ -333,7 +333,7 @@ servers and runs on many machines.
   value '...'" (an unknown tag or literal) is a newer version's log: the worker lets the
   lease run out without counting it toward `unreadable_log`, so it backs off by the lease
   instead of releasing into a busy loop. Malformed JSON and wrong shapes still count.
-- D44 (`os-fix-r5kernel`) A model call is charged to its tenant as soon as it returns,
+- D44 (`os-fix-r5kernel`; extends D33) A model call is charged to its tenant as soon as it returns,
   empty replies included; the kernel's `spawn(history_from=)` is refused like
   `Client.create`'s, an unknown source included.
 - D45 (`os-fix-r5tools`) A worker's background-job table lets a root go, with its jobs'
@@ -370,10 +370,10 @@ servers and runs on many machines.
   sends the command tags (`command_message`), and the `markdown_commands` plugin adds the body
   on the person's message, running its `!` lines and keeping its `allowed-tools` as
   pre-approval for the rest of the task, the skills' rules (`noeta.toolkit.inline_commands`).
-- D51 (`os-fix-r6core`) D43 holds for the inbox: an item that fails to decode as a newer
+- D51 (`os-fix-r6core`; extends D43) D43 holds for the inbox: an item that fails to decode as a newer
   version's (msgspec's "Invalid value") lets the lease run out with nothing written; a
   malformed one counts toward `unreadable_log` with the log's own count.
-- D52 (`os-fix-r6core`) The budget is checked before a step's request hooks and in
+- D52 (`os-fix-r6core`; extends D33) The budget is checked before a step's request hooks and in
   `TaskRun.complete`, which raises `BudgetSpent` (a `Fatal`) without calling: no model call of
   a tenant past its budget is made, compaction's and extensions' included.
 - D53 (`os-fix-r6core`; refined by D64) An agent's worktree kept for a running job is removed, if git finds no
@@ -384,11 +384,11 @@ servers and runs on many machines.
   (checked as the call finishes, where `_foreign_history` is). Rejected: letting a claim take a
   held tree's task on a queue the holder does not serve (it would run off the holder, against
   D24, and the holder's background job could not reach it).
-- D55 (`os-fix-r7kernel`) A worker missing a task's pinned plugin backs off like D43: the lease
+- D55 (`os-fix-r7kernel`; extends D43) A worker missing a task's pinned plugin backs off like D43: the lease
   runs out with nothing written, and after `LOAD_ATTEMPTS` such claims in a row on one worker
   with the log's last seq unchanged it ends the task failed with `plugin_missing` as before
   (a rolling install, `docs/extending.md`). Rejected: a time bound (one more clock to set).
-- D56 (`os-fix-r7kernel`; extended by D73) Folding a core record of a kind this version does not know raises
+- D56 (`os-fix-r7kernel`; extends D43; extended by D73) Folding a core record of a kind this version does not know raises
   `records.NewerRecord`, treated as a newer version's log (D43); `records.decode` still returns
   `None` for it, so front ends that only display records skip it.
 - D57 (`os-fix-r7sec`) A non-default tenant's sandbox drops the operator's
@@ -444,15 +444,15 @@ servers and runs on many machines.
   rules files) drop what the fence refuses; names leaked otherwise, contents never did. The
   skill commands a front end lists for a non-default tenant, read with no task env, skip a
   `SKILL.md` that resolves out of its skill directory rather than consult the fence.
-- D71 (`os-fix-r8sec`) With tenants besides the default one, `noeta serve` / `noeta worker`
+- D71 (`os-fix-r8sec`; extends D38) With tenants besides the default one, `noeta serve` / `noeta worker`
   refuse to start when a server directory cannot be hidden (D38's reasonable protection: a
   refusal, not a warning); without them nothing changes.
-- D72 (`os-fix-r8kernel`; refined by D80) D54 covers an extension's `TaskView.spawn(queue=...)`: the spawn
+- D72 (`os-fix-r8kernel`; extends D54; refined by D80) D54 covers an extension's `TaskView.spawn(queue=...)`: the spawn
   raises `ValueError` naming the queue, staging nothing, through the same
   `TaskRun.serves_queue` a tool call's spawn is checked with. Rejected: checking in
   `TaskRun.staged` at append (the hook's `spawned` record is already pending; dropping the
   child would leave the parent waiting on a child that never exists).
-- D73 (`os-fix-r8kernel`) `ToolContext.record` / `TaskView.record` refuse a `core` record of
+- D73 (`os-fix-r8kernel`; extends D56) `ToolContext.record` / `TaskView.record` refuse a `core` record of
   a kind the core does not know with `ValueError` (`records.check_writable`); in a tool call
   it fails the call with that error. Since D56 folding one would leave the task to a newer
   worker for good.
@@ -460,11 +460,11 @@ servers and runs on many machines.
   lease (`lease_until >= now`) on both stores (store contract). A task whose lease ran out
   may then be reclaimed while the tenant's next task runs, briefly one over the limit, as a
   dead worker's task was before.
-- D75 (`os-fix-r8tools`) A blocked prompt's erase also takes the `inline` user messages
+- D75 (`os-fix-r8tools`; extends D60) A blocked prompt's erase also takes the `inline` user messages
   recorded from the first blocked input on (its `/command` / `/skill` expansions); the fold
   drops `human` and `inline` user messages at the erased seqs, never tool results or other
   agents' messages.
-- D76 (`os-fix-r8tools`) `UserPromptSubmit` runs before any model call that carries new
+- D76 (`os-fix-r8tools`; extends D60) `UserPromptSubmit` runs before any model call that carries new
   human messages, not only a turn's first, so a mid-turn message is checked before the model
   sees it and never again; a block mid-turn fails the turn as at its start.
 - D77 (`os-fix-r8tools`) An agent hook keeps the task's read-only tools (Claude Code offers
