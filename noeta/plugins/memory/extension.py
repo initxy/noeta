@@ -25,11 +25,11 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from noeta.core.events import DEFAULT_TENANT, Recorded
+from noeta.core.events import DEFAULT_TENANT
 from noeta.core.execenv import ExecEnv
-from noeta.core.extension import ContextPart, Extension, TaskView
-from noeta.core.types import Message, ModelRequest, SystemPart, user
-from noeta.toolkit.context import fence_refuses, new_user_messages, read_local_text, task_env
+from noeta.core.extension import ContextPart, Extension, Reminder, TaskView
+from noeta.core.types import Message, ModelRequest, SystemPart, ToolResult, user
+from noeta.toolkit.context import fence_refuses, read_local_text, task_env
 from noeta.toolkit.memory_index import (
     MEMORY_INDEX_FILE,
     MEMORY_INDEX_MAX_BYTES,
@@ -156,7 +156,10 @@ class Memory(Extension):
             return {**state, "dir": data["dir"]}
         if kind == "recalled":
             return {**state, "surfaced": [*state["surfaced"], *data["paths"]],
-                    "bytes": state["bytes"] + int(data.get("bytes") or 0)}
+                    "bytes": state["bytes"] + int(data.get("bytes") or 0),
+                    "through": data.get("through") or state.get("through")}
+        if kind == "checked":
+            return {**state, "through": data["through"]}
         return state
 
     def _dir(self, view: TaskView) -> str | None:
@@ -203,13 +206,34 @@ class Memory(Extension):
         index = await self._index(view, directory)
         return (user(index, origin="system"),) if index is not None else ()
 
-    async def on_event(self, view: TaskView, recorded: Recorded) -> None:
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        """Recall for the person's messages the model has not answered yet,
+        before the call that first carries them. Run as a reminder, not when
+        a message arrives, so a ``UserPromptSubmit`` hook listed before this
+        plugin has blocked (and erased) a prompt before its text reaches the
+        recall model."""
         directory = self._dir(view)
         if not self.recall_model or view.complete is None or directory is None:
-            return
-        messages = new_user_messages(view.state, recorded.seq)
-        if messages:
-            await self._recall(view, directory, "\n\n".join(m.text for m in messages))
+            return ()
+        state = view.state
+        after = int((view.ext_state(self.name) or {}).get("through") or 0)
+        new: list[tuple[int, Message]] = []
+        for seq, m in zip(state.message_seqs, state.messages, strict=False):
+            if m.role == "assistant":
+                new = []
+            elif seq > after and m.from_person and m.text \
+                    and not any(isinstance(b, ToolResult) for b in m.content):
+                new.append((seq, m))
+        if not new:
+            return ()
+        through = new[-1][0]
+        found = await self._recall(view, directory, "\n\n".join(m.text for _, m in new))
+        if found is None:
+            view.record(self.name, "checked", {"through": through})
+            return ()
+        text, paths, used = found
+        return (Reminder(text=text, kind="recalled", origin="memory",
+                         data={"paths": paths, "bytes": used, "through": through}),)
 
     # ------------------------------------------------------------ helpers
 
@@ -287,14 +311,17 @@ class Memory(Extension):
         out.sort(key=lambda t: -t[1])
         return [(name, line) for name, _, line in out]
 
-    async def _recall(self, view: TaskView, directory: str, query: str) -> None:
+    async def _recall(self, view: TaskView, directory: str,
+                      query: str) -> tuple[str, list[str], int] | None:
+        """The recalled text, the files attached and their bytes; ``None``
+        when nothing is attached."""
         state = view.ext_state(self.name) or {}
         if int(state.get("bytes") or 0) >= RECALL_TASK_BYTES:
-            return
+            return None
         env = task_env(view.env, view.state.config)
         manifest = await self._manifest(env, directory, set(state.get("surfaced") or []))
         if not manifest:
-            return
+            return None
         assert view.complete is not None and self.recall_model is not None
         listing = "\n".join(line for _, line in manifest)
         request = ModelRequest(
@@ -308,7 +335,7 @@ class Memory(Extension):
             picked = json.loads(response.message.text).get("selected_memories") or []
         except Exception:
             log.info("memory: recall selection failed", exc_info=True)
-            return
+            return None
         names = {name for name, _ in manifest}
         budget = RECALL_TASK_BYTES - int(state.get("bytes") or 0)
         parts: list[str] = []
@@ -325,6 +352,6 @@ class Memory(Extension):
             used += size
             parts.append(f"Memory {path}:\n{body.strip()}")
             paths.append(str(path))
-        if parts:
-            view.record(self.name, "recalled", {"paths": paths, "bytes": used},
-                        message=user(RECALL_HEAD + "\n\n" + "\n\n".join(parts), origin="memory"))
+        if not parts:
+            return None
+        return RECALL_HEAD + "\n\n" + "\n\n".join(parts), paths, used

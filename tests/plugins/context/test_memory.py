@@ -12,6 +12,8 @@ import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.agent import Agent
+from noeta.core.types import ModelRequest, ModelResponse
+from noeta.plugins.hooks import Hooks
 from noeta.plugins.instructions import Instructions
 from noeta.plugins.memory import INDEX_FILE, Memory, load_index, memory_dir_for
 from noeta.plugins.memory.extension import (
@@ -286,3 +288,27 @@ async def test_a_tenants_own_memory_is_still_read(h: Harness, tmp_path: Path) ->
     assert "indent with tabs" in selector.messages[0].text
     sent = "\n".join(m.text for m in main.messages)
     assert "tabs please" in sent and "Use tabs." in sent
+
+
+async def test_a_blocked_prompt_is_never_recalled_for(h: Harness, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "vault.md", "the vault", "The vault code is 1234.")
+
+    def answer(request: ModelRequest) -> ModelResponse:
+        if request.model == "small":
+            picked = ["vault.md"] if "vault please" in request.messages[0].text else []
+            return reply(json.dumps({"selected_memories": picked}))
+        return reply("ok")
+
+    h.provider.add(*[answer] * 4)
+    hooks = {"UserPromptSubmit": [{"matcher": "", "hooks": [{
+        "type": "command", "command": "grep -q SECRET && { echo no >&2; exit 2; }; exit 0"}]}]}
+    a = Agent(name="a", model="m", extensions=[
+        Hooks(hooks=hooks), Memory(home=str(home), recall_model="small")])
+    tid = await h.start(a, goal="SECRET vault please", config={"cwd": str(h.work)})
+    await h.say(a, tid, "hello")
+    assert not any("SECRET" in m.text for r in h.provider.requests for m in r.messages)
+    main = h.provider.requests[-1]
+    assert main.model == "m" and not [m for m in main.messages if m.origin == "memory"]
