@@ -719,3 +719,6 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   read, the compaction transcripts of its own task and its root (`<task id>.jsonl`), with a
   file tool and in the sandbox. Before, the whole directory was open, so the transcripts of
   every other task working in that directory could be read and rewritten.
+- A started workflow's script is kept in its task's own spill directory
+  (`tool-results/<task id>/workflows/`). Before, every task's went to one shared
+  `tool-results/workflows/`, which a tenant's task could not read back.
