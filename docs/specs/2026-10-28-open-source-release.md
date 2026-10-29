@@ -601,6 +601,7 @@ servers and runs on many machines.
 - [ ] Final independent review on code only: no P0/P1.
 - [ ] Run make check, make parity, make cluster, make e2e and make eval on the final head and record the numbers.
 - [ ] Owner signs off on publishing the committed Claude Code interface data (scripts/parity/README.md) and the remaining owner decisions before any push.
+- [ ] Owner decides on the internal company and host names in committed docs before any push (left as they are until then): this spec's D9 ("gateway token gateway"); `docs/specs/2026-10-26-noeta-1-0-redesign.md` lines 45 (host-app, host-app-2, noeta-agent), 63, 370, 371, 385, 395, 418 and 420 (host-app); `docs/specs/archive/2026-10-27-layout-split.md` line 27 and `docs/specs/archive/2026-10-27-noeta-1-0-layout.md` line 19 (host-app); `docs/specs/archive/2026-10-28-claude-code-parity.md` line 365 (the `gateway/seed-evolving` upstream).
 ### Follow-ups (after this release; each moves to a spec of its own before this one is `done`)
 - [x] Deferred tool loading out of the kernel (ADR-016): an `Extension` way to offer tools computed from the task's other tools, then `ToolSearchTool`, its description and the placeholder into a `tool_search` plugin; request bytes unchanged (`make parity` 0), existing snapshots still valid.
 - [x] The file splits S22–S40 left undone in the kernel: `core/runner/task.py` (timers; stopping and ending a turn), `core/runner/model.py` `call_model` (reminders and hooks; overflow), and `backends/stores/postgres.py`'s connection handling; structure only.
