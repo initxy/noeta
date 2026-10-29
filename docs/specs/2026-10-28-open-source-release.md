@@ -552,6 +552,10 @@ servers and runs on many machines.
   refuses, outside the workspace, a git directory that is not `.git` (nor named by a `.git`
   file) and is not bare: a work tree is what runs a repository's filters, which no `-c` can
   turn off by name. A bare repository elsewhere still reads.
+- D99 (`os-fix-r11sec`, refines ADR-014) On macOS the sandbox is not a tenant boundary:
+  `isolation_problem` refuses non-default tenants there whatever the sandbox settings,
+  unless `shared_os_user_tenants`. Seatbelt starts from `(allow default)`, and closing
+  `mach-lookup` / Apple Events cannot be tested here; refusing is the honest default.
 
 ## Plan
 

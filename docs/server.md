@@ -145,7 +145,10 @@ of these holds:
 
 1. **The sandbox confines every command**: `sandbox.enabled: true`,
    `sandbox.failIfUnavailable: true` and `sandbox.allowUnsandboxedCommands: false` in
-   `~/.noeta/settings.json`. `Bash` then runs inside bubblewrap or Seatbelt.
+   `~/.noeta/settings.json`. `Bash` then runs inside bubblewrap. Not on macOS: Seatbelt's
+   profile leaves launchd and other apps reachable, so a command could have them run
+   something outside it. There, run the workers in a Linux container (where bubblewrap
+   applies), use option 2, or take option 3.
 2. **A remote exec env (host code only)**: tools run in a container per task, chosen by
    `Runtime(env_for=…)` in host code that embeds noeta. The `noeta` command cannot set one
    up, and its start-up check does not recognise one: such a host runs its own workers.
