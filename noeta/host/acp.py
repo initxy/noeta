@@ -131,11 +131,16 @@ HOST_COMMANDS = (
 class NoetaAcpAgent:
     """The ACP agent side. ``agent`` names the noeta agent each session runs;
     ``app`` runs here (``LocalApp``) or is a ``noeta serve`` server
-    (``RemoteApp``)."""
+    (``RemoteApp``). ``editor_cwd``: a new session's task runs in the
+    directory the editor names; without it (a server, where that path means
+    nothing) in ``cwd``, or where the server puts it when that is empty."""
 
     def __init__(self, app: AppAPI, *, agent: str = "main", model: str = "",
-                 servers: EditorServers | None = None) -> None:
+                 servers: EditorServers | None = None, editor_cwd: bool = True,
+                 cwd: str = "") -> None:
         self.app = app
+        self.editor_cwd = editor_cwd
+        self.cwd = cwd
         self.servers = servers
         self.agent = agent
         self.model = model
@@ -170,7 +175,9 @@ class NoetaAcpAgent:
 
     async def new_session(self, cwd: str, mcp_servers: list[Any] | None = None,
                           **kw: Any) -> schema.NewSessionResponse:
-        config: dict[str, Any] = {"cwd": cwd}
+        config: dict[str, Any] = {}
+        if task_cwd := (cwd if self.editor_cwd else self.cwd):
+            config["cwd"] = task_cwd
         if self.model:
             config["model"] = self.model
         task_id = await self.app.client.create(self.agent, None, config=config)
@@ -561,7 +568,8 @@ class NoetaAcpAgent:
 
 
 async def serve_stdio(app: AppAPI, *, agent: str = "main", model: str = "",
-                      servers: EditorServers | None = None) -> None:
+                      servers: EditorServers | None = None, editor_cwd: bool = True,
+                      cwd: str = "") -> None:
     await acp.run_agent(NoetaAcpAgent(app, agent=agent, model=model,  # type: ignore[arg-type]
-                                      servers=servers))
+                                      servers=servers, editor_cwd=editor_cwd, cwd=cwd))
 

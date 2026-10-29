@@ -18,7 +18,7 @@ task, and on a server with tenants their tools run as that same OS user.
 - A file an older noeta left holding the token itself is rewritten to its digest on the next
   start, which prints the token one last time.
 - Clients (`noeta --server`, `noeta acp --server`) take the token from `NOETA_SERVER_TOKEN`
-  (`noeta/cli/config.py` `server_token`); the file serves them only while it still holds an
+  (`noeta/cli/server_token.py`); the file serves them only while it still holds an
   older noeta's plain-text token, until a server start migrates it. Deleting the file and
   restarting makes a new token.
 

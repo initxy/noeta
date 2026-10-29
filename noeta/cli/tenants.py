@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from noeta.agents.agent_files import resolve_secrets
-from noeta.cli import config
+from noeta.cli import config, home_dir
 from noeta.core.events import DEFAULT_TENANT
 from noeta.core.tenants import Tenant, token_digest
 from noeta.toolkit.sandbox import SandboxSettings
@@ -46,7 +46,7 @@ TENANT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 
 
 def _tokens_path() -> Any:
-    return config.HOME / "tokens.json"
+    return home_dir.HOME / "tokens.json"
 
 
 def read_tokens() -> list[dict[str, Any]]:
@@ -63,7 +63,7 @@ def read_tokens() -> list[dict[str, Any]]:
 
 def _write_tokens(entries: list[dict[str, Any]]) -> None:
     path = _tokens_path()
-    config.HOME.mkdir(parents=True, exist_ok=True)
+    home_dir.ensure_home()
     fresh = path.with_name(f".tokens-{os.getpid()}.json")
     fd = os.open(fresh, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -140,7 +140,7 @@ def workspace_problem(places: dict[str, Any]) -> str | None:
                if places.get(t) is None or not places[t].workspace]
     if not missing:
         return None
-    files = ", ".join(str(config.HOME / "tenants" / t / "config.toml") for t in missing)
+    files = ", ".join(str(home_dir.HOME / "tenants" / t / "config.toml") for t in missing)
     return (f"tenant(s) {', '.join(missing)} have no workspace, and a tenant's tasks run only "
             f"in its own: set workspace = \"<directory>\" in {files}")
 
@@ -148,7 +148,7 @@ def workspace_problem(places: dict[str, Any]) -> str | None:
 def _has_workspace(tenant: str) -> bool:
     """Whether ``tenant``'s config names a workspace directory."""
     try:
-        data = tomllib.loads((config.HOME / "tenants" / tenant / "config.toml")
+        data = tomllib.loads((home_dir.HOME / "tenants" / tenant / "config.toml")
                              .read_text("utf-8"))
     except (OSError, ValueError):
         return False
@@ -175,10 +175,10 @@ def isolation_problem(settings: config.Settings, cwd: str) -> str | None:
     if not missing:
         return None
     return ("tenants' tools would run as this OS user with no boundary: they could read "
-            f"{config.HOME} (tokens, the store) and this process's environment. Set "
+            f"{home_dir.HOME} (tokens, the store) and this process's environment. Set "
             f"{', '.join(missing)} in settings.json, run the workers with a remote exec env, "
             "or accept tenants separated at the API only with [server] "
-            f"shared_os_user_tenants = true in {config.HOME / 'config.toml'}")
+            f"shared_os_user_tenants = true in {home_dir.HOME / 'config.toml'}")
 
 
 @dataclass(frozen=True)
@@ -202,7 +202,7 @@ def load_tenants(settings: config.Settings) -> dict[str, TenantPlace]:
     """Every ``~/.noeta/tenants/<name>/config.toml``, by tenant name; secret
     references resolved now. Raises ``ValueError`` naming the file for a
     setting it does not know or cannot use."""
-    root = config.HOME / "tenants"
+    root = home_dir.HOME / "tenants"
     out: dict[str, TenantPlace] = {}
     for folder in sorted(root.iterdir()) if root.is_dir() else ():
         path = folder / "config.toml"
@@ -268,7 +268,7 @@ def run(args: argparse.Namespace) -> int:
     try:
         if args.token_command == "add":
             if args.tenant != DEFAULT_TENANT and not _has_workspace(args.tenant):
-                path = config.HOME / "tenants" / args.tenant / "config.toml"
+                path = home_dir.HOME / "tenants" / args.tenant / "config.toml"
                 raise ValueError(f"tenant {args.tenant!r} has no workspace: set workspace = "
                                  f"\"<directory>\" in {path} first (a tenant's tasks run "
                                  "only in its own)")

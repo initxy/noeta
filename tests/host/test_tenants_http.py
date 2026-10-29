@@ -213,9 +213,9 @@ def test_the_tokens_file_maps_tokens_to_tenants(tmp_path: Path,
                                                monkeypatch: pytest.MonkeyPatch) -> None:
     import stat
 
-    from noeta.cli import config, main, tenants
+    from noeta.cli import home_dir, main, tenants
 
-    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    monkeypatch.setattr(home_dir, "HOME", tmp_path / "home")
     lookup = tenants.tenant_tokens()
     assert lookup("nothing") is None
     token = tenants.add_token("acme", "ci")

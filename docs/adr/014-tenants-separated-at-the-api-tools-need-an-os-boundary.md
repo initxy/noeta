@@ -1,6 +1,8 @@
 # ADR-014: Tenants are separated at the API; tools need an OS boundary
 
 - Status: accepted
+- Refined by: [ADR-018](018-each-tenant-has-its-own-places-on-disk.md)
+  (per-tenant project and temp directories; a workspace is required)
 - Date: 2026-10-28
 - Refines: [ADR-007](007-tenants.md)
 

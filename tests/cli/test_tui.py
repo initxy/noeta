@@ -90,6 +90,22 @@ async def test_approval_with_a_key(tmp_path: Path) -> None:
         assert call.state == "done"
 
 
+async def test_a_new_task_asks_only_for_its_task_config(tmp_path: Path) -> None:
+    """Attached to a server, a new task names no directory or model of its
+    own: the server picks them."""
+    from noeta.core.events import TaskCreated
+
+    agent = Agent(name="main", model="claude-sonnet-4-5", tools=[Look()])
+    local = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], ScriptedProvider([]),
+                     env_for=lambda _s: None)
+    app = NoetaApp(local, agent="main", model="the server's model", cwd=str(tmp_path),
+                   task_config={})
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(pilot, app, lambda: app.task_id != "")
+        first = (await local.client.events(app.task_id))[0].event
+        assert isinstance(first, TaskCreated) and first.config == {}
+
+
 async def test_shift_tab_cycles_the_permission_mode(tmp_path: Path) -> None:
     from noeta.core.events import External
     from noeta.plugins.permissions import Permissions

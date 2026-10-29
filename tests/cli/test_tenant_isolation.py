@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from noeta.cli import config, main, tenants
+from noeta.cli import config, home_dir, main, tenants
 
 
 class _Started(Exception):
@@ -22,7 +22,7 @@ class _Started(Exception):
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "home"
     path.mkdir()
-    monkeypatch.setattr(config, "HOME", path)
+    monkeypatch.setattr(home_dir, "HOME", path)
     monkeypatch.delenv("NOETA_SERVER_TOKEN", raising=False)
     monkeypatch.chdir(tmp_path)
 

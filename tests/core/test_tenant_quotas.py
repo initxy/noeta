@@ -119,9 +119,9 @@ async def test_a_tenants_tasks_call_its_own_provider(tmp_path: Path) -> None:
 
 def test_tenant_directories_are_read_with_their_secrets(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from noeta.cli import config, tenants
+    from noeta.cli import config, home_dir, tenants
 
-    monkeypatch.setattr(config, "HOME", tmp_path)
+    monkeypatch.setattr(home_dir, "HOME", tmp_path)
     work = tmp_path / "acme-work"
     work.mkdir()
     (tmp_path / "tenants" / "acme").mkdir(parents=True)

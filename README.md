@@ -97,7 +97,10 @@ noeta serve --no-worker --host 0.0.0.0    # the API; bearer token required
 noeta --server http://api.internal:8642   # the TUI against it (also: noeta acp --server URL)
 ```
 
-A worker that dies leaves nothing behind: another claims its tasks where their logs stop.
+A worker that dies leaves nothing behind: another claims its tasks where their logs stop. A
+front end attached with `--server` needs the token in `NOETA_SERVER_TOKEN` and no model of its
+own: its tasks run on the server's model and in the server's directory unless `--model` or
+`--cwd PATH` (a directory on the server) say otherwise.
 Workspaces, tokens and tenants: [docs/server.md](docs/server.md).
 
 ## Extend it

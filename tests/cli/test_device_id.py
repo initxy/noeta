@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from noeta.cli import config
+from noeta.cli import home_dir
 
 
 def test_made_once_and_kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    first = config.device_id()
+    monkeypatch.setattr(home_dir, "HOME", tmp_path / "home")
+    first = home_dir.device_id()
     assert first is not None and len(first) == 64
-    assert config.device_id() == first
+    assert home_dir.device_id() == first
     assert (tmp_path / "home" / "device_id").read_text().strip() == first

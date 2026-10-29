@@ -53,6 +53,12 @@ the events since the last one hold a tenth of its bytes), and a claim folds the 
 the events after it. Ending a task deletes its snapshot. A snapshot whose version does not match the code is ignored and the log is
 folded from the start, so a snapshot can be missing but never wrong.
 
+**Tenant limits are scheduling.** The claim skips a tenant's tasks at its running limit, and
+every model call (the turn's and every plugin's) passes through the kernel, which picks the
+tenant's provider, refuses a call past its monthly budget and counts the usage. The count is a
+per-tenant total beside the logs, not task state: no fold reads it, and a refusal is written
+to the task's log. See [ADR-019](adr/019-tenant-limits-are-enforced-by-the-kernel.md).
+
 ## One step of a task
 
 1. A worker claims a ready task, folds its log (snapshot + tail) and takes its inbox.

@@ -20,12 +20,10 @@ win. The plugin part of ``config.toml``::
 
 from __future__ import annotations
 
-import contextlib
 import dataclasses
 import functools
 import logging
 import os
-import secrets
 import tomllib
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -38,7 +36,9 @@ from noeta.agents.agent_files import (
     PluginSetting,
     parse_plugin_list,
 )
+from noeta.cli import home_dir
 from noeta.cli.claude_plugins import ClaudePlugin, find_claude_plugins, plugin_settings
+from noeta.cli.plugin_policy import plugin_policy
 from noeta.cli.settings_files import (
     FileSettings,
     apply_env,
@@ -47,11 +47,16 @@ from noeta.cli.settings_files import (
     settings_layers,
 )
 from noeta.cli.settings_files import load as load_file_settings
+from noeta.cli.trust import (
+    PROJECT_GATED_DIRS,
+    project_trusted,
+    untrusted_notice,
+)
+from noeta.cli.trust import trust_project as trust_project
 from noeta.core import models, registry
 from noeta.core.events import DEFAULT_TENANT
 from noeta.core.execenv import ExecEnv
 from noeta.core.provider import Provider
-from noeta.core.tenants import token_digest
 from noeta.toolkit.paths import make_tenant_temp_dir
 from noeta.toolkit.sandbox import SandboxSettings
 from noeta.toolkit.tenant_fence import TenantFence, store_files
@@ -63,8 +68,6 @@ if TYPE_CHECKING:
     from noeta.host.local import LocalApp
 
 log = logging.getLogger("noeta.cli")
-
-HOME = Path(os.environ.get("NOETA_HOME") or Path.home() / ".noeta")
 
 
 @dataclass
@@ -100,87 +103,13 @@ class Settings:
         if self.extra_headers:
             kw["extra_headers"] = dict(self.extra_headers)
         if self.provider == "anthropic":
-            kw["device_id"] = device_id()
+            kw["device_id"] = home_dir.device_id()
         return registry.provider(self.provider, base_url=self.base_url, api_key=self.api_key,
                                  **kw)
 
     @property
     def store_url(self) -> str:
-        return self.store or f"sqlite:///{HOME / 'tasks.db'}"
-
-
-def device_id() -> str | None:
-    """This machine's random id, made on first use (``~/.noeta/device_id``):
-    the stable device id Claude Code sends in ``metadata.user_id``. ``None``
-    when it cannot be kept (the provider then uses one per process)."""
-    path = HOME / "device_id"
-    try:
-        text = path.read_text("utf-8").strip()
-        if text:
-            return text
-    except OSError:
-        pass
-    value = secrets.token_hex(32)
-    try:
-        HOME.mkdir(parents=True, exist_ok=True)
-        path.write_text(value + "\n", "utf-8")
-    except OSError:
-        return None
-    return value
-
-
-#: How ``~/.noeta/server-token`` starts: it keeps the token's digest only.
-_DIGEST_PREFIX = "sha256:"
-
-
-def server_token() -> str | None:
-    """The bearer token a client sends to ``noeta serve``:
-    ``NOETA_SERVER_TOKEN``, else one an older noeta still keeps in plain text
-    in ``~/.noeta/server-token`` (a server keeps only its digest there)."""
-    if os.environ.get("NOETA_SERVER_TOKEN"):
-        return os.environ["NOETA_SERVER_TOKEN"]
-    try:
-        text = (HOME / "server-token").read_text("utf-8").strip()
-    except OSError:
-        return None
-    return text if text and not text.startswith(_DIGEST_PREFIX) else None
-
-
-@dataclass(frozen=True)
-class ServerToken:
-    """The server's bearer token as ``noeta serve`` holds it."""
-
-    #: Its SHA-256 (``noeta.core.tenants.token_digest``).
-    sha256: str
-    #: The token itself when it was made, or moved out of a plain-text file,
-    #: just now: shown this once, never again.
-    shown: str | None = None
-
-
-def server_token_digest() -> ServerToken:
-    """``NOETA_SERVER_TOKEN``'s digest, else the one kept in
-    ``~/.noeta/server-token`` (owner-only). A missing file gets a new token;
-    a file of an older noeta holding the token itself is rewritten to hold
-    its digest. Either way the token is :attr:`ServerToken.shown`."""
-    if os.environ.get("NOETA_SERVER_TOKEN"):
-        return ServerToken(token_digest(os.environ["NOETA_SERVER_TOKEN"]))
-    path = HOME / "server-token"
-    try:
-        text = path.read_text("utf-8").strip()
-    except OSError:
-        text = ""
-    if text.startswith(_DIGEST_PREFIX):
-        return ServerToken(text.removeprefix(_DIGEST_PREFIX))
-    value = text or secrets.token_urlsafe(32)
-    HOME.mkdir(parents=True, exist_ok=True)
-    fresh = path.with_name(f".server-token-{os.getpid()}")
-    with contextlib.suppress(FileNotFoundError):
-        fresh.unlink()
-    fd = os.open(fresh, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(_DIGEST_PREFIX + token_digest(value) + "\n")
-    os.replace(fresh, path)
-    return ServerToken(token_digest(value), shown=value)
+        return self.store or f"sqlite:///{home_dir.HOME / 'tasks.db'}"
 
 
 def file_settings(cwd: str | None, *, sources: Collection[str] | None = None,
@@ -189,7 +118,7 @@ def file_settings(cwd: str | None, *, sources: Collection[str] | None = None,
     (:mod:`noeta.cli.settings_files`), the project's once it is trusted;
     ``sources`` and ``flag`` are ``--setting-sources`` and ``--settings``."""
     trusted = bool(cwd) and project_trusted(str(cwd))
-    layers = settings_layers(cwd, noeta_home=HOME, trusted=trusted, managed=managed_dir(),
+    layers = settings_layers(cwd, noeta_home=home_dir.HOME, trusted=trusted, managed=managed_dir(),
                              sources=sources, flag=flag)
     return load_file_settings([p for p, _ in layers], [k for _, k in layers])
 
@@ -203,7 +132,7 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
     found = file_settings(cwd, sources=sources, flag=flag)
     apply_env(found)
     data: dict[str, Any] = {}
-    path = HOME / "config.toml"
+    path = home_dir.HOME / "config.toml"
     if path.is_file():
         data.update(tomllib.loads(path.read_text("utf-8")))
     env = {
@@ -341,94 +270,6 @@ def open_store(url: str) -> Any:
     return registry.store(url)
 
 
-#: The projects whose gated directories (``PROJECT_GATED_DIRS``) may load:
-#: ``{"projects": [path, ...]}``,
-#: written by ``noeta trust``.
-TRUST_FILE = "trusted.json"
-
-
-def trusted_projects() -> list[str]:
-    import json
-
-    path = HOME / TRUST_FILE
-    if not path.is_file():
-        return []
-    data = json.loads(path.read_text("utf-8"))
-    projects = data.get("projects", []) if isinstance(data, dict) else []
-    return [str(Path(p).expanduser().resolve()) for p in projects if isinstance(p, str)]
-
-
-def trust_project(directory: str) -> str:
-    """Add ``directory`` to the trusted projects; returns it resolved."""
-    import json
-
-    resolved = str(Path(directory).expanduser().resolve())
-    projects = trusted_projects()
-    if resolved not in projects:
-        projects.append(resolved)
-        HOME.mkdir(parents=True, exist_ok=True)
-        (HOME / TRUST_FILE).write_text(json.dumps({"projects": projects}, indent=2) + "\n",
-                                       "utf-8")
-    return resolved
-
-
-def project_trusted(directory: str) -> bool:
-    """Has the person trusted the project at ``directory`` (``noeta trust``)?"""
-    return str(Path(directory).expanduser().resolve()) in trusted_projects()
-
-
-#: A project's directories that load only once it is trusted, with what each
-#: holds: code, or what changes an agent's plugins, permissions and prompts.
-PROJECT_GATED_DIRS = {
-    ".noeta/plugins": "plugins",
-    ".noeta/agents": "agent files",
-    ".noeta/prompts": "prompt overrides",
-    ".noeta/skills": "skills",
-    ".agents/skills": "skills",
-}
-
-
-def _untrusted_notice(cwd: str | None, sub: str) -> str | None:
-    """The notice for ``<cwd>/<sub>`` left alone because the project is not
-    trusted; ``None`` when it is absent or the project is trusted."""
-    if not cwd:
-        return None
-    project = Path(cwd).expanduser().resolve()
-    local = project / sub
-    if not local.is_dir() or str(project) in trusted_projects():
-        return None
-    return (f"{local} was not loaded: this project is not trusted "
-            f"(run `noeta trust` in {project} to load its {PROJECT_GATED_DIRS[sub]})")
-
-
-@dataclass(frozen=True)
-class PluginPolicy:
-    """The machine's say over plugins (``/etc/noeta/config.toml``
-    ``[policy]``): ``allowed_plugins`` (when set, only these plugins that
-    noeta does not ship load) and ``blocked_plugins`` (never load). It wins
-    over the user's and the project's settings; a plugin file is checked by
-    its file name before it is imported, every plugin, channel and Claude
-    Code plugin by its name."""
-
-    allowed: frozenset[str] | None = None
-    blocked: frozenset[str] = frozenset()
-
-    def admits(self, name: str, *, shipped: bool = False) -> bool:
-        if name in self.blocked:
-            return False
-        return shipped or self.allowed is None or name in self.allowed
-
-
-def plugin_policy() -> PluginPolicy:
-    path = managed_dir() / "config.toml"
-    if not path.is_file():
-        return PluginPolicy()
-    table = tomllib.loads(path.read_text("utf-8")).get("policy") or {}
-    allowed = table.get("allowed_plugins")
-    return PluginPolicy(allowed=None if allowed is None else frozenset(map(str, allowed)),
-                        blocked=frozenset(map(str, table.get("blocked_plugins") or ())))
-
-
 def _shipped(name: str) -> bool:
     return registry.sources(registry.PLUGINS).get(name) == "package noeta"
 
@@ -437,11 +278,11 @@ def load_plugin_files(cwd: str | None) -> list[str]:
     """Load the plugin files of ``~/.noeta/plugins`` and, for a trusted
     project, ``<cwd>/.noeta/plugins``. Returns notices for the person: a
     project's plugin directory left alone because it is not trusted."""
-    dirs = [HOME / "plugins"]
-    notice = _untrusted_notice(cwd, ".noeta/plugins")
+    dirs = [home_dir.HOME / "plugins"]
+    notice = untrusted_notice(cwd, ".noeta/plugins")
     if cwd and notice is None and (Path(cwd).expanduser() / ".noeta" / "plugins").is_dir():
         dirs.append(Path(cwd).expanduser().resolve() / ".noeta" / "plugins")
-    registry.load_plugin_files(dirs, admit=plugin_policy().admits)
+    registry.load_plugin_files(dirs, admit=plugin_policy(managed_dir()).admits)
     return [notice] if notice else []
 
 
@@ -476,12 +317,12 @@ def _base_plugin_settings(found: FileSettings, cwd: str | None,
     write_roots = [str(Path(cwd or os.getcwd(), d))
                    for d in permission_args.get("additional_directories") or ()]
     return merge_plugin_settings(
-        {"memory": {"home": str(HOME)},
+        {"memory": {"home": str(home_dir.HOME)},
          "hooks": {"settings_files": setting_files},
          "mcp": {"settings_files": setting_files,
                  "project": project_trusted if project else False},
-         "skills": {"trusted": project_trusted, "global_dir": str(HOME / "skills")},
-         "instructions": {"user_dir": str(HOME), "managed_dir": str(managed_dir())},
+         "skills": {"trusted": project_trusted, "global_dir": str(home_dir.HOME / "skills")},
+         "instructions": {"user_dir": str(home_dir.HOME), "managed_dir": str(managed_dir())},
          "permissions": permission_args, "fs": {"write_roots": write_roots}})
 
 
@@ -547,9 +388,11 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     from noeta.agents.agent_files import read_agent_dir
     from noeta.host.local import LocalApp
 
-    notices = load_plugin_files(cwd)
+    home_dir.ensure_home()
+    notices = home_dir.loose_permissions(settings.store_url)
+    notices += load_plugin_files(cwd)
     notices += [n for sub in PROJECT_GATED_DIRS if sub != ".noeta/plugins"
-                if (n := _untrusted_notice(cwd, sub)) is not None]
+                if (n := untrusted_notice(cwd, sub)) is not None]
     if (unknown := models.unknown_model_notice(settings.model)) is not None:
         notices.append(unknown)
     for notice in notices:
@@ -562,9 +405,9 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     def source(name: str) -> bool:
         return setting_sources is None or name in setting_sources
 
-    runtime_kw.setdefault("spill_root", str(HOME / "tool-results"))
-    fence = TenantFence(home=str(HOME), spill_root=runtime_kw["spill_root"],
-                        plans_dir=str(HOME / "plans"),
+    runtime_kw.setdefault("spill_root", str(home_dir.HOME / "tool-results"))
+    fence = TenantFence(home=str(home_dir.HOME), spill_root=runtime_kw["spill_root"],
+                        plans_dir=str(home_dir.HOME / "plans"),
                         store_files=store_files(settings.store_url),
                         workspaces=dict(tenant_workspaces or {}))
     permissions = {"tenant_workspaces": dict(fence.workspaces),
@@ -581,14 +424,14 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         notices.extend(n for n in found_notices if n not in notices)
         files = [a for p in claude for a in p.agents if a.name not in BUILTIN_AGENTS]
         if source("user"):
-            files += read_agent_dir(HOME / "agents")
+            files += read_agent_dir(home_dir.HOME / "agents")
         if cwd and project_trusted(cwd) and source("project"):
             files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
         files += agent_files
         from_plugins, plugin_notices = plugin_settings(claude)
         notices.extend(n for n in plugin_notices if n not in notices)
         table = merge_plugin_settings(base, from_plugins, settings.plugins, plugins or {})
-        policy = plugin_policy()
+        policy = plugin_policy(managed_dir())
         table.update({name: False for name in registry.available(registry.PLUGINS)
                       if not policy.admits(name, shipped=_shipped(name))})
         add = {agent: tuple(entries) for agent, entries in add_plugins.items()}
@@ -600,7 +443,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
 
     agents = make_agents()
     notices += _apply_sandbox(found, cwd, runtime_kw, fence)
-    runtime_kw.setdefault("prompt_dirs", [str(HOME / "prompts")])
+    runtime_kw.setdefault("prompt_dirs", [str(home_dir.HOME / "prompts")])
     runtime_kw.setdefault("workspace_trusted", project_trusted)
     app = LocalApp(open_store(settings.store_url), agents,
                    settings.make_provider(), own_tasks_only=own_tasks_only,
@@ -626,7 +469,7 @@ def make_channels(tables: Mapping[str, Mapping[str, Any]]) -> list[Channel]:
     from noeta.agents.agent_files import resolve_secrets
 
     out: list[Channel] = []
-    policy = plugin_policy()
+    policy = plugin_policy(managed_dir())
     for name, table in tables.items():
         args = dict(table)
         if args.pop("enabled", True) is False or not policy.admits(name):
@@ -644,11 +487,11 @@ def claude_plugins(cwd: str | None) -> tuple[list[ClaudePlugin], list[str]]:
     """The Claude Code plugin directories of ``~/.noeta/plugins`` and, for a
     trusted project, ``<cwd>/.noeta/plugins`` (:mod:`noeta.cli.claude_plugins`),
     with notices for the person (an agent named like a built-in one)."""
-    places = [(HOME / "plugins", False)]
+    places = [(home_dir.HOME / "plugins", False)]
     if cwd and project_trusted(cwd):
         places.append((Path(cwd).expanduser().resolve() / ".noeta" / "plugins", True))
-    policy = plugin_policy()
-    found = [p for p in find_claude_plugins(places, HOME / "plugin-data")
+    policy = plugin_policy(managed_dir())
+    found = [p for p in find_claude_plugins(places, home_dir.HOME / "plugin-data")
              if policy.admits(p.name)]
     notices = [f"plugin {p.name}: agent {a.name!r} is a built-in agent's name; not loaded"
                for p in found for a in p.agents if a.name in BUILTIN_AGENTS]

@@ -21,7 +21,11 @@ noeta serve --no-worker --host 0.0.0.0   # the API, on one or more machines
   sqlite (one machine) live output stays in the process that runs the task; the recorded
   events still reach everyone.
 - **Front ends attach anywhere.** The TUI (`noeta --server URL`) and editors through ACP
-  (`noeta acp --server URL`) drive the server's tasks with the same API the server serves.
+  (`noeta acp --server URL`) drive the server's tasks with the same API the server serves,
+  with the token in `NOETA_SERVER_TOKEN`. They need no model of their own: a new task runs
+  on the server's model, in the server's directory (a tenant's: its workspace), unless
+  `--model` names one or `--cwd PATH` names a directory on the server (a relative one is
+  taken from the server's). `noeta -p` always runs here and refuses `--server`.
 - **Same settings everywhere.** Each process reads its own `~/.noeta` (`NOETA_HOME`): agents,
   plugins, `config.toml`, tenant directories. Ship the same copy to every machine; a worker
   missing a plugin a task was started with fails that task with `plugin_missing` instead of

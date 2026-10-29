@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from noeta.cli import config, main
+from noeta.cli import home_dir, main
 from noeta.cli.config import from_settings, load_settings
 from noeta.cli.plugin_command import PluginInstallError, install
 from noeta.core import registry
@@ -57,7 +57,7 @@ def clean_registry() -> Iterator[None]:
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setattr(config, "HOME", home)
+    monkeypatch.setattr(home_dir, "HOME", home)
     (home / "config.toml").write_text(
         f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n')
     return home

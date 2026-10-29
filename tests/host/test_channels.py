@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from noeta.backends.stores.sqlite import SqliteStore
-from noeta.cli import config
+from noeta.cli import home_dir
 from noeta.cli.config import from_settings, load_settings, make_channels
 from noeta.core import registry
 from noeta.core.channel import Channel, deliver, framed
@@ -135,7 +135,7 @@ async def test_config_toml_enables_a_channel_from_a_plugin_file(
     home = tmp_path / "home"
     (home / "plugins").mkdir(parents=True)
     (home / "plugins" / "pager.py").write_text(CHANNEL_FILE)
-    monkeypatch.setattr(config, "HOME", home)
+    monkeypatch.setattr(home_dir, "HOME", home)
     monkeypatch.setenv("PAGER_TOKEN", "t0k")
     (home / "config.toml").write_text(
         f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n'

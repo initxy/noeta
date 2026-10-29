@@ -29,7 +29,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from noeta.cli import config
+from noeta.cli import home_dir
 
 __all__ = ["add_parser", "install", "run"]
 
@@ -107,14 +107,14 @@ def _plugin_name(path: Path) -> str:
 
 
 def _records() -> dict[str, Any]:
-    path = config.HOME / SOURCES_FILE
+    path = home_dir.HOME / SOURCES_FILE
     data = json.loads(path.read_text("utf-8")) if path.is_file() else {}
     return data if isinstance(data, dict) else {}
 
 
 def _save(records: dict[str, Any]) -> None:
-    config.HOME.mkdir(parents=True, exist_ok=True)
-    (config.HOME / SOURCES_FILE).write_text(json.dumps(records, indent=2, sort_keys=True) + "\n",
+    home_dir.ensure_home()
+    (home_dir.HOME / SOURCES_FILE).write_text(json.dumps(records, indent=2, sort_keys=True) + "\n",
                                             "utf-8")
 
 
@@ -123,7 +123,7 @@ def _place(found: Path, name: str, record: dict[str, Any]) -> Path:
     ``name`` and record where it came from."""
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
         raise PluginInstallError(f"{name!r} is not a usable plugin name")
-    plugins = config.HOME / "plugins"
+    plugins = home_dir.HOME / "plugins"
     target = plugins / (f"{name}.py" if found.is_file() else name)
     if target.exists() or (plugins / name).exists() or (plugins / f"{name}.py").exists():
         raise PluginInstallError(f"{name} is already in {plugins}; noeta plugin remove {name} "
@@ -237,7 +237,7 @@ def _list() -> int:
 
 def _remove(name: str) -> int:
     records = _records()
-    plugins = (config.HOME / "plugins").resolve()
+    plugins = (home_dir.HOME / "plugins").resolve()
     rec = records.pop(name, None)
     candidates = [Path(rec["path"])] if rec and rec.get("path") else \
         [plugins / name, plugins / f"{name}.py"]

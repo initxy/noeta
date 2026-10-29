@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from noeta.cli import config, mcp_command, plugin_command, tenants
+from noeta.cli import home_dir, mcp_command, plugin_command, tenants
 from noeta.cli.config import Settings, load_settings
 from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
@@ -53,7 +53,9 @@ def _common(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--provider", choices=("anthropic", "openai_compat", "openai_responses"))
     ap.add_argument("--base-url")
     ap.add_argument("--store", help="sqlite:///path or postgres://... (default ~/.noeta/tasks.db)")
-    ap.add_argument("--cwd", default=None, help="working directory (default: current)")
+    ap.add_argument("--cwd", default=None,
+                    help="working directory (default: current); with --server, a directory "
+                         "on the server (default: the server's own, or the tenant's workspace)")
     ap.add_argument("--system-prompt", help="replace the main agent's system prompt")
     ap.add_argument("--append-system-prompt",
                     help="add text after the main agent's system prompt")
@@ -109,7 +111,8 @@ def _front_parser() -> argparse.ArgumentParser:
     _common(ap)
     ap.add_argument("-r", "--resume", nargs="?", const="", default=None,
                     help="resume a task (id; the TUI offers a list without one)")
-    ap.add_argument("--server", help="TUI: attach to a noeta server URL")
+    ap.add_argument("--server", metavar="URL",
+                    help="TUI: drive the tasks of a noeta server (token: NOETA_SERVER_TOKEN)")
     add_arguments(ap)
     return ap
 
@@ -153,11 +156,14 @@ def _plugins(cwd: str) -> None:
         print(notice, file=sys.stderr)
 
 
-def _settings(args: argparse.Namespace, **layers: Any) -> Settings:
+def _settings(args: argparse.Namespace, *, need_model: bool = True,
+              **layers: Any) -> Settings:
+    """The settings; ``need_model``: exit when none names a model (a front
+    end attached to a server uses the server's)."""
     s = load_settings(cwd=os.path.abspath(args.cwd or os.getcwd()),
                       model=args.model, provider=args.provider, base_url=args.base_url,
                       store=args.store, effort=args.effort, **layers)
-    if not s.model:
+    if need_model and not s.model:
         sys.exit("noeta: no model configured (--model or NOETA_MODEL)")
     if args.system_prompt is not None:
         s.prompts["system/main"] = args.system_prompt
@@ -209,7 +215,8 @@ def _allowed_hosts(args: argparse.Namespace) -> list[str] | None:
 async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     import uvicorn
 
-    from noeta.cli.config import HOME, server_token_digest
+    from noeta.cli.home_dir import HOME
+    from noeta.cli.server_token import server_token_digest
     from noeta.host.http import create_app, redact_token_logs
 
     host, with_worker = args.host, not args.no_worker
@@ -319,7 +326,7 @@ def _main(argv: list[str]) -> None:
     args = _parser().parse_args(argv)
     cwd = os.path.abspath(args.cwd or os.getcwd())
     if args.command == "trust":
-        from noeta.cli.config import trust_project
+        from noeta.cli.trust import trust_project
         print(f"trusted {trust_project(cwd)}: its plugins, agent files, prompt overrides, "
               "skills and Claude-Code-format settings load from now on")
         return
@@ -335,10 +342,13 @@ def _main(argv: list[str]) -> None:
     if args.command == "acp":
         from noeta.host.acp import EditorServers, serve_stdio
         if args.server:
-            from noeta.cli.config import server_token
+            from noeta.cli.server_token import server_token
             from noeta.host.remote import RemoteApp
+            # The editor's directory is a path on this machine, and the
+            # model is the server's unless --model names one.
             asyncio.run(serve_stdio(RemoteApp(args.server, token=server_token()),
-                                    model=args.model or ""))
+                                    model=args.model or "", editor_cwd=False,
+                                    cwd=args.cwd or ""))
             return
         s = _settings(args)
         servers = EditorServers()
@@ -370,10 +380,13 @@ def _front(argv: list[str]) -> None:
     if args.permission_mode in MODE_ALIASES:
         args.permission_mode = MODE_ALIASES[args.permission_mode]
     if headless.headless(args):
+        if args.server:
+            sys.exit("noeta: -p runs its task here; --server attaches the terminal UI "
+                     "(or noeta acp --server) to a server")
         try:
             layers: dict[str, Any] = {
                 "sources": headless.setting_sources(args),
-                "flag": headless.settings_layer(args, config.HOME / "flag-settings")}
+                "flag": headless.settings_layer(args, home_dir.HOME / "flag-settings")}
             mcp = headless.mcp_arguments(args)
             agent_files = headless.agent_files(args)
         except headless.FlagError as exc:
@@ -392,7 +405,15 @@ def _front(argv: list[str]) -> None:
         sys.exit(asyncio.run(headless.run(app, s, args, cwd=cwd)))
     from noeta.cli.tui import run_tui
 
-    run_tui(_settings(args), cwd=cwd, resume=args.resume, server=args.server,
+    if args.server:
+        # The server's model and directory unless --model / --cwd name one;
+        # a local path or a model only this machine knows means nothing there.
+        run_tui(_settings(args, need_model=False), cwd=cwd, resume=args.resume,
+                server=args.server, permission_mode=args.permission_mode,
+                task_config={k: v for k, v in (("cwd", args.cwd), ("model", args.model))
+                             if v})
+        return
+    run_tui(_settings(args), cwd=cwd, resume=args.resume,
             permission_mode=args.permission_mode)
 
 

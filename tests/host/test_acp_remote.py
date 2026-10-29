@@ -5,6 +5,7 @@ process, with the tasks running on the server's side."""
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -132,3 +133,34 @@ async def test_acp_drives_a_served_app(
                                                                         text="/context")])
     assert "Messages" in _text(editor)
     await acp_agent.app.stop()
+
+
+async def _created_config(local: LocalApp, task_id: str) -> Any:
+    from noeta.core.events import TaskCreated
+
+    first = (await local.client.events(task_id))[0].event
+    assert isinstance(first, TaskCreated)
+    return first.config
+
+
+async def test_acp_on_a_server_sends_neither_the_editors_directory_nor_a_model(
+        server: tuple[str, ScriptedProvider, LocalApp], tmp_path: Path) -> None:
+    """The editor's directory is a path on its own machine (outside the
+    server's: 403) and its model may be one the server lacks: the task runs
+    in the server's directory, on the agent's model, unless asked."""
+    url, _provider, local = server
+    acp_agent = NoetaAcpAgent(RemoteApp(url, token="secret"), editor_cwd=False)
+    acp_agent.on_connect(FakeEditor())
+    await acp_agent.initialize(protocol_version=1)
+    session = await acp_agent.new_session(cwd="/somewhere/only/the/editor/has")
+    assert await _created_config(local, session.session_id) == {
+        "cwd": os.path.realpath(tmp_path)}
+
+    (tmp_path / "sub").mkdir()
+    named = NoetaAcpAgent(RemoteApp(url, token="secret"), editor_cwd=False, cwd="sub")
+    named.on_connect(FakeEditor())
+    session = await named.new_session(cwd="/somewhere/only/the/editor/has")
+    assert await _created_config(local, session.session_id) == {
+        "cwd": os.path.realpath(tmp_path / "sub")}
+    await acp_agent.app.stop()
+    await named.app.stop()

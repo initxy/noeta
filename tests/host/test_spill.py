@@ -10,7 +10,7 @@ import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
-from noeta.cli import config
+from noeta.cli import home_dir
 from noeta.cli.config import from_settings, load_settings
 from noeta.core.agent import Agent
 from noeta.core.events import ToolFinished
@@ -54,7 +54,7 @@ async def test_every_host_has_a_spill_root(tmp_path: Path,
     await app.store.close()
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setattr(config, "HOME", home)
+    monkeypatch.setattr(home_dir, "HOME", home)
     (home / "config.toml").write_text(
         f'model = "m"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "u.db"}"\n')
     cli = from_settings(load_settings(), cwd=str(tmp_path))

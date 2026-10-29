@@ -34,7 +34,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from noeta.cli import config
+from noeta.cli import config, home_dir
+from noeta.cli.trust import project_trusted
 from noeta.core import registry
 
 __all__ = ["CLIENT_SECRET_ENV", "SCOPES", "add_parser", "run"]
@@ -98,7 +99,7 @@ def add_parser(sub: Any) -> None:
 
 def scope_file(scope: str, cwd: str) -> Path:
     if scope == "user":
-        return config.HOME / "settings.json"
+        return home_dir.HOME / "settings.json"
     if scope == "project":
         return Path(cwd) / ".noeta" / "mcp.json"
     return Path(cwd) / ".noeta" / "settings.local.json"
@@ -117,6 +118,8 @@ def _read(path: Path) -> dict[str, Any]:
 
 
 def _write(path: Path, data: dict[str, Any]) -> None:
+    if path.parent == home_dir.HOME:
+        home_dir.ensure_home()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", "utf-8")
 
@@ -195,12 +198,12 @@ def _save(name: str, spec: dict[str, Any], scope: str, cwd: str, secret: str | N
     table[name] = spec
     _write(path, data)
     if secret is not None:
-        _admin().save_client_secret(name, spec, secret, config.HOME)
+        _admin().save_client_secret(name, spec, secret, home_dir.HOME)
     print(f"Added {transport} MCP server {name} to {scope} config ({path})")
     if scope == "project" and not _consented(name, cwd):
         print(f"It starts once you consent: add {name!r} to enabledMcpjsonServers in "
               f"{scope_file('local', cwd)}")
-    if scope in ("project", "local") and not config.project_trusted(cwd):
+    if scope in ("project", "local") and not project_trusted(cwd):
         print("This project is not trusted yet; run `noeta trust` here to load its settings")
 
 
@@ -342,7 +345,7 @@ def _login(args: argparse.Namespace, cwd: str) -> int:
         return await _pasted()
 
     try:
-        asyncio.run(_admin().login(args.name, spec, config.HOME, show=show,
+        asyncio.run(_admin().login(args.name, spec, home_dir.HOME, show=show,
                                    open_browser=not args.no_browser,
                                    pasted=pasted if args.no_browser else None))
     except Exception as exc:  # the plugin's own error type, not imported here
@@ -353,7 +356,7 @@ def _login(args: argparse.Namespace, cwd: str) -> int:
 
 def _logout(args: argparse.Namespace, cwd: str) -> int:
     _, spec = _find(args.name, cwd)
-    if _admin().logout(args.name, spec, config.HOME):
+    if _admin().logout(args.name, spec, home_dir.HOME):
         print(f"Removed the stored sign-in for {args.name}.")
     else:
         print(f"No stored sign-in for {args.name}.")

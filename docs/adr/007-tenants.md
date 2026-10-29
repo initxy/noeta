@@ -3,7 +3,9 @@
 - Status: accepted
 - Date: 2026-10-28
 - Refined by: [ADR-014](014-tenants-separated-at-the-api-tools-need-an-os-boundary.md)
-  ("nothing crosses it" holds for the API; tools need an OS boundary)
+  ("nothing crosses it" holds for the API; tools need an OS boundary),
+  [ADR-019](019-tenant-limits-are-enforced-by-the-kernel.md) (limits and providers are
+  kernel scheduling)
 
 ## Context
 

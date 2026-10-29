@@ -53,8 +53,9 @@ class GuardedClient:
     server's directory and its other ``roots``. A relative ``cwd`` is taken
     from the server's directory (not the process's) and passed on
     absolute, so every worker resolves it the same. With a ``workspace``
-    (a tenant's) that directory is the only root, and a task created
-    without a ``cwd`` runs in it. ``queues``: the queues a task may be
+    (a tenant's) that directory is the only root. A task created without a
+    ``cwd`` runs in the workspace, else in the server's directory (recorded,
+    so every worker runs it there). ``queues``: the queues a task may be
     created on (any when ``None``). ``tenant``: whose requests these are; one
     other than the default needs a workspace to start or place tasks, and
     never reaches into ``others`` (the other tenants' workspaces), even
@@ -139,7 +140,7 @@ class GuardedClient:
             raise Refused(f"queue {queue!r} is not one this tenant may use "
                           f"({', '.join(self._queues)})")
         config = self.check_config(config)
-        if self._fill and not (config or {}).get("cwd"):
+        if self._cwd is not None and not (config or {}).get("cwd"):
             config = {**(config or {}), "cwd": self._cwd}
         return await self._client.create(
             agent, input, task_id=task_id, config=config, queue=queue,

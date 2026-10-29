@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import sqlite3
 import threading
 import time
@@ -182,6 +183,19 @@ def _add_columns(conn: sqlite3.Connection) -> None:
     conn.executescript(_ADDED_TABLES)
 
 
+def _create_private(path: str) -> None:
+    """Create the database file owner-only (it holds every conversation)
+    when it does not exist; SQLite gives its ``-wal`` and ``-shm`` files the
+    database file's mode. An existing file keeps its mode."""
+    if not path or path == ":memory:" or path.startswith("file:"):
+        return
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return
+    os.close(fd)
+
+
 class SqliteStore:
     def __init__(self, path: str, *, poll_interval: float = 0.5) -> None:
         self.path = path
@@ -200,6 +214,7 @@ class SqliteStore:
             # WAL; the busy timeout comes first so that waits instead of
             # failing, and a first open that still finds the file locked is
             # tried again.
+            _create_private(self.path)
             for attempt in range(_OPEN_ATTEMPTS):
                 conn = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
                 try:
