@@ -17,6 +17,7 @@ from typing import Any
 
 from noeta.core import records
 from noeta.core.events import (
+    DEFAULT_TENANT,
     Answer,
     Compacted,
     External,
@@ -40,6 +41,7 @@ from noeta.core.extension import (
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import ModelRequest, ToolUse
 from noeta.plugins.permissions import auto as a
+from noeta.plugins.permissions import fence as fc
 from noeta.plugins.permissions import guards as g
 from noeta.plugins.permissions import modes as md
 from noeta.plugins.permissions import plan as pl
@@ -61,6 +63,7 @@ from noeta.toolkit import permission_rules as r
 from noeta.toolkit.paths import plans_dir as default_plans_dir
 from noeta.toolkit.permission_modes import MODE_SIGNAL as MODE_SIGNAL
 from noeta.toolkit.signals import RESUMED_SIGNAL
+from noeta.toolkit.tenant_fence import TenantFence
 
 __all__ = ["DENIED_BY_HUMAN", "MODE_SIGNAL", "CanUseTool", "PermState", "Permissions",
            "UntrustedProjectShellAllowlistWarning", "inherited_rules"]
@@ -137,6 +140,12 @@ class Permissions(Extension):
     * ``can_use_tool`` — ``(tool, input) -> bool`` (sync or async) that
       answers this extension's asks instead of a person; recorded with
       ``resolver="can_use_tool"``.
+    * ``tenant_workspaces`` (tenant -> workspace), ``store_files`` and
+      ``spill_root`` — the places a task of a tenant other than the default
+      one may never name in a tool call beyond noeta's home, ``/etc/noeta``
+      and ``/proc`` (:mod:`noeta.toolkit.tenant_fence`); no rule, mode or
+      answer lifts it. Such a task keeps its plan files under
+      ``plans_dir/<tenant>``.
 
     Remembered rules are per task; a child spawned by ``Subtasks`` starts
     with its parent's (``config["permission_rules"]``).
@@ -173,6 +182,9 @@ class Permissions(Extension):
         repetition_window: int = 8,
         pre_tool_use: Sequence[g.PreToolUseRule] = (),
         can_use_tool: CanUseTool | None = None,
+        tenant_workspaces: Mapping[str, str] | None = None,
+        store_files: Sequence[str] = (),
+        spill_root: str | None = None,
     ) -> None:
         self.mode = p.check_mode(mode)
         self.disable_bypass = bool(disable_bypass_mode)
@@ -218,6 +230,9 @@ class Permissions(Extension):
         self.pre_rules = tuple(g.check_pre_rule(f"pre_tool_use[{i}]", rule)
                                for i, rule in enumerate(pre_tool_use))
         self.can_use_tool = can_use_tool
+        self.fence = TenantFence(spill_root=spill_root, plans_dir=self.plans_dir,
+                                 store_files=tuple(store_files),
+                                 workspaces=dict(tenant_workspaces or {}))
         self._check = RuleCheck(
             allow_rules=self.allow_rules, deny_rules=self.deny_rules, ask_rules=self.ask_rules,
             additional_directories=self.additional_directories, risk=self.risk,
@@ -264,7 +279,20 @@ class Permissions(Extension):
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
         # Sub-agents do not plan for approval (none is offered it).
-        return () if view.state.parent_id else (self._enter_plan, self._exit_plan)
+        if view.state.parent_id:
+            return ()
+        if view.state.tenant == DEFAULT_TENANT:
+            return (self._enter_plan, self._exit_plan)
+        plans = self._plans_dir(view)
+        return (pl.EnterPlanModeTool(lambda ctx: md.enter_plan(
+            ctx, default_mode=self.mode, plans_dir=plans)), self._exit_plan)
+
+    def _plans_dir(self, view: TaskView) -> str:
+        """Where this task's plan files go: a tenant's own directory for a
+        task of a tenant other than the default one."""
+        tenant = view.state.tenant
+        return self.plans_dir if tenant == DEFAULT_TENANT \
+            else os.path.join(self.plans_dir, tenant)
 
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
         return (Command(name="plan", description="Switch to plan mode; with a request, plan it",
@@ -276,6 +304,9 @@ class Permissions(Extension):
     # ------------------------------------------------------------ the gate
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
+        fenced = await fc.refusal(self.fence, view, call)
+        if fenced is not None:
+            return Deny(reason=fenced)
         updated = _updated_input(view, call)
         if updated is not None:
             # Approved with changed input (a headless client's
@@ -419,7 +450,7 @@ class Permissions(Extension):
 
     def _switch(self, view: TaskView, mode: Any, seq: int) -> None:
         md.switch(view, mode, seq, current=self.mode_of(view),
-                  disable_bypass=self.disable_bypass, plans_dir=self.plans_dir)
+                  disable_bypass=self.disable_bypass, plans_dir=self._plans_dir(view))
 
     def _enter_plan_mode(self, ctx: ToolContext) -> bool:
         return md.enter_plan(ctx, default_mode=self.mode, plans_dir=self.plans_dir)

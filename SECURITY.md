@@ -60,10 +60,12 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
   user, so without a boundary a tenant can read what that user can (`~/.noeta`, the store, the
   worker's environment). `noeta serve` and `noeta worker` refuse other tenants unless the
   sandbox confines every command, or the operator sets `[server] shared_os_user_tenants =
-  true` (tenants then trust each other); with the sandbox, file tools stay in-process and are
-  bounded by permission rules (`docs/server.md`, "What separates tenants"). A tenant reaching
-  another tenant's tasks through the API is a vulnerability; a tenant reading the OS user's
-  files after the operator chose shared OS users is not.
+  true` (tenants then trust each other). File tools run in-process; a non-default tenant's
+  task may never reach noeta's home, the store's files, `/etc/noeta`, `/proc` or another
+  tenant's workspace with them, whatever its rules, mode or approvals (`docs/server.md`,
+  "What separates tenants"). A tenant reaching another tenant's tasks through the API, or
+  those places with a file tool, is a vulnerability; a tenant reading the OS user's other
+  files with `Bash` after the operator chose shared OS users is not.
 - **Plugins are code you install.** They run in-process with noeta's rights; installing one
   (`noeta plugin add`, a plugin file, a package) is trusting it. noeta runs nothing from a plugin
   while installing it, and a machine policy (`/etc/noeta/config.toml` `[policy]`) can allow or

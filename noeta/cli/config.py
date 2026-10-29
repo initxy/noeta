@@ -51,6 +51,7 @@ from noeta.core.execenv import ExecEnv
 from noeta.core.provider import Provider
 from noeta.core.tenants import token_digest
 from noeta.toolkit.sandbox import SandboxSettings
+from noeta.toolkit.tenant_fence import store_files
 
 if TYPE_CHECKING:
     from noeta.core.agent import Agent
@@ -491,6 +492,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
                   setting_sources: Collection[str] | None = None,
                   flag_settings: Path | None = None,
                   agent_files: Sequence[AgentFile] = (),
+                  tenant_workspaces: Mapping[str, str] | None = None,
                   **runtime_kw: Any) -> LocalApp:
     """The default agents on the configured store, model and provider, with
     the user's plugin files (``~/.noeta/plugins``, and a trusted project's
@@ -514,7 +516,10 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     (:func:`file_settings`); a left-out ``user`` source also skips
     ``~/.noeta/agents``, a left-out ``project`` source the project's agents
     and its ``.noeta/mcp.json``. ``agent_files`` (``--agents``) come last
-    and win a name."""
+    and win a name. ``tenant_workspaces`` (tenant -> workspace) joins the
+    places a non-default tenant's task may not touch
+    (:mod:`noeta.toolkit.tenant_fence`), with noeta's home, the store's
+    files and the spill directory."""
     from noeta.agents import default_agents
     from noeta.agents.agent_files import read_agent_dir
     from noeta.host.local import LocalApp
@@ -534,6 +539,10 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     def source(name: str) -> bool:
         return setting_sources is None or name in setting_sources
 
+    runtime_kw.setdefault("spill_root", str(HOME / "tool-results"))
+    permissions = {"tenant_workspaces": dict(tenant_workspaces or {}),
+                   "store_files": list(store_files(settings.store_url)),
+                   "spill_root": runtime_kw["spill_root"], **(permissions or {})}
     base = _base_plugin_settings(found, cwd, permissions, project=source("project"))
     made: dict[Any, Any] = {}
     model, add_plugins = settings.model, settings.add_plugins
@@ -566,7 +575,6 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     notices += _apply_sandbox(found, cwd, runtime_kw)
     runtime_kw.setdefault("prompt_dirs", [str(HOME / "prompts")])
     runtime_kw.setdefault("workspace_trusted", project_trusted)
-    runtime_kw.setdefault("spill_root", str(HOME / "tool-results"))
     app = LocalApp(open_store(settings.store_url), agents,
                    settings.make_provider(), own_tasks_only=own_tasks_only,
                    task_config={"prompts": settings.prompts} if settings.prompts else None,

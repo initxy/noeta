@@ -174,6 +174,10 @@ def _tenants(s: Settings) -> dict[str, tenants.TenantPlace]:
         sys.exit(f"noeta: {exc}")
 
 
+def _workspaces(places: dict[str, tenants.TenantPlace]) -> dict[str, str]:
+    return {name: p.workspace for name, p in places.items() if p.workspace}
+
+
 def _check_isolation(s: Settings, cwd: str, places: dict[str, tenants.TenantPlace]) -> bool:
     """Whether tools of tenants other than the default one may run here;
     exits when such tenants exist and may not."""
@@ -204,7 +208,8 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     places = _tenants(s)
     isolated = not with_worker or _check_isolation(s, cwd, places)
     app = _app(s, cwd=cwd, with_channels=True,
-               tenants={name: p.allowed for name, p in places.items()}, **refuse)
+               tenants={name: p.allowed for name, p in places.items()},
+               tenant_workspaces=_workspaces(places), **refuse)
     await app.start(worker=with_worker)
     api = create_app(app.client, auth=server is not None,
                      tokens=tenants.tenant_tokens(
@@ -215,8 +220,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      origins=args.allow_origin,
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
                      roots=[os.path.abspath(r) for r in args.allow_root],
-                     workspaces={name: p.workspace for name, p in places.items()
-                                 if p.workspace},
+                     workspaces=_workspaces(places),
                      queues={name: p.queues for name, p in places.items()
                              if p.queues is not None})
     port = args.port
@@ -234,6 +238,7 @@ async def _worker(s: Settings, queues: list[str], concurrency: int,
     places = _tenants(s)
     _check_isolation(s, os.getcwd(), places)
     kw["tenants"] = {name: p.allowed for name, p in places.items()}
+    kw["tenant_workspaces"] = _workspaces(places)
     if snapshot_every is not None:
         kw["snapshot_every"] = snapshot_every
     app = _app(s, queues=tuple(queues), concurrency=concurrency, with_channels=True, **kw)

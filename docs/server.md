@@ -114,16 +114,22 @@ of these holds:
 
 1. **The sandbox confines every command**: `sandbox.enabled: true`,
    `sandbox.failIfUnavailable: true` and `sandbox.allowUnsandboxedCommands: false` in
-   `~/.noeta/settings.json`. `Bash` then runs inside bubblewrap or Seatbelt. File tools
-   (`Read`, `Edit`, `Write`, `Grep`, `Glob`) still run in the worker process, gated only by
-   permission rules the tenant answers itself; add deny rules such as
-   `Read(~/.noeta/**)` and `Edit(~/.noeta/**)` (deny rules feed the sandbox too) for paths no
-   tenant may touch.
+   `~/.noeta/settings.json`. `Bash` then runs inside bubblewrap or Seatbelt.
 2. **A remote exec env**: tools run in a container per task (`Runtime(env_for=…)`, from host
    code embedding noeta; the `noeta` command does not set one up).
 3. **The operator accepts tenants separated at the API only**:
    `shared_os_user_tenants = true` under `[server]` in `~/.noeta/config.toml`. Tenants then must trust each
    other and the operator with everything the OS user can reach.
+
+File tools (`Read`, `Edit`, `Write`, `NotebookEdit`, a workflow's `scriptPath`) run in the
+worker process whatever the deployment, so a task of a tenant other than the default one is
+fenced off from these paths: noeta's home (`NOETA_HOME`: tokens, settings, tenant
+directories, other tasks' files), the sqlite store and its `-wal` / `-shm` files,
+`/etc/noeta`, `/proc` and every other tenant's workspace. The fence is checked after
+symlinks and `..` are resolved, and no allow rule, permission mode (`bypassPermissions`
+included) or approval lifts it. Inside noeta's home such a task keeps its own spilled tool
+outputs, its tenant's plan files (`plans/<tenant>/`), the memory of its working directory
+(`projects/<slug>/`) and read access to `skills/`. The default tenant's tasks are not fenced.
 
 A token for another tenant added while a non-isolated server runs is not accepted (401) until
 it is restarted with one of the above. `noeta serve --no-worker` runs no tools and is not

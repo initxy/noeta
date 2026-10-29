@@ -5,6 +5,7 @@ operator accepts tenants separated at the API only."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -71,3 +72,36 @@ def test_tokens_of_other_tenants_find_nothing_when_not_isolated(home: Path) -> N
     closed = tenants.tenant_tokens(others=False)
     assert closed(acme) is None and closed(mine) == "default"
     assert tenants.tenant_tokens()(acme) == "acme"
+
+
+def test_a_worker_fences_the_tenants_workspaces(home: Path, tmp_path: Path,
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    (home / "config.toml").write_text("[server]\nshared_os_user_tenants = true\n")
+    (tmp_path / "acme-ws").mkdir()
+    (home / "tenants" / "acme").mkdir(parents=True)
+    (home / "tenants" / "acme" / "config.toml").write_text(
+        f'workspace = "{tmp_path / "acme-ws"}"\n')
+    seen: dict[str, object] = {}
+
+    def started(*_a: object, **kw: object) -> None:
+        seen.update(kw)
+        raise _Started
+
+    monkeypatch.setattr(main, "_app", started)
+    with pytest.raises(_Started):
+        _run(tmp_path, "worker")
+    assert seen["tenant_workspaces"] == {"acme": str((tmp_path / "acme-ws").resolve())}
+
+
+async def test_the_permissions_plugin_gets_the_fenced_places(home: Path,
+                                                             tmp_path: Path) -> None:
+    settings = config.load_settings(model="sonnet", store=f"sqlite:///{tmp_path / 't.db'}")
+    settings = dataclasses.replace(settings, api_key="k")
+    app = config.from_settings(settings, cwd=str(tmp_path),
+                               tenant_workspaces={"acme": "/srv/acme"})
+    perms = next(e for e in app.runtime.agents["main"].extensions if e.name == "permissions")
+    fence = perms.fence  # type: ignore[attr-defined]
+    assert fence.workspaces == {"acme": "/srv/acme"}
+    assert fence.store_files[0] == str(tmp_path / "t.db")
+    assert fence.spill_root == str(home / "tool-results")
+    await app.store.close()

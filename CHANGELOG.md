@@ -556,6 +556,16 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   separated at the API only; a tenant token added later is not accepted by such a server.
   Before, every tenant's tools ran as the server's OS user and could read `~/.noeta`, the
   store and the process environment.
+- A task of a tenant other than the default one is denied any file tool call (`Read`,
+  `Edit`, `Write`, `NotebookEdit`, a workflow's `scriptPath`) that reaches noeta's home, the
+  sqlite store's files, `/etc/noeta`, `/proc` or another tenant's workspace, after symlinks
+  and `..` are resolved; no rule, mode (`bypassPermissions` included) or approval lifts it
+  (`noeta.toolkit.tenant_fence`; `Permissions(tenant_workspaces=, store_files=,
+  spill_root=)`). Such a task keeps its own spilled outputs, its plan files (now under
+  `plans/<tenant>/`) and its project memory. Before, file tools ran in the worker process
+  bounded only by permission rules the tenant answered itself, so even under the strict
+  sandbox a tenant could approve reading the tokens file, the store or other tenants'
+  settings.
 - `~/.noeta/server-token` keeps only the server token's SHA-256, like tenant tokens; the token
   is printed once, when made (`noeta serve` no longer prints it on every start). A file an
   older noeta left holding the token itself is rewritten to its digest on the next start,
