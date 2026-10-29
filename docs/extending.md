@@ -48,7 +48,8 @@ The three examples are each one file, a short README and a test `make check` run
 - [`examples/run-tests`](../examples/run-tests) — a tool: runs the test command where the task's
   commands run, folds the last result from the log, reminds the model once after an edit.
 - [`examples/chat-bridge`](../examples/chat-bridge) — a channel: a chat thread becomes a task,
-  senders are allowlisted, approvals are answered from the chat, replies relayed from the task.
+  requests carry a shared secret, senders are allowlisted, approvals are answered from the chat,
+  replies relayed from the task.
 - [`examples/house-style`](../examples/house-style) — prompt and reminder text: an output style
   captured when the task starts, so a resumed task sends identical bytes.
 
