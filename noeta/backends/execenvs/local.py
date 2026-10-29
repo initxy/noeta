@@ -129,15 +129,25 @@ class _TailBuffer:
         return bytes(self.buf), truncated
 
 
+def _signal_own_group(pid: int, sig: int) -> None:
+    """Signal the group a child started with ``start_new_session`` leads: its
+    id is the child's pid, so it is reached even after the child exited and
+    was reaped while what it started lives on."""
+    try:
+        os.killpg(pid, sig)
+    except _BENIGN:
+        pass
+
+
 async def _kill_group(proc: _Child, grace: float) -> None:
     """SIGTERM the child's group, wait up to ``grace``, then SIGKILL the group
     unconditionally — a grandchild that ignores SIGTERM must die even when
     the direct child exited within the grace."""
-    send_group_signal(proc.pid, signal.SIGTERM)
+    _signal_own_group(proc.pid, signal.SIGTERM)
     if proc.returncode is None:
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(proc.wait(), grace)
-    send_group_signal(proc.pid, signal.SIGKILL)
+    _signal_own_group(proc.pid, signal.SIGKILL)
     with contextlib.suppress(ProcessLookupError):
         await proc.wait()
 

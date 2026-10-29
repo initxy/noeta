@@ -111,6 +111,10 @@ class ToolContext(CoreNotices):
     #: ``await count_tokens(text)``: the provider's exact token count of one
     #: user message holding ``text``; ``None`` when it cannot count.
     count_tokens: Callable[[str], Awaitable[int | None]] | None = None
+    #: ``serves_queue(queue)``: whether a child staged on ``queue`` could run
+    #: now (``TaskView.serves_queue``); one that could not is dropped with
+    #: the call's result. ``None`` takes every queue.
+    serves_queue: Callable[[str], bool] | None = None
 
     @property
     def idempotency_key(self) -> str:

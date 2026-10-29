@@ -232,8 +232,9 @@ class AgentTool:
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         ext, state = self._ext, self._state
         use = ToolUse(id=ctx.call_id, name=self.name, input=input)
-        batch = batch_refusal(ext, state, [c.use for c in state.calls] or [use])
-        refusal = call_refusal(ext, state, use, self._roster) or (batch[0] if batch else None)
+        # The reply's limits taken together are the gate's (``before_tool``):
+        # here the siblings started before this call already count as running.
+        refusal = call_refusal(ext, state, use, self._roster)
         if refusal is not None:  # normally denied at the gate already
             return text_output(refusal, is_error=True)
         assert ctx.spawn is not None
@@ -247,7 +248,11 @@ class AgentTool:
         if transcripts:
             config[TRANSCRIPT_KEY] = transcripts
         worktree = None
-        if isolation == "worktree":
+        # A child on a queue it could not run on now is dropped with this
+        # call's result (the runner says why): make no worktree for it.
+        refused = queue is not None and ctx.serves_queue is not None \
+            and not ctx.serves_queue(queue)
+        if isolation == "worktree" and not refused:
             worktree = await make_agent_worktree(ctx, config)
             if isinstance(worktree, str):
                 return text_output(worktree, is_error=True)
@@ -333,8 +338,13 @@ class HandbackTool:
         sender = str(self._state.config.get(AGENT_ID_KEY) or self._state.task_id)
         if parent and ctx.post is not None:
             await ctx.post(Say(message=agent_message(sender, report), when="now"),
-                           task_id=parent)
+                           task_id=parent, dedupe_key=f"subtasks:handback:{ctx.idempotency_key}")
         return ToolOutput(content=text_output(texts.HANDBACK_DONE).content, end_turn=report)
+
+    async def recover(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput | None:
+        """A hand-back a crash cut short is made again: the caller drops the
+        repeated report (its key), and the run ends as it would have."""
+        return await self.run(input, ctx)
 
 
 class SendMessageTool:

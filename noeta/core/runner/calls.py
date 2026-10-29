@@ -243,7 +243,8 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
                        tasks=tasks, task=task, count_tokens=run.counter(run.model),
                        hold=lambda: run.rt.hold(root), by_model=True,
                        approved=answer is not None and answer.decision == "allow",
-                       allowed_outright=outright, model=run.model)
+                       allowed_outright=outright, model=run.model,
+                       serves_queue=run.serves_queue)
 
 
 async def _foreign_history(run: TaskRun, creates: list[NewTask]) -> str | None:

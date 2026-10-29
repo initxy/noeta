@@ -34,7 +34,7 @@ async def test_read_records_the_read(h: Harness, ws: Path) -> None:
     out = await h.call(ReadTool(), file_path="hello.txt")
     assert not out.is_error
     expected = hashlib.sha256(b"hi\n").hexdigest()
-    assert h.fs.digest(str(target)) == expected
+    assert h.fs.reads[str(target)].digest == expected
     [(ext, kind, data)] = h.records
     assert (ext, kind) == (FS, "read")
     assert data["path"] == str(target)
@@ -149,6 +149,24 @@ async def test_read_missing_file_suggests_another_extension(h: Harness, ws: Path
     out = await h.call(ReadTool(), file_path="app.js")
     assert text_of(out) == (
         f"Read: No file at that path (the working directory is {ws}). Did you mean app.ts?")
+
+
+async def test_a_missing_files_guess_does_not_look_where_the_fence_refuses(
+        tmp_path: Path) -> None:
+    from noeta.plugins.fs._missing import missing_file_message
+    from noeta.toolkit.tools import Workspace
+
+    work, secret = tmp_path / "work", tmp_path / "secret"
+    work.mkdir()
+    secret.mkdir()
+    (secret / "keys.pem").write_text("k")
+
+    def fence(path: str, write: bool) -> str | None:
+        return "refused" if path.startswith(str(secret)) else None
+
+    env = LocalExecEnv(str(work), fence=fence)
+    message = await missing_file_message(await Workspace.of(env), str(secret / "keys.txt"))
+    assert "keys.pem" not in message
 
 
 async def test_read_missing_file_suggests_the_path_inside_the_workspace(
@@ -308,8 +326,8 @@ async def test_read_follows_a_symlink_and_records_the_target(h: Harness, ws: Pat
     out = await h.call(ReadTool(), file_path="link.txt")
     assert "linked" in text_of(out)
     # Keyed by the canonical path, the form Edit / Write resolve to.
-    assert h.fs.digest(str(outside)) is not None
-    assert h.fs.digest(str(ws / "link.txt")) is None
+    assert str(outside) in h.fs.reads
+    assert str(ws / "link.txt") not in h.fs.reads
 
 
 async def test_read_relative_path_resolves_against_the_workspace(
@@ -341,7 +359,7 @@ async def test_read_streams_the_window_and_hashes_the_whole_file(ws: Path) -> No
     (ws / "big.log").write_bytes(body)
     out = await h.call(ReadTool(), file_path="big.log", offset=250_000, limit=3)
     assert text_of(out) == "250000\tline 250000\n250001\tline 250001\n250002\tline 250002"
-    assert h.fs.digest(str(ws / "big.log")) == hashlib.sha256(body).hexdigest()
+    assert h.fs.reads[str(ws / "big.log")].digest == hashlib.sha256(body).hexdigest()
 
 
 async def test_read_refuses_a_whole_file_over_256kb(h: Harness, ws: Path) -> None:

@@ -425,6 +425,18 @@ async def test_depth_cap_and_fan_out(store: SqliteStore) -> None:
     assert out[3:] == [(texts.TOO_MANY_BACKGROUND.format(limit=1), True)] * 2
 
 
+async def test_agent_calls_of_one_reply_count_once_against_the_cap(
+        store: SqliteStore) -> None:
+    p = ScriptedProvider([reply("", agent("a"), agent("b")), reply("ok")])
+    rt = runtime(store, {"p": p}, parent(queue="kids", max_background=2), worker())
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    out = await results(client, tid)
+    assert [failed for _, failed in out] == [False, False]
+    assert len(await client.tasks(parent_id=tid)) == 2
+
+
 async def test_task_is_the_old_name_and_exclusive_tools(store: SqliteStore) -> None:
     p = ScriptedProvider([reply("", ("Task", {"description": "d", "prompt": "old name",
                                               "subagent_type": "scout"})), reply("ok")])
@@ -565,6 +577,30 @@ async def test_worktree_isolation(store: SqliteStore, tmp_path: Path) -> None:
     assert not Path(cwd).exists()  # unchanged, so removed again
 
 
+async def test_an_agent_refused_for_its_queue_leaves_no_worktree(
+        store: SqliteStore, tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    p = ScriptedProvider([reply("", agent("look", isolation="worktree")), reply("ok")])
+    rt = Runtime(store=store, agents={"main": parent(queue="kids"), "worker": worker()},
+                 provider_for=lambda m: {"p": p}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or repo)))
+    client = Client(store)
+    tid = await client.create("main", "go", config={"cwd": str(repo)})
+    release = await rt.hold(tid)  # as a background job does
+    try:
+        await rt.run_until_idle()
+    finally:
+        await release()
+    assert await client.tasks(parent_id=tid) == []
+    [(text, failed)] = await results(client, tid)
+    assert failed and "kids" in text
+    assert not (repo / ".noeta" / "worktrees").exists() \
+        or not list((repo / ".noeta" / "worktrees").iterdir())
+    branches = subprocess.run(["git", "branch", "--list", "worktree-*"], cwd=repo,
+                              capture_output=True, text=True, check=True).stdout
+    assert branches.strip() == ""
+
+
 async def test_a_cancelled_parent_closes_its_agents_worktrees(store: SqliteStore,
                                                               tmp_path: Path) -> None:
     repo = tmp_path / "repo"
@@ -686,6 +722,25 @@ async def test_a_call_a_crash_cut_short_removes_the_worktree_it_made(tmp_path: P
                                                 capture_output=True, text=True).stdout
     # Nothing made: nothing to remove.
     assert await tool.recover(args, ctx) is None
+
+
+async def test_a_hand_back_a_crash_cut_short_reports_once(tmp_path: Path) -> None:
+    from noeta.plugins.subtasks.tool import HandbackTool
+
+    posts: list[tuple[Any, dict[str, Any]]] = []
+
+    async def post(body: Any, **kw: Any) -> None:
+        posts.append((body, kw))
+
+    tool = HandbackTool(TaskState(task_id="p.c.1", agent="worker", parent_id="p"))
+    ctx = ToolContext(task_id="p.c.1", call_id="toolu_back", env=LocalExecEnv(str(tmp_path)),
+                      state={}, record=lambda *_: None, post=post)
+    first = await tool.run({"message": "1 2 3"}, ctx)
+    # The worker died after the report was posted, before the result was written.
+    again = await tool.recover({"message": "1 2 3"}, ctx)
+    assert again is not None and again.end_turn == first.end_turn == "1 2 3"
+    keys = [kw.get("dedupe_key") for _, kw in posts]
+    assert len(keys) == 2 and keys[0] is not None and keys[0] == keys[1]
 
 
 def _repo(tmp_path: Path) -> Path:

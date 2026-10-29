@@ -91,10 +91,6 @@ class PageCache:
         self._max = max_entries
         self._pages: dict[str, tuple[float, str, str, bool]] = {}
 
-    def get(self, url: str) -> tuple[str, str] | None:
-        entry = self.entry(url)
-        return None if entry is None else (entry[0], entry[1])
-
     def entry(self, url: str) -> tuple[str, str, bool] | None:
         """``(title, markdown, binary)`` for ``url``, or ``None``."""
         entry = self._pages.get(url)
@@ -268,7 +264,7 @@ class HttpFetchTransport:
                                          headers={"User-Agent": self.user_agent}) as resp:
                     if resp.is_redirect:
                         target = str(httpx.URL(current).join(resp.headers.get("location", "")))
-                        if not _same_origin(target, current):
+                        if not _same_origin(current, target):
                             raise CrossHostRedirect(current, target, resp.status_code)
                         current = target
                         continue

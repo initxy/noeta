@@ -635,6 +635,38 @@ async def test_a_fork_skill_runs_in_a_sub_agent(h: Harness) -> None:
     assert await h.records(tid, "skills", "activated") == []
 
 
+async def test_a_denied_fork_skill_runs_none_of_its_commands(h: Harness) -> None:
+    write_skill(skills_dir(h), "mk", "Make.", body="Made: !`touch made.txt`\n",
+                context="fork", agent="scout", **{"allowed-tools": "Bash(touch:*)"})
+    main = Agent(name="a", model="m", extensions=[
+        FileTools(), Shell(), Permissions(mode="default", plans_dir=str(h.work.parent / "p"),
+                                          deny=["Skill(mk)"]),
+        Subtasks([SubagentSpec(name="scout", description="Looks.", agent="w")]), Skills()])
+    h.provider.add(reply("", ("Skill", {"skill": "mk"})), reply("done"))
+    tid = await h.client.create("a", "go")
+    await h.runtime(main, Agent(name="w", model="m", extensions=[])).run_until_idle()
+    [result] = await h.results(tid)
+    assert result.result.is_error
+    assert not (h.work / "made.txt").exists()
+
+
+async def test_a_fork_skills_commands_run_once_it_is_allowed(h: Harness) -> None:
+    write_skill(skills_dir(h), "mk", "Make.", body="Made: !`echo made-it`\n",
+                context="fork", agent="scout", **{"allowed-tools": "Bash(echo:*)"})
+    main = Agent(name="a", model="m", extensions=[
+        FileTools(), Shell(), Permissions(mode="default", plans_dir=str(h.work.parent / "p"),
+                                          allow=["Skill(mk)"]),
+        Subtasks([SubagentSpec(name="scout", description="Looks.", agent="w")]), Skills()])
+    h.provider.add(reply("", ("Skill", {"skill": "mk"})), reply("started"),
+                   reply("child report"), reply("thanks"))
+    tid = await h.client.create("a", "go")
+    await h.runtime(main, Agent(name="w", model="m", extensions=[])).run_until_idle()
+    first = (await h.results(tid))[0]
+    assert not first.result.is_error, first.result.text
+    assert any(m.text.endswith("Made: made-it\n") or "Made: made-it" in m.text
+               for r in h.provider.requests for m in r.messages)
+
+
 def test_an_untrusted_workspace_is_warned_about_once(
         tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     (tmp_path / ".noeta" / "skills").mkdir(parents=True)
@@ -709,3 +741,13 @@ async def test_a_tenants_skill_lists_no_resource_behind_the_fence(
     found = await index_dir(env, str(skills_dir(h)))
     assert list(found) == ["mine"]
     assert found["mine"].resources == ("notes.md",)
+
+
+def test_the_typed_and_forked_entries_kept_are_bounded() -> None:
+    skills = Skills()
+    state = skills.initial_state()
+    for seq in range(1, 500):
+        state = skills.reduce(state, "activated", {"name": f"s{seq % 3}", "input": seq})
+        state = skills.reduce(state, "forked", {"call_id": f"c{seq}", "prompt": "p"})
+    assert len(state["typed"]) <= 64 and "499" in state["typed"]
+    assert len(state["forks"]) <= 64 and "c499" in state["forks"]

@@ -88,10 +88,6 @@ class FsState(Struct):
     #: Notes waiting to reach the model after the results they belong to.
     notices: list[str] = msgspec.field(default_factory=list)
 
-    def digest(self, path: str) -> str | None:
-        entry = self.reads.get(path)
-        return entry.digest if entry is not None else None
-
 
 def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
     """``state`` with one recorded entry applied. Never mutates ``state``."""

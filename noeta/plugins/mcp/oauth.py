@@ -164,6 +164,12 @@ class TokenStore:
             self.save(data)
         return data
 
+    async def update_async(self, **fields: Any) -> dict[str, Any]:
+        """:meth:`update` in a thread: the lock may be held for a while (a
+        refresh elsewhere waits for the network under it), and a wait on
+        the event loop would stall the very refresh it waits for."""
+        return await asyncio.to_thread(self.update, **fields)
+
     def clear(self) -> bool:
         try:
             self.path.unlink()
@@ -371,7 +377,7 @@ class SignIn:
         async with _client(self._http) as http:
             endpoints = await discover(http, self.server, self.challenge)
             client = await self._client(http, endpoints, settings)
-        self.store.update(endpoints=endpoints.__dict__, client=client)
+        await self.store.update_async(endpoints=endpoints.__dict__, client=client)
         try:
             self._listener = await asyncio.start_server(self._on_redirect, "127.0.0.1", port)
         except OSError as exc:
@@ -481,7 +487,7 @@ class SignIn:
             body["resource"] = str(resource)
         async with _client(self._http) as http:
             tokens = await _token_request(http, data, body)
-        self.store.update(tokens=tokens)
+        await self.store.update_async(tokens=tokens)
 
     async def close(self) -> None:
         listener, self._listener = self._listener, None

@@ -187,6 +187,39 @@ async def test_sign_in_end_to_end(home: Path) -> None:
     await client.close()
 
 
+async def test_a_sign_in_waits_for_the_token_files_lock_off_the_event_loop(
+        home: Path) -> None:
+    auth = AuthServer()
+    http = http_for(auth)
+    store = store_for(SERVER)
+    sign_in = SignIn(SERVER, store, http=http)
+    taken, release = threading.Event(), threading.Event()
+
+    def hold() -> None:  # a refresh elsewhere, holding the lock
+        with store.locked():
+            taken.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    taken.wait(5)
+    starting = asyncio.ensure_future(sign_in.start())
+    gaps: list[float] = []
+    last = time.monotonic()
+    for _ in range(10):
+        await asyncio.sleep(0.02)
+        now = time.monotonic()
+        gaps.append(now - last)
+        last = now
+    release.set()
+    url = await starting
+    holder.join()
+    assert max(gaps) < 0.2  # the loop kept running while the lock was held
+    assert sign_in.submit(auth.authorize(url))
+    await sign_in.finish()
+    assert store.load()["tokens"]["access_token"] == "a1"
+
+
 async def test_a_pasted_redirect_and_a_wrong_state(home: Path) -> None:
     auth = AuthServer()
     http = http_for(auth)
