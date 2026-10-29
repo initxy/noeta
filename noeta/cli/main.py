@@ -195,7 +195,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     import uvicorn
 
     from noeta.cli.config import HOME, server_token_digest
-    from noeta.host.http import LOOPBACK_HOSTS, create_app
+    from noeta.host.http import LOOPBACK_HOSTS, create_app, redact_token_logs
 
     host, with_worker = args.host, not args.no_worker
     server = None if args.no_token else server_token_digest()
@@ -229,9 +229,10 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      workspaces=_workspaces(places),
                      queues={name: p.queues for name, p in places.items()
                              if p.queues is not None})
-    port = args.port
+    config = uvicorn.Config(api, host=host, port=args.port)
+    redact_token_logs()
     try:
-        await uvicorn.Server(uvicorn.Config(api, host=host, port=port)).serve()
+        await uvicorn.Server(config).serve()
     finally:
         await app.stop()
 

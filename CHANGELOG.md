@@ -626,3 +626,7 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   and does not look inside submodules (`--ignore-submodules=dirty`), so a cloned
   repository's `gpg.program` or a submodule's filter driver no longer runs when a task
   starts; a submodule with changed files but no new commit is no longer listed.
+- `noeta serve` logs a `?token=` value as `REDACTED` in uvicorn's access and error logs
+  (`noeta.host.http.redact_token_logs`, for host code serving `create_app`). Before, every
+  WebSocket connection logged its path with the token at info level
+  (`"WebSocket /stream-json?token=…" [accepted]`).

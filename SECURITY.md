@@ -49,7 +49,8 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
 - **`noeta serve` always requires a bearer token** (`NOETA_SERVER_TOKEN`, or one made on first
   start and printed once; `~/.noeta/server-token`, owner-only, keeps only its SHA-256);
   `--no-token` is accepted only on a loopback address. Only the WebSocket route also takes the token as
-  `?token=` (a browser cannot set the header there).
+  `?token=` (a browser cannot set the header there); `noeta serve` logs it as `REDACTED`
+  (host code serving `create_app` calls `noeta.host.http.redact_token_logs`).
   Other web origins and unexpected `Host` headers are refused, no request may start or switch a
   task into `bypassPermissions` unless the server allows it, and tasks run only inside the
   server's directory or `--allow-root` paths. Tenant tokens (`noeta token add`) are stored as
