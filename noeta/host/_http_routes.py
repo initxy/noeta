@@ -176,6 +176,7 @@ class Routes:
     async def rewind_post(self, request: Request) -> Response:
         task_id = request.path_params["task_id"]
         body = await request.json()
+        await scope(request).client.get(task_id)
         points = await rewind_points(scope(request).client, task_id)
         point = points[int(body["index"])]
         # The new task is a request's: the guard's checks, and only the
