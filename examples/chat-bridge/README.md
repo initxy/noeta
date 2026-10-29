@@ -2,10 +2,12 @@
 
 A chat app posts each message to `POST /chat` as `{delivery_id, thread, sender, text}`, with the
 shared `secret` in the `X-Chat-Secret` header; every thread is one durable task. A request without
-the secret is refused (401) before its sender id is believed; then only allowlisted senders (by
-sender id, never by room) get in, and `yes <id>` / `no <id>` from them answers an approval. The
-`chat_reply` plugin, inside the task, posts each answer and approval prompt back to its `url` and
-records what it relayed. The task's config holds only the thread id, so the reply URL (and any
+the secret is refused (401) before its sender id is believed, a body without those four strings
+too (400); then only allowlisted senders (by sender id, never by room) get in, and `yes <id>` /
+`no <id>` from them answers an approval. The `chat_reply` plugin, inside the task, posts each
+answer and approval prompt back to its `url` and records what it relayed: at least once, since a
+crash between the post and the record posts again, with the same `Idempotency-Key` header
+(`<task id>:<seq>`) so the chat app can drop the repeat. The task's config holds only the thread id, so the reply URL (and any
 token in it) never enters the task log.
 
 Run it on as many replicas as you like: an inbound delivery lands once (`deliver` creates the

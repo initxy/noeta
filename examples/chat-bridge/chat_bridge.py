@@ -2,14 +2,11 @@
 X-Chat-Secret; every thread is one durable task, replies go back from inside it.
 Safe on several replicas: a delivery lands once, and only the task's writer relays."""
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import hmac
 import json
 import re
-from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -19,28 +16,30 @@ from noeta.core.channel import Channel, deliver, framed
 from noeta.core.client import ClientAPI
 from noeta.core.events import Recorded, Waiting
 
-VERDICT = re.compile(r"^\s*(yes|no)\s+(\S+)\s*$", re.I)
+VERDICT = re.compile(r"^\s*(yes|no)\s+(\S+)\s*$", re.I)  # `yes <id>` answers an approval
 
 
 class ChatBridge(Channel):
-    """``secret`` (as ``{env:NAME}``; unset refuses all) proves the caller is the
-    chat app; then ``allow_senders`` (sender ids, never rooms) are let in."""
+    """``secret`` (``{env:NAME}``; unset refuses all) proves the caller is the chat app;
+    then only ``allow_senders`` (sender ids, never rooms) get in."""
 
     name = "chat_bridge"
 
-    def __init__(self, secret: str = "", allow_senders: Sequence[str] = (), agent: str = "main",
-                 host: str = "127.0.0.1", port: int = 8788) -> None:
+    def __init__(self, secret: str = "", allow_senders: tuple[str, ...] = (),
+                 agent: str = "main", host: str = "127.0.0.1", port: int = 8788) -> None:
         self.secret, self.allowed, self.agent = secret.encode(), set(allow_senders), agent
         self.host, self.port = host, port
 
-    async def receive(self, client: ClientAPI, body: dict[str, Any], secret: str) -> int:
-        """One delivery ``{delivery_id, thread, sender, text}``: an HTTP status."""
+    async def receive(self, client: ClientAPI, body: Any, secret: str) -> int:
         if not self.secret or not hmac.compare_digest(secret.encode(), self.secret):
             return 401
-        if body.get("sender") not in self.allowed:
+        fields = ("delivery_id", "thread", "sender", "text")
+        if not isinstance(body, dict) or not all(isinstance(body.get(k), str) for k in fields):
+            return 400
+        if body["sender"] not in self.allowed:
             return 403
         task_id = "chat-" + hashlib.sha256(body["thread"].encode()).hexdigest()[:24]
-        if verdict := VERDICT.match(body["text"]):  # `yes <id>` / `no <id>` answers an approval
+        if verdict := VERDICT.match(body["text"]):
             await client.answer(task_id, verdict[2], ("deny", "allow")[verdict[1].lower() == "yes"])
         else:
             await deliver(client, task_id=task_id, agent=self.agent,
@@ -52,13 +51,16 @@ class ChatBridge(Channel):
     async def run(self, client: ClientAPI, stop: asyncio.Event) -> None:
         import uvicorn  # the server extra
         from starlette.applications import Starlette
-        from starlette.requests import Request
         from starlette.responses import Response
         from starlette.routing import Route
 
-        async def chat(request: Request) -> Response:
-            return Response(status_code=await self.receive(
-                client, await request.json(), request.headers.get("x-chat-secret", "")))
+        async def chat(request: Any) -> Response:
+            try:
+                body = json.loads(await request.body())
+            except ValueError:
+                body = None
+            secret = request.headers.get("x-chat-secret", "")
+            return Response(status_code=await self.receive(client, body, secret))
         app = Starlette(routes=[Route("/chat", chat, methods=["POST"])])
         server = uvicorn.Server(uvicorn.Config(app, host=self.host, port=self.port))
         serving = asyncio.create_task(server.serve())
@@ -68,11 +70,10 @@ class ChatBridge(Channel):
 
 
 class ChatReply(Extension):
-    """Posts the answer or an approval prompt back to the thread, once. ``url``
-    (often holding a token) is a plugin argument, never in the task's log."""
+    """Posts each answer or approval prompt to the thread, at least once (after a crash, again
+    with the same ``Idempotency-Key``). ``url`` may hold a token: it never enters the log."""
 
-    name = "chat_reply"
-    add_to = ("main",)
+    name, add_to = "chat_reply", ("main",)
 
     def __init__(self, url: str = "") -> None:
         self.url = url
@@ -86,9 +87,9 @@ class ChatReply(Extension):
                 or recorded.seq <= (view.ext_state(self.name) or 0):
             return
         text = view.state.last_answer if event.on == "input" else "\n".join(
-            f"Allow {c.use.name} {json.dumps(c.use.input)}? "
-            f"Reply `yes {c.use.id}` or `no {c.use.id}`."
-            for c in view.state.open_calls if c.use.id in event.ids)
+            f"Allow {c.use.name} {json.dumps(c.use.input)}? Reply `yes {c.use.id}` or "
+            f"`no {c.use.id}`." for c in view.state.open_calls if c.use.id in event.ids)
         async with httpx.AsyncClient(timeout=10) as http:
-            await http.post(self.url, json={"thread": target["thread"], "text": text})
+            await http.post(self.url, json={"thread": target["thread"], "text": text},
+                            headers={"Idempotency-Key": f"{view.task_id}:{recorded.seq}"})
         view.record(self.name, "relayed", {"seq": recorded.seq})
