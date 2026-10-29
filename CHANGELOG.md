@@ -471,7 +471,19 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   asked the recall model about a message when it arrived, before `UserPromptSubmit` checked
   it, and the recalled memory stayed in the conversation after the erase. Recall now runs
   just before the model call that first carries the message; with `hooks` listed before
-  `memory` (as in the built-in agents), a blocked prompt is never sent to it.
+  `memory` (as in the built-in agents), a blocked prompt is never sent to it. With `memory`
+  listed first, the recall made for a blocked prompt is erased before the next model call
+  (an erase now also takes a `memory`-origin message) and its files may be recalled again.
+- **Foreground `Bash` commands no longer count toward the background job cap.** Eight running
+  foreground commands of one tree refused any `run_in_background` start with a `TaskStop`
+  hint that could not stop them.
+- **A foreground `Bash` command returns when its shell exits.** `sleep 20 & echo hi` waited
+  until its timeout because the backgrounded child held the output pipe; as in Claude Code,
+  the call now ends with the shell (the child keeps writing to the log).
+- **A background job's output file outlives the job's entry.** Past 64 ended jobs per root
+  the oldest were forgotten with their logs, which their end notices told the model to read;
+  the log now stays until the root ends, at most 256 MB of such logs per root
+  (`Registry(let_go_logs_max_bytes=...)`).
 - **Several `Agent` calls in one reply count once against `max_background`.** The second of
   two calls with a cap of two was refused: the tool checked the reply's limits again with
   its sibling already running.
