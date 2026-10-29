@@ -15,16 +15,8 @@ from dataclasses import dataclass, field
 
 from noeta.toolkit.paths import noeta_home
 from noeta.toolkit.protected_paths import PROTECTED_DIRS, PROTECTED_FILES, PROTECTED_NESTED
-from noeta.toolkit.sandbox import SandboxSettings
+from noeta.toolkit.sandbox import DEFAULT_DENY_READ, SandboxSettings
 
-#: Credential stores in the home directory a confined command never reads
-#: unless ``allowRead`` names them.
-DEFAULT_DENY_READ = (
-    "~/.ssh", "~/.gnupg", "~/.aws", "~/.azure", "~/.config/gcloud", "~/.kube",
-    "~/.docker/config.json", "~/.config/gh", "~/.netrc", "~/.git-credentials",
-    "~/.pypirc", "~/.npmrc", "~/.cargo/credentials", "~/.cargo/credentials.toml",
-    "~/.pgpass", "~/.password-store",
-)
 #: Inside noeta's home (otherwise unreadable: tokens, the task store), what
 #: a command may still read: spilled tool output and project memory.
 HOME_ALLOW_READ = ("tool-results", "projects")
