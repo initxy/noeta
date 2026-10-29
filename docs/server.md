@@ -44,7 +44,8 @@ noeta serve --no-worker --host 0.0.0.0   # the API, on one or more machines
   (`StoreUnavailable`). On sqlite, a binary from before schema version 2 does not refuse:
   left running, it fails once the upgrade has dropped the old `holds` table, and started again
   it writes a new one, so stop every old worker before the upgrade. Each open that finds a
-  `holds` table tells every tree held there that its hold is gone, then drops the table; on
+  `holds` table tells each tree held there that its hold is gone (once per tree), then drops
+  the table; on
   Postgres it waits for an old worker's open transaction on that table.
 
 ## Where commands run (the workspace)
