@@ -14,6 +14,12 @@ All notable changes to Noeta are documented here. The format is based on
   `role="system"`, origins `inline` and `agent`, `ToolReference` blocks), so an older worker
   that picks up a task a newer one touched fails on it again and again. Logs written by
   older versions still load.
+- **Stores are at schema version 2 and refuse a newer store.** Holds moved to `tree_holds`,
+  and `tasks.tenant`, `tenant_usage` and `snapshots` were added. The first process of this
+  version moves a version 1 store (sqlite or Postgres) forward in place, posting `hold_lost`
+  for the old `holds` rows and keeping that table unused; a store at a later version than the
+  code knows is refused with `StoreUnavailable` before anything is written to it (sqlite never
+  checked before). Upgrading: stop every worker first.
 - **noeta reads only its own places, with Claude Code's mechanisms.** `~/.claude/`,
   `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json` and `CLAUDE_CONFIG_DIR` are no
   longer read, so the two tools never pick up each other's hooks, env or instructions.
