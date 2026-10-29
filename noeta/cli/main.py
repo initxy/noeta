@@ -33,6 +33,9 @@ from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
 SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp", "token")
 
+#: Where an extra is installed from (README). noeta 1.0 is not on PyPI, and
+#: the bare name there may be someone else's package.
+SOURCE_URL = "git+https://github.com/initxy/noeta"
 #: The top-level modules each optional extra installs (``pyproject.toml``).
 EXTRA_MODULES = {
     "uvicorn": "server", "starlette": "server", "websockets": "server",
@@ -301,9 +304,10 @@ def main(argv: list[str] | None = None) -> None:
         extra = missing_extra(exc)
         if extra is None:
             raise
+        source = f"'noeta[{extra}] @ {SOURCE_URL}'"
         sys.exit(f"noeta: this needs the {extra} extra, which is not installed: "
-                 f"pip install 'noeta[{extra}]' (or, for a uv tool install, "
-                 f"uv tool install --reinstall 'noeta[{extra}]')")
+                 f"pip install {source} (or, for a uv tool install, "
+                 f"uv tool install --reinstall {source})")
 
 
 def _main(argv: list[str]) -> None:

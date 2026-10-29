@@ -2,7 +2,7 @@
 JetBrains, Neovim, Toad). One ACP session is one noeta task; what the task
 records is translated into ACP session updates as it lands.
 
-Needs the ``acp`` extra (``pip install 'noeta[acp]'``).
+Needs the ``acp`` extra (``pip install 'noeta[acp] @ git+https://github.com/initxy/noeta'``).
 """
 
 from __future__ import annotations

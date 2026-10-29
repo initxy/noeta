@@ -636,3 +636,7 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   were always refused).
 - `noeta serve --no-token` refuses to start when a tenant token or tenant directory exists.
   Before, it served every request as the default tenant and ignored the tenants' tokens.
+- A command missing an optional extra names the install from this repository
+  (`pip install 'noeta[server] @ git+https://github.com/initxy/noeta'`, and the same for
+  `uv tool install --reinstall`). Before, it named `noeta[server]` on PyPI, where noeta 1.0
+  is not published and the name may install someone else's package.
