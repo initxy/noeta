@@ -115,3 +115,36 @@ async def test_the_http_command_listing_carries_the_requests_tenant(tmp_path: Pa
                 assert pool.used == used
     finally:
         await store.close()
+
+
+class _Prompts:
+    def __init__(self, scope: str | None) -> None:
+        self.scope = scope
+
+    async def list_prompts(self) -> list[Any]:
+        return [{"name": "hello"}]
+
+    async def get_prompt(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return {"messages": [{"role": "user",
+                              "content": {"type": "text", "text": f"from {self.scope}"}}]}
+
+
+class PromptPool(Recording):
+    @contextlib.asynccontextmanager
+    async def acquire(self, server: McpServer, scope: str | None = None,
+                      context: Any = None) -> AsyncIterator[Any]:
+        self.used.append((server.alias, scope))
+        yield _Prompts(scope)
+
+
+async def test_a_prompt_runs_in_the_partition_of_the_tenant_that_runs_it() -> None:
+    pool = PromptPool()
+    mcp = Mcp([McpServer(alias="remote", url="http://127.0.0.1:9/mcp")], pool=pool)
+    acme, beta = CommandContext(cwd="/", tenant="acme"), CommandContext(cwd="/", tenant="beta")
+    names = [c.name for c in await mcp.commands(acme)]
+    await mcp.commands(beta)  # beta lists the same command name after acme
+    pool.used.clear()
+    assert await mcp.run_command(acme, names[0], "") == "from tenant:acme"
+    assert pool.used == [("remote", "tenant:acme")]
+    assert await mcp.run_command(beta, names[0], "") == "from tenant:beta"
+    assert await mcp.run_command(CommandContext(cwd="/"), names[0], "") == "from None"

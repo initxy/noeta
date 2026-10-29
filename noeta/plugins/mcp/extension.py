@@ -189,8 +189,10 @@ class Mcp(Extension):
         self._scopes: dict[str, str | None] = {}
         self._tools: dict[str, tuple[Any, list[Tool]]] = {}
         self._marks: dict[str, int] = {}
-        #: Command name -> (server, scope, prompt), as last listed.
-        self._prompts: dict[str, tuple[McpServer, str | None, McpPrompt]] = {}
+        #: (connection partition, command name) -> (server, prompt), as last
+        #: listed in that partition: a tenant's listing never names the
+        #: connection another tenant's command runs on.
+        self._prompts: dict[tuple[str | None, str], tuple[McpServer, McpPrompt]] = {}
         #: task id -> the workspace directories ``roots/list`` answers.
         self._roots: dict[str, list[str]] = {}
         #: task id -> {alias: why not started} (a tenant's local servers).
@@ -521,15 +523,17 @@ class Mcp(Extension):
         return [s for s in known.values()
                 if ctx.tenant == DEFAULT_TENANT or not _runs_here(s)]
 
+    def _command_scope(self, ctx: CommandContext) -> str | None:
+        """The connection partition a command of ``ctx`` lists and runs in."""
+        if ctx.task_id:
+            return self._scopes[ctx.task_id] if ctx.task_id in self._scopes \
+                else _tenant_scope(ctx.tenant, None)
+        return _tenant_scope(ctx.tenant, self._scope if isinstance(self._scope, str) else None)
+
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
         """Each server prompt as ``/mcp__<alias>__<prompt>``; arguments are
         typed after it, separated by spaces (the last takes the rest)."""
-        if ctx.task_id:
-            scope = self._scopes[ctx.task_id] if ctx.task_id in self._scopes \
-                else _tenant_scope(ctx.tenant, None)
-        else:
-            scope = _tenant_scope(ctx.tenant,
-                                  self._scope if isinstance(self._scope, str) else None)
+        scope = self._command_scope(ctx)
         out: list[Command] = []
         for server in await self._command_servers(ctx):
             try:
@@ -538,7 +542,7 @@ class Mcp(Extension):
                 log.warning("mcp: listing the prompts of %s failed: %s", server.alias, exc)
                 continue
             for p in prompts:
-                self._prompts[p.command_name] = (server, scope, p)
+                self._prompts[(scope, p.command_name)] = (server, p)
                 hint = " ".join(f"<{a['name']}>" if a["required"] else f"[{a['name']}]"
                                 for a in p.arguments)
                 out.append(Command(name=p.command_name, description=p.description,
@@ -546,11 +550,12 @@ class Mcp(Extension):
         return out
 
     async def run_command(self, ctx: CommandContext, name: str, args: str) -> str:
-        if name not in self._prompts:
+        scope = self._command_scope(ctx)
+        if (scope, name) not in self._prompts:
             await self.commands(ctx)
-        if name not in self._prompts:
+        if (scope, name) not in self._prompts:
             raise McpError(f"no MCP prompt {name!r}")
-        server, scope, prompt = self._prompts[name]
+        server, prompt = self._prompts[(scope, name)]
         names = [a["name"] for a in prompt.arguments]
         values = args.split(None, max(len(names) - 1, 0)) if names and args else []
         return await expand_prompt(server, prompt.name, dict(zip(names, values, strict=False)),

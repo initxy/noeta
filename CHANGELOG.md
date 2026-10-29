@@ -800,3 +800,7 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   workspace and its own corners, nor write the operator's `allowWrite` /
   `additionalDirectories` (`TenantFence.confine`, `TenantFence(server_dirs=)`). Before, they
   read everything but noeta's places and the sandbox's credential stores.
+- An MCP prompt command (`/mcp__<server>__<prompt>`) runs in the connection partition of the
+  request that runs it: listed prompts are kept per partition. Before, they were kept by
+  command name only, so after another tenant listed the same command, a tenant's
+  `/commands/run` used that tenant's connection and OAuth sign-in.
