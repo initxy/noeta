@@ -514,6 +514,10 @@ servers and runs on many machines.
   classifier needs it).
 - D89 (`os-fix-r9sec`) The tenant fence folds case on macOS and Windows only; Linux
   compares with case (a case-insensitive file system mounted there: "Not a boundary").
+- D160 (`os-fix-r10sec`) `Read` of a PDF renders one page per `pdftoppm` run to stdout
+  (no temporary directory, for any env); a fenced task's PDF reaches `pdfinfo` and
+  `pdftoppm` only as bytes on stdin (`-`). The converters still run unsandboxed as the
+  worker, but open no path.
 
 ## Plan
 

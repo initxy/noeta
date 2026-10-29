@@ -1,6 +1,7 @@
-"""A fenced env's PDF reaches the page converter only as a copy read
-through the fence: the converter, run by the worker, never opens the path
-itself (a link swapped in after the check would carry it elsewhere)."""
+"""A fenced env's PDF reaches the page converter only as bytes read through
+the fence, on stdin: the converter, run by the worker, never opens a path
+(a link the tenant's commands swap in after the check would carry it
+elsewhere), and nothing is written where those commands can reach."""
 
 from __future__ import annotations
 
@@ -35,7 +36,13 @@ def _converter_paths(env: Recording) -> list[str]:
             for a in argv if a.endswith(".pdf")]
 
 
-async def test_a_fenced_pdf_is_converted_from_a_copy(tmp_path: Path) -> None:
+def _pdf(marker: bytes) -> bytes:
+    """A one-page PDF whose page box differs by ``marker`` (so its rendered
+    page does too)."""
+    return _PDF.replace(b"[0 0 72 72]", b"[0 0 " + marker + b"]")
+
+
+async def test_a_fenced_pdf_is_fed_to_the_converters_on_stdin(tmp_path: Path) -> None:
     doc = tmp_path / "doc.pdf"
     doc.write_bytes(_PDF)
     checked: list[str] = []
@@ -48,8 +55,9 @@ async def test_a_fenced_pdf_is_converted_from_a_copy(tmp_path: Path) -> None:
     out = await read_pdf("Read", env, str(doc), "doc.pdf", len(_PDF), None)
     if shutil.which("pdftoppm"):
         assert not out.is_error and len(out.content) == 2  # the text and one page
-    used = _converter_paths(env)
-    assert used and str(doc) not in used
+    converters = [argv for argv in env.argvs if argv[0] in ("pdfinfo", "pdftoppm")]
+    assert converters and all(argv[-1] == "-" for argv in converters)
+    assert not _converter_paths(env)
     assert str(doc) in checked
 
 
@@ -61,7 +69,7 @@ async def test_an_unfenced_pdf_is_converted_in_place(tmp_path: Path) -> None:
     assert set(_converter_paths(env)) == {str(doc)}
 
 
-async def test_a_fenced_pdf_behind_a_link_into_the_fence_is_refused(tmp_path: Path) -> None:
+async def test_a_fenced_pdf_behind_a_link_into_the_fence_is_an_error(tmp_path: Path) -> None:
     secret = tmp_path / "secret"
     secret.mkdir()
     (secret / "doc.pdf").write_bytes(_PDF)
@@ -72,30 +80,54 @@ async def test_a_fenced_pdf_behind_a_link_into_the_fence_is_refused(tmp_path: Pa
         return "fenced" if path.startswith(str(secret)) else None
 
     env = Recording(str(tmp_path), fence=fence)
-    try:
-        await read_pdf("Read", env, str(link), "ws.pdf", len(_PDF), None)
-    except PermissionError:
-        pass
+    out = await read_pdf("Read", env, str(link), "ws.pdf", len(_PDF), None)
+    assert out.is_error and "read failed" in str(out.content[0])
     assert not _converter_paths(env)
 
 
-async def test_a_tenants_copy_and_pages_stay_in_its_own_temporary_directory(
+class Swapping(Recording):
+    """The tenant's background command at its worst: every file a converter
+    is about to open in the tenant's temporary directory is first replaced
+    by a link to another tenant's PDF, and every directory it writes into by
+    a link to another tenant's workspace."""
+
+    def __init__(self, *args: Any, own: Path, other: Path, **kw: Any) -> None:
+        super().__init__(*args, **kw)
+        self.own, self.other = own, other
+
+    async def run(self, argv: Sequence[str], **kw: Any) -> RunResult:
+        if argv[0] in ("pdfinfo", "pdftoppm"):
+            for a in argv:
+                target = Path(a)
+                if not a.startswith(f"{self.own}/"):
+                    continue
+                if a.endswith(".pdf") and target.is_file():
+                    target.unlink()
+                    target.symlink_to(self.other / "secret.pdf")
+                elif target.parent.is_dir() and not target.parent.is_symlink():
+                    shutil.rmtree(target.parent)
+                    target.parent.symlink_to(self.other)
+        return await super().run(argv, **kw)
+
+
+async def test_a_swapped_link_in_the_tenants_temporary_directory_reaches_nothing(
         tmp_path: Path) -> None:
-    doc = tmp_path / "doc.pdf"
-    doc.write_bytes(_PDF)
-    own = tmp_path / "own-temp"
-    (own / "tmp").mkdir(parents=True)
+    mine, other, own = tmp_path / "mine", tmp_path / "other", tmp_path / "own-temp"
+    for d in (mine, other, own / "tmp"):
+        d.mkdir(parents=True)
+    (mine / "doc.pdf").write_bytes(_pdf(b"72 72"))
+    (other / "secret.pdf").write_bytes(_pdf(b"300 300"))
 
     def fence(path: str, write: bool) -> str | None:
-        # As the tenant fence: of its temporary directory, file tools write
-        # only its commands' TMPDIR.
-        inside = path.startswith(f"{own}/")
-        return "job logs" if write and inside and not path.startswith(f"{own}/tmp/") else None
+        return None if path.startswith(f"{mine}/") or path.startswith(f"{own}/") else "fenced"
 
-    env = Recording(str(tmp_path), fence=fence, temp_dir=str(own))
-    out = await read_pdf("Read", env, str(doc), "doc.pdf", len(_PDF), None)
-    used = _converter_paths(env)
-    assert used and all(p.startswith(f"{own}/tmp/") for p in used)
+    env = Swapping(str(mine), fence=fence, temp_dir=str(own), own=own, other=other)
+    out = await read_pdf("Read", env, str(mine / "doc.pdf"), "doc.pdf", 100, None)
+    assert sorted(p.name for p in other.iterdir()) == ["secret.pdf"]
+    assert list((own / "tmp").iterdir()) == []
     if shutil.which("pdftoppm"):
         assert not out.is_error
-    assert list((own / "tmp").iterdir()) == []  # removed after use
+        page = out.content[1]
+        clean = await read_pdf("Read", LocalExecEnv(str(mine)), str(mine / "doc.pdf"),
+                               "doc.pdf", 100, None)
+        assert page == clean.content[1]  # tenant a's own page, not the other's

@@ -872,6 +872,13 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- **A tenant's `Read` of a PDF no longer lets its commands swap the converters' input or
+  output.** The copy and the rendered pages were in the tenant's own commands' `TMPDIR`, so a
+  background command could replace them with links: `pdfinfo` and `pdftoppm`, run by the
+  worker unsandboxed, then read another tenant's PDF or wrote pages into another tenant's
+  workspace. A fenced task's PDF is now read once through the fence and fed to the converters
+  on stdin, and each page is rendered to stdout, so no file is made anywhere. A PDF the fence
+  refuses is now a `Read` error instead of an exception.
 - **A sandboxed command can no longer reach into the network relay it runs under.** The
   relay inside the Linux sandbox (same user, same PID namespace, no system-call filter, and
   holding the proxies' Unix sockets) was dumpable, so where `kernel.yama.ptrace_scope` is 0 a
