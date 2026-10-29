@@ -15,7 +15,7 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.errors import StoreUnavailable
-from noeta.core.events import Event, ToolFinished, ToolStarted
+from noeta.core.events import Event, TaskCreated, ToolFinished, ToolStarted
 from noeta.core.runner import INTERRUPTED_CALL_ERROR, Runtime
 from noeta.core.store import Appended, Claim, NewTask, Patch, Post
 from noeta.core.tool import ToolContext, ToolOutput, text_output
@@ -201,5 +201,73 @@ async def test_a_lease_that_cannot_be_renewed_is_given_up_by_the_local_clock(
     try:
         await asyncio.wait_for(run._keep_claim(), 2.0)
         assert run._lost
+    finally:
+        await store.close()
+
+
+class SlowClaim(SqliteStore):
+    async def claim(self, *args: Any, **kw: Any) -> Claim | None:
+        await asyncio.sleep(0.2)
+        return await super().claim(*args, **kw)
+
+
+async def test_a_claims_local_deadline_counts_from_before_it_was_asked_for(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The store starts the lease when it takes the claim; the runner's own
+    clock must not start it later, when the answer came back."""
+    from noeta.core.runner.task import TaskRun
+
+    deadlines: list[float] = []
+
+    async def run(self: TaskRun) -> None:
+        deadlines.append(self._lease_deadline)
+
+    monkeypatch.setattr(TaskRun, "run", run)
+    store = SlowClaim(str(tmp_path / "t.db"))
+    rt = Runtime(store=store, agents={}, provider_for=lambda _m: None,  # type: ignore[arg-type,return-value]
+                 lease_seconds=10)
+    try:
+        await store.create(NewTask(task_id="t", created=TaskCreated(agent="a")))
+        before = time.monotonic()
+        assert await rt.run_once()
+        assert deadlines and deadlines[0] < before + 10 + 0.1
+    finally:
+        await store.close()
+
+
+async def test_a_task_whose_log_cannot_be_read_ends_failed_after_a_few_claims(
+        tmp_path: Path) -> None:
+    """A log no worker can read or fold is not claimed forever: after a few
+    claims in a row it ends failed with the reason, its parent hears it and
+    its children are cancelled."""
+    import sqlite3
+
+    from noeta.core.events import Cancel, ChildEnded
+    from noeta.core.runner.task import LOAD_ATTEMPTS
+
+    path = str(tmp_path / "t.db")
+    store = SqliteStore(path)
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m")},
+                 provider_for=lambda _m: None, lease_seconds=0.1)  # type: ignore[arg-type,return-value]
+    try:
+        await store.create(NewTask(task_id="P", created=TaskCreated(agent="a"), queue="other"))
+        await store.create(NewTask(task_id="C", created=TaskCreated(
+            agent="a", parent_id="P", root_id="P")))
+        await store.create(NewTask(task_id="G", created=TaskCreated(
+            agent="a", parent_id="C", root_id="P"), queue="other"))
+        conn = sqlite3.connect(path)
+        conn.execute("UPDATE events SET data = x'7b' WHERE task_id = 'C'")
+        conn.commit()
+        conn.close()
+        for attempt in range(LOAD_ATTEMPTS):
+            row = await store.get("C")
+            assert row is not None and row.status != "ended", attempt
+            await asyncio.sleep(0.15)  # the last claim's lease runs out
+            assert await rt.run_once()
+        row = await store.get("C")
+        assert row is not None and row.status == "ended" and row.end_status == "failed"
+        [ended] = [i.body for i in await store.inbox("P") if isinstance(i.body, ChildEnded)]
+        assert ended.status == "failed" and ended.error.startswith("unreadable_log")
+        assert any(isinstance(i.body, Cancel) for i in await store.inbox("G"))
     finally:
         await store.close()

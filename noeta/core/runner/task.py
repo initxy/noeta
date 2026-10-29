@@ -48,7 +48,7 @@ from noeta.core.records import CORE
 from noeta.core.runner import texts
 from noeta.core.runner.runtime import Runtime
 from noeta.core.runner.snapshotting import SnapshotWriter
-from noeta.core.store import Claim, NewTask, Post, Snapshot, patch_for, pin_history
+from noeta.core.store import Claim, NewTask, Patch, Post, Snapshot, patch_for, pin_history
 from noeta.core.tool import Tool
 from noeta.core.types import Text, Thinking, ToolResult, user
 
@@ -58,13 +58,16 @@ log = logging.getLogger("noeta.core.runner")
 #: Continued conversations followed back from a task (``history_from``)
 #: before the rest of the chain is ignored.
 MAX_HISTORY_DEPTH = 64
+#: Claims in a row (in one worker) whose log could not be read or folded
+#: before the task is ended failed instead of claimed again.
+LOAD_ATTEMPTS = 3
 
 class LostClaim(Exception):
     pass
 
 
 class TaskRun:
-    def __init__(self, rt: Runtime, claim: Claim) -> None:
+    def __init__(self, rt: Runtime, claim: Claim, *, sent: float | None = None) -> None:
         self.rt = rt
         self.store = rt.store
         self.claim = claim
@@ -77,8 +80,9 @@ class TaskRun:
         self._lost = False
         #: When the claim's lease runs out by this process's monotonic clock
         #: (``Claim.lease_until`` is the store's clock, which may differ):
-        #: counted from just before the last successful renewal was sent.
-        self._lease_deadline = time.monotonic() + rt.lease_seconds
+        #: counted from just before the claim, then the last successful
+        #: renewal, was asked for.
+        self._lease_deadline = (time.monotonic() if sent is None else sent) + rt.lease_seconds
         self._write_lock = asyncio.Lock()
         self._env: Any = None
         #: The text the model call in flight has streamed so far, and the
@@ -97,6 +101,7 @@ class TaskRun:
         unsubscribe = self.store.on_change(self._on_change)
         try:
             await self.load()
+            self.rt._unreadable.pop(self.task_id, None)
             self.snapshots.write_loaded()
             if self.agent is None:
                 # Releasing would hand it straight back to this worker; a task
@@ -112,15 +117,53 @@ class TaskRun:
             # The store is unreachable: stop; the lease runs out and the task
             # is claimed again once the store is back.
             log.warning("task %s: store error, stopping: %s", self.task_id, exc)
-        except Exception:
+        except Exception as exc:
             # The log could not even be read and folded (nothing was written).
             log.exception("task %s: could not run", self.task_id)
+            try:
+                await self._unreadable(exc)
+            except Exception:  # claimed again once the lease runs out
+                log.exception("task %s: could not end it failed", self.task_id)
         finally:
             unsubscribe()
             keeper.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await keeper
             await self.snapshots.finish()
+
+    async def _unreadable(self, exc: Exception) -> None:
+        """A claim whose log could not be read or folded: the task is
+        claimed again once the lease runs out, and after ``LOAD_ATTEMPTS``
+        such claims in a row here it ends failed, written from its row
+        since there is no folded state: its parent hears it, its children
+        are cancelled."""
+        tries = self.rt._unreadable.get(self.task_id, 0) + 1
+        if tries < LOAD_ATTEMPTS:
+            self.rt._unreadable[self.task_id] = tries
+            return
+        self.rt._unreadable.pop(self.task_id, None)
+        error = texts.UNREADABLE_LOG.format(attempts=tries, error=repr(exc))
+        while True:
+            row = await self.store.get(self.task_id)
+            if row is None or row.status == "ended":
+                return
+            posts = [Post(task_id=c.task_id, body=Cancel(reason="parent task failed"))
+                     for c in await self.store.tasks(parent_id=self.task_id, limit=10_000)
+                     if c.status != "ended"]
+            if row.parent_id:
+                posts.append(Post(task_id=row.parent_id, dedupe_key=f"child:{self.task_id}",
+                                  body=ChildEnded(child_id=self.task_id, status="failed",
+                                                  error=error)))
+            try:
+                await self.store.append(
+                    self.claim, [TaskEnded(status="failed", error=error)],
+                    expected_seq=row.last_seq, posts=posts,
+                    patch=Patch(status="ended", end_status="failed",
+                                inbox_read_seq=row.inbox_seq))
+            except InboxUnread:
+                continue  # posted to meanwhile: read the row again
+            log.error("task %s: ended failed: %s", self.task_id, error)
+            return
 
     async def _steps(self) -> None:
         """Step until the task waits or ends. A bug (an extension hook, a
@@ -366,11 +409,20 @@ class TaskRun:
                         agents=self.rt.agents,
                         allowed_tools=self.agent.allowed_tools if self.agent else None,
                         denied_tools=self.agent.denied_tools if self.agent else (),
-                        count_tokens=self.counter(model), read_log=self.store.read,
+                        count_tokens=self.counter(model), read_log=self._read_log,
                         child_tasks=self._child_ids)
 
+    async def _read_log(self, task_id: str, after: int = 0) -> Sequence[Recorded]:
+        """``TaskView.read_log``: another tenant's task is not there for it."""
+        if task_id != self.task_id:
+            row = await self.store.get(task_id)
+            if row is None or row.tenant != self.state.tenant:
+                return []
+        return await self.store.read(task_id, after)
+
     async def _child_ids(self, task_id: str) -> list[str]:
-        return [row.task_id for row in await self.store.tasks(parent_id=task_id, limit=10_000)]
+        return [row.task_id for row in await self.store.tasks(
+            parent_id=task_id, limit=10_000, tenant=self.state.tenant)]
 
     def counter(self, model: str) -> Any:
         """``count_tokens(text)`` against ``model``'s provider, or ``None``

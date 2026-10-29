@@ -207,3 +207,79 @@ async def test_a_version_1_schema_is_upgraded_in_place(pg: Any) -> None:
     with psycopg.connect(pg.dsn, autocommit=True) as conn:
         rows = conn.execute(f'SELECT version FROM "{pg.schema}".noeta_schema').fetchall()
     assert rows == [(SCHEMA_VERSION,)] and SCHEMA_VERSION == 2
+
+
+async def test_a_claim_waits_for_a_hold_of_its_tree_being_taken(pg: Any) -> None:
+    """A hold being taken (its transaction not committed yet) and a claim of
+    the same tree serialize: the claim does not take a task of a tree that
+    another worker's hold, once committed, keeps."""
+    import psycopg
+
+    from noeta.backends.stores.postgres import _HOLD_LOCK_CLASS
+
+    store = pg.store()
+    await store.create(new("R"))
+    async with await psycopg.AsyncConnection.connect(pg.dsn) as holder:
+        # What PostgresStore.hold does, held open before its commit.
+        await holder.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
+                             (_HOLD_LOCK_CLASS, f"{pg.schema}:R"))
+        await holder.execute(
+            f'INSERT INTO "{pg.schema}".tree_holds (root_id, worker, until)'
+            " VALUES ('R', 'A', extract(epoch from now()) + 60)")
+        claim = asyncio.create_task(store.claim("B", ["default"], 30))
+        await asyncio.sleep(0.3)
+        await holder.commit()
+        assert await asyncio.wait_for(claim, 10) is None
+    row = await store.get("R")
+    assert row is not None and row.owner is None
+    await store.close()
+
+
+async def test_a_hold_waits_for_a_claim_of_its_tree_being_taken(pg: Any) -> None:
+    import psycopg
+
+    from noeta.backends.stores.postgres import _HOLD_LOCK_CLASS
+
+    store = pg.store()
+    await store.create(new("R"))
+    async with await psycopg.AsyncConnection.connect(pg.dsn) as claimer:
+        # What PostgresStore.claim does, held open before its commit.
+        await claimer.execute(
+            f'UPDATE "{pg.schema}".tasks SET status = \'running\', owner = \'B\','
+            " owner_epoch = owner_epoch + 1, lease_until = extract(epoch from now()) + 60"
+            " WHERE task_id = 'R'")
+        await claimer.execute("SELECT pg_advisory_xact_lock_shared(%s, hashtext(%s))",
+                              (_HOLD_LOCK_CLASS, f"{pg.schema}:R"))
+        hold = asyncio.create_task(store.hold("R", "A", 30))
+        await asyncio.sleep(0.3)
+        assert not hold.done()
+        await claimer.commit()
+        assert await asyncio.wait_for(hold, 10) is None
+    await store.close()
+
+
+async def test_upgrading_a_version_1_schema_tells_its_held_trees(pg: Any) -> None:
+    import psycopg
+
+    from noeta.core.events import External
+    from noeta.core.store import HOLD_LOST
+
+    store = pg.store()
+    await store.create(new("R"))
+    await store.create(NewTask(task_id="S", created=TaskCreated(agent="a", parent_id="R",
+                                                                root_id="R")))
+    await store.create(new("free"))
+    await store.close()
+    schema = f'"{pg.schema}"'
+    with psycopg.connect(pg.dsn, autocommit=True) as conn:
+        conn.execute(f"CREATE TABLE {schema}.holds (root_id TEXT PRIMARY KEY,"
+                     " worker TEXT NOT NULL, until DOUBLE PRECISION NOT NULL)")
+        conn.execute(f"INSERT INTO {schema}.holds VALUES ('R', 'w-old', 1e12)")
+        conn.execute(f"UPDATE {schema}.noeta_schema SET version = 1")
+    lost = External(name=HOLD_LOST, data={"worker": "w-old", "epoch": 0})
+    for _ in range(2):  # told once
+        store = pg.store()
+        assert [i.body for i in await store.inbox("R")] == [lost]
+        assert [i.body for i in await store.inbox("S")] == [lost]
+        assert await store.inbox("free") == []
+        await store.close()

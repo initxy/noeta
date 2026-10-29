@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from noeta.core import snapshots
 from noeta.core.agent import Agent
 from noeta.core.errors import HeldElsewhere
 from noeta.core.execenv import ExecEnv
@@ -112,6 +113,18 @@ class Runtime:
     #: released); a new hold of the tree waits for it.
     _unholding: dict[str, asyncio.Future[None]] = field(default_factory=dict, init=False,
                                                         repr=False)
+    #: Per task: claims in a row whose log could not be read or folded here
+    #: (``TaskRun._unreadable``).
+    _unreadable: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        # The snapshot version is of the code this process runs: hash it
+        # now, before an upgrade on disk could change what is read.
+        for agent in self.agents.values():
+            try:
+                snapshots.pin(agent.all_extensions())
+            except ValueError:  # a misconfigured agent fails when its task loads
+                continue
 
     @property
     def hold_seconds(self) -> float:
@@ -127,21 +140,24 @@ class Runtime:
         ``release.tree.on_lost`` to stop when the hold is gone (reaped after
         this worker was silent too long, or this runtime stopping).
         Raises ``HeldElsewhere`` while another worker holds the tree (one
-        whose hold ran out is reaped first)."""
+        whose hold ran out is reaped first) or runs one of its tasks."""
         async with self._tree_lock(root_id):
             tree = self._holds.get(root_id)
             if tree is None or tree.lost:
                 unholding = self._unholding.get(root_id)
                 if unholding is not None:
                     await asyncio.shield(unholding)  # the last share's give-back
+                sent = time.monotonic()
                 epoch = await self.store.hold(root_id, self.worker, self.hold_seconds)
                 if epoch is None:
                     await self._reap()
+                    sent = time.monotonic()
                     epoch = await self.store.hold(root_id, self.worker, self.hold_seconds)
                 if epoch is None:
-                    raise HeldElsewhere(f"task tree {root_id} is held by another worker")
+                    raise HeldElsewhere(f"task tree {root_id} is held by another worker, or "
+                                       "another worker runs one of its tasks")
                 tree = TreeHold(root_id=root_id, worker=self.worker, epoch=epoch,
-                                seconds=self.hold_seconds)
+                                seconds=self.hold_seconds, renewed=sent)
                 self._holds[root_id] = tree
             tree.count += 1
         if self._renewer is None or self._renewer.done():
@@ -198,6 +214,7 @@ class Runtime:
             # wait): a hold must outlive the worker by wall-clock seconds.
             await asyncio.sleep(self.lease_seconds / 3)
             for tree in list(self._holds.values()):
+                sent = time.monotonic()
                 try:
                     kept = await self.store.hold(tree.root_id, self.worker, self.hold_seconds,
                                                  epoch=tree.epoch)
@@ -211,7 +228,7 @@ class Runtime:
                         self._holds.pop(tree.root_id)
                     tree.mark_lost()
                 else:
-                    tree.renewed = time.monotonic()
+                    tree.renewed = sent
 
     async def _reap(self) -> None:
         """Reap the holds of silent workers (``Store.reap_holds``): every
@@ -224,16 +241,21 @@ class Runtime:
         if reaped:
             log.info("reaped %d hold(s) of silent workers", reaped)
 
-    async def _claim_once(self) -> Claim | None:
+    async def _claim_once(self) -> tuple[Claim, float] | None:
+        """A claim and this process's monotonic time just before it was
+        asked for (when its lease surely started)."""
         await self._reap()
         roots = sorted(self.roots) if self.roots is not None else None
         limits = {name: t.max_running for name, t in self.tenants.items()
                   if t.max_running is not None}
+        sent = time.monotonic()
         if limits:
-            return await self.store.claim(self.worker, self.queues, self.lease_seconds,
-                                          roots=roots, tenant_limits=limits)
-        return await self.store.claim(self.worker, self.queues, self.lease_seconds,
-                                      roots=roots)
+            claim = await self.store.claim(self.worker, self.queues, self.lease_seconds,
+                                           roots=roots, tenant_limits=limits)
+        else:
+            claim = await self.store.claim(self.worker, self.queues, self.lease_seconds,
+                                           roots=roots)
+        return (claim, sent) if claim is not None else None
 
     def provider(self, model: str, tenant: str) -> Provider:
         """The provider for ``model`` in a task of ``tenant``."""
@@ -263,13 +285,14 @@ class Runtime:
         except Exception as exc:  # noqa: BLE001 — the call happened; the count is best effort
             log.warning("tenant %s: counting usage failed: %s", tenant, exc)
 
-    async def run_claim(self, claim: Claim) -> None:
+    async def run_claim(self, claim: Claim, *, sent: float | None = None) -> None:
         """Run one claim until the task waits or ends. Cancelled (a
         shutdown), it hands the task back at once instead of leaving it
-        ``running`` until the lease runs out."""
+        ``running`` until the lease runs out. ``sent`` is this process's
+        monotonic time just before the claim was asked for (default now)."""
         from noeta.core.runner.task import TaskRun
 
-        run = TaskRun(self, claim)
+        run = TaskRun(self, claim, sent=sent)
         try:
             await run.run()
         except asyncio.CancelledError:
@@ -285,10 +308,10 @@ class Runtime:
     async def run_once(self) -> bool:
         """Claim one task and run it until it waits or ends. ``False`` when
         nothing was claimable."""
-        claim = await self._claim_once()
-        if claim is None:
+        claimed = await self._claim_once()
+        if claimed is None:
             return False
-        await self.run_claim(claim)
+        await self.run_claim(claimed[0], sent=claimed[1])
         return True
 
     async def preview(self, task_id: str) -> ModelRequest | None:
@@ -319,7 +342,7 @@ class Runtime:
         while await self.run_once():
             pass
 
-    async def _claim(self) -> Claim | None:
+    async def _claim(self) -> tuple[Claim, float] | None:
         try:
             return await self._claim_once()
         except Exception as exc:  # noqa: BLE001 — a store outage must not end the worker
@@ -341,10 +364,10 @@ class Runtime:
         try:
             while not stop.is_set():
                 while len(running) < self.concurrency:
-                    claim = await self._claim()
-                    if claim is None:
+                    claimed = await self._claim()
+                    if claimed is None:
                         break
-                    t = asyncio.create_task(self.run_claim(claim))
+                    t = asyncio.create_task(self.run_claim(claimed[0], sent=claimed[1]))
                     running.add(t)
                     t.add_done_callback(running.discard)
                     t.add_done_callback(lambda _d: wake.set())

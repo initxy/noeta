@@ -35,9 +35,10 @@ class UnknownTask(NoetaError):
 
 
 class HeldElsewhere(NoetaError):
-    """A hold on a task tree was refused: another worker holds the tree
-    (``Store.hold``), and a tree has at most one holding worker. What needed
-    the hold (a background job) cannot start in this process."""
+    """A hold on a task tree was refused: another worker holds the tree or
+    runs one of its tasks (``Store.hold``), and a tree has at most one
+    holding worker. What needed the hold (a background job) cannot start in
+    this process."""
 
 
 class ModelError(NoetaError):

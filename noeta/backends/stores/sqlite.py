@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE INDEX IF NOT EXISTS tasks_claimable ON tasks (queue, status, ready_at);
 CREATE INDEX IF NOT EXISTS tasks_parent ON tasks (parent_id);
+CREATE INDEX IF NOT EXISTS tasks_root ON tasks (root_id);
 CREATE TABLE IF NOT EXISTS events (
     task_id TEXT NOT NULL,
     seq     INTEGER NOT NULL,
@@ -148,12 +149,25 @@ def _set_version(conn: sqlite3.Connection) -> None:
         if row is None or row[0] is None:
             conn.execute("INSERT INTO noeta_schema VALUES (?)", (SCHEMA_VERSION,))
         elif int(row[0]) < SCHEMA_VERSION:
+            _tell_version_1_holds(conn)
             conn.execute("UPDATE noeta_schema SET version = ?", (SCHEMA_VERSION,))
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
         raise
+
+
+def _tell_version_1_holds(conn: sqlite3.Connection) -> None:
+    """Version 1 kept holds in ``holds``, which this version does not read:
+    each tree held there is told the hold is gone (``hold_lost`` with epoch
+    0, which no hold of ``tree_holds`` has). The table itself is kept."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'holds'"
+                    ).fetchone() is None:
+        return
+    now = time.time()
+    for root_id, worker in conn.execute("SELECT root_id, worker FROM holds").fetchall():
+        SqliteStore._lost_posts(conn, str(root_id), str(worker), 0, now, [])
 
 
 def _add_columns(conn: sqlite3.Connection) -> None:
@@ -585,7 +599,8 @@ class SqliteStore:
     async def hold(self, root_id: str, worker: str, seconds: float,
                    *, epoch: int | None = None) -> int | None:
         def tx(conn: sqlite3.Connection) -> int | None:
-            until = time.time() + seconds
+            now = time.time()
+            until = now + seconds
             if epoch is not None:
                 cur = conn.execute(
                     "UPDATE tree_holds SET until = ? WHERE epoch = ? AND root_id = ?"
@@ -594,6 +609,11 @@ class SqliteStore:
             if conn.execute("SELECT 1 FROM tree_holds WHERE root_id = ? AND worker <> ?",
                             (root_id, worker)).fetchone() is not None:
                 return None  # one holding worker per tree
+            if conn.execute(
+                    "SELECT 1 FROM tasks WHERE root_id = ? AND status = 'running'"
+                    " AND owner <> ? AND lease_until >= ? LIMIT 1",
+                    (root_id, worker, now)).fetchone() is not None:
+                return None  # a task of the tree runs on another worker
             row = conn.execute(
                 "SELECT epoch FROM tree_holds WHERE root_id = ? AND worker = ?",
                 (root_id, worker)).fetchone()
@@ -606,14 +626,15 @@ class SqliteStore:
 
         return await self._write(tx)
 
-    def _lost_posts(self, conn: sqlite3.Connection, root_id: str, worker: str, epoch: int,
+    @staticmethod
+    def _lost_posts(conn: sqlite3.Connection, root_id: str, worker: str, epoch: int,
                     now: float, changes: list[tuple[str, ChangeKind]],
                     *, wake: bool = True) -> None:
         """Post ``hold_lost`` to every unended task of the tree."""
         tasks = conn.execute("SELECT task_id FROM tasks WHERE root_id = ? AND status <> 'ended'",
                              (root_id,)).fetchall()
         for (task_id,) in tasks:
-            _, created = self._insert_post(conn, hold_lost(str(task_id), worker, epoch,
+            _, created = SqliteStore._insert_post(conn, hold_lost(str(task_id), worker, epoch,
                                                          wake=wake), now)
             if created:
                 changes.append((str(task_id), "posted"))

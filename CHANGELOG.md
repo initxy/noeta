@@ -188,7 +188,10 @@ All notable changes to Noeta are documented here. The format is based on
   and settled once by the task's runner. A worker stopping on purpose (closing the TUI) posts
   `hold_lost` without waking the task (`Post.wake`): it hears with its next message. Third-party
   stores implement `hold`, `unhold` and `reap_holds` (a store an earlier
-  development build opened keeps an unused `holds` table).
+  development build opened keeps its unused `holds` table; upgrading it posts `hold_lost`, with
+  epoch 0, to the tasks of each tree held there). A hold is refused while another
+  worker runs a task of the tree, and on Postgres a claim and a hold of one tree serialize, so a
+  held tree's tasks run only on its holder.
 - **Plugins as files.** `~/.noeta/plugins/*.py` (or a directory) is a plugin without packaging;
   a project's `.noeta/plugins/` loads once trusted (`noeta trust`). `noeta plugins` lists where
   each plugin comes from.
@@ -387,8 +390,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   WebSearch, CronList, ListAgents and the MCP resource tools are retry-safe.
 - **Fold snapshots** (`noeta.core.snapshots`, a `snapshots` table in both stores): a claim
   folds the task's newest snapshot plus the events after it; written every
-  `Runtime.snapshot_every` (100) events, versioned by the code that folds, never trusted when
-  the version differs. A 20,002-event log claims in 21 ms instead of 120 ms on sqlite.
+  `Runtime.snapshot_every` (100) events, versioned by the code that folds (hashed when the
+  `Runtime` is made, so code upgraded on disk under a running worker does not change it), never
+  trusted when the version differs. A 20,002-event log claims in 21 ms instead of 120 ms on sqlite.
 - `noeta worker --lease` and `--snapshot-every`; one worker id `host:pid:random`.
 - `make cluster`: worker processes on Postgres under random SIGKILL / SIGSTOP with a scripted
   provider (tool calls, background jobs, sub-agents, timers, Cron, mid-run messages); a CI job
@@ -401,6 +405,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - **An unknown model is announced once.** The front end's notice now also says its cost
   counts as $0.00, and the catalog no longer logs a second "not in the catalog" warning about
   its price.
+- **A task whose log cannot be read no longer loops forever.** A log no claim could read or
+  fold left the task `running` to be claimed again on every lease; after three such claims in
+  a row on a worker it now ends `failed` (`unreadable_log: ...` with the last error), its
+  parent gets `ChildEnded` and its children are cancelled.
 - **An interrupted reply keeps the thinking it finished.** Only the streamed text was kept;
   completed thinking blocks (signature included) now go back ahead of it
   (`TurnStopped.thinking`; older records fold as before).
@@ -558,6 +566,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Security
 
+- An extension's `TaskView.read_log` reads another tenant's task as empty and
+  `TaskView.child_tasks` lists only children of its own tenant, as `ToolContext.post` and
+  `ToolContext.tasks` already did. Before, a plugin given another tenant's task id could read
+  its log.
 - `noeta serve` takes only `model`, `effort`, `max_turns`, `cwd`, `permission_mode` and
   `output_schema` in a new task's `config`, and only `model`, `effort` and `max_turns` in a
   `config` signal; any other key is refused with 403 naming it. Before, a request could set

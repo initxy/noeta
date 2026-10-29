@@ -27,7 +27,7 @@ once and answers), a ``ScheduleWakeup`` whose prompt is
 ``CLUSTER-WAKE <id>``. With ``child_bg`` > 0 the sub-agent also starts a
 background ``Bash`` (``child_bg`` seconds, journalling ``<id>-cbg``) and ends
 without waiting for it; the root then waits for that job's end or loss too
-(a sub-agent whose job could not start answers ``CHILD-DONE <id> NO-JOB``
+(a sub-agent whose job could not start hands back ``CHILD-DONE <id> NO-JOB``
 and leaves nothing to wait for). With ``agent_first`` the ``Agent`` call
 comes right after the ``Effect`` calls, before ``Lookup`` and the job.
 With ``cron`` > 0 it loads the cron tools (``ToolSearch``), creates a
@@ -333,6 +333,11 @@ def child_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
             "command": f"sleep {bg}; echo {line} >> {shlex.quote(str(spec['journal']))}",
             "run_in_background": True, "description": f"cluster child job {rid}"})
     if bg > 0 and seen.failed(f"cbg-{rid}"):
+        # Handed back: with SubagentHandback offered, the root's notice of
+        # the end carries no last reply, only the handed-back report.
+        if f"chb-{rid}" not in seen.issued:
+            return _call(f"chb-{rid}", "SubagentHandback",
+                         {"message": f"CHILD-DONE {rid} NO-JOB"})
         return _say(f"CHILD-DONE {rid} NO-JOB")
     return _say(f"CHILD-DONE {rid}")
 

@@ -79,7 +79,8 @@ class ToolContext(CoreNotices):
     #: returned release is awaited (``Runtime.hold``): for what lives only in
     #: this process, e.g. a background job. The release's ``tree`` is the
     #: hold: its worker and epoch, and ``on_lost`` to stop with it. Raises
-    #: ``HeldElsewhere`` while another worker holds the tree.
+    #: ``HeldElsewhere`` while another worker holds the tree or runs one of
+    #: its tasks.
     hold: Callable[[], Awaitable[Release]] | None = None
     #: ``await tasks(parent_id=..., status=..., limit=...)``: rows of the
     #: store's task table (``Store.tasks``) of this task's tenant, e.g. to
