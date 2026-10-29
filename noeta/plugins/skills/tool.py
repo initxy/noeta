@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.plugins.skills.allowed_tools import allow_rule_texts, resolve_skill_allowed_tools
+from noeta.plugins.skills.allowed_tools import allow_rule_texts, granted_tools
 from noeta.plugins.skills.registry import (
     SkillDescription,
     render_activation,
@@ -117,8 +117,7 @@ def activation_data(desc: SkillDescription, source: str,
     raw = desc.meta("allowed-tools")
     allowed: list[str] | None = None
     if raw is not None:
-        [(_, grant)] = resolve_skill_allowed_tools(((desc.name, raw),))
-        allowed = sorted(grant)
+        allowed = list(granted_tools(raw, skill=desc.name))
     rules = [substitute_variables(r, desc.base_dir, cwd)
              for r in allow_rule_texts(raw)] if raw is not None else []
     return {

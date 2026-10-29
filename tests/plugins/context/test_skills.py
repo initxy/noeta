@@ -13,12 +13,13 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import Waiting
 from noeta.core.extension import Ask, Extension, Gate, TaskView
+from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import ToolUse
 from noeta.plugins.fs import FileTools
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.shell import Shell
 from noeta.plugins.skills import Skills, UsageRank
-from noeta.plugins.skills.allowed_tools import allow_rule_texts, parse_allowed_tools
+from noeta.plugins.skills.allowed_tools import allow_rule_texts, granted_tools
 from noeta.plugins.skills.inline_commands import DISABLED_MARKER
 from noeta.plugins.skills.listing import (
     ADDED_HEADER,
@@ -190,7 +191,7 @@ async def test_new_skills_are_announced_at_the_next_message(h: Harness) -> None:
 async def test_a_skill_installed_into_an_empty_task_is_announced(h: Harness) -> None:
     """Installed mid-turn, announced with the person's next message, with no
     pick-up in between (the runner keeps the task)."""
-    from noeta.core.tool import ToolContext, ToolOutput, text_output
+    from noeta.core.tool import text_output
 
     class Install:
         name = "Install"
@@ -316,6 +317,50 @@ async def test_allowed_tools_enforcement_denies_outside_the_grant(h: Harness) ->
     assert bash.result.is_error and "not in the allowed-tools grant" in bash.result.text
 
 
+class _Named:
+    """A tool that answers ``ok``."""
+
+    description = "A tool."
+    input_schema: dict[str, Any] = {"type": "object"}
+    read_only = True
+    clearable = True
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        return text_output("ok")
+
+
+@pytest.mark.parametrize("declared", ["Read Grep", "[Read, Grep]", "Read, Grep(*)"])
+async def test_the_grant_names_any_tool_as_a_permission_rule_does(h: Harness,
+                                                                  declared: str) -> None:
+    write_skill(skills_dir(h), "readonly", "Read only.", **{"allowed-tools": declared})
+    (h.work / "f.txt").write_text("x\n")
+    h.provider.add(
+        reply("", ("Skill", {"skill": "readonly"})),
+        reply("", ("Read", {"file_path": "f.txt"})),
+        reply("", ("Grep", {"pattern": "x"})),
+        reply("", ("Bash", {"command": "echo hi"})),
+        reply("done"),
+    )
+    tid = await h.start(Agent(name="a", model="m", tools=[_Named("Grep"), _Named("Bash")],
+                              extensions=[FileTools(), Skills(tool_enforcement="deny")]))
+    _, read, grep, bash = await h.results(tid)
+    assert not read.result.is_error and not grep.result.is_error
+    assert bash.result.is_error and "not in the allowed-tools grant" in bash.result.text
+
+
+async def test_a_grant_of_every_tool_restricts_nothing(h: Harness) -> None:
+    write_skill(skills_dir(h), "any", "Anything.", **{"allowed-tools": "'*'"})
+    h.provider.add(reply("", ("Skill", {"skill": "any"})),
+                   reply("", ("Bash", {"command": "echo hi"})), reply("done"))
+    tid = await h.start(Agent(name="a", model="m", tools=[_Named("Bash")],
+                              extensions=[FileTools(), Skills(tool_enforcement="deny")]))
+    _, bash = await h.results(tid)
+    assert not bash.result.is_error
+
+
 async def test_rank_resolver_is_asked_once_and_shapes_the_fit(h: Harness) -> None:
     long = "Very long description sentence. " * 40
     for name in ("alpha", "beta"):
@@ -378,9 +423,11 @@ def test_long_summary_is_capped_with_a_marker() -> None:
 
 
 def test_allowed_tools_parsing() -> None:
-    assert parse_allowed_tools("[Read, Bash(git:*)]") == frozenset({"Read", "Bash"})
-    assert parse_allowed_tools("Read, Grep") == frozenset({"Read", "Grep"})
-    assert parse_allowed_tools("{Read}") is None
+    assert granted_tools("[Read, Bash(git:*)]") == ("Bash", "Read")
+    assert granted_tools("Read, Grep mcp__github") == ("Grep", "Read", "mcp__github")
+    assert granted_tools("Task, Workflow") == ("Agent", "Workflow")
+    assert granted_tools("{Read}") == ()
+    assert granted_tools("Read *") == ("*",)
 
 
 async def test_skill_dirs_are_listed_workspace_first_never_claude_codes(

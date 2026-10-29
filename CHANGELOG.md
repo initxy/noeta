@@ -439,6 +439,12 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **A skill's `allowed-tools` grant names any tool.** With `tool_enforcement` on, the grant
+  kept only names from a fixed table that had drifted (it lacked `Glob`, `Grep`,
+  `Workflow`, the worktree, schedule and plan tools, and every MCP tool), and a value in
+  Claude Code's space-separated form or `*` granted nothing. The grant is now the tools
+  the skill's rules name, read as its pre-approval reads them (`mcp__server` covers that
+  server's tools, `Read` covers `Grep` and `Glob`, `*` everything).
 - **Without background jobs, `Bash` runs a long leading `sleep`.** `Shell(background=False)`
   refused it with a message pointing at `Monitor` and `run_in_background`, which that host
   does not offer; the refusal now applies only where background jobs are offered.

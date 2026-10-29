@@ -13,19 +13,24 @@ from noeta.core.types import ToolUse
 from noeta.toolkit import permission_rules as pr
 
 Enforcement = Literal["off", "approval", "deny"]
+#: A whole-tool rule matches by name alone: no path is judged.
+_ANY = pr.RuleContext(root="/", home="/", cwd="/")
 
 
 def allowed_tools_gate(tool: str, active: Mapping[str, Any],
                        enforcement: Enforcement) -> Gate | None:
     """Enforcement is on only when the mode is on and an active skill
-    declares ``allowed-tools``; the grant is the union over them."""
+    declares ``allowed-tools``; the grant is the union over them, each name
+    covering the tools a whole-tool permission rule of it covers (``Read``
+    covers ``Grep``, ``mcp__server`` that server's tools)."""
     if enforcement == "off":
         return None
     declaring = sorted(n for n, a in active.items() if a.get("allowed_tools") is not None)
     if not declaring:
         return None
     granted = {t for n in declaring for t in active[n]["allowed_tools"]}
-    if tool in granted:
+    if "*" in granted or any(pr.match(pr.Rule(tool=t, content=None, text=t), tool, {}, _ANY)
+                             for t in granted):
         return None
     reason = f"tool {tool!r} not in the allowed-tools grant of active skills {declaring!r}"
     if enforcement == "deny":
