@@ -360,7 +360,7 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   plugin files and remakes the agents between turns.
 - **`noeta plugin add|list|remove`**: installs from `<git-url>@<commit>` (a commit is
   required), a local path, or a Claude Code `marketplace.json` (`--marketplace`, only read,
-  entries pinned by sha); nothing from the plugin runs while installing.
+  an entry installed at its sha, or at `--commit` when it pins none); nothing from the plugin runs while installing.
 - **Claude Code plugin directories** in noeta's plugin places load through the plugins that
   read their formats (skills, agents, hooks, `.mcp.json`; `commands/*.md` through the new
   `markdown_commands` plugin as `/<plugin>:<command>`), with `${CLAUDE_PLUGIN_ROOT}` and
