@@ -58,6 +58,9 @@ __all__ = ["SYSTEM_PATHS", "TenantFence", "credential_paths", "home_dirs", "stor
 SYSTEM_PATHS = ("/etc/noeta", "/proc")
 #: Where people's home directories are kept: each directory in one is a home.
 HOME_ROOTS = ("/home", "/Users")
+#: The file system takes ``.SSH`` for ``.ssh`` (macOS's and Windows' default),
+#: so the fence compares names without case.
+CASE_INSENSITIVE = sys.platform in ("darwin", "win32")
 #: Places a server directory to hide may not hold: hiding one would hide the
 #: machine's programs or the command's own temporary files.
 _NEVER_HIDDEN = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc",
@@ -84,7 +87,12 @@ def _real(path: str) -> str:
     return os.path.realpath(os.path.expanduser(path))
 
 
+def _fold(path: str) -> str:
+    return path.lower() if CASE_INSENSITIVE else path
+
+
 def _within(path: str, base: str) -> bool:
+    path, base = _fold(path), _fold(base)
     return path == base or path.startswith(base.rstrip("/") + "/")
 
 
@@ -134,7 +142,7 @@ def _matches(path: str, place: str) -> bool:
         return _within(path, place) or _within(path, _real(place))
     here = path
     while True:
-        if fnmatch.fnmatchcase(here, place):
+        if fnmatch.fnmatchcase(_fold(here), _fold(place)):
             return True
         parent = posixpath.dirname(here)
         if parent == here:
@@ -187,7 +195,7 @@ class TenantFence:
         for system in SYSTEM_PATHS:
             if _within(path, system) or _within(path, _real(system)):
                 return head + "it holds this machine's settings or other processes' data"
-        if any(path == f or path == _real(f) for f in self.store_files):
+        if any(_fold(path) in (_fold(f), _fold(_real(f))) for f in self.store_files):
             return head + "it is the task store"
         owner = self._workspace_owner(path)
         if owner is not None and owner != tenant:

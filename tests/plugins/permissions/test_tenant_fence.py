@@ -456,3 +456,20 @@ async def test_a_tenant_whose_workspace_this_worker_does_not_know_fails_its_turn
               if isinstance(d := records.decode(e), records.TurnFailed)]
     assert failed and failed[0].reason == "tenant_not_isolated"
     assert "tenant 'gamma'" in failed[0].detail and "workspace" in failed[0].detail
+
+
+@pytest.mark.parametrize("insensitive", [True, False])
+def test_on_a_case_insensitive_file_system_names_compare_without_case(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, insensitive: bool) -> None:
+    from noeta.toolkit import tenant_fence
+
+    home = tmp_path / "home"
+    monkeypatch.setattr(tenant_fence, "home_dirs", lambda: [str(home)])
+    monkeypatch.setattr(tenant_fence, "CASE_INSENSITIVE", insensitive)
+    fence = TenantFence(home=str(tmp_path / "noeta"),
+                        workspaces={"acme": str(tmp_path / "ws"), "beta": str(tmp_path / "b")})
+    kw: dict[str, Any] = {"tenant": "acme", "task_id": "t"}
+    assert fence.refusal(str(home / ".ssh" / "id_rsa"), **kw) is not None
+    for spelled in (home / ".SSH" / "id_rsa", tmp_path / "B" / "notes.txt",
+                    tmp_path / "NOETA" / "tokens.json"):
+        assert (fence.refusal(str(spelled), **kw) is not None) == insensitive

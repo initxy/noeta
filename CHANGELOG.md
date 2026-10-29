@@ -1149,3 +1149,7 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - A tenant's `Read` of a PDF no longer always fails: its copy and pages were made in the
   tenant's temporary directory itself, where the fence lets file tools write nothing; they
   now go in its `tmp/`.
+- On macOS and Windows the tenant fence compares names without case, so `~/.SSH` or another
+  tenant's workspace spelled in other case is refused like the name it reaches. On Linux it
+  compares with case (documented in docs/server.md "Not a boundary" for case-insensitive
+  file systems mounted there).
